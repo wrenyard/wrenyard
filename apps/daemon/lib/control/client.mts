@@ -10,8 +10,6 @@ import type {
   HealthPingResult,
   EventListParams,
   EventListResult,
-  MessageSendParams,
-  MessageSendResult,
   ProjectDescribeParams,
   ProjectDescribeResult,
   ProjectListParams,
@@ -38,6 +36,8 @@ import type {
   TaskDefinitionDescribeResult,
   TaskDefinitionListParams,
   TaskDefinitionListResult,
+  TaskSettingsRuntimesParams,
+  TaskSettingsRuntimesResult,
   TaskRunCancelParams,
   TaskRunCancelResult,
   TaskRunCreateParams,
@@ -70,16 +70,6 @@ import type {
   TaskGraphWaitResult,
   TaskGraphSlipParams,
   TaskGraphSlipResult,
-  ClientConfigurationSnapshotParams,
-  ClientConfigurationSnapshotResult,
-  ClientConfigurationPlanParams,
-  ClientConfigurationPlanResult,
-  ClientConfigurationApplyParams,
-  ClientConfigurationApplyResult,
-  ClientConfigurationPlanRestoreParams,
-  ClientConfigurationPlanRestoreResult,
-  ClientConfigurationRestoreParams,
-  ClientConfigurationRestoreResult,
   ExecCancelParams,
   ExecCancelResult,
   ExecEventsParams,
@@ -187,24 +177,6 @@ export class ForemanClient {
     },
   }
 
-  readonly clientConfiguration = {
-    snapshot: (params: ClientConfigurationSnapshotParams = {}): Promise<ClientConfigurationSnapshotResult> => {
-      return this.rpc.request<ClientConfigurationSnapshotResult>('client.configuration.snapshot', params)
-    },
-    plan: (params: ClientConfigurationPlanParams): Promise<ClientConfigurationPlanResult> => {
-      return this.rpc.request<ClientConfigurationPlanResult>('client.configuration.plan', params)
-    },
-    apply: (params: ClientConfigurationApplyParams): Promise<ClientConfigurationApplyResult> => {
-      return this.rpc.request<ClientConfigurationApplyResult>('client.configuration.apply', params)
-    },
-    planRestore: (params: ClientConfigurationPlanRestoreParams): Promise<ClientConfigurationPlanRestoreResult> => {
-      return this.rpc.request<ClientConfigurationPlanRestoreResult>('client.configuration.plan-restore', params)
-    },
-    restore: (params: ClientConfigurationRestoreParams): Promise<ClientConfigurationRestoreResult> => {
-      return this.rpc.request<ClientConfigurationRestoreResult>('client.configuration.restore', params)
-    },
-  }
-
   readonly stats = {
     today: (params: StatsTodayParams = {}): Promise<StatsTodayResult> => {
       return this.rpc.request<StatsTodayResult>('stats.today', params)
@@ -215,6 +187,11 @@ export class ForemanClient {
   }
 
   readonly task = {
+    settings: {
+      runtimes: (params: TaskSettingsRuntimesParams): Promise<TaskSettingsRuntimesResult> => {
+        return this.rpc.request<TaskSettingsRuntimesResult>('task.settings.runtimes', params)
+      },
+    },
     definition: {
       list: (params: TaskDefinitionListParams = {}): Promise<TaskDefinitionListResult> => {
         return this.rpc.request<TaskDefinitionListResult>('task.definition.list', params)
@@ -257,12 +234,6 @@ export class ForemanClient {
           options,
         )
       },
-    },
-  }
-
-  readonly message = {
-    send: (params: MessageSendParams): Promise<MessageSendResult> => {
-      return this.rpc.request<MessageSendResult>('message.send', params)
     },
   }
 

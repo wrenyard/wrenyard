@@ -38,7 +38,7 @@ const MAX_SNAPSHOT_WAIT_MS = 1_000;
  * the hosting application is pushed in:
  *
  * - `stateRoot` and `initialWorkspace` describe the product's local state.
- * - `ipcPath` is the daemon control socket DSH's MCP tools legitimately use.
+ * - `ipcPath` is the daemon control socket DSH's IPC tools legitimately use.
  * - `getGatewayConnection` reads the live daemon gateway projection used both
  *   for the DSH model patch and for gateway identity recovery.
  * - `waitForTaskRun` / `cancelTaskRun` are in-process task-run ownership

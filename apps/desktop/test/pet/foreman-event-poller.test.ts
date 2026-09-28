@@ -5,6 +5,7 @@ import {
   type ForemanEventRecord,
 } from '../../src/main/daemon-client/foreman-event-poller';
 import { resolveForemanIpcPath } from '../../src/pet/main/foreman-ipc-client';
+import type { EventsLineData } from '../../src/pet/main/foreman-event-map';
 import type { AgentEventSignal, SessionMetaData } from '../../src/pet/main/agent-types';
 
 describe('ForemanEventPoller', () => {
@@ -498,7 +499,9 @@ function event(
   id: number,
   type: ForemanEventRecord['type'],
   timestamp: string,
-  payload: Omit<Partial<ForemanEventRecord>, 'id' | 'type' | 'timestamp'> = {},
+  payload: Omit<Partial<ForemanEventRecord>, 'id' | 'type' | 'timestamp' | 'data'> & {
+    data?: EventsLineData | Record<string, unknown>;
+  } = {},
 ): ForemanEventRecord {
   return {
     id,

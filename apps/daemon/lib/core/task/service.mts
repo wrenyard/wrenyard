@@ -291,6 +291,28 @@ export class TaskService {
     return this.requireRunner().cancelTaskRun(taskRunId)
   }
 
+  /**
+   * Forced-shutdown cancellation: cancel every admitted (queued or running)
+   * task run and await the authoritative terminal transition for each. The
+   * per-run cancel already terminates the linked agent execution before
+   * resolving, so awaiting it here guarantees no task child outlives a forced
+   * daemon shutdown and the caller may close the database immediately after.
+   * Never throws: a per-run failure is logged and the remaining runs are still
+   * cancelled. A no-op when nothing is admitted.
+   */
+  async cancelActive(): Promise<void> {
+    const { tasks } = this.activeRuns()
+    await Promise.all(tasks.map(async (taskRunId) => {
+      try {
+        await this.cancel(taskRunId)
+      } catch (error) {
+        process.stderr.write(
+          `[task] force cancellation failed for '${taskRunId}': ${errorMessage(error)}\n`,
+        )
+      }
+    }))
+  }
+
   activeRuns(): { tasks: string[]; count: number } {
     const rows = dbQuery<{ id: string }>(
       `SELECT id
@@ -585,7 +607,7 @@ export class TaskService {
     } catch (error) {
       throw new TaskServiceError(
         'task_runner_unavailable',
-        'Task execution requires a daemon-owned task workflow runner. Start `foreman daemon start`.',
+        'Task execution requires a daemon-owned task workflow runner. Start `wrenyard daemon run`.',
         503,
         { cause: errorMessage(error) },
       )

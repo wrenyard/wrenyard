@@ -12,10 +12,6 @@ export function resolveWrenyardConnectionEnv(env: NodeJS.ProcessEnv = process.en
   const out: NodeJS.ProcessEnv = {};
   const ipc = env.WRENYARD_IPC_PATH ?? env.FOREMAN_IPC_PATH;
   if (ipc) out.WRENYARD_IPC_PATH = ipc;
-  const mcpUrl = env.WRENYARD_MCP_URL ?? env.FOREMAN_MCP_URL;
-  if (mcpUrl) out.WRENYARD_MCP_URL = mcpUrl;
-  const sender = env.WRENYARD_MCP_SENDER ?? env.FOREMAN_MCP_SENDER;
-  if (sender) out.WRENYARD_MCP_SENDER = sender;
   return out;
 }
 
@@ -88,6 +84,12 @@ export function startDshWeb(options: DshWebOptions): Promise<DshWebHandle> {
     // Propagate the Wrenyard connection context to the child without logging
     // values; explicit overrides win (LaunchServices supplies no shell env).
     Object.assign(env, resolveWrenyardConnectionEnv(), options.wrenyardEnv, options.extraEnv);
+    // The daemon MCP surface was removed: never hand a DSH child a daemon MCP
+    // address or sender, even one inherited from the parent environment.
+    delete env.WRENYARD_MCP_URL;
+    delete env.FOREMAN_MCP_URL;
+    delete env.WRENYARD_MCP_SENDER;
+    delete env.FOREMAN_MCP_SENDER;
     // Wrenyard has one execution mode. Apply this last so inherited, legacy,
     // or caller-provided DSH settings cannot restore restrictions.
     env.DSH_PERMISSION_MODE = 'danger-full-access';

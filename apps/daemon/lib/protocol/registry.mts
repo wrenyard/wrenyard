@@ -35,40 +35,6 @@ import {
 } from './methods/gateway.mts'
 export type { GatewayConnectionParams, GatewayConnectionResult } from './methods/gateway.mts'
 import {
-  clientConfigurationApplyParamsSchema,
-  clientConfigurationApplyResultSchema,
-  clientConfigurationPlanParamsSchema,
-  clientConfigurationPlanRestoreParamsSchema,
-  clientConfigurationPlanRestoreResultSchema,
-  clientConfigurationPlanResultSchema,
-  clientConfigurationRestoreParamsSchema,
-  clientConfigurationRestoreResultSchema,
-  clientConfigurationSnapshotParamsSchema,
-  clientConfigurationSnapshotResultSchema,
-  type ClientConfigurationApplyParams,
-  type ClientConfigurationApplyResult,
-  type ClientConfigurationPlanParams,
-  type ClientConfigurationPlanRestoreParams,
-  type ClientConfigurationPlanRestoreResult,
-  type ClientConfigurationPlanResult,
-  type ClientConfigurationRestoreParams,
-  type ClientConfigurationRestoreResult,
-  type ClientConfigurationSnapshotParams,
-  type ClientConfigurationSnapshotResult,
-} from './methods/client-configuration.mts'
-export type {
-  ClientConfigurationApplyParams,
-  ClientConfigurationApplyResult,
-  ClientConfigurationPlanParams,
-  ClientConfigurationPlanRestoreParams,
-  ClientConfigurationPlanRestoreResult,
-  ClientConfigurationPlanResult,
-  ClientConfigurationRestoreParams,
-  ClientConfigurationRestoreResult,
-  ClientConfigurationSnapshotParams,
-  ClientConfigurationSnapshotResult,
-} from './methods/client-configuration.mts'
-import {
   providerConfigureParamsSchema,
   providerConfigureResultSchema,
   providerListParamsSchema,
@@ -83,12 +49,6 @@ import {
   type ProviderQuotaResult,
 } from './methods/provider.mts'
 export type { ProviderConfigureParams, ProviderConfigureResult, ProviderListParams, ProviderListResult, ProviderQuotaParams, ProviderQuotaResult } from './methods/provider.mts'
-import {
-  messageSendParamsSchema,
-  messageSendResultSchema,
-  type MessageSendParams,
-  type MessageSendResult,
-} from './methods/message.mts'
 import {
   projectDescribeParamsSchema,
   projectDescribeResultSchema,
@@ -353,10 +313,6 @@ export type {
   HealthPingResult,
 } from './methods/health.mts'
 export type {
-  MessageSendParams,
-  MessageSendResult,
-} from './methods/message.mts'
-export type {
   ProjectCommitLogParams,
   ProjectCommitLogResult,
   ProjectDescribeParams,
@@ -480,11 +436,6 @@ export interface ForemanMethodParams {
   'daemon.status': DaemonStatusParams
   'health.ping': HealthPingParams
   'gateway.connection': GatewayConnectionParams
-  'client.configuration.snapshot': ClientConfigurationSnapshotParams
-  'client.configuration.plan': ClientConfigurationPlanParams
-  'client.configuration.apply': ClientConfigurationApplyParams
-  'client.configuration.plan-restore': ClientConfigurationPlanRestoreParams
-  'client.configuration.restore': ClientConfigurationRestoreParams
   'provider.list': ProviderListParams
   'provider.configure': ProviderConfigureParams
   'provider.quota': ProviderQuotaParams
@@ -515,7 +466,6 @@ export interface ForemanMethodParams {
   'project.worktree.remove': ProjectWorktreeRemoveParams
   'project.worktree.merge': ProjectWorktreeMergeParams
   'project.commitLog': ProjectCommitLogParams
-  'message.send': MessageSendParams
   'taskgraph.create': TaskGraphCreateParams
   'taskgraph.patch': TaskGraphPatchParams
   'taskgraph.status': TaskGraphStatusParams
@@ -555,11 +505,6 @@ export interface ForemanMethodResults {
   'daemon.status': DaemonStatusResult
   'health.ping': HealthPingResult
   'gateway.connection': GatewayConnectionResult
-  'client.configuration.snapshot': ClientConfigurationSnapshotResult
-  'client.configuration.plan': ClientConfigurationPlanResult
-  'client.configuration.apply': ClientConfigurationApplyResult
-  'client.configuration.plan-restore': ClientConfigurationPlanRestoreResult
-  'client.configuration.restore': ClientConfigurationRestoreResult
   'provider.list': ProviderListResult
   'provider.configure': ProviderConfigureResult
   'provider.quota': ProviderQuotaResult
@@ -590,7 +535,6 @@ export interface ForemanMethodResults {
   'project.worktree.remove': ProjectWorktreeRemoveResult
   'project.worktree.merge': ProjectWorktreeMergeResult
   'project.commitLog': ProjectCommitLogResult
-  'message.send': MessageSendResult
   'taskgraph.create': TaskGraphCreateResult
   'taskgraph.patch': TaskGraphPatchResult
   'taskgraph.status': TaskGraphStatusResult
@@ -650,26 +594,6 @@ export const methodRegistry: {
   'gateway.connection': {
     params: gatewayConnectionParamsSchema,
     result: gatewayConnectionResultSchema,
-  },
-  'client.configuration.snapshot': {
-    params: clientConfigurationSnapshotParamsSchema,
-    result: clientConfigurationSnapshotResultSchema,
-  },
-  'client.configuration.plan': {
-    params: clientConfigurationPlanParamsSchema,
-    result: clientConfigurationPlanResultSchema,
-  },
-  'client.configuration.apply': {
-    params: clientConfigurationApplyParamsSchema,
-    result: clientConfigurationApplyResultSchema,
-  },
-  'client.configuration.plan-restore': {
-    params: clientConfigurationPlanRestoreParamsSchema,
-    result: clientConfigurationPlanRestoreResultSchema,
-  },
-  'client.configuration.restore': {
-    params: clientConfigurationRestoreParamsSchema,
-    result: clientConfigurationRestoreResultSchema,
   },
   'provider.list': {
     params: providerListParamsSchema,
@@ -790,10 +714,6 @@ export const methodRegistry: {
   'project.commitLog': {
     params: projectCommitLogParamsSchema,
     result: projectCommitLogResultSchema,
-  },
-  'message.send': {
-    params: messageSendParamsSchema,
-    result: messageSendResultSchema,
   },
   'taskgraph.create': {
     params: taskgraphCreateParamsSchema,

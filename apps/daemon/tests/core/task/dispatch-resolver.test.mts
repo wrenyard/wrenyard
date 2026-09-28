@@ -50,7 +50,7 @@ async function createSpeedOverrideResolver(
   catalog.registerProvider({
     id: 'p',
     displayName: 'P',
-    credentialResolver: 'forge-managed',
+    credentialResolver: 'managed',
     models: [{
       id: 'm',
       displayName: 'M',
@@ -125,7 +125,6 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
   it('a legacy policy declaredRuntime opens the same automatic pool', () => {
     const withPolicy = resolver.resolve({
       taskName: 'policy-auto',
-      declaredRuntime: 'forge/fast',
       requirements: { expectedTps: 80, minimumTps: 60, excludeProviderIds: ['opencode-zen', 'openrouter', 'opencode-go'] } satisfies TaskDispatchRequirements,
     })
     const withAbsent = resolver.resolve({
@@ -147,7 +146,6 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
     // Flash gateway variant.
     const resolution = resolver.resolve({
       taskName: 'glm-flash-eligible',
-      declaredRuntime: 'forge/fast',
       requirements: {
         maxOutputUsdPerMillion: 2,
         excludeProviderIds: ['opencode-zen', 'openrouter', 'opencode-go'],
@@ -172,7 +170,6 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
   it('a legacy non-policy forge/<profile> declaredRuntime fails closed (no source preset map)', () => {
     const resolution = resolver.resolve({
       taskName: 'legacy-pin',
-      declaredRuntime: 'forge/codex-luna',
       requirements: { minimumTps: 1 } satisfies TaskDispatchRequirements,
     })
 
@@ -183,7 +180,6 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
   it('an invalid declared runtime fails closed instead of opening the automatic pool', () => {
     const resolution = resolver.resolve({
       taskName: 'invalid-runtime',
-      declaredRuntime: 'not-a-runtime',
       requirements: { minimumTps: 1 } satisfies TaskDispatchRequirements,
     })
 
@@ -234,7 +230,6 @@ describe('core task dispatch-resolver automatic mode (no-model)', () => {
   it('eligible policy declaration exposes exact canonical choices only, never policy aliases', () => {
     const result = resolver.eligible({
       taskName: 'fast-80-60-eligible',
-      declaredRuntime: 'forge/fast',
       requirements: { expectedTps: 80, minimumTps: 60 } satisfies TaskDispatchRequirements,
     })
 
@@ -606,7 +601,6 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
   it('resolve reports no_available_provider for a non-policy declared runtime', () => {
     const resolution = resolver.resolve({
       taskName: 'code-legacy-non-policy',
-      declaredRuntime: 'forge/codex-luna',
       requirements: { minimumTps: 1 } satisfies TaskDispatchRequirements,
     })
     assert.equal(resolution.ok, false)

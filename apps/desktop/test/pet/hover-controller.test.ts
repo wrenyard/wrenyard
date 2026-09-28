@@ -12,6 +12,7 @@ function makeWorker(overrides: Partial<WorkerSnapshot> = {}): WorkerSnapshot {
     workerIdentityKey: 'fg_test_01',
     profile: 'cb-dsf',
     phase: 'working',
+    phaseSinceMs: 0,
     toolCount: 5,
     startedAt: 1000000,
     meta: {
@@ -132,6 +133,7 @@ describe('hover-controller — buildInfoCard', () => {
       workerIdentityKey: 'fg_min',
       profile: 'codex',
       phase: 'sleeping',
+      phaseSinceMs: 0,
       toolCount: 0,
       startedAt: 0,
       meta: {

@@ -89,7 +89,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const first = await supervisor.startExecution({
       profile: 'test',
-      permission: 'edit',
       cwd,
       prompt: 'first writer',
     })
@@ -97,7 +96,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
 
     const second = await supervisor.startExecution({
       profile: 'test',
-      permission: 'edit',
       cwd,
       prompt: 'second writer',
     })
@@ -121,7 +119,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const first = await supervisor.startExecution({
       profile: 'test',
-      permission: 'edit',
       cwd,
       prompt: 'first writer',
       writePaths: [join(cwd, 'src/a.ts')],
@@ -130,7 +127,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
 
     const second = await supervisor.startExecution({
       profile: 'test',
-      permission: 'edit',
       cwd,
       prompt: 'second writer',
       writePaths: [join(cwd, 'src/b.ts')],
@@ -154,7 +150,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const first = await supervisor.startExecution({
       profile: 'test',
-      permission: 'yolo',
       repoWriteLock: false,
       cwd,
       prompt: 'first writer',
@@ -163,7 +158,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
 
     const second = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       repoWriteLock: false,
       cwd,
       prompt: 'second writer',
@@ -199,7 +193,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit v1 envelope events',
     })
@@ -240,7 +233,7 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
       }),
       forgeStreamEvent(3, 'run_finished', { status: 'done', exit_code: 0, summary: 'sampled' }),
     ])
-    const handle = await makeSupervisor().startExecution({ profile: 'test', permission: 'readonly', cwd, prompt: 'test sampling transport' })
+    const handle = await makeSupervisor().startExecution({ profile: 'test', cwd, prompt: 'test sampling transport' })
     assert.equal((await handle.wait()).status, 'done')
     const row = db.prepare<unknown[], EventRow>("SELECT type, data FROM events WHERE execution_id = ? AND type = 'turn_usage'").get(handle.executionId)
     const data = JSON.parse(row!.data!)
@@ -282,7 +275,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'codex-test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit codex command execution item',
     })
@@ -325,7 +317,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'opencode-test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit opencode native session',
     })
@@ -364,7 +355,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit non-terminal native id',
     })
@@ -400,7 +390,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const prompt = 'emit via stdin\nwith shell-sensitive chars: $PATH && "quoted"'
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt,
     })
@@ -425,7 +414,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit bare direct runtime events',
     })
@@ -459,7 +447,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit one malformed line',
     })
@@ -484,7 +471,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit failed v1 terminal event',
     })
@@ -532,10 +518,8 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'test capabilities',
-      capabilities: ['browser-use', 'computer-use'],
     })
 
     const result = await handle.wait()
@@ -566,10 +550,8 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'test no capabilities',
-      capabilities: [],
     })
 
     const result = await handle.wait()
@@ -599,7 +581,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit legacy native terminal events',
     })
@@ -644,7 +625,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit scoped usage',
       taskId,
@@ -703,7 +683,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'cur-grok',
-      permission: 'readonly',
       cwd,
       prompt: 'emit cursor usage',
     })
@@ -803,7 +782,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit unscoped usage',
       taskId,
@@ -859,7 +837,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit normalized tool_call and tool_result',
     })
@@ -910,7 +887,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit legacy native session id and canonical terminal event',
     })
@@ -937,7 +913,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'forge/general',
-      permission: 'readonly',
       cwd,
       prompt: 'test requested agent runtime',
       requestedAgentRuntime: 'forge/general',
@@ -960,7 +935,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'test resolved profile null',
     })
@@ -998,7 +972,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'emit two run_started events',
     })
@@ -1045,7 +1018,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     const supervisor = makeSupervisor()
     const handle = await supervisor.startExecution({
       profile: 'forge/fast',
-      permission: 'readonly',
       cwd,
       prompt: 'run policy',
       requestedAgentRuntime: 'forge/fast',
@@ -1070,7 +1042,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     // Start without requestedAgentRuntime to simulate legacy
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'legacy execution',
     })
@@ -1103,7 +1074,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
 
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'edit',
       cwd,
       prompt: 'long running',
       taskId,
@@ -1173,7 +1143,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
 
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'edit',
       cwd,
       prompt: 'stalled observer cancel',
       taskId,
@@ -1281,7 +1250,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
 
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'edit',
       cwd,
       prompt: 'should not run',
       taskId,
@@ -1326,7 +1294,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
       const supervisor = makeSupervisor()
       const handle = await supervisor.startExecution({
         profile: 'test',
-        permission: 'readonly',
         cwd,
         prompt: 'record env',
         taskId,
@@ -1358,7 +1325,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
       installLongRunningFakeForge(blockerCwd, blockerStarted)
       const handle = await supervisor.startExecution({
         profile: 'test',
-        permission: 'readonly',
         cwd: blockerCwd,
         prompt: 'blocker',
       })
@@ -1382,7 +1348,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
 
     const handle = await supervisor.startExecution({
       profile: 'codebuddy/deepseek-v3.2:cb',
-      permission: 'readonly',
       cwd,
       prompt: 'queued child',
       taskId,
@@ -1447,7 +1412,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
     await assert.rejects(
       supervisor.startExecution({
         profile: 'codebuddy/deepseek-v3.2:cb',
-        permission: 'readonly',
         cwd,
         prompt: 'reject incomplete binding',
         codeBuddyExecution: invalidBinding,
@@ -1478,7 +1442,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
 
       const handle = await supervisor.startExecution({
         profile: 'codebuddy/deepseek-v3.2:cb',
-        permission: 'readonly',
         cwd,
         prompt: 'record private admission env',
         codeBuddyExecution: privateValues,
@@ -1502,7 +1465,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
       ])
       const nonCodeBuddy = await supervisor.startExecution({
         profile: 'test',
-        permission: 'readonly',
         cwd,
         prompt: 'do not inject private admission env',
         codeBuddyExecution: privateValues,
@@ -1535,7 +1497,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
       const supervisor = makeSupervisor()
       const handle = await supervisor.startExecution({
         profile: 'test',
-        permission: 'readonly',
         cwd,
         prompt: 'taskless child',
       })
@@ -1969,7 +1930,6 @@ setInterval(() => {}, 1000)
 
     const handle = await supervisor.startExecution({
       profile: 'test',
-      permission: 'edit',
       cwd,
       prompt: 'timeout race',
       taskId,
@@ -2089,7 +2049,6 @@ setInterval(() => {}, 1000)
 
     const handleA = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'attempt A',
       taskId,
@@ -2101,7 +2060,6 @@ setInterval(() => {}, 1000)
     ])
     const handleB = await supervisor.startExecution({
       profile: 'test',
-      permission: 'readonly',
       cwd,
       prompt: 'attempt B',
       taskId,
@@ -2147,7 +2105,6 @@ async function runFinalEvent(event: Record<string, unknown>): Promise<RawResultR
   const supervisor = makeSupervisor()
   const handle = await supervisor.startExecution({
     profile: 'test',
-    permission: 'readonly',
     cwd,
     prompt: 'emit one final event',
   })
@@ -2400,7 +2357,7 @@ it('spawns automatic low and max with isolated per-attempt plans', async () => {
         speed: { effective_tps: 60, source: 'catalog_default', sample_count: 0, checked_at: now, expected_tps_met: true },
         reference_pricing: { source: 'catalog', checked_at: now },
       }
-      const handle = await supervisor.startExecution({ profile, cwd, prompt: 'echo', permission: 'readonly', taskId, dispatchSnapshot: snapshot })
+      const handle = await supervisor.startExecution({ profile, cwd, prompt: 'echo', taskId, dispatchSnapshot: snapshot })
       assert.equal((await handle.wait()).status, 'done')
       const plans = JSON.parse(JSON.parse(readFileSync(envPath, 'utf8')).WRENYARD_DISPATCH_PLANS_JSON)
       assert.equal(plans[profile].thinking, thinking)

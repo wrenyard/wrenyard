@@ -31,11 +31,13 @@ import type {
   TaskGraphSlipNode,
   TaskGraphSlipResult,
   TaskGraphInspectResult,
+  TaskGraphStatusResult,
+  TaskGraphEntityDtoWithPresentation,
 } from '../../src/pet/shared/taskgraph';
 import { projectGraphSlipFromActivity, projectGraphSlipSnapshot, snapshotAllowsTranscript } from '../../src/main/windows/graph-slip-snapshot-dto';
 import type { TaskGraphSnapshot } from '../../src/main/daemon-client/foreman-taskgraph-reader';
 import { ForemanTaskGraphReader } from '../../src/main/daemon-client/foreman-taskgraph-reader';
-import type { ForemanIpcClient } from '../../src/pet/main/foreman-ipc-client';
+import type { DaemonClient } from '../../src/main/daemon-client/client';
 import { TaskGraphWindowOwner, countDoneTaskNodes, fitGraphSlipWindowSize, placeWrenWindow } from '../../src/main/windows/taskgraph-windows';
 import {
   ACTIVITY_SNAPSHOT_SCHEMA_VERSION,
@@ -130,8 +132,9 @@ const electronMocks = vi.hoisted(() => {
     return win;
   };
 
-  const BrowserWindow = vi.fn((options?: Record<string, number>) => makeMockWin(options));
-  BrowserWindow.fromWebContents = (wc: object): unknown => windowsByContents.get(wc) ?? null;
+  const BrowserWindow = Object.assign(vi.fn((options?: Record<string, number>) => makeMockWin(options)), {
+    fromWebContents: (wc: object): unknown => windowsByContents.get(wc) ?? null,
+  });
 
   return {
     ipcHandlers,
@@ -618,7 +621,7 @@ describe('TaskGraph generation guard', () => {
         }
         throw new Error(`unexpected method: ${method}`);
       },
-    } as unknown as ForemanIpcClient;
+    } as unknown as DaemonClient;
 
     await new ForemanTaskGraphReader(client).loadSnapshot('tg-canonical');
 
@@ -659,7 +662,7 @@ describe('TaskGraph generation guard', () => {
         }
         throw new Error(`unexpected method: ${method}`);
       },
-    } as unknown as ForemanIpcClient;
+    } as unknown as DaemonClient;
 
     const snapshot = await new ForemanTaskGraphReader(client).loadSnapshot('tg-pages');
 
@@ -691,7 +694,7 @@ describe('TaskGraph generation guard', () => {
         }
         throw new Error(`unexpected method: ${method}`);
       },
-    } as unknown as ForemanIpcClient;
+    } as unknown as DaemonClient;
 
     await expect(new ForemanTaskGraphReader(client).loadSnapshot('tg-expected')).rejects.toThrow(
       'taskgraph.events identity mismatch',
@@ -706,7 +709,7 @@ describe('TaskGraph generation guard', () => {
         next_seq: 0,
         has_more: false,
       }),
-    } as unknown as ForemanIpcClient;
+    } as unknown as DaemonClient;
     const reader = new ForemanTaskGraphReader(client);
 
     await expect(reader.loadTaskEvents('run-expected')).rejects.toThrow(
@@ -717,7 +720,7 @@ describe('TaskGraph generation guard', () => {
   it('snapshot with mismatched generation is detected', () => {
     const inspectRev = 3;
     const statusRev = 5;
-    expect(inspectRev === statusRev).toBe(false);
+    expect(inspectRev).not.toBe(statusRev);
   });
 
   it('snapshot with matching generation passes', () => {
@@ -742,7 +745,7 @@ describe('Graph Slip request contract', () => {
         if (!handler) throw new Error(`unexpected method: ${method}`);
         return handler(params);
       },
-    } as unknown as ForemanIpcClient;
+    } as unknown as DaemonClient;
     return { reader: new ForemanTaskGraphReader(client), calls };
   }
 
@@ -1067,7 +1070,7 @@ describe('Graph Slip identity boundary (structure_revision / latest_seq)', () =>
           }
           throw new Error(`unexpected method: ${method}`);
         },
-      } as unknown as ForemanIpcClient;
+      } as unknown as DaemonClient;
       return new ForemanTaskGraphReader(client);
     };
 
@@ -1662,7 +1665,7 @@ describe('Graph Slip display facts projection', () => {
             graph_state: 'running',
             structure_revision: 1,
             latest_seq: 1,
-            nodes: slipNodes as TaskGraphSlipNode[],
+            nodes: slipNodes as unknown as TaskGraphSlipNode[],
           }
         : undefined,
     };
@@ -1969,7 +1972,7 @@ describe('Active list request', () => {
         expect(params.states).toEqual(['running', 'paused']);
         return { runs: [{ taskgraph_id: 'tg-1', state: 'running', structure_revision: 1, created_at: '', updated_at: '' }] };
       },
-    } as unknown as ForemanIpcClient;
+    } as unknown as DaemonClient;
     const reader = new ForemanTaskGraphReader(client);
     return reader.listActive().then(function (result) {
       expect(result.runs).toHaveLength(1);
@@ -1981,7 +1984,7 @@ describe('Active list request', () => {
       request: async () => ({
         runs: [{ taskgraph_id: 'tg-1', state: 'created', structure_revision: 1, created_at: '', updated_at: '' }],
       }),
-    } as unknown as ForemanIpcClient;
+    } as unknown as DaemonClient;
     const reader = new ForemanTaskGraphReader(client);
     await expect(reader.listActive()).rejects.toThrow('invalid state');
   });
@@ -2488,12 +2491,12 @@ describe('Safe transcript event normalization', () => {
       seq: 5, type: 'custom_event', timestamp: '2025-01-01T00:00:00Z',
       data: { secret: 'leaked' },
     };
-    const safe = normalizeSafeEvent(raw);
+    const safe = normalizeSafeEvent(raw) as Extract<SafeTranscriptEventData, { type: 'unknown' }>;
     expect(safe.type).toBe('unknown');
     expect(safe.event_type).toBe('custom_event');
-    expect((safe as Record<string, unknown>).timestamp).toBe('2025-01-01T00:00:00Z');
-    expect((safe as Record<string, unknown>).data).toEqual({});
-    expect('secret' in (safe as Record<string, unknown>).data as Record<string, never>).toBe(false);
+    expect(safe.timestamp).toBe('2025-01-01T00:00:00Z');
+    expect(safe.data).toEqual({});
+    expect('secret' in safe.data).toBe(false);
   });
 
   it('normalizes persisted task lifecycle rows for the Work Slip', () => {
@@ -2676,7 +2679,7 @@ describe('taskRunIsTerminal protocol contract', () => {
   const makeReader = (respond: (params: Record<string, unknown>) => unknown) =>
     new ForemanTaskGraphReader({
       request: async (method: string, params: Record<string, unknown>) => respond(params),
-    } as unknown as ForemanIpcClient);
+    } as unknown as DaemonClient);
 
   it('accepts echoed-id string statuses and classifies live vs terminal', async () => {
     expect(await makeReader((p) => ({ task_run_id: p.task_run_id, status: 'running' })).taskRunIsTerminal('run-1')).toBe(false);
@@ -3466,7 +3469,7 @@ class FakeForemanClient {
 
 interface OwnerInternals {
   entities: Map<string, {
-    dto: { id: string; state: 'created' | 'running' | 'paused'; revision: number };
+    dto: TaskGraphEntityDtoWithPresentation;
     stale: boolean;
     exiting: boolean;
     manuallyPositioned: boolean;
@@ -3556,7 +3559,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
 
   function makeOwner(): TaskGraphWindowOwner {
     return new TaskGraphWindowOwner({
-      foremanIpcClient: client as unknown as ForemanIpcClient,
+      daemonClient: client as unknown as DaemonClient,
       htmlDir: '/nonexistent/html',
       preloadDir: '/nonexistent/preload',
       getHouseWindow: () => null,
@@ -3655,7 +3658,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
 
   it('hides only Wren entity windows while preserving activity state and Graph Slips', async () => {
     owner = new TaskGraphWindowOwner({
-      foremanIpcClient: client as unknown as ForemanIpcClient,
+      daemonClient: client as unknown as DaemonClient,
       htmlDir: '/nonexistent/html',
       preloadDir: '/nonexistent/preload',
       getHouseWindow: () => null,
@@ -3755,7 +3758,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
   it('uses and updates remembered manual Graph Slip size without auto-fitting', async () => {
     const onGraphSlipGeometryChange = vi.fn();
     owner = new TaskGraphWindowOwner({
-      foremanIpcClient: client as unknown as ForemanIpcClient,
+      daemonClient: client as unknown as DaemonClient,
       htmlDir: '/nonexistent/html',
       preloadDir: '/nonexistent/preload',
       getHouseWindow: () => null,
@@ -3789,7 +3792,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
   it('remembers Graph Slip movement without turning the auto-fitted size into a manual size', async () => {
     const onGraphSlipGeometryChange = vi.fn();
     owner = new TaskGraphWindowOwner({
-      foremanIpcClient: client as unknown as ForemanIpcClient,
+      daemonClient: client as unknown as DaemonClient,
       htmlDir: '/nonexistent/html',
       preloadDir: '/nonexistent/preload',
       getHouseWindow: () => null,

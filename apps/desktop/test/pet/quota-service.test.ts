@@ -1,23 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { spawn } from 'node:child_process';
-import path from 'node:path';
-import { parseQuotaJson, sanitizeQuotaChildEnv } from '../../src/main/projections/quota-service';
 
-vi.mock('node:child_process', () => {
-  const { EventEmitter } = require('node:events');
-  return {
-    spawn: vi.fn(() => {
-      const proc = new EventEmitter() as any;
-      proc.stdout = new EventEmitter() as any;
-      proc.stderr = new EventEmitter() as any;
-      proc.stdout.readable = true;
-      proc.stderr.readable = true;
-      proc.pid = 42;
-      proc.connected = true;
-      return proc;
-    }),
-  };
-});
+
+import { parseQuotaJson } from '../../src/main/projections/quota-service';
 
 describe('parseQuotaJson', () => {
   it('parses provider-level remaining_pct and expected_remaining_pct with no windows', () => {
@@ -394,27 +378,5 @@ describe('parseQuotaJson — unified ChatGPT provider', () => {
     expect(providers).toHaveLength(1);
     expect(providers[0].id).toBe('chatgpt');
     expect(providers.some((entry) => entry.id.startsWith('pool-'))).toBe(false);
-  });
-});
-
-describe('sanitizeQuotaChildEnv', () => {
-  it('drops npm node_modules/.bin entries and prefers user/homebrew bins', () => {
-    const home = '/tmp/tester-home';
-    const env = sanitizeQuotaChildEnv({
-      HOME: home,
-      PATH: [
-        `${home}/Documents/Github/wrenyard/apps/desktop/node_modules/.bin`,
-        `${home}/node_modules/.bin`,
-        '/node_modules/.bin',
-        '/opt/homebrew/bin',
-        '/usr/bin',
-      ].join(path.delimiter),
-    });
-    expect(env.PATH?.split(path.delimiter)).toEqual([
-      path.join(home, '.local', 'bin'),
-      '/opt/homebrew/bin',
-      '/usr/local/bin',
-      '/usr/bin',
-    ]);
   });
 });

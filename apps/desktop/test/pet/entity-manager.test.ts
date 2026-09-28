@@ -96,8 +96,7 @@ function makeClock() {
 }
 
 function makeWorker(overrides: Partial<WorkerSnapshot> & { workerIdentityKey: string }): WorkerSnapshot {
-  const workerIdentityKey = overrides.workerIdentityKey ?? 't1';
-  const profile = overrides.profile ?? 'cb-dsf';
+  const { workerIdentityKey = 't1', profile = 'cb-dsf', ...rest } = overrides;
   return {
     workerIdentityKey,
     profile,
@@ -112,12 +111,26 @@ function makeWorker(overrides: Partial<WorkerSnapshot> & { workerIdentityKey: st
       isWorktree: false,
       status: 'running',
     },
-    ...overrides,
+    ...rest,
   };
 }
 
 function makeSnapshot(workers: WorkerSnapshot[]): SiteSnapshot {
   return { workers, queuedCount: 0 };
+}
+
+// Minimal shape of the private WorkerEntity records kept in EntityManager.workers.
+interface WorkerEntityInternal {
+  window: { isDestroyed(): boolean };
+  view: { lastActivityTs?: number; lastContentTs?: number };
+  fade?: { from: number; to: number; startMs: number; durationMs: number; destroyOnComplete: boolean };
+  pendingRetireUntil?: number;
+}
+
+function internalWorkers(em: EntityManager): WorkerEntityInternal[] {
+  return Array.from(
+    (em as unknown as { workers: Map<string, WorkerEntityInternal> }).workers.values(),
+  );
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -130,12 +143,15 @@ describe('EntityManager — key reuse after retirement', () => {
     clock = makeClock();
 
     const config: AppConfig = {
+      enabled: true,
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
+      quota: { providers: [] },
+      windows: {},
     };
 
     em = new EntityManager({
@@ -191,7 +207,7 @@ describe('EntityManager — key reuse after retirement', () => {
     // Reuse before fade completion keeps the same window alive and cancels fade.
     em.syncSnapshot(makeSnapshot([makeWorker({ workerIdentityKey: 't1', phase: 'working' })]));
     expect(mockCreateWorker).toHaveBeenCalledTimes(0);
-    const workers = Array.from((em as any).workers.values());
+    const workers = internalWorkers(em);
     expect(workers).toHaveLength(1);
     expect(workers[0].fade).toBeUndefined();
     expect(workers[0].window.isDestroyed()).toBe(false);
@@ -201,25 +217,25 @@ describe('EntityManager — key reuse after retirement', () => {
     clock.set(1_000);
     em.syncSnapshot(makeSnapshot([makeWorker({ workerIdentityKey: 't1', toolCount: 0, lastText: 'starting' })]));
 
-    let worker = Array.from((em as any).workers.values())[0];
+    let worker = internalWorkers(em)[0];
     expect(worker.view.lastActivityTs).toBe(1_000);
     expect(worker.view.lastContentTs).toBe(1_000);
 
     clock.set(1_500);
     em.syncSnapshot(makeSnapshot([makeWorker({ workerIdentityKey: 't1', toolCount: 0, lastText: 'starting' })]));
-    worker = Array.from((em as any).workers.values())[0];
+    worker = internalWorkers(em)[0];
     expect(worker.view.lastActivityTs).toBe(1_000);
     expect(worker.view.lastContentTs).toBe(1_000);
 
     clock.set(2_000);
     em.syncSnapshot(makeSnapshot([makeWorker({ workerIdentityKey: 't1', toolCount: 1, lastText: 'starting' })]));
-    worker = Array.from((em as any).workers.values())[0];
+    worker = internalWorkers(em)[0];
     expect(worker.view.lastActivityTs).toBe(2_000);
     expect(worker.view.lastContentTs).toBe(1_000);
 
     clock.set(2_500);
     em.syncSnapshot(makeSnapshot([makeWorker({ workerIdentityKey: 't1', toolCount: 1, lastText: 'new output' })]));
-    worker = Array.from((em as any).workers.values())[0];
+    worker = internalWorkers(em)[0];
     expect(worker.view.lastActivityTs).toBe(2_500);
     expect(worker.view.lastContentTs).toBe(2_500);
   });
@@ -233,12 +249,15 @@ describe('EntityManager — bubble-based delayed retirement', () => {
     clock = makeClock();
 
     const config: AppConfig = {
+      enabled: true,
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
+      quota: { providers: [] },
+      windows: {},
     };
 
     em = new EntityManager({
@@ -261,14 +280,14 @@ describe('EntityManager — bubble-based delayed retirement', () => {
     // Worker has lastText → generates bubble with untilMs = 1000 + 6000 = 7000
     em.syncSnapshot(makeSnapshot([makeWorker({ workerIdentityKey: 't1', lastText: 'working on it' })]));
 
-    let workers = Array.from((em as any).workers.values());
+    let workers = internalWorkers(em);
     expect(workers).toHaveLength(1);
     expect(workers[0].window.isDestroyed()).toBe(false);
 
     // Remove worker from snapshot — bubble still active, should NOT destroy window
     em.syncSnapshot(makeSnapshot([]));
 
-    workers = Array.from((em as any).workers.values());
+    workers = internalWorkers(em);
     expect(workers).toHaveLength(1);
     expect(workers[0].window.isDestroyed()).toBe(false);
     expect(workers[0].pendingRetireUntil).toBe(7000);
@@ -286,7 +305,7 @@ describe('EntityManager — bubble-based delayed retirement', () => {
     clock.set(5000);
     em.tick();
 
-    const workers = Array.from((em as any).workers.values());
+    const workers = internalWorkers(em);
     expect(workers).toHaveLength(1);
     expect(workers[0].window.isDestroyed()).toBe(false);
     // No fade started yet
@@ -305,12 +324,12 @@ describe('EntityManager — bubble-based delayed retirement', () => {
     clock.set(6000);
     em.tick();
 
-    let workers = Array.from((em as any).workers.values());
+    let workers = internalWorkers(em);
     expect(workers).toHaveLength(1);
     // FadeOut should have started
     expect(workers[0].fade).toBeDefined();
-    expect(workers[0].fade.to).toBe(0);
-    expect(workers[0].fade.destroyOnComplete).toBe(true);
+    expect(workers[0].fade!.to).toBe(0);
+    expect(workers[0].fade!.destroyOnComplete).toBe(true);
     expect(workers[0].window.isDestroyed()).toBe(false);
 
     // Advance through fade duration
@@ -318,7 +337,7 @@ describe('EntityManager — bubble-based delayed retirement', () => {
     em.tick();
 
     // Worker should be fully destroyed and removed from the map
-    workers = Array.from((em as any).workers.values());
+    workers = internalWorkers(em);
     expect(workers).toHaveLength(0);
   });
 
@@ -330,14 +349,14 @@ describe('EntityManager — bubble-based delayed retirement', () => {
     // Remove worker → pendingRetireUntil = 6000
     em.syncSnapshot(makeSnapshot([]));
 
-    let workers = Array.from((em as any).workers.values());
+    let workers = internalWorkers(em);
     expect(workers[0].pendingRetireUntil).toBe(6000);
 
     // Worker reappears before bubble expiry → pending retirement cancelled
     clock.set(3000);
     em.syncSnapshot(makeSnapshot([makeWorker({ workerIdentityKey: 't1', lastText: 'working on it' })]));
 
-    workers = Array.from((em as any).workers.values());
+    workers = internalWorkers(em);
     expect(workers).toHaveLength(1);
     expect(workers[0].pendingRetireUntil).toBeUndefined();
 
@@ -346,7 +365,7 @@ describe('EntityManager — bubble-based delayed retirement', () => {
     em.tick();
 
     // Window still alive because reappearance cancelled the pending retirement
-    workers = Array.from((em as any).workers.values());
+    workers = internalWorkers(em);
     expect(workers).toHaveLength(1);
     expect(workers[0].window.isDestroyed()).toBe(false);
   });
@@ -371,12 +390,15 @@ describe('EntityManager — stats clear regression', () => {
     clock = makeClock();
 
     const config: AppConfig = {
+      enabled: true,
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
+      quota: { providers: [] },
+      windows: {},
     };
 
     em = new EntityManager({
@@ -435,12 +457,15 @@ describe('EntityManager — quota tips plumbing', () => {
     clock = makeClock();
 
     const config: AppConfig = {
+      enabled: true,
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
+      quota: { providers: [] },
+      windows: {},
     };
 
     em = new EntityManager({
@@ -492,12 +517,15 @@ describe('EntityManager — house skin', () => {
     onConfigChange = vi.fn();
 
     const config: AppConfig = {
+      enabled: true,
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
+      quota: { providers: [] },
+      windows: {},
     };
 
     em = new EntityManager({
@@ -536,12 +564,15 @@ describe('EntityManager — house skin', () => {
   it('setHouseSkin persists through config change callback', () => {
     let captured: AppConfig | undefined;
     const cfg: AppConfig = {
+      enabled: true,
       scale: 3,
       bubbleSeconds: 6,
       bottomOffset: 0,
       house: {},
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
+      quota: { providers: [] },
+      windows: {},
     };
     const localEm = new EntityManager({
       preloadPath: '/fake/preload.js',

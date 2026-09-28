@@ -6,9 +6,9 @@ import {
   UPDATE_FEED_SCHEMA_VERSION as SCHEMA_VERSION,
   channelForVersion,
   compareVersions,
-  desktopAssetName,
+  installerAssetName,
   isSemver,
-  suiteAssetName,
+  updateAssetName,
 } from '../../packages/protocol/src/update-feed.ts';
 
 // Static update feed generator.
@@ -26,9 +26,12 @@ import {
 //     "version": "<semver>",
 //     "published_at": "<ISO-8601>",
 //     "assets": [
-//       { "name": "<archive name>", "url": "<release download url>", "sha256": "<64 hex>" }
+//       { "name": "<asset name>", "url": "<release download url>", "sha256": "<64 hex>" }
 //     ]
 //   }
+//
+// Every release publishes exactly three assets: the macOS installer (DMG), the
+// macOS in-app update (ZIP) and the Windows installer/update (NSIS setup.exe).
 //
 // Everything in this module is pure generation/preparation. It never reads
 // credentials, never talks to git, and never publishes anything: the release
@@ -38,15 +41,14 @@ import {
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-// The four canonical public archive names are derived from the requested
+// The three canonical public asset names are derived from the requested
 // version, so a wrong-version asset (e.g. dev25 names staged for a dev26
-// release) or a missing/wrong Desktop prefix can never be published.
+// release) or a missing/mislabeled installer can never be published.
 export function canonicalAssetNames(version) {
   return [
-    suiteAssetName(version, 'darwin-arm64'),
-    desktopAssetName(version, 'darwin-arm64'),
-    suiteAssetName(version, 'win32-x64'),
-    desktopAssetName(version, 'win32-x64'),
+    installerAssetName(version, 'darwin-arm64'),
+    updateAssetName(version, 'darwin-arm64'),
+    installerAssetName(version, 'win32-x64'),
   ];
 }
 
@@ -71,10 +73,10 @@ function assertTimestamp(publishedAt) {
   return parsed.toISOString();
 }
 
-// The four assets must be exactly the canonical names derived from the
-// requested version. A missing, extra, wrong-version or malformed name is a
-// hard error: a feed that advertises a partial or mislabeled archive set would
-// break every client that trusts it.
+// The assets must be exactly the canonical names derived from the requested
+// version. A missing, extra, wrong-version or malformed name is a hard error: a
+// feed that advertises a partial or mislabeled asset set would break every
+// client that trusts it.
 export function assertAssetNames(names, version) {
   const expected = canonicalAssetNames(version);
   const expectedSet = new Set(expected);
@@ -90,22 +92,23 @@ export function assertAssetNames(names, version) {
   }
   for (const name of expected) {
     if (!seen.has(name)) {
-      throw new Error(`missing canonical public archive ending in ${name.slice(`wrenyard-${version}`.length)}`);
+      throw new Error(`missing canonical public archive ${name}`);
     }
   }
   return expected;
 }
 
 // Build one immutable version document from local release assets. `assetsDir`
-// holds the four archives, which are hashed here so the manifest can never
+// holds the three installers, which are hashed here so the manifest can never
 // disagree with what was uploaded, and every asset URL is derived from the
 // validated version/repository rather than being accepted from the caller.
 export function buildVersionDocument({ version, repository, publishedAt, assetsDir }) {
   if (!isSemver(version)) throw new Error(`invalid version: ${version}`);
   const repo = assertRepository(repository);
   const published = assertTimestamp(publishedAt);
-  const names = readdirSync(assetsDir)
-    .filter((name) => name.endsWith('.zip'))
+  const names = readdirSync(assetsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
     .sort();
   const canonical = assertAssetNames(names, version);
   const assets = canonical.map((name) => {
@@ -143,13 +146,11 @@ function readExisting(path) {
 // Prepare the metadata directory without publishing anything.
 //
 // Returns the list of files that changed so the caller can stage exactly those:
-// the immutable versions/<version>.json, the mutable channel head and any
-// `extraFiles` (the publish job passes install.sh/install.ps1 so the feed and
-// the bootstrap scripts land in one commit). Repeat runs with identical content
-// are no-ops; a conflicting snapshot for an already published version is
-// rejected instead of overwritten, and an older release never regresses the
-// channel head.
-export function prepareMetadata({ assetsDir, version, repository, publishedAt, metadataDir, extraFiles = [] }) {
+// the immutable versions/<version>.json and the mutable channel head. Repeat
+// runs with identical content are no-ops; a conflicting snapshot for an already
+// published version is rejected instead of overwritten, and an older release
+// never regresses the channel head.
+export function prepareMetadata({ assetsDir, version, repository, publishedAt, metadataDir }) {
   const document = buildVersionDocument({ version, repository, publishedAt, assetsDir });
   const channel = channelForVersion(version);
   const versionsDir = resolve(metadataDir, 'versions');
@@ -173,13 +174,13 @@ export function prepareMetadata({ assetsDir, version, repository, publishedAt, m
       // but still record the immutable snapshot for this version.
       mkdirSync(versionsDir, { recursive: true });
       writeFileSync(versionPath, rendered);
-      return { channel, files: [versionPath, ...extraFiles], updatedChannel: false, document };
+      return { channel, files: [versionPath], updatedChannel: false, document };
     }
   }
 
   const channelChanged =
     existingChannel === null || renderDocument(existingChannel) !== rendered;
-  const files = [versionPath, ...extraFiles];
+  const files = [versionPath];
   mkdirSync(versionsDir, { recursive: true });
   writeFileSync(versionPath, rendered);
   if (channelChanged) {

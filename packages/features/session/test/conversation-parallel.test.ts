@@ -848,7 +848,7 @@ test('a send after three out-of-order concurrent turns inherits every completed 
       await restored.client.send('第五个问题');
       assert.ok(await waitFor(() => restored.fake.calls.filter((call) => call.method === 'session.prompt').length === 1));
       const fifth = restored.fake.calls.filter((call) => call.method === 'session.prompt').at(-1);
-      const fifthText = String((fifth?.payload.content as Array<{ text: string }>)[0]?.text);
+      const fifthText = String((fifth?.payload.content as Array<{ text: string }> | undefined)?.[0]?.text);
       assert.equal(fifthText, '第五个问题', 'a fully covered ancestry injects nothing, even after restore');
       const forkAfterRestore = restored.fake.calls.filter((call) => call.method === 'session.fork');
       assert.equal(forkAfterRestore.length, 1);
@@ -922,7 +922,7 @@ test('a pre-upgrade linear chain restores its ancestry instead of injecting its 
       await restored.client.send('第四个问题');
       assert.ok(await waitFor(() => restored.fake.calls.filter((call) => call.method === 'session.prompt').length === 1));
       const fourth = restored.fake.calls.filter((call) => call.method === 'session.prompt').at(-1);
-      const fourthText = String((fourth?.payload.content as Array<{ text: string }>)[0]?.text);
+      const fourthText = String((fourth?.payload.content as Array<{ text: string }> | undefined)?.[0]?.text);
 
       // The restored ancestry makes the new turn fork the third cut with turns
       // one and two already covered: a linear history never re-injects its own
@@ -973,7 +973,7 @@ test('a still-running sibling stays out of the injected history', async () => {
     await harness.client.send('第四个问题');
     assert.ok(await waitFor(() => harness.fake.calls.filter((call) => call.method === 'session.prompt').length === 4));
     const fourth = harness.fake.calls.filter((call) => call.method === 'session.prompt').at(-1);
-    const text = String((fourth?.payload.content as Array<{ text: string }>)[0]?.text);
+    const text = String((fourth?.payload.content as Array<{ text: string }> | undefined)?.[0]?.text);
     // The fork base is turn three; only turn one's exchange is missing.
     assert.ok(text.includes('[wrenyard:conversation-history]'));
     assert.ok(text.includes('摘要：问题一'));
@@ -1534,7 +1534,7 @@ test('a dispatched task keeps the work turn running with a progress note, then o
     assert.ok(await waitFor(() => h.fake.calls.filter((call) => call.method === 'session.prompt').length === 2));
     const delivery = h.fake.calls.filter((call) => call.method === 'session.prompt').at(-1);
     assert.equal(String(delivery?.payload.sessionId), session, 'the result resumes the same execution session');
-    const delivered = String((delivery?.payload.content as Array<{ text: string }>)[0].text);
+    const delivered = String((delivery?.payload.content as Array<{ text: string }> | undefined)?.[0]?.text);
     assert.ok(delivered.includes('[wrenyard:task-results]'), 'the delivery is a marked internal data envelope');
     assert.ok(delivered.includes('tr-1'));
     assert.equal(h.fake.calls.filter((call) => call.method === 'session.fork').length, 0, 'a delivery never forks a new branch');
@@ -1799,7 +1799,7 @@ function deliveries(fake: FakeDsh, sessionId: string): string[] {
   return fake.calls
     .filter((call) => call.method === 'session.prompt' && call.payload.sessionId === sessionId)
     .slice(1)
-    .map((call) => String((call.payload.content as Array<{ text: string }>)[0].text));
+    .map((call) => String((call.payload.content as Array<{ text: string }> | undefined)?.[0]?.text));
 }
 
 test('a real internal error never completes a work turn that owns a dispatched run', async () => {

@@ -6,10 +6,6 @@
   "type": "module",
   "description": "Provider product feature: catalog listing and configuration plus per-provider quota acquisition.",
   "exports": "./src/index.ts",
-  "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --outfile=dist/index.js"
-  },
   "dependencies": {
     "@wrenyard/providers": "workspace:*",
     "@wrenyard/protocol": "workspace:*",

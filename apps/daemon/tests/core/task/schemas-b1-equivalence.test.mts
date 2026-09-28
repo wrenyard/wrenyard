@@ -35,7 +35,7 @@ const loadLegacy = (name: string): Record<string, unknown> =>
   JSON.parse(readFileSync(join(legacyDir, name), 'utf8'))
 const loadFixture = (name: string): Record<string, unknown> =>
   JSON.parse(readFileSync(join(fixtureDir, name), 'utf8'))
-const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
+const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
 // ─── Old (legacy) validator ────────────────────────────────────────
 

@@ -42,6 +42,12 @@ export interface DaemonStatusResult {
   activeTaskCount: number
   activeWorkflowCount: number
   activeExecutionCount: number
+  /**
+   * Active taskgraph runs, distinct from the legacy `activeWorkflowCount`. The
+   * daemon always returns it; the schema keeps it optional so responses from
+   * older daemons that predate the field remain valid.
+   */
+  activeTaskGraphCount?: number
 }
 
 export const daemonStatusParamsSchema = {
@@ -60,6 +66,9 @@ export const daemonStatusResultSchema = {
     activeTaskCount: { type: 'integer', minimum: 0 },
     activeWorkflowCount: { type: 'integer', minimum: 0 },
     activeExecutionCount: { type: 'integer', minimum: 0 },
+    // Optional (not in `required`) so a response from an older daemon that
+    // predates this field still validates; the daemon always emits it.
+    activeTaskGraphCount: { type: 'integer', minimum: 0 },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

@@ -84,16 +84,15 @@ Desktop renderer + preload + Electron main
   instead of being migrated at startup.
   Credential values are reduced to booleans in the main process and never sent
   to the renderer.
-- **Desktop-owned update check** — Desktop checks the update feed shortly after
+- **Desktop-owned updater** — Desktop checks the update feed shortly after
   startup and then at most once per hour; manual checks are not rate limited.
   Help → Check for Updates opens a native popup for current, available, waiting
-  and installing states. Desktop never downloads, stages or swaps artifacts
-  itself: after the user confirms, it reads `daemon.status.idle` (waiting for
-  active work to finish when needed), resolves the installed suite's SEA
-  executable, and spawns `wrenyard update --wait-pid <pid> --relaunch-desktop`
-  before quitting. The suite engine performs the verified install, rollback and
-  relaunch; Desktop reads the engine's result file on the next launch to report
-  a failed or interrupted update.
+  and installing states. After the user confirms, Desktop waits for
+  `daemon.status.idle`, downloads the platform update asset and verifies its
+  SHA-256 against the feed, writes `update-pending.json`, and applies it with a
+  platform applier (`setup.exe /S` on Windows, a verified zip swap on macOS)
+  before quitting. The first version does not roll back; a failed or interrupted
+  update is reported on the next launch.
 - **Notification-area ownership** — Desktop owns the single three-wren macOS
   template icon and menu. It exists only while Desktop is active. The compact
   menu exposes only “打开”, “桌宠”, “额度” and “退出”; settings and statistics
@@ -107,25 +106,28 @@ Desktop renderer + preload + Electron main
 
 - **Single instance** — a second launch only focuses the existing window.
 - **Window identity** — Pet overlays never suppress the macOS Dock identity of
-  the Desktop host. Closing the product window hides it without ending the tray,
-  DSH or Pet lifecycle; the Dock activation event and the tray “打开” command
-  restore the same window.
+  the Desktop host. Closing the product window hides it to the tray without
+  ending the tray, DSH or Pet lifecycle on every platform; only the tray “退出”
+  command quits. The Dock activation event and the tray “打开” command restore
+  the same window.
 - **Wrenyard and workspace gates** — Desktop probes
   `WrenyardIpcClient.health.ping()` on the resolved IPC socket (`WRENYARD_IPC_PATH`, legacy
   `FOREMAN_*` names, then `\\.\pipe\wrenyard` on Windows or `/tmp/wrenyard.sock`
-  on Unix). Blank environment values are ignored. If no daemon is
-  answering, the main process locates the installed Wrenyard CLI via
-  `WRENYARD_CLI`, the working directory, or `~/.local/bin`, starts the service
-  once (`wrenyard daemon start`), and retries health.ping with bounded retries.
-  If the CLI cannot be found or never becomes ready, the product shell and its
-  settings remain available while control-plane features report unavailable.
-  A missing or invalid `workspace.root` prevents DSH from starting and places
-  an explicit gate over conversations. The gate can open settings or save a
-  valid directory directly; Desktop persists and activates the daemon workspace,
-  then refreshes the session projection without an App relaunch.
-  LaunchServices provides no shell environment, so the
-  CLI is located explicitly and the resolved connection context is passed to
-  the DSH child directly. Wrenyard remains the sole state/permission owner.
+  on Unix). Blank environment values are ignored. If a daemon is already
+  answering (started by a terminal `wrenyard daemon run` or
+  `pnpm dev:desktop`), Desktop enters
+  **connection mode**: it only connects, never supervises, and leaves the daemon
+  running on exit. Otherwise Desktop enters **supervised mode**: it starts the
+  daemon as a child of its own process with the packaged runtime and control
+  tree running `wrenyard daemon run`, carrying a Node IPC channel, and retries
+  `health.ping`. It restarts an unexpectedly exited daemon (1s/5s/15s, at most
+  3 times in 5 minutes) and, on a clean exit, shows “daemon stopped” with a
+  restart action; a failed start shows its reason. A missing or invalid
+  `workspace.root` prevents DSH from starting and places an explicit gate over
+  conversations. The gate can open settings or save a valid directory directly;
+  Desktop persists and activates the daemon workspace, then refreshes the
+  session projection without an App relaunch. Wrenyard remains the sole
+  state/permission owner.
 - **Session ownership** — the daemon's session feature owns the DSH child,
   conversation history, summary preference, task ownership and recovery.
   Desktop receives versioned product snapshots over IPC. Closing Desktop
@@ -163,9 +165,10 @@ daemon owns the managed copy; Desktop no longer copies DSH resources.
 
 - The DSH web child binds loopback only (`127.0.0.1`); the URL parser rejects
   any non-loopback or malformed line (including DNS-rebinding style input).
-- Wrenyard connection context (`WRENYARD_MCP_URL`, `WRENYARD_MCP_SENDER`,
-  `WRENYARD_IPC_PATH`, with legacy `FOREMAN_*` fallbacks) is propagated to the
-  child without ever being logged.
+- Wrenyard connection context (`WRENYARD_IPC_PATH`, with legacy `FOREMAN_*`
+  fallbacks) is propagated to the child without ever being logged. The daemon
+  has no MCP or HTTP client surface; the gateway that serves its own agents
+  binds a random loopback port with an in-memory token.
 - The shell renderer has no Node access and receives only bounded settings,
   statistics, quota and conversation projections. Only the daemon session feature
   talks to DSH; the renderer cannot open windows or navigate off-origin.
@@ -177,14 +180,13 @@ daemon owns the managed copy; Desktop no longer copies DSH resources.
 
 | Command | Purpose |
 | --- | --- |
-| `npm run build` | typecheck + esbuild main bundle + type declarations |
-| `npm run typecheck` | `tsc --noEmit` |
+| `npm run build` | build the Desktop bundle (`dist/`) |
 | `npm test` | Desktop shell tests (session engine tests live in packages/features/session/test) |
-| `npm run start` | run Electron against the current build |
-| `npm run dev` | build then run Electron |
-| `npm run smoke` | build then launch hidden Electron; exits 0 on load + health, non-zero on timeout |
-| `npm run dist:dir` | unpacked Electron build into `release/` (Spotlight-hidden) |
-| `npm run dist:zip` | zip artifacts for the current platform (publish never) |
+
+From the repository root: `pnpm dev:desktop` supervises the daemon and Desktop
+from source, `pnpm dev:daemon` supervises only the daemon, `pnpm lint` and
+`pnpm check` run the repository gates, and `pnpm release <x.y.z>` packs this
+platform's installer.
 
 ## Signing
 
@@ -197,8 +199,9 @@ unsigned unless a signtool identity is supplied.
 
 ## Requirements
 
-- Node.js `>=22.19.0`
-- A Wrenyard daemon (the startup health gate starts it on demand through the
-  installed CLI)
+- Node.js `>=22.19.0` for source development (the packaged app ships its own
+  Node runtime)
+- A Wrenyard daemon. Desktop connects to one that is already running, or
+  supervises one itself with the packaged runtime (`wrenyard daemon run`).
 - `pnpm install` at the monorepo root. Desktop consumes the control client and
   product protocol; the daemon's session feature owns the pinned DSH runtime.

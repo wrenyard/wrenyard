@@ -21,7 +21,7 @@ export type {
   JsonRpcSuccessResponse,
   NdjsonChunk,
 } from './types.ts'
-export { NdjsonFrameError } from './types.ts'
+export { NdjsonFrameError, WRENYARD_PROTOCOL_VERSION } from './types.ts'
 export {
   connectIpcClientTransport,
   type ConnectIpcClientTransportOptions,
@@ -45,6 +45,7 @@ export {
   PROTOCOL_ERROR_CODES,
   ProtocolError,
   isProtocolError,
+  protocolVersionMismatchMessage,
   type ProtocolErrorCode,
   type ProtocolErrorDefinition,
 } from './errors.ts'

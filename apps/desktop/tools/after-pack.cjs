@@ -2,7 +2,7 @@ const { execFileSync } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { homedir, tmpdir } = require('node:os');
 const { pathToFileURL } = require('node:url');
-const { writeFileSync } = require('node:fs');
+const { existsSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -67,7 +67,7 @@ function containsLocalPath(buffer, needles) {
 }
 
 /** node_modules members are third-party unless vendor-scoped to @wrenyard,
- * mirroring isDependencyPath in tools/release/build-local-release.mjs. */
+ * mirroring isDependencyPath in tools/release/pack.mjs. */
 function isFirstPartyArchivePath(archivePath) {
   const segments = normalizeArchivePath(archivePath).split('/').filter(Boolean);
   const lastModulesIndex = segments.lastIndexOf('node_modules');
@@ -150,6 +150,17 @@ exports.default = async function afterPack(context) {
     context.appOutDir,
     `${context.packager.appInfo.productFilename}.app`,
   );
+  // The bundled CLI (SEA) and native Node runtime are Mach-O executables placed
+  // under Contents/Resources/wrenyard. Sign them individually first so the
+  // signature covers them regardless of how deep signing walks the bundle.
+  const bundledRuntime = path.join(resourcesPath(context), 'wrenyard');
+  for (const relative of ['wrenyard', path.join('runtime', 'node')]) {
+    const binary = path.join(bundledRuntime, relative);
+    if (!existsSync(binary)) continue;
+    execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', binary], {
+      stdio: 'inherit',
+    });
+  }
   execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', appPath], {
     stdio: 'inherit',
   });

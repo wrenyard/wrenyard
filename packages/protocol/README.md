@@ -31,8 +31,8 @@ backend, persistence and recovery. The types here are the shape it projects.
 
 ### Relationship to existing code
 
-This package is **not** the existing worker/daemon session surface and **not**
-`message.send`. The conversation DTOs here are the product conversation API that
+This package is **not** the existing worker/daemon session surface. The
+conversation DTOs here are the product conversation API that
 `@wrenyard/session` returns and `@wrenyard/control-client/session` transports.
 The existing `apps/daemon/lib/protocol` wire shape is unchanged and is not
 imported here; the JSON-RPC envelope shape is mirrored so the adapter can carry
@@ -260,8 +260,7 @@ To add a feature (for example `taskgraph`):
 3. Add subpath exports in `package.json` if the feature should be importable
    on its own (`./<feature>`).
 
-Migrating an existing surface (for example the legacy `message.send`) has two
-rules:
+Migrating an existing surface has two rules:
 
 - **Preserve legacy wire names and fields.** Keep snake_case field names and
   existing method names exactly as they are on the wire; the DTOs are the

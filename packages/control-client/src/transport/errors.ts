@@ -22,7 +22,6 @@ export const PROTOCOL_ERROR_CODES = {
   TASK_NOT_FOUND: -32002,
   SESSION_NOT_FOUND: -32003,
   WORKER_NOT_FOUND: -32004,
-  MESSAGE_NOT_FOUND: -32005,
   OPERATION_CANCELLED: -32006,
   OPERATION_TIMEOUT: -32007,
 } as const
@@ -93,4 +92,20 @@ export class ProtocolError extends Error {
 
 export function isProtocolError(error: unknown): error is ProtocolError {
   return error instanceof ProtocolError
+}
+
+/**
+ * The canonical Chinese message for a Wrenyard IPC protocol version mismatch.
+ *
+ * Both the client handshake and the daemon's server-side handshake check build
+ * the error from this helper so the operator sees the same actionable text on
+ * either end. A missing or non-numeric daemon version is rendered as 未知,
+ * because a missing version must fail closed exactly like a mismatched one.
+ */
+export function protocolVersionMismatchMessage(
+  cliVersion: number,
+  daemonVersion: unknown,
+): string {
+  const daemon = typeof daemonVersion === 'number' ? String(daemonVersion) : '未知'
+  return `CLI 与 daemon 协议版本不一致（CLI ${cliVersion}，daemon ${daemon}），请使用同一版本`
 }

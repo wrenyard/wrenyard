@@ -4,7 +4,16 @@ dist/
 build/
 coverage/
 .artifacts/
-apps/desktop/release/
+# Desktop installers are written to the repository-root release/ directory, and
+# the publish job stages downloads in release-assets/. A leading slash anchors
+# these to the repository root so tools/release/ is never matched.
+/release/
+/release-assets/
+
+# The NSIS custom include is source, not build output, and must stay tracked
+# despite the generic build/ rule above.
+!apps/desktop/build/
+!apps/desktop/build/installer.nsh
 
 # Generated runtime payload binaries.
 bin/daemon/

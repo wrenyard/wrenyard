@@ -6,7 +6,6 @@ import type {
   CheckpointFn,
   ExecutionOptions,
   JsonSchema,
-  PermissionMode,
   PrimitiveSet,
   ResolvedTarget,
   SchemaField,
@@ -107,17 +106,16 @@ describe('lib/types.mts re-export shim (AC-2, Core Concept 7)', () => {
     assert.equal(projectEntry.source, 'project')
   })
 
-  it('retains JsonSchema/SchemaField/PermissionMode/AgentResult at lib/types.mts', () => {
+  it('retains JsonSchema/SchemaField/AgentResult at lib/types.mts', () => {
     const schema: JsonSchema = { type: 'object' }
     const field: SchemaField = { type: 'string', required: true }
-    const perm: PermissionMode = 'edit'
     const agentResult: AgentResult = { output: '', status: 'done' }
 
-    void [schema, field, perm, agentResult]
+    void [schema, field, agentResult]
   })
 
   it('retains execution primitives and ExecutionOptions', () => {
-    const opts: AgentOpts = { permission: 'edit' }
+    const opts: AgentOpts = { repoWriteLock: true }
     const shellOpts: ShellOpts = {}
     const shellResult: ShellResult = { exitCode: 0, stdout: '', stderr: '' }
     const execOpts: ExecutionOptions = { workspaceRoot: '/' }

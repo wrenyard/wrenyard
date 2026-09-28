@@ -10,19 +10,12 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "tsc --noEmit && node tools/build.mjs && tsc --emitDeclarationOnly",
-    "typecheck": "tsc --noEmit",
+    "build": "node tools/build.mjs",
     "test": "node tools/pet/renderer-cleanup-scan.mjs && node --test tools/convert-settings.test.mjs && tsx --test test/*.test.ts && vitest run",
-    "start": "electron .",
-    "dev": "npm run build && electron .",
-    "smoke": "npm run build && electron . --smoke",
     "icon": "node tools/render-app-icon.mjs",
     "pet:preview:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb tools/pet/scripts/preview-capture.mjs",
     "pet:taskgraph:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb tools/pet/scripts/taskgraph-e2e-capture.mjs",
-    "convert:settings": "node tools/convert-settings.mjs",
-    "dist:dir": "npm run build && electron-builder --dir",
-    "dist:release": "tsc --noEmit && node tools/build.mjs && electron-builder --dir",
-    "dist:zip": "npm run build && electron-builder --publish never"
+    "convert:settings": "node tools/convert-settings.mjs"
   },
   "dependencies": {
     "@wrenyard/control-client": "workspace:*",

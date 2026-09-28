@@ -149,14 +149,6 @@ export class TaskRunStore {
     ).changes
   }
 
-  markNotifiedViaChannel(taskRunId: string, updatedAt: string): boolean {
-    return this.run(
-      `UPDATE tasks SET notified_via_channel = 1, updated_at = ? WHERE id = ?`,
-      updatedAt,
-      taskRunId,
-    ).changes > 0
-  }
-
   readStatus(taskRunId: string): TaskRunStoreStatus | null {
     const row = this.get<{ status: string }>(
       `SELECT status FROM tasks WHERE id = ?`,

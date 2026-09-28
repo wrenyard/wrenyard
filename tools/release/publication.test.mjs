@@ -28,7 +28,7 @@ function withTempDir(fn) {
 }
 
 // Mirror actions/download-artifact: one directory per build job, each holding
-// that target's suite and Desktop zip.
+// that target's installer(s).
 function createDownloadedArtifacts(root) {
   for (const name of canonicalAssetNames(VERSION)) {
     const target = name.includes('darwin-arm64') ? 'darwin-arm64' : 'win32-x64';
@@ -44,14 +44,6 @@ function createFlatAssets(root) {
   mkdirSync(assetsDir, { recursive: true });
   for (const name of canonicalAssetNames(VERSION)) writeFileSync(join(assetsDir, name), `content:${name}`);
   return assetsDir;
-}
-
-function createScripts(root) {
-  const scriptsDir = join(root, 'scripts');
-  mkdirSync(scriptsDir, { recursive: true });
-  writeFileSync(join(scriptsDir, 'install.sh'), '#!/bin/sh\n');
-  writeFileSync(join(scriptsDir, 'install.ps1'), '# install\n');
-  return scriptsDir;
 }
 
 test('tag and native platform validation fail closed', () => {
@@ -71,7 +63,7 @@ test('canonical assets are confirmed in memory before any publication', () => {
     assert.deepEqual(assets.map((asset) => asset.name), canonicalAssetNames(VERSION));
     assert.ok(assets.every((asset) => asset.path.endsWith(asset.name)));
 
-    const extra = join(artifactsDir, 'wrenyard-release-win32-x64', `wrenyard-9.9.9-dev.1-win32-x64-suite.zip`);
+    const extra = join(artifactsDir, 'wrenyard-release-win32-x64', `wrenyard-desktop-9.9.9-dev.1-win32-x64.zip`);
     writeFileSync(extra, 'extra');
     assert.throws(() => confirmCanonicalAssets({ artifactsDir, version: VERSION }), /not a canonical public archive/);
     rmSync(extra, { force: true });
@@ -82,7 +74,7 @@ test('canonical assets are confirmed in memory before any publication', () => {
   });
 });
 
-test('GitHub publication creates a draft, uploads four assets, then publishes', () => {
+test('GitHub publication creates a draft, uploads three assets, then publishes', () => {
   withTempDir((dir) => {
     const assetsDir = createFlatAssets(dir);
     const assets = canonicalAssetNames(VERSION).map((name) => join(assetsDir, name));
@@ -97,7 +89,6 @@ test('GitHub publication creates a draft, uploads four assets, then publishes', 
     assert.deepEqual(calls.map((call) => call.slice(0, 3).join(' ')), [
       'gh release view',
       'gh release create',
-      'gh release upload',
       'gh release upload',
       'gh release upload',
       'gh release upload',
@@ -148,10 +139,9 @@ test('invalid tags and existing releases stop before any mutation', () => {
   });
 });
 
-test('feed publication pushes the feed and bootstrap scripts in one commit', () => {
+test('feed publication pushes the feed documents in one commit', () => {
   withTempDir((dir) => {
     const assetsDir = createFlatAssets(dir);
-    const scriptsDir = createScripts(dir);
     const calls = [];
     let pushes = 0;
     const run = (command, args) => {
@@ -172,7 +162,6 @@ test('feed publication pushes the feed and bootstrap scripts in one commit', () 
       repository: REPOSITORY,
       tag: TAG,
       workspace: join(dir, 'workspace'),
-      scriptsDir,
       version: VERSION,
       run,
     });
@@ -185,14 +174,13 @@ test('feed publication pushes the feed and bootstrap scripts in one commit', () 
 
     const staged = calls.filter((call) => call[0] === 'git' && call[1] === 'add')[0].slice(2);
     assert.ok(staged.includes('dev.json'));
-    assert.ok(staged.includes('install.sh'));
-    assert.ok(staged.includes('install.ps1'));
     assert.ok(staged.some((file) => file.startsWith('versions/')));
+    assert.ok(!staged.includes('install.sh'));
+    assert.ok(!staged.includes('install.ps1'));
 
     const feed = JSON.parse(readFileSync(join(dir, 'updates-publication', 'dev.json'), 'utf8'));
-    assert.equal(feed.assets.length, 4);
+    assert.equal(feed.assets.length, 3);
     assert.ok(feed.assets.every((asset) => /^[0-9a-f]{64}$/.test(asset.sha256)));
-    assert.ok(readFileSync(join(dir, 'updates-publication', 'install.sh'), 'utf8').length > 0);
   });
 });
 
@@ -229,7 +217,6 @@ test('publishRelease fails closed before any remote mutation when an archive is 
         sha: 'abc123',
         version: VERSION,
         workspace: join(dir, 'workspace'),
-        scriptsDir: createScripts(dir),
         publicationDir: join(dir, 'updates-publication'),
         stagingDir: join(dir, 'staging'),
         runId: '42',

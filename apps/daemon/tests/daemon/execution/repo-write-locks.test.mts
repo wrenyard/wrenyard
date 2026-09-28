@@ -6,7 +6,6 @@ import { join, resolve } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import {
   RepoWriteLocks,
-  requiresRepoWriteLock,
   type RepoRootResolver,
 } from '../../../lib/daemon/execution/repo-write-locks.mts'
 
@@ -152,11 +151,5 @@ describe('RepoWriteLocks', () => {
       locks.tryAcquire('/repo/app/', 'exec_b', 'edit', ['/repo/app/src/a.ts']).acquired,
       false,
     )
-  })
-
-  it('maps only write permissions to repo write locks', () => {
-    assert.equal(requiresRepoWriteLock('readonly'), false)
-    assert.equal(requiresRepoWriteLock('edit'), true)
-    assert.equal(requiresRepoWriteLock('yolo'), true)
   })
 })

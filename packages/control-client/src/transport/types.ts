@@ -46,3 +46,13 @@ export class NdjsonFrameError extends Error {
     this.cause = cause
   }
 }
+
+/**
+ * Canonical Wrenyard IPC protocol version.
+ *
+ * This is the single definition shared by every client and the daemon: clients
+ * send it in the `health.ping` handshake, clients validate the daemon's echoed
+ * value against it, and the daemon validates the client's value against it.
+ * Increment only for an incompatible wire change.
+ */
+export const WRENYARD_PROTOCOL_VERSION = 1

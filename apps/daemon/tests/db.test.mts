@@ -150,7 +150,6 @@ test('initDb migrates a deployed opencode-only client_family CHECK without metad
         failure_category TEXT,
         suggestion      TEXT,
         error_message   TEXT,
-        notified_via_channel INTEGER NOT NULL DEFAULT 0,
         definition_source TEXT CHECK(definition_source IN ('builtin','project')),
         status          TEXT NOT NULL CHECK(status IN
                           ('queued','running','done','failed','cancelled','interrupted')),
@@ -251,7 +250,7 @@ test('initDb adds DB-backed task and workflow status metadata columns', () => {
 
     const db = initDb(dbPath)
     assert.deepEqual(
-      ['failure_category', 'suggestion', 'error_message', 'notified_via_channel', 'workflow_id', 'summary']
+      ['failure_category', 'suggestion', 'error_message', 'workflow_id', 'summary']
         .filter((column) => !tableColumnNames(db, 'tasks').includes(column)),
       [],
     )
@@ -260,7 +259,6 @@ test('initDb adds DB-backed task and workflow status metadata columns', () => {
         'failure_category',
         'suggestion',
         'error_message',
-        'notified_via_channel',
         'output',
         'workspace_root',
         'execution_project',
@@ -538,7 +536,6 @@ test('initDb idempotently migrates nullable auto_routing onto legacy dispatch ro
         failure_category TEXT,
         suggestion      TEXT,
         error_message   TEXT,
-        notified_via_channel INTEGER NOT NULL DEFAULT 0,
         definition_source TEXT CHECK(definition_source IN ('builtin','project')),
         status          TEXT NOT NULL CHECK(status IN
                           ('queued','running','done','failed','cancelled','interrupted')),

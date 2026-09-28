@@ -1,5 +1,3 @@
-import type { MessageService } from '../../message/message-service.mts'
-import type { MessageSender } from '../../message/protocol.mts'
 import type { OperationHost } from '../../core/operations/types.mts'
 import { TaskService, TaskServiceError } from '../../core/task/service.mts'
 import { ActivitySnapshotError, buildActivitySnapshot } from '../../core/activity/index.mts'
@@ -25,7 +23,6 @@ import {
 } from '../../protocol/errors.mts'
 import type {
   ActivitySnapshotV1,
-  MessageSendResult,
   DaemonShutdownResult,
   DaemonStatusResult,
   EventListResult,
@@ -47,7 +44,6 @@ import type {
   TaskGraphWaitResult,
   TaskGraphSlipResult,
   GatewayConnectionResult,
-  ClientConfigurationSnapshotResult,
   ExecCancelResult,
   ExecEventsResult,
   ExecGetResult,
@@ -75,11 +71,18 @@ import {
 } from '../../runtime-aliases/store.mts'
 import type { ExecService, ExecRequest } from '@wrenyard/exec'
 import type { ExecStartParams } from '@wrenyard/protocol'
+import { WRENYARD_PROTOCOL_VERSION } from '@wrenyard/control-client'
 
 export interface DaemonActiveWorkCounts {
   activeTaskCount: number
   activeWorkflowCount: number
   activeExecutionCount: number
+  /**
+   * Active taskgraph runs (the real taskgraph count). Optional so existing fake
+   * consumers that predate this field still type-check; `daemon.status`
+   * normalizes a missing value to 0.
+   */
+  activeTaskGraphCount?: number
 }
 
 export interface CoreRpcHandlerOptions {
@@ -105,8 +108,6 @@ export interface CoreRpcHandlerOptions {
   daemonActiveWork?: () => DaemonActiveWorkCounts | Promise<DaemonActiveWorkCounts>
   /** Daemon-owned TaskGraphService shared by all transports. */
   taskgraphService?: TaskGraphService
-  /** Unified MessageService for principal-based message.send */
-  messageService?: import('../../message/message-service.mts').MessageService
   /** Workspace doc service for workspace.doc.* RPC methods. */
   workspaceDocService?: WorkspaceDocHandlerService
   /** IPC-only model Gateway connection descriptor for local clients. */
@@ -140,16 +141,9 @@ export interface CoreRpcHandlerOptions {
   providerList?: () => Promise<import('../../protocol/methods/provider.mts').ProviderListResult>
   providerConfigure?: (params: import('../../protocol/methods/provider.mts').ProviderConfigureParams) => Promise<import('../../protocol/methods/provider.mts').ProviderConfigureResult>
   providerQuota?: (params: import('../../protocol/methods/provider.mts').ProviderQuotaParams) => Promise<import('../../protocol/methods/provider.mts').ProviderQuotaResult>
-  clientConfiguration?: {
-    snapshot(): Promise<ClientConfigurationSnapshotResult>
-    plan(params: import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanParams): Promise<import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanResult>
-    apply(params: import('../../protocol/methods/client-configuration.mts').ClientConfigurationApplyParams): Promise<import('../../protocol/methods/client-configuration.mts').ClientConfigurationApplyResult>
-    planRestore(params: import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanRestoreParams): Promise<import('../../protocol/methods/client-configuration.mts').ClientConfigurationPlanRestoreResult>
-    restore(params: import('../../protocol/methods/client-configuration.mts').ClientConfigurationRestoreParams): Promise<import('../../protocol/methods/client-configuration.mts').ClientConfigurationRestoreResult>
-  }
 }
 
-export type CoreRpcTransport = 'ipc' | 'http' | 'mcp'
+export type CoreRpcTransport = 'ipc'
 
 export function readProcessIdentity(env: NodeJS.ProcessEnv = process.env): {
   mode: 'source' | 'installed'
@@ -167,7 +161,6 @@ export function readProcessIdentity(env: NodeJS.ProcessEnv = process.env): {
 export interface CoreRpcContext {
   transport?: CoreRpcTransport
   connectingId?: string
-  sender?: MessageSender
 }
 
 export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerOptions): void {
@@ -191,10 +184,13 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     const result: {
       ok: true
       uptimeMs: number
+      protocolVersion: number
       identity: ReturnType<typeof readProcessIdentity>
     } = {
       ok: true as const,
       uptimeMs: Math.max(0, Date.now() - options.startedAt),
+      // Integer protocol version the control-client handshake validates against.
+      protocolVersion: WRENYARD_PROTOCOL_VERSION,
       identity: readProcessIdentity(),
     }
     return result
@@ -246,51 +242,6 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         )
       }
       return options.providerQuota!(params)
-    })
-  }
-  if (options.clientConfiguration) {
-    const requireClientConfigurationIpc = (context: unknown, method: string): void => {
-      const rpcContext = coreRpcContextFromUnknown(context)
-      if (rpcContext.transport !== 'ipc') {
-        throw new ProtocolError(
-          { code: INVALID_PARAMS.code, message: `${method} is only available over IPC` },
-          { code: 'client_configuration_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
-        )
-      }
-    }
-    const callClientConfiguration = async <T,>(operation: () => Promise<T>): Promise<T> => {
-      try {
-        return await operation()
-      } catch (error) {
-        if (error instanceof ProtocolError) throw error
-        throw new ProtocolError(
-          {
-            code: INVALID_PARAMS.code,
-            message: error instanceof Error ? error.message : 'Client configuration request rejected',
-          },
-          { code: 'client_configuration_rejected' },
-        )
-      }
-    }
-    router.register('client.configuration.snapshot', async (_params, _message, context) => {
-      requireClientConfigurationIpc(context, 'client.configuration.snapshot')
-      return options.clientConfiguration!.snapshot()
-    })
-    router.register('client.configuration.plan', async (params, _message, context) => {
-      requireClientConfigurationIpc(context, 'client.configuration.plan')
-      return callClientConfiguration(() => options.clientConfiguration!.plan(params))
-    })
-    router.register('client.configuration.apply', async (params, _message, context) => {
-      requireClientConfigurationIpc(context, 'client.configuration.apply')
-      return callClientConfiguration(() => options.clientConfiguration!.apply(params))
-    })
-    router.register('client.configuration.plan-restore', async (params, _message, context) => {
-      requireClientConfigurationIpc(context, 'client.configuration.plan-restore')
-      return callClientConfiguration(() => options.clientConfiguration!.planRestore(params))
-    })
-    router.register('client.configuration.restore', async (params, _message, context) => {
-      requireClientConfigurationIpc(context, 'client.configuration.restore')
-      return callClientConfiguration(() => options.clientConfiguration!.restore(params))
     })
   }
   router.register('event.list', (params) => {
@@ -364,12 +315,13 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   router.register('daemon.status', async () => {
     const counts = options.daemonActiveWork
       ? await options.daemonActiveWork()
-      : { activeTaskCount: 0, activeWorkflowCount: 0, activeExecutionCount: 0 }
+      : { activeTaskCount: 0, activeWorkflowCount: 0, activeExecutionCount: 0, activeTaskGraphCount: 0 }
     return {
       ok: true as const,
       shutting_down: options.isShuttingDown?.() === true,
       idle: options.isIdle ? await options.isIdle() : false,
       ...counts,
+      activeTaskGraphCount: counts.activeTaskGraphCount ?? 0,
     } satisfies DaemonStatusResult
   })
   router.register('task.definition.list', async (params) => {
@@ -462,20 +414,17 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   })
   // Bounded read-only runtime discovery for one task: canonical
   // `provider/model:client` targets with truthful client/provider readiness.
-  // Never selects, saves, reserves, or calls a model. This is the ONE
-  // task.settings.* method exposed over MCP (see the `task_runtimes` agent
-  // tool) so agents can discover valid dispatch targets instead of inventing
-  // them; it reads no user settings and mutates nothing, so the IPC-only guard
-  // used by snapshot/save/routingTest does not apply. Every mutating
-  // task.settings.* method stays IPC-only.
+  // Never selects, saves, reserves, or calls a model; it reads no user settings
+  // and mutates nothing. The public surface is the owner-only IPC channel, so
+  // every task.settings.* method is IPC-only.
   const requireTaskSettingsDiscovery = (
     context: unknown,
     method: string,
   ): TaskSettingsService => {
     const rpcContext = coreRpcContextFromUnknown(context)
-    if (rpcContext.transport !== 'ipc' && rpcContext.transport !== 'mcp') {
+    if (rpcContext.transport !== 'ipc') {
       throw new ProtocolError(
-        { code: INVALID_PARAMS.code, message: `${method} is only available over IPC or MCP` },
+        { code: INVALID_PARAMS.code, message: `${method} is only available over IPC` },
         { code: 'task_settings_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
       )
     }
@@ -707,69 +656,6 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
 
   registerWorkspaceDocHandlers(router, options.workspaceDocService)
 
-  router.register('message.send', async (params, _message, context) => {
-    // Check whether raw RPC context owns a sender property
-    const rawContext = (context && typeof context === 'object' && !Array.isArray(context)
-      ? context as Record<string, unknown>
-      : {})
-    const contextHasSender = 'sender' in rawContext
-    const rpcContext = coreRpcContextFromUnknown(context)
-
-    const from: string | undefined = (() => {
-      if (contextHasSender) {
-        // Context sender is authoritative — must be valid
-        if (rpcContext.sender && rpcContext.sender.role?.trim()) {
-          return rpcContext.sender.role.trim()
-        }
-        // Context has sender but it's invalid — reject, do NOT fallback to params
-        throw new ProtocolError(
-          { code: INVALID_PARAMS.code, message: 'message.send requires a valid sender in context' },
-          { code: 'context_sender_required' },
-        )
-      }
-      // No context sender — IPC/CLI callers may supply sender via params
-      const senderRaw: string | undefined = typeof params.sender === 'string'
-        ? params.sender
-        : params.sender && typeof params.sender === 'object' && typeof params.sender.role === 'string'
-          ? params.sender.role
-          : undefined
-      return senderRaw
-    })()
-    if (!from) {
-      throw new ProtocolError(
-        { code: INVALID_PARAMS.code, message: 'message.send requires a from principal' },
-        { code: 'sender_required' },
-      )
-    }
-    if (!options.messageService) {
-      throw new ProtocolError(
-        { code: INTERNAL_ERROR.code, message: 'message service is not configured' },
-        { code: 'message_service_unavailable' },
-      )
-    }
-    const result = await options.messageService.send({
-      from,
-      to: params.to,
-      text: params.text,
-      ...(params.client_message_id ? { client_message_id: params.client_message_id } : {}),
-    })
-    if ("ok" in result) {
-      return {
-        accepted: false,
-        message_id: '',
-        error: result.error,
-        message: result.message,
-      } satisfies MessageSendResult
-    }
-    return {
-      accepted: result.accepted,
-      message_id: result.message_id,
-      ...(result.target_seq !== undefined ? { target_seq: result.target_seq } : {}),
-      ...(result.queue_depth !== undefined ? { queue_depth: result.queue_depth } : {}),
-      ...(result.delivery ? { delivery: result.delivery } : {}),
-    } satisfies MessageSendResult
-  })
-
   router.register('taskgraph.create', async (params) => {
     return taskgraphResult<TaskGraphCreateResult>(async () => {
       try {
@@ -834,31 +720,17 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
 
 function coreRpcContextFromUnknown(value: unknown): CoreRpcContext {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  const record = value as { transport?: unknown; connectingId?: unknown; sender?: unknown }
+  const record = value as { transport?: unknown; connectingId?: unknown }
   return {
     ...(isCoreRpcTransport(record.transport) ? { transport: record.transport } : {}),
     ...(typeof record.connectingId === 'string' && record.connectingId.trim()
       ? { connectingId: record.connectingId.trim() }
       : {}),
-    ...(isSender(record.sender) ? { sender: record.sender } : {}),
   }
 }
 
 function isCoreRpcTransport(value: unknown): value is CoreRpcTransport {
-  return value === 'ipc' || value === 'http' || value === 'mcp'
-}
-
-function isSender(value: unknown): value is MessageSender {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && typeof (value as { role?: unknown }).role === 'string'
-    && Boolean((value as { role: string }).role.trim())
-}
-
-function senderFromRpc(sender: string | { role: string; [key: string]: unknown }): MessageSender {
-  if (typeof sender === 'string') return { role: sender }
-  return sender
+  return value === 'ipc'
 }
 
 function serviceRunResult<T>(

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { JsonRpcClient, type JsonRpcClientTransport } from '@wrenyard/control-client/transport'
+import {
+  JsonRpcClient,
+  WRENYARD_PROTOCOL_VERSION,
+  type JsonRpcClientTransport,
+} from '@wrenyard/control-client/transport'
 import {
   INVALID_PARAMS,
   OPERATION_TIMEOUT,
@@ -34,6 +38,7 @@ describe('JsonRpcClient', () => {
   it('request() sends a JSON-RPC 2.0 request', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({
+      handshake: false,
       transport,
       idFactory: () => 'request-1',
     })
@@ -56,6 +61,7 @@ describe('JsonRpcClient', () => {
   it('request() resolves when a matching success response arrives', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({
+      handshake: false,
       transport,
       idFactory: () => 7,
     })
@@ -71,6 +77,7 @@ describe('JsonRpcClient', () => {
   it('request() rejects when a matching error response arrives', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({
+      handshake: false,
       transport,
       idFactory: () => 'bad-request',
     })
@@ -93,14 +100,14 @@ describe('JsonRpcClient', () => {
 
   it('notify() sends a JSON-RPC notification without creating pending state', async () => {
     const transport = new FakeTransport()
-    const client = new JsonRpcClient({ transport })
+    const client = new JsonRpcClient({ handshake: false, transport })
 
-    await client.notify('message.send', { to: 'relay', text: 'hello' })
+    await client.notify('health.ping', {})
 
     assert.deepEqual(transport.lastMessage(), {
       jsonrpc: '2.0',
-      method: 'message.send',
-      params: { to: 'relay', text: 'hello' },
+      method: 'health.ping',
+      params: {},
     })
     assert.equal(client.pendingCount, 0)
   })
@@ -108,6 +115,7 @@ describe('JsonRpcClient', () => {
   it('ignores responses with unknown ids', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({
+      handshake: false,
       transport,
       idFactory: () => 'known',
     })
@@ -125,6 +133,7 @@ describe('JsonRpcClient', () => {
   it('times out pending requests and cleans up state', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({
+      handshake: false,
       transport,
       timeoutMs: 5,
       idFactory: () => 'slow',
@@ -147,6 +156,7 @@ describe('JsonRpcClient', () => {
   it('does not resolve a timed-out request from a late response', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({
+      handshake: false,
       transport,
       timeoutMs: 5,
       idFactory: () => 'late',
@@ -162,6 +172,7 @@ describe('JsonRpcClient', () => {
   it('request() honors timeoutMs:null and stays pending past the default boundary', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({
+      handshake: false,
       transport,
       timeoutMs: 10,
       idFactory: () => 'no-deadline',
@@ -183,6 +194,7 @@ describe('JsonRpcClient', () => {
   it('close() rejects pending requests and clears state', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({
+      handshake: false,
       transport,
       idFactory: () => 'closing',
     })
@@ -199,6 +211,7 @@ describe('JsonRpcClient', () => {
   it('dispose() rejects pending requests and clears state', async () => {
     const transport = new FakeTransport()
     const client = new JsonRpcClient({
+      handshake: false,
       transport,
       idFactory: () => 'disposing',
     })
@@ -210,5 +223,44 @@ describe('JsonRpcClient', () => {
 
     await assert.rejects(promise, /JsonRpcClient disposed/)
     assert.equal(client.pendingCount, 0)
+  })
+
+  it('completes the version-tagged handshake once before the first business request', async () => {
+    const transport = new FakeTransport()
+    let nextId = 0
+    const client = new JsonRpcClient({ transport, idFactory: () => `id-${nextId++}` })
+
+    const first = client.request('task.run.list', {})
+    await delay(0)
+    assert.deepEqual(transport.lastMessage(), {
+      jsonrpc: '2.0',
+      method: 'health.ping',
+      params: { protocolVersion: WRENYARD_PROTOCOL_VERSION },
+      id: 'id-0',
+    })
+    client.handleIncoming(encodeFrame(createSuccessResponse('id-0', { ok: true, protocolVersion: WRENYARD_PROTOCOL_VERSION })))
+    await delay(0)
+    assert.equal((transport.lastMessage() as { method: string }).method, 'task.run.list')
+    client.handleIncoming(encodeFrame(createSuccessResponse('id-1', { items: [] })))
+    assert.deepEqual(await first, { items: [] })
+
+    const second = client.request('task.run.list', {})
+    await delay(0)
+    assert.equal(transport.frames.length, 3, 'the handshake is not repeated')
+    client.handleIncoming(encodeFrame(createSuccessResponse('id-2', { items: [] })))
+    await second
+  })
+
+  it('fails closed on a daemon without a matching protocolVersion', async () => {
+    const transport = new FakeTransport()
+    const client = new JsonRpcClient({ transport, idFactory: () => 'handshake' })
+
+    const request = client.request('task.run.list', {})
+    await delay(0)
+    client.handleIncoming(encodeFrame(createSuccessResponse('handshake', { ok: true })))
+
+    await assert.rejects(request, /daemon/)
+    assert.equal(transport.frames.length, 1, 'no business request reaches an incompatible daemon')
+    await assert.rejects(client.request('task.run.list', {}), /daemon/)
   })
 })

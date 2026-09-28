@@ -25,10 +25,9 @@ function withTempDir(fn) {
 
 function assetNames(version) {
   return [
-    `wrenyard-${version}-darwin-arm64-suite.zip`,
+    `wrenyard-desktop-${version}-darwin-arm64.dmg`,
     `wrenyard-desktop-${version}-darwin-arm64.zip`,
-    `wrenyard-${version}-win32-x64-suite.zip`,
-    `wrenyard-desktop-${version}-win32-x64.zip`,
+    `wrenyard-desktop-${version}-win32-x64-setup.exe`,
   ];
 }
 
@@ -45,7 +44,7 @@ function expectedSha(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-test('generates a channel head and immutable snapshot for the four assets', () => {
+test('generates a channel head and immutable snapshot for the three assets', () => {
   withTempDir((dir) => {
     const version = '1.0.0-dev.10';
     const assetsDir = writeAssets(dir, version);
@@ -65,7 +64,7 @@ test('generates a channel head and immutable snapshot for the four assets', () =
     assert.equal(channel.schema_version, 'wrenyard.update.v1');
     assert.equal(channel.version, version);
     assert.equal(channel.published_at, PUBLISHED_AT);
-    assert.equal(channel.assets.length, 4);
+    assert.equal(channel.assets.length, 3);
     for (const name of assetNames(version)) {
       assert.ok(channel.assets.some((asset) => asset.name === name), `missing ${name}`);
     }
@@ -109,7 +108,7 @@ test('rejects missing, extra and malformed asset names and versions', () => {
     );
 
     const extraDir = writeAssets(join(dir, 'extra'), version);
-    writeFileSync(join(extraDir, `wrenyard-${version}-linux-x64-suite.zip`), 'nope');
+    writeFileSync(join(extraDir, `wrenyard-desktop-${version}-darwin-x64.dmg`), 'nope');
     assert.throws(
       () => prepareMetadata({ assetsDir: extraDir, version, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir }),
       /not a canonical public archive/,

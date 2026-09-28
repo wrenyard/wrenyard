@@ -188,7 +188,6 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 .settings-page > * { width: min(100%, 1080px); margin-inline: auto; }
 .stats-page > * { width: min(100%, 1480px); margin-inline: auto; }
 .quota-page > * { width: min(100%, 1280px); margin-inline: auto; }
-.clients-page > * { width: min(100%, 1280px); margin-inline: auto; }
 .tasks-page > * { width: min(100%, 1280px); margin-inline: auto; }
 
 /* Desktop-owned Task settings page (任务): full-height list/detail split, panes scroll internally */
@@ -409,6 +408,7 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 .conversation-daemon-tooltip { position: absolute; right: 0; top: calc(100% + 4px); z-index: 12; width: max-content; min-width: 174px; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid #403930; border-radius: 4px; color: var(--paper); background: var(--rail); font-size: 10px; line-height: 1.35; opacity: 0; pointer-events: none; transform: translateY(-2px); transition: opacity 80ms ease 250ms, transform 80ms ease 250ms; }
 .conversation-daemon-tooltip strong { font-size: 10px; font-weight: 750; }
 .conversation-daemon-tooltip small { color: #c9beaa; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 8px; }
+.conversation-daemon-tooltip small.conversation-daemon-reason { color: #e6c9a8; font-family: inherit; white-space: pre-wrap; }
 .conversation-daemon-status:hover .conversation-daemon-tooltip, .conversation-daemon-status:focus-visible .conversation-daemon-tooltip { opacity: 1; transform: translateY(0); }
 
 .conversation-feed { min-height: 0; overflow-y: auto; padding: 38px max(28px, calc((100% - 820px) / 2)) 30px; }
@@ -667,6 +667,10 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 .setting-control input[type="checkbox"], .compact-switch input { width: 17px; height: 17px; }
 .setting-row-stacked { align-items: flex-start; flex-direction: column; gap: 9px; }
 .setting-row code { width: 100%; overflow: hidden; padding: 7px 9px; border: 1px solid rgba(212, 201, 168, .8); border-radius: 3px; color: var(--slate); background: rgba(255, 250, 240, .65); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.setting-row-daemon { align-items: flex-start; }
+.daemon-lifecycle-control { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.daemon-action-button { white-space: nowrap; }
+.daemon-error { display: block; margin-top: 6px; color: var(--terracotta); font-size: 11px; font-weight: 650; line-height: 1.45; }
 .version { flex: 0 0 auto; color: var(--slate); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; }
 .settings-save-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 13px; }
 .settings-save-row > span { color: var(--muted); font-size: 11px; }
@@ -1004,51 +1008,6 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
 .provider-dialog-error { min-height: 24px; display: block; padding-top: 7px; color: var(--terracotta); font-size: 10px; }
 .provider-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 4px; }
 
-/* Real Agent client configuration */
-.clients-hero { align-items: center; }
-.clients-meta { min-height: 49px; display: flex; align-items: center; gap: 11px; color: var(--muted); font-size: 11px; }
-.client-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper-dim); }
-.client-tab { min-height: 30px; border: 0; border-radius: 4px; padding: 0 13px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; }
-.client-tab:hover { color: var(--ink); background: rgba(247, 239, 216, .72); }
-.client-tab.is-selected { color: var(--ink); background: var(--lamp); box-shadow: inset 0 0 0 1px var(--lamp-deep); }
-.client-tab:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 1px; }
-.client-tabpanel { min-width: 0; margin-top: 14px; border: 1px solid var(--line); border-radius: 7px; padding: 18px 20px; background: rgba(245, 235, 212, .72); box-shadow: 0 8px 24px rgba(72, 55, 36, .035); }
-.client-tabpanel:focus-visible { outline: 2px solid var(--moss-deep); outline-offset: 2px; }
-.client-panel__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.client-panel__identity { min-width: 0; }
-.client-panel__identity h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 19px; }
-.client-panel__copy { margin: 7px 0 0; color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
-.client-panel__mode { flex: 0 0 auto; border-radius: 999px; padding: 4px 8px; color: var(--slate); background: var(--paper-deep); font-size: 9px; font-weight: 750; }
-.client-card__status { margin: 10px 0 12px; color: var(--moss-deep); font-size: 11px; font-weight: 750; }
-.client-surface { min-width: 0; display: grid; grid-template-columns: minmax(100px, .7fr) auto; gap: 4px 12px; border-top: 1px solid rgba(212, 201, 168, .65); padding: 9px 0; }
-.client-surface strong { color: var(--ink-soft); font-size: 11px; }
-.client-surface > span { color: var(--slate); font-size: 10px; text-align: right; }
-.client-surface small { grid-column: 1 / -1; overflow: hidden; color: var(--muted); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.client-card__model-list { max-height: 250px; overflow-y: auto; display: grid; gap: 7px; margin-top: 12px; padding-right: 3px; }
-.client-model-option { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 9px; border: 1px solid rgba(212, 201, 168, .75); border-radius: 5px; padding: 8px 9px; background: rgba(255, 250, 240, .52); }
-.client-model-option > span { min-width: 0; display: grid; gap: 2px; }
-.client-model-option strong, .client-model-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.client-model-option strong { color: var(--ink-soft); font-size: 10px; }
-.client-model-option small { color: var(--muted); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 8px; }
-.client-model-option select { max-width: 140px; height: 27px; border: 1px solid var(--line); border-radius: 4px; color: var(--slate); background: var(--paper); font-size: 9px; }
-.client-card__empty { margin: 0; padding: 18px 10px; color: var(--muted); font-size: 10px; line-height: 1.5; text-align: center; }
-.client-card__actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 15px; }
-.client-card__actions button { min-height: 32px; border: 1px solid var(--line); border-radius: 4px; padding: 0 12px; color: var(--ink-soft); background: #fffaf0; cursor: pointer; font-size: 10px; font-weight: 700; }
-.client-card__actions button:first-child { border-color: var(--moss-deep); color: #fffdf4; background: var(--moss-deep); }
-.client-card__actions button:hover:not(:disabled) { filter: brightness(1.04); }
-.client-card__actions button:disabled { opacity: .55; cursor: wait; }
-.client-plan-backdrop { position: fixed; inset: 0; z-index: 13; display: grid; place-items: center; padding: 30px; background: rgba(41, 37, 31, .68); backdrop-filter: blur(8px); }
-.client-plan-backdrop[hidden] { display: none; }
-.client-plan-card { width: min(100%, 680px); max-height: min(82vh, 760px); overflow-y: auto; border: 1px solid #c9b990; border-radius: 9px; padding: 26px; background: var(--paper); box-shadow: 0 24px 70px rgba(25, 21, 16, .28); }
-.client-plan-preview h2 { margin: 0; color: var(--ink); font-family: Georgia, "Songti SC", serif; font-size: 22px; }
-.client-plan-preview > p { color: var(--muted); font-size: 11px; }
-.client-plan-preview dl { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 10px; color: var(--ink-soft); font-size: 11px; }
-.client-plan-preview ul { margin: 12px 0 0; padding-left: 20px; color: var(--ink-soft); font-size: 10px; line-height: 1.6; }
-.client-plan-preview__files code { overflow-wrap: anywhere; color: var(--slate); }
-.client-plan-preview__files span { display: block; color: var(--muted); }
-.client-plan-error { min-height: 24px; display: block; padding-top: 8px; color: var(--terracotta); font-size: 10px; }
-.client-plan-actions { display: flex; justify-content: flex-end; gap: 9px; }
-
 /* Full-size workshop ledger */
 .ledger-hero { align-items: center; }
 .period-switcher { display: flex; padding: 3px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper-dim); }
@@ -1130,7 +1089,7 @@ button, .activity-item, .tooltip { user-select: none; -webkit-user-select: none;
   .composer-wrap { padding-inline: 20px; }
   .conversation-error { margin-inline: 20px; }
   .message-user .message-body { max-width: min(92%, 650px); }
-  .page-hero, .ledger-hero, .quota-hero, .clients-hero { align-items: flex-start; flex-direction: column; }
+  .page-hero, .ledger-hero, .quota-hero { align-items: flex-start; flex-direction: column; }
   .ledger-actions { width: 100%; justify-content: space-between; }
   .settings-layout { grid-template-columns: 1fr; gap: 20px; }
   .settings-toc { position: static; display: flex; flex-wrap: wrap; }

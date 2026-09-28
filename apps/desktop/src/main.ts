@@ -1,7 +1,6 @@
-import { app, dialog, Menu, screen, session, type MessageBoxOptions } from 'electron';
-import { spawn } from 'node:child_process';
+import { app, BrowserWindow, dialog, ipcMain, Menu, powerMonitor, screen, session, type MessageBoxOptions } from 'electron';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
 import { DesktopConversationAdapter } from './conversation-adapter.js';
 import { DesktopPetRuntime } from './pet/main/runtime.js';
@@ -17,12 +16,13 @@ import { DesktopQuotaController } from './quota-controller.js';
 import { DesktopQuotaSource } from './quota-service.js';
 import { ProviderService } from './provider-service.js';
 import { readConversationActivity } from './conversation-activity.js';
-import { ClientConfigurationDesktopService } from './client-configuration/service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { isSettingsLaunchRequest, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
-import { DesktopUpdateController } from './update-controller.js';
+import { DesktopUpdateController } from './updater/controller.js';
+import { DesktopDaemonSupervisor } from './daemon-supervisor.js';
+import { createQuitController, type QuitController, type QuitCounts, type QuitDialogHandle } from './quit-controller.js';
 import { resolveInstallation } from './installation-discovery.js';
 import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
@@ -41,7 +41,7 @@ import {
   inspectProductWorkspace,
   saveProductWorkspace,
 } from './workspace.js';
-import { assertDaemonIdle, runDaemonRestart } from './workspace-activation.js';
+import { assertDaemonIdle, restartOwnedDaemon } from './workspace-activation.js';
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
 applySourceDevelopmentIdentity(app);
@@ -64,16 +64,6 @@ const SERVICE_RETRY_ATTEMPTS = 10;
 const SERVICE_RETRY_DELAY_MS = 500;
 /** Smoke drives task enumeration and a routing test over IPC, which can cold-load the workspace and model catalog. */
 const SMOKE_TIMEOUT_MS = 90_000;
-
-/**
- * Locate the installed Wrenyard suite: an explicit WRENYARD_CLI, the current
- * working directory, or the default prefix. LaunchServices provides no shell
- * profile, so the CLI is located explicitly instead of relying on an inherited
- * PATH.
- */
-function resolveWrenyardCli(): string | undefined {
-  return resolveInstallation().cliPath;
-}
 
 /** Read the bounded public health projection from the given IPC socket. */
 async function readWrenyardHealth(path: string): Promise<HealthSnapshot> {
@@ -106,46 +96,13 @@ async function readGatewayConnection(path: string): Promise<WrenyardGatewayConne
   try { return await client.gatewayConnection(); } finally { client.close(); }
 }
 
-/** Start the Wrenyard daemon service once, detached from the app process. */
-function startWrenyardService(cli: string): void {
-  const child = spawn(cli, ['daemon', 'start'], {
-    stdio: 'ignore',
-    detached: process.platform !== 'win32',
-    windowsHide: true,
-  });
-  child.unref();
-}
-
-async function assertForemanHealthy(): Promise<void> {
-  const ipcPath = resolveWrenyardIpcPath();
-  if (await probeWrenyard(ipcPath)) return;
-
-  if (isSupervised()) {
-    for (let attempt = 1; attempt <= SERVICE_RETRY_ATTEMPTS; attempt += 1) {
-      if (await probeWrenyard(ipcPath)) return;
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, SERVICE_RETRY_DELAY_MS));
-    }
-    throw new Error(
-      `Wrenyard is unavailable: supervised source-development Desktop will not start an installed daemon. health.ping failed on ${ipcPath}`,
-    );
-  }
-
-  const cli = resolveWrenyardCli();
-  if (!cli) {
-    throw new Error(
-      `Wrenyard is unavailable: health.ping failed on ${ipcPath} and no Wrenyard CLI was found in WRENYARD_CLI, the working directory, or ~/.local/bin`,
-    );
-  }
-  console.error(`[wrenyard-desktop] Wrenyard IPC not ready on ${ipcPath}; starting the Wrenyard service once via ${cli}`);
-  startWrenyardService(cli);
-
+/** Bounded wait for a daemon owned outside Desktop (source supervisor or CLI). */
+async function waitForDaemonHealth(ipcPath: string): Promise<boolean> {
   for (let attempt = 1; attempt <= SERVICE_RETRY_ATTEMPTS; attempt += 1) {
-    if (await probeWrenyard(ipcPath)) return;
+    if (await probeWrenyard(ipcPath)) return true;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, SERVICE_RETRY_DELAY_MS));
   }
-  throw new Error(
-    `Wrenyard is unavailable: service did not answer health.ping on ${ipcPath} after ${SERVICE_RETRY_ATTEMPTS * SERVICE_RETRY_DELAY_MS}ms of starting`,
-  );
+  return false;
 }
 
 function resolveAppIcon(): string | undefined {
@@ -153,6 +110,18 @@ function resolveAppIcon(): string | undefined {
   if (app.isPackaged && existsSync(packaged)) return packaged;
   const fromApp = join(app.getAppPath(), 'resources', 'icon.png');
   return existsSync(fromApp) ? fromApp : undefined;
+}
+
+/**
+ * Absolute path of the running app bundle / executable for the platform
+ * applier. `app.getAppPath()` resolves to the bundled asar, not the `.app`
+ * bundle, so macOS walks up from the native executable
+ * (`.../Contents/MacOS/name`); Windows uses the executable itself.
+ */
+function resolveUpdateAppPath(): string {
+  return process.platform === 'darwin'
+    ? dirname(dirname(dirname(process.execPath)))
+    : process.execPath;
 }
 
 function resolvePetAssets(): { rendererDir: string; preloadDir: string } {
@@ -253,17 +222,13 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     if (!routingLayoutOk) {
       throw new Error('smoke failed: routing test button wraps or clips');
     }
-    shell.setPage('clients', false);
-    const clientsVisible = await shell.window.webContents.executeJavaScript(
-      "document.documentElement.dataset.page === 'clients' && window.wrenyardShell.getClientConfiguration().then((value) => Array.isArray(value?.surfaces) && Array.isArray(value?.configurations) && Array.isArray(value?.models)).catch(() => false)",
-    );
     shell.setPage('workbench', false);
     const workbenchVisible = await shell.window.webContents.executeJavaScript(
       "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null && (() => { const host = document.getElementById('conversation-model-picker'); return host !== null && host.querySelector('button.multi-select-trigger') instanceof HTMLButtonElement && host.querySelector('[role=\"listbox\"]') !== null; })()",
     );
-    if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !tasksOk || !routingOk || !newConversationOk || !settingsVisible || !statsVisible || !quotaVisible || !clientsVisible || !workbenchVisible) {
+    if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !tasksOk || !routingOk || !newConversationOk || !settingsVisible || !statsVisible || !quotaVisible || !workbenchVisible) {
       throw new Error(
-        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, conversation=${conversationOk}, quota=${quotaOk}, tasks=${tasksOk}, routing=${routingOk}, newConversation=${newConversationOk}, settings=${settingsVisible}, stats=${statsVisible}, quotaPage=${quotaVisible}, clients=${clientsVisible}, workbench=${workbenchVisible})`,
+        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, conversation=${conversationOk}, quota=${quotaOk}, tasks=${tasksOk}, routing=${routingOk}, newConversation=${newConversationOk}, settings=${settingsVisible}, stats=${statsVisible}, quotaPage=${quotaVisible}, workbench=${workbenchVisible})`,
       );
     }
   };
@@ -351,7 +316,10 @@ let desktopSubscriptions: DaemonSubscriptions | null = null;
 let taskgraphWindowOwner: TaskGraphWindowOwner | null = null;
 let quotaController: DesktopQuotaController | null = null;
 let updateController: DesktopUpdateController | null = null;
-let quitting = false;
+let daemonSupervisor: DesktopDaemonSupervisor | null = null;
+let quitController: QuitController | null = null;
+/** Set only inside finalizeQuit, immediately before the final app.quit(). */
+let finalExit = false;
 let openSettingsOnReady = process.argv.some(isSettingsLaunchRequest);
 let updateDialogActive = false;
 
@@ -361,7 +329,53 @@ let updateDialogActive = false;
  */
 const macQuitGate = createMacQuitConfirmationGate({ windowMs: 3_000 });
 
+function daemonSnapshot(): DaemonLifecycleSnapshot {
+  return daemonSupervisor?.snapshot()
+    ?? { mode: 'connected', state: 'unavailable', canStart: false, restartCount: 0 };
+}
+
+function notifyDaemonChanged(): void {
+  if (shellWindow && !shellWindow.window.isDestroyed()) {
+    shellWindow.window.webContents.send(SHELL_CHANNELS.daemonChanged);
+  }
+}
+
+/** Final teardown shared by every exit path; the daemon stop already happened. */
+async function finalizeQuit(): Promise<void> {
+  try {
+    desktopTray?.destroy();
+    desktopTray = null;
+    quotaController?.stop();
+    quotaController = null;
+    updateController?.stop();
+    updateController = null;
+    daemonSupervisor?.dispose();
+    daemonSupervisor = null;
+    await petController?.stop();
+    petController = null;
+    // Tear down the shared daemon subscriptions and the Desktop-owned task
+    // windows after the Pet module stops consuming them.
+    desktopSubscriptions?.dispose();
+    desktopSubscriptions = null;
+    taskgraphWindowOwner?.destroy();
+    taskgraphWindowOwner = null;
+    // Detach only: quit never cancels the daemon-owned session backend.
+    await conversationAdapter?.close();
+    conversationAdapter = null;
+  } catch {
+    // best-effort termination
+  } finally {
+    finalExit = true;
+    app.quit();
+    // A SIGTERM-initiated quit (e.g. pnpm dev:desktop) stalls after this second
+    // app.quit(); teardown is already done, so exit if still alive.
+    setTimeout(() => app.exit(0), 1_000);
+  }
+}
+
 function showDesktop(page: ShellPage = 'workbench'): void {
+  // Every surface is inert for the whole pending quit, not only the modal.
+  if (quitController?.isQuitting()) return;
   if (!shellWindow || shellWindow.window.isDestroyed()) {
     if (page === 'settings') openSettingsOnReady = true;
     return;
@@ -379,11 +393,127 @@ function showUpdateMessage(options: MessageBoxOptions) {
     : dialog.showMessageBox(options);
 }
 
+let quitSurfacesBlocked = false;
+let preQuitMenu: Menu | null = null;
+
+/**
+ * Make every window and menu surface inert for the *entire* pending quit, not
+ * only while the drain dialog is open: the application menu is removed, the
+ * shell is disabled, and the Pet/graph entity windows are hidden. The
+ * stored menu and geometry are restored only if the quit never happens.
+ */
+function blockQuitSurfaces(): void {
+  if (quitSurfacesBlocked) return;
+  quitSurfacesBlocked = true;
+  preQuitMenu = Menu.getApplicationMenu();
+  Menu.setApplicationMenu(null);
+  // Every existing window (shell, Pet house, Wren/graph entities) is disabled;
+  // the drain dialog is created afterwards and stays interactive.
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.setEnabled(false);
+  }
+  taskgraphWindowOwner?.setEntitiesVisible(false);
+}
+
+/** Undo {@link blockQuitSurfaces} for a quit that did not proceed. */
+function restoreQuitSurfaces(): void {
+  if (!quitSurfacesBlocked) return;
+  quitSurfacesBlocked = false;
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.setEnabled(true);
+  }
+  if (preQuitMenu) Menu.setApplicationMenu(preQuitMenu);
+  preQuitMenu = null;
+  const pet = petController?.getConfig();
+  taskgraphWindowOwner?.setEntitiesVisible(
+    (pet?.enabled ?? true) && (pet?.entities.taskgraphs ?? true),
+  );
+}
+
+/**
+ * Blocking drain dialog shown while a supervised daemon still has running
+ * tasks or graphs. It has exactly one action ("强制结束"), reports live counts,
+ * and cannot be closed by the user: only drain completion or the button.
+ */
+const QUIT_DIALOG_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>退出啾啾工坊</title><style>
+body{margin:0;padding:24px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#1f1f24;color:#f2f2f5}
+h1{margin:0 0 8px;font-size:16px}
+p{margin:0 0 8px;font-size:13px;color:#c8c8d0}
+.counts{font-size:13px;color:#f2f2f5}
+button{margin-top:16px;padding:8px 18px;border:0;border-radius:6px;background:#c0392b;color:#fff;font-size:13px;cursor:pointer}
+</style></head><body>
+<h1>正在退出啾啾工坊</h1>
+<p>后台仍有任务运行，全部完成后将自动停止服务并退出。</p>
+<p class="counts">运行中的任务：<span id="tasks">0</span> · 任务图：<span id="graphs">0</span></p>
+<p class="counts" id="status"></p>
+<button id="force">强制结束</button>
+</body></html>`;
+
+function createQuitDialogPresenter() {
+  return {
+    open(counts: QuitCounts | null): QuitDialogHandle {
+      const parent = shellWindow?.window;
+      // A modal child needs a visible parent to render on every platform.
+      if (parent && !parent.isDestroyed()) parent.show();
+      // The app menu is another quit entry point; remove it while blocking.
+      const previousMenu = Menu.getApplicationMenu();
+      Menu.setApplicationMenu(null);
+      const window = new BrowserWindow({
+        width: 420,
+        height: 220,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        closable: false,
+        frame: false,
+        show: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        ...(parent && !parent.isDestroyed() ? { parent, modal: true } : {}),
+        webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+      });
+      let resolveForced: () => void = () => undefined;
+      window.setEnabled(true);
+      const forced = new Promise<void>((resolve) => { resolveForced = resolve; });
+      // Taskgraph counts come from the daemon's taskgraph field; the legacy
+      // workflow count is never displayed as 任务图. A null status is shown as
+      // "confirming" instead of a false zero.
+      const setCounts = (value: QuitCounts | null): string => value === null
+        ? "document.getElementById('tasks').textContent = '—';"
+          + "document.getElementById('graphs').textContent = '—';"
+          + "document.getElementById('status').textContent = '正在确认后台状态…';"
+        : `document.getElementById('tasks').textContent = ${JSON.stringify(String(value.activeTaskCount))};`
+          + `document.getElementById('graphs').textContent = ${JSON.stringify(String(value.activeTaskGraphCount))};`
+          + "document.getElementById('status').textContent = '';";
+      window.once('ready-to-show', () => { if (!window.isDestroyed()) window.show(); });
+      window.webContents.once('did-finish-load', () => {
+        void window.webContents.executeJavaScript(
+          `(() => { ${setCounts(counts)} return new Promise((resolve) => { document.getElementById('force').addEventListener('click', () => resolve(true)); }); })()`,
+        ).then(() => resolveForced()).catch(() => undefined);
+      });
+      void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(QUIT_DIALOG_HTML)}`);
+      return {
+        update: (value) => {
+          if (!window.isDestroyed()) void window.webContents.executeJavaScript(setCounts(value)).catch(() => undefined);
+        },
+        focus: () => { if (!window.isDestroyed()) { window.show(); window.focus(); } },
+        close: () => {
+          Menu.setApplicationMenu(previousMenu);
+          if (!window.isDestroyed()) window.destroy();
+        },
+        forced,
+      };
+    },
+  };
+}
+
 async function requestInstallFromMenu(): Promise<void> {
-  if (!updateController || updateDialogActive) return;
+  if (!updateController || updateDialogActive || quitController?.isQuitting()) return;
   updateDialogActive = true;
   try {
-    const snapshot = await updateController.check(true);
+    const snapshot = await updateController.checkForUpdates();
     if (snapshot.state !== 'available' && snapshot.state !== 'waiting') {
       await showUpdateMessage({
         type: snapshot.state === 'error' ? 'error' : 'info',
@@ -395,9 +525,9 @@ async function requestInstallFromMenu(): Promise<void> {
       });
       return;
     }
-    // One click authorizes the flow: the installed SEA engine takes over once
-    // the daemon is idle, then relaunches Desktop.
-    await updateController.requestInstall(() => setImmediate(() => app.quit()));
+    // One click authorizes the flow; the controller applies the update and then
+    // quits through the already-idle path (no drain dialog).
+    await updateController.requestInstall();
   } finally {
     updateDialogActive = false;
   }
@@ -429,7 +559,10 @@ async function bootstrap(): Promise<void> {
     try {
       return assertDaemonIdle(await requestForeman('daemon.status', {})).idle;
     } catch {
-      return null;
+      // A confirmed-absent daemon (unreachable probe) is idle; a reachable but
+      // unreadable one stays unknown so the install defers instead of guessing.
+      if (daemonSupervisor?.snapshot().pid !== undefined) return null;
+      return (await probeWrenyard(ipcPath)) ? null : true;
     }
   };
   const mapRuntimeAliasError = (error: unknown): never => {
@@ -527,8 +660,124 @@ async function bootstrap(): Promise<void> {
     return (await requestForeman('exec.cancel', { id })) as { id: string; status: ExecSnapshotDto['status'] };
   };
 
-  await assertForemanHealthy().catch((error: unknown) => {
-    console.warn('[wrenyard-desktop] Wrenyard service is unavailable; Desktop settings remain accessible:', error);
+  // The updater is constructed and preflighted *before* the daemon is started
+  // or contacted: a startup blocker (DMG-in-place, translocation) must end
+  // startup before any control connection opens. Its daemon closures resolve
+  // the supervisor later, once it exists.
+  updateController = new DesktopUpdateController({
+    currentVersion: app.getVersion(),
+    userDataPath: app.getPath('userData'),
+    appPath: resolveUpdateAppPath(),
+    readDaemonIdle: readUpdateDaemonIdle,
+    // Confirms whether the daemon process is actually running, so a stopped
+    // connected-mode daemon can still be updated.
+    isDaemonRunning: async () => daemonSupervisor?.snapshot().pid !== undefined || await probeWrenyard(ipcPath),
+    // Who stops the daemon for the apply step, and how.
+    daemonMode: () => daemonSupervisor?.mode ?? 'connected',
+    stopDaemon: () => daemonSupervisor?.stop() ?? Promise.resolve(),
+    // A platform blocker (DMG run, translocation, unwritable install) is shown
+    // as a modal; a startup blocker ends startup, an update blocker aborts it.
+    onBlocker: async (blocker) => {
+      await showUpdateMessage({
+        type: 'warning',
+        title: '无法更新',
+        message: blocker.message,
+        buttons: ['好'],
+        noLink: true,
+      });
+    },
+    // Applying the update quits through the already-idle path: never drain.
+    onInstall: () => {
+      // Block every surface before the teardown so no action slips through.
+      blockQuitSurfaces();
+      quitController?.requestQuit({ bypassDrain: true });
+    },
+    onChanged: () => shellWindow?.notifyUpdateChanged(),
+    sourceDevelopment: isSourceDevelopment(),
+  });
+  // macOS DMG-in-place and AppTranslocation runs are blocked before any window
+  // opens: the modal is confirmed, then Desktop exits.
+  if (!(await updateController.preflightStartup())) {
+    app.exit(0);
+    return;
+  }
+
+  let startupFinalized = false;
+  // Finalize a pending update only once the shell has actually loaded and the
+  // daemon is healthy. A startup where the daemon was unavailable finalizes on
+  // the later healthy recovery instead of being skipped forever.
+  const finalizeWhenHealthy = async (): Promise<void> => {
+    if (startupFinalized) return;
+    if (shellWindow === null || daemonSnapshot().state !== 'running') return;
+    startupFinalized = true;
+    try {
+      await updateController?.finalizeStartup();
+    } catch (error) {
+      console.warn('[wrenyard-desktop] update finalize failed:', error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  // Daemon ownership is decided once: a reachable daemon was started elsewhere
+  // (CLI or the source supervisor) and Desktop only connects to it; otherwise a
+  // packaged Desktop supervises its own daemon with the bundled Node. A
+  // supervised source Desktop never launches anything and waits for `pnpm dev:desktop`.
+  const installation = resolveInstallation({ packaged: app.isPackaged, searchFrom: app.getAppPath() });
+  const sourceSupervised = isSupervised();
+  const initiallyConnected = await probeWrenyard(ipcPath)
+    || (sourceSupervised && await waitForDaemonHealth(ipcPath));
+  daemonSupervisor = new DesktopDaemonSupervisor({
+    installation,
+    ipcPath,
+    sourceSupervised,
+    initiallyConnected,
+    probe: () => probeWrenyard(ipcPath),
+    forceShutdown: async () => {
+      await requestForeman('daemon.shutdown', { reason: 'desktop force quit', force: true });
+    },
+    onChanged: () => { notifyDaemonChanged(); void finalizeWhenHealthy(); },
+  });
+  const daemonStart = daemonSupervisor.start().catch((error: unknown) => {
+    console.warn('[wrenyard-desktop] daemon start failed:', error instanceof Error ? error.message : String(error));
+  });
+  // Smoke asserts a ready backend, so it must wait for the daemon to come up.
+  if (SMOKE) await daemonStart;
+  const readDaemonCounts = async (): Promise<QuitCounts | null> => {
+    const toCount = (value: unknown): number =>
+      (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
+    try {
+      const status = await requestForeman('daemon.status', {}) as Record<string, unknown>;
+      // `idle` already accounts for tasks, taskgraphs, executions and
+      // conversations, so it is the only readiness signal; counts are display
+      // only and taskgraphs come from `activeTaskGraphCount`.
+      if (status.ok !== true || typeof status.idle !== 'boolean') return null;
+      return {
+        idle: status.idle,
+        activeTaskCount: toCount(status.activeTaskCount),
+        activeTaskGraphCount: toCount(status.activeTaskGraphCount),
+      };
+    } catch {
+      // Status unavailable: only a daemon Desktop does not own (no live child)
+      // is confirmed absent and thus idle; an owned child keeps us waiting.
+      const ownsLiveChild = daemonSupervisor?.mode === 'supervised'
+        && daemonSupervisor.snapshot().pid !== undefined;
+      return ownsLiveChild ? null : { idle: true, activeTaskCount: 0, activeTaskGraphCount: 0 };
+    }
+  };
+  quitController = createQuitController({
+    daemonMode: () => daemonSupervisor?.mode ?? 'connected',
+    readCounts: readDaemonCounts,
+    stopDaemon: () => daemonSupervisor?.stop() ?? Promise.resolve(),
+    forceCancel: () => daemonSupervisor?.forceStop() ?? Promise.resolve(),
+    presenter: createQuitDialogPresenter(),
+    exit: () => { void finalizeQuit(); },
+  });
+
+  // macOS/Linux OS shutdown: cancel all work and force-quit with no dialog.
+  // Registered only after the app is ready, as powerMonitor requires.
+  powerMonitor.on('shutdown', (event?: Electron.Event) => {
+    if (typeof event?.preventDefault === 'function') event.preventDefault();
+    blockQuitSurfaces();
+    quitController?.forceQuit();
   });
 
   // Conversation state, summary preference and recovery are all daemon-owned
@@ -567,18 +816,6 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     console.warn('[wrenyard-desktop] Desktop settings could not be loaded:', error instanceof Error ? error.message : String(error));
   }
-  updateController = new DesktopUpdateController({
-    currentVersion: app.getVersion(),
-    userDataPath: app.getPath('userData'),
-    // Re-probe on every check/install so a suite repaired after startup becomes
-    // installable without restarting Desktop.
-    probeInstallation: () => resolveInstallation(),
-    readDaemonIdle: readUpdateDaemonIdle,
-    onInstall: () => setImmediate(() => app.quit()),
-    onChanged: () => shellWindow?.notifyUpdateChanged(),
-    sourceDevelopment: isSourceDevelopment(),
-  });
-
   // One shared daemon transport and subscription set for the whole Desktop
   // process. The shell window, tray and Pet all consume the same rounds; the
   // Pet never opens its own connection or timer.
@@ -632,7 +869,6 @@ async function bootstrap(): Promise<void> {
   });
   if (SMOKE) await petStart;
   const providerService = new ProviderService({ ipcPath });
-  const clientConfigurationService = new ClientConfigurationDesktopService({ ipcPath });
   quotaController = new DesktopQuotaController({
     source: new DesktopQuotaSource(ipcPath),
     providerSource: providerService,
@@ -669,6 +905,21 @@ async function bootstrap(): Promise<void> {
     readUpdate: () => updateController!.snapshot(),
     sourceDevelopment: isSourceDevelopment(),
   });
+  // Daemon lifecycle surface: read the live projection, or start/restart the
+  // daemon when this Desktop supervises it.
+  ipcMain.handle(SHELL_CHANNELS.daemonSnapshot, () => daemonSnapshot());
+  ipcMain.handle(SHELL_CHANNELS.daemonStart, async () => {
+    if (quitController?.isQuitting()) return daemonSnapshot();
+    await daemonSupervisor?.start();
+    return daemonSnapshot();
+  });
+  ipcMain.handle(SHELL_CHANNELS.daemonRestart, async () => {
+    if (quitController?.isQuitting()) return daemonSnapshot();
+    if (daemonSupervisor?.mode === 'supervised') await daemonSupervisor.restart();
+    else await daemonSupervisor?.start();
+    return daemonSnapshot();
+  });
+
   shellWindow = await ShellWindowController.create({
     rendererPath: join(app.getAppPath(), 'dist', 'renderer', 'index.html'),
     preloadPath: join(app.getAppPath(), 'dist', 'preload.cjs'),
@@ -690,14 +941,9 @@ async function bootstrap(): Promise<void> {
       await providerService.configureApiKey(providerId, key);
       return quotaController!.getSnapshot(true);
     },
-    getClientConfiguration: () => clientConfigurationService.snapshot(),
-    planClientConfiguration: (clientId, selection) => clientConfigurationService.plan(clientId, selection),
-    applyClientConfiguration: (plan) => clientConfigurationService.apply(plan),
-    planClientConfigurationRestore: (clientId) => clientConfigurationService.planRestore(clientId),
-    restoreClientConfiguration: (plan) => clientConfigurationService.restore(plan),
     getUpdate: async () => updateController!.snapshot(),
-    checkUpdate: () => updateController!.check(true),
-    requestInstall: (onInstall) => updateController!.requestInstall(onInstall),
+    checkUpdate: () => updateController!.checkForUpdates(),
+    requestInstall: () => updateController!.requestInstall(),
     savePetSettings: async (settings: PetCompanionSettings) => {
       // Provider order has one mutation surface: the Provider page. A stale
       // settings draft must never overwrite that order when Pet settings save.
@@ -710,22 +956,30 @@ async function bootstrap(): Promise<void> {
       return getSettings();
     },
     saveWorkspace: async (path: string, create = false) => {
+      if (!isSupervised() && daemonSupervisor?.mode !== 'supervised') {
+        throw new Error('daemon 由终端管理，请先停止它，再由啾啾工坊启动后切换工作区。');
+      }
       const idle = assertDaemonIdle(await requestForeman('daemon.status', {}));
       if (!idle.idle) throw new Error(idle.reason);
       const saved = create ? await createProductWorkspace(path) : await saveProductWorkspace(path);
       if (isSupervised()) {
         await requestForeman('daemon.shutdown', { reason: 'source-development workspace activation' });
         for (let attempt = 1; attempt <= SERVICE_RETRY_ATTEMPTS; attempt += 1) {
-          if (await probeWrenyard(ipcPath)) break;
+          try {
+            const status = await requestForeman('daemon.status', {}) as { ok?: boolean; shutting_down?: boolean };
+            if (status.ok === true && status.shutting_down === false) break;
+          } catch {
+            // The source owner is replacing the old daemon and IPC endpoint.
+          }
           if (attempt === SERVICE_RETRY_ATTEMPTS) {
             throw new Error('源码 supervisor 未能在工作区切换后拉起 daemon');
           }
           await new Promise((resolveDelay) => setTimeout(resolveDelay, SERVICE_RETRY_DELAY_MS));
         }
       } else {
-        const cli = resolveWrenyardCli();
-        if (!cli) throw new Error('未找到 Wrenyard CLI，无法应用工作区');
-        await runDaemonRestart({ cli });
+        // Desktop owns the restart through its shared supervisor; it never
+        // shells out to `wrenyard daemon restart`.
+        await restartOwnedDaemon(daemonSupervisor!);
       }
       // Activation is Desktop's; the daemon validates and owns the binding.
       await conversationAdapter!.setWorkspace(saved);
@@ -762,6 +1016,8 @@ async function bootstrap(): Promise<void> {
     process.platform,
     () => { void requestInstallFromMenu(); },
     (origin: QuitOrigin) => {
+      // A pending quit already owns the flow; never start another one.
+      if (quitController?.isQuitting()) return;
       if (origin === 'direct') {
         app.quit();
         return;
@@ -772,6 +1028,8 @@ async function bootstrap(): Promise<void> {
       }
       // Warn, never quit: a second Cmd+Q inside the 3s window fully exits
       // while Cmd+W only backgrounds. The dialog is intentionally non-blocking.
+      // A first press never starts a quit, so make sure nothing stays blocked.
+      restoreQuitSurfaces();
       void showUpdateMessage({
         type: 'warning',
         title: '退出啾啾工坊',
@@ -784,9 +1042,18 @@ async function bootstrap(): Promise<void> {
   )));
   if (!SMOKE && !isSourceDevelopment()) updateController.start();
 
+  // A new version health-starts and the shell is loaded: settle the pending
+  // update result and run the platform finalize (applier cleanup). If the
+  // daemon was unavailable at startup, the healthy recovery above finalizes.
+  await daemonStart;
+  await finalizeWhenHealthy();
+
   shellWindow.window.on('close', (event) => {
-    if (quitting) return;
+    if (finalExit) return;
     event.preventDefault();
+    // The shell never hides while a quit is pending; the drain dialog or the
+    // final teardown owns every surface.
+    if (quitController?.isQuitting()) return;
     shellWindow?.window.hide();
   });
 
@@ -803,6 +1070,8 @@ async function bootstrap(): Promise<void> {
   desktopTray = createDesktopTray({
     getPetConfig: () => petController!.getConfig(),
     setPetEntityVisibility: (key, visible) => {
+      // Every tray action is inert for the whole pending quit, not only modal.
+      if (quitController?.isQuitting()) return Promise.resolve();
       if (key === 'taskgraphs') {
         const pet = settingsStore.load().pet;
         settingsStore.patch('pet', {
@@ -814,12 +1083,15 @@ async function bootstrap(): Promise<void> {
       }
       return petController!.setEntityVisibility(key, visible);
     },
-    selectPetDisplay: (displayId) => petController!.selectDisplay(displayId),
+    selectPetDisplay: (displayId) => (quitController?.isQuitting()
+      ? Promise.resolve()
+      : petController!.selectDisplay(displayId)),
     setPetEnabled: async (enabled) => {
+      if (quitController?.isQuitting()) return;
       await petController!.setVisible(enabled);
       syncTaskgraphEntityVisibility();
     },
-    restartPet: () => petController!.restart(),
+    restartPet: () => (quitController?.isQuitting() ? Promise.resolve() : petController!.restart()),
     openDesktop: () => showDesktop('workbench'),
     getQuotaSnapshot: () => quotaController!.snapshot(),
   }, process.platform);
@@ -842,12 +1114,15 @@ async function bootstrap(): Promise<void> {
     await runSmoke(shellWindow);
     await runSmokeWindowLifecycle(shellWindow);
     console.log('[wrenyard-desktop] smoke ok');
-    // Real explicit quit: the production before-quit handler owns all teardown.
-    app.quit();
+    // Real explicit quit: skip the drain dialog but run the production teardown.
+    if (quitController) quitController.requestQuit({ bypassDrain: true });
+    else void finalizeQuit();
   }
 }
 
 app.on('second-instance', (_event, commandLine) => {
+  // A second instance only raises the blocking drain dialog.
+  if (quitController?.handleSecondInstance()) return;
   showDesktop(commandLine.some(isSettingsLaunchRequest) ? 'settings' : 'workbench');
 });
 
@@ -856,44 +1131,37 @@ app.on('open-url', (event, url) => {
   if (isSettingsLaunchRequest(url)) showDesktop('settings');
 });
 
-app.on('activate', () => showDesktop('workbench'));
+app.on('activate', () => {
+  if (quitController?.isQuitting()) return;
+  showDesktop('workbench');
+});
 
+// Closing every window only hides it to the tray on every platform. The app
+// stays resident (and keeps the daemon it supervises running) until the user
+// explicitly quits from the tray menu, so this handler must never app.quit().
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // Tray-resident: no platform quits on the last window close.
+});
+
+// Windows delivers OS shutdown/logout as a per-window session event, so every
+// created BrowserWindow forwards it to the forced, dialog-free quit path. A
+// connected external daemon is never stopped, even here.
+app.on('browser-window-created', (_event, window) => {
+  if (quitSurfacesBlocked) window.setEnabled(false);
+  const onSessionEnd = (): void => { blockQuitSurfaces(); quitController?.forceQuit(); };
+  window.on('query-session-end', (event) => { event.preventDefault(); onSessionEnd(); });
+  window.on('session-end', onSessionEnd);
 });
 
 app.on('before-quit', (event) => {
-  if (quitting) return;
-  quitting = true;
+  // Only the final exit issued from finalizeQuit may proceed; every other
+  // before-quit is prevented for as long as the quit controller is pending, so
+  // a second request can never bypass draining.
+  if (finalExit) return;
   event.preventDefault();
-  void (async () => {
-    try {
-      desktopTray?.destroy();
-      desktopTray = null;
-      quotaController?.stop();
-      quotaController = null;
-      updateController?.stop();
-      updateController = null;
-      await petController?.stop();
-      petController = null;
-      // Tear down the shared daemon subscriptions and the Desktop-owned task
-      // windows after the Pet module stops consuming them.
-      desktopSubscriptions?.dispose();
-      desktopSubscriptions = null;
-      taskgraphWindowOwner?.destroy();
-      taskgraphWindowOwner = null;
-      // Detach only: quit never cancels the daemon-owned session backend.
-      await conversationAdapter?.close();
-      conversationAdapter = null;
-    } catch {
-      // best-effort termination
-    } finally {
-      app.quit();
-      // A SIGTERM-initiated quit (e.g. pnpm dev) stalls after this second
-      // app.quit(); teardown is already done, so exit if still alive.
-      setTimeout(() => app.exit(0), 1_000);
-    }
-  })();
+  blockQuitSurfaces();
+  if (quitController) quitController.requestQuit();
+  else void finalizeQuit();
 });
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -910,6 +1178,8 @@ if (!gotSingleInstanceLock) {
       quotaController = null;
       updateController?.stop();
       updateController = null;
+      daemonSupervisor?.dispose();
+      daemonSupervisor = null;
       await petController?.stop();
       desktopSubscriptions?.dispose();
       desktopSubscriptions = null;

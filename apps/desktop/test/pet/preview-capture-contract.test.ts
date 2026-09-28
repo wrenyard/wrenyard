@@ -11,14 +11,14 @@ describe('stdio guard contract', () => {
     expect(isBrokenPipe(new Error('foo'))).toBe(false);
     expect(isBrokenPipe(null)).toBe(false);
     expect(isBrokenPipe({})).toBe(false);
-    const e = new Error('broken pipe');
+    const e = new Error('broken pipe') as NodeJS.ErrnoException;
     e.code = 'EPIPE';
     expect(isBrokenPipe(e)).toBe(true);
   });
 
   it('rethrowUnlessBrokenPipe rethrows non-EPIPE errors', async () => {
     const { rethrowUnlessBrokenPipe } = await import('../../tools/pet/scripts/preview/stdio-guard.mjs');
-    const epipe = new Error('epipe');
+    const epipe = new Error('epipe') as NodeJS.ErrnoException;
     epipe.code = 'EPIPE';
     expect(() => rethrowUnlessBrokenPipe(epipe)).not.toThrow();
     const other = new Error('other');
@@ -30,7 +30,7 @@ describe('stdio guard contract', () => {
     const stream = new EventEmitter();
     installBrokenPipeGuard(stream);
 
-    const epipe = new Error('epipe');
+    const epipe = new Error('epipe') as NodeJS.ErrnoException;
     epipe.code = 'EPIPE';
     expect(() => stream.emit('error', epipe)).not.toThrow();
 
@@ -144,7 +144,7 @@ describe('final preview capture contract', () => {
       expect(item).not.toHaveProperty('generatedAt');
       expect(item).not.toHaveProperty('duration');
       expect(item.file).toMatch(/^artifacts\/preview-capture\//);
-      expect(item.reference).toMatch(/^test\/visual\/reference\/(worker|house)\//);
+      expect(item.reference).toMatch(/^test\/pet\/visual\/reference\/(worker|house)\//);
     }
     const houseFixtures = fixtures.PREVIEW_FIXTURES.filter((f) => f.kind === 'house');
     expect(houseFixtures).toHaveLength(9);
@@ -173,8 +173,8 @@ describe('final preview capture contract', () => {
       htmlPathForFixture,
       staticQueryForFixture,
     } = await import('../../tools/pet/scripts/preview/capture-contract.mjs');
-    expect(htmlPathForFixture(rootDir, PREVIEW_FIXTURES[0]).replace(/\\/g, '/')).toMatch(/dist\/renderer\/worker\.html$/);
-    expect(htmlPathForFixture(rootDir, PREVIEW_FIXTURES[25]).replace(/\\/g, '/')).toMatch(/dist\/renderer\/house\.html$/);
+    expect(htmlPathForFixture(rootDir, PREVIEW_FIXTURES[0]).replace(/\\/g, '/')).toMatch(/dist\/pet\/renderer\/worker\.html$/);
+    expect(htmlPathForFixture(rootDir, PREVIEW_FIXTURES[25]).replace(/\\/g, '/')).toMatch(/dist\/pet\/renderer\/house\.html$/);
     expect(additionalArgumentsForFixture(PREVIEW_FIXTURES[0])).toHaveLength(1);
     expect(additionalArgumentsForFixture(PREVIEW_FIXTURES[0])[0]).toMatch(/^--preview-fixture=/);
     expect(staticQueryForFixture(PREVIEW_FIXTURES[24])).toMatchObject({
@@ -237,43 +237,43 @@ describe('final preview capture contract', () => {
     expect(hoverFixture.value.quotaTips).toBeDefined();
     expect(Array.isArray(hoverFixture.value.quotaTips)).toBe(true);
 
-    const tips = hoverFixture.value.quotaTips;
+    const tips = hoverFixture.value.quotaTips!;
     expect(tips.length).toBeGreaterThanOrEqual(4);
 
     // codex: two percentage windows ordered first
-    const codex = tips.find((t: any) => t.text.includes('codex'));
+    const codex = tips.find((t: any) => t.text.includes('codex'))!;
     expect(codex).toBeDefined();
     expect(codex.bars).toHaveLength(1);
-    expect(codex.bars[0].provider.windows[0].name).toBe('5h');
-    expect(codex.bars[0].provider.windows[1].name).toBe('7d');
-    expect(codex.bars[0].provider.expectedRemainingPct).toBeNull();
+    expect(codex.bars![0].provider.windows[0].name).toBe('5h');
+    expect(codex.bars![0].provider.windows[1].name).toBe('7d');
+    expect(codex.bars![0].provider.expectedRemainingPct).toBeNull();
 
     // cursor: second percentage group
-    const cursor = tips.find((t: any) => t.text.includes('cursor'));
+    const cursor = tips.find((t: any) => t.text.includes('cursor'))!;
     expect(cursor).toBeDefined();
     expect(cursor.bars).toHaveLength(1);
-    expect(cursor.bars[0].provider.windows[0].name).toBe('7d');
-    expect(cursor.bars[0].provider.windows[0].remainingPct).toBe(80);
+    expect(cursor.bars![0].provider.windows[0].name).toBe('7d');
+    expect(cursor.bars![0].provider.windows[0].remainingPct).toBe(80);
 
     // deepseek: monetary balance row (quota-only), no bars
-    const deepseek = tips.find((t: any) => t.text.includes('deepseek'));
+    const deepseek = tips.find((t: any) => t.text.includes('deepseek'))!;
     expect(deepseek).toBeDefined();
     expect(deepseek.bars).toBeUndefined();
     expect(deepseek.balances).toBeDefined();
     expect(deepseek.balances).toHaveLength(1);
-    expect(deepseek.balances[0].currency).toBe('CNY');
-    expect(deepseek.balances[0].amount).toBe('12.50');
-    expect(deepseek.balances[0].display).toBe('¥12.50');
+    expect(deepseek.balances![0].currency).toBe('CNY');
+    expect(deepseek.balances![0].amount).toBe('12.50');
+    expect(deepseek.balances![0].display).toBe('¥12.50');
 
     // super-grok: status error, colon-free text, errorRow present
-    const superGrok = tips.find((t: any) => t.text.includes('super-grok'));
+    const superGrok = tips.find((t: any) => t.text.includes('super-grok'))!;
     expect(superGrok).toBeDefined();
-    expect(superGrok.bars[0].status).toBe('error');
-    expect(superGrok.bars[0].error).toBe('rate limit hit');
+    expect(superGrok.bars![0].status).toBe('error');
+    expect(superGrok.bars![0].error).toBe('rate limit hit');
     expect(superGrok.text).not.toContain(':');
     expect(superGrok.errorRow).toBeDefined();
-    expect(superGrok.errorRow.label).toBe('super-grok');
-    expect(superGrok.errorRow.message).toBe('error — rate limit hit');
+    expect(superGrok.errorRow!.label).toBe('super-grok');
+    expect(superGrok.errorRow!.message).toBe('error — rate limit hit');
 
     // Dispatch/token two-line summary header assertion kept
     expect(source).toContain("'1 个任务运行中 · 2 张图纸'");

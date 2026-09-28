@@ -28,16 +28,16 @@ export async function handleProject(args: string[]): Promise<number> {
 
 export async function handleProjectList(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project list [--config path]')
+    console.log('Usage: wrenyard project list [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
-  requireNoPositionals(positionals, 'wrenyard project list [--config path]')
+  requireNoPositionals(positionals, 'wrenyard project list [--config path] [--json]')
 
   const client = await connectConfiguredForemanClient(values.config)
   try {
@@ -50,16 +50,16 @@ export async function handleProjectList(args: string[]): Promise<number> {
 
 export async function handleProjectDescribe(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project describe <project> [--config path]')
+    console.log('Usage: wrenyard project describe <project> [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
-  const project = requireSinglePositional(positionals, 'wrenyard project describe <project> [--config path]')
+  const project = requireSinglePositional(positionals, 'wrenyard project describe <project> [--config path] [--json]')
 
   const client = await connectConfiguredForemanClient(values.config)
   try {
@@ -72,16 +72,16 @@ export async function handleProjectDescribe(args: string[]): Promise<number> {
 
 export async function handleProjectStatus(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project status <project> [--config path]')
+    console.log('Usage: wrenyard project status <project> [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
-  const project = requireSinglePositional(positionals, 'wrenyard project status <project> [--config path]')
+  const project = requireSinglePositional(positionals, 'wrenyard project status <project> [--config path] [--json]')
 
   const client = await connectConfiguredForemanClient(values.config)
   try {
@@ -94,16 +94,16 @@ export async function handleProjectStatus(args: string[]): Promise<number> {
 
 export async function handleProjectPull(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project pull <project> [--config path]')
+    console.log('Usage: wrenyard project pull <project> [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
-  const project = requireSinglePositional(positionals, 'wrenyard project pull <project> [--config path]')
+  const project = requireSinglePositional(positionals, 'wrenyard project pull <project> [--config path] [--json]')
 
   const client = await connectConfiguredForemanClient(values.config)
   try {
@@ -117,16 +117,16 @@ export async function handleProjectPull(args: string[]): Promise<number> {
 
 export async function handleProjectPush(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project push <project> [--config path]')
+    console.log('Usage: wrenyard project push <project> [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
-  const project = requireSinglePositional(positionals, 'wrenyard project push <project> [--config path]')
+  const project = requireSinglePositional(positionals, 'wrenyard project push <project> [--config path] [--json]')
 
   const client = await connectConfiguredForemanClient(values.config)
   try {
@@ -154,16 +154,16 @@ export async function handleProjectWorktree(args: string[]): Promise<number> {
 
 export async function handleProjectWorktreeList(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project worktree list <project> [--config path]')
+    console.log('Usage: wrenyard project worktree list <project> [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
-  const project = requireSinglePositional(positionals, 'wrenyard project worktree list <project> [--config path]')
+  const project = requireSinglePositional(positionals, 'wrenyard project worktree list <project> [--config path] [--json]')
 
   const client = await connectConfiguredForemanClient(values.config)
   try {
@@ -176,17 +176,17 @@ export async function handleProjectWorktreeList(args: string[]): Promise<number>
 
 export async function handleProjectWorktreeCreate(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project worktree create <project> <worktree_id> [--config path]')
+    console.log('Usage: wrenyard project worktree create <project> <worktree_id> [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
   if (positionals.length !== 2) {
-    console.error('Usage: wrenyard project worktree create <project> <worktree_id> [--config path]')
+    console.error('Usage: wrenyard project worktree create <project> <worktree_id> [--config path] [--json]')
     return 1
   }
   const [project, worktreeId] = positionals
@@ -202,16 +202,16 @@ export async function handleProjectWorktreeCreate(args: string[]): Promise<numbe
 
 export async function handleProjectWorktreeRemove(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project worktree remove <worktree_id> [--config path]')
+    console.log('Usage: wrenyard project worktree remove <worktree_id> [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
-  const worktreeId = requireSinglePositional(positionals, 'wrenyard project worktree remove <worktree_id> [--config path]')
+  const worktreeId = requireSinglePositional(positionals, 'wrenyard project worktree remove <worktree_id> [--config path] [--json]')
 
   const client = await connectConfiguredForemanClient(values.config)
   try {
@@ -225,17 +225,17 @@ export async function handleProjectWorktreeRemove(args: string[]): Promise<numbe
 
 export async function handleProjectWorktreeMerge(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project worktree merge <project> <worktree_id> [--config path]')
+    console.log('Usage: wrenyard project worktree merge <project> <worktree_id> [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
   if (positionals.length !== 2) {
-    console.error('Usage: wrenyard project worktree merge <project> <worktree_id> [--config path]')
+    console.error('Usage: wrenyard project worktree merge <project> <worktree_id> [--config path] [--json]')
     return 1
   }
   const [project, worktreeId] = positionals

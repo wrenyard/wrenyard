@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "nursery": "off",
+    "restriction": "off"
+  },
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/.artifacts/**",
+    "/release/**",
+    "**/node_modules/**"
+  ],
+  "rules": {
+    "typescript/triple-slash-reference": "off",
+    "unicorn/prefer-string-starts-ends-with": "off",
+    "no-useless-catch": "off",
+    "unicorn/no-useless-fallback-in-spread": "off",
+    "no-control-regex": "off",
+    "no-useless-escape": "off",
+    "unicorn/no-thenable": "off",
+    "no-unused-vars": "off",
+    "unicorn/no-new-array": "off",
+    "typescript/no-useless-empty-export": "off",
+    "unicorn/no-useless-spread": "off"
+  }
+}

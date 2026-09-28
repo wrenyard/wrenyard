@@ -1,27 +1,25 @@
 /**
  * @wrenyard/dsh-shell
  *
- * Wrenyard MCP/IPC tools bridge for DeepSeek Harness (DSH) Code Mode.
+ * Wrenyard owner-only IPC tools bridge for DeepSeek Harness (DSH) Code Mode.
  *
  * A self-contained Cordis plugin compatible with @deepseek-ai/dsh@0.1.0-rc.6.
- * It talks only to Wrenyard's public MCP (HTTP/SSE JSON-RPC) and owner-only
- * NDJSON IPC surfaces, whose wire protocols are stable. It never imports Wrenyard
- * or Wrenyard source, never logs credentials or raw environment values, and
- * bundles no internal provider.
+ * It talks only to Wrenyard's owner-only NDJSON IPC surface, whose wire protocol
+ * is stable. It never imports Wrenyard or Wrenyard source, never logs credentials
+ * or raw environment values, and bundles no internal provider.
  *
- * Exactly nine Desktop/DSH model-visible tools are exposed under stable
- * aliases. The three task tools are mapped to canonical MCP definitions; the
- * four workspace-document tools talk only to the owner-only NDJSON IPC
- * surface; the two discovery tools are read-only IPC projections:
- *   - list_task            -> task_list (MCP)
- *   - describe_task        -> task_describe (MCP)
- *   - run_task             -> task_run (MCP) + IPC task.run.wait / task.run.cancel
- *   - list_workspace_docs  -> workspace.doc.list (owner-only IPC)
- *   - read_workspace_doc   -> workspace.doc.read (owner-only IPC)
- *   - create_workspace_doc -> workspace.doc.create (owner-only IPC)
- *   - update_workspace_doc -> workspace.doc.update (owner-only IPC; expectedContent CAS)
- *   - list_projects        -> project.list (owner-only IPC, read-only)
- *   - list_runtimes        -> task.settings.runtimes (owner-only IPC, read-only)
+ * Exactly nine Desktop/DSH model-visible tools are exposed under stable aliases.
+ * Every tool is a read-only projection or a bounded mutation over the owner-only
+ * NDJSON IPC surface:
+ *   - list_task            -> task.definition.list (IPC, read-only)
+ *   - describe_task        -> task.definition.describe (IPC, read-only)
+ *   - run_task             -> task.run.create + task.run.wait / task.run.cancel (IPC)
+ *   - list_workspace_docs  -> workspace.doc.list (IPC)
+ *   - read_workspace_doc   -> workspace.doc.read (IPC)
+ *   - create_workspace_doc -> workspace.doc.create (IPC)
+ *   - update_workspace_doc -> workspace.doc.update (IPC; expectedContent CAS)
+ *   - list_projects        -> project.list (IPC, read-only)
+ *   - list_runtimes        -> task.settings.runtimes (IPC, read-only)
  */
 
 import net from 'node:net';
@@ -30,17 +28,24 @@ export const name = 'wrenyard-foreman-tools';
 
 export const inject = ['tools'];
 
-const DEFAULT_MCP_URL = 'http://127.0.0.1:8787/mcp';
-const CATALOG_TIMEOUT_MS = 15_000;
 const DEFAULT_TIMEOUT_MS = 180_000;
 const IPC_TIMEOUT_MS = 5_000;
 
-const TASK_CANONICAL = {
-  list_task: 'task_list',
-  describe_task: 'task_describe',
-  run_task: 'task_run',
-};
+// Every fresh owner-only IPC connection must complete a version-tagged
+// health.ping handshake before any business request; the daemon rejects a
+// business method sent first. This standalone plugin cannot import the
+// TypeScript control-client, so the wire version and the mismatch text are
+// mirrored locally and must stay in lockstep with WRENYARD_PROTOCOL_VERSION
+// and protocolVersionMismatchMessage in @wrenyard/control-client. The handshake
+// is IPC-only and never invokes a task, so it adds no recursion.
+const IPC_HANDSHAKE_METHOD = 'health.ping';
+const WRENYARD_PROTOCOL_VERSION = 1;
 
+// Owner-only NDJSON IPC methods. run_task is create + wait/cancel; the two task
+// read aliases are the definition list/describe projections.
+const IPC_TASK_LIST_METHOD = 'task.definition.list';
+const IPC_TASK_DESCRIBE_METHOD = 'task.definition.describe';
+const IPC_RUN_CREATE_METHOD = 'task.run.create';
 const IPC_WAIT_METHOD = 'task.run.wait';
 const IPC_CANCEL_METHOD = 'task.run.cancel';
 
@@ -74,7 +79,72 @@ const RUNTIMES_TARGET_RULE =
 // The nine model-visible aliases keep their execution authority in the
 // Wrenyard backend. Only these names may short-circuit the pre-execute
 // waterfall; every other native tool must keep flowing through DSH policy.
-const WRENYARD_ALIAS_NAMES = new Set([...Object.keys(TASK_CANONICAL), ...Object.keys(DOC_ALIAS_TO_IPC), ...Object.keys(DISCOVERY_ALIAS_TO_IPC)]);
+const TASK_ALIAS_NAMES = ['list_task', 'describe_task', 'run_task'];
+const WRENYARD_ALIAS_NAMES = new Set([...TASK_ALIAS_NAMES, ...Object.keys(DOC_ALIAS_TO_IPC), ...Object.keys(DISCOVERY_ALIAS_TO_IPC)]);
+
+// Local task-tool definitions: the aliases talk straight to the daemon's
+// owner-only IPC methods, so their descriptions and input schemas live here
+// instead of being projected from a remote tool catalog.
+const TASK_DEFINITIONS = {
+  list_task: {
+    description:
+      'List available Wrenyard task definitions (read-only). Without a project, returns only generic/common tasks; with a project, returns generic plus that project\'s task definitions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'Optional project id to include project-specific task definitions.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  describe_task: {
+    description:
+      'Get the detailed schema and contract for one Wrenyard task definition (read-only).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task definition name.' },
+        project: { type: 'string', description: 'Optional project scope for the definition.' },
+      },
+      required: ['task_id'],
+      additionalProperties: false,
+    },
+  },
+};
+
+// run_task forwards its input unchanged to task.run.create, so its parameters
+// mirror that method's schema: the one-shot invocation_settings layer (routing,
+// timeout, automatic dispatch) plus the optional bounded ctx. Runtime selection
+// is expressed only through invocation_settings / the mutually exclusive
+// mode/automatic/explicit_runtime top-level forms.
+const RUN_TASK_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    task_id: { type: 'string', description: 'Task definition name to run.' },
+    project: { type: 'string', description: 'Project id that owns the task definition.' },
+    worktree: { type: 'string', description: 'Optional managed worktree id.' },
+    input: { description: 'Task input payload, validated against the definition input schema.' },
+    ctx: { type: 'object', additionalProperties: true, description: 'Bounded JSON-safe KV context inherited by this task run.' },
+    invocation_settings: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['automatic', 'explicit'] },
+        explicit_runtime: { type: 'object', additionalProperties: true },
+        timeout_ms: { type: 'number' },
+        automatic: { type: 'object', additionalProperties: true },
+        max_auto_output_usd_per_million: { type: 'number' },
+        routing_weights: { type: 'object', additionalProperties: true },
+      },
+      additionalProperties: true,
+      description: 'One-shot invocation settings for this run only; applies to this run and is never persisted.',
+    },
+    mode: { type: 'string', enum: ['automatic', 'explicit'] },
+    automatic: { type: 'object', additionalProperties: true },
+    explicit_runtime: { type: 'object', additionalProperties: true },
+  },
+  required: ['task_id', 'project'],
+  additionalProperties: false,
+};
 
 const DISCOVERY_DEFINITIONS = {
   list_projects: {
@@ -158,140 +228,18 @@ function abortError() {
   return err;
 }
 
-function boundedMessage(err) {
-  return err instanceof Error ? err.message : String(err);
-}
-
-const SCHEMA_KEEP = new Set([
-  'type', 'oneOf', 'properties', 'required', 'additionalProperties', 'items',
-  'enum', 'const', 'description', 'title', 'default',
-]);
-
-function sanitizeSchema(node) {
-  if (node === true) return {};
-  if (node === false) return { type: 'object', additionalProperties: false };
-  if (!node || typeof node !== 'object' || Array.isArray(node)) return {};
-  const anyOf = Array.isArray(node.anyOf) ? node.anyOf.map(sanitizeSchema) : undefined;
-  const oneOf = Array.isArray(node.oneOf) ? node.oneOf.map(sanitizeSchema) : undefined;
-  const out = {};
-  for (const key of Object.keys(node)) {
-    if (!SCHEMA_KEEP.has(key) || key === 'oneOf') continue;
-    out[key] = node[key];
-  }
-  if (typeof out.additionalProperties === 'object') out.additionalProperties = true;
-  if (Array.isArray(out.type)) out.type = out.type.find((type) => type !== 'null') ?? 'string';
-  if (out.properties && typeof out.properties === 'object') {
-    out.properties = Object.fromEntries(
-      Object.entries(out.properties).map(([key, value]) => [key, sanitizeSchema(value)]),
-    );
-  }
-  if (out.items !== undefined) out.items = sanitizeSchema(out.items);
-  if (Array.isArray(out.required)) out.required = out.required.filter((key) => typeof key === 'string');
-  const variants = oneOf?.length >= 2 ? oneOf : anyOf?.length >= 2 ? anyOf : undefined;
-  if (variants && !out.type) out.oneOf = variants;
-  return out;
-}
-
-async function mcpRequest(mcpUrl, sender, method, params, { timeout = DEFAULT_TIMEOUT_MS, signal } = {}) {
-  const target = new URL(mcpUrl);
-  if (sender) target.searchParams.set('FOREMAN_MCP_SENDER', sender);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error('Wrenyard MCP request timeout')), timeout);
-  const onOuterAbort = () => controller.abort();
-  if (signal) {
-    if (signal.aborted) {
-      clearTimeout(timer);
-      throw abortError();
-    }
-    signal.addEventListener('abort', onOuterAbort, { once: true });
-  }
-  try {
-    const res = await fetch(target, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`MCP HTTP ${res.status}`);
-    return parseSse(await res.text());
-  } finally {
-    clearTimeout(timer);
-    if (signal) signal.removeEventListener('abort', onOuterAbort);
-  }
-}
-
-function parseSse(raw) {
-  const chunks = [];
-  for (const line of raw.split(/\r?\n/)) {
-    if (line.startsWith('data:')) chunks.push(line.slice(5).trim());
-  }
-  for (const chunk of chunks) {
-    if (!chunk) continue;
-    let msg;
-    try {
-      msg = JSON.parse(chunk);
-    } catch {
-      continue;
-    }
-    if (msg.error) {
-      const err = new Error(`MCP error: ${msg.error.message || 'unknown'}`);
-      err.code = msg.error.code;
-      throw err;
-    }
-    if (msg.result !== undefined) return msg.result;
-  }
-  throw new Error('MCP returned no usable SSE payload');
-}
-
-function extractText(result) {
-  if (result === null || result === undefined) return '';
+/** Render one owner-only IPC result as stable text for the model. */
+function ipcText(result) {
   if (typeof result === 'string') return result;
-  if (typeof result !== 'object') return String(result);
-  if (result.structuredContent !== undefined) {
-    return typeof result.structuredContent === 'string'
-      ? result.structuredContent
-      : JSON.stringify(result.structuredContent, null, 2);
-  }
-  if (Array.isArray(result.content)) {
-    return result.content
-      .filter((item) => item && item.type === 'text' && typeof item.text === 'string')
-      .map((item) => item.text)
-      .join('\n');
-  }
-  return JSON.stringify(result, null, 2);
+  return JSON.stringify(result === undefined ? null : result, null, 2);
 }
 
 function pick(result, keys) {
   if (!result || typeof result !== 'object') return undefined;
-  const structured = result.structuredContent;
-  if (structured && typeof structured === 'object') {
-    for (const key of keys) {
-      if (structured[key] !== undefined) return structured[key];
-    }
-  }
   for (const key of keys) {
     if (result[key] !== undefined) return result[key];
   }
-  try {
-    const parsed = JSON.parse(extractText(result));
-    if (parsed && typeof parsed === 'object') {
-      for (const key of keys) {
-        if (parsed[key] !== undefined) return parsed[key];
-      }
-    }
-  } catch {
-    // Non-JSON text output; nothing to pick.
-  }
   return undefined;
-}
-
-function canonicalOutput(result) {
-  if (result && result.isError) {
-    const err = new Error(extractText(result) || 'Wrenyard tool reported an error');
-    err.isToolError = true;
-    throw err;
-  }
-  return extractText(result);
 }
 
 function dshOutput() {
@@ -302,15 +250,6 @@ function dshOutput() {
       return [{ type: 'text', text }];
     },
   };
-}
-
-async function listTools(mcpUrl, sender) {
-  const result = await mcpRequest(mcpUrl, sender, 'tools/list', {}, { timeout: CATALOG_TIMEOUT_MS });
-  return Array.isArray(result && result.tools) ? result.tools : [];
-}
-
-async function callTool(mcpUrl, sender, toolName, args, { signal } = {}) {
-  return mcpRequest(mcpUrl, sender, 'tools/call', { name: toolName, arguments: args }, { signal });
 }
 
 /**
@@ -326,11 +265,26 @@ export function wrenyardIpcPath(env = process.env) {
   return process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock';
 }
 
+/**
+ * Exact operator-facing text for a missing or different daemon protocol
+ * version, mirrored from the control-client so DSH and the CLI report the same
+ * actionable message. A non-numeric daemon version renders as 未知, matching
+ * the client-side helper's fail-closed behavior.
+ */
+function protocolVersionMismatchMessage(cliVersion, daemonVersion) {
+  const daemon = typeof daemonVersion === 'number' ? String(daemonVersion) : '未知';
+  return `CLI 与 daemon 协议版本不一致（CLI ${cliVersion}，daemon ${daemon}），请使用同一版本`;
+}
+
 function ipcRequest(socketPath, method, params, { timeout = IPC_TIMEOUT_MS, signal } = {}) {
   return new Promise((resolve, reject) => {
     const sock = net.connect(socketPath);
     let lineBuffer = '';
     let settled = false;
+    // False until the version-tagged health.ping reply is accepted; the
+    // business request is only written after that, so no business method can
+    // ever be the first frame on a fresh connection.
+    let handshaken = false;
 
     const finish = (err, value) => {
       if (settled) return;
@@ -349,11 +303,24 @@ function ipcRequest(socketPath, method, params, { timeout = IPC_TIMEOUT_MS, sign
       signal.addEventListener('abort', onOuterAbort, { once: true });
     }
 
+    const writeLine = (message) => {
+      sock.write(`${JSON.stringify(message)}\n`);
+    };
+
+    // Decode once at the socket boundary so a multi-byte UTF-8 character split
+    // across chunks is reassembled by the stream decoder, not corrupted by a
+    // per-chunk toString().
+    sock.setEncoding('utf8');
     sock.on('connect', () => {
-      sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })}\n`);
+      writeLine({
+        jsonrpc: '2.0',
+        id: 0,
+        method: IPC_HANDSHAKE_METHOD,
+        params: { protocolVersion: WRENYARD_PROTOCOL_VERSION },
+      });
     });
     sock.on('data', (chunk) => {
-      lineBuffer += chunk.toString();
+      lineBuffer += chunk;
       let index;
       while ((index = lineBuffer.indexOf('\n')) >= 0) {
         const line = lineBuffer.slice(0, index).trim();
@@ -365,14 +332,36 @@ function ipcRequest(socketPath, method, params, { timeout = IPC_TIMEOUT_MS, sign
         } catch {
           continue;
         }
+        if (!handshaken) {
+          // Validate correlation before interpreting any error: only the
+          // pending handshake reply (id 0) may settle the connection.
+          if (msg.id !== 0) continue;
+          if (msg.error) {
+            finish(new Error(`Wrenyard IPC handshake error: ${msg.error.message || msg.error || 'unknown'}`));
+            return;
+          }
+          const result = msg.result && typeof msg.result === 'object' ? msg.result : undefined;
+          const daemonVersion = result ? result.protocolVersion : undefined;
+          if (daemonVersion !== WRENYARD_PROTOCOL_VERSION) {
+            finish(new Error(protocolVersionMismatchMessage(WRENYARD_PROTOCOL_VERSION, daemonVersion)));
+            return;
+          }
+          if (result.ok !== true) {
+            finish(new Error('Wrenyard IPC handshake failed'));
+            return;
+          }
+          handshaken = true;
+          writeLine({ jsonrpc: '2.0', id: 1, method, params });
+          continue;
+        }
+        // Same correlation rule for the business reply (id 1).
+        if (msg.id !== 1) continue;
         if (msg.error) {
           finish(new Error(`Wrenyard IPC error: ${msg.error.message || msg.error || 'unknown'}`));
           return;
         }
-        if (msg.id === 1) {
-          finish(null, msg.result !== undefined ? msg.result : msg);
-          return;
-        }
+        finish(null, msg.result !== undefined ? msg.result : msg);
+        return;
       }
     });
     sock.on('error', (err) => finish(err));
@@ -387,10 +376,19 @@ function ipcRequest(socketPath, method, params, { timeout = IPC_TIMEOUT_MS, sign
   });
 }
 
-function makeExecute(mcpUrl, sender, canonicalName) {
+/**
+ * Task read aliases route straight to the owner-only NDJSON IPC surface with
+ * explicitly shaped params, so an unknown model-supplied key can never reach the
+ * daemon's task-definition methods.
+ */
+function makeTaskExecute(socketPath, ipcMethod) {
   return async function execute(input, { signal } = {}) {
-    const result = await callTool(mcpUrl, sender, canonicalName, input || {}, { signal });
-    return canonicalOutput(result);
+    const source = input && typeof input === 'object' ? input : {};
+    const params = {};
+    if (ipcMethod === IPC_TASK_DESCRIBE_METHOD && typeof source.task_id === 'string') params.task_id = source.task_id;
+    if (typeof source.project === 'string') params.project = source.project;
+    const result = await ipcRequest(socketPath, ipcMethod, params, { signal, timeout: DEFAULT_TIMEOUT_MS });
+    return ipcText(result);
   };
 }
 
@@ -631,7 +629,7 @@ function stepHasNewInputOrResult(messages) {
   return Array.isArray(messages) && messages.length > 0;
 }
 
-function makeRunTaskExecute(mcpUrl, sender, socketPath, { desktopAsync = false, pendingYields } = {}) {
+function makeRunTaskExecute(socketPath, { desktopAsync = false, pendingYields } = {}) {
   return async function execute(input, exec = {}) {
     const { signal } = exec;
     if (signal && signal.aborted) throw abortError();
@@ -669,13 +667,13 @@ function makeRunTaskExecute(mcpUrl, sender, socketPath, { desktopAsync = false, 
     else if (merged.ctx !== modelCtx && modelCtx === undefined) delete payload.ctx;
 
     // The caller signal is not passed here: an abort during create must not
-    // discard a successfully created task_run_id. The bounded MCP timeout is
-    // preserved via the existing callTool default.
-    const launch = await callTool(mcpUrl, sender, TASK_CANONICAL.run_task, payload, {});
+    // discard a successfully created task_run_id. A bounded IPC deadline still
+    // applies to the create request.
+    const launch = await ipcRequest(socketPath, IPC_RUN_CREATE_METHOD, payload, { timeout: DEFAULT_TIMEOUT_MS });
     taskRunId = pick(launch, ['task_run_id', 'task_id', 'taskRunId', 'id']);
     if (taskRunId === undefined) {
       // Surface the real backend error but keep whatever run metadata arrived.
-      const text = canonicalOutput(launch);
+      const text = ipcText(launch);
       if (merged.status.startsWith('skipped:')) {
         const err = new Error(`${text}\n[current conversation was not attached to ctx.orchestration — ${merged.status}]`);
         err.isToolError = true;
@@ -699,7 +697,7 @@ function makeRunTaskExecute(mcpUrl, sender, socketPath, { desktopAsync = false, 
       // otherwise trigger, while a later real wake still reaches the model.
       const yieldKey = agentYieldKey(exec.agent);
       if (yieldKey !== undefined && pendingYields) pendingYields.set(yieldKey, taskRunId);
-      const launchText = canonicalOutput(launch);
+      const launchText = ipcText(launch);
       return (
         `${launchText}\n` +
         `[async dispatch: task_run_id=${JSON.stringify(taskRunId)} is running. ` +
@@ -715,7 +713,7 @@ function makeRunTaskExecute(mcpUrl, sender, socketPath, { desktopAsync = false, 
         { task_run_id: taskRunId },
         { timeout: null, signal },
       );
-      return canonicalOutput(waitPayload);
+      return ipcText(waitPayload);
     } catch (err) {
       if (signal && signal.aborted) {
         await cancelOwned();
@@ -763,14 +761,14 @@ function makeDiscoveryExecute(socketPath, ipcMethod) {
   };
 }
 
-function registerTool(tools, aliasName, canonicalTool, execute) {
+function registerTool(tools, aliasName, aliasDefinition, execute) {
   // run_task owns its own schema so the model-facing description can carry the
-  // "canonical target from list_runtimes" rule; everything else inherits the
-  // canonical MCP description verbatim.
+  // "canonical target from list_runtimes" rule; every other alias is described
+  // by its own local definition.
   const definition = {
     name: aliasName,
-    description: typeof canonicalTool.description === 'string' ? canonicalTool.description : '',
-    parameters: sanitizeSchema(canonicalTool.inputSchema || canonicalTool.schema),
+    description: typeof aliasDefinition.description === 'string' ? aliasDefinition.description : '',
+    parameters: aliasDefinition.inputSchema || aliasDefinition.schema || { type: 'object', additionalProperties: false },
     output: dshOutput(),
     isConcurrencySafe: () => true,
     execute,
@@ -779,7 +777,7 @@ function registerTool(tools, aliasName, canonicalTool, execute) {
   tools.register(definition);
 }
 
-function registerRunTask(tools, canonicalTool, execute, { desktopAsync = false } = {}) {
+function registerRunTask(tools, parameters, execute, { desktopAsync = false } = {}) {
   const definition = {
     name: 'run_task',
     description: desktopAsync
@@ -793,7 +791,7 @@ function registerRunTask(tools, canonicalTool, execute, { desktopAsync = false }
       'Prefer the default automatic routing and omit any runtime target unless the user explicitly named one or routing already failed. ' +
       `The caller\'s recent conversation in this session is attached to ctx.orchestration automatically (key \`${ORCHESTRATION_CONVERSATION_KEY}\`), so pass only the necessary delta in the task arguments — do not restate the whole chat, and do not write ctx.orchestration yourself. ` +
       'A failed run reports its real error and any task_run_id metadata; there is no implicit retry or fallback.',
-    parameters: sanitizeSchema(canonicalTool.inputSchema || canonicalTool.schema),
+    parameters,
     output: dshOutput(),
     isConcurrencySafe: () => true,
     execute,
@@ -834,41 +832,21 @@ export async function apply(ctx) {
     }
   }
 
-  const mcpUrl = process.env.WRENYARD_MCP_URL || process.env.FOREMAN_MCP_URL || DEFAULT_MCP_URL;
-  const sender = process.env.WRENYARD_MCP_SENDER || process.env.FOREMAN_MCP_SENDER || undefined;
-
-  let catalog;
-  try {
-    catalog = await listTools(mcpUrl, sender);
-  } catch (err) {
-    throw new Error(`Wrenyard: MCP is unavailable: ${boundedMessage(err)}`);
-  }
-
-  const byName = new Map(
-    catalog.filter((tool) => tool && typeof tool.name === 'string').map((tool) => [tool.name, tool]),
-  );
-
-  const taskList = byName.get(TASK_CANONICAL.list_task);
-  const taskDescribe = byName.get(TASK_CANONICAL.describe_task);
-  const taskRun = byName.get(TASK_CANONICAL.run_task);
-  if (!taskList || !taskDescribe || !taskRun) {
-    throw new Error('Wrenyard: MCP catalog missing required task tool (task_list/task_describe/task_run)');
-  }
-
-  registerTool(tools, 'list_task', taskList, makeExecute(mcpUrl, sender, TASK_CANONICAL.list_task));
-  registerTool(tools, 'describe_task', taskDescribe, makeExecute(mcpUrl, sender, TASK_CANONICAL.describe_task));
-
+  // Every alias is IPC-only; there is no remote tool catalog to fetch, so
+  // registration is synchronous and never depends on daemon availability.
   const socketPath = wrenyardIpcPath();
-  registerRunTask(tools, taskRun, makeRunTaskExecute(mcpUrl, sender, socketPath, { desktopAsync, pendingYields }), { desktopAsync });
 
-  // The four workspace-doc aliases depend only on the owner-only IPC socket,
-  // not on the MCP task catalog, and inherit the same bounded-error path.
+  registerTool(tools, 'list_task', TASK_DEFINITIONS.list_task, makeTaskExecute(socketPath, IPC_TASK_LIST_METHOD));
+  registerTool(tools, 'describe_task', TASK_DEFINITIONS.describe_task, makeTaskExecute(socketPath, IPC_TASK_DESCRIBE_METHOD));
+  registerRunTask(tools, RUN_TASK_INPUT_SCHEMA, makeRunTaskExecute(socketPath, { desktopAsync, pendingYields }), { desktopAsync });
+
+  // The four workspace-doc aliases depend only on the owner-only IPC socket.
   for (const alias of Object.keys(DOC_ALIAS_TO_IPC)) {
     registerTool(tools, alias, DOC_DEFINITIONS[alias], makeDocExecute(socketPath, DOC_ALIAS_TO_IPC[alias]));
   }
 
   // Read-only discovery aliases: same owner-only IPC surface, explicit
-  // definitions (not MCP-derived), no mutation and no MCP fallback.
+  // definitions, no mutation.
   for (const alias of Object.keys(DISCOVERY_ALIAS_TO_IPC)) {
     registerTool(tools, alias, DISCOVERY_DEFINITIONS[alias], makeDiscoveryExecute(socketPath, DISCOVERY_ALIAS_TO_IPC[alias]));
   }

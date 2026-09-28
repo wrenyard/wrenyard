@@ -29,7 +29,7 @@ import {
 
 // ─── Test-scoped helpers ──────────────────────────────────────────────────────
 
-const deepClone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
+const deepClone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
 /** Assert that a value freezes to the same thing (no mutation sentinel). */
 function assertUnchanged<T>(before: T, after: T, label: string): void {

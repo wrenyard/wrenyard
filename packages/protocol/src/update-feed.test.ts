@@ -7,16 +7,16 @@ import {
   channelDocumentUrl,
   channelForVersion,
   compareVersions,
-  desktopAssetName,
+  installerAssetName,
   parseUpdateFeedJson,
-  suiteAssetName,
+  updateAssetName,
   updateDocumentUrl,
 } from './update-feed.ts';
 
 const VERSION = '1.0.0-dev.41';
 const TRIPLET = 'darwin-arm64';
-const SUITE_SHA = 'a'.repeat(64);
-const DESKTOP_SHA = 'b'.repeat(64);
+const INSTALLER_SHA = 'a'.repeat(64);
+const UPDATE_SHA = 'b'.repeat(64);
 
 interface FeedAsset {
   name: string;
@@ -42,10 +42,9 @@ function feed({ version = VERSION, assets, schema = UPDATE_FEED_SCHEMA_VERSION }
     assets:
       assets ??
       [
-        asset(suiteAssetName(version, 'darwin-arm64'), SUITE_SHA),
-        asset(desktopAssetName(version, 'darwin-arm64'), DESKTOP_SHA),
-        asset(suiteAssetName(version, 'win32-x64'), 'c'.repeat(64)),
-        asset(desktopAssetName(version, 'win32-x64'), 'd'.repeat(64)),
+        asset(installerAssetName(version, 'darwin-arm64'), INSTALLER_SHA),
+        asset(updateAssetName(version, 'darwin-arm64'), UPDATE_SHA),
+        asset(installerAssetName(version, 'win32-x64'), 'c'.repeat(64)),
       ],
   });
 }
@@ -55,10 +54,10 @@ test('accepts a canonical document and resolves both host assets', () => {
   assert.equal(parsed.version, VERSION);
   assert.equal(parsed.channel, 'dev');
   assert.equal(parsed.triplet, TRIPLET);
-  assert.equal(parsed.suite.name, suiteAssetName(VERSION, TRIPLET));
-  assert.equal(parsed.suite.sha256, SUITE_SHA);
-  assert.equal(parsed.desktop.name, desktopAssetName(VERSION, TRIPLET));
-  assert.equal(parsed.desktop.sha256, DESKTOP_SHA);
+  assert.equal(parsed.installer.name, installerAssetName(VERSION, TRIPLET));
+  assert.equal(parsed.installer.sha256, INSTALLER_SHA);
+  assert.equal(parsed.update.name, updateAssetName(VERSION, TRIPLET));
+  assert.equal(parsed.update.sha256, UPDATE_SHA);
   assert.equal(parsed.document.schema_version, UPDATE_FEED_SCHEMA_VERSION);
 });
 
@@ -77,30 +76,30 @@ test('rejects a non-semver document version', () => {
 });
 
 test('rejects a missing host asset', () => {
-  const withoutDesktop = feed({
+  const withoutUpdate = feed({
     assets: [
-      asset(suiteAssetName(VERSION, 'darwin-arm64'), SUITE_SHA),
-      asset(suiteAssetName(VERSION, 'win32-x64'), 'c'.repeat(64)),
-      asset(desktopAssetName(VERSION, 'win32-x64'), 'd'.repeat(64)),
+      asset(installerAssetName(VERSION, 'darwin-arm64'), INSTALLER_SHA),
+      asset(installerAssetName(VERSION, 'win32-x64'), 'c'.repeat(64)),
     ],
   });
-  assert.throws(() => parseUpdateFeedJson(withoutDesktop, { triplet: TRIPLET }), /has no asset .*desktop/);
+  assert.throws(() => parseUpdateFeedJson(withoutUpdate, { triplet: TRIPLET }), /has no asset/);
 });
 
 test('rejects an invalid digest', () => {
   const malformed = feed({
     assets: [
-      asset(suiteAssetName(VERSION, 'darwin-arm64'), 'sha256:not-a-digest'),
-      asset(desktopAssetName(VERSION, 'darwin-arm64'), DESKTOP_SHA),
+      asset(installerAssetName(VERSION, 'darwin-arm64'), 'sha256:not-a-digest'),
+      asset(updateAssetName(VERSION, 'darwin-arm64'), UPDATE_SHA),
     ],
   });
   assert.throws(() => parseUpdateFeedJson(malformed, { triplet: TRIPLET }), /invalid sha256 digest/);
 });
 
 test('derives canonical asset names and normalizes a leading v', () => {
-  assert.equal(suiteAssetName(VERSION, TRIPLET), `wrenyard-${VERSION}-darwin-arm64-suite.zip`);
-  assert.equal(desktopAssetName(VERSION, TRIPLET), `wrenyard-desktop-${VERSION}-darwin-arm64.zip`);
-  assert.equal(suiteAssetName(`v${VERSION}`, 'win32-x64'), `wrenyard-${VERSION}-win32-x64-suite.zip`);
+  assert.equal(installerAssetName(VERSION, TRIPLET), `wrenyard-desktop-${VERSION}-darwin-arm64.dmg`);
+  assert.equal(updateAssetName(VERSION, TRIPLET), `wrenyard-desktop-${VERSION}-darwin-arm64.zip`);
+  assert.equal(installerAssetName(`v${VERSION}`, 'win32-x64'), `wrenyard-desktop-${VERSION}-win32-x64-setup.exe`);
+  assert.equal(updateAssetName(VERSION, 'win32-x64'), installerAssetName(VERSION, 'win32-x64'));
 });
 
 test('infers the channel from the version', () => {

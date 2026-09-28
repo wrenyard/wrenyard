@@ -6,9 +6,9 @@ describe('RpcRouter', () => {
   it('calls notification handlers without returning a response', async () => {
     const router = new RpcRouter()
     const calls: unknown[] = []
-    router.register('health.ping', async (params) => {
+    router.register('health.ping' as string, async (params: unknown) => {
       calls.push(params)
-      return { ok: true }
+      return undefined
     })
 
     const response = await router.handleMessage({

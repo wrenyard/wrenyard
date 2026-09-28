@@ -2,20 +2,7 @@
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadForemanServiceConfig, resolveForemanConfigPath, type ForemanServiceConfig } from '../config/index.mts'
-import { ForemanDaemon } from '../daemon/daemon.mts'
-
-/**
- * CLI argument guards for the daemon bootstrap. They live here (rather than in
- * the CLI application) so the daemon entrypoint owns its own argv contract and
- * never imports the CLI package.
- */
-function parsePositiveIntegerFlag(value: string | boolean | undefined, flagName: string, defaultValue: number): number {
-  if (value === undefined || value === false) return defaultValue
-  if (typeof value !== 'string' || !/^\d+$/u.test(value) || Number(value) < 1) {
-    throw new Error(`${flagName} must be a positive integer`)
-  }
-  return Number(value)
-}
+import { ForemanDaemon, writeDaemonLog } from '../daemon/daemon.mts'
 
 function requireNoPositionals(positionals: string[], usage: string): void {
   if (positionals.length > 0) {
@@ -30,9 +17,6 @@ function resolveConfigPath(value: unknown): string {
 }
 
 function applyServiceCliOverrides(config: ForemanServiceConfig, values: Record<string, unknown>): void {
-  if (typeof values.host === 'string') config.service.host = values.host
-  if (typeof values.port === 'string') config.service.port = parsePositiveIntegerFlag(values.port, '--port', config.service.port)
-  if (typeof values['public-url'] === 'string') config.service.publicUrl = values['public-url']
   if (typeof values['work-dir'] === 'string') config.workspaceRoot = resolve(values['work-dir'])
 }
 
@@ -51,15 +35,12 @@ export async function runForemanService(args = process.argv.slice(2)): Promise<n
     args,
     options: {
       config: { type: 'string' },
-      host: { type: 'string' },
-      port: { type: 'string' },
-      'public-url': { type: 'string' },
       'work-dir': { type: 'string' },
     },
     allowPositionals: true,
     strict: true,
   })
-  requireNoPositionals(positionals, 'wrenyard daemon service [--config path] [--host addr] [--port n]')
+  requireNoPositionals(positionals, 'wrenyard daemon run [--config path]')
 
   const { config, resolvedConfigPath } = loadServiceConfigForDaemon(values.config, values)
   if (!config.service.enabled) throw new Error('Wrenyard daemon service is disabled by config')
@@ -70,23 +51,36 @@ export async function runForemanService(args = process.argv.slice(2)): Promise<n
     // Ready logs and the parent-process notification are the named startup
     // notification; run() does not call start() a second time to learn about it.
     onStarted: ({ ipcPath }) => {
-      process.stderr.write(`[foreman-daemon] listening on http://${config.service.host}:${config.service.port}\n`)
-      process.stderr.write(`[foreman-daemon] MCP:     http://${config.service.host}:${config.service.port}/mcp\n`)
-      process.stderr.write(`[foreman-daemon] Message: use send_message on /mcp?sender=<role-id>\n`)
-      process.stderr.write(`[foreman-daemon] Health:  http://${config.service.host}:${config.service.port}/health\n`)
-      process.stderr.write(`[foreman-daemon] IPC:     ${ipcPath}\n`)
-      process.stderr.write(`[foreman-daemon] workspace: ${config.workspaceRoot}\n`)
-      if (process.send) process.send('ready')
+      // The shared daemon logger appends every line to <state>/logs/daemon.log
+      // as well as stderr, so the foreground owner's startup lines and all
+      // runtime diagnostics land in one file with no duplicate writers.
+      writeDaemonLog('info', `listening (IPC ${ipcPath})`)
+      writeDaemonLog('info', `workspace: ${config.workspaceRoot}`)
+      if (process.connected && process.send) {
+        // The no-op callback routes a channel-closed send error to the callback
+        // instead of the process 'error' event when the parent disconnected
+        // during bootstrap.
+        process.send('ready', () => {})
+      }
     },
   })
 
-  // Handlers are installed before run() so a signal or parent message that
-  // arrives during bootstrap is recorded on the daemon rather than lost.
-  process.on('SIGTERM', () => { daemon.requestShutdown('SIGTERM') })
-  process.on('SIGINT', () => { daemon.requestShutdown('SIGINT') })
+  // Handlers are installed before run() so a signal, a parent message or a
+  // parent IPC disconnect that arrives during bootstrap is recorded on the
+  // daemon rather than lost. The first SIGINT/SIGTERM requests a graceful
+  // shutdown that drains admitted work; a second escalates to a forced close.
+  // A disconnect requests the same graceful drain and never forces cancellation.
+  let signalCount = 0
+  const onSignal = (signal: NodeJS.Signals): void => {
+    signalCount += 1
+    daemon.requestShutdown(signalCount > 1 ? `${signal} (forced)` : signal, signalCount > 1)
+  }
+  process.on('SIGTERM', () => { onSignal('SIGTERM') })
+  process.on('SIGINT', () => { onSignal('SIGINT') })
   process.on('message', (msg) => {
     if (msg === 'shutdown') daemon.requestShutdown('process shutdown message')
   })
+  process.on('disconnect', () => { daemon.requestShutdown('parent disconnected') })
 
   // run() owns start -> await shutdown request -> drain -> close -> exit code.
   return await daemon.run()

@@ -29,7 +29,7 @@ function workspace(): string {
 }
 
 describe('Foreman config', () => {
-  it('normalizes workspace, principals, and delivery routes while ignoring retired agent config', () => {
+  it('normalizes the workspace root while ignoring retired agent and message config', () => {
     const root = workspace()
     const config = normalizeForemanServiceConfig({
       service: { bind: '127.0.0.1:9876' },
@@ -52,36 +52,14 @@ describe('Foreman config', () => {
       },
     }, { configDir: root, env: {} })
 
-    assert.equal(config.service.port, 9876)
     assert.equal(config.workspaceRoot, root)
-    assert.equal(config.message.principals.codex.canSend, true)
-    assert.equal(config.message.principals.codex.canReceive, false)
-    assert.equal(config.message.principals['foreman-work'], undefined)
-    assert.equal(config.message.routes?.['operator.telegram'].transport, 'telegram')
   })
 
-  it('defaults to the current principal model without a resident agent role', () => {
-    const defaults = createDefaultForemanConfigData({ env: {} })
-    assert.ok(defaults.message?.principals?.codex)
-    assert.equal(defaults.message?.principals?.['wrenyard-agent'], undefined)
-    assert.equal(defaults.message?.routes?.['wrenyard.message-mcp'], undefined)
-  })
-
-  it('rejects removed resident-agent and message compatibility keys', () => {
+  it('rejects the removed daily_session config', () => {
     const root = workspace()
     assert.throws(
       () => normalizeForemanServiceConfig({ daily_session: { workspace_root: root } }, { configDir: root, env: {} }),
       /daily_session/u,
-    )
-    assert.throws(
-      () => normalizeForemanServiceConfig({ message: { local_role: 'wrenyard-agent' } }, { configDir: root, env: {} }),
-      /message\.local_role/u,
-    )
-    assert.throws(
-      () => normalizeForemanServiceConfig({
-        message: { principals: { codex: { canSend: true } } },
-      }, { configDir: root, env: {} }),
-      /removed compatibility key/u,
     )
   })
 

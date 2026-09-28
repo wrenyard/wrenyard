@@ -27,10 +27,6 @@
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h14v10H4V7Z" /><path d="M18 10h2v4h-2M7 10h6v4H7" /></svg>
         <span class="tooltip" role="tooltip">模型供应</span>
       </button>
-      <button class="activity-item" id="clients-nav" type="button" aria-label="客户端" data-page="clients">
-        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5h14v10H5V5Z" /><path d="M9 19h6M12 15v4" /><path d="M8 9h8" /></svg>
-        <span class="tooltip" role="tooltip">客户端</span>
-      </button>
       <button class="activity-item" id="tasks-nav" type="button" aria-label="任务" data-page="tasks">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 11h6M9 15h6M9 7h3" /><rect x="4" y="4" width="13" height="16" rx="1.5" /><path d="M17.5 8.5 20 11l-2.5 3" /></svg>
         <span class="tooltip" role="tooltip">任务</span>
@@ -86,6 +82,7 @@
                 <span class="conversation-daemon-tooltip" id="conversation-daemon-tooltip" role="tooltip">
                   <strong id="conversation-daemon-label">正在检查 Daemon</strong>
                   <small id="conversation-daemon-started-at">启动时间暂不可用</small>
+                  <small class="conversation-daemon-reason" id="conversation-daemon-reason" hidden></small>
                 </span>
               </span>
             </div>
@@ -245,22 +242,6 @@
         </div>
       </section>
 
-      <section class="product-page clients-page" id="clients-page" aria-labelledby="clients-title" hidden>
-        <header class="page-hero clients-hero">
-          <div>
-            <p class="eyebrow">AGENT CLIENTS</p>
-            <h1 id="clients-title">客户端</h1>
-            <p>把真实安装的 Agent 客户端连接到本机 Wrenyard Model Gateway。</p>
-          </div>
-          <button class="secondary-button" id="clients-refresh-button" type="button">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
-            <span id="clients-refresh-label">刷新探测</span>
-          </button>
-        </header>
-        <div class="clients-meta"><span class="status-pill is-pending" id="clients-status">读取中</span><span id="clients-message">正在探测本机客户端与 Gateway 模型…</span></div>
-        <div id="clients-content" aria-live="polite"></div>
-      </section>
-
       <section class="product-page settings-page" id="settings-page" aria-labelledby="settings-title" hidden>
         <header class="page-hero">
           <div><p class="eyebrow">WRENYARD DESKTOP</p><h1 id="settings-title">啾啾工坊设置</h1><p>管理本地工作环境、更新与桌宠体验</p></div>
@@ -284,6 +265,17 @@
               <div class="section-heading"><h2>运行环境</h2><p>Desktop 通过公开协议读取 Wrenyard 控制面。</p></div>
               <div class="settings-card">
                 <div class="setting-row"><div><h3>本地服务</h3><p id="service-description">正在读取状态…</p></div><span class="status-pill is-pending" id="service-status">检查中</span></div>
+                <div class="setting-row setting-row-daemon">
+                  <div>
+                    <h3>本地 Daemon</h3>
+                    <p id="daemon-description">正在读取 Daemon 状态…</p>
+                    <span class="daemon-error" id="daemon-error" role="alert" hidden></span>
+                  </div>
+                  <div class="daemon-lifecycle-control">
+                    <span class="status-pill is-pending" id="daemon-state-pill">检查中</span>
+                    <button class="secondary-button daemon-action-button" id="daemon-action-button" type="button" hidden>启动</button>
+                  </div>
+                </div>
                 <div class="setting-row setting-row-stacked workspace-setting-row">
                   <div><h3>Workspace</h3><p>会话固定绑定此目录，不在聊天界面提供临时切换。</p></div>
                   <div class="workspace-setting-control">
@@ -470,17 +462,6 @@
           <div class="provider-dialog-actions">
             <button class="secondary-button" id="provider-dialog-cancel" type="button">取消</button>
             <button class="primary-button" id="provider-dialog-save" type="button">保存</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="client-plan-backdrop" id="client-plan-dialog" role="dialog" aria-modal="true" aria-labelledby="client-plan-title" aria-hidden="true" hidden>
-        <div class="client-plan-card">
-          <div id="client-plan-content"></div>
-          <span class="client-plan-error" id="client-plan-error"></span>
-          <div class="client-plan-actions">
-            <button class="secondary-button" id="client-plan-cancel" type="button">取消</button>
-            <button class="primary-button" id="client-plan-confirm" type="button">确认应用</button>
           </div>
         </div>
       </div>

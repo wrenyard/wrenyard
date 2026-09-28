@@ -1,17 +1,14 @@
 
-import { request as httpRequest } from 'node:http'
 import { parseArgs } from 'node:util'
 import { connectIpcForemanClient } from '@wrenyard/daemon/control/ipc-client'
 import { requireNoPositionals } from '../helpers.mts'
 import {
   type ForemanStatus,
   type IpcForemanClient,
-  type JsonRecord,
   type StatusCheck,
   errorMessage,
   isHelpRequest,
   loadServiceConfigForCli,
-  localForemanServiceOriginForConfig,
 } from '../shared.mts'
 import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
 import { readDaemonSupervisorStatus } from '../daemon-supervisor.mts'
@@ -42,8 +39,7 @@ export async function handleStatus(args: string[]): Promise<number> {
 
   if (!status.ok) {
     if (!status.ipc.ok) console.error(`Wrenyard daemon IPC is not reachable at ${status.ipc.path}.`)
-    console.error(`Wrenyard daemon is not healthy.`)
-    console.error("Start the Wrenyard daemon with 'wrenyard daemon start' and retry.")
+    console.error('Wrenyard daemon 未运行。请打开啾啾工坊，或在终端运行 `wrenyard daemon run`。')
     return 1
   }
   return 0
@@ -51,42 +47,27 @@ export async function handleStatus(args: string[]): Promise<number> {
 
 export async function collectForemanStatus(configPathValue: unknown): Promise<ForemanStatus> {
   const { config, resolvedConfigPath } = loadServiceConfigForCli(configPathValue)
-  const ipcPath = resolveForemanServiceIpcPath({
-    port: config.service.port,
-    path: config.service.ipc?.path,
-  })
+  const ipcPath = resolveForemanServiceIpcPath({ path: config.service.ipc?.path })
   const supervisor = await readDaemonSupervisorStatus({ config, resolvedConfigPath })
   const ipc = await checkIpcStatus(ipcPath)
-  const origin = localForemanServiceOriginForConfig(config)
-  const http = await checkHttpJson(`${origin}/health`)
-  const mcp = await checkHttpReachable(`${origin}/mcp`, [405])
-  const db = await checkIpcStats(ipcPath)
   const health = ipcHealthPayload(ipc)
   const daemonStatus = await checkDaemonStatus(ipcPath)
   const daemonStatusPayload = (daemonStatus as StatusCheck & { payload?: unknown }).payload
   const result: ForemanStatus = {
-    ok: ipc.ok && http.ok && mcp.ok && db.ok,
+    ok: ipc.ok,
     ...(typeof health.uptimeMs === 'number' ? { uptimeMs: health.uptimeMs } : {}),
     config: {
       ok: true,
       path: resolvedConfigPath,
     },
     daemon: {
-      running: supervisor.running || ipc.ok,
-      process: supervisor.process,
+      running: supervisor.running,
       status: supervisor.status,
-      ...(supervisor.pid ? { pid: supervisor.pid } : {}),
-      pidAlive: supervisor.pidAlive,
-      statePath: supervisor.statePath,
-      pidPath: supervisor.pidPath,
-      ...(supervisor.state?.suiteRoot ? { suiteRoot: supervisor.state.suiteRoot } : {}),
-      ...(supervisor.state?.suiteVersion ? { suiteVersion: supervisor.state.suiteVersion } : {}),
-      logPaths: supervisor.logPaths,
+      ...(supervisor.pid !== undefined ? { pid: supervisor.pid } : {}),
+      ...(supervisor.startedAt !== undefined ? { startedAt: supervisor.startedAt } : {}),
+      ...(supervisor.mode !== undefined ? { mode: supervisor.mode } : {}),
     },
     ipc,
-    http,
-    mcp,
-    db,
     ...(daemonStatus.ok ? daemonStatusProjection(daemonStatusPayload) : {}),
   }
   return result
@@ -133,19 +114,6 @@ export async function checkIpcStatus(ipcPath: string): Promise<StatusCheck> {
   }
 }
 
-export async function checkIpcStats(ipcPath: string): Promise<StatusCheck> {
-  let client: IpcForemanClient | undefined
-  try {
-    client = await connectIpcForemanClient({ path: ipcPath, timeoutMs: 1_000 })
-    const payload = await client.stats.today()
-    return { ok: true, path: ipcPath, status: 'ok', payload }
-  } catch (error) {
-    return { ok: false, path: ipcPath, error: errorMessage(error) }
-  } finally {
-    client?.close()
-  }
-}
-
 export async function checkDaemonStatus(ipcPath: string): Promise<StatusCheck> {
   let client: IpcForemanClient | undefined
   try {
@@ -159,63 +127,11 @@ export async function checkDaemonStatus(ipcPath: string): Promise<StatusCheck> {
   }
 }
 
-export async function checkHttpJson(url: string): Promise<StatusCheck> {
-  try {
-    const response = await httpRequestText(url, 1_000)
-    const status = response.statusCode ?? 0
-    const parsed = response.text ? JSON.parse(response.text) as JsonRecord : {}
-    const ok = status >= 200 && status < 300
-    const error = ok ? undefined : jsonErrorMessage(parsed) ?? `HTTP ${status}`
-    return { ok, url, status, ...(error ? { error } : {}) }
-  } catch (error) {
-    return { ok: false, url, error: errorMessage(error) }
-  }
-}
-
-export async function checkHttpReachable(url: string, okStatuses: number[]): Promise<StatusCheck> {
-  try {
-    const response = await httpRequestText(url, 1_000)
-    const status = response.statusCode ?? 0
-    const ok = (status >= 200 && status < 300) || okStatuses.includes(status)
-    return { ok, url, status, ...(ok ? {} : { error: `HTTP ${status}` }) }
-  } catch (error) {
-    return { ok: false, url, error: errorMessage(error) }
-  }
-}
-
-export function jsonErrorMessage(value: JsonRecord): string | undefined {
-  if (typeof value.message === 'string') return value.message
-  if (typeof value.error === 'string') return value.error
-  return undefined
-}
-
-export function httpRequestText(url: string, timeoutMs: number): Promise<{ statusCode?: number; text: string }> {
-  return new Promise((resolveRequest, reject) => {
-    const request = httpRequest(url, { method: 'GET', timeout: timeoutMs }, (response) => {
-      const chunks: Buffer[] = []
-      response.on('data', (chunk: Buffer) => {
-        chunks.push(chunk)
-      })
-      response.on('end', () => {
-        resolveRequest({
-          statusCode: response.statusCode,
-          text: Buffer.concat(chunks).toString('utf-8'),
-        })
-      })
-    })
-    request.on('timeout', () => {
-      request.destroy(new Error(`HTTP request timed out after ${timeoutMs}ms`))
-    })
-    request.on('error', reject)
-    request.end()
-  })
-}
-
 export function printForemanStatus(status: ForemanStatus): void {
   console.log('Wrenyard status')
   console.log(`  daemon: ${status.daemon.running ? 'running' : 'not running'}${status.daemon.pid ? ` (pid ${status.daemon.pid})` : ''}`)
-  console.log(`  state:  ${status.daemon.status ?? 'unknown'}${status.daemon.pidAlive === false ? ' (pid not alive)' : ''}`)
-  if (status.daemon.logPaths?.stderr) console.log(`  logs:   ${status.daemon.logPaths.stderr}`)
+  if (status.daemon.mode) console.log(`  mode:   ${status.daemon.mode}`)
+  if (status.daemon.startedAt) console.log(`  since:  ${status.daemon.startedAt}`)
   if (status.shutting_down !== undefined) {
     console.log(`  admission: ${status.shutting_down ? 'shutting down' : 'accepting'}`)
     console.log(`  active tasks: ${status.active_task_count ?? 0}`)
@@ -223,9 +139,6 @@ export function printForemanStatus(status: ForemanStatus): void {
     console.log(`  active executions: ${status.active_execution_count ?? 0}`)
   }
   console.log(`  ipc:    ${formatStatusCheck(status.ipc)}`)
-  console.log(`  http:   ${formatStatusCheck(status.http)}`)
-  console.log(`  mcp:    ${formatStatusCheck(status.mcp)}`)
-  console.log(`  db:     ${formatStatusCheck(status.db)}`)
 }
 
 export function formatStatusCheck(check: StatusCheck): string {

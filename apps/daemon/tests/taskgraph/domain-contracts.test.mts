@@ -37,7 +37,7 @@ import {
 
 const ajv = new Ajv({ allErrors: true, strict: false })
 
-const roundtrip = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
+const roundtrip = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 

@@ -8,7 +8,6 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 
 import {
   readSourceDevLock,
-  sourceDevLockRefusalMessage,
   sourceDevStopNotice,
 } from '../src/source-dev-lock.mts'
 import { delegateToSourceCli } from '../src/source-cli-delegation.mts'
@@ -138,14 +137,6 @@ describe('readSourceDevLock', () => {
     const lock = readSourceDevLock()
     assert.ok(lock)
     assert.equal(lock.cli, undefined)
-  })
-})
-
-describe('sourceDevLockRefusalMessage', () => {
-  it('includes the holder pid and checkout', () => {
-    const message = sourceDevLockRefusalMessage({ pid: 4321, checkout: '/src/wrenyard' })
-    assert.match(message, /4321/u)
-    assert.match(message, /\/src\/wrenyard/u)
   })
 })
 

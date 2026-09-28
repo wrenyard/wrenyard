@@ -38,13 +38,6 @@ import {
   type ExecEventsResult,
   type ExecCancelResult,
 } from './shell-contract.js';
-import type {
-  ClientConfigurationDto,
-  ClientConfigurationId,
-  ClientConfigurationPlanDto,
-  ClientConfigurationSnapshotDto,
-  ClientModelSelectionDto,
-} from './client-configuration/contract.js';
 import { formatShellWindowTitle } from './shell-window-title.js';
 import { platformWindowChrome } from './window-chrome.js';
 
@@ -59,11 +52,6 @@ export interface ShellWindowOptions {
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
   saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot>;
   configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot>;
-  getClientConfiguration(): Promise<ClientConfigurationSnapshotDto>;
-  planClientConfiguration(clientId: ClientConfigurationId, selection: ClientModelSelectionDto): Promise<ClientConfigurationPlanDto>;
-  applyClientConfiguration(plan: ClientConfigurationPlanDto): Promise<ClientConfigurationDto>;
-  planClientConfigurationRestore(clientId: ClientConfigurationId): Promise<ClientConfigurationPlanDto>;
-  restoreClientConfiguration(plan: ClientConfigurationPlanDto): Promise<ClientConfigurationDto>;
   getUpdate(): Promise<UpdateSnapshot>;
   checkUpdate(): Promise<UpdateSnapshot>;
   requestInstall(onInstall?: () => void): Promise<UpdateSnapshot>;
@@ -511,26 +499,6 @@ export class ShellWindowController {
       if (url === null) throw new Error('不支持的 Provider 密钥页面');
       await shell.openExternal(url);
     });
-    ipcMain.handle(SHELL_CHANNELS.clientConfigurationSnapshot, async (event) => {
-      assertShellSender(event.sender);
-      return options.getClientConfiguration();
-    });
-    ipcMain.handle(SHELL_CHANNELS.clientConfigurationPlan, async (event, clientId: ClientConfigurationId, selection: ClientModelSelectionDto) => {
-      assertShellSender(event.sender);
-      return options.planClientConfiguration(clientId, selection);
-    });
-    ipcMain.handle(SHELL_CHANNELS.clientConfigurationApply, async (event, plan: ClientConfigurationPlanDto) => {
-      assertShellSender(event.sender);
-      return options.applyClientConfiguration(plan);
-    });
-    ipcMain.handle(SHELL_CHANNELS.clientConfigurationPlanRestore, async (event, clientId: ClientConfigurationId) => {
-      assertShellSender(event.sender);
-      return options.planClientConfigurationRestore(clientId);
-    });
-    ipcMain.handle(SHELL_CHANNELS.clientConfigurationRestore, async (event, plan: ClientConfigurationPlanDto) => {
-      assertShellSender(event.sender);
-      return options.restoreClientConfiguration(plan);
-    });
     ipcMain.handle(SHELL_CHANNELS.updateSnapshot, async (event) => {
       assertShellSender(event.sender);
       return options.getUpdate();
@@ -683,11 +651,6 @@ export class ShellWindowController {
       SHELL_CHANNELS.saveProviderOrder,
       SHELL_CHANNELS.configureProviderKey,
       SHELL_CHANNELS.openProviderKeyPage,
-      SHELL_CHANNELS.clientConfigurationSnapshot,
-      SHELL_CHANNELS.clientConfigurationPlan,
-      SHELL_CHANNELS.clientConfigurationApply,
-      SHELL_CHANNELS.clientConfigurationPlanRestore,
-      SHELL_CHANNELS.clientConfigurationRestore,
       SHELL_CHANNELS.updateSnapshot,
       SHELL_CHANNELS.checkUpdate,
       SHELL_CHANNELS.requestInstall,

@@ -343,6 +343,32 @@ export class TaskGraphService {
     }
   }
 
+  /**
+   * Forced-shutdown cancellation: signal 'cancel_graph' on every active graph
+   * and await each runner's queue to drain, so a forced daemon shutdown
+   * converges active graphs to a terminal state (cancelling their bound task
+   * runs through the existing task bridge) before resources are closed.
+   * Instantiated runners plus every persisted actionable run are covered, and
+   * a runner is lazily created for any actionable graph without one, mirroring
+   * startup reconciliation. Never throws: a per-graph failure is logged and
+   * the remaining graphs still converge. A no-op when nothing is active.
+   */
+  async cancelActive(): Promise<void> {
+    const ids = new Set<string>(this.runners.keys())
+    for (const run of this.store.listActionableRuns()) ids.add(run.id)
+    await Promise.all([...ids].map(async (id) => {
+      try {
+        const runner = this.runner(id)
+        runner.signal({ type: 'cancel_graph' })
+        await runner.whenIdle()
+      } catch (error) {
+        process.stderr.write(
+          `[taskgraph] force cancellation failed for '${id}': ${error instanceof Error ? error.message : String(error)}\n`,
+        )
+      }
+    }))
+  }
+
   private runner(taskgraphId: string, project?: string): GraphRunner {
     const existing = this.runners.get(taskgraphId)
     if (existing) return existing

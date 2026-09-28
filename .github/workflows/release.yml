@@ -1,7 +1,8 @@
 name: Release
 
-# CI only builds the two native public targets and, for an explicit development
-# tag, publishes their four archives plus the update feed.
+# CI lints the repository once, builds the two native public targets and, for an
+# explicit development tag, publishes their three installers plus the update
+# feed. Manual dispatch lints and builds without publishing.
 
 on:
   push:
@@ -17,7 +18,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
   build:
+    needs: pre-check
     strategy:
       fail-fast: false
       matrix:
@@ -34,15 +51,16 @@ jobs:
         with:
           node-version: 24.19.0
       - run: pnpm install --frozen-lockfile
-      - name: Build native release archives
-        run: node tools/release/build-local-release.mjs
-      - name: Upload public build archives
+      - name: Build Desktop installer
+        run: node tools/release/pack.mjs
+      - name: Upload Desktop installer
         uses: actions/upload-artifact@v4
         with:
           name: wrenyard-release-${{ matrix.os }}
           path: |
-            .artifacts/release/wrenyard-*-suite.zip
-            .artifacts/release/wrenyard-desktop-*.zip
+            release/*.dmg
+            release/*.zip
+            release/*-setup.exe
           if-no-files-found: error
           retention-days: 1
 
@@ -62,7 +80,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Publish release, feed and bootstrap scripts
+      - name: Publish release and update feed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node tools/release/publish.mjs --artifacts artifacts

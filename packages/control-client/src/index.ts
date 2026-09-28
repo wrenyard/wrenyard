@@ -1,5 +1,13 @@
 import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
 import { createConnection, type Socket } from "node:net";
+import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from "./transport/index.ts";
+
+/**
+ * Canonical Wrenyard IPC protocol version, re-exported from the transport
+ * module so `@wrenyard/control-client` and `@wrenyard/control-client/transport`
+ * share exactly one definition.
+ */
+export { WRENYARD_PROTOCOL_VERSION } from "./transport/index.ts";
 
 export type WrenyardIpcEnvironment = NodeJS.ProcessEnv;
 
@@ -170,67 +178,6 @@ export interface WrenyardTaskUsage {
   reference_cost_basis?: 'catalog_reference';
 }
 
-export type WrenyardClientConfigurationId = 'claude-app' | 'claude-code' | 'codex-shared' | 'grok-build';
-export type WrenyardClientSurfaceId = 'claude-app' | 'claude-code' | 'codex-app' | 'codex-cli' | 'grok-build';
-export type WrenyardClientCompatibility = 'not-installed' | 'supported' | 'needs-verification' | 'needs-upgrade' | 'externally-managed';
-export type WrenyardClientConfigurationState = 'not-configured' | 'connected' | 'drifted' | 'conflict' | 'needs-restart';
-export type WrenyardGatewayProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_messages';
-
-export interface WrenyardClientSurface {
-  id: WrenyardClientSurfaceId;
-  label: string;
-  installed: boolean;
-  compatibility: WrenyardClientCompatibility;
-  source?: string;
-  version?: string;
-  detail?: string;
-}
-
-export interface WrenyardClientGatewayModel extends WrenyardGatewayModel {
-  protocols: WrenyardGatewayProtocol[];
-  claudeFamily?: boolean;
-  claudeTier?: 'haiku' | 'sonnet' | 'opus';
-  supports1MContext?: boolean;
-}
-
-export interface WrenyardClientConfigurationStatus {
-  clientId: WrenyardClientConfigurationId;
-  state: WrenyardClientConfigurationState;
-  configuredModels: string[];
-  detail?: string;
-}
-
-export interface WrenyardClientConfigurationSnapshot {
-  surfaces: WrenyardClientSurface[];
-  configurations: WrenyardClientConfigurationStatus[];
-  models: WrenyardClientGatewayModel[];
-}
-
-export interface WrenyardClientModelSelection {
-  models: string[];
-  defaultModel: string;
-  protocols?: Partial<Record<string, WrenyardGatewayProtocol>>;
-}
-
-export interface WrenyardClientPlanFile {
-  path: string;
-  digest: string;
-  existed: boolean;
-  changes: string[];
-}
-
-export interface WrenyardClientConfigurationPlan {
-  clientId: WrenyardClientConfigurationId;
-  operation: 'apply' | 'restore';
-  files: WrenyardClientPlanFile[];
-  models: string[];
-  defaultModel?: string;
-  protocols?: Partial<Record<string, WrenyardGatewayProtocol>>;
-  connectionMode: 'additive' | 'switching';
-  effects: string[];
-  requiresRestart: WrenyardClientSurfaceId[];
-}
-
 export type WrenyardProviderStatus = ProviderListResult['providers'][number];
 
 interface PendingRequest {
@@ -277,6 +224,7 @@ export class WrenyardIpcClient {
   private buffer = "";
   private nextId = 1;
   private closed = false;
+  private handshake?: Promise<void>;
 
   constructor(options: WrenyardIpcClientOptions) {
     this.socketPath = options.path;
@@ -294,47 +242,19 @@ export class WrenyardIpcClient {
     return this.socketPath;
   }
 
-  /** Send a JSON-RPC request and resolve with the response result. */
+  /**
+   * Send a JSON-RPC request and resolve with the response result.
+   *
+   * The first business request completes the version-checked `health.ping`
+   * handshake; a mismatch (including a missing daemon version) fails closed,
+   * rejecting every queued request and destroying the socket.
+   */
   request<TResult>(
     method: string,
     params?: unknown,
     options?: WrenyardIpcRequestOptions,
   ): Promise<TResult> {
-    if (this.closed) {
-      return Promise.reject(new Error("WrenyardIpcClient is closed"));
-    }
-
-    const id = this.nextId++;
-    const payload = JSON.stringify({
-      jsonrpc: "2.0",
-      id,
-      method,
-      params: params === undefined ? {} : params,
-    });
-
-    return new Promise<TResult>((resolve, reject) => {
-      const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
-      // An explicit null timeout disables the transport deadline (e.g. for a
-      // long task.run.wait); any other value falls back to the client default.
-      const timer = options?.timeoutMs === null
-        ? undefined
-        : setTimeout(() => {
-          this.pending.delete(id);
-          reject(
-            new Error(
-              `Wrenyard RPC request timed out after ${timeoutMs}ms (method: ${method})`,
-            ),
-          );
-        }, timeoutMs);
-
-      this.pending.set(id, {
-        resolve: (result) => resolve(result as TResult),
-        reject,
-        timer,
-      });
-
-      this.socket.write(payload + "\n");
-    });
+    return this.ensureHandshake().then(() => this.sendRequest<TResult>(method, params, options));
   }
 
   /** Resolve the daemon-local Model Gateway connection. Available over IPC only. */
@@ -392,50 +312,88 @@ export class WrenyardIpcClient {
     );
   }
 
-  /** Discover supported local Agent clients and their redacted Gateway model catalog. */
-  clientConfigurationSnapshot(options?: WrenyardIpcRequestOptions): Promise<WrenyardClientConfigurationSnapshot> {
-    return this.request('client.configuration.snapshot', {}, options);
-  }
-
-  /** Build a read-only, digest-bound client configuration preview. */
-  clientConfigurationPlan(
-    clientId: WrenyardClientConfigurationId,
-    selection: WrenyardClientModelSelection,
-    options?: WrenyardIpcRequestOptions,
-  ): Promise<WrenyardClientConfigurationPlan> {
-    return this.request('client.configuration.plan', { clientId, selection }, options);
-  }
-
-  /** Apply a previously previewed client configuration plan. */
-  clientConfigurationApply(
-    plan: WrenyardClientConfigurationPlan,
-    options?: WrenyardIpcRequestOptions,
-  ): Promise<WrenyardClientConfigurationStatus> {
-    return this.request('client.configuration.apply', { plan }, options);
-  }
-
-  /** Build a read-only restore preview for one managed client configuration. */
-  clientConfigurationPlanRestore(
-    clientId: WrenyardClientConfigurationId,
-    options?: WrenyardIpcRequestOptions,
-  ): Promise<WrenyardClientConfigurationPlan> {
-    return this.request('client.configuration.plan-restore', { clientId }, options);
-  }
-
-  /** Restore only Wrenyard-owned fields using a digest-bound preview. */
-  clientConfigurationRestore(
-    plan: WrenyardClientConfigurationPlan,
-    options?: WrenyardIpcRequestOptions,
-  ): Promise<WrenyardClientConfigurationStatus> {
-    return this.request('client.configuration.restore', { plan }, options);
-  }
-
   /** Destroy the socket and reject every request still awaiting a reply. */
   close(): void {
     if (this.closed) return;
     this.closed = true;
     this.socket.destroy();
     this.settlePending(new Error("WrenyardIpcClient closed before response"));
+  }
+
+  private ensureHandshake(): Promise<void> {
+    this.handshake ??= this.performHandshake();
+    return this.handshake;
+  }
+
+  private async performHandshake(): Promise<void> {
+    try {
+      const result = await this.sendRequest<{ protocolVersion?: unknown }>(
+        "health.ping",
+        { protocolVersion: WRENYARD_PROTOCOL_VERSION },
+      );
+      const daemonVersion = result && typeof result === "object"
+        ? (result as { protocolVersion?: unknown }).protocolVersion
+        : undefined;
+      if (daemonVersion !== WRENYARD_PROTOCOL_VERSION) {
+        throw new Error(
+          protocolVersionMismatchMessage(WRENYARD_PROTOCOL_VERSION, daemonVersion),
+        );
+      }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.failClosed(failure);
+      throw failure;
+    }
+  }
+
+  /** Mark the client dead, reject every pending request and destroy the socket. */
+  private failClosed(error: Error): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.socket.destroy();
+    this.settlePending(error);
+  }
+
+  private sendRequest<TResult>(
+    method: string,
+    params?: unknown,
+    options?: WrenyardIpcRequestOptions,
+  ): Promise<TResult> {
+    if (this.closed) {
+      return Promise.reject(new Error("WrenyardIpcClient is closed"));
+    }
+
+    const id = this.nextId++;
+    const payload = JSON.stringify({
+      jsonrpc: "2.0",
+      id,
+      method,
+      params: params === undefined ? {} : params,
+    });
+
+    return new Promise<TResult>((resolve, reject) => {
+      const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+      // An explicit null timeout disables the transport deadline (e.g. for a
+      // long task.run.wait); any other value falls back to the client default.
+      const timer = options?.timeoutMs === null
+        ? undefined
+        : setTimeout(() => {
+          this.pending.delete(id);
+          reject(
+            new Error(
+              `Wrenyard RPC request timed out after ${timeoutMs}ms (method: ${method})`,
+            ),
+          );
+        }, timeoutMs);
+
+      this.pending.set(id, {
+        resolve: (result) => resolve(result as TResult),
+        reject,
+        timer,
+      });
+
+      this.socket.write(payload + "\n");
+    });
   }
 
   private handleData(chunk: string): void {

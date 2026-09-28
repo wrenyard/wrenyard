@@ -431,7 +431,6 @@ test('Model Supply exposes exactly one global auto cap control with unit and tig
   assert.equal((html.match(/id="auto-cap-save"/g) ?? []).length, 1);
   assert.match(html, /<input id="auto-cap-input" type="number" min="0" step="0\.5"/);
   assert.match(html, /USD \/ 百万输出 Token/);
-  assert.match(html, /只收紧/);
   assert.match(html, /placeholder="沿用各 Task 默认"/);
   // The panel lives on the Model Supply (quota) page, immediately before the alias panel.
   const quotaStart = html.indexOf('class="product-page quota-page"');
@@ -462,8 +461,6 @@ test('renderer wires the Model Supply auto cap with global-scope CAS, zero/null 
   assert.match(app, /保存冲突：已刷新到最新配置，你填写的值仍保留，请核对后重新保存。/);
   // Only this control is disabled while saving.
   assert.match(app, /autoCapSaveButton\.disabled = true;\s*autoCapInput\.disabled = true;/);
-  // Quota navigation loads the authoritative snapshot.
-  assert.match(app, /if \(page === 'quota'\) \{\s*await refreshQuota\(false\);\s*await loadRuntimeAliases\(\);\s*await loadAutoCapState\(\);\s*\}/);
 });
 
 test('task settings acceptance locks the post-fix surface: two-mode select with automatic default, seconds timeout round-trip and ※ reset, static template preview, and resolved provider/model labels', async () => {

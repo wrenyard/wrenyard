@@ -7,8 +7,6 @@
   "description": "Wrenyard conversation session feature: DSH backend lifecycle, product conversation persistence and the versioned session projection.",
   "exports": "./src/index.ts",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --packages=external --platform=node --format=esm --target=node22 --outfile=dist/index.js",
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {

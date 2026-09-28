@@ -7,7 +7,6 @@ export function bootstrapSchema(database: ForemanDatabase): void {
     }
   })
   migrate()
-  reconcileMessageIdempotencyResultColumn(database)
   reconcileFwaDuplicateSessions(database)
   createFwaActiveSessionIndex(database)
   migrateCurrentSchema(database)
@@ -31,16 +30,6 @@ export function bootstrapSchema(database: ForemanDatabase): void {
   recreateTaskIndexes(database)
   recreateWorkflowJournalIndexes(database)
   recreateWorkflowStepSnapshotIndexes(database)
-}
-
-function reconcileMessageIdempotencyResultColumn(database: ForemanDatabase): void {
-  const columns = new Set(database
-    .prepare<[], { name: string }>('PRAGMA table_info(message_idempotency_keys)')
-    .all()
-    .map((column) => column.name))
-  if (!columns.has('result_json')) {
-    database.prepare('ALTER TABLE message_idempotency_keys ADD COLUMN result_json TEXT').run()
-  }
 }
 
 function migrateCurrentSchema(database: ForemanDatabase): void {
@@ -147,13 +136,11 @@ function needsStatusMetadataMigration(database: ForemanDatabase): boolean {
   return !taskColumns.has('failure_category')
     || !taskColumns.has('suggestion')
     || !taskColumns.has('error_message')
-    || !taskColumns.has('notified_via_channel')
     || !taskColumns.has('workflow_id')
     || !taskColumns.has('summary')
     || !workflowColumns.has('failure_category')
     || !workflowColumns.has('suggestion')
     || !workflowColumns.has('error_message')
-    || !workflowColumns.has('notified_via_channel')
     || !workflowColumns.has('output')
     || !workflowColumns.has('workspace_root')
     || !workflowColumns.has('execution_project')
@@ -184,7 +171,6 @@ function addStatusMetadataColumns(database: ForemanDatabase): void {
   if (!columns.has('failure_category')) database.prepare('ALTER TABLE tasks ADD COLUMN failure_category TEXT').run()
   if (!columns.has('suggestion')) database.prepare('ALTER TABLE tasks ADD COLUMN suggestion TEXT').run()
   if (!columns.has('error_message')) database.prepare('ALTER TABLE tasks ADD COLUMN error_message TEXT').run()
-  if (!columns.has('notified_via_channel')) database.prepare('ALTER TABLE tasks ADD COLUMN notified_via_channel INTEGER NOT NULL DEFAULT 0').run()
   if (!columns.has('workflow_id')) database.prepare('ALTER TABLE tasks ADD COLUMN workflow_id TEXT REFERENCES workflows(id)').run()
   if (!columns.has('summary')) database.prepare('ALTER TABLE tasks ADD COLUMN summary TEXT').run()
 
@@ -195,7 +181,6 @@ function addStatusMetadataColumns(database: ForemanDatabase): void {
   if (!workflowColumns.has('failure_category')) database.prepare('ALTER TABLE workflows ADD COLUMN failure_category TEXT').run()
   if (!workflowColumns.has('suggestion')) database.prepare('ALTER TABLE workflows ADD COLUMN suggestion TEXT').run()
   if (!workflowColumns.has('error_message')) database.prepare('ALTER TABLE workflows ADD COLUMN error_message TEXT').run()
-  if (!workflowColumns.has('notified_via_channel')) database.prepare('ALTER TABLE workflows ADD COLUMN notified_via_channel INTEGER NOT NULL DEFAULT 0').run()
   if (!workflowColumns.has('runtime_compat_marker')) database.prepare('ALTER TABLE workflows ADD COLUMN runtime_compat_marker TEXT').run()
   if (!workflowColumns.has('output')) database.prepare('ALTER TABLE workflows ADD COLUMN output TEXT').run()
   if (!workflowColumns.has('workspace_root')) database.prepare('ALTER TABLE workflows ADD COLUMN workspace_root TEXT').run()
@@ -399,43 +384,6 @@ const EVENT_INDEX_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_event_exec       ON events(execution_id, seq)',
   'CREATE INDEX IF NOT EXISTS idx_event_type       ON events(type)',
 ] as const
-
-const MESSAGES_TABLE_SQL = `CREATE TABLE messages (
-  id              TEXT PRIMARY KEY,
-  from_role       TEXT NOT NULL,
-  to_role         TEXT NOT NULL,
-  conversation_id TEXT,
-  body            TEXT NOT NULL,
-  format          TEXT,
-  created_at      TEXT NOT NULL
-)`
-
-const MESSAGE_DELIVERIES_TABLE_SQL = `CREATE TABLE message_deliveries (
-  id              TEXT PRIMARY KEY,
-  message_id      TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  route_id        TEXT NOT NULL,
-  transport       TEXT NOT NULL,
-  status          TEXT NOT NULL CHECK(status IN ('pending','sent','delivered','failed')),
-  attempts        INTEGER NOT NULL DEFAULT 0,
-  last_error      TEXT,
-  created_at      TEXT NOT NULL,
-  updated_at      TEXT NOT NULL,
-  delivered_at    TEXT
-)`
-
-const MESSAGE_DELIVERY_INDEX_STATEMENTS = [
-  'CREATE INDEX IF NOT EXISTS idx_message_deliveries_message ON message_deliveries(message_id)',
-  'CREATE INDEX IF NOT EXISTS idx_message_deliveries_status ON message_deliveries(status)',
-]
-
-const MESSAGE_IDEMPOTENCY_TABLE_SQL = `CREATE TABLE message_idempotency_keys (
-  from_role        TEXT NOT NULL,
-  client_message_id TEXT NOT NULL,
-  message_id       TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-  result_json      TEXT,
-  created_at       TEXT NOT NULL,
-  PRIMARY KEY (from_role, client_message_id)
-)` as const
 
 const PM_TICKETS_TABLE_SQL = `CREATE TABLE pm_tickets (
   id                  TEXT PRIMARY KEY,
@@ -1194,7 +1142,6 @@ const SCHEMA_STATEMENTS = [
   failure_category TEXT,
   suggestion      TEXT,
   error_message   TEXT,
-  notified_via_channel INTEGER NOT NULL DEFAULT 0,
   definition_source TEXT CHECK(definition_source IN ('builtin','project')),
   status          TEXT NOT NULL CHECK(status IN
                     ('queued','running','done','failed','cancelled','interrupted')),
@@ -1221,7 +1168,6 @@ const SCHEMA_STATEMENTS = [
   failure_category TEXT,
   suggestion      TEXT,
   error_message   TEXT,
-  notified_via_channel INTEGER NOT NULL DEFAULT 0,
   runtime_compat_marker TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, ended_at TEXT
 )`,
@@ -1231,10 +1177,6 @@ const SCHEMA_STATEMENTS = [
   ...WORKFLOW_STEP_SNAPSHOT_INDEX_STATEMENTS,
   EVENTS_TABLE_SQL.replace('CREATE TABLE events', 'CREATE TABLE IF NOT EXISTS events'),
   ...EVENT_INDEX_STATEMENTS,
-  MESSAGES_TABLE_SQL.replace('CREATE TABLE messages', 'CREATE TABLE IF NOT EXISTS messages'),
-  MESSAGE_DELIVERIES_TABLE_SQL.replace('CREATE TABLE message_deliveries', 'CREATE TABLE IF NOT EXISTS message_deliveries'),
-  ...MESSAGE_DELIVERY_INDEX_STATEMENTS,
-  MESSAGE_IDEMPOTENCY_TABLE_SQL.replace('CREATE TABLE message_idempotency_keys', 'CREATE TABLE IF NOT EXISTS message_idempotency_keys'),
   PM_TICKETS_TABLE_SQL.replace('CREATE TABLE pm_tickets', 'CREATE TABLE IF NOT EXISTS pm_tickets'),
   ...PM_TICKET_INDEX_STATEMENTS,
   TASKGRAPH_RUN_TABLE_SQL.replace('CREATE TABLE taskgraph_run', 'CREATE TABLE IF NOT EXISTS taskgraph_run'),

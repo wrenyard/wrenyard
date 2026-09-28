@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import {
   createStatsCard,
   updateStatsCard,
@@ -473,16 +473,16 @@ describe('HouseStatsCard — hover tip background alpha', () => {
     const windowLabelX = providerLabelX + PROVIDER_LABEL_WIDTH;
     const trackX = windowLabelX + WINDOW_LABEL_WIDTH;
 
-    const provPos0 = node.providerNodes[0].setPosition.mock.calls.slice(-1)[0];
+    const provPos0 = (node.providerNodes[0].setPosition as Mock<(x: number, y: number) => void>).mock.calls.slice(-1)[0];
     expect(provPos0[0]).toBe(providerLabelX);
     expect(provPos0[0]).toBeLessThan(trackX);
 
-    const winPos0 = node.windowNodes[0].setPosition.mock.calls.slice(-1)[0];
+    const winPos0 = (node.windowNodes[0].setPosition as Mock<(x: number, y: number) => void>).mock.calls.slice(-1)[0];
     expect(winPos0[0]).toBe(windowLabelX + CHILD_LABEL_INDENT);
     expect(winPos0[0]).toBeLessThan(trackX);
 
     // Percentage text is positioned to the right of the track
-    const pctPos0 = node.pctNodes[0].setPosition.mock.calls.slice(-1)[0];
+    const pctPos0 = (node.pctNodes[0].setPosition as Mock<(x: number, y: number) => void>).mock.calls.slice(-1)[0];
     expect(pctPos0[0]).toBeGreaterThan(trackX);
   });
 
