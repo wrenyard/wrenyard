@@ -5,15 +5,7 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./runtime": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
-  },
-  "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json && esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/index.js"
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@wrenyard/clients": "workspace:*",
@@ -27,14 +19,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "typesVersions": {
-    "*": {
-      "runtime": [
-        "dist/index.d.ts"
-      ]
-    }
   }
 }

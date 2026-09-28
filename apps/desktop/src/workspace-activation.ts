@@ -1,39 +1,13 @@
-import { spawn } from 'node:child_process';
-
 /**
  * Electron-free workspace activation helpers. Desktop binds a workspace and
- * then asks the installed CLI to restart the daemon. The restart is only safe
- * when the daemon has no queued or running work, so activation first asserts an
- * idle daemon and never interrupts in-flight tasks.
+ * restarts the daemon it owns through the shared supervisor. The restart is
+ * only safe when the daemon has no queued or running work, so activation first
+ * asserts an idle daemon and never interrupts in-flight tasks.
  */
-
-const DEFAULT_OUTPUT_LIMIT = 8_192;
-const DEFAULT_RESTART_TIMEOUT_MS = 30_000;
 
 export interface ProductDaemonIdleResult {
   idle: boolean;
   reason?: string;
-}
-
-export interface DaemonRestartRequest {
-  cli: string;
-  outputLimit?: number;
-  timeoutMs?: number;
-}
-
-export interface DaemonRestartRunnerResult {
-  stdout: string;
-  stderr: string;
-  code: number | null;
-}
-
-export type DaemonRestartRunner = (cli: string, args: string[]) => Promise<DaemonRestartRunnerResult>;
-
-export interface DaemonRestartOutcome {
-  /** Bounded combined stdout/stderr for diagnostics; kept local for diagnostics. */
-  output: string;
-  /** `completed` once the CLI reported `restarted: true`. */
-  restartResult: string;
 }
 
 /**
@@ -56,69 +30,21 @@ export function assertDaemonIdle(rawStatus: unknown): ProductDaemonIdleResult {
 }
 
 /**
- * Hidden, shell-free spawn runner. Bounded stdout/stderr; no redirection, no
- * shell interpolation, no secret environment material is echoed.
+ * The owner that restarts the daemon after a workspace change. Desktop passes
+ * its `DesktopDaemonSupervisor`, but the module stays Electron-free: it only
+ * needs the `restart` behaviour.
  */
-export function defaultDaemonRestartRunner(limit: number, timeoutMs: number): DaemonRestartRunner {
-  return (cli: string, args: string[]): Promise<DaemonRestartRunnerResult> => new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(cli, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const append = (current: string, chunk: Buffer): string =>
-      (current + chunk.toString('utf8')).slice(-limit);
-    const finish = (fn: () => void): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn();
-    };
-    const timer = setTimeout(() => {
-      finish(() => {
-        child.kill();
-        rejectPromise(new Error('daemon restart 命令超时，后台可能仍处于重启中'));
-      });
-    }, timeoutMs);
-    child.stdout?.on('data', (chunk: Buffer) => { stdout = append(stdout, chunk); });
-    child.stderr?.on('data', (chunk: Buffer) => { stderr = append(stderr, chunk); });
-    child.on('error', (error) => finish(() => rejectPromise(error)));
-    child.on('close', (code) => finish(() => resolvePromise({ stdout, stderr, code })));
-  });
-}
-
-/** Parse the CLI JSON envelope and require `restarted: true`. */
-function completedRestartResult(stdout: string): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  return (parsed as { restarted?: unknown }).restarted === true ? 'completed' : null;
+export interface OwnedDaemonRestart {
+  restart(): Promise<{ state: string }>;
 }
 
 /**
- * Run the installed CLI's synchronous daemon restart. Any nonzero exit, invalid
- * JSON, or non-`restarted` result surfaces an actionable Chinese error — the
- * caller must never pretend the activation succeeded.
+ * Reactivate the daemon after a workspace change by calling the injected
+ * owner's restart. The daemon is always restarted by whoever owns it (Desktop
+ * or the source supervisor); activation never shells out to the removed
+ * `wrenyard daemon restart` CLI command.
  */
-export async function runDaemonRestart(
-  request: DaemonRestartRequest,
-  runner: DaemonRestartRunner = defaultDaemonRestartRunner(
-    request.outputLimit ?? DEFAULT_OUTPUT_LIMIT,
-    request.timeoutMs ?? DEFAULT_RESTART_TIMEOUT_MS,
-  ),
-): Promise<DaemonRestartOutcome> {
-  const limit = request.outputLimit ?? DEFAULT_OUTPUT_LIMIT;
-  const result = await runner(request.cli, ['daemon', 'restart', '--json']);
-  const output = `${result.stdout}${result.stderr}`.slice(-limit).trim();
-  if (result.code !== 0) {
-    throw new Error(`daemon restart 失败（退出码 ${result.code ?? 'unknown'}）：${output || '无输出'}`);
-  }
-  const restartResult = completedRestartResult(result.stdout);
-  if (restartResult === null) {
-    throw new Error(`daemon restart 未返回 restarted: true：${output || '无输出'}`);
-  }
-  return { output, restartResult };
+export async function restartOwnedDaemon(owner: OwnedDaemonRestart): Promise<void> {
+  const result = await owner.restart();
+  if (result.state !== 'running') throw new Error('daemon 未能完成重启，请检查后台状态。');
 }

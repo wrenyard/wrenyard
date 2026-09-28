@@ -57,7 +57,6 @@ describe('core task structured-output', () => {
     assert.deepEqual(result, { label: 'from supervisor' })
     assert.equal(starts.length, 1)
     assert.equal(starts[0].profile, 'test')
-    assert.equal(starts[0].permission, 'yolo')
     assert.equal('mcp' in starts[0], false)
     assert.match(starts[0].prompt, /Return one Foreman structured output block/u)
     assert.match(starts[0].prompt, /^<wy-system>\n<wy-instruction mode="structured-xml">/u)
@@ -304,7 +303,7 @@ describe('core task structured-output', () => {
           nativeSessionId: 'native_edit_default_cap',
           resolvedProfile: 'forge/test',
         } as StructuredOutputAgentResult & { nativeSessionId: string; resolvedProfile: string }
-      }, { permission: 'edit', maxResumeAttempts: 3, timeoutMs: 300_000 })
+      }, { maxResumeAttempts: 3, timeoutMs: 300_000 })
     } catch (err) {
       caughtErr = err
     }
@@ -414,7 +413,6 @@ describe('core task structured-output', () => {
       instructions: 'classify',
       outputSchema: labelSchema(),
       workingDirectory: '/tmp/foreman-structured-work',
-      permission: 'readonly',
       timeoutMs: 1000,
       maxResumeAttempts: 0,
       runAgent: async (profile, _prompt, opts) => {
@@ -427,7 +425,6 @@ describe('core task structured-output', () => {
     assert.deepEqual(result, { label: 'forwarded' })
     assert.equal(seenProfile, 'test-profile')
     assert.equal(seenOpts?.workingDirectory, '/tmp/foreman-structured-work')
-    assert.equal(seenOpts?.permission, 'readonly')
     assert.equal('mcp' in (seenOpts ?? {}), false)
     assert.equal('mcpServers' in (seenOpts ?? {}), false)
   })
@@ -913,7 +910,6 @@ describe('core task structured-output', () => {
     }
 
     const result = await collectWithAgent(agent, {
-      capabilities: ['browser-use', 'computer-use'],
       maxResumeAttempts: 1,
     })
 
@@ -939,7 +935,7 @@ describe('core task structured-output', () => {
       await collectWithAgent(async () => {
         calls += 1
         return { output: 'missing delivery block', status: 'done', nativeSessionId: 'native_edit_unverified' }
-      }, { maxResumeAttempts: 2, permission: 'edit' })
+      }, { maxResumeAttempts: 2 })
     } catch (err) {
       caughtErr = err
     }
@@ -962,7 +958,7 @@ describe('core task structured-output', () => {
       await collectWithAgent(async () => {
         calls += 1
         return { output: 'missing delivery block', status: 'done', nativeSessionId: 'native_yolo_unverified' }
-      }, { maxResumeAttempts: 1, permission: 'yolo' })
+      }, { maxResumeAttempts: 1 })
     } catch (err) {
       caughtErr = err
     }
@@ -982,7 +978,7 @@ describe('core task structured-output', () => {
       await collectWithAgent(async () => {
         calls += 1
         return { output: 'missing delivery block', status: 'done', nativeSessionId: 'native_missing_perm' }
-      }, { maxResumeAttempts: 1, permission: undefined })
+      }, { maxResumeAttempts: 1 })
     } catch (err) {
       caughtErr = err
     }
@@ -1013,7 +1009,7 @@ describe('core task structured-output', () => {
         status: 'done',
         nativeSessionId: 'native_readonly_retry',
       }
-    }, { maxResumeAttempts: 1, permission: 'readonly' })
+    }, { maxResumeAttempts: 1 })
 
     assert.equal(calls, 2, 'readonly permission must still use configured resume attempts')
     assert.deepEqual(resumeIds, [undefined, 'native_readonly_retry'])
@@ -1062,7 +1058,6 @@ function collectWithAgent(
     outputSchema: labelSchema(),
     timeoutMs: 1000,
     maxResumeAttempts: 0,
-    permission: 'readonly',
     runAgent: agent,
     ...overrides,
   })
@@ -1145,7 +1140,6 @@ function makeExecutionRecord(id: string, opts: StartExecutionOpts, status: Execu
     id,
     task_id: opts.taskId ?? null,
     profile: opts.profile,
-    permission: opts.permission,
     cwd: opts.cwd,
     prompt: opts.prompt,
     status,

@@ -6,17 +6,14 @@
   "license": "MIT",
   "packageManager": "pnpm@11.19.0",
   "type": "module",
-  "bin": {
-    "wrenyard-daemon": "./bin/daemon.mts"
-  },
   "files": [
-    "bin",
     "lib",
     "config.example.json"
   ],
   "exports": {
     ".": "./lib/index.mts",
     "./bootstrap": "./lib/server-bootstrap/service.mts",
+    "./supervisor": "./lib/supervisor.mjs",
     "./protocol/registry": "./lib/protocol/registry.mts",
     "./protocol/errors": "./lib/protocol/errors.mts",
     "./protocol/methods/exec": "./lib/protocol/methods/exec.mts",
@@ -31,14 +28,12 @@
     "./control/ipc-server": "./lib/control/ipc-server.mts",
     "./db/connection": "./lib/db/connection.mts",
     "./daemon/instance-lock": "./lib/daemon/instance-lock.mts",
+    "./daemon/launch": "./lib/daemon/launch.mts",
     "./core/taskgraph": "./lib/core/taskgraph/index.mts",
     "./workspace/task-loader": "./lib/workspace/task-loader.mts"
   },
   "scripts": {
-    "start": "tsx bin/daemon.mts",
-    "build": "pnpm run typecheck",
-    "test": "tsx --test --test-concurrency=1 tests/*.test.mts tests/*/*.test.mts tests/*/*/*.test.mts",
-    "typecheck": "tsc --noEmit"
+    "test": "tsx --test --test-concurrency=1 tests/*.test.mts tests/*/*.test.mts tests/*/*/*.test.mts"
   },
   "engines": {
     "node": ">=24.19.0"

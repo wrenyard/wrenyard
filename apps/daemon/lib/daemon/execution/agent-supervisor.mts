@@ -1,7 +1,10 @@
 import { createAgentClients, type AgentRequest, type AgentSession } from '@wrenyard/clients';
 import { ExecService, type ExecRequest } from '@wrenyard/exec';
 import { randomBytes } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
 import type { ForemanDatabase } from '../../db/types.mts'
+import { resolveWrenyardSuiteRoot } from '../../layout/suite-root.mts'
 import { ExecutionEventStore } from '../../db/stores/execution-event-store.mts'
 import { TaskRunStore } from '../../db/stores/task-run-store.mts'
 import { assertValidTimeoutMs } from '../../task-timeouts.mts'
@@ -1622,7 +1625,7 @@ const DISPATCH_PLANS_ENV = 'WRENYARD_DISPATCH_PLANS_JSON'
 /** A single per-run dispatch plan override keyed by its canonical profile. */
 interface ThinkingPlanEnvOverride {
   profile: string
-  plan: unknown
+  plan: Partial<ReturnType<ReturnType<typeof createBuiltinCatalog>['resolveRun']>>
 }
 
 interface AttemptThinkingRow {
@@ -1692,6 +1695,10 @@ export function resolveTaskAgentEnv(
   for (const key of Object.keys(next)) {
     if (CODEBUDDY_PRIVATE_ENV_NAMES.has(key.toLowerCase())) delete next[key]
   }
+  // Make the installed bundled CLI discoverable to task agents without any
+  // shell setup: an installed suite ships the single-executable `wrenyard` at
+  // its root, so prepend that directory to the inherited PATH.
+  prependBundledCliToPath(next)
   // ...and inject the authoritative current task run id only when one exists.
   if (taskRunId) {
     next.FOREMAN_TASK_RUN_ID = taskRunId
@@ -1722,6 +1729,43 @@ export function resolveTaskAgentEnv(
     }
   }
   return next
+}
+
+/**
+ * Directory that holds the installed bundled CLI when this daemon runs from an
+ * installed suite. The release build places the single-executable `wrenyard`
+ * (or `wrenyard.exe` on Windows) at the suite root, so that directory can be
+ * exposed on PATH for task agents. Returns undefined in a source checkout or
+ * when the bundled executable is absent, so nothing changes outside an
+ * installed suite and a missing/ambiguous suite root is never fatal.
+ */
+function bundledCliDirectory(env: NodeJS.ProcessEnv): string | undefined {
+  try {
+    const suiteRoot = resolveWrenyardSuiteRoot({ env })
+    const executable = process.platform === 'win32'
+      ? join(suiteRoot, 'wrenyard.exe')
+      : join(suiteRoot, 'wrenyard')
+    return existsSync(executable) ? suiteRoot : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Prepend the installed bundled CLI directory to the environment's PATH. The
+ * existing key is matched case-insensitively and updated in place, because
+ * Windows inherits the variable as `Path` while POSIX uses `PATH`; the
+ * canonical `PATH` name is used only when no inheritable key exists. The
+ * directory is never duplicated, and an empty PATH becomes just the directory.
+ */
+function prependBundledCliToPath(env: NodeJS.ProcessEnv): void {
+  const directory = bundledCliDirectory(env)
+  if (!directory) return
+  const key = Object.keys(env).find((name) => name.toLowerCase() === 'path') ?? 'PATH'
+  const existing = env[key]
+  const entries = existing ? existing.split(delimiter) : []
+  if (entries.includes(directory)) return
+  env[key] = existing ? `${directory}${delimiter}${existing}` : directory
 }
 
 /** Inherited gateway endpoint URLs rewritten with this execution's scope. */

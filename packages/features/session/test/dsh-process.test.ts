@@ -189,14 +189,16 @@ test('startDshWeb bounds stderr in rejection messages', async () => {
   });
 });
 
-test('resolveWrenyardConnectionEnv prefers WRENYARD_* and falls back to FOREMAN_*', () => {
+test('resolveWrenyardConnectionEnv propagates only the owner-only IPC path', () => {
   assert.deepEqual(
     resolveWrenyardConnectionEnv({
       WRENYARD_IPC_PATH: '/run/wrenyard.sock',
       FOREMAN_IPC_PATH: '/run/foreman.sock',
+      WRENYARD_MCP_URL: 'http://daemon/mcp',
       FOREMAN_MCP_URL: 'http://legacy/mcp',
+      WRENYARD_MCP_SENDER: 'desk',
     }),
-    { WRENYARD_IPC_PATH: '/run/wrenyard.sock', WRENYARD_MCP_URL: 'http://legacy/mcp' },
+    { WRENYARD_IPC_PATH: '/run/wrenyard.sock' },
   );
   assert.deepEqual(
     resolveWrenyardConnectionEnv({
@@ -204,16 +206,12 @@ test('resolveWrenyardConnectionEnv prefers WRENYARD_* and falls back to FOREMAN_
       FOREMAN_MCP_URL: 'http://legacy/mcp',
       FOREMAN_MCP_SENDER: 'pet',
     }),
-    {
-      WRENYARD_IPC_PATH: '/run/foreman.sock',
-      WRENYARD_MCP_URL: 'http://legacy/mcp',
-      WRENYARD_MCP_SENDER: 'pet',
-    },
+    { WRENYARD_IPC_PATH: '/run/foreman.sock' },
   );
   assert.deepEqual(resolveWrenyardConnectionEnv({}), {});
 });
 
-test('startDshWeb propagates the Wrenyard connection env to the child', async () => {
+test('startDshWeb propagates the IPC path and strips daemon MCP env from the child', async () => {
   const previous: Record<string, string | undefined> = {
     WRENYARD_IPC_PATH: process.env.WRENYARD_IPC_PATH,
     FOREMAN_IPC_PATH: process.env.FOREMAN_IPC_PATH,
@@ -237,8 +235,8 @@ test('startDshWeb propagates the Wrenyard connection env to the child', async ()
 
       const childEnv = JSON.parse(await readFile(join(dir, 'child-env.json'), 'utf8'));
       assert.equal(childEnv.WRENYARD_IPC_PATH, '/tmp/wrenyard.sock');
-      assert.equal(childEnv.WRENYARD_MCP_URL, 'http://127.0.0.1:8787/mcp');
-      assert.equal(childEnv.WRENYARD_MCP_SENDER, 'pet', 'legacy sender used when WRENYARD sender absent');
+      assert.equal(childEnv.WRENYARD_MCP_URL, null, 'no daemon MCP URL may reach the DSH child');
+      assert.equal(childEnv.WRENYARD_MCP_SENDER, null, 'no daemon MCP sender may reach the DSH child');
     });
   } finally {
     for (const [key, value] of Object.entries(previous)) {
@@ -253,13 +251,13 @@ test('startDshWeb explicit wrenyardEnv overrides values derived from process.env
     const bin = await writeFixture(dir, 'env.js', ENV_SCRIPT);
     const handle = await startDshWeb({
       ...baseOptions(dir, bin),
-      wrenyardEnv: { WRENYARD_IPC_PATH: '/run/explicit.sock', WRENYARD_MCP_URL: 'http://explicit/mcp' },
+      wrenyardEnv: { WRENYARD_IPC_PATH: '/run/explicit.sock' },
     });
     await handle.stop();
 
     const childEnv = JSON.parse(await readFile(join(dir, 'child-env.json'), 'utf8'));
     assert.equal(childEnv.WRENYARD_IPC_PATH, '/run/explicit.sock');
-    assert.equal(childEnv.WRENYARD_MCP_URL, 'http://explicit/mcp');
+    assert.equal(childEnv.WRENYARD_MCP_URL, null, 'the DSH child never receives a daemon MCP URL');
   });
 });
 

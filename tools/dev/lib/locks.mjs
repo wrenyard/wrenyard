@@ -41,7 +41,7 @@ export function acquireDevLock(path, record) {
       if (error?.code !== 'EEXIST') throw error;
     }
     const holder = readDevLock(path);
-    if (holder) throw new Error(`pnpm dev is already running (pid ${holder.pid}, checkout ${holder.checkout}). Stop it with Ctrl+C in its terminal first.`);
+    if (holder) throw new Error(`pnpm dev:desktop is already running (pid ${holder.pid}, checkout ${holder.checkout}). Stop it with Ctrl+C in its terminal first.`);
     rmSync(path, { force: true });
   }
   throw new Error(`Could not acquire ${path}`);

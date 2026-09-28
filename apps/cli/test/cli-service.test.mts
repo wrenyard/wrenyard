@@ -64,14 +64,8 @@ test('foreman status --json reaches the running daemon over IPC', async () => {
   writeWorkspaceFixture(workDir)
 
   const running = await startForemanDaemon({
-    service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpoint.path } },
+    service: { enabled: true, ipc: { path: endpoint.path } },
     workspaceRoot: workDir,
-    message: { enabled: false, principals: {} },
-    messageDelivery: {
-      enabled: false,
-      default: ['system'],
-      channels: {},
-    },
   })
 
   try {
@@ -112,14 +106,8 @@ test('foreman taskgraph commands drive the kernel and reject invalid params', as
   writeWorkspaceFixture(workDir)
 
   const running = await startForemanDaemon({
-    service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpoint.path } },
+    service: { enabled: true, ipc: { path: endpoint.path } },
     workspaceRoot: workDir,
-    message: { enabled: false, principals: {} },
-    messageDelivery: {
-      enabled: false,
-      default: ['system'],
-      channels: {},
-    },
   })
 
   try {
@@ -213,106 +201,6 @@ test('foreman taskgraph commands drive the kernel and reject invalid params', as
   }
 })
 
-test('foreman daemon start/status/restart/stop controls the local daemon lifecycle', {
-  timeout: 60000,
-  skip: process.env.FOREMAN_RUN_DAEMON_LIFECYCLE_TESTS === '1'
-    ? false
-    : 'set FOREMAN_RUN_DAEMON_LIFECYCLE_TESTS=1 to run isolated daemon lifecycle integration coverage',
-}, async () => {
-  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
-  const binary = join(repoRoot, 'src', 'index.mts')
-  const suiteRoot = resolve(repoRoot, '..', '..')
-  const rootVersion = (JSON.parse(readFileSync(join(suiteRoot, 'package.json'), 'utf-8')) as { version: string }).version
-  const workDir = mkdtempSync(join(tmpdir(), 'foreman-cli-daemon-work-'))
-  const configDir = mkdtempSync(join(tmpdir(), 'foreman-cli-daemon-config-'))
-  const stateDir = mkdtempSync(join(tmpdir(), 'foreman-cli-daemon-state-'))
-  const endpoint = createTestIpcEndpoint('daemon')
-  tempDirs.push(workDir, configDir, stateDir, endpoint.dir)
-  writeWorkspaceFixture(workDir)
-  const port = await allocateFreeTcpPort()
-  const configPath = join(configDir, 'config.json')
-  const dbPath = join(configDir, 'foreman.sqlite')
-  writeJsonConfig(configPath, {
-    service: { bind: `127.0.0.1:${port}`, ipc: { path: endpoint.path } },
-    workspace: { root: workDir },
-    message: { enabled: false },
-    messageDelivery: { enabled: false },
-  })
-  const env = {
-    FOREMAN_DB_PATH: dbPath,
-    XDG_STATE_HOME: stateDir,
-  }
-  const oldDbPath = process.env.FOREMAN_DB_PATH
-  const oldStateHome = process.env.XDG_STATE_HOME
-
-  try {
-    const start = await runForeman(repoRoot, binary, ['daemon', 'start', '--config', configPath], env)
-    assert.ifError(start.error)
-    assert.equal(start.status, 0, `stdout:\n${start.stdout}\nstderr:\n${start.stderr}`)
-    assert.match(start.stdout, /Wrenyard daemon started/u)
-    assert.doesNotMatch(start.stdout, /pm2/u)
-
-    const status = await runForeman(repoRoot, binary, ['daemon', 'status', '--config', configPath, '--json'], env)
-    assert.ifError(status.error)
-    assert.equal(status.status, 0, status.stderr)
-    const statusPayload = JSON.parse(status.stdout) as {
-      ok?: boolean
-      daemon?: { running?: boolean; pid?: number; status?: string; process?: string; pidAlive?: boolean; statePath?: string; logPaths?: { stderr?: string }; suiteRoot?: string; suiteVersion?: string }
-      ipc?: { ok?: boolean }
-      http?: { ok?: boolean }
-      mcp?: { ok?: boolean }
-      db?: { ok?: boolean }
-    }
-    assert.equal(statusPayload.ok, true)
-    assert.equal(statusPayload.daemon?.running, true)
-    assert.equal(typeof statusPayload.daemon?.pid, 'number')
-    assert.equal(statusPayload.daemon?.process, 'wrenyard-daemon')
-    assert.equal(statusPayload.daemon?.status, 'running')
-    assert.equal(statusPayload.daemon?.pidAlive, true)
-    assert.equal(statusPayload.daemon?.suiteRoot, suiteRoot)
-    assert.equal(statusPayload.daemon?.suiteVersion, rootVersion)
-    assert.equal(statusPayload.daemon?.statePath, join(stateDir, 'wrenyard', 'wrenyard-daemon.json'))
-    assert.equal(statusPayload.daemon?.logPaths?.stderr, join(stateDir, 'wrenyard', 'logs', 'wrenyard-error.log'))
-    assert.equal(statusPayload.ipc?.ok, true)
-    assert.equal(statusPayload.http?.ok, true)
-    assert.equal(statusPayload.mcp?.ok, true)
-    assert.equal(statusPayload.db?.ok, true)
-
-    const startAgain = await runForeman(repoRoot, binary, ['daemon', 'start', '--config', configPath], env)
-    assert.ifError(startAgain.error)
-    assert.equal(startAgain.status, 0, `stdout:\n${startAgain.stdout}\nstderr:\n${startAgain.stderr}`)
-    assert.match(startAgain.stdout, /Wrenyard daemon already running/u)
-    assert.doesNotMatch(startAgain.stdout, /pm2/u)
-
-    const restart = await runForeman(repoRoot, binary, ['daemon', 'restart', '--config', configPath], env)
-    assert.ifError(restart.error)
-    assert.equal(restart.status, 0, `stdout:\n${restart.stdout}\nstderr:\n${restart.stderr}`)
-    // Synchronous restart: the CLI process itself stops and starts the daemon.
-    assert.match(restart.stdout, /Wrenyard daemon restarted/u)
-
-    const stop = await runForeman(repoRoot, binary, ['daemon', 'stop', '--config', configPath], env)
-    assert.ifError(stop.error)
-    assert.equal(stop.status, 0, `stdout:\n${stop.stdout}\nstderr:\n${stop.stderr}`)
-    assert.match(stop.stdout, /Wrenyard daemon stopped/u)
-    assert.doesNotMatch(stop.stdout, /pm2/u)
-
-    const stoppedStatus = await runForeman(repoRoot, binary, ['daemon', 'status', '--config', configPath, '--json'], env)
-    assert.ifError(stoppedStatus.error)
-    assert.notEqual(stoppedStatus.status, 0)
-    const stoppedPayload = JSON.parse(stoppedStatus.stdout) as { ok?: boolean; daemon?: { running?: boolean; status?: string } }
-    assert.equal(stoppedPayload.ok, false)
-    assert.equal(stoppedPayload.daemon?.running, false)
-    assert.equal(stoppedPayload.daemon?.status, 'stopped')
-  } finally {
-    await runForeman(repoRoot, binary, ['daemon', 'stop', '--config', configPath], env)
-    resetRegistry()
-    if (oldDbPath === undefined) delete process.env.FOREMAN_DB_PATH
-    else process.env.FOREMAN_DB_PATH = oldDbPath
-    if (oldStateHome === undefined) delete process.env.XDG_STATE_HOME
-    else process.env.XDG_STATE_HOME = oldStateHome
-  }
-})
-
 test('foreman task commands reach the running service over IPC', async () => {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
   const binary = join(repoRoot, 'src', 'index.mts')
@@ -369,14 +257,8 @@ test('foreman task commands reach the running service over IPC', async () => {
 
   try {
     running = await startForemanDaemon({
-      service: { enabled: true, host: '127.0.0.1', port: 0, ipc: { path: endpoint.path } },
+      service: { enabled: true, ipc: { path: endpoint.path } },
       workspaceRoot: workDir,
-      message: { enabled: false, principals: {} },
-      messageDelivery: {
-        enabled: false,
-        default: ['system'],
-        channels: {},
-      },
     })
 
     const unreachableHttpPort = await allocateFreeTcpPort()

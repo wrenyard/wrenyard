@@ -5,13 +5,13 @@ import { foremanStateRoot } from '@wrenyard/daemon/config/state'
 const DEV_STATE_DIR_NAME = 'dev'
 const DEV_LOCK_FILE_NAME = 'dev.lock'
 
-/** A live `pnpm dev` source checkout that owns the Wrenyard daemon. */
+/** A live `pnpm dev:desktop` source checkout that owns the Wrenyard daemon. */
 export interface SourceDevLock {
-  /** Pid of the `pnpm dev` process that wrote the lock. */
+  /** Pid of the `pnpm dev:desktop` process that wrote the lock. */
   pid: number
-  /** Absolute path of the source checkout that `pnpm dev` is running from. */
+  /** Absolute path of the source checkout that `pnpm dev:desktop` is running from. */
   checkout: string
-  /** Full argv that starts the source CLI (node, tsx cli, apps/cli/src/index.ts), written by pnpm dev. */
+  /** Full argv that starts the source CLI (node, tsx cli, apps/cli/src/index.ts), written by pnpm dev:desktop. */
   cli?: string[]
 }
 
@@ -28,7 +28,7 @@ function isProcessAlive(pid: number): boolean {
 /**
  * Read the live source-dev lock at `<state>/dev/dev.lock`, if any.
  *
- * The lock is written by `pnpm dev` with `{ pid, checkout, startedAt }` and is
+ * The lock is written by `pnpm dev:desktop` with `{ pid, checkout, startedAt }` and is
  * treated as live only while its holder pid is still running. A missing,
  * malformed, or dead-holder lock returns undefined so callers fall back to
  * their normal behavior. An optional `cli` field is returned when the lock
@@ -68,17 +68,9 @@ export function readSourceDevLock(env: NodeJS.ProcessEnv = process.env): SourceD
 }
 
 /**
- * Exact refusal message shared by every entry point that must not race a live
- * `pnpm dev` stack (daemon start, daemon restart, update).
- */
-export function sourceDevLockRefusalMessage(lock: SourceDevLock): string {
-  return `pnpm dev (pid ${lock.pid}, checkout ${lock.checkout}) owns the Wrenyard daemon and restarts it itself. Do not start another daemon; wait for it, or stop pnpm dev first.`
-}
-
-/**
  * Extra line printed by `wrenyard daemon stop` after a successful stop while a
  * live source-dev lock remains, so the human knows the daemon will come back.
  */
 export function sourceDevStopNotice(): string {
-  return 'pnpm dev will start the daemon again; press Ctrl+C in pnpm dev to stop the whole stack.'
+  return 'pnpm dev:desktop will start the daemon again; press Ctrl+C in pnpm dev:desktop to stop the whole stack.'
 }

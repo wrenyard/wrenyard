@@ -3,7 +3,6 @@ import test from 'node:test';
 import {
   PROVIDER_QUOTA_BINDINGS,
   findProviderQuotaBinding,
-  providerQuotas,
   type ProviderQuotaBinding,
 } from '../src/provider-quota-metadata.ts';
 import { BUILTIN_PROVIDERS } from '../src/catalog.ts';
@@ -18,6 +17,12 @@ function bindingPoolIds(binding: ProviderQuotaBinding): string[] {
   return binding.pools.map((pool) => pool.quotaPoolId);
 }
 
+function bindingPoolIdsForProvider(providerId: string): string[] {
+  return PROVIDER_QUOTA_BINDINGS
+    .filter((binding) => binding.providerId === providerId && binding.modelId === '*')
+    .flatMap((binding) => bindingPoolIds(binding));
+}
+
 function expectBinding(providerId: string, modelId: string): ProviderQuotaBinding {
   const binding = findProviderQuotaBinding(providerId, modelId);
   assert.ok(binding, `missing binding for ${providerId}/${modelId}`);
@@ -30,7 +35,7 @@ test('every builtin catalog model resolves to a non-empty own-provider binding',
       const binding = findProviderQuotaBinding(provider.id, modelDefinition.id);
       // A provider that owns no quota source contributes no binding at all;
       // its models stay unbound instead of claiming a pool it does not own.
-      if (!providerQuotas.has(provider.id)) {
+      if (bindingPoolIdsForProvider(provider.id).length === 0) {
         assert.equal(binding, undefined, `${provider.id} owns no quota source`);
         continue;
       }

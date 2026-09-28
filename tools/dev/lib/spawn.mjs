@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 function quoteCmdArg(value) {
@@ -71,25 +71,6 @@ export function pnpmInvocation(checkout, pnpmArgs) {
   return { command: process.execPath, args: [pnpmCli, ...pnpmArgs], cwd: checkout };
 }
 
-function tsxLoaderInvocation(checkout, entry, extraArgs = []) {
-  const tsxRoot = firstExisting([
-    join(checkout, 'node_modules', 'tsx'),
-    join(checkout, 'apps', 'daemon', 'node_modules', 'tsx'),
-    join(checkout, 'apps', 'cli', 'node_modules', 'tsx'),
-  ]);
-  if (!tsxRoot) throw new Error('tsx was not found. Run pnpm install --frozen-lockfile in the checkout root.');
-  const preflightPath = join(tsxRoot, 'dist', 'preflight.cjs');
-  const loaderPath = join(tsxRoot, 'dist', 'loader.mjs');
-  if (!existsSync(preflightPath) || !existsSync(loaderPath)) {
-    throw new Error('Local tsx loader files were not found. Run pnpm install --frozen-lockfile in the checkout root.');
-  }
-  return {
-    command: process.execPath,
-    args: ['--require', preflightPath, '--import', pathToFileURL(loaderPath).href, entry, ...extraArgs],
-    cwd: checkout,
-  };
-}
-
 export function sourceCliInvocation(checkout, cliArgs = []) {
   const tsxCli = firstExisting([
     join(checkout, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
@@ -103,10 +84,24 @@ export function sourceCliInvocation(checkout, cliArgs = []) {
   return { command: process.execPath, args: [tsxCli, cliSource, ...cliArgs], cwd: checkout };
 }
 
-export function daemonInvocation(checkout, configPath, extraArgs = []) {
-  const entry = join(checkout, 'apps', 'daemon', 'bin', 'daemon.mts');
-  if (!existsSync(entry)) throw new Error(`Daemon entry missing: ${entry}`);
-  const invocation = tsxLoaderInvocation(checkout, entry, ['--config', configPath, ...extraArgs]);
-  invocation.cwd = join(checkout, 'apps', 'daemon');
-  return invocation;
+/**
+ * The one owner entrypoint. Source development runs the control CLI
+ * (`apps/cli/src/index.mts`) with `daemon run`, exactly like the terminal and
+ * Desktop, so all three owners start the daemon the same way.
+ */
+export function daemonRunInvocation(checkout, configPath, extraArgs = []) {
+  const tsxCli = firstExisting([
+    join(checkout, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    join(checkout, 'apps', 'cli', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    join(checkout, 'apps', 'daemon', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+  ]);
+  const cliSource = join(checkout, 'apps', 'cli', 'src', 'index.mts');
+  if (!tsxCli || !existsSync(cliSource)) {
+    throw new Error('Source CLI entry was not found. Run pnpm install --frozen-lockfile in the checkout root.');
+  }
+  return {
+    command: process.execPath,
+    args: ['--require', join(dirname(tsxCli), 'preflight.cjs'), '--import', pathToFileURL(join(dirname(tsxCli), 'loader.mjs')).href, cliSource, 'daemon', 'run', '--config', configPath, ...extraArgs],
+    cwd: checkout,
+  };
 }

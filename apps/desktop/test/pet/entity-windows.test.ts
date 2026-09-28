@@ -126,7 +126,7 @@ describe('entity windows', () => {
       (c: any[]) => c[0] === 'did-fail-load'
     );
     expect(failLoadEntry).toBeDefined();
-    const failLoadListener = failLoadEntry[1];
+    const failLoadListener = failLoadEntry![1];
     failLoadListener({}, -3, 'ERR_ABORTED', 'about:blank', true);
 
     // ready-to-show should NOT show the window
@@ -334,7 +334,7 @@ describe('entity windows', () => {
       (c: any[]) => c[0] === 'ready-to-show'
     );
     expect(rtsEntry).toBeDefined();
-    rtsEntry[1]();
+    rtsEntry![1]();
     expect(mockShowInactive).toHaveBeenCalledTimes(1);
 
     // 2. Late main-frame did-fail-load → hides exactly once
@@ -342,7 +342,7 @@ describe('entity windows', () => {
       (c: any[]) => c[0] === 'did-fail-load'
     );
     expect(failEntry).toBeDefined();
-    const failListener = failEntry[1];
+    const failListener = failEntry![1];
     failListener({}, -3, 'ERR_ABORTED', 'about:blank', true);
 
     expect(mockHide).toHaveBeenCalledTimes(1);
@@ -360,7 +360,7 @@ describe('entity windows', () => {
       (c: any[]) => c[0] === 'render-process-gone'
     );
     expect(rpgEntry).toBeDefined();
-    rpgEntry[1]();
+    rpgEntry![1]();
 
     expect(mockReload).toHaveBeenCalledTimes(1);
 
@@ -369,7 +369,7 @@ describe('entity windows', () => {
       (c: any[]) => c[0] === 'did-finish-load'
     );
     expect(dflEntry).toBeDefined();
-    dflEntry[1]();
+    dflEntry![1]();
 
     expect(mockRecovered).toHaveBeenCalledTimes(1);
     expect(mockHide).not.toHaveBeenCalled();

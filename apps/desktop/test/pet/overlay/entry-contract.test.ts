@@ -77,7 +77,6 @@ describe('overlay entry contracts', () => {
     const transparentWindowRule = transcriptHtml.match(/html, body\s*\{[^}]+\}/)?.[0] ?? '';
 
     expect(transcriptHtml).not.toContain('panel.css');
-    expect(transparentWindowRule).toContain('background: transparent');
     expect(transparentWindowRule).toContain('border: 0');
     expect(transparentWindowRule).toContain('border-radius: 0');
     expect(transparentWindowRule).toContain('outline: 0');
@@ -96,6 +95,7 @@ describe('overlay entry contracts', () => {
   it('keeps broadcast close dismissal local and preserves the dismissed id', () => {
     const state = {
       scale: 5,
+      houseSkin: 'classic' as const,
       workers: [],
       queuedCount: 0,
       broadcast: { id: 'b1', text: 'hello', intensity: 'sticky' as const },

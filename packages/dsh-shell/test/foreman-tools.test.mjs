@@ -1,6 +1,5 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -40,25 +39,12 @@ function withEnv(overrides, fn) {
     });
 }
 
-function startMcp(handler) {
-  const server = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (chunk) => (body += chunk));
-    req.on('end', async () => {
-      let msg = {};
-      try {
-        msg = JSON.parse(body || '{}');
-      } catch {
-        // malformed request: answer nothing useful
-      }
-      const reply = await handler(msg);
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-      res.end(`data: ${JSON.stringify(reply)}\n\n`);
-    });
-  });
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve(server));
-  });
+// Every connection opens with the version-checked health.ping handshake. Fake
+// daemons answer it here so their handlers only ever see business requests.
+function answerHandshake(sock, msg) {
+  if (msg.method !== 'health.ping' || msg.params?.protocolVersion === undefined) return false;
+  sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { ok: true, protocolVersion: msg.params.protocolVersion } })}\n`);
+  return true;
 }
 
 function startIpc(socketPath, handler) {
@@ -77,6 +63,7 @@ function startIpc(socketPath, handler) {
         } catch {
           continue;
         }
+        if (answerHandshake(sock, msg)) continue;
         const result = await handler(msg);
         if (!sock.destroyed) {
           sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`);
@@ -91,14 +78,6 @@ function startIpc(socketPath, handler) {
       resolve(server);
     });
   });
-}
-
-function okReply(msg, result) {
-  return { jsonrpc: '2.0', id: msg.id, result };
-}
-
-function sseUrl(server) {
-  return `http://127.0.0.1:${server.address().port}/mcp`;
 }
 
 function makeCtx() {
@@ -178,31 +157,9 @@ function testIpcPath(name) {
 
 const deadIpc = () => testIpcPath('missing');
 
-const CANONICAL_TOOLS = [
-  { name: 'task_list', description: 'List tasks', inputSchema: { type: 'object', properties: { repo: { type: 'string' } } } },
-  { name: 'task_describe', description: 'Describe a task', inputSchema: { type: 'object', properties: { task_id: { type: 'string' } } } },
-  { name: 'task_run', description: 'Run a task', inputSchema: { type: 'object', properties: { command: { type: 'string' }, invocation_settings: { type: 'object', properties: { mode: { type: 'string' }, explicit_runtime: { type: 'string' }, timeout_ms: { type: 'number' }, additional_instructions: { type: 'string' }, automatic: { type: 'object' } }, additionalProperties: false } }, additionalProperties: false } },
-];
-
-function canonicalListFixture(msg) {
-  if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-  if (msg.method === 'tools/call') {
-    const name = msg.params.name;
-    if (name === 'task_list') return okReply(msg, { structuredContent: { tasks: [{ id: 'a' }] }, content: [{ type: 'text', text: 'a' }] });
-    if (name === 'task_describe') return okReply(msg, { structuredContent: { task_id: 'a', status: 'queued' } });
-    if (name === 'task_run') {
-      const id = msg.params.arguments && msg.params.arguments.task_id;
-      return okReply(msg, { structuredContent: { task_run_id: id || 't-1', status: 'queued' } });
-    }
-  }
-  return okReply(msg, { content: [{ type: 'text', text: '{}' }] });
-}
-
-test('registers exactly the nine canonical task, workspace-doc, and discovery aliases with the correct contract', async () => {
-  const server = await startMcp(canonicalListFixture);
+test('registers exactly the nine task, workspace-doc, and discovery aliases with the correct contract', async () => {
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: deadIpc() }, () => plugin.apply(ctx));
-  server.close();
+  await withEnv({ WRENYARD_IPC_PATH: deadIpc() }, () => plugin.apply(ctx));
 
   const names = ctx.registered.map((definition) => definition.name).sort();
   assert.deepEqual(names, [
@@ -230,13 +187,12 @@ test('registers exactly the nine canonical task, workspace-doc, and discovery al
   assert.ok(typeof describeTask.timeoutMs === 'number' && describeTask.timeoutMs > 0, 'describe_task keeps a bounded timeout');
   assert.equal(runTask.timeoutMs, undefined, 'run_task omits timeoutMs so DSH enforces no deadline');
 
-  assert.equal(runTask.parameters.type, 'object', 'run_task schema is sanitized to an object');
+  assert.equal(runTask.parameters.type, 'object', 'run_task schema is an object');
 
-  // The canonical task_run schema exposes the shared one-shot Task settings
-  // layer. run_task must surface it on its sanitized parameters and keep it
-  // optional; there is no DSH-owned settings field or merge logic.
+  // run_task exposes the shared one-shot Task settings layer on its parameters
+  // and keeps it optional; there is no DSH-owned settings field or merge logic.
   const runSettings = runTask.parameters.properties && runTask.parameters.properties.invocation_settings;
-  assert.ok(runSettings, 'run_task parameters expose invocation_settings from the canonical schema');
+  assert.ok(runSettings, 'run_task parameters expose invocation_settings');
   assert.equal(runSettings.type, 'object');
   assert.equal(runSettings.properties.timeout_ms.type, 'number');
   assert.equal(runSettings.properties.automatic.type, 'object');
@@ -285,10 +241,8 @@ test('registers exactly the nine canonical task, workspace-doc, and discovery al
 });
 
 test('pre-execute waterfall allows the nine Wrenyard aliases only; bash/read/web_search flow to the downstream ask/deny policy', async () => {
-  const server = await startMcp(canonicalListFixture);
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: deadIpc() }, () => plugin.apply(ctx));
-  server.close();
+  await withEnv({ WRENYARD_IPC_PATH: deadIpc() }, () => plugin.apply(ctx));
 
   assert.equal((ctx.events.get('tools/pre-execute') || []).length, 1, 'the bridge registers exactly one pre-execute listener');
 
@@ -320,24 +274,15 @@ test('pre-execute waterfall allows the nine Wrenyard aliases only; bash/read/web
   }
 });
 
-test('workspace-doc aliases route unchanged params to exactly one owner-only IPC method each, with no MCP fallback', async () => {
+test('workspace-doc aliases route unchanged params to exactly one owner-only IPC method each', async () => {
   const ipcCalls = [];
   const ipcSocket = testIpcPath('doc-routing');
   const ipcServer = await startIpc(ipcSocket, (msg) => {
     ipcCalls.push(msg);
     return { ok: true, method: msg.method };
   });
-  const mcpCallNames = [];
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call') {
-      mcpCallNames.push(msg.params.name);
-      return okReply(msg, { content: [{ type: 'text', text: 'unexpected MCP fallback' }] });
-    }
-    return okReply(msg, {});
-  });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const cases = [
     { alias: 'list_workspace_docs', args: { directory: 'guide' }, method: 'workspace.doc.list', params: { directory: 'guide' } },
@@ -354,13 +299,11 @@ test('workspace-doc aliases route unchanged params to exactly one owner-only IPC
 
   assert.deepEqual(ipcCalls.map((m) => m.method), cases.map((c) => c.method), 'each alias calls exactly its own IPC method');
   assert.deepEqual(ipcCalls.map((m) => m.params), cases.map((c) => c.params), 'IPC params are forwarded unchanged, including update expectedContent CAS');
-  assert.deepEqual(mcpCallNames, [], 'doc aliases never fall back to MCP tools/call');
 
-  server.close();
   ipcServer.close();
 });
 
-test('discovery aliases hit project.list and task.settings.runtimes over owner-only IPC with shaped params and no MCP fallback', async () => {
+test('discovery aliases hit project.list and task.settings.runtimes over owner-only IPC with shaped params', async () => {
   const ipcCalls = [];
   const RUNTIMES_RESULT = {
     items: [
@@ -374,17 +317,8 @@ test('discovery aliases hit project.list and task.settings.runtimes over owner-o
     if (msg.method === 'task.settings.runtimes') return RUNTIMES_RESULT;
     return { projects: [{ id: 'p1', name: 'Wrenyard' }] };
   });
-  const mcpCallNames = [];
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call') {
-      mcpCallNames.push(msg.params.name);
-      return okReply(msg, { content: [{ type: 'text', text: 'unexpected MCP fallback' }] });
-    }
-    return okReply(msg, {});
-  });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const listProjects = ctx.registered.find((d) => d.name === 'list_projects');
   const listRuntimes = ctx.registered.find((d) => d.name === 'list_runtimes');
@@ -405,9 +339,6 @@ test('discovery aliases hit project.list and task.settings.runtimes over owner-o
     'list_runtimes forwards only the declared project/task_id params',
   );
 
-  assert.deepEqual(mcpCallNames, [], 'discovery aliases never fall back to MCP tools/call');
-
-  server.close();
   ipcServer.close();
 });
 
@@ -422,14 +353,14 @@ test('discovery IPC errors propagate as bounded rejections', async () => {
       } catch {
         return;
       }
+      if (answerHandshake(sock, msg)) return;
       sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'unknown task_id: t-missing' } })}\n`);
     });
   });
   await new Promise((resolve) => ipcServer.listen(ipcSocket, resolve));
 
-  const server = await startMcp(canonicalListFixture);
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const listRuntimes = ctx.registered.find((d) => d.name === 'list_runtimes');
   await assert.rejects(
@@ -437,7 +368,6 @@ test('discovery IPC errors propagate as bounded rejections', async () => {
     /Wrenyard IPC error:.*unknown task_id/,
   );
 
-  server.close();
   ipcServer.close();
 });
 
@@ -603,17 +533,15 @@ test('mergeOrchestrationContext keeps the merged ctx inside the 16 KiB / 64-key 
 test('run_task derives ctx.orchestration from its own exec.agent.session.events', async () => {
   const createArguments = [];
   const ipcSocket = testIpcPath('ctx-handoff');
-  const ipcServer = await startIpc(ipcSocket, () => ({ status: 'done' }));
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call' && msg.params.name === 'task_run') {
-      createArguments.push(msg.params.arguments);
-      return okReply(msg, { structuredContent: { task_run_id: 't-ctx', status: 'queued' } });
+  const ipcServer = await startIpc(ipcSocket, (msg) => {
+    if (msg.method === 'task.run.create') {
+      createArguments.push(msg.params);
+      return { task_run_id: 't-ctx', status: 'queued' };
     }
-    return okReply(msg, {});
+    return { status: 'done' };
   });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const runTask = ctx.registered.find((d) => d.name === 'run_task');
   const session = { id: 'session-abc', events: realSessionEvents() };
@@ -640,48 +568,41 @@ test('run_task derives ctx.orchestration from its own exec.agent.session.events'
   assert.deepEqual(second.ctx, { orchestration: { mine: true } }, 'a model-supplied ctx.orchestration is passed through untouched');
   assert.equal(withCtx.length, 1);
 
-  server.close();
   ipcServer.close();
 });
 
 test('run_task with no agent session still dispatches without inventing ctx', async () => {
   const createArguments = [];
   const ipcSocket = testIpcPath('ctx-none');
-  const ipcServer = await startIpc(ipcSocket, () => ({ status: 'done' }));
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call' && msg.params.name === 'task_run') {
-      createArguments.push(msg.params.arguments);
-      return okReply(msg, { structuredContent: { task_run_id: 't-plain', status: 'queued' } });
+  const ipcServer = await startIpc(ipcSocket, (msg) => {
+    if (msg.method === 'task.run.create') {
+      createArguments.push(msg.params);
+      return { task_run_id: 't-plain', status: 'queued' };
     }
-    return okReply(msg, {});
+    return { status: 'done' };
   });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const runTask = ctx.registered.find((d) => d.name === 'run_task');
   await runTask.execute({ task_id: 't-plain' }, {});
   assert.deepEqual(createArguments[0], { task_id: 't-plain' }, 'no ctx is added when the call has no agent session');
 
-  server.close();
   ipcServer.close();
 });
 
 test('concurrent run_task calls on different sessions never cross-talk in ctx.orchestration', async () => {
   const createArguments = [];
   const ipcSocket = testIpcPath('ctx-isolation');
-  const ipcServer = await startIpc(ipcSocket, (msg) => ({ task_run_id: msg.params.task_run_id, status: 'done' }));
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call' && msg.params.name === 'task_run') {
-      createArguments.push(msg.params.arguments);
-      const id = msg.params.arguments.task_id;
-      return okReply(msg, { structuredContent: { task_run_id: id, status: 'queued' } });
+  const ipcServer = await startIpc(ipcSocket, (msg) => {
+    if (msg.method === 'task.run.create') {
+      createArguments.push(msg.params);
+      return { task_run_id: msg.params.task_id, status: 'queued' };
     }
-    return okReply(msg, {});
+    return { task_run_id: msg.params.task_run_id, status: 'done' };
   });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const runTask = ctx.registered.find((d) => d.name === 'run_task');
   const sessionA = { id: 'sess-A', events: [userEvent(1, 'user', 'alpha-only-request'), assistantEvent(2, 'alpha answer')] };
@@ -705,7 +626,6 @@ test('concurrent run_task calls on different sessions never cross-talk in ctx.or
   assert.ok(ctxB.includes('beta-only-request') && !ctxB.includes('alpha-only-request'), 'session B carries only its own dialogue');
   assert.ok(oa.includes('t-a') && ob.includes('t-b'), 'each call still receives its own terminal envelope');
 
-  server.close();
   ipcServer.close();
 });
 
@@ -721,15 +641,15 @@ test('workspace-doc IPC errors (e.g. expectedContent CAS conflict) propagate as 
       } catch {
         return;
       }
+      if (answerHandshake(sock, msg)) return;
       ipcCalls.push(msg);
       sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'CAS conflict: content no longer matches expectedContent' } })}\n`);
     });
   });
   await new Promise((resolve) => ipcServer.listen(ipcSocket, resolve));
 
-  const server = await startMcp(canonicalListFixture);
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const updateDoc = ctx.registered.find((d) => d.name === 'update_workspace_doc');
   await assert.rejects(
@@ -740,52 +660,7 @@ test('workspace-doc IPC errors (e.g. expectedContent CAS conflict) propagate as 
   assert.equal(ipcCalls[0].method, 'workspace.doc.update');
   assert.deepEqual(ipcCalls[0].params, { path: 'guide/new.md', content: 'v2', expectedContent: 'stale' });
 
-  server.close();
   ipcServer.close();
-});
-
-test('tools/call unwraps structuredContent/content and surfaces isError', async () => {
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call') {
-      if (msg.params.arguments && msg.params.arguments.fail) {
-        return okReply(msg, { isError: true, content: [{ type: 'text', text: 'boom: project exploded' }] });
-      }
-      return okReply(msg, { structuredContent: { tasks: [{ name: 'alpha' }] }, content: [{ type: 'text', text: 'alpha' }] });
-    }
-    return okReply(msg, {});
-  });
-  const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: deadIpc() }, () => plugin.apply(ctx));
-
-  const execute = ctx.registered.find((d) => d.name === 'list_task').execute;
-  const output = await execute({}, {});
-  assert.match(output, /alpha/);
-  await assert.rejects(() => execute({ fail: true }, {}), /boom: project exploded/);
-  server.close();
-});
-
-test('fails loudly when Wrenyard MCP is unavailable', async () => {
-  const server = await startMcp(() => ({ jsonrpc: '2.0', id: 1, error: { code: -32001, message: 'denied' } }));
-  const ctx = makeCtx();
-  await assert.rejects(
-    withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: deadIpc() }, () => plugin.apply(ctx)),
-    /Wrenyard: MCP is unavailable/,
-  );
-  server.close();
-});
-
-test('fails loudly when Wrenyard MCP catalog is missing a required canonical task tool', async () => {
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: [{ name: 'project_list', description: 'List', inputSchema: { type: 'object' } }] });
-    return okReply(msg, {});
-  });
-  const ctx = makeCtx();
-  await assert.rejects(
-    withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: deadIpc() }, () => plugin.apply(ctx)),
-    /Wrenyard: MCP catalog missing required task tool/,
-  );
-  server.close();
 });
 
 test('wrenyardIpcPath prefers non-blank overrides, then uses the daemon platform default', () => {
@@ -798,28 +673,6 @@ test('wrenyardIpcPath prefers non-blank overrides, then uses the daemon platform
     process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock');
 });
 
-test('WRENYARD_MCP_URL takes precedence over legacy FOREMAN_MCP_URL', async () => {
-  const server = await startMcp(canonicalListFixture);
-  const ctx = makeCtx();
-  await withEnv({
-    WRENYARD_MCP_URL: sseUrl(server),
-    FOREMAN_MCP_URL: 'http://127.0.0.1:9/mcp',
-    WRENYARD_IPC_PATH: deadIpc(),
-  }, () => plugin.apply(ctx));
-  const names = ctx.registered.map((definition) => definition.name);
-  assert.ok(names.includes('list_task'), 'WRENYARD_MCP_URL must win over FOREMAN_MCP_URL');
-  server.close();
-});
-
-test('legacy FOREMAN_* env vars remain honored when WRENYARD_* are absent', async () => {
-  const server = await startMcp(canonicalListFixture);
-  const ctx = makeCtx();
-  await withEnv({ FOREMAN_MCP_URL: sseUrl(server), FOREMAN_IPC_PATH: deadIpc() }, () => plugin.apply(ctx));
-  const names = ctx.registered.map((definition) => definition.name);
-  assert.ok(names.includes('list_task'), 'legacy FOREMAN_* env must still configure the bridge');
-  server.close();
-});
-
 const TERMINAL_ENVELOPES = [
   { status: 'done', stdout: 'built ok' },
   { status: 'failed', error: 'kaboom' },
@@ -827,29 +680,17 @@ const TERMINAL_ENVELOPES = [
   { status: 'interrupted' },
 ];
 
-test('run_task creates once, waits once over IPC, and passes through terminal envelopes', async () => {
+test('run_task creates once and waits once over IPC, and passes through terminal envelopes', async () => {
   for (const envelope of TERMINAL_ENVELOPES) {
     const ipcCalls = [];
-    const createArguments = [];
     const ipcSocket = testIpcPath('run');
     const ipcServer = await startIpc(ipcSocket, (msg) => {
       ipcCalls.push(msg);
+      if (msg.method === 'task.run.create') return { task_run_id: 't-1', status: 'queued' };
       return envelope;
     });
-    const taskCallNames = [];
-    const server = await startMcp((msg) => {
-      if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-      if (msg.method === 'tools/call') {
-        taskCallNames.push(msg.params.name);
-        if (msg.params.name === 'task_run') {
-          createArguments.push(msg.params.arguments);
-          return okReply(msg, { structuredContent: { task_run_id: 't-1', status: 'queued' } });
-        }
-      }
-      return okReply(msg, {});
-    });
     const ctx = makeCtx();
-    await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+    await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
     const runTask = ctx.registered.find((d) => d.name === 'run_task');
     const invocationSettings = {
@@ -860,17 +701,16 @@ test('run_task creates once, waits once over IPC, and passes through terminal en
     const output = await runTask.execute({ command: 'build', invocation_settings: invocationSettings }, {});
     assert.match(output, new RegExp(envelope.status));
 
-    assert.equal(ipcCalls.length, 1, `exactly one task.run.wait for ${envelope.status}`);
-    assert.equal(ipcCalls[0].method, 'task.run.wait');
-    assert.equal(ipcCalls[0].params.task_run_id, 't-1');
-    assert.deepEqual(taskCallNames, ['task_run'], 'no task_status/task_output polling calls');
+    assert.equal(ipcCalls.length, 2, `exactly one create and one wait for ${envelope.status}`);
+    assert.equal(ipcCalls[0].method, 'task.run.create');
     assert.deepEqual(
-      createArguments,
-      [{ command: 'build', invocation_settings: invocationSettings }],
-      'run_task forwards the caller input, including the nested invocation_settings object, unchanged to the canonical task_run create call',
+      ipcCalls[0].params,
+      { command: 'build', invocation_settings: invocationSettings },
+      'run_task forwards the caller input, including the nested invocation_settings object, unchanged to task.run.create',
     );
+    assert.equal(ipcCalls[1].method, 'task.run.wait');
+    assert.equal(ipcCalls[1].params.task_run_id, 't-1');
 
-    server.close();
     ipcServer.close();
   }
 });
@@ -880,35 +720,24 @@ test('concurrent run_task calls use distinct ids with no cross-delivery or dupli
   const ipcSocket = testIpcPath('concurrent');
   const ipcServer = await startIpc(ipcSocket, (msg) => {
     ipcCalls.push(msg);
+    if (msg.method === 'task.run.create') return { task_run_id: msg.params.task_id, status: 'queued' };
     return { task_run_id: msg.params.task_run_id, status: 'done' };
   });
-  const taskCallNames = [];
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call') {
-      taskCallNames.push(msg.params.name);
-      if (msg.params.name === 'task_run') {
-        const id = msg.params.arguments.task_id;
-        return okReply(msg, { structuredContent: { task_run_id: id, status: 'queued' } });
-      }
-    }
-    return okReply(msg, {});
-  });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const runTask = ctx.registered.find((d) => d.name === 'run_task');
   const a = runTask.execute({ task_id: 'a-1' }, {});
   const b = runTask.execute({ task_id: 'b-2' }, {});
   const [oa, ob] = await Promise.all([a, b]);
 
-  const ids = ipcCalls.map((m) => m.params.task_run_id).sort();
-  assert.deepEqual(ids, ['a-1', 'b-2'], 'exactly one wait per distinct task');
-  assert.equal(ipcCalls.length, 2, 'no duplicate wait');
+  const createIds = ipcCalls.filter((m) => m.method === 'task.run.create').map((m) => m.params.task_id).sort();
+  const waitIds = ipcCalls.filter((m) => m.method === 'task.run.wait').map((m) => m.params.task_run_id).sort();
+  assert.deepEqual(createIds, ['a-1', 'b-2'], 'each call creates its task once');
+  assert.deepEqual(waitIds, ['a-1', 'b-2'], 'exactly one wait per distinct task');
+  assert.equal(ipcCalls.length, 4, 'no duplicate create or wait');
   assert.ok(oa.includes('a-1') && ob.includes('b-2'), 'each call receives its own terminal envelope');
-  assert.deepEqual(taskCallNames, ['task_run', 'task_run'], 'each call creates its task once');
 
-  server.close();
   ipcServer.close();
 });
 
@@ -927,25 +756,21 @@ test('AbortSignal aborts a pending IPC task.run.wait, cleans up the socket, and 
       } catch {
         return;
       }
+      if (answerHandshake(sock, msg)) return;
       ipcCalls.push(msg);
-      // Hold task.run.wait open; respond immediately to task.run.cancel so the
-      // cancel socket closes promptly.
-      if (msg.method === 'task.run.cancel') {
+      // Respond immediately to create and cancel so those sockets close
+      // promptly; hold task.run.wait open until the abort closes it.
+      if (msg.method === 'task.run.create') {
+        sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { task_run_id: 't-9' } })}\n`);
+      } else if (msg.method === 'task.run.cancel') {
         sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { status: 'cancelled' } })}\n`);
       }
     });
   });
   await new Promise((resolve) => ipcServer.listen(ipcSocket, resolve));
 
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call' && msg.params.name === 'task_run') {
-      return okReply(msg, { structuredContent: { task_run_id: 't-9' } });
-    }
-    return okReply(msg, {});
-  });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const runTask = ctx.registered.find((d) => d.name === 'run_task');
   const controller = new AbortController();
@@ -966,28 +791,18 @@ test('AbortSignal aborts a pending IPC task.run.wait, cleans up the socket, and 
   assert.equal(cancelCall.params.task_run_id, 't-9');
   assert.equal(ipcCalls.filter((c) => c.method === 'task.run.cancel').length, 1, 'no duplicate cancel');
 
-  server.close();
   ipcServer.close();
 });
 
-test('run_task with an already-aborted signal sends no task_run and no IPC', async () => {
+test('run_task with an already-aborted signal sends no IPC at all', async () => {
   const ipcCalls = [];
   const ipcSocket = testIpcPath('prelaunch');
   const ipcServer = await startIpc(ipcSocket, (msg) => {
     ipcCalls.push(msg);
     return { status: 'done' };
   });
-  const taskCallNames = [];
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call') {
-      taskCallNames.push(msg.params.name);
-      if (msg.params.name === 'task_run') return okReply(msg, { structuredContent: { task_run_id: 't-abort' } });
-    }
-    return okReply(msg, {});
-  });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const runTask = ctx.registered.find((d) => d.name === 'run_task');
   const controller = new AbortController();
@@ -997,10 +812,8 @@ test('run_task with an already-aborted signal sends no task_run and no IPC', asy
     (err) => err.name === 'AbortError',
   );
 
-  assert.deepEqual(taskCallNames, [], 'no task_run create on prelaunch abort');
-  assert.deepEqual(ipcCalls, [], 'no IPC wait or cancel on prelaunch abort');
+  assert.deepEqual(ipcCalls, [], 'no create, wait or cancel on prelaunch abort');
 
-  server.close();
   ipcServer.close();
 });
 
@@ -1009,23 +822,15 @@ test('abort during a delayed create still returns the id and sends exactly one t
   const ipcSocket = testIpcPath('during-create');
   const ipcServer = await startIpc(ipcSocket, (msg) => {
     ipcCalls.push(msg);
+    if (msg.method === 'task.run.create') {
+      return new Promise((resolve) => {
+        setTimeout(() => resolve({ task_run_id: 't-create' }), 60);
+      });
+    }
     return { status: 'cancelled' };
   });
-  const taskCallNames = [];
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call') {
-      taskCallNames.push(msg.params.name);
-      if (msg.params.name === 'task_run') {
-        return new Promise((resolve) => {
-          setTimeout(() => resolve(okReply(msg, { structuredContent: { task_run_id: 't-create' } })), 60);
-        });
-      }
-    }
-    return okReply(msg, {});
-  });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const runTask = ctx.registered.find((d) => d.name === 'run_task');
   const controller = new AbortController();
@@ -1036,13 +841,12 @@ test('abort during a delayed create still returns the id and sends exactly one t
     (err) => err.name === 'AbortError',
   );
 
-  assert.deepEqual(taskCallNames, ['task_run'], 'create is allowed to finish exactly once');
+  assert.equal(ipcCalls.filter((c) => c.method === 'task.run.create').length, 1, 'create is allowed to finish exactly once');
   assert.ok(ipcCalls.some((c) => c.method === 'task.run.cancel'), 'created id is cancelled once');
   assert.equal(ipcCalls.filter((c) => c.method === 'task.run.cancel').length, 1, 'exactly one cancel');
   assert.equal(ipcCalls.find((c) => c.method === 'task.run.cancel').params.task_run_id, 't-create');
   assert.equal(ipcCalls.filter((c) => c.method === 'task.run.wait').length, 0, 'no wait once aborted after create');
 
-  server.close();
   ipcServer.close();
 });
 
@@ -1051,21 +855,13 @@ test('abort during an active wait closes the wait socket and cancels the owned t
   const ipcSocket = testIpcPath('during-wait');
   const ipcServer = await startIpc(ipcSocket, (msg) => {
     ipcCalls.push(msg);
+    if (msg.method === 'task.run.create') return { task_run_id: 't-wait' };
     // Hold task.run.wait open; respond to task.run.cancel immediately.
     if (msg.method === 'task.run.cancel') return { status: 'cancelled' };
     return new Promise(() => {});
   });
-  const taskCallNames = [];
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call') {
-      taskCallNames.push(msg.params.name);
-      if (msg.params.name === 'task_run') return okReply(msg, { structuredContent: { task_run_id: 't-wait' } });
-    }
-    return okReply(msg, {});
-  });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const runTask = ctx.registered.find((d) => d.name === 'run_task');
   const controller = new AbortController();
@@ -1076,12 +872,11 @@ test('abort during an active wait closes the wait socket and cancels the owned t
     (err) => err.name === 'AbortError',
   );
 
-  assert.deepEqual(taskCallNames, ['task_run'], 'create happens once, no duplicate');
+  assert.equal(ipcCalls.filter((c) => c.method === 'task.run.create').length, 1, 'create happens once, no duplicate');
   assert.equal(ipcCalls.filter((c) => c.method === 'task.run.wait').length, 1, 'exactly one wait');
   assert.equal(ipcCalls.filter((c) => c.method === 'task.run.cancel').length, 1, 'exactly one cancel');
   assert.equal(ipcCalls.find((c) => c.method === 'task.run.cancel').params.task_run_id, 't-wait');
 
-  server.close();
   ipcServer.close();
 });
 
@@ -1097,23 +892,22 @@ test('incidental wait transport disconnect rejects without cancelling the backen
       } catch {
         return;
       }
+      if (answerHandshake(sock, msg)) return;
       ipcCalls.push(msg);
-      // Disconnect the wait socket to simulate an incidental transport error;
-      // do NOT respond, and never run task.run.cancel.
-      if (msg.method === 'task.run.wait') sock.destroy();
+      // Answer task.run.create so the flow reaches the wait; then disconnect the
+      // wait socket to simulate an incidental transport error. Never respond to
+      // the wait and never run task.run.cancel.
+      if (msg.method === 'task.run.create') {
+        sock.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { task_run_id: 't-x' } })}\n`);
+      } else if (msg.method === 'task.run.wait') {
+        sock.destroy();
+      }
     });
   });
   await new Promise((resolve) => ipcServer.listen(ipcSocket, resolve));
 
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call' && msg.params.name === 'task_run') {
-      return okReply(msg, { structuredContent: { task_run_id: 't-x' } });
-    }
-    return okReply(msg, {});
-  });
   const ctx = makeCtx();
-  await withEnv({ WRENYARD_MCP_URL: sseUrl(server), WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
+  await withEnv({ WRENYARD_IPC_PATH: ipcSocket }, () => plugin.apply(ctx));
 
   const runTask = ctx.registered.find((d) => d.name === 'run_task');
   const controller = new AbortController();
@@ -1125,9 +919,9 @@ test('incidental wait transport disconnect rejects without cancelling the backen
 
     assert.equal(controller.signal.aborted, false, 'incidental failure leaves the signal intact');
     assert.equal(ipcCalls.filter((c) => c.method === 'task.run.cancel').length, 0, 'no backend cancel on transport error');
+    assert.equal(ipcCalls.filter((c) => c.method === 'task.run.create').length, 1, 'create opened once before the wait');
     assert.equal(ipcCalls.filter((c) => c.method === 'task.run.wait').length, 1, 'wait opened once before disconnect');
   } finally {
-    server.close();
     ipcServer.close();
   }
 });
@@ -1136,8 +930,12 @@ test('source-level: run_task IPC wait carries no implicit deadline and TASK_TIME
   const source = fs.readFileSync(new URL('../src/foreman-tools.mjs', import.meta.url), 'utf8');
 
   assert.ok(!/TASK_TIMEOUT_MS/.test(source), 'no TASK_TIMEOUT_MS constant may exist');
+  assert.ok(
+    !/DEFAULT_MCP_URL|WRENYARD_MCP_URL|FOREMAN_MCP_URL|WRENYARD_MCP_SENDER/.test(source),
+    'no daemon MCP url or sender env may remain',
+  );
 
-  const waitCall = source.match(/function makeRunTaskExecute[\s\S]*?return canonicalOutput\(waitPayload\);/);
+  const waitCall = source.match(/function makeRunTaskExecute[\s\S]*?return ipcText\(waitPayload\);/);
   assert.ok(waitCall, 'run_task invokes ipcRequest for task.run.wait');
   assert.ok(/timeout:\s*null/.test(waitCall[0]), 'task.run.wait is called with timeout:null (no implicit deadline)');
   assert.ok(!/timeout:\s*TASK_TIMEOUT_MS|timeout:\s*\d/.test(waitCall[0]), 'task.run.wait passes no numeric IPC deadline');
@@ -1148,25 +946,16 @@ test('Desktop async mode: run_task returns the launch identity without task.run.
   const ipcSocket = testIpcPath('async-launch');
   const ipcServer = await startIpc(ipcSocket, (msg) => {
     ipcCalls.push(msg);
-    return { status: 'done' };
-  });
-  const taskCallNames = [];
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call') {
-      taskCallNames.push(msg.params.name);
-      if (msg.params.name === 'task_run') {
-        // Production shape: the accepted create result carries the resolved
-        // definition display name alongside the run identity.
-        return okReply(msg, { structuredContent: { task_run_id: 't-async', status: 'queued', task_name: '探索调查' } });
-      }
+    if (msg.method === 'task.run.create') {
+      // Production shape: the accepted create result carries the resolved
+      // definition display name alongside the run identity.
+      return { task_run_id: 't-async', status: 'queued', task_name: '探索调查' };
     }
-    return okReply(msg, {});
+    return { status: 'done' };
   });
   const ctx = makeCtx();
   await withEnv({
     WRENYARD_DESKTOP_ASYNC_TASKS: '1',
-    WRENYARD_MCP_URL: sseUrl(server),
     WRENYARD_IPC_PATH: ipcSocket,
   }, () => plugin.apply(ctx));
 
@@ -1191,28 +980,21 @@ test('Desktop async mode: run_task returns the launch identity without task.run.
   assert.match(output, /pending/, 'the coordinator is told the result is pending');
   assert.match(output, /"task_name": "探索调查"/, 'the display name stays in the async launch text');
   assert.match(output, /do not fabricate a result/, 'no fabricated terminal result');
-  assert.deepEqual(taskCallNames, ['task_run', 'task_run'], 'only the create call runs');
-  assert.deepEqual(ipcCalls, [], 'no task.run.wait and no polling IPC in async mode');
+  assert.equal(ipcCalls.filter((c) => c.method === 'task.run.create').length, 2, 'only the create calls run');
+  assert.equal(ipcCalls.filter((c) => c.method === 'task.run.wait').length, 0, 'no task.run.wait and no polling IPC in async mode');
 
-  server.close();
   ipcServer.close();
 });
 
 test('Desktop async mode: the pre-step waterfall rejects the empty continuation, allows new input, and never rejects another agent', async () => {
   const ipcSocket = testIpcPath('async-prestep');
-  const ipcServer = await startIpc(ipcSocket, (msg) => ({ task_run_id: msg.params.task_run_id, status: 'done' }));
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call' && msg.params.name === 'task_run') {
-      const id = msg.params.arguments.task_id;
-      return okReply(msg, { structuredContent: { task_run_id: id, status: 'queued' } });
-    }
-    return okReply(msg, {});
+  const ipcServer = await startIpc(ipcSocket, (msg) => {
+    if (msg.method === 'task.run.create') return { task_run_id: msg.params.task_id, status: 'queued' };
+    return { task_run_id: msg.params.task_run_id, status: 'done' };
   });
   const ctx = makeCtx();
   await withEnv({
     WRENYARD_DESKTOP_ASYNC_TASKS: '1',
-    WRENYARD_MCP_URL: sseUrl(server),
     WRENYARD_IPC_PATH: ipcSocket,
   }, () => plugin.apply(ctx));
 
@@ -1262,7 +1044,6 @@ test('Desktop async mode: the pre-step waterfall rejects the empty continuation,
   const parallelReject = await runPreStep(ctx, { agent: agentB, messages: [], turn: 1, step: 2 }, terminal);
   assert.deepEqual(parallelReject.decision, { kind: 'reject' }, 'one yield covers the parallel dispatch step');
 
-  server.close();
   ipcServer.close();
 });
 
@@ -1271,25 +1052,16 @@ test('Desktop async mode: abort during creation cancels the owned run and skips 
   const ipcSocket = testIpcPath('async-abort-create');
   const ipcServer = await startIpc(ipcSocket, (msg) => {
     ipcCalls.push(msg);
-    return { status: 'cancelled' };
-  });
-  const taskCallNames = [];
-  const server = await startMcp((msg) => {
-    if (msg.method === 'tools/list') return okReply(msg, { tools: CANONICAL_TOOLS });
-    if (msg.method === 'tools/call') {
-      taskCallNames.push(msg.params.name);
-      if (msg.params.name === 'task_run') {
-        return new Promise((resolve) => {
-          setTimeout(() => resolve(okReply(msg, { structuredContent: { task_run_id: 't-async-abort' } })), 60);
-        });
-      }
+    if (msg.method === 'task.run.create') {
+      return new Promise((resolve) => {
+        setTimeout(() => resolve({ task_run_id: 't-async-abort' }), 60);
+      });
     }
-    return okReply(msg, {});
+    return { status: 'cancelled' };
   });
   const ctx = makeCtx();
   await withEnv({
     WRENYARD_DESKTOP_ASYNC_TASKS: '1',
-    WRENYARD_MCP_URL: sseUrl(server),
     WRENYARD_IPC_PATH: ipcSocket,
   }, () => plugin.apply(ctx));
 
@@ -1303,7 +1075,7 @@ test('Desktop async mode: abort during creation cancels the owned run and skips 
     (err) => err.name === 'AbortError',
   );
 
-  assert.deepEqual(taskCallNames, ['task_run'], 'create is allowed to finish exactly once');
+  assert.equal(ipcCalls.filter((c) => c.method === 'task.run.create').length, 1, 'create is allowed to finish exactly once');
   const cancelCall = ipcCalls.find((c) => c.method === 'task.run.cancel');
   assert.ok(cancelCall, 'the owned backend run is cancelled on abort during creation');
   assert.equal(cancelCall.params.task_run_id, 't-async-abort');
@@ -1317,6 +1089,5 @@ test('Desktop async mode: abort during creation cancels the owned run and skips 
   assert.equal(afterAbort.downstream, true, 'an aborted dispatch leaves no pending yield');
   assert.deepEqual(afterAbort.decision, terminal);
 
-  server.close();
   ipcServer.close();
 });

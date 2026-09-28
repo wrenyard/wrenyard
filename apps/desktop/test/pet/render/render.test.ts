@@ -434,7 +434,7 @@ describe('text and pixel node factories', () => {
     const pixel = surface.createPixel(program);
     program.rects[1].width = 99;
 
-    const texture = (pixel as {
+    const texture = (pixel as unknown as {
       container: { texture: { opts: { source: { opts: Record<string, unknown> } } } };
     }).container.texture;
     const sourceOptions = texture.opts.source.opts;

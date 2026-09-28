@@ -105,7 +105,7 @@ const h = vi.hoisted(() => {
         options === true ||
         (typeof options !== 'boolean' && options.context === true);
       if (releaseCtx) this.releaseContext();
-      const destroyChildren = options === true || (typeof options !== 'boolean' && options.children === true);
+      const destroyChildren = options === true || (typeof options !== 'boolean' && options?.children === true);
       this.children.forEach((child) => {
         if (destroyChildren) {
           child.destroy(options);
@@ -354,10 +354,10 @@ describe('node lifecycle methods', () => {
     node.setAlpha(2);
     node.setVisible(false);
 
-    expect((node as { container: { position: { x: number; y: number } } }).container.position).toMatchObject({ x: 1, y: 2 });
-    expect((node as { container: { scale: { x: number; y: number } } }).container.scale).toMatchObject({ x: -2, y: 3 });
-    expect((node as { container: { alpha: number; visible: boolean } }).container.alpha).toBe(1);
-    expect((node as { container: { alpha: number; visible: boolean } }).container.visible).toBe(false);
+    expect((node as unknown as { container: { position: { x: number; y: number } } }).container.position).toMatchObject({ x: 1, y: 2 });
+    expect((node as unknown as { container: { scale: { x: number; y: number } } }).container.scale).toMatchObject({ x: -2, y: 3 });
+    expect((node as unknown as { container: { alpha: number; visible: boolean } }).container.alpha).toBe(1);
+    expect((node as unknown as { container: { alpha: number; visible: boolean } }).container.visible).toBe(false);
     expect(() => node.setPosition(NaN, 0)).toThrow(RangeError);
     expect(() => node.setScale(1, Infinity)).toThrow(RangeError);
     expect(() => node.setAlpha(NaN)).toThrow(RangeError);
@@ -414,9 +414,9 @@ describe('node lifecycle methods', () => {
     expect(destroyOrder().includes(siblingId)).toBe(false);
     expect(destroyOrder().includes(parentId)).toBe(false);
     expect(children(parent)).toEqual([pixiContainer(sibling)]);
-    expect(pixiContainer(sibling).children).toBeDefined();
+    expect((pixiContainer(sibling) as { children: unknown[] }).children).toBeDefined();
     sibling.setPosition(1, 1);
-    expect(pixiContainer(sibling).position).toMatchObject({ x: 1, y: 1 });
+    expect((pixiContainer(sibling) as { position: { x: number; y: number } }).position).toMatchObject({ x: 1, y: 1 });
     expect(siblingId).toBe(pixiId(sibling));
     parent.setAlpha(0.5);
     expect((pixiContainer(parent) as { alpha: number }).alpha).toBe(0.5);
@@ -432,7 +432,7 @@ describe('defensive copies', () => {
     const graphics = s.createGraphics(commands);
     points[0].x = 99;
 
-    expect((graphics as { container: { _ops: Array<{ points: number[] }> } }).container._ops[0].points).toEqual([0, 0, 3, 0, 0, 3]);
+    expect((graphics as unknown as { container: { _ops: Array<{ points: number[] }> } }).container._ops[0].points).toEqual([0, 0, 3, 0, 0, 3]);
     s.destroy();
   });
 
@@ -441,12 +441,12 @@ describe('defensive copies', () => {
     const style = baseStyle();
     const text = s.createText('a', style);
     style.fontSize = 99;
-    expect((text as { container: { style: { opts: { fontSize: number } } } }).container.style.opts.fontSize).toBe(12);
+    expect((text as unknown as { container: { style: { opts: { fontSize: number } } } }).container.style.opts.fontSize).toBe(12);
 
     const program = { width: 2, height: 1, rects: [{ x: 0, y: 0, width: 1, height: 1, color: 0x010203 }] };
     const pixel = s.createPixel(program);
     program.rects[0].width = 2;
-    const texture = (pixel as {
+    const texture = (pixel as unknown as {
       container: { texture: { opts: { source: { opts: { resource: Uint8ClampedArray } } } } };
     }).container.texture;
     expect(texture.opts.source.opts.resource[4]).toBe(0);

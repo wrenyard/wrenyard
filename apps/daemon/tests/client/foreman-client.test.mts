@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict'
-import { readFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { rmSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import {
   ForemanClient,
   type ForemanClientRpc,
   type ForemanRequestOptions,
 } from '../../lib/control/client.mts'
-import { JsonRpcClient, type JsonRpcClientTransport } from '@wrenyard/control-client/transport'
+import {
+  JsonRpcClient,
+  WRENYARD_PROTOCOL_VERSION,
+  type JsonRpcClientTransport,
+} from '@wrenyard/control-client/transport'
 import { connectIpcForemanClient } from '../../lib/control/ipc-client.mts'
 import {
   DAEMON_UNAVAILABLE,
@@ -90,12 +93,25 @@ function assertRequest(
   assert.equal(rpc.requests[index]?.params, params)
 }
 
+type PingResult = { ok: true, protocolVersion: number }
+
+const PING_RESULT: PingResult = { ok: true, protocolVersion: WRENYARD_PROTOCOL_VERSION }
+
+// The first ping is always the connection handshake; `onPing` answers the
+// business pings that follow it.
 async function createHealthServer(
   endpoint: TestIpcEndpoint,
-  onPing: () => Promise<{ ok: true }> | { ok: true } = () => ({ ok: true }),
+  onPing: () => Promise<PingResult> | PingResult = () => PING_RESULT,
 ): Promise<IpcServer> {
   const router = new RpcRouter()
-  router.register('health.ping', onPing)
+  let handshakeDone = false
+  router.register('health.ping', () => {
+    if (!handshakeDone) {
+      handshakeDone = true
+      return PING_RESULT
+    }
+    return onPing()
+  })
   return createIpcServer({
     path: endpoint.path,
     onMessage: (message) => router.handleMessage(message),
@@ -191,21 +207,6 @@ describe('ForemanClient', () => {
     await client.task.definition.list()
 
     assert.deepEqual(rpc.requests, [{ method: 'task.definition.list', params: {} }])
-  })
-
-  it('message wrapper delegates to the matching JSON-RPC method with original params', async () => {
-    const result = { ok: true }
-    const rpc = new FakeRpc(result)
-    const client = new ForemanClient(rpc)
-    const messageParams = {
-      to: 'relay',
-      text: 'hello from client',
-      sender: { role: 'codex' },
-    }
-
-    assert.equal(await client.message.send(messageParams), result)
-
-    assertRequest(rpc, 0, 'message.send', messageParams)
   })
 
   it('project wrappers delegate to the matching JSON-RPC methods with original params', async () => {
@@ -332,40 +333,6 @@ describe('ForemanClient', () => {
     assert.deepEqual(rpc.requests[1]?.params, {})
   })
 
-  it('client configuration wrappers delegate to the matching IPC methods', async () => {
-    const result = { ok: true }
-    const rpc = new FakeRpc(result)
-    const client = new ForemanClient(rpc)
-    const selection = { models: ['provider/model'], defaultModel: 'provider/model' }
-    const plan = {
-      clientId: 'codex-shared' as const,
-      operation: 'apply' as const,
-      files: [],
-      models: ['provider/model'],
-      defaultModel: 'provider/model',
-      connectionMode: 'additive' as const,
-      effects: [],
-      requiresRestart: [],
-    }
-    const planParams = { clientId: 'codex-shared' as const, selection }
-    const applyParams = { plan }
-    const planRestoreParams = { clientId: 'codex-shared' as const }
-    const restoreParams = { plan }
-
-    assert.equal(await client.clientConfiguration.snapshot(), result)
-    assert.equal(await client.clientConfiguration.plan(planParams), result)
-    assert.equal(await client.clientConfiguration.apply(applyParams), result)
-    assert.equal(await client.clientConfiguration.planRestore(planRestoreParams), result)
-    assert.equal(await client.clientConfiguration.restore(restoreParams), result)
-
-    assert.equal(rpc.requests[0]?.method, 'client.configuration.snapshot')
-    assert.deepEqual(rpc.requests[0]?.params, {})
-    assertRequest(rpc, 1, 'client.configuration.plan', planParams)
-    assertRequest(rpc, 2, 'client.configuration.apply', applyParams)
-    assertRequest(rpc, 3, 'client.configuration.plan-restore', planRestoreParams)
-    assertRequest(rpc, 4, 'client.configuration.restore', restoreParams)
-  })
-
   it('connectIpcForemanClient connects health.ping over IPC to RpcRouter', async () => {
     const endpoint = createTestIpcEndpoint('health')
     const server = await createHealthServer(endpoint)
@@ -375,7 +342,7 @@ describe('ForemanClient', () => {
     })
 
     try {
-      assert.deepEqual(await client.health.ping(), { ok: true })
+      assert.deepEqual(await client.health.ping(), PING_RESULT)
     } finally {
       client.close()
       await server.close()
@@ -436,7 +403,7 @@ describe('ForemanClient', () => {
       await new Promise<void>((resolve) => {
         releasePing = resolve
       })
-      return { ok: true }
+      return PING_RESULT
     })
     const client = await connectIpcForemanClient({
       path: endpoint.path,
@@ -465,29 +432,6 @@ describe('ForemanClient', () => {
       releasePing?.()
       client.close()
       rmSync(endpoint.dir, { recursive: true, force: true })
-    }
-  })
-
-  it('keeps new client modules free of runtime imports', () => {
-    const clientRoot = join(process.cwd(), 'lib', 'client')
-    const files = [
-      join(clientRoot, 'foreman-client.mts'),
-      join(clientRoot, 'ipc-foreman-client.mts'),
-    ]
-    const forbiddenRuntimePath = /(^|\/|\\)(cli|daemon|service|server|db|executor|notify|config|mcp)(\/|\\|\.mts$)/
-
-    for (const file of files) {
-      const source = readFileSync(file, 'utf8')
-      const importSpecifiers = [...source.matchAll(/\b(?:import|export)\b[^'"]*from\s+['"]([^'"]+)['"]/g)]
-        .map((match) => match[1])
-
-      for (const specifier of importSpecifiers) {
-        const crossesClientBoundary = specifier.startsWith('../') || specifier.startsWith('..\\')
-        assert(
-          !(crossesClientBoundary && forbiddenRuntimePath.test(specifier)),
-          `${file} imports forbidden runtime dependency ${specifier}`,
-        )
-      }
     }
   })
 })

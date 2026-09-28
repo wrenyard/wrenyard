@@ -4,7 +4,7 @@ import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
 import type { ConversationSnapshot, WorkspaceConfigurationSnapshot } from '@wrenyard/protocol/session';
 import { DshConversationClient, type ConversationSummaryInput } from './dsh-conversation-client.js';
 import { startDshWeb } from './dsh-process.js';
-import { defaultMcpUrl, WRENYARD_DSH_PROVIDER_ID, WRENYARD_GATEWAY_TOKEN_ENV, writeModelPatch } from './model-patch.js';
+import { WRENYARD_DSH_PROVIDER_ID, WRENYARD_GATEWAY_TOKEN_ENV, writeModelPatch } from './model-patch.js';
 import { resolveDshBin, resolveRuntimeModulesDir, resolveShellSource } from './paths.js';
 import { prepareProfile } from './profile.js';
 import { conversationStatePath, dshHomePath } from './state-root.js';
@@ -74,12 +74,11 @@ export async function startSessionBackend(
   const gateway = await options.getGatewayConnection();
   const patchPath = await writeModelPatch(profile.dshHome, gateway);
   const extraEnv: NodeJS.ProcessEnv = { [WRENYARD_GATEWAY_TOKEN_ENV]: gateway.token };
+  // DSH reaches Wrenyard only through the owner-only IPC surface; no daemon MCP
+  // address is injected into the child.
   const wrenyardEnv: NodeJS.ProcessEnv = {
     WRENYARD_IPC_PATH: options.ipcPath,
-    WRENYARD_MCP_URL: defaultMcpUrl(),
   };
-  const sender = process.env.WRENYARD_MCP_SENDER ?? process.env.FOREMAN_MCP_SENDER;
-  if (sender) wrenyardEnv.WRENYARD_MCP_SENDER = sender;
 
   const dsh = await startDshWeb({
     binPath: resolveDshBin(),

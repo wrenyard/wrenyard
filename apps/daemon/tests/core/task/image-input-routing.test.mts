@@ -21,7 +21,7 @@ async function fixture(includeImage: boolean) {
     ...(includeImage ? [{ id: 'vision', capabilities: ['text', 'image'] as const, tps: 90, price: 2 }] : []),
   ]
   catalog.registerProvider({
-    id: 'fixture', displayName: 'Fixture', credentialResolver: 'forge-managed',
+    id: 'fixture', displayName: 'Fixture', credentialResolver: 'managed',
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://fixture.invalid/chat/completions', authScheme: 'bearer' }],
     models: definitions.map(({ id, capabilities, tps, price }) => ({
       id, displayName: id, capabilities, intelligence: 'mid',

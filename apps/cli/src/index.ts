@@ -1,25 +1,17 @@
 import { spawnSync } from 'node:child_process';
 import type { SpawnSyncOptions } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runInstallCommand, runUpdateEngineCommand } from './install/index.js';
-import type { InstallCommandContext } from './install/index.js';
-import { runControl } from './install/engine.js';
-import type { ControlBridge } from './install/engine.js';
 
 /** Subcommands of the legacy `foreman` binary routed through the unified CLI. */
 export type ForemanCommand =
-  | 'service'
   | 'task'
   | 'exec'
   | 'taskgraph'
   | 'project'
-  | 'message'
   | 'quota'
-  | 'status'
-  | 'update';
+  | 'status';
 
 /** Parsed dispatch target for a CLI command line. */
 export type Route =
@@ -27,9 +19,7 @@ export type Route =
   | { kind: 'version' }
   | { kind: 'foreman'; args: string[] }
   | { kind: 'desktop'; args: string[] }
-  | { kind: 'install'; args: string[] }
-  | { kind: 'update'; args: string[] }
-  | { kind: 'doctor' }
+  | { kind: 'doctor'; args: string[] }
   | { kind: 'unknown'; command: string };
 
 /** Outcome of a child process, mirroring the relevant `spawnSync` fields. */
@@ -60,21 +50,10 @@ export interface MainOptions {
   suiteVersion?: string;
   /** Embedded component versions; overrides contracts/versions.json when bundled. */
   componentVersions?: Record<string, string>;
-  /** Install-engine overrides, forwarded to the SEA install engine. */
-  platform?: NodeJS.Platform;
-  arch?: string;
-  execPath?: string;
-  fetchImpl?: InstallCommandContext['fetchImpl'];
-  control?: ControlBridge;
-  now?: () => number;
-  pid?: number;
-  installSignalHandlers?: boolean;
 }
 
 interface MainContext {
   runner: Runner;
-  /** True when a runner was injected by a test; production spawns async instead. */
-  runnerInjected: boolean;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
   env: NodeJS.ProcessEnv;
@@ -83,14 +62,6 @@ interface MainContext {
   desktopBin?: string;
   suiteVersion?: string;
   componentVersions?: Record<string, string>;
-  platform?: NodeJS.Platform;
-  arch?: string;
-  execPath?: string;
-  fetchImpl?: InstallCommandContext['fetchImpl'];
-  control?: ControlBridge;
-  now?: () => number;
-  pid?: number;
-  installSignalHandlers?: boolean;
 }
 
 const RUN_OPTIONS: SpawnSyncOptions = { shell: false, stdio: 'inherit', windowsHide: true };
@@ -102,16 +73,18 @@ Usage: wrenyard <command> [args...]
 Commands:
   help, -h, --help        Show this help
   version, -v, --version  Show the suite version and component versions
-  service <command>       Control the wrenyard service
-  task, taskgraph,        Development suite commands
-  project, message,
-  status
+  daemon <cmd>            Control the wrenyard daemon (run|stop|status)
+  task <cmd>              Task commands; 'wrenyard task runtimes <task_id>' lists exact runtime targets
+  taskgraph <cmd>         TaskGraph commands
+  project <cmd>           Project and worktree commands
+  status                  Show daemon and service status
   quota [provider] [--json]  Query provider quotas
   exec [options] <prompt> Execute a prompt through the daemon
-  install [options]       Install or repair the suite and Desktop from a release
-  update [--version V]    Update an installed suite and Desktop; --json for machine output
   desktop                 Launch the wrenyard Desktop application
-  doctor                  Diagnose the Wrenyard service`;
+  doctor [--json]         Diagnose the Wrenyard service
+Notes:
+  Business commands (task, taskgraph, project, daemon stop, doctor) accept --json.
+  'wrenyard daemon run' is a foreground log stream and does not accept --json.`;
 
 /** Pure route mapping from argv to a dispatch target; performs no I/O. */
 export function routeCommand(argv: string[]): Route {
@@ -129,27 +102,19 @@ export function routeCommand(argv: string[]): Route {
     case '-v':
     case '--version':
       return { kind: 'version' };
-    case 'service':
     case 'daemon':
       return { kind: 'foreman', args: ['daemon', ...rest] };
     case 'task':
     case 'exec':
     case 'taskgraph':
     case 'project':
-    case 'message':
     case 'quota':
     case 'status':
       return { kind: 'foreman', args: [command, ...rest] };
-    case 'install':
-      return { kind: 'install', args: rest };
-    case 'update':
-      // Public updates run inside the SEA install engine: one transaction
-      // installs the suite and the Desktop from the shared update feed.
-      return { kind: 'update', args: rest };
     case 'desktop':
       return { kind: 'desktop', args: rest };
     case 'doctor':
-      return { kind: 'doctor' };
+      return { kind: 'doctor', args: rest };
     default:
       return { kind: 'unknown', command };
   }
@@ -295,16 +260,10 @@ function resolveDesktop(ctx: MainContext): { command: string; args: string[] } |
       };
     }
   }
-  // Canonical installed layout used by the official installers.
-  const artifact =
-    process.platform === 'win32'
-      ? join(
-          ctx.env.LOCALAPPDATA ?? join(ctx.env.USERPROFILE ?? homedir(), 'AppData', 'Local'),
-          'Programs',
-          'Wrenyard Desktop',
-          'wrenyard-desktop.exe',
-        )
-      : join(ctx.env.HOME ?? homedir(), 'Applications', '啾啾工坊.app', 'Contents', 'MacOS', '啾啾工坊');
+  // The installed CLI belongs to this Desktop's resources/wrenyard tree.
+  const artifact = process.platform === 'win32'
+    ? resolve(ctx.suiteRoot, '..', '..', 'wrenyard-desktop.exe')
+    : resolve(ctx.suiteRoot, '..', '..', 'MacOS', '啾啾工坊');
   if (existsSync(artifact)) {
     return { command: artifact, args: [] };
   }
@@ -324,92 +283,15 @@ function runDesktop(args: string[], ctx: MainContext): number {
   return exitCode(result);
 }
 
-/** Control-tree invocation that captures output for the engine's daemon bridge. */
-const CONTROL_OPTIONS: SpawnSyncOptions = {
-  shell: false,
-  stdio: ['ignore', 'pipe', 'pipe'],
-  windowsHide: true,
-  encoding: 'utf8',
-};
-
-/**
- * Bridge daemon stop/status to the current suite's control tree. The install
- * engine must not import daemon-supervisor.mts or shared.mts, so the bridge is
- * built here and injected.
- */
-function makeControlBridge(ctx: MainContext): ControlBridge | undefined {
-  const cliRoot = resolve(ctx.suiteRoot, 'apps', 'cli');
-  const tsxCli = [
-    resolve(cliRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-    resolve(ctx.suiteRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-  ].find((candidate) => existsSync(candidate));
-  if (tsxCli === undefined) return undefined;
-  const control = resolve(cliRoot, 'src', 'index.mts');
-  return async (args) => {
-    if (ctx.runnerInjected) {
-      // Tests inject a synchronous runner; keep that deterministic path so the
-      // bridge's argv/env contract is asserted without spawning Node.
-      const result = ctx.runner(ctx.nodeExecutable, [tsxCli, control, ...args], CONTROL_OPTIONS);
-      return {
-        status: result.status,
-        error: result.error,
-        stdout: result.stdout === undefined || result.stdout === null ? '' : String(result.stdout),
-        stderr: result.stderr === undefined || result.stderr === null ? '' : String(result.stderr),
-      };
-    }
-    // Production: spawn asynchronously so SIGINT/SIGTERM stay responsive for
-    // the whole (unlimited) daemon drain.
-    return runControl(ctx.nodeExecutable, [tsxCli, control, ...args], ctx.env);
-  };
-}
-
-function installContext(ctx: MainContext): InstallCommandContext {
-  return {
-    env: ctx.env,
-    platform: ctx.platform,
-    arch: ctx.arch,
-    execPath: ctx.execPath,
-    // Adapt the main runner (which surfaces spawn errors) to the engine runner,
-    // normalizing optional/Buffer output to the engine's string shape.
-    runner: (command, args, options) => {
-      const result = ctx.runner(command, args, options);
-      return {
-        status: result.status,
-        error: result.error,
-        stdout: result.stdout === undefined || result.stdout === null ? '' : String(result.stdout),
-        stderr: result.stderr === undefined || result.stderr === null ? '' : String(result.stderr),
-      };
-    },
-    fetchImpl: ctx.fetchImpl,
-    control: ctx.control ?? makeControlBridge(ctx),
-    now: ctx.now,
-    pid: ctx.pid,
-    stdout: ctx.stdout,
-    stderr: ctx.stderr,
-    installSignalHandlers: ctx.installSignalHandlers,
-  };
-}
-
-/** `wrenyard install [...]`: route into the SEA install engine. */
-function runInstall(args: string[], ctx: MainContext): Promise<number> {
-  return runInstallCommand(args, installContext(ctx));
-}
-
-/** `wrenyard update [...]`: route into the SEA install engine. */
-function runUpdateCommand(args: string[], ctx: MainContext): Promise<number> {
-  return runUpdateEngineCommand(args, installContext(ctx));
-}
-
-/** Unified CLI entry point; returns an exit code or a promise of one. */
+/** Unified CLI entry point; returns an exit code. */
 export function main(
   argv: string[] = process.argv.slice(2),
   options: MainOptions = {},
-): number | Promise<number> {
+): number {
   const env = options.env ?? process.env;
   const suiteRoot = options.suiteRoot ?? locateSuiteRoot(env);
   const ctx: MainContext = {
     runner: options.runner ?? ((command, args, opts) => spawnSync(command, args, opts)),
-    runnerInjected: options.runner !== undefined,
     stdout: options.stdout ?? ((text) => process.stdout.write(`${text}\n`)),
     stderr: options.stderr ?? ((text) => process.stderr.write(`${text}\n`)),
     env,
@@ -418,14 +300,6 @@ export function main(
     desktopBin: options.desktopBin,
     suiteVersion: options.suiteVersion,
     componentVersions: options.componentVersions,
-    platform: options.platform,
-    arch: options.arch,
-    execPath: options.execPath,
-    fetchImpl: options.fetchImpl,
-    control: options.control,
-    now: options.now,
-    pid: options.pid,
-    installSignalHandlers: options.installSignalHandlers,
   };
 
   const route = routeCommand(argv);
@@ -440,12 +314,8 @@ export function main(
       return runForeman(route.args, ctx);
     case 'desktop':
       return runDesktop(route.args, ctx);
-    case 'install':
-      return runInstall(route.args, ctx);
-    case 'update':
-      return runUpdateCommand(route.args, ctx);
     case 'doctor': {
-      return runForeman(['doctor'], ctx);
+      return runForeman(['doctor', ...route.args], ctx);
     }
     case 'unknown':
       ctx.stderr(`Unknown command: ${route.command}`);
@@ -479,18 +349,5 @@ export function isEntryPoint(entry: string | undefined, moduleUrl: string | unde
 
 // Run only when this module is the entry point; importing it (e.g. from tests) is inert.
 if (isEntryPoint(process.argv[1], import.meta.url)) {
-  const result = main();
-  if (result instanceof Promise) {
-    result.then(
-      (code) => {
-        process.exitCode = code;
-      },
-      (error: unknown) => {
-        process.stderr.write(`wrenyard: ${error instanceof Error ? error.message : String(error)}\n`);
-        process.exitCode = 1;
-      },
-    );
-  } else {
-    process.exitCode = result;
-  }
+  process.exitCode = main();
 }

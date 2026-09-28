@@ -4,11 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
-  DEFAULT_WRENYARD_MCP_URL,
   MODEL_PATCH_FILENAME,
   WRENYARD_DSH_PROVIDER_ID,
   WRENYARD_GATEWAY_TOKEN_ENV,
-  defaultMcpUrl,
   renderModelPatch,
   writeModelPatch,
 } from '../src/model-patch.js';
@@ -77,10 +75,4 @@ test('writeModelPatch atomically writes the overlay into DSH_HOME', async () => 
     assert.equal(path, join(dir, MODEL_PATCH_FILENAME));
     assert.equal(await readFile(path, 'utf8'), renderModelPatch(connection));
   });
-});
-
-test('defaultMcpUrl prefers WRENYARD_* then FOREMAN_* then the shared default', () => {
-  assert.equal(defaultMcpUrl({ WRENYARD_MCP_URL: 'http://a/mcp', FOREMAN_MCP_URL: 'http://b/mcp' }), 'http://a/mcp');
-  assert.equal(defaultMcpUrl({ FOREMAN_MCP_URL: 'http://b/mcp' }), 'http://b/mcp');
-  assert.equal(defaultMcpUrl({}), DEFAULT_WRENYARD_MCP_URL);
 });

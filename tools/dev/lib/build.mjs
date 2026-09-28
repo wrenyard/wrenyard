@@ -2,27 +2,28 @@ import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { electronDesktopInvocation, pnpmInvocation } from './spawn.mjs';
+import { electronDesktopInvocation } from './spawn.mjs';
 import { COMPONENTS } from './watch.mjs';
 
 const BUILD_TIMEOUT_MS = 900_000;
 const TYPECHECK_TIMEOUT_MS = 300_000;
 const KILL_GRACE_MS = 2_000;
 const ALL_TARGETS = ['renderer', 'main', 'preload', 'pet'];
-const SHARED_ARGS = ['-r', '--filter', './packages/*', '--filter', './packages/features/*', '--filter', './packages/clients/*', '--if-present', 'run', 'build'];
 
 function buildError(message, output = '') {
   return Object.assign(new Error(message), { output });
 }
 
-/** Node >= 24.19, an installed node_modules, a pinned lockfile and a resolvable Electron binary. */
-export function checkToolchain({ checkout }) {
+/** Node >= 24.19, an installed node_modules and a pinned lockfile. */
+export function checkToolchain({ checkout, requireElectron = true }) {
   const errors = [];
   const [major, minor] = process.versions.node.split('.').map((part) => Number(part));
   if (major < 24 || (major === 24 && minor < 19)) errors.push(`Node ${process.versions.node} is too old; Wrenyard requires Node >= 24.19.`);
   if (!existsSync(join(checkout, 'node_modules'))) errors.push('node_modules is missing from this checkout.');
   if (!existsSync(join(checkout, 'pnpm-lock.yaml'))) errors.push('pnpm-lock.yaml is missing from this checkout.');
-  try { electronDesktopInvocation(checkout); } catch { errors.push('Electron executable was not found.'); }
+  if (requireElectron) {
+    try { electronDesktopInvocation(checkout); } catch { errors.push('Electron executable was not found.'); }
+  }
   return errors;
 }
 
@@ -77,19 +78,17 @@ function run(command, args, { cwd, timeoutMs, signal }) {
   });
 }
 
-/** Shared packages and the Desktop targets a component set needs. */
+/**
+ * Build the Desktop targets a component set needs. Internal packages export
+ * TypeScript source, so nothing else in the workspace is built for source
+ * development; only Electron loads JavaScript artifacts from `dist/`.
+ */
 export async function build({ checkout, components, signal }) {
-  if (components.has(COMPONENTS.shared)) {
-    const pnpm = pnpmInvocation(checkout, SHARED_ARGS);
-    const result = await run(pnpm.command, pnpm.args, { cwd: checkout, timeoutMs: BUILD_TIMEOUT_MS, signal });
-    if (result.status !== 0) throw buildError('shared package build failed', result.output);
-  }
   const targets = desktopTargetsFor(components);
-  if (targets.length > 0) {
-    const args = [join('apps', 'desktop', 'tools', 'build.mjs'), '--no-clean', `--only=${targets.join(',')}`];
-    const result = await run(process.execPath, args, { cwd: checkout, timeoutMs: BUILD_TIMEOUT_MS, signal });
-    if (result.status !== 0) throw buildError('desktop build failed', result.output);
-  }
+  if (targets.length === 0) return;
+  const args = [join('apps', 'desktop', 'tools', 'build.mjs'), '--no-clean', `--only=${targets.join(',')}`];
+  const result = await run(process.execPath, args, { cwd: checkout, timeoutMs: BUILD_TIMEOUT_MS, signal });
+  if (result.status !== 0) throw buildError('desktop build failed', result.output);
 }
 
 /** The daemon's production TypeScript, resolved through the daemon package. */
