@@ -143,6 +143,12 @@ export interface CandidateInput {
   nowMs: number;
   /** Listed reference output price, USD per M tokens. */
   referenceUsdPerM: number;
+  /**
+   * Optional fixed base-pool discount rate for automatic routing. It is applied
+   * once to the unit price for the automatic cap and ranking, and is independent
+   * of peak/off-peak time-of-day pricing. Absent means 1.
+   */
+  quotaPoolDiscountRate?: number;
   /** Effective reference cap in the same USD/M units. */
   effectiveCapUsdPerM: number;
   /** Routing horizon that the marginal interval must fully cover. */

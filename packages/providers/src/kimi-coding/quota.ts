@@ -7,11 +7,11 @@ const KIMI_DOCS = 'https://www.kimi.com/code/docs/en/kimi-code/membership.html';
 
 const KIMI_7D_POOL = quotaPool('kimi-coding/7d', [
   quotaWindow('7d', 'full_cycle', 'official_docs', KIMI_DOCS),
-]);
+], 0.4);
 
 const KIMI_5H_POOL = quotaPool('kimi-coding/5h', [
   quotaWindow('5h', 'rolling_partial', 'official_docs', KIMI_DOCS),
-]);
+], 0.4);
 
 export const quota = {
   read: async (source: QuotaSource) => normalizeKimiQuota(await source.read()),

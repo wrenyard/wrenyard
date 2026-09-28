@@ -2619,11 +2619,20 @@ function toAutomaticCandidateInput(
         domain: 'quota_burn_efficiency' as const,
         worst_applicable: 'worst_applicable' as const,
       }
+  // Fixed base-pool automatic-routing discount, resolved from the bound pools.
+  // The conservative rate is the maximum across pools and is applied ONCE, never
+  // multiplied/compounded across multiple 5h/7d pools. A balance pool is always
+  // 1; a missing/empty binding defaults to 1.
+  const boundPools = findProviderQuotaBinding(choice.provider, choice.model)?.pools ?? []
+  const quotaPoolDiscountRate = boundPools.length === 0
+    ? 1
+    : Math.max(...boundPools.map((pool) => pool.kind === 'balance' ? 1 : (pool.routingDiscountRate ?? 1)))
   return {
     snapshotId: context.snapshotId,
     canonicalId: choice.exactAgentRuntime,
     nowMs: context.nowMs,
     referenceUsdPerM,
+    quotaPoolDiscountRate,
     effectiveCapUsdPerM: context.capUsdPerM,
     timeoutMs: context.timeoutMs,
     minimumTps: context.minimumTps,

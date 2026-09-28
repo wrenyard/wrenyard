@@ -102,6 +102,7 @@ export function snapshotCandidate(input: CandidateInput): CandidateInput {
     canonicalId: input.canonicalId,
     nowMs: input.nowMs,
     referenceUsdPerM: input.referenceUsdPerM,
+    quotaPoolDiscountRate: input.quotaPoolDiscountRate,
     effectiveCapUsdPerM: input.effectiveCapUsdPerM,
     timeoutMs: input.timeoutMs,
     minimumTps: input.minimumTps,
