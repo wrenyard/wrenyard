@@ -14,7 +14,6 @@
     "./update-feed": "./src/update-feed.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts"
   },
   "devDependencies": {

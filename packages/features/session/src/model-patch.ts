@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
 
 export const MODEL_PATCH_FILENAME = 'wrenyard-model-patch.yaml';
-export const DEFAULT_WRENYARD_MCP_URL = 'http://127.0.0.1:8787/mcp';
 export const WRENYARD_DSH_PROVIDER_ID = 'wrenyard';
 export const WRENYARD_GATEWAY_TOKEN_ENV = 'WRENYARD_GATEWAY_TOKEN';
 
@@ -51,8 +50,4 @@ export async function writeModelPatch(dshHome: string, connection: WrenyardGatew
   await fs.writeFile(tmp, renderModelPatch(connection), 'utf8');
   await fs.rename(tmp, target);
   return target;
-}
-
-export function defaultMcpUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return env.WRENYARD_MCP_URL ?? env.FOREMAN_MCP_URL ?? DEFAULT_WRENYARD_MCP_URL;
 }

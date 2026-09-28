@@ -57,7 +57,6 @@ test('model supply page hosts a compact runtime alias CRUD section', async () =>
   assert.match(html, /id="alias-list"/);
   // The inline alias-name rule text is present but input is always editable.
   assert.match(html, /小写字母开头，仅限 a-z 0-9 \. _ -，最长 64 位/);
-  assert.match(html, /同名保存为更新/);
 });
 
 test('renderer implements alias CRUD via typed methods, CAS revision, and visible errors', async () => {

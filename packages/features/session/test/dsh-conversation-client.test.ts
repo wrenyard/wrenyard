@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { afterEach, test } from 'node:test';
 import { getEncoding } from 'js-tiktoken';
 import {
   DshConversationClient,
@@ -430,20 +430,24 @@ test('resumed legacy HY4 selection is persisted before the next prompt without r
     throw new Error(`unexpected ${method}`);
   };
 
-  await harness.refreshModels('session-old');
+  try {
+    await harness.refreshModels('session-old');
 
-  assert.deepEqual(calls.slice(0, 2), [
-    { method: 'session.models', payload: { sessionId: 'session-old' } },
-    {
-      method: 'session.selectModel',
-      payload: {
-        sessionId: 'session-old',
-        provider: 'wrenyard',
-        model: 'codebuddy/hy4-preview',
+    assert.deepEqual(calls.slice(0, 2), [
+      { method: 'session.models', payload: { sessionId: 'session-old' } },
+      {
+        method: 'session.selectModel',
+        payload: {
+          sessionId: 'session-old',
+          provider: 'wrenyard',
+          model: 'codebuddy/hy4-preview',
+        },
       },
-    },
-  ]);
-  assert.equal(client.snapshot().models.current?.model, 'codebuddy/hy4-preview');
+    ]);
+    assert.equal(client.snapshot().models.current?.model, 'codebuddy/hy4-preview');
+  } finally {
+    client.stop();
+  }
 });
 
 test('model projection keeps a routable unadvertised current selection visible', () => {
@@ -728,6 +732,12 @@ test('raw run_task result text is capped at 16000 characters', () => {
   assert.equal(items[0].taskRun, undefined);
 });
 
+// Started clients keep reconnecting their event streams until stopped.
+const harnessClients: DshConversationClient[] = [];
+afterEach(() => {
+  for (const client of harnessClients.splice(0)) client.stop();
+});
+
 function conversationClientHarness(
   summarize?: (input: {
     previousSummaries: Array<{ user: string; summary: string }>;
@@ -753,6 +763,7 @@ function conversationClientHarness(
     ...(summarize ? { summarize } : {}),
     onChanged() {},
   });
+  harnessClients.push(client);
   return {
     client,
     state: client as unknown as {

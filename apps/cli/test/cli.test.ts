@@ -87,15 +87,13 @@ test('unknown command returns 2 with guidance', (t) => {
   assert.equal(recorder.calls.length, 0);
 });
 
-test('daemon routes to the internal control alongside service', () => {
+test('daemon routes to the internal control', () => {
   assert.deepEqual(routeCommand(['daemon', 'status']), { kind: 'foreman', args: ['daemon', 'status'] });
-  assert.deepEqual(routeCommand(['daemon', 'start']), { kind: 'foreman', args: ['daemon', 'start'] });
+  assert.deepEqual(routeCommand(['daemon', 'run']), { kind: 'foreman', args: ['daemon', 'run'] });
   assert.deepEqual(routeCommand(['daemon', 'doctor', '--json']), {
     kind: 'foreman',
     args: ['daemon', 'doctor', '--json'],
   });
-  // Service remains an alias for the same internal control path.
-  assert.deepEqual(routeCommand(['service', 'status']), { kind: 'foreman', args: ['daemon', 'status'] });
 });
 
 test('version reads the suite version and component versions', (t) => {
@@ -116,13 +114,22 @@ test('version reads the suite version and component versions', (t) => {
 });
 
 test('desktop discovers the canonical installed application path', (t) => {
-  const root = makeSuite();
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const temp = makeSuite();
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+  // Production resolves the Desktop from the suite root as ../..: the suite
+  // lives in the bundle's resources, so resolveDesktop walks back out to the
+  // app executable while the fixture stays inside the isolated temp parent.
+  const root =
+    process.platform === 'win32'
+      ? join(temp, 'resources', 'wrenyard')
+      : join(temp, '啾啾工坊.app', 'Contents', 'Resources', 'wrenyard');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, 'SUITE_VERSION'), '9.9.9\n');
   let installed: string;
   if (process.platform === 'win32') {
-    installed = join(root, 'Programs', 'Wrenyard Desktop', 'wrenyard-desktop.exe');
+    installed = join(temp, 'wrenyard-desktop.exe');
   } else {
-    installed = join(root, 'Applications', '啾啾工坊.app', 'Contents', 'MacOS', '啾啾工坊');
+    installed = join(temp, '啾啾工坊.app', 'Contents', 'MacOS', '啾啾工坊');
   }
   mkdirSync(join(installed, '..'), { recursive: true });
   writeFileSync(installed, '#!/bin/sh\nexit 0\n');
@@ -139,7 +146,7 @@ test('daemon executes through bundled Node and the staged tsx/Foreman control', 
   const root = makeSuite();
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const recorder = makeRunner([0]);
-  const code = main(['daemon', 'start'], {
+  const code = main(['daemon', 'run'], {
     ...baseOptions(root, recorder),
     nodeExecutable: '/suite/runtime/node',
   });
@@ -151,5 +158,5 @@ test('daemon executes through bundled Node and the staged tsx/Foreman control', 
     join(root, 'apps', 'cli', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
   );
   assert.ok(recorder.calls[0].args[1].endsWith(join('apps', 'cli', 'src', 'index.mts')));
-  assert.deepEqual(recorder.calls[0].args.slice(2), ['daemon', 'start']);
+  assert.deepEqual(recorder.calls[0].args.slice(2), ['daemon', 'run']);
 });

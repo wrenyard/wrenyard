@@ -1,11 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { RenderTextStyle, ShapeCommand } from '../../src/pet/render';
+import type { RenderColor, RenderText, RenderTextStyle, ShapeCommand } from '../../src/pet/render';
 
 const rootDir = process.cwd();
 
 type MockMeasure = (text: string, style: RenderTextStyle | undefined) => { width: number; height: number };
+
+/** Runtime shape of mockSurface text nodes: the RenderText API plus observable mock fields. */
+type MockTextNode = RenderText & {
+  x: number;
+  y: number;
+  visible: boolean;
+  value: string;
+};
 
 function defaultMeasure(text: string, style: RenderTextStyle | undefined) {
   const lineWidths = text.split('\n').map((line) => Array.from(line).reduce((sum, ch) => {
@@ -117,36 +125,36 @@ describe('house fixture contract', () => {
       source: 'sqlite',
     });
     expect(HOUSE_FIXTURES[3].value.workers.map((worker: any) => worker.phase)).toEqual(['working']);
-    expect(HOUSE_FIXTURES[3].value.dailyStats.startAt).toBe('2026-07-09T16:00:00.000Z');
-    expect(HOUSE_FIXTURES[3].value.dailyStats.endAt).toBe('2026-07-10T16:00:00.000Z');
+    expect(HOUSE_FIXTURES[3].value.dailyStats!.startAt).toBe('2026-07-09T16:00:00.000Z');
+    expect(HOUSE_FIXTURES[3].value.dailyStats!.endAt).toBe('2026-07-10T16:00:00.000Z');
     expect(HOUSE_FIXTURES[3].pointer).toEqual({ x: 180, y: 360, inside: true });
 
-    const tips = HOUSE_FIXTURES[3].value.quotaTips;
+    const tips = HOUSE_FIXTURES[3].value.quotaTips!;
     expect(Array.isArray(tips)).toBe(true);
     expect(tips.length).toBeGreaterThanOrEqual(3);
 
     // codex: both subscription windows remain grouped
-    const codex = tips.find((t: any) => t.text.includes('codex'));
+    const codex = tips.find((t: any) => t.text.includes('codex'))!;
     expect(codex).toBeDefined();
     expect(codex.bars).toHaveLength(1);
-    expect(codex.bars[0].provider.windows.map((window: any) => window.name)).toEqual(['5h', '7d']);
+    expect(codex.bars![0].provider.windows.map((window: any) => window.name)).toEqual(['5h', '7d']);
 
     // cursor: one subscription window follows Codex in the fixture order
-    const cursor = tips.find((t: any) => t.text.includes('cursor'));
+    const cursor = tips.find((t: any) => t.text.includes('cursor'))!;
     expect(cursor).toBeDefined();
-    expect(cursor.bars[0].provider.windows.map((window: any) => window.name)).toEqual(['7d']);
+    expect(cursor.bars![0].provider.windows.map((window: any) => window.name)).toEqual(['7d']);
 
     // deepseek: amount-only row has no percentage bars
-    const deepseek = tips.find((t: any) => t.text.includes('deepseek'));
+    const deepseek = tips.find((t: any) => t.text.includes('deepseek'))!;
     expect(deepseek).toBeDefined();
     expect(deepseek.bars).toBeUndefined();
     expect(deepseek.balances).toEqual([{ currency: 'CNY', amount: '12.50', display: '¥12.50' }]);
 
     // super-grok: error shape
-    const superGrok = tips.find((t: any) => t.text.includes('super-grok'));
+    const superGrok = tips.find((t: any) => t.text.includes('super-grok'))!;
     expect(superGrok).toBeDefined();
-    expect(superGrok.bars[0].status).toBe('error');
-    expect(superGrok.bars[0].error).toBe('rate limit hit');
+    expect(superGrok.bars![0].status).toBe('error');
+    expect(superGrok.bars![0].error).toBe('rate limit hit');
   });
 });
 
@@ -693,7 +701,7 @@ describe('stats card graphical containment', () => {
     }
 
     // Verify every row text node position is within the background
-    const allTextNodes = [...node.providerNodes, ...node.windowNodes, ...node.pctNodes];
+    const allTextNodes = [...node.providerNodes, ...node.windowNodes, ...node.pctNodes] as MockTextNode[];
     for (const tn of allTextNodes) {
       if (tn.visible) {
         expect(tn.x).toBeGreaterThanOrEqual(bgCmd.x);
@@ -761,7 +769,7 @@ describe('stats card graphical containment', () => {
     expect(bgCmd).toBeDefined();
 
     // Verify all visible row text nodes are inside the background
-    const allTextNodes = [...node.providerNodes, ...node.windowNodes, ...node.pctNodes];
+    const allTextNodes = [...node.providerNodes, ...node.windowNodes, ...node.pctNodes] as MockTextNode[];
     for (const tn of allTextNodes) {
       if (tn.visible) {
         expect(tn.x).toBeGreaterThanOrEqual(bgCmd.x);
@@ -772,7 +780,7 @@ describe('stats card graphical containment', () => {
     }
 
     // Specifically verify the error text row (third row, index 2) is inside the background
-    const errorNode = node.providerNodes[2];
+    const errorNode = node.providerNodes[2] as MockTextNode;
     expect(errorNode.visible).toBe(true);
     expect(errorNode.x).toBeGreaterThanOrEqual(bgCmd.x);
     expect(errorNode.y).toBeGreaterThanOrEqual(bgCmd.y);
@@ -839,7 +847,7 @@ describe('stats card graphical containment', () => {
     expect(bgCmd).toBeDefined();
 
     // Find the error text node (third provider node, index 2)
-    const errorNode = node.providerNodes[2];
+    const errorNode = node.providerNodes[2] as MockTextNode;
     expect(errorNode.visible).toBe(true);
 
     // Horizontal containment: text x + measured width inside background
@@ -894,7 +902,7 @@ describe('stats card graphical containment', () => {
     expect(bgCmd).toBeDefined();
 
     // Provider text node: inside provider column AND inside background
-    const providerNode = node.providerNodes[0];
+    const providerNode = node.providerNodes[0] as MockTextNode;
     expect(providerNode.visible).toBe(true);
     const provColumnX = bgCmd.x + STATS_PADDING_X;
     const provColumnRight = provColumnX + PROVIDER_LABEL_WIDTH;
@@ -905,7 +913,7 @@ describe('stats card graphical containment', () => {
     expect(providerNode.x + provWidth).toBeLessThanOrEqual(bgCmd.x + bgCmd.width);
 
     // Window text node: inside window column AND inside background
-    const windowNode = node.windowNodes[0];
+    const windowNode = node.windowNodes[0] as MockTextNode;
     expect(windowNode.visible).toBe(true);
     const winColumnX = provColumnX + PROVIDER_LABEL_WIDTH;
     const winColumnRight = winColumnX + WINDOW_LABEL_WIDTH;
@@ -1404,7 +1412,7 @@ describe('house skin dispatch', () => {
     for (const skin of ['classic', 'mushroom'] as const) {
       const program = buildHousePixelProgram(skin);
       // Crow/trail would use dark gray or white — neither classic nor mushroom palette has these
-      const suspiciousColors = ['#555555', '#AAAAAA', '#CCCCCC', '#333333', '#444444'];
+      const suspiciousColors: RenderColor[] = ['#555555', '#AAAAAA', '#CCCCCC', '#333333', '#444444'];
       const badRects = program.rects.filter((r) => suspiciousColors.includes(r.color));
       expect(badRects.length, `no crow/trail colors in ${skin}`).toBe(0);
     }

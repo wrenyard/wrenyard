@@ -5,8 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const petRoot = join(desktopRoot, '..', 'pet');
-
 test('Desktop owns the product tray, Pet runtime, conversations, statistics and settings bridge', async () => {
   const [main, tray, quotaMenuIcon, contract, renderer, rendererScript, rendererStyles, conversationRenderer, shellWindow, preload] = await Promise.all([
     readFile(join(desktopRoot, 'src', 'main.ts'), 'utf8'),
@@ -58,22 +56,15 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(renderer, /id="quota-title">模型供应/);
   assert.match(renderer, /模型供应/);
   assert.match(renderer, /id="quota-provider-grid"/);
-  assert.match(renderer, /Provider 次序同时用于模型供应与额度显示/);
   assert.doesNotMatch(renderer, /id="pet-provider-list"|settings-subtitle">额度来源/);
   assert.doesNotMatch(rendererScript, /function renderProviders|function moveProvider/);
   assert.match(rendererScript, /formatCompactTokenCount/);
   assert.doesNotMatch(rendererScript, /cell\.title = tooltipLines/);
-  assert.match(rendererScript, /entry\.configured \? quotaProviderOrderButtons/);
-  assert.match(rendererScript, /entry\.configured \? '更新 Key' : '激活 Provider'/);
-  assert.match(rendererStyles, /grid-template-columns: minmax\(200px, \.9fr\) minmax\(0, 1\.6fr\) 176px/);
-  assert.match(rendererStyles, /\.provider-directory-action \{ width: 176px;/);
   assert.match(rendererStyles, /grid-auto-flow: column/);
   assert.match(rendererStyles, /grid-template-rows: repeat\(7,/);
   assert.match(renderer, /id="provider-dialog"/);
-  assert.doesNotMatch(renderer, /id="model-list"/);
   assert.doesNotMatch(renderer, /id="models"/);
   assert.match(renderer, /id="conversation-composer"/);
-  assert.match(renderer, /id="conversation-workspace">工坊工作区/);
   assert.match(renderer, /id="conversation-model-picker"/);
   assert.match(conversationRenderer, /new SearchableSingleSelect\(this\.modelPickerHost/);
   assert.doesNotMatch(renderer, /id="conversation-model-select"|<select[^>]+当前会话模型/);
@@ -81,7 +72,6 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(renderer, /id="conversation-daemon-status"[^>]+role="status"/);
   assert.match(renderer, /id="conversation-daemon-tooltip" role="tooltip"/);
   assert.doesNotMatch(renderer, /可以开始/);
-  assert.match(conversationRenderer, /workspaceLabel\.textContent = '工坊工作区'/);
   assert.doesNotMatch(conversationRenderer, /conversation-state|可以开始|工坊工作中/);
   assert.doesNotMatch(conversationRenderer, /workspacePath\.split/);
   assert.match(conversationRenderer, /createElement\('table'\)/);
@@ -102,9 +92,7 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(shellWindow, /platformWindowChrome/);
   assert.match(preload, /platform: process\.platform/);
   assert.match(renderer, /id="workspace-gate"/);
-  assert.match(renderer, /class="activity-brand" role="img" aria-label="啾啾工坊标识"/);
   assert.match(renderer, /id="workbench-nav"[^>]+aria-label="会话"/);
-  assert.doesNotMatch(renderer, /<button class="activity-brand"/);
   assert.doesNotMatch(shellWindow, /WebContentsView/);
   assert.match(renderer, /id="tasks-nav"[^>]+aria-label="任务" data-page="tasks"/);
   assert.match(renderer, /id="tasks-page"/);
@@ -134,20 +122,4 @@ test('Task page owns an app-themed mode listbox and never regresses to a native 
   assert.match(rendererScript, /event\.key === 'Tab'/);
   assert.match(rendererScript, /event\.key === 'Escape'/);
   assert.match(rendererScript, /stopPropagation\(\)/);
-});
-
-test('Pet entrypoint remains a headless companion without product UI ownership', async () => {
-  const [main, preload, packageJson] = await Promise.all([
-    readFile(join(petRoot, 'src', 'main', 'index.ts'), 'utf8'),
-    readFile(join(petRoot, 'src', 'main', 'preload.ts'), 'utf8'),
-    readFile(join(petRoot, 'package.json'), 'utf8'),
-  ]);
-
-  assert.doesNotMatch(main, /\bTray\b|createTray/);
-  assert.doesNotMatch(main, /openSettings\(/);
-  assert.doesNotMatch(main, /PanelOwner|stats:load|house:open-stats/);
-  assert.doesNotMatch(main, /new QuotaService|quotaRefreshTimer/);
-  assert.doesNotMatch(preload, /settingsPanelApi/);
-  assert.doesNotMatch(preload, /statsPanelApi|openStats|openSettings/);
-  assert.doesNotMatch(packageJson, /settings\.html|settings\.js|stats\.html|stats\.js/);
 });

@@ -5,7 +5,7 @@ import suitePackage from '../../../package.json' with { type: 'json' };
 import componentVersions from '../../../contracts/versions.json' with { type: 'json' };
 import { delegateToSourceCli } from './source-cli-delegation.mts';
 
-// While pnpm dev runs, the source CLI answers instead of this installed one.
+// While pnpm dev:desktop runs, the source CLI answers instead of this installed one.
 const delegated = delegateToSourceCli(process.argv.slice(2));
 if (delegated !== undefined) process.exit(delegated);
 
@@ -40,28 +40,11 @@ function resolveNodeExecutable(root: string): string {
 
 const nodeExecutable = resolveNodeExecutable(suiteRoot);
 
-// `install`/`update` return a promise (the engine downloads and health-checks
-// asynchronously); every other command returns a number synchronously. The SEA
-// bundle is CommonJS, so the promise is settled with a callback instead of
-// top-level await.
-const result = main(process.argv.slice(2), {
+// The SEA bundle is CommonJS; main() resolves the route and returns the exit
+// code synchronously.
+process.exitCode = main(process.argv.slice(2), {
   suiteRoot,
   nodeExecutable,
   suiteVersion: suitePackage.version,
   componentVersions,
-  execPath: process.execPath,
 });
-
-if (result instanceof Promise) {
-  result.then(
-    (code) => {
-      process.exitCode = code;
-    },
-    (error: unknown) => {
-      process.stderr.write(`wrenyard: ${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 1;
-    },
-  );
-} else {
-  process.exitCode = result;
-}

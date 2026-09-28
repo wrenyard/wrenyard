@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// Focused tests for the bounded staged-payload security gate in
-// build-local-release.mjs. They build throwaway staged trees under the OS temp
-// directory, exercise the exported validator, and assert the reports name only
-// the artifact + rule (never a matched secret value). No real credentials,
-// network, or release/push is required.
+// Focused tests for the bounded staged-payload security gate in pack.mjs. They
+// build throwaway staged trees under the OS temp directory, exercise the
+// exported validator, and assert the reports name only the artifact + rule
+// (never a matched secret value). No real credentials, network, or release/push
+// is required.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { assertSafeReleasePayload } from './build-local-release.mjs';
+import { assertSafeReleasePayload } from './pack.mjs';
 
 function makeStage() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wrenyard-payload-test-'));

@@ -9,7 +9,6 @@ import { RpcRouter } from '../lib/server/rpc-router.mts'
 import { closeTestDb, initTestDb } from './helpers/test-db.mts'
 import type { ForemanDatabase } from '../lib/db/types.mts'
 import type { ForemanEvent } from '../lib/events/event-types.mts'
-import type { JsonRecord } from '../lib/server/http/shared.mts'
 
 let db: ForemanDatabase
 let router: RpcRouter

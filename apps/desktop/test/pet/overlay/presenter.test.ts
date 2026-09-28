@@ -148,6 +148,7 @@ function workerState(scale = 5): WorkerRendererState {
 function houseState(scale = 5): HouseRendererState {
   return {
     scale,
+    houseSkin: 'classic',
     workers: [{ phase: 'working' } as any],
     queuedCount: 3,
     broadcast: { id: 'broadcast-1', text: 'Ready', intensity: 'sticky' },

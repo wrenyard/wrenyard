@@ -5,8 +5,6 @@ export type {
 
 export {
   normalizeForemanServiceConfig,
-  normalizeMessageConfig,
-  normalizeMessageDeliveryConfig,
   type NormalizeForemanConfigOptions,
 } from './normalize.mts'
 
@@ -16,7 +14,6 @@ export {
   type ForemanConfigData,
   type ServiceConfigData,
   type WorkspaceConfigData,
-  type MessageConfigData,
   type TasksConfigData,
 } from './data.mts'
 

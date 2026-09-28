@@ -350,7 +350,7 @@ test('SuperGrok distinguishes missing configuration from expired login and query
   assert.deepEqual(missing.providers, []);
   assert.equal(missing.catalog[0].configured, false);
   assert.equal(missing.catalog[0].authMode, 'native');
-  assert.equal(missing.catalog[0].quota?.message, '尚未配置，请先完成 Grok 登录。');
+  assert.equal(missing.catalog[0].quota?.message, '尚未配置，请先完成登录或填写 API Key 后刷新。');
 
   const expired = projectQuotaSnapshot([makeProvider('authentication_required')], [{ id: 'super-grok', enabled: true }], undefined, undefined, discovered);
   assert.deepEqual(expired.providers, []);

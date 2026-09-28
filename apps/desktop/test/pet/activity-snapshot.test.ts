@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
   ACTIVITY_SNAPSHOT_SCHEMA_VERSION,
   deriveActivityPresence,
@@ -762,6 +762,17 @@ describe('ActivitySnapshotPoller content-free failure classification', () => {
     expectedProbes?: number;
   }
 
+  type LogFn = Mock<(event: string, fields?: Record<string, unknown>) => void>;
+
+  function mockLogger(): DiagnosticLogger & { warn: LogFn } {
+    return {
+      info: vi.fn<(event: string, fields?: Record<string, unknown>) => void>(),
+      warn: vi.fn<(event: string, fields?: Record<string, unknown>) => void>(),
+      error: vi.fn<(event: string, fields?: Record<string, unknown>) => void>(),
+      path: null,
+    };
+  }
+
   const throwCases: ThrowCase[] = [
     { name: 'null', expectedClass: 'non_error_null', make: () => ({ value: null, traps: () => 0 }) },
     { name: 'undefined', expectedClass: 'non_error_undefined', make: () => ({ value: undefined, traps: () => 0 }) },
@@ -850,7 +861,7 @@ describe('ActivitySnapshotPoller content-free failure classification', () => {
   it.each(throwCases.map((tc) => [tc.name, tc]))(
     'classifies a thrown %s into a closed { failureClass } record without leaking',
     async (_name, tc: ThrowCase) => {
-      const logger: DiagnosticLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), path: null };
+      const logger = mockLogger();
       const { value, traps } = tc.make();
       const poller = new ActivitySnapshotPoller({
         request: async () => {
@@ -862,7 +873,7 @@ describe('ActivitySnapshotPoller content-free failure classification', () => {
 
       await poller.pollOnce();
 
-      const failureCalls = logger.warn.mock.calls.filter((c: any[]) => c[0] === 'foreman_activity_poll_failed');
+      const failureCalls = logger.warn.mock.calls.filter((c) => c[0] === 'foreman_activity_poll_failed');
       expect(failureCalls.length).toBeGreaterThan(0);
       for (const call of failureCalls) {
         expect(call[1]).toEqual({ failureClass: tc.expectedClass });
@@ -876,7 +887,7 @@ describe('ActivitySnapshotPoller content-free failure classification', () => {
   );
 
   it('logs an Error class only as { failureClass: "error" } without the secret name/message', async () => {
-    const logger: DiagnosticLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), path: null };
+    const logger = mockLogger();
     const secret = Object.assign(new Error('top-secret-message'), { name: 'top-secret-name' });
     const poller = new ActivitySnapshotPoller({
       request: async () => {
@@ -888,7 +899,7 @@ describe('ActivitySnapshotPoller content-free failure classification', () => {
 
     await poller.pollOnce();
 
-    const failureCalls = logger.warn.mock.calls.filter((c: any[]) => c[0] === 'foreman_activity_poll_failed');
+    const failureCalls = logger.warn.mock.calls.filter((c) => c[0] === 'foreman_activity_poll_failed');
     expect(failureCalls.length).toBeGreaterThan(0);
     for (const call of failureCalls) {
       expect(call.length).toBe(2);

@@ -16,7 +16,6 @@ export const FOREMAN_PROTOCOL_ERROR_CODES = {
   TASK_NOT_FOUND: -32002,
   SESSION_NOT_FOUND: -32003,
   WORKER_NOT_FOUND: -32004,
-  MESSAGE_NOT_FOUND: -32005,
   OPERATION_CANCELLED: -32006,
   OPERATION_TIMEOUT: -32007,
 } as const
@@ -86,11 +85,6 @@ export const SESSION_NOT_FOUND = {
 export const WORKER_NOT_FOUND = {
   code: FOREMAN_PROTOCOL_ERROR_CODES.WORKER_NOT_FOUND,
   message: 'Worker not found',
-} as const satisfies ProtocolErrorDefinition
-
-export const MESSAGE_NOT_FOUND = {
-  code: FOREMAN_PROTOCOL_ERROR_CODES.MESSAGE_NOT_FOUND,
-  message: 'Message not found',
 } as const satisfies ProtocolErrorDefinition
 
 export const OPERATION_CANCELLED = {

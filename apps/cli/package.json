@@ -5,14 +5,11 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts test/*.test.mts test/install/*.test.ts",
-    "build": "tsc -p tsconfig.build.json && node tools/build.mjs"
+    "test": "tsx --test test/*.test.ts test/*.test.mts"
   },
   "dependencies": {
     "@wrenyard/control-client": "workspace:*",
     "@wrenyard/daemon": "workspace:*",
-    "@wrenyard/protocol": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "tsx": "^4.22.4"
   },

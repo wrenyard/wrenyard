@@ -7,8 +7,8 @@ import { foremanStateRoot } from '@wrenyard/daemon/config/state'
 import { connectIpcForemanClient } from '@wrenyard/daemon/control/ipc-client'
 import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
 import { ProtocolError } from '@wrenyard/daemon/protocol/errors'
+import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from '@wrenyard/control-client/transport'
 import { loadForemanServiceConfig, loadForemanConfigData, resolveDefaultForemanConfigPath, resolveForemanConfigPath as configResolveForemanConfigPath, type ForemanServiceConfig } from '@wrenyard/daemon/config'
-import { parsePositiveIntegerFlag } from './helpers.mts'
 import { readSourceDevLock } from './source-dev-lock.mts'
 
 /** Daemon package root (owns task/execution lifecycle and the product IPC server). */
@@ -43,23 +43,12 @@ export interface ForemanStatus {
   }
   daemon: {
     running: boolean
-    process: string
     status?: string
     pid?: number
-    pidAlive?: boolean
-    statePath?: string
-    pidPath?: string
-    suiteRoot?: string
-    suiteVersion?: string
-    logPaths?: {
-      stdout: string
-      stderr: string
-    }
+    startedAt?: string
+    mode?: 'source' | 'installed'
   }
   ipc: StatusCheck
-  http: StatusCheck
-  mcp: StatusCheck
-  db: StatusCheck
   // Daemon lifecycle projection. Present only when daemon.status is reachable;
   // omitted on lookup failure so we never fabricate an accepting admission or
   // zero active counts.
@@ -71,9 +60,6 @@ export interface ForemanStatus {
 }
 
 export function applyServiceCliOverrides(config: ForemanServiceConfig, values: Record<string, unknown>): void {
-  if (typeof values.host === 'string') config.service.host = values.host
-  if (typeof values.port === 'string') config.service.port = parsePositiveIntegerFlag(values.port, '--port', config.service.port)
-  if (typeof values['public-url'] === 'string') config.service.publicUrl = values['public-url']
   if (typeof values['work-dir'] === 'string') config.workspaceRoot = resolve(values['work-dir'])
 }
 
@@ -85,12 +71,6 @@ export function loadServiceConfigForCli(configPathValue: unknown, values: Record
   const config = loadForemanServiceConfig(resolvedConfigPath)
   applyServiceCliOverrides(config, values)
   return { config, resolvedConfigPath }
-}
-
-export interface ForemanConfig {
-  messageDelivery?: {
-    enabled?: boolean
-  }
 }
 
 export function resolveWorkDir(): string {
@@ -153,19 +133,25 @@ export interface ServicePayload {
   hasJson: boolean
 }
 
-export function localForemanServiceOriginForConfig(config: ForemanServiceConfig): string {
-  const host = config.service.host === '0.0.0.0' || config.service.host === '::'
-    ? '127.0.0.1'
-    : config.service.host
-  return `http://${host}:${config.service.port}`
-}
-
 export function resolveConfiguredIpcPath(configPathValue: unknown): string {
   const config = loadForemanServiceConfig(resolveConfigPath(configPathValue))
-  return resolveForemanServiceIpcPath({
-    port: config.service.port,
-    path: config.service.ipc?.path,
-  })
+  return resolveForemanServiceIpcPath({ path: config.service.ipc?.path })
+}
+
+/**
+ * The daemon handshake rejects a version mismatch with the canonical mismatch
+ * message as an ordinary Error, so the only stable marker is its text. Derive
+ * the fixed prefix from the canonical builder so a formatting change can never
+ * silently downgrade an actionable mismatch into the generic unreachable hint.
+ */
+const PROTOCOL_MISMATCH_PREFIX = (() => {
+  const marker = protocolVersionMismatchMessage(WRENYARD_PROTOCOL_VERSION, '')
+  const daemonAt = marker.lastIndexOf('daemon ')
+  return marker.slice(0, daemonAt + 'daemon '.length)
+})()
+
+function isProtocolMismatch(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith(PROTOCOL_MISMATCH_PREFIX)
 }
 
 export async function connectConfiguredForemanClient(configPathValue: unknown): Promise<IpcForemanClient> {
@@ -173,15 +159,18 @@ export async function connectConfiguredForemanClient(configPathValue: unknown): 
   try {
     return await connectIpcForemanClient({ path: ipcPath, timeoutMs: 2_000 })
   } catch (error) {
-    // A live `pnpm dev` restarts the daemon after every source change, so an
+    // A protocol version mismatch is actionable on its own and must reach the
+    // operator verbatim; never replace it with the "daemon not running" hint.
+    if (isProtocolMismatch(error)) throw error
+    // A live `pnpm dev:desktop` restarts the daemon after every source change, so an
     // unreachable IPC during dev is expected churn, not a missing daemon.
     const devLock = readSourceDevLock()
     if (devLock) {
       const daemonLog = join(foremanStateRoot(), 'dev', 'logs', 'daemon.log')
-      throw new Error(`Wrenyard daemon IPC is not reachable at ${ipcPath}. pnpm dev (pid ${devLock.pid}) is probably restarting it after a source change; retry in a few seconds. If it stays down, the new source failed to start: check the pnpm dev terminal and ${daemonLog}, then fix the source directly.`)
+      throw new Error(`Wrenyard daemon IPC is not reachable at ${ipcPath}. pnpm dev:desktop (pid ${devLock.pid}) is probably restarting it after a source change; retry in a few seconds. If it stays down, the new source failed to start: check the pnpm dev:desktop terminal and ${daemonLog}, then fix the source directly.`)
     }
     const details = error instanceof Error && error.message ? ` ${error.message}` : ''
-    throw new Error(`Wrenyard daemon IPC is not reachable at ${ipcPath}.${details} Start the Wrenyard daemon with 'wrenyard daemon start' and retry.`)
+    throw new Error(`Wrenyard daemon IPC is not reachable at ${ipcPath}.${details} Wrenyard daemon 未运行。请打开啾啾工坊，或在终端运行 \`wrenyard daemon run\`。`)
   }
 }
 
@@ -303,14 +292,9 @@ export function workspaceRootForRuntime(): string {
   return workspace ? resolve(workspace) : resolveWorkDir()
 }
 
-export function loadConfig(configPathValue?: unknown): ForemanConfig {
-  const data = loadForemanConfigData(resolveConfigPath(configPathValue))
-  const msgDelivery = data.message?.delivery
-  return {
-    messageDelivery: {
-      enabled: typeof msgDelivery?.enabled === 'boolean' ? msgDelivery.enabled : true,
-    },
-  }
+/** Validate that the config file loads; the daemon owns the config schema. */
+export function loadConfig(configPathValue?: unknown): void {
+  loadForemanConfigData(resolveConfigPath(configPathValue))
 }
 
 export function readLocalPackageVersion(): string {

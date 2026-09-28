@@ -3,7 +3,7 @@
  *
  * This is the client-side half of the `updates` branch static feed. It contains
  * no Node imports, performs no I/O and has no import side effects, so it can be
- * bundled into the SEA install engine and the Desktop main process unchanged.
+ * bundled into the Desktop main process unchanged.
  *
  * Feed layout (base URL defaults to {@link DEFAULT_UPDATE_BASE_URL}):
  *
@@ -15,16 +15,18 @@
  *
  *   { schema_version, version, published_at, assets: [{ name, url, sha256 }] }
  *
- * Client parsing rules, shared by the install engine, the one-command
- * bootstrap scripts and Desktop:
+ * Client parsing rules, shared by Desktop and the release tooling:
  *
  *   - read the channel head when no version is requested, otherwise the
  *     immutable `versions/<v>.json` document;
  *   - derive the channel from the running version: a prerelease reads
- *     `dev.json`, a plain release reads `stable.json`; the bootstrap scripts
- *     always read `dev.json`;
+ *     `dev.json`, a plain release reads `stable.json`;
  *   - validate the schema, that the version is valid SemVer, that both assets
  *     for the host triplet are present, and that every digest is 64 hex.
+ *
+ * Each platform publishes a first-install asset (`installer`) and an in-app
+ * update asset (`update`). On Windows both resolve to the same NSIS
+ * `setup.exe`; on macOS the installer is a DMG and the updater consumes a ZIP.
  *
  * Asset URLs are deliberately NOT required to be canonical GitHub download
  * URLs. The URL and digest come from the same document, so a canonical-URL
@@ -42,7 +44,7 @@ const DEFAULT_UPDATE_BASE_URL =
 /** Release channels. A prerelease version resolves to `dev`, a plain release to `stable`. */
 type UpdateChannel = 'dev' | 'stable';
 
-/** Host triplets that publish a suite and a Desktop asset. */
+/** Host triplets that publish Desktop installer and update assets. */
 export type PlatformTriplet = 'darwin-arm64' | 'win32-x64';
 
 /** One downloadable release asset as advertised by the feed. */
@@ -62,8 +64,10 @@ interface UpdateFeedDocument {
 
 /** The two resolved assets for one host triplet. */
 interface PlatformAssets {
-  readonly suite: UpdateFeedAsset;
-  readonly desktop: UpdateFeedAsset;
+  /** First-install asset (DMG on macOS, setup.exe on Windows). */
+  readonly installer: UpdateFeedAsset;
+  /** In-app update asset (ZIP on macOS, setup.exe on Windows). */
+  readonly update: UpdateFeedAsset;
 }
 
 /** Options for {@link parseUpdateFeed}. */
@@ -75,7 +79,7 @@ interface ParseUpdateFeedOptions {
   readonly channel?: UpdateChannel;
 }
 
-/** A validated feed document plus the host triplet's two assets. */
+/** A validated feed document plus the host triplet's installer and update assets. */
 interface ParsedUpdateFeed extends PlatformAssets {
   readonly document: UpdateFeedDocument;
   readonly version: string;
@@ -168,14 +172,27 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** The canonical suite archive name for a version and host triplet. */
-export function suiteAssetName(version: string, triplet: PlatformTriplet): string {
-  return `wrenyard-${normalizeVersion(version)}-${triplet}-suite.zip`;
+/** Shared prefix for every Desktop distribution asset of a version and triplet. */
+export function desktopAssetStem(version: string, triplet: PlatformTriplet): string {
+  return `wrenyard-desktop-${normalizeVersion(version)}-${triplet}`;
 }
 
-/** The canonical Desktop archive name for a version and host triplet. */
-export function desktopAssetName(version: string, triplet: PlatformTriplet): string {
-  return `wrenyard-desktop-${normalizeVersion(version)}-${triplet}.zip`;
+/**
+ * The canonical first-install asset name for a version and host triplet: the
+ * NSIS `setup.exe` on Windows, the DMG on macOS.
+ */
+export function installerAssetName(version: string, triplet: PlatformTriplet): string {
+  const stem = desktopAssetStem(version, triplet);
+  return triplet === 'win32-x64' ? `${stem}-setup.exe` : `${stem}.dmg`;
+}
+
+/**
+ * The canonical in-app update asset name for a version and host triplet: the
+ * applier reuses the same NSIS `setup.exe` on Windows and a ZIP on macOS.
+ */
+export function updateAssetName(version: string, triplet: PlatformTriplet): string {
+  const stem = desktopAssetStem(version, triplet);
+  return triplet === 'win32-x64' ? `${stem}-setup.exe` : `${stem}.zip`;
 }
 
 /** Derives the release channel from a version: prereleases read `dev`. */
@@ -227,7 +244,7 @@ function readAsset(record: unknown, index: number): UpdateFeedAsset {
 
 /**
  * Validates an already-parsed feed document and resolves the host triplet's
- * suite and Desktop assets. Throws on any schema, version, name or digest
+ * installer and update assets. Throws on any schema, version, name or digest
  * violation; never touches the network or the filesystem.
  */
 function parseUpdateFeed(input: unknown, options: ParseUpdateFeedOptions): ParsedUpdateFeed {
@@ -259,15 +276,17 @@ function parseUpdateFeed(input: unknown, options: ParseUpdateFeedOptions): Parse
     }
     byName.set(asset.name, asset);
   }
-  const suiteName = suiteAssetName(version, triplet);
-  const suite = byName.get(suiteName);
-  if (suite === undefined) {
-    throw new Error(`update feed has no asset ${suiteName}`);
+  // On Windows the installer and the update asset are the same setup.exe, so a
+  // single lookup resolves both without duplicating the record.
+  const installerName = installerAssetName(version, triplet);
+  const installer = byName.get(installerName);
+  if (installer === undefined) {
+    throw new Error(`update feed has no asset ${installerName}`);
   }
-  const desktopName = desktopAssetName(version, triplet);
-  const desktop = byName.get(desktopName);
-  if (desktop === undefined) {
-    throw new Error(`update feed has no asset ${desktopName}`);
+  const updateName = updateAssetName(version, triplet);
+  const update = byName.get(updateName);
+  if (update === undefined) {
+    throw new Error(`update feed has no asset ${updateName}`);
   }
   return {
     document: {
@@ -279,8 +298,8 @@ function parseUpdateFeed(input: unknown, options: ParseUpdateFeedOptions): Parse
     version,
     channel: requestedChannel ?? channelForVersion(version),
     triplet,
-    suite,
-    desktop,
+    installer,
+    update,
   };
 }
 

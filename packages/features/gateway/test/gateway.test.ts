@@ -12,7 +12,7 @@ function fixture(
 ) {
   const catalog = new Catalog();
   catalog.registerProvider({
-    id: 'vendor', displayName: 'Vendor', credentialResolver: 'forge-managed',
+    id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     models: [{
       id: 'public',
       displayName: 'Public',
@@ -304,7 +304,7 @@ function headerFixture(fetchImpl: typeof fetch) {
   const catalog = new Catalog();
   const register = (id: string, endpoint: string, model: string, upstream: string) => {
     catalog.registerProvider({
-      id, displayName: id, credentialResolver: 'forge-managed',
+      id, displayName: id, credentialResolver: 'managed',
       models: [{
         id: model,
         displayName: model,
@@ -479,7 +479,7 @@ function codeBuddyFixture(fetchImpl: typeof fetch, identity?: { platform: string
   const catalog = new Catalog();
   const register = (id: string, model: string, endpoint: string) => {
     catalog.registerProvider({
-      id, displayName: id, credentialResolver: id === 'codebuddy' ? 'codebuddy' : 'forge-managed',
+      id, displayName: id, credentialResolver: id === 'codebuddy' ? 'codebuddy' : 'managed',
       models: [{
         id: model,
         displayName: model,
