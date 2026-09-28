@@ -12,7 +12,8 @@ asarUnpack:
   - node_modules/**
 
 directories:
-  output: release
+  # Installers land in the repository-root release/ directory (git-ignored).
+  output: ../../release
 
 files:
   - dist/**
@@ -31,6 +32,11 @@ files:
 extraResources:
   - from: resources/icon.png
     to: icon.png
+  # The bundled CLI, native Node runtime and control tree staged by
+  # tools/release/pack.mjs. The SEA derives its suite root from
+  # dirname(process.execPath), so `<resources>/wrenyard` is the whole runtime.
+  - from: ../../.artifacts/pack/wrenyard
+    to: wrenyard
 
 npmRebuild: false
 
@@ -39,7 +45,11 @@ afterPack: tools/after-pack.cjs
 
 mac:
   target:
+    - dmg
     - zip
+  # `darwin-arm64` comes from pack.mjs so the public asset names never contain
+  # the product name.
+  artifactName: wrenyard-desktop-${version}-${env.WRENYARD_RELEASE_TRIPLET}.${ext}
   category: public.app-category.developer-tools
   hardenedRuntime: true
   forceCodeSigning: false
@@ -48,12 +58,20 @@ mac:
 win:
   executableName: wrenyard-desktop
   target:
-    - zip
+    - nsis
+  artifactName: wrenyard-desktop-${version}-${env.WRENYARD_RELEASE_TRIPLET}-setup.${ext}
   icon: resources/icon.png
 
-linux:
-  executableName: wrenyard-desktop
-  target:
-    - zip
-  category: Development
-  icon: resources/icon.png
+nsis:
+  # Assisted installer with pages, current-user only. The install scope is not
+  # user-selectable; the optional PATH opt-in lives in build/installer.nsh.
+  #
+  # Include the custom PATH script explicitly instead of relying on implicit
+  # discovery, so the opt-in logic is always applied to the installer.
+  include: build/installer.nsh
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: false
+  shortcutName: 啾啾工坊
+  uninstallDisplayName: 啾啾工坊

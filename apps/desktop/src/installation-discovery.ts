@@ -1,20 +1,30 @@
-import { existsSync, realpathSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 /**
- * Why in-app installation is unavailable. Every surface (snapshot, menu,
- * renderer) reports exactly one of these so the reason stays consistent.
+ * Why an installed installation could not be resolved. Every surface (snapshot,
+ * menu, renderer) reports the same code so the reason stays consistent.
  */
 export type InstallCapabilityReason =
   | 'unsupported-platform'
   | 'missing-cli'
   | 'missing-runtime';
 
-/** The Wrenyard suite layout: <root>/wrenyard + <root>/runtime/node(.exe). */
+export type InstallationKind = 'packaged' | 'source';
+
+/**
+ * A resolved Wrenyard installation. A packaged install is a self-contained suite
+ * (`<resources>/wrenyard`); a source install is a checkout whose CLI runs from
+ * source through tsx. `rootPath` always names the directory that owns the suite
+ * runtime and the control tree, so callers never reconstruct it from a leaf.
+ */
 export interface InstallationDiscovery {
+  kind?: InstallationKind;
+  /** Root that owns `wrenyard[.exe]`, `runtime/` and the control tree. */
+  rootPath?: string;
+  /** Installed CLI executable (`<root>/wrenyard[.exe]`). Absent for a checkout. */
   cliPath?: string;
-  /** Bundled Node runtime that belongs to the *same* resolved suite as cliPath. */
+  /** Node runtime that runs the control tree and the daemon. */
   runtimePath?: string;
   reason?: InstallCapabilityReason;
 }
@@ -22,12 +32,22 @@ export interface InstallationDiscovery {
 export interface InstallationDiscoveryOptions {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
-  home?: string;
+  /** Installed-package detection; the caller passes `app.isPackaged`. */
+  packaged?: boolean;
+  /** Electron resources directory; defaults to `process.resourcesPath`. */
+  resourcesPath?: string;
+  /** Start of the upward search for a checkout when no env override exists. */
+  searchFrom?: string;
   /** Bounded file probe; injected so tests never touch a real installation. */
   exists?: (path: string) => boolean;
+  existsFile?: (path: string) => boolean;
 }
 
-function isFile(path: string, exists: (path: string) => boolean): boolean {
+const PACKAGED_SUITE_DIR = 'wrenyard';
+const CHECKOUT_MARKER = join('bin', 'wrenyard.mjs');
+const MAX_CHECKOUT_SEARCH_DEPTH = 8;
+
+function defaultExistsFile(path: string, exists: (path: string) => boolean): boolean {
   if (!exists(path)) return false;
   try {
     return statSync(path).isFile();
@@ -36,132 +56,55 @@ function isFile(path: string, exists: (path: string) => boolean): boolean {
   }
 }
 
-/** Resolve a possibly-symlinked path without requiring the leaf to exist. */
-function canonicalPath(path: string, exists: (path: string) => boolean): string {
-  let candidate = path;
-  for (let depth = 0; depth < 40; depth += 1) {
-    if (exists(candidate)) {
-      try {
-        return realpathSync(candidate);
-      } catch {
-        return candidate;
-      }
-    }
-    const parent = dirname(candidate);
-    if (parent === candidate) return path;
-    candidate = parent;
+/** Nearest ancestor (including `start`) that looks like a Wrenyard checkout. */
+function findCheckoutRoot(
+  start: string,
+  existsFile: (path: string) => boolean,
+): string | undefined {
+  let current = resolve(start);
+  for (let depth = 0; depth < MAX_CHECKOUT_SEARCH_DEPTH; depth += 1) {
+    if (existsFile(join(current, CHECKOUT_MARKER))) return current;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
   }
-  return path;
-}
-
-/** Rebuild an absolute path from a leading '/', or a drive letter on Windows. */
-function joinSegments(segments: string[], absolute: boolean, drive?: string): string {
-  const joined = segments.join(sep);
-  if (drive) return `${drive}${sep}${joined}`;
-  return absolute ? `${sep}${joined}` : joined;
+  return undefined;
 }
 
 /**
- * Candidate suite roots for one CLI executable, most specific first.
+ * Resolve the CLI together with the Node runtime of the *same* installation.
  *
- * The suite keeps `wrenyard` next to `runtime/node` (the release layout). A
- * launcher shim may also live beside the suite or sit under a separate bin
- * directory, so each shape contributes a candidate.
- */
-function cliSuiteRoots(cliPath: string, exists: (path: string) => boolean): string[] {
-  const roots: string[] = [];
-  const push = (root: string): void => {
-    if (root && !roots.includes(root)) roots.push(root);
-  };
-
-  // Resolve every symlink first: a custom `current` link (including the
-  // Windows junction/link the installer creates) and a launcher shim both
-  // point at the real version directory, which is where the runtime lives.
-  const resolved = canonicalPath(cliPath, exists);
-  const resolvedDir = dirname(resolved);
-  push(resolvedDir);
-
-  // A public launcher shim (<prefix>/bin/wrenyard) points at, or sits beside,
-  // the `current` link of the suite.
-  const absolute = resolved.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(resolved);
-  const drive = /^([A-Za-z]:)[\\/]/u.exec(resolved)?.[1];
-  const segments = resolved.split(/[\\/]+/u).filter((segment) => segment.length > 0
-    && !/^[A-Za-z]:$/u.test(segment));
-  const binIndex = segments.lastIndexOf('bin');
-  if (binIndex > 0) {
-    const prefix = joinSegments(segments.slice(0, binIndex), absolute, drive);
-    push(join(prefix, 'current'));
-    push(prefix);
-  }
-
-  return roots;
-}
-
-function runtimeCandidates(root: string, exeSuffix: string): string[] {
-  return [join(root, 'runtime', `node${exeSuffix}`)];
-}
-
-/** Explicit WRENYARD_CLI, then the working directory, then the default install. */
-function cliCandidates(platform: NodeJS.Platform, env: NodeJS.ProcessEnv, home: string): string[] {
-  const exeSuffix = platform === 'win32' ? '.exe' : '';
-  const candidates = [env.WRENYARD_CLI];
-  if (platform === 'win32') {
-    const localAppData = env.LOCALAPPDATA ?? join(home, 'AppData', 'Local');
-    candidates.push(
-      join(process.cwd(), `wrenyard${exeSuffix}`),
-      join(localAppData, 'wrenyard', 'current', `wrenyard${exeSuffix}`),
-      join(localAppData, 'wrenyard', 'bin', 'wrenyard.cmd'),
-    );
-  } else {
-    candidates.push(
-      join(process.cwd(), 'wrenyard'),
-      join(home, '.local', 'bin', 'wrenyard'),
-      join(home, '.local', 'share', 'wrenyard', 'bin', 'wrenyard'),
-      join(home, '.local', 'share', 'wrenyard', 'current', 'wrenyard'),
-    );
-  }
-  return candidates.filter((candidate): candidate is string => Boolean(candidate));
-}
-
-/**
- * Resolve the installed CLI together with the Node runtime of the *same*
- * suite. A custom CLI must never pair with the old default runtime: when the
- * runtime cannot be derived from the resolved CLI, discovery reports
- * `missing-runtime` instead of falling back to an unrelated installation.
+ * A packaged Desktop always uses the suite shipped next to it
+ * (`process.resourcesPath/wrenyard`); a source Desktop uses the checkout it is
+ * running from. Legacy per-user suite layouts are intentionally not consulted:
+ * a stale installation must never pair with the current Desktop.
  */
 export function resolveInstallation(
   options: InstallationDiscoveryOptions = {},
 ): InstallationDiscovery {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  const home = options.home ?? homedir();
   const exists = options.exists ?? existsSync;
+  const existsFile = options.existsFile ?? ((path: string) => defaultExistsFile(path, exists));
   const exeSuffix = platform === 'win32' ? '.exe' : '';
+  const packaged = options.packaged ?? Boolean(process.resourcesPath);
 
-  // An explicit Node override is an operator decision, never a silent mix.
-  const explicitNode = env.WRENYARD_NODE_BIN;
-  if (explicitNode && !isFile(explicitNode, exists)) {
-    return { reason: 'missing-runtime' };
+  if (packaged) {
+    const resources = options.resourcesPath ?? process.resourcesPath;
+    if (!resources) return { reason: 'missing-cli' };
+    const root = join(resources, PACKAGED_SUITE_DIR);
+    const cliPath = join(root, `wrenyard${exeSuffix}`);
+    const runtimePath = join(root, 'runtime', `node${exeSuffix}`);
+    if (!existsFile(cliPath)) return { kind: 'packaged', rootPath: root, runtimePath, reason: 'missing-cli' };
+    if (!existsFile(runtimePath)) return { kind: 'packaged', rootPath: root, cliPath, reason: 'missing-runtime' };
+    return { kind: 'packaged', rootPath: root, cliPath, runtimePath };
   }
 
-  for (const candidate of cliCandidates(platform, env, home)) {
-    if (!isFile(candidate, exists)) continue;
-    // Report the canonical executable: a launcher shim and a custom `current`
-    // link both resolve to the same real path the runtime is derived from.
-    const cliPath = canonicalPath(candidate, exists);
-    if (explicitNode) return { cliPath, runtimePath: explicitNode };
-    for (const root of cliSuiteRoots(cliPath, exists)) {
-      for (const candidateRuntime of runtimeCandidates(root, exeSuffix)) {
-        if (isFile(candidateRuntime, exists)) {
-          return { cliPath, runtimePath: canonicalPath(candidateRuntime, exists) };
-        }
-      }
-    }
-    // The CLI exists but its suite runtime does not: report the precise reason
-    // rather than borrowing a runtime from another installation.
-    return { cliPath, reason: 'missing-runtime' };
-  }
-
-  if (explicitNode) return { runtimePath: explicitNode, reason: 'missing-cli' };
-  return { reason: 'missing-cli' };
+  const override = env.WRENYARD_SOURCE_CHECKOUT?.trim();
+  const root = override ? resolve(override) : findCheckoutRoot(options.searchFrom ?? process.cwd(), existsFile);
+  if (!root) return { reason: 'missing-cli' };
+  // The source runtime is the Node running tsx; an explicit override is honored
+  // so a Desktop launched by `pnpm dev:desktop` uses the supervisor's Node.
+  const runtimePath = env.WRENYARD_NODE_BIN?.trim() || 'node';
+  return { kind: 'source', rootPath: root, runtimePath };
 }

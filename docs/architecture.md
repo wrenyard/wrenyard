@@ -1,16 +1,23 @@
 # Architecture
 
-Wrenyard is one TypeScript product with CLI and Desktop surfaces and a daemon
-control plane. Installation and updates belong to the Wrenyard release tools.
-There is no separate agent runtime binary or Go build.
+Wrenyard is a local-first TypeScript product. Desktop is the primary product
+surface, the `wrenyard` CLI is a thin client, and the daemon is the control
+plane. The daemon exposes only an owner-only local IPC surface, its lifecycle
+belongs to whichever owner started it, and Desktop owns the installed app's
+updates. There is no separate agent runtime binary or Go build.
 
 ## Package boundaries
 
-- `apps/cli` exposes commands and consumes daemon IPC.
+- `apps/cli` exposes commands and consumes daemon IPC. It never starts the
+  daemon and requires one to already be running.
 - `apps/desktop` owns UI, communication and its in-tree Pet module (windows,
-  renderer and resource layout are all Desktop-owned).
-- `apps/daemon` owns durable tasks, scheduling and service lifecycle, and
-  composes feature services behind IPC handlers.
+  renderer and resource layout are all Desktop-owned). It also supervises the
+  daemon while it runs (tray-resident; closing the window does not quit) and
+  applies its own updates.
+- `apps/daemon` owns durable tasks and scheduling and composes feature services
+  behind owner-only IPC handlers. It has one run entry point,
+  `wrenyard daemon run`; Desktop, the terminal and
+  `pnpm dev:daemon`/`pnpm dev:desktop` all use it.
 - `packages/protocol` contains type-only IPC definitions grouped by feature.
   The session contract remains a scaffold; exec and provider have daemon handlers.
 - `packages/features/exec` runs raw prompts, owns bounded event replay and
@@ -27,6 +34,23 @@ There is no separate agent runtime binary or Go build.
 - Browser/computer feature packages provide MCP descriptors and instructions;
   clients encode those descriptors in their native configuration.
 - `packages/dsh-shell` provides the Desktop conversation integration.
+
+## Runtime surface
+
+The daemon's only external interface is owner-only NDJSON JSON-RPC over a unix
+socket (macOS) or a named pipe (Windows). There is no MCP, REST or message HTTP
+surface and no listener for external clients. `health.ping` carries an integer
+`protocolVersion`; the client validates it and refuses a mismatched daemon
+instead of negotiating compatibility.
+
+The gateway is an internal daemon-process-tree feature: the daemon binds
+`127.0.0.1:0` (a random loopback port) and mints a fresh in-memory token on
+every start. Only daemon-launched agents (through `WRENYARD_GATEWAY_*_URL`
+environment variables) and Desktop's embedded DSH sessions (through the
+`gateway.connection` IPC method) consume it, and its listener serves only
+`/gateway/*` and returns 404 elsewhere. Separately injected stdio MCP servers
+(`browser-use`, `computer-use` and task-declared `mcpServers`) are unrelated to
+the daemon and remain in place.
 
 ## Execution
 
@@ -54,11 +78,14 @@ Quota observations live in `<XDG_STATE_HOME or ~/.local/state>/wrenyard/quota`.
 Official native client credential stores remain owned by those clients.
 No runtime migration or dual-read fallback is shipped.
 
-Release assembly produces exactly two archives per maintained target
-(`darwin-arm64`, `win32-x64`): the suite zip and the Desktop zip, each with a
-local `.sha256` sidecar. The suite bundles the CLI/daemon Node environment and
-the SEA `wrenyard` executable that owns installation and updates. The root
-`package.json` is the single version source, synced only to the Desktop
-package. The update feed and the one-click bootstrap scripts are published to
-the `updates` branch. Signing details remain in
+Each release publishes three Desktop artifacts and no suite archive: a Windows
+NSIS `setup.exe` (first install and in-app update), a macOS `.dmg` (first
+install) and a macOS `.zip` (in-app update). The packaged app carries the CLI,
+a standalone Node runtime and the deployed control tree under its Resources, so
+no system Node or pnpm is needed. Desktop itself performs updates: it reads the
+channel feed on the `updates` branch, verifies the artifact SHA-256 and applies
+it (`setup.exe /S` on Windows, a verified zip swap on macOS). There is no SEA
+install engine, no one-click bootstrap script and no rollback in the first
+updater version. The root `package.json` is the single version source, synced
+only to the Desktop package. Signing details remain in
 [release/signing.md](release/signing.md).

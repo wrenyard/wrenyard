@@ -4,24 +4,11 @@ export type ConfigRecord = Record<string, unknown>
 
 export type ServiceConfigData = ConfigRecord & {
   enabled?: boolean
-  bind?: string
-  public_url?: string
   ipc?: { path?: string }
 }
 
 export type WorkspaceConfigData = ConfigRecord & {
   root?: string
-}
-
-export type MessageConfigData = ConfigRecord & {
-  enabled?: boolean
-  principals?: Record<string, ConfigRecord>
-  routes?: Record<string, ConfigRecord>
-  delivery?: {
-    enabled?: boolean
-    default?: string[]
-    methods?: Record<string, { backend?: string }>
-  }
 }
 
 /** Persisted task settings layer. Mirrors the canonical TaskSettingsLayer while
@@ -45,7 +32,6 @@ export type TasksConfigData = ConfigRecord & {
 export type ForemanConfigData = {
   service?: ServiceConfigData
   workspace?: WorkspaceConfigData
-  message?: MessageConfigData
   tasks?: TasksConfigData
 }
 
@@ -56,28 +42,9 @@ export function createDefaultForemanConfigData(
   return {
     service: {
       enabled: true,
-      bind: '127.0.0.1:8787',
     },
     workspace: {
       root: env.WRENYARD_WORKSPACE ?? env.FOREMAN_WORKSPACE,
-    },
-    message: {
-      enabled: true,
-      principals: {
-        codex: {
-          kind: 'agent',
-          can_send: true,
-          can_receive: false,
-          grants: [{ name: 'message.send' }],
-        },
-      },
-      delivery: {
-        enabled: true,
-        default: ['local.system'],
-        methods: {
-          'local.system': { backend: 'system' },
-        },
-      },
     },
   }
 }

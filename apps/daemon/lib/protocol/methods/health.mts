@@ -4,6 +4,12 @@ export interface HealthPingParams {}
 
 export interface HealthPingResult {
   ok: true
+  /**
+   * Integer IPC protocol version. Clients send their expected version in the
+   * handshake params and validate this echoed value; a missing value fails the
+   * client handshake closed.
+   */
+  protocolVersion: number
   uptimeMs?: number
   identity?: {
     mode: 'source' | 'installed'
@@ -20,9 +26,10 @@ export const healthPingParamsSchema = {
 
 export const healthPingResultSchema = {
   type: 'object',
-  required: ['ok'],
+  required: ['ok', 'protocolVersion'],
   properties: {
     ok: { const: true },
+    protocolVersion: { type: 'integer', minimum: 1 },
     uptimeMs: { type: 'number', minimum: 0 },
     identity: {
       type: 'object',

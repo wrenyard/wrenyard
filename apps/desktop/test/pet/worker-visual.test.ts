@@ -172,7 +172,7 @@ describe('worker label entity', () => {
 
   it('matches legacy age layout and text style with shadow', async () => {
     const { createWorkerLabel, updateWorkerLabel, layoutWorkerLabel } = await import('../../src/pet/features/worker/scene/label');
-    expect(layoutWorkerLabel({ kind: 'age', windowWidth: 640, workerX: 44, workerY: 40, scale: 5, labelWidth: 18, labelHeight: 12 }))
+    expect(layoutWorkerLabel({ kind: 'age', windowWidth: 640, workerX: 44, workerY: 40, scale: 5, labelWidth: 18, labelHeight: 12, text: '30s' }))
       .toEqual({ left: 349, top: 346 });
 
     const { surface, texts, graphics } = mockSurface();

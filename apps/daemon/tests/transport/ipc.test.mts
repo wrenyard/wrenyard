@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { JsonRpcClient } from '@wrenyard/control-client/transport'
+import { JsonRpcClient, WRENYARD_PROTOCOL_VERSION } from '@wrenyard/control-client/transport'
 import {
   INVALID_PARAMS,
   ProtocolError,
@@ -20,19 +20,13 @@ import {
 } from '../../lib/control/ipc-server.mts'
 import { createTestIpcEndpoint } from '../helpers/ipc-endpoint.mts'
 
+const PING = { ok: true as const, protocolVersion: WRENYARD_PROTOCOL_VERSION }
+
 interface IpcHarness {
   client: JsonRpcClient
   transport: IpcClientTransport
   server: IpcServer
   dir: string
-}
-
-function listMtsFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((entry) => {
-    const path = join(dir, entry)
-    if (statSync(path).isDirectory()) return listMtsFiles(path)
-    return path.endsWith('.mts') ? [path] : []
-  })
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
@@ -70,6 +64,7 @@ async function createHarness(
   })
 
   client = new JsonRpcClient({
+    handshake: false,
     transport,
     timeoutMs: 1_000,
   })
@@ -94,10 +89,7 @@ async function closeHarness(harness: IpcHarness): Promise<void> {
 
 describe('IPC transport', () => {
   it('resolves one Wrenyard daemon IPC path by default instead of deriving identity from HTTP port', () => {
-    const defaultPath = resolveForemanServiceIpcPath({ port: 8787 })
-    const otherPortPath = resolveForemanServiceIpcPath({ port: 9999 })
-
-    assert.equal(defaultPath, otherPortPath)
+    const defaultPath = resolveForemanServiceIpcPath({})
     if (process.platform === 'win32') {
       assert.equal(defaultPath, '\\\\.\\pipe\\wrenyard')
     } else {
@@ -107,11 +99,11 @@ describe('IPC transport', () => {
 
   it('connects JsonRpcClient to RpcRouter over IPC and resolves requests', async () => {
     const router = new RpcRouter()
-    router.register('health.ping', async () => ({ ok: true }))
+    router.register('health.ping', async () => PING)
     const harness = await createHarness('health', router)
 
     try {
-      assert.deepEqual(await harness.client.request('health.ping', {}), { ok: true })
+      assert.deepEqual(await harness.client.request('health.ping', {}), PING)
     } finally {
       await closeHarness(harness)
     }
@@ -120,9 +112,9 @@ describe('IPC transport', () => {
   it('delivers notifications without creating client pending state', async () => {
     const router = new RpcRouter()
     const calls: unknown[] = []
-    router.register('health.ping', async (params) => {
+    router.register('health.ping' as string, async (params: unknown) => {
       calls.push(params)
-      return { ok: true }
+      return undefined
     })
     const harness = await createHarness('notification', router)
 
@@ -139,7 +131,7 @@ describe('IPC transport', () => {
 
   it('handles multiple requests on the same connection', async () => {
     const router = new RpcRouter()
-    router.register('health.ping', async () => ({ ok: true }))
+    router.register('health.ping', async () => PING)
     const harness = await createHarness('multi', router)
 
     try {
@@ -149,7 +141,7 @@ describe('IPC transport', () => {
         harness.client.request('health.ping', {}),
       ])
 
-      assert.deepEqual(results, [{ ok: true }, { ok: true }, { ok: true }])
+      assert.deepEqual(results, [PING, PING, PING])
       assert.equal(harness.client.pendingCount, 0)
     } finally {
       await closeHarness(harness)
@@ -163,13 +155,15 @@ describe('IPC transport', () => {
       task_run_id: 'task-1',
       hint: 'Use task.run.status with the same task_run_id.',
     }))
+    router.register('health.ping', async () => PING)
     const harness = await createHarness('error-response', router)
 
     try {
+      await harness.client.request('health.ping', { protocolVersion: WRENYARD_PROTOCOL_VERSION })
       await assert.rejects(
         harness.client.request('task.run.create', {}),
         (error) => {
-          assert(error instanceof ProtocolError)
+          assert(error instanceof ProtocolError, String(error))
           assert.equal(error.code, INVALID_PARAMS.code)
           return true
         },
@@ -245,7 +239,7 @@ describe('IPC transport', () => {
     const router = new RpcRouter()
     router.register('health.ping', async () => {
       await new Promise((resolve) => setTimeout(resolve, 100))
-      return { ok: true }
+      return PING
     })
     const harness = await createHarness('close-dispose', router)
 
@@ -261,30 +255,6 @@ describe('IPC transport', () => {
     assert.equal(harness.client.pendingCount, 0)
   })
 
-  it('keeps transport IPC modules free of Foreman runtime imports', () => {
-    const transportRoot = join(process.cwd(), 'lib', 'transport')
-    const forbiddenSpecifiers = [
-      'node:child_process',
-      'node:process',
-    ]
-    const forbiddenRuntimePath = /(^|\/|\\)(cli|daemon|service|db|executor|notify|config|mcp)(\/|\\|\.mts$)/
-
-    for (const file of listMtsFiles(transportRoot).filter((path) => path.includes('ipc-'))) {
-      const source = readFileSync(file, 'utf8')
-      const importSpecifiers = [...source.matchAll(/\b(?:import|export)\b[^'"]*from\s+['"]([^'"]+)['"]/g)]
-        .map((match) => match[1])
-
-      for (const specifier of importSpecifiers) {
-        const crossesTransportBoundary = specifier.startsWith('../') || specifier.startsWith('..\\')
-        assert(
-          !forbiddenSpecifiers.includes(specifier)
-            && !(crossesTransportBoundary && forbiddenRuntimePath.test(specifier)),
-          `${file} imports forbidden runtime dependency ${specifier}`,
-        )
-      }
-    }
-  })
-
   it('recovers from client disconnect during async handler', async () => {
     let resolveHandler!: () => void
     const handlerPending = new Promise<void>((resolve) => { resolveHandler = resolve })
@@ -294,7 +264,7 @@ describe('IPC transport', () => {
     router.register('health.ping', async () => {
       handlerCalled = true
       await handlerPending
-      return { ok: true }
+      return PING
     })
 
     const endpoint = createTestIpcEndpoint('async-disconnect')
@@ -310,7 +280,7 @@ describe('IPC transport', () => {
         timeoutMs: 1_000,
         onChunk: () => {},
       })
-      const client1 = new JsonRpcClient({ transport: transport1, timeoutMs: 5_000 })
+      const client1 = new JsonRpcClient({ handshake: false, transport: transport1, timeoutMs: 5_000 })
       const request1 = client1.request('health.ping', {})
 
       await waitFor(() => handlerCalled)
@@ -340,13 +310,13 @@ describe('IPC transport', () => {
         },
       })
 
-      client2 = new JsonRpcClient({ transport: transport2, timeoutMs: 1_000 })
+      client2 = new JsonRpcClient({ handshake: false, transport: transport2, timeoutMs: 1_000 })
       for (const chunk of pendingChunks2) {
         client2.handleIncoming(chunk)
       }
 
       const result = await client2.request('health.ping', {})
-      assert.deepEqual(result, { ok: true })
+      assert.deepEqual(result, PING)
 
       client2.close()
       transport2.close()

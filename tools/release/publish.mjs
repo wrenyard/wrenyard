@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Single publish entry point. It validates the tag, confirms the four canonical
-// archives, publishes them as a prerelease, commits the update feed together
-// with the bootstrap scripts to the `updates` branch, then removes this run's
-// transient workflow artifacts. Every external command goes through the
-// injectable `run` seam so the fixture tests never touch a real remote.
+// Single publish entry point. It validates the tag, confirms the three canonical
+// installers, publishes them as a prerelease, commits the update feed to the
+// `updates` branch, then removes this run's transient workflow artifacts. Every
+// external command goes through the injectable `run` seam so the fixture tests
+// never touch a real remote.
 
-import { chmodSync, copyFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,19 +14,19 @@ import { runCommand } from './run-command.mjs';
 import { assertAssetNames, canonicalAssetNames, prepareMetadata } from './update-feed.mjs';
 
 const MAX_FEED_ATTEMPTS = 5;
-const BOOTSTRAP_SCRIPTS = [['install.sh', 0o755], ['install.ps1', undefined]];
 
-// Confirm the four canonical archives exist in the downloaded artifacts before
-// anything is published. The map is built in memory and validated against the
-// version-derived names, so a missing, extra or mislabeled archive fails closed.
+// Confirm the three canonical installers exist in the downloaded artifacts
+// before anything is published. The map is built in memory and validated
+// against the version-derived names, so a missing, extra or mislabeled asset
+// fails closed.
 export function confirmCanonicalAssets({ artifactsDir, version = packageVersion() }) {
   const found = new Map();
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const file = join(dir, entry.name);
       if (entry.isDirectory()) walk(file);
-      else if (entry.isFile() && entry.name.endsWith('.zip')) {
-        if (found.has(entry.name)) throw new Error(`duplicate release archive: ${entry.name}`);
+      else if (entry.isFile()) {
+        if (found.has(entry.name)) throw new Error(`duplicate release asset: ${entry.name}`);
         found.set(entry.name, file);
       }
     }
@@ -35,8 +35,9 @@ export function confirmCanonicalAssets({ artifactsDir, version = packageVersion(
   return assertAssetNames([...found.keys()].sort(), version).map((name) => ({ name, path: found.get(name) }));
 }
 
-// Create a draft release, upload the four archives, then publish as prerelease.
-// An existing release is refused outright and assets are never clobbered.
+// Create a draft release, upload the three installers, then publish as
+// prerelease. An existing release is refused outright and assets are never
+// clobbered.
 export function publishGitHubRelease({ assets, repository, tag, sha, version = packageVersion(), run = runCommand }) {
   validateDevTag(tag, version);
   if (!repository) throw new Error('repository is required');
@@ -80,16 +81,15 @@ function assertSafePublicationDir(publicationDir, workspace) {
   return target;
 }
 
-// Push the immutable version document, the channel head and the bootstrap
-// scripts in one commit. Retries a rejected push without force, never rewrites a
-// published version and never regresses the channel head.
+// Push the immutable version document and the channel head in one commit.
+// Retries a rejected push without force, never rewrites a published version and
+// never regresses the channel head.
 export function publishUpdateFeed({
   assetsDir,
   publicationDir,
   repository,
   tag,
   workspace = REPO_ROOT,
-  scriptsDir = resolve(REPO_ROOT, 'scripts'),
   version = packageVersion(),
   run = runCommand,
 }) {
@@ -123,15 +123,9 @@ export function publishUpdateFeed({
   const publishedAt = run('gh', ['release', 'view', tag, '-R', repository, '--json', 'publishedAt', '--jq', '.publishedAt']).stdout.trim();
   if (!publishedAt) throw new Error(`release ${tag} has no publication timestamp; refusing to publish a feed`);
 
-  const scripts = BOOTSTRAP_SCRIPTS.map(([name]) => resolve(publicationDir, name));
   for (let attempt = 1; attempt <= MAX_FEED_ATTEMPTS; attempt += 1) {
-    const prepared = prepareMetadata({ assetsDir, version, repository, publishedAt, metadataDir: publicationDir, extraFiles: scripts });
-    for (const [name, mode] of BOOTSTRAP_SCRIPTS) {
-      const destination = resolve(publicationDir, name);
-      copyFileSync(resolve(scriptsDir, name), destination);
-      if (mode !== undefined) chmodSync(destination, mode);
-    }
-    run('git', ['add', ...prepared.files.map((file) => relative(publicationDir, file))], { cwd: publicationDir });
+    const prepared = prepareMetadata({ assetsDir, version, repository, publishedAt, metadataDir: publicationDir });
+    run('git', ['add', ...prepared.files.map((file) => relative(publicationDir, file).split(sep).join('/'))], { cwd: publicationDir });
     const diff = run('git', ['diff', '--cached', '--quiet'], { cwd: publicationDir, allowFailure: true });
     if (diff.status === 0) return { changed: false, attempts: attempt };
     if (diff.status !== 1) throw new Error(`git diff failed with exit ${diff.status}`);
@@ -163,7 +157,6 @@ export function publishRelease({
   sha,
   version = packageVersion(),
   workspace = REPO_ROOT,
-  scriptsDir = resolve(REPO_ROOT, 'scripts'),
   publicationDir,
   stagingDir = resolve(REPO_ROOT, 'release-assets'),
   runId,
@@ -183,7 +176,7 @@ export function publishRelease({
     version,
     run,
   });
-  publishUpdateFeed({ assetsDir: stagingDir, publicationDir, repository, tag, workspace, scriptsDir, version, run });
+  publishUpdateFeed({ assetsDir: stagingDir, publicationDir, repository, tag, workspace, version, run });
   cleanupRunArtifacts({ repository, runId, run });
   return { version, assets: canonicalAssetNames(version) };
 }

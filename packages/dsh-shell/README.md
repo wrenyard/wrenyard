@@ -1,10 +1,10 @@
 # @wrenyard/dsh-shell
 
 Private **MIT** ESM package (part of the Wrenyard desktop suite, `0.1.0-dev.0`).
-Ships the **Wrenyard MCP/IPC tools bridge** that gives DeepSeek Harness (DSH)
-a safe, first-class tool SDK bound to Wrenyard's public MCP/IPC surfaces, plus
-the **agent-scoped tool boundary** that keeps Wrenyard the sole orchestration
-authority inside the harness.
+Ships the **Wrenyard IPC tools bridge** that gives DeepSeek Harness (DSH) a
+safe, first-class tool SDK bound to Wrenyard's owner-only NDJSON IPC surface,
+plus the **agent-scoped tool boundary** that keeps Wrenyard the sole
+orchestration authority inside the harness.
 
 ## Architecture
 
@@ -26,7 +26,7 @@ authority inside the harness.
   search, browser, jobs, goals, skills, ask-user) run in the fixed YOLO mode;
   their availability does not expand task purpose or declared targets. The
   tools bridge's `tools/pre-execute`
-  listener only short-circuits the waterfall for its seven Wrenyard aliases
+  listener only short-circuits the waterfall for its nine Wrenyard aliases
   (whose authority lives in the Wrenyard backend); native bash/fs/browser calls
   always continue through DSH's normal downstream execution chain.
 - **Agent-scoped boundary**: the preset loads
@@ -40,10 +40,12 @@ authority inside the harness.
   time, closing the later-registration gap: even a competing orchestration tool
   registered after the catalog snapshot cannot execute. Legitimate
   non-orchestration tools are unaffected.
-- **Seven Wrenyard aliases**: the bridge exposes three MCP task aliases and
-  four owner-only IPC workspace-document aliases.
-- **Public boundaries only**: everything goes through Wrenyard's public MCP
-  (HTTP/SSE JSON-RPC) and owner-only NDJSON IPC. No Forge or Wrenyard
+- **Nine Wrenyard aliases**: three task aliases, four workspace-document
+  aliases and two read-only discovery aliases, all routed over Wrenyard's
+  owner-only IPC surface.
+- **Public boundaries only**: everything goes through Wrenyard's owner-only
+  NDJSON IPC surface. The daemon exposes no MCP or HTTP client endpoint, so the
+  bridge needs no gateway URL, port, sender or token. No Forge or Wrenyard
   implementation code is imported, and no credentials or raw environment values
   are ever logged.
 
@@ -51,39 +53,39 @@ authority inside the harness.
 
 | Alias | Backend | Notes |
 | --- | --- | --- |
-| `list_task` | MCP `task_list` | Canonical MCP definition |
-| `describe_task` | MCP `task_describe` | Canonical MCP definition |
-| `run_task` | MCP `task_run` + IPC `task.run.wait` / `task.run.cancel` | Terminal wait by default; Desktop returns a launch identity and owns the asynchronous wait |
+| `list_task` | IPC task catalog | Lists task definitions |
+| `describe_task` | IPC task catalog | Returns one task contract |
+| `run_task` | IPC `task.run.create` + `task.run.wait` / `task.run.cancel` | Terminal wait by default; Desktop returns a launch identity and owns the asynchronous wait |
 | `list_workspace_docs` | IPC `workspace.doc.list` | Optional `directory` string |
 | `read_workspace_doc` | IPC `workspace.doc.read` | Requires `path` |
 | `create_workspace_doc` | IPC `workspace.doc.create` | Requires `path` + `content` |
 | `update_workspace_doc` | IPC `workspace.doc.update` | Requires `path` + `content` + `expectedContent` CAS |
+| `list_projects` | IPC `project.list` | Read-only project discovery |
+| `list_runtimes` | IPC `task.settings.runtimes` | Read-only runtime target discovery; requires `task_id` |
 
-The four workspace-doc aliases route unchanged params over the owner-only
-NDJSON IPC socket only; there is no MCP fallback and no generic filesystem,
-delete or rename surface. The daemon applies its workspace-root path
-restriction and `expectedContent` compare-and-set validation. Backend IPC
-errors surface as bounded rejections (`Wrenyard IPC error: ...`).
+Every alias routes unchanged params over the owner-only NDJSON IPC socket only;
+there is no MCP or HTTP fallback and no generic filesystem, delete or rename
+surface. The daemon applies its workspace-root path restriction and
+`expectedContent` compare-and-set validation. Backend IPC errors surface as
+bounded rejections (`Wrenyard IPC error: ...`).
 
 ## Environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `WRENYARD_MCP_URL` | `http://127.0.0.1:8787/mcp` | Wrenyard MCP HTTP/SSE endpoint |
-| `WRENYARD_MCP_SENDER` | *(empty)* | Sender appended as the stable protocol sender query parameter |
-| `WRENYARD_IPC_PATH` | `\\.\pipe\wrenyard.sock` (Windows), `/tmp/wrenyard.sock` (elsewhere) | Owner-only NDJSON IPC socket/pipe |
-| `FOREMAN_MCP_URL` / `FOREMAN_MCP_SENDER` / `FOREMAN_IPC_PATH` | *(legacy)* | Deprecated pre-Wrenyard names, still read as fallbacks |
+| `WRENYARD_IPC_PATH` | `\\.\pipe\wrenyard` (Windows), `/tmp/wrenyard.sock` (elsewhere) | Owner-only NDJSON IPC socket/pipe |
+| `FOREMAN_IPC_PATH` | *(legacy)* | Deprecated pre-Wrenyard name, still read as a fallback |
+| `WRENYARD_DESKTOP_ASYNC_TASKS` | *(unset)* | Desktop-only opt-in (`=1`) for asynchronous `run_task` dispatch |
 
-The IPC path shares the same `wrenyard.sock` default with
-`@wrenyard/control-client` and the desktop app. The MCP/IPC wire protocols are
-stable — only the product naming changed, so the legacy `FOREMAN_*` variables
-continue to work.
+The IPC path shares the same `wrenyard` default with
+`@wrenyard/control-client` and the desktop app. The daemon exposes no MCP or
+HTTP client endpoint, so the bridge needs no gateway URL, port, sender or
+token.
 
 ## Fail-loud behavior
 
-- MCP unavailable → startup fails with `Wrenyard: MCP is unavailable`.
-- MCP catalog missing a required task tool → startup fails with
-  `Wrenyard: MCP catalog missing required task tool (...)`.
+- The IPC daemon unavailable, or missing a required task method → startup fails
+  instead of silently exposing a partial tool set.
 - Tool-boundary plugin without `tools.schemas()`/`tools.restrict()`/
   `tools.guard()` → fails rather than silently weakening the agent-scoped
   boundary.

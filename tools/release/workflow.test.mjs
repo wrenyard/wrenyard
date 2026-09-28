@@ -24,12 +24,22 @@ test('release workflow builds exactly the two maintained native targets', () => 
   assert.ok(!workflow.includes('darwin-x64'));
 });
 
-test('build job installs frozen dependencies and runs the single build script', () => {
+test('pre-check job lints the repository before any build starts', () => {
+  const preCheck = workflow.slice(workflow.indexOf('  pre-check:'), workflow.indexOf('  build:'));
+  assert.ok(preCheck.includes('pnpm install --frozen-lockfile'));
+  assert.match(preCheck, /- run: pnpm lint\n/);
+  const build = workflow.slice(workflow.indexOf('  build:'), workflow.indexOf('  publish:'));
+  assert.match(build, /needs: pre-check/);
+});
+
+test('build job installs frozen dependencies and runs the single pack script', () => {
   const build = workflow.slice(workflow.indexOf('  build:'), workflow.indexOf('  publish:'));
   assert.ok(build.includes('pnpm install --frozen-lockfile'));
-  assert.ok(build.includes('node tools/release/build-local-release.mjs'));
-  assert.ok(build.includes('.artifacts/release/wrenyard-*-suite.zip'));
-  assert.ok(build.includes('.artifacts/release/wrenyard-desktop-*.zip'));
+  assert.ok(build.includes('node tools/release/pack.mjs'));
+  assert.ok(build.includes('release/*.dmg'));
+  assert.ok(build.includes('release/*.zip'));
+  assert.ok(build.includes('release/*-setup.exe'));
+  assert.ok(!build.includes('build-local-release.mjs'));
   assert.ok(build.includes('if-no-files-found: error'));
   for (const forbidden of [
     'pnpm check',

@@ -15,7 +15,11 @@ import {
   workspaceRootForRuntime,
   errorMessage,
 } from '../shared.mts'
-import type { TaskSettingsLayer } from '@wrenyard/daemon/protocol/methods/task'
+import type {
+  TaskSettingsLayer,
+  TaskSettingsRuntimesParams,
+  TaskSettingsRuntimesResult,
+} from '@wrenyard/daemon/protocol/methods/task'
 import { ensureDiscovered, getLoadErrors, type DuplicateDefinitionLoadError } from '@wrenyard/daemon/workspace/task-loader'
 
 export async function handleTaskList(args: string[]): Promise<number> {
@@ -66,7 +70,7 @@ export async function handleTaskList(args: string[]): Promise<number> {
 
 export async function handleTaskDescribe(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard task describe <task_id> [--config path] [-p project]')
+    console.log('Usage: wrenyard task describe <task_id> [--config path] [-p project] [--json]')
     return 0
   }
 
@@ -75,12 +79,13 @@ export async function handleTaskDescribe(args: string[]): Promise<number> {
     options: {
       config: { type: 'string' },
       project: { type: 'string', short: 'p' },
+      json: { type: 'boolean' },
     },
     allowPositionals: true,
     strict: true,
   })
   if (positionals.length !== 1) {
-    console.error('Usage: wrenyard task describe <task_id> [--config path] [-p project]')
+    console.error('Usage: wrenyard task describe <task_id> [--config path] [-p project] [--json]')
     return 1
   }
 
@@ -99,7 +104,7 @@ export async function handleTaskDescribe(args: string[]): Promise<number> {
 
 export async function handleTaskRun(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--settings-json json] <json-input>')
+    console.log('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--settings-json json] [--json] <json-input>')
     return 0
   }
 
@@ -110,6 +115,7 @@ export async function handleTaskRun(args: string[]): Promise<number> {
       project: { type: 'string', short: 'p' },
       worktree: { type: 'string' },
       'settings-json': { type: 'string' },
+      json: { type: 'boolean' },
     },
     allowPositionals: true,
     strict: true,
@@ -118,7 +124,7 @@ export async function handleTaskRun(args: string[]): Promise<number> {
   const project = typeof values.project === 'string' ? values.project : undefined
   const worktree = typeof values.worktree === 'string' ? values.worktree : undefined
   if (!taskId || !project || positionals.length !== 2) {
-    console.error('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--settings-json json] <json-input>')
+    console.error('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--settings-json json] [--json] <json-input>')
     if (taskId && project && positionals.length < 2) await printTaskInputRequiredHint(taskId, project, values.config)
     return 1
   }
@@ -150,7 +156,7 @@ export async function handleTaskRun(args: string[]): Promise<number> {
 
 export async function handleTaskCancel(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard task cancel <task_run_id> [--config path]')
+    console.log('Usage: wrenyard task cancel <task_run_id> [--config path] [--json]')
     return 0
   }
 
@@ -158,12 +164,13 @@ export async function handleTaskCancel(args: string[]): Promise<number> {
     args,
     options: {
       config: { type: 'string' },
+      json: { type: 'boolean' },
     },
     allowPositionals: true,
     strict: true,
   })
   if (positionals.length !== 1) {
-    console.error('Usage: wrenyard task cancel <task_run_id> [--config path]')
+    console.error('Usage: wrenyard task cancel <task_run_id> [--config path] [--json]')
     return 1
   }
   const client = await connectConfiguredForemanClient(values.config)
@@ -177,7 +184,7 @@ export async function handleTaskCancel(args: string[]): Promise<number> {
 
 export async function handleTaskStatus(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard task status <task_run_id> [--config path]')
+    console.log('Usage: wrenyard task status <task_run_id> [--config path] [--json]')
     return 0
   }
 
@@ -185,12 +192,13 @@ export async function handleTaskStatus(args: string[]): Promise<number> {
     args,
     options: {
       config: { type: 'string' },
+      json: { type: 'boolean' },
     },
     allowPositionals: true,
     strict: true,
   })
   if (positionals.length !== 1) {
-    console.error('Usage: wrenyard task status <task_run_id> [--config path]')
+    console.error('Usage: wrenyard task status <task_run_id> [--config path] [--json]')
     return 1
   }
   const client = await connectConfiguredForemanClient(values.config)
@@ -204,7 +212,7 @@ export async function handleTaskStatus(args: string[]): Promise<number> {
 
 export async function handleTaskOutput(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard task output <task_run_id> [--config path]')
+    console.log('Usage: wrenyard task output <task_run_id> [--config path] [--json]')
     return 0
   }
 
@@ -212,12 +220,13 @@ export async function handleTaskOutput(args: string[]): Promise<number> {
     args,
     options: {
       config: { type: 'string' },
+      json: { type: 'boolean' },
     },
     allowPositionals: true,
     strict: true,
   })
   if (positionals.length !== 1) {
-    console.error('Usage: wrenyard task output <task_run_id> [--config path]')
+    console.error('Usage: wrenyard task output <task_run_id> [--config path] [--json]')
     return 1
   }
   const client = await connectConfiguredForemanClient(values.config)
@@ -227,6 +236,71 @@ export async function handleTaskOutput(args: string[]): Promise<number> {
     client.close()
   }
   return 0
+}
+
+/**
+ * Enumerate a task's discoverable exact runtime targets via
+ * `task.settings.runtimes`, forwarding the exact protocol params. JSON output is
+ * the raw protocol result; the human form is one columnar row per target with
+ * its truthful readiness.
+ */
+export async function handleTaskRuntimes(args: string[]): Promise<number> {
+  if (isHelpRequest(args)) {
+    console.log('Usage: wrenyard task runtimes <task_id> [-p project] [--config path] [--json]')
+    return 0
+  }
+
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      config: { type: 'string' },
+      project: { type: 'string', short: 'p' },
+      json: { type: 'boolean' },
+    },
+    allowPositionals: true,
+    strict: true,
+  })
+  if (positionals.length !== 1) {
+    console.error('Usage: wrenyard task runtimes <task_id> [-p project] [--config path] [--json]')
+    return 1
+  }
+
+  const project = typeof values.project === 'string' ? values.project : undefined
+  const params: TaskSettingsRuntimesParams = {
+    task_id: positionals[0],
+    ...(project ? { project } : {}),
+  }
+
+  const client = await connectConfiguredForemanClient(values.config)
+  try {
+    const result: TaskSettingsRuntimesResult = await client.task.settings.runtimes(params)
+    if (values.json) {
+      writeServicePayload(servicePayload(result))
+      return 0
+    }
+    writeTaskRuntimes(result)
+    return 0
+  } finally {
+    client.close()
+  }
+}
+
+function writeTaskRuntimes(result: TaskSettingsRuntimesResult): void {
+  if (result.items.length === 0) {
+    console.log('No runtime targets')
+    return
+  }
+  console.log('TARGET                            PROVIDER         MODEL                        CLIENT        MODE      AVAILABLE')
+  console.log('-'.repeat(114))
+  for (const item of result.items) {
+    const target = item.target.padEnd(34)
+    const provider = item.provider.padEnd(17)
+    const model = item.model.padEnd(29)
+    const client = item.client.padEnd(14)
+    const mode = (item.mode ?? '-').padEnd(10)
+    const available = item.available ? 'yes' : `no${item.reason ? ` (${item.reason})` : ''}`
+    console.log(`${target}${provider}${model}${client}${mode}${available}`)
+  }
 }
 
 export async function handleTaskDoctor(args: string[]): Promise<number> {
@@ -281,7 +355,7 @@ export async function handleTaskDoctor(args: string[]): Promise<number> {
 export async function handleTask(args: string[]): Promise<number> {
   const subcommand = args[0]
   if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-    console.error('Usage: wrenyard task <run|cancel|list|describe|status|output|doctor> ...')
+    console.error('Usage: wrenyard task <run|cancel|list|describe|status|output|runtimes|doctor> ...')
     return subcommand ? 0 : 1
   }
   if (subcommand === 'run') return handleTaskRun(args.slice(1))
@@ -290,8 +364,9 @@ export async function handleTask(args: string[]): Promise<number> {
   if (subcommand === 'describe') return handleTaskDescribe(args.slice(1))
   if (subcommand === 'status') return handleTaskStatus(args.slice(1))
   if (subcommand === 'output') return handleTaskOutput(args.slice(1))
+  if (subcommand === 'runtimes') return handleTaskRuntimes(args.slice(1))
   if (subcommand === 'doctor') return handleTaskDoctor(args.slice(1))
-  console.error('Usage: wrenyard task <run|cancel|list|describe|status|output|doctor> ...')
+  console.error('Usage: wrenyard task <run|cancel|list|describe|status|output|runtimes|doctor> ...')
   return 1
 }
 

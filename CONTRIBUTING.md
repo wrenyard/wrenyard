@@ -6,7 +6,7 @@ the public policies in this repository.
 
 ## Prerequisites
 
-- Node.js 22.19 or newer
+- Node.js 24.19 or newer
 - pnpm 11.19.0
 
 Install dependencies with the frozen lockfile, then build once before the
@@ -15,7 +15,7 @@ long-running source environment:
 ```sh
 pnpm install --frozen-lockfile
 pnpm build
-pnpm dev
+pnpm dev:desktop
 ```
 
 `pnpm-workspace.yaml` allows the Electron install script; if Electron is
@@ -25,23 +25,21 @@ global Wrenyard/Electron binary.
 Daily commands from the same checkout root:
 
 ```sh
-pnpm dev              # Terminal A, stays running
-pnpm dev --kill-desktop   # same start; terminate a stuck installed Desktop first
+pnpm dev:desktop    # Terminal A, supervises daemon + Desktop, stays running
+pnpm dev:daemon     # supervise only the daemon, no Desktop
 ```
 
-Source-development reuses the installed user data domain. `pnpm dev` first
-checks for a running installed Wrenyard Desktop; if one is open it prints a
-reminder to quit from the tray and exits without replacing the service or
-starting source components. Pass `--kill-desktop` once to terminate that
-Desktop tree instead. It does not install a release, change `current`, or
-start at login. After Ctrl+C in the `pnpm dev` terminal, open the installed
-app yourself if you want it back.
+Source-development reuses the installed user data domain. If a Wrenyard daemon
+is already running (for example under an installed Desktop), `pnpm dev:desktop`
+prints a reminder to quit 啾啾工坊 fully from the tray or run `wrenyard daemon
+stop`, and exits without replacing the service. It does not install a release,
+change the installed version, or start at login. After Ctrl+C in the
+`pnpm dev:desktop` terminal, open the installed app yourself if you want it
+back.
 
-If a lockfile or package manifest changes, interrupt `pnpm dev` (Ctrl+C),
-reinstall with `--frozen-lockfile`, rebuild, then `pnpm dev`. Saving
-watcher/supervisor source while `pnpm dev` is running replaces that worker;
-otherwise interrupt and run `pnpm dev` again. Unexpected component exits are
-reported as degraded; save a file or run `pnpm dev` again to restore.
+If a lockfile or package manifest changes, stop `pnpm dev:desktop` (Ctrl+C),
+reinstall with `--frozen-lockfile`, rebuild, then run it again. The supervisor
+does not apply dev-tooling changes automatically.
 
 ## Working in the workspace
 
@@ -56,12 +54,10 @@ pnpm --filter <package> <script>
 At the repository root, the composition checks are:
 
 ```sh
-pnpm check             # full check composition
-pnpm check:identifiers # public identifier / release-boundary gate
-pnpm release:check     # license and asset-provenance verification
-pnpm typecheck
-pnpm build
-pnpm test:workspace
+pnpm lint              # oxlint + repository tsc
+pnpm check             # release gates: public identifiers, secrets, legal, versions
+pnpm test              # repository tool tests + all package tests
+pnpm build             # Desktop bundle only
 ```
 
 ## Change guidelines

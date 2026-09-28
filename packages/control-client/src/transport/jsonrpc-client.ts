@@ -2,27 +2,40 @@ import {
   OPERATION_TIMEOUT,
   PROTOCOL_ERROR_CODES,
   ProtocolError,
+  protocolVersionMismatchMessage,
   type ProtocolErrorCode,
 } from './errors.ts'
 import {
   createFrameDecoder,
   encodeFrame,
 } from './ndjson.ts'
-import type {
-  JsonRpcErrorObject,
-  JsonRpcId,
-  JsonRpcResponse,
-  NdjsonChunk,
+import {
+  WRENYARD_PROTOCOL_VERSION,
+  type JsonRpcErrorObject,
+  type JsonRpcId,
+  type JsonRpcResponse,
+  type NdjsonChunk,
 } from './types.ts'
+
+/** Client-initiated handshake method; carries the expected protocol version. */
+const HANDSHAKE_METHOD = 'health.ping'
 
 export interface JsonRpcClientTransport {
   send(frame: string): void | Promise<void>
+  close?(): void
 }
 
 export interface JsonRpcClientOptions {
   transport: JsonRpcClientTransport
   timeoutMs?: number
   idFactory?: () => string | number
+  /** Protocol version sent in the automatic `health.ping` handshake. */
+  protocolVersion?: number
+  /**
+   * When true (the default) the client completes the `health.ping` handshake
+   * before its first business request. Set false only for raw framing tests.
+   */
+  handshake?: boolean
 }
 
 export interface JsonRpcRequestOptions {
@@ -82,8 +95,12 @@ export class JsonRpcClient {
   private readonly transport: JsonRpcClientTransport
   private readonly timeoutMs: number
   private readonly idFactory?: () => string | number
+  private readonly protocolVersion: number
+  private readonly handshakeEnabled: boolean
   private readonly pending = new Map<string, PendingRequest>()
   private nextNumericId = 1
+  private handshakePromise?: Promise<void>
+  private closedError?: Error
   private readonly decoder = createFrameDecoder({
     onMessage: (message) => this.handleMessage(message),
   })
@@ -92,10 +109,24 @@ export class JsonRpcClient {
     this.transport = options.transport
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.idFactory = options.idFactory
+    this.protocolVersion = options.protocolVersion ?? WRENYARD_PROTOCOL_VERSION
+    this.handshakeEnabled = options.handshake ?? true
   }
 
   get pendingCount(): number {
     return this.pending.size
+  }
+
+  /**
+   * Complete (or reuse) the version-checked `health.ping` handshake.
+   *
+   * Idempotent: the handshake runs at most once per client and the failed
+   * result is cached, so every later business request fails closed with the
+   * same error instead of silently retrying an incompatible peer.
+   */
+  handshake(): Promise<void> {
+    this.handshakePromise ??= this.runHandshake()
+    return this.handshakePromise
   }
 
   request<TResult = unknown>(
@@ -103,6 +134,76 @@ export class JsonRpcClient {
     params?: unknown,
     options: JsonRpcRequestOptions = {},
   ): Promise<TResult> {
+    // The handshake uses sendRequest directly, so all public calls can wait
+    // for it without recursively handshaking.
+    if (this.handshakeEnabled) {
+      return this.handshake().then(() => this.sendRequest<TResult>(method, params, options))
+    }
+    return this.sendRequest<TResult>(method, params, options)
+  }
+
+  async notify(method: string, params?: unknown): Promise<void> {
+    if (this.handshakeEnabled) {
+      await this.handshake()
+    }
+    if (this.closedError) throw this.closedError
+
+    const notification = {
+      jsonrpc: '2.0' as const,
+      method,
+      ...(params === undefined ? {} : { params }),
+    }
+
+    await this.transport.send(encodeFrame(notification))
+  }
+
+  handleIncoming(chunk: NdjsonChunk): unknown[] {
+    return this.decoder.write(chunk)
+  }
+
+  clearPending(error = new Error('JsonRpcClient closed')): void {
+    for (const request of this.pending.values()) {
+      if (request.timeout !== undefined) clearTimeout(request.timeout)
+      request.reject(error)
+    }
+    this.pending.clear()
+  }
+
+  close(error = new Error('JsonRpcClient closed')): void {
+    this.closedError ??= error
+    this.clearPending(error)
+  }
+
+  dispose(error = new Error('JsonRpcClient disposed')): void {
+    this.close(error)
+  }
+
+  private runHandshake(): Promise<void> {
+    return this.sendRequest<{ protocolVersion?: unknown }>(
+      HANDSHAKE_METHOD,
+      { protocolVersion: this.protocolVersion },
+      {},
+    ).then((result) => {
+      const daemonVersion = isRecord(result) ? result.protocolVersion : undefined
+      if (daemonVersion !== this.protocolVersion) {
+        const error = new Error(protocolVersionMismatchMessage(this.protocolVersion, daemonVersion))
+        this.clearPending(error)
+        throw error
+      }
+    }).catch((error: unknown) => {
+      const failure = error instanceof Error ? error : new Error(String(error))
+      this.close(failure)
+      this.transport.close?.()
+      throw failure
+    })
+  }
+
+  private sendRequest<TResult = unknown>(
+    method: string,
+    params?: unknown,
+    options: JsonRpcRequestOptions = {},
+  ): Promise<TResult> {
+    if (this.closedError) return Promise.reject(this.closedError)
     const id = this.createId()
     const timeoutMs = options.timeoutMs ?? this.timeoutMs
     const request = {
@@ -139,36 +240,6 @@ export class JsonRpcClient {
         this.rejectPending(id, error instanceof Error ? error : new Error(String(error)))
       }
     })
-  }
-
-  async notify(method: string, params?: unknown): Promise<void> {
-    const notification = {
-      jsonrpc: '2.0' as const,
-      method,
-      ...(params === undefined ? {} : { params }),
-    }
-
-    await this.transport.send(encodeFrame(notification))
-  }
-
-  handleIncoming(chunk: NdjsonChunk): unknown[] {
-    return this.decoder.write(chunk)
-  }
-
-  clearPending(error = new Error('JsonRpcClient closed')): void {
-    for (const request of this.pending.values()) {
-      if (request.timeout !== undefined) clearTimeout(request.timeout)
-      request.reject(error)
-    }
-    this.pending.clear()
-  }
-
-  close(error = new Error('JsonRpcClient closed')): void {
-    this.clearPending(error)
-  }
-
-  dispose(error = new Error('JsonRpcClient disposed')): void {
-    this.clearPending(error)
   }
 
   private createId(): string | number {

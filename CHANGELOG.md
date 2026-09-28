@@ -4,26 +4,70 @@
 
 Development preview release.
 
+### Daemon service surface
+
+- Make the daemon local-first and IPC-only. Its only external interface is
+  owner-only NDJSON JSON-RPC (a unix socket on macOS, a named pipe on Windows);
+  there is no MCP, REST or message HTTP surface and no listener for external
+  clients. `health.ping` now reports an integer `protocolVersion`, and the
+  client refuses a version mismatch instead of negotiating compatibility.
+- Give the daemon one run entry point, `wrenyard daemon run`, which runs in the
+  foreground: the first SIGINT/SIGTERM drains active work and a second forces
+  shutdown. Desktop, `pnpm dev:daemon`/`pnpm dev:desktop` and the terminal all
+  use it. Remove `wrenyard daemon start` (detached mode, the
+  `wrenyard-daemon.json` state file and `--host`/`--port`) and
+  `wrenyard daemon restart`; keep `daemon stop` and `daemon status`.
+- Make Desktop the daemon owner: it connects to a daemon that is already
+  running or supervises one with the packaged runtime, is tray-resident on
+  every platform (closing the window hides it; only the tray “退出” command
+  quits), and shows “daemon stopped” with a restart action after a clean stop.
+  The CLI never starts or restarts the daemon and reports a single message when
+  none is running.
+- Confine the gateway to the daemon process tree: bind `127.0.0.1:0` (a random
+  loopback port), mint a fresh in-memory token on every start, and serve only
+  `/gateway/*`. Remove the fixed `service.bind`/`host`/`port` configuration,
+  the `EADDRINUSE` retry, the on-disk `gateway/credential` and the credential
+  helper.
+
+### Removed surface
+
+- Remove MCP (`/mcp`, `ForemanMcpServer`, `protocol/agent-tools.mts`), REST
+  (`server/http/*` and `/api/v1/*`) and the message subsystem (the telegram,
+  wecom, webhook, openclaw, cc-channel, remote and system backends;
+  `/message/deliver`, `/channel/*` and `/mcp/channel/events`; the `message.send`
+  RPC; and `wrenyard message`).
+- Remove external client configuration (ccswitch): the daemon
+  `client-configuration/` tree and the `client.configuration.*` RPCs, the
+  control-client methods, and Desktop's Clients page and IPC. Independently
+  injected stdio MCP servers (`browser-use`, `computer-use` and task-declared
+  `mcpServers`) are unaffected.
+
+### Distribution
+
+- Ship Desktop installers only. Each release publishes three artifacts
+  (Windows `setup.exe`, macOS `.dmg` and macOS in-app-update `.zip`); the suite
+  zip, the SEA install engine (`wrenyard install`/`wrenyard update`), the
+  one-click bootstrap scripts and `pnpm release:local`/`install:local`/
+  `version:sync` are gone. Desktop updates itself from the channel feed on the
+  `updates` branch and does not roll back a failed update in the first version.
+- Converge root scripts to `build`, `dev:daemon`, `dev:desktop`, `release`,
+  `lint`, `check`, `test` and `wrenyard`.
+
+### Migration from external client configuration
+
+- Upgrading drops external client configuration without automatic restoration.
+  Before upgrading, open the old Desktop Clients page and click Restore for
+  each client; if you already upgraded, manually remove the base URL and
+  credential-helper entries Wrenyard wrote from your Claude Code, Codex, Grok
+  Build or Claude App configuration so they no longer point at
+  `127.0.0.1:8787/gateway/...`.
+
 ### Release simplification
 
-- Publish only two archives per target (`darwin-arm64`, `win32-x64`): the suite
-  zip and the Desktop zip. The npm CLI tarball, bare SEA binary, aggregate
-  checksums, `release-manifest.json` and the generated license report are gone.
-- Replace the three separate installers with one engine inside the SEA
-  `wrenyard` executable. `wrenyard install` and `wrenyard update` share it; the
-  one-click scripts are thin bootstraps that hand a verified suite zip to the
-  engine.
-- Distribute the bootstrap scripts and the update feed from the `updates`
-  branch so the script, feed and engine always move together. The feed keeps
-  the `wrenyard.update.v1` schema and the four public asset names.
-- Make Desktop check and prompt only: it resolves the installed suite and
-  spawns `wrenyard update`, which performs the verified install, rollback and
-  relaunch. Channel switching and the in-app installer are removed.
 - Reduce the version source to the root `package.json`, synced only to the
   Desktop package; the suite version is read from `SUITE_VERSION`.
 - Delete the planned-restart subsystem and the source-checkout updater.
-  `wrenyard daemon restart [--force] [--json]` stops and starts synchronously,
-  and Task-context stop, restart, install and update are refused.
+  Task-context daemon stop is refused.
 - Remove the Go/Forge leftovers: the root `go.work`, the Go toolchain
   requirement, and the stale asset-provenance entry.
 

@@ -6,17 +6,23 @@ import { build as buildTargets, checkToolchain, typecheckDaemon } from './build.
 import { withDaemon } from './ipc.mjs';
 import { acquireDevLock, readDaemonLock, readDevLock, releaseDevLock } from './locks.mjs';
 import { businessIpcPath, configDir, daemonLockPath, desktopUserData, devLockPath, logDir, stateRoot } from './paths.mjs';
-import { daemonInvocation, electronDesktopInvocation, sourceCliInvocation } from './spawn.mjs';
+import { daemonRunInvocation, electronDesktopInvocation, sourceCliInvocation } from './spawn.mjs';
+import { DaemonProcess } from '../../../apps/daemon/lib/supervisor.mjs';
 import { COMPONENTS, createWatcher } from './watch.mjs';
 
 const checkout = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
+const DESKTOP_COMPONENTS = new Set([
+  COMPONENTS.desktopRenderer,
+  COMPONENTS.desktopMain,
+  COMPONENTS.desktopPreload,
+]);
 const platform = process.platform;
 const env = process.env;
 const nodeExecutable = process.execPath;
 const print = (line) => process.stdout.write(`${line}\n`);
 
 const PING_MS = 250, READY_TIMEOUT_MS = 60_000, RPC_TIMEOUT_MS = 2_000, IDLE_POLL_MS = 1_000;
-const IDLE_NOTICE_MS = 60_000, SHUTDOWN_TIMEOUT_MS = 5_000, DRAIN_NOTICE_MS = 30_000;
+const IDLE_NOTICE_MS = 60_000, SHUTDOWN_TIMEOUT_MS = 5_000, STOP_WAIT_MS = 120_000;
 const DESKTOP_TERM_MS = 10_000, DESKTOP_KILL_MS = 2_000, SINGLE_INSTANCE_MS = 5_000;
 const BUILD_TAIL = 40, STARTUP_TAIL = 30;
 
@@ -46,9 +52,11 @@ function waitExit(child, timeoutMs) {
 }
 
 // Single-process source-development supervisor (specification section 4).
-// `pnpm dev` calls this once; it owns the watcher, the build/restart loop and the
-// daemon and Desktop children until the first SIGINT/SIGTERM.
-export async function runDev() {
+// `pnpm dev:desktop` calls this once; it owns the watcher, the build/restart loop
+// and the daemon and Desktop children until the first SIGINT/SIGTERM.
+// `pnpm dev:daemon` passes `daemonOnly: true`: Desktop is never launched and
+// Desktop source changes are ignored.
+export async function runDev({ daemonOnly = false } = {}) {
   const state = stateRoot(), logs = logDir(state), devLock = devLockPath(state), daemonLock = daemonLockPath(state);
   const ipcPath = businessIpcPath(), configPath = join(configDir(), 'config.json'), userData = desktopUserData();
   const daemonLog = join(logs, 'daemon.log'), desktopLog = join(logs, 'desktop.log');
@@ -95,7 +103,7 @@ export async function runDev() {
     return fn(controller.signal).finally(() => { if (workAbort === controller) workAbort = null; });
   }
   async function waitForDaemonIdle() {
-    if (stopping || !daemonState || childHasExited(daemonState.child)) return;
+    if (stopping || !daemonState || !daemonState.proc.running) return;
     let lastNotice = 0;
     while (!stopping) {
       let status;
@@ -112,78 +120,76 @@ export async function runDev() {
       await sleep(IDLE_POLL_MS);
     }
   }
-  function daemonStartupError(child) {
-    return new Error(`Daemon exited during startup (code ${child.exitCode ?? 'none'}, signal ${child.signalCode ?? 'none'}). Last lines of ${daemonLog}:\n${fileTail(daemonLog, STARTUP_TAIL)}`);
+  function daemonStartupError(detail) {
+    return new Error(`${detail}. Last lines of ${daemonLog}:\n${fileTail(daemonLog, STARTUP_TAIL)}`);
   }
+  // Spawn `daemon run` through the shared supervisor; readiness is the process
+  // `ready` message or a source-mode health.ping, and exit/shutdown handling is
+  // owned by the shared module (no duplicated subprocess lifecycle here).
   async function startDaemon() {
     if (stopping) return;
     mkdirSync(logs, { recursive: true });
-    const invocation = daemonInvocation(checkout, configPath);
-    const child = spawnProcess(invocation.command, invocation.args, { cwd: invocation.cwd, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, shell: false });
-    attachLog(child, daemonLog);
-    const track = { child, expected: false, starting: true };
-    daemonState = track;
-    let spawnError = null;
-    child.once('error', (error) => {
-      spawnError = error;
-      if (daemonState === track) daemonState = null;
+    const invocation = daemonRunInvocation(checkout, configPath);
+    let track;
+    const proc = new DaemonProcess({
+      command: invocation.command,
+      args: invocation.args,
+      cwd: invocation.cwd,
+      env: childEnv(),
+      ipcPath,
+      readyTimeoutMs: READY_TIMEOUT_MS,
+      pollIntervalMs: PING_MS,
+      stopTimeoutMs: STOP_WAIT_MS,
+      exitPollMs: 100,
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      probe: async () => {
+        try {
+          const health = await pingDaemon(RPC_TIMEOUT_MS);
+          return health?.ok === true && health?.identity?.mode === 'source';
+        } catch { return false; }
+      },
+      onExit: (info) => { if (track) onDaemonExit(track, info); },
     });
-    child.once('exit', (code, signal) => onDaemonExit(track, code, signal));
-    const deadline = Date.now() + READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      if (spawnError) throw new Error(`Daemon failed to start: ${message(spawnError)}`);
+    track = { proc, starting: true };
+    daemonState = track;
+    try {
+      // launch() spawns synchronously, so the child exists before we attach logs.
+      const launching = proc.launch();
+      attachLog(proc.child, daemonLog);
+      await launching;
+      track.starting = false;
+    } catch (error) {
+      if (daemonState === track) daemonState = null;
       if (stopping) return;
-      if (childHasExited(child)) throw daemonStartupError(child);
-      try {
-        const health = await pingDaemon(RPC_TIMEOUT_MS);
-        if (health?.ok === true && health?.identity?.mode === 'source') { track.starting = false; return; }
-      } catch { /* keep polling until the deadline */ }
-      await sleep(PING_MS);
+      throw daemonStartupError(message(error));
     }
-    try { child.kill('SIGTERM'); } catch { /* gone */ }
-    await waitExit(child, DESKTOP_KILL_MS);
-    throw daemonStartupError(child);
   }
-  function onDaemonExit(track, code, signal) {
+  function onDaemonExit(track, info) {
     if (daemonState === track) daemonState = null;
-    if (track.starting || track.expected || stopping) return;
-    if (code === 0 && !signal) {
-      print('Daemon exited cleanly (requested outside pnpm dev); starting it again.');
+    if (track.starting || info.expected || stopping) return;
+    if (info.code === 0 && !info.signal) {
+      print('Daemon exited cleanly (requested outside pnpm dev:desktop); starting it again.');
       startDaemon()
-        .then(() => print(`Daemon is back (pid ${daemonState?.child?.pid ?? '—'}).`))
-        .catch((error) => print(`${message(error)}\nDaemon restart failed; save a file or rerun pnpm dev to retry.`));
+        .then(() => print(`Daemon is back (pid ${daemonState?.proc.pid ?? '—'}).`))
+        .catch((error) => print(`${message(error)}\nDaemon restart failed; save a file or rerun pnpm dev:desktop to retry.`));
       return;
     }
-    print(`Daemon exited (code ${code ?? 'none'}, signal ${signal ?? 'none'}).`);
+    print(`Daemon exited (code ${info.code ?? 'none'}, signal ${info.signal ?? 'none'}).`);
     const text = fileTail(daemonLog, STARTUP_TAIL);
     if (text) print(text);
   }
   async function stopDaemon() {
     const track = daemonState;
-    if (!track || childHasExited(track.child)) { daemonState = null; return; }
-    track.expected = true;
+    if (!track || !track.proc.running) { daemonState = null; return; }
     if (stopping && track.starting) {
-      try { track.child.kill('SIGTERM'); } catch { /* gone */ }
-      if (!(await waitExit(track.child, SHUTDOWN_TIMEOUT_MS))) {
-        try { track.child.kill('SIGKILL'); } catch { /* gone */ }
-        await waitExit(track.child, DESKTOP_KILL_MS);
-      }
-      if (!childHasExited(track.child)) throw new Error(`Cannot stop starting daemon; pid ${track.child.pid ?? 'unknown'} was left running.`);
+      // A daemon still booting cannot drain; terminate it and await the real exit.
+      await track.proc.kill();
+      if (track.proc.running) throw new Error(`Cannot stop starting daemon; pid ${track.proc.pid ?? 'unknown'} was left running.`);
       return;
     }
-    try {
-      await withDaemon(ipcPath, (client) => client.request('daemon.shutdown', { reason: 'pnpm dev restart' }, SHUTDOWN_TIMEOUT_MS), SHUTDOWN_TIMEOUT_MS);
-    } catch {
-      if (!childHasExited(track.child)) {
-        track.expected = false;
-        throw new Error(`Cannot request a graceful daemon shutdown; pid ${track.child.pid ?? 'unknown'} was left running.`);
-      }
-    }
-    let lastNotice = Date.now();
-    while (!childHasExited(track.child)) {
-      await sleep(200);
-      if (Date.now() - lastNotice >= DRAIN_NOTICE_MS) { lastNotice = Date.now(); print('Daemon is still draining active work.'); }
-    }
+    print('Stopping daemon; waiting for active work to finish...');
+    const exited = await track.proc.shutdown({ timeoutMs: STOP_WAIT_MS });
+    if (!exited) throw new Error(`Cannot request a graceful daemon shutdown; pid ${track.proc.pid ?? 'unknown'} was left running.`);
     if (daemonState === track) daemonState = null;
   }
 
@@ -192,12 +198,12 @@ export async function runDev() {
     if (track.starting || track.expected || stopping) return;
     print(`Desktop exited (code ${code ?? 'none'}).`);
     if (Date.now() - track.startedAt < SINGLE_INSTANCE_MS) {
-      print('Another 啾啾工坊 may be running (Desktop is single-instance). Quit it, then save a file or rerun pnpm dev.');
+      print('Another 啾啾工坊 may be running (Desktop is single-instance). Quit it, then save a file or rerun pnpm dev:desktop.');
     }
   }
 
   async function startDesktop() {
-    if (stopping) return;
+    if (stopping || daemonOnly) return;
     const invocation = electronDesktopInvocation(checkout);
     const desktopEnv = childEnv();
     delete desktopEnv.ELECTRON_RUN_AS_NODE;
@@ -247,7 +253,7 @@ export async function runDev() {
     if (stopping) return;
     const daemonAffected = components.has(COMPONENTS.daemon) || components.has(COMPONENTS.shared);
     await withAbort(async (signal) => {
-      await buildTargets({ checkout, components, signal });
+      await buildTargets({ checkout, components: daemonOnly ? new Set() : components, signal });
       if (daemonAffected) await typecheckDaemon({ checkout, signal });
     });
     if (stopping) return;
@@ -255,10 +261,15 @@ export async function runDev() {
       await waitForDaemonIdle();
       if (stopping) return;
       await stopDaemon();
+      if (daemonOnly) {
+        await startDaemon();
+        print(`Restarted daemon (pid ${daemonState?.proc.pid ?? '—'}).`);
+        return;
+      }
       await stopDesktop();
       await startDaemon();
       await startDesktop();
-      print(`Restarted daemon (pid ${daemonState?.child?.pid ?? '—'}) and Desktop (pid ${desktopState?.child?.pid ?? '—'}).`);
+      print(`Restarted daemon (pid ${daemonState?.proc.pid ?? '—'}) and Desktop (pid ${desktopState?.child?.pid ?? '—'}).`);
     } else {
       await stopDesktop();
       await startDesktop();
@@ -280,7 +291,7 @@ export async function runDev() {
           await applyChange(components);
         } catch (error) {
           for (const component of components) carry.add(component);
-          print(`Restart failed: ${message(error)}\n${daemonState && !childHasExited(daemonState.child) ? 'The daemon is still running' : 'The daemon is not running'}; fix the source and save to retry.`);
+          print(`Restart failed: ${message(error)}\n${daemonState?.proc.running ? 'The daemon is still running' : 'The daemon is not running'}; fix the source and save to retry.`);
         }
       }
     } finally {
@@ -291,9 +302,10 @@ export async function runDev() {
   function handleChange(files, components) {
     const restart = new Set();
     for (const component of components) {
+      if (daemonOnly && DESKTOP_COMPONENTS.has(component)) continue;
       if (component === COMPONENTS.cli) print('CLI runs from source on every invocation; no restart needed.');
-      else if (component === COMPONENTS.tooling) print(`${files.join(', ')} changed; restart pnpm dev to load it.`);
-      else if (component === COMPONENTS.manifest) print('Dependencies changed; stop pnpm dev, run pnpm install --frozen-lockfile, then run pnpm dev.');
+      else if (component === COMPONENTS.tooling) print(`${files.join(', ')} changed; restart pnpm dev:desktop to load it.`);
+      else if (component === COMPONENTS.manifest) print('Dependencies changed; stop pnpm dev:desktop, run pnpm install --frozen-lockfile, then run pnpm dev:desktop.');
       else restart.add(component);
     }
     if (restart.size === 0) return;
@@ -309,15 +321,19 @@ export async function runDev() {
   }
 
   function printReady(status) {
-    print([
+    const lines = [
       `ready: ${checkout}`,
       `revision: ${gitShortSha()}`,
-      `daemon pid: ${daemonState?.child?.pid ?? '—'}`,
-      `desktop pid: ${desktopState?.child?.pid ?? '—'}`,
+      `mode: ${daemonOnly ? 'daemon-only' : 'daemon+desktop'}`,
+      `daemon pid: ${daemonState?.proc.pid ?? '—'}`,
+    ];
+    if (!daemonOnly) lines.push(`desktop pid: ${desktopState?.child?.pid ?? '—'}`);
+    lines.push(
       `ipc: ${ipcPath}`,
       `logs: ${logs}`,
       'Edits restart the stack when the daemon is idle; stop with Ctrl+C.',
-    ].join('\n'));
+    );
+    print(lines.join('\n'));
     if (status?.shutting_down === true) print('Daemon is shutting down; the next source change restarts it.');
   }
 
@@ -347,14 +363,14 @@ export async function runDev() {
     if (forced) return;
     forced = true;
     print('Forcing daemon shutdown; further signals are ignored.');
-    withDaemon(ipcPath, (client) => client.request('daemon.shutdown', { reason: 'pnpm dev forced stop', force: true }, SHUTDOWN_TIMEOUT_MS), SHUTDOWN_TIMEOUT_MS).catch(() => {});
+    withDaemon(ipcPath, (client) => client.request('daemon.shutdown', { reason: 'pnpm dev:desktop forced stop', force: true }, SHUTDOWN_TIMEOUT_MS), SHUTDOWN_TIMEOUT_MS).catch(() => {});
   }
 
   process.on('exit', releaseLock);
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
 
-  const toolErrors = checkToolchain({ checkout });
+  const toolErrors = checkToolchain({ checkout, requireElectron: !daemonOnly });
   if (toolErrors.length > 0) {
     print(toolErrors.join('\n'));
     print('Run: pnpm install --frozen-lockfile');
@@ -362,7 +378,7 @@ export async function runDev() {
   }
   const holder = readDevLock(devLock);
   if (holder) {
-    print(`pnpm dev is already running (pid ${holder.pid}, checkout ${holder.checkout}). Stop it with Ctrl+C in its terminal first.`);
+    print(`pnpm dev:desktop is already running (pid ${holder.pid}, checkout ${holder.checkout}). Stop it with Ctrl+C in its terminal first.`);
     return 1;
   }
   try {
@@ -377,7 +393,7 @@ export async function runDev() {
   if (stopping) return finished;
   if (running) {
     releaseLock();
-    print(`A Wrenyard daemon is already running (pid ${running.pid}, ${running.mode}). Quit 啾啾工坊 completely (tray → Quit) or run "wrenyard daemon stop", then run pnpm dev again.`);
+    print(`A Wrenyard daemon is already running (pid ${running.pid}, ${running.mode}). Quit 啾啾工坊 completely (tray → Quit) or run "wrenyard daemon stop", then run pnpm dev:desktop again.`);
     return 1;
   }
   mkdirSync(logs, { recursive: true });
@@ -386,13 +402,17 @@ export async function runDev() {
 
   let initialBuildOk = true;
   try {
-    await withAbort((signal) => buildTargets({ checkout, components: new Set([COMPONENTS.shared]), signal }));
+    const initialComponents = daemonOnly ? new Set() : new Set([COMPONENTS.shared]);
+    await withAbort((signal) => buildTargets({ checkout, components: initialComponents, signal }));
   } catch (error) {
     initialBuildOk = false;
     print(message(error));
     const text = tail(error?.output, BUILD_TAIL);
     if (text) print(text);
-    for (const component of [COMPONENTS.shared, COMPONENTS.daemon, COMPONENTS.desktopRenderer, COMPONENTS.desktopMain, COMPONENTS.desktopPreload]) carry.add(component);
+    const carryComponents = daemonOnly
+      ? [COMPONENTS.daemon]
+      : [COMPONENTS.shared, COMPONENTS.daemon, COMPONENTS.desktopRenderer, COMPONENTS.desktopMain, COMPONENTS.desktopPreload];
+    for (const component of carryComponents) carry.add(component);
     print('Initial build failed; the watcher stays up. Fix the source and save to retry.');
   }
   if (stopping) return finished;

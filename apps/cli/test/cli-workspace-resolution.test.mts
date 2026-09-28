@@ -44,13 +44,24 @@ function runForemanDoctor(env: NodeJS.ProcessEnv): string {
   })
 }
 
+// WRENYARD_* spellings outrank the FOREMAN_* ones under test, so a developer
+// shell exporting them must not leak into the resolution cases.
+const OVERRIDING_KEYS = ['WRENYARD_WORKSPACE', 'WRENYARD_TEST_WORK_DIR', 'WRENYARD_WORK_DIR'] as const
+let overridden: Partial<Record<(typeof OVERRIDING_KEYS)[number], string>> = {}
+
 beforeEach(() => {
   oldTestWorkDir = process.env.FOREMAN_TEST_WORK_DIR
   oldWorkspace = process.env.FOREMAN_WORKSPACE
   oldPath = process.env.PATH ?? ''
+  overridden = {}
+  for (const key of OVERRIDING_KEYS) {
+    if (process.env[key] !== undefined) overridden[key] = process.env[key]
+    delete process.env[key]
+  }
 })
 
 afterEach(() => {
+  for (const [key, value] of Object.entries(overridden)) process.env[key] = value
   if (oldTestWorkDir === undefined) {
     delete process.env.FOREMAN_TEST_WORK_DIR
   } else {

@@ -32,23 +32,23 @@ export async function handleTaskgraph(args: string[]): Promise<number> {
 async function handleTaskgraphNode(args: string[]): Promise<number> {
   const subcommand = args[0]
   if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-    console.error('Usage: wrenyard taskgraph node inspect <json-params> [--config path]')
+    console.error('Usage: wrenyard taskgraph node inspect <json-params> [--config path] [--json]')
     return subcommand ? 0 : 1
   }
   if (subcommand === 'inspect') return handleTaskgraphNodeInspect(args.slice(1))
-  console.error('Usage: wrenyard taskgraph node inspect <json-params> [--config path]')
+  console.error('Usage: wrenyard taskgraph node inspect <json-params> [--config path] [--json]')
   return 1
 }
 
 async function handleTaskgraphCreate(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph create <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph create <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
@@ -67,14 +67,14 @@ async function handleTaskgraphCreate(args: string[]): Promise<number> {
 }
 
 async function handleTaskgraphPatch(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph patch <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph patch <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
@@ -93,14 +93,14 @@ async function handleTaskgraphPatch(args: string[]): Promise<number> {
 }
 
 async function handleTaskgraphStatus(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph status <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph status <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
@@ -119,14 +119,14 @@ async function handleTaskgraphStatus(args: string[]): Promise<number> {
 }
 
 async function handleTaskgraphEvents(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph events <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph events <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
@@ -145,14 +145,14 @@ async function handleTaskgraphEvents(args: string[]): Promise<number> {
 }
 
 async function handleTaskgraphSignal(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph signal <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph signal <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
@@ -171,14 +171,14 @@ async function handleTaskgraphSignal(args: string[]): Promise<number> {
 }
 
 async function handleTaskgraphNodeInspect(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph node inspect <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph node inspect <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
@@ -197,14 +197,14 @@ async function handleTaskgraphNodeInspect(args: string[]): Promise<number> {
 }
 
 async function handleTaskgraphInspect(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph inspect <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph inspect <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
@@ -223,14 +223,14 @@ async function handleTaskgraphInspect(args: string[]): Promise<number> {
 }
 
 async function handleTaskgraphList(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph list <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph list <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
@@ -251,14 +251,14 @@ async function handleTaskgraphList(args: string[]): Promise<number> {
 }
 
 async function handleTaskgraphWait(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph wait <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph wait <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
@@ -378,14 +378,14 @@ export async function runCompactTaskGraph(
 }
 
 async function handleTaskgraphRun(args: string[]): Promise<number> {
-  const usage = 'wrenyard taskgraph run <json-params> [--config path]'
+  const usage = 'wrenyard taskgraph run <json-params> [--config path] [--json]'
   if (isHelpRequest(args)) {
     console.log(`Usage: ${usage}`)
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })

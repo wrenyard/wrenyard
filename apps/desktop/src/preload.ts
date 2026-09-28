@@ -9,6 +9,7 @@ import {
   type ConversationActivityItem,
   type WorkspaceConfigurationSnapshot,
   type UpdateSnapshot,
+  type DaemonLifecycleSnapshot,
   type ShellPage,
   type WrenyardShellApi,
   type TaskSettingsSaveRequest,
@@ -51,21 +52,6 @@ const api: WrenyardShellApi = {
   openProviderKeyPage(providerId: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.openProviderKeyPage, providerId) as Promise<void>;
   },
-  getClientConfiguration() {
-    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationSnapshot);
-  },
-  planClientConfiguration(clientId, selection) {
-    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationPlan, clientId, selection);
-  },
-  applyClientConfiguration(plan) {
-    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationApply, plan);
-  },
-  planClientConfigurationRestore(clientId) {
-    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationPlanRestore, clientId);
-  },
-  restoreClientConfiguration(plan) {
-    return ipcRenderer.invoke(SHELL_CHANNELS.clientConfigurationRestore, plan);
-  },
   getUpdate(): Promise<UpdateSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.updateSnapshot) as Promise<UpdateSnapshot>;
   },
@@ -74,6 +60,20 @@ const api: WrenyardShellApi = {
   },
   requestInstall(): Promise<UpdateSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.requestInstall) as Promise<UpdateSnapshot>;
+  },
+  getDaemon(): Promise<DaemonLifecycleSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.daemonSnapshot) as Promise<DaemonLifecycleSnapshot>;
+  },
+  startDaemon(): Promise<DaemonLifecycleSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.daemonStart) as Promise<DaemonLifecycleSnapshot>;
+  },
+  restartDaemon(): Promise<DaemonLifecycleSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.daemonRestart) as Promise<DaemonLifecycleSnapshot>;
+  },
+  onDaemonChanged(listener: () => void): () => void {
+    const handler = (): void => listener();
+    ipcRenderer.on(SHELL_CHANNELS.daemonChanged, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.daemonChanged, handler);
   },
   savePetSettings(settings): Promise<SettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.savePetSettings, settings) as Promise<SettingsSnapshot>;

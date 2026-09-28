@@ -1,12 +1,5 @@
 import type { ConversationSnapshot, SummarySettingsSnapshot, TaskRunSnapshot, WorkspaceConfigurationSnapshot } from '@wrenyard/protocol/session';
 import type { PetSettingsPayload } from './pet/main/config';
-import type {
-  ClientConfigurationDto,
-  ClientConfigurationId,
-  ClientConfigurationPlanDto,
-  ClientConfigurationSnapshotDto,
-  ClientModelSelectionDto,
-} from './client-configuration/contract.js';
 
 // Shared conversation DTOs are owned by the protocol session surface. Desktop
 // re-exports them here so existing Desktop consumers keep one import site.
@@ -48,17 +41,16 @@ export const SHELL_CHANNELS = {
   conversationCancel: 'wrenyard-shell:conversation-cancel',
   configureProviderKey: 'wrenyard-shell:configure-provider-key',
   openProviderKeyPage: 'wrenyard-shell:open-provider-key-page',
-  clientConfigurationSnapshot: 'wrenyard-shell:client-configuration-snapshot',
-  clientConfigurationPlan: 'wrenyard-shell:client-configuration-plan',
-  clientConfigurationApply: 'wrenyard-shell:client-configuration-apply',
-  clientConfigurationPlanRestore: 'wrenyard-shell:client-configuration-plan-restore',
-  clientConfigurationRestore: 'wrenyard-shell:client-configuration-restore',
   updateSnapshot: 'wrenyard-shell:update-snapshot',
   checkUpdate: 'wrenyard-shell:check-update',
   requestInstall: 'wrenyard-shell:request-install',
+  daemonSnapshot: 'wrenyard-shell:daemon-snapshot',
+  daemonStart: 'wrenyard-shell:daemon-start',
+  daemonRestart: 'wrenyard-shell:daemon-restart',
   conversationChanged: 'wrenyard-shell:conversation-changed',
   quotaChanged: 'wrenyard-shell:quota-changed',
   updateChanged: 'wrenyard-shell:update-changed',
+  daemonChanged: 'wrenyard-shell:daemon-changed',
   viewChanged: 'wrenyard-shell:view-changed',
   taskSettingsSnapshot: 'wrenyard-shell:task-settings-snapshot',
   taskSettingsSave: 'wrenyard-shell:task-settings-save',
@@ -75,7 +67,7 @@ export const SHELL_CHANNELS = {
   execCancel: 'wrenyard-shell:exec-cancel',
 } as const;
 
-export type ShellPage = 'workbench' | 'stats' | 'quota' | 'clients' | 'settings' | 'tasks';
+export type ShellPage = 'workbench' | 'stats' | 'quota' | 'settings' | 'tasks';
 
 export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
@@ -124,6 +116,31 @@ export interface UpdateSnapshot {
   message?: string;
 }
 
+/**
+ * Who owns the daemon lifecycle. `supervised` means Desktop launched it, so it
+ * stops it on quit; `connected` means it was started elsewhere (the CLI or the
+ * source-development supervisor) and Desktop only disconnects.
+ */
+export type DaemonConnectionMode = 'supervised' | 'connected';
+
+export type DaemonProcessState =
+  | 'starting'
+  | 'running'
+  | 'stopped'
+  | 'failed'
+  | 'unavailable';
+
+/** Live daemon lifecycle projection consumed by the Desktop surfaces. */
+export interface DaemonLifecycleSnapshot {
+  mode: DaemonConnectionMode;
+  state: DaemonProcessState;
+  /** Only a supervised Desktop may launch or restart the daemon. */
+  canStart: boolean;
+  restartCount: number;
+  pid?: number;
+  message?: string;
+}
+
 export interface SettingsSnapshot {
   service: ServiceSnapshot;
   models: ModelSnapshot[];
@@ -134,7 +151,7 @@ export interface SettingsSnapshot {
     wrenyardVersion: string;
     dshVersion: string;
     buildTime?: string;
-    /** Present only while Desktop is running from `pnpm dev`. */
+    /** Present only while Desktop is running from `pnpm dev:desktop`. */
     sourceDevelopment?: boolean;
   };
 }
@@ -708,14 +725,13 @@ export interface WrenyardShellApi {
   saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot>;
   configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot>;
   openProviderKeyPage(providerId: string): Promise<void>;
-  getClientConfiguration(): Promise<ClientConfigurationSnapshotDto>;
-  planClientConfiguration(clientId: ClientConfigurationId, selection: ClientModelSelectionDto): Promise<ClientConfigurationPlanDto>;
-  applyClientConfiguration(plan: ClientConfigurationPlanDto): Promise<ClientConfigurationDto>;
-  planClientConfigurationRestore(clientId: ClientConfigurationId): Promise<ClientConfigurationPlanDto>;
-  restoreClientConfiguration(plan: ClientConfigurationPlanDto): Promise<ClientConfigurationDto>;
   getUpdate(): Promise<UpdateSnapshot>;
   checkUpdate(): Promise<UpdateSnapshot>;
   requestInstall(): Promise<UpdateSnapshot>;
+  getDaemon(): Promise<DaemonLifecycleSnapshot>;
+  startDaemon(): Promise<DaemonLifecycleSnapshot>;
+  restartDaemon(): Promise<DaemonLifecycleSnapshot>;
+  onDaemonChanged(listener: () => void): () => void;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   getConversation(): Promise<ConversationSnapshot>;
@@ -747,7 +763,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'clients' || value === 'settings' || value === 'tasks';
+  return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'settings' || value === 'tasks';
 }
 
 /**
@@ -796,6 +812,6 @@ export function acceleratorPage(input: AcceleratorInput, platform: NodeJS.Platfo
   if (input.key === '1') return 'workbench';
   if (input.key === '2') return 'stats';
   if (input.key === '3') return 'quota';
-  if (input.key === '4') return 'clients';
+  if (input.key === '4') return 'tasks';
   return null;
 }
