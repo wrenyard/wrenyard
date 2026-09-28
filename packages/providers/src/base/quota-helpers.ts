@@ -15,8 +15,9 @@ export function quotaWindow(
 export function quotaPool(
   quotaPoolId: string,
   windows: readonly ProviderQuotaPoolWindow[],
+  routingDiscountRate = 1,
 ): ProviderQuotaPool {
-  return Object.freeze({ quotaPoolId, kind: 'quota' as const, windows: Object.freeze(windows.slice()) });
+  return Object.freeze({ quotaPoolId, kind: 'quota' as const, windows: Object.freeze(windows.slice()), routingDiscountRate });
 }
 
 /** Builds one frozen mandatory monetary-balance pool at module load. */
@@ -25,7 +26,7 @@ export function balancePool(
   evidenceRef: string,
   checkedAt = '2026-09-08',
 ): ProviderQuotaPool {
-  return Object.freeze({ quotaPoolId, kind: 'balance' as const, windows: Object.freeze([]), balanceId: quotaPoolId, evidenceRef, checkedAt });
+  return Object.freeze({ quotaPoolId, kind: 'balance' as const, windows: Object.freeze([]), balanceId: quotaPoolId, routingDiscountRate: 1, evidenceRef, checkedAt });
 }
 
 /** Builds one frozen binding, guaranteeing a non-empty pools array. */

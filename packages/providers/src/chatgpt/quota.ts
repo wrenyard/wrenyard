@@ -7,11 +7,11 @@ const CODEX_PARSER = 'packages/providers/src/chatgpt/quota.ts';
 
 const CHATGPT_7D_POOL = quotaPool('chatgpt/7d', [
   quotaWindow('7d', 'full_cycle', 'provider_parser', CODEX_PARSER, '2026-09-09'),
-]);
+], 0.2);
 
 const CHATGPT_5H_POOL = quotaPool('chatgpt/5h', [
   quotaWindow('5h', 'full_cycle', 'provider_parser', CODEX_PARSER, '2026-09-09'),
-]);
+], 0.2);
 
 export const quota = {
   read: async (source: QuotaSource) => normalizeChatGPTQuota(await source.read()),

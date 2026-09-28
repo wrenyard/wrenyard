@@ -13,9 +13,12 @@ export class SupplyEvidencePolicy {
       ruleId: string;
     } | null = null;
     // Effective routing price (USD per M output tokens) drives the price factor P.
-    // A confirmed-free candidate zeroes it (P = 1); otherwise it starts at the
-    // reference and may be lowered by a valid worst-applicable marginal price.
-    let routingPriceUsdPerM = candidate.referenceUsdPerM;
+    // The fixed base-pool discount rate is applied once to the reference unit
+    // price; it is independent of peak/off-peak time-of-day pricing. A
+    // confirmed-free candidate zeroes it (P = 1); otherwise it may be lowered by
+    // a valid worst-applicable marginal price (also scaled by the rate).
+    const quotaPoolDiscountRate = candidate.quotaPoolDiscountRate ?? 1;
+    let routingPriceUsdPerM = candidate.referenceUsdPerM * quotaPoolDiscountRate;
     let marginalApplied = false;
     const freeSupply = candidate.confirmedFreeSupply;
     if (freeSupply !== null && freeSupply !== undefined) {
@@ -47,12 +50,20 @@ export class SupplyEvidencePolicy {
         notes.push("confirmed_free_supply_applied");
       }
     }
+    // The fixed pool discount lowers the automatic unit price once. Report it
+    // only when it actually applies and the candidate is not confirmed free
+    // (free routing already zeroed the price).
+    if (!confirmedFreeSupplyApplied && quotaPoolDiscountRate < 1) {
+      notes.push("quota_pool_discount_applied");
+    }
     // Marginal price: usable only when it carries verification provenance
     // (nonempty source/ruleId), the conservative worst_applicable marker, and a
     // UTC interval covering [now, now + timeout]. Invalid/stale/insufficient
     // evidence falls back to reference; an otherwise-valid applicable marginal
-    // above the listed reference rejects the candidate. Confirmed-free routing
-    // already zeroed the price, so marginal application is skipped in that case.
+    // above the listed reference rejects the candidate (compared raw, before the
+    // fixed pool discount). A valid applicable marginal is scaled by the fixed
+    // pool discount rate. Confirmed-free routing already zeroed the price, so
+    // marginal application is skipped in that case.
     const marginal = candidate.marginalPrice;
     if (marginal !== null && marginal !== undefined && !confirmedFreeSupplyApplied) {
       const usdPerM = marginal.usdPerM;
@@ -81,12 +92,16 @@ export class SupplyEvidencePolicy {
         return { kind: "rejected", snapshotId: candidate.snapshotId, canonicalId: candidate.canonicalId, reason: "marginal_above_reference", detail: `marginal usdPerM=${usdPerM} exceeds the reference ${candidate.referenceUsdPerM}` };
       }
       else {
-        routingPriceUsdPerM = usdPerM;
+        routingPriceUsdPerM = usdPerM * quotaPoolDiscountRate;
         marginalApplied = true;
         notes.push("marginal_price_applied");
       }
     }
-    if (!confirmedFreeSupplyApplied && candidate.referenceUsdPerM > candidate.effectiveCapUsdPerM) {
+    // The automatic cap gate compares the discounted reference unit price
+    // against the effective cap, never the marginal price: the fixed pool
+    // discount preserves the peak safety reference and a marginal price must
+    // never bypass the cap.
+    if (!confirmedFreeSupplyApplied && candidate.referenceUsdPerM * quotaPoolDiscountRate > candidate.effectiveCapUsdPerM) {
       return { kind: "rejected", snapshotId: candidate.snapshotId, canonicalId: candidate.canonicalId, reason: "reference_above_cap", detail: "effective routing price exceeds the effective cap" };
     }
     // Verified quota-burn efficiency adjusts Q only; it never changes H, tier,

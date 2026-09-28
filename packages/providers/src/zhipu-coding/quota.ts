@@ -7,11 +7,11 @@ const ZHIPU_DOCS = 'https://docs.bigmodel.cn/cn/coding-plan/overview';
 
 const ZHIPU_7D_POOL = quotaPool('zhipu-coding/7d', [
   quotaWindow('7d', 'full_cycle', 'official_docs', ZHIPU_DOCS, '2026-09-09'),
-]);
+], 0.3);
 
 const ZHIPU_5H_POOL = quotaPool('zhipu-coding/5h', [
   quotaWindow('5h', 'rolling_partial', 'official_docs', ZHIPU_DOCS, '2026-09-09'),
-]);
+], 0.3);
 
 export const quota = {
   read: async (source: QuotaSource) => normalizeZhipuQuota(await source.read()),

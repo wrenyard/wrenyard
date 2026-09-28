@@ -8,6 +8,7 @@ function quotaPool(quotaPoolId: string) {
     quotaPoolId,
     kind: 'quota' as const,
     windows: Object.freeze([]),
+    routingDiscountRate: 1,
   });
 }
 

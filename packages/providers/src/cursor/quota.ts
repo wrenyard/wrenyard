@@ -9,11 +9,11 @@ const CURSOR_DOCS = 'https://cursor.com/docs/models-and-pricing';
 
 const CURSOR_OTHER_POOL = quotaPool('cursor/other', [
   quotaWindow('Other', 'full_cycle', 'provider_parser', CURSOR_PARSER, '2026-09-10'),
-]);
+], 0.4);
 
 const CURSOR_POOL = quotaPool('cursor/cursor', [
   quotaWindow('Cursor', 'full_cycle', 'official_docs', CURSOR_DOCS),
-]);
+], 0.15);
 
 export const quota = {
   read: async (source: QuotaSource) => normalizeCursorQuota(await source.read()),
@@ -31,7 +31,7 @@ export const quota = {
     binding('cursor', 'gemini-3.8-flash', [CURSOR_OTHER_POOL]),
     binding('cursor', 'claude-fable-5-1', [CURSOR_OTHER_POOL]),
   ],
-  defaultPools: [quotaPool('cursor/usage', [])],
+  defaultPools: [quotaPool('cursor/usage', [], 0.4)],
 } satisfies Provider['quota'];
 
 function normalizeCursorQuota(raw: unknown) {

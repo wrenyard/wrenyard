@@ -7,7 +7,7 @@ import type { QuotaSnapshot } from '../base/quota-snapshot.ts';
 export const quota = {
   read: async (source: QuotaSource) => normalizeGrokQuota(await source.read()),
   bindings: [],
-  defaultPools: [quotaPool('super-grok/usage', [])],
+  defaultPools: [quotaPool('super-grok/usage', [], 0.2)],
 } satisfies Provider['quota'];
 
 function normalizeGrokQuota(raw: unknown): QuotaSnapshot {
