@@ -110,7 +110,9 @@ ${cliSource}
     seaConfigPath,
     JSON.stringify(
       {
-        main: wrappedEntry,
+        // Node embeds the main value in the SEA blob; keep it relative so
+        // release binaries do not contain a developer's temporary path.
+        main: path.basename(wrappedEntry),
         output: hasBuiltInBuilder ? outputPath : blobPath,
         disableExperimentalSEAWarning: true,
         useSnapshot: false,
@@ -124,7 +126,7 @@ ${cliSource}
 
   if (hasBuiltInBuilder) {
     await rm(outputPath, { force: true });
-    run(seaNode, ["--build-sea", seaConfigPath], { cwd: REPO_ROOT });
+    run(seaNode, ["--build-sea", seaConfigPath], { cwd: tmpDir });
   } else {
     let postjectCli;
     try {
@@ -132,7 +134,7 @@ ${cliSource}
     } catch {
       throw new Error("postject not found in local node_modules; install it as a devDependency");
     }
-    run(seaNode, ["--experimental-sea-config", seaConfigPath], { cwd: REPO_ROOT });
+    run(seaNode, ["--experimental-sea-config", seaConfigPath], { cwd: tmpDir });
     await copyFile(seaNode, outputPath);
     await chmod(outputPath, 0o755);
     if (process.platform === "darwin") {
