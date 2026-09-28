@@ -22,6 +22,11 @@ export interface ProviderQuotaPool {
   readonly windows: readonly ProviderQuotaPoolWindow[];
   /** Raw upstream balance row id for a `balance` pool. */
   readonly balanceId?: string;
+  /**
+   * Fixed base-pool automatic-routing multiplier for this pool's unit price.
+   * Independent of time-of-day (peak/off-peak) unit pricing; absence means 1.
+   */
+  readonly routingDiscountRate?: number;
   readonly evidenceRef?: string;
   readonly checkedAt?: string;
 }

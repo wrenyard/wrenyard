@@ -3,5 +3,5 @@ import { quotaPool } from '../base/quota-helpers.ts';
 
 export const quota = {
   bindings: [],
-  defaultPools: [quotaPool('qwen-coding/usage', [])],
+  defaultPools: [quotaPool('qwen-coding/usage', [], 0.2)],
 } satisfies Provider['quota'];

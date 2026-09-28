@@ -3,5 +3,5 @@ import { quotaPool } from '../base/quota-helpers.ts';
 
 export const quota = {
   bindings: [],
-  defaultPools: [quotaPool('minimax-coding/usage', [])],
+  defaultPools: [quotaPool('minimax-coding/usage', [], 0.2)],
 } satisfies Provider['quota'];

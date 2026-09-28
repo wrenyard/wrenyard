@@ -13,7 +13,7 @@ export const quota = {
     }
   },
   bindings: [],
-  defaultPools: [quotaPool('claude-coding/usage', [])],
+  defaultPools: [quotaPool('claude-coding/usage', [], 0.2)],
 } satisfies Provider['quota'];
 
 function window(value: unknown, name: string, minutes: number): QuotaWindow | undefined {
