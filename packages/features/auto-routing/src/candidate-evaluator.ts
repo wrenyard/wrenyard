@@ -37,6 +37,15 @@ export class CandidateEvaluator {
     if (!isFiniteNumber(candidate.referenceUsdPerM) || candidate.referenceUsdPerM < 0) {
       return this.rejected(snapshotId, canonicalId, "invalid_reference_price", "reference price must be finite and non-negative");
     }
+    // A supplied quota-pool discount rate scales the automatic unit price. It
+    // must be a finite multiplier in (0, 1]; absence means 1. Zero pricing
+    // remains exclusively confirmed-free or zero unit-price behavior.
+    if (candidate.quotaPoolDiscountRate !== undefined &&
+      (!isFiniteNumber(candidate.quotaPoolDiscountRate) ||
+        candidate.quotaPoolDiscountRate <= 0 ||
+        candidate.quotaPoolDiscountRate > 1)) {
+      return this.rejected(snapshotId, canonicalId, "invalid_reference_price", "quota pool discount rate must be a finite number greater than 0 and at most 1");
+    }
     if (!isFiniteNumber(candidate.effectiveCapUsdPerM) || candidate.effectiveCapUsdPerM < 0) {
       return this.rejected(snapshotId, canonicalId, "invalid_cap", "effective cap must be finite and non-negative");
     }

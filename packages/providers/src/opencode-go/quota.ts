@@ -3,5 +3,5 @@ import { quotaPool } from '../base/quota-helpers.ts';
 
 export const quota = {
   bindings: [],
-  defaultPools: [quotaPool('opencode-go/usage', [])],
+  defaultPools: [quotaPool('opencode-go/usage', [], 0.2)],
 } satisfies Provider['quota'];
