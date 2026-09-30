@@ -230,6 +230,11 @@ function renderEvent(event: LedgerEvent): string | undefined {
       const interrupted = event as TurnInterruptedEvent;
       return tag('interrupt', [['turn', interrupted.turn], ['reason', interrupted.reason]]);
     }
+    // Observational only: a started call must never enter the rendered context,
+    // exactly like the terminal `call` event it pairs with.
+    case 'call.started':
+    case 'call':
+      return undefined;
     default:
       return undefined;
   }
