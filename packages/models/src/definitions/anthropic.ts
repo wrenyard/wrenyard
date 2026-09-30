@@ -36,6 +36,17 @@ export const anthropicModels = [
     pricing: [0.2, 2, 10],
     speed: 60,
   }, { lab: 'anthropic', family: 'claude' }),
+  // https://platform.claude.com/docs/en/models/sonnet-5-5/overview
+  // Initial speed estimate uses the vendor's 30% uplift over Sonnet 5; local samples take precedence.
+  defineModel('claude-sonnet-5-5', 'Claude Sonnet 5.5', {
+    intelligence: 'high',
+    capabilities: ['text', 'image'],
+    thinkingLevels: THINKING_FULL,
+    contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
+    pricing: [0.2, 2, 10],
+    speed: 78,
+  }, { lab: 'anthropic', family: 'claude' }),
   defineModel('claude-haiku-4-5', 'Claude Haiku 4.5', {
     intelligence: 'low',
     capabilities: ['text'],

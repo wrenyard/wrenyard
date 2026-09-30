@@ -2,10 +2,10 @@ import { defineProvider, model, anthropic } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
   id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'managed',
-  defaultModel: 'claude-sonnet-5', quotaProvider: 'anthropic',
+  defaultModel: 'claude-sonnet-5-5', quotaProvider: 'anthropic',
   models: [
     { canonical: 'claude-opus-5-5', overrides: { family: 'claude', claudeTier: 'opus', supports1MContext: true } },
-    { ...model('claude-sonnet-5', 1_000_000, 131_072), family: 'claude', claudeTier: 'sonnet', supports1MContext: true },
+    { canonical: 'claude-sonnet-5-5', overrides: { family: 'claude', claudeTier: 'sonnet', supports1MContext: true } },
     { ...model('claude-haiku-4-5-20251001', 200_000, 64_000, 'claude-haiku-4-5'), family: 'claude', claudeTier: 'haiku' },
   ],
   protocols: [anthropic('https://api.anthropic.com/v1/messages', 'x-api-key')],

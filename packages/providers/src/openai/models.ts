@@ -1,13 +1,12 @@
 import { defineProvider, THINKING_FULL, effortLadder } from '../base/model-defaults.ts';
 
-// GPT-6 reasoning with tool calls requires Responses; Chat Completions only
-// supports tool calls with reasoning disabled.
+// GPT-6.1 Sol tool calls require Responses; Chat Completions is text-only.
 export const definition = defineProvider({
-  id: 'openai', displayName: 'OpenAI', credentialResolver: 'managed', defaultModel: 'gpt-6-sol',
-  models: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'],
+  id: 'openai', displayName: 'OpenAI', credentialResolver: 'managed', defaultModel: 'gpt-6.1-sol',
+  models: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'],
   thinkingMappings: {
     'gpt-6-astra': { codex: effortLadder(THINKING_FULL) },
-    'gpt-6-sol': { codex: effortLadder(THINKING_FULL) },
+    'gpt-6.1-sol': { codex: effortLadder(THINKING_FULL) },
     'gpt-6-luna': { codex: effortLadder(THINKING_FULL) },
   },
   protocols: [

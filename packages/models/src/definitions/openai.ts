@@ -29,6 +29,17 @@ export const openaiModels = [
     pricing: [0.01, 0.1, 0.5],
     speed: 107,
   }, { lab: 'openai', family: 'gpt-6' }),
+  // https://developers.openai.com/api/docs/models/gpt-6.1-sol
+  // Initial speed estimate retains Sol's catalog baseline pending local measured samples.
+  defineModel('gpt-6.1-sol', 'GPT 6.1 Sol', {
+    intelligence: 'high',
+    capabilities: ['text', 'image'],
+    thinkingLevels: THINKING_FULL,
+    contextWindow: 1_050_000,
+    maxOutputTokens: 128_000,
+    pricing: [0.1, 2, 10],
+    speed: 63,
+  }, { lab: 'openai', family: 'gpt-6' }),
   defineModel('gpt-5.6-sol', 'GPT 5.6 Sol', {
     intelligence: 'high',
     capabilities: ['text', 'image'],

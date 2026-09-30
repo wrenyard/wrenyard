@@ -19,6 +19,7 @@ const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'hy4-preview': 'hunyuan-hy4-preview',
   'hy4-preview-ioa': 'hunyuan-hy4-preview',
   'MiniMax-M3': 'minimax-m3',
+  'MiniMax-M3.1-Flash-Preview': 'minimax-m3.1-flash-preview',
   'MiniMax-M2.7': 'minimax-m2.7',
   // DeepSeek V4 ships as `deepseek-v4-<tier>` in the plain/internal product
   // files and as `deepseek-v4-<tier>-ioa` in the iOA one; both channel forms

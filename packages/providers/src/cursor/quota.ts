@@ -26,7 +26,7 @@ export const quota = {
     binding('cursor', 'claude-opus-5-5', [CURSOR_OTHER_POOL]),
     binding('cursor', 'gpt-5.6-luna', [CURSOR_OTHER_POOL]),
     binding('cursor', 'gpt-5.6-sol', [CURSOR_OTHER_POOL]),
-    binding('cursor', 'claude-sonnet-5', [CURSOR_OTHER_POOL]),
+    binding('cursor', 'claude-sonnet-5-5', [CURSOR_OTHER_POOL]),
     binding('cursor', 'muse-spark-1.3', [CURSOR_OTHER_POOL]),
     binding('cursor', 'gemini-3.8-flash', [CURSOR_OTHER_POOL]),
     binding('cursor', 'claude-fable-5-1', [CURSOR_OTHER_POOL]),

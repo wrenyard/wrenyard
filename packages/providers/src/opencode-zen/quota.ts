@@ -18,6 +18,7 @@ export const quota = {
     binding('opencode-zen', 'nemotron-3.5-lightning-free', [ZEN_FREE_POOL]),
     binding('opencode-zen', 'glm-5.3', [ZEN_BALANCE_POOL]),
     binding('opencode-zen', 'kimi-k3', [ZEN_BALANCE_POOL]),
+    binding('opencode-zen', 'gpt-6.1-sol', [ZEN_BALANCE_POOL]),
   ],
   defaultPools: [ZEN_FREE_POOL],
 } satisfies Provider['quota'];
