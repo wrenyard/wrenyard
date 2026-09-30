@@ -3,8 +3,10 @@ import type {
   SessionV2Bridge,
   SessionV2BridgeEventPayload,
   SessionV2BridgeModelEntry,
+  SessionV2BridgeTaskBrief,
 } from '../../../session-v2/preload.js';
 
+export type { SessionV2BridgeTaskBrief };
 export type SessionApi = SessionV2Bridge;
 export type ModelEntry = SessionV2BridgeModelEntry;
 export type EventPayload = SessionV2BridgeEventPayload;
@@ -101,6 +103,7 @@ export interface ActionModel {
   parsed?: unknown;
   result?: string;
   taskRunId?: string;
+  task?: SessionV2BridgeTaskBrief;
   outputs: ContextItem[];
   writes: { path: string; change: 'created' | 'updated' }[];
   afterInterrupt: boolean;

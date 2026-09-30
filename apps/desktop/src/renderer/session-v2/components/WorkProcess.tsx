@@ -6,9 +6,43 @@ import { Elapsed } from '@/renderer/components/elapsed';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import { ShimmerText } from '@/renderer/components/chat/shimmer-text';
 import { cn } from '@/renderer/lib/utils';
+import { useNow } from '@/renderer/hooks/use-now';
+import { buildTurnProfile } from '../model/profile.js';
 import { cycleLabel, phaseLabel } from '../model/describe.js';
 import type { ActionModel, TurnModel } from '../model/types.js';
 import { CycleSteps } from './CycleSteps.js';
+import { useInspector } from './inspector/Inspector.js';
+
+function MiniPhaseBarContent({ turn, onOpen, now }: { turn: TurnModel; onOpen: () => void; now: number }) {
+  const tones = {
+    preparing: 'bg-muted-foreground/40',
+    reasoning: 'bg-primary',
+    acting: 'bg-[var(--moss)]',
+    replying: 'bg-[var(--lamp-deep)]',
+  };
+  const weights: [string, number, string][] = buildTurnProfile(turn, now).summary.phases
+    .map(({ phase, ms }) => [phase, ms, tones[phase]]);
+  const total = weights.reduce((sum, [, value]) => sum + value, 0) || 1;
+  return (
+    <button type="button" onClick={onOpen} aria-label="打开时间线"
+      className="flex h-1 w-24 overflow-hidden rounded-full bg-muted">
+      {weights.filter(([, value]) => value > 0).map(([phase, value, tone]) => (
+        <span key={phase} className={cn('h-full', tone)} style={{ width: `${(value / total) * 100}%` }} />
+      ))}
+    </button>
+  );
+}
+
+function RunningMiniPhaseBar({ turn, onOpen }: { turn: TurnModel; onOpen: () => void }) {
+  const now = useNow();
+  return <MiniPhaseBarContent turn={turn} onOpen={onOpen} now={now} />;
+}
+
+function MiniPhaseBar({ turn, onOpen }: { turn: TurnModel; onOpen: () => void }) {
+  return turn.endedAt === undefined
+    ? <RunningMiniPhaseBar turn={turn} onOpen={onOpen} />
+    : <MiniPhaseBarContent turn={turn} onOpen={onOpen} now={Date.parse(turn.endedAt)} />;
+}
 
 function ActionTag({ action }: { action: ActionModel }) {
   return (
@@ -57,6 +91,7 @@ export interface WorkProcessProps {
 /** Collapsed-by-default work process with a persistent status header. */
 export function WorkProcess({ turn }: WorkProcessProps) {
   const [open, setOpen] = useState(false);
+  const { inspectTimeline } = useInspector();
   const running = turn.status === 'running';
 
   return (
@@ -78,6 +113,7 @@ export function WorkProcess({ turn }: WorkProcessProps) {
           )}
           <ChevronDown className={cn('ml-auto size-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
         </CollapsibleTrigger>
+        <MiniPhaseBar turn={turn} onOpen={() => inspectTimeline?.({ kind: 'turn', turnId: turn.id })} />
       </div>
       {running && !open && (
         <div className="px-2.5 pb-2">
