@@ -7,7 +7,7 @@ import {
   type Input,
   type WebContents,
 } from 'electron';
-import { pathToFileURL } from 'node:url';
+import type { PageLoader } from './pages.js';
 import {
   SHELL_CHANNELS,
   acceleratorPage,
@@ -42,7 +42,7 @@ import { formatShellWindowTitle } from './shell-window-title.js';
 import { platformWindowChrome } from './window-chrome.js';
 
 export interface ShellWindowOptions {
-  rendererPath: string;
+  pageLoader: PageLoader;
   preloadPath: string;
   appVersion: string;
   smoke: boolean;
@@ -412,7 +412,7 @@ export class ShellWindowController {
     const win = new BrowserWindow(windowOptions);
     console.info('[wrenyard-desktop] shell window created');
     const controller = new ShellWindowController(win, options.appVersion);
-    controller.installSecurity(options.rendererPath);
+    controller.installSecurity(options.pageLoader.url('shell'));
     controller.installIpc(options);
     controller.installShortcuts(win.webContents);
 
@@ -420,8 +420,8 @@ export class ShellWindowController {
     win.on('closed', () => controller.removeIpcHandlers());
 
     options.onCreated?.(controller);
-    await win.loadFile(options.rendererPath);
-    controller.setPage('workbench', false);
+    win.webContents.on('did-finish-load', () => controller.setPage(controller.page, false));
+    await options.pageLoader.load(win, 'shell');
     if (!options.smoke) win.show();
     console.info(`[wrenyard-desktop] shell loaded (visible=${win.isVisible()})`);
     return controller;
@@ -691,8 +691,7 @@ export class ShellWindowController {
     });
   }
 
-  private installSecurity(rendererPath: string): void {
-    const rendererUrl = pathToFileURL(rendererPath).href;
+  private installSecurity(rendererUrl: string): void {
     this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     this.window.webContents.on('will-navigate', (event, targetUrl) => {
       if (targetUrl.split('#', 1)[0] !== rendererUrl) event.preventDefault();

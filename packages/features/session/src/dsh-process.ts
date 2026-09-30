@@ -10,7 +10,7 @@ const READINESS_HTTP_TIMEOUT_MS = 5_000;
  */
 export function resolveWrenyardConnectionEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
-  const ipc = env.WRENYARD_IPC_PATH ?? env.FOREMAN_IPC_PATH;
+  const ipc = env.WRENYARD_IPC_PATH;
   if (ipc) out.WRENYARD_IPC_PATH = ipc;
   return out;
 }

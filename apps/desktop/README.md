@@ -113,16 +113,18 @@ Desktop renderer + preload + Electron main
 - **Wrenyard and workspace gates** — Desktop probes
   `WrenyardIpcClient.health.ping()` on the resolved IPC socket (`WRENYARD_IPC_PATH`, legacy
   `FOREMAN_*` names, then `\\.\pipe\wrenyard` on Windows or `/tmp/wrenyard.sock`
-  on Unix). Blank environment values are ignored. If a daemon is already
-  answering (started by a terminal `wrenyard daemon run` or
-  `pnpm dev:desktop`), Desktop enters
-  **connection mode**: it only connects, never supervises, and leaves the daemon
-  running on exit. Otherwise Desktop enters **supervised mode**: it starts the
-  daemon as a child of its own process with the packaged runtime and control
-  tree running `wrenyard daemon run`, carrying a Node IPC channel, and retries
-  `health.ping`. It restarts an unexpectedly exited daemon (1s/5s/15s, at most
-  3 times in 5 minutes) and, on a clean exit, shows “daemon stopped” with a
-  restart action; a failed start shows its reason. A missing or invalid
+  on Unix). Blank environment values are ignored. Only a packaged Desktop
+  (`app.isPackaged`) launches the daemon bundle when none is running at startup,
+  as a child of its own process running
+  `<resources>/wrenyard/runtime/node <resources>/wrenyard/daemon/daemon.mjs run --config <path>`,
+  then retries `health.ping`. A source Desktop never launches a daemon: it only
+  connects and waits until one is available, and reconnects automatically when a
+  daemon with the same product version appears. Ownership is decided once at
+  startup and stays fixed; a daemon whose product version differs from the
+  Desktop version is rejected and never replaced. It restarts an unexpectedly
+  exited daemon (1s/5s/15s, at most 3 times in 5 minutes) and, on a clean exit,
+  shows “daemon stopped” with a restart action; a failed start shows its reason.
+  A missing or invalid
   `workspace.root` prevents DSH from starting and places an explicit gate over
   conversations. The gate can open settings or save a valid directory directly;
   Desktop persists and activates the daemon workspace, then refreshes the
@@ -183,10 +185,13 @@ daemon owns the managed copy; Desktop no longer copies DSH resources.
 | `npm run build` | build the Desktop bundle (`dist/`) |
 | `npm test` | Desktop shell tests (session engine tests live in packages/features/session/test) |
 
-From the repository root: `pnpm dev:desktop` supervises the daemon and Desktop
-from source, `pnpm dev:daemon` supervises only the daemon, `pnpm lint` and
-`pnpm check` run the repository gates, and `pnpm release <x.y.z>` packs this
-platform's installer.
+From the repository root: `pnpm --filter @wrenyard/desktop dev` runs
+`electron-vite dev --watch` (renderer HMR with React Refresh, preload changes
+reload all windows, main-process changes restart Desktop). The production build
+is `pnpm --filter @wrenyard/desktop run build` (`electron-vite build`), which
+produces `dist/main/index.js`, `dist/preload/<id>.cjs` and `dist/web/**`.
+`pnpm lint` and `pnpm check` run the repository gates, and
+`pnpm release <x.y.z>` packs this platform's installer.
 
 ## Signing
 

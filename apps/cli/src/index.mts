@@ -1,8 +1,12 @@
 import {handleQuota} from './commands/quota.mts'
+import { spawn } from 'node:child_process'
 import { hostname } from 'node:os'
-import { realpathSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { bundledSuiteRoot, runningFromBundle } from '@wrenyard/daemon/layout/suite-root'
+import suitePackage from '../../../package.json' with { type: 'json' }
+import componentVersions from '../../../contracts/versions.json' with { type: 'json' }
 import { handleDaemonRun, handleDaemonStop } from './commands/daemon.mts'
 import { handleDoctor } from './commands/doctor.mts'
 import { handleProject } from './commands/project.mts'
@@ -12,7 +16,7 @@ import { handleExec } from './commands/exec.mts'
 import { handleTaskgraph } from './commands/taskgraph.mts'
 import { launchTui } from './tui-launcher.mts'
 import { resolveCliArgs } from './args.mts'
-import { errorMessage, readLocalPackageVersion } from './shared.mts'
+import { errorMessage } from './shared.mts'
 
 export { parsePowerShellForemanArgs, resolveCliArgs } from './args.mts'
 export { resolveRepoDir, resolveWorkDir } from './shared.mts'
@@ -27,12 +31,14 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
       printUsage()
       return 0
     }
-    if (command === '--version' || command === '-v') {
-      console.log(readLocalPackageVersion())
+    if (command === '--version' || command === '-v' || command === 'version') {
+      console.log(versionText())
       return 0
     }
 
     switch (command) {
+      case 'desktop':
+        return launchDesktop(args.slice(1))
       case 'quota':
         return handleQuota(args.slice(1))
       case 'daemon':
@@ -98,6 +104,7 @@ Usage:
   wrenyard exec <prompt> --target <provider/model:client> [--cwd path] [--resume <session-id>] [--thinking <level>] [--features a,b] [--config path] [--json] [--no-stream]
   wrenyard daemon <run|stop|status> [--config path] [--force] [--json]
   wrenyard -v | --version
+  wrenyard desktop
   wrenyard status [--config path] [--json]
   wrenyard doctor [--config path] [--json]
   wrenyard project list [--config path] [--json]
@@ -127,7 +134,31 @@ The daemon is owner-managed: run it in the foreground with 'wrenyard daemon run'
 Host: ${hostname()}`)
 }
 
+/** Suite version and component versions, embedded at build time. */
+export function versionText(): string {
+  return [`wrenyard ${suitePackage.version}`, ...Object.entries(componentVersions).map(([name, value]) => `${name}: ${String(value)}`)].join('\n')
+}
+
+/** The installed Desktop owning this suite (`<app>/resources/wrenyard`); source runs use `pnpm dev`. */
+function launchDesktop(args: string[]): number {
+  if (!runningFromBundle) {
+    console.error('From source, run the Desktop with `pnpm dev` in the Wrenyard checkout.')
+    return 1
+  }
+  const executable = process.platform === 'win32'
+    ? join(bundledSuiteRoot, '..', '..', 'wrenyard-desktop.exe')
+    : join(bundledSuiteRoot, '..', '..', 'MacOS', '啾啾工坊')
+  if (!existsSync(executable)) {
+    console.error(`Unable to locate the Desktop application at ${executable}.`)
+    return 1
+  }
+  const child = spawn(executable, args, { detached: true, stdio: 'ignore', windowsHide: false })
+  child.unref()
+  return 0
+}
+
 export function isCliEntrypoint(entry = process.argv[1]): boolean {
+  if (runningFromBundle) return true
   if (!entry) return false
   return realpathSync(resolve(entry)) === realpathSync(fileURLToPath(import.meta.url))
 }
@@ -139,8 +170,7 @@ export async function runCliEntrypoint(): Promise<void> {
   process.exit(code)
 }
 
-// Run only when this module is the CLI entrypoint; importing it is inert. The
-// product CLI (`src/index.ts`) spawns this file for the internal commands.
+// Run only when this module is the CLI entrypoint (or the SEA bundle); importing it is inert.
 if (isCliEntrypoint()) {
   runCliEntrypoint().catch((error) => {
     console.error(errorMessage(error))

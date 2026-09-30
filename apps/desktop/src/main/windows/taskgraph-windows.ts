@@ -1,3 +1,4 @@
+import type { PageLoader } from '../../pages.js';
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import * as path from 'node:path';
 import type { DaemonClient } from '../daemon-client/client';
@@ -39,7 +40,7 @@ const TERMINAL_NODE_STATES: ReadonlySet<TaskGraphNodeState> = new Set(['done', '
 
 export interface TaskGraphWindowOwnerOptions {
   daemonClient: DaemonClient;
-  htmlDir: string;
+  pageLoader: PageLoader;
   preloadDir: string;
   getHouseWindow: () => BrowserWindow | null;
   graphSlipGeometry?: { x?: number; y?: number; width?: number; height?: number };
@@ -157,7 +158,7 @@ export class TaskGraphWindowOwner {
   private readonly graphSlips = new Map<string, GraphSlipState>();
   private readonly transcriptWindows = new Map<string, BrowserWindow>();
   private readonly reader: ForemanTaskGraphReader;
-  private readonly htmlDir: string;
+  private readonly pageLoader: PageLoader;
   private readonly preloadDir: string;
   private readonly getHouseWindow: () => BrowserWindow | null;
   private graphSlipGeometry: { x?: number; y?: number; width?: number; height?: number } | undefined;
@@ -170,6 +171,7 @@ export class TaskGraphWindowOwner {
   private lastPresence: ActivityPresence | null = null;
   private readonly structureCache = new Map<string, GraphStructureState>();
   private readonly structureLoads = new Map<string, Promise<unknown>>();
+  private connectionGeneration = 0;
   private readonly transcriptPoller = new SerializedAsyncPoller(POLL_INTERVAL_MS);
   private readonly liveTranscriptRuns = new Set<string>();
   private readonly transcriptLoadGenerations = new Map<string, number>();
@@ -223,7 +225,7 @@ export class TaskGraphWindowOwner {
 
   constructor(opts: TaskGraphWindowOwnerOptions) {
     this.reader = new ForemanTaskGraphReader(opts.daemonClient);
-    this.htmlDir = opts.htmlDir;
+    this.pageLoader = opts.pageLoader;
     this.preloadDir = opts.preloadDir;
     this.getHouseWindow = opts.getHouseWindow;
     this.graphSlipGeometry = opts.graphSlipGeometry;
@@ -233,6 +235,15 @@ export class TaskGraphWindowOwner {
     this.logger = opts.logger ?? console;
     this.onCleanup = opts.onCleanup;
     this.registerIpcHandlers();
+  }
+
+  reconnect(): void {
+    this.connectionGeneration += 1;
+    this.structureCache.clear();
+    this.structureLoads.clear();
+    this.transcriptLoadGenerations.clear();
+    for (const slip of this.graphSlips.values()) this.refreshSlipProjection(slip);
+    for (const taskRunId of this.transcriptWindows.keys()) void this.loadTranscriptPage(taskRunId);
   }
 
   private registerIpcHandlers(): void {
@@ -616,8 +627,10 @@ export class TaskGraphWindowOwner {
       this.structureCache.set(graphId, { structure: null, loading: true });
     }
 
+    const generation = this.connectionGeneration;
     const load = this.reader.loadStructure(graphId)
       .then((structure) => {
+        if (generation !== this.connectionGeneration || this.destroyed) return;
         const current = this.structureCache.get(graphId);
         if (current) {
           current.structure = structure;
@@ -627,6 +640,7 @@ export class TaskGraphWindowOwner {
         return structure;
       })
       .catch((err) => {
+        if (generation !== this.connectionGeneration || this.destroyed) return;
         this.logger.warn(`structure load failed for ${graphId}:`, err);
         const current = this.structureCache.get(graphId);
         if (current) current.loading = false;
@@ -706,7 +720,7 @@ export class TaskGraphWindowOwner {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        preload: path.join(this.preloadDir, 'entity-preload.js'),
+        preload: path.join(this.preloadDir, 'entity.cjs'),
       },
     });
 
@@ -746,7 +760,13 @@ export class TaskGraphWindowOwner {
     });
     win.webContents.on('render-process-gone', () => handleLoadFailure());
 
-    win.loadFile(path.join(this.htmlDir, 'entity.html'), { query: { entity_id: id } }).catch(() => handleLoadFailure());
+    win.webContents.on('did-finish-load', () => {
+      if (this.entities.get(id) === entityState && !win.isDestroyed() && !loadFailed) {
+        this.pushEntityPlacement(entityState);
+        this.pushEntityState(entityState);
+      }
+    });
+    this.pageLoader.load(win, 'entity', { entity_id: id }).catch(() => handleLoadFailure());
 
     win.once('ready-to-show', () => {
       if (this.entities.get(id) === entityState && !win.isDestroyed() && !loadFailed) {
@@ -928,7 +948,7 @@ export class TaskGraphWindowOwner {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        preload: path.join(this.preloadDir, 'graph-slip-preload.js'),
+        preload: path.join(this.preloadDir, 'graph-slip.cjs'),
       },
     });
 
@@ -975,13 +995,13 @@ export class TaskGraphWindowOwner {
     });
     win.webContents.on('render-process-gone', () => handleLoadFailure());
 
-    win.webContents.once('did-finish-load', () => {
+    win.webContents.on('did-finish-load', () => {
       if (this.graphSlips.get(graphId) === slipState && !win.isDestroyed() && !loadFailed) {
         this.refreshSlipProjection(slipState);
       }
     });
 
-    win.loadFile(path.join(this.htmlDir, 'graph-slip.html'), { query: { graph_id: graphId } }).catch(() => handleLoadFailure());
+    this.pageLoader.load(win, 'graph-slip', { graph_id: graphId }).catch(() => handleLoadFailure());
 
     win.once('ready-to-show', () => {
       if (this.graphSlips.get(graphId) === slipState && !win.isDestroyed() && !loadFailed) {
@@ -1158,7 +1178,7 @@ export class TaskGraphWindowOwner {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        preload: path.join(this.preloadDir, 'transcript-preload.js'),
+        preload: path.join(this.preloadDir, 'transcript.cjs'),
       },
     });
 
@@ -1183,14 +1203,14 @@ export class TaskGraphWindowOwner {
       if (isMainFrame) handleLoadFailure();
     });
     win.webContents.on('render-process-gone', () => handleLoadFailure());
-    win.webContents.once('did-finish-load', () => {
+    win.webContents.on('did-finish-load', () => {
       if (this.transcriptWindows.get(taskRunId) === win && !win.isDestroyed() && !loadFailed) {
         void this.loadTranscriptPage(taskRunId);
       }
     });
 
-    win.loadFile(path.join(this.htmlDir, 'transcript.html'), {
-      query: { task_run_id: taskRunId, node_id: nodeId, task_label: taskLabel, platform: process.platform },
+    this.pageLoader.load(win, 'transcript', {
+      task_run_id: taskRunId, node_id: nodeId, task_label: taskLabel, platform: process.platform,
     }).catch(() => handleLoadFailure());
 
     win.once('ready-to-show', () => {

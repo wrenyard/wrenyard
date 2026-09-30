@@ -1,3 +1,4 @@
+import { createPageLoader } from '../../src/pages';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EntityManager } from '../../src/pet/main/entity-manager';
 import { createHouseWindow, createWorkerWindow } from '../../src/pet/main/entity-windows';
@@ -20,8 +21,8 @@ const { makeMockWin } = vi.hoisted(() => {
         setOpacity: vi.fn(),
         loadFile: vi.fn(),
         webContents: {
-          on: vi.fn(),
-          once: vi.fn((_event: string, cb?: () => void) => { cb?.(); }),
+          on: vi.fn((event: string, cb?: () => void) => { if (event === 'did-finish-load') cb?.(); }),
+          once: vi.fn(),
           send: vi.fn(),
         },
         on: vi.fn(),
@@ -156,7 +157,7 @@ describe('EntityManager — key reuse after retirement', () => {
 
     em = new EntityManager({
       preloadPath: '/fake/preload.js',
-      rendererDir: '/fake/renderer',
+      pageLoader: createPageLoader({ appPath: '/fake', packaged: true, env: {} }),
       config,
       onConfigChange: vi.fn(),
       now: clock.now,
@@ -262,7 +263,7 @@ describe('EntityManager — bubble-based delayed retirement', () => {
 
     em = new EntityManager({
       preloadPath: '/fake/preload.js',
-      rendererDir: '/fake/renderer',
+      pageLoader: createPageLoader({ appPath: '/fake', packaged: true, env: {} }),
       config,
       onConfigChange: vi.fn(),
       now: clock.now,
@@ -403,7 +404,7 @@ describe('EntityManager — stats clear regression', () => {
 
     em = new EntityManager({
       preloadPath: '/fake/preload.js',
-      rendererDir: '/fake/renderer',
+      pageLoader: createPageLoader({ appPath: '/fake', packaged: true, env: {} }),
       config,
       onConfigChange: vi.fn(),
       now: clock.now,
@@ -470,7 +471,7 @@ describe('EntityManager — quota tips plumbing', () => {
 
     em = new EntityManager({
       preloadPath: '/fake/preload.js',
-      rendererDir: '/fake/renderer',
+      pageLoader: createPageLoader({ appPath: '/fake', packaged: true, env: {} }),
       config,
       onConfigChange: vi.fn(),
       now: clock.now,
@@ -530,7 +531,7 @@ describe('EntityManager — house skin', () => {
 
     em = new EntityManager({
       preloadPath: '/fake/preload.js',
-      rendererDir: '/fake/renderer',
+      pageLoader: createPageLoader({ appPath: '/fake', packaged: true, env: {} }),
       config,
       onConfigChange,
       now: clock.now,
@@ -576,7 +577,7 @@ describe('EntityManager — house skin', () => {
     };
     const localEm = new EntityManager({
       preloadPath: '/fake/preload.js',
-      rendererDir: '/fake/renderer',
+      pageLoader: createPageLoader({ appPath: '/fake', packaged: true, env: {} }),
       config: cfg,
       onConfigChange: (c) => { captured = c; },
       rng: () => 0.5,

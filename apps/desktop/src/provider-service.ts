@@ -12,6 +12,7 @@ export interface ProviderControlClient {
 
 export interface ProviderServiceOptions {
   ipcPath: string;
+  canConnect?: () => boolean;
   clientFactory?: (path: string) => ProviderControlClient;
 }
 
@@ -24,6 +25,7 @@ export class ProviderService {
   }
 
   async listProviders(): Promise<ProviderAuthStatus[]> {
+    if (this.options.canConnect?.() === false) throw new Error('daemon 不可用');
     const client = this.clientFactory(this.options.ipcPath);
     try {
       const result = await client.providerList();
@@ -56,6 +58,7 @@ export class ProviderService {
   }
 
   async configureApiKey(providerId: string, key: string): Promise<void> {
+    if (this.options.canConnect?.() === false) throw new Error('daemon 不可用');
     if (typeof providerId !== 'string' || !providerId || providerId.length > MAX_PROVIDER_ID_LENGTH) {
       throw new Error('Provider id 无效');
     }

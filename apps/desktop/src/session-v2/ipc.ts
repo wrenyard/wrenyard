@@ -16,9 +16,10 @@ export type {
 
 export interface RegisterSessionV2Options {
   ipcPath: string;
+  canConnect?: () => boolean;
   isShellSender(sender: WebContents): boolean;
 }
-export interface SessionV2Registration { close(): Promise<void> }
+export interface SessionV2Registration { disconnect(): void; close(): Promise<void> }
 interface EventPage { events: LedgerEvent[]; lastSeq: number }
 interface PollState {
   ownerId: number;
@@ -66,6 +67,7 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
   };
   const request = <T,>(method: string, params: unknown, signal?: AbortSignal): Promise<T> => {
     if (closed || signal?.aborted) return Promise.reject(aborted());
+    if (options.canConnect?.() === false) return Promise.reject(new Error('daemon 不可用'));
     const client = new WrenyardIpcClient({ path: options.ipcPath, requestTimeoutMs: 30_000 });
     clients.add(client);
     const stop = (): void => client.close();
@@ -170,6 +172,7 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
   });
 
   return {
+    disconnect(): void { for (const client of clients) client.close(); },
     close(): Promise<void> {
       closePromise ??= (async () => {
         closed = true;

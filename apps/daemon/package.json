@@ -30,9 +30,13 @@
     "./daemon/instance-lock": "./lib/daemon/instance-lock.mts",
     "./daemon/launch": "./lib/daemon/launch.mts",
     "./core/taskgraph": "./lib/core/taskgraph/index.mts",
+    "./core/taskgraph/compile": "./lib/core/taskgraph/compile.mts",
+    "./core/taskgraph/templates": "./lib/core/taskgraph/templates.mts",
     "./workspace/task-loader": "./lib/workspace/task-loader.mts"
   },
   "scripts": {
+    "build": "node tools/build.mjs",
+    "dev": "node scripts/dev.ts",
     "test": "tsx --test --test-concurrency=1 tests/*.test.mts tests/*/*.test.mts tests/*/*/*.test.mts"
   },
   "engines": {
@@ -47,7 +51,6 @@
     "@langchain/core": "1.2.5",
     "ajv": "^8.20.0",
     "better-sqlite3": "13.0.3",
-    "tsx": "^4.22.4",
     "yaml": "^2.7.0",
     "zod": "^4.4.3",
     "@wrenyard/auto-routing": "workspace:*",
@@ -62,6 +65,8 @@
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.9.0"
   }
 }

@@ -1,3 +1,4 @@
+import { createPageLoader } from '../../src/pages';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GRAPH_SLIP_SCHEMA_VERSION,
@@ -3560,7 +3561,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
   function makeOwner(): TaskGraphWindowOwner {
     return new TaskGraphWindowOwner({
       daemonClient: client as unknown as DaemonClient,
-      htmlDir: '/nonexistent/html',
+      pageLoader: createPageLoader({ appPath: '/nonexistent', packaged: true, env: {} }),
       preloadDir: '/nonexistent/preload',
       getHouseWindow: () => null,
       logger: { warn: () => {}, error: () => {}, log: () => {} },
@@ -3659,7 +3660,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
   it('hides only Wren entity windows while preserving activity state and Graph Slips', async () => {
     owner = new TaskGraphWindowOwner({
       daemonClient: client as unknown as DaemonClient,
-      htmlDir: '/nonexistent/html',
+      pageLoader: createPageLoader({ appPath: '/nonexistent', packaged: true, env: {} }),
       preloadDir: '/nonexistent/preload',
       getHouseWindow: () => null,
       entitiesVisible: false,
@@ -3759,7 +3760,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
     const onGraphSlipGeometryChange = vi.fn();
     owner = new TaskGraphWindowOwner({
       daemonClient: client as unknown as DaemonClient,
-      htmlDir: '/nonexistent/html',
+      pageLoader: createPageLoader({ appPath: '/nonexistent', packaged: true, env: {} }),
       preloadDir: '/nonexistent/preload',
       getHouseWindow: () => null,
       graphSlipGeometry: { width: 640, height: 720 },
@@ -3793,7 +3794,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
     const onGraphSlipGeometryChange = vi.fn();
     owner = new TaskGraphWindowOwner({
       daemonClient: client as unknown as DaemonClient,
-      htmlDir: '/nonexistent/html',
+      pageLoader: createPageLoader({ appPath: '/nonexistent', packaged: true, env: {} }),
       preloadDir: '/nonexistent/preload',
       getHouseWindow: () => null,
       onGraphSlipGeometryChange,

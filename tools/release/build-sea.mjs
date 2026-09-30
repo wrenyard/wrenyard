@@ -78,30 +78,9 @@ try {
   const blobPath = path.join(tmpDir, "sea-prep.blob");
   const seaConfigPath = path.join(tmpDir, "sea-config.json");
 
-  // The SEA must discover its suite root and the suite's bundled runtime/node
-  // on its own so status/update never need a PATH node. Prepend a small
-  // prologue to the bundled CLI entry that sets WRENYARD_ROOT and
-  // WRENYARD_NODE_BIN from the SEA's own location (dirname(process.execPath))
-  // before the entry module evaluates; the entry reads those env vars at module
-  // load time. A packaged SEA is authoritative for its own identity: source-mode
-  // overrides are never honored once the SEA is assembled.
-  const cliSource = await readFile(cliEntry, "utf8");
+  // The bundle derives the suite root from its own executable location.
   const wrappedEntry = path.join(tmpDir, "sea-main.cjs");
-  await writeFile(
-    wrappedEntry,
-    `'use strict';
-const { dirname, join } = require('node:path');
-// The packaged SEA is authoritative for its own identity: the suite root is
-// always the directory containing this executable, and the bundled node binary
-// always lives at runtime/node under that root. Values are set unconditionally
-// so stale suite-pinned environment variables cannot redirect a new SEA at its
-// installed location.
-process.env.WRENYARD_ROOT = dirname(process.execPath);
-process.env.WRENYARD_NODE_BIN = join(process.env.WRENYARD_ROOT, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node');
-${cliSource}
-`,
-    "utf8"
-  );
+  await copyFile(cliEntry, wrappedEntry);
 
   const seaNodeVersion = run(seaNode, ["--version"]).stdout.trim().replace(/^v/, "");
   const [nodeMajor, nodeMinor] = seaNodeVersion.split(".").map(Number);

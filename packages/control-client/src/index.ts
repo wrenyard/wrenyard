@@ -23,23 +23,16 @@ export function defaultWrenyardIpcPath(): string {
 }
 
 /**
- * Resolve the Wrenyard NDJSON IPC socket path. `WRENYARD_IPC_PATH` is
- * primary; the legacy `FOREMAN_IPC_PATH` and `FOREMAN_PET_FOREMAN_IPC`
- * variables are still read as fallbacks. Without an override, Windows uses
- * the daemon's `\\.\pipe\wrenyard` named pipe and Unix uses
+ * Resolve the Wrenyard NDJSON IPC socket path. `WRENYARD_IPC_PATH` overrides
+ * the platform default when set to a non-blank value. Without an override,
+ * Windows uses the daemon's `\\.\pipe\wrenyard` named pipe and Unix uses
  * `/tmp/wrenyard.sock`.
  */
 export function resolveWrenyardIpcPath(
   env: WrenyardIpcEnvironment = process.env,
 ): string {
-  for (const candidate of [
-    env.WRENYARD_IPC_PATH,
-    env.FOREMAN_IPC_PATH,
-    env.FOREMAN_PET_FOREMAN_IPC,
-  ]) {
-    const path = candidate?.trim();
-    if (path) return path;
-  }
+  const path = env.WRENYARD_IPC_PATH?.trim();
+  if (path) return path;
   return defaultWrenyardIpcPath();
 }
 

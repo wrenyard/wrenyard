@@ -82,7 +82,7 @@ export function viewportForFixture(fixture) {
 }
 
 export function htmlPathForFixture(rootDir, fixture) {
-  return path.join(rootDir, 'dist', 'pet', 'renderer', fixture.kind === 'house' ? 'house.html' : 'worker.html');
+  return path.join(rootDir, 'dist', 'web', 'pet', 'overlay', fixture.kind, 'index.html');
 }
 
 export function outputPathForFixture(rootDir, fixture) {
