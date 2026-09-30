@@ -12,9 +12,12 @@ import { RpcRouter } from '../server/rpc-router.mts'
 import { registerCoreHandlers, readProcessIdentity } from '../server/handlers/core.mts'
 import { createIpcServer, resolveForemanServiceIpcPath, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
+import { registerSessionV2Handlers } from '../server/handlers/session-v2.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
 import { TaskService } from '../core/task/service.mts'
 import { createSessionService, type SessionService } from '@wrenyard/session'
+import { createSessionV2, type SessionV2 } from '@wrenyard/session-v2'
+import { createDaemonSessionV2Host } from './services/session-v2-host.mts'
 import { resolveDesktopStateRoot } from '../config/desktop-state.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
@@ -106,6 +109,7 @@ interface ForemanDaemonResources {
   ipcServer: IpcServer
   gateway: ModelGateway
   sessionService: SessionService
+  sessionV2: SessionV2
   rpcRouter: RpcRouter
   /** Daemon-owned task service, retained so a forced shutdown can cancel every
    *  admitted task run through the same service the RPC surface uses. */
@@ -274,6 +278,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
       && counts.activeExecutionCount === 0
       && activeGraphs.length === 0
       && !activeConversation
+      && resources.sessionV2.activeTurnCount() === 0
       && resources.rpcRouter.activeWorkRequestCount === 0
   }
 
@@ -288,10 +293,10 @@ export class ForemanDaemon implements RunningForemanDaemon {
 
   /**
    * Forced-shutdown step run once drain has been skipped or escalated. Cancels
-   * every active graph first (which cancels its bound task runs through the
-   * existing task bridge), then every remaining admitted task run, awaiting
-   * terminal cancellation so no agent child outlives the daemon and the DB is
-   * only closed after cancellation has converged. Both services use their
+   * session-v2 first, then active graphs and their bound task runs, then every
+   * remaining admitted task run, awaiting terminal cancellation so no agent
+   * child outlives the daemon and the DB is
+   * only closed after cancellation has converged. The services use their
    * existing cancellation APIs and bound their own work; a failure is logged
    * rather than aborting teardown so close() still runs. Normal (non-forced)
    * shutdown never calls this.
@@ -299,6 +304,11 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private async cancelActiveWork(): Promise<void> {
     const resources = this.resources
     if (!resources) return
+    try {
+      await resources.sessionV2.close()
+    } catch (error) {
+      writeDaemonLog('warn', 'session-v2 force cancellation failed', error)
+    }
     try {
       await resources.taskgraphService.cancelActive()
     } catch (error) {
@@ -326,6 +336,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
         await teardownDaemonResources({
           httpServer: resources.httpServer,
           sessionService: resources.sessionService,
+          sessionV2: resources.sessionV2,
           gateway: resources.gateway,
           restoreGatewayEnvironment: resources.restoreGatewayEnvironment,
           ipcServer: resources.ipcServer,
@@ -826,10 +837,10 @@ async function createForemanDaemonResources(
   // admitted work. New top-level dispatch and long polling cannot hold the
   // daemon open or create more work after the shutdown request is accepted.
   const blockedDuringShutdown = new Set([
-    'taskgraph.create', 'task.run.create', 'exec.start', 'session.send',
+    'taskgraph.create', 'task.run.create', 'exec.start', 'session.send', 'sessionV2.send',
   ])
   rpcRouter.setAdmissionGate((method, params) => {
-    const longSessionPoll = method === 'session.snapshot'
+    const longSessionPoll = (method === 'session.snapshot' || method === 'sessionV2.events')
       && typeof params === 'object' && params !== null
       && 'waitMs' in params && typeof params.waitMs === 'number' && params.waitMs > 0
     if (options.isShuttingDown() && (blockedDuringShutdown.has(method) || longSessionPoll)) {
@@ -840,7 +851,7 @@ async function createForemanDaemonResources(
     }
   }, [
     'taskgraph.create', 'taskgraph.patch', 'taskgraph.signal',
-    'task.run.create', 'exec.start', 'session.send',
+    'task.run.create', 'exec.start', 'session.send', 'sessionV2.send',
   ])
 
   const httpServer = createServer((request, response) => {
@@ -928,15 +939,26 @@ async function createForemanDaemonResources(
   })
   sessionRefresh.current = sessionService
   registerSessionHandlers(rpcRouter, { sessionService })
+  let sessionV2: SessionV2 | undefined
   let ipcServer: IpcServer | undefined
   try {
+    sessionV2 = createSessionV2(createDaemonSessionV2Host({
+      workspaceRoot: config.workspaceRoot,
+      gateway: async () => ({
+        ...await gateway.connection(gatewayOrigin(boundPort)), token: gatewayToken,
+      }),
+      sessionService,
+      taskService,
+      workspaceDocService,
+    }))
+    registerSessionV2Handlers(rpcRouter, { sessionV2 })
     ipcServer = await createIpcServer({
       path: ipcPath,
       onMessage: (message) => rpcRouter.handleMessage(message, { transport: 'ipc' }),
     })
   } catch (error) {
     // Tear down every handle already built through the one shared teardown:
-    // HTTP, session, gateway + environment restore, IPC (if it was created).
+    // HTTP, sessions, gateway + environment restore, IPC (if it was created).
     // The runtime supervisor/exec/DB are owned and released by bootstrap's
     // runtime teardown after this throws. Individual failures are logged by the
     // teardown; its aggregate is swallowed so it can never replace the original
@@ -944,6 +966,7 @@ async function createForemanDaemonResources(
     await teardownDaemonResources({
       httpServer,
       sessionService,
+      sessionV2,
       gateway,
       restoreGatewayEnvironment,
       ipcServer,
@@ -967,6 +990,7 @@ async function createForemanDaemonResources(
     ipcServer: runningIpcServer,
     gateway,
     sessionService,
+    sessionV2,
     rpcRouter,
     taskService,
     taskgraphService,
@@ -984,6 +1008,7 @@ interface DaemonResourceTeardownHandles {
   /** Started first, awaited last: its async handle teardown overlaps the rest. */
   httpServer?: Server
   sessionService?: SessionService
+  sessionV2?: SessionV2
   gateway?: ModelGateway
   restoreGatewayEnvironment?: () => void
   ipcServer?: IpcServer
@@ -997,8 +1022,8 @@ interface DaemonResourceTeardownHandles {
  * The single resource teardown shared by normal close and both partial-start
  * failure paths. Every supplied handle is attempted exactly once in the one
  * canonical order (HTTP close start, session, gateway + environment restore,
- * IPC, supervisor, exec, await HTTP, DB release). Each failure is logged, every
- * remaining handle still runs, and the first failure is thrown once all handles
+ * IPC, session-v2, supervisor, exec, await HTTP, DB release). Each failure is logged;
+ * every remaining handle still runs, and the first failure is thrown once all handles
  * were attempted so the normal path can surface it.
  */
 async function teardownDaemonResources(handles: DaemonResourceTeardownHandles): Promise<void> {
@@ -1050,6 +1075,13 @@ async function teardownDaemonResources(handles: DaemonResourceTeardownHandles): 
       await handles.ipcServer.close()
     } catch (error) {
       recordFailure('IPC server shutdown failed', error)
+    }
+  }
+  if (handles.sessionV2) {
+    try {
+      await handles.sessionV2.close()
+    } catch (error) {
+      recordFailure('session-v2 shutdown failed', error)
     }
   }
   if (handles.supervisor) {

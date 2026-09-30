@@ -1,5 +1,24 @@
 import type { JsonSchema } from './jsonrpc.mts'
 import {
+  sessionV2ListParamsSchema, sessionV2ListResultSchema,
+  sessionV2CreateParamsSchema, sessionV2CreateResultSchema,
+  sessionV2SendParamsSchema, sessionV2SendResultSchema,
+  sessionV2InterruptParamsSchema, sessionV2InterruptResultSchema,
+  sessionV2EventsParamsSchema, sessionV2EventsResultSchema,
+  type SessionV2ListParams, type SessionV2ListResult,
+  type SessionV2CreateParams, type SessionV2CreateResult,
+  type SessionV2SendParams, type SessionV2SendResult,
+  type SessionV2InterruptParams, type SessionV2InterruptResult,
+  type SessionV2EventsParams, type SessionV2EventsResult,
+} from './methods/session-v2.mts'
+export type {
+  SessionV2ListParams, SessionV2ListResult,
+  SessionV2CreateParams, SessionV2CreateResult,
+  SessionV2SendParams, SessionV2SendResult,
+  SessionV2InterruptParams, SessionV2InterruptResult,
+  SessionV2EventsParams, SessionV2EventsResult,
+} from './methods/session-v2.mts'
+import {
   activitySnapshotParamsSchema,
   activitySnapshotResultSchema,
   type ActivitySnapshotParams,
@@ -488,6 +507,11 @@ export interface ForemanMethodParams {
   'exec.events': ExecEventsParams
   'exec.cancel': ExecCancelParams
   'session.snapshot': SessionSnapshotParams
+  'sessionV2.list': SessionV2ListParams
+  'sessionV2.create': SessionV2CreateParams
+  'sessionV2.send': SessionV2SendParams
+  'sessionV2.interrupt': SessionV2InterruptParams
+  'sessionV2.events': SessionV2EventsParams
   'session.select': SessionSelectParams
   'session.create': SessionCreateParams
   'session.selectModel': SessionSelectModelParams
@@ -557,6 +581,11 @@ export interface ForemanMethodResults {
   'exec.events': ExecEventsResult
   'exec.cancel': ExecCancelResult
   'session.snapshot': SessionSnapshotResult
+  'sessionV2.list': SessionV2ListResult
+  'sessionV2.create': SessionV2CreateResult
+  'sessionV2.send': SessionV2SendResult
+  'sessionV2.interrupt': SessionV2InterruptResult
+  'sessionV2.events': SessionV2EventsResult
   'session.select': SessionSelectResult
   'session.create': SessionCreateResult
   'session.selectModel': SessionSelectModelResult
@@ -803,6 +832,11 @@ export const methodRegistry: {
     params: sessionSnapshotParamsSchema,
     result: sessionSnapshotResultSchema,
   },
+  'sessionV2.list': { params: sessionV2ListParamsSchema, result: sessionV2ListResultSchema },
+  'sessionV2.create': { params: sessionV2CreateParamsSchema, result: sessionV2CreateResultSchema },
+  'sessionV2.send': { params: sessionV2SendParamsSchema, result: sessionV2SendResultSchema },
+  'sessionV2.interrupt': { params: sessionV2InterruptParamsSchema, result: sessionV2InterruptResultSchema },
+  'sessionV2.events': { params: sessionV2EventsParamsSchema, result: sessionV2EventsResultSchema },
   'session.select': {
     params: sessionSelectParamsSchema,
     result: sessionSelectResultSchema,
