@@ -7,7 +7,7 @@ import { Composer } from './components/Composer.js';
 import { EmptySession } from './components/EmptySession.js';
 import { SessionHeader } from './components/SessionHeader.js';
 import { SessionSidebar } from './components/SessionSidebar.js';
-import { PendingTurnItem, TurnItem } from './components/TurnItem.js';
+import { PendingTurnItem, TurnItem } from './components/conversation/TurnItem.js';
 import { Inspector, InspectorProvider } from './components/inspector/Inspector.js';
 import { fold } from './model/fold.js';
 import type { ActionModel, InspectorTarget, SessionApi } from './model/types.js';

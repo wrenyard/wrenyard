@@ -1,5 +1,5 @@
 /** Desktop transport for daemon-owned session-v2 sessions. */
-import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
 import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session-v2';
 import type {
@@ -12,7 +12,7 @@ import type {
 export const SESSION_V2_CHANNELS = {
   list: 'session-v2:list', create: 'session-v2:create', ledger: 'session-v2:ledger',
   send: 'session-v2:send', interrupt: 'session-v2:interrupt', models: 'session-v2:models',
-  tasks: 'session-v2:tasks', openExternal: 'session-v2:open-external',
+  tasks: 'session-v2:tasks',
   event: 'session-v2:event', live: 'session-v2:live',
 } as const;
 export type {
@@ -263,17 +263,6 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
         return { taskRunId, status: 'unavailable' };
       }
     }));
-  });
-  handle(SESSION_V2_CHANNELS.openExternal, async (_event, value) => {
-    if (typeof value !== 'string' || value === '') throw new Error('Invalid URL');
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch {
-      throw new Error('Invalid URL');
-    }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported URL protocol');
-    await shell.openExternal(url.toString());
   });
 
   return {

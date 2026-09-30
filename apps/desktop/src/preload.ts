@@ -91,6 +91,9 @@ const api: WrenyardShellApi = {
   copyText(text: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.copyText, text);
   },
+  openExternal(url: string): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.openExternal, url);
+  },
   openTaskTranscript(taskRunId: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskTranscript, taskRunId);
   },

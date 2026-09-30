@@ -28,8 +28,6 @@ export const SESSION_V2_CHANNELS = {
   models: 'session-v2:models',
   /** Renderer → main: `string[]` of task run ids, resolved to briefs. */
   tasks: 'session-v2:tasks',
-  /** Renderer → main: open an external http(s) URL in the OS browser. */
-  openExternal: 'session-v2:open-external',
   /** Main → renderer: `{ sessionId, event }` for the subscribed session. */
   event: 'session-v2:event',
   /** Main → renderer: `{ sessionId, live }` streaming snapshot changes. */
@@ -103,8 +101,6 @@ export interface SessionV2Bridge {
   models(): Promise<SessionV2BridgeModelEntry[]>;
   /** Resolve task-run briefs for the given run ids (per-id failures are `unavailable`). */
   tasks(taskRunIds: string[]): Promise<SessionV2BridgeTaskBrief[]>;
-  /** Open an `http:`/`https:` URL in the OS browser; other schemes are rejected. */
-  openExternal(url: string): Promise<void>;
   /** Subscribe to pushed ledger events; the returned function unsubscribes. */
   onEvent(listener: (payload: SessionV2BridgeEventPayload) => void): () => void;
   /** Subscribe to live streaming snapshots; the returned function unsubscribes. */
@@ -156,9 +152,6 @@ const bridge: SessionV2Bridge = {
   },
   tasks(taskRunIds: string[]): Promise<SessionV2BridgeTaskBrief[]> {
     return ipcRenderer.invoke(SESSION_V2_CHANNELS.tasks, taskRunIds) as Promise<SessionV2BridgeTaskBrief[]>;
-  },
-  openExternal(url: string): Promise<void> {
-    return ipcRenderer.invoke(SESSION_V2_CHANNELS.openExternal, url) as Promise<void>;
   },
   onEvent(listener: (payload: SessionV2BridgeEventPayload) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: unknown): void => {
