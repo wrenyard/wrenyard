@@ -24,7 +24,8 @@
     "@wrenyard/models": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "js-tiktoken": "1.0.21",
-    "@wrenyard/auto-routing": "workspace:*"
+    "@wrenyard/auto-routing": "workspace:*",
+    "@wrenyard/session-v2": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
@@ -34,6 +35,10 @@
     "pixi.js": "^8.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.6"
+    "vitest": "^3.2.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   }
 }
