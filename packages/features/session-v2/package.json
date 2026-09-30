@@ -1,0 +1,25 @@
+{
+  "name": "@wrenyard/session-v2",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Wrenyard context-ledger session core (session-v2): append-only per-session timeline, derived state and the work-turn engine.",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@wrenyard/control-client": "workspace:*",
+    "@wrenyard/models": "workspace:*",
+    "@wrenyard/providers": "workspace:*",
+    "ajv": "^8.17.1",
+    "js-tiktoken": "1.0.21"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=24.19.0"
+  }
+}
