@@ -2,15 +2,16 @@ import { useMemo, useState } from 'react';
 import { MessageCircle, Zap } from 'lucide-react';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { Markdown } from '@/renderer/components/markdown';
 import { Reasoning } from '@/renderer/components/chat/reasoning';
 import { Step, Steps } from '@/renderer/components/chat/steps';
-import { cycleLabel } from '../model/describe.js';
-import type { ActionModel, BlockModel, CycleModel, TurnModel } from '../model/types.js';
+import { CYCLE_LIMIT_TOOLTIP, PHASE_LABEL, cycleLabel } from '../../model/describe.js';
+import type { ActionModel, BlockModel, CycleModel, TurnModel } from '../../model/types.js';
 import { ActionRow } from './ActionRow.js';
 import { ContextItems } from './ContextItems.js';
-import { useInspector } from './inspector/Inspector.js';
+import { useInspector } from '../inspector/Inspector.js';
 
 function ActionMark({ block, turnId, actionCount }: { block: BlockModel; turnId: number; actionCount: number }) {
   const { inspect } = useInspector();
@@ -57,13 +58,13 @@ function CycleBody({ cycle, actions, turnId }: { cycle: CycleModel; actions: Act
   return (
     <div className="flex flex-col gap-3 text-sm">
       <section className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-muted-foreground">准备</span>
+        <span className="text-xs font-medium text-muted-foreground">{PHASE_LABEL.preparing}</span>
         <ContextItems items={cycle.context} turnId={turnId} cycle={cycle.index} />
       </section>
 
       {(cycle.reasoning || cycle.blocks.length > 0) && (
         <section className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-muted-foreground">推理</span>
+          <span className="text-xs font-medium text-muted-foreground">{PHASE_LABEL.reasoning}</span>
           {cycle.reasoning
             ? <>
                 <ReasoningBody text={cycle.reasoning.text} blocks={cycle.blocks} turnId={turnId} />
@@ -79,7 +80,7 @@ function CycleBody({ cycle, actions, turnId }: { cycle: CycleModel; actions: Act
 
       {actions.length > 0 && (
         <section className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-muted-foreground">行动</span>
+          <span className="text-xs font-medium text-muted-foreground">{PHASE_LABEL.acting}</span>
           {actions.map((action) => <ActionRow key={action.id} action={action} turnId={turnId} />)}
         </section>
       )}
@@ -121,20 +122,24 @@ export function CycleSteps({ turn }: CycleStepsProps) {
   }
   return (
     <Steps>
-      {turn.cycles.map((cycle) => (
-        <Step
-          key={cycle.index}
-          defaultOpen
-          title={
-            <span className="flex items-center gap-2 text-xs">
-              <span>{cycleLabel(cycle.index)}</span>
-              <span className="text-muted-foreground">· <Elapsed start={cycle.startedAt} end={cycle.endedAt} /></span>
-            </span>
-          }
-        >
-          <CycleBody cycle={cycle} actions={actionsByCycle.get(cycle.index) ?? []} turnId={turn.id} />
-        </Step>
-      ))}
+      {turn.cycles.map((cycle) => {
+        const title = (
+          <span className="flex items-center gap-2 text-xs">
+            <span>{cycleLabel(cycle.index)}</span>
+            <span className="text-muted-foreground">· <Elapsed start={cycle.startedAt} end={cycle.endedAt} /></span>
+          </span>
+        );
+        return (
+          <Step
+            key={cycle.index}
+            title={cycle.index >= 8
+              ? <Tooltip><TooltipTrigger render={title} /><TooltipContent>{CYCLE_LIMIT_TOOLTIP}</TooltipContent></Tooltip>
+              : title}
+          >
+            <CycleBody cycle={cycle} actions={actionsByCycle.get(cycle.index) ?? []} turnId={turn.id} />
+          </Step>
+        );
+      })}
     </Steps>
   );
 }

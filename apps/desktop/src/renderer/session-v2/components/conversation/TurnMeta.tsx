@@ -2,7 +2,8 @@ import { Elapsed } from '@/renderer/components/elapsed';
 import { Separator } from '@/renderer/components/ui/separator';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import { formatTokenCount } from '@/renderer/lib/format';
-import type { TurnModel } from '../model/types.js';
+import { statusView } from '../../model/describe.js';
+import type { TurnModel } from '../../model/types.js';
 
 function totalTokens(turn: TurnModel): number {
   const { expensive, cheap } = turn.stats;
@@ -67,7 +68,7 @@ export function TurnMeta({ turn }: TurnMetaProps) {
       </div>
       <div className="flex items-center gap-2">
         <span>终态</span>
-        <StatusBadge status={turn.status} />
+        <StatusBadge {...statusView(turn.status)} />
       </div>
     </div>
   );

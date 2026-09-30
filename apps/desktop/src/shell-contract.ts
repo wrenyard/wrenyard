@@ -34,6 +34,7 @@ export const SHELL_CHANNELS = {
   conversationActivity: 'wrenyard-shell:conversation-activity',
   taskTranscript: 'wrenyard-shell:task-transcript',
   copyText: 'wrenyard-shell:copy-text',
+  openExternal: 'wrenyard-shell:open-external',
   conversationSelect: 'wrenyard-shell:conversation-select',
   conversationCreate: 'wrenyard-shell:conversation-create',
   conversationSelectModel: 'wrenyard-shell:conversation-select-model',
@@ -738,6 +739,8 @@ export interface WrenyardShellApi {
   getConversationActivity(): Promise<ConversationActivityItem[]>;
   openTaskTranscript(taskRunId: string): Promise<void>;
   copyText(text: string): Promise<void>;
+  /** Open an `http:`/`https:` URL in the OS browser; other schemes are rejected. */
+  openExternal(url: string): Promise<void>;
   selectConversation(sessionId: string): Promise<ConversationSnapshot>;
   createConversation(): Promise<ConversationSnapshot>;
   selectConversationModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot>;

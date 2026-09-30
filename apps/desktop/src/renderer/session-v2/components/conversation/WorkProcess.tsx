@@ -4,30 +4,24 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { StatusBadge } from '@/renderer/components/status-badge';
-import { ShimmerText } from '@/renderer/components/chat/shimmer-text';
+import { timelineToneClass } from '@/renderer/components/timeline-bars';
 import { cn } from '@/renderer/lib/utils';
 import { useNow } from '@/renderer/hooks/use-now';
-import { buildTurnProfile } from '../model/profile.js';
-import { cycleLabel, phaseLabel } from '../model/describe.js';
-import type { ActionModel, TurnModel } from '../model/types.js';
+import { buildTurnProfile } from '../../model/profile.js';
+import { PHASE_TONE, cycleLabel, phaseLabel, statusView } from '../../model/describe.js';
+import type { ActionModel, TurnModel } from '../../model/types.js';
 import { CycleSteps } from './CycleSteps.js';
-import { useInspector } from './inspector/Inspector.js';
+import { useInspector } from '../inspector/Inspector.js';
 
 function MiniPhaseBarContent({ turn, onOpen, now }: { turn: TurnModel; onOpen: () => void; now: number }) {
-  const tones = {
-    preparing: 'bg-muted-foreground/40',
-    reasoning: 'bg-primary',
-    acting: 'bg-[var(--moss)]',
-    replying: 'bg-[var(--lamp-deep)]',
-  };
-  const weights: [string, number, string][] = buildTurnProfile(turn, now).summary.phases
-    .map(({ phase, ms }) => [phase, ms, tones[phase]]);
+  const weights = buildTurnProfile(turn, now).summary.phases
+    .map(({ phase, ms }) => [phase, ms, PHASE_TONE[phase]] as const);
   const total = weights.reduce((sum, [, value]) => sum + value, 0) || 1;
   return (
     <button type="button" onClick={onOpen} aria-label="打开时间线"
       className="flex h-1 w-24 overflow-hidden rounded-full bg-muted">
       {weights.filter(([, value]) => value > 0).map(([phase, value, tone]) => (
-        <span key={phase} className={cn('h-full', tone)} style={{ width: `${(value / total) * 100}%` }} />
+        <span key={phase} className={cn('h-full', timelineToneClass(tone))} style={{ width: `${(value / total) * 100}%` }} />
       ))}
     </button>
   );
@@ -98,17 +92,17 @@ export function WorkProcess({ turn }: WorkProcessProps) {
     <Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border border-border/70 bg-card/40">
       <div className="flex w-full items-center gap-2 px-2.5 py-2">
         <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2 text-left">
-          {running ? <Spinner className="size-3.5 text-primary" /> : <StatusBadge status={turn.status} label="" />}
+          {running ? <Spinner className="size-3.5 text-primary" /> : <StatusBadge {...statusView(turn.status)} label="" />}
           {running ? (
             <>
-              <ShimmerText className="text-sm font-medium">{phaseLabel(turn.phase ?? 'preparing')}</ShimmerText>
+              <span className="shimmer text-sm font-medium">{phaseLabel(turn.phase ?? 'preparing')}</span>
               <span className="text-xs text-muted-foreground">{cycleLabel(Math.max(1, turn.cycle))}</span>
               <span className="text-xs text-muted-foreground"><Elapsed start={turn.startedAt} end={turn.endedAt} /></span>
             </>
           ) : (
             <>
               <span className="text-sm">打造了 <Elapsed start={turn.startedAt} end={turn.endedAt} /></span>
-              {turn.status !== 'completed' && <StatusBadge status={turn.status} />}
+              {turn.status !== 'completed' && <StatusBadge {...statusView(turn.status)} />}
             </>
           )}
           <ChevronDown className={cn('ml-auto size-4 text-muted-foreground transition-transform', open && 'rotate-180')} />

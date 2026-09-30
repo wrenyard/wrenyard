@@ -3,6 +3,7 @@ import { Streamdown, type Components } from 'streamdown';
 import { code } from '@streamdown/code';
 import { cjk } from '@streamdown/cjk';
 import { cn } from '@/renderer/lib/utils';
+import { openExternal } from '@/renderer/lib/desktop';
 
 const PLUGINS = { code, cjk };
 /** Prototype has no dark theme yet; both slots use the light Shiki theme. */
@@ -17,7 +18,7 @@ function MarkdownLink({ href, children, onClick, ...rest }: ComponentProps<'a'>)
         onClick?.(event);
         if (event.defaultPrevented || !href) return;
         event.preventDefault();
-        void window.sessionV2?.openExternal(href);
+        void openExternal(href);
       }}
     >
       {children}
@@ -35,8 +36,8 @@ export interface MarkdownProps {
 }
 
 /**
- * Streamdown configured for the session-v2 page: code + CJK plugins only, no
- * math or mermaid. Fenced code is highlighted with the JavaScript Shiki engine.
+ * Streamdown configured for the conversation surface: code + CJK plugins only,
+ * no math or mermaid. Fenced code is highlighted with the JavaScript Shiki engine.
  */
 export function Markdown({ children, streaming = false, size = 'base', className }: MarkdownProps) {
   return (

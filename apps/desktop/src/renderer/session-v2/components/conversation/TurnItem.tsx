@@ -4,10 +4,10 @@ import { Button } from '@/renderer/components/ui/button';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { CopyButton } from '@/renderer/components/copy-button';
+import { Timestamp } from '@/renderer/components/timestamp';
 import { Message, MessageContent } from '@/renderer/components/chat/message';
-import { formatClock, formatDateTime } from '@/renderer/lib/format';
-import type { PendingTurn } from '../state/session-reducer.js';
-import type { TurnModel } from '../model/types.js';
+import type { PendingTurn } from '../../state/session-reducer.js';
+import type { TurnModel } from '../../model/types.js';
 import { ActivityCards } from './ActivityCards.js';
 import { FinalReply } from './FinalReply.js';
 import { WorkProcess } from './WorkProcess.js';
@@ -40,10 +40,7 @@ function UserBubble({ text, at }: { text: string; at: string }) {
         <CopyButton text={text} className="opacity-0 transition-opacity group-hover/message:opacity-100" label="复制消息" />
         <div className="flex flex-col items-end">
           <span className="whitespace-pre-wrap">{text}</span>
-          <Tooltip>
-            <TooltipTrigger render={<span className="text-[10px] opacity-70" />}>{formatClock(at)}</TooltipTrigger>
-            <TooltipContent>{formatDateTime(at)}</TooltipContent>
-          </Tooltip>
+          <Timestamp value={at} className="text-[10px] opacity-70" />
         </div>
       </div>
     </MessageContent>
