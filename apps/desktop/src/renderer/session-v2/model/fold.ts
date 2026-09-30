@@ -19,6 +19,7 @@ import type {
   CycleModel,
   ErrorItem,
   ItemStatus,
+  LiveCall,
   Phase,
   ReplyModel,
   SessionModel,
@@ -36,6 +37,17 @@ export interface FoldOptions {
 
 type CallEvent = Extract<LedgerEvent, { type: 'call' }>;
 
+/** Structural view of the P3 `call.started` event, kept independent of the union. */
+interface CallStartedLike {
+  seq: number;
+  at: string;
+  callId: string;
+  role: CallModel['role'];
+  model: string;
+  turn?: number;
+  cycle?: number;
+}
+
 function eventType(event: LedgerEvent): string {
   return (event as { type: string }).type;
 }
@@ -47,12 +59,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const turnCache = new Map<string, Map<number, { signature: string; model: TurnModel }>>();
 
 /**
- * Pure fold of the ledger and task statuses into the page view model. A turn
- * whose `lastSeq` and relevant task inputs are unchanged reuses its previous
- * object so `React.memo` can skip it.
+ * Pure fold of the ledger, the live-call snapshot and task statuses into the
+ * page view model. A turn whose `lastSeq` and relevant live/task inputs are
+ * unchanged reuses its previous object so `React.memo` can skip it.
  */
 export function fold(
   events: readonly LedgerEvent[],
+  live: readonly LiveCall[],
   tasks: Record<string, SessionV2BridgeTaskBrief>,
   options: FoldOptions = {},
 ): SessionModel {
@@ -90,7 +103,7 @@ export function fold(
   const turns: TurnModel[] = [];
   const allCalls: CallModel[] = [];
   for (const turnId of [...turnEvents.keys()].sort((a, b) => a - b)) {
-    const model = buildTurn(turnId, turnEvents.get(turnId)!, tasks, interrupting.has(turnId), perSession);
+    const model = buildTurn(turnId, turnEvents.get(turnId)!, live, tasks, interrupting.has(turnId), perSession);
     turns.push(model);
     allCalls.push(...model.calls);
   }
@@ -103,7 +116,16 @@ export function fold(
   };
 }
 
-function signatureOf(turnId: number, events: LedgerEvent[], tasks: Record<string, SessionV2BridgeTaskBrief>, interrupting: boolean): string {
+function signatureOf(turnId: number, events: LedgerEvent[], live: readonly LiveCall[], tasks: Record<string, SessionV2BridgeTaskBrief>, interrupting: boolean): string {
+  const callIds = new Set<string>();
+  for (const event of events) {
+    const type = eventType(event);
+    if (type === 'call' || type === 'call.started') {
+      const callId = (event as { callId?: string }).callId;
+      if (callId) callIds.add(callId);
+    }
+  }
+  const liveSlice = live.filter((entry) => callIds.has(entry.callId)).map((entry) => [entry.callId, entry.text.length, entry.reasoning.length]);
   const taskIds = new Set<string>();
   for (const event of events) {
     const taskRunId = (event as { taskRunId?: string }).taskRunId;
@@ -111,7 +133,7 @@ function signatureOf(turnId: number, events: LedgerEvent[], tasks: Record<string
   }
   const taskSlice = [...taskIds].sort().map((id) => [id, tasks[id]?.status ?? '']);
   const lastSeq = events.reduce((max, event) => Math.max(max, event.seq), 0);
-  return JSON.stringify([lastSeq, taskSlice, interrupting ? 1 : 0]);
+  return JSON.stringify([lastSeq, liveSlice, taskSlice, interrupting ? 1 : 0]);
 }
 
 function lastOfType<T extends LedgerEvent['type']>(events: LedgerEvent[], type: T): Extract<LedgerEvent, { type: T }> | undefined {
@@ -125,11 +147,12 @@ function lastOfType<T extends LedgerEvent['type']>(events: LedgerEvent[], type: 
 function buildTurn(
   turnId: number,
   events: LedgerEvent[],
+  live: readonly LiveCall[],
   tasks: Record<string, SessionV2BridgeTaskBrief>,
   interrupting: boolean,
   cache: Map<number, { signature: string; model: TurnModel }>,
 ): TurnModel {
-  const signature = signatureOf(turnId, events, tasks, interrupting);
+  const signature = signatureOf(turnId, events, live, tasks, interrupting);
   const cached = cache.get(turnId);
   if (cached && cached.signature === signature) return cached.model;
 
@@ -141,7 +164,7 @@ function buildTurn(
   const endedAt = finished?.at;
   const status: TurnStatus = finished ? finished.status : 'running';
 
-  const calls = buildCalls(events, finished !== undefined);
+  const calls = buildCalls(events, live, finished !== undefined);
   const contextItems = buildContextItems(events);
   const actions = buildActions(events, contextItems, tasks, status !== 'running');
   const cycles = buildCycles(events, calls, actions, contextItems);
@@ -208,31 +231,59 @@ function replyModel(event: ReplyEvent): ReplyModel {
   };
 }
 
-function buildCalls(events: LedgerEvent[], turnEnded: boolean): CallModel[] {
+function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded: boolean): CallModel[] {
+  const startedEvents = new Map<string, CallStartedLike>();
   const completed = new Map<string, CallEvent>();
   for (const event of events) {
-    if (eventType(event) === 'call') {
+    const type = eventType(event);
+    if (type === 'call.started') {
+      const record = event as unknown as CallStartedLike;
+      startedEvents.set(record.callId, record);
+    } else if (type === 'call') {
       const record = event as CallEvent;
       completed.set(record.callId, record);
     }
   }
 
-  const calls: CallModel[] = [...completed.values()].map((done) => ({
-    id: done.callId,
-    role: done.role,
-    model: done.model,
-    status: done.status,
-    turn: done.turn ?? 0,
-    ...(done.cycle === undefined ? {} : { cycle: done.cycle }),
-    startedAt: done.startedAt,
-    endedAt: done.endedAt,
-    ...(done.usage === undefined ? {} : { usage: done.usage }),
-    estimatedInputTokens: done.estimatedInputTokens,
-    layers: done.layers,
-    output: done.output,
-    ...(done.reasoning === undefined ? {} : { reasoning: done.reasoning }),
-    ...(done.error === undefined ? {} : { error: done.error }),
-  }));
+  const liveById = new Map(live.map((entry) => [entry.callId, entry]));
+  const ids = [...new Set([...startedEvents.keys(), ...completed.keys()])];
+  const calls: CallModel[] = ids.map((id) => {
+    const done = completed.get(id);
+    if (done) {
+      return {
+        id,
+        role: done.role,
+        model: done.model,
+        status: done.status,
+        turn: done.turn ?? 0,
+        ...(done.cycle === undefined ? {} : { cycle: done.cycle }),
+        startedAt: done.startedAt,
+        ...(typeof (done as { firstTokenAt?: unknown }).firstTokenAt === 'string'
+          ? { firstTokenAt: (done as { firstTokenAt: string }).firstTokenAt }
+          : {}),
+        endedAt: done.endedAt,
+        ...(done.usage === undefined ? {} : { usage: done.usage }),
+        estimatedInputTokens: done.estimatedInputTokens,
+        layers: done.layers,
+        output: done.output,
+        ...(done.reasoning === undefined ? {} : { reasoning: done.reasoning }),
+        ...(done.error === undefined ? {} : { error: done.error }),
+      };
+    }
+    const startedEvent = startedEvents.get(id)!;
+    const snapshot = liveById.get(id);
+    return {
+      id,
+      role: startedEvent.role,
+      model: startedEvent.model,
+      status: turnEnded ? 'aborted' : 'running',
+      turn: startedEvent.turn ?? 0,
+      ...(startedEvent.cycle === undefined ? {} : { cycle: startedEvent.cycle }),
+      startedAt: startedEvent.at,
+      output: snapshot?.text ?? '',
+      ...(snapshot?.reasoning ? { reasoning: snapshot.reasoning } : {}),
+    };
+  });
 
   return calls.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 }

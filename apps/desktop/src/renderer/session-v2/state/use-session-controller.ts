@@ -147,6 +147,9 @@ export function useSessionController(api: SessionApi) {
     const offEvent = api.onEvent(({ sessionId, event }) => {
       if (!cancelled) dispatch({ type: 'events', sessionId, events: [event] });
     });
+    const offLive = api.onLive(({ sessionId, live }) => {
+      if (!cancelled) dispatch({ type: 'live', sessionId, live });
+    });
     void api.models().then((models) => {
       if (!cancelled) dispatch({ type: 'models', models });
     }).catch((error: unknown) => { if (!cancelled) reportError(error); });
@@ -161,6 +164,7 @@ export function useSessionController(api: SessionApi) {
       selectionVersion.current++;
       listVersion.current++;
       offEvent();
+      offLive();
     };
   }, [api, refreshList, reportError, selectSession]);
 

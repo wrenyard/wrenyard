@@ -8,7 +8,9 @@
  */
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { LedgerEvent, SessionSummary } from '@wrenyard/session-v2';
+import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session-v2';
+
+export type { LiveCall };
 
 /** Exact main↔renderer channels of the session-v2 test surface. */
 export const SESSION_V2_CHANNELS = {
@@ -30,6 +32,8 @@ export const SESSION_V2_CHANNELS = {
   openExternal: 'session-v2:open-external',
   /** Main → renderer: `{ sessionId, event }` for the subscribed session. */
   event: 'session-v2:event',
+  /** Main → renderer: `{ sessionId, live }` streaming snapshot changes. */
+  live: 'session-v2:live',
 } as const;
 
 /** One selectable model row: gateway public id plus its thinking levels. */
@@ -74,6 +78,11 @@ export interface SessionV2BridgeTaskBrief {
   usage?: { input?: number; output?: number };
 }
 
+export interface SessionV2BridgeLivePayload {
+  sessionId: string;
+  live: LiveCall[];
+}
+
 /** The `window.sessionV2` facade consumed by the renderer test page. */
 export interface SessionV2Bridge {
   /** Every known session, newest first (daemon/feature order). */
@@ -98,6 +107,8 @@ export interface SessionV2Bridge {
   openExternal(url: string): Promise<void>;
   /** Subscribe to pushed ledger events; the returned function unsubscribes. */
   onEvent(listener: (payload: SessionV2BridgeEventPayload) => void): () => void;
+  /** Subscribe to live streaming snapshots; the returned function unsubscribes. */
+  onLive(listener: (payload: SessionV2BridgeLivePayload) => void): () => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -108,6 +119,20 @@ function isEventPayload(value: unknown): value is SessionV2BridgeEventPayload {
   return isRecord(value)
     && typeof value.sessionId === 'string'
     && isRecord(value.event);
+}
+
+function isLiveCall(value: unknown): value is LiveCall {
+  return isRecord(value)
+    && typeof value.callId === 'string'
+    && typeof value.text === 'string'
+    && typeof value.reasoning === 'string';
+}
+
+function isLivePayload(value: unknown): value is SessionV2BridgeLivePayload {
+  return isRecord(value)
+    && typeof value.sessionId === 'string'
+    && Array.isArray(value.live)
+    && value.live.every(isLiveCall);
 }
 
 const bridge: SessionV2Bridge = {
@@ -142,6 +167,15 @@ const bridge: SessionV2Bridge = {
     ipcRenderer.on(SESSION_V2_CHANNELS.event, handler);
     return () => {
       ipcRenderer.removeListener(SESSION_V2_CHANNELS.event, handler);
+    };
+  },
+  onLive(listener: (payload: SessionV2BridgeLivePayload) => void): () => void {
+    const handler = (_event: IpcRendererEvent, payload: unknown): void => {
+      if (isLivePayload(payload)) listener(payload);
+    };
+    ipcRenderer.on(SESSION_V2_CHANNELS.live, handler);
+    return () => {
+      ipcRenderer.removeListener(SESSION_V2_CHANNELS.live, handler);
     };
   },
 };

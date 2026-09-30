@@ -93,14 +93,24 @@ export function buildTurnProfile(turn: TurnModel, now: number): TurnProfile {
     },
   ];
 
-  // Reason calls: one shared lane, every call's output segment in time order.
+  // Reason calls: one shared lane, every call's wait/output segments concatenated in time order.
+  let waitTotal = 0;
   let outputTotal = 0;
   const reasonBars: TimelineBar[] = [];
   for (const call of reasonCalls) {
     const callStart = ms(call.startedAt);
     const outEnd = callEnd(call, end);
-    outputTotal += Math.max(0, outEnd - callStart);
-    reasonBars.push({ id: call.id, start: callStart, end: outEnd, tone: 'reason-output', label: `${cycleLabel(call.cycle ?? 1)} · 输出` });
+    const firstToken = call.firstTokenAt === undefined ? undefined : ms(call.firstTokenAt);
+    const cycle = cycleLabel(call.cycle ?? 1);
+    if (firstToken !== undefined && firstToken > callStart) {
+      waitTotal += firstToken - callStart;
+      outputTotal += Math.max(0, outEnd - firstToken);
+      reasonBars.push({ id: `${call.id}#wait`, start: callStart, end: firstToken, tone: 'reason-wait', label: `${cycle} · 等待首 token`, detail: `${firstToken - callStart}ms` });
+      reasonBars.push({ id: call.id, start: firstToken, end: outEnd, tone: 'reason-output', label: `${cycle} · 输出` });
+    } else {
+      outputTotal += Math.max(0, outEnd - callStart);
+      reasonBars.push({ id: call.id, start: callStart, end: outEnd, tone: 'reason-output', label: `${cycle} · 输出` });
+    }
   }
   if (reasonCalls.length > 0) {
     lanes.push({ id: 'reason', label: '推理', bars: reasonBars });
@@ -161,7 +171,7 @@ export function buildTurnProfile(turn: TurnModel, now: number): TurnProfile {
     summary: {
       wallMs: end - start,
       phases,
-      reasonWaitMs: 0,
+      reasonWaitMs: waitTotal,
       reasonOutputMs: outputTotal,
       calls: turn.calls.length,
     },

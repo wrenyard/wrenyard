@@ -1,9 +1,10 @@
 /** Desktop transport for daemon-owned session-v2 sessions. */
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
-import type { LedgerEvent, SessionSummary } from '@wrenyard/session-v2';
+import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session-v2';
 import type {
   SessionV2BridgeEventPayload,
+  SessionV2BridgeLivePayload,
   SessionV2BridgeModelEntry,
   SessionV2BridgeTaskBrief,
 } from './preload.js';
@@ -12,11 +13,11 @@ export const SESSION_V2_CHANNELS = {
   list: 'session-v2:list', create: 'session-v2:create', ledger: 'session-v2:ledger',
   send: 'session-v2:send', interrupt: 'session-v2:interrupt', models: 'session-v2:models',
   tasks: 'session-v2:tasks', openExternal: 'session-v2:open-external',
-  event: 'session-v2:event',
+  event: 'session-v2:event', live: 'session-v2:live',
 } as const;
 export type {
   SessionV2Bridge, SessionV2BridgeEventPayload, SessionV2BridgeInterruptRequest,
-  SessionV2BridgeModelEntry, SessionV2BridgeSendRequest,
+  SessionV2BridgeLivePayload, SessionV2BridgeModelEntry, SessionV2BridgeSendRequest,
   SessionV2BridgeTaskBrief,
 } from './preload.js';
 
@@ -26,7 +27,7 @@ export interface RegisterSessionV2Options {
   isShellSender(sender: WebContents): boolean;
 }
 export interface SessionV2Registration { disconnect(): void; close(): Promise<void> }
-interface EventPage { events: LedgerEvent[]; lastSeq: number }
+interface EventPage { events: LedgerEvent[]; lastSeq: number; live?: LiveCall[] }
 interface PollState {
   ownerId: number;
   target: WebContents;
@@ -34,6 +35,8 @@ interface PollState {
   afterSeq: number;
   controller: AbortController;
   onDestroyed(): void;
+  /** Last live snapshot pushed to the renderer; undefined forces a refresh. */
+  lastLive?: LiveCall[];
 }
 
 function aborted(): Error { return new Error('Session relay stopped'); }
@@ -56,6 +59,17 @@ function toModelEntries(connection: WrenyardGatewayConnection): SessionV2BridgeM
     model: model.publicId.slice(model.publicId.indexOf('/') + 1), displayName: model.displayName,
     ...(model.thinkingLevels?.length ? { thinkingLevels: [...model.thinkingLevels] } : {}),
   }));
+}
+
+/** Full-snapshot equality; an unchanged live table is not re-pushed. */
+function sameLive(a: readonly LiveCall[], b: readonly LiveCall[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index]!;
+    const right = b[index]!;
+    if (left.callId !== right.callId || left.text !== right.text || left.reasoning !== right.reasoning) return false;
+  }
+  return true;
 }
 
 function readString(value: unknown): string | undefined {
@@ -142,7 +156,7 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
   };
   const readPage = (state: PollState, waitMs: number): Promise<EventPage> => request(
     'sessionV2.events',
-    { sessionId: state.sessionId, afterSeq: state.afterSeq, waitMs },
+    { sessionId: state.sessionId, afterSeq: state.afterSeq, waitMs, live: true },
     state.controller.signal,
   );
   const poll = async (state: PollState): Promise<void> => {
@@ -158,6 +172,12 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
             state.target.send(SESSION_V2_CHANNELS.event, payload);
             state.afterSeq = event.seq;
           }
+          const live = page.live;
+          if (live !== undefined && (state.lastLive === undefined || !sameLive(state.lastLive, live))) {
+            state.lastLive = live.map(call => ({ ...call }));
+            const payload: SessionV2BridgeLivePayload = { sessionId: state.sessionId, live };
+            state.target.send(SESSION_V2_CHANNELS.live, payload);
+          }
           if (draining) {
             const status = await request<{ shutting_down: boolean }>('daemon.status', {}, signal);
             draining = status.shutting_down;
@@ -165,6 +185,8 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
           }
         } catch (error) {
           if (signal.aborted) break;
+          // Force a live refresh after any reconnect so the renderer is not stale.
+          state.lastLive = undefined;
           if (isShuttingDown(error)) {
             draining = true;
             await delay(500, signal);

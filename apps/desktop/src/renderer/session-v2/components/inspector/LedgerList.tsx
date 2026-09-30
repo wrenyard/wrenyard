@@ -37,6 +37,7 @@ function summarize(event: LedgerEvent): string {
     case 'turn.interrupted': return String(record.reason ?? '');
     case 'turn.finished': return String(record.status ?? '');
     case 'call': return `${record.role} · ${record.model} · ${record.status}`;
+    case 'call.started': return `${record.role} · ${record.model}`;
     case 'error': return oneLine(`${record.stage}: ${record.message}`);
     default: return '';
   }

@@ -55,6 +55,8 @@ export interface CallEventDraft {
   status: 'ok' | 'failed' | 'aborted';
   startedAt: string;
   endedAt: string;
+  /** When the driver first produced a nonempty delta (visible or reasoning). */
+  firstTokenAt?: string;
   /** Character count per prompt layer, e.g. `{ 'wy-system': 1234 }`. */
   layers: Record<string, number>;
   estimatedInputTokens: number;
@@ -66,6 +68,25 @@ export interface CallEventDraft {
   turn?: number;
   cycle?: number;
 }
+
+/**
+ * The `call.started` event body, written as the call is actually issued. It is
+ * observational: it never enters the rendered context, so appending it cannot
+ * change any previously rendered result. Its `callId` matches the terminal
+ * `call` event for the same attempt.
+ */
+export interface CallStartedEventDraft {
+  type: 'call.started';
+  callId: string;
+  role: CallRole;
+  /** Gateway public id, always exactly `provider/model`. */
+  model: string;
+  turn?: number;
+  cycle?: number;
+}
+
+/** Every ledger draft the runner writes for one call. */
+export type CallLedgerEventDraft = CallStartedEventDraft | CallEventDraft;
 
 export interface ModelCallInput {
   callId: string;
@@ -94,8 +115,8 @@ export interface CallRunnerOptions {
   driver: ModelDriver;
   /** Cheap model public id used by every role except `reason`. */
   cheapModel: () => string | Promise<string>;
-  /** Structural sink: exactly one call event per attempted invocation. */
-  append: (event: CallEventDraft) => void | Promise<void>;
+  /** Structural sink: exactly one terminal call event per attempted invocation. */
+  append: (event: CallLedgerEventDraft) => void | Promise<void>;
   now?: () => Date;
 }
 
@@ -258,10 +279,12 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       let reasoningEffort: string | undefined;
       let partialUsage: Usage | undefined;
       let emitted = false;
+      /** First nonempty delta time, shared by the terminal call event. */
+      let firstTokenAt: string | undefined;
 
       const emit = async (
         status: CallEventDraft['status'],
-        fields: { output: string; reasoning?: string; usage?: Usage; error?: string },
+        fields: { output: string; reasoning?: string; usage?: Usage; error?: string; firstTokenAt?: string },
       ): Promise<void> => {
         if (emitted) return;
         emitted = true;
@@ -276,6 +299,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           layers: input.layers,
           estimatedInputTokens,
           ...(fields.usage === undefined ? {} : { usage: fields.usage }),
+          ...(fields.firstTokenAt === undefined ? {} : { firstTokenAt: fields.firstTokenAt }),
           output: fields.output,
           ...(fields.reasoning === undefined ? {} : { reasoning: fields.reasoning }),
           ...(fields.error === undefined ? {} : { error: fields.error }),
@@ -299,6 +323,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           output: partialText,
           ...(detail.partialReasoning === undefined ? {} : { reasoning: detail.partialReasoning }),
           ...(detail.usage === undefined ? {} : { usage: detail.usage }),
+          ...(firstTokenAt === undefined ? {} : { firstTokenAt }),
           error: message,
         });
         throw new ModelCallError(message, {
@@ -341,12 +366,18 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       let reasoning = '';
       const onText = (delta: string): void => {
         text += delta;
-        if (delta !== '') resetIdle();
+        if (delta !== '') {
+          firstTokenAt ??= now().toISOString();
+          resetIdle();
+        }
         input.onText?.(delta);
       };
       const onReasoning = (delta: string): void => {
         reasoning += delta;
-        if (delta !== '') resetIdle();
+        if (delta !== '') {
+          firstTokenAt ??= now().toISOString();
+          resetIdle();
+        }
         input.onReasoning?.(delta);
       };
 
@@ -373,6 +404,17 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           return await fail(`Model ${model} does not support reasoning effort "${reasoningEffort}"`);
         }
         if (!budget.ok) return await fail(`Call not sent: ${budget.reason}`);
+
+        // Observational marker: the driver call is about to be issued. It never
+        // enters the rendered context, so it cannot change prior renderings.
+        await options.append({
+          type: 'call.started',
+          callId: input.callId,
+          role: input.role,
+          model,
+          ...(input.turn === undefined ? {} : { turn: input.turn }),
+          ...(input.cycle === undefined ? {} : { cycle: input.cycle }),
+        });
 
         result = await settleWithAbort(options.driver.complete({
           model,
@@ -409,6 +451,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         output: finalText,
         ...(finalReasoning === undefined ? {} : { reasoning: finalReasoning }),
         ...(usage === undefined ? {} : { usage }),
+        ...(firstTokenAt === undefined ? {} : { firstTokenAt }),
       });
 
       return {
