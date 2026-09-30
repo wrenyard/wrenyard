@@ -1,6 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'electron-vite';
 import { DESKTOP_PAGES, DESKTOP_PRELOADS } from './src/entries.ts';
 import { devShellCsp } from './tools/vite-dev-csp.mjs';
@@ -48,7 +49,12 @@ export default defineConfig({
     root: src,
     base: './',
     publicDir: false,
-    plugins: [react(), devShellCsp()],
+    resolve: {
+      alias: {
+        '@': src,
+      },
+    },
+    plugins: [react(), tailwindcss(), devShellCsp()],
     // Pre-bundle up front so a first page load never triggers a dependency re-optimization reload.
     optimizeDeps: { include: ['react', 'react-dom/client', 'react/jsx-dev-runtime', 'pixi.js'] },
     server: { host: '127.0.0.1', port: 5199, strictPort: false },

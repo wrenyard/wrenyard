@@ -1,4 +1,4 @@
-import './app.css';
+import './globals.css';
 import { RoutingWeightsSettings } from './routing-weights-settings.js';
 import { SummaryModelSettings } from './summary-settings.js';
 import type {
