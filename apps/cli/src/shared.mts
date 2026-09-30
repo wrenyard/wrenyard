@@ -2,20 +2,18 @@
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { foremanPackageRoot, readSuiteVersion, resolveWrenyardSuiteRoot } from '@wrenyard/daemon/layout/suite-root'
-import { foremanStateRoot } from '@wrenyard/daemon/config/state'
+import { bundledSuiteRoot, foremanPackageRoot } from '@wrenyard/daemon/layout/suite-root'
 import { connectIpcForemanClient } from '@wrenyard/daemon/control/ipc-client'
 import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
 import { ProtocolError } from '@wrenyard/daemon/protocol/errors'
 import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from '@wrenyard/control-client/transport'
 import { loadForemanServiceConfig, loadForemanConfigData, resolveDefaultForemanConfigPath, resolveForemanConfigPath as configResolveForemanConfigPath, type ForemanServiceConfig } from '@wrenyard/daemon/config'
-import { readSourceDevLock } from './source-dev-lock.mts'
 
 /** Daemon package root (owns task/execution lifecycle and the product IPC server). */
 export const foremanDir = foremanPackageRoot
 /** CLI package root, derived from this module's location (src/ one level up). */
 export const cliDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-export const suiteDir = resolveWrenyardSuiteRoot({ packageRoot: foremanDir })
+export const suiteDir = bundledSuiteRoot
 export const configPath = resolveDefaultForemanConfigPath()
 export const whichCmd = process.platform === 'win32' ? 'where' : 'which'
 
@@ -77,7 +75,7 @@ export function resolveWorkDir(): string {
   const override = process.env.WRENYARD_TEST_WORK_DIR?.trim() || process.env.FOREMAN_TEST_WORK_DIR?.trim()
   if (override) return resolve(override)
 
-  const workspaceRoot = process.env.WRENYARD_WORKSPACE?.trim() || process.env.FOREMAN_WORKSPACE?.trim()
+  const workspaceRoot = process.env.WRENYARD_WORKSPACE?.trim()
   if (workspaceRoot) return resolve(workspaceRoot)
 
   let current = resolve(foremanDir)
@@ -162,13 +160,6 @@ export async function connectConfiguredForemanClient(configPathValue: unknown): 
     // A protocol version mismatch is actionable on its own and must reach the
     // operator verbatim; never replace it with the "daemon not running" hint.
     if (isProtocolMismatch(error)) throw error
-    // A live `pnpm dev:desktop` restarts the daemon after every source change, so an
-    // unreachable IPC during dev is expected churn, not a missing daemon.
-    const devLock = readSourceDevLock()
-    if (devLock) {
-      const daemonLog = join(foremanStateRoot(), 'dev', 'logs', 'daemon.log')
-      throw new Error(`Wrenyard daemon IPC is not reachable at ${ipcPath}. pnpm dev:desktop (pid ${devLock.pid}) is probably restarting it after a source change; retry in a few seconds. If it stays down, the new source failed to start: check the pnpm dev:desktop terminal and ${daemonLog}, then fix the source directly.`)
-    }
     const details = error instanceof Error && error.message ? ` ${error.message}` : ''
     throw new Error(`Wrenyard daemon IPC is not reachable at ${ipcPath}.${details} Wrenyard daemon 未运行。请打开啾啾工坊，或在终端运行 \`wrenyard daemon run\`。`)
   }
@@ -288,19 +279,13 @@ export function isHelpRequest(args: string[]): boolean {
 }
 
 export function workspaceRootForRuntime(): string {
-  const workspace = process.env.WRENYARD_WORKSPACE?.trim() || process.env.FOREMAN_WORKSPACE?.trim()
+  const workspace = process.env.WRENYARD_WORKSPACE?.trim()
   return workspace ? resolve(workspace) : resolveWorkDir()
 }
 
 /** Validate that the config file loads; the daemon owns the config schema. */
 export function loadConfig(configPathValue?: unknown): void {
   loadForemanConfigData(resolveConfigPath(configPathValue))
-}
-
-export function readLocalPackageVersion(): string {
-  // The daemon package version is a constant 0.0.0; the suite version (from
-  // SUITE_VERSION or the suite package.json) is the only meaningful identity.
-  return readSuiteVersion(suiteDir)
 }
 
 export function resolveConfigPath(value: unknown): string {

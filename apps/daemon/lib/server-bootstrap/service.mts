@@ -1,4 +1,3 @@
-#!/usr/bin/env tsx
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadForemanServiceConfig, resolveForemanConfigPath, type ForemanServiceConfig } from '../config/index.mts'

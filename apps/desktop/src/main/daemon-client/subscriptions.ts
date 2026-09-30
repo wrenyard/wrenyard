@@ -123,15 +123,35 @@ export class DaemonSubscriptions {
     return this.lastActivity;
   }
 
-  dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
+  pause(): void {
+    const presence = this.lastActivity;
+    this.started = false;
     this.eventPoller?.stop();
     this.statsPoller?.stop();
     this.activityPoller?.stop();
     this.eventPoller = null;
     this.statsPoller = null;
     this.activityPoller = null;
+    this.lastStats = undefined;
+    this.lastActivity = undefined;
+    this.client.reset();
+    if (!this.disposed) {
+      for (const handler of this.handlers) {
+        handler.onStats?.(undefined);
+        if (presence) handler.onActivity?.({ ...presence, stale: true });
+      }
+    }
+  }
+
+  reconnect(): void {
+    this.pause();
+    this.start();
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.pause();
     this.handlers.clear();
     this.client.close();
   }

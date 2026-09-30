@@ -151,7 +151,7 @@ export interface SettingsSnapshot {
     wrenyardVersion: string;
     dshVersion: string;
     buildTime?: string;
-    /** Present only while Desktop is running from `pnpm dev:desktop`. */
+    /** Present only while Desktop is running from `pnpm dev`. */
     sourceDevelopment?: boolean;
   };
 }

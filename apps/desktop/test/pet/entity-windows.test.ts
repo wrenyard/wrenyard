@@ -1,3 +1,4 @@
+import { createPageLoader } from '../../src/pages';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { makeMockWin } = vi.hoisted(() => {
@@ -61,14 +62,16 @@ describe('entity windows', () => {
 
     createHouseWindow({
       preloadPath: '/tmp/preload.js',
-      htmlPath: '/tmp/house.html',
+      pageLoader: createPageLoader({ appPath: '/tmp', packaged: true, env: {} }),
+      page: 'house',
       bounds,
       visible: true,
     });
 
     createWorkerWindow({
       preloadPath: '/tmp/preload.js',
-      htmlPath: '/tmp/worker.html',
+      pageLoader: createPageLoader({ appPath: '/tmp', packaged: true, env: {} }),
+      page: 'worker',
       bounds,
       visible: true,
     });
@@ -116,7 +119,8 @@ describe('entity windows', () => {
     const bounds = { x: 0, y: 0, width: 120, height: 160 };
     createHouseWindow({
       preloadPath: '/tmp/preload.js',
-      htmlPath: '/tmp/house.html',
+      pageLoader: createPageLoader({ appPath: '/tmp', packaged: true, env: {} }),
+      page: 'house',
       bounds,
       visible: true,
     });
@@ -173,7 +177,8 @@ describe('entity windows', () => {
     const bounds = { x: 0, y: 0, width: 120, height: 160 };
     createHouseWindow({
       preloadPath: '/tmp/preload.js',
-      htmlPath: '/tmp/house.html',
+      pageLoader: createPageLoader({ appPath: '/tmp', packaged: true, env: {} }),
+      page: 'house',
       bounds,
       visible: true,
     });
@@ -225,7 +230,8 @@ describe('entity windows', () => {
     const bounds = { x: 0, y: 0, width: 120, height: 160 };
     createHouseWindow({
       preloadPath: '/tmp/preload.js',
-      htmlPath: '/tmp/house.html',
+      pageLoader: createPageLoader({ appPath: '/tmp', packaged: true, env: {} }),
+      page: 'house',
       bounds,
       visible: true,
     });
@@ -249,14 +255,16 @@ describe('entity windows', () => {
 
     createHouseWindow({
       preloadPath: '/tmp/preload.js',
-      htmlPath: '/tmp/house.html',
+      pageLoader: createPageLoader({ appPath: '/tmp', packaged: true, env: {} }),
+      page: 'house',
       bounds,
       visible: true,
     });
 
     createWorkerWindow({
       preloadPath: '/tmp/preload.js',
-      htmlPath: '/tmp/worker.html',
+      pageLoader: createPageLoader({ appPath: '/tmp', packaged: true, env: {} }),
+      page: 'worker',
       bounds,
       visible: true,
     });
@@ -296,7 +304,6 @@ describe('entity windows', () => {
     const mockOn = vi.fn();
     const mockHide = vi.fn();
     const mockClose = vi.fn();
-    const mockRecovered = vi.fn();
     const mockReload = vi.fn();
     let destroyed = false;
 
@@ -323,10 +330,10 @@ describe('entity windows', () => {
     const bounds = { x: 0, y: 0, width: 120, height: 160 };
     createHouseWindow({
       preloadPath: '/tmp/preload.js',
-      htmlPath: '/tmp/house.html',
+      pageLoader: createPageLoader({ appPath: '/tmp', packaged: true, env: {} }),
+      page: 'house',
       bounds,
       visible: true,
-      onRendererRecovered: mockRecovered,
     });
 
     // 1. ready-to-show fires first (no prior failure) → window shown
@@ -364,14 +371,6 @@ describe('entity windows', () => {
 
     expect(mockReload).toHaveBeenCalledTimes(1);
 
-    // did-finish-load fires (no did-fail-load in between) → no hide/close
-    const dflEntry = mockOnce.mock.calls.find(
-      (c: any[]) => c[0] === 'did-finish-load'
-    );
-    expect(dflEntry).toBeDefined();
-    dflEntry![1]();
-
-    expect(mockRecovered).toHaveBeenCalledTimes(1);
     expect(mockHide).not.toHaveBeenCalled();
     expect(mockClose).not.toHaveBeenCalled();
   });
@@ -390,7 +389,8 @@ describe('entity windows', () => {
 
     createHouseWindow({
       preloadPath: '/tmp/preload.js',
-      htmlPath: '/tmp/house.html',
+      pageLoader: createPageLoader({ appPath: '/tmp', packaged: true, env: {} }),
+      page: 'house',
       bounds: { x: 0, y: 0, width: 120, height: 160 },
       visible: true,
     });

@@ -1,5 +1,5 @@
 import { BrowserWindow, screen } from 'electron';
-import * as path from 'node:path';
+import type { PageLoader } from '../../pages.js';
 import { getAppearance } from '../features/worker/appearance';
 import { classifyWorkerClient } from './client-family';
 import { AppConfig, type EntityVisibilityConfig } from './config';
@@ -58,7 +58,7 @@ interface WorkerEntity {
 
 export interface EntityManagerOptions {
   preloadPath: string;
-  rendererDir: string;
+  pageLoader: PageLoader;
   config: AppConfig;
   onConfigChange: (config: AppConfig) => void;
   onHouseDisplayChanged?: () => void;
@@ -69,7 +69,7 @@ export interface EntityManagerOptions {
 
 export class EntityManager {
   private readonly preloadPath: string;
-  private readonly rendererDir: string;
+  private readonly pageLoader: PageLoader;
   private readonly onConfigChange: (config: AppConfig) => void;
   private readonly onHouseDisplayChanged?: () => void;
   private readonly now: () => number;
@@ -102,7 +102,7 @@ export class EntityManager {
 
   constructor(options: EntityManagerOptions) {
     this.preloadPath = options.preloadPath;
-    this.rendererDir = options.rendererDir;
+    this.pageLoader = options.pageLoader;
     this.config = options.config;
     this.onConfigChange = options.onConfigChange;
     this.onHouseDisplayChanged = options.onHouseDisplayChanged;
@@ -456,20 +456,17 @@ export class EntityManager {
 
     const win = createHouseWindow({
       preloadPath: this.preloadPath,
-      htmlPath: path.join(this.rendererDir, 'house.html'),
+      pageLoader: this.pageLoader,
+      page: 'house',
       bounds: placement.bounds,
       visible: this.visible && this.config.entities.house,
       isVisible: () => this.visible && this.config.entities.house,
-      onRendererRecovered: () => {
-        this.houseRendererReady = true;
-        this.sendHouseUpdate();
-      },
     });
     this.house = win;
     win.setIgnoreMouseEvents(true, { forward: true });
     this.attachRendererDebug(win);
 
-    win.webContents.once('did-finish-load', () => {
+    win.webContents.on('did-finish-load', () => {
       this.houseRendererReady = true;
       this.sendHouseUpdate();
     });
@@ -487,7 +484,8 @@ export class EntityManager {
 
     const win = createWorkerWindow({
       preloadPath: this.preloadPath,
-      htmlPath: path.join(this.rendererDir, 'worker.html'),
+      pageLoader: this.pageLoader,
+      page: 'worker',
       bounds: startBounds,
       visible: this.visible && this.config.entities.workers,
       isVisible: () => this.visible && this.config.entities.workers,

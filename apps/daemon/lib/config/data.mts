@@ -44,7 +44,7 @@ export function createDefaultForemanConfigData(
       enabled: true,
     },
     workspace: {
-      root: env.WRENYARD_WORKSPACE ?? env.FOREMAN_WORKSPACE,
+      root: env.WRENYARD_WORKSPACE,
     },
   }
 }

@@ -193,7 +193,6 @@ test('resolveWrenyardConnectionEnv propagates only the owner-only IPC path', () 
   assert.deepEqual(
     resolveWrenyardConnectionEnv({
       WRENYARD_IPC_PATH: '/run/wrenyard.sock',
-      FOREMAN_IPC_PATH: '/run/foreman.sock',
       WRENYARD_MCP_URL: 'http://daemon/mcp',
       FOREMAN_MCP_URL: 'http://legacy/mcp',
       WRENYARD_MCP_SENDER: 'desk',
@@ -206,7 +205,7 @@ test('resolveWrenyardConnectionEnv propagates only the owner-only IPC path', () 
       FOREMAN_MCP_URL: 'http://legacy/mcp',
       FOREMAN_MCP_SENDER: 'pet',
     }),
-    { WRENYARD_IPC_PATH: '/run/foreman.sock' },
+    {},
   );
   assert.deepEqual(resolveWrenyardConnectionEnv({}), {});
 });
@@ -214,7 +213,6 @@ test('resolveWrenyardConnectionEnv propagates only the owner-only IPC path', () 
 test('startDshWeb propagates the IPC path and strips daemon MCP env from the child', async () => {
   const previous: Record<string, string | undefined> = {
     WRENYARD_IPC_PATH: process.env.WRENYARD_IPC_PATH,
-    FOREMAN_IPC_PATH: process.env.FOREMAN_IPC_PATH,
     WRENYARD_MCP_URL: process.env.WRENYARD_MCP_URL,
     FOREMAN_MCP_URL: process.env.FOREMAN_MCP_URL,
     WRENYARD_MCP_SENDER: process.env.WRENYARD_MCP_SENDER,
@@ -222,7 +220,6 @@ test('startDshWeb propagates the IPC path and strips daemon MCP env from the chi
   };
   try {
     process.env.WRENYARD_IPC_PATH = '/tmp/wrenyard.sock';
-    process.env.FOREMAN_IPC_PATH = '/tmp/legacy.sock';
     process.env.WRENYARD_MCP_URL = 'http://127.0.0.1:8787/mcp';
     process.env.FOREMAN_MCP_URL = 'http://legacy/mcp';
     delete process.env.WRENYARD_MCP_SENDER;

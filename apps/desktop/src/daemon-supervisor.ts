@@ -5,14 +5,13 @@ import type {
   DaemonLifecycleSnapshot,
   DaemonProcessState,
 } from './shell-contract.js';
-import type { InstallationDiscovery } from './installation-discovery.js';
-import { resolveDaemonLaunch, type DaemonLaunch } from '../../daemon/lib/daemon/launch.mts';
+import { incompatibleDaemonMessage, type DaemonProbe } from './daemon-health.js';
+import type { PackagedDaemonLaunch } from '../../daemon/lib/daemon/launch.mts';
 import { DaemonProcess, type DaemonProcessExitInfo } from '../../daemon/lib/supervisor.mjs';
 
 /**
- * Owns the daemon process when Desktop is its supervisor. The child is the
- * single owner entrypoint `daemon run` (the same command the terminal and
- * `pnpm dev` use), run with the bundled Node and the control tree. Desktop adds
+ * Owns the daemon process when a packaged Desktop is its supervisor. The child
+ * is the bundled Node running the daemon bundle's `run` entry. Desktop adds
  * only what an owner adds: it keeps the Node IPC channel to learn when the
  * daemon is `ready` and to ask it to `shutdown`, and respawns it on a crash.
  *
@@ -32,13 +31,14 @@ const STOP_WAIT_MS = 120_000;
 const EXIT_POLL_MS = 100;
 
 export interface DaemonSupervisorOptions {
-  installation: InstallationDiscovery;
+  /** The bundled daemon of a packaged Desktop; null when running from source. */
+  launch: PackagedDaemonLaunch | null;
+  /** Directory for the owned daemon's stdout/stderr logs. */
+  logsDir: string;
   ipcPath: string;
-  /** The source-development supervisor owns the daemon; Desktop never launches. */
-  sourceSupervised: boolean;
-  /** A daemon is already reachable when Desktop starts. */
-  initiallyConnected: boolean;
-  probe: () => Promise<boolean>;
+  initialProbe: DaemonProbe;
+  desktopVersion: string;
+  probe: () => Promise<DaemonProbe>;
   /** `daemon.shutdown {force:true}` over IPC: cancels every task and graph. */
   forceShutdown: () => Promise<void>;
   onChanged: (snapshot: DaemonLifecycleSnapshot) => void;
@@ -59,6 +59,7 @@ function errorMessage(error: unknown): string {
 
 export class DesktopDaemonSupervisor {
   private readonly options: DaemonSupervisorOptions;
+  private readonly connectionMode: DaemonConnectionMode;
   private proc: DaemonProcess | null = null;
   private owned = false;
   private state: DaemonProcessState;
@@ -66,37 +67,37 @@ export class DesktopDaemonSupervisor {
   private restartTimes: number[] = [];
   private restartTimer?: NodeJS.Timeout;
   private connectivityTimer?: NodeJS.Timeout;
+  private probing = false;
   private stopping = false;
   /** True only while spawnOwned is racing a fresh child to readiness. */
   private starting = false;
   /** Serializes start() so two IPC requests never spawn two daemons. */
   private startPromise: Promise<DaemonLifecycleSnapshot> | null = null;
   private disposed = false;
-  private invocation?: DaemonLaunch;
-  private invocationResolved = false;
-
   constructor(options: DaemonSupervisorOptions) {
     this.options = options;
+    this.connectionMode = options.initialProbe.connected || !options.launch ? 'connected' : 'supervised';
     const canStart = this.canStart();
-    if (options.initiallyConnected) {
+    if (options.initialProbe.compatible) {
       this.state = 'running';
+    } else if (options.initialProbe.connected) {
+      this.state = 'unavailable';
+      this.message = incompatibleDaemonMessage(options.initialProbe, options.desktopVersion);
     } else if (canStart) {
       this.state = 'stopped';
     } else {
       this.state = 'unavailable';
-      this.message = options.sourceSupervised
-        ? '源码 supervisor 尚未启动 daemon'
-        : '未找到可用的 Wrenyard 安装';
+      this.message = this.unavailableMessage();
     }
     this.startConnectivityMonitor();
   }
 
   get mode(): DaemonConnectionMode {
-    return this.owned ? 'supervised' : 'connected';
+    return this.connectionMode;
   }
 
   canStart(): boolean {
-    if (this.options.sourceSupervised) return false;
+    if (this.mode !== 'supervised') return false;
     return this.resolveInvocation() !== null;
   }
 
@@ -164,6 +165,7 @@ export class DesktopDaemonSupervisor {
   /** Force-cancel every task/graph over IPC, then reap the owned child. */
   async forceStop(): Promise<void> {
     this.clearRestartTimer();
+    if (!this.proc) return;
     try {
       await this.options.forceShutdown();
     } catch {
@@ -186,59 +188,38 @@ export class DesktopDaemonSupervisor {
 
   private async doStart(): Promise<DaemonLifecycleSnapshot> {
     if (this.proc !== null) return this.snapshot();
-    if (await this.options.probe()) {
+    const probe = await this.options.probe();
+    if (probe.connected && !probe.compatible) {
+      this.setState('unavailable', incompatibleDaemonMessage(probe, this.options.desktopVersion));
+      return this.snapshot();
+    }
+    if (probe.compatible) {
       this.owned = false;
       this.setState('running');
       return this.snapshot();
     }
-    const invocation = this.options.sourceSupervised ? null : this.resolveInvocation();
+    const invocation = this.mode === 'supervised' ? this.resolveInvocation() : null;
     if (invocation === null) {
-      this.setState('unavailable', this.options.sourceSupervised
-        ? '源码 supervisor 尚未启动 daemon'
-        : '未找到可用的 Wrenyard 安装');
+      this.setState('unavailable', this.unavailableMessage());
       return this.snapshot();
     }
     await this.spawnOwned(invocation);
     return this.snapshot();
   }
 
-  private resolveInvocation(): DaemonLaunch | null {
-    if (this.invocationResolved) return this.invocation ?? null;
-    this.invocationResolved = true;
-    const installation = this.options.installation;
-    const root = installation.rootPath;
-    const runtime = installation.runtimePath;
-    if (!root || !runtime) return null;
-
-    const daemonRoot = this.resolveDaemonRoot(root);
-    const cliRoot = join(root, 'apps', 'cli');
-    if (!daemonRoot || !isFile(join(cliRoot, 'src', 'index.mts'))) return null;
-    try {
-      // The shared helper resolves tsx, loads the same config the CLI resolves,
-      // pins the installation for the child and builds the `daemon run` argv.
-      this.invocation = resolveDaemonLaunch({
-        daemonRoot,
-        cliRoot,
-        runtimeNode: runtime,
-        env: this.options.env ?? process.env,
-        envOverrides: { WRENYARD_ROOT: root, WRENYARD_NODE_BIN: runtime },
-      });
-      return this.invocation;
-    } catch {
-      return null;
-    }
+  private unavailableMessage(): string {
+    if (!this.options.launch) return '未连接到 daemon，请先运行 `pnpm dev` 或 `pnpm --filter @wrenyard/daemon dev`';
+    return this.mode === 'connected' ? 'daemon 不可用，请由原启动方重新启动' : '未找到随包的 Wrenyard daemon';
   }
 
-  /** Deployed control tree (`apps/cli/node_modules/@wrenyard/daemon`) or a source checkout. */
-  private resolveDaemonRoot(root: string): string | undefined {
-    return [
-      join(root, 'apps', 'cli', 'node_modules', '@wrenyard', 'daemon'),
-      join(root, 'apps', 'daemon'),
-    ].find((candidate) => isFile(join(candidate, 'lib', 'server-bootstrap', 'service.mts')));
+  private resolveInvocation(): PackagedDaemonLaunch | null {
+    const launch = this.options.launch;
+    if (!launch || !isFile(launch.command) || !isFile(launch.args[0]!)) return null;
+    return launch;
   }
 
-  private async spawnOwned(invocation: DaemonLaunch): Promise<void> {
-    const logsDir = join(invocation.stateDir, 'logs');
+  private async spawnOwned(invocation: PackagedDaemonLaunch): Promise<void> {
+    const logsDir = this.options.logsDir;
     mkdirSync(logsDir, { recursive: true });
     const stdoutPath = join(logsDir, 'wrenyard-out.log');
     const stderrPath = join(logsDir, 'wrenyard-error.log');
@@ -255,13 +236,13 @@ export class DesktopDaemonSupervisor {
         command: invocation.command,
         args: invocation.args,
         cwd: invocation.cwd,
-        env: invocation.env,
+        env: this.options.env ?? process.env,
         ipcPath: this.options.ipcPath,
         readyTimeoutMs: READY_TIMEOUT_MS,
         pollIntervalMs: PROBE_INTERVAL_MS,
         stopTimeoutMs: STOP_WAIT_MS,
         exitPollMs: EXIT_POLL_MS,
-        probe: this.options.probe,
+        probe: async () => (await this.options.probe()).compatible,
         stdio: ['ignore', stdoutFd, stderrFd, 'ipc'],
         onExit: (info) => { if (ref) this.onProcessExit(ref, info); },
       });
@@ -288,6 +269,8 @@ export class DesktopDaemonSupervisor {
       // Readiness is the `ready` message or a live health probe; the shared
       // module also rejects on spawn error, early exit or timeout.
       await launchPromise;
+      const probe = await this.options.probe();
+      if (!probe.compatible) throw new Error(incompatibleDaemonMessage(probe, this.options.desktopVersion));
     } catch (error) {
       this.failStart(proc, `daemon 启动失败：${errorMessage(error)}`);
       return;
@@ -353,21 +336,23 @@ export class DesktopDaemonSupervisor {
 
   private startConnectivityMonitor(): void {
     this.connectivityTimer = setInterval(() => {
-      if (this.disposed || this.owned || this.proc !== null || this.restartTimer) return;
-      void this.options.probe().then((healthy) => {
+      if (this.disposed || this.owned || this.proc !== null || this.restartTimer || this.probing) return;
+      this.probing = true;
+      void this.options.probe().then((probe) => {
         if (this.disposed || this.owned || this.proc !== null || this.restartTimer) return;
-        if (healthy) {
+        if (probe.compatible) {
           if (this.state !== 'running') this.setState('running');
           return;
         }
         // Only a live projection may be downgraded: an owned stop/failure
         // reason and a pending restart must survive the poll unchanged.
         if (this.state !== 'running' && this.state !== 'unavailable') return;
-        const message = this.canStart() ? 'daemon 已停止，可重新启动' : (this.message ?? 'daemon 不可用');
+        const message = probe.connected ? incompatibleDaemonMessage(probe, this.options.desktopVersion)
+          : this.canStart() ? 'daemon 已停止，可重新启动' : this.unavailableMessage();
         if (this.state !== 'unavailable' || this.message !== message) {
           this.setState('unavailable', message);
         }
-      }).catch(() => undefined);
+      }).catch(() => undefined).finally(() => { this.probing = false; });
     }, CONNECTIVITY_POLL_MS);
     this.connectivityTimer.unref?.();
   }
