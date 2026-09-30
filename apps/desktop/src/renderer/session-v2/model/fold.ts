@@ -22,6 +22,7 @@ import type {
   Phase,
   ReplyModel,
   SessionModel,
+  SessionV2BridgeTaskBrief,
   TurnModel,
   TurnStats,
   TurnStatus,
@@ -46,12 +47,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const turnCache = new Map<string, Map<number, { signature: string; model: TurnModel }>>();
 
 /**
- * Pure fold of the ledger into the page view model. A turn whose `lastSeq` and
- * interrupting state are unchanged reuses its previous object so `React.memo`
- * can skip it.
+ * Pure fold of the ledger and task statuses into the page view model. A turn
+ * whose `lastSeq` and relevant task inputs are unchanged reuses its previous
+ * object so `React.memo` can skip it.
  */
 export function fold(
   events: readonly LedgerEvent[],
+  tasks: Record<string, SessionV2BridgeTaskBrief>,
   options: FoldOptions = {},
 ): SessionModel {
   const sessionKey = options.sessionId ?? '';
@@ -88,7 +90,7 @@ export function fold(
   const turns: TurnModel[] = [];
   const allCalls: CallModel[] = [];
   for (const turnId of [...turnEvents.keys()].sort((a, b) => a - b)) {
-    const model = buildTurn(turnId, turnEvents.get(turnId)!, interrupting.has(turnId), perSession);
+    const model = buildTurn(turnId, turnEvents.get(turnId)!, tasks, interrupting.has(turnId), perSession);
     turns.push(model);
     allCalls.push(...model.calls);
   }
@@ -101,9 +103,15 @@ export function fold(
   };
 }
 
-function signatureOf(turnId: number, events: LedgerEvent[], interrupting: boolean): string {
+function signatureOf(turnId: number, events: LedgerEvent[], tasks: Record<string, SessionV2BridgeTaskBrief>, interrupting: boolean): string {
+  const taskIds = new Set<string>();
+  for (const event of events) {
+    const taskRunId = (event as { taskRunId?: string }).taskRunId;
+    if (taskRunId) taskIds.add(taskRunId);
+  }
+  const taskSlice = [...taskIds].sort().map((id) => [id, tasks[id]?.status ?? '']);
   const lastSeq = events.reduce((max, event) => Math.max(max, event.seq), 0);
-  return JSON.stringify([lastSeq, interrupting ? 1 : 0]);
+  return JSON.stringify([lastSeq, taskSlice, interrupting ? 1 : 0]);
 }
 
 function lastOfType<T extends LedgerEvent['type']>(events: LedgerEvent[], type: T): Extract<LedgerEvent, { type: T }> | undefined {
@@ -117,10 +125,11 @@ function lastOfType<T extends LedgerEvent['type']>(events: LedgerEvent[], type: 
 function buildTurn(
   turnId: number,
   events: LedgerEvent[],
+  tasks: Record<string, SessionV2BridgeTaskBrief>,
   interrupting: boolean,
   cache: Map<number, { signature: string; model: TurnModel }>,
 ): TurnModel {
-  const signature = signatureOf(turnId, events, interrupting);
+  const signature = signatureOf(turnId, events, tasks, interrupting);
   const cached = cache.get(turnId);
   if (cached && cached.signature === signature) return cached.model;
 
@@ -134,7 +143,7 @@ function buildTurn(
 
   const calls = buildCalls(events, finished !== undefined);
   const contextItems = buildContextItems(events);
-  const actions = buildActions(events, contextItems, status !== 'running');
+  const actions = buildActions(events, contextItems, tasks, status !== 'running');
   const cycles = buildCycles(events, calls, actions, contextItems);
   const cycle = cycles.length > 0 ? cycles[cycles.length - 1]!.index : 0;
 
@@ -276,6 +285,7 @@ function contextItem(
 function buildActions(
   events: LedgerEvent[],
   contextItems: ContextItem[],
+  tasks: Record<string, SessionV2BridgeTaskBrief>,
   turnEnded: boolean,
 ): ActionModel[] {
   const started = new Map<string, Extract<LedgerEvent, { type: 'action.started' }>>();
@@ -341,6 +351,7 @@ function buildActions(
       ...(start?.parsed === undefined ? {} : { parsed: start.parsed }),
       ...(end?.result === undefined ? {} : { result: end.result }),
       ...(taskRunId === undefined ? {} : { taskRunId }),
+      ...(taskRunId === undefined || tasks[taskRunId] === undefined ? {} : { task: tasks[taskRunId] }),
       outputs,
       writes: writes.get(actionId) ?? [],
       afterInterrupt: end?.afterInterrupt ?? false,

@@ -4,6 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/renderer/components/
 import type { InspectorTarget, LedgerEvent, SessionModel } from '../../model/types.js';
 import { DetailPane } from './DetailPane.js';
 import { LedgerList } from './LedgerList.js';
+import { TurnTimeline } from './TurnTimeline.js';
 
 export interface InspectorContextValue {
   target?: InspectorTarget;
@@ -48,11 +49,17 @@ export function Inspector({ model, events, target, tab, onTabChange, onSelect, o
       <Tabs value={tab} onValueChange={(value) => onTabChange(String(value))} className="flex h-full min-h-0 flex-col gap-0">
         <TabsList variant="line" className="m-2 w-fit">
           <TabsTrigger value="detail">详情</TabsTrigger>
+          <TabsTrigger value="timeline">时间线</TabsTrigger>
           <TabsTrigger value="ledger">账本</TabsTrigger>
         </TabsList>
         <TabsContent value="detail" className="min-h-0 flex-1">
           <ScrollArea className="h-full">
             <DetailPane model={model} target={target} onSelect={onSelect} />
+          </ScrollArea>
+        </TabsContent>
+        <TabsContent value="timeline" className="min-h-0 flex-1">
+          <ScrollArea className="h-full">
+            <TurnTimeline model={model} target={target} onSelect={onSelect} />
           </ScrollArea>
         </TabsContent>
         <TabsContent value="ledger" className="min-h-0 flex-1">
