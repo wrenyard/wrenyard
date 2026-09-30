@@ -203,7 +203,7 @@ export interface WsUpdatedEvent extends LedgerEventBase {
 
 export interface TurnInterruptedEvent extends LedgerEventBase {
   type: 'turn.interrupted';
-  reason: 'user' | 'restart';
+  reason: 'user' | 'shutdown' | 'restart';
 }
 
 export interface TurnFinishedEvent extends LedgerEventBase {

@@ -88,6 +88,8 @@ export interface SessionV2 {
     input: { text: string; model: { provider: string; model: string; reasoningEffort?: string } },
   ): Promise<{ turn: number }>;
   interrupt(sessionId: string, turn: number): Promise<void>;
+  /** Admitted turns whose terminal `turn.finished` is not yet durable. */
+  activeTurnCount(): number;
   readLedger(sessionId: string): LedgerEvent[];
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void;
   close(): Promise<void>;
@@ -379,6 +381,8 @@ interface TurnRuntime {
   abort: AbortController;
   actions: Map<string, RuntimeAction>;
   finished: boolean;
+  /** Unlike `finished`, this flag changes only after the terminal append. */
+  durableTerminal: boolean;
   resultQueue: ResultBundle[];
   flushPromise: Promise<void>;
   /** Set when reasoning failed: late results are still recorded, reads are not. */
@@ -434,14 +438,30 @@ class Engine implements SessionV2 {
   private readonly ports: EnginePorts;
   private readonly sessions = new Map<string, SessionRuntime>();
   private readonly ensuring = new Map<string, Promise<SessionRuntime>>();
+  private readonly recoveringTurns = new Set<string>();
   private readonly pipeline = new Set<Promise<unknown>>();
   private gatewayModelsPromise?: Promise<WrenyardGatewayModel[]>;
   private ready: Promise<void>;
   private closed = false;
+  private closePromise?: Promise<void>;
 
   constructor(host: SessionV2Host, ports: EnginePorts) {
     this.host = host;
     this.ports = ports;
+    for (const summary of ports.ledger.listSessions()) {
+      let events: LedgerEvent[];
+      try {
+        events = ports.ledger.read(summary.sessionId);
+      } catch {
+        // An unreadable timeline is skipped by recovery too; it must not block startup.
+        continue;
+      }
+      for (const event of events) {
+        const key = `${summary.sessionId}:${event.turn}`;
+        if (event.type === 'turn.started') this.recoveringTurns.add(key);
+        else if (event.type === 'turn.finished') this.recoveringTurns.delete(key);
+      }
+    }
     this.ready = this.initialize();
     void this.ready.catch(() => undefined);
   }
@@ -453,7 +473,13 @@ class Engine implements SessionV2 {
   private async initialize(): Promise<void> {
     await this.ports.ledger.init();
     for (const summary of this.ports.ledger.listSessions()) {
-      await this.recoverSession(summary.sessionId).catch(() => undefined);
+      await this.recoverSession(summary.sessionId).catch(() => {
+        // Nothing runs for a turn whose recovery failed, so it is not active work.
+        const prefix = `${summary.sessionId}:`;
+        for (const key of this.recoveringTurns) {
+          if (key.startsWith(prefix)) this.recoveringTurns.delete(key);
+        }
+      });
     }
   }
 
@@ -535,18 +561,36 @@ class Engine implements SessionV2 {
     if (session.firstUserText === undefined) session.firstUserText = input.text;
 
     // Durable start: the user event is on disk before `send` returns.
-    await this.ports.ledger.append(sessionId, {
-      type: 'turn.started',
-      turn: turnNumber,
-      text: input.text,
-      model: input.model,
-    });
+    try {
+      await this.ports.ledger.append(sessionId, {
+        type: 'turn.started',
+        turn: turnNumber,
+        text: input.text,
+        model: input.model,
+      });
+    } catch (error) {
+      // A turn whose start never reached the timeline was never admitted:
+      // forget it so it is not counted active and cannot be interrupted.
+      session.turns.delete(turnNumber);
+      throw error;
+    }
 
     this.track(this.runTurn(session, turn));
     return { turn: turnNumber };
   }
 
   async interrupt(sessionId: string, turn: number): Promise<void> {
+    this.assertOpen();
+    const operation = this.interruptTurn(sessionId, turn, 'user');
+    this.track(operation);
+    await operation;
+  }
+
+  private async interruptTurn(
+    sessionId: string,
+    turn: number,
+    reason: 'user' | 'shutdown',
+  ): Promise<void> {
     const session = await this.ensureSession(sessionId);
     const runtime = session.turns.get(turn);
     if (!runtime || runtime.finished) return;
@@ -559,11 +603,22 @@ class Engine implements SessionV2 {
     // Late action results are appended immediately, flagged as post-interrupt.
     runtime.reasonCompleted = true;
 
-    await this.ports.ledger.append(sessionId, { type: 'turn.interrupted', turn, reason: 'user' });
+    await this.ports.ledger.append(sessionId, { type: 'turn.interrupted', turn, reason });
     runtime.abort.abort();
     await Promise.allSettled([...runtime.taskRunIds].map((id) => this.safeCancelTask(id)));
     await this.flushResults(session, runtime);
     await this.ports.ledger.append(sessionId, { type: 'turn.finished', turn, status: 'interrupted' });
+    runtime.durableTerminal = true;
+  }
+
+  activeTurnCount(): number {
+    let count = this.recoveringTurns.size;
+    for (const session of this.sessions.values()) {
+      for (const turn of session.turns.values()) {
+        if (!turn.durableTerminal) count += 1;
+      }
+    }
+    return count;
   }
 
   readLedger(sessionId: string): LedgerEvent[] {
@@ -575,7 +630,11 @@ class Engine implements SessionV2 {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
+    if (!this.closePromise) this.closePromise = this.doClose();
+    return this.closePromise;
+  }
+
+  private async doClose(): Promise<void> {
     this.closed = true;
     await this.ready.catch(() => undefined);
     for (const sessionId of [...this.sessions.keys()]) {
@@ -583,7 +642,7 @@ class Engine implements SessionV2 {
       if (!session) continue;
       for (const turn of [...session.turns.values()]) {
         if (!turn.finished) {
-          await this.interrupt(sessionId, turn.turn).catch(() => undefined);
+          await this.interruptTurn(sessionId, turn.turn, 'shutdown').catch(() => undefined);
         } else if (!turn.abort.signal.aborted) {
           // Abort post-final calls (title) that no interrupt reaches.
           turn.abort.abort();
@@ -712,6 +771,7 @@ class Engine implements SessionV2 {
         await this.safeCancelTask(taskRunId);
       }
       await this.ports.ledger.append(session.sessionId, { type: 'turn.finished', turn, status: 'interrupted' });
+      this.recoveringTurns.delete(`${session.sessionId}:${turn}`);
     }
   }
 
@@ -735,6 +795,7 @@ class Engine implements SessionV2 {
       abort: new AbortController(),
       actions: new Map(),
       finished: false,
+      durableTerminal: false,
       resultQueue: [],
       flushPromise: Promise.resolve(),
       dropDeferred: false,
@@ -1390,6 +1451,7 @@ class Engine implements SessionV2 {
       status,
       ...(error === undefined ? {} : { error }),
     });
+    turn.durableTerminal = true;
 
     await this.maybeUpdateTitle(session, turn, text);
   }
