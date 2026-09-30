@@ -27,6 +27,7 @@ import {
   type ExecEventsResult,
   type ExecCancelResult,
 } from './shell-contract.js';
+import { exposeSessionV2 } from './session-v2/preload.js';
 
 const api: WrenyardShellApi = {
   platform: process.platform,
@@ -172,3 +173,6 @@ const api: WrenyardShellApi = {
 };
 
 contextBridge.exposeInMainWorld('wrenyardShell', api);
+
+// Independent session-v2 test surface; it never touches the shell contract.
+exposeSessionV2();

@@ -8,7 +8,7 @@ import type {
   QuotaSnapshot,
   ServiceSnapshot,
   SettingsSnapshot,
-  ShellPage,
+  ShellPage as NativeShellPage,
   StatsPeriod,
   StatsSnapshot,
   StatsWindowSnapshot,
@@ -48,6 +48,9 @@ declare global {
 }
 
 document.documentElement.dataset.platform = window.wrenyardShell.platform;
+type ShellPage = NativeShellPage | 'session-v2';
+const sessionV2Nav = requireElement<HTMLButtonElement>('session-v2-nav');
+const sessionV2Page = requireElement<HTMLElement>('session-v2-page');
 
 const workbenchNav = requireElement<HTMLButtonElement>('workbench-nav');
 const statsNav = requireElement<HTMLButtonElement>('stats-nav');
@@ -1746,6 +1749,7 @@ function renderPage(page: ShellPage): void {
   if (page !== 'quota') selectQuotaTab('models');
   const pages: Array<[ShellPage, HTMLButtonElement, HTMLElement]> = [
     ['workbench', workbenchNav, workbenchPage],
+    ['session-v2', sessionV2Nav, sessionV2Page],
     ['stats', statsNav, statsPage],
     ['quota', quotaNav, quotaPage],
     ['tasks', tasksNav, tasksPage],
@@ -1765,6 +1769,7 @@ function renderPage(page: ShellPage): void {
 async function navigate(page: ShellPage): Promise<void> {
   if (page === currentPage) return;
   renderPage(page);
+  if (page === 'session-v2') return;
   await window.wrenyardShell.navigate(page);
   if (page === 'stats') await refreshStats();
   if (page === 'quota') await refreshQuota(false);
@@ -2526,6 +2531,7 @@ function applyTaskDraft(draft: TaskFormDraft): void {
 }
 
 workbenchNav.addEventListener('click', () => void navigate('workbench'));
+sessionV2Nav.addEventListener('click', () => void navigate('session-v2'));
 statsNav.addEventListener('click', () => void navigate('stats'));
 quotaNav.addEventListener('click', () => void navigate('quota'));
 tasksNav.addEventListener('click', () => void navigate('tasks'));
