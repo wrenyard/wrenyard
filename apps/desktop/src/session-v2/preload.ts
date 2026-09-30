@@ -24,6 +24,8 @@ export const SESSION_V2_CHANNELS = {
   interrupt: 'session-v2:interrupt',
   /** Renderer → main: the gateway model list. */
   models: 'session-v2:models',
+  /** Renderer → main: open an external http(s) URL in the OS browser. */
+  openExternal: 'session-v2:open-external',
   /** Main → renderer: `{ sessionId, event }` for the subscribed session. */
   event: 'session-v2:event',
 } as const;
@@ -71,6 +73,8 @@ export interface SessionV2Bridge {
   interrupt(request: SessionV2BridgeInterruptRequest): Promise<void>;
   /** The live gateway models the reason-model picker may offer. */
   models(): Promise<SessionV2BridgeModelEntry[]>;
+  /** Open an `http:`/`https:` URL in the OS browser; other schemes are rejected. */
+  openExternal(url: string): Promise<void>;
   /** Subscribe to pushed ledger events; the returned function unsubscribes. */
   onEvent(listener: (payload: SessionV2BridgeEventPayload) => void): () => void;
 }
@@ -103,6 +107,9 @@ const bridge: SessionV2Bridge = {
   },
   models(): Promise<SessionV2BridgeModelEntry[]> {
     return ipcRenderer.invoke(SESSION_V2_CHANNELS.models) as Promise<SessionV2BridgeModelEntry[]>;
+  },
+  openExternal(url: string): Promise<void> {
+    return ipcRenderer.invoke(SESSION_V2_CHANNELS.openExternal, url) as Promise<void>;
   },
   onEvent(listener: (payload: SessionV2BridgeEventPayload) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: unknown): void => {

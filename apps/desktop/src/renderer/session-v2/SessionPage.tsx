@@ -1,37 +1,134 @@
-import { useState } from 'react';
-import type { SessionApi } from './types.js';
-import { useSessionController } from './use-session-controller.js';
-import { ConversationTimeline } from './components/ConversationTimeline.js';
-import { MessageComposer } from './components/MessageComposer.js';
+import { useCallback, useMemo, useState } from 'react';
+import { useDefaultLayout } from 'react-resizable-panels';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/renderer/components/ui/resizable';
+import { TooltipProvider } from '@/renderer/components/ui/tooltip';
+import { Conversation, ConversationContent, ConversationScrollButton } from '@/renderer/components/chat/conversation';
+import { Composer } from './components/Composer.js';
+import { EmptySession } from './components/EmptySession.js';
 import { SessionHeader } from './components/SessionHeader.js';
 import { SessionSidebar } from './components/SessionSidebar.js';
+import { PendingTurnItem, TurnItem } from './components/TurnItem.js';
+import { Inspector, InspectorProvider } from './components/inspector/Inspector.js';
+import { fold } from './model/fold.js';
+import type { InspectorTarget, SessionApi } from './model/types.js';
+import { useSessionController } from './state/use-session-controller.js';
+
+const LAYOUT_ID = 'session-v2-shell';
 
 export function SessionPage({ api }: { api: SessionApi }) {
-  const { state, selectSession, createSession, sendMessage, interruptTurn } = useSessionController(api);
-  const [modelId, setModelId] = useState('');
-  const [effort, setEffort] = useState('');
-  const [showRaw, setShowRaw] = useState(false);
-  const model = state.models.find((entry) => entry.publicId === modelId) ?? state.models[0];
-  const title = state.sessions.find((session) => session.sessionId === state.selectedId)?.title ?? '会话 v2';
+  const { state, selectSession, newDraft, sendMessage, interruptTurn, removePending, clearError } = useSessionController(api);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [target, setTarget] = useState<InspectorTarget | undefined>(undefined);
+  const [tab, setTab] = useState('detail');
+  const [retry, setRetry] = useState<{ text: string; nonce: number } | undefined>(undefined);
 
-  return <div className="sv2-page">
-    <SessionSidebar sessions={state.sessions} selectedId={state.selectedId}
-      creating={state.creating} loading={state.loadingList}
-      onSelect={(id) => { void selectSession(id).catch(() => {}); }}
-      onCreate={() => { void createSession().catch(() => {}); }} />
-    <main className="sv2-main">
-      <SessionHeader title={title} models={state.models} modelId={model?.publicId ?? ''}
-        effort={effort} showRaw={showRaw} onEffortChange={setEffort} onRawChange={setShowRaw}
-        onModelChange={(value) => { setModelId(value); setEffort(''); }} />
-      {state.error && <div className="sv2-error" role="alert">{state.error}</div>}
-      <ConversationTimeline key={state.selectedId} events={state.events}
-        loading={state.loadingLedger} showRaw={showRaw}
-        onInterrupt={(turn) => { void interruptTurn(turn); }} />
-      <MessageComposer disabled={!model || state.loadingLedger || state.creating}
-        onSend={(text) => {
-          if (!model) return Promise.reject(new Error('请先选择可用模型'));
-          return sendMessage(text, model, effort);
-        }} />
-    </main>
-  </div>;
+  const model = useMemo(
+    () => fold(state.events, { sessionId: state.selectedId, interrupting: state.interrupting }),
+    [state.events, state.selectedId, state.interrupting],
+  );
+
+  const inspect = useCallback((next: InspectorTarget): void => {
+    setTarget(next);
+    setTab('detail');
+    setInspectorOpen(true);
+  }, []);
+
+  const inspectTimeline = useCallback((next: InspectorTarget): void => {
+    setTarget(next);
+    setTab('timeline');
+    setInspectorOpen(true);
+  }, []);
+
+  const panelIds = inspectorOpen ? ['sidebar', 'main', 'inspector'] : ['sidebar', 'main'];
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: LAYOUT_ID, panelIds, storage: window.localStorage });
+
+  const selectedTitle = state.sessions.find((session) => session.sessionId === state.selectedId)?.title ?? '新会话';
+  const draft = state.selectedId === '';
+  const empty = draft || (!state.loadingLedger && model.turns.length === 0 && state.pending.length === 0);
+
+  const composer = (
+    <Composer
+      models={state.models}
+      turns={model.turns}
+      sessionKey={state.selectedId === '' ? 'draft' : state.selectedId}
+      disabled={state.loadingLedger}
+      onSend={(text, entry, effort) => sendMessage(text, entry, effort)}
+      injectedText={retry}
+    />
+  );
+
+  return (
+    <TooltipProvider>
+      <InspectorProvider target={target} inspect={inspect} inspectTimeline={inspectTimeline}>
+        <ResizablePanelGroup
+          orientation="horizontal"
+          defaultLayout={defaultLayout}
+          onLayoutChanged={onLayoutChanged}
+          className="h-full min-h-0"
+        >
+          <ResizablePanel id="sidebar" defaultSize={240} minSize={180} collapsible collapsedSize={0}>
+            <SessionSidebar
+              sessions={state.sessions}
+              selectedId={state.selectedId}
+              loading={state.loadingList}
+              running={model.runningTurns > 0}
+              onSelect={(sessionId) => { void selectSession(sessionId).catch(() => undefined); }}
+              onNew={newDraft}
+            />
+          </ResizablePanel>
+          <ResizableHandle />
+          <ResizablePanel id="main" minSize={360} className="flex min-h-0 flex-col">
+            <SessionHeader
+              title={selectedTitle}
+              snapshot={model.snapshot}
+              runningTurns={model.runningTurns}
+              inspectorOpen={inspectorOpen}
+              error={state.error}
+              onToggleInspector={() => setInspectorOpen((value) => !value)}
+              onDismissError={clearError}
+            />
+            {empty ? (
+              <EmptySession>{composer}</EmptySession>
+            ) : (
+              <>
+                <Conversation>
+                  <ConversationContent className="mx-auto w-full max-w-3xl">
+                    {model.turns.map((turn) => (
+                      <TurnItem key={turn.id} turn={turn} onInterrupt={(id) => { void interruptTurn(id); }} />
+                    ))}
+                    {state.pending.map((pending) => (
+                      <PendingTurnItem
+                        key={pending.localId}
+                        pending={pending}
+                        onRetry={(text) => setRetry({ text, nonce: Date.now() })}
+                        onRemove={removePending}
+                      />
+                    ))}
+                  </ConversationContent>
+                  <ConversationScrollButton />
+                </Conversation>
+                <div className="mx-auto w-full max-w-3xl px-4 pb-4">{composer}</div>
+              </>
+            )}
+          </ResizablePanel>
+          {inspectorOpen && (
+            <>
+              <ResizableHandle />
+              <ResizablePanel id="inspector" defaultSize={360} minSize={320} className="min-h-0">
+                <Inspector
+                  model={model}
+                  events={state.events}
+                  target={target}
+                  tab={tab}
+                  onTabChange={setTab}
+                  onSelect={inspect}
+                  onClose={() => setInspectorOpen(false)}
+                />
+              </ResizablePanel>
+            </>
+          )}
+        </ResizablePanelGroup>
+      </InspectorProvider>
+    </TooltipProvider>
+  );
 }
