@@ -310,7 +310,7 @@ async function refreshQuotaProjectionAfterGatewayRestart(): Promise<void> {
 }
 
 let conversationAdapter: DesktopConversationAdapter | null = null;
-/** In-process session-v2 host; null until bootstrap registers it. */
+/** Session-v2 IPC relay; null until bootstrap registers it. */
 let sessionV2Registration: SessionV2Registration | null = null;
 let shellWindow: ShellWindowController | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
@@ -365,7 +365,7 @@ async function finalizeQuit(): Promise<void> {
     // Detach only: quit never cancels the daemon-owned session backend.
     await conversationAdapter?.close();
     conversationAdapter = null;
-    // session-v2 is hosted in-process, so closing it interrupts its turns.
+    // Stop the relay; session-v2 turns remain owned by the daemon.
     await sessionV2Registration?.close();
     sessionV2Registration = null;
   } catch {
@@ -804,13 +804,9 @@ async function bootstrap(): Promise<void> {
   // Render the shell while the daemon conversation backend is bound.
   if (SMOKE) await conversationStart;
 
-  // session-v2 is hosted in-process by Desktop and reaches the daemon over the
-  // same owner-only control socket. Registering binds it to the workspace
-  // currently configured; a later workspace switch rebinds it on next use.
+  // Relay session-v2 over the same owner-only daemon control socket.
   sessionV2Registration = registerSessionV2({
     ipcPath,
-    stateRoot: app.getPath('userData'),
-    getWorkspaceRoot: () => conversationAdapter?.workspace.path,
     // The shell window is created after this registration, so read the live
     // pointer on each call instead of capturing it.
     isShellSender: (sender) =>

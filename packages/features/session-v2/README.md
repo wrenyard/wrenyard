@@ -1,8 +1,8 @@
 # @wrenyard/session-v2
 
-Context-ledger conversation core. Source-development preview: no daemon hosting,
-no `protocol/session` integration and no tests yet. It does not depend on DSH,
-the old `@wrenyard/session` feature or Desktop.
+Context-ledger conversation core, hosted by the daemon through injected in-process
+ports. Desktop relays `sessionV2.*` IPC and ledger events to the React page.
+The feature does not depend on DSH, the old `@wrenyard/session` feature or Desktop.
 
 ## State architecture
 
@@ -14,6 +14,10 @@ Under `<stateRoot>/session-v2/<sha256(workspaceRoot)>/`:
 - `sessions/<sessionId>.jsonl` — one event per line, appended durably (`fsync`).
 - `index.json` — the session list (`sessionId`, `title`, `createdAt`,
   `updatedAt`), written atomically and derived from the timelines.
+
+The daemon supplies its state root and configured workspace root. Desktop restart
+does not interrupt turns; daemon shutdown drains them or interrupts with `shutdown`.
+Old Desktop preview ledgers are not imported.
 
 Appends go through one serialized queue, so `seq` strictly increases per
 session. Events are deep-frozen on the way in and timelines are copied out, so

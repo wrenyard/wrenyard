@@ -24,10 +24,10 @@
     "@wrenyard/models": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "js-tiktoken": "1.0.21",
-    "@wrenyard/auto-routing": "workspace:*",
-    "@wrenyard/session-v2": "workspace:*"
+    "@wrenyard/auto-routing": "workspace:*"
   },
   "devDependencies": {
+    "@wrenyard/session-v2": "workspace:*",
     "@types/node": "^22.15.0",
     "electron": "^39.8.10",
     "electron-builder": "^26.0.12",
