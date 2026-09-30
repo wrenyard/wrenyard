@@ -1,4 +1,9 @@
-import type { LedgerEvent, ModelEntry, SessionSummary } from '../model/types.js';
+import type {
+  LedgerEvent,
+  ModelEntry,
+  SessionSummary,
+  SessionV2BridgeTaskBrief,
+} from '../model/types.js';
 
 export interface PendingTurn {
   localId: string;
@@ -14,6 +19,7 @@ export interface SessionPageState {
   /** `''` means the draft state: no session exists until the first send. */
   selectedId: string;
   events: LedgerEvent[];
+  tasks: Record<string, SessionV2BridgeTaskBrief>;
   pending: PendingTurn[];
   interrupting: number[];
   loadingList: boolean;
@@ -26,6 +32,7 @@ export const initialSessionPageState: SessionPageState = {
   models: [],
   selectedId: '',
   events: [],
+  tasks: {},
   pending: [],
   interrupting: [],
   loadingList: true,
@@ -52,6 +59,7 @@ export type SessionAction =
   | { type: 'select'; sessionId: string }
   | { type: 'draft' }
   | { type: 'events'; sessionId: string; events: LedgerEvent[]; snapshot?: boolean }
+  | { type: 'tasks'; tasks: Record<string, SessionV2BridgeTaskBrief> }
   | { type: 'pending-add'; pending: PendingTurn }
   | { type: 'pending-resolve'; localId: string; turn: number }
   | { type: 'pending-fail'; localId: string; message: string }
@@ -73,6 +81,7 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         ...state,
         selectedId: action.sessionId,
         events: [],
+        tasks: {},
         pending: [],
         interrupting: [],
         loadingLedger: true,
@@ -83,6 +92,7 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         ...state,
         selectedId: '',
         events: [],
+        tasks: {},
         pending: [],
         interrupting: [],
         loadingLedger: false,
@@ -108,6 +118,8 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         sessions: withLedgerTitle(state.sessions, events, action.sessionId),
       };
     }
+    case 'tasks':
+      return { ...state, tasks: action.tasks };
     case 'pending-add':
       return { ...state, pending: [...state.pending, action.pending] };
     case 'pending-resolve': {

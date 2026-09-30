@@ -1,6 +1,7 @@
 import { BookOpen, FilePenLine, Send, ShieldAlert, TriangleAlert } from 'lucide-react';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { StatusBadge } from '@/renderer/components/status-badge';
+import { Button } from '@/renderer/components/ui/button';
 import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@/renderer/components/ui/item';
 import { itemStatusLabel } from '../model/describe.js';
 import type { ActionModel } from '../model/types.js';
@@ -25,6 +26,10 @@ export interface ActionRowProps {
 /** One-line action summary; details live in the inspector. */
 export function ActionRow({ action, turnId }: ActionRowProps) {
   const { inspect } = useInspector();
+  const openTranscript = (taskRunId: string): void => {
+    void window.wrenyardShell?.openTaskTranscript(taskRunId);
+  };
+
   return (
     <div className="flex flex-col gap-1">
       <Item
@@ -46,6 +51,12 @@ export function ActionRow({ action, turnId }: ActionRowProps) {
         <ItemActions>
           <StatusBadge status={action.status} label={itemStatusLabel(action.status)} />
           <span className="text-xs text-muted-foreground"><Elapsed start={action.startedAt} end={action.endedAt} /></span>
+          {action.kind === 'dispatch' && action.taskRunId && (
+            <Button variant="outline" size="xs"
+              onClick={(event) => { event.stopPropagation(); openTranscript(action.taskRunId!); }}>
+              查看任务
+            </Button>
+          )}
         </ItemActions>
       </Item>
       {action.outputs.length > 0 && (

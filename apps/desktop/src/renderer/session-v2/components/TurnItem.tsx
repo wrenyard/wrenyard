@@ -8,6 +8,7 @@ import { Message, MessageContent } from '@/renderer/components/chat/message';
 import { formatClock, formatDateTime } from '@/renderer/lib/format';
 import type { PendingTurn } from '../state/session-reducer.js';
 import type { TurnModel } from '../model/types.js';
+import { ActivityCards } from './ActivityCards.js';
 import { FinalReply } from './FinalReply.js';
 import { WorkProcess } from './WorkProcess.js';
 
@@ -64,6 +65,7 @@ export const TurnItem = memo(function TurnItem({ turn, onInterrupt }: TurnItemPr
         <UserBubble text={turn.user.text} at={turn.user.at} />
       </Message>
       <WorkProcess turn={turn} />
+      <ActivityCards turn={turn} />
       <FinalReply turn={turn} />
     </div>
   );

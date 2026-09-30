@@ -5,17 +5,19 @@ import type { LedgerEvent, SessionSummary } from '@wrenyard/session-v2';
 import type {
   SessionV2BridgeEventPayload,
   SessionV2BridgeModelEntry,
+  SessionV2BridgeTaskBrief,
 } from './preload.js';
 
 export const SESSION_V2_CHANNELS = {
   list: 'session-v2:list', create: 'session-v2:create', ledger: 'session-v2:ledger',
   send: 'session-v2:send', interrupt: 'session-v2:interrupt', models: 'session-v2:models',
-  openExternal: 'session-v2:open-external',
+  tasks: 'session-v2:tasks', openExternal: 'session-v2:open-external',
   event: 'session-v2:event',
 } as const;
 export type {
   SessionV2Bridge, SessionV2BridgeEventPayload, SessionV2BridgeInterruptRequest,
   SessionV2BridgeModelEntry, SessionV2BridgeSendRequest,
+  SessionV2BridgeTaskBrief,
 } from './preload.js';
 
 export interface RegisterSessionV2Options {
@@ -54,6 +56,57 @@ function toModelEntries(connection: WrenyardGatewayConnection): SessionV2BridgeM
     model: model.publicId.slice(model.publicId.indexOf('/') + 1), displayName: model.displayName,
     ...(model.thinkingLevels?.length ? { thinkingLevels: [...model.thinkingLevels] } : {}),
   }));
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** Runtime label from the actual resolved dispatch (execution client + model). */
+function taskRuntimeLabel(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  // Prefer the resolved execution client (codex/codebuddy/etc.); provider only as fallback.
+  const client = readString(record.client_display_name)
+    ?? readString(record.client) ?? readString(record.provider_display_name) ?? readString(record.provider);
+  const model = readString(record.model_display_name) ?? readString(record.model);
+  if (client !== undefined && model !== undefined) return `${client} · ${model}`;
+  return readString(record.runtime);
+}
+
+function taskUsage(value: unknown): { input?: number; output?: number } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  const input = readNumber(record.input_tokens);
+  const output = readNumber(record.output_tokens);
+  if (input === undefined && output === undefined) return undefined;
+  return {
+    ...(input === undefined ? {} : { input }),
+    ...(output === undefined ? {} : { output }),
+  };
+}
+
+/** Map a daemon `task.run.status` result into a renderer brief. */
+function taskBriefFrom(taskRunId: string, value: unknown): SessionV2BridgeTaskBrief {
+  if (typeof value !== 'object' || value === null) return { taskRunId, status: 'unavailable' };
+  const record = value as Record<string, unknown>;
+  const brief: SessionV2BridgeTaskBrief = {
+    taskRunId: readString(record.task_run_id) ?? taskRunId,
+    status: readString(record.status) ?? 'unavailable',
+  };
+  const name = readString(record.task_name) ?? readString(record.task_id);
+  if (name !== undefined) brief.taskName = name;
+  const runtime = taskRuntimeLabel(record.resolved);
+  if (runtime !== undefined) brief.runtime = runtime;
+  const summary = readString(record.summary);
+  if (summary !== undefined) brief.summary = summary;
+  const usage = taskUsage(record.usage);
+  if (usage !== undefined) brief.usage = usage;
+  return brief;
 }
 
 export function registerSessionV2(options: RegisterSessionV2Options): SessionV2Registration {
@@ -175,6 +228,19 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
   handle(SESSION_V2_CHANNELS.ledger, (event, value) => {
     if (typeof value !== 'string' || !value) throw new Error('Invalid sessionId');
     return openLedger(event.sender, value);
+  });
+  handle(SESSION_V2_CHANNELS.tasks, async (_event, value) => {
+    if (!Array.isArray(value) || !value.every(id => typeof id === 'string')) {
+      throw new Error('Invalid taskRunIds');
+    }
+    // Concurrent per-id status: one rejection only marks that entry unavailable.
+    return Promise.all(value.map(async (taskRunId): Promise<SessionV2BridgeTaskBrief> => {
+      try {
+        return taskBriefFrom(taskRunId, await request('task.run.status', { task_run_id: taskRunId }));
+      } catch {
+        return { taskRunId, status: 'unavailable' };
+      }
+    }));
   });
   handle(SESSION_V2_CHANNELS.openExternal, async (_event, value) => {
     if (typeof value !== 'string' || value === '') throw new Error('Invalid URL');

@@ -24,6 +24,8 @@ export const SESSION_V2_CHANNELS = {
   interrupt: 'session-v2:interrupt',
   /** Renderer → main: the gateway model list. */
   models: 'session-v2:models',
+  /** Renderer → main: `string[]` of task run ids, resolved to briefs. */
+  tasks: 'session-v2:tasks',
   /** Renderer → main: open an external http(s) URL in the OS browser. */
   openExternal: 'session-v2:open-external',
   /** Main → renderer: `{ sessionId, event }` for the subscribed session. */
@@ -55,6 +57,23 @@ export interface SessionV2BridgeEventPayload {
   event: LedgerEvent;
 }
 
+/**
+ * One task-run brief, keyed by the run id the renderer already knows. Named
+ * distinctly from the ledger's `TaskBrief` (a snapshot task definition) to
+ * avoid a collision in the shared public surface.
+ */
+export interface SessionV2BridgeTaskBrief {
+  taskRunId: string;
+  /** `task_name`, falling back to `task_id` when the definition declares none. */
+  taskName?: string;
+  /** Task-run status, or `unavailable` when this id could not be resolved. */
+  status: string;
+  /** Resolved client/provider/model label, when a runtime was resolved. */
+  runtime?: string;
+  summary?: string;
+  usage?: { input?: number; output?: number };
+}
+
 /** The `window.sessionV2` facade consumed by the renderer test page. */
 export interface SessionV2Bridge {
   /** Every known session, newest first (daemon/feature order). */
@@ -73,6 +92,8 @@ export interface SessionV2Bridge {
   interrupt(request: SessionV2BridgeInterruptRequest): Promise<void>;
   /** The live gateway models the reason-model picker may offer. */
   models(): Promise<SessionV2BridgeModelEntry[]>;
+  /** Resolve task-run briefs for the given run ids (per-id failures are `unavailable`). */
+  tasks(taskRunIds: string[]): Promise<SessionV2BridgeTaskBrief[]>;
   /** Open an `http:`/`https:` URL in the OS browser; other schemes are rejected. */
   openExternal(url: string): Promise<void>;
   /** Subscribe to pushed ledger events; the returned function unsubscribes. */
@@ -107,6 +128,9 @@ const bridge: SessionV2Bridge = {
   },
   models(): Promise<SessionV2BridgeModelEntry[]> {
     return ipcRenderer.invoke(SESSION_V2_CHANNELS.models) as Promise<SessionV2BridgeModelEntry[]>;
+  },
+  tasks(taskRunIds: string[]): Promise<SessionV2BridgeTaskBrief[]> {
+    return ipcRenderer.invoke(SESSION_V2_CHANNELS.tasks, taskRunIds) as Promise<SessionV2BridgeTaskBrief[]>;
   },
   openExternal(url: string): Promise<void> {
     return ipcRenderer.invoke(SESSION_V2_CHANNELS.openExternal, url) as Promise<void>;

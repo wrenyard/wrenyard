@@ -10,21 +10,37 @@ import { SessionSidebar } from './components/SessionSidebar.js';
 import { PendingTurnItem, TurnItem } from './components/TurnItem.js';
 import { Inspector, InspectorProvider } from './components/inspector/Inspector.js';
 import { fold } from './model/fold.js';
-import type { InspectorTarget, SessionApi } from './model/types.js';
+import type { ActionModel, InspectorTarget, SessionApi } from './model/types.js';
 import { useSessionController } from './state/use-session-controller.js';
+import { useTaskStatus } from './state/use-task-status.js';
 
 const LAYOUT_ID = 'session-v2-shell';
 
+function RunningDispatchTasks({ api, turns, setTasks }: {
+  api: SessionApi;
+  turns: ReturnType<typeof fold>['turns'];
+  setTasks: (tasks: Record<string, import('./model/types.js').SessionV2BridgeTaskBrief>) => void;
+}) {
+  const actions = useMemo(
+    () => turns.flatMap((turn) => turn.status === 'running'
+      ? turn.actions.filter((action): action is ActionModel & { taskRunId: string } => action.kind === 'dispatch' && action.status === 'running' && action.taskRunId !== undefined)
+      : []),
+    [turns],
+  );
+  useTaskStatus(api, actions, setTasks);
+  return null;
+}
+
 export function SessionPage({ api }: { api: SessionApi }) {
-  const { state, selectSession, newDraft, sendMessage, interruptTurn, removePending, clearError } = useSessionController(api);
+  const { state, selectSession, newDraft, sendMessage, interruptTurn, removePending, setTasks, clearError } = useSessionController(api);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [target, setTarget] = useState<InspectorTarget | undefined>(undefined);
   const [tab, setTab] = useState('detail');
   const [retry, setRetry] = useState<{ text: string; nonce: number } | undefined>(undefined);
 
   const model = useMemo(
-    () => fold(state.events, { sessionId: state.selectedId, interrupting: state.interrupting }),
-    [state.events, state.selectedId, state.interrupting],
+    () => fold(state.events, state.tasks, { sessionId: state.selectedId, interrupting: state.interrupting }),
+    [state.events, state.tasks, state.selectedId, state.interrupting],
   );
 
   const inspect = useCallback((next: InspectorTarget): void => {
@@ -60,6 +76,7 @@ export function SessionPage({ api }: { api: SessionApi }) {
   return (
     <TooltipProvider>
       <InspectorProvider target={target} inspect={inspect} inspectTimeline={inspectTimeline}>
+        <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
         <ResizablePanelGroup
           orientation="horizontal"
           defaultLayout={defaultLayout}

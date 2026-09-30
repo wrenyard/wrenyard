@@ -1,4 +1,4 @@
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ExternalLink } from 'lucide-react';
 import { Markdown } from '@/renderer/components/markdown';
 import { JsonView } from '@/renderer/components/json-view';
 import { StatusBadge } from '@/renderer/components/status-badge';
@@ -157,6 +157,9 @@ function Layers({ layers }: { layers: Record<string, number> }) {
 }
 
 function ActionDetail({ turn, action, onSelect }: { turn: TurnModel; action: ActionModel; onSelect: (target: InspectorTarget) => void }) {
+  const openTranscript = (taskRunId: string): void => {
+    void window.wrenyardShell?.openTaskTranscript(taskRunId);
+  };
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-2">
@@ -167,6 +170,27 @@ function ActionDetail({ turn, action, onSelect }: { turn: TurnModel; action: Act
         <Field label="开始"><span className="font-mono text-xs" title={formatDateTime(action.startedAt)}>{formatClockSeconds(action.startedAt)}</span></Field>
         <Field label="结束">{action.endedAt ? <span className="font-mono text-xs" title={formatDateTime(action.endedAt)}>{formatClockSeconds(action.endedAt)}</span> : '进行中'}</Field>
         <Field label="用时"><Elapsed start={action.startedAt} end={action.endedAt} /></Field>
+        {action.taskRunId && (
+          <Field label="任务运行">
+            <span className="flex items-center gap-2">
+              <span className="font-mono text-xs break-all">{action.taskRunId}</span>
+              <Button variant="outline" size="xs" onClick={() => openTranscript(action.taskRunId!)}>
+                <ExternalLink /> 查看任务对话
+              </Button>
+            </span>
+          </Field>
+        )}
+        {action.task && (
+          <>
+            <Field label="任务状态"><StatusBadge status={action.task.status} /></Field>
+            {action.task.runtime && <Field label="运行端">{action.task.runtime}</Field>}
+            {action.task.usage && (
+              <Field label="用量">
+                {`输入 ${action.task.usage.input ?? '—'} · 输出 ${action.task.usage.output ?? '—'}`}
+              </Field>
+            )}
+          </>
+        )}
       </div>
       {action.parsed !== undefined && (
         <Section title="解析结果"><JsonView value={action.parsed} /></Section>
