@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
 import { DesktopConversationAdapter } from './conversation-adapter.js';
+import { registerSessionV2, type SessionV2Registration } from './session-v2/ipc.js';
 import { DesktopPetRuntime } from './pet/main/runtime.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
@@ -309,6 +310,8 @@ async function refreshQuotaProjectionAfterGatewayRestart(): Promise<void> {
 }
 
 let conversationAdapter: DesktopConversationAdapter | null = null;
+/** In-process session-v2 host; null until bootstrap registers it. */
+let sessionV2Registration: SessionV2Registration | null = null;
 let shellWindow: ShellWindowController | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
@@ -362,6 +365,9 @@ async function finalizeQuit(): Promise<void> {
     // Detach only: quit never cancels the daemon-owned session backend.
     await conversationAdapter?.close();
     conversationAdapter = null;
+    // session-v2 is hosted in-process, so closing it interrupts its turns.
+    await sessionV2Registration?.close();
+    sessionV2Registration = null;
   } catch {
     // best-effort termination
   } finally {
@@ -798,6 +804,19 @@ async function bootstrap(): Promise<void> {
   // Render the shell while the daemon conversation backend is bound.
   if (SMOKE) await conversationStart;
 
+  // session-v2 is hosted in-process by Desktop and reaches the daemon over the
+  // same owner-only control socket. Registering binds it to the workspace
+  // currently configured; a later workspace switch rebinds it on next use.
+  sessionV2Registration = registerSessionV2({
+    ipcPath,
+    stateRoot: app.getPath('userData'),
+    getWorkspaceRoot: () => conversationAdapter?.workspace.path,
+    // The shell window is created after this registration, so read the live
+    // pointer on each call instead of capturing it.
+    isShellSender: (sender) =>
+      Boolean(shellWindow && !shellWindow.window.isDestroyed() && sender.id === shellWindow.window.webContents.id),
+  });
+
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
 
@@ -926,6 +945,7 @@ async function bootstrap(): Promise<void> {
     appVersion: version,
     smoke: SMOKE,
     icon: resolveAppIcon(),
+    onCreated: (controller) => { shellWindow = controller; },
     getSettings,
     getStats: () => readStatsSnapshot(ipcPath),
     getQuota: (forceRefresh = false) => quotaController!.getSnapshot(forceRefresh),
@@ -1187,6 +1207,8 @@ if (!gotSingleInstanceLock) {
       taskgraphWindowOwner = null;
       await conversationAdapter?.close();
       conversationAdapter = null;
+      await sessionV2Registration?.close();
+      sessionV2Registration = null;
     } catch {
       // best-effort termination
     }

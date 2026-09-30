@@ -69,6 +69,17 @@ if (want('renderer')) {
     sourcemap: 'external',
     logLevel: 'info',
   });
+  await build({
+    entryPoints: [join(root, 'src', 'renderer', 'session-v2', 'main.tsx')],
+    outfile: join(rendererDist, 'session-v2.js'),
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    target: 'chrome140',
+    sourcemap: 'external',
+    define: { 'process.env.NODE_ENV': '"production"' },
+    logLevel: 'info',
+  });
   await Promise.all([
     copyFile(join(root, 'src', 'renderer', 'index.html'), join(rendererDist, 'index.html')),
     copyFile(join(root, 'src', 'renderer', 'app.css'), join(rendererDist, 'app.css')),

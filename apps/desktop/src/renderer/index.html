@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>啾啾工坊</title>
     <link rel="stylesheet" href="./app.css" />
+    <link rel="stylesheet" href="./session-v2.css" />
   </head>
   <body>
     <nav class="activity-bar" aria-label="啾啾工坊功能">
@@ -18,6 +19,10 @@
           <path d="M8 9.25h8M8 12.75h5" />
         </svg>
         <span class="tooltip" role="tooltip">会话</span>
+      </button>
+      <button class="activity-item" id="session-v2-nav" type="button" aria-label="会话 v2" data-page="session-v2">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 3h12v18H5zM8 7h6M8 11h6M8 15h3M19 7h2v12h-2" /></svg>
+        <span class="tooltip" role="tooltip">会话 v2</span>
       </button>
       <button class="activity-item" id="stats-nav" type="button" aria-label="工房台账" data-page="stats">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" /></svg>
@@ -466,6 +471,7 @@
         </div>
       </div>
 
+      <section id="session-v2-page" hidden></section>
     </main>
     <div class="workspace-gate" id="workspace-gate" hidden>
       <div class="workspace-gate-card" role="dialog" aria-modal="true" aria-labelledby="workspace-gate-title">
@@ -506,6 +512,7 @@
         </div>
       </div>
     </div>
+    <script src="./session-v2.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

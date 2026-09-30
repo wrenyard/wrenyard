@@ -47,6 +47,7 @@ export interface ShellWindowOptions {
   appVersion: string;
   smoke: boolean;
   icon?: string;
+  onCreated?(controller: ShellWindowController): void;
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
@@ -418,6 +419,7 @@ export class ShellWindowController {
     win.on('page-title-updated', (event) => event.preventDefault());
     win.on('closed', () => controller.removeIpcHandlers());
 
+    options.onCreated?.(controller);
     await win.loadFile(options.rendererPath);
     controller.setPage('workbench', false);
     if (!options.smoke) win.show();
