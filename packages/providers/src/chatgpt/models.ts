@@ -2,10 +2,10 @@ import { defineProvider, THINKING_FULL, effortLadder } from '../base/model-defau
 
 export const definition = defineProvider({
   id: 'chatgpt', displayName: 'ChatGPT', credentialResolver: 'codex',
-  nativeClients: ['codex'], defaultModel: 'gpt-6-sol', quotaProvider: 'chatgpt',
+  nativeClients: ['codex'], defaultModel: 'gpt-6.1-sol', quotaProvider: 'chatgpt',
   models: [
     { canonical: 'gpt-6-astra', overrides: { contextWindow: 1_050_000 } },
-    'gpt-6-sol',
+    'gpt-6.1-sol',
     'gpt-6-luna',
   ],
   modelAliases: { 'codex-astra': 'gpt-6-astra' },
@@ -13,7 +13,7 @@ export const definition = defineProvider({
   // effort token; the public canonical model id is retained.
   thinkingMappings: {
     'gpt-6-astra': { codex: effortLadder(THINKING_FULL) },
-    'gpt-6-sol': { codex: effortLadder(THINKING_FULL) },
+    'gpt-6.1-sol': { codex: effortLadder(THINKING_FULL) },
     'gpt-6-luna': { codex: effortLadder(THINKING_FULL) },
   },
   description: 'ChatGPT 编程模型使用账号适用的 5h、7d 额度池。',

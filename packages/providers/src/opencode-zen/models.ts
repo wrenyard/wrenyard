@@ -14,9 +14,12 @@ export const definition = defineProvider({
     { ...model('union-alpha'), free: true, supportedClients: ['opencode'] },
     { ...model('nemotron-3-ultra-free', 1_000_000, 32_768, 'nemotron-3-ultra'), free: true, supportedClients: ['opencode'] },
     { ...model('nemotron-3.5-lightning-free', 1_000_000, 32_768, 'nemotron-3.5-lightning'), free: true, supportedClients: ['opencode'] },
-    // Paid Zen pool: gateway-usable, priced by the existing catalog metadata.
+    // Paid Zen pool, priced by the registered catalog metadata.
     model('glm-5.3', 1_048_576, 32_768, 'glm-5.3'),
     model('kimi-k3', 1_048_576, 32_768, 'kimi-k3', THINKING_LOW_HIGH_MAX),
+    // Zen serves Sol through Responses. The native OpenCode client owns that
+    // transport; the existing Chat Completions gateway cannot serve this model.
+    { canonical: 'gpt-6.1-sol', overrides: { supportedClients: ['opencode'] } },
   ],
   protocols: [
     openAI('https://opencode.ai/zen/v1/chat/completions'),

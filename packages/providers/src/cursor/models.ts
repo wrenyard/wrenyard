@@ -18,7 +18,7 @@ export const definition = defineProvider({
     { canonical: 'claude-opus-5-5', overrides: { contextWindow: 300_000, supports1MContext: true } },
     { ...model('gpt-5.6-luna', 272_000, undefined, 'gpt-5.6-luna', THINKING_FULL), capabilities: ['text', 'image'], pricing: [0.02, 0.2, 1.2] },
     { ...model('gpt-5.6-sol', 272_000, undefined, 'gpt-5.6-sol', THINKING_FULL), capabilities: ['text', 'image'], pricing: [0.4, 4, 20] },
-    { ...model('claude-sonnet-5', 300_000), capabilities: ['text', 'image'], pricing: [0.2, 2, 10] },
+    { canonical: 'claude-sonnet-5-5', overrides: { contextWindow: 200_000, supports1MContext: true } },
     model('muse-spark-1.3', 300_000),
     model('gemini-3.8-flash', 1_000_000),
     model('claude-fable-5-1', 300_000),
