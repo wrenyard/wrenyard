@@ -21,6 +21,7 @@ export interface DaemonClient {
 
 export interface DaemonClientOptions {
   path?: string;
+  canConnect?: () => boolean;
   /** Default transport deadline for ordinary requests. */
   requestTimeoutMs?: number;
 }
@@ -36,9 +37,11 @@ export class WrenyardDaemonClient implements DaemonClient {
   private readonly path: string;
   private readonly requestTimeoutMs: number;
   private client: WrenyardIpcClient | null = null;
+  private readonly canConnect: () => boolean;
 
   constructor(options: DaemonClientOptions = {}) {
     this.path = options.path ?? resolveWrenyardIpcPath();
+    this.canConnect = options.canConnect ?? (() => true);
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
@@ -51,6 +54,10 @@ export class WrenyardDaemonClient implements DaemonClient {
     params?: unknown,
     options?: DaemonRequestOptions,
   ): Promise<TResult> {
+    if (!this.canConnect()) {
+      this.reset();
+      throw new Error('daemon 不可用');
+    }
     const client = this.ensureClient();
     const timeoutMs = options?.timeoutMs === undefined ? this.requestTimeoutMs : options.timeoutMs;
     try {
@@ -61,7 +68,7 @@ export class WrenyardDaemonClient implements DaemonClient {
       );
     } catch (error) {
       // A dead socket must not be reused: the next request reconnects.
-      if (isTransportFailure(error)) this.reset();
+      if (this.client === client && isTransportFailure(error)) this.reset();
       throw error;
     }
   }

@@ -16,8 +16,9 @@ updates. There is no separate agent runtime binary or Go build.
   applies its own updates.
 - `apps/daemon` owns durable tasks and scheduling and composes feature services
   behind owner-only IPC handlers. It has one run entry point,
-  `wrenyard daemon run`; Desktop, the terminal and
-  `pnpm dev:daemon`/`pnpm dev:desktop` all use it.
+  `wrenyard daemon run`; the terminal runs it directly, and the packaged
+  Desktop and the daemon dev script (`apps/daemon/scripts/dev.ts`) use
+  `@wrenyard/daemon/supervisor`.
 - `packages/protocol` contains type-only IPC definitions grouped by feature.
   The session contract remains a scaffold; exec and provider have daemon handlers.
 - `packages/features/exec` runs raw prompts, owns bounded event replay and
@@ -80,8 +81,9 @@ No runtime migration or dual-read fallback is shipped.
 
 Each release publishes three Desktop artifacts and no suite archive: a Windows
 NSIS `setup.exe` (first install and in-app update), a macOS `.dmg` (first
-install) and a macOS `.zip` (in-app update). The packaged app carries the CLI,
-a standalone Node runtime and the deployed control tree under its Resources, so
+install) and a macOS `.zip` (in-app update). The packaged app carries the
+single-file CLI, a Node runtime and the daemon bundle (`daemon/daemon.mjs` plus
+only its native and DSH runtime dependencies) under its Resources, so
 no system Node or pnpm is needed. Desktop itself performs updates: it reads the
 channel feed on the `updates` branch, verifies the artifact SHA-256 and applies
 it (`setup.exe /S` on Windows, a verified zip swap on macOS). There is no SEA

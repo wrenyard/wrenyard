@@ -253,15 +253,13 @@ function dshOutput() {
 }
 
 /**
- * Resolve the Wrenyard NDJSON IPC socket. WRENYARD_IPC_PATH is primary, the
- * legacy FOREMAN_IPC_PATH is still read as a fallback. Without an override,
+ * Resolve the Wrenyard NDJSON IPC socket. WRENYARD_IPC_PATH overrides the
+ * platform default when set to a non-blank value. Without an override,
  * Windows uses the daemon's named pipe and Unix uses the shared socket path.
  */
 export function wrenyardIpcPath(env = process.env) {
-  for (const candidate of [env.WRENYARD_IPC_PATH, env.FOREMAN_IPC_PATH]) {
-    const socketPath = candidate?.trim();
-    if (socketPath) return socketPath;
-  }
+  const socketPath = env.WRENYARD_IPC_PATH?.trim();
+  if (socketPath) return socketPath;
   return process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock';
 }
 

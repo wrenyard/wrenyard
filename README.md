@@ -77,7 +77,7 @@ After a clone, from the repository root (not an installed suite):
 cd D:\GitHub\wrenyard
 pnpm install --frozen-lockfile
 pnpm build
-pnpm dev:desktop
+pnpm dev
 ```
 
 macOS uses the same last three commands; only the checkout path changes.
@@ -89,7 +89,7 @@ missing cannot start Desktop.
 SQLite uses better-sqlite3 13 Node-API prebuilds shipped with the package; its
 implicit node-gyp build is disabled, so supported x64/arm64 hosts do not need
 Python or a C++ toolchain. After updating dependencies, run `pnpm install` and
-restart `pnpm dev:desktop` once to load the pinned Node 24 runtime.
+restart `pnpm dev` once to load the pinned Node 24 runtime.
 
 `pnpm build` builds only the Desktop bundle. The CLI and daemon run from source
 through tsx, so no per-package `dist/` is produced and nothing is installed or
@@ -98,16 +98,15 @@ started.
 Daily loop, still from the checkout root:
 
 ```powershell
-# Keep this terminal running. Save source files to rebuild and restart.
-pnpm dev:desktop    # supervise daemon + Desktop
-pnpm dev:daemon     # supervise only the daemon, no Desktop
+# Runs the daemon and Desktop dev scripts in parallel. Keep this terminal running.
+pnpm dev           # daemon + Desktop dev scripts, in parallel
 ```
 
-Running `pnpm dev:desktop` again from the same checkout replaces the existing
-dev stack and loads current code. After a source edit the supervisor
-type-checks the daemon, waits until no task, workflow, execution, task graph or
-conversation turn is active, and then restarts. `pnpm dev:daemon` starts only
-the daemon and ignores Desktop source changes. Ctrl+C stops the stack.
+`pnpm dev` runs `pnpm --parallel --filter @wrenyard/daemon --filter @wrenyard/desktop run dev`: both dev scripts start in parallel with no orchestration, so their start order does not matter. Run one side alone with `pnpm --filter @wrenyard/daemon dev` or `pnpm --filter @wrenyard/desktop dev`.
+
+`pnpm --filter @wrenyard/daemon dev` runs `apps/daemon/scripts/dev.ts`. It refuses to start if a daemon already answers on the IPC path; otherwise it runs `lib/main.mts run` through tsx with the default config, watches `apps/daemon/**` and `packages/**`, and after a content change type-checks the daemon, waits for `daemon.status` idle, then gracefully restarts it. A clean daemon exit (for example a workspace switch from a source Desktop) is relaunched. Ctrl+C drains and stops it; a second Ctrl+C forces.
+
+`pnpm --filter @wrenyard/desktop dev` runs `electron-vite dev --watch`: the renderer updates through Vite with React Refresh, preload changes reload every window, and main-process changes restart Desktop. A source Desktop never launches a daemon; it shows the daemon as unavailable and reconnects automatically when a daemon with the same product version appears.
 
 Source-development and an installed Desktop share the same user config,
 state, Desktop `userData`, and DSH session location. The Desktop `userData`
@@ -117,16 +116,13 @@ display name, so source-development reuses the settings and DSH session an
 installed Desktop already wrote. There is no migration or copy, and your
 existing files are left untouched; set `WRENYARD_DESKTOP_USER_DATA` to point
 source-development at a different directory, and only one Wrenyard instance may
-use that data domain at a time. If a Wrenyard daemon is already running — for
-example under an installed Desktop — `pnpm dev:desktop` prints a reminder to
-quit 啾啾工坊 fully from the tray (or run `wrenyard daemon stop`) and exits
-without replacing the service. Closing the window is not enough.
+use that data domain at a time. Because the daemon dev script refuses to start next to a running daemon, quit 啾啾工坊 fully from the tray (or run `wrenyard daemon stop`) before starting it. Closing the window is not enough.
 
-Manifest or lockfile changes stop the loop and print a reminder to run
-`pnpm install --frozen-lockfile`, then `pnpm dev:desktop` again. Install/build
+Manifest or lockfile changes: stop the dev scripts and run
+`pnpm install --frozen-lockfile`, then start them again. Install/build
 errors remain visible and the watcher waits for the next save; no release
 installer is involved. Unexpected component exits are reported without an
-automatic crash-restart loop. Save a source file or run `pnpm dev:desktop`
+automatic crash-restart loop. Save a source file or start `pnpm dev`
 again to retry.
 
 ## Install
@@ -138,8 +134,9 @@ suite archive, no SEA install engine and no one-click bootstrap script.
 1. Download the artifact for your platform:
    - Windows: `wrenyard-desktop-<version>-win32-x64-setup.exe`
    - macOS: `wrenyard-desktop-<version>-darwin-arm64.dmg`
-2. Run it. The packaged app bundles the CLI, the pinned Node runtime and the
-   deployed control tree under its Resources, so nothing else is required.
+2. Run it. The packaged app carries the single-file CLI, a Node runtime and the
+   daemon bundle (`daemon/daemon.mjs` with only its native and DSH runtime
+   dependencies) under its Resources, so nothing else is required.
 
 **First launch is blocked by the OS** because preview builds are ad-hoc signed
 on macOS and unsigned on Windows:
@@ -205,8 +202,8 @@ Preview binaries are signed ad-hoc on macOS and unsigned by default on Windows
 - `wrenyard task` — delegate and track bounded project work
 - `wrenyard exec` / `wrenyard quota` / `wrenyard project` / `wrenyard taskgraph` — exec, provider quota, project and task-graph commands (`--json` on all of them)
 
-The daemon has a single run entry point, `wrenyard daemon run`; Desktop,
-`pnpm dev:desktop`/`pnpm dev:daemon` and the terminal all use it. The CLI never
+The daemon has a single run entry point, `wrenyard daemon run`; Desktop and the
+terminal use it, and the daemon dev script runs it through tsx. The CLI never
 starts or restarts the daemon. When no daemon is reachable it reports one
 message: the Wrenyard daemon is not running — open 啾啾工坊, or run
 `wrenyard daemon run` in a terminal.
@@ -254,11 +251,12 @@ pnpm test
 ```
 
 `pnpm build` builds only the Desktop bundle; the CLI and daemon run from source
-through tsx. Other root scripts: `pnpm lint` (oxlint + `tsc`), `pnpm check`
+through tsx (the source CLI is `pnpm wrenyard ...`). Other root scripts:
+`pnpm lint` (oxlint + `tsc`), `pnpm check`
 (release gates: public identifiers, secrets, legal, version consistency) and
 `pnpm test`. These checks are run through the workspace Tasks and repository
-instructions, not by GitHub Actions. All root scripts (`build`, `dev:daemon`,
-`dev:desktop`, `release`, `lint`, `check`, `test`, `wrenyard`) are defined only
+instructions, not by GitHub Actions. All root scripts (`build`, `dev`,
+`release`, `lint`, `check`, `test`, `wrenyard`) are defined only
 at the repository root; internal packages keep no `build` or `typecheck`
 script.
 

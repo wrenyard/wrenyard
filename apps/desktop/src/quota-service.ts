@@ -7,9 +7,10 @@ import { parseQuotaJson, type QuotaProviderState } from './main/projections/quot
  * list) so a failed query is distinguishable from a genuinely empty catalog.
  */
 export class DesktopQuotaSource {
-  constructor(private readonly ipcPath: string) {}
+  constructor(private readonly ipcPath: string, private readonly canConnect: () => boolean = () => true) {}
 
   async listProviders(forceRefresh = false): Promise<QuotaProviderState[]> {
+    if (!this.canConnect()) throw new Error('daemon 不可用');
     const client = new WrenyardIpcClient({ path: this.ipcPath });
     try {
       const result = await client.providerQuota(forceRefresh, { timeoutMs: 45_000 });

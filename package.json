@@ -22,12 +22,11 @@
   "scripts": {
     "wrenyard": "node ./bin/wrenyard.mjs",
     "build": "pnpm --filter @wrenyard/desktop run build",
-    "dev:daemon": "node ./tools/dev/run.mjs --daemon-only",
-    "dev:desktop": "node ./tools/dev/run.mjs",
     "release": "node ./tools/release/release.mjs",
-    "lint": "oxlint && tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint && tsc -p tsconfig.json --noEmit && tsc -b apps/desktop",
     "check": "node tools/check.mjs",
-    "test": "node --test tools/*.test.mjs tools/**/*.test.mjs && pnpm -r --if-present run test"
+    "test": "node --test tools/*.test.mjs tools/**/*.test.mjs && pnpm -r --if-present run test",
+    "dev": "pnpm --parallel --filter @wrenyard/daemon --filter @wrenyard/desktop run dev"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

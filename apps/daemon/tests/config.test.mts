@@ -124,14 +124,14 @@ describe('Foreman config', () => {
     )
   })
 
-  it('honors WRENYARD_WORKSPACE with legacy FOREMAN_WORKSPACE read fallback', () => {
+  it('honors WRENYARD_WORKSPACE and ignores legacy FOREMAN_WORKSPACE', () => {
     assert.equal(
       createDefaultForemanConfigData({ env: { WRENYARD_WORKSPACE: '/wrenyard-ws' } }).workspace?.root,
       '/wrenyard-ws',
     )
     assert.equal(
       createDefaultForemanConfigData({ env: { FOREMAN_WORKSPACE: '/legacy-ws' } }).workspace?.root,
-      '/legacy-ws',
+      createDefaultForemanConfigData({ env: {} }).workspace?.root,
     )
     const root = workspace()
     const config = normalizeForemanServiceConfig({}, { configDir: root, env: { WRENYARD_WORKSPACE: '/wrenyard-ws' } })

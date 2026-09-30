@@ -49,7 +49,8 @@ test('top-level version flag prints the suite version', () => {
     const result = runForemanSync(repoRoot, binary, [...args])
     assert.ifError(result.error)
     assert.equal(result.status, 0, result.stderr)
-    assert.equal(result.stdout.trim(), pkg.version)
+    assert.equal(result.stdout.split('\n')[0]?.trim(), `wrenyard ${pkg.version}`)
+    assert.match(result.stdout, /^schema_version: /m)
     assert.equal(result.stderr, '')
   }
 })

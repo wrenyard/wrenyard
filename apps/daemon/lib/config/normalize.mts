@@ -39,7 +39,7 @@ function resolveWorkspaceRoot(value: unknown, configDir: string, env: NodeJS.Pro
   const configured = stringValue(value, '')
   if (configured) return resolveConfigRelativePath(configured, configDir)
 
-  const envWorkspace = env.WRENYARD_WORKSPACE?.trim() || env.FOREMAN_WORKSPACE?.trim()
+  const envWorkspace = env.WRENYARD_WORKSPACE?.trim()
   if (envWorkspace) return resolve(envWorkspace)
 
   return configDir
