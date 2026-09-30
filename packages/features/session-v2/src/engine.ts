@@ -80,6 +80,18 @@ export interface SessionV2Host {
   now?(): Date;
 }
 
+/**
+ * An in-memory streaming snapshot of one call. It is never written to the
+ * ledger: the durable `call.started` / `call` events remain authoritative, and
+ * the live table only bridges the gap while a call is still running. The
+ * complete accumulated text (not a delta) is exposed on each notification.
+ */
+export interface LiveCall {
+  callId: string;
+  text: string;
+  reasoning: string;
+}
+
 export interface SessionV2 {
   createSession(): Promise<{ sessionId: string }>;
   listSessions(): SessionSummary[];
@@ -91,7 +103,11 @@ export interface SessionV2 {
   /** Admitted turns whose terminal `turn.finished` is not yet durable. */
   activeTurnCount(): number;
   readLedger(sessionId: string): LedgerEvent[];
+  /** Current in-memory streaming snapshots for the session's live calls. */
+  readLive(sessionId: string): LiveCall[];
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void;
+  /** Subscribe to live-snapshot changes; the returned function unsubscribes. */
+  subscribeLive(sessionId: string, listener: (live: LiveCall[]) => void): () => void;
   close(): Promise<void>;
 }
 
@@ -437,6 +453,9 @@ class Engine implements SessionV2 {
   private readonly host: SessionV2Host;
   private readonly ports: EnginePorts;
   private readonly sessions = new Map<string, SessionRuntime>();
+  /** Per-session, in-memory streaming snapshots keyed by call id. */
+  private readonly liveCalls = new Map<string, Map<string, LiveCall>>();
+  private readonly liveListeners = new Map<string, Set<(live: LiveCall[]) => void>>();
   private readonly ensuring = new Map<string, Promise<SessionRuntime>>();
   private readonly recoveringTurns = new Set<string>();
   private readonly pipeline = new Set<Promise<unknown>>();
@@ -625,8 +644,26 @@ class Engine implements SessionV2 {
     return this.ports.ledger.read(sessionId);
   }
 
+  readLive(sessionId: string): LiveCall[] {
+    return this.snapshotLive(sessionId);
+  }
+
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void {
     return this.ports.ledger.subscribe(sessionId, listener);
+  }
+
+  subscribeLive(sessionId: string, listener: (live: LiveCall[]) => void): () => void {
+    let set = this.liveListeners.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.liveListeners.set(sessionId, set);
+    }
+    set.add(listener);
+    const current = set;
+    return () => {
+      current.delete(listener);
+      if (current.size === 0) this.liveListeners.delete(sessionId);
+    };
   }
 
   async close(): Promise<void> {
@@ -653,6 +690,8 @@ class Engine implements SessionV2 {
     while (this.pipeline.size > 0) {
       await Promise.allSettled([...this.pipeline]);
     }
+    this.liveListeners.clear();
+    this.liveCalls.clear();
     await this.ports.ledger.close();
   }
 
@@ -660,7 +699,7 @@ class Engine implements SessionV2 {
 
   private registerSession(sessionId: string, workspaceRoot: string, snapshot: WorkspaceSnapshot): SessionRuntime {
     const files = this.ports.files(snapshot, workspaceRoot);
-    const calls = this.ports.calls(sessionId);
+    const calls = this.withLive(sessionId, this.ports.calls(sessionId));
     const session: SessionRuntime = {
       sessionId,
       workspaceRoot,
@@ -1657,6 +1696,89 @@ class Engine implements SessionV2 {
     } catch {
       // Cancellation is best-effort; a stale run id must not fail the turn.
     }
+  }
+
+  // ── live streaming snapshots ────────────────────────────────────────────
+
+  /**
+   * Wrap a session's call port so the three streaming roles (`reason`, `reply`,
+   * `write`) publish an in-memory snapshot while they run. The durable
+   * `call.started` / `call` events, not this table, are the source of truth.
+   */
+  private withLive(sessionId: string, inner: CallsPort): CallsPort {
+    return { run: (input) => this.runCallWithLive(sessionId, inner, input) };
+  }
+
+  private async runCallWithLive(
+    sessionId: string,
+    inner: CallsPort,
+    input: CallRunRequest,
+  ): Promise<CallRunResult> {
+    const streaming = input.role === 'reason' || input.role === 'reply' || input.role === 'write';
+    if (!streaming) return inner.run(input);
+    this.beginLive(sessionId, input.callId);
+    const onText = input.onText;
+    const onReasoning = input.onReasoning;
+    try {
+      return await inner.run({
+        ...input,
+        onText: (delta) => {
+          this.appendLive(sessionId, input.callId, 'text', delta);
+          onText?.(delta);
+        },
+        onReasoning: (delta) => {
+          this.appendLive(sessionId, input.callId, 'reasoning', delta);
+          onReasoning?.(delta);
+        },
+      });
+    } finally {
+      // Covers success, failure and abort: the entry exists only while running.
+      this.endLive(sessionId, input.callId);
+    }
+  }
+
+  private snapshotLive(sessionId: string): LiveCall[] {
+    const table = this.liveCalls.get(sessionId);
+    if (!table) return [];
+    return [...table.values()].map((call) => ({ ...call }));
+  }
+
+  private notifyLive(sessionId: string): void {
+    const listeners = this.liveListeners.get(sessionId);
+    if (!listeners || listeners.size === 0) return;
+    const snapshot = this.snapshotLive(sessionId);
+    for (const listener of [...listeners]) {
+      try {
+        listener(snapshot);
+      } catch {
+        // A listener must never break the call it observes.
+      }
+    }
+  }
+
+  private beginLive(sessionId: string, callId: string): void {
+    let table = this.liveCalls.get(sessionId);
+    if (!table) {
+      table = new Map();
+      this.liveCalls.set(sessionId, table);
+    }
+    table.set(callId, { callId, text: '', reasoning: '' });
+    this.notifyLive(sessionId);
+  }
+
+  private appendLive(sessionId: string, callId: string, field: 'text' | 'reasoning', delta: string): void {
+    if (delta === '') return;
+    const entry = this.liveCalls.get(sessionId)?.get(callId);
+    if (!entry) return;
+    entry[field] += delta;
+    this.notifyLive(sessionId);
+  }
+
+  private endLive(sessionId: string, callId: string): void {
+    const table = this.liveCalls.get(sessionId);
+    if (!table) return;
+    if (table.delete(callId)) this.notifyLive(sessionId);
+    if (table.size === 0) this.liveCalls.delete(sessionId);
   }
 
   private track(promise: Promise<unknown>): void {

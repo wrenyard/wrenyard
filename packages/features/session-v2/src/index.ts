@@ -39,6 +39,7 @@ export type {
   EnginePorts,
   FilesPort,
   LedgerPort,
+  LiveCall,
   ProjectInfo,
   RecallGate,
   RecalledFile,
@@ -64,7 +65,7 @@ export type {
   SplitActionBlock,
 } from './actions.ts';
 export { ActionRunner, ActionSplitter, DOC_TYPE_DIRS, parseDocBlock, validateJsonSchema } from './actions.ts';
-export type { CallRole, ModelCallInput, ModelCallOutput } from './calls.ts';
+export type { CallLedgerEventDraft, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
 export { CALL_ROLES, checkContextBudget, estimateTokens, resolveModelMetadata } from './calls.ts';
 export type { DriverResult, ModelDriver, ModelMessage, Usage } from './driver.ts';
 export { createGatewayDriver } from './driver.ts';
@@ -73,6 +74,7 @@ export type {
   ActionFinishedEvent,
   ActionStartedEvent,
   CallEvent,
+  CallStartedEvent,
   ContextSelectedEvent,
   DocReadEvent,
   ErrorEvent,

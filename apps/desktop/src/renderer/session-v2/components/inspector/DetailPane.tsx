@@ -262,6 +262,7 @@ function CallDetail({ call, onSelect }: { call: CallModel; onSelect: (target: In
       <div className="flex flex-col gap-1.5">
         <Field label="开始"><span className="font-mono text-xs" title={formatDateTime(call.startedAt)}>{formatClockSeconds(call.startedAt)}</span></Field>
         {call.endedAt && <Field label="结束"><span className="font-mono text-xs" title={formatDateTime(call.endedAt)}>{formatClockSeconds(call.endedAt)}</span></Field>}
+        <Field label="首 token">{call.firstTokenAt ? <Elapsed start={call.startedAt} end={call.firstTokenAt} /> : '—'}</Field>
         <Field label="总用时"><Elapsed start={call.startedAt} end={call.endedAt} /></Field>
         {call.estimatedInputTokens !== undefined && <Field label="估算输入">{call.estimatedInputTokens.toLocaleString()} token</Field>}
       </div>

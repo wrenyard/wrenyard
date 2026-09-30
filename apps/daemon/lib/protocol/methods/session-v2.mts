@@ -1,4 +1,4 @@
-import type { LedgerEvent, SessionSummary } from '@wrenyard/session-v2'
+import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session-v2'
 import type { JsonSchema } from '../jsonrpc.mts'
 
 export type SessionV2ListParams = Record<string, never>
@@ -18,8 +18,15 @@ export interface SessionV2EventsParams {
   afterSeq: number
   limit?: number
   waitMs?: number
+  /** When true, the result also carries the current live streaming snapshot. */
+  live?: boolean
 }
-export interface SessionV2EventsResult { events: LedgerEvent[]; lastSeq: number }
+export interface SessionV2EventsResult {
+  events: LedgerEvent[]
+  lastSeq: number
+  /** Complete current live-call snapshot; present only when `live` was requested. */
+  live?: LiveCall[]
+}
 
 const idSchema = { type: 'string', minLength: 1 } as const
 const turnSchema = { type: 'integer', minimum: 1 } as const
@@ -62,11 +69,13 @@ export const sessionV2EventsParamsSchema = {
     sessionId: idSchema, afterSeq: seqSchema,
     limit: { type: 'integer', minimum: 1 },
     waitMs: { type: 'integer', minimum: 0, maximum: 1000 },
+    live: { type: 'boolean' },
   },
 } as const satisfies JsonSchema
 export const sessionV2EventsResultSchema = {
   type: 'object', required: ['events', 'lastSeq'], additionalProperties: false,
   properties: {
     events: { type: 'array', items: { type: 'object' } }, lastSeq: seqSchema,
+    live: { type: 'array', items: { type: 'object' } },
   },
 } as const satisfies JsonSchema

@@ -39,8 +39,8 @@ export function SessionPage({ api }: { api: SessionApi }) {
   const [retry, setRetry] = useState<{ text: string; nonce: number } | undefined>(undefined);
 
   const model = useMemo(
-    () => fold(state.events, state.tasks, { sessionId: state.selectedId, interrupting: state.interrupting }),
-    [state.events, state.tasks, state.selectedId, state.interrupting],
+    () => fold(state.events, state.live, state.tasks, { sessionId: state.selectedId, interrupting: state.interrupting }),
+    [state.events, state.live, state.tasks, state.selectedId, state.interrupting],
   );
 
   const inspect = useCallback((next: InspectorTarget): void => {
