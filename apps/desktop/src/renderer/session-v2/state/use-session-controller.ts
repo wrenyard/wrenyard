@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { initialSessionPageState, sessionReducer, type SessionPageState } from './session-reducer.js';
-import type { ModelEntry, SessionApi } from '../model/types.js';
+import type { ModelEntry, SessionApi, SessionV2BridgeTaskBrief } from '../model/types.js';
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 let localSeq = 0;
@@ -12,6 +12,7 @@ export interface SessionController {
   sendMessage(text: string, model: ModelEntry, reasoningEffort: string): Promise<void>;
   interruptTurn(turn: number): Promise<void>;
   removePending(localId: string): void;
+  setTasks(tasks: Record<string, SessionV2BridgeTaskBrief>): void;
   clearError(): void;
 }
 
@@ -132,6 +133,10 @@ export function useSessionController(api: SessionApi) {
     dispatch({ type: 'pending-remove', localId });
   }, []);
 
+  const setTasks = useCallback((tasks: Record<string, SessionV2BridgeTaskBrief>): void => {
+    dispatch({ type: 'tasks', tasks });
+  }, []);
+
   const clearError = useCallback((): void => {
     dispatch({ type: 'clear-error' });
   }, []);
@@ -159,5 +164,5 @@ export function useSessionController(api: SessionApi) {
     };
   }, [api, refreshList, reportError, selectSession]);
 
-  return { state, selectSession, newDraft, sendMessage, interruptTurn, removePending, clearError };
+  return { state, selectSession, newDraft, sendMessage, interruptTurn, removePending, setTasks, clearError };
 }
