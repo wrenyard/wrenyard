@@ -695,6 +695,37 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/features/session-v2:
+    dependencies:
+      '@wrenyard/control-client':
+        specifier: workspace:*
+        version: link:../../control-client
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../../models
+      '@wrenyard/providers':
+        specifier: workspace:*
+        version: link:../../providers
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+      js-tiktoken:
+        specifier: 1.0.21
+        version: 1.0.21
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/models:
     devDependencies:
       '@types/node':
