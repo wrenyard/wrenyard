@@ -20,7 +20,12 @@
     "types": [
       "vite/client"
     ],
-    "tsBuildInfoFile": "node_modules/.cache/tsconfig.web.tsbuildinfo"
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig.web.tsbuildinfo",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
   },
   "include": [
     "src/renderer/**/*.ts",
