@@ -107,6 +107,9 @@ importers:
       '@wrenyard/session':
         specifier: workspace:*
         version: file:packages/features/session(a9f8add2b6dbe10b50f33574300c9a66)
+      '@wrenyard/session-v2':
+        specifier: workspace:*
+        version: link:../../packages/features/session-v2
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -153,13 +156,13 @@ importers:
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../packages/providers
-      '@wrenyard/session-v2':
-        specifier: workspace:*
-        version: link:../../packages/features/session-v2
       js-tiktoken:
         specifier: 1.0.21
         version: 1.0.21
     devDependencies:
+      '@wrenyard/session-v2':
+        specifier: workspace:*
+        version: link:../../packages/features/session-v2
       react:
         specifier: ^19.3.0
         version: 19.3.0
