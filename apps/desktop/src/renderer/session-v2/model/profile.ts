@@ -1,8 +1,8 @@
 import type { TimelineBar, TimelineLane, TimelineRange } from '@/renderer/components/timeline-bars';
-import { cycleLabel } from './describe.js';
-import type { ActionModel, CallModel, Phase, TurnModel } from './types.js';
+import { ACTION_TONE, CALL_ROLE_LABEL, PHASE_LABEL, PHASE_TONE, cycleLabel } from './describe.js';
+import type { CallModel, Phase, TurnModel } from './types.js';
 
-export interface TurnProfile {
+interface TurnProfile {
   range: TimelineRange;
   lanes: TimelineLane[];
   summary: {
@@ -13,32 +13,6 @@ export interface TurnProfile {
     calls: number;
   };
 }
-
-const PHASE_LABEL: Record<Phase, string> = {
-  preparing: '准备',
-  reasoning: '推理',
-  acting: '行动',
-  replying: '回复',
-};
-
-const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
-  reason: '推理',
-  select: '选择',
-  interpret: '解析',
-  compile: '编译',
-  write: '写文档',
-  reply: '回复',
-  title: '标题',
-};
-
-const ACTION_TONE: Record<ActionModel['status'], string> = {
-  running: 'running',
-  done: 'done',
-  failed: 'failed',
-  skipped: 'skipped',
-  cancelled: 'cancelled',
-  aborted: 'cancelled',
-};
 
 function ms(value: string): number {
   const parsed = Date.parse(value);
@@ -61,7 +35,7 @@ export function buildTurnProfile(turn: TurnModel, now: number): TurnProfile {
   const phaseTotals = new Map<Phase, number>();
   const addPhase = (phase: Phase, from: number, to: number): void => {
     if (to <= from) return;
-    phaseBars.push({ id: `phase-${phase}-${phaseBars.length}`, start: from, end: to, tone: phase, label: PHASE_LABEL[phase] });
+    phaseBars.push({ id: `phase-${phase}-${phaseBars.length}`, start: from, end: to, tone: PHASE_TONE[phase], label: PHASE_LABEL[phase] });
     phaseTotals.set(phase, (phaseTotals.get(phase) ?? 0) + (to - from));
   };
 
@@ -105,11 +79,11 @@ export function buildTurnProfile(turn: TurnModel, now: number): TurnProfile {
     if (firstToken !== undefined && firstToken > callStart) {
       waitTotal += firstToken - callStart;
       outputTotal += Math.max(0, outEnd - firstToken);
-      reasonBars.push({ id: `${call.id}#wait`, start: callStart, end: firstToken, tone: 'reason-wait', label: `${cycle} · 等待首 token`, detail: `${firstToken - callStart}ms` });
-      reasonBars.push({ id: call.id, start: firstToken, end: outEnd, tone: 'reason-output', label: `${cycle} · 输出` });
+      reasonBars.push({ id: `${call.id}#wait`, start: callStart, end: firstToken, tone: 'primary-soft', label: `${cycle} · 等待首 token`, detail: `${firstToken - callStart}ms` });
+      reasonBars.push({ id: call.id, start: firstToken, end: outEnd, tone: 'primary', label: `${cycle} · 输出` });
     } else {
       outputTotal += Math.max(0, outEnd - callStart);
-      reasonBars.push({ id: call.id, start: callStart, end: outEnd, tone: 'reason-output', label: `${cycle} · 输出` });
+      reasonBars.push({ id: call.id, start: callStart, end: outEnd, tone: 'primary', label: `${cycle} · 输出` });
     }
   }
   if (reasonCalls.length > 0) {
@@ -136,7 +110,7 @@ export function buildTurnProfile(turn: TurnModel, now: number): TurnProfile {
           id: call.id,
           start: ms(call.startedAt),
           ...(call.endedAt === undefined ? {} : { end: ms(call.endedAt) }),
-          tone: 'cheap',
+          tone: 'neutral',
           label: `${CALL_ROLE_LABEL[role]} · ${call.model}`,
           detail: call.status,
         })),

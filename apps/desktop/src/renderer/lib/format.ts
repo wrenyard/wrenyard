@@ -1,4 +1,4 @@
-/** Formatting helpers shared by the session-v2 page. All output is product UI copy. */
+/** Formatting helpers shared across the renderer. All output is product UI copy. */
 
 function pad2(value: number): string {
   return String(value).padStart(2, '0');

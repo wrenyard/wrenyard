@@ -3,10 +3,11 @@ import { Elapsed } from '@/renderer/components/elapsed';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import { Button } from '@/renderer/components/ui/button';
 import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@/renderer/components/ui/item';
-import { itemStatusLabel } from '../model/describe.js';
-import type { ActionModel } from '../model/types.js';
+import { statusView } from '../../model/describe.js';
+import { openTaskTranscript } from '@/renderer/lib/desktop';
+import type { ActionModel } from '../../model/types.js';
 import { ContextItems } from './ContextItems.js';
-import { useInspector } from './inspector/Inspector.js';
+import { useInspector } from '../inspector/Inspector.js';
 
 function KindIcon({ kind }: { kind: ActionModel['kind'] }) {
   switch (kind) {
@@ -26,39 +27,35 @@ export interface ActionRowProps {
 /** One-line action summary; details live in the inspector. */
 export function ActionRow({ action, turnId }: ActionRowProps) {
   const { inspect } = useInspector();
-  const openTranscript = (taskRunId: string): void => {
-    void window.wrenyardShell?.openTaskTranscript(taskRunId);
-  };
+  const select = (): void => inspect({ kind: 'action', turnId, actionId: action.id });
+  const transcriptId = action.kind === 'dispatch' ? action.taskRunId : undefined;
 
   return (
     <div className="flex flex-col gap-1">
-      <Item
-        variant="outline"
-        size="xs"
-        role="button"
-        tabIndex={0}
-        className="cursor-pointer"
-        onClick={() => inspect({ kind: 'action', turnId, actionId: action.id })}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') inspect({ kind: 'action', turnId, actionId: action.id });
-        }}
-      >
-        <ItemMedia variant="icon" className="text-muted-foreground"><KindIcon kind={action.kind} /></ItemMedia>
-        <ItemContent>
-          <ItemTitle>{action.title}</ItemTitle>
-          {action.subtitle && <ItemDescription>{action.subtitle}</ItemDescription>}
-        </ItemContent>
-        <ItemActions>
-          <StatusBadge status={action.status} label={itemStatusLabel(action.status)} />
-          <span className="text-xs text-muted-foreground"><Elapsed start={action.startedAt} end={action.endedAt} /></span>
-          {action.kind === 'dispatch' && action.taskRunId && (
-            <Button variant="outline" size="xs"
-              onClick={(event) => { event.stopPropagation(); openTranscript(action.taskRunId!); }}>
-              查看任务
-            </Button>
-          )}
-        </ItemActions>
-      </Item>
+      <div className="flex items-start gap-2">
+        <Item
+          render={<button type="button" />}
+          variant="outline"
+          size="xs"
+          className="flex-1 cursor-pointer text-left"
+          onClick={select}
+        >
+          <ItemMedia variant="icon" className="text-muted-foreground"><KindIcon kind={action.kind} /></ItemMedia>
+          <ItemContent>
+            <ItemTitle>{action.title}</ItemTitle>
+            {action.subtitle && <ItemDescription>{action.subtitle}</ItemDescription>}
+          </ItemContent>
+          <ItemActions>
+            <StatusBadge {...statusView(action.status)} />
+            <span className="text-xs text-muted-foreground"><Elapsed start={action.startedAt} end={action.endedAt} /></span>
+          </ItemActions>
+        </Item>
+        {transcriptId !== undefined && (
+          <Button variant="outline" size="xs" onClick={() => { void openTaskTranscript(transcriptId); }}>
+            查看任务
+          </Button>
+        )}
+      </div>
       {action.outputs.length > 0 && (
         <div className="ml-7"><ContextItems items={action.outputs} turnId={turnId} cycle={action.cycle} /></div>
       )}

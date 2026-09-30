@@ -8,13 +8,16 @@ export interface TimelineRange {
   end: number;
 }
 
+/** Generic bar tone. Business phases resolve to one of these in the model layer. */
+export type TimelineTone = 'primary' | 'primary-soft' | 'success' | 'warning' | 'danger' | 'muted' | 'neutral';
+
 export interface TimelineBar {
   id: string;
   /** Epoch milliseconds. */
   start: number;
   /** Epoch milliseconds; absent means "still running" and ends at `now`. */
   end?: number;
-  tone?: string;
+  tone: TimelineTone;
   label: string;
   detail?: string;
 }
@@ -33,26 +36,19 @@ export interface TimelineBarsProps {
   className?: string;
 }
 
-const TONE_CLASS: Record<string, string> = {
-  preparing: 'bg-muted-foreground/40',
-  reasoning: 'bg-primary',
-  acting: 'bg-[var(--moss)]',
-  replying: 'bg-[var(--lamp-deep)]',
-  'reason-wait': 'bg-primary/25',
-  'reason-output': 'bg-primary',
-  cheap: 'bg-secondary-foreground/50',
-  done: 'bg-[var(--moss)]',
-  ok: 'bg-[var(--moss)]',
-  failed: 'bg-destructive',
-  cancelled: 'bg-muted-foreground/40',
-  aborted: 'bg-muted-foreground/40',
-  interrupted: 'bg-muted-foreground/40',
-  skipped: 'bg-muted-foreground/30',
-  running: 'bg-primary',
+const TONE_CLASS: Record<TimelineTone, string> = {
+  primary: 'bg-primary',
+  'primary-soft': 'bg-primary/25',
+  success: 'bg-[var(--moss)]',
+  warning: 'bg-[var(--lamp-deep)]',
+  danger: 'bg-destructive',
+  muted: 'bg-muted-foreground/40',
+  neutral: 'bg-secondary-foreground/50',
 };
 
-function toneClass(tone: string | undefined): string {
-  return TONE_CLASS[tone ?? ''] ?? 'bg-primary/50';
+/** Background class for one timeline tone. */
+export function timelineToneClass(tone: TimelineTone): string {
+  return TONE_CLASS[tone];
 }
 
 /** Candidate tick intervals, from one second up to one week. */
@@ -130,7 +126,7 @@ export function TimelineBars({ range, now, lanes, onSelect, className }: Timelin
                     render={<button type="button" />}
                     className={cn(
                       'absolute top-0 h-full rounded-sm outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring',
-                      toneClass(bar.tone),
+                      timelineToneClass(bar.tone),
                     )}
                     style={{ left: `${left}%`, width: `${width}%`, minWidth: 2 }}
                     onClick={() => onSelect?.(bar)}

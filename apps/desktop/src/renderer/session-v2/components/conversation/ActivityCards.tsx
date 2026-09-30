@@ -1,23 +1,22 @@
 import { Elapsed } from '@/renderer/components/elapsed';
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@/renderer/components/ui/item';
-import type { ActionModel, TurnModel } from '../model/types.js';
+import { openTaskTranscript } from '@/renderer/lib/desktop';
+import type { ActionModel, TurnModel } from '../../model/types.js';
 
 function ActivityCard({ action }: { action: ActionModel }) {
   const parsed = action.parsed as { project?: string; task?: string } | undefined;
   const name = action.task?.taskName ?? parsed?.task ?? action.title;
   const project = parsed?.project;
   const open = (): void => {
-    if (action.taskRunId) void window.wrenyardShell?.openTaskTranscript(action.taskRunId);
+    if (action.taskRunId) void openTaskTranscript(action.taskRunId);
   };
   return (
     <Item
+      render={<button type="button" />}
       variant="outline"
       size="xs"
-      role="button"
-      tabIndex={0}
-      className="w-64 cursor-pointer border-primary/40 animate-pulse hover:animate-none"
+      className="w-64 cursor-pointer text-left border-primary/40 animate-pulse hover:animate-none"
       onClick={open}
-      onKeyDown={(event) => { if (event.key === 'Enter') open(); }}
     >
       <ItemMedia>
         <span className="size-2 rounded-full bg-primary" />

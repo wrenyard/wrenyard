@@ -1,10 +1,10 @@
 import { CopyButton } from '@/renderer/components/copy-button';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/renderer/components/ui/hover-card';
 import { Markdown } from '@/renderer/components/markdown';
+import { Timestamp } from '@/renderer/components/timestamp';
 import { Message, MessageActions, MessageContent, MessageFooter } from '@/renderer/components/chat/message';
-import { formatClock } from '@/renderer/lib/format';
-import { turnStatusLabel } from '../model/describe.js';
-import type { TurnModel } from '../model/types.js';
+import { statusView } from '../../model/describe.js';
+import type { TurnModel } from '../../model/types.js';
 import { TurnMeta, TurnMetaSummary } from './TurnMeta.js';
 
 function TurnMetaHover({ turn }: { turn: TurnModel }) {
@@ -32,8 +32,8 @@ export function FinalReply({ turn }: FinalReplyProps) {
       <Message from="assistant">
         <MessageContent>
           <p className="text-xs text-muted-foreground">
-            {turnStatusLabel(turn.status)}
-            {turn.endedAt ? ` · ${formatClock(turn.endedAt)}` : ''}
+            {statusView(turn.status).label}
+            {turn.endedAt && <> · <Timestamp value={turn.endedAt} /></>}
           </p>
           <MessageFooter><TurnMetaHover turn={turn} /></MessageFooter>
         </MessageContent>
@@ -48,7 +48,7 @@ export function FinalReply({ turn }: FinalReplyProps) {
         <MessageFooter>
           <MessageActions><CopyButton text={turn.final.text} /></MessageActions>
           <TurnMetaHover turn={turn} />
-          <span>{formatClock(turn.final.at)}</span>
+          <Timestamp value={turn.final.at} />
         </MessageFooter>
       </MessageContent>
     </Message>

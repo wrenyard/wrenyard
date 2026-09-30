@@ -1,43 +1,80 @@
-import type { ActionKindModel, ContextItem, ItemStatus, Phase, TurnStatus } from './types.js';
+import type { StatusTone } from '@/renderer/components/status-badge';
+import type { TimelineTone } from '@/renderer/components/timeline-bars';
+import type { ActionKindModel, ActionModel, CallModel, ContextItem, LedgerEvent, Phase } from './types.js';
 
-/* Central product copy for the session-v2 page. */
+/* Central product copy and mappings for the session page. */
 
 export const MAX_CYCLES = 10;
 
+/** Short phase names for compact lane and section labels. */
 export const PHASE_LABEL: Record<Phase, string> = {
+  preparing: '准备',
+  reasoning: '推理',
+  acting: '行动',
+  replying: '回复',
+};
+
+/** Longer phase names for the work-process header. */
+const PHASE_DETAIL_LABEL: Record<Phase, string> = {
   preparing: '准备上下文',
   reasoning: '推理中',
   acting: '执行行动',
   replying: '撰写回复',
 };
 
-export const TURN_STATUS_LABEL: Record<TurnStatus, string> = {
-  running: '进行中',
-  completed: '已完成',
-  failed: '失败',
-  interrupted: '已中断',
-  exhausted: '达到推理上限',
+/** Phase colour tone for the mini phase bar and the timeline phase lane. */
+export const PHASE_TONE: Record<Phase, TimelineTone> = {
+  preparing: 'muted',
+  reasoning: 'primary',
+  acting: 'success',
+  replying: 'warning',
 };
 
-const ITEM_STATUS_LABEL: Record<ItemStatus, string> = {
-  running: '运行中',
-  done: '完成',
-  failed: '失败',
-  skipped: '已跳过',
-  cancelled: '已取消',
-  aborted: '已取消',
+/** Display name of every model call role. */
+export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
+  reason: '推理',
+  select: '选择',
+  interpret: '解析',
+  compile: '编译',
+  write: '写文档',
+  reply: '回复',
+  title: '标题',
 };
+
+/** Timeline tone of every action status. */
+export const ACTION_TONE: Record<ActionModel['status'], TimelineTone> = {
+  running: 'primary',
+  done: 'success',
+  failed: 'danger',
+  skipped: 'muted',
+  cancelled: 'muted',
+  aborted: 'muted',
+};
+
+/** Unified status tone and label across turns, actions, calls and tasks. */
+const STATUS_VIEW: Record<string, { tone: StatusTone; label: string }> = {
+  running: { tone: 'running', label: '运行中' },
+  completed: { tone: 'success', label: '已完成' },
+  done: { tone: 'success', label: '完成' },
+  ok: { tone: 'success', label: '成功' },
+  success: { tone: 'success', label: '成功' },
+  failed: { tone: 'danger', label: '失败' },
+  error: { tone: 'danger', label: '失败' },
+  exhausted: { tone: 'warning', label: '达到推理上限' },
+  interrupted: { tone: 'muted', label: '已中断' },
+  cancelled: { tone: 'muted', label: '已取消' },
+  aborted: { tone: 'muted', label: '已取消' },
+  skipped: { tone: 'muted', label: '已跳过' },
+  unavailable: { tone: 'muted', label: '不可用' },
+};
+
+/** Resolve one business status into the tone and label a `StatusBadge` needs. */
+export function statusView(status: string): { tone: StatusTone; label: string } {
+  return STATUS_VIEW[status] ?? { tone: 'muted', label: status };
+}
 
 export function phaseLabel(phase: Phase): string {
-  return PHASE_LABEL[phase];
-}
-
-export function turnStatusLabel(status: TurnStatus): string {
-  return TURN_STATUS_LABEL[status];
-}
-
-export function itemStatusLabel(status: ItemStatus): string {
-  return ITEM_STATUS_LABEL[status];
+  return PHASE_DETAIL_LABEL[phase];
 }
 
 /** `第 N 次推理`, with the near-limit hint once N reaches 8. */
@@ -59,7 +96,7 @@ function firstLine(text: string): string {
   return line.length > 80 ? `${line.slice(0, 80)}…` : line;
 }
 
-export function basename(path: string): string {
+function basename(path: string): string {
   const index = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return index === -1 ? path : path.slice(index + 1);
 }
@@ -68,7 +105,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-export interface ActionCopy {
+interface ActionCopy {
   title: string;
   subtitle?: string;
 }
@@ -108,4 +145,37 @@ export function describeAction(kind: ActionKindModel, parsed: unknown, result: s
 
 export function materialTitle(item: ContextItem): string {
   return item.title && item.title.trim() !== '' ? item.title : basename(item.path);
+}
+
+export function ledgerEventType(event: LedgerEvent): string {
+  return (event as { type: string }).type;
+}
+
+function oneLine(value: string, max = 140): string {
+  const line = value.split('\n', 1)[0] ?? '';
+  return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+
+export function summarizeLedgerEvent(event: LedgerEvent): string {
+  const record = event as unknown as Record<string, unknown>;
+  switch (ledgerEventType(event)) {
+    case 'session.created': return String(record.workspaceRoot ?? '');
+    case 'turn.started': return oneLine(String(record.text ?? ''));
+    case 'context.selected': return `${(record.selections as unknown[] | undefined)?.length ?? 0} 项`;
+    case 'memory.recalled':
+    case 'doc.read': return String(record.path ?? '');
+    case 'reason.completed':
+    case 'action.block':
+    case 'reply':
+    case 'title': return oneLine(String(record.text ?? ''));
+    case 'action.started': return String(record.kind ?? '');
+    case 'action.finished': return oneLine(`${record.kind} · ${record.status}: ${record.result ?? ''}`);
+    case 'ws.updated': return `${record.change} ${record.path}`;
+    case 'turn.interrupted': return String(record.reason ?? '');
+    case 'turn.finished': return String(record.status ?? '');
+    case 'call': return `${record.role} · ${record.model} · ${record.status}`;
+    case 'call.started': return `${record.role} · ${record.model}`;
+    case 'error': return oneLine(`${record.stage}: ${record.message}`);
+    default: return '';
+  }
 }
