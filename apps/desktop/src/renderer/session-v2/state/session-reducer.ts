@@ -1,5 +1,6 @@
 import type {
   LedgerEvent,
+  LiveCall,
   ModelEntry,
   SessionSummary,
   SessionV2BridgeTaskBrief,
@@ -19,6 +20,7 @@ export interface SessionPageState {
   /** `''` means the draft state: no session exists until the first send. */
   selectedId: string;
   events: LedgerEvent[];
+  live: LiveCall[];
   tasks: Record<string, SessionV2BridgeTaskBrief>;
   pending: PendingTurn[];
   interrupting: number[];
@@ -32,6 +34,7 @@ export const initialSessionPageState: SessionPageState = {
   models: [],
   selectedId: '',
   events: [],
+  live: [],
   tasks: {},
   pending: [],
   interrupting: [],
@@ -59,6 +62,7 @@ export type SessionAction =
   | { type: 'select'; sessionId: string }
   | { type: 'draft' }
   | { type: 'events'; sessionId: string; events: LedgerEvent[]; snapshot?: boolean }
+  | { type: 'live'; sessionId: string; live: LiveCall[] }
   | { type: 'tasks'; tasks: Record<string, SessionV2BridgeTaskBrief> }
   | { type: 'pending-add'; pending: PendingTurn }
   | { type: 'pending-resolve'; localId: string; turn: number }
@@ -81,6 +85,7 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         ...state,
         selectedId: action.sessionId,
         events: [],
+        live: [],
         tasks: {},
         pending: [],
         interrupting: [],
@@ -92,6 +97,7 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         ...state,
         selectedId: '',
         events: [],
+        live: [],
         tasks: {},
         pending: [],
         interrupting: [],
@@ -118,6 +124,9 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         sessions: withLedgerTitle(state.sessions, events, action.sessionId),
       };
     }
+    case 'live':
+      if (action.sessionId !== state.selectedId) return state;
+      return { ...state, live: action.live };
     case 'tasks':
       return { ...state, tasks: action.tasks };
     case 'pending-add':

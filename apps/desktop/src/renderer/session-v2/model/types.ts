@@ -1,12 +1,13 @@
 import type { LedgerEvent, ProjectSnapshot, SessionSummary, WorkspaceSnapshot } from '@wrenyard/session-v2';
 import type {
+  LiveCall,
   SessionV2Bridge,
   SessionV2BridgeEventPayload,
   SessionV2BridgeModelEntry,
   SessionV2BridgeTaskBrief,
 } from '../../../session-v2/preload.js';
 
-export type { SessionV2BridgeTaskBrief };
+export type { LiveCall, SessionV2BridgeTaskBrief };
 export type SessionApi = SessionV2Bridge;
 export type ModelEntry = SessionV2BridgeModelEntry;
 export type EventPayload = SessionV2BridgeEventPayload;
@@ -118,6 +119,7 @@ export interface CallModel {
   turn: number;
   cycle?: number;
   startedAt: string;
+  firstTokenAt?: string;
   endedAt?: string;
   usage?: { input?: number; cachedInput?: number; output?: number; reasoning?: number };
   estimatedInputTokens?: number;

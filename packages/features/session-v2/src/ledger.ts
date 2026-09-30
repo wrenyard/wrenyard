@@ -42,6 +42,7 @@ export type LedgerEventType =
   | 'turn.interrupted'
   | 'turn.finished'
   | 'title'
+  | 'call.started'
   | 'call'
   | 'error';
 
@@ -218,6 +219,20 @@ export interface TitleEvent extends LedgerEventBase {
   callId: string;
 }
 
+/**
+ * Observational marker appended when a call is actually issued. It never enters
+ * the rendered model context (it is not a context event), so appending it cannot
+ * change any previously rendered result. The matching `call` event carries the
+ * same `callId`.
+ */
+export interface CallStartedEvent extends LedgerEventBase {
+  type: 'call.started';
+  callId: string;
+  role: CallRole;
+  /** Gateway public id, always exactly `provider/model`. */
+  model: string;
+}
+
 export interface CallEvent extends LedgerEventBase {
   type: 'call';
   callId: string;
@@ -227,6 +242,8 @@ export interface CallEvent extends LedgerEventBase {
   status: 'ok' | 'failed' | 'aborted';
   startedAt: string;
   endedAt: string;
+  /** When the driver first produced a nonempty delta (visible or reasoning). */
+  firstTokenAt?: string;
   /** Character count per prompt layer, e.g. `{ 'wy-system': 1234 }`. */
   layers: Record<string, number>;
   estimatedInputTokens: number;
@@ -258,6 +275,7 @@ export type LedgerEvent =
   | TurnInterruptedEvent
   | TurnFinishedEvent
   | TitleEvent
+  | CallStartedEvent
   | CallEvent
   | ErrorEvent;
 
