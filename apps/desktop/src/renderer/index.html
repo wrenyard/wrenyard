@@ -2,7 +2,7 @@
 <html lang="zh-CN" data-page="workbench">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none';" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>啾啾工坊</title>
   </head>
@@ -469,7 +469,7 @@
         </div>
       </div>
 
-      <section id="session-v2-page" hidden></section>
+      <section id="session-v2-page" class="h-full min-h-0" hidden></section>
     </main>
     <div class="workspace-gate" id="workspace-gate" hidden>
       <div class="workspace-gate-card" role="dialog" aria-modal="true" aria-labelledby="workspace-gate-title">
