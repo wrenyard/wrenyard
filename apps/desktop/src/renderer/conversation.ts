@@ -19,6 +19,8 @@ import { brandIcon } from './brand-icons.js';
 import { providerBrand, classifyFamily, familyBrand } from './model-list.js';
 import { createAgentTaskStatusIcon } from './agent-task-icon.js';
 
+const iconUrl = new URL('../../resources/icon-256.png', import.meta.url).href;
+
 /** Shared token formatter re-exported for conversation stats; never a second copy. */
 export { formatCompactTokenCount };
 
@@ -1065,7 +1067,7 @@ export class ConversationView {
     const welcome = document.createElement('div');
     welcome.className = 'conversation-welcome';
     const image = document.createElement('img');
-    image.src = './icon-256.png';
+    image.src = iconUrl;
     image.alt = '';
     const eyebrow = document.createElement('p');
     eyebrow.className = 'eyebrow';

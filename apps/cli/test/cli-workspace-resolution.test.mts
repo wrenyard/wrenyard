@@ -6,11 +6,10 @@ import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 
-import { foremanPackageRoot, resolveWrenyardSuiteRoot } from '@wrenyard/daemon/layout/suite-root'
+import { resolveWrenyardSuiteRoot } from '@wrenyard/daemon/layout/suite-root'
 
 let tempDirs: string[] = []
 let oldTestWorkDir: string | undefined
-let oldWorkspace: string | undefined
 let oldPath = ''
 
 function makeTempDir(prefix: string): string {
@@ -51,7 +50,6 @@ let overridden: Partial<Record<(typeof OVERRIDING_KEYS)[number], string>> = {}
 
 beforeEach(() => {
   oldTestWorkDir = process.env.FOREMAN_TEST_WORK_DIR
-  oldWorkspace = process.env.FOREMAN_WORKSPACE
   oldPath = process.env.PATH ?? ''
   overridden = {}
   for (const key of OVERRIDING_KEYS) {
@@ -68,12 +66,6 @@ afterEach(() => {
     process.env.FOREMAN_TEST_WORK_DIR = oldTestWorkDir
   }
 
-  if (oldWorkspace === undefined) {
-    delete process.env.FOREMAN_WORKSPACE
-  } else {
-    process.env.FOREMAN_WORKSPACE = oldWorkspace
-  }
-
   process.env.PATH = oldPath
 
   for (const dir of tempDirs) {
@@ -83,14 +75,14 @@ afterEach(() => {
 })
 
 describe('foreman CLI workspace resolution', () => {
-  it('keeps FOREMAN_WORKSPACE as the external workspace while suiteDir points to the monorepo', () => {
+  it('keeps WRENYARD_WORKSPACE as the external workspace while suiteDir points to the monorepo', () => {
     const workspaceDir = makeTempDir('foreman-cli-workspace-')
     const fakeGhDir = makeFakeGh()
     delete process.env.FOREMAN_TEST_WORK_DIR
-    process.env.FOREMAN_WORKSPACE = workspaceDir
+    process.env.WRENYARD_WORKSPACE = workspaceDir
     process.env.PATH = `${fakeGhDir}${delimiter}${oldPath}`
     mkdirSync(join(workspaceDir, '.git'), { recursive: true })
-    const expectedSuiteDir = resolveWrenyardSuiteRoot({ packageRoot: foremanPackageRoot })
+    const expectedSuiteDir = resolveWrenyardSuiteRoot()
 
     const output = runForemanDoctor(process.env)
 
@@ -101,15 +93,15 @@ describe('foreman CLI workspace resolution', () => {
     assert.doesNotMatch(output, /Git repo not found at C:\\Users\\someone\\Documents/u)
   })
 
-  it('keeps FOREMAN_TEST_WORK_DIR above FOREMAN_WORKSPACE for the work dir', () => {
+  it('keeps FOREMAN_TEST_WORK_DIR above WRENYARD_WORKSPACE for the work dir', () => {
     const testWorkDir = makeTempDir('foreman-cli-test-workdir-')
     const workspaceDir = makeTempDir('foreman-cli-workspace-')
     const fakeGhDir = makeFakeGh()
     process.env.FOREMAN_TEST_WORK_DIR = testWorkDir
-    process.env.FOREMAN_WORKSPACE = workspaceDir
+    process.env.WRENYARD_WORKSPACE = workspaceDir
     process.env.PATH = `${fakeGhDir}${delimiter}${oldPath}`
     mkdirSync(join(testWorkDir, '.git'), { recursive: true })
-    const expectedSuiteDir = resolveWrenyardSuiteRoot({ packageRoot: foremanPackageRoot })
+    const expectedSuiteDir = resolveWrenyardSuiteRoot()
 
     const output = runForemanDoctor(process.env)
 

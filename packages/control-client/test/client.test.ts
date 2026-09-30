@@ -17,28 +17,17 @@ import {
 
 const isWindows = process.platform === "win32";
 
-test("WRENYARD_IPC_PATH takes precedence over the legacy FOREMAN_* variables", () => {
+test("WRENYARD_IPC_PATH overrides the platform default", () => {
   assert.equal(
-    resolveWrenyardIpcPath({
-      WRENYARD_IPC_PATH: "/run/wrenyard.sock",
-      FOREMAN_IPC_PATH: "/run/foreman.sock",
-      FOREMAN_PET_FOREMAN_IPC: "/run/pet.sock",
-    }),
+    resolveWrenyardIpcPath({ WRENYARD_IPC_PATH: "/run/wrenyard.sock" }),
     "/run/wrenyard.sock",
   );
 });
 
-test("legacy FOREMAN_IPC_PATH is honored as a fallback", () => {
+test("legacy FOREMAN_IPC_PATH is ignored", () => {
   assert.equal(
     resolveWrenyardIpcPath({ FOREMAN_IPC_PATH: "/run/foreman.sock" }),
-    "/run/foreman.sock",
-  );
-});
-
-test("legacy FOREMAN_PET_FOREMAN_IPC is honored as a further fallback", () => {
-  assert.equal(
-    resolveWrenyardIpcPath({ FOREMAN_PET_FOREMAN_IPC: "/run/pet.sock" }),
-    "/run/pet.sock",
+    resolveWrenyardIpcPath({}),
   );
 });
 
@@ -54,8 +43,6 @@ test("resolveWrenyardIpcPath falls back to the daemon's shared platform default"
 test("blank IPC environment values do not suppress the platform default", () => {
   assert.equal(resolveWrenyardIpcPath({
     WRENYARD_IPC_PATH: "",
-    FOREMAN_IPC_PATH: "  ",
-    FOREMAN_PET_FOREMAN_IPC: "",
   }), defaultWrenyardIpcPath());
 });
 

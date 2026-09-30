@@ -15,7 +15,7 @@ long-running source environment:
 ```sh
 pnpm install --frozen-lockfile
 pnpm build
-pnpm dev:desktop
+pnpm dev
 ```
 
 `pnpm-workspace.yaml` allows the Electron install script; if Electron is
@@ -25,21 +25,17 @@ global Wrenyard/Electron binary.
 Daily commands from the same checkout root:
 
 ```sh
-pnpm dev:desktop    # Terminal A, supervises daemon + Desktop, stays running
-pnpm dev:daemon     # supervise only the daemon, no Desktop
+pnpm dev                              # daemon + Desktop dev scripts, in parallel
+pnpm --filter @wrenyard/daemon dev    # daemon only
+pnpm --filter @wrenyard/desktop dev   # Desktop only
 ```
 
-Source-development reuses the installed user data domain. If a Wrenyard daemon
-is already running (for example under an installed Desktop), `pnpm dev:desktop`
-prints a reminder to quit 啾啾工坊 fully from the tray or run `wrenyard daemon
-stop`, and exits without replacing the service. It does not install a release,
-change the installed version, or start at login. After Ctrl+C in the
-`pnpm dev:desktop` terminal, open the installed app yourself if you want it
-back.
+`pnpm dev` runs both dev scripts in parallel with no orchestration, so start order does not matter. The daemon dev script refuses to start while another daemon (for example one started by an installed Desktop) answers on the IPC path, so quit the installed app first. A source Desktop never starts a daemon; it waits until one is available and reconnects automatically. Neither dev script installs a release, changes the installed version, or starts at login.
 
-If a lockfile or package manifest changes, stop `pnpm dev:desktop` (Ctrl+C),
-reinstall with `--frozen-lockfile`, rebuild, then run it again. The supervisor
-does not apply dev-tooling changes automatically.
+If a lockfile or package manifest changes, stop the dev scripts, run
+`pnpm install --frozen-lockfile`, then start them again.
+
+`pnpm --filter @wrenyard/desktop dev` runs `electron-vite dev --watch`: the renderer updates through Vite with React Refresh, preload changes reload all windows, and main-process changes restart Desktop. The daemon dev script type-checks the daemon after a change, waits for `daemon.status` idle, then restarts only the daemon; shared package changes restart both processes.
 
 ## Working in the workspace
 

@@ -77,14 +77,14 @@ function taskSource(promptExpression: string): string {
 beforeEach(() => {
   resetRegistry()
   invalidateProjectCache()
-  prevForemanWorkspace = process.env.FOREMAN_WORKSPACE
+  prevForemanWorkspace = process.env.WRENYARD_WORKSPACE
 })
 
 afterEach(() => {
   resetRegistry()
   invalidateProjectCache()
-  if (prevForemanWorkspace === undefined) delete process.env.FOREMAN_WORKSPACE
-  else process.env.FOREMAN_WORKSPACE = prevForemanWorkspace
+  if (prevForemanWorkspace === undefined) delete process.env.WRENYARD_WORKSPACE
+  else process.env.WRENYARD_WORKSPACE = prevForemanWorkspace
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true })
   tempDirs = []
 })
@@ -421,7 +421,7 @@ describe('standard-library layered task resolution', () => {
     assert.match(duplicates[0].load_error, /Duplicate definition 'same'/)
     assert.equal(resolveTaskTarget('same', workspace, 'app')?.source, 'project')
 
-    process.env.FOREMAN_WORKSPACE = workspace
+    process.env.WRENYARD_WORKSPACE = workspace
     const originalLog = console.log
     let stdout = ''
     console.log = (...args: unknown[]) => { stdout += args.join(' ') + '\n' }

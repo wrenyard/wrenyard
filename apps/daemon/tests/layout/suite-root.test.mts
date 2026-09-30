@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict'
 import { test, after } from 'node:test'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  foremanPackageRoot,
+  bundledSuiteRoot,
   readSuiteVersion,
-  resolveDependencyPackageRoot,
   resolveWrenyardSuiteRoot,
+  runningFromBundle,
 } from '../../lib/layout/suite-root.mts'
 
 const tempDirs: string[] = []
@@ -33,11 +33,16 @@ function makeSuiteRoot(): string {
   return root
 }
 
-test('resolves the suite root upward from a nested package directory', () => {
+test('from source the suite root is the checkout root', () => {
+  assert.equal(runningFromBundle, false)
+  assert.equal(existsSync(join(bundledSuiteRoot, 'contracts', 'versions.json')), true)
+  assert.equal(existsSync(join(bundledSuiteRoot, 'apps', 'daemon', 'package.json')), true)
+})
+
+test('resolveWrenyardSuiteRoot validates the marker', () => {
   const suite = makeSuiteRoot()
-  const nested = join(suite, 'apps', 'daemon', 'lib', 'layout')
-  mkdirSync(nested, { recursive: true })
-  assert.equal(resolveWrenyardSuiteRoot({ packageRoot: nested, env: {} }), realpathSync(suite))
+  assert.equal(resolveWrenyardSuiteRoot({ suiteRoot: suite }), realpathSync(suite))
+  assert.throws(() => resolveWrenyardSuiteRoot({ suiteRoot: tempDir('wrenyard-not-suite-') }), /missing contracts/)
 })
 
 test('readSuiteVersion prefers the SUITE_VERSION marker', () => {
@@ -45,10 +50,4 @@ test('readSuiteVersion prefers the SUITE_VERSION marker', () => {
   writeFileSync(join(root, 'SUITE_VERSION'), '2.3.4\n', 'utf-8')
   writeFileSync(join(root, 'package.json'), '{"version":"1.0.0"}\n', 'utf-8')
   assert.equal(readSuiteVersion(root), '2.3.4')
-})
-
-test('resolveDependencyPackageRoot finds tsx under the installed pnpm workspace', () => {
-  const tsxRoot = resolveDependencyPackageRoot(foremanPackageRoot, 'tsx')
-  const pkg = JSON.parse(readFileSync(join(tsxRoot, 'package.json'), 'utf-8')) as { name?: unknown }
-  assert.equal(pkg.name, 'tsx')
 })

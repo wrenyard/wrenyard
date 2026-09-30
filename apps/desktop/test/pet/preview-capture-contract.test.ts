@@ -173,8 +173,8 @@ describe('final preview capture contract', () => {
       htmlPathForFixture,
       staticQueryForFixture,
     } = await import('../../tools/pet/scripts/preview/capture-contract.mjs');
-    expect(htmlPathForFixture(rootDir, PREVIEW_FIXTURES[0]).replace(/\\/g, '/')).toMatch(/dist\/pet\/renderer\/worker\.html$/);
-    expect(htmlPathForFixture(rootDir, PREVIEW_FIXTURES[25]).replace(/\\/g, '/')).toMatch(/dist\/pet\/renderer\/house\.html$/);
+    expect(htmlPathForFixture(rootDir, PREVIEW_FIXTURES[0]).replace(/\\/g, '/')).toMatch(/dist\/web\/pet\/overlay\/worker\/index\.html$/);
+    expect(htmlPathForFixture(rootDir, PREVIEW_FIXTURES[25]).replace(/\\/g, '/')).toMatch(/dist\/web\/pet\/overlay\/house\/index\.html$/);
     expect(additionalArgumentsForFixture(PREVIEW_FIXTURES[0])).toHaveLength(1);
     expect(additionalArgumentsForFixture(PREVIEW_FIXTURES[0])[0]).toMatch(/^--preview-fixture=/);
     expect(staticQueryForFixture(PREVIEW_FIXTURES[24])).toMatchObject({

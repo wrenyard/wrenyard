@@ -13,6 +13,7 @@ export interface HealthPingResult {
   uptimeMs?: number
   identity?: {
     mode: 'source' | 'installed'
+    version?: string
     checkout?: string
     node?: string
   }
@@ -36,6 +37,7 @@ export const healthPingResultSchema = {
       required: ['mode'],
       properties: {
         mode: { type: 'string', enum: ['source', 'installed'] },
+        version: { type: 'string' },
         checkout: { type: 'string' },
         node: { type: 'string' },
       },

@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron';
+import type { PageLoader } from '../../pages.js';
 import { DisplayRect } from './display-placement';
 import {
   overlaySkipsTaskbar,
@@ -7,14 +8,12 @@ import {
 
 export interface EntityWindowOptions {
   preloadPath: string;
-  htmlPath: string;
+  pageLoader: PageLoader;
+  page: 'house' | 'worker';
   bounds: DisplayRect;
   visible: boolean;
   /** Current owner visibility, including changes while the renderer loads. */
   isVisible?: () => boolean;
-  /** Called after a render-process recovery reload completes, so the
-   *  consumer can re-push current state before the next frame. */
-  onRendererRecovered?: () => void;
 }
 
 export function createHouseWindow(options: EntityWindowOptions): BrowserWindow {
@@ -83,7 +82,7 @@ function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
     if (isMainFrame) handleLoadFailure();
   });
 
-  win.loadFile(options.htmlPath).catch(() => {
+  options.pageLoader.load(win, options.page).catch(() => {
     handleLoadFailure();
   });
 
@@ -95,10 +94,6 @@ function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
 
   win.webContents.on('render-process-gone', () => {
     if (!win.isDestroyed()) {
-      // Re-register did-finish-load so a recovered renderer gets state
-      win.webContents.once('did-finish-load', () => {
-        options.onRendererRecovered?.();
-      });
       win.webContents.reload();
     }
   });

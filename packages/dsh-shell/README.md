@@ -74,7 +74,6 @@ bounded rejections (`Wrenyard IPC error: ...`).
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `WRENYARD_IPC_PATH` | `\\.\pipe\wrenyard` (Windows), `/tmp/wrenyard.sock` (elsewhere) | Owner-only NDJSON IPC socket/pipe |
-| `FOREMAN_IPC_PATH` | *(legacy)* | Deprecated pre-Wrenyard name, still read as a fallback |
 | `WRENYARD_DESKTOP_ASYNC_TASKS` | *(unset)* | Desktop-only opt-in (`=1`) for asynchronous `run_task` dispatch |
 
 The IPC path shares the same `wrenyard` default with

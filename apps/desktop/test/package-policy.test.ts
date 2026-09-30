@@ -47,7 +47,7 @@ test('electron-builder excludes safe file kinds without guessing dependency dire
 
 test('post-pack policy rejects safe file kinds and keeps uncertain dependency directories', () => {
   const entries = [
-    '/dist/main.js.map',
+    '/dist/main/index.js.map',
     '/dist/types/main.d.ts',
     '/dist/types/internal.js',
   ];
@@ -61,7 +61,7 @@ test('post-pack policy rejects safe file kinds and keeps uncertain dependency di
       && !error.message.includes(sensitivePath),
   );
   assert.doesNotThrow(() => packagePolicy.assertNoForbiddenPackagedEntries([
-    '/dist/main.js',
+    '/dist/main/index.js',
     '/node_modules/pkg/LICENSE',
     '/node_modules/ajv/dist/types/index.js',
     '/node_modules/yaml/dist/doc/directives.js',
@@ -80,10 +80,10 @@ test('post-pack path detector finds exact local roots without exposing content',
 
 test('first-party classification mirrors dependency path semantics', () => {
   const vendorScope = ['@wrenyard', 'desktop'].join('/');
-  assert.equal(packagePolicy.isFirstPartyArchivePath('/dist/main.js'), true);
+  assert.equal(packagePolicy.isFirstPartyArchivePath('/dist/main/index.js'), true);
   assert.equal(packagePolicy.isFirstPartyArchivePath('/node_modules/sharp/build/Release/sharp.node'), false);
   assert.equal(packagePolicy.isFirstPartyArchivePath('/node_modules/rg/bin/rg'), false);
-  assert.equal(packagePolicy.isFirstPartyArchivePath(`/node_modules/${vendorScope}/dist/main.js`), true);
+  assert.equal(packagePolicy.isFirstPartyArchivePath(`/node_modules/${vendorScope}/dist/main/index.js`), true);
 });
 
 test('build-root needles cover exact checkout output for any archive member', () => {
@@ -127,7 +127,7 @@ test('generic home and temp needles are scoped to first-party output', () => {
     'generic home and temp bytes in a dependency NUL binary are not a finding',
   );
   assert.equal(
-    packagePolicy.containsUnsafePackagedPath('/dist/main.js', dependencyBinary, noExactNeedles, genericNeedles),
+    packagePolicy.containsUnsafePackagedPath('/dist/main/index.js', dependencyBinary, noExactNeedles, genericNeedles),
     true,
     'the same generic bytes in first-party output are a finding',
   );
@@ -171,15 +171,15 @@ test('exact checkout and separate output roots are rejected in any member', () =
     'separate outside-checkout output root in a dependency NUL binary is a finding',
   );
   assert.equal(
-    packagePolicy.containsUnsafePackagedPath('/dist/main.js', Buffer.from(JSON.stringify({ root: checkoutRoot })), exactNeedles, genericNeedles),
+    packagePolicy.containsUnsafePackagedPath('/dist/main/index.js', Buffer.from(JSON.stringify({ root: checkoutRoot })), exactNeedles, genericNeedles),
     true,
   );
   assert.equal(
-    packagePolicy.containsUnsafePackagedPath('/dist/main.js', Buffer.from(JSON.stringify({ root: outputRoot })), exactNeedles, genericNeedles),
+    packagePolicy.containsUnsafePackagedPath('/dist/main/index.js', Buffer.from(JSON.stringify({ root: outputRoot })), exactNeedles, genericNeedles),
     true,
   );
   assert.equal(
-    packagePolicy.containsUnsafePackagedPath('/dist/main.js', Buffer.from('portable runtime content'), exactNeedles, genericNeedles),
+    packagePolicy.containsUnsafePackagedPath('/dist/main/index.js', Buffer.from('portable runtime content'), exactNeedles, genericNeedles),
     false,
   );
 });
@@ -201,7 +201,7 @@ test('POSIX needles match backslash and JSON-double-backslash spellings', () => 
   ];
   for (const variant of variants) {
     assert.equal(
-      packagePolicy.containsUnsafePackagedPath('/dist/main.js', Buffer.from(variant), needles, genericNeedles),
+      packagePolicy.containsUnsafePackagedPath('/dist/main/index.js', Buffer.from(variant), needles, genericNeedles),
       true,
       `raw/backslash/JSON-doubled variant must be detected: ${variant}`,
     );
@@ -241,7 +241,7 @@ async function withRealPackage(
 
 test('real archive scanner accepts safe scoped-package content', async () => {
   await withRealPackage({
-    'dist/main.js': 'portable first-party runtime content\n',
+    'dist/main/index.js': 'portable first-party runtime content\n',
     'node_modules/@example/sdk/lib/index.js': 'module.exports = 42;\n',
   }, async (context) => {
     await assert.doesNotReject(() => packagePolicy.assertSafeDesktopPackage(context));
@@ -250,8 +250,8 @@ test('real archive scanner accepts safe scoped-package content', async () => {
 
 test('real archive scanner rejects forbidden source maps', async () => {
   await withRealPackage({
-    'dist/main.js': 'portable first-party runtime content\n',
-    'dist/main.js.map': '{"version":3,"sources":[]}\n',
+    'dist/main/index.js': 'portable first-party runtime content\n',
+    'dist/main/index.js.map': '{"version":3,"sources":[]}\n',
   }, async (context) => {
     await assert.rejects(
       () => packagePolicy.assertSafeDesktopPackage(context),
@@ -264,7 +264,7 @@ test('real archive scanner rejects exact output root leaked from first-party out
   let leakedRoot = '';
   await withRealPackage({
     'node_modules/@example/sdk/lib/index.js': 'module.exports = 42;\n',
-    'dist/main.js': 'placeholder\n',
+    'dist/main/index.js': 'placeholder\n',
   }, async (context) => {
     leakedRoot = context.appOutDir as string;
     const target = join(leakedRoot, 'resources', 'app.asar');

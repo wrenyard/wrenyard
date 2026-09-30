@@ -50,7 +50,7 @@ const UNTRACKED_TEXT_LIMIT = 8 * 1024
 const UNTRACKED_LARGE_LIMIT = 64 * 1024
 
 export function foremanWorkspaceFromEnv(): string | null {
-  const workspace = process.env.FOREMAN_WORKSPACE?.trim()
+  const workspace = process.env.WRENYARD_WORKSPACE?.trim()
   return workspace ? resolve(workspace) : null
 }
 
@@ -88,7 +88,7 @@ export class ProjectManager {
 
   constructor(options: ProjectManagerOptions = {}) {
     const workspaceRoot = options.workspaceRoot?.trim() || foremanWorkspaceFromEnv()
-    if (!workspaceRoot) throw new Error('FOREMAN_WORKSPACE is not set')
+    if (!workspaceRoot) throw new Error('WRENYARD_WORKSPACE is not set')
 
     this.workspaceRoot = resolve(workspaceRoot)
     this.stateRoot = resolve(options.stateRoot?.trim() || foremanStateRoot())

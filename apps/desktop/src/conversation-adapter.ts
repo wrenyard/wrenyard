@@ -40,6 +40,7 @@ function unavailableConversation(
 
 export interface DesktopConversationAdapterOptions {
   ipcPath: string;
+  canConnect?: () => boolean;
   initialWorkspace: WorkspaceConfigurationSnapshot;
   /** Renderer notification for every observed conversation revision. */
   onChanged(): void;
@@ -88,7 +89,7 @@ export class DesktopConversationAdapter {
    * Never throws: an unavailable daemon is retried by the poll loop.
    */
   async start(): Promise<void> {
-    if (this.closed || this.client) return;
+    if (this.closed || this.client || this.options.canConnect?.() === false) return;
     const client = new SessionClient({ ipcPath: this.options.ipcPath });
     this.client = client;
     await this.prime(client);
@@ -145,6 +146,20 @@ export class DesktopConversationAdapter {
   }
 
   /** Detach from the session transport. Never cancels the backend. */
+  pause(): void {
+    this.client?.close();
+    this.client = null;
+    this.revision = 0;
+    this.cursorKnown = false;
+    this.appliedOnce = false;
+    this.markUnavailable('daemon 不可用');
+  }
+
+  async reconnect(): Promise<void> {
+    this.pause();
+    await this.start();
+  }
+
   close(): Promise<void> {
     this.closed = true;
     const client = this.client;
@@ -154,7 +169,7 @@ export class DesktopConversationAdapter {
   }
 
   private requireClient(): SessionClient {
-    if (this.closed || !this.client) {
+    if (this.closed || !this.client || this.options.canConnect?.() === false) {
       throw new Error(this.lastError ?? '请先配置 Wrenyard workspace');
     }
     return this.client;
@@ -192,6 +207,10 @@ export class DesktopConversationAdapter {
     const client = startingClient;
     while (!this.closed && client === this.client) {
       try {
+        if (this.options.canConnect?.() === false) {
+          this.pause();
+          return;
+        }
         const params: SessionSnapshotParams = {};
         if (this.cursorKnown) {
           params.afterRevision = this.revision;

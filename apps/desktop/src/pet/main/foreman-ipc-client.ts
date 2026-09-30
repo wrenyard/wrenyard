@@ -13,8 +13,8 @@ export interface ForemanIpcClientOptions {
 
 /**
  * Resolve the Wrenyard NDJSON IPC socket path. Delegates to the canonical
- * control-client resolver so every surface shares one default and one set of
- * legacy fallbacks (`FOREMAN_IPC_PATH`, `FOREMAN_PET_FOREMAN_IPC`).
+ * control-client resolver so every surface shares one default; the path comes
+ * only from WRENYARD_IPC_PATH or the platform default.
  */
 export function resolveForemanIpcPath(env: NodeJS.ProcessEnv = process.env): string {
   return resolveWrenyardIpcPath(env);

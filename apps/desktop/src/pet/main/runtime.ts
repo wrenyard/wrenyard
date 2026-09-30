@@ -1,4 +1,5 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
+import type { PageLoader } from '../../pages.js';
 import { SiteModel } from './site-model';
 import { EntityManager } from './entity-manager';
 import { buildQuotaTips } from '../../main/projections/quota-tips';
@@ -15,7 +16,7 @@ export type { QuotaProviderState } from '../shared/entities';
 
 export interface DesktopPetRuntimeOptions {
   config: AppConfig;
-  rendererDir: string;
+  pageLoader: PageLoader;
   preloadDir: string;
   /**
    * Shared Desktop subscriptions. The Pet runtime consumes a projection; it
@@ -115,8 +116,8 @@ export class DesktopPetRuntime {
   private setup(): void {
     this.model = new SiteModel();
     this.entityManager = new EntityManager({
-      preloadPath: `${this.options.preloadDir}/preload.js`,
-      rendererDir: this.options.rendererDir,
+      preloadPath: `${this.options.preloadDir}/pet.cjs`,
+      pageLoader: this.options.pageLoader,
       config: this.config,
       onConfigChange: (config) => {
         this.config = config;

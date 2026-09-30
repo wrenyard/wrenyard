@@ -1,7 +1,9 @@
 import { parseArgs } from 'node:util'
 import type { TaskGraphCreateParams, TaskGraphPatchParams, TaskGraphStatusParams, TaskGraphEventsParams, TaskGraphSignalParams, TaskGraphNodeInspectParams, TaskGraphInspectParams, TaskGraphListParams, TaskGraphWaitParams } from '@wrenyard/daemon/protocol/registry'
 import type { TaskGraphCreateResult, TaskGraphPatchResult, TaskGraphSignalResult, TaskGraphWaitResult, TaskGraphNodeInspectResult } from '@wrenyard/daemon/protocol/methods/taskgraph'
-import { compactInstallPatchOps, compileCompactTaskGraph } from '@wrenyard/daemon/core/taskgraph'
+// Pure compilers only: the taskgraph index also pulls the SQLite-backed store.
+import { compileCompactTaskGraph } from '@wrenyard/daemon/core/taskgraph/compile'
+import { compactInstallPatchOps } from '@wrenyard/daemon/core/taskgraph/templates'
 import {
   connectConfiguredForemanClient,
   isHelpRequest,

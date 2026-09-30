@@ -55,21 +55,21 @@ describe('overlay entry contracts', () => {
   });
 
   it('builds production Pet renderer bundles inside the Desktop build graph', () => {
-    const buildScript = read('tools/build.mjs');
-    expect(buildScript).toContain("['overlay/house/index.ts', 'house.js']");
-    expect(buildScript).toContain("['overlay/worker/index.ts', 'worker.js']");
-    expect(buildScript).toContain("['overlay/taskgraph-entity/index.ts', 'entity.js']");
-    expect(buildScript).toContain("['panels/transcript/index.ts', 'transcript.js']");
-    expect(buildScript).toContain("['panels/observatory/index.ts', 'graph-slip.js']");
-    expect(buildScript).toContain("join(dist, 'pet', 'renderer')");
-    expect(buildScript).toContain("join(dist, 'pet', 'preloads')");
-    // The Pet module is built from this checkout: no Pet-app dist is copied.
-    expect(buildScript).not.toContain('petRoot');
-    // Retired renderer assets are removed so an incremental build cannot keep them.
-    expect(buildScript).toContain("['settings.html', 'settings.js', 'stats.html', 'stats.js', 'panel.css']");
-
-    const tsconfig = read('tsconfig.json');
-    expect(tsconfig).toContain('"src/**/*.ts"');
+    const config = read('electron.vite.config.ts');
+    expect(config).toContain('fromSrc(DESKTOP_PRELOADS)');
+    expect(config).toContain('fromSrc(DESKTOP_PAGES)');
+    const pages = read('src/entries.ts');
+    for (const preload of [
+      'pet/main/preload.ts', 'pet/preloads/entity-preload.ts',
+      'pet/preloads/graph-slip-preload.ts', 'pet/preloads/transcript-preload.ts',
+    ]) expect(pages).toContain(preload);
+    for (const page of [
+      'pet/overlay/house/index.html', 'pet/overlay/worker/index.html',
+      'pet/overlay/taskgraph-entity/index.html', 'pet/panels/transcript/index.html',
+      'pet/panels/observatory/index.html',
+    ]) expect(pages).toContain(page);
+    const tsconfig = JSON.parse(read('tsconfig.json'));
+    expect(tsconfig.references).toEqual([{ path: './tsconfig.node.json' }, { path: './tsconfig.web.json' }]);
   });
 
   it('keeps the transparent Work Slip free of the shared panel outer border', () => {

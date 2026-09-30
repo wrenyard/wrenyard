@@ -1,3 +1,4 @@
+import { bundledSuiteRoot, readSuiteVersion, runningFromBundle } from '../../layout/suite-root.mts'
 import type { OperationHost } from '../../core/operations/types.mts'
 import { TaskService, TaskServiceError } from '../../core/task/service.mts'
 import { ActivitySnapshotError, buildActivitySnapshot } from '../../core/activity/index.mts'
@@ -145,15 +146,16 @@ export interface CoreRpcHandlerOptions {
 
 export type CoreRpcTransport = 'ipc'
 
-export function readProcessIdentity(env: NodeJS.ProcessEnv = process.env): {
+export function readProcessIdentity(): {
   mode: 'source' | 'installed'
+  version: string
   checkout?: string
   node: string
 } {
-  const source = env.WRENYARD_SOURCE_DEV === '1'
   return {
-    mode: source ? 'source' : 'installed',
-    ...(source && env.WRENYARD_SOURCE_CHECKOUT ? { checkout: env.WRENYARD_SOURCE_CHECKOUT } : {}),
+    mode: runningFromBundle ? 'installed' : 'source',
+    version: readSuiteVersion(bundledSuiteRoot),
+    ...(runningFromBundle ? {} : { checkout: bundledSuiteRoot }),
     node: process.execPath,
   }
 }

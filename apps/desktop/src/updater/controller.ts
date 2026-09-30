@@ -64,7 +64,7 @@ export interface DesktopUpdateControllerOptions {
   onInstall?: () => void;
   /** Surfaces a blocking condition; resolves once the user acknowledged it. */
   onBlocker?: (blocker: UpdateBlocker) => Promise<void>;
-  /** Source-development (`pnpm dev:desktop`) disables release polling and install. */
+  /** Source-development (`pnpm dev`) disables release polling and install. */
   sourceDevelopment?: boolean;
   updateBaseUrl?: string;
   platform?: NodeJS.Platform;
@@ -91,7 +91,7 @@ const UNAVAILABLE_MESSAGES: Record<UpdateInstallReason, string> = {
   'unsupported-platform': '当前平台暂不支持应用内更新，请从发布页下载安装包。',
   'missing-cli': '未找到已安装的 Wrenyard CLI，无法应用内更新。',
   'missing-runtime': '未找到与当前安装配套的 Node 运行时，无法应用内更新。',
-  'source-development': '当前为源码开发模式，不会检查或安装发行版更新。停止 `pnpm dev:desktop` 后可再使用已安装的啾啾工坊。',
+  'source-development': '当前为源码开发模式，不会检查或安装发行版更新。停止 `pnpm dev` 后可再使用已安装的啾啾工坊。',
 };
 
 /** Human-readable explanation keyed to the reason code every surface shows. */

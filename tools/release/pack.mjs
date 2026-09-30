@@ -23,10 +23,8 @@ const PACK_DIR = path.join(ROOT, '.artifacts', 'pack');
 // <resources>/wrenyard of the packaged app.
 const STAGE_DIR = path.join(PACK_DIR, 'wrenyard');
 const OUTPUT_DIR = path.join(ROOT, 'release');
-const STAGED_CONTROL_ROOT = 'apps/cli';
 // Keep <resources>\wrenyard\** under 240 chars on Windows without LongPathsEnabled.
 const MAX_SUITE_RELATIVE_PATH = 180;
-const DEPLOY_SOURCES = [path.join('apps', 'cli'), path.join('apps', 'daemon'), 'packages'];
 
 function run(command, args, options = {}) {
   console.log(`[pack] $ ${command} ${args.join(' ')}`);
@@ -73,49 +71,92 @@ function copyFile(source, destination, mode) {
   fs.copyFileSync(source, destination);
   if (mode !== undefined) fs.chmodSync(destination, mode);
 }
-function copyDirWithoutNodeModules(source, destination) {
-  fs.cpSync(source, destination, { recursive: true, force: true, verbatimSymlinks: true, filter: (entry) => path.basename(entry) !== 'node_modules' });
-}
-// Remove pnpm deploy-only metadata; the deployed tree needs no build-host state.
-function stripDeployMetadata(deploy) {
-  for (const name of ['pnpm-lock.yaml', 'pnpm-workspace.yaml', 'node_modules/.modules.yaml', 'node_modules/.pnpm/lock.yaml', 'node_modules/.pnpm-workspace-state-v1.json']) {
-    const file = path.join(deploy, name);
-    fs.rmSync(file, { force: true });
-    if (fs.existsSync(file)) throw new Error(`deployed control tree still contains ${name}: ${file}`);
+// Nearest `node_modules/<name>` visible from `fromDir`, following Node's lookup.
+function findPackageDir(name, fromDir) {
+  for (let dir = fromDir; ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, 'node_modules', ...name.split('/'));
+    if (fs.existsSync(path.join(candidate, 'package.json'))) return fs.realpathSync(candidate);
+    if (path.dirname(dir) === dir) return undefined;
   }
 }
-// pnpm deploy writes workspace dependencies as file: URLs into the build temp
-// dir; pin them to the deployed package version so no build path ships.
-function pinWorkspaceDependencySpecs(deploy) {
-  const manifestPath = path.join(deploy, 'package.json');
-  const manifest = readJson(manifestPath);
-  for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
-    for (const [name, spec] of Object.entries(manifest[field] ?? {})) {
-      if (typeof spec !== 'string' || !/(^|@)(file|link):/.test(spec)) continue;
-      manifest[field][name] = readJson(path.join(deploy, 'node_modules', ...name.split('/'), 'package.json')).version;
+// Copies the production dependency closure of `roots` out of the build host's
+// installed tree into `nodeModules`, hoisted where versions agree and nested
+// where they differ. Installed native binaries are copied as built.
+export function copyDependencyClosure(roots, nodeModules) {
+  const hoistedVersions = new Map();
+  const copyPackage = (source, target) => fs.cpSync(source, target, {
+    recursive: true, force: true, dereference: true,
+    filter: (entry) => {
+      const name = path.basename(entry);
+      if (name === 'node_modules' || name === '.bin') return false;
+      return path.dirname(entry) !== source || !['test', 'tests', '__tests__'].includes(name);
+    },
+  });
+  const visit = (name, fromDir, parentModules, optional) => {
+    const source = findPackageDir(name, fromDir);
+    if (!source) {
+      if (optional) return;
+      throw new Error(`cannot resolve ${name} from ${fromDir}`);
     }
-  }
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const { version, dependencies = {}, optionalDependencies = {} } = readJson(path.join(source, 'package.json'));
+    const hoisted = hoistedVersions.get(name);
+    if (hoisted === version) return;
+    const target = path.join(hoisted === undefined ? nodeModules : parentModules, ...name.split('/'));
+    if (fs.existsSync(target)) return;
+    if (hoisted === undefined) hoistedVersions.set(name, version);
+    copyPackage(source, target);
+    const childModules = hoisted === undefined ? nodeModules : path.join(target, 'node_modules');
+    for (const dependency of Object.keys(dependencies)) visit(dependency, source, childModules, false);
+    for (const dependency of Object.keys(optionalDependencies)) visit(dependency, source, childModules, true);
+  };
+  for (const [name, fromDir] of roots) visit(name, fromDir, nodeModules, false);
+}
+// Every installed package directory under `nodeModules`, nested ones included.
+function installedPackageDirs(nodeModules) {
+  const dirs = [];
+  const walk = (modules) => {
+    if (!fs.existsSync(modules)) return;
+    for (const entry of fs.readdirSync(modules, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const dir = path.join(modules, entry.name);
+      const packages = entry.name.startsWith('@')
+        ? fs.readdirSync(dir, { withFileTypes: true }).filter((child) => child.isDirectory()).map((child) => path.join(dir, child.name))
+        : [dir];
+      for (const pkg of packages) {
+        dirs.push(pkg);
+        walk(path.join(pkg, 'node_modules'));
+      }
+    }
+  };
+  walk(nodeModules);
+  return dirs;
 }
 // Dependency source maps and type declarations are never loaded at runtime.
 const DEPENDENCY_DEV_ONLY_FILE = /\.(?:map|d\.[cm]?ts)$/u;
-function pruneDependencyDevFiles(deploy) {
+function pruneDependencyDevFiles(root) {
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(file);
-      else if (entry.isFile() && DEPENDENCY_DEV_ONLY_FILE.test(entry.name) && isDependencyPath(path.relative(deploy, file).split(path.sep))) fs.rmSync(file);
+      else if (entry.isFile() && DEPENDENCY_DEV_ONLY_FILE.test(entry.name)) fs.rmSync(file);
     }
   };
-  walk(path.join(deploy, 'node_modules'));
+  walk(root);
 }
-// Every shipped launcher resolves tsx explicitly, so no .bin shim may survive.
-function removeBinDirs(root) {
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    const file = path.join(root, entry.name);
-    if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
-    if (entry.name === '.bin') fs.rmSync(file, { recursive: true, force: true });
-    else removeBinDirs(file);
+// Native packages keep their compiled binary and JS entry only: no C/C++
+// sources, intermediate build output or other platforms' prebuilds.
+function pruneNativePackages(nodeModules) {
+  const platformDir = `${process.platform}-${process.arch}`;
+  const removeExcept = (dir, keep) => {
+    if (!fs.existsSync(dir)) return;
+    for (const child of fs.readdirSync(dir)) if (!keep(child)) fs.rmSync(path.join(dir, child), { recursive: true, force: true });
+  };
+  for (const pkg of installedPackageDirs(nodeModules)) {
+    if (!fs.existsSync(path.join(pkg, 'binding.gyp'))) continue;
+    for (const name of ['deps', 'src', 'third_party', 'scripts']) fs.rmSync(path.join(pkg, name), { recursive: true, force: true });
+    removeExcept(path.join(pkg, 'build'), (child) => child === 'Release');
+    removeExcept(path.join(pkg, 'build', 'Release'), (child) => child.endsWith('.node'));
+    removeExcept(path.join(pkg, 'prebuilds'), (child) => child === platformDir || child === `${platformDir}.node`);
   }
 }
 // Resolve the pinned Node runtime from the root `node` dependency, not execPath.
@@ -229,7 +270,7 @@ export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
   walk(root);
   if (violations.length) throw new Error(`unsafe staged ${label} payload:\n${violations.join('\n')}`);
 }
-// Desktop extraResources layout: SEA CLI, pinned Node, deployed control tree,
+// Desktop extraResources layout: SEA CLI, pinned Node, the daemon bundle tree,
 // the suite root marker and legal files. Bootstrap scripts, release-manifest
 // and pnpm workspace files are deliberately absent.
 function writeStage(stage, version, sea) {
@@ -246,17 +287,23 @@ function buildSea(tmp) {
   run(process.execPath, [path.join(RELEASE_DIR, 'build-sea.mjs'), '--cli', path.join(ROOT, 'apps', 'cli', 'dist', 'wrenyard-sea.cjs'), '--output', sea]);
   return sea;
 }
-// Minimal deploy workspace kept outside the checkout, deployed with --prod.
-function deployControlTree(tmp) {
-  const controlDeploy = path.join(STAGE_DIR, STAGED_CONTROL_ROOT);
-  const deployWorkspace = path.join(tmp, 'deploy-workspace');
-  for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) copyFile(path.join(ROOT, name), path.join(deployWorkspace, name));
-  for (const rel of DEPLOY_SOURCES) copyDirWithoutNodeModules(path.join(ROOT, rel), path.join(deployWorkspace, rel));
-  run('pnpm', ['--config.node-linker=hoisted', '--config.package-import-method=copy', '--filter', '@wrenyard/cli', 'deploy', '--prod', controlDeploy], { cwd: deployWorkspace });
-  stripDeployMetadata(controlDeploy);
-  pinWorkspaceDependencySpecs(controlDeploy);
-  removeBinDirs(controlDeploy);
-  pruneDependencyDevFiles(controlDeploy);
+// daemon/: the daemon bundle, its external-dependency manifest and only those
+// external packages (native modules and the DSH runtime it loads from disk).
+export function stageDaemon(stage) {
+  run('pnpm', ['--filter', '@wrenyard/daemon', 'run', 'build']);
+  const bundle = path.join(ROOT, 'apps', 'daemon', 'dist');
+  const daemonDir = path.join(stage, 'daemon');
+  copyFile(path.join(bundle, 'daemon.mjs'), path.join(daemonDir, 'daemon.mjs'));
+  copyFile(path.join(bundle, 'package.json'), path.join(daemonDir, 'package.json'));
+  const nodeModules = path.join(daemonDir, 'node_modules');
+  const session = path.join(ROOT, 'packages', 'features', 'session');
+  const { dependencies } = readJson(path.join(bundle, 'package.json'));
+  copyDependencyClosure([
+    ...Object.keys(dependencies).map((name) => [name, name === 'better-sqlite3' ? path.join(ROOT, 'packages', 'execution') : session]),
+    ['@wrenyard/dsh-shell', session],
+  ], nodeModules);
+  pruneDependencyDevFiles(nodeModules);
+  pruneNativePackages(nodeModules);
 }
 // Build the Desktop bundle, then let electron-builder produce this platform's
 // installer(s). The artifact names are driven by WRENYARD_RELEASE_TRIPLET so no
@@ -302,14 +349,10 @@ export function packagedSeaPath(appDir, triplet = target.triplet) {
   if (!fs.existsSync(sea)) throw new Error(`assembled app is missing the bundled CLI: ${sea}`);
   return sea;
 }
-// Inherited daemon/source-dev pointers from a developer shell, `pnpm dev:desktop`
-// supervisor or a Foreman task must never reach the isolated smoke.
+// Inherited daemon pointers from a developer shell or a Wrenyard task must
+// never reach the isolated smoke.
 const INHERITED_SMOKE_KEYS = [
-  'WRENYARD_ROOT', 'WRENYARD_CLI', 'WRENYARD_NODE_BIN', 'WRENYARD_IPC_PATH',
-  'FOREMAN_IPC_PATH', 'FOREMAN_PET_FOREMAN_IPC', 'WRENYARD_SOURCE_DEV',
-  'WRENYARD_DEV_SUPERVISED', 'WRENYARD_SOURCE_CHECKOUT', 'WRENYARD_DESKTOP_BIN',
-  'WRENYARD_DESKTOP_USER_DATA', 'WRENYARD_USER_DATA', 'WRENYARD_DEV_INSTANCE_ID',
-  'WRENYARD_DEV_LAUNCH_ID', 'WRENYARD_DEV_CONTROL', 'FOREMAN_TASK_RUN_ID',
+  'WRENYARD_IPC_PATH', 'FOREMAN_TASK_RUN_ID',
   'FOREMAN_DB_PATH', 'FOREMAN_OPENCODE_BIN', 'HOST', 'PORT',
 ];
 // Isolated HOME/XDG dirs plus a private config with an explicit IPC path, so the
@@ -350,7 +393,6 @@ function isolatedSmokeEnv(homeDir) {
     WRENYARD_WORKSPACE: workspaceRoot,
     WRENYARD_TEST_WORK_DIR: workspaceRoot,
   };
-  // A dev.lock lookup must see the isolated state, never the developer's.
   for (const key of INHERITED_SMOKE_KEYS) delete env[key];
   return env;
 }
@@ -456,7 +498,7 @@ async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wrenyard-pack-'));
   try {
     const sea = buildSea(tmp);
-    deployControlTree(tmp);
+    stageDaemon(STAGE_DIR);
     writeStage(STAGE_DIR, version, sea);
     assertNoSymlinks(STAGE_DIR, 'payload');
     assertSingleSuiteMarker(STAGE_DIR);

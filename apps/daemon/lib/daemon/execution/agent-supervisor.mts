@@ -1739,9 +1739,9 @@ export function resolveTaskAgentEnv(
  * when the bundled executable is absent, so nothing changes outside an
  * installed suite and a missing/ambiguous suite root is never fatal.
  */
-function bundledCliDirectory(env: NodeJS.ProcessEnv): string | undefined {
+function bundledCliDirectory(): string | undefined {
   try {
-    const suiteRoot = resolveWrenyardSuiteRoot({ env })
+    const suiteRoot = resolveWrenyardSuiteRoot()
     const executable = process.platform === 'win32'
       ? join(suiteRoot, 'wrenyard.exe')
       : join(suiteRoot, 'wrenyard')
@@ -1759,7 +1759,7 @@ function bundledCliDirectory(env: NodeJS.ProcessEnv): string | undefined {
  * directory is never duplicated, and an empty PATH becomes just the directory.
  */
 function prependBundledCliToPath(env: NodeJS.ProcessEnv): void {
-  const directory = bundledCliDirectory(env)
+  const directory = bundledCliDirectory()
   if (!directory) return
   const key = Object.keys(env).find((name) => name.toLowerCase() === 'path') ?? 'PATH'
   const existing = env[key]

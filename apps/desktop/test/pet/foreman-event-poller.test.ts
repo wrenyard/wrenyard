@@ -471,7 +471,7 @@ describe('ForemanEventPoller', () => {
     expect(seen[0].meta.foremanTaskRunID).toBe('task_a1b99341');
   });
 
-  it('resolves the Wrenyard IPC path from WRENYARD_IPC_PATH, legacy Foreman env, then the daemon platform default', () => {
+  it('resolves the Wrenyard IPC path from WRENYARD_IPC_PATH, otherwise the daemon platform default', () => {
     expect(resolveForemanIpcPath({
       WRENYARD_IPC_PATH: '/tmp/wrenyard.sock',
       FOREMAN_IPC_PATH: '/tmp/foreman.sock',
@@ -479,10 +479,8 @@ describe('ForemanEventPoller', () => {
     })).toBe('/tmp/wrenyard.sock');
     expect(resolveForemanIpcPath({
       FOREMAN_IPC_PATH: '/tmp/foreman.sock',
-    })).toBe('/tmp/foreman.sock');
-    expect(resolveForemanIpcPath({
       FOREMAN_PET_FOREMAN_IPC: '/tmp/pet.sock',
-    })).toBe('/tmp/pet.sock');
+    })).toBe(process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock');
     expect(resolveForemanIpcPath({
       WRENYARD_IPC_PATH: '',
       FOREMAN_IPC_PATH: ' ',

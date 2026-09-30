@@ -663,13 +663,14 @@ test('workspace-doc IPC errors (e.g. expectedContent CAS conflict) propagate as 
   ipcServer.close();
 });
 
-test('wrenyardIpcPath prefers non-blank overrides, then uses the daemon platform default', () => {
+test('wrenyardIpcPath prefers non-blank WRENYARD_IPC_PATH, then uses the daemon platform default', () => {
   assert.equal(
     wrenyardIpcPath({ WRENYARD_IPC_PATH: '/run/wrenyard.sock', FOREMAN_IPC_PATH: '/run/foreman.sock' }),
     '/run/wrenyard.sock',
   );
-  assert.equal(wrenyardIpcPath({ FOREMAN_IPC_PATH: '/run/foreman.sock' }), '/run/foreman.sock');
-  assert.equal(wrenyardIpcPath({ WRENYARD_IPC_PATH: ' ', FOREMAN_IPC_PATH: '' }),
+  assert.equal(wrenyardIpcPath({ FOREMAN_IPC_PATH: '/run/foreman.sock' }),
+    process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock');
+  assert.equal(wrenyardIpcPath({ WRENYARD_IPC_PATH: ' ' }),
     process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock');
 });
 

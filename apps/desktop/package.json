@@ -5,12 +5,13 @@
   "description": "Wrenyard Desktop product shell for daemon features and its in-process Pet companion.",
   "license": "MIT",
   "type": "module",
-  "main": "dist/main.js",
+  "main": "dist/main/index.js",
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "node tools/build.mjs",
+    "build": "node tools/clean-dist.mjs && electron-vite build",
+    "dev": "electron-vite dev --watch",
     "test": "node tools/pet/renderer-cleanup-scan.mjs && node --test tools/convert-settings.test.mjs && tsx --test test/*.test.ts && vitest run",
     "icon": "node tools/render-app-icon.mjs",
     "pet:preview:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb tools/pet/scripts/preview-capture.mjs",
@@ -18,27 +19,30 @@
     "convert:settings": "node tools/convert-settings.mjs"
   },
   "dependencies": {
-    "@wrenyard/control-client": "workspace:*",
+    "@wrenyard/auto-routing": "workspace:*",
     "@wrenyard/clients": "workspace:*",
-    "@wrenyard/protocol": "workspace:*",
+    "@wrenyard/control-client": "workspace:*",
     "@wrenyard/models": "workspace:*",
+    "@wrenyard/protocol": "workspace:*",
     "@wrenyard/providers": "workspace:*",
-    "js-tiktoken": "1.0.21",
-    "@wrenyard/auto-routing": "workspace:*"
+    "js-tiktoken": "1.0.21"
   },
   "devDependencies": {
-    "@wrenyard/session-v2": "workspace:*",
     "@types/node": "^22.15.0",
-    "electron": "^39.8.10",
-    "electron-builder": "^26.0.12",
-    "esbuild": "^0.25.0",
-    "pixi.js": "^8.0.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.8.3",
-    "vitest": "^3.2.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "@wrenyard/session-v2": "workspace:*",
+    "electron": "^39.8.10",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "5.0.0",
+    "esbuild": "^0.25.0",
+    "pixi.js": "^8.0.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3",
+    "vite": "6.4.3",
+    "vitest": "^3.2.6"
   }
 }

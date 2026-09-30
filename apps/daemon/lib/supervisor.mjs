@@ -1,5 +1,5 @@
 // Minimal daemon subprocess supervisor shared by the Desktop wrapper and
-// tools/dev. It owns exactly one foreground `daemon run` child: spawn, readiness
+// scripts/dev.ts. It owns exactly one foreground `daemon run` child: spawn, readiness
 // (the `ready` IPC message or a live `health.ping`), graceful shutdown over the
 // shared version-checked control client, and awaited real exit. The exit
 // callback distinguishes an expected/normal exit from a crash.

@@ -17,8 +17,7 @@ const require = createRequire(import.meta.url);
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const captureBase = path.join(rootDir, 'artifacts', 'ui-review');
-const htmlDir = path.join(rootDir, 'dist', 'pet', 'renderer');
-const preloadDir = path.join(rootDir, 'dist', 'pet', 'preloads');
+const preloadDir = path.join(rootDir, 'dist', 'preload');
 const electronDataDir = path.join(captureBase, 'electron-user-data');
 
 // The owner is part of the Desktop main bundle, so the harness builds its own
@@ -28,12 +27,18 @@ fs.mkdirSync(captureBase, { recursive: true });
 const ownerBundlePath = path.join(captureBase, 'taskgraph-windows.cjs');
 await buildOwnerBundle();
 const { TaskGraphWindowOwner } = require(ownerBundlePath);
+const { createPageLoader } = require(path.join(captureBase, 'pages.cjs'));
+const pageLoader = createPageLoader({ appPath: rootDir, packaged: true, env: {} });
 
 async function buildOwnerBundle() {
   const { build } = await import('esbuild');
   await build({
-    entryPoints: [path.join(rootDir, 'src', 'main', 'windows', 'taskgraph-windows.ts')],
-    outfile: ownerBundlePath,
+    entryPoints: {
+      'taskgraph-windows': path.join(rootDir, 'src', 'main', 'windows', 'taskgraph-windows.ts'),
+      pages: path.join(rootDir, 'src', 'pages.ts'),
+    },
+    outdir: captureBase,
+    outExtension: { '.js': '.cjs' },
     bundle: true,
     platform: 'node',
     format: 'cjs',
@@ -399,7 +404,7 @@ function findAnyGraphSlipWindow() {
     if (w.isDestroyed()) continue;
     try {
       var url = w.webContents.getURL();
-      if (url.includes('graph-slip.html')) return w;
+      if (url.includes('/pet/panels/observatory/')) return w;
     } catch (_) { /* ignore */ }
   }
   return null;
@@ -412,7 +417,7 @@ function findAnyTranscriptWindow() {
     if (w.isDestroyed()) continue;
     try {
       var url = w.webContents.getURL();
-      if (url.includes('transcript.html')) return w;
+      if (url.includes('/pet/panels/transcript/')) return w;
     } catch (_) { /* ignore */ }
   }
   return null;
@@ -1135,7 +1140,7 @@ function createOwner(client) {
   currentClient = client;
   currentOwner = new TaskGraphWindowOwner({
     daemonClient: client,
-    htmlDir: htmlDir,
+    pageLoader,
     preloadDir: preloadDir,
     getHouseWindow: function () { return null; },
     stayHidden: true,
@@ -2487,11 +2492,11 @@ async function runSecurityChecks() {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        preload: path.join(preloadDir, 'entity-preload.js'),
+        preload: path.join(preloadDir, 'entity.cjs'),
       },
     });
     foreignWin.setBounds({ x: 400, y: 400 });
-    await foreignWin.loadFile(path.join(htmlDir, 'entity.html'));
+    await pageLoader.load(foreignWin, 'entity');
 
     // Wait for full page load — entityReady must NOT be set since getState returns null for unowned
     var hasEntityReady = await foreignWin.webContents.executeJavaScript(
@@ -2505,7 +2510,7 @@ async function runSecurityChecks() {
     function countGraphSlips() {
       return BrowserWindow.getAllWindows().filter(function(w) {
         if (w.isDestroyed()) return false;
-        try { return w.webContents.getURL().includes('graph-slip.html'); }
+        try { return w.webContents.getURL().includes('/pet/panels/observatory/'); }
         catch (_) { return false; }
       }).length;
     }
@@ -2553,7 +2558,7 @@ async function runSecurityChecks() {
     function countTranscripts() {
       return BrowserWindow.getAllWindows().filter(function(w) {
         if (w.isDestroyed()) return false;
-        try { return w.webContents.getURL().includes('transcript.html'); }
+        try { return w.webContents.getURL().includes('/pet/panels/transcript/'); }
         catch (_) { return false; }
       }).length;
     }

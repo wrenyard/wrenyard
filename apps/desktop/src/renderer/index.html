@@ -5,13 +5,11 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none';" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>啾啾工坊</title>
-    <link rel="stylesheet" href="./app.css" />
-    <link rel="stylesheet" href="./session-v2.css" />
   </head>
   <body>
     <nav class="activity-bar" aria-label="啾啾工坊功能">
       <button class="activity-brand" id="about-trigger" type="button" aria-label="关于啾啾工坊">
-        <img class="app-icon" src="./icon-256.png" alt="" />
+        <img class="app-icon" src="../../resources/icon-256.png" alt="" />
       </button>
       <button class="activity-item is-selected" id="workbench-nav" type="button" aria-label="会话" aria-current="page" data-page="workbench">
         <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -94,7 +92,7 @@
           </header>
           <div class="conversation-feed" id="conversation-feed" aria-live="polite">
             <div class="conversation-welcome" id="conversation-welcome">
-              <img src="./icon-256.png" alt="" />
+              <img src="../../resources/icon-256.png" alt="" />
               <p class="eyebrow">THE WRENYARD WORKSHOP</p>
               <h2>今天想让工坊做些什么？</h2>
             </div>
@@ -475,7 +473,7 @@
     </main>
     <div class="workspace-gate" id="workspace-gate" hidden>
       <div class="workspace-gate-card" role="dialog" aria-modal="true" aria-labelledby="workspace-gate-title">
-        <img src="./icon-256.png" alt="" />
+        <img src="../../resources/icon-256.png" alt="" />
         <p class="eyebrow">WORKSPACE REQUIRED</p>
         <h2 id="workspace-gate-title">先为工坊安一个家</h2>
         <p id="workspace-gate-message">会话必须绑定一个 Wrenyard workspace。配置完成前，聊天功能不会启动。</p>
@@ -497,7 +495,7 @@
 
     <div class="about-dialog-backdrop" id="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-dialog-title" aria-hidden="true" hidden>
       <div class="about-dialog-card">
-        <img class="about-dialog-icon" src="./icon-256.png" alt="" />
+        <img class="about-dialog-icon" src="../../resources/icon-256.png" alt="" />
         <p class="eyebrow">WRENYARD WORKSHOP</p>
         <h2 id="about-dialog-title">关于啾啾工坊</h2>
         <div class="about-dialog-rows">
@@ -512,7 +510,7 @@
         </div>
       </div>
     </div>
-    <script src="./session-v2.js"></script>
-    <script src="./app.js"></script>
+    <script type="module" src="./session-v2/main.tsx"></script>
+    <script type="module" src="./app.ts"></script>
   </body>
 </html>

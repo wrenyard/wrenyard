@@ -16,16 +16,16 @@ let oldWorkspace: string | undefined
 let workspaceRoots: string[] = []
 
 beforeEach(() => {
-  oldWorkspace = process.env.FOREMAN_WORKSPACE
-  delete process.env.FOREMAN_WORKSPACE
+  oldWorkspace = process.env.WRENYARD_WORKSPACE
+  delete process.env.WRENYARD_WORKSPACE
   workspaceRoots = []
 })
 
 afterEach(() => {
   if (oldWorkspace === undefined) {
-    delete process.env.FOREMAN_WORKSPACE
+    delete process.env.WRENYARD_WORKSPACE
   } else {
-    process.env.FOREMAN_WORKSPACE = oldWorkspace
+    process.env.WRENYARD_WORKSPACE = oldWorkspace
   }
 
   for (const workspaceRoot of workspaceRoots) {
@@ -39,7 +39,7 @@ function createWorkspaceWithProjectsDir(): string {
   const workspaceDir = mkdtempSync(join(tmpdir(), 'foreman-projects-'))
   const projectsDir = join(workspaceDir, 'projects')
   mkdirSync(projectsDir, { recursive: true })
-  process.env.FOREMAN_WORKSPACE = workspaceDir
+  process.env.WRENYARD_WORKSPACE = workspaceDir
   workspaceRoots.push(workspaceDir)
   return workspaceDir
 }
