@@ -1,8 +1,9 @@
 import { BookMarked, Brain, FileText } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { materialTitle } from '../model/describe.js';
-import type { ContextItem } from '../model/types.js';
-import { useInspector } from './inspector/Inspector.js';
+import { Item } from '@/renderer/components/ui/item';
+import { materialTitle } from '../../model/describe.js';
+import type { ContextItem } from '../../model/types.js';
+import { useInspector } from '../inspector/Inspector.js';
 
 function directory(path: string): string {
   const index = path.lastIndexOf('/');
@@ -28,21 +29,22 @@ export function ContextItems({ items, turnId, cycle }: ContextItemsProps) {
   return (
     <div className="flex flex-col gap-0.5">
       {items.map((item) => {
-        const button = (
-          <button
-            type="button"
+        const row = (
+          <Item
             key={item.key}
-            className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:bg-muted/50"
+            render={<button type="button" />}
+            size="xs"
+            className="gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:bg-muted/50"
             onClick={() => inspect({ kind: 'context', turnId, key: item.key, ...(cycle === undefined ? {} : { cycle }) })}
           >
             <KindIcon kind={item.kind} />
             <span className="truncate">{materialTitle(item)}</span>
             <span className="shrink-0 truncate text-muted-foreground">{directory(item.path)}</span>
-          </button>
+          </Item>
         );
         return item.reason
-          ? <Tooltip key={item.key}><TooltipTrigger render={button} /><TooltipContent side="top">{item.reason}</TooltipContent></Tooltip>
-          : button;
+          ? <Tooltip key={item.key}><TooltipTrigger render={row} /><TooltipContent side="top">{item.reason}</TooltipContent></Tooltip>
+          : row;
       })}
     </div>
   );

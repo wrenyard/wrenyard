@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'r
 import { ScrollArea } from '@/renderer/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/renderer/components/ui/tabs';
 import type { InspectorTarget, LedgerEvent, SessionModel } from '../../model/types.js';
-import { DetailPane } from './DetailPane.js';
+import { DetailPane } from './details/DetailPane.js';
 import { LedgerList } from './LedgerList.js';
 import { TurnTimeline } from './TurnTimeline.js';
 

@@ -58,11 +58,9 @@ export function SessionSidebar({ sessions, selectedId, loading, running, onSelec
                   <Item
                     key={session.sessionId}
                     size="xs"
-                    role="button"
-                    tabIndex={0}
+                    render={<button type="button" />}
                     className={cn('cursor-pointer', session.sessionId === selectedId && 'bg-muted')}
                     onClick={() => onSelect(session.sessionId)}
-                    onKeyDown={(event) => { if (event.key === 'Enter') onSelect(session.sessionId); }}
                   >
                     <ItemContent>
                       <ItemTitle className="gap-1.5">

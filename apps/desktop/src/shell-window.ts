@@ -536,6 +536,18 @@ export class ShellWindowController {
       if (typeof text !== 'string' || text.length > 4_000_000) throw new Error('复制文本无效');
       clipboard.writeText(text);
     });
+    ipcMain.handle(SHELL_CHANNELS.openExternal, async (event, url: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof url !== 'string' || url === '') throw new Error('无效链接');
+      let target: URL;
+      try {
+        target = new URL(url);
+      } catch {
+        throw new Error('无效链接');
+      }
+      if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new Error('不支持的链接协议');
+      await shell.openExternal(target.toString());
+    });
     ipcMain.handle(SHELL_CHANNELS.taskTranscript, async (event, taskRunId: unknown) => {
       assertShellSender(event.sender);
       if (typeof taskRunId !== 'string' || !/^task_[a-zA-Z0-9_-]{1,128}$/.test(taskRunId)) {
@@ -661,6 +673,7 @@ export class ShellWindowController {
       SHELL_CHANNELS.conversationSnapshot,
       SHELL_CHANNELS.conversationActivity,
       SHELL_CHANNELS.taskTranscript,
+      SHELL_CHANNELS.openExternal,
       SHELL_CHANNELS.conversationSelect,
       SHELL_CHANNELS.conversationCreate,
       SHELL_CHANNELS.conversationSelectModel,
