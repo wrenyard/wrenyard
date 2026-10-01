@@ -515,12 +515,6 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
-  packages/dsh-shell:
-    dependencies:
-      '@deepseek-ai/dsh-host-directory-picker':
-        specifier: 0.1.1-rc.2
-        version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))
-
   packages/execution:
     dependencies:
       better-sqlite3:
@@ -731,37 +725,6 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
-  packages/features/session-v2:
-    dependencies:
-      '@wrenyard/control-client':
-        specifier: workspace:*
-        version: link:../../control-client
-      '@wrenyard/models':
-        specifier: workspace:*
-        version: link:../../models
-      '@wrenyard/providers':
-        specifier: workspace:*
-        version: link:../../providers
-      ajv:
-        specifier: ^8.17.1
-        version: 8.20.0
-      js-tiktoken:
-        specifier: 1.0.21
-        version: 1.0.21
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
   packages/models:
     devDependencies:
       '@types/node':
@@ -929,50 +892,6 @@ packages:
 
   '@cfworker/json-schema@4.1.1':
     resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
-
-  '@deepseek-ai/cordis-plugin-include@1.0.6':
-    resolution: {integrity: sha512-i1VXrZCbv6tk/iUgedCNjrxxArbWT3IvRZGB5sdqJ3ectnihivXXQbRZ8JJ73DSmAPvlMGmrbtjFAfm10yvXRg==}
-    peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.1
-      '@deepseek-ai/cordis-plugin-loader': ^1.0.2
-
-  '@deepseek-ai/cordis-plugin-loader@1.0.2':
-    resolution: {integrity: sha512-RIW9hoVyhYDWdCI9BsvtZccPde1ECLC4OAxupwowGTak78vwVTVdb3HezTSOK1Y1/Ax3Ru0LA1pYOB04CnTxIQ==}
-    peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.1
-      node-addon-require-builtin: ^0.1.4
-    peerDependenciesMeta:
-      node-addon-require-builtin:
-        optional: true
-
-  '@deepseek-ai/cordis@4.0.1':
-    resolution: {integrity: sha512-YBdskTU2Po1kru3GgcUWUbkTsPMA9LkSQDAY8rBkFJeajdgcQad3QPJZE26JyK99Xb6HaASvoXg2DSUTeN/0Nw==}
-    hasBin: true
-    peerDependencies:
-      '@deepseek-ai/cordis-plugin-include': ^1.0.6
-      '@deepseek-ai/cordis-plugin-loader': ^1.0.2
-    peerDependenciesMeta:
-      '@deepseek-ai/cordis-plugin-include':
-        optional: true
-      '@deepseek-ai/cordis-plugin-loader':
-        optional: true
-
-  '@deepseek-ai/cosmokit@1.8.2':
-    resolution: {integrity: sha512-muBOKtSrUKU5m/xpq8ZXWL6hQ/jgd4PhU2PqH97bcxIiLEJfNwZOGQEx4t/aS/GgxRAR+ra9pMHPMtTHU4sqqA==}
-
-  '@deepseek-ai/dsh-host-directory-picker@0.1.1-rc.2':
-    resolution: {integrity: sha512-m3puwS+bvJQ1eASdpEEwlQqKa9znhBSgtoSSI0GZN5VMynZVl7E31HMltENz3QC2Nd+C3bh7vNjrJFtumUDsLQ==}
-    peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.1
-      '@deepseek-ai/dsh-invariants': ^0.1.1-rc.2
-
-  '@deepseek-ai/dsh-invariants@0.1.1-rc.2':
-    resolution: {integrity: sha512-l+1Om/EDFyMjhgSuEx2WDLLA2fia/+ga9mBTCoT/MMslsnWaK5G0/lWwbwlTBSaJ6OfmYc3DuBgox8DbgIGHRQ==}
-    peerDependencies:
-      '@deepseek-ai/cordis': ^4.0.1
-
-  '@deepseek-ai/schemastery@3.18.1':
-    resolution: {integrity: sha512-Qn0FCSwCQnpnj6SB31I6i2sIKgKWnkbJM8O0EU91Gv2UsYVvtZTl6IA0sCwk2e2MZf5S8w5hpq9QkeVvK9qwxg==}
 
   '@dnd-kit/accessibility@3.1.1':
     resolution: {integrity: sha512-2P+YgaXF+gRsIihwwY1gCsQSYnu9Zyj2py8kY5fFvUM1qm2WA2u639R6YNVfU4GWr+ZM5mqEsfHZZLoRONbemw==}
@@ -3406,58 +3325,6 @@ packages:
     resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
     engines: {node: ^18 || ^20 || >= 21}
 
-  node-addon-native-custom-loader@0.1.4:
-    resolution: {integrity: sha512-DreegO6EoC1JHWYBv3j8Miwp2Zl/CyBeNyoeyCbnEdjyYFEulR4Gcb3wj9fXF7KMDY0ZJ5MWwHcXP8GVNyScnA==}
-    engines: {node: '>=20'}
-
-  node-addon-require-builtin-darwin-arm64@0.1.4:
-    resolution: {integrity: sha512-pqiTPbqlDKRIo8YKoWMjuFge4kyHbsdYkAcGW5MAVcJSCyU0M1hhpiLdWlvX753XKL3xlGeuPmv2NqTNRV0/hw==}
-    engines: {node: '>=20'}
-    cpu: [arm64]
-    os: [darwin]
-
-  node-addon-require-builtin-darwin-x64@0.1.4:
-    resolution: {integrity: sha512-i9oThh+w6d+H79YQuc3d3MZCx4YZ6aMWlQ0HYMgOTWvSRzppXmksa/xPV8O20G1gjpq5do/9/hgImixj3XIcjQ==}
-    engines: {node: '>=20'}
-    cpu: [x64]
-    os: [darwin]
-
-  node-addon-require-builtin-linux-arm64-gnu@0.1.4:
-    resolution: {integrity: sha512-qbmYtkiIFp7h1ZvYYHH0MGFQbc03OyvplkeS90j+t3VMomkRc/YwZ140WzVM3eYJYZ7XHq+s1GL5ZdFQFPUXBQ==}
-    engines: {node: '>=20'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
-
-  node-addon-require-builtin-linux-x64-gnu@0.1.4:
-    resolution: {integrity: sha512-4jC617+yOrYYuKgNmN2KMD722G6BICpjEzAcmzA3j5tt+zmey5M/c/z9JxqdjnNmU9CQWseBaJu/fGdbHZXSOg==}
-    engines: {node: '>=20'}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
-
-  node-addon-require-builtin-win32-arm64-msvc@0.1.4:
-    resolution: {integrity: sha512-4TW96aPR108R3RxJbUNLXU6FLTZ7n8fWtSpPbPtvYWXa9cXojvCMdH4BvrHM6W2M+Iu42nqMxRyylP3PeTjOmA==}
-    engines: {node: '>=20'}
-    cpu: [arm64]
-    os: [win32]
-
-  node-addon-require-builtin-win32-ia32-msvc@0.1.4:
-    resolution: {integrity: sha512-a3ZRkiMKaE7uRjI+H+Ic7dvhPIk0rW9mHV47IEiqJzoRZqnDp5JPjQfAnngu979HR59Ghy+mfexJ/kStBlP3eQ==}
-    engines: {node: '>=20 <23'}
-    cpu: [ia32]
-    os: [win32]
-
-  node-addon-require-builtin-win32-x64-msvc@0.1.4:
-    resolution: {integrity: sha512-EGx7AcJKB7fNxo/YHV32JTUg1Hetbdnh6uPaqPhklhyRSMM13/7hZK1pTACqMS9dwnR3Lakxl9HKG9/eAoIyyg==}
-    engines: {node: '>=20'}
-    cpu: [x64]
-    os: [win32]
-
-  node-addon-require-builtin@0.1.4:
-    resolution: {integrity: sha512-yuXz43GmtQyMrO75u2Z8KZAafMhnMH8RTOZBJWGDU9HoD2QxT6q4PF28iLNm/OS9BkS8MHwCKpgTk3d6qW584A==}
-    engines: {node: '>=20'}
-
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
 
@@ -4446,47 +4313,6 @@ snapshots:
       '@types/react': 19.3.0
 
   '@cfworker/json-schema@4.1.1': {}
-
-  '@deepseek-ai/cordis-plugin-include@1.0.6(@deepseek-ai/cordis-plugin-loader@1.0.2)(@deepseek-ai/cordis@4.0.1)':
-    dependencies:
-      '@deepseek-ai/cordis': 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
-      '@deepseek-ai/cordis-plugin-loader': 1.0.2(@deepseek-ai/cordis@4.0.1)(node-addon-require-builtin@0.1.4)
-      '@deepseek-ai/cosmokit': 1.8.2
-      js-yaml: 4.3.2
-    optional: true
-
-  '@deepseek-ai/cordis-plugin-loader@1.0.2(@deepseek-ai/cordis@4.0.1)(node-addon-require-builtin@0.1.4)':
-    dependencies:
-      '@deepseek-ai/cordis': 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
-      '@deepseek-ai/cosmokit': 1.8.2
-    optionalDependencies:
-      node-addon-require-builtin: 0.1.4
-    optional: true
-
-  '@deepseek-ai/cordis@4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)':
-    dependencies:
-      '@deepseek-ai/cosmokit': 1.8.2
-      '@standard-schema/spec': 1.1.0
-    optionalDependencies:
-      '@deepseek-ai/cordis-plugin-include': 1.0.6(@deepseek-ai/cordis-plugin-loader@1.0.2)(@deepseek-ai/cordis@4.0.1)
-      '@deepseek-ai/cordis-plugin-loader': 1.0.2(@deepseek-ai/cordis@4.0.1)(node-addon-require-builtin@0.1.4)
-
-  '@deepseek-ai/cosmokit@1.8.2': {}
-
-  '@deepseek-ai/dsh-host-directory-picker@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))':
-    dependencies:
-      '@deepseek-ai/cordis': 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
-      '@deepseek-ai/dsh-invariants': 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)
-
-  '@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)':
-    dependencies:
-      '@deepseek-ai/cordis': 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
-      '@deepseek-ai/schemastery': 3.18.1
-
-  '@deepseek-ai/schemastery@3.18.1':
-    dependencies:
-      '@deepseek-ai/cosmokit': 1.8.2
-      '@standard-schema/spec': 1.1.0
 
   '@dnd-kit/accessibility@3.1.1(react@19.3.0)':
     dependencies:
@@ -7025,57 +6851,6 @@ snapshots:
       semver: 7.8.5
 
   node-addon-api@8.9.2: {}
-
-  node-addon-native-custom-loader@0.1.4:
-    optional: true
-
-  node-addon-require-builtin-darwin-arm64@0.1.4:
-    dependencies:
-      node-addon-native-custom-loader: 0.1.4
-    optional: true
-
-  node-addon-require-builtin-darwin-x64@0.1.4:
-    dependencies:
-      node-addon-native-custom-loader: 0.1.4
-    optional: true
-
-  node-addon-require-builtin-linux-arm64-gnu@0.1.4:
-    dependencies:
-      node-addon-native-custom-loader: 0.1.4
-    optional: true
-
-  node-addon-require-builtin-linux-x64-gnu@0.1.4:
-    dependencies:
-      node-addon-native-custom-loader: 0.1.4
-    optional: true
-
-  node-addon-require-builtin-win32-arm64-msvc@0.1.4:
-    dependencies:
-      node-addon-native-custom-loader: 0.1.4
-    optional: true
-
-  node-addon-require-builtin-win32-ia32-msvc@0.1.4:
-    dependencies:
-      node-addon-native-custom-loader: 0.1.4
-    optional: true
-
-  node-addon-require-builtin-win32-x64-msvc@0.1.4:
-    dependencies:
-      node-addon-native-custom-loader: 0.1.4
-    optional: true
-
-  node-addon-require-builtin@0.1.4:
-    dependencies:
-      node-addon-native-custom-loader: 0.1.4
-    optionalDependencies:
-      node-addon-require-builtin-darwin-arm64: 0.1.4
-      node-addon-require-builtin-darwin-x64: 0.1.4
-      node-addon-require-builtin-linux-arm64-gnu: 0.1.4
-      node-addon-require-builtin-linux-x64-gnu: 0.1.4
-      node-addon-require-builtin-win32-arm64-msvc: 0.1.4
-      node-addon-require-builtin-win32-ia32-msvc: 0.1.4
-      node-addon-require-builtin-win32-x64-msvc: 0.1.4
-    optional: true
 
   node-api-version@0.2.1:
     dependencies:
