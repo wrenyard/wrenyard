@@ -94,11 +94,13 @@ class Recorder {
     this.ffmpeg = spawn('ffmpeg', [
       '-hide_banner', '-loglevel', 'error', '-y',
       '-f', 'rawvideo', '-pix_fmt', 'bgra', '-s', `${size.width}x${size.height}`, '-r', String(fps), '-i', 'pipe:0',
-      '-c:v', 'libx264', '-preset', 'medium', '-crf', '12', '-pix_fmt', 'yuv420p', file,
+      '-vf', 'crop=trunc(iw/2)*2:trunc(ih/2)*2',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '14', '-pix_fmt', 'yuv420p', file,
     ], { stdio: ['pipe', 'inherit', 'inherit'] });
     const done = new Promise((resolveDone, reject) => {
       this.ffmpeg.on('exit', (code) => (code === 0 ? resolveDone() : reject(new Error(`ffmpeg exited ${code}`))));
     });
+    this.ffmpeg.stdin.on('error', () => {});
     this.finished = done;
     let next = performance.now();
     const tick = () => {
@@ -162,8 +164,17 @@ function createContext(win, recorder) {
 
   async function target(spec) {
     if (typeof spec === 'object' && spec !== null && 'x' in spec) return spec;
-    if (typeof spec === 'object' && spec !== null && 'text' in spec) return byText(spec.text, spec.scope);
-    return rect(spec);
+    // Popovers and pages animate in; poll briefly before giving up.
+    const deadline = Date.now() + 4000;
+    for (;;) {
+      try {
+        if (typeof spec === 'object' && spec !== null && 'text' in spec) return await byText(spec.text, spec.scope);
+        return await rect(spec);
+      } catch (error) {
+        if (Date.now() > deadline) throw error;
+        await sleep(150);
+      }
+    }
   }
 
   async function moveTo(spec, ms = 650) {
