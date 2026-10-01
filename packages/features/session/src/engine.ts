@@ -44,7 +44,8 @@ import {
 } from './actions.ts';
 
 export const MAX_CYCLES = 10;
-const PROGRESS_MERGE_MS = 3000;
+/** Output-token allowance for the single final reply call. */
+const REPLY_MAX_TOKENS = 800;
 
 // ─── Public host and session surface ───────────────────────────────────────
 
@@ -219,7 +220,7 @@ export interface SelectViewInput {
 }
 
 export interface ReplyViewInput {
-  phase: 'progress' | 'final';
+  phase: 'final';
   snapshot: WorkspaceSnapshot;
   events: LedgerEvent[];
   userText: string;
@@ -285,6 +286,8 @@ export interface CallRunRequest {
   layers: Record<string, number>;
   /** Required for the `reason` role; ignored for every other role. */
   reason?: { provider: string; model: string; reasoningEffort?: string };
+  /** Output-token cap forwarded to the wire `max_tokens` when the driver supports it. */
+  maxTokens?: number;
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
@@ -412,12 +415,8 @@ interface TurnRuntime {
   /** Blocks being parsed/started; separate from the executions they spawn. */
   parsePromises: Set<Promise<void>>;
   actionPromises: Set<Promise<void>>;
-  /** Serializes progress and final replies so they never interleave. */
-  replyChain: Promise<void>;
   cycleText: string;
   taskRunIds: Set<string>;
-  progressTimer?: ReturnType<typeof setTimeout>;
-  progressPending: boolean;
 }
 
 interface SessionRuntime {
@@ -850,10 +849,8 @@ class Engine implements Session {
       actionSeq: 0,
       parsePromises: new Set(),
       actionPromises: new Set(),
-      replyChain: Promise.resolve(),
       cycleText: '',
       taskRunIds: new Set(),
-      progressPending: false,
     };
   }
 
@@ -887,20 +884,7 @@ class Engine implements Session {
         }
 
         turn.phase = 'acting';
-        // Reasoning ended and every block is parsed: the started actions are
-        // visible now, so send one progress reply before waiting on executions.
-        if (turn.actionsThisCycle > 0) this.scheduleProgress(session, turn, true);
         await this.awaitCycleActions(turn);
-        if (turn.finished) return;
-        if (turn.progressTimer) {
-          clearTimeout(turn.progressTimer);
-          turn.progressTimer = undefined;
-        }
-        if (turn.progressPending) {
-          turn.progressPending = false;
-          this.scheduleProgress(session, turn, true);
-        }
-        await turn.replyChain;
         if (turn.finished) return;
 
         if (cycle === MAX_CYCLES) {
@@ -1309,7 +1293,6 @@ class Engine implements Session {
       },
       outcome.deferred,
     );
-    if (!turn.finished) this.scheduleProgress(session, turn, false);
   }
 
   private async awaitParses(turn: TurnRuntime): Promise<void> {
@@ -1382,61 +1365,6 @@ class Engine implements Session {
 
   // ── replies ─────────────────────────────────────────────────────────────
 
-  private scheduleProgress(session: SessionRuntime, turn: TurnRuntime, immediate: boolean): void {
-    // Never before the cycle's reasoning has completed, never after the final.
-    if (!turn.reasonCompleted) return;
-    if (turn.finished || turn.phase === 'replying' || turn.phase === 'terminal') return;
-    if (immediate) {
-      this.track(this.chainReply(turn, () => this.runProgressReply(session, turn)));
-      return;
-    }
-    turn.progressPending = true;
-    if (turn.progressTimer) return;
-    turn.progressTimer = setTimeout(() => {
-      turn.progressTimer = undefined;
-      const pending = turn.progressPending;
-      turn.progressPending = false;
-      if (!pending) return;
-      if (turn.finished || turn.phase === 'replying' || turn.phase === 'terminal') return;
-      this.track(this.chainReply(turn, () => this.runProgressReply(session, turn)));
-    }, PROGRESS_MERGE_MS);
-    turn.progressTimer.unref?.();
-  }
-
-  /** Serialize replies per turn so progress and final never interleave. */
-  private chainReply(turn: TurnRuntime, task: () => Promise<void>): Promise<void> {
-    const run = turn.replyChain.then(task, task);
-    turn.replyChain = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  }
-
-  private async runProgressReply(session: SessionRuntime, turn: TurnRuntime): Promise<void> {
-    if (turn.finished || turn.phase === 'terminal' || !turn.reasonCompleted) return;
-    const cycle = turn.cycle;
-    const context = this.turnViewContext(session, turn);
-    const view = this.ports.views.reply({
-      phase: 'progress',
-      snapshot: session.snapshot,
-      events: this.ports.ledger.read(session.sessionId),
-      userText: turn.userText,
-      session: context.session,
-      runningTurns: context.runningTurns,
-    });
-    const outcome = await this.invoke(session, turn, 'reply', view);
-    if (turn.finished || turn.phase === 'replying' || turn.abort.signal.aborted) return;
-    await this.ports.ledger.append(session.sessionId, {
-      type: 'reply',
-      turn: turn.turn,
-      cycle,
-      phase: 'progress',
-      text: outcome.ok ? outcome.text : '工作仍在处理中，暂时无法生成进展说明。',
-      callId: outcome.callId,
-    });
-  }
-
   private async finishReply(
     session: SessionRuntime,
     turn: TurnRuntime,
@@ -1444,16 +1372,12 @@ class Engine implements Session {
     error: string | undefined,
   ): Promise<void> {
     if (turn.finished || turn.abort.signal.aborted) return;
-    if (turn.progressTimer) {
-      clearTimeout(turn.progressTimer);
-      turn.progressTimer = undefined;
-    }
     turn.phase = 'replying';
 
     let text: string | undefined;
     let callId: string | undefined;
     if (status !== 'interrupted') {
-      await this.chainReply(turn, async () => {
+      await (async () => {
         const context = this.turnViewContext(session, turn);
         const view = this.ports.views.reply({
           phase: 'final',
@@ -1465,12 +1389,12 @@ class Engine implements Session {
           status,
           ...(error === undefined ? {} : { error }),
         });
-        const outcome = await this.invoke(session, turn, 'reply', view);
+        const outcome = await this.invoke(session, turn, 'reply', view, { maxTokens: REPLY_MAX_TOKENS });
         if (outcome.ok) {
           text = outcome.text;
           callId = outcome.callId;
         }
-      }).catch(() => undefined);
+      })().catch(() => undefined);
     }
 
     // An interrupt that landed while the final reply was in flight owns the end.
@@ -1674,6 +1598,7 @@ class Engine implements Session {
       reason?: { provider: string; model: string; reasoningEffort?: string };
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
+      maxTokens?: number;
     } = {},
   ): Promise<{ ok: boolean; callId: string; text: string; error?: string }> {
     const callId = `c${turn.turn}.${++session.callSeq}`;
@@ -1689,6 +1614,7 @@ class Engine implements Session {
         ...(extra.reason === undefined ? {} : { reason: extra.reason }),
         ...(extra.onText === undefined ? {} : { onText: extra.onText }),
         ...(extra.onReasoning === undefined ? {} : { onReasoning: extra.onReasoning }),
+        ...(extra.maxTokens === undefined ? {} : { maxTokens: extra.maxTokens }),
       });
       return { ok: true, callId, text: result.text };
     } catch (error) {

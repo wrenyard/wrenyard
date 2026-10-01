@@ -33,6 +33,8 @@ export interface DriverRequest {
   messages: readonly ModelMessage[];
   /** Public thinking level; forwarded as the wire reasoning-effort parameter. */
   reasoningEffort?: string;
+  /** Optional output-token cap; forwarded as the wire `max_tokens` when set. */
+  maxTokens?: number;
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
@@ -85,6 +87,7 @@ export function createGatewayDriver(
         stream_options: { include_usage: true },
       };
       if (request.reasoningEffort) body[REASONING_EFFORT_FIELD] = request.reasoningEffort;
+      if (request.maxTokens !== undefined) body.max_tokens = request.maxTokens;
 
       let response: Response;
       try {
