@@ -1,8 +1,11 @@
 import { useRef, type ReactNode, type RefObject } from 'react';
 import { ArrowUp } from 'lucide-react';
-import { Button } from '@/renderer/components/ui/button';
-import { Textarea } from '@/renderer/components/ui/textarea';
-import { cn } from '@/renderer/lib/utils';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from '@/renderer/components/ui/input-group';
 
 export interface PromptInputProps {
   value: string;
@@ -12,7 +15,6 @@ export interface PromptInputProps {
   disabled?: boolean;
   submitDisabled?: boolean;
   toolbar?: ReactNode;
-  hint?: ReactNode;
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
   className?: string;
 }
@@ -30,7 +32,6 @@ export function PromptInput({
   disabled = false,
   submitDisabled = false,
   toolbar,
-  hint,
   textareaRef,
   className,
 }: PromptInputProps) {
@@ -43,38 +44,37 @@ export function PromptInput({
 
   return (
     <form
-      className={cn('rounded-xl border border-border bg-card p-2 shadow-sm', className)}
+      className={className}
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
     >
-      <Textarea
-        ref={textareaRef}
-        value={value}
-        placeholder={placeholder}
-        disabled={disabled}
-        rows={1}
-        className="field-sizing-content max-h-60 min-h-9 resize-none border-0 bg-transparent px-1.5 py-1.5 shadow-none focus-visible:ring-0 dark:bg-transparent"
-        onChange={(event) => onValueChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            submit();
-          }
-        }}
-        onCompositionStart={() => { composing.current = true; }}
-        onCompositionEnd={() => { composing.current = false; }}
-      />
-      <div className="mt-1 flex items-end justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">{toolbar}</div>
-        <div className="flex items-center gap-2">
-          {hint}
-          <Button type="submit" size="icon-sm" disabled={!canSubmit} aria-label="发送" title="发送">
+      <InputGroup>
+        <InputGroupTextarea
+          ref={textareaRef}
+          value={value}
+          placeholder={placeholder}
+          disabled={disabled}
+          rows={1}
+          className="max-h-60"
+          onChange={(event) => onValueChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={() => { composing.current = false; }}
+        />
+        <InputGroupAddon align="block-end">
+          <div className="flex min-w-0 items-center gap-1.5">{toolbar}</div>
+          <InputGroupButton type="submit" variant="default" size="icon-sm" className="ml-auto" disabled={!canSubmit} aria-label="发送" title="发送">
             <ArrowUp />
-          </Button>
-        </div>
-      </div>
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
     </form>
   );
 }

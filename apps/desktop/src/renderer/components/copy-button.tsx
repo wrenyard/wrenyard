@@ -2,17 +2,17 @@ import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { Button } from '@/renderer/components/ui/button';
 import { copyText } from '@/renderer/lib/desktop';
-import { cn } from '@/renderer/lib/utils';
+import { cn } from 'cn';
 
 export interface CopyButtonProps {
   text: string;
   className?: string;
   label?: string;
-  size?: 'icon-sm' | 'icon-xs' | 'icon';
+  size?: 'icon' | 'icon-sm';
 }
 
 /** Copies text through the desktop bridge, falling back to the clipboard API. */
-export function CopyButton({ text, className, label = '复制', size = 'icon-sm' }: CopyButtonProps) {
+export function CopyButton({ text, className, label = '复制', size = 'icon' }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
   const copy = (): void => {

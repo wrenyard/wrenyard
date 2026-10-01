@@ -9,15 +9,17 @@ import {
   ComboboxItem,
   ComboboxLabel,
   ComboboxList,
+  ComboboxTrigger,
+  ComboboxValue,
 } from '@/renderer/components/ui/combobox';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/renderer/components/ui/select';
-import { cn } from '@/renderer/lib/utils';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/renderer/components/ui/dropdown-menu';
+import { InputGroupButton } from '@/renderer/components/ui/input-group';
 
 export interface ModelOption {
   value: string;
@@ -64,13 +66,11 @@ export function ModelPicker({ models, value, onChange, disabled = false, placeho
       isItemEqualToValue={(a, b) => a.value === b.value}
       disabled={disabled}
     >
-      <ComboboxInput
-        placeholder={placeholder}
-        disabled={disabled}
-        showTrigger
-        className={cn('h-7 w-44', className)}
-      />
-      <ComboboxContent>
+      <ComboboxTrigger render={<InputGroupButton variant="ghost" className={className} />}>
+        <ComboboxValue>{(current) => current?.label ?? placeholder}</ComboboxValue>
+      </ComboboxTrigger>
+      <ComboboxContent side="top" className="min-w-64">
+        <ComboboxInput showTrigger={false} placeholder={placeholder} disabled={disabled} />
         <ComboboxEmpty>没有匹配的模型</ComboboxEmpty>
         <ComboboxList>
           {(group: { value: string; items: ModelOption[] }) => (
@@ -78,14 +78,7 @@ export function ModelPicker({ models, value, onChange, disabled = false, placeho
               <ComboboxLabel>{group.value}</ComboboxLabel>
               <ComboboxCollection>
                 {(option: ModelOption) => (
-                  <ComboboxItem key={option.value} value={option}>
-                    <span className="flex flex-col">
-                      <span>{option.label}</span>
-                      {option.description && (
-                        <span className="text-xs text-muted-foreground">{option.description}</span>
-                      )}
-                    </span>
-                  </ComboboxItem>
+                  <ComboboxItem key={option.value} value={option}>{option.label}</ComboboxItem>
                 )}
               </ComboboxCollection>
             </ComboboxGroup>
@@ -104,24 +97,27 @@ export interface EffortPickerProps {
 }
 
 /** Reasoning-effort picker. Renders nothing when the model has no levels. */
-export function EffortPicker({ levels, value, onChange, className }: EffortPickerProps) {
+export function EffortPicker({ levels, value, onChange }: EffortPickerProps) {
   if (levels.length === 0) return null;
   const options = [DEFAULT_VALUE, ...levels];
   const labelOf = (current: string): string => (current === DEFAULT_VALUE ? '默认' : current);
+  const current = value === '' ? DEFAULT_VALUE : value;
 
   return (
-    <Select
-      value={value === '' ? DEFAULT_VALUE : value}
-      onValueChange={(next) => onChange(next === DEFAULT_VALUE || next === null ? '' : String(next))}
-    >
-      <SelectTrigger size="sm" className={cn('h-7', className)} aria-label="推理强度">
-        <SelectValue>{(current) => labelOf(typeof current === 'string' ? current : DEFAULT_VALUE)}</SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        {options.map((option) => (
-          <SelectItem key={option} value={option}>{labelOf(option)}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<InputGroupButton variant="ghost" />}>
+        {labelOf(current)}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top">
+        <DropdownMenuRadioGroup
+          value={current}
+          onValueChange={(next) => onChange(next === DEFAULT_VALUE ? '' : String(next))}
+        >
+          {options.map((option) => (
+            <DropdownMenuRadioItem key={option} value={option}>{labelOf(option)}</DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

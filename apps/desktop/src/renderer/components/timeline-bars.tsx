@@ -1,6 +1,6 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { formatElapsedMs } from '@/renderer/lib/format';
-import { cn } from '@/renderer/lib/utils';
+import { cn } from 'cn';
 
 export interface TimelineRange {
   /** Epoch milliseconds. */
@@ -39,11 +39,11 @@ export interface TimelineBarsProps {
 const TONE_CLASS: Record<TimelineTone, string> = {
   primary: 'bg-primary',
   'primary-soft': 'bg-primary/25',
-  success: 'bg-[var(--moss)]',
-  warning: 'bg-[var(--lamp-deep)]',
+  success: 'bg-success',
+  warning: 'bg-warning',
   danger: 'bg-destructive',
-  muted: 'bg-muted-foreground/40',
-  neutral: 'bg-secondary-foreground/50',
+  muted: 'bg-muted-foreground',
+  neutral: 'bg-muted-foreground/40',
 };
 
 /** Background class for one timeline tone. */
@@ -104,7 +104,7 @@ export function TimelineBars({ range, now, lanes, onSelect, className }: Timelin
     <div className={cn('flex flex-col gap-2', className)}>
       <div className="grid grid-cols-[6.5rem_1fr] items-center gap-2" aria-hidden="true">
         <span />
-        <div className="relative h-3.5 text-[10px] leading-none text-muted-foreground tabular-nums">
+        <div className="relative text-muted-foreground tabular-nums" style={{ height: 14 }}>
           {ticks.map((tick) => (
             <span key={tick.ms} className="absolute top-0 -translate-x-1/2 whitespace-nowrap" style={{ left: `${tick.pct}%` }}>
               {formatTick(tick.ms)}
@@ -114,8 +114,8 @@ export function TimelineBars({ range, now, lanes, onSelect, className }: Timelin
       </div>
       {lanes.map((lane) => (
         <div key={lane.id} className="grid grid-cols-[6.5rem_1fr] items-center gap-2">
-          <span className="truncate text-xs text-muted-foreground">{lane.label}</span>
-          <div className="relative h-5 rounded-sm bg-muted/40">
+          <span className="truncate text-muted-foreground">{lane.label}</span>
+          <div className="relative rounded-sm bg-muted" style={{ height: 20 }}>
             {lane.bars.map((bar) => {
               const end = bar.end ?? cursor;
               const left = ((bar.start - range.start) / total) * 100;
@@ -125,7 +125,7 @@ export function TimelineBars({ range, now, lanes, onSelect, className }: Timelin
                   <TooltipTrigger
                     render={<button type="button" />}
                     className={cn(
-                      'absolute top-0 h-full rounded-sm outline-none transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring',
+                      'absolute top-0 h-full rounded-sm',
                       timelineToneClass(bar.tone),
                     )}
                     style={{ left: `${left}%`, width: `${width}%`, minWidth: 2 }}
@@ -134,7 +134,7 @@ export function TimelineBars({ range, now, lanes, onSelect, className }: Timelin
                   />
                   <TooltipContent side="top">
                     <div className="flex flex-col gap-0.5">
-                      <span className="font-medium">{bar.label}</span>
+                      <span>{bar.label}</span>
                       <span>
                         +{formatElapsedMs(Math.max(0, bar.start - range.start))}
                         {' · '}
@@ -148,8 +148,8 @@ export function TimelineBars({ range, now, lanes, onSelect, className }: Timelin
             })}
             {showNow && (
               <span
-                className="pointer-events-none absolute top-[-2px] bottom-[-2px] w-px bg-foreground/70"
-                style={{ left: `${((cursor - range.start) / total) * 100}%` }}
+                className="pointer-events-none absolute top-[-2px] bottom-[-2px] bg-foreground"
+                style={{ left: `${((cursor - range.start) / total) * 100}%`, width: 1 }}
                 aria-hidden="true"
               />
             )}

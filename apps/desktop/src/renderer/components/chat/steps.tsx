@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react';
-import { cn } from '@/renderer/lib/utils';
+import { Circle } from 'lucide-react';
+import { ItemMedia } from '@/renderer/components/ui/item';
+import { Separator } from '@/renderer/components/ui/separator';
+import { cn } from 'cn';
 
 export interface StepsProps {
   children: ReactNode;
@@ -23,14 +26,12 @@ export function Step({ title, icon, children, className }: StepProps) {
   return (
     <div className={cn('group/step flex gap-3', className)}>
       <div className="flex flex-col items-center self-stretch">
-        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-background text-muted-foreground ring-1 ring-border">
-          {icon}
-        </span>
-        <span className="mt-1 w-px flex-1 bg-border group-last/step:hidden" aria-hidden="true" />
+        <ItemMedia variant="icon" className="text-muted-foreground">{icon ?? <Circle />}</ItemMedia>
+        <Separator orientation="vertical" className="my-1 flex-1 group-last/step:hidden" />
       </div>
-      <div className="min-w-0 flex-1 pb-5 group-last/step:pb-0">
-        {title !== undefined && <span className="flex items-center gap-2 text-sm font-medium">{title}</span>}
-        <div className="pt-2">{children}</div>
+      <div className="mb-5 flex min-w-0 flex-1 flex-col gap-2 group-last/step:mb-0">
+        {title !== undefined && <div className="flex items-center gap-2">{title}</div>}
+        <div>{children}</div>
       </div>
     </div>
   );

@@ -2,7 +2,7 @@ import type { ComponentProps } from 'react';
 import { Streamdown, type Components } from 'streamdown';
 import { code } from '@streamdown/code';
 import { cjk } from '@streamdown/cjk';
-import { cn } from '@/renderer/lib/utils';
+import { cn } from 'cn';
 import { openExternal } from '@/renderer/lib/desktop';
 
 const PLUGINS = { code, cjk };
@@ -31,7 +31,6 @@ const COMPONENTS = { a: MarkdownLink } as Components;
 export interface MarkdownProps {
   children: string;
   streaming?: boolean;
-  size?: 'sm' | 'base';
   className?: string;
 }
 
@@ -39,7 +38,7 @@ export interface MarkdownProps {
  * Streamdown configured for the conversation surface: code + CJK plugins only,
  * no math or mermaid. Fenced code is highlighted with the JavaScript Shiki engine.
  */
-export function Markdown({ children, streaming = false, size = 'base', className }: MarkdownProps) {
+export function Markdown({ children, streaming = false, className }: MarkdownProps) {
   return (
     <Streamdown
       mode={streaming ? 'streaming' : 'static'}
@@ -48,7 +47,7 @@ export function Markdown({ children, streaming = false, size = 'base', className
       plugins={PLUGINS}
       shikiTheme={SHIKI_THEME}
       components={COMPONENTS}
-      className={cn('text-sm leading-relaxed', size === 'sm' && 'text-xs leading-normal', className)}
+      className={cn('text-sm', className)}
     >
       {children}
     </Streamdown>

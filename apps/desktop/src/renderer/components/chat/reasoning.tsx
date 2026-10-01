@@ -1,7 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { BrainCircuit, ChevronRight } from 'lucide-react';
+import { Button } from '@/renderer/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/components/ui/collapsible';
-import { cn } from '@/renderer/lib/utils';
+import { cn } from 'cn';
 
 export interface ReasoningProps {
   children: ReactNode;
@@ -23,14 +24,14 @@ export function Reasoning({ children, streaming = false, defaultOpen, title = 'æ
   }, [streaming]);
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className={cn('rounded-md border border-border/60', className)}>
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
-        <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
-        <BrainCircuit className="size-3.5" />
+    <Collapsible open={open} onOpenChange={setOpen} className={className}>
+      <CollapsibleTrigger render={<Button variant="ghost" />} className="w-full justify-start">
+        <ChevronRight className={cn(open && 'rotate-90')} />
+        <BrainCircuit />
         <span>{title}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="border-t border-border/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+        <div className="text-muted-foreground">
           {children}
         </div>
       </CollapsibleContent>

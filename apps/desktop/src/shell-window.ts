@@ -13,8 +13,6 @@ import {
   acceleratorPage,
   isShellPage,
   providerKeyPageUrl,
-  type ConversationSnapshot,
-  type ConversationActivityItem,
   type StatsSnapshot,
   type QuotaSnapshot,
   type SettingsSnapshot,
@@ -58,14 +56,7 @@ export interface ShellWindowOptions {
   requestInstall(onInstall?: () => void): Promise<UpdateSnapshot>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
-  getConversation(): Promise<ConversationSnapshot>;
-  getConversationActivity(): Promise<ConversationActivityItem[]>;
   openTaskTranscript(taskRunId: string): Promise<void>;
-  selectConversation(sessionId: string): Promise<ConversationSnapshot>;
-  createConversation(): Promise<ConversationSnapshot>;
-  selectConversationModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot>;
-  sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
-  cancelConversation(turnId?: string): Promise<ConversationSnapshot>;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
@@ -384,7 +375,7 @@ function validateExecEventsRequest(value: unknown): ExecEventsRequest {
 
 export class ShellWindowController {
   readonly window: BrowserWindow;
-  private page: ShellPage = 'workbench';
+  private page: ShellPage = 'session';
 
   private constructor(window: BrowserWindow, private readonly appVersion: string) {
     this.window = window;
@@ -397,7 +388,7 @@ export class ShellWindowController {
       minWidth: 760,
       minHeight: 520,
       show: false,
-      title: formatShellWindowTitle('workbench', options.appVersion),
+      title: formatShellWindowTitle('session', options.appVersion),
       backgroundColor: '#f7efd8',
       ...platformWindowChrome(process.platform),
       ...(options.icon ? { icon: options.icon } : {}),
@@ -437,12 +428,6 @@ export class ShellWindowController {
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.viewChanged, page);
       if (focus) this.window.webContents.focus();
-    }
-  }
-
-  notifyConversationChanged(): void {
-    if (!this.window.webContents.isDestroyed()) {
-      this.window.webContents.send(SHELL_CHANNELS.conversationChanged);
     }
   }
 
@@ -523,14 +508,6 @@ export class ShellWindowController {
       if (create !== undefined && create !== null && typeof create !== 'boolean') throw new Error('Workspace 创建参数无效');
       return options.saveWorkspace(path, create === true);
     });
-    ipcMain.handle(SHELL_CHANNELS.conversationSnapshot, async (event) => {
-      assertShellSender(event.sender);
-      return options.getConversation();
-    });
-    ipcMain.handle(SHELL_CHANNELS.conversationActivity, async (event) => {
-      assertShellSender(event.sender);
-      return options.getConversationActivity();
-    });
     ipcMain.handle(SHELL_CHANNELS.copyText, (event, text: unknown) => {
       assertShellSender(event.sender);
       if (typeof text !== 'string' || text.length > 4_000_000) throw new Error('复制文本无效');
@@ -554,40 +531,6 @@ export class ShellWindowController {
         throw new Error('任务运行 id 无效');
       }
       return options.openTaskTranscript(taskRunId);
-    });
-    ipcMain.handle(SHELL_CHANNELS.conversationSelect, async (event, sessionId: unknown) => {
-      assertShellSender(event.sender);
-      if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256) throw new Error('会话 id 无效');
-      return options.selectConversation(sessionId);
-    });
-    ipcMain.handle(SHELL_CHANNELS.conversationCreate, async (event) => {
-      assertShellSender(event.sender);
-      return options.createConversation();
-    });
-    ipcMain.handle(SHELL_CHANNELS.conversationSelectModel, async (event, provider: unknown, model: unknown, reasoningEffort: unknown) => {
-      assertShellSender(event.sender);
-      if (typeof provider !== 'string' || !provider || provider.length > 256) throw new Error('模型 provider 无效');
-      if (typeof model !== 'string' || !model || model.length > 512) throw new Error('模型 id 无效');
-      if (reasoningEffort !== undefined && (typeof reasoningEffort !== 'string' || !reasoningEffort || reasoningEffort.length > 128)) {
-        throw new Error('思考强度无效');
-      }
-      return options.selectConversationModel(provider, model, reasoningEffort as string | undefined);
-    });
-    ipcMain.handle(SHELL_CHANNELS.conversationSend, async (event, text: unknown, clientTimeZone: unknown) => {
-      assertShellSender(event.sender);
-      if (typeof text !== 'string') throw new Error('消息格式无效');
-      if (clientTimeZone !== undefined && typeof clientTimeZone !== 'string') throw new Error('时区格式无效');
-      return options.sendConversation(text, clientTimeZone);
-    });
-    ipcMain.handle(SHELL_CHANNELS.conversationCancel, async (event, turnId: unknown) => {
-      assertShellSender(event.sender);
-      if (turnId !== undefined && turnId !== null
-        && (typeof turnId !== 'string' || !turnId || turnId.length > 256)) {
-        throw new Error('会话回合 id 无效');
-      }
-      return options.cancelConversation(
-        turnId === undefined || turnId === null ? undefined : turnId,
-      );
     });
     ipcMain.handle(SHELL_CHANNELS.taskSettingsSnapshot, async (event, project: unknown, taskId: unknown) => {
       assertShellSender(event.sender);
@@ -670,15 +613,8 @@ export class ShellWindowController {
       SHELL_CHANNELS.requestInstall,
       SHELL_CHANNELS.savePetSettings,
       SHELL_CHANNELS.saveWorkspace,
-      SHELL_CHANNELS.conversationSnapshot,
-      SHELL_CHANNELS.conversationActivity,
       SHELL_CHANNELS.taskTranscript,
       SHELL_CHANNELS.openExternal,
-      SHELL_CHANNELS.conversationSelect,
-      SHELL_CHANNELS.conversationCreate,
-      SHELL_CHANNELS.conversationSelectModel,
-      SHELL_CHANNELS.conversationSend,
-      SHELL_CHANNELS.conversationCancel,
       SHELL_CHANNELS.taskSettingsSnapshot,
       SHELL_CHANNELS.taskSettingsSave,
       SHELL_CHANNELS.runtimeAliasSnapshot,

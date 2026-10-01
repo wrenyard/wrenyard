@@ -43,11 +43,32 @@ export function formatDateTime(value: string): string {
     + `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
 }
 
-/** `09-30 22:31`, the compact snapshot stamp shown under the session title. */
+/** `09-30 22:31`, the compact snapshot stamp shown in the session title card. */
 export function formatSnapshotStamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+/**
+ * Build-time stamp in the local timezone with second precision; `undefined`
+ * (or empty) renders as an em dash. An optional IANA timezone converts the
+ * displayed instant, and unparseable input stays inspectable verbatim.
+ */
+export function formatBuildTime(value: string | undefined, timeZone?: string): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    ...(timeZone ? { timeZone } : {}),
+  }).format(date);
 }
 
 function trimOneDecimal(value: number): string {
@@ -60,6 +81,11 @@ export function formatTokenCount(value: number | undefined): string {
   if (value < 1000) return String(value);
   if (value < 1_000_000) return `${trimOneDecimal(value / 1000)}k`;
   return `${trimOneDecimal(value / 1_000_000)}M`;
+}
+
+/** Grouped integer, e.g. `1,234`; used for the small counts in the title card. */
+export function formatCount(value: number): string {
+  return value.toLocaleString();
 }
 
 export type DateGroup = '今天' | '昨天' | '7 天内' | '更早';
@@ -80,14 +106,20 @@ export function dateGroupOf(value: string, now: number): DateGroup {
   return '更早';
 }
 
-/** Compact relative time for the sidebar row. */
-export function formatRelative(value: string, now: number): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return '—';
-  const delta = Math.max(0, now - timestamp);
-  if (delta < 60_000) return '刚刚';
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`;
-  if (dateGroupOf(value, now) === '今天') return `${Math.floor(delta / 3_600_000)} 小时前`;
-  const date = new Date(timestamp);
-  return `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+const WEEKDAY = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'] as const;
+
+/**
+ * Chat divider stamp: `今天 18:32`, `昨天 09:05`, `周二 14:20`, `9月30日 08:00`.
+ * The weekday form covers the last seven calendar days; older stamps fall back
+ * to the absolute month-day.
+ */
+export function formatDivider(value: string, now: number): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  const clock = `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  const days = Math.round((startOfDay(now) - startOfDay(date.getTime())) / 86_400_000);
+  if (days <= 0) return `今天 ${clock}`;
+  if (days === 1) return `昨天 ${clock}`;
+  if (days < 7) return `${WEEKDAY[date.getDay()]} ${clock}`;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
 }

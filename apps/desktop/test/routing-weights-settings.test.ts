@@ -7,7 +7,7 @@ import {
   parseRoutingWeightsInput,
   routingWeightsFromPercent,
   routingWeightsToPercent,
-} from '../src/renderer/routing-weights-settings.js';
+} from '../src/renderer/pages/settings/model/routing-weights.js';
 
 test('a missing override resolves to the defaults', () => {
   assert.deepEqual(routingWeightsToPercent(undefined), defaultRoutingWeightsPercent());

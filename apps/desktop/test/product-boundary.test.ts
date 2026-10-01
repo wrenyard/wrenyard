@@ -5,16 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-test('Desktop owns the product tray, Pet runtime, conversations, statistics and settings bridge', async () => {
-  const [main, tray, quotaMenuIcon, contract, renderer, rendererScript, rendererStyles, conversationRenderer, shellWindow, preload] = await Promise.all([
+test('Desktop owns the product tray, Pet runtime, sessions, statistics and settings bridge', async () => {
+  const [main, tray, quotaMenuIcon, contract, shellWindow, preload] = await Promise.all([
     readFile(join(desktopRoot, 'src', 'main.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'desktop-tray.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'quota-menu-icon.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'shell-contract.ts'), 'utf8'),
-    readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8'),
-    readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8'),
-    readFile(join(desktopRoot, 'src', 'renderer', 'app.css'), 'utf8'),
-    readFile(join(desktopRoot, 'src', 'renderer', 'conversation.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'shell-window.ts'), 'utf8'),
     readFile(join(desktopRoot, 'src', 'preload.ts'), 'utf8'),
   ]);
@@ -45,81 +41,14 @@ test('Desktop owns the product tray, Pet runtime, conversations, statistics and 
   assert.match(contract, /statsSnapshot/);
   assert.match(contract, /quotaSnapshot/);
   assert.match(contract, /saveProviderOrder/);
-  assert.match(contract, /conversationSnapshot/);
-  assert.match(renderer, /id="stats-page"/);
-  assert.match(renderer, /id="stats-heat-tooltip"/);
-  assert.doesNotMatch(renderer, /最近一年；每列一周|具名 Profile 的调度|按累计耗时排序/);
-  assert.match(renderer, /id="desktop-build-time"/);
-  assert.doesNotMatch(renderer, /stats-day-label|SQLite 权威汇总/);
-  assert.match(renderer, /id="quota-page"/);
-  assert.match(renderer, /id="quota-nav"[^>]+aria-label="模型供应"/);
-  assert.match(renderer, /id="quota-title">模型供应/);
-  assert.match(renderer, /模型供应/);
-  assert.match(renderer, /id="quota-provider-grid"/);
-  assert.doesNotMatch(renderer, /id="pet-provider-list"|settings-subtitle">额度来源/);
-  assert.doesNotMatch(rendererScript, /function renderProviders|function moveProvider/);
-  assert.match(rendererScript, /formatCompactTokenCount/);
-  assert.doesNotMatch(rendererScript, /cell\.title = tooltipLines/);
-  assert.match(rendererStyles, /grid-auto-flow: column/);
-  assert.match(rendererStyles, /grid-template-rows: repeat\(7,/);
-  assert.match(renderer, /id="provider-dialog"/);
-  assert.doesNotMatch(renderer, /id="models"/);
-  assert.match(renderer, /id="conversation-composer"/);
-  assert.match(renderer, /id="conversation-model-picker"/);
-  assert.match(conversationRenderer, /new SearchableSingleSelect\(this\.modelPickerHost/);
-  assert.doesNotMatch(renderer, /id="conversation-model-select"|<select[^>]+当前会话模型/);
-  assert.doesNotMatch(renderer, /<span>模型<\/span>/);
-  assert.match(renderer, /id="conversation-daemon-status"[^>]+role="status"/);
-  assert.match(renderer, /id="conversation-daemon-tooltip" role="tooltip"/);
-  assert.doesNotMatch(renderer, /可以开始/);
-  assert.doesNotMatch(conversationRenderer, /conversation-state|可以开始|工坊工作中/);
-  assert.doesNotMatch(conversationRenderer, /workspacePath\.split/);
-  assert.match(conversationRenderer, /createElement\('table'\)/);
-  assert.match(conversationRenderer, /createElement\('hr'\)/);
-  assert.match(conversationRenderer, /expandedItemIds/);
-  assert.match(conversationRenderer, /catalogProvider/);
-  // Keyboard navigation and disabled options are covered by the shared picker tests.
-  assert.match(conversationRenderer, /setQuotaSnapshot/);
-  assert.match(conversationRenderer, /modelSelect\.setOptions/);
-  assert.match(conversationRenderer, /modelSelect\.setDisabled/);
-  assert.doesNotMatch(conversationRenderer, /presentation\.indicators/);
-  assert.doesNotMatch(conversationRenderer, /setInterval|listProviders|configureProvider/);
-  assert.doesNotMatch(renderer, /conversation-model-trigger-signal/);
-  assert.doesNotMatch(rendererStyles, /i\.is-balance|i\.is-quota-plan|i\.is-pace-low|i\.is-quota-low|i\.is-quota-empty/);
-  assert.doesNotMatch(conversationRenderer, /pinnedToBottom \|\| snapshot\.selectedRunning/);
-  assert.match(rendererStyles, /::-webkit-scrollbar-thumb/);
-  assert.match(rendererStyles, /data-platform="win32"/);
+  // The retired DSH conversation bridge no longer exists in the contract.
+  assert.doesNotMatch(contract, /conversationSnapshot|conversationChanged|dshVersion/);
   assert.match(shellWindow, /platformWindowChrome/);
   assert.match(preload, /platform: process\.platform/);
-  assert.match(renderer, /id="workspace-gate"/);
-  assert.match(renderer, /id="workbench-nav"[^>]+aria-label="会话"/);
   assert.doesNotMatch(shellWindow, /WebContentsView/);
-  assert.match(renderer, /id="tasks-nav"[^>]+aria-label="任务" data-page="tasks"/);
-  assert.match(renderer, /id="tasks-page"/);
-  assert.doesNotMatch(renderer, /id="docs-nav"|id="docs-page"|id="docs-editor"|id="docs-file-list"|id="docs-unsaved-dialog"/);
   assert.doesNotMatch(preload, /listDocs|readDoc|saveDoc|setDocsDirty|WorkspaceDoc/);
   assert.doesNotMatch(shellWindow, /docsList|docsRead|docsSave|docsDirty|WorkspaceDoc/);
-});
-
-test('Task page owns an app-themed mode listbox and never regresses to a native select', async () => {
-  const [renderer, rendererScript] = await Promise.all([
-    readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8'),
-    readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8'),
-  ]);
-  // Task mode selection is the same application-themed listbox contract as the
-  // conversation model picker: an aria-haspopup trigger, a role=listbox, no native select.
-  assert.match(renderer, /id="tasks-mode-trigger"[^>]+aria-haspopup="listbox"/);
-  assert.match(renderer, /id="tasks-mode-list" role="listbox"/);
-  assert.doesNotMatch(renderer, /<select id="tasks-mode">/);
-  // The renderer carries the required pointer and keyboard outside-close behavior.
-  assert.match(rendererScript, /document\.addEventListener\('pointerdown'/);
-  assert.match(rendererScript, /event\.key === 'ArrowDown'/);
-  assert.match(rendererScript, /event\.key === 'ArrowUp'/);
-  assert.match(rendererScript, /event\.key === 'Home'/);
-  assert.match(rendererScript, /event\.key === 'End'/);
-  assert.match(rendererScript, /event\.key === 'Enter'/);
-  assert.match(rendererScript, /event\.key === ' '/);
-  assert.match(rendererScript, /event\.key === 'Tab'/);
-  assert.match(rendererScript, /event\.key === 'Escape'/);
-  assert.match(rendererScript, /stopPropagation\(\)/);
+  // The old DSH conversation bridge is neither exposed nor handled.
+  assert.doesNotMatch(preload, /getConversation|selectConversation|sendConversation|conversationSnapshot/);
+  assert.doesNotMatch(shellWindow, /options\.getConversation|options\.sendConversation|conversationSnapshot/);
 });

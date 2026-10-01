@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildActivityHeatmap } from '../src/renderer/activity-heatmap.js';
+import { buildActivityHeatmap } from '../src/renderer/pages/stats/model/heatmap.js';
 
 const days = [
   { dayKey: '2026-08-30', dispatchCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
