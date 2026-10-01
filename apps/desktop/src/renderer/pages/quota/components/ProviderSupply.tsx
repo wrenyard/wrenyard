@@ -1,4 +1,23 @@
-import { useState } from 'react';
+import { useId, type CSSProperties, type ReactNode } from 'react';
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { ChevronDownIcon, ChevronUpIcon, GripVerticalIcon, SettingsIcon } from 'lucide-react';
 import { BrandIcon } from '@/renderer/components/brand-icon';
 import { StatusBadge } from '@/renderer/components/status-badge';
@@ -44,11 +63,6 @@ export interface ProviderSupplyProps {
   onConfigure: (entry: ProviderCatalogSnapshot) => void;
 }
 
-interface DropTarget {
-  id: string;
-  before: boolean;
-}
-
 /**
  * Provider catalog: configured rows (reorderable) above an unconfigured
  * disclosure. Order comes from the snapshot; the component never reorders on
@@ -61,8 +75,7 @@ export function ProviderSupply({
   onReorder,
   onConfigure,
 }: ProviderSupplyProps) {
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const dndContextId = useId();
 
   const catalog = snapshot.catalog ?? [];
   const configured = catalog.filter((entry) => entry.configured);
@@ -70,14 +83,30 @@ export function ProviderSupply({
   const orderIds = reorderProviders(snapshot.providerOrder ?? [], catalog.map((entry) => entry.id))
     .map((entry) => entry.id);
   const configuredIds = orderIds.filter((id) => configured.some((entry) => entry.id === id));
+  const configuredById = new Map(configured.map((entry) => [entry.id, entry]));
+  const orderedConfigured = configuredIds
+    .map((id) => configuredById.get(id))
+    .filter((entry): entry is ProviderCatalogSnapshot => entry !== undefined);
 
-  const commitDrop = (sourceId: string, targetId: string, before: boolean): void => {
-    if (savingOrder || sourceId === targetId) return;
-    const ids = orderIds.filter((id) => id !== sourceId);
-    const targetIndex = ids.indexOf(targetId);
-    if (targetIndex === -1) return;
-    ids.splice(before ? targetIndex : targetIndex + 1, 0, sourceId);
-    onReorder(ids);
+  const sensors = useSensors(
+    useSensor(MouseSensor, {}),
+    useSensor(TouchSensor, {}),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const persistConfigured = (nextIds: string[]): void => {
+    const rest = orderIds.filter((id) => !configuredIds.includes(id));
+    onReorder([...nextIds, ...rest]);
+  };
+
+  const handleDragEnd = (event: DragEndEvent): void => {
+    if (savingOrder) return;
+    const { active, over } = event;
+    if (over === null || active.id === over.id) return;
+    const oldIndex = configuredIds.indexOf(String(active.id));
+    const newIndex = configuredIds.indexOf(String(over.id));
+    if (oldIndex === -1 || newIndex === -1) return;
+    persistConfigured(arrayMove(configuredIds, oldIndex, newIndex));
   };
 
   const move = (id: string, delta: number): void => {
@@ -85,125 +114,7 @@ export function ProviderSupply({
     const index = configuredIds.indexOf(id);
     const next = index + delta;
     if (index === -1 || next < 0 || next >= configuredIds.length) return;
-    const swapped = [...configuredIds];
-    [swapped[index], swapped[next]] = [swapped[next], swapped[index]];
-    const rest = orderIds.filter((candidate) => !configuredIds.includes(candidate));
-    onReorder([...swapped, ...rest]);
-  };
-
-  const renderRow = (entry: ProviderCatalogSnapshot) => {
-    const configuredRow = entry.configured;
-    const dragActive = dragId === entry.id;
-    const drop = dropTarget?.id === entry.id ? dropTarget : null;
-    const position = configuredIds.indexOf(entry.id);
-    return (
-      <Item
-        key={entry.id}
-        role="listitem"
-        variant="outline"
-       
-        className={cn(
-          'flex-col items-stretch gap-2',
-          dragActive && 'opacity-60',
-          drop?.before && 'border-t-primary',
-          drop && !drop.before && 'border-b-primary',
-        )}
-        onDragOver={(event) => {
-          if (!dragId || dragId === entry.id || savingOrder) return;
-          event.preventDefault();
-          const rect = event.currentTarget.getBoundingClientRect();
-          setDropTarget({ id: entry.id, before: event.clientY < rect.top + rect.height / 2 });
-        }}
-        onDragLeave={() => setDropTarget(null)}
-        onDrop={(event) => {
-          event.preventDefault();
-          const sourceId = dragId ?? event.dataTransfer.getData('text/plain');
-          const before = dropTarget?.before ?? true;
-          setDropTarget(null);
-          setDragId(null);
-          commitDrop(sourceId, entry.id, before);
-        }}
-      >
-        <ItemHeader>
-          <div className="flex min-w-0 items-center gap-2">
-            {configuredRow && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={dragHandleLabel(entry.label)}
-                title="拖动调整顺序"
-                draggable
-                className="text-muted-foreground cursor-grab active:cursor-grabbing"
-                onDragStart={(event) => {
-                  setDragId(entry.id);
-                  event.dataTransfer.setData('text/plain', entry.id);
-                  event.dataTransfer.effectAllowed = 'move';
-                }}
-                onDragEnd={() => {
-                  setDragId(null);
-                  setDropTarget(null);
-                }}
-              >
-                <GripVerticalIcon />
-              </Button>
-            )}
-            <BrandIcon brand={providerBrand(entry.id)} />
-            <ItemTitle>{entry.label || entry.id}</ItemTitle>
-            {entry.quota && <StatusBadge {...quotaStatusView(entry.quota.status)} />}
-            {entry.quota?.stale === true && <Badge variant="outline">{STALE_LABEL}</Badge>}
-          </div>
-          <ItemActions>
-            {configuredRow && (
-              <>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={MOVE_UP_LABEL}
-                  title={MOVE_UP_LABEL}
-                  disabled={savingOrder || position <= 0}
-                  onClick={() => move(entry.id, -1)}
-                >
-                  <ChevronUpIcon />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={MOVE_DOWN_LABEL}
-                  title={MOVE_DOWN_LABEL}
-                  disabled={savingOrder || position === -1 || position >= configuredIds.length - 1}
-                  onClick={() => move(entry.id, 1)}
-                >
-                  <ChevronDownIcon />
-                </Button>
-              </>
-            )}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={configureProviderLabel(entry.label || entry.id, entry.configured)}
-              title={entry.configured ? '配置' : '激活'}
-              onClick={() => onConfigure(entry)}
-            >
-              <SettingsIcon />
-            </Button>
-          </ItemActions>
-        </ItemHeader>
-        <ItemContent>
-          {(entry.models ?? []).length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {(entry.models ?? []).map((model) => (
-                <Badge key={model.id} variant="outline">{model.displayName}</Badge>
-              ))}
-            </div>
-          )}
-          <QuotaContent entry={entry} />
-        </ItemContent>
-      </Item>
-    );
+    persistConfigured(arrayMove(configuredIds, index, next));
   };
 
   return (
@@ -215,11 +126,45 @@ export function ProviderSupply({
         <p className="text-muted-foreground">{SUPPLY_EMPTY_TEXT(snapshot)}</p>
       ) : (
         <>
-          <div role="list" className="flex flex-col gap-3">{configured.map(renderRow)}</div>
+          <DndContext
+            id={dndContextId}
+            collisionDetection={closestCenter}
+            modifiers={[restrictToVerticalAxis]}
+            sensors={sensors}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={configuredIds} strategy={verticalListSortingStrategy}>
+              <div role="list" className="flex flex-col gap-3">
+                {orderedConfigured.map((entry, index) => (
+                  <SortableRow
+                    key={entry.id}
+                    entry={entry}
+                    position={index}
+                    lastPosition={orderedConfigured.length - 1}
+                    savingOrder={savingOrder}
+                    onConfigure={onConfigure}
+                    onMove={move}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
           {unconfigured.length > 0 && (
             <details className="flex flex-col gap-2" open>
               <summary className="text-muted-foreground cursor-pointer">{UNCONFIGURED_TITLE}</summary>
-              <div role="list" className="mt-2 flex flex-col gap-3">{unconfigured.map(renderRow)}</div>
+              <div role="list" className="mt-2 flex flex-col gap-3">
+                {unconfigured.map((entry) => (
+                  <ProviderRow
+                    key={entry.id}
+                    entry={entry}
+                    position={-1}
+                    lastPosition={configuredIds.length - 1}
+                    savingOrder={savingOrder}
+                    onConfigure={onConfigure}
+                    onMove={move}
+                  />
+                ))}
+              </div>
             </details>
           )}
         </>
@@ -231,6 +176,183 @@ export function ProviderSupply({
 /** Snapshot-level empty copy: an unavailable snapshot reads differently from an empty catalog. */
 function SUPPLY_EMPTY_TEXT(snapshot: QuotaSnapshot): string {
   return snapshot.status === 'available' ? SUPPLY_EMPTY : SUPPLY_UNAVAILABLE;
+}
+
+interface ProviderRowProps {
+  entry: ProviderCatalogSnapshot;
+  position: number;
+  lastPosition: number;
+  savingOrder: boolean;
+  onConfigure: (entry: ProviderCatalogSnapshot) => void;
+  onMove: (id: string, delta: number) => void;
+  itemRef?: (node: HTMLElement | null) => void;
+  itemStyle?: CSSProperties;
+  isDragging?: boolean;
+  dragHandle?: ReactNode;
+}
+
+function ProviderRow({
+  entry,
+  position,
+  lastPosition,
+  savingOrder,
+  onConfigure,
+  onMove,
+  itemRef,
+  itemStyle,
+  isDragging,
+  dragHandle,
+}: ProviderRowProps) {
+  const configuredRow = entry.configured;
+  return (
+    <Item
+      ref={itemRef}
+      role="listitem"
+      variant="outline"
+      data-dragging={isDragging || undefined}
+      style={itemStyle}
+      className={cn(
+        'flex-col items-stretch gap-2',
+        configuredRow && 'relative z-0 data-[dragging=true]:z-10 data-[dragging=true]:opacity-80',
+      )}
+    >
+      <ItemHeader>
+        <div className="flex min-w-0 items-center gap-2">
+          {configuredRow && dragHandle}
+          <BrandIcon brand={providerBrand(entry.id)} />
+          <ItemTitle>{entry.label || entry.id}</ItemTitle>
+          {entry.quota && <StatusBadge {...quotaStatusView(entry.quota.status)} />}
+          {entry.quota?.stale === true && <Badge variant="outline">{STALE_LABEL}</Badge>}
+        </div>
+        <ItemActions>
+          {configuredRow && (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={MOVE_UP_LABEL}
+                title={MOVE_UP_LABEL}
+                disabled={savingOrder || position <= 0}
+                onClick={() => onMove(entry.id, -1)}
+              >
+                <ChevronUpIcon />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={MOVE_DOWN_LABEL}
+                title={MOVE_DOWN_LABEL}
+                disabled={savingOrder || position === -1 || position >= lastPosition}
+                onClick={() => onMove(entry.id, 1)}
+              >
+                <ChevronDownIcon />
+              </Button>
+            </>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={configureProviderLabel(entry.label || entry.id, entry.configured)}
+            title={entry.configured ? '配置' : '激活'}
+            onClick={() => onConfigure(entry)}
+          >
+            <SettingsIcon />
+          </Button>
+        </ItemActions>
+      </ItemHeader>
+      <ItemContent>
+        {(entry.models ?? []).length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {(entry.models ?? []).map((model) => (
+              <Badge key={model.id} variant="outline">{model.displayName}</Badge>
+            ))}
+          </div>
+        )}
+        <QuotaContent entry={entry} />
+      </ItemContent>
+    </Item>
+  );
+}
+
+interface SortableRowProps {
+  entry: ProviderCatalogSnapshot;
+  position: number;
+  lastPosition: number;
+  savingOrder: boolean;
+  onConfigure: (entry: ProviderCatalogSnapshot) => void;
+  onMove: (id: string, delta: number) => void;
+}
+
+function SortableRow({
+  entry,
+  position,
+  lastPosition,
+  savingOrder,
+  onConfigure,
+  onMove,
+}: SortableRowProps) {
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: entry.id, disabled: savingOrder });
+
+  return (
+    <ProviderRow
+      entry={entry}
+      position={position}
+      lastPosition={lastPosition}
+      savingOrder={savingOrder}
+      onConfigure={onConfigure}
+      onMove={onMove}
+      itemRef={setNodeRef}
+      itemStyle={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+      isDragging={isDragging}
+      dragHandle={
+        <DragHandle
+          label={entry.label || entry.id}
+          savingOrder={savingOrder}
+          setActivatorNodeRef={setActivatorNodeRef}
+          attributes={attributes}
+          listeners={listeners}
+        />
+      }
+    />
+  );
+}
+
+type DragHandleProps = Pick<
+  ReturnType<typeof useSortable>,
+  'attributes' | 'listeners' | 'setActivatorNodeRef'
+> & {
+  label: string;
+  savingOrder: boolean;
+};
+
+function DragHandle({
+  label,
+  savingOrder,
+  setActivatorNodeRef,
+  attributes,
+  listeners,
+}: DragHandleProps) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      ref={setActivatorNodeRef}
+      disabled={savingOrder}
+      {...attributes}
+      {...listeners}
+    >
+      <GripVerticalIcon />
+      <span className="sr-only">{dragHandleLabel(label)}</span>
+    </Button>
+  );
 }
 
 function QuotaContent({ entry }: { entry: ProviderCatalogSnapshot }) {

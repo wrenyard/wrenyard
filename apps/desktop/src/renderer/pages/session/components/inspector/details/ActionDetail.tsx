@@ -6,7 +6,7 @@ import { JsonView } from '@/renderer/components/json-view';
 import { Markdown } from '@/renderer/components/markdown';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import { Timestamp } from '@/renderer/components/timestamp';
-import { openTaskTranscript } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import { materialTitle, statusView } from '../../../model/describe.js';
 import type { ActionModel, InspectorTarget, TurnModel } from '../../../model/types.js';
 import { Field, Fields, InspectLink, Section } from '../parts.js';
@@ -28,7 +28,7 @@ export function ActionDetail({ turn, action, onSelect }: { turn: TurnModel; acti
           <Field label="任务运行">
             <span className="flex items-center gap-2">
               <span>{transcriptId}</span>
-              <Button variant="outline" onClick={() => { void openTaskTranscript(transcriptId); }}>
+              <Button variant="outline" onClick={() => { void shell.openTaskTranscript(transcriptId); }}>
                 <ExternalLink /> 查看任务对话
               </Button>
             </span>

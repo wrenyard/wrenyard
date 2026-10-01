@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
+import { QueryError } from '@/renderer/components/query-error';
 import { Button } from '@/renderer/components/ui/button';
 import { Card, CardContent, CardDescription } from '@/renderer/components/ui/card';
 import { Input } from '@/renderer/components/ui/input';
@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/renderer/components/ui/separator';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { StatusBadge } from '@/renderer/components/status-badge';
-import { restartDaemon, saveWorkspace, startDaemon } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import {
   DAEMON_LABEL,
   DAEMON_RESTART_LABEL,
@@ -67,7 +67,7 @@ export function RuntimeSettings() {
 
   const daemonMutation = useMutation({
     mutationFn: (action: DaemonLifecycleAction) => (
-      action === 'restart' ? restartDaemon() : startDaemon()
+      action === 'restart' ? shell.restartDaemon() : shell.startDaemon()
     ),
     onMutate: () => setDaemonError(''),
     onSuccess: (snapshot) => queryClient.setQueryData(daemonQueryKey, snapshot),
@@ -75,7 +75,7 @@ export function RuntimeSettings() {
   });
 
   const workspaceMutation = useMutation({
-    mutationFn: (next: WorkspaceDraft) => saveWorkspace(next.path, next.create),
+    mutationFn: (next: WorkspaceDraft) => shell.saveWorkspace(next.path, next.create),
     onSuccess: () => {
       setDirty(false);
       setNote('Workspace 已保存，会话后端已切换，无需重启 App。');
@@ -207,11 +207,7 @@ export function RuntimeSettings() {
             : <code>{service.endpoint}</code>}
         </div>
 
-        {settings.isError && (
-          <Alert variant="destructive">
-            <AlertDescription>{`读取失败：${errorMessage(settings.error)}`}</AlertDescription>
-          </Alert>
-        )}
+        {settings.isError && <QueryError query={settings} title="读取失败" />}
       </CardContent>
     </Card>
   );
