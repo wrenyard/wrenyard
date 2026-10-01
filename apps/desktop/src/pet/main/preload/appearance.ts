@@ -29,6 +29,7 @@ const petAppearanceApi: PetAppearanceApi = {
       ipcRenderer.removeListener(SHELL_CHANNELS.appearanceChanged, handler);
     };
   },
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke(SHELL_CHANNELS.openExternal, url),
 };
 
 /** Expose the shared Pet appearance bridge on `window.petAppearance`. */

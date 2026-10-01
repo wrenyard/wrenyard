@@ -6,7 +6,7 @@ import { Item, ItemContent, ItemMedia } from '@/renderer/components/ui/item';
 import { Marker, MarkerContent, MarkerIcon } from '@/renderer/components/ui/marker';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { Elapsed } from '@/renderer/components/elapsed';
-import { Markdown } from '@/renderer/components/markdown';
+import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { Reasoning } from '@/renderer/components/chat/reasoning';
 import { CYCLE_LIMIT_TOOLTIP, PHASE_LABEL, cycleLabel } from '../../../model/describe.js';
 import type { ActionModel, CycleModel, ErrorItem, ReplyModel, TurnModel } from '../../../model/types.js';

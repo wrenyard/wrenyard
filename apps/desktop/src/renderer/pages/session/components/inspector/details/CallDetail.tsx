@@ -1,5 +1,5 @@
 import { Elapsed } from '@/renderer/components/elapsed';
-import { Markdown } from '@/renderer/components/markdown';
+import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import { Item, ItemContent, ItemTitle } from '@/renderer/components/ui/item';
 import { Table, TableBody, TableCell, TableRow } from '@/renderer/components/ui/table';

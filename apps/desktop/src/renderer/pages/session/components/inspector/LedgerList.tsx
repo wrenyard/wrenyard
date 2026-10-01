@@ -4,7 +4,7 @@ import { Badge } from '@/renderer/components/ui/badge';
 import { CopyButton } from '@/renderer/components/copy-button';
 import { Input } from '@/renderer/components/ui/input';
 import { Item, ItemContent, ItemDescription, ItemTitle } from '@/renderer/components/ui/item';
-import { Markdown } from '@/renderer/components/markdown';
+import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import { Timestamp } from '@/renderer/components/timestamp';

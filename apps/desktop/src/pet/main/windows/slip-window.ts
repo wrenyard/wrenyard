@@ -15,6 +15,8 @@ export interface GraphSlipWindowOptions {
   preloadPath: string;
   /** Capture harness only: render without ever showing the window. */
   stayHidden: boolean;
+  /** Whether the owner currently wants the slip shown, used after a crash reload. */
+  isVisible?: () => boolean;
   pageLoader: PageLoader;
   graphId: string;
   /** Called once after a load failure; the owner closes the slip. */
@@ -29,6 +31,15 @@ export interface GraphSlipWindowOptions {
 }
 
 export function createGraphSlipWindow(options: GraphSlipWindowOptions): BrowserWindow {
+  // The factory hides on a load failure and calls this once; the owner closes
+  // the slip. Renderer crashes are reloaded by the factory, not reported here.
+  let loadFailed = false;
+  const notifyLoadFailure = (): void => {
+    if (loadFailed) return;
+    loadFailed = true;
+    options.onLoadFailure();
+  };
+
   const win = createOverlayWindow({
     x: options.bounds.x,
     y: options.bounds.y,
@@ -39,26 +50,16 @@ export function createGraphSlipWindow(options: GraphSlipWindowOptions): BrowserW
     preloadPath: options.preloadPath,
     resizable: true,
     focusable: true,
-    ...(options.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
+    stayHidden: options.stayHidden,
+    isVisible: options.isVisible,
+    onLoadFailure: notifyLoadFailure,
   });
-
-  let loadFailed = false;
-  const handleLoadFailure = (): void => {
-    if (loadFailed) return;
-    loadFailed = true;
-    options.onLoadFailure();
-  };
-
-  win.webContents.on('did-fail-load', (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
-    if (isMainFrame) handleLoadFailure();
-  });
-  win.webContents.on('render-process-gone', () => handleLoadFailure());
 
   win.webContents.on('did-finish-load', () => {
     if (!win.isDestroyed() && !loadFailed) options.onDidFinishLoad();
   });
 
-  options.pageLoader.load(win, 'graph-slip', { panel: 'slip', graph_id: options.graphId }).catch(() => handleLoadFailure());
+  options.pageLoader.load(win, 'graph-slip', { panel: 'slip', graph_id: options.graphId }).catch(() => notifyLoadFailure());
 
   win.once('ready-to-show', () => {
     if (!win.isDestroyed() && !loadFailed) options.onReady();
