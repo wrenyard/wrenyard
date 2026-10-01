@@ -201,7 +201,7 @@ function OverviewCard({ inspection, budget, groups, growth, cacheRatio }: {
 }
 
 /* ------------------------------------------------------------------ */
-/* Model preview (spec §7 换模型预演)                                   */
+/* Model preview (spec section 7 model preview)                                   */
 /* ------------------------------------------------------------------ */
 
 function ModelPreviewTable({ models, modelId, totalTokens, cacheRatio, quota }: {
@@ -280,7 +280,7 @@ function ModelPreviewTable({ models, modelId, totalTokens, cacheRatio, quota }: 
 }
 
 /* ------------------------------------------------------------------ */
-/* Composition tree (spec §7 构成)                                      */
+/* Composition tree (spec section 7 composition)                                      */
 /* ------------------------------------------------------------------ */
 
 type TreeSort = 'seq' | 'tokens';
@@ -441,9 +441,11 @@ function TreeRowView({ row, total, sessionKey, expandedGroups, expandedTypes, on
 }) {
   if (row.kind === 'item') {
     return (
-      <button
+      <Button
         type="button"
-        className={`${TREE_GRID} h-9 w-full rounded-md px-1 text-left text-sm hover:bg-muted`}
+      variant="ghost"
+      size="lg"
+        className={`${TREE_GRID} w-full text-left`}
         title={row.item.label}
         onClick={() => requestContextInspection(sessionKey, { tab: 'ledger', seq: row.item.seq })}
       >
@@ -453,7 +455,7 @@ function TreeRowView({ row, total, sessionKey, expandedGroups, expandedTypes, on
         <span className="truncate text-xs text-muted-foreground">{KIND_LABEL[row.item.kind]}</span>
         <span className="text-right tabular-nums">{formatTokenCount(row.item.tokens)}</span>
         <span className="text-right tabular-nums">{formatShare(row.item.tokens, total)}</span>
-      </button>
+      </Button>
     );
   }
 
@@ -464,9 +466,11 @@ function TreeRowView({ row, total, sessionKey, expandedGroups, expandedTypes, on
     else onToggleType(`${row.group}/${row.typeKey}`);
   };
   return (
-    <button
+    <Button
       type="button"
-      className={`${TREE_GRID} h-9 w-full rounded-md px-1 text-left text-sm hover:bg-muted`}
+      variant="ghost"
+      size="lg"
+      className={`${TREE_GRID} w-full text-left`}
       aria-expanded={expanded}
       onClick={onToggle}
     >
@@ -479,12 +483,12 @@ function TreeRowView({ row, total, sessionKey, expandedGroups, expandedTypes, on
       <span />
       <span className="text-right tabular-nums">{formatTokenCount(row.tokens)}</span>
       <span className="text-right tabular-nums">{formatShare(row.tokens, total)}</span>
-    </button>
+    </Button>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Growth area chart (spec §7 增长)                                     */
+/* Growth area chart (spec section 7 growth)                                     */
 /* ------------------------------------------------------------------ */
 
 const GROWTH_CONFIG: ChartConfig = {
@@ -536,7 +540,7 @@ function GrowthChart({ growth, budget }: { growth: readonly GrowthPoint[]; budge
 }
 
 /* ------------------------------------------------------------------ */
-/* Call summary (spec §7 调用)                                          */
+/* Call summary (spec section 7 calls)                                          */
 /* ------------------------------------------------------------------ */
 
 const ROLE_ORDER: readonly CallModel['role'][] = ['reason', 'select', 'interpret', 'compile', 'write', 'reply', 'title'];

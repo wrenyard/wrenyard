@@ -158,7 +158,13 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
   const check = async (): Promise<void> => {
     const [shellOk, snapshotOk, quotaOk] = await Promise.all([
       shell.window.webContents.executeJavaScript(
-        "document.body?.innerText.includes('啾啾工坊设置') === true",
+        `['[data-titlebar]', '[data-statusbar]'].every((selector) => {
+          const root = document.querySelector(selector);
+          if (!(root instanceof HTMLElement)) return false;
+          const box = root.getBoundingClientRect();
+          const style = getComputedStyle(root);
+          return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+        })`,
       ),
       shell.window.webContents.executeJavaScript(
         "window.wrenyardShell.getSettings().then((value) => value?.service?.status === 'connected' && value?.pet?.settings?.entities && Array.isArray(value?.pet?.settings?.quota?.providers) && typeof value?.update?.currentVersion === 'string' && typeof value?.update?.installSupported === 'boolean').catch(() => false)",
@@ -1035,6 +1041,7 @@ async function bootstrap(): Promise<void> {
     additionalArguments: appearanceController.arguments(),
     initialPage: initialShellPage,
     onPageChanged: (page) => {
+      if (SMOKE) return;
       const windowSettings = settingsStore.load().window;
       if (windowSettings.lastPage === page) return;
       settingsStore.patch('window', { ...windowSettings, lastPage: page });
@@ -1121,8 +1128,7 @@ async function bootstrap(): Promise<void> {
     clearNotifications: async () => { notificationCenter?.clear(); },
     markNotificationsRead: async () => { notificationCenter?.markAllRead(); },
     setDoNotDisturb: async (value: boolean) => {
-      settingsStore.patch('notifications', { ...settingsStore.load().notifications, doNotDisturb: value });
-      notificationCenter?.setDoNotDisturb(value);
+      preferencesController!.set('notifications.doNotDisturb', value);
       return notificationCenter!.snapshot();
     },
     getPreferences: async () => preferencesController!.get(),

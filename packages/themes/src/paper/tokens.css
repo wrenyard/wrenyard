@@ -29,6 +29,7 @@
     --accent: var(--paper-deep);
     --accent-foreground: var(--ink);
     --destructive: var(--terracotta);
+    --destructive-foreground: #ffffff;
     --border: var(--line);
     --input: var(--line);
     --ring: var(--moss);
@@ -90,6 +91,7 @@
   --accent: var(--paper-deep);
   --accent-foreground: var(--ink);
   --destructive: var(--terracotta);
+  --destructive-foreground: var(--paper);
   --border: var(--line);
   --input: var(--line);
   --ring: var(--moss);

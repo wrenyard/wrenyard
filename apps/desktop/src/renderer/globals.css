@@ -674,6 +674,7 @@ html[data-theme-switching] *::after {
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
     --color-success: var(--success);
     --color-success-foreground: var(--success-foreground);
     --color-warning: var(--warning);
@@ -805,11 +806,17 @@ html[data-platform="win32"] {
 .motion-surface-page {
   view-transition-name: app-page;
 }
-/* The shell activity rail is chrome, not page content: it keeps its own name
-   so it stays put across page transitions. The `#root >` scope matches only
-   the shell rail, not a page's inner sidebar. */
-#root > [data-slot="sidebar-wrapper"] > [data-slot="sidebar"] {
-  view-transition-name: app-chrome;
+/* Keep the stable three-row chrome outside the changing page snapshot. */
+[data-titlebar] { view-transition-name: app-titlebar; }
+[data-statusbar] { view-transition-name: app-statusbar; }
+[data-slot="sidebar"][data-collapsible="icon"] { view-transition-name: app-sidebar; }
+::view-transition-old(app-titlebar),
+::view-transition-new(app-titlebar),
+::view-transition-old(app-statusbar),
+::view-transition-new(app-statusbar),
+::view-transition-old(app-sidebar),
+::view-transition-new(app-sidebar) {
+  animation: none;
 }
 ::view-transition-old(app-page) {
   animation: wy-fade-out var(--duration-fast) var(--ease-in) both;
