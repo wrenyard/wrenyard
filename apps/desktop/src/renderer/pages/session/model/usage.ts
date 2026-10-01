@@ -33,6 +33,17 @@ export type UsageGroupId =
   | 'runtime'
   | 'input';
 
+/** Composition groups in fixed display order, shared by every usage surface. */
+export const USAGE_GROUP_ORDER: readonly UsageGroupId[] = [
+  'resident',
+  'workspace',
+  'conversation',
+  'material',
+  'task',
+  'runtime',
+  'input',
+];
+
 export interface UsageGroupView {
   id: UsageGroupId;
   label: string;
@@ -66,6 +77,57 @@ const RESIDENT_LAYERS: readonly ContextLayerId[] = ['wy-system', 'wy-global', 'w
 const CONVERSATION_KINDS: readonly ContextItemKind[] = ['user', 'assistant', 'reply', 'interrupt'];
 const MATERIAL_KINDS: readonly ContextItemKind[] = ['doc', 'memory'];
 const TASK_KINDS: readonly ContextItemKind[] = ['action-result', 'ws-update'];
+
+/** Display label of every context item kind. */
+export const ITEM_KIND_LABEL: Record<ContextItemKind, string> = {
+  user: '用户消息',
+  assistant: '助手消息',
+  reply: '回复',
+  doc: '文档',
+  memory: '记忆',
+  'action-result': '行动结果',
+  'ws-update': '工作区更新',
+  interrupt: '中断',
+};
+
+const KIND_GROUP: Record<ContextItemKind, UsageGroupId> = {
+  user: 'conversation',
+  assistant: 'conversation',
+  reply: 'conversation',
+  interrupt: 'conversation',
+  doc: 'material',
+  memory: 'material',
+  'action-result': 'task',
+  'ws-update': 'task',
+};
+
+const LAYER_GROUP: Record<ContextLayerId, UsageGroupId> = {
+  'wy-system': 'resident',
+  'wy-global': 'resident',
+  'wy-role': 'resident',
+  'wy-workspace': 'workspace',
+  'wy-ctx': 'conversation',
+  'wy-info': 'runtime',
+};
+
+const LAYER_LABEL: Record<ContextLayerId, string> = {
+  'wy-system': '系统提示',
+  'wy-global': '全局记忆',
+  'wy-role': '角色',
+  'wy-workspace': '工作区快照',
+  'wy-ctx': '对话上下文',
+  'wy-info': '运行信息',
+};
+
+/** Composition group of a context item kind. */
+export function groupOfItemKind(kind: ContextItemKind): UsageGroupId {
+  return KIND_GROUP[kind];
+}
+
+/** Composition group of a context layer. */
+export function groupOfLayer(id: ContextLayerId): UsageGroupId {
+  return LAYER_GROUP[id];
+}
 
 export interface ContextBudgetView {
   /** Layer total plus the text currently in the input box. */
@@ -136,6 +198,95 @@ export function usageGroups(inspection: ContextInspection, inputTokens = 0): Usa
   return values
     .filter((entry) => entry.tokens > 0)
     .map((entry) => ({ id: entry.id, label: GROUP_LABEL[entry.id], tokens: entry.tokens, color: GROUP_COLOR[entry.id] }));
+}
+
+/** Groups whose members are context items rather than layers. */
+const ITEM_BACKED_GROUPS: ReadonlySet<UsageGroupId> = new Set(['conversation', 'material', 'task']);
+
+export interface ContextTreeRow {
+  /** Stable identity; also the expansion-set member of group and type rows. */
+  key: string;
+  depth: 0 | 1 | 2;
+  kind: 'group' | 'type' | 'item';
+  label: string;
+  tokens: number;
+  /** `tokens / inspection.totalTokens`, or 0 when the total is unknown. */
+  share: number;
+  item?: ContextItem;
+}
+
+export interface ContextTreeOptions {
+  expandedGroups: ReadonlySet<UsageGroupId>;
+  expandedKinds: ReadonlySet<string>;
+  sort: 'tokens' | 'seq';
+  /** Restrict to one turn; absent means every turn. */
+  turn?: number;
+  /** Restrict to these item kinds; empty or absent means every kind. */
+  kinds?: ReadonlySet<ContextItemKind>;
+}
+
+/**
+ * Group → type → item rows of the composition tree. Filtering, ordering and
+ * expansion live here so the inspector tree renders exactly what this module
+ * derives and can never drift from the composition panel.
+ */
+export function contextTreeRows(inspection: ContextInspection, options: ContextTreeOptions): ContextTreeRow[] {
+  const { expandedGroups, expandedKinds, sort, turn, kinds } = options;
+  const total = inspection.totalTokens;
+  const shareOf = (tokens: number): number => (total > 0 ? tokens / total : 0);
+  const compare = sort === 'seq'
+    ? (left: ContextItem, right: ContextItem): number => left.seq - right.seq
+    : (left: ContextItem, right: ContextItem): number => right.tokens - left.tokens || left.seq - right.seq;
+
+  const visible = inspection.items.filter((item) => (turn === undefined || item.turn === turn)
+    && (kinds === undefined || kinds.size === 0 || kinds.has(item.kind)));
+  const byKind = new Map<ContextItemKind, ContextItem[]>();
+  for (const item of visible) {
+    const list = byKind.get(item.kind);
+    if (list) list.push(item);
+    else byKind.set(item.kind, [item]);
+  }
+
+  const rows: ContextTreeRow[] = [];
+  for (const group of USAGE_GROUP_ORDER) {
+    if (ITEM_BACKED_GROUPS.has(group)) {
+      const groupKinds = [...byKind.keys()].filter((kind) => groupOfItemKind(kind) === group);
+      if (groupKinds.length === 0) continue;
+      let groupTokens = 0;
+      for (const kind of groupKinds) for (const item of byKind.get(kind) ?? []) groupTokens += item.tokens;
+      rows.push({ key: group, depth: 0, kind: 'group', label: GROUP_LABEL[group], tokens: groupTokens, share: shareOf(groupTokens) });
+      if (!expandedGroups.has(group)) continue;
+      for (const kind of groupKinds) {
+        const children = [...(byKind.get(kind) ?? [])].sort(compare);
+        let kindTokens = 0;
+        for (const item of children) kindTokens += item.tokens;
+        rows.push({ key: kind, depth: 1, kind: 'type', label: ITEM_KIND_LABEL[kind], tokens: kindTokens, share: shareOf(kindTokens) });
+        if (!expandedKinds.has(kind)) continue;
+        for (const item of children) {
+          rows.push({
+            key: `i:${item.seq}`,
+            depth: 2,
+            kind: 'item',
+            label: item.label,
+            tokens: item.tokens,
+            share: shareOf(item.tokens),
+            item,
+          });
+        }
+      }
+      continue;
+    }
+    const groupLayers = inspection.layers.filter((layer) => groupOfLayer(layer.id) === group && layer.id !== 'wy-ctx');
+    if (groupLayers.length === 0) continue;
+    let layerTokens = 0;
+    for (const layer of groupLayers) layerTokens += layer.tokens;
+    rows.push({ key: group, depth: 0, kind: 'group', label: GROUP_LABEL[group], tokens: layerTokens, share: shareOf(layerTokens) });
+    if (!expandedGroups.has(group)) continue;
+    for (const layer of groupLayers) {
+      rows.push({ key: layer.id, depth: 1, kind: 'type', label: LAYER_LABEL[layer.id], tokens: layer.tokens, share: shareOf(layer.tokens) });
+    }
+  }
+  return rows;
 }
 
 /**
@@ -293,19 +444,6 @@ export function modelPreviews(
       inputCost: pricing === undefined ? undefined : costOf(pricing, totalTokens, cached, 0),
     };
   });
-}
-
-/** Three significant figures with a k / M suffix (`182k`, `968k`, `1.08M`). */
-export function formatTokenCount(tokens: number | undefined): string {
-  if (tokens === undefined || !Number.isFinite(tokens)) return '—';
-  const magnitude = Math.abs(tokens);
-  if (magnitude < 1_000) return String(Math.round(tokens));
-  if (magnitude < 1_000_000) return `${significant(tokens / 1_000)}k`;
-  return `${significant(tokens / 1_000_000)}M`;
-}
-
-function significant(value: number): number {
-  return Number(value.toPrecision(3));
 }
 
 /** Exact grouped integer for hover tooltips. */

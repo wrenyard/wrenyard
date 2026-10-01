@@ -83,6 +83,19 @@ export function formatTokenCount(value: number | undefined): string {
   return `${trimOneDecimal(value / 1_000_000)}M`;
 }
 
+/** `42%` from a 0–1 ratio; `undefined` or non-finite renders as an em dash. */
+export function formatRatio(ratio: number | undefined): string {
+  if (ratio === undefined || !Number.isFinite(ratio)) return '—';
+  return `${Math.round(ratio * 100)}%`;
+}
+
+/** `$0.0123` from a USD amount; unknown renders as an em dash, zero as `$0`. */
+export function formatCost(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return '—';
+  if (value === 0) return '$0';
+  return `$${value.toFixed(4)}`;
+}
+
 /** Grouped integer, e.g. `1,234`; used for the small counts in the title card. */
 export function formatCount(value: number): string {
   return value.toLocaleString();

@@ -13,13 +13,13 @@ import { paceView, quotaLevel } from '@/renderer/components/usage/QuotaBar';
 import { TokenBar, type TokenBarSegment } from '@/renderer/components/usage/TokenBar';
 import { UsageRing, type UsageRingLevel, type UsageRingStatus } from '@/renderer/components/usage/UsageRing';
 import { notify } from '@/renderer/lib/notify';
+import { formatTokenCount } from '@/renderer/lib/format';
 import { useQuotaQuery } from '@/renderer/lib/queries';
 import type { ContextInspection, QuotaProviderSnapshot } from '@/shell-contract';
 import {
   MAX_REASON_CALLS_PER_TURN,
   contextBudget,
   formatExactTokens,
-  formatTokenCount,
   growthByTurn,
   recentCacheRatio,
   remainingTurns,
