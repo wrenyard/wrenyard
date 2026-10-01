@@ -17,6 +17,11 @@ const TITLE_BAR_PAGES: readonly ShellPage[] = ['session', 'stats', 'quota', 'tas
 const DRAG = '[-webkit-app-region:drag] [app-region:drag]';
 const NO_DRAG = '[-webkit-app-region:no-drag] [app-region:no-drag]';
 
+// The page title/auxiliary slots are draggable so the whole blank run of the
+// title bar moves the window; interactive content inside them opts back out.
+const SLOT_NO_DRAG =
+  '[&_:is(button,a,input,textarea,select,[role=button],[role=combobox],[data-no-drag])]:[-webkit-app-region:no-drag] [&_:is(button,a,input,textarea,select,[role=button],[role=combobox],[data-no-drag])]:[app-region:no-drag]';
+
 interface TitleBarButtonProps {
   label: string;
   tooltip: string;
@@ -100,7 +105,7 @@ export function TitleBar() {
         <SourceDevelopmentBadge />
       </div>
 
-      <div className={cn('flex min-w-0 flex-1 items-center gap-2', NO_DRAG)}>
+      <div className={cn('flex min-w-0 flex-1 items-center gap-2', DRAG, SLOT_NO_DRAG)}>
         {TITLE_BAR_PAGES.map((id) => (
           <div
             key={id}
@@ -111,7 +116,7 @@ export function TitleBar() {
         ))}
       </div>
 
-      <div className={cn('flex items-center gap-1', NO_DRAG)}>
+      <div className={cn('flex items-center gap-1', DRAG, SLOT_NO_DRAG)}>
         {TITLE_BAR_PAGES.map((id) => (
           <div
             key={id}
