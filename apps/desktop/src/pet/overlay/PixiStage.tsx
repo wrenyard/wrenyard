@@ -12,5 +12,5 @@ export interface PixiStageProps {
 }
 
 export function PixiStage({ canvasRef }: PixiStageProps) {
-  return <canvas ref={canvasRef} aria-hidden="true" className={PIXI_STAGE_CLASS} />;
+  return <canvas id="scene" ref={canvasRef} aria-hidden="true" className={PIXI_STAGE_CLASS} />;
 }
