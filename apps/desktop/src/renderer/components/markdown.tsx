@@ -4,10 +4,12 @@ import { code } from '@streamdown/code';
 import { cjk } from '@streamdown/cjk';
 import { cn } from 'cn';
 import { shell } from '@/renderer/lib/desktop';
+import { useAppearance } from '@/renderer/lib/theme';
 
 const PLUGINS = { code, cjk };
-/** Prototype has no dark theme yet; both slots use the light Shiki theme. */
-const SHIKI_THEME: [string, string] = ['github-light', 'github-light'];
+
+/** Shiki theme per appearance mode; `github-dark-default` matches the dark tokens. */
+const SHIKI_THEME = { light: 'github-light', dark: 'github-dark-default' } as const;
 
 function MarkdownLink({ href, children, onClick, ...rest }: ComponentProps<'a'>) {
   return (
@@ -39,13 +41,20 @@ export interface MarkdownProps {
  * no math or mermaid. Fenced code is highlighted with the JavaScript Shiki engine.
  */
 export function Markdown({ children, streaming = false, className }: MarkdownProps) {
+  const { dark } = useAppearance();
+  // Streamdown takes a [light, dark] pair; pin both slots to the active theme so
+  // highlighting follows the resolved appearance instead of the CSS `dark:` class.
+  const shikiTheme: [string, string] = dark
+    ? [SHIKI_THEME.dark, SHIKI_THEME.dark]
+    : [SHIKI_THEME.light, SHIKI_THEME.light];
+
   return (
     <Streamdown
       mode={streaming ? 'streaming' : 'static'}
       isAnimating={streaming}
       caret="block"
       plugins={PLUGINS}
-      shikiTheme={SHIKI_THEME}
+      shikiTheme={shikiTheme}
       components={COMPONENTS}
       className={cn('text-sm', className)}
     >
