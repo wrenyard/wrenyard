@@ -25,6 +25,8 @@ export interface PetAppearanceBridge {
 export interface PetAppearanceApi {
   getSnapshot(): Promise<PetAppearanceSnapshot>;
   onChanged(listener: (next: PetAppearanceSnapshot) => void): () => void;
+  /** Open an http(s) link out of process; other schemes are rejected by the shell handler. */
+  openExternal(url: string): Promise<void>;
 }
 
 interface AppearanceDocumentElement {

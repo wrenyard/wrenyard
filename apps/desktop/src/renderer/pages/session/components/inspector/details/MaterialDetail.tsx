@@ -1,5 +1,5 @@
 import { Separator } from '@/renderer/components/ui/separator';
-import { Markdown } from '@/renderer/components/markdown';
+import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import type { ContextItem } from '../../../model/types.js';
 import { Field, Fields } from '../parts.js';
 

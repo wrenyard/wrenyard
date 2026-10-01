@@ -5,7 +5,7 @@ import { Button } from '@/renderer/components/ui/button';
 import { Message, MessageContent, MessageFooter } from '@/renderer/components/ui/message';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { CopyButton } from '@/renderer/components/copy-button';
-import { Markdown } from '@/renderer/components/markdown';
+import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { useEnterAnimation } from '@/renderer/lib/motion';
 import { noFinalReply } from '../../model/describe.js';
 import type { TurnModel } from '../../model/types.js';

@@ -1,22 +1,29 @@
 // ── Work Slip transcript panel (React) ──────────────────────────────
 // Renders persisted task.run.events as a read-only conversation record with
-// the shared Message/Bubble components. Only the sanitized
+// the shared Message/Bubble/Markdown components. Only the sanitized
 // SafeTranscriptEventData allowlist crosses the preload boundary; the panel
 // accumulates incremental rounds and keeps the stream pinned to the bottom
 // while the reader stays there.
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactElement,
   type ReactNode,
 } from 'react';
+import { X } from 'lucide-react';
 import { Badge } from '@/renderer/components/ui/badge';
 import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
+import { Button } from '@/renderer/components/ui/button';
 import { Card } from '@/renderer/components/ui/card';
 import { Message, MessageContent, MessageHeader } from '@/renderer/components/ui/message';
+import { Markdown } from '@/renderer/components/markdown';
+import { formatClockSeconds, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
+import { petAppearanceBridge, type PetAppearanceApi } from '../shared/appearance';
 import type { SafeTaskRunEventsResult, SafeTranscriptEventData } from '../shared/taskgraph';
 
 interface TranscriptWindowApi {
@@ -29,6 +36,7 @@ interface TranscriptWindowApi {
 declare global {
   interface Window {
     transcriptApi: TranscriptWindowApi;
+    petAppearance: PetAppearanceApi;
   }
 }
 
@@ -83,29 +91,6 @@ function humanToolLabel(toolName: string): string {
   if (normalized.includes('task') || normalized.includes('todo')) return '协作与进度';
   if (normalized.includes('web') || normalized.includes('fetch')) return '查询资料';
   return '其他操作';
-}
-
-function formatTimestamp(ts: string): string {
-  try {
-    const date = new Date(ts);
-    if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  } catch {
-    return '';
-  }
-}
-
-function formatMs(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return '—';
-  if (ms < 1000) return `${Math.round(ms)}毫秒`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}秒`;
-  return `${Math.floor(ms / 60000)}分${Math.round((ms % 60000) / 1000)}秒`;
-}
-
-function formatCount(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}m`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return String(Math.round(value));
 }
 
 /**
@@ -175,19 +160,30 @@ function projectEvents(events: SafeTranscriptEventData[]): RenderedEvent[] {
 
 // ── Rows ─────────────────────────────────────────────────────────────
 
-function MessageRow({ event }: { event: SafeMessageEvent }): ReactElement {
+interface RowAppearance {
+  dark: boolean;
+  onOpenExternal: (href: string) => void;
+}
+
+function MessageRow({ event, appearance }: { event: SafeMessageEvent; appearance: RowAppearance }): ReactElement {
   const role = event.role === 'user' ? '用户' : event.role === 'system' ? '系统' : '助手';
   const align = event.role === 'user' ? 'end' : 'start';
   return (
     <Message align={align}>
       <MessageContent>
         <MessageHeader className="px-0">
-          <time className="text-[10px] text-muted-foreground">{formatTimestamp(event.timestamp)}</time>
-          <span className="ml-2 text-[10px] font-bold text-muted-foreground">{role}</span>
+          <time className="text-xs text-muted-foreground">{formatClockSeconds(event.timestamp)}</time>
+          <span className="ml-2 text-xs font-bold text-muted-foreground">{role}</span>
         </MessageHeader>
         <Bubble variant={event.role === 'user' ? 'secondary' : 'muted'} align={align}>
           <BubbleContent>
-            <span className="whitespace-pre-wrap break-words">{event.message_summary}</span>
+            <Markdown
+              className="text-xs"
+              dark={appearance.dark}
+              onOpenExternal={appearance.onOpenExternal}
+            >
+              {event.message_summary}
+            </Markdown>
           </BubbleContent>
         </Bubble>
       </MessageContent>
@@ -208,13 +204,13 @@ function ToolRow({ activity }: { activity: ToolActivity }): ReactElement {
   return (
     <Card size="sm" className="mx-3 gap-1 border-l-2 bg-muted/20 py-2">
       <div className="flex items-center gap-2 px-3">
-        <time className="text-[10px] text-muted-foreground">{formatTimestamp(activity.timestamp)}</time>
-        <span className="text-[10px] font-bold text-muted-foreground">执行记录</span>
-        <Badge variant={status.variant} className={`ml-auto h-4 px-1.5 text-[9px] ${status.tone}`}>
+        <time className="text-xs text-muted-foreground">{formatClockSeconds(activity.timestamp)}</time>
+        <span className="text-xs font-bold text-muted-foreground">执行记录</span>
+        <Badge variant={status.variant} className={`ml-auto ${status.tone}`}>
           {status.label}
         </Badge>
       </div>
-      <div className="truncate px-3 text-[10px] text-muted-foreground" title={summary}>
+      <div className="truncate px-3 text-xs text-muted-foreground" title={summary}>
         {summary}
       </div>
     </Card>
@@ -223,28 +219,28 @@ function ToolRow({ activity }: { activity: ToolActivity }): ReactElement {
 
 function UsageRow({ event }: { event: SafeUsageEvent }): ReactElement {
   const parts = [
-    event.input_tokens > 0 ? `输入 ${formatCount(event.input_tokens)}` : '',
-    event.output_tokens > 0 ? `输出 ${formatCount(event.output_tokens)}` : '',
-    event.duration_ms > 0 ? `用时 ${formatMs(event.duration_ms)}` : '',
+    event.input_tokens > 0 ? `输入 ${formatTokenCount(event.input_tokens)}` : '',
+    event.output_tokens > 0 ? `输出 ${formatTokenCount(event.output_tokens)}` : '',
+    event.duration_ms > 0 ? `用时 ${formatElapsedMs(event.duration_ms)}` : '',
   ].filter(Boolean);
   return (
-    <div className="my-2 border-y border-dashed border-border px-2 py-1 text-center text-[10px] text-muted-foreground">
-      {`${formatTimestamp(event.timestamp)} · ${parts.join(' · ')}`}
+    <div className="my-2 border-y border-dashed border-border px-2 py-1 text-center text-xs text-muted-foreground">
+      {`${formatClockSeconds(event.timestamp)} · ${parts.join(' · ')}`}
     </div>
   );
 }
 
 function LifecycleRow({ event, label }: { event: SafeLifecycleEvent; label: string }): ReactElement {
   return (
-    <div className="px-2 py-1 text-center text-[10px] text-muted-foreground">
-      {`${formatTimestamp(event.timestamp)}  —  ${label}`}
+    <div className="px-2 py-1 text-center text-xs text-muted-foreground">
+      {`${formatClockSeconds(event.timestamp)}  —  ${label}`}
     </div>
   );
 }
 
-function renderRow(row: RenderedEvent): ReactNode {
+function renderRow(row: RenderedEvent, appearance: RowAppearance): ReactNode {
   switch (row.kind) {
-    case 'message': return <MessageRow key={row.key} event={row.event} />;
+    case 'message': return <MessageRow key={row.key} event={row.event} appearance={appearance} />;
     case 'tool': return <ToolRow key={row.key} activity={row.activity} />;
     case 'usage': return <UsageRow key={row.key} event={row.event} />;
     case 'lifecycle': return <LifecycleRow key={row.key} event={row.event} label={row.label} />;
@@ -254,6 +250,15 @@ function renderRow(row: RenderedEvent): ReactNode {
 // ── Panel ────────────────────────────────────────────────────────────
 
 type TranscriptState = 'loading' | 'data' | 'empty' | 'error';
+
+/** Current Pet appearance, mirrored synchronously from the preload bridge. */
+function usePetAppearance(): { dark: boolean } {
+  return useSyncExternalStore(
+    (listener) => petAppearanceBridge.subscribe(listener),
+    () => petAppearanceBridge.getSnapshot(),
+    () => petAppearanceBridge.getSnapshot(),
+  );
+}
 
 export function Transcript(): ReactElement {
   const [taskRunId] = useState(() => new URLSearchParams(window.location.search).get('task_run_id') ?? '');
@@ -269,6 +274,10 @@ export function Transcript(): ReactElement {
   const streamRef = useRef<HTMLDivElement | null>(null);
 
   const missingRunId = taskRunId.length === 0;
+  const appearance = usePetAppearance();
+  const onOpenExternal = useCallback((href: string) => {
+    void window.petAppearance.openExternal(href);
+  }, []);
 
   useEffect(() => {
     if (platform) document.documentElement.dataset.platform = platform;
@@ -319,24 +328,30 @@ export function Transcript(): ReactElement {
   }, [events]);
 
   const rows = useMemo(() => projectEvents(events), [events]);
+  const rowAppearance = useMemo<RowAppearance>(
+    () => ({ dark: appearance.dark, onOpenExternal }),
+    [appearance.dark, onOpenExternal],
+  );
   const boundedRunId = taskRunId.length > 12 ? `${taskRunId.slice(0, 12)}…` : taskRunId;
   const boundedLabel = nodeLabel.length > 48 ? `${nodeLabel.slice(0, 47)}…` : nodeLabel;
   const showEmpty = !loading && !error && rows.length === 0;
 
   return (
-    <div className="relative flex h-screen w-screen flex-col bg-background text-sm text-foreground">
+    <div className="relative flex h-screen w-screen flex-col bg-background text-xs text-foreground">
       <div className="flex min-h-9 items-center gap-2 border-b border-border bg-background/95 px-2.5 py-1 shadow-sm [-webkit-app-region:drag]">
         {platform === 'darwin' && (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-sm"
             aria-label="关闭任务对话"
-            title="关闭"
+            className="[-webkit-app-region:no-drag]"
             onClick={() => void window.transcriptApi.close()}
-            className="h-3 w-3 shrink-0 rounded-full bg-destructive [-webkit-app-region:no-drag]"
-          />
+          >
+            <X />
+          </Button>
         )}
         <span className="flex-1 truncate text-xs font-semibold" title={nodeLabel}>{boundedLabel}</span>
-        <span className="text-[9px] text-muted-foreground">{boundedRunId}</span>
+        <span className="text-xs text-muted-foreground">{boundedRunId}</span>
       </div>
 
       <div
@@ -350,7 +365,7 @@ export function Transcript(): ReactElement {
         }}
         className="flex-1 overflow-y-auto px-2.5 pb-4 pt-2.5"
       >
-        {rows.map(renderRow)}
+        {rows.map((row) => renderRow(row, rowAppearance))}
       </div>
 
       {loading && !error && (
@@ -367,17 +382,15 @@ export function Transcript(): ReactElement {
         <div className="absolute inset-x-0 bottom-0 top-9 flex flex-col items-center justify-center gap-2 bg-background/97 text-destructive">
           <span>{error}</span>
           {!missingRunId && (
-            <button
-              type="button"
+            <Button
               onClick={() => {
                 setError(null);
                 setLoading(true);
                 void window.transcriptApi.retry(taskRunId);
               }}
-              className="rounded-sm border border-border bg-muted/30 px-3 py-1 text-xs text-foreground"
             >
               重试
-            </button>
+            </Button>
           )}
         </div>
       )}
