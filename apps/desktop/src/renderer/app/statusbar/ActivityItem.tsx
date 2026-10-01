@@ -23,7 +23,7 @@ function byStartedAt(a: ActivityStatusTask, b: ActivityStatusTask): number {
 }
 
 const ACTIVITY_ROW_CLASS =
-  'min-w-0 flex-1 gap-2 rounded-xl px-2 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground';
+  'min-w-0 flex-1';
 
 export function ActivityItem() {
   const snapshot = useActivityStatus();
@@ -86,7 +86,7 @@ export function ActivityItem() {
             type="button"
             variant="ghost"
             size="xs"
-            className="h-5 max-w-24 shrink-0 px-1.5 text-xs text-muted-foreground"
+            className="max-w-24 shrink-0 text-muted-foreground"
             onClick={() => openTaskGraph(taskgraphId)}
           >
             <span className="truncate">{graph.title ?? graph.taskgraphId}</span>
@@ -206,7 +206,7 @@ export function TaskGraphItem() {
               key={graph.taskgraphId}
               render={<button type="button" onClick={() => openGraph(graph)} />}
               size="xs"
-              className="w-full gap-2 rounded-xl px-2 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground"
+              className="w-full"
             >
               <span className="truncate">{graph.title ?? graph.taskgraphId}</span>
               {graph.project ? <span className="truncate text-muted-foreground">{graph.project}</span> : null}
