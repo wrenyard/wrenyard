@@ -16,10 +16,12 @@ import { reorderProviders } from './provider-order.js';
 import { TaskGraphWindowOwner } from './main/windows/taskgraph-windows.js';
 import { DesktopQuotaController } from './quota-controller.js';
 import { DesktopQuotaSource } from './quota-service.js';
+import { ActivityStatusProjector, TaskRunLifecycleTracker, type VanishedTaskRun } from './main/activity-status.js';
+import { QuotaAlertTracker } from './main/projections/quota-service.js';
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_MAX, APPEARANCE_ZOOM_MIN, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_MAX, APPEARANCE_ZOOM_MIN, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type QuotaSnapshot, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { NotificationCenter, type NotificationInput, type ShellNotification } from './main/notification-center.js';
 import { DesktopUpdateController } from './updater/controller.js';
@@ -946,8 +948,46 @@ async function bootstrap(): Promise<void> {
   if (canConnectDaemon()) desktopSubscriptions.start();
   // The single shared activity round feeds the general TaskGraph windows as
   // well, so Wren entities and Graph Slips stay live even while Pet is hidden.
+  // It also feeds the status-bar projection and the main-owned task lifecycle
+  // notifications, which must work whether or not Pet is enabled.
+  const activityProjector = new ActivityStatusProjector();
+  const taskLifecycle = new TaskRunLifecycleTracker();
+  const notifyVanishedTaskRun = async (run: VanishedTaskRun): Promise<void> => {
+    if (notificationCenter === null || desktopSettingsStore === null) return;
+    // Resolve the terminal fact from the authoritative run status; a run that
+    // merely vanished is never reported as success or failure on its own.
+    let status: string | null = null;
+    try {
+      const raw = await requestForeman('task.run.status', { task_run_id: run.taskRunId });
+      if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+        const value = (raw as { status?: unknown }).status;
+        if (typeof value === 'string') status = value;
+      }
+    } catch {
+      return;
+    }
+    if (status !== 'done' && status !== 'failed' && status !== 'interrupted') return;
+    const events = desktopSettingsStore.load().notifications.events;
+    if (status === 'done' ? !events.taskCompleted : !events.taskFailed) return;
+    const label = run.taskLabel ?? run.taskRunId;
+    notificationCenter.push({
+      id: `task-run:${run.taskRunId}`,
+      level: status === 'done' ? 'success' : 'error',
+      source: 'task',
+      title: status === 'done' ? `任务完成：${label}` : `任务失败：${label}`,
+      ...(run.project !== undefined ? { description: run.project } : {}),
+      action: { label: '查看', command: { id: 'tasks.open', args: { taskRunId: run.taskRunId } } },
+    });
+  };
   desktopSubscriptions.subscribe({
-    onActivity: (presence) => windowOwner.applyActivity(presence),
+    onActivity: (presence) => {
+      windowOwner.applyActivity(presence);
+      const changed = activityProjector.update(presence);
+      if (changed) shellWindow?.notifyActivityChanged(changed);
+      for (const run of taskLifecycle.observe(activityProjector.get())) {
+        void notifyVanishedTaskRun(run);
+      }
+    },
   });
 
   petController = new DesktopPetController({
@@ -972,14 +1012,50 @@ async function bootstrap(): Promise<void> {
   });
   if (SMOKE) await petStart;
   const providerService = new ProviderService({ ipcPath, canConnect: canConnectDaemon });
+  // Downward threshold crossings are computed in the main process so a window
+  // in the background still emits a system notification (usage spec 6.6).
+  const quotaAlerts = new QuotaAlertTracker();
+  const emitQuotaAlerts = (snapshot: QuotaSnapshot): void => {
+    if (notificationCenter === null || desktopSettingsStore === null) return;
+    // Tracking consumes every sample even while the quota-warning event is off;
+    // only emission is gated below. Skipping observation would let a crossing
+    // that happened while notifications were disabled replay as a fresh alert
+    // when the event is switched back on. Eligible providers match the
+    // status-bar QuotaItem projection: when an explicit order exists, only
+    // order-enabled configured providers are tracked.
+    const enabledIds = new Set(
+      snapshot.providerOrder.filter((entry) => entry.enabled).map((entry) => entry.id),
+    );
+    const eligible = snapshot.providerOrder.length === 0
+      ? snapshot.providers
+      : snapshot.providers.filter((provider) => enabledIds.has(provider.id));
+    const providers = eligible.map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      windows: provider.windows.map((window) => ({ name: window.name, remainingPct: window.remainingPct })),
+    }));
+    const alerts = quotaAlerts.observe(providers);
+    if (!desktopSettingsStore.load().notifications.events.quotaWarning) return;
+    for (const alert of alerts) {
+      notificationCenter.push({
+        id: alert.id,
+        level: alert.level,
+        source: 'quota',
+        title: alert.title,
+        description: alert.description,
+        action: { label: '查看额度', command: { id: 'quota.showPanel' } },
+      });
+    }
+  };
   quotaController = new DesktopQuotaController({
     source: new DesktopQuotaSource(ipcPath, canConnectDaemon),
     providerSource: providerService,
     getProviderOrder: () => settingsStore.load().providers.providers,
-    onChanged: (_snapshot, providers) => {
+    onChanged: (snapshot, providers) => {
       petController?.setQuotaProviders(providers);
       desktopTray?.rebuild();
       shellWindow?.notifyQuotaChanged();
+      emitQuotaAlerts(snapshot);
     },
   });
   // Provider discovery may wait on native clients; it must not delay the window.
@@ -1104,6 +1180,7 @@ async function bootstrap(): Promise<void> {
     // Task detail/transcript windows are general Desktop windows, owned by the
     // window owner and reachable even when Pet is hidden.
     openTaskTranscript: (taskRunId) => windowOwner.openTaskTranscript(taskRunId),
+    openTaskGraph: (taskGraphId) => windowOwner.openTaskGraph(taskGraphId),
     getTaskSettings: (project?: string, taskId?: string) => getTaskSettings(project, taskId),
     saveTaskSettings: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),
     runtimeAliasSnapshot: () => getRuntimeAliasSnapshot(),
@@ -1133,6 +1210,7 @@ async function bootstrap(): Promise<void> {
     },
     getPreferences: async () => preferencesController!.get(),
     setPreference: async (id: PreferenceId, value: unknown) => preferencesController!.set(id, value),
+    getActivityStatus: () => activityProjector.get(),
     openSettingsFile: async () => { await shell.openPath(settingsPath); },
     openLogsDirectory: async () => { await shell.openPath(join(foremanStateRoot(), 'logs')); },
     revealWorkspace: async (path: string) => { shell.showItemInFolder(path); },

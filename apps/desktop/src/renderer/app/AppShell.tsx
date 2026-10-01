@@ -1,15 +1,14 @@
 import { Activity, useEffect, useState } from 'react';
 import type { ComponentType } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import type { ShellPage } from '@/shell-contract';
 import { useShellPage } from '@/renderer/lib/desktop';
 import { startViewTransition } from '@/renderer/lib/motion';
 import { SidebarInset, SidebarProvider } from '@/renderer/components/ui/sidebar';
 import { AppSidebar } from '@/renderer/app/AppSidebar';
 import { TitleBar } from '@/renderer/app/TitleBar';
+import { StatusBar } from '@/renderer/app/statusbar/StatusBar';
 import { TitleBarPageProvider } from '@/renderer/lib/titlebar';
-import { UpdateDialog, isUpdateVisible } from '@/renderer/app/dialogs/UpdateDialog';
-import { updateQuery } from '@/renderer/lib/queries';
+import { UpdateDialog } from '@/renderer/app/dialogs/UpdateDialog';
 import { SessionPage } from '@/renderer/pages/session';
 import { StatsPage } from '@/renderer/pages/stats';
 import { QuotaPage } from '@/renderer/pages/quota';
@@ -29,7 +28,7 @@ const PAGES: Record<ShellPage, ComponentType> = {
 
 /**
  * Shell frame: a full-width title bar, the fixed activity rail beside the
- * active page, and a status bar slot, per the window-chrome spec. Each page
+ * active page, and the full-width status bar, per the window-chrome spec. Each page
  * mounts on first visit and is then kept alive inside an `Activity` boundary,
  * so switching pages preserves state and pauses hidden effects. The title bar
  * is rendered outside the middle row but inside the page provider so portaled
@@ -43,7 +42,6 @@ export function AppShell() {
   const [shown, setShown] = useState<ShellPage>(page);
   const [visited, setVisited] = useState<ReadonlySet<ShellPage>>(() => new Set([page]));
   const [updateOpen, setUpdateOpen] = useState(false);
-  const update = useQuery(updateQuery);
 
   useEffect(() => {
     if (page === shown) return;
@@ -64,11 +62,7 @@ export function AppShell() {
           // The outer rail is fixed; Cmd+B must only toggle a page's inner sidebar.
           onOpenChange={() => {}}
         >
-          <AppSidebar
-            page={shown}
-            updateVisible={isUpdateVisible(update.data)}
-            onOpenUpdate={() => setUpdateOpen(true)}
-          />
+          <AppSidebar page={shown} />
           <SidebarInset className="motion-surface-page flex min-h-0 flex-col">
             {PAGE_ORDER.map((id) => {
               if (!visited.has(id)) return null;
@@ -87,8 +81,7 @@ export function AppShell() {
           <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />
         </SidebarProvider>
       </div>
-      {/* Reserved status bar slot (chrome spec C2). */}
-      <div data-statusbar className="h-(--statusbar-height) shrink-0 border-t bg-sidebar" />
+      <StatusBar onOpenUpdate={() => setUpdateOpen(true)} />
     </div>
   );
 }
