@@ -34,7 +34,7 @@ async function buildOwnerBundle() {
   const { build } = await import('esbuild');
   await build({
     entryPoints: {
-      'taskgraph-windows': path.join(rootDir, 'src', 'main', 'windows', 'taskgraph-windows.ts'),
+      'taskgraph-windows': path.join(rootDir, 'src', 'pet', 'main', 'windows', 'taskgraph-windows.ts'),
       pages: path.join(rootDir, 'src', 'pages.ts'),
     },
     outdir: captureBase,

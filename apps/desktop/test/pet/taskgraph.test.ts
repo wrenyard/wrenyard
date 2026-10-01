@@ -35,11 +35,12 @@ import type {
   TaskGraphStatusResult,
   TaskGraphEntityDtoWithPresentation,
 } from '../../src/pet/shared/taskgraph';
-import { projectGraphSlipFromActivity, projectGraphSlipSnapshot, snapshotAllowsTranscript } from '../../src/main/windows/graph-slip-snapshot-dto';
+import { projectGraphSlipFromActivity, projectGraphSlipSnapshot, snapshotAllowsTranscript } from '../../src/pet/main/windows/graph-slip-snapshot-dto';
 import type { TaskGraphSnapshot } from '../../src/main/daemon-client/foreman-taskgraph-reader';
 import { ForemanTaskGraphReader } from '../../src/main/daemon-client/foreman-taskgraph-reader';
 import type { DaemonClient } from '../../src/main/daemon-client/client';
-import { TaskGraphWindowOwner, countDoneTaskNodes, fitGraphSlipWindowSize, placeWrenWindow } from '../../src/main/windows/taskgraph-windows';
+import { TaskGraphWindowOwner, countDoneTaskNodes } from '../../src/pet/main/windows/taskgraph-windows';
+import { fitGraphSlipWindowSize, placeWrenWindow } from '../../src/pet/main/windows/placement';
 import {
   ACTIVITY_SNAPSHOT_SCHEMA_VERSION,
   deriveActivityPresence,

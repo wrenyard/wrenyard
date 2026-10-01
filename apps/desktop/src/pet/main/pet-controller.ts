@@ -4,20 +4,20 @@ import {
   serializePetSettings,
   type AppConfig,
   type EntityVisibilityConfig,
-} from './pet/main/config';
-import type { PetRuntimeStatus } from './pet/main/runtime';
-import type { QuotaProviderState } from './main/projections/quota-runtime';
+} from './config';
+import type { PetRuntimeStatus } from './runtime';
+import type { QuotaProviderState } from '../../main/projections/quota-runtime';
 import type {
   PetCompanionSettings,
   PetCompanionSnapshot,
   PetDisplaySnapshot,
-} from './shell-contract.js';
-import { normalizeProviderOrder } from './provider-order.js';
+} from '../../shell-contract.js';
+import { normalizeProviderOrder } from '../../provider-order.js';
 import {
   configFromPetSettings,
   petSettingsFromConfig,
   type DesktopSettingsStore,
-} from './main/settings/desktop-settings.js';
+} from '../../main/settings/desktop-settings.js';
 
 export interface DesktopPetRuntimeHandle {
   readonly status: PetRuntimeStatus;
@@ -217,3 +217,4 @@ export class DesktopPetController {
     return result;
   }
 }
+

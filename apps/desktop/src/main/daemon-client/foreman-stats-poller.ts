@@ -1,4 +1,4 @@
-import type { DailyStatsSnapshot } from '../../pet/shared/snapshot';
+import type { DailyStatsSnapshot } from '../../shell-contract.js';
 import type { DiagnosticLogger } from './diagnostic-logger';
 import { WrenyardDaemonClient, resolveDaemonIpcPath, type DaemonClient, type DaemonRequestOptions } from './client';
 

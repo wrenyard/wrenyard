@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   overlaySkipsTaskbar,
   overlayWorkspaceVisibilityOptions,
-} from '../../src/pet/main/overlay-window-policy';
+} from '../../src/pet/main/windows/overlay-window-policy';
 
 describe('overlay window taskbar policy', () => {
   it('keeps the Desktop host visible in the macOS Dock', () => {

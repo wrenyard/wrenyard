@@ -11,7 +11,7 @@ import {
 import {
   DesktopPetController,
   type DesktopPetRuntimeHandle,
-} from '../src/pet-controller.js';
+} from '../src/pet/main/pet-controller.js';
 
 function runtime(events: string[]): DesktopPetRuntimeHandle {
   let status: DesktopPetRuntimeHandle['status'] = 'stopped';
