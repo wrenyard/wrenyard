@@ -8,6 +8,7 @@ import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import { DesktopPetController } from './pet-controller.js';
 import { DesktopSettingsStore } from './main/settings/desktop-settings.js';
+import { DesktopAppearanceController } from './main/appearance.js';
 import { WrenyardDaemonClient } from './main/daemon-client/client.js';
 import { DaemonSubscriptions } from './main/daemon-client/subscriptions.js';
 import { reorderProviders } from './provider-order.js';
@@ -222,6 +223,7 @@ let petController: DesktopPetController | null = null;
 let desktopSubscriptions: DaemonSubscriptions | null = null;
 let taskgraphWindowOwner: TaskGraphWindowOwner | null = null;
 let quotaController: DesktopQuotaController | null = null;
+let appearanceController: DesktopAppearanceController | null = null;
 let updateController: DesktopUpdateController | null = null;
 let daemonSupervisor: DesktopDaemonSupervisor | null = null;
 /** Latest known product workspace; refreshed when a save activates a new root. */
@@ -273,6 +275,8 @@ async function finalizeQuit(): Promise<void> {
     desktopTray = null;
     quotaController?.stop();
     quotaController = null;
+    appearanceController?.dispose();
+    appearanceController = null;
     updateController?.stop();
     updateController = null;
     daemonSupervisor?.dispose();
@@ -740,6 +744,14 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     console.warn('[wrenyard-desktop] Desktop settings could not be loaded:', error instanceof Error ? error.message : String(error));
   }
+  // Appearance is main-owned and resolved before any window opens: it sets
+  // `nativeTheme.themeSource`, the window background/palette/icons, and pushes
+  // only a changed resolution to the renderer.
+  appearanceController = new DesktopAppearanceController({
+    store: settingsStore,
+    onChanged: (appearance) => shellWindow?.notifyAppearanceChanged(appearance),
+  });
+  appearanceController.init();
   // One shared daemon transport and subscription set for the whole Desktop
   // process. The shell window, tray and Pet all consume the same rounds; the
   // Pet never opens its own connection or timer.
@@ -848,8 +860,15 @@ async function bootstrap(): Promise<void> {
     preloadPath: preloadPath(app.getAppPath(), 'shell'),
     appVersion: version,
     smoke: SMOKE,
-    icon: resolveAppIcon(),
+    icon: appearanceController.iconPath('png256') ?? resolveAppIcon(),
+    initialAppearance: appearanceController.resolve(),
+    backgroundColor: appearanceController.backgroundColor(),
+    titleBarOverlay: appearanceController.titleBarOverlay(),
+    additionalArguments: appearanceController.arguments(),
     onCreated: (controller) => { shellWindow = controller; },
+    getAppearance: () => appearanceController!.resolve(),
+    getAppearanceSettings: async () => appearanceController!.getSettings(),
+    setAppearance: async (settings) => appearanceController!.save(settings),
     getSettings,
     getStats: () => { requireDaemonRunning(); return readStatsSnapshot(ipcPath); },
     getQuota: (forceRefresh = false) => quotaController!.getSnapshot(forceRefresh),
@@ -1048,6 +1067,9 @@ app.on('window-all-closed', () => {
 // created BrowserWindow forwards it to the forced, dialog-free quit path. A
 // connected external daemon is never stopped, even here.
 app.on('browser-window-created', (_event, window) => {
+  // Every window (shell, Pet, TaskGraph, dialogs) inherits the resolved
+  // background, Windows title bar palette and window icon.
+  appearanceController?.applyToWindow(window);
   if (quitSurfacesBlocked) window.setEnabled(false);
   const onSessionEnd = (): void => { blockQuitSurfaces(); quitController?.forceQuit(); };
   window.on('query-session-end', (event) => { event.preventDefault(); onSessionEnd(); });
@@ -1077,6 +1099,8 @@ if (!gotSingleInstanceLock) {
     try {
       quotaController?.stop();
       quotaController = null;
+      appearanceController?.dispose();
+      appearanceController = null;
       updateController?.stop();
       updateController = null;
       daemonSupervisor?.dispose();
