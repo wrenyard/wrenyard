@@ -1,5 +1,5 @@
 /**
- * session-v2 model driver.
+ * session model driver.
  *
  * A driver executes exactly one stateless streaming completion and returns the
  * visible text, the reasoning text and the provider usage. It owns no session

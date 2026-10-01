@@ -14,7 +14,6 @@ export interface SettingsSnapshotOptions {
   workspace: WorkspaceConfigurationSnapshot;
   desktopVersion: string;
   wrenyardVersion: string;
-  dshVersion: string;
   buildTime?: string;
   readHealth(): Promise<HealthSnapshot>;
   readGatewayModels?: () => Promise<WrenyardGatewayModel[]>;
@@ -52,7 +51,6 @@ export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): P
     about: {
       desktopVersion: options.desktopVersion,
       wrenyardVersion: options.wrenyardVersion,
-      dshVersion: options.dshVersion,
       ...(options.buildTime ? { buildTime: options.buildTime } : {}),
       ...(options.sourceDevelopment ? { sourceDevelopment: true } : {}),
     },

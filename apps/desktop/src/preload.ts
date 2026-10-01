@@ -5,8 +5,6 @@ import {
   type StatsSnapshot,
   type QuotaSnapshot,
   type SettingsSnapshot,
-  type ConversationSnapshot,
-  type ConversationActivityItem,
   type WorkspaceConfigurationSnapshot,
   type UpdateSnapshot,
   type DaemonLifecycleSnapshot,
@@ -27,7 +25,7 @@ import {
   type ExecEventsResult,
   type ExecCancelResult,
 } from './shell-contract.js';
-import { exposeSessionV2 } from './session-v2/preload.js';
+import { exposeSession } from './session/preload.js';
 
 const api: WrenyardShellApi = {
   platform: process.platform,
@@ -82,12 +80,6 @@ const api: WrenyardShellApi = {
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.saveWorkspace, path, create) as Promise<WorkspaceConfigurationSnapshot>;
   },
-  getConversation(): Promise<ConversationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.conversationSnapshot) as Promise<ConversationSnapshot>;
-  },
-  getConversationActivity(): Promise<ConversationActivityItem[]> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.conversationActivity);
-  },
   copyText(text: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.copyText, text);
   },
@@ -96,26 +88,6 @@ const api: WrenyardShellApi = {
   },
   openTaskTranscript(taskRunId: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskTranscript, taskRunId);
-  },
-  selectConversation(sessionId: string): Promise<ConversationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.conversationSelect, sessionId) as Promise<ConversationSnapshot>;
-  },
-  createConversation(): Promise<ConversationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.conversationCreate) as Promise<ConversationSnapshot>;
-  },
-  selectConversationModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.conversationSelectModel, provider, model, reasoningEffort) as Promise<ConversationSnapshot>;
-  },
-  sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.conversationSend, text, clientTimeZone) as Promise<ConversationSnapshot>;
-  },
-  cancelConversation(turnId?: string): Promise<ConversationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.conversationCancel, turnId) as Promise<ConversationSnapshot>;
-  },
-  onConversationChanged(listener: () => void): () => void {
-    const handler = (): void => listener();
-    ipcRenderer.on(SHELL_CHANNELS.conversationChanged, handler);
-    return () => ipcRenderer.removeListener(SHELL_CHANNELS.conversationChanged, handler);
   },
   onQuotaChanged(listener: () => void): () => void {
     const handler = (): void => listener();
@@ -177,5 +149,5 @@ const api: WrenyardShellApi = {
 
 contextBridge.exposeInMainWorld('wrenyardShell', api);
 
-// Independent session-v2 test surface; it never touches the shell contract.
-exposeSessionV2();
+// Independent session test surface; it never touches the shell contract.
+exposeSession();

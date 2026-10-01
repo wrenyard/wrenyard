@@ -1,32 +1,32 @@
-/** Desktop transport for daemon-owned session-v2 sessions. */
+/** Desktop transport for daemon-owned sessions. */
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
-import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session-v2';
+import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
 import type {
-  SessionV2BridgeEventPayload,
-  SessionV2BridgeLivePayload,
-  SessionV2BridgeModelEntry,
-  SessionV2BridgeTaskBrief,
+  SessionBridgeEventPayload,
+  SessionBridgeLivePayload,
+  SessionBridgeModelEntry,
+  SessionBridgeTaskBrief,
 } from './preload.js';
 
-export const SESSION_V2_CHANNELS = {
-  list: 'session-v2:list', create: 'session-v2:create', ledger: 'session-v2:ledger',
-  send: 'session-v2:send', interrupt: 'session-v2:interrupt', models: 'session-v2:models',
-  tasks: 'session-v2:tasks',
-  event: 'session-v2:event', live: 'session-v2:live',
+export const SESSION_CHANNELS = {
+  list: 'session:list', create: 'session:create', ledger: 'session:ledger',
+  send: 'session:send', interrupt: 'session:interrupt', models: 'session:models',
+  tasks: 'session:tasks',
+  event: 'session:event', live: 'session:live',
 } as const;
 export type {
-  SessionV2Bridge, SessionV2BridgeEventPayload, SessionV2BridgeInterruptRequest,
-  SessionV2BridgeLivePayload, SessionV2BridgeModelEntry, SessionV2BridgeSendRequest,
-  SessionV2BridgeTaskBrief,
+  SessionBridge, SessionBridgeEventPayload, SessionBridgeInterruptRequest,
+  SessionBridgeLivePayload, SessionBridgeModelEntry, SessionBridgeSendRequest,
+  SessionBridgeTaskBrief,
 } from './preload.js';
 
-export interface RegisterSessionV2Options {
+export interface RegisterSessionOptions {
   ipcPath: string;
   canConnect?: () => boolean;
   isShellSender(sender: WebContents): boolean;
 }
-export interface SessionV2Registration { disconnect(): void; close(): Promise<void> }
+export interface SessionRegistration { disconnect(): void; close(): Promise<void> }
 interface EventPage { events: LedgerEvent[]; lastSeq: number; live?: LiveCall[] }
 interface PollState {
   ownerId: number;
@@ -53,7 +53,7 @@ function isShuttingDown(error: unknown): boolean {
   return error instanceof WrenyardRpcError && typeof error.data === 'object' && error.data !== null
     && 'code' in error.data && error.data.code === 'daemon_shutting_down';
 }
-function toModelEntries(connection: WrenyardGatewayConnection): SessionV2BridgeModelEntry[] {
+function toModelEntries(connection: WrenyardGatewayConnection): SessionBridgeModelEntry[] {
   return connection.models.filter(model => !model.taskOnly && model.publicId.includes('/')).map(model => ({
     publicId: model.publicId, provider: model.provider,
     model: model.publicId.slice(model.publicId.indexOf('/') + 1), displayName: model.displayName,
@@ -105,10 +105,10 @@ function taskUsage(value: unknown): { input?: number; output?: number } | undefi
 }
 
 /** Map a daemon `task.run.status` result into a renderer brief. */
-function taskBriefFrom(taskRunId: string, value: unknown): SessionV2BridgeTaskBrief {
+function taskBriefFrom(taskRunId: string, value: unknown): SessionBridgeTaskBrief {
   if (typeof value !== 'object' || value === null) return { taskRunId, status: 'unavailable' };
   const record = value as Record<string, unknown>;
-  const brief: SessionV2BridgeTaskBrief = {
+  const brief: SessionBridgeTaskBrief = {
     taskRunId: readString(record.task_run_id) ?? taskRunId,
     status: readString(record.status) ?? 'unavailable',
   };
@@ -123,7 +123,7 @@ function taskBriefFrom(taskRunId: string, value: unknown): SessionV2BridgeTaskBr
   return brief;
 }
 
-export function registerSessionV2(options: RegisterSessionV2Options): SessionV2Registration {
+export function registerSession(options: RegisterSessionOptions): SessionRegistration {
   const polls = new Map<number, PollState>();
   const clients = new Set<WrenyardIpcClient>();
   const work = new Set<Promise<unknown>>();
@@ -155,7 +155,7 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
     if (polls.get(state.ownerId) === state) polls.delete(state.ownerId);
   };
   const readPage = (state: PollState, waitMs: number): Promise<EventPage> => request(
-    'sessionV2.events',
+    'session.events',
     { sessionId: state.sessionId, afterSeq: state.afterSeq, waitMs, live: true },
     state.controller.signal,
   );
@@ -168,15 +168,15 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
           const page = await readPage(state, draining ? 0 : 1000);
           if (signal.aborted || state.target.isDestroyed()) break;
           for (const event of page.events) {
-            const payload: SessionV2BridgeEventPayload = { sessionId: state.sessionId, event };
-            state.target.send(SESSION_V2_CHANNELS.event, payload);
+            const payload: SessionBridgeEventPayload = { sessionId: state.sessionId, event };
+            state.target.send(SESSION_CHANNELS.event, payload);
             state.afterSeq = event.seq;
           }
           const live = page.live;
           if (live !== undefined && (state.lastLive === undefined || !sameLive(state.lastLive, live))) {
             state.lastLive = live.map(call => ({ ...call }));
-            const payload: SessionV2BridgeLivePayload = { sessionId: state.sessionId, live };
-            state.target.send(SESSION_V2_CHANNELS.live, payload);
+            const payload: SessionBridgeLivePayload = { sessionId: state.sessionId, live };
+            state.target.send(SESSION_CHANNELS.live, payload);
           }
           if (draining) {
             const status = await request<{ shutting_down: boolean }>('daemon.status', {}, signal);
@@ -199,7 +199,7 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
         }
       }
     } catch (error) {
-      if (!signal.aborted) console.warn('[session-v2] event polling failed:', error);
+      if (!signal.aborted) console.warn('[session] event polling failed:', error);
     } finally {
       stopPoll(state);
     }
@@ -240,23 +240,23 @@ export function registerSessionV2(options: RegisterSessionV2Options): SessionV2R
     });
   };
 
-  handle(SESSION_V2_CHANNELS.list, async () =>
-    (await request<{ sessions: SessionSummary[] }>('sessionV2.list', {})).sessions);
-  handle(SESSION_V2_CHANNELS.create, () => request('sessionV2.create', {}));
-  handle(SESSION_V2_CHANNELS.send, (_event, value) => request('sessionV2.send', value));
-  handle(SESSION_V2_CHANNELS.interrupt, async (_event, value) => { await request('sessionV2.interrupt', value); });
-  handle(SESSION_V2_CHANNELS.models, async () =>
+  handle(SESSION_CHANNELS.list, async () =>
+    (await request<{ sessions: SessionSummary[] }>('session.list', {})).sessions);
+  handle(SESSION_CHANNELS.create, () => request('session.create', {}));
+  handle(SESSION_CHANNELS.send, (_event, value) => request('session.send', value));
+  handle(SESSION_CHANNELS.interrupt, async (_event, value) => { await request('session.interrupt', value); });
+  handle(SESSION_CHANNELS.models, async () =>
     toModelEntries(await request<WrenyardGatewayConnection>('gateway.connection', {})));
-  handle(SESSION_V2_CHANNELS.ledger, (event, value) => {
+  handle(SESSION_CHANNELS.ledger, (event, value) => {
     if (typeof value !== 'string' || !value) throw new Error('Invalid sessionId');
     return openLedger(event.sender, value);
   });
-  handle(SESSION_V2_CHANNELS.tasks, async (_event, value) => {
+  handle(SESSION_CHANNELS.tasks, async (_event, value) => {
     if (!Array.isArray(value) || !value.every(id => typeof id === 'string')) {
       throw new Error('Invalid taskRunIds');
     }
     // Concurrent per-id status: one rejection only marks that entry unavailable.
-    return Promise.all(value.map(async (taskRunId): Promise<SessionV2BridgeTaskBrief> => {
+    return Promise.all(value.map(async (taskRunId): Promise<SessionBridgeTaskBrief> => {
       try {
         return taskBriefFrom(taskRunId, await request('task.run.status', { task_run_id: taskRunId }));
       } catch {

@@ -300,7 +300,6 @@ export function stageDaemon(stage) {
   const { dependencies } = readJson(path.join(bundle, 'package.json'));
   copyDependencyClosure([
     ...Object.keys(dependencies).map((name) => [name, name === 'better-sqlite3' ? path.join(ROOT, 'packages', 'execution') : session]),
-    ['@wrenyard/dsh-shell', session],
   ], nodeModules);
   pruneDependencyDevFiles(nodeModules);
   pruneNativePackages(nodeModules);

@@ -82,5 +82,7 @@ export async function runForemanService(args = process.argv.slice(2)): Promise<n
   process.on('disconnect', () => { daemon.requestShutdown('parent disconnected') })
 
   // run() owns start -> await shutdown request -> drain -> close -> exit code.
-  return await daemon.run()
+  const exitCode = await daemon.run()
+  if (process.connected) process.disconnect()
+  return exitCode
 }

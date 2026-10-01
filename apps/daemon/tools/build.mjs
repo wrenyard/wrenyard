@@ -38,7 +38,7 @@ await build({
   // Bundled CommonJS dependencies still require Node built-ins at runtime.
   banner: { js: "import { createRequire as __wrenyardCreateRequire } from 'node:module'; const require = __wrenyardCreateRequire(import.meta.url);" },
   define: { __WRENYARD_BUNDLE_SUITE_ROOT__: JSON.stringify('..') },
-  external: [...Object.keys(external), '@deepseek-ai/*', '@wrenyard/dsh-shell'],
+  external: [...Object.keys(external), '@deepseek-ai/*'],
   logLevel: 'info',
 });
 await writeFile(join(dist, 'package.json'), `${JSON.stringify({

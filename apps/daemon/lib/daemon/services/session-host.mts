@@ -1,18 +1,21 @@
 import { execFileSync } from 'node:child_process'
 import { hostname } from 'node:os'
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client'
-import type { SessionService } from '@wrenyard/session'
-import type { ProjectInfo, SessionV2Host } from '@wrenyard/session-v2'
-import { foremanStateRoot } from '../../config/state.mts'
+import {
+  buildSummarySettingsSnapshot,
+  readSummaryModel,
+  type ProjectInfo,
+  type SessionHost,
+} from '@wrenyard/session'
 import { ProjectManager } from '../../core/project/manager.mts'
 import type { TaskContext } from '../../core/task/context.mts'
 import { isTaskRunRejection, type TaskService } from '../../core/task/service.mts'
 import type { WorkspaceDocService } from './workspace-doc-service.mts'
 
-export interface DaemonSessionV2HostOptions {
+export interface DaemonSessionHostOptions {
   workspaceRoot: string
+  stateRoot: string
   gateway(): Promise<WrenyardGatewayConnection>
-  sessionService: Pick<SessionService, 'getSummaryModel'>
   taskService: TaskService
   workspaceDocService: WorkspaceDocService
 }
@@ -36,8 +39,8 @@ function readGitHead(checkoutPath: string): { branch?: string; head?: string } {
 }
 
 /** In-process feature ports; task admission goes through TaskService, never RPC. */
-export function createDaemonSessionV2Host(options: DaemonSessionV2HostOptions): SessionV2Host {
-  const { taskService, workspaceDocService } = options
+export function createDaemonSessionHost(options: DaemonSessionHostOptions): SessionHost {
+  const { stateRoot, taskService, workspaceDocService } = options
   const projects = new ProjectManager({ workspaceRoot: options.workspaceRoot })
   const listProjects = async (): Promise<ProjectInfo[]> => projects.listProjects().map(project => ({
     id: project.name,
@@ -50,12 +53,15 @@ export function createDaemonSessionV2Host(options: DaemonSessionV2HostOptions): 
 
   return {
     workspaceRoot: options.workspaceRoot,
-    stateRoot: foremanStateRoot(),
+    stateRoot,
     deviceName: hostname(),
     gateway: options.gateway,
     async cheapModel() {
-      const { summary } = await options.sessionService.getSummaryModel()
-      const canonical = summary.selectedCanonicalModel.trim() || 'deepseek-v4.1-flash'
+      const canonical = readSummaryModel(stateRoot).trim() || 'deepseek-v4.1-flash'
+      const summary = await buildSummarySettingsSnapshot({
+        readGatewayConnection: options.gateway,
+        readSummaryModel: () => readSummaryModel(stateRoot),
+      })
       const connection = await options.gateway()
       const usable = connection.models.filter(model => !model.taskOnly)
       const preferred = summary.options.find(option => option.canonicalModel === canonical && option.available)?.publicId

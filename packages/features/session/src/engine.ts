@@ -1,5 +1,5 @@
 /**
- * session-v2 engine: the work-turn state machine.
+ * session engine: the work-turn state machine.
  *
  * Cross-module contract (implemented by the concurrent sibling tasks):
  *
@@ -57,7 +57,7 @@ export interface ProjectInfo {
   defaultBranch?: string;
 }
 
-export interface SessionV2Host {
+export interface SessionHost {
   workspaceRoot: string;
   stateRoot: string;
   deviceName: string;
@@ -92,7 +92,7 @@ export interface LiveCall {
   reasoning: string;
 }
 
-export interface SessionV2 {
+export interface Session {
   createSession(): Promise<{ sessionId: string }>;
   listSessions(): SessionSummary[];
   send(
@@ -102,6 +102,8 @@ export interface SessionV2 {
   interrupt(sessionId: string, turn: number): Promise<void>;
   /** Admitted turns whose terminal `turn.finished` is not yet durable. */
   activeTurnCount(): number;
+  /** True while any admitted turn has not reached its durable terminal append. */
+  hasRunningTurns(): boolean;
   readLedger(sessionId: string): LedgerEvent[];
   /** Current in-memory streaming snapshots for the session's live calls. */
   readLive(sessionId: string): LiveCall[];
@@ -445,12 +447,12 @@ const SCOPE_RULES = [
 
 // ─── Engine ────────────────────────────────────────────────────────────────
 
-export function createEngine(host: SessionV2Host, ports: EnginePorts): SessionV2 {
+export function createEngine(host: SessionHost, ports: EnginePorts): Session {
   return new Engine(host, ports);
 }
 
-class Engine implements SessionV2 {
-  private readonly host: SessionV2Host;
+class Engine implements Session {
+  private readonly host: SessionHost;
   private readonly ports: EnginePorts;
   private readonly sessions = new Map<string, SessionRuntime>();
   /** Per-session, in-memory streaming snapshots keyed by call id. */
@@ -464,7 +466,7 @@ class Engine implements SessionV2 {
   private closed = false;
   private closePromise?: Promise<void>;
 
-  constructor(host: SessionV2Host, ports: EnginePorts) {
+  constructor(host: SessionHost, ports: EnginePorts) {
     this.host = host;
     this.ports = ports;
     for (const summary of ports.ledger.listSessions()) {
@@ -638,6 +640,10 @@ class Engine implements SessionV2 {
       }
     }
     return count;
+  }
+
+  hasRunningTurns(): boolean {
+    return this.activeTurnCount() > 0;
   }
 
   readLedger(sessionId: string): LedgerEvent[] {
@@ -1793,7 +1799,7 @@ class Engine implements SessionV2 {
   }
 
   private assertOpen(): void {
-    if (this.closed) throw new Error('session-v2 is closed');
+    if (this.closed) throw new Error('session is closed');
   }
 }
 

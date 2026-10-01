@@ -1,23 +1,29 @@
 import type { JsonSchema } from './jsonrpc.mts'
 import {
-  sessionV2ListParamsSchema, sessionV2ListResultSchema,
-  sessionV2CreateParamsSchema, sessionV2CreateResultSchema,
-  sessionV2SendParamsSchema, sessionV2SendResultSchema,
-  sessionV2InterruptParamsSchema, sessionV2InterruptResultSchema,
-  sessionV2EventsParamsSchema, sessionV2EventsResultSchema,
-  type SessionV2ListParams, type SessionV2ListResult,
-  type SessionV2CreateParams, type SessionV2CreateResult,
-  type SessionV2SendParams, type SessionV2SendResult,
-  type SessionV2InterruptParams, type SessionV2InterruptResult,
-  type SessionV2EventsParams, type SessionV2EventsResult,
-} from './methods/session-v2.mts'
+  sessionListParamsSchema, sessionListResultSchema,
+  sessionCreateParamsSchema, sessionCreateResultSchema,
+  sessionSendParamsSchema, sessionSendResultSchema,
+  sessionInterruptParamsSchema, sessionInterruptResultSchema,
+  sessionEventsParamsSchema, sessionEventsResultSchema,
+  sessionSummarySettingsParamsSchema, sessionSummarySettingsResultSchema,
+  sessionSummarySaveParamsSchema, sessionSummarySaveResultSchema,
+  type SessionListParams, type SessionListResult,
+  type SessionCreateParams, type SessionCreateResult,
+  type SessionSendParams, type SessionSendResult,
+  type SessionInterruptParams, type SessionInterruptResult,
+  type SessionEventsParams, type SessionEventsResult,
+  type SessionSummarySettingsParams, type SessionSummarySettingsResult,
+  type SessionSummarySaveParams, type SessionSummarySaveResult,
+} from './methods/session.mts'
 export type {
-  SessionV2ListParams, SessionV2ListResult,
-  SessionV2CreateParams, SessionV2CreateResult,
-  SessionV2SendParams, SessionV2SendResult,
-  SessionV2InterruptParams, SessionV2InterruptResult,
-  SessionV2EventsParams, SessionV2EventsResult,
-} from './methods/session-v2.mts'
+  SessionListParams, SessionListResult,
+  SessionCreateParams, SessionCreateResult,
+  SessionSendParams, SessionSendResult,
+  SessionInterruptParams, SessionInterruptResult,
+  SessionEventsParams, SessionEventsResult,
+  SessionSummarySettingsParams, SessionSummarySettingsResult,
+  SessionSummarySaveParams, SessionSummarySaveResult,
+} from './methods/session.mts'
 import {
   activitySnapshotParamsSchema,
   activitySnapshotResultSchema,
@@ -272,46 +278,6 @@ import {
   type ExecStartParams,
   type ExecStartResult,
 } from './methods/exec.mts'
-import {
-  sessionBackendParamsSchema,
-  sessionBackendResultSchema,
-  sessionCancelParamsSchema,
-  sessionCancelResultSchema,
-  sessionCreateParamsSchema,
-  sessionCreateResultSchema,
-  sessionSelectModelParamsSchema,
-  sessionSelectModelResultSchema,
-  sessionSelectParamsSchema,
-  sessionSelectResultSchema,
-  sessionSendParamsSchema,
-  sessionSendResultSchema,
-  sessionSetWorkspaceParamsSchema,
-  sessionSetWorkspaceResultSchema,
-  sessionSnapshotParamsSchema,
-  sessionSnapshotResultSchema,
-  sessionSummaryModelGetParamsSchema,
-  sessionSummaryModelResultSchema,
-  sessionSummaryModelSetParamsSchema,
-  type SessionBackendParams,
-  type SessionBackendResult,
-  type SessionCancelParams,
-  type SessionCancelResult,
-  type SessionCreateParams,
-  type SessionCreateResult,
-  type SessionSelectModelParams,
-  type SessionSelectModelResult,
-  type SessionSelectParams,
-  type SessionSelectResult,
-  type SessionSendParams,
-  type SessionSendResult,
-  type SessionSetWorkspaceParams,
-  type SessionSetWorkspaceResult,
-  type SessionSnapshotParams,
-  type SessionSnapshotResult,
-  type SessionSummaryModelGetParams,
-  type SessionSummaryModelResult,
-  type SessionSummaryModelSetParams,
-} from './methods/session.mts'
 
 export type {
   ActivitySnapshotParams,
@@ -506,21 +472,13 @@ export interface ForemanMethodParams {
   'exec.get': ExecGetParams
   'exec.events': ExecEventsParams
   'exec.cancel': ExecCancelParams
-  'session.snapshot': SessionSnapshotParams
-  'sessionV2.list': SessionV2ListParams
-  'sessionV2.create': SessionV2CreateParams
-  'sessionV2.send': SessionV2SendParams
-  'sessionV2.interrupt': SessionV2InterruptParams
-  'sessionV2.events': SessionV2EventsParams
-  'session.select': SessionSelectParams
+  'session.list': SessionListParams
   'session.create': SessionCreateParams
-  'session.selectModel': SessionSelectModelParams
   'session.send': SessionSendParams
-  'session.cancel': SessionCancelParams
-  'session.setWorkspace': SessionSetWorkspaceParams
-  'session.summary.model.get': SessionSummaryModelGetParams
-  'session.summary.model.set': SessionSummaryModelSetParams
-  'session.backend': SessionBackendParams
+  'session.interrupt': SessionInterruptParams
+  'session.events': SessionEventsParams
+  'session.summary.settings': SessionSummarySettingsParams
+  'session.summary.save': SessionSummarySaveParams
 }
 
 export interface ForemanMethodResults {
@@ -580,21 +538,13 @@ export interface ForemanMethodResults {
   'exec.get': ExecGetResult
   'exec.events': ExecEventsResult
   'exec.cancel': ExecCancelResult
-  'session.snapshot': SessionSnapshotResult
-  'sessionV2.list': SessionV2ListResult
-  'sessionV2.create': SessionV2CreateResult
-  'sessionV2.send': SessionV2SendResult
-  'sessionV2.interrupt': SessionV2InterruptResult
-  'sessionV2.events': SessionV2EventsResult
-  'session.select': SessionSelectResult
+  'session.list': SessionListResult
   'session.create': SessionCreateResult
-  'session.selectModel': SessionSelectModelResult
   'session.send': SessionSendResult
-  'session.cancel': SessionCancelResult
-  'session.setWorkspace': SessionSetWorkspaceResult
-  'session.summary.model.get': SessionSummaryModelResult
-  'session.summary.model.set': SessionSummaryModelResult
-  'session.backend': SessionBackendResult
+  'session.interrupt': SessionInterruptResult
+  'session.events': SessionEventsResult
+  'session.summary.settings': SessionSummarySettingsResult
+  'session.summary.save': SessionSummarySaveResult
 }
 
 export type ForemanMethod = keyof ForemanMethodParams & keyof ForemanMethodResults
@@ -828,50 +778,18 @@ export const methodRegistry: {
     params: execCancelParamsSchema,
     result: execCancelResultSchema,
   },
-  'session.snapshot': {
-    params: sessionSnapshotParamsSchema,
-    result: sessionSnapshotResultSchema,
+  'session.list': { params: sessionListParamsSchema, result: sessionListResultSchema },
+  'session.create': { params: sessionCreateParamsSchema, result: sessionCreateResultSchema },
+  'session.send': { params: sessionSendParamsSchema, result: sessionSendResultSchema },
+  'session.interrupt': { params: sessionInterruptParamsSchema, result: sessionInterruptResultSchema },
+  'session.events': { params: sessionEventsParamsSchema, result: sessionEventsResultSchema },
+  'session.summary.settings': {
+    params: sessionSummarySettingsParamsSchema,
+    result: sessionSummarySettingsResultSchema,
   },
-  'sessionV2.list': { params: sessionV2ListParamsSchema, result: sessionV2ListResultSchema },
-  'sessionV2.create': { params: sessionV2CreateParamsSchema, result: sessionV2CreateResultSchema },
-  'sessionV2.send': { params: sessionV2SendParamsSchema, result: sessionV2SendResultSchema },
-  'sessionV2.interrupt': { params: sessionV2InterruptParamsSchema, result: sessionV2InterruptResultSchema },
-  'sessionV2.events': { params: sessionV2EventsParamsSchema, result: sessionV2EventsResultSchema },
-  'session.select': {
-    params: sessionSelectParamsSchema,
-    result: sessionSelectResultSchema,
-  },
-  'session.create': {
-    params: sessionCreateParamsSchema,
-    result: sessionCreateResultSchema,
-  },
-  'session.selectModel': {
-    params: sessionSelectModelParamsSchema,
-    result: sessionSelectModelResultSchema,
-  },
-  'session.send': {
-    params: sessionSendParamsSchema,
-    result: sessionSendResultSchema,
-  },
-  'session.cancel': {
-    params: sessionCancelParamsSchema,
-    result: sessionCancelResultSchema,
-  },
-  'session.setWorkspace': {
-    params: sessionSetWorkspaceParamsSchema,
-    result: sessionSetWorkspaceResultSchema,
-  },
-  'session.summary.model.get': {
-    params: sessionSummaryModelGetParamsSchema,
-    result: sessionSummaryModelResultSchema,
-  },
-  'session.summary.model.set': {
-    params: sessionSummaryModelSetParamsSchema,
-    result: sessionSummaryModelResultSchema,
-  },
-  'session.backend': {
-    params: sessionBackendParamsSchema,
-    result: sessionBackendResultSchema,
+  'session.summary.save': {
+    params: sessionSummarySaveParamsSchema,
+    result: sessionSummarySaveResultSchema,
   },
 }
 
