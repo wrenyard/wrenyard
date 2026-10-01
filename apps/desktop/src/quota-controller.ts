@@ -258,6 +258,9 @@ function projectCatalog(
         ? '此 Provider 暂不提供额度查询。'
         : unavailableQuotaMessage(authMode, configured, projectedQuota.code);
     }
+    // Quota observations carry the raw provider id as their label; surfaces
+    // such as the status bar should show the catalog display name instead.
+    if (projectedQuota && discoveredStatus?.displayName) projectedQuota.label = discoveredStatus.displayName;
     const base = {
       id,
       configured,
