@@ -4,7 +4,7 @@ import { Button } from '@/renderer/components/ui/button';
 import { ScrollArea } from '@/renderer/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/renderer/components/ui/tabs';
 import type { InspectorTarget, LedgerEvent, SessionModel } from '../../model/types.js';
-import { useSessionUsage } from '../../state/usage-selection.js';
+import { useSessionUsage } from '../../state/session-usage.js';
 import { ContextTab } from './ContextTab.js';
 import { DetailPane } from './details/DetailPane.js';
 import { LedgerList } from './LedgerList.js';
