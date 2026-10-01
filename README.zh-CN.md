@@ -12,7 +12,7 @@
 [![Release](https://img.shields.io/github/v/release/wrenyard/wrenyard?include_prereleases&label=latest-dev)](https://github.com/wrenyard/wrenyard/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-[English](README.md) · [下载](https://github.com/wrenyard/wrenyard/releases) · [观看 77 秒演示](docs/media/wrenyard-desktop-promo.mp4)
+[English](README.md) · [下载](https://github.com/wrenyard/wrenyard/releases)
 
 </div>
 

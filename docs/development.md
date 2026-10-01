@@ -62,7 +62,8 @@ pnpm --filter @wrenyard/desktop exec electron tools/showcase/run.mjs \
   --scenario tools/showcase/scenarios/screenshots.mjs --out .showcase --scale 2
 ```
 
-`scenarios/promo.mjs` records the clips used for the product tour video.
+`scenarios/promo.mjs` records short scripted clips for release notes and demos;
+the recordings are not kept in the repository.
 
 ## Releases
 
