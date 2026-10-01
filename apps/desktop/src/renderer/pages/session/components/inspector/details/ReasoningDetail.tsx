@@ -1,4 +1,4 @@
-import { Markdown } from '@/renderer/components/markdown';
+import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { Item, ItemContent } from '@/renderer/components/ui/item';
 import type { InspectorTarget, ReasoningModel } from '../../../model/types.js';
 import { Field, Fields, InspectLink, Section } from '../parts.js';
