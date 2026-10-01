@@ -1,13 +1,10 @@
-import { Card, CardContent } from '@/renderer/components/ui/card';
 import { UpdatePanel } from '@/renderer/components/update-panel';
 
-/** Settings card wrapper around the shared update panel. */
-export function UpdateSettings() {
-  return (
-    <Card>
-      <CardContent>
-        <UpdatePanel />
-      </CardContent>
-    </Card>
-  );
+/**
+ * Current-version status: the shared update panel (version, last check, and
+ * the check/install actions). The `update.autoCheck` row lives beside it as a
+ * standard preference control.
+ */
+export function UpdateStatusControl() {
+  return <UpdatePanel />;
 }
