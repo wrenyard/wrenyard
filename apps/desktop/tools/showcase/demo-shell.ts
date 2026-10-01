@@ -66,7 +66,7 @@ const NOW = Date.now();
 
 const WORKSPACE_ROOT = '~/workspace';
 const DEVICE_NAME = 'Demo MacBook Pro';
-const VERSION = '1.0.0-dev.44';
+const VERSION = '1.0.0-dev.45';
 const IPC_ENDPOINT = '~/.local/state/wrenyard/daemon.sock';
 
 function iso(ms: number): string {
@@ -440,6 +440,7 @@ const SETTINGS_MODELS: ModelSnapshot[] = CATALOG.filter((provider) => provider.c
   (provider) =>
     (provider.models ?? []).map((model) => ({
       id: `${provider.id}/${model.id}`,
+      quotaProvider: provider.id,
       label: model.displayName,
       configured: true,
     })),
