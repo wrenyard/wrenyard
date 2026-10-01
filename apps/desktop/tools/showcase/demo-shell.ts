@@ -3,7 +3,7 @@
  * for product screenshots and promo recordings.
  *
  * Source-only showcase tooling: it is never bundled into the shipped product.
- * Every value is fictional (workspace `/Users/demo/workspace`, device
+ * Every value is fictional (workspace `~/workspace`, device
  * `Demo MacBook Pro`) and every generated series is seeded, so repeated runs
  * render identical screens. Timestamps are anchored to `Date.now()` at module
  * load, so relative labels (今天, 2 分钟前) stay correct on any capture day.
@@ -64,7 +64,7 @@ const DAY = 24 * HOUR;
 /** Module-load anchor: every relative timestamp is derived from this. */
 const NOW = Date.now();
 
-const WORKSPACE_ROOT = '/Users/demo/workspace';
+const WORKSPACE_ROOT = '~/workspace';
 const DEVICE_NAME = 'Demo MacBook Pro';
 const VERSION = '1.0.0-dev.44';
 const IPC_ENDPOINT = '~/.local/state/wrenyard/daemon.sock';
@@ -209,7 +209,7 @@ let updateSnapshot: UpdateSnapshot = {
 let workspaceSnapshot: WorkspaceConfigurationSnapshot = {
   status: 'configured',
   source: 'user-config',
-  configPath: '/Users/demo/.config/wrenyard/workspace.json',
+  configPath: '~/.config/wrenyard/workspace.json',
   path: WORKSPACE_ROOT,
   readOnly: false,
 };
@@ -934,7 +934,7 @@ const TASK_ROWS: TaskSettingsTaskRow[] = [
 ];
 
 const TASK_SETTINGS: TaskSettingsSnapshot = {
-  config_path: '/Users/demo/.config/wrenyard/task-settings.json',
+  config_path: '~/.config/wrenyard/task-settings.json',
   revision: '42',
   project: 'aurora',
   user_global: {},
@@ -1121,7 +1121,7 @@ export function createDemoShell(control?: DemoControl): DemoShell {
       workspaceSnapshot = {
         status: 'configured',
         source: 'user-config',
-        configPath: '/Users/demo/.config/wrenyard/workspace.json',
+        configPath: '~/.config/wrenyard/workspace.json',
         path,
         readOnly: false,
       };
