@@ -91,7 +91,7 @@ export function createTranscriptWindow(options: TranscriptWindowOptions): Browse
   });
 
   options.pageLoader.load(win, 'transcript', {
-    task_run_id: options.taskRunId, node_id: options.nodeId, task_label: options.taskLabel, platform: process.platform,
+    panel: 'transcript', task_run_id: options.taskRunId, node_id: options.nodeId, task_label: options.taskLabel, platform: process.platform,
   }).catch(() => handleLoadFailure());
 
   win.once('ready-to-show', () => {
