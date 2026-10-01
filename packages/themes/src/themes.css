@@ -1,0 +1,4 @@
+/* Aggregate stylesheet: imports every builtin theme's token file. This is the
+   only CSS file to edit when a theme is added. */
+@import "./paper/tokens.css";
+@import "./neutral/tokens.css";

@@ -10,8 +10,7 @@
 @import "../../node_modules/streamdown/styles.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
-@import "@wrenyard/themes/paper.css";
-@import "@wrenyard/themes/neutral.css";
+@import "@wrenyard/themes/themes.css";
 /* ejected from shadcn@4.21.0 */
 @theme inline {
   @keyframes accordion-down {

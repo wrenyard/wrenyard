@@ -1,8 +1,12 @@
 /** Browser asset entry; never imported by sandboxed preloads or native consumers. */
-import { paperTheme } from './paper/theme.ts';
-import { neutralTheme } from './neutral/theme.ts';
 
-export const THEME_ICON_URLS: Readonly<Record<string, string>> = {
-  [paperTheme.id]: new URL('./paper/assets/icon-256.png', import.meta.url).href,
-  [neutralTheme.id]: new URL('./neutral/assets/icon-256.png', import.meta.url).href,
-};
+/** Icon URL per theme id, derived from the `src/<id>/assets/` folder structure. */
+export const THEME_ICON_URLS: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(
+    import.meta.glob<string>('./*/assets/icon-256.png', {
+      eager: true,
+      query: '?url',
+      import: 'default',
+    }),
+  ).map(([path, url]) => [path.split('/')[1], url] as const),
+);
