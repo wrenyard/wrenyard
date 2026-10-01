@@ -1,10 +1,12 @@
 import { RotateCw } from 'lucide-react';
+import { cn } from 'cn';
 import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
 import { Button } from '@/renderer/components/ui/button';
 import { Message, MessageContent, MessageFooter } from '@/renderer/components/ui/message';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { formatClock } from '@/renderer/lib/format';
+import { useEnterAnimation } from '@/renderer/lib/motion';
 import type { PendingTurn } from '../../state/session-reducer.js';
 import { HoverTime } from './HoverTime.js';
 
@@ -20,12 +22,18 @@ export interface UserMessageProps {
   pending?: PendingTurn;
   /** Restore the failed text and drop the optimistic turn. */
   onRetry?: () => void;
+  /** Play the entry animation; only set for genuinely new appends. */
+  enter?: boolean;
 }
 
 /** The user's own message: a right-aligned primary bubble with a hover time. */
-export function UserMessage({ text, at, readAt, pending, onRetry }: UserMessageProps) {
+export function UserMessage({ text, at, readAt, pending, onRetry, enter }: UserMessageProps) {
+  const animate = useEnterAnimation(enter === true);
   return (
-    <Message align="end">
+    <Message
+      align="end"
+      className={cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}
+    >
       <MessageContent>
         <div className="flex items-end justify-end gap-2">
           <HoverTime value={at} />

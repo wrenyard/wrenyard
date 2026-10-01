@@ -29,7 +29,9 @@ export function TurnStatus({ turn, onInterrupt }: TurnStatusProps) {
             render={<button type="button" />}
             onClick={() => inspect({ kind: 'turn', turnId: turn.id })}
           >
-            <MarkerIcon><Spinner /></MarkerIcon>
+            <MarkerIcon className="flex items-center justify-center">
+              <span className="size-2 rounded-full bg-current motion-pulse-slow" />
+            </MarkerIcon>
             <MarkerContent className="shimmer">{turnStatusText(turn)}</MarkerContent>
           </Marker>
           {turn.interrupting ? (

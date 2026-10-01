@@ -1,10 +1,12 @@
 import { ListTree } from 'lucide-react';
+import { cn } from 'cn';
 import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
 import { Button } from '@/renderer/components/ui/button';
 import { Message, MessageContent, MessageFooter } from '@/renderer/components/ui/message';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { CopyButton } from '@/renderer/components/copy-button';
 import { Markdown } from '@/renderer/components/markdown';
+import { useEnterAnimation } from '@/renderer/lib/motion';
 import { noFinalReply } from '../../model/describe.js';
 import type { TurnModel } from '../../model/types.js';
 import { useInspector } from '../inspector/Inspector.js';
@@ -30,6 +32,8 @@ function AssistantFooter({ text, onInspect }: { text: string; onInspect: () => v
 
 export interface AssistantMessageProps {
   turn: TurnModel;
+  /** Play the entry animation; only set for genuinely new appends. */
+  enter?: boolean;
 }
 
 /**
@@ -38,15 +42,17 @@ export interface AssistantMessageProps {
  * visible; a running turn without a reply renders nothing. The hover footer
  * only appears once the turn has ended, never while the reply streams.
  */
-export function AssistantMessage({ turn }: AssistantMessageProps) {
+export function AssistantMessage({ turn, enter }: AssistantMessageProps) {
   const { inspect } = useInspector();
+  const animate = useEnterAnimation(enter === true);
+  const enterClass = cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out');
   const onInspect = (): void => inspect({ kind: 'turn', turnId: turn.id });
 
   if (!turn.final) {
     if (turn.status === 'running') return null;
     const fallback = noFinalReply(turn);
     return (
-      <Message>
+      <Message className={enterClass}>
         <MessageContent>
           <div className="flex items-end gap-2">
             <Bubble variant={fallback.variant === 'destructive' ? 'destructive' : 'outline'}>
@@ -61,7 +67,7 @@ export function AssistantMessage({ turn }: AssistantMessageProps) {
   }
 
   return (
-    <Message>
+    <Message className={enterClass}>
       <MessageContent>
         <div className="flex items-end gap-2">
           <Bubble variant="muted">

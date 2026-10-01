@@ -730,3 +730,208 @@ html[data-theme-switching] *::after {
 :root [data-slot="sheet-overlay"] {
   background-color: var(--overlay);
 }
+
+/* ------------------------------------------------------------------ */
+/* Motion (foundation spec §2.2–2.3)                                   */
+/* ------------------------------------------------------------------ */
+
+@theme {
+  /* Canonical motion tokens. Tailwind's `duration-*` utilities resolve the
+     `--transition-duration-*` namespace, so the spec's `--duration-*` names
+     hold the values and are re-exported for the utilities. */
+  --duration-instant: 80ms;
+  --duration-fast: 140ms;
+  --duration-base: 200ms;
+  --duration-slow: 280ms;
+  --transition-duration-instant: var(--duration-instant);
+  --transition-duration-fast: var(--duration-fast);
+  --transition-duration-base: var(--duration-base);
+  --transition-duration-slow: var(--duration-slow);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* Page switch: the page host fades in from 4px below; the shell rail carries
+   its own `view-transition-name` so the chrome stays put. */
+@keyframes wy-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes wy-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes wy-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.motion-surface-page {
+  view-transition-name: app-page;
+}
+/* The shell activity rail is chrome, not page content: it keeps its own name
+   so it stays put across page transitions. The `#root >` scope matches only
+   the shell rail, not a page's inner sidebar. */
+#root > [data-slot="sidebar-wrapper"] > [data-slot="sidebar"] {
+  view-transition-name: app-chrome;
+}
+::view-transition-old(app-page) {
+  animation: wy-fade-out var(--duration-fast) var(--ease-in) both;
+}
+::view-transition-new(app-page) {
+  animation: wy-page-enter var(--duration-base) var(--ease-out) both;
+}
+
+/* Session switch: the conversation fades in; the sidebar selection is left
+   alone. */
+@keyframes wy-conversation-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.motion-conversation-enter {
+  animation: wy-conversation-enter var(--duration-fast) var(--ease-out) both;
+}
+
+/* Panel collapse/expand: width eased at `slow`. The class is dropped while a
+   resize handle is dragged so dragging stays instant. */
+.motion-panel {
+  transition-property: flex-grow, flex-basis;
+  transition-duration: var(--duration-slow);
+  transition-timing-function: var(--ease-in-out);
+}
+
+/* Running status: a slow (2s) pulse. */
+@keyframes wy-pulse-slow {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.motion-pulse-slow {
+  animation: wy-pulse-slow 2s var(--ease-in-out) infinite;
+}
+
+/* One-shot accent flash for a changed number. */
+@keyframes wy-number-flash {
+  from {
+    background-color: var(--accent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.motion-number-flash {
+  animation: wy-number-flash var(--duration-base) var(--ease-out);
+}
+
+/* Ring gauge fill readiness. */
+.motion-ring {
+  transition: stroke-dashoffset var(--duration-base) var(--ease-out);
+}
+
+/* Theme switch suppresses every transition for the swap frame. */
+html[data-theme-switching] *,
+html[data-theme-switching] *::before,
+html[data-theme-switching] *::after {
+  transition: none !important;
+}
+
+/* Reduced motion: cancel translate/scale/rotate, keep opacity at <=100ms and
+   stop shimmer/pulse. Applies to the OS preference and to an explicit
+   `data-motion="reduce"`. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 100ms;
+    --duration-base: 100ms;
+    --duration-slow: 100ms;
+    --transition-duration-fast: 100ms;
+    --transition-duration-base: 100ms;
+    --transition-duration-slow: 100ms;
+    --animate-pulse: none;
+  }
+  *,
+  ::before,
+  ::after {
+    --tw-enter-translate-x: 0;
+    --tw-enter-translate-y: 0;
+    --tw-enter-scale: 1;
+    --tw-enter-rotate: 0;
+    --tw-enter-blur: 0;
+    --tw-exit-translate-x: 0;
+    --tw-exit-translate-y: 0;
+    --tw-exit-scale: 1;
+    --tw-exit-rotate: 0;
+    --tw-exit-blur: 0;
+  }
+  .transition-transform,
+  .transition-all {
+    transition-property: none;
+  }
+  .motion-pulse-slow {
+    animation: none;
+  }
+  ::view-transition-new(app-page) {
+    animation-name: wy-fade-in;
+  }
+}
+
+html[data-motion="reduce"] {
+  --duration-fast: 100ms;
+  --duration-base: 100ms;
+  --duration-slow: 100ms;
+  --transition-duration-fast: 100ms;
+  --transition-duration-base: 100ms;
+  --transition-duration-slow: 100ms;
+  --animate-pulse: none;
+}
+html[data-motion="reduce"] *,
+html[data-motion="reduce"] *::before,
+html[data-motion="reduce"] *::after {
+  --tw-enter-translate-x: 0;
+  --tw-enter-translate-y: 0;
+  --tw-enter-scale: 1;
+  --tw-enter-rotate: 0;
+  --tw-enter-blur: 0;
+  --tw-exit-translate-x: 0;
+  --tw-exit-translate-y: 0;
+  --tw-exit-scale: 1;
+  --tw-exit-rotate: 0;
+  --tw-exit-blur: 0;
+}
+html[data-motion="reduce"] .transition-transform,
+html[data-motion="reduce"] .transition-all {
+  transition-property: none;
+}
+html[data-motion="reduce"] .motion-pulse-slow {
+  animation: none;
+}
+html[data-motion="reduce"] .shimmer {
+  animation: none;
+  background-image: none;
+  -webkit-text-fill-color: currentColor;
+}
+html[data-motion="reduce"]::view-transition-new(app-page) {
+  animation-name: wy-fade-in;
+}

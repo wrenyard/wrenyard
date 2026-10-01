@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { cn } from 'cn';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
@@ -13,6 +14,7 @@ import {
   MessageScrollerViewport,
 } from '@/renderer/components/ui/message-scroller';
 import { Page } from '@/renderer/components/page';
+import { useNewItemKeys } from '@/renderer/lib/motion';
 import { getSessionApi } from './api.js';
 import { Composer } from './components/Composer.js';
 import { EmptySession } from './components/EmptySession.js';
@@ -54,6 +56,31 @@ export function SessionPage() {
   const [tab, setTab] = useState('detail');
   const [retry, setRetry] = useState<{ text: string; nonce: number } | undefined>(undefined);
   const sidebarPanel = usePanelRef();
+
+  // Panel collapse animates at `slow`; while a resize handle is dragged the
+  // transition is suspended so dragging stays instant (foundation §2.3).
+  const [resizing, setResizing] = useState(false);
+  useEffect(() => {
+    if (!resizing) return;
+    const stop = (): void => setResizing(false);
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+    return () => {
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+    };
+  }, [resizing]);
+  const panelMotion = resizing ? undefined : 'motion-panel';
+
+  // The conversation fades in on a session switch; the first appearance is not
+  // animated. The message scroller remounts per session, so the class replays.
+  const [conversationEnter, setConversationEnter] = useState(false);
+  const previousSession = useRef(state.selectedId);
+  useLayoutEffect(() => {
+    if (previousSession.current === state.selectedId) return;
+    previousSession.current = state.selectedId;
+    setConversationEnter(true);
+  }, [state.selectedId]);
 
   const model = useMemo(
     () => fold(state.events, state.live, state.tasks, { sessionId: state.selectedId, interrupting: state.interrupting }),
@@ -120,6 +147,21 @@ export function SessionPage() {
   const empty = draft || (!state.loadingLedger && model.turns.length === 0 && state.pending.length === 0);
   const sessionKey = state.selectedId === '' ? 'draft' : state.selectedId;
 
+  // Entry animation applies only to messages appended after the conversation
+  // settles; history loads are absorbed into the baseline (foundation §2.3).
+  const messageKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (const turn of model.turns) {
+      keys.push(`u:${turn.id}`);
+      if (turn.final !== undefined || turn.status !== 'running') keys.push(`a:${turn.id}`);
+    }
+    return keys;
+  }, [model.turns]);
+  const freshMessageKeys = useNewItemKeys(messageKeys, {
+    scope: sessionKey,
+    ready: !state.loadingLedger,
+  });
+
   const composer = (
     <Composer
       models={state.models}
@@ -160,6 +202,7 @@ export function SessionPage() {
               collapsedSize={0}
               groupResizeBehavior="preserve-pixel-size"
               panelRef={sidebarPanel}
+              className={panelMotion}
               onResize={(size) => setSidebarOpen(size.inPixels > 0)}
             >
               <SessionSidebar
@@ -172,8 +215,11 @@ export function SessionPage() {
                 onSearch={() => setSearchOpen(true)}
               />
             </ResizablePanel>
-            <ResizableHandle className="w-1.5 bg-transparent after:w-px after:bg-border" />
-            <ResizablePanel id="main" className="relative flex min-h-0 flex-col">
+            <ResizableHandle
+              className="w-1.5 bg-transparent after:w-px after:bg-border"
+              onPointerDown={() => setResizing(true)}
+            />
+            <ResizablePanel id="main" className={cn('relative flex min-h-0 flex-col', panelMotion)}>
               <SessionTopBar
                 title={selectedTitle}
                 session={selectedSession}
@@ -192,7 +238,7 @@ export function SessionPage() {
               ) : (
                 <>
                   <MessageScrollerProvider key={sessionKey}>
-                    <MessageScroller className="min-h-0 flex-1">
+                    <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
                       <MessageScrollerViewport className="scroll-fade-t">
                         <MessageScrollerContent className="mx-auto w-full max-w-3xl px-4 pt-(--header-height) pb-4">
                           {model.turns.map((turn, index) => (
@@ -201,6 +247,8 @@ export function SessionPage() {
                               turn={turn}
                               previous={index > 0 ? model.turns[index - 1] : undefined}
                               latest={index === model.turns.length - 1 && state.pending.length === 0}
+                              enterUser={freshMessageKeys.has(`u:${turn.id}`)}
+                              enterAssistant={freshMessageKeys.has(`a:${turn.id}`)}
                               onInterrupt={(id) => { void interruptTurn(id); }}
                             />
                           ))}
@@ -226,8 +274,11 @@ export function SessionPage() {
             </ResizablePanel>
             {inspectorOpen && (
               <>
-                <ResizableHandle className="w-1.5 bg-transparent after:w-px after:bg-border" />
-                <ResizablePanel id="inspector" defaultSize={400} minSize={320} className="min-h-0">
+                <ResizableHandle
+                  className="w-1.5 bg-transparent after:w-px after:bg-border"
+                  onPointerDown={() => setResizing(true)}
+                />
+                <ResizablePanel id="inspector" defaultSize={400} minSize={320} className={cn('min-h-0', panelMotion)}>
                   <Inspector
                     model={model}
                     events={state.events}
