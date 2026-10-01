@@ -65,6 +65,35 @@ export function windowExpectedTooltip(pct: number): string {
   return `按当前时间进度建议剩余 ${Math.floor(pct)}%`;
 }
 
+/** Balance prefix shown before a monetary quota balance. */
+export const BALANCE_LABEL = '余额';
+
+/** Compact configured-provider model count badge copy. */
+export function modelCountLabel(count: number): string {
+  return `${count} 个模型`;
+}
+
+/** Collapsible title for the unconfigured-provider group, carrying its count. */
+export function unconfiguredTitle(count: number): string {
+  return `${UNCONFIGURED_TITLE}（${count}）`;
+}
+
+/**
+ * Status-dot projection for a compact provider row: normal, syncing, failed or
+ * stale. A failure reads strongest, then stale; idle statuses fall back to
+ * normal/syncing/unavailable.
+ */
+export function providerStatusDot(
+  status: QuotaProviderSnapshot['status'],
+  stale: boolean,
+): { tone: StatusTone; label: string } {
+  if (status === 'error') return { tone: 'danger', label: '失败' };
+  if (stale) return { tone: 'warning', label: '数据过期' };
+  if (status === 'ok') return { tone: 'success', label: '正常' };
+  if (status === 'pending') return { tone: 'muted', label: '读取中' };
+  return { tone: 'muted', label: '不可用' };
+}
+
 export function configureProviderLabel(name: string, configured: boolean): string {
   return configured ? `配置 ${name}` : `激活 ${name}`;
 }

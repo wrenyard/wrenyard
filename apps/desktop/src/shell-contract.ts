@@ -307,6 +307,10 @@ export interface QuotaWindowSnapshot {
   name: string;
   remainingPct: number;
   expectedRemainingPct: number | null;
+  /** ISO 8601 reset time; omitted when invalid or already past. */
+  resetsAt?: string;
+  /** Window length in minutes; drives the Chinese window label. */
+  windowMinutes?: number;
 }
 
 export interface QuotaBalanceSnapshot {
