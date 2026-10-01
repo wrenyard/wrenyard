@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { countInputTokens } from '../model/usage.js';
 import { EffortPicker, ModelPicker, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
+import { shell } from '@/renderer/lib/desktop';
+import { preferencesQuery } from '@/renderer/lib/queries';
+import type { SessionPreferences } from '@/shell-contract';
 import type { ModelEntry, TurnModel } from '../model/types.js';
 import { clearDraft, flushDraft, readDraft, writeDraft } from '../state/drafts.js';
 import { onSessionModelRequest, publishComposerState } from '../state/usage-selection.js';
@@ -30,31 +34,48 @@ function useInputTokenCount(text: string): number | undefined {
   return tokens;
 }
 
+/** Legacy pre-bridge storage key; migrated once into the main preference. */
 const LAST_SENT_KEY = 'session:last-sent';
 
-interface LastSent {
+interface LegacyLastSent {
   model: string;
   effort: string;
 }
 
-function readLastSent(): LastSent | undefined {
+function readLegacyLastSent(): LegacyLastSent | undefined {
   try {
     const raw = window.localStorage.getItem(LAST_SENT_KEY);
     if (!raw) return undefined;
-    const parsed = JSON.parse(raw) as Partial<LastSent>;
+    const parsed = JSON.parse(raw) as Partial<LegacyLastSent>;
     return { model: parsed.model ?? '', effort: parsed.effort ?? '' };
   } catch {
     return undefined;
   }
 }
 
-function writeLastSent(value: LastSent): void {
+function clearLegacyLastSent(): void {
   try {
-    window.localStorage.setItem(LAST_SENT_KEY, JSON.stringify(value));
+    window.localStorage.removeItem(LAST_SENT_KEY);
   } catch {
-    // Persisting the preference is best-effort.
+    // Removing the legacy key is best-effort.
   }
 }
+
+/** Keeps a reasoning effort only when the target model supports it. */
+function supportedEffort(entry: ModelEntry | undefined, effort: string): string {
+  if (effort === '') return '';
+  return (entry?.thinkingLevels ?? []).includes(effort) ? effort : '';
+}
+
+/** Mirror of the persisted session defaults, used until the preference loads. */
+const DEFAULT_SESSION_PREFS: SessionPreferences = {
+  defaultModel: 'last',
+  model: null,
+  effort: null,
+  lastSentModel: null,
+  lastSentEffort: null,
+  sendKey: 'enter',
+};
 
 export interface ComposerProps {
   models: ModelEntry[];
@@ -82,15 +103,52 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const sessionKeyRef = useRef(sessionKey);
   sessionKeyRef.current = sessionKey;
 
+  // New-session model/effort defaults and the submit key come from the shared
+  // Desktop preferences; the composer only reads them.
+  const preferences = useQuery(preferencesQuery);
+  const sessionPrefs = preferences.data?.session;
+  const prefsReady = sessionPrefs !== undefined;
+  const prefs = sessionPrefs ?? DEFAULT_SESSION_PREFS;
+
+  // One-time migration of the pre-bridge localStorage "last sent" value.
+  const migrated = useRef(false);
+  useEffect(() => {
+    if (!prefsReady || migrated.current) return;
+    migrated.current = true;
+    const legacy = readLegacyLastSent();
+    if (legacy === undefined) return;
+    const writes: Promise<unknown>[] = [];
+    if (legacy.model !== '' && sessionPrefs.lastSentModel === null) {
+      writes.push(shell.setPreference('session.lastSentModel', legacy.model));
+    }
+    if (legacy.effort !== '' && sessionPrefs.lastSentEffort === null) {
+      writes.push(shell.setPreference('session.lastSentEffort', legacy.effort));
+    }
+    void Promise.all(writes).then(clearLegacyLastSent).catch(() => {
+      migrated.current = false;
+    });
+  }, [prefsReady, sessionPrefs]);
+
   useEffect(() => {
     const last = turnsRef.current[turnsRef.current.length - 1];
-    const stored = readLastSent();
-    const wanted = last ? `${last.model.provider}/${last.model.model}` : stored?.model;
-    const match = models.find((entry) => entry.publicId === wanted) ?? models[0];
+    // An existing session keeps its model immutable; only a new session reads
+    // the default-model preference.
+    if (last !== undefined) {
+      const match = models.find((entry) => entry.publicId === `${last.model.provider}/${last.model.model}`) ?? models[0];
+      setModelId(match?.publicId ?? '');
+      // An existing session's model and effort are authoritative and never change.
+      setEffort(last.model.reasoningEffort ?? '');
+      textareaRef.current?.focus();
+      return;
+    }
+    const specified = prefs.defaultModel === 'specified';
+    const wanted = specified ? prefs.model : prefs.lastSentModel;
+    const storedEffort = specified ? prefs.effort : prefs.lastSentEffort;
+    const match = (wanted === null ? undefined : models.find((entry) => entry.publicId === wanted)) ?? models[0];
     setModelId(match?.publicId ?? '');
-    setEffort(last ? last.model.reasoningEffort ?? '' : stored?.effort ?? '');
+    setEffort(supportedEffort(match, storedEffort ?? ''));
     textareaRef.current?.focus();
-  }, [sessionKey, models, turns.at(-1)?.id]);
+  }, [sessionKey, models, turns.at(-1)?.id, prefsReady]);
 
   // Load the destination draft on switch/remount and flush the outgoing one so
   // no pending edit is lost.
@@ -113,11 +171,14 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   }, [sessionKey, modelId, text]);
 
   // The inspector's "use this model" action requests a switch for the active
-  // session only; a request for another session is ignored.
+  // session only; a request for another session is ignored. The reasoning
+  // effort is kept only when the target model still supports it.
   useEffect(() => onSessionModelRequest((request) => {
     if (request.sessionKey !== sessionKey) return;
+    const target = models.find((entry) => entry.publicId === request.modelId);
     setModelId(request.modelId);
-  }), [sessionKey]);
+    setEffort((current) => supportedEffort(target, current));
+  }), [sessionKey, models]);
 
   const selected = models.find((entry) => entry.publicId === modelId);
   const options: ModelOption[] = models.map((entry) => ({
@@ -129,6 +190,12 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const handleChange = (value: string): void => {
     setText(value);
     writeDraft(sessionKey, value);
+  };
+
+  const selectModel = (value: string): void => {
+    const target = models.find((entry) => entry.publicId === value);
+    setModelId(value);
+    setEffort((current) => supportedEffort(target, current));
   };
 
   const submit = (): void => {
@@ -146,6 +213,9 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
             clearDraft(originKey);
             if (sessionKeyRef.current === originKey) setText('');
           }
+          // Remember the successful send for the "沿用上次发送的模型" default.
+          void shell.setPreference('session.lastSentModel', selected.publicId).catch(() => undefined);
+          void shell.setPreference('session.lastSentEffort', effort === '' ? null : effort).catch(() => undefined);
         },
         () => {
           // A rejected send keeps the draft so the user can retry.
@@ -153,7 +223,6 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       )
       .finally(() => {
         setSending(false);
-        writeLastSent({ model: selected.publicId, effort });
       });
   };
 
@@ -164,11 +233,12 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       onSubmit={submit}
       disabled={disabled || !selected}
       submitDisabled={sending || exceeded}
+      sendKey={sessionPrefs?.sendKey ?? 'enter'}
       textareaRef={textareaRef}
       placeholder="输入消息，可随时发起新的并行轮次"
       toolbar={
         <>
-          <ModelPicker models={options} value={modelId} onChange={setModelId} disabled={models.length === 0} />
+          <ModelPicker models={options} value={modelId} onChange={selectModel} disabled={models.length === 0} />
           <EffortPicker levels={selected?.thinkingLevels ?? []} value={effort} onChange={setEffort} />
         </>
       }

@@ -1,9 +1,7 @@
+import { getSessionBridge } from '@/renderer/lib/session';
 import type { SessionApi } from './model/types.js';
 
-/**
- * The session page's sole read of the preload-exposed bridge. Keeping the
- * `window` access here means the rest of the page never touches the global.
- */
+/** Page-local facade; the shared bridge also supplies session settings. */
 export function getSessionApi(): SessionApi {
-  return window.wrenyardSession;
+  return getSessionBridge();
 }

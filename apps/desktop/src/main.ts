@@ -19,7 +19,7 @@ import { DesktopQuotaSource } from './quota-service.js';
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_MAX, APPEARANCE_ZOOM_MIN, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { NotificationCenter, type NotificationInput, type ShellNotification } from './main/notification-center.js';
 import { DesktopUpdateController } from './updater/controller.js';
@@ -263,6 +263,50 @@ let updateDialogActive = false;
  * accelerator-driven quit request. Direct/programmatic quits bypass it.
  */
 const macQuitGate = createMacQuitConfirmationGate({ windowMs: 3_000 });
+
+/** Rounds an interface zoom percentage to the allowed step and clamps its range. */
+function clampZoom(value: number): number {
+  const stepped = Math.round(value / APPEARANCE_ZOOM_STEP) * APPEARANCE_ZOOM_STEP;
+  return Math.min(APPEARANCE_ZOOM_MAX, Math.max(APPEARANCE_ZOOM_MIN, stepped));
+}
+
+/** Apply the persisted `appearance.zoom` to the shell window (100% → factor 1). */
+function applyShellZoom(): void {
+  const shell = shellWindow;
+  if (shell === null || shell.window.isDestroyed()) return;
+  try {
+    shell.window.webContents.setZoomFactor(appearanceController?.zoomFactor() ?? 1);
+  } catch {
+    // Zoom is best-effort; the window keeps its current factor.
+  }
+}
+
+/** Set one interface-zoom percentage and persist it through the bridge. */
+function setInterfaceZoom(value: number): void {
+  preferencesController?.set('appearance.zoom', clampZoom(value));
+}
+
+/** Gate for `notifications.events`, shared by renderer- and main-origin events. */
+function isNotificationEventEnabled(input: NotificationInput): boolean {
+  if (desktopSettingsStore === null) return true;
+  const events = desktopSettingsStore.load().notifications.events;
+  switch (input.source) {
+    case 'task':
+      return input.level === 'error' ? events.taskFailed : events.taskCompleted;
+    case 'session':
+      // Only the completed-reply success event is gated; session errors such as
+      // context_overflow stay independent of the completion setting.
+      return input.level === 'success' ? events.sessionReplyCompleted : true;
+    case 'update':
+      return events.updateAvailable;
+    case 'quota':
+      return events.quotaWarning;
+    case 'daemon':
+      return events.daemonDisconnected;
+    default:
+      return true;
+  }
+}
 
 function daemonSnapshot(): DaemonLifecycleSnapshot {
   return daemonSupervisor?.snapshot()
@@ -818,6 +862,9 @@ async function bootstrap(): Promise<void> {
     onChange: () => {
       desktopTray?.rebuild();
       shellWindow?.notifyPreferencesChanged();
+      applyShellZoom();
+      // `update.autoCheck` gates the periodic schedule; manual checks always work.
+      if (!SMOKE && app.isPackaged) updateController?.setAutoCheck(settingsStore.load().update.autoCheck);
     },
   });
   // Surface an unreadable/incompatible document explicitly instead of letting a
@@ -844,6 +891,13 @@ async function bootstrap(): Promise<void> {
     store: settingsStore,
     saveAppearance: (patch) => { appearanceController?.save(patch); },
     onDoNotDisturb: (value) => { notificationCenter?.setDoNotDisturb(value); },
+    readOpenAtLogin: () => app.getLoginItemSettings().openAtLogin,
+    setOpenAtLogin: (value) => {
+      // The login item is a macOS/Windows native concept; other platforms ignore it.
+      if (process.platform !== 'darwin' && process.platform !== 'win32') return;
+      app.setLoginItemSettings({ openAtLogin: value });
+    },
+    onMenuBarQuotaChanged: () => { desktopTray?.rebuild(); },
   });
   // One notification owner for the whole process. Main-origin (update, daemon,
   // Pet task) and renderer-originated events all land here; the center decides
@@ -854,6 +908,7 @@ async function bootstrap(): Promise<void> {
       shellWindow && !shellWindow.window.isDestroyed() && shellWindow.window.isFocused(),
     ),
     isSystemEnabled: () => settingsStore.load().notifications.system,
+    isEventEnabled: (input) => isNotificationEventEnabled(input),
     onSystemNotification: (notification) => showSystemNotification(notification),
     doNotDisturb: loadedSettings?.notifications.doNotDisturb ?? false,
   });
@@ -961,6 +1016,13 @@ async function bootstrap(): Promise<void> {
     return daemonSnapshot();
   });
 
+  // `general.startupPage` controls the first page: 'session' always, or 'last'
+  // restores the page the shell was on when it last ran. Explicit second-instance
+  // navigation (`--settings`) still overrides it below.
+  const initialShellPage: ShellPage = settingsStore.load().general.startupPage === 'session'
+    ? 'session'
+    : loadedSettings?.window.lastPage ?? 'session';
+
   shellWindow = await ShellWindowController.create({
     pageLoader,
     preloadPath: preloadPath(app.getAppPath(), 'shell'),
@@ -971,6 +1033,12 @@ async function bootstrap(): Promise<void> {
     backgroundColor: appearanceController.backgroundColor(),
     titleBarOverlay: appearanceController.titleBarOverlay(),
     additionalArguments: appearanceController.arguments(),
+    initialPage: initialShellPage,
+    onPageChanged: (page) => {
+      const windowSettings = settingsStore.load().window;
+      if (windowSettings.lastPage === page) return;
+      settingsStore.patch('window', { ...windowSettings, lastPage: page });
+    },
     onCreated: (controller) => { shellWindow = controller; },
     getAppearance: () => appearanceController!.resolve(),
     getAppearanceSettings: async () => appearanceController!.getSettings(),
@@ -1063,6 +1131,7 @@ async function bootstrap(): Promise<void> {
     openLogsDirectory: async () => { await shell.openPath(join(foremanStateRoot(), 'logs')); },
     revealWorkspace: async (path: string) => { shell.showItemInFolder(path); },
   });
+  applyShellZoom();
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,
     () => { void requestInstallFromMenu(); },
@@ -1094,6 +1163,12 @@ async function bootstrap(): Promise<void> {
         buttons: ['好'],
         noLink: true,
       });
+    },
+    {
+      // The View menu drives the same persisted `appearance.zoom` as the setting.
+      zoomIn: () => setInterfaceZoom((appearanceController?.getSettings().zoom ?? 100) + APPEARANCE_ZOOM_STEP),
+      zoomOut: () => setInterfaceZoom((appearanceController?.getSettings().zoom ?? 100) - APPEARANCE_ZOOM_STEP),
+      reset: () => setInterfaceZoom(100),
     },
   )));
   // `update.autoCheck` gates the background schedule; a manual check always works.
@@ -1151,6 +1226,7 @@ async function bootstrap(): Promise<void> {
     restartPet: () => (quitController?.isQuitting() ? Promise.resolve() : petController!.restart()),
     openDesktop: () => showDesktop('session'),
     getQuotaSnapshot: () => quotaController!.snapshot(),
+    showQuota: () => settingsStore.load().tray.showQuota ?? true,
   }, process.platform);
 
   if (openSettingsOnReady) {

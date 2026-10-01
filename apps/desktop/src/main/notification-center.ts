@@ -76,6 +76,12 @@ export interface NotificationCenterOptions {
   isForeground?: () => boolean;
   /** Whether OS-level notifications are enabled in preferences. */
   isSystemEnabled?: () => boolean;
+  /**
+   * Whether an event family is enabled in preferences. A disabled event is
+   * never recorded nor surfaced, so renderer-originated notifications obey the
+   * same `notifications.events` gate as main-origin events.
+   */
+  isEventEnabled?: (input: NotificationInput) => boolean;
   /** Emit a native notification; only called for background-worthy events. */
   onSystemNotification?: (notification: ShellNotification) => void;
   /** Initial do-not-disturb state; the owner persists later toggles. */
@@ -94,6 +100,7 @@ export class NotificationCenter {
   private readonly onChanged: ((snapshot: NotificationSnapshot) => void) | undefined;
   private readonly isForeground: () => boolean;
   private readonly isSystemEnabled: () => boolean;
+  private readonly isEventEnabled: ((input: NotificationInput) => boolean) | undefined;
   private readonly onSystemNotification: ((notification: ShellNotification) => void) | undefined;
   private items: ShellNotification[] = [];
   private doNotDisturb: boolean;
@@ -105,6 +112,7 @@ export class NotificationCenter {
     this.onChanged = options.onChanged;
     this.isForeground = options.isForeground ?? (() => true);
     this.isSystemEnabled = options.isSystemEnabled ?? (() => true);
+    this.isEventEnabled = options.isEventEnabled;
     this.onSystemNotification = options.onSystemNotification;
     this.doNotDisturb = options.doNotDisturb ?? false;
   }
@@ -121,6 +129,19 @@ export class NotificationCenter {
 
   /** Insert or update a notification; returns the stored (cloned) record. */
   push(input: NotificationInput): ShellNotification {
+    // A disabled event family is never recorded nor surfaced; return the input
+    // shape without touching history so callers that ignore the result are safe.
+    if (this.isEventEnabled !== undefined && !this.isEventEnabled(input)) {
+      return {
+        id: input.id ?? this.nextId(),
+        level: input.level,
+        source: input.source,
+        title: input.title,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        createdAt: this.now(),
+        read: true,
+      };
+    }
     const index = input.id === undefined ? -1 : this.items.findIndex((item) => item.id === input.id);
     let notification: ShellNotification;
     if (index >= 0) {

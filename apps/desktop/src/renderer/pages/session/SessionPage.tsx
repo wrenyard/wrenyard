@@ -21,6 +21,7 @@ import { useNewItemKeys } from '@/renderer/lib/motion';
 import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
 import { getSessionApi } from './api.js';
 import { Composer } from './components/Composer.js';
+import { Conversation } from './components/conversation/Conversation.js';
 import { EmptySession } from './components/EmptySession.js';
 import { SessionSearch } from './components/SessionSearch.js';
 import { SessionSidebar } from './components/SessionSidebar.js';
@@ -246,6 +247,7 @@ export function SessionPage() {
     <Page data-page="session">
       <InspectorProvider target={target} inspect={inspect} inspectTimeline={inspectTimeline}>
         <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
+        <Conversation sessionKey={sessionKey} turns={model.turns} ready={!state.loadingLedger} />
         <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen} className="h-full min-h-0">
           <ResizablePanelGroup
             orientation="horizontal"

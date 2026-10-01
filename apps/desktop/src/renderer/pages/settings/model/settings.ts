@@ -253,6 +253,10 @@ export function readPreference(preferences: DesktopPreferences, id: PreferenceId
       return preferences.general.startupPage;
     case 'general.confirmQuit':
       return preferences.general.confirmQuit;
+    case 'general.openAtLogin':
+      return preferences.general.openAtLogin;
+    case 'general.menuBarQuota':
+      return preferences.general.menuBarQuota;
     case 'appearance.theme':
       return preferences.appearance.theme;
     case 'appearance.colorMode':
@@ -315,6 +319,12 @@ export function applyLocalPreference(
     case 'general.confirmQuit':
       next.general.confirmQuit = value as boolean;
       break;
+    case 'general.openAtLogin':
+      next.general.openAtLogin = value as boolean;
+      break;
+    case 'general.menuBarQuota':
+      next.general.menuBarQuota = value as boolean;
+      break;
     case 'appearance.theme':
       next.appearance.theme = value as DesktopPreferences['appearance']['theme'];
       break;
@@ -366,4 +376,25 @@ export function applyLocalPreference(
     }
   }
   return next;
+}
+
+/**
+ * Structural equality for preference values. Composite preferences (the hidden
+ * status-bar id list, notification event flags) are fresh objects on every
+ * snapshot, so reference inequality would mark every such row as modified.
+ */
+export function preferenceValuesEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, index) => preferenceValuesEqual(item, b[index]));
+  }
+  if (a !== null && b !== null && typeof a === 'object' && typeof b === 'object') {
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const keys = Object.keys(left);
+    if (keys.length !== Object.keys(right).length) return false;
+    return keys.every((key) => preferenceValuesEqual(left[key], right[key]));
+  }
+  return false;
 }
