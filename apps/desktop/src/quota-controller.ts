@@ -193,13 +193,16 @@ function projectProvider(id: string, provider: QuotaProviderState): QuotaProvide
   }));
   // A successful status preserves the runtime's friendly message (e.g. the
   // observed CodeBuddy monthly exhaustion) alongside any display line, while
-  // error/unavailable statuses keep the generic unavailable copy.
+  // error/unavailable statuses keep the generic unavailable copy. A rate-limit
+  // observation keeps the last good data and gets its own retry copy.
   const unavailable = isQuotaUnavailable(provider.status);
-  const message = unavailable
-    ? '额度数据暂不可用。'
-    : provider.status === 'ok' && provider.error
-      ? sanitizeQuotaText(provider.error)
-      : undefined;
+  const message = provider.code === 'rate_limited'
+    ? rateLimitedMessage(provider.error)
+    : unavailable
+      ? '额度数据暂不可用。'
+      : provider.status === 'ok' && provider.error
+        ? sanitizeQuotaText(provider.error)
+        : undefined;
   const displayLine = !unavailable && provider.displayLine
     ? sanitizeQuotaText(provider.displayLine)
     : undefined;
@@ -256,7 +259,7 @@ function projectCatalog(
       // row keeps the product "no quota lookup" wording.
       projectedQuota.message = id === 'codebuddy'
         ? '此 Provider 暂不提供额度查询。'
-        : unavailableQuotaMessage(authMode, configured, projectedQuota.code);
+        : unavailableQuotaMessage(authMode, configured, projectedQuota.code, quota?.error);
     }
     // Quota observations carry the raw provider id as their label; surfaces
     // such as the status bar should show the catalog display name instead.
@@ -342,7 +345,20 @@ function isQuotaUnavailable(status: QuotaProviderSnapshot['status']): boolean {
   return status === 'error' || status === 'unavailable';
 }
 
-function unavailableQuotaMessage(authMode: ProviderAuthMode, configured: boolean, code?: string): string {
+/**
+ * Retry hint the quota feature embeds in a rate-limited observation
+ * (`Rate limited; retry in <n> min`); the controller owns the Chinese copy.
+ */
+const RATE_LIMIT_RETRY_RE = /retry in (\d+) min/;
+
+/** Chinese copy for a rate-limited provider, retaining the retry window when present. */
+function rateLimitedMessage(detail?: string | null): string {
+  const minutes = typeof detail === 'string' ? detail.match(RATE_LIMIT_RETRY_RE)?.[1] : undefined;
+  return minutes ? `额度接口限流，约 ${minutes} 分钟后重试。` : '额度接口限流，请稍后重试。';
+}
+
+function unavailableQuotaMessage(authMode: ProviderAuthMode, configured: boolean, code?: string, detail?: string | null): string {
+  if (code === 'rate_limited') return rateLimitedMessage(detail);
   if (code === 'configuration_missing') return '尚未配置，请先完成登录或填写 API Key 后刷新。';
   if (code === 'authentication_required') return '登录已失效，请重新登录后刷新。';
   if (code === 'quota_query_failed') return '额度查询失败，请稍后刷新。';

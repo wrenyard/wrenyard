@@ -122,7 +122,17 @@ export interface StreamChunk {
     readonly message?: string;
 }
 export class ClientError extends Error {
-    constructor(readonly code: string, message = 'Client operation unavailable') { super(message); this.name = 'ClientError'; }
+    constructor(readonly code: string, message = 'Client operation unavailable', readonly retryAfterMs?: number) { super(message); this.name = 'ClientError'; }
+}
+/** Parse a `Retry-After` header (delta-seconds or HTTP-date) into milliseconds. */
+function parseRetryAfterMs(value: string | null, now = Date.now()): number | undefined {
+    if (value === null)
+        return undefined;
+    const text = value.trim();
+    if (/^\d+$/.test(text))
+        return Number(text) * 1000;
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? Math.max(0, parsed - now) : undefined;
 }
 export function observation(source: string, data: unknown): AccountSnapshot {
     return { source, fetched_at: new Date().toISOString(), data };
@@ -133,6 +143,10 @@ export async function requestJson(url: string, init: RequestInit, options?: Oper
     const response = await fetch(url, { ...init, signal, redirect: 'error' });
     if (!response.ok) {
         await response.body?.cancel();
+        // A 429 is a temporary upstream limit, not a query failure: surface the
+        // Retry-After so callers can back off instead of retrying immediately.
+        if (response.status === 429)
+            throw new ClientError('rate_limited', 'Upstream rate limited', parseRetryAfterMs(response.headers.get('retry-after')));
         throw new ClientError(response.status === 401 || response.status === 403 ? 'authentication_required' : 'quota_query_failed');
     }
     if (!response.body)

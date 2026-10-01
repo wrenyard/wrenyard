@@ -14,6 +14,9 @@ export const quota = {
   },
   bindings: [],
   defaultPools: [quotaPool('claude-coding/usage', [], 0.2)],
+  // The OAuth usage endpoint rate limits hard (HTTP 429 with a long Retry-After),
+  // so never poll it more often than every five minutes.
+  minRefreshMs: 300_000,
 } satisfies Provider['quota'];
 
 function window(value: unknown, name: string, minutes: number): QuotaWindow | undefined {

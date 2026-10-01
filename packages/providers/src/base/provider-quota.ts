@@ -7,5 +7,11 @@ export interface QuotaSource {
 export interface ProviderQuota {
   readonly bindings: readonly ProviderQuotaBinding[];
   readonly defaultPools: readonly ProviderQuotaPool[];
+  /**
+   * Minimum interval between successful upstream reads. While it has not
+   * elapsed, a cached observation is returned even for an explicit refresh, so
+   * an aggressively rate-limited endpoint is never polled faster than this.
+   */
+  readonly minRefreshMs?: number;
   read?(source: QuotaSource): Promise<QuotaSnapshot | undefined>;
 }
