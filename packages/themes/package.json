@@ -8,10 +8,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./icons": "./src/icons.ts",
-    "./paper.css": "./src/paper/tokens.css",
-    "./neutral.css": "./src/neutral/tokens.css",
-    "./assets/paper/*": "./src/paper/assets/*",
-    "./assets/neutral/*": "./src/neutral/assets/*"
+    "./themes.css": "./src/themes.css",
+    "./*.css": "./src/*/tokens.css",
+    "./assets/*": "./src/*"
   },
   "devDependencies": {
     "typescript": "^5.9.0"
