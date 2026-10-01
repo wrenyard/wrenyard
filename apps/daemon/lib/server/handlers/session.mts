@@ -132,6 +132,8 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
     }))
   router.register('session.events', (params, _message, context) =>
     call(context, 'session.events', () => pollEvents(session, params)))
+  router.register('session.context.inspect', (params, _message, context) =>
+    call(context, 'session.context.inspect', () => session.inspectContext(params)))
   router.register('session.summary.settings', (_params, _message, context) =>
     call(context, 'session.summary.settings', () => summarySnapshot()))
   router.register('session.summary.save', (params, _message, context) =>

@@ -332,6 +332,34 @@ function normalizeError(error: unknown, signal: AbortSignal): unknown {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+/**
+ * Phrases upstream providers use when a request exceeds their context window.
+ * The gateway forwards the provider body verbatim, so a small set of stable
+ * phrases is matched instead of a provider-specific error code.
+ */
+const CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
+  /context[_ ]length/iu,
+  /context window/iu,
+  /maximum context/iu,
+  /context overflow/iu,
+  /exceeds? the (?:maximum )?context/iu,
+  /(?:prompt|input|request|messages?)[^.\n]*too (?:long|large)/iu,
+  /too many tokens/iu,
+  /reduce the length of the messages?/iu,
+];
+
+/**
+ * True when a failure is an upstream context-window overflow. `calls.ts` uses
+ * this to prefix the `call` event error with `context_overflow:` so Desktop can
+ * classify the failed turn without parsing provider wording.
+ */
+export function isContextOverflowError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  if (message === '') return false;
+  if (message.startsWith('context_overflow:')) return true;
+  return CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 function abortError(): Error {
   const error = new Error('Model request was aborted');
   error.name = 'AbortError';

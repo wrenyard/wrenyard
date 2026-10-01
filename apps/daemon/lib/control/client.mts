@@ -92,6 +92,8 @@ import type {
   SessionSummarySettingsResult,
   SessionSummarySaveParams,
   SessionSummarySaveResult,
+  SessionContextInspectParams,
+  SessionContextInspectResult,
   ProviderListParams,
   ProviderListResult,
 } from '../protocol/registry.mts'
@@ -281,6 +283,11 @@ export class ForemanClient {
     },
     events: (params: SessionEventsParams): Promise<SessionEventsResult> => {
       return this.rpc.request<SessionEventsResult>('session.events', params)
+    },
+    context: {
+      inspect: (params: SessionContextInspectParams): Promise<SessionContextInspectResult> => {
+        return this.rpc.request<SessionContextInspectResult>('session.context.inspect', params)
+      },
     },
     summary: {
       settings: (params: SessionSummarySettingsParams = {}): Promise<SessionSummarySettingsResult> => {

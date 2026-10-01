@@ -1,7 +1,7 @@
 /** Desktop transport for daemon-owned sessions. */
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
-import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
+import { resolveModelMetadata, type LedgerEvent, type LiveCall, type SessionSummary } from '@wrenyard/session';
 import type {
   SessionBridgeEventPayload,
   SessionBridgeLivePayload,
@@ -12,13 +12,13 @@ import type {
 export const SESSION_CHANNELS = {
   list: 'session:list', create: 'session:create', ledger: 'session:ledger',
   send: 'session:send', interrupt: 'session:interrupt', models: 'session:models',
-  tasks: 'session:tasks',
+  context: 'session:context', tasks: 'session:tasks',
   event: 'session:event', live: 'session:live',
 } as const;
 export type {
-  SessionBridge, SessionBridgeEventPayload, SessionBridgeInterruptRequest,
-  SessionBridgeLivePayload, SessionBridgeModelEntry, SessionBridgeSendRequest,
-  SessionBridgeTaskBrief,
+  SessionBridge, SessionBridgeContextInspectRequest, SessionBridgeEventPayload,
+  SessionBridgeInterruptRequest, SessionBridgeLivePayload, SessionBridgeModelEntry,
+  SessionBridgeSendRequest, SessionBridgeTaskBrief,
 } from './preload.js';
 
 export interface RegisterSessionOptions {
@@ -54,11 +54,18 @@ function isShuttingDown(error: unknown): boolean {
     && 'code' in error.data && error.data.code === 'daemon_shutting_down';
 }
 function toModelEntries(connection: WrenyardGatewayConnection): SessionBridgeModelEntry[] {
-  return connection.models.filter(model => !model.taskOnly && model.publicId.includes('/')).map(model => ({
-    publicId: model.publicId, provider: model.provider,
-    model: model.publicId.slice(model.publicId.indexOf('/') + 1), displayName: model.displayName,
-    ...(model.thinkingLevels?.length ? { thinkingLevels: [...model.thinkingLevels] } : {}),
-  }));
+  return connection.models.filter(model => !model.taskOnly && model.publicId.includes('/')).map(model => {
+    // Window facts resolve from the same config as the call budget, so the
+    // renderer's model-change preview (and the ring) use identical numbers.
+    const metadata = resolveModelMetadata(model.publicId);
+    return {
+      publicId: model.publicId, provider: model.provider,
+      model: model.publicId.slice(model.publicId.indexOf('/') + 1), displayName: model.displayName,
+      ...(model.thinkingLevels?.length ? { thinkingLevels: [...model.thinkingLevels] } : {}),
+      ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
+      ...(metadata.maxOutputTokens === undefined ? {} : { maxOutputTokens: metadata.maxOutputTokens }),
+    };
+  });
 }
 
 /** Full-snapshot equality; an unchanged live table is not re-pushed. */
@@ -247,6 +254,8 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
   handle(SESSION_CHANNELS.interrupt, async (_event, value) => { await request('session.interrupt', value); });
   handle(SESSION_CHANNELS.models, async () =>
     toModelEntries(await request<WrenyardGatewayConnection>('gateway.connection', {})));
+  handle(SESSION_CHANNELS.context, (_event, value) =>
+    request('session.context.inspect', value));
   handle(SESSION_CHANNELS.ledger, (event, value) => {
     if (typeof value !== 'string' || !value) throw new Error('Invalid sessionId');
     return openLedger(event.sender, value);

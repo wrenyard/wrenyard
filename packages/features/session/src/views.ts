@@ -160,8 +160,11 @@ function tag(name: string, attributes: readonly Attribute[], body?: string): str
  * Render one approved context event, or `undefined` for events that never enter
  * the context (procedural events and post-interrupt results). Thinking is never
  * a context event, so it can never be rendered here.
+ *
+ * Exported so the read-only context inspector counts an event's tokens with the
+ * exact bytes a model call would render for it.
  */
-function renderEvent(event: LedgerEvent): string | undefined {
+export function renderContextEvent(event: LedgerEvent): string | undefined {
   switch (event.type) {
     case 'turn.started': {
       const started = event as TurnStartedEvent;
@@ -276,7 +279,7 @@ function renderRecallDraft(draft: LedgerEventDraft): string | undefined {
 function renderEventsBlock(events: readonly LedgerEvent[], pending: readonly LedgerEventDraft[] = []): string {
   const rendered: string[] = [];
   for (const event of events) {
-    const text = renderEvent(event);
+    const text = renderContextEvent(event);
     if (text !== undefined) rendered.push(text);
   }
   for (const draft of pending) {
@@ -428,6 +431,15 @@ function buildReason(input: ReasonViewInput): BuiltView {
     { role: 'system', content: `${systemSeg}\n${globalSeg}\n${roleSeg}` },
     { role: 'user', content: `${workspaceSeg}\n${ctxSeg}\n${infoSeg}\n${userSeg}` },
   ];
+  const segments: Record<string, string> = {
+    'wy-system': systemSeg,
+    'wy-global': globalSeg,
+    'wy-role': roleSeg,
+    'wy-workspace': workspaceSeg,
+    'wy-ctx': ctxSeg,
+    'wy-info': infoSeg,
+    'wy-user': userSeg,
+  };
   return {
     messages,
     layers: {
@@ -439,6 +451,7 @@ function buildReason(input: ReasonViewInput): BuiltView {
       'wy-info': infoSeg.length,
       'wy-user': userSeg.length,
     },
+    segments,
   };
 }
 

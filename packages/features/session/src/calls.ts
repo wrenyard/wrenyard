@@ -12,6 +12,7 @@ import { getEncoding } from 'js-tiktoken';
 import { createBuiltinCatalog } from '@wrenyard/providers';
 import type { ModelDefinition, ThinkingLevel } from '@wrenyard/providers/base';
 import { models as registeredModels } from '@wrenyard/models';
+import { isContextOverflowError } from './driver.js';
 import type { DriverResult, ModelDriver, ModelMessage, Usage } from './driver.js';
 
 export type { ModelMessage, Usage } from './driver.js';
@@ -269,6 +270,18 @@ function abortMessage(kind: 'signal' | 'timeout' | 'idle' | undefined, totalTime
   return 'Model call failed';
 }
 
+/**
+ * Prefix a failure message with the fixed `context_overflow:` code when it is a
+ * context-window overflow, whether it came from the local budget check or an
+ * upstream context-too-long error. Desktop matches this prefix and never parses
+ * the provider wording.
+ */
+function withOverflowPrefix(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith('context_overflow:')) return message;
+  return isContextOverflowError(error) ? `context_overflow: ${message}` : message;
+}
+
 /** Create the role-aware call runner. */
 export function createCallRunner(options: CallRunnerOptions): CallRunner {
   const now = options.now ?? ((): Date => new Date());
@@ -405,7 +418,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           && !isThinkingLevelSupported(budget.metadata, reasoningEffort)) {
           return await fail(`Model ${model} does not support reasoning effort "${reasoningEffort}"`);
         }
-        if (!budget.ok) return await fail(`Call not sent: ${budget.reason}`);
+        if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
 
         // Observational marker: the driver call is about to be issued. It never
         // enters the rendered context, so it cannot change prior renderings.
@@ -432,7 +445,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         if (error instanceof ModelCallError) throw error;
         const status: 'failed' | 'aborted' = abortKind === 'signal' ? 'aborted' : 'failed';
         const message = abortKind === undefined
-          ? error instanceof Error ? error.message : String(error)
+          ? withOverflowPrefix(error)
           : abortMessage(abortKind, totalTimeoutMs);
         return await fail(message, {
           status,

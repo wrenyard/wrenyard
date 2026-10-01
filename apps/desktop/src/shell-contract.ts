@@ -1,9 +1,16 @@
 import type { PetSettingsPayload } from './pet/main/config';
-import type { SummarySettingsSnapshot } from '@wrenyard/session';
+import type {
+  ContextInspection,
+  ContextItem,
+  ContextItemKind,
+  ContextLayerId,
+  SummarySettingsSnapshot,
+} from '@wrenyard/session';
 
-// The summary-settings DTO is owned by the session feature. Desktop re-exports
-// it here so existing Desktop consumers keep one import site.
-export type { SummarySettingsSnapshot };
+// The summary-settings and context-inspection DTOs are owned by the session
+// feature. Desktop re-exports them here so existing Desktop consumers keep one
+// import site.
+export type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, SummarySettingsSnapshot };
 
 /**
  * Whether a workspace is usable, plus where the configuration came from. A

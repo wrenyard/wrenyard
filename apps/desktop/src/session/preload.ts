@@ -8,9 +8,9 @@
  */
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
+import type { ContextInspection, LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
 
-export type { LiveCall };
+export type { ContextInspection, LiveCall };
 
 /** Exact main↔renderer channels of the session surface. */
 export const SESSION_CHANNELS = {
@@ -26,6 +26,8 @@ export const SESSION_CHANNELS = {
   interrupt: 'session:interrupt',
   /** Renderer → main: the gateway model list. */
   models: 'session:models',
+  /** Renderer → main: `{ sessionId?, model }`, forwarded to `session.context.inspect`. */
+  context: 'session:context',
   /** Renderer → main: `string[]` of task run ids, resolved to briefs. */
   tasks: 'session:tasks',
   /** Main → renderer: `{ sessionId, event }` for the subscribed session. */
@@ -41,6 +43,17 @@ export interface SessionBridgeModelEntry {
   model: string;
   displayName: string;
   thinkingLevels?: string[];
+  /** Window facts from the same config as the call budget; absent when unknown. */
+  contextWindow?: number;
+  maxOutputTokens?: number;
+}
+
+/** Params of the read-only context inspection (`session.context.inspect`). */
+export interface SessionBridgeContextInspectRequest {
+  /** Omitted means a new session: resident layers plus the workspace snapshot. */
+  sessionId?: string;
+  /** Gateway public id the input box currently has selected. */
+  model: string;
 }
 
 export interface SessionBridgeSendRequest {
@@ -99,6 +112,11 @@ export interface SessionBridge {
   interrupt(request: SessionBridgeInterruptRequest): Promise<void>;
   /** The live gateway models the reason-model picker may offer. */
   models(): Promise<SessionBridgeModelEntry[]>;
+  /**
+   * Read-only inspection of the next main reasoning view for a session and the
+   * currently selected model. Omit `sessionId` for a new session.
+   */
+  contextInspect(request: SessionBridgeContextInspectRequest): Promise<ContextInspection>;
   /** Resolve task-run briefs for the given run ids (per-id failures are `unavailable`). */
   tasks(taskRunIds: string[]): Promise<SessionBridgeTaskBrief[]>;
   /** Subscribe to pushed ledger events; the returned function unsubscribes. */
@@ -149,6 +167,9 @@ const bridge: SessionBridge = {
   },
   models(): Promise<SessionBridgeModelEntry[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.models) as Promise<SessionBridgeModelEntry[]>;
+  },
+  contextInspect(request: SessionBridgeContextInspectRequest): Promise<ContextInspection> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.context, request) as Promise<ContextInspection>;
   },
   tasks(taskRunIds: string[]): Promise<SessionBridgeTaskBrief[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.tasks, taskRunIds) as Promise<SessionBridgeTaskBrief[]>;
