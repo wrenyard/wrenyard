@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,20 +6,17 @@ import { test } from 'node:test';
 import {
   SHELL_CHANNELS,
   type TaskRoutingTestParams,
-  type TaskRoutingTestResult,
   type TaskRoutingTestTask,
   type WrenyardShellApi,
 } from '../src/shell-contract.js';
 import {
-  RoutingTestController,
   defaultRoutingTestForm,
   formFromTask,
-  renderRoutingTestResult,
   routingTestErrorMessage,
   routingTestTaskLabel,
   serializeRoutingTestRequest,
   type RoutingTestFormState,
-} from '../src/renderer/routing-test.js';
+} from '../src/renderer/pages/quota/model/routing.js';
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -47,33 +43,11 @@ function importedTask(overrides: Partial<TaskRoutingTestTask> = {}): TaskRouting
   };
 }
 
-function resultRow(overrides: Record<string, unknown> = {}) {
-  return {
-    provider: 'moonshot',
-    provider_name: 'Moonshot',
-    model: 'kimi-k3',
-    model_name: 'Kimi K3',
-    effective_tps: 42.5,
-    price_score: 0.24,
-    speed_score: 0.12,
-    quota_score: 0.35,
-    intelligence_score: 0.135,
-    score: 0.845,
-    rank: 1,
-    reason: null,
-    ...overrides,
-  };
-}
-
-function routingResult(rows = [resultRow()]): TaskRoutingTestResult {
-  return { rows };
-}
-
 test('routing test IPC channels and typed API surface exist', () => {
   assert.equal(SHELL_CHANNELS.taskRoutingTest, 'wrenyard-shell:task-routing-test');
   assert.equal(SHELL_CHANNELS.taskRoutingTestTasks, 'wrenyard-shell:task-routing-test-tasks');
   const api: Pick<WrenyardShellApi, 'requestTaskRoutingTest' | 'requestRoutingTestTasks'> = {
-    requestTaskRoutingTest: async () => routingResult(),
+    requestTaskRoutingTest: async () => ({ rows: [] }),
     requestRoutingTestTasks: async () => ({ tasks: [importedTask()] }),
   };
   assert.equal(typeof api.requestTaskRoutingTest, 'function');
@@ -127,75 +101,6 @@ test('main bridges the typed form request and routingTestTasks import with reque
   assert.match(main, /const requestRoutingTestTasks = async \(\): Promise<TaskRoutingTestTasksResult>/);
   assert.match(main, /requestTaskRoutingTest: \(params: TaskRoutingTestParams\) => requestTaskRoutingTest\(params\),/);
   assert.match(main, /requestRoutingTestTasks: \(\) => requestRoutingTestTasks\(\),/);
-});
-
-test('HTML hosts supply/routing tabs, keeps the supply config together, and turns routing into a form', async () => {
-  const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
-  assert.match(html, /id="quota-tabs" role="tablist"/);
-  assert.match(html, /data-quota-tab="supply"[^>]*>供应商</);
-  assert.match(html, /data-quota-tab="routing"[^>]*>路由测试</);
-  assert.match(html, /id="quota-panel-supply" role="tabpanel"/);
-  assert.match(html, /id="quota-panel-routing" role="tabpanel"[^>]*hidden/);
-
-  const supplyEnd = html.indexOf('id="quota-panel-routing"');
-
-  const routingStart = supplyEnd;
-  const routingEnd = html.indexOf('id="clients-page"');
-  const routingMarkup = html.slice(routingStart, routingEnd);
-  assert.match(routingMarkup, /id="routing-test-run"[^>]*>测试</);
-  assert.match(routingMarkup, /id="routing-test-import-select"/);
-  const app = await readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8');
-  assert.match(app, /label: 'Task 模板'/);
-  assert.match(routingMarkup, /id="routing-test-minimum-tps"/);
-  assert.match(routingMarkup, /id="routing-test-expected-tps"/);
-  assert.match(routingMarkup, /id="routing-test-output-cap"/);
-  assert.match(routingMarkup, /id="routing-test-require-image"[^>]*type="checkbox"/);
-  assert.match(routingMarkup, /id="routing-test-require-search"[^>]*type="checkbox"/);
-  assert.match(routingMarkup, /id="routing-test-exclude-models"/);
-  assert.match(routingMarkup, /id="routing-test-exclude-providers"/);
-  assert.ok(
-    routingMarkup.indexOf('routing-test-minimum-tps') < routingMarkup.indexOf('routing-test-expected-tps'),
-    'minimum TPS controls stay left of expected TPS',
-  );
-});
-
-test('scoped picker styles keep the trigger practical and wrap option labels inside the viewport', async () => {
-  const css = await readFile(join(desktopRoot, 'src', 'renderer', 'app.css'), 'utf8');
-  const toolbarRule = (selector: string): string => {
-    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const match = css.match(new RegExp(`${escaped} \\{([^}]*)\\}`));
-    assert.ok(match, `scoped rule ${selector} must exist`);
-    return match[1];
-  };
-
-  // Trigger: practical width with flex-shrink protection while room remains.
-  const host = toolbarRule('.routing-test-toolbar .single-select');
-  assert.match(host, /flex: 0 1 320px;/, 'the picker asks for a practical 320px width');
-  assert.match(host, /min-width: 180px;/, 'the picker resists collapsing below a readable width');
-
-  // Popup: right anchored, content-sized, clamped to the viewport on both edges.
-  const popup = toolbarRule('.routing-test-toolbar .single-select-popup');
-  assert.match(popup, /right: 0;/, 'the popup hangs from the trigger right edge');
-  assert.match(popup, /left: auto;/, 'the popup overrides the shared left:0 anchor');
-  assert.match(popup, /width: max-content;/, 'the popup sizes to its content');
-  assert.match(popup, /min-width: min\(320px, calc\(100vw - 48px\)\);/, 'the popup has a viewport-clamped floor');
-  assert.match(popup, /max-width: min\(520px, calc\(100vw - 48px\)\);/, 'the popup has a viewport-clamped ceiling');
-
-  // Option text wraps naturally: no ellipsis clipping inside the scoped popup.
-  const label = toolbarRule('.routing-test-toolbar .single-select-option-label');
-  assert.match(label, /white-space: normal;/, 'option labels wrap');
-  assert.match(label, /text-overflow: clip;/, 'option labels never ellipsize');
-  assert.match(label, /overflow-wrap: anywhere;/, 'long unbroken labels still wrap');
-  const secondary = toolbarRule('.routing-test-toolbar .single-select-option-secondary');
-  assert.match(secondary, /white-space: normal;/, 'secondary option text wraps');
-  assert.match(secondary, /flex: 1 1 100%;/, 'secondary text owns its own line');
-
-  // Narrow screens hand the picker a full row rather than clipping it.
-  assert.match(
-    css,
-    /@media \(max-width: 820px\) \{[\s\S]*?\.routing-test-toolbar \.single-select \{ flex: 1 1 100%; min-width: 0; \}/,
-    'the picker takes a full row at narrow widths',
-  );
 });
 
 test('default form has recommended mid with no minimum or extra capabilities', () => {
@@ -275,124 +180,6 @@ test('picker labels distinguish project tasks and Chinese names', () => {
   );
 });
 
-test('result table uses the exact semantic columns and shows rejected rows as dashes', () => {
-  const accepted = resultRow();
-  const rejected = resultRow({
-    provider: 'zhipu', provider_name: 'Zhipu', model: 'glm', model_name: 'GLM',
-    effective_tps: null, price_score: null, speed_score: null, quota_score: null,
-    intelligence_score: null, score: null, rank: null, reason: '额度不足',
-  });
-  const text = collectText(renderRoutingTestResult(routingResult([accepted, rejected])));
-  for (const header of ['排名', '供应商', '模型', 'TPS', '价格分', '速度分', '额度分', '智能分', '总分', '原因']) {
-    assert.match(text, new RegExp(header));
-  }
-  assert.match(text, /0\.845/);
-  assert.match(text, /42\.5/);
-  assert.match(text, /额度不足/);
-  // Rejected row emits dashes, never a fabricated number.
-  assert.match(text, /—/);
-});
-
-test('result table preserves backend row order', () => {
-  const first = resultRow({ rank: 1, provider_name: 'First' });
-  const second = resultRow({ rank: 2, provider_name: 'Second' });
-  const text = collectText(renderRoutingTestResult(routingResult([first, second])));
-  assert.ok(text.indexOf('First') < text.indexOf('Second'), 'rows render in backend order');
-});
-
-test('empty result renders a brief empty state', () => {
-  const text = collectText(renderRoutingTestResult(routingResult([])));
-  assert.match(text, /暂无可用模型/);
-});
-
-test('a late response from an invalidated run is discarded and stale results cleared', async () => {
-  const harness = controllerHarness();
-  const first = harness.controller.run();
-  assert.equal(harness.runButton.disabled, true);
-  // A form change invalidates the in-flight run.
-  harness.controller.onFormChanged();
-  assert.equal(harness.result.childElementCount, 0, 'form change clears the stale result');
-  const second = harness.controller.run();
-  assert.equal(harness.queue.length, 2, 'a second run is issued after invalidation');
-  // Resolve the latest request first, then let the superseded one settle late.
-  harness.resolveAt(1, routingResult([resultRow({ provider_name: 'Latest' })]));
-  await second;
-  const afterSecond = harness.result.childElementCount;
-  harness.resolveAt(0, routingResult([resultRow({ provider_name: 'Stale' })]));
-  await first;
-  assert.equal(harness.result.childElementCount, afterSecond, 'late response never overwrites the latest result');
-  assert.match(collectText(harness.result), /Latest/);
-  assert.doesNotMatch(collectText(harness.result), /Stale/);
-});
-
-test('duplicate runs are blocked while a test is in flight', async () => {
-  const harness = controllerHarness();
-  const first = harness.controller.run();
-  assert.equal(harness.runButton.disabled, true);
-  assert.equal(harness.runButton.textContent, '测试中…');
-  await harness.controller.run();
-  assert.equal(harness.queue.length, 1, 'second invocation is a no-op');
-  harness.resolveNext(routingResult());
-  await first;
-  assert.equal(harness.runButton.disabled, false);
-  assert.equal(harness.runButton.textContent, '测试');
-});
-
-test('importing tasks is lazy, caches a successful list, and suppresses concurrent fetches', async () => {
-  const harness = controllerHarness();
-  assert.equal(harness.importQueue.length, 0, 'no import happens before first interaction');
-  const firstImport = harness.controller.importTasks();
-  await harness.controller.importTasks();
-  assert.equal(harness.importQueue.length, 1, 'concurrent fetch is suppressed');
-  harness.resolveImportNext({ tasks: [importedTask()] });
-  await firstImport;
-  assert.equal(harness.picker.options.length, 2, 'placeholder + one imported task');
-  await harness.controller.importTasks();
-  assert.equal(harness.importQueue.length, 0, 'successful list is cached');
-});
-
-test('initializeExploreDefault imports builtin:explore once and copies it without running', async () => {
-  const harness = controllerHarness();
-  const explore = importedTask({ identity: 'builtin:explore', name: 'explore', display_name: '探索' });
-  const initialization = harness.controller.initializeExploreDefault();
-  assert.equal(harness.importQueue.length, 1);
-  harness.resolveImportNext({ tasks: [explore] });
-  await initialization;
-  assert.equal(harness.importQueue.length, 0);
-  assert.deepEqual(harness.applied, [explore]);
-  assert.equal(harness.queue.length, 0);
-
-  harness.picker.value = 'builtin:explore';
-  await harness.controller.initializeExploreDefault();
-  assert.deepEqual(harness.applied, [explore], 'an existing user selection is preserved');
-  assert.equal(harness.importQueue.length, 0);
-});
-
-test('failed import stays visible in the result region and can be retried', async () => {
-  const harness = controllerHarness();
-  const firstImport = harness.controller.importTasks();
-  harness.rejectImportNext(new Error('网关不可用'));
-  await firstImport;
-  assert.match(collectText(harness.result), /导入失败：网关不可用/);
-  const retry = harness.controller.importTasks();
-  assert.equal(harness.importQueue.length, 1, 'failure allows retry');
-  harness.resolveImportNext({ tasks: [importedTask()] });
-  await retry;
-  assert.equal(harness.picker.options.length, 2);
-});
-
-test('selecting an imported task copies its fields and does not request a test or persist', async () => {
-  const harness = controllerHarness();
-  const importRun = harness.controller.importTasks();
-  harness.resolveImportNext({ tasks: [importedTask()] });
-  await importRun;
-  harness.picker.value = 'builtin:edit';
-  harness.controller.selectImportedTask();
-  assert.deepEqual(harness.applied, [importedTask()]);
-  assert.equal(harness.result.childElementCount, 0);
-  assert.equal(harness.queue.length, 0);
-});
-
 test('template unknown model and provider exclusions are preserved', () => {
   const form = formFromTask(importedTask({
     automatic: {
@@ -408,164 +195,10 @@ test('template unknown model and provider exclusions are preserved', () => {
   assert.deepEqual(request.automatic.exclude_provider_ids, ['unknown-provider']);
 });
 
-test('an error exposes a bounded message', async () => {
-  const harness = controllerHarness();
-  const failing = harness.controller.run();
-  harness.rejectNext(new Error("Error invoking remote method 'x': Error: 网关不可用"));
-  await failing;
-  assert.match(collectText(harness.result), /测试失败：网关不可用/);
+test('an error exposes a bounded message', () => {
   assert.equal(routingTestErrorMessage(new Error('boom')), 'boom');
+  assert.equal(
+    routingTestErrorMessage(new Error("Error invoking remote method 'x': Error: 网关不可用")),
+    '网关不可用',
+  );
 });
-
-interface Harness {
-  controller: RoutingTestController;
-  runButton: HTMLButtonElement;
-  picker: FakePicker;
-  result: HTMLElement;
-  applied: TaskRoutingTestTask[];
-  queue: Array<{ resolve(value: TaskRoutingTestResult): void; reject(error: unknown): void }>;
-  importQueue: Array<{ resolve(value: { tasks: TaskRoutingTestTask[] }): void; reject(error: unknown): void }>;
-  resolveAt(index: number, value: TaskRoutingTestResult): void;
-  resolveNext(value: TaskRoutingTestResult): void;
-  rejectNext(error: unknown): void;
-  resolveImportNext(value: { tasks: TaskRoutingTestTask[] }): void;
-  rejectImportNext(error: unknown): void;
-}
-
-/** Minimal stand-in for the picker's {value, setOptions} surface. */
-interface FakePicker {
-  value: string;
-  options: Array<{ value: string; label: string }>;
-  setOptions(options: { value: string; label: string }[]): void;
-}
-
-function fakePicker(): FakePicker {
-  return {
-    value: '',
-    options: [],
-    setOptions(options) { this.options = options; },
-  };
-}
-
-function controllerHarness(): Harness {
-  const runButton = fakeElement('button') as unknown as HTMLButtonElement;
-  const picker = fakePicker();
-  const result = fakeElement('div') as unknown as HTMLElement;
-  const queue: Array<{ resolve(value: TaskRoutingTestResult): void; reject(error: unknown): void }> = [];
-  const importQueue: Array<{ resolve(value: { tasks: TaskRoutingTestTask[] }): void; reject(error: unknown): void }> = [];
-  const applied: TaskRoutingTestTask[] = [];
-  const controller = new RoutingTestController({
-    request: () => new Promise<TaskRoutingTestResult>((resolve, reject) => { queue.push({ resolve, reject }); }),
-    importTasks: () => new Promise<{ tasks: TaskRoutingTestTask[] }>((resolve, reject) => { importQueue.push({ resolve, reject }); }),
-    runButton,
-    taskPicker: picker,
-    result,
-    readForm: () => defaultRoutingTestForm(),
-    applyTask: (task) => { applied.push(task); },
-  });
-  return {
-    controller,
-    runButton,
-    picker,
-    result,
-    applied,
-    queue,
-    importQueue,
-    resolveAt: (index, value) => { queue[index]?.resolve(value); },
-    resolveNext: (value) => { queue.shift()?.resolve(value); },
-    rejectNext: (error) => { queue.shift()?.reject(error); },
-    resolveImportNext: (value) => { importQueue.shift()?.resolve(value); },
-    rejectImportNext: (error) => { importQueue.shift()?.reject(error); },
-  };
-}
-
-interface FakeElement {
-  tagName: string;
-  children: FakeElement[];
-  childElementCount: number;
-  textContent: string;
-  title: string;
-  hidden: boolean;
-  disabled: boolean;
-  value: string;
-  checked: boolean;
-  className: string;
-  append(...nodes: unknown[]): void;
-  replaceChildren(...nodes: unknown[]): void;
-  setAttribute(name: string, value: string): void;
-  getAttribute(name: string): string | null;
-  addEventListener(type: string, listener: () => void): void;
-}
-
-/** Minimal DOM stand-in covering only what the routing-test module touches. */
-function fakeElement(tagName: string): FakeElement {
-  const element: FakeElement = {
-    tagName,
-    children: [],
-    get childElementCount() { return element.children.length; },
-    textContent: '',
-    title: '',
-    hidden: false,
-    disabled: false,
-    value: '',
-    checked: false,
-    className: '',
-    append(...nodes: unknown[]) {
-      for (const node of nodes) {
-        if (isFragment(node)) element.children.push(...node.children);
-        else if (isFake(node)) element.children.push(node);
-      }
-    },
-    replaceChildren(...nodes: unknown[]) {
-      element.children = [];
-      element.append(...nodes);
-    },
-    setAttribute() {},
-    getAttribute() { return null; },
-    addEventListener() {},
-  };
-  return element;
-}
-
-function isFake(value: unknown): value is FakeElement {
-  return typeof value === 'object' && value !== null && typeof (value as FakeElement).tagName === 'string';
-}
-
-interface FakeFragment {
-  fragment: true;
-  children: FakeElement[];
-  append(...nodes: unknown[]): void;
-}
-
-function isFragment(value: unknown): value is FakeFragment {
-  return typeof value === 'object' && value !== null && (value as { fragment?: unknown }).fragment === true;
-}
-
-/** Depth-first text of a real or fake node tree. */
-function collectText(node: unknown): string {
-  if (node === null || node === undefined) return '';
-  if (typeof node === 'string') return node;
-  if (Array.isArray(node)) return node.map(collectText).join(' ');
-  const record = node as { textContent?: string; children?: unknown[] };
-  const own = typeof record.textContent === 'string' ? record.textContent : '';
-  const child = Array.isArray(record.children) ? record.children.map(collectText).join(' ') : '';
-  return `${own} ${child}`.trim();
-}
-
-// Bind the fake DOM into the module's document global for this test process.
-(globalThis as { document?: unknown }).document = {
-  createElement: (tag: string) => fakeElement(tag),
-  createDocumentFragment: (): FakeFragment => {
-    const fragment: FakeFragment = {
-      fragment: true,
-      children: [],
-      append(...nodes: unknown[]) {
-        for (const node of nodes) {
-          if (isFragment(node)) fragment.children.push(...node.children);
-          else if (isFake(node)) fragment.children.push(node);
-        }
-      },
-    };
-    return fragment;
-  },
-};

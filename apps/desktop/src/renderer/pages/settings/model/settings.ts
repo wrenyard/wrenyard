@@ -1,0 +1,235 @@
+import type { StatusTone } from '@/renderer/components/status-badge';
+import type {
+  DaemonLifecycleSnapshot,
+  DaemonProcessState,
+  PetCompanionSettings,
+  PetCompanionSnapshot,
+  ServiceSnapshot,
+  SettingsSnapshot,
+  WorkspaceConfigurationSnapshot,
+} from '@/shell-contract';
+
+/**
+ * Pure model for the Settings page. Every helper here is framework-free: no
+ * React, no DOM and no window access. The UI components translate the neutral
+ * results into product copy (see `describe.ts`) and render them.
+ */
+
+/** Error text with the Electron IPC invocation prefix stripped. */
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+  }
+  return String(error);
+}
+
+/* ------------------------------------------------------------------ */
+/* Local service                                                       */
+/* ------------------------------------------------------------------ */
+
+export function formatServiceDuration(uptimeMs: number | undefined): string {
+  if (uptimeMs === undefined) return '已连接';
+  const totalMinutes = Math.max(0, Math.floor(uptimeMs / 60_000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `已连接 · 已运行 ${days} 天 ${hours} 小时`;
+  if (hours > 0) return `已连接 · 已运行 ${hours} 小时 ${minutes} 分钟`;
+  return `已连接 · 已运行 ${minutes} 分钟`;
+}
+
+/** Human description of the local service row. */
+export function serviceDescription(service: Pick<ServiceSnapshot, 'status' | 'uptimeMs'>): string {
+  return service.status === 'connected'
+    ? formatServiceDuration(service.uptimeMs)
+    : '未能连接本地 Wrenyard 服务';
+}
+
+export function serviceTone(status: ServiceSnapshot['status']): StatusTone {
+  return status === 'connected' ? 'success' : 'danger';
+}
+
+/* ------------------------------------------------------------------ */
+/* Daemon lifecycle                                                    */
+/* ------------------------------------------------------------------ */
+
+export type DaemonLifecycleAction = 'start' | 'restart';
+
+export function daemonStateTone(state: DaemonProcessState): StatusTone {
+  if (state === 'running') return 'success';
+  if (state === 'starting') return 'running';
+  return 'danger';
+}
+
+/**
+ * Human reason shown under the daemon row. The snapshot `message` is
+ * authoritative when present; otherwise a state/mode-specific fallback keeps
+ * the stopped/crash/lost-connection cause visible.
+ */
+export function daemonLifecycleDescription(snapshot: DaemonLifecycleSnapshot): string {
+  const message = snapshot.message?.trim();
+  if (message) return message;
+  switch (snapshot.state) {
+    case 'running':
+      return snapshot.mode === 'supervised'
+        ? `本地 Daemon 运行中${snapshot.pid ? `（进程 ${snapshot.pid}）` : ''}。`
+        : '已连接到外部启动的本地 Daemon。';
+    case 'starting':
+      return '本地 Daemon 正在启动…';
+    case 'stopped':
+      return snapshot.mode === 'supervised'
+        ? '本地 Daemon 已停止，可由啾啾工坊重新启动。'
+        : '本地 Daemon 已停止，需从外部重新启动。';
+    case 'failed':
+      return '本地 Daemon 启动失败。';
+    default:
+      return '未能连接本地 Daemon。';
+  }
+}
+
+/**
+ * Which launch action the snapshot admits, or null when no launch is allowed.
+ * `canStart` is the authoritative gate: a source-supervised Desktop reports
+ * `false` and must never offer a start/restart button.
+ */
+export function daemonLifecycleAction(snapshot: DaemonLifecycleSnapshot): DaemonLifecycleAction | null {
+  if (!snapshot.canStart) return null;
+  if (snapshot.state === 'stopped' || snapshot.state === 'failed') {
+    return snapshot.mode === 'supervised' ? 'restart' : 'start';
+  }
+  if (snapshot.state === 'unavailable') return 'start';
+  return null;
+}
+
+/** A launch button is offered while the daemon is starting or has a valid action. */
+export function daemonActionVisible(snapshot: DaemonLifecycleSnapshot): boolean {
+  return daemonLifecycleAction(snapshot) !== null || (snapshot.state === 'starting' && snapshot.canStart);
+}
+
+export function daemonActionPending(snapshot: DaemonLifecycleSnapshot, inFlight: boolean): boolean {
+  return inFlight || (snapshot.state === 'starting' && snapshot.canStart);
+}
+
+/* ------------------------------------------------------------------ */
+/* Workspace                                                           */
+/* ------------------------------------------------------------------ */
+
+export interface WorkspaceDraft {
+  path: string;
+  /** `create` maps to `saveWorkspace(path, true)`: initialize an empty dir. */
+  create: boolean;
+}
+
+export const WORKSPACE_MODE_OPTIONS = [
+  { value: 'existing', label: '选择已有 workspace' },
+  { value: 'create', label: '新建 workspace' },
+] as const;
+
+export function isWorkspaceReadOnly(workspace: WorkspaceConfigurationSnapshot): boolean {
+  return workspace.source === 'environment';
+}
+
+export function workspaceDraftFromSnapshot(workspace: WorkspaceConfigurationSnapshot): WorkspaceDraft {
+  return { path: workspace.path ?? '', create: false };
+}
+
+/** Note under the workspace input; explains the binding source and its owner. */
+export function workspaceNote(workspace: WorkspaceConfigurationSnapshot): string {
+  if (isWorkspaceReadOnly(workspace)) {
+    return '由环境变量 WRENYARD_DESKTOP_WORKSPACE 提供；路径只读，如需修改请调整启动环境。';
+  }
+  if (workspace.status === 'configured') {
+    return `已绑定 · 配置写入 ${workspace.configPath}`;
+  }
+  return workspace.message ?? `尚未配置 · 将写入 ${workspace.configPath}`;
+}
+
+/** Hint shown while choosing how to bind the configured workspace. */
+export function workspaceModeHint(create: boolean): string {
+  return create
+    ? '新建模式会初始化一个空的 workspace 目录，已有内容的目录请改用「选择已有 workspace」。'
+    : '选择模式只会绑定已存在的 workspace 目录。';
+}
+
+/* ------------------------------------------------------------------ */
+/* Global auto output cap                                              */
+/* ------------------------------------------------------------------ */
+
+/** Input text for a persisted global auto cap: the number verbatim (0 stays), unset → empty. */
+export function autoCapDisplayValue(value: number | null | undefined): string {
+  if (value === undefined || value === null) return '';
+  return String(value);
+}
+
+export type AutoCapParseResult =
+  | { ok: true; value: number | null }
+  | { ok: false; reason: 'not-number' | 'negative' };
+
+/** Parse the raw cap input; empty clears with `null`, zero is preserved. */
+export function parseAutoCapInput(raw: string): AutoCapParseResult {
+  const trimmed = raw.trim();
+  if (trimmed === '') return { ok: true, value: null };
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return { ok: false, reason: 'not-number' };
+  if (parsed < 0) return { ok: false, reason: 'negative' };
+  return { ok: true, value: parsed };
+}
+
+/* ------------------------------------------------------------------ */
+/* Runtime aliases                                                     */
+/* ------------------------------------------------------------------ */
+
+export const ALIAS_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+export const ALIAS_TARGET_MAX_LENGTH = 512;
+
+export type AliasValidationReason = 'invalid-name' | 'empty-target' | 'long-target';
+
+/** Validates the alias name and target; `null` means acceptable. */
+export function validateAlias(name: string, target: string): AliasValidationReason | null {
+  if (!ALIAS_NAME_PATTERN.test(name)) return 'invalid-name';
+  if (target.length === 0) return 'empty-target';
+  if (target.length > ALIAS_TARGET_MAX_LENGTH) return 'long-target';
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Pet companion                                                       */
+/* ------------------------------------------------------------------ */
+
+export const PET_SCALE_MIN = 1;
+export const PET_SCALE_MAX = 6;
+export const PET_BOTTOM_OFFSET_MIN = 0;
+export const PET_BOTTOM_OFFSET_MAX = 512;
+export const PET_BUBBLE_SECONDS_MIN = 1;
+export const PET_BUBBLE_SECONDS_MAX = 60;
+
+export const PET_HOUSE_SKINS = [
+  { value: 'classic', label: '经典木屋' },
+  { value: 'mushroom', label: '蘑菇小屋' },
+] as const;
+
+/** The full editable Pet payload, cloned so a draft never aliases a snapshot. */
+export type PetDraft = PetCompanionSettings;
+
+/** Clones the pet settings into an editable draft, defaulting the display. */
+export function petDraftFromSnapshot(pet: PetCompanionSnapshot): PetDraft {
+  const draft = structuredClone(pet.settings);
+  const fallbackDisplay = pet.displays.find((item) => item.isPrimary)?.id ?? pet.displays[0]?.id;
+  if (draft.displayId === undefined && fallbackDisplay !== undefined) draft.displayId = fallbackDisplay;
+  return draft;
+}
+
+/** Clamps an edited numeric field into the persisted range. */
+export function clampPetNumber(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+/* ------------------------------------------------------------------ */
+/* About                                                               */
+/* ------------------------------------------------------------------ */
+
+/** Local build-time label, delegating to the one canonical generic formatter. */
+export { formatBuildTime } from '@/renderer/lib/format';
+
+export type AboutSnapshot = SettingsSnapshot['about'];
