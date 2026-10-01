@@ -295,7 +295,7 @@ describe('entity windows', () => {
     expect(childWin.destroy).toHaveBeenCalled();
   });
 
-  it('late main-frame did-fail-load hides an already-visible window; successful renderer recovery does not', async () => {
+  it('hides failed or crashed renderers and restores visible overlays after a successful reload', async () => {
     const { createHouseWindow } = await import('../../src/pet/main/windows/entity-windows');
     const { BrowserWindow } = await import('electron');
 
@@ -311,6 +311,7 @@ describe('entity windows', () => {
       _mockId: 99,
       webContents: { on: mockOn, once: mockOnce, send: vi.fn(), reload: mockReload, setWindowOpenHandler: vi.fn() },
       isDestroyed: () => destroyed,
+      isVisible: () => true,
       destroy: () => { destroyed = true; },
       close: mockClose,
       setOpacity: vi.fn(),
@@ -359,7 +360,7 @@ describe('entity windows', () => {
     failListener({}, -3, 'ERR_ABORTED', 'about:blank', true);
     expect(mockHide).toHaveBeenCalledTimes(1);
 
-    // 3. render-process-gone → successful reload without did-fail-load keeps window intact
+    // 3. Crash hides immediately; only a successful reload restores the window.
     mockHide.mockClear();
     mockClose.mockClear();
 
@@ -371,7 +372,10 @@ describe('entity windows', () => {
 
     expect(mockReload).toHaveBeenCalledTimes(1);
 
-    expect(mockHide).not.toHaveBeenCalled();
+    expect(mockHide).toHaveBeenCalledTimes(1);
+    mockOn.mock.calls.find((c: any[]) => c[0] === 'did-start-loading')![1]();
+    mockOn.mock.calls.find((c: any[]) => c[0] === 'did-finish-load')![1]();
+    expect(mockShowInactive).toHaveBeenCalledTimes(2);
     expect(mockClose).not.toHaveBeenCalled();
   });
 

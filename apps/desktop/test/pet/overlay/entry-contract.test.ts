@@ -29,14 +29,13 @@ function expectEarlyUpdateBufferContract(
   const source = read(rel);
   const subscriptionIndex = indexOfRequired(source, `petApi.${subscription}((state) => {`);
   const firstCreateSurfaceAwaitIndex = indexOfRequired(source, 'await createRenderSurface');
-  const bufferIndex = indexOfRequired(source, `let ${buffer}:`);
-  const applyAssignmentIndex = indexOfRequired(source, `let ${apply}:`);
+  const applyAssignmentIndex = indexOfRequired(source, `${apply} = paint;`);
   const replayIndex = indexOfRequired(source, `if (${buffer}) `);
 
   expect(subscriptionIndex).toBeLessThan(firstCreateSurfaceAwaitIndex);
   expect(source).toContain(`${buffer} = state;`);
   expect(source).toContain(`${apply}?.(state);`);
-  expect(applyAssignmentIndex).toBeGreaterThan(bufferIndex);
+  expect(applyAssignmentIndex).toBeGreaterThan(firstCreateSurfaceAwaitIndex);
   expect(replayIndex).toBeGreaterThan(firstCreateSurfaceAwaitIndex);
 }
 
@@ -71,14 +70,14 @@ describe('overlay entry contracts', () => {
     expect(tsconfig.references).toEqual([{ path: './tsconfig.node.json' }, { path: './tsconfig.web.json' }]);
   });
 
-  it('keeps the transparent Work Slip free of the shared panel outer border', () => {
-    const transcriptHtml = read('src/pet/panels/transcript/index.html');
+  it('keeps the transparent Graph Slip root free of an outer panel border', () => {
+    const transcriptHtml = read('src/pet/panels/index.html');
     const transparentWindowRule = transcriptHtml.match(/html, body\s*\{[^}]+\}/)?.[0] ?? '';
 
     expect(transcriptHtml).not.toContain('panel.css');
-    expect(transparentWindowRule).toContain('border: 0');
-    expect(transparentWindowRule).toContain('border-radius: 0');
-    expect(transparentWindowRule).toContain('outline: 0');
+    expect(transparentWindowRule).toContain('background: transparent');
+    expect(read('src/pet/panels/GraphSlip.tsx')).toContain('bg-transparent');
+    expect(transparentWindowRule).not.toMatch(/(?:border|outline)\s*:/);
   });
 
   it('keeps Wren placement defaults on the same root element updated at runtime', () => {
@@ -134,7 +133,7 @@ describe('overlay entry contracts', () => {
       expect(source).toContain('createRoot(container).render');
       expect(source).toContain('await initializePetAppearance()');
       expect(source).toContain('petAppearanceBridge');
-      expect(source).toContain("from '@/renderer/globals.css'");
+      expect(source).toContain("import '@/renderer/globals.css'");
     }
   });
 

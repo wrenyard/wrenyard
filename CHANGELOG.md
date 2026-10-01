@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.0-dev.45
+
+### Desktop
+
+- Keep the session sidebar width stable when opening or closing the inspector.
+- Use rounded macOS Dock and Finder icons with transparent margins for both themes.
+- Focus status-bar quota on the selected session model, with shared 5h/7d usage cards, pacing and reset times.
+- Respect Claude Code quota refresh intervals and Retry-After cooldowns; retain stale quota data during rate limits.
+- Restore dragging across blank title-bar areas while keeping controls clickable.
+
+### Pet
+
+- Preserve transparent companion windows when appearance or system color mode changes.
+- Consolidate Pet windows, preload bridges and lifecycle ownership under the Pet module.
+- Render bubbles, labels, quota tips and transcripts with shared React UI; keep pixel art and animations in PixiJS.
+- Replace the custom Graph Slip layout with React Flow and dagre, and replay initial window updates across renderer startup.
+
 ## 1.0.0-dev.44
 
 A redesigned Desktop built on shadcn/ui and Tailwind, with a ledger-backed

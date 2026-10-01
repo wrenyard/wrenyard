@@ -85,12 +85,12 @@ describe('worker sprite scene (art-only)', () => {
     scene.destroy();
   });
 
-  it('animates the sprite frame as sinceMs advances', () => {
+  it('animates sleeping sprite frames as sinceMs advances', () => {
     const env = mockSurface();
     const scene = createWorkerScene(env.surface, workerState(), { width: 128, height: 100, scale: 1 });
-    scene.update(workerState({ sinceMs: 0 }), { width: 128, height: 100, scale: 1 }, 0);
+    scene.update(workerState({ sinceMs: 0, phase: 'sleeping' }), { width: 128, height: 100, scale: 1 }, 0);
     const first = env.pixels[0].program;
-    scene.update(workerState({ sinceMs: 0 }), { width: 128, height: 100, scale: 1 }, 640);
+    scene.update(workerState({ sinceMs: 0, phase: 'sleeping' }), { width: 128, height: 100, scale: 1 }, 320);
     const second = env.pixels[0].program;
     expect(first).not.toEqual(second);
     scene.destroy();
@@ -102,7 +102,7 @@ describe('worker age/task label projection', () => {
     expect(formatWorkerAge(0, 0)).toBe('0s');
     expect(formatWorkerAge(0, 59_000)).toBe('59s');
     expect(formatWorkerAge(0, 60_000)).toBe('1m');
-    expect(formatWorkerAge(0, 60 * 60 * 1000)).toBe('99m');
+    expect(formatWorkerAge(0, 100 * 60 * 1000)).toBe('99m');
   });
 
   it('shows the task label only while hovering with a task name', () => {
@@ -112,6 +112,8 @@ describe('worker age/task label projection', () => {
     expect(resolveWorkerLabelText({ ...base, hovering: true, taskName: undefined, taskLabel: 'L' }))
       .toEqual({ kind: 'task', text: 'L' });
     expect(resolveWorkerLabelText({ ...base, hovering: true, taskName: undefined, taskLabel: undefined }))
+      .toEqual({ kind: 'task', text: 't1' });
+    expect(resolveWorkerLabelText({ ...base, hovering: true, taskName: undefined, taskId: undefined }))
       .toEqual({ kind: 'age', text: '5s' });
   });
 });

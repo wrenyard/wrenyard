@@ -2874,7 +2874,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
       stale: false,
       exiting: false,
       nodeCounts: { done: 0, total: 1 },
-      placement: { bird_x: 64, bird_y: 18, tip_side: 'above' },
+      placement: { bird_x: 64, bird_y: 54, tip_side: 'above' },
     });
 
     // 2. Revision refresh.

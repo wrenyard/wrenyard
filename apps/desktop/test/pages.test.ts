@@ -53,7 +53,7 @@ test('an unpackaged dev server serves overlay pages with query strings', async (
   await loader.load(win, 'entity', { taskgraph: 'g1' });
   assert.deepEqual(calls[0], [
     'url',
-    'http://127.0.0.1:5199/pet/overlay/taskgraph-entity/index.html?taskgraph=g1',
+    'http://127.0.0.1:5199/pet/overlay/entity/index.html?taskgraph=g1',
   ]);
 
   assert.equal(loader.url('shell'), 'http://127.0.0.1:5199/renderer/index.html');
@@ -93,7 +93,7 @@ test('without a dev server, files load and the query passes through unchanged', 
 
   assert.deepEqual(calls[0], [
     'file',
-    join('/app', 'dist', 'web', 'pet/panels/transcript/index.html'),
+    join('/app', 'dist', 'web', 'pet/panels/index.html'),
     { query: { task: 't1' } },
   ]);
 });
