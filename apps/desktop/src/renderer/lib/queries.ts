@@ -26,6 +26,19 @@ export const runtimeAliasesQuery = queryOptions({
 });
 
 /**
+ * Full shell settings snapshot. Shared because both the settings page and the
+ * window chrome read `about` (the source-development marker), so a single
+ * cache owner avoids a second bridge fetch.
+ */
+export const settingsQueryKey = ['shell', 'settings'] as const;
+
+export const settingsQuery = queryOptions({
+  queryKey: settingsQueryKey,
+  queryFn: () => shell.getSettings(),
+  staleTime: 30_000,
+});
+
+/**
  * Shared task-settings snapshot used by the tasks and stats pages. The daemon
  * owns merge/persistence, so the cached snapshot is treated as fresh for one
  * minute before a background refetch. Page-specific queries live with their

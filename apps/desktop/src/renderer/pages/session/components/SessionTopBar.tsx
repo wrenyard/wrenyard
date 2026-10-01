@@ -1,4 +1,5 @@
 import { PanelRight } from 'lucide-react';
+import { SourceDevelopmentBadge } from '@/renderer/components/source-development-badge';
 import { Badge } from '@/renderer/components/ui/badge';
 import { Button } from '@/renderer/components/ui/button';
 import { SidebarTrigger } from '@/renderer/components/ui/sidebar';
@@ -32,6 +33,7 @@ export function SessionTopBar({
     <header className="absolute inset-x-0 top-0 z-10 grid h-(--header-height) grid-cols-[1fr_auto_1fr] items-center px-4">
       <div className="flex items-center gap-2">
         <SidebarTrigger />
+        <SourceDevelopmentBadge />
       </div>
       <div className="flex justify-center">
         <SessionTitle title={title} session={session} snapshot={snapshot} turnCount={turnCount} draft={draft} />

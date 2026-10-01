@@ -110,7 +110,7 @@ export function TasksPage() {
             </Button>
           </PageActions>
         </PageHeader>
-        <PageContent className="min-h-0 overflow-hidden">
+        <PageContent fill>
           {requestFailed ? (
             <QueryError query={list} title={copy.DIRECTORY_LOAD_FAILED} />
           ) : (
