@@ -1,4 +1,4 @@
-:root {
+[data-theme="paper"] {
   /* Paper palette formerly declared by the retired DOM stylesheet. */
   --paper: #f7efd8;
   --paper-raised: #f5ebd4;
