@@ -205,9 +205,9 @@ vi.mock('pixi.js', () => ({
 import {
   PixelBuilder,
   createRenderSurface,
+  pixelProgramCoversPoint,
   type PixelProgram,
   type RenderColor,
-  type RenderTextStyle,
   type ShapeCommand,
 } from '../../../src/pet/render';
 
@@ -234,7 +234,7 @@ function graphicsOps(node: unknown): Array<Record<string, unknown>> {
 describe('render public barrel', () => {
   it('exports only runtime factories from the public entry', async () => {
     const mod = await import('../../../src/pet/render');
-    expect(Object.keys(mod).sort()).toEqual(['PixelBuilder', 'createRenderSurface']);
+    expect(Object.keys(mod).sort()).toEqual(['PixelBuilder', 'createRenderSurface', 'pixelProgramCoversPoint']);
   });
 });
 
@@ -401,26 +401,7 @@ describe('PixelBuilder', () => {
   });
 });
 
-describe('text and pixel node factories', () => {
-  const style: RenderTextStyle = {
-    fontFamily: 'monospace',
-    fontSize: 12,
-    fill: 0xffffff,
-    align: 'center',
-    lineHeight: 14,
-    fontWeight: 700,
-  };
-
-  it('requires the exact six-field RenderTextStyle and returns local text measurements', async () => {
-    const surface = await createRenderSurface(makeCanvas(), { resolution: 1 });
-    const text = surface.createText('hey', style);
-    expect(text.measure()).toEqual({ width: 10.5, height: 12.25 });
-    expect(() => text.setStyle({ ...style, letterSpacing: 0 } as never)).toThrow(TypeError);
-    expect(() => text.setStyle({ ...style, fontSize: 0 })).toThrow(RangeError);
-    expect(() => text.setStyle({ ...style, fontWeight: '400' } as never)).toThrow(TypeError);
-    surface.destroy();
-  });
-
+describe('pixel hit testing and node factories', () => {
   it('creates nearest RGBA pixel textures from a defensive PixelProgram copy', async () => {
     const surface = await createRenderSurface(makeCanvas(), { resolution: 1 });
     const program: PixelProgram = {
@@ -444,6 +425,33 @@ describe('text and pixel node factories', () => {
     expect(sourceOptions.scaleMode).toBe('nearest');
     expect((sourceOptions.resource as Uint8ClampedArray)[7]).toBe(0);
     surface.destroy();
+  });
+});
+
+describe('pixelProgramCoversPoint', () => {
+  const program = new PixelBuilder(4, 4)
+    .rect(1, 1, 2, 2, 0xffffff)
+    .rect(3, 0, 1, 1, 0x000000, 0)
+    .build();
+
+  it('reports non-transparent program pixels and ignores transparent rects', () => {
+    expect(pixelProgramCoversPoint(program, 1, 1)).toBe(true);
+    expect(pixelProgramCoversPoint(program, 2, 2)).toBe(true);
+    expect(pixelProgramCoversPoint(program, 0, 0)).toBe(false);
+    // alpha:0 rect covers the cell but is fully transparent
+    expect(pixelProgramCoversPoint(program, 3, 0)).toBe(false);
+  });
+
+  it('treats out-of-bounds points as transparent', () => {
+    expect(pixelProgramCoversPoint(program, -1, 0)).toBe(false);
+    expect(pixelProgramCoversPoint(program, 0, -1)).toBe(false);
+    expect(pixelProgramCoversPoint(program, 4, 0)).toBe(false);
+    expect(pixelProgramCoversPoint(program, 0, 4)).toBe(false);
+  });
+
+  it('floors fractional coordinates into the containing pixel', () => {
+    expect(pixelProgramCoversPoint(program, 1.9, 2.9)).toBe(true);
+    expect(pixelProgramCoversPoint(program, 0.9, 0.9)).toBe(false);
   });
 });
 

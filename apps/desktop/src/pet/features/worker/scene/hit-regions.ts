@@ -1,16 +1,13 @@
 /**
- * Inclusive 40x32 scaled worker AABB and pure hit/visibility helpers.
+ * Inclusive scaled worker AABB and the pure footline hit test.
  *
  * Domain-free: imports only src/render public types. No Electron or pixi.js.
- *
- * FU-002 / IU-002
  */
 
 import type { RenderPoint } from '../../../render';
 
 /** Logical worker sprite box and the visible (footline) hit height. */
 export const WORKER_BOX_W = 40;
-export const WORKER_BOX_H = 44;
 export const WORKER_HIT_H = 32;
 
 /** A scaled axis-aligned bounding box expressed in screen/CSS pixels. */
@@ -23,16 +20,6 @@ export interface WorkerHitRegion {
   width: number;
   /** Height in CSS px (32 × scale). */
   height: number;
-}
-
-/** Visual pointer state used for hover targeting. */
-export interface PointerInput {
-  /** Pointer x in CSS px. */
-  x: number;
-  /** Pointer y in CSS px. */
-  y: number;
-  /** Whether the pointer is currently inside the window. */
-  inside: boolean;
 }
 
 /**
@@ -65,26 +52,4 @@ export function hitTest(
     point.y >= region.y &&
     point.y <= region.y + region.height
   );
-}
-
-/**
- * Whether the worker body is hovered. Hover requires the pointer to be inside
- * the window, not currently dragging, and to fall within the inclusive
- * worker hit region.
- */
-export function isHovering(
-  region: WorkerHitRegion,
-  pointer: PointerInput,
-  dragging: boolean,
-): boolean {
-  if (dragging || !pointer.inside) return false;
-  return hitTest(region, { x: pointer.x, y: pointer.y });
-}
-
-/**
- * Mouse passthrough: true when the worker is neither hovered nor being
- * dragged, so window mouse events fall through to the page beneath.
- */
-export function isPassthrough(hovering: boolean, dragging: boolean): boolean {
-  return !hovering && !dragging;
 }
