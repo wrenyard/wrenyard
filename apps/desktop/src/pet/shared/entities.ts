@@ -35,6 +35,10 @@ export interface QuotaWindowRow {
   usedPct: number;
   remainingPct: number;
   expectedRemainingPct: number | null;
+  /** Provider wire ISO reset time, carried for structured countdown rendering. */
+  resetsAt?: string;
+  /** Provider wire window length in minutes, carried for window labelling. */
+  windowMinutes?: number;
 }
 
 export interface QuotaProviderBars {

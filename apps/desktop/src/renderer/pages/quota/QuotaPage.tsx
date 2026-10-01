@@ -105,6 +105,7 @@ export function QuotaPage() {
                     reorderError={reorderError}
                     onReorder={handleReorder}
                     onConfigure={setDialogEntry}
+                    onRetry={() => refresh.mutate()}
                   />
                 </div>
               </TabsContent>
