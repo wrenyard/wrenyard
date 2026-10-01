@@ -428,6 +428,9 @@ function createQuitDialogPresenter() {
         ...(parent && !parent.isDestroyed() ? { parent, modal: true } : {}),
         webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
       });
+      // The drain dialog is a themed window; register it so a theme change
+      // re-applies in place. Transparent Pet overlays are never attached.
+      appearanceController?.attach(window);
       let resolveForced: () => void = () => undefined;
       window.setEnabled(true);
       const forced = new Promise<void>((resolve) => { resolveForced = resolve; });
@@ -844,6 +847,7 @@ async function bootstrap(): Promise<void> {
     },
     entitiesVisible: (loadedSettings?.pet.visible ?? true)
       && (loadedSettings?.pet.entities.taskgraphs ?? true),
+    attachAppearance: (window) => appearanceController?.attach(window),
     logger: console,
   });
   taskgraphWindowOwner = windowOwner;
@@ -964,6 +968,7 @@ async function bootstrap(): Promise<void> {
     icon: appearanceController.iconPath('png256') ?? resolveAppIcon(),
     initialAppearance: appearanceController.resolve(),
     backgroundColor: appearanceController.backgroundColor(),
+    attachAppearance: (window) => appearanceController?.attach(window),
     titleBarOverlay: appearanceController.titleBarOverlay(),
     additionalArguments: appearanceController.arguments(),
     initialPage: initialShellPage,
@@ -1203,9 +1208,9 @@ app.on('window-all-closed', () => {
 // created BrowserWindow forwards it to the forced, dialog-free quit path. A
 // connected external daemon is never stopped, even here.
 app.on('browser-window-created', (_event, window) => {
-  // Every window (shell, Pet, TaskGraph, dialogs) inherits the resolved
-  // background, Windows title bar palette and window icon.
-  appearanceController?.applyToWindow(window);
+  // Themed windows register themselves through `attach`; transparent Pet
+  // overlays are created by the overlay factory and never receive a theme
+  // background. Appearance is deliberately not applied per-window here.
   if (quitSurfacesBlocked) window.setEnabled(false);
   const onSessionEnd = (): void => { blockQuitSurfaces(); quitController?.forceQuit(); };
   window.on('query-session-end', (event) => { event.preventDefault(); onSessionEnd(); });

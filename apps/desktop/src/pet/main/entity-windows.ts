@@ -1,10 +1,7 @@
 import { BrowserWindow } from 'electron';
 import type { PageLoader } from '../../pages.js';
 import { DisplayRect } from './display-placement';
-import {
-  overlaySkipsTaskbar,
-  overlayWorkspaceVisibilityOptions,
-} from './overlay-window-policy';
+import { createOverlayWindow } from './windows/overlay-window';
 
 export interface EntityWindowOptions {
   preloadPath: string;
@@ -25,46 +22,18 @@ export function createWorkerWindow(options: EntityWindowOptions): BrowserWindow 
 }
 
 function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
-  const win = new BrowserWindow({
+  const win = createOverlayWindow({
     x: options.bounds.x,
     y: options.bounds.y,
     width: options.bounds.width,
     height: options.bounds.height,
-    transparent: true,
-    frame: false,
-    thickFrame: false,
-    resizable: false,
-    skipTaskbar: overlaySkipsTaskbar(),
-    hasShadow: false,
-    alwaysOnTop: true,
+    preloadPath: options.preloadPath,
     focusable: true,
-    show: false,
-    backgroundColor: '#00000000',
-    acceptFirstMouse: true,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      preload: options.preloadPath,
-    },
   });
-
-  win.setMenuBarVisibility(false);
-  win.setAlwaysOnTop(true, 'screen-saver');
-  win.setVisibleOnAllWorkspaces(true, overlayWorkspaceVisibilityOptions());
 
   // Overlay entities have no context menu; product controls live in Desktop.
   win.webContents.on('context-menu', (event) => {
     event.preventDefault();
-  });
-
-  // ── Deny renderer-created child windows ────────────────────────
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-
-  win.webContents.on('did-create-window', (childWin) => {
-    console.warn('entity window detected unexpected child; destroying');
-    if (!childWin.isDestroyed()) {
-      childWin.destroy();
-    }
   });
 
   // ── Fail-closed loading: keep a failed entity window hidden ────
