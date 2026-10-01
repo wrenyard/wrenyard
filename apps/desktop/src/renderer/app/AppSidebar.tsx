@@ -1,6 +1,6 @@
-import appIcon from '../../../resources/icon.png?url';
 import type { ShellPage } from '@/shell-contract';
 import { shell } from '@/renderer/lib/desktop';
+import { useThemeIcon } from '@/renderer/lib/theme';
 import { PRIMARY_NAV, SETTINGS_NAV, UPDATE_NAV } from '@/renderer/app/nav';
 import {
   Sidebar,
@@ -26,6 +26,7 @@ export interface AppSidebarProps {
  * decorative local resource and the primary entries keep their tooltips.
  */
 export function AppSidebar({ page, updateVisible, onOpenUpdate }: AppSidebarProps) {
+  const appIcon = useThemeIcon();
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>

@@ -32,6 +32,12 @@ files:
 extraResources:
   - from: resources/icon.png
     to: icon.png
+  # Per-theme assets staged as resources/themes/<id>/assets/..., matching the
+  # source-run path the main process resolves from the theme package.
+  - from: ../../packages/themes/src
+    to: themes
+    filter:
+      - "*/assets/icon-*.png"
   # The bundled CLI, native Node runtime and control tree staged by
   # tools/release/pack.mjs. The SEA derives its suite root from
   # dirname(process.execPath), so `<resources>/wrenyard` is the whole runtime.

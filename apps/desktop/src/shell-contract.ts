@@ -1,4 +1,5 @@
 import type { PetSettingsPayload } from './pet/main/config';
+import type { ThemeId } from '@wrenyard/themes';
 import type {
   ContextInspection,
   ContextItem,
@@ -98,6 +99,10 @@ export const ACTIVITY_BAR_WIDTH = 48;
 
 export const SHELL_CHANNELS = {
   navigate: 'wrenyard-shell:navigate',
+  appearanceSnapshot: 'wrenyard-shell:appearance-snapshot',
+  appearanceSettingsSnapshot: 'wrenyard-shell:appearance-settings-snapshot',
+  saveAppearance: 'wrenyard-shell:save-appearance',
+  appearanceChanged: 'wrenyard-shell:appearance-changed',
   settingsSnapshot: 'wrenyard-shell:settings-snapshot',
   statsSnapshot: 'wrenyard-shell:stats-snapshot',
   quotaSnapshot: 'wrenyard-shell:quota-snapshot',
@@ -135,6 +140,39 @@ export const SHELL_CHANNELS = {
 } as const;
 
 export type ShellPage = 'session' | 'stats' | 'quota' | 'settings' | 'tasks';
+
+/* ------------------------------------------------------------------ */
+/* Appearance                                                          */
+/* ------------------------------------------------------------------ */
+
+/** How the appearance prefers its light/dark rendering. */
+export type ColorMode = 'system' | 'light' | 'dark';
+
+/** Whether motion follows the OS setting or is unconditionally reduced. */
+export type MotionPreference = 'system' | 'reduce';
+
+/**
+ * Persisted appearance preferences. Stored in the Desktop main-process
+ * settings document (version 2), replacing the renderer localStorage scheme.
+ * `theme` is a theme-registry id; Desktop never hardcodes the list.
+ */
+export interface AppearanceSettings {
+  theme: ThemeId;
+  colorMode: ColorMode;
+  motion: MotionPreference;
+}
+
+/**
+ * The main process resolves {@link AppearanceSettings} against the OS into
+ * concrete values every surface can render without re-deriving them.
+ */
+export interface ResolvedAppearance {
+  theme: ThemeId;
+  /** Resolved dark rendering: the selected mode, or the OS preference. */
+  dark: boolean;
+  /** Resolved reduced motion: the preference, or the OS reduced-motion setting. */
+  reduceMotion: boolean;
+}
 
 export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
@@ -763,6 +801,16 @@ export type {
 };
 export interface WrenyardShellApi {
   platform: NodeJS.Platform;
+  /**
+   * Appearance resolved by the main process and passed through
+   * `--wy-appearance` at preload time, so the boot script can set the theme
+   * before React mounts and no light flash occurs.
+   */
+  readonly initialAppearance: ResolvedAppearance;
+  getAppearance(): Promise<ResolvedAppearance>;
+  getAppearanceSettings(): Promise<AppearanceSettings>;
+  setAppearance(settings: Partial<AppearanceSettings>): Promise<AppearanceSettings>;
+  onAppearanceChanged(listener: (appearance: ResolvedAppearance) => void): () => void;
   navigate(page: ShellPage): Promise<void>;
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;

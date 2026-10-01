@@ -2,8 +2,8 @@
  * Theme registry. Pure data and lookups only — no React, Electron or Desktop
  * imports — so every surface can read the same definitions.
  */
-import { neutralTheme } from './neutral/theme.ts';
-import { paperTheme } from './paper/theme.ts';
+import { neutralTheme, neutralIconUrl } from './neutral/theme.ts';
+import { paperTheme, paperIconUrl } from './paper/theme.ts';
 import type { ThemeDefinition } from './types.ts';
 
 export type { RequiredToken, ThemeDefinition, ThemeMode, ThemeModeDefinition } from './types.ts';
@@ -19,3 +19,9 @@ export type ThemeId = (typeof BUILTIN_THEMES)[number]['id'];
 export function getTheme(id: string): ThemeDefinition {
   return BUILTIN_THEMES.find((theme) => theme.id === id) ?? paperTheme;
 }
+
+/** Browser asset URLs are exported with the registry so Desktop never enumerates themes. */
+export const THEME_ICON_URLS: Readonly<Record<string, string>> = {
+  [paperTheme.id]: paperIconUrl,
+  [neutralTheme.id]: neutralIconUrl,
+};
