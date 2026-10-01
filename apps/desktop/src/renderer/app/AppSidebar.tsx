@@ -1,6 +1,6 @@
 import type { ShellPage } from '@/shell-contract';
 import { shell } from '@/renderer/lib/desktop';
-import { PRIMARY_NAV, SETTINGS_NAV, UPDATE_NAV } from '@/renderer/app/nav';
+import { PRIMARY_NAV, SETTINGS_NAV } from '@/renderer/app/nav';
 import {
   Sidebar,
   SidebarContent,
@@ -14,18 +14,15 @@ import {
 
 export interface AppSidebarProps {
   page: ShellPage;
-  /** Whether an update is actionable; controls the footer update entry. */
-  updateVisible: boolean;
-  onOpenUpdate: () => void;
 }
 
 /**
  * Fixed icon activity rail. It is always collapsed. The official `sidebar-16`
  * pattern (registered full-app exception) pins it between the title bar and
- * the status bar instead of the full window height; the update entry stays in
- * the footer until the status bar owns it.
+ * the status bar instead of the full window height; the update entry is owned
+ * by the status bar's update item, not this footer.
  */
-export function AppSidebar({ page, updateVisible, onOpenUpdate }: AppSidebarProps) {
+export function AppSidebar({ page }: AppSidebarProps) {
   return (
     <Sidebar
       collapsible="icon"
@@ -55,14 +52,6 @@ export function AppSidebar({ page, updateVisible, onOpenUpdate }: AppSidebarProp
 
       <SidebarFooter>
         <SidebarMenu>
-          {updateVisible && (
-            <SidebarMenuItem>
-              <SidebarMenuButton tooltip={UPDATE_NAV.label} onClick={onOpenUpdate}>
-                <UPDATE_NAV.icon />
-                <span>{UPDATE_NAV.label}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          )}
           <SidebarMenuItem>
             <SidebarMenuButton
               tooltip={SETTINGS_NAV.label}

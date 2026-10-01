@@ -390,6 +390,24 @@ export class TaskGraphWindowOwner {
   }
 
   /**
+   * Trusted-host entry point: open the Graph Slip window for a live task graph.
+   * The graph id is validated for shape only; existence is decided by the same
+   * live activity/entity state that drives Wren entities and slips (`openGraphSlip`
+   * ignores an unknown, stale or exiting graph), so a foreign id can never open
+   * an arbitrary window. This is the native Graph Slip surface — never a
+   * transcript — and it stays reachable while entity windows are hidden or the
+   * Pet module is disabled, because the shared activity round keeps entities
+   * reconciled regardless of visibility.
+   */
+  async openTaskGraph(taskGraphId: string): Promise<void> {
+    if (this.destroyed) throw new Error('TaskGraph: window owner is destroyed');
+    if (typeof taskGraphId !== 'string' || taskGraphId.length === 0) {
+      throw new Error('TaskGraph: invalid task graph id');
+    }
+    this.openGraphSlip(taskGraphId);
+  }
+
+  /**
    * Map a task run to its graph/node only when the current activity snapshot
    * genuinely carries the association. Taskgraph node presence is the
    * canonical source; a standalone task (direct run) has no graph and is

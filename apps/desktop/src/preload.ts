@@ -35,6 +35,7 @@ import {
   type NotificationCommandAction,
   type DesktopPreferences,
   type PreferenceId,
+  type ActivityStatusSnapshot,
 } from './shell-contract.js';
 import { exposeSession } from './session/preload.js';
 
@@ -164,6 +165,9 @@ const api: WrenyardShellApi = {
   openTaskTranscript(taskRunId: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskTranscript, taskRunId);
   },
+  openTaskGraph(taskGraphId: string): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.taskGraph, taskGraphId);
+  },
   onQuotaChanged(listener: () => void): () => void {
     const handler = (): void => listener();
     ipcRenderer.on(SHELL_CHANNELS.quotaChanged, handler);
@@ -255,6 +259,16 @@ const api: WrenyardShellApi = {
   },
   setPreference(id: PreferenceId, value: unknown): Promise<DesktopPreferences> {
     return ipcRenderer.invoke(SHELL_CHANNELS.setPreference, id, value) as Promise<DesktopPreferences>;
+  },
+  getActivityStatus(): Promise<ActivityStatusSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.activityStatusSnapshot) as Promise<ActivityStatusSnapshot>;
+  },
+  onActivityChanged(listener: (snapshot: ActivityStatusSnapshot) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: ActivityStatusSnapshot): void => {
+      listener(snapshot);
+    };
+    ipcRenderer.on(SHELL_CHANNELS.activityChanged, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.activityChanged, handler);
   },
   onPreferencesChanged(listener: (preferences: DesktopPreferences) => void): () => void {
     const handler = (_event: Electron.IpcRendererEvent, preferences: DesktopPreferences): void => {

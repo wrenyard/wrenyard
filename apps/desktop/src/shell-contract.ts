@@ -134,6 +134,7 @@ export const SHELL_CHANNELS = {
   savePetSettings: 'wrenyard-shell:save-pet-settings',
   saveWorkspace: 'wrenyard-shell:save-workspace',
   taskTranscript: 'wrenyard-shell:task-transcript',
+  taskGraph: 'wrenyard-shell:task-graph',
   copyText: 'wrenyard-shell:copy-text',
   openExternal: 'wrenyard-shell:open-external',
   configureProviderKey: 'wrenyard-shell:configure-provider-key',
@@ -144,9 +145,11 @@ export const SHELL_CHANNELS = {
   daemonSnapshot: 'wrenyard-shell:daemon-snapshot',
   daemonStart: 'wrenyard-shell:daemon-start',
   daemonRestart: 'wrenyard-shell:daemon-restart',
+  activityStatusSnapshot: 'wrenyard-shell:activity-status-snapshot',
   quotaChanged: 'wrenyard-shell:quota-changed',
   updateChanged: 'wrenyard-shell:update-changed',
   daemonChanged: 'wrenyard-shell:daemon-changed',
+  activityChanged: 'wrenyard-shell:activity-changed',
   viewChanged: 'wrenyard-shell:view-changed',
   notificationsSnapshot: 'wrenyard-shell:notifications-snapshot',
   notificationNotify: 'wrenyard-shell:notification-notify',
@@ -516,6 +519,39 @@ export type DaemonProcessState =
   | 'stopped'
   | 'failed'
   | 'unavailable';
+
+/**
+ * Simplied activity projection for the status bar (window-chrome spec 4.4). It
+ * is a bounded projection of the shared `ActivityPresence` round: only the
+ * queued/running task runs and the active task graphs, with the fields the
+ * status bar renders. `stale` marks a failed round that re-published the last
+ * complete snapshot so the UI can show （数据过期） instead of clearing.
+ */
+export interface ActivityStatusTask {
+  taskRunId: string;
+  status: 'queued' | 'running';
+  taskId?: string;
+  taskLabel?: string;
+  project?: string;
+  taskgraphId?: string;
+  /** Task-run creation timestamp (ISO 8601); never fabricated from `sampledAt`. */
+  startedAt: string;
+}
+
+export interface ActivityStatusTaskGraph {
+  taskgraphId: string;
+  title?: string;
+  project?: string;
+  state: string;
+  nodeCounts: Record<string, number>;
+}
+
+export interface ActivityStatusSnapshot {
+  sampledAt: string;
+  stale: boolean;
+  tasks: ActivityStatusTask[];
+  taskgraphs: ActivityStatusTaskGraph[];
+}
 
 /** Live daemon lifecycle projection consumed by the Desktop surfaces. */
 export interface DaemonLifecycleSnapshot {
@@ -1110,9 +1146,15 @@ export interface WrenyardShellApi {
   startDaemon(): Promise<DaemonLifecycleSnapshot>;
   restartDaemon(): Promise<DaemonLifecycleSnapshot>;
   onDaemonChanged(listener: () => void): () => void;
+  /** Latest shared activity projection for the status bar (chrome spec 4.4). */
+  getActivityStatus(): Promise<ActivityStatusSnapshot>;
+  /** Pushed only when the projected activity content changes. */
+  onActivityChanged(listener: (snapshot: ActivityStatusSnapshot) => void): () => void;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   openTaskTranscript(taskRunId: string): Promise<void>;
+  /** Open the native Graph Slip window for a live task graph (never a transcript). */
+  openTaskGraph(taskGraphId: string): Promise<void>;
   copyText(text: string): Promise<void>;
   /** Open an `http:`/`https:` URL in the OS browser; other schemes are rejected. */
   openExternal(url: string): Promise<void>;

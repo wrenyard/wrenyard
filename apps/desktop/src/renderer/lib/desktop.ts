@@ -1,6 +1,6 @@
 /** The only renderer module that reads the typed preload shell facade. */
 import { useSyncExternalStore } from 'react';
-import type { DesktopPreferences, ResolvedAppearance, NotificationCommandAction, ShellPage, WindowStateSnapshot, WrenyardShellApi } from '@/shell-contract';
+import type { ActivityStatusSnapshot, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, ShellPage, WindowStateSnapshot, WrenyardShellApi } from '@/shell-contract';
 
 declare global {
   interface Window {
@@ -61,6 +61,45 @@ export function onWindowStateChanged(listener: (state: WindowStateSnapshot) => v
 
 export function onPreferencesChanged(listener: (preferences: DesktopPreferences) => void): () => void {
   return shell.onPreferencesChanged(listener);
+}
+
+export function onActivityChanged(listener: (snapshot: ActivityStatusSnapshot) => void): () => void {
+  return shell.onActivityChanged(listener);
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared activity status                                              */
+/* ------------------------------------------------------------------ */
+
+// The main process pushes a fresh projection only when its content changes.
+// Cache the latest round at module load and read it through a store so the
+// status bar renders the current task/graph activity without its own poller.
+const EMPTY_ACTIVITY: ActivityStatusSnapshot = { sampledAt: '', stale: false, tasks: [], taskgraphs: [] };
+let activityStatus: ActivityStatusSnapshot | null = null;
+const activityListeners = new Set<() => void>();
+
+function publishActivityStatus(snapshot: ActivityStatusSnapshot): void {
+  activityStatus = snapshot;
+  for (const listener of activityListeners) listener();
+}
+
+shell.onActivityChanged(publishActivityStatus);
+void shell.getActivityStatus().then(publishActivityStatus).catch(() => undefined);
+
+function subscribeActivityStatus(listener: () => void): () => void {
+  activityListeners.add(listener);
+  return () => {
+    activityListeners.delete(listener);
+  };
+}
+
+function getActivityStatusSnapshot(): ActivityStatusSnapshot {
+  return activityStatus ?? EMPTY_ACTIVITY;
+}
+
+/** Latest shared activity round; empty until the first push/read resolves. */
+export function useActivityStatus(): ActivityStatusSnapshot {
+  return useSyncExternalStore(subscribeActivityStatus, getActivityStatusSnapshot, getActivityStatusSnapshot);
 }
 
 /* ------------------------------------------------------------------ */
