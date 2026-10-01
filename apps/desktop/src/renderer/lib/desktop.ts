@@ -1,6 +1,6 @@
 /** The only renderer module that reads the typed preload shell facade. */
 import { useSyncExternalStore } from 'react';
-import type { ResolvedAppearance, NotificationCommandAction, ShellPage, WrenyardShellApi } from '@/shell-contract';
+import type { ResolvedAppearance, NotificationCommandAction, ShellPage, WindowStateSnapshot, WrenyardShellApi } from '@/shell-contract';
 
 declare global {
   interface Window {
@@ -53,6 +53,10 @@ export function onNotificationsChanged(listener: () => void): () => void {
 
 export function onCommandAction(listener: (action: NotificationCommandAction) => void): () => void {
   return shell.onCommandAction(listener);
+}
+
+export function onWindowStateChanged(listener: (state: WindowStateSnapshot) => void): () => void {
+  return shell.onWindowStateChanged(listener);
 }
 
 /* ------------------------------------------------------------------ */
