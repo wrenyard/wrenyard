@@ -202,6 +202,7 @@ const MODEL_ENTRIES: SessionBridgeModelEntry[] = MODEL_SPECS.map((spec) => {
   return {
     publicId: spec.publicId,
     provider: spec.publicId.slice(0, separator),
+    quotaProvider: spec.publicId.slice(0, separator),
     model: spec.publicId.slice(separator + 1),
     displayName: spec.displayName,
     ...(spec.thinkingLevels === undefined ? {} : { thinkingLevels: [...spec.thinkingLevels] }),
