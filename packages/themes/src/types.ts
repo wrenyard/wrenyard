@@ -52,6 +52,7 @@ export const REQUIRED_TOKENS = [
   '--accent',
   '--accent-foreground',
   '--destructive',
+  '--destructive-foreground',
   '--border',
   '--input',
   '--ring',
