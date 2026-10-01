@@ -7,6 +7,7 @@
   "description": "Reusable Desktop theme definitions: pure token data, ThemeDefinition metadata and per-theme CSS token files.",
   "exports": {
     ".": "./src/index.ts",
+    "./icons": "./src/icons.ts",
     "./paper.css": "./src/paper/tokens.css",
     "./neutral.css": "./src/neutral/tokens.css",
     "./assets/paper/*": "./src/paper/assets/*",
