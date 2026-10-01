@@ -24,15 +24,15 @@ import { contextQuery, useThrottledSeq } from '../../queries.js';
 import { CALL_ROLE_LABEL } from '../../model/describe.js';
 import { callCost, contextBudget, growthByTurn, recentCacheRatio, usageGroups, modelPreviews, remainingTurns, countInputTokens } from '../../model/usage.js';
 import type { CallModel, ModelEntry, SessionModel } from '../../model/types.js';
-import { requestContextInspection, requestSessionModel, useSessionUsage } from '../../state/usage-selection.js';
+import { useSessionUsage } from '../../state/session-usage.js';
 import { Section } from './parts.js';
 
 /**
  * Inspector "上下文" tab: the whole-session audit surface from the usage-meter
- * spec (§7). It reads the shared selected model from the usage-selection bridge,
- * loads the read-only context inspection through `api.contextInspect`, and uses
- * the shared T13 `model/usage.ts` helpers for every token/fee calculation. All
- * calculations stay in that module; this file only renders.
+ * spec (§7). It reads the shared selected model from the session usage
+ * context, loads the read-only context inspection through `api.contextInspect`,
+ * and uses the shared T13 `model/usage.ts` helpers for every token/fee
+ * calculation. All calculations stay in that module; this file only renders.
  */
 
 type Budget = ReturnType<typeof contextBudget>;
@@ -204,12 +204,13 @@ function OverviewCard({ inspection, budget, groups, growth, cacheRatio }: {
 /* Model preview (spec section 7 model preview)                                   */
 /* ------------------------------------------------------------------ */
 
-function ModelPreviewTable({ models, modelId, totalTokens, cacheRatio, quota }: {
+function ModelPreviewTable({ models, modelId, totalTokens, cacheRatio, quota, onUseModel }: {
   models: readonly ModelEntry[];
   modelId: string;
   totalTokens: number;
   cacheRatio: number | undefined;
   quota: QuotaSnapshot | undefined;
+  onUseModel: (modelId: string) => void;
 }) {
   const rows = useMemo(() => {
     const ordered = [...models];
@@ -265,7 +266,7 @@ function ModelPreviewTable({ models, modelId, totalTokens, cacheRatio, quota }: 
                     variant="outline"
                     size="sm"
                     disabled={current}
-                    onClick={() => requestSessionModel(entry.publicId)}
+                    onClick={() => onUseModel(entry.publicId)}
                   >
                     使用此模型
                   </Button>
@@ -285,11 +286,11 @@ function ModelPreviewTable({ models, modelId, totalTokens, cacheRatio, quota }: 
 
 type TreeSort = 'seq' | 'tokens';
 
-function ContextTree({ items, layers, total, sessionKey }: {
+function ContextTree({ items, layers, total, onInspect }: {
   items: readonly InspectionItem[];
   layers: readonly { id: ContextLayerId; tokens: number }[];
   total: number;
-  sessionKey: string;
+  onInspect: (options?: { tab?: 'context' | 'ledger'; seq?: number }) => void;
 }) {
   const [turn, setTurn] = useState('all');
   const [kinds, setKinds] = useState<ContextItemKind[]>([]);
@@ -419,7 +420,7 @@ function ContextTree({ items, layers, total, sessionKey }: {
                   className="absolute left-0 top-0 w-full"
                   style={{ height: virtualRow.size, transform: `translateY(${virtualRow.start}px)` }}
                 >
-                  <TreeRowView row={row} total={total} sessionKey={sessionKey} expandedGroups={expandedGroups} expandedTypes={expandedTypes} onToggleGroup={toggleGroup} onToggleType={toggleType} />
+                  <TreeRowView row={row} total={total} onInspect={onInspect} expandedGroups={expandedGroups} expandedTypes={expandedTypes} onToggleGroup={toggleGroup} onToggleType={toggleType} />
                 </div>
               );
             })}
@@ -430,10 +431,10 @@ function ContextTree({ items, layers, total, sessionKey }: {
   );
 }
 
-function TreeRowView({ row, total, sessionKey, expandedGroups, expandedTypes, onToggleGroup, onToggleType }: {
+function TreeRowView({ row, total, onInspect, expandedGroups, expandedTypes, onToggleGroup, onToggleType }: {
   row: TreeRow;
   total: number;
-  sessionKey: string;
+  onInspect: (options?: { tab?: 'context' | 'ledger'; seq?: number }) => void;
   expandedGroups: Set<UsageGroupId>;
   expandedTypes: Set<string>;
   onToggleGroup: (group: UsageGroupId) => void;
@@ -447,7 +448,7 @@ function TreeRowView({ row, total, sessionKey, expandedGroups, expandedTypes, on
       size="lg"
         className={`${TREE_GRID} w-full text-left`}
         title={row.item.label}
-        onClick={() => requestContextInspection(sessionKey, { tab: 'ledger', seq: row.item.seq })}
+        onClick={() => onInspect({ tab: 'ledger', seq: row.item.seq })}
       >
         <span className="truncate pl-6">{row.item.label}</span>
         <span className="text-right tabular-nums">{row.item.seq}</span>
@@ -704,7 +705,7 @@ export interface ContextTabProps {
 
 /** Whole-session context audit: overview, model preview, composition, growth and calls. */
 export function ContextTab({ model }: ContextTabProps) {
-  const { sessionKey, models, modelId, seq, inputText } = useSessionUsage();
+  const { sessionKey, models, modelId, seq, inputText, requestModel, requestInspection } = useSessionUsage();
   const inputTokens = useMemo(() => countInputTokens(inputText), [inputText]);
   const selected = models.find((entry) => entry.publicId === modelId);
   const throttledSeq = useThrottledSeq(seq);
@@ -744,8 +745,9 @@ export function ContextTab({ model }: ContextTabProps) {
         totalTokens={budget.total}
         cacheRatio={cacheRatio}
         quota={quota.data}
+        onUseModel={requestModel}
       />
-      <ContextTree items={data.items} layers={data.layers} total={data.totalTokens} sessionKey={sessionKey} />
+      <ContextTree items={data.items} layers={data.layers} total={data.totalTokens} onInspect={requestInspection} />
       <Section title="增长">
         <GrowthChart growth={growth} budget={budget} />
       </Section>

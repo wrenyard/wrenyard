@@ -26,7 +26,7 @@ import {
   usageGroups,
 } from '../../model/usage.js';
 import { contextQuery, useThrottledSeq } from '../../queries.js';
-import { requestContextInspection, useSessionUsage } from '../../state/usage-selection.js';
+import { useSessionUsage } from '../../state/session-usage.js';
 import { ContextBreakdown } from './ContextBreakdown.js';
 
 /**
@@ -52,7 +52,7 @@ export interface ContextMeterProps {
 export function ContextMeter({ sessionKey, modelId, inputTokens, onBudgetChange }: ContextMeterProps) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const { sessionKey: contextKey, models, turns, seq } = useSessionUsage();
+  const { sessionKey: contextKey, models, turns, seq, requestInspection } = useSessionUsage();
   const throttledSeq = useThrottledSeq(seq);
   const query = useQuery(contextQuery(sessionKey, modelId, throttledSeq));
   const inspection = query.data;
@@ -123,11 +123,11 @@ export function ContextMeter({ sessionKey, modelId, inputTokens, onBudgetChange 
 
   const audit = (): void => {
     setOpen(false);
-    requestContextInspection(sessionKey, { tab: 'context' });
+    requestInspection({ tab: 'context' });
   };
   const inspectSeq = (target: number): void => {
     setOpen(false);
-    requestContextInspection(sessionKey, { tab: 'ledger', seq: target });
+    requestInspection({ tab: 'ledger', seq: target });
   };
 
   return (

@@ -7,8 +7,7 @@ import { shell } from '@/renderer/lib/desktop';
 import { preferencesQuery } from '@/renderer/lib/queries';
 import type { SessionPreferences } from '@/shell-contract';
 import type { ModelEntry, TurnModel } from '../model/types.js';
-import { clearDraft, flushDraft, readDraft, writeDraft } from '../state/drafts.js';
-import { onSessionModelRequest, publishComposerState } from '../state/usage-selection.js';
+import { useComposerSelection } from '../state/session-usage.js';
 import { ContextMeter } from './usage/ContextMeter.js';
 
 /** Input text is token-counted 300ms after typing stops (usage spec 3.3). */
@@ -89,9 +88,7 @@ export interface ComposerProps {
 
 /** Bottom composer with model and effort pickers and a send-only button. */
 export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText }: ComposerProps) {
-  const [text, setText] = useState(() => readDraft(sessionKey));
-  const [modelId, setModelId] = useState('');
-  const [effort, setEffort] = useState('');
+  const { modelId, setModelId, effort, setEffort, text, setText, clearText } = useComposerSelection();
   const [sending, setSending] = useState(false);
   const [exceeded, setExceeded] = useState(false);
   const inputTokens = useInputTokenCount(text);
@@ -150,35 +147,11 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     textareaRef.current?.focus();
   }, [sessionKey, models, turns.at(-1)?.id, prefsReady]);
 
-  // Load the destination draft on switch/remount and flush the outgoing one so
-  // no pending edit is lost.
-  useEffect(() => {
-    setText(readDraft(sessionKey));
-    return () => { flushDraft(sessionKey); };
-  }, [sessionKey]);
-
   useEffect(() => {
     if (!injectedText) return;
     setText(injectedText.text);
-    writeDraft(sessionKey, injectedText.text);
     textareaRef.current?.focus();
   }, [injectedText?.nonce]);
-
-  // Publish the destination model and text so the usage meter (and the
-  // inspector's model list) read the composer's current selection.
-  useEffect(() => {
-    publishComposerState({ sessionKey, modelId, inputText: text });
-  }, [sessionKey, modelId, text]);
-
-  // The inspector's "use this model" action requests a switch for the active
-  // session only; a request for another session is ignored. The reasoning
-  // effort is kept only when the target model still supports it.
-  useEffect(() => onSessionModelRequest((request) => {
-    if (request.sessionKey !== sessionKey) return;
-    const target = models.find((entry) => entry.publicId === request.modelId);
-    setModelId(request.modelId);
-    setEffort((current) => supportedEffort(target, current));
-  }), [sessionKey, models]);
 
   const selected = models.find((entry) => entry.publicId === modelId);
   const options: ModelOption[] = models.map((entry) => ({
@@ -189,7 +162,6 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
 
   const handleChange = (value: string): void => {
     setText(value);
-    writeDraft(sessionKey, value);
   };
 
   const selectModel = (value: string): void => {
@@ -207,11 +179,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     void Promise.resolve(onSend(body, selected, effort))
       .then(
         () => {
-          // Clear the sent draft, but never a destination the user switched to
-          // while the send was in flight.
-          if (sessionKeyRef.current !== originKey || textRef.current === bodyText) {
-            clearDraft(originKey);
-            if (sessionKeyRef.current === originKey) setText('');
+          // Clear the sent draft, but never an edit the user made (or a
+          // destination session they switched to) while the send was in flight.
+          if (sessionKeyRef.current === originKey && textRef.current === bodyText) {
+            clearText();
           }
           // Remember the successful send for the "沿用上次发送的模型" default.
           void shell.setPreference('session.lastSentModel', selected.publicId).catch(() => undefined);
