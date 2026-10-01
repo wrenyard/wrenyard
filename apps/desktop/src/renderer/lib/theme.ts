@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
-import { BUILTIN_THEMES, DEFAULT_THEME_ID, THEME_ICON_URLS } from '@wrenyard/themes';
+import { BUILTIN_THEMES, DEFAULT_THEME_ID } from '@wrenyard/themes';
+import { THEME_ICON_URLS } from '@wrenyard/themes/icons';
 import type { AppearanceSettings, ColorMode, MotionPreference, ResolvedAppearance } from '@/shell-contract';
 import { onAppearanceChanged, shell } from './desktop.js';
 
