@@ -210,7 +210,7 @@ export function WorkerOverlay({ appearance, api }: WorkerOverlayProps): ReactEle
       lastBubbleTextRef.current = '';
       return;
     }
-    if (bubble.text !== lastBubbleTextRef.current) {
+    if (staticPreview || bubble.text !== lastBubbleTextRef.current) {
       lastBubbleTextRef.current = bubble.text;
       setRevealStart(staticPreview ? staticPreview.initNowMs : Date.now());
     }
@@ -221,6 +221,7 @@ export function WorkerOverlay({ appearance, api }: WorkerOverlayProps): ReactEle
     startMs: revealStart,
     untilMs: bubble?.untilMs ?? 0,
     reduceMotion,
+    nowMs: staticPreview?.nowMs,
   });
   const bubbleVisible = Boolean(bubble?.text) && typewriter.alpha > 0;
 
