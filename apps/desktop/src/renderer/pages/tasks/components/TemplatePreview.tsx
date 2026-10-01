@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { JsonView } from '@/renderer/components/json-view';
-import { Markdown } from '@/renderer/components/markdown';
+import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import type { TaskSettingsInstructionTemplate } from '@/shell-contract';
 import { PREVIEW_EMPTY, PREVIEW_TAB_JSON, PREVIEW_TAB_PREVIEW } from '../model/describe.js';

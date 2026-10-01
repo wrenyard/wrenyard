@@ -3,7 +3,7 @@ import { ItemTitle } from '@/renderer/components/ui/item';
 import { Button } from '@/renderer/components/ui/button';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { JsonView } from '@/renderer/components/json-view';
-import { Markdown } from '@/renderer/components/markdown';
+import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { shell } from '@/renderer/lib/desktop';

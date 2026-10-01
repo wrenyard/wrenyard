@@ -855,6 +855,7 @@ export class TaskGraphWindowOwner {
       minHeight: GRAPH_SLIP_MIN_HEIGHT,
       preloadPath: path.join(this.preloadDir, 'graph-slip.cjs'),
       stayHidden: this.stayHidden,
+      isVisible: () => this.graphSlips.get(graphId)?.shown ?? false,
       pageLoader: this.pageLoader,
       graphId,
       onLoadFailure: () => {

@@ -22,6 +22,12 @@ export interface OverlayWindowOptions {
   skipTaskbar?: boolean;
   /** Keep painting while hidden; required by capture harnesses. */
   paintWhenInitiallyHidden?: boolean;
+  /** Capture harness only: render without ever showing the window. */
+  stayHidden?: boolean;
+  /** Whether the owning surface currently wants this window shown. */
+  isVisible?: () => boolean;
+  /** Called once when a main-frame load fails; the factory has already hidden the window. */
+  onLoadFailure?: () => void;
   /** Extra web preferences merged over the overlay defaults. */
   webPreferences?: Omit<WebPreferences, 'preload'>;
 }
@@ -69,6 +75,13 @@ export function broadcastPetAppearance(appearance: ResolvedAppearance): void {
  * transparent, borderless, shadowless, always on top — and never registers the
  * window with the appearance controller, so a transparent overlay can never be
  * painted with the themed `windowBackground`.
+ *
+ * It also owns the shared load lifecycle so every overlay fails the same way:
+ * a main-frame load failure hides the window and is reported once, while a
+ * renderer crash reloads the web contents. A window that was visible before the
+ * crash is restored only after the reload succeeds and the owner still wants it
+ * shown, so a deliberate user-hide and the capture `stayHidden` mode survive a
+ * crash. `transparent: true` is confined to this factory.
  */
 export function createOverlayWindow(options: OverlayWindowOptions): BrowserWindow {
   const win = new BrowserWindow({
@@ -89,7 +102,7 @@ export function createOverlayWindow(options: OverlayWindowOptions): BrowserWindo
     resizable: options.resizable ?? false,
     show: false,
     acceptFirstMouse: true,
-    ...(options.paintWhenInitiallyHidden ? { paintWhenInitiallyHidden: true } : {}),
+    ...(options.paintWhenInitiallyHidden || options.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -108,5 +121,39 @@ export function createOverlayWindow(options: OverlayWindowOptions): BrowserWindo
     if (!childWin.isDestroyed()) childWin.destroy();
   });
 
+  let loadFailed = false;
+  let visibleBeforeCrash = false;
+
+  const reportLoadFailure = (): void => {
+    if (loadFailed) return;
+    loadFailed = true;
+    if (!win.isDestroyed()) win.hide();
+    options.onLoadFailure?.();
+  };
+
+  win.webContents.on('did-fail-load', (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
+    if (isMainFrame) reportLoadFailure();
+  });
+
+  // A renderer crash reloads in place instead of destroying the window. The
+  // previous visibility is captured so the window is not silently resurrected
+  // after a deliberate user-hide.
+  win.webContents.on('render-process-gone', () => {
+    if (win.isDestroyed()) return;
+    visibleBeforeCrash = !options.stayHidden && isWindowVisible(win);
+    win.webContents.reload();
+  });
+
+  win.webContents.on('did-finish-load', () => {
+    if (win.isDestroyed() || loadFailed) return;
+    if (visibleBeforeCrash && (options.isVisible?.() ?? true)) win.showInactive();
+    visibleBeforeCrash = false;
+  });
+
   return win;
+}
+
+function isWindowVisible(win: BrowserWindow): boolean {
+  const candidate = win as unknown as { isVisible?: () => boolean };
+  return typeof candidate.isVisible === 'function' ? candidate.isVisible() : false;
 }

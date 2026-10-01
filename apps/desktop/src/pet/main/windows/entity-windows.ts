@@ -22,6 +22,17 @@ export function createWorkerWindow(options: EntityWindowOptions): BrowserWindow 
 }
 
 function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
+  const isVisible = (): boolean => options.isVisible?.() ?? options.visible;
+
+  // The overlay factory hides a failed load; this flag only suppresses the
+  // later ready-to-show. Renderer crashes are reloaded by the factory.
+  let loadFailed = false;
+  const handleLoadFailure = (): void => {
+    if (loadFailed) return;
+    loadFailed = true;
+    console.warn('entity window load failed');
+  };
+
   const win = createOverlayWindow({
     x: options.bounds.x,
     y: options.bounds.y,
@@ -29,6 +40,8 @@ function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
     height: options.bounds.height,
     preloadPath: options.preloadPath,
     focusable: true,
+    isVisible,
+    onLoadFailure: handleLoadFailure,
   });
 
   // Overlay entities have no context menu; product controls live in Desktop.
@@ -36,34 +49,13 @@ function createEntityWindow(options: EntityWindowOptions): BrowserWindow {
     event.preventDefault();
   });
 
-  // ── Fail-closed loading: keep a failed entity window hidden ────
-  let loadFailed = false;
-  const handleLoadFailure = (): void => {
-    if (loadFailed) return;
-    loadFailed = true;
-    console.warn('entity window load failed');
-    if (!win.isDestroyed()) {
-      win.hide();
-    }
-  };
-
-  win.webContents.on('did-fail-load', (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
-    if (isMainFrame) handleLoadFailure();
-  });
-
   options.pageLoader.load(win, options.page).catch(() => {
     handleLoadFailure();
   });
 
   win.once('ready-to-show', () => {
-    if (!win.isDestroyed() && (options.isVisible?.() ?? options.visible) && !loadFailed) {
+    if (!win.isDestroyed() && isVisible() && !loadFailed) {
       win.showInactive();
-    }
-  });
-
-  win.webContents.on('render-process-gone', () => {
-    if (!win.isDestroyed()) {
-      win.webContents.reload();
     }
   });
 

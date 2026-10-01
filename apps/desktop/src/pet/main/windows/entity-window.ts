@@ -24,33 +24,32 @@ export interface TaskGraphEntityWindowOptions {
 }
 
 export function createTaskGraphEntityWindow(options: TaskGraphEntityWindowOptions): BrowserWindow {
-  const win = createOverlayWindow({
-    width: ENTITY_WINDOW_WIDTH,
-    height: ENTITY_WINDOW_HEIGHT,
-    preloadPath: options.preloadPath,
-    focusable: false,
-    ...(options.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
-  });
-
-  // Start with full window passthrough; only bird/fact-slip areas become interactive.
-  win.setIgnoreMouseEvents(true, { forward: true });
-
+  // The factory hides on a load failure and calls this once; the owner removes
+  // the entity. Renderer crashes are reloaded by the factory, not reported here.
   let loadFailed = false;
-  const handleLoadFailure = (): void => {
+  const notifyLoadFailure = (): void => {
     if (loadFailed) return;
     loadFailed = true;
     options.onLoadFailure();
   };
 
-  win.webContents.on('did-fail-load', (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
-    if (isMainFrame) handleLoadFailure();
+  const win = createOverlayWindow({
+    width: ENTITY_WINDOW_WIDTH,
+    height: ENTITY_WINDOW_HEIGHT,
+    preloadPath: options.preloadPath,
+    focusable: false,
+    stayHidden: options.stayHidden,
+    isVisible: options.isVisible,
+    onLoadFailure: notifyLoadFailure,
   });
-  win.webContents.on('render-process-gone', () => handleLoadFailure());
+
+  // Start with full window passthrough; only bird/fact-slip areas become interactive.
+  win.setIgnoreMouseEvents(true, { forward: true });
 
   win.webContents.on('did-finish-load', () => {
     if (!win.isDestroyed() && !loadFailed) options.onReady();
   });
-  options.pageLoader.load(win, 'entity', { entity_id: options.windowId }).catch(() => handleLoadFailure());
+  options.pageLoader.load(win, 'entity', { entity_id: options.windowId }).catch(() => notifyLoadFailure());
 
   win.once('ready-to-show', () => {
     if (!win.isDestroyed() && !loadFailed) {

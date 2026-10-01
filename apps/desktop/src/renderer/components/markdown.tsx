@@ -1,17 +1,23 @@
-import type { ComponentProps } from 'react';
+import { useMemo, type ComponentProps } from 'react';
 import { Streamdown, type Components } from 'streamdown';
 import { code } from '@streamdown/code';
 import { cjk } from '@streamdown/cjk';
 import { cn } from 'cn';
-import { shell } from '@/renderer/lib/desktop';
-import { useAppearance } from '@/renderer/lib/theme';
 
 const PLUGINS = { code, cjk };
 
 /** Shiki theme per appearance mode; `github-dark-default` matches the dark tokens. */
 const SHIKI_THEME = { light: 'github-light', dark: 'github-dark-default' } as const;
 
-function MarkdownLink({ href, children, onClick, ...rest }: ComponentProps<'a'>) {
+type OpenExternal = (href: string) => void;
+
+function MarkdownLink({
+  href,
+  children,
+  onClick,
+  onOpenExternal,
+  ...rest
+}: ComponentProps<'a'> & { onOpenExternal?: OpenExternal }) {
   return (
     <a
       {...rest}
@@ -20,7 +26,7 @@ function MarkdownLink({ href, children, onClick, ...rest }: ComponentProps<'a'>)
         onClick?.(event);
         if (event.defaultPrevented || !href) return;
         event.preventDefault();
-        void shell.openExternal(href);
+        onOpenExternal?.(href);
       }}
     >
       {children}
@@ -28,20 +34,40 @@ function MarkdownLink({ href, children, onClick, ...rest }: ComponentProps<'a'>)
   );
 }
 
-const COMPONENTS = { a: MarkdownLink } as Components;
+/**
+ * Link safety stays in the pure renderer: the anchor never navigates in-app.
+ * The embedder injects the external opener (the main-app shell bridge or the
+ * narrow Pet appearance bridge), so this module loads without shell side
+ * effects.
+ */
+function createComponents(onOpenExternal?: OpenExternal): Components {
+  return {
+    a: (props) => <MarkdownLink {...props} onOpenExternal={onOpenExternal} />,
+  };
+}
 
 export interface MarkdownProps {
   children: string;
   streaming?: boolean;
   className?: string;
+  /** Resolved dark appearance; the embedder supplies it instead of reading the theme store. */
+  dark?: boolean;
+  /** Opens http(s) links out of process; the anchor itself never navigates. */
+  onOpenExternal?: OpenExternal;
 }
 
 /**
  * Streamdown configured for the conversation surface: code + CJK plugins only,
  * no math or mermaid. Fenced code is highlighted with the JavaScript Shiki engine.
  */
-export function Markdown({ children, streaming = false, className }: MarkdownProps) {
-  const { dark } = useAppearance();
+export function Markdown({
+  children,
+  streaming = false,
+  className,
+  dark = false,
+  onOpenExternal,
+}: MarkdownProps) {
+  const components = useMemo(() => createComponents(onOpenExternal), [onOpenExternal]);
   // Streamdown takes a [light, dark] pair; pin both slots to the active theme so
   // highlighting follows the resolved appearance instead of the CSS `dark:` class.
   const shikiTheme: [string, string] = dark
@@ -55,7 +81,7 @@ export function Markdown({ children, streaming = false, className }: MarkdownPro
       caret="block"
       plugins={PLUGINS}
       shikiTheme={shikiTheme}
-      components={COMPONENTS}
+      components={components}
       className={cn('text-sm', className)}
     >
       {children}
