@@ -1,6 +1,7 @@
 /** Desktop transport for daemon-owned sessions. */
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
+import { BUILTIN_PROVIDERS } from '@wrenyard/providers';
 import { resolveModelMetadata, type LedgerEvent, type LiveCall, type SessionSummary } from '@wrenyard/session';
 import type {
   SessionBridgeEventPayload,
@@ -53,6 +54,12 @@ function isShuttingDown(error: unknown): boolean {
   return error instanceof WrenyardRpcError && typeof error.data === 'object' && error.data !== null
     && 'code' in error.data && error.data.code === 'daemon_shutting_down';
 }
+
+/** Catalog provider id → quota provider id; identity when none is declared. */
+const QUOTA_PROVIDER_IDS: ReadonlyMap<string, string> = new Map(
+  BUILTIN_PROVIDERS.map(provider => [provider.id, provider.quotaProvider ?? provider.id] as const),
+);
+
 function toModelEntries(connection: WrenyardGatewayConnection): SessionBridgeModelEntry[] {
   return connection.models.filter(model => !model.taskOnly && model.publicId.includes('/')).map(model => {
     // Window facts resolve from the same config as the call budget, so the
@@ -61,6 +68,9 @@ function toModelEntries(connection: WrenyardGatewayConnection): SessionBridgeMod
     return {
       publicId: model.publicId, provider: model.provider,
       model: model.publicId.slice(model.publicId.indexOf('/') + 1), displayName: model.displayName,
+      // A catalog provider may bind to a different quota provider (e.g. Claude
+      // Code draws on a shared pool); fall back to the model's own provider.
+      quotaProvider: QUOTA_PROVIDER_IDS.get(model.provider) ?? model.provider,
       ...(model.thinkingLevels?.length ? { thinkingLevels: [...model.thinkingLevels] } : {}),
       ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
       ...(metadata.maxOutputTokens === undefined ? {} : { maxOutputTokens: metadata.maxOutputTokens }),

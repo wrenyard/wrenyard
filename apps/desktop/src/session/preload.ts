@@ -43,6 +43,8 @@ export interface SessionBridgeModelEntry {
   model: string;
   displayName: string;
   thinkingLevels?: string[];
+  /** Quota provider id backing this model: the catalog `quotaProvider`, else `provider`. */
+  quotaProvider?: string;
   /** Window facts from the same config as the call budget; absent when unknown. */
   contextWindow?: number;
   maxOutputTokens?: number;

@@ -173,3 +173,40 @@ export function onQuotaPanelOpen(listener: () => void): () => void {
     quotaPanelListeners.delete(listener);
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* Quota focus                                                         */
+/* ------------------------------------------------------------------ */
+
+// The session page publishes the quota provider of the model currently selected
+// in the composer, so the status-bar quota item can surface that provider's
+// most tense window instead of the global worst one. The store is deliberately
+// tiny — one provider id plus a listener set, read through
+// `useSyncExternalStore` — because both the session page and the status-bar
+// item need it and may not import each other's layer.
+
+let quotaFocus: string | null = null;
+const quotaFocusListeners = new Set<() => void>();
+
+/** Focus the given quota provider, or clear the focus with null. */
+export function setQuotaFocus(providerId: string | null): void {
+  if (quotaFocus === providerId) return;
+  quotaFocus = providerId;
+  for (const listener of quotaFocusListeners) listener();
+}
+
+function subscribeQuotaFocus(listener: () => void): () => void {
+  quotaFocusListeners.add(listener);
+  return () => {
+    quotaFocusListeners.delete(listener);
+  };
+}
+
+function getQuotaFocusSnapshot(): string | null {
+  return quotaFocus;
+}
+
+/** The quota provider of the model currently selected in the composer. */
+export function useQuotaFocus(): string | null {
+  return useSyncExternalStore(subscribeQuotaFocus, getQuotaFocusSnapshot, getQuotaFocusSnapshot);
+}
