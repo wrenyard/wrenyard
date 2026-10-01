@@ -205,7 +205,6 @@ vi.mock('pixi.js', () => ({
 import {
   createRenderSurface,
   type RenderContainer,
-  type RenderTextStyle,
   type ShapeCommand,
 } from '../../../src/pet/render';
 
@@ -241,17 +240,6 @@ function pixiId(node: unknown): number {
   return (node as { container: { id: number } }).container.id;
 }
 
-function baseStyle(): RenderTextStyle {
-  return {
-    fontFamily: 'monospace',
-    fontSize: 12,
-    fill: '#000000',
-    align: 'left',
-    lineHeight: 14,
-    fontWeight: 'normal',
-  };
-}
-
 async function surface() {
   return createRenderSurface(makeCanvas(), { resolution: 1 });
 }
@@ -261,7 +249,7 @@ describe('container ownership', () => {
     const s = await surface();
     const a = s.createContainer();
     const b = s.createGraphics();
-    const c = s.createText('x', baseStyle());
+    const c = s.createPixel({ width: 1, height: 1, rects: [] });
 
     expect(children(s.root)).toEqual([]);
     s.root.add(a, b, c);
@@ -368,26 +356,20 @@ describe('node lifecycle methods', () => {
     const s = await surface();
     const container = s.createContainer();
     const graphics = s.createGraphics();
-    const text = s.createText('x', baseStyle());
     const pixel = s.createPixel({ width: 1, height: 1, rects: [] });
-    s.root.add(container, graphics, text, pixel);
+    s.root.add(container, graphics, pixel);
 
     container.destroy();
     graphics.destroy();
-    text.destroy();
     pixel.destroy();
 
     expect(() => container.add()).toThrow(Error);
     expect(() => container.remove(graphics)).toThrow(Error);
     expect(() => container.setPosition(0, 0)).toThrow(Error);
     expect(() => graphics.setCommands([])).toThrow(Error);
-    expect(() => text.setText('y')).toThrow(Error);
-    expect(() => text.setStyle(baseStyle())).toThrow(Error);
-    expect(() => text.measure()).toThrow(Error);
     expect(() => pixel.setProgram({ width: 1, height: 1, rects: [] })).toThrow(Error);
     expect(() => container.destroy()).not.toThrow();
     expect(() => graphics.destroy()).not.toThrow();
-    expect(() => text.destroy()).not.toThrow();
     expect(() => pixel.destroy()).not.toThrow();
     s.destroy();
   });
@@ -436,13 +418,8 @@ describe('defensive copies', () => {
     s.destroy();
   });
 
-  it('copies text style and pixel programs before caller mutation', async () => {
+  it('copies pixel programs before caller mutation', async () => {
     const s = await surface();
-    const style = baseStyle();
-    const text = s.createText('a', style);
-    style.fontSize = 99;
-    expect((text as unknown as { container: { style: { opts: { fontSize: number } } } }).container.style.opts.fontSize).toBe(12);
-
     const program = { width: 2, height: 1, rects: [{ x: 0, y: 0, width: 1, height: 1, color: 0x010203 }] };
     const pixel = s.createPixel(program);
     program.rects[0].width = 2;

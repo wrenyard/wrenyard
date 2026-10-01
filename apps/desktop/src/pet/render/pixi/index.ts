@@ -10,7 +10,6 @@
 export { PixiRenderSurface, createPixiRenderSurface } from './surface';
 export { PixiRenderContainer } from './container';
 export { PixiRenderGraphics } from './graphics';
-export { PixiRenderText } from './text';
 export { PixiRenderPixel } from './pixel';
 export { PixiRenderTicker } from './ticker';
 export { PixiRenderNode } from './node';

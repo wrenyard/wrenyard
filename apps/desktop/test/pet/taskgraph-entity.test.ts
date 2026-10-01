@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createWrenScene, WREN_W, WREN_H, WREN_DISPLAY_W, WREN_DISPLAY_H } from '../../src/pet/features/taskgraph-entity/scene';
-import { createWrenEntityPresenter } from '../../src/pet/features/taskgraph-entity/presenter';
 import {
+  createWrenEntityPresenter,
   wrenFactSlipLabel,
   wrenStitchTone,
   wrenStitchClasses,
   WREN_FALLBACK_TITLE,
-} from '../../src/pet/features/taskgraph-entity/fact-slip';
+} from '../../src/pet/features/taskgraph-entity/presenter';
 import type { RenderSurface, RenderContainer, RenderGraphics, ShapeCommand } from '../../src/pet/render/types';
 
 // ── Mock surface ──────────────────────────────────────────────────────
@@ -50,16 +50,6 @@ function createMockSurface(): RenderSurface {
       setVisible: () => {},
       destroy: () => {},
       setCommands: () => {},
-    }),
-    createText: () => ({
-      setPosition: () => {},
-      setScale: () => {},
-      setAlpha: () => {},
-      setVisible: () => {},
-      destroy: () => {},
-      setText: () => {},
-      setStyle: () => {},
-      measure: () => ({ width: 0, height: 0 }),
     }),
     createPixel: () => ({
       setPosition: () => {},

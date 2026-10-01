@@ -216,7 +216,7 @@ vi.mock('pixi.js', () => ({
   Texture: Object.assign(h.MockTexture, { EMPTY: h.TextureEmpty }),
 }));
 
-import { createRenderSurface, type RenderTextStyle } from '../../../src/pet/render';
+import { createRenderSurface } from '../../../src/pet/render';
 
 beforeAll(() => {
   vi.stubGlobal('HTMLCanvasElement', FakeHTMLCanvasElement);
@@ -229,17 +229,6 @@ afterAll(() => {
 
 function lastApplication(): InstanceType<typeof h.MockApplication> {
   return h.applications[h.applications.length - 1];
-}
-
-function style(): RenderTextStyle {
-  return {
-    fontFamily: 'monospace',
-    fontSize: 12,
-    fill: '#ffffff',
-    align: 'left',
-    lineHeight: 14,
-    fontWeight: 'bold',
-  };
 }
 
 describe('RenderTicker lifecycle', () => {
@@ -393,7 +382,6 @@ describe('RenderSurface lifecycle', () => {
     expect(() => root.setScale(1)).toThrow(Error);
     expect(() => surface.createContainer()).toThrow(Error);
     expect(() => surface.createGraphics()).toThrow(Error);
-    expect(() => surface.createText('x', style())).toThrow(Error);
     expect(() => surface.createPixel({ width: 1, height: 1, rects: [] })).toThrow(Error);
     expect(() => surface.resize(1, 1, 1)).toThrow(Error);
     expect(() => surface.render()).toThrow(Error);

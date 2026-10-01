@@ -1,44 +1,24 @@
 import type {
+  PixelProgram,
   RenderContainer,
   RenderPixel,
   RenderSurface,
 } from '../../../render';
-import { PixelBuilder } from '../../../render';
+import { PixelBuilder, pixelProgramCoversPoint } from '../../../render';
 import type { HouseRendererState } from '../../../shared/entities';
 import {
+  buildHousePixelProgram,
   updateHouseSprite,
   HOUSE_PX_H,
   HOUSE_PX_W,
 } from './house-sprite';
-import {
-  collectHitRects,
-  hitTargetAt,
-  isPassthrough,
-  pointInRect,
-  type HouseHitRect,
-  type HouseHitTarget,
-  type HouseRect,
-  type PointerInput,
-} from './hit-regions';
-import {
-  createStatusLabel,
-  updateStatusLabel,
-  type StatusLabelLayout,
-  type StatusLabelNode,
-} from './status-label';
-import {
-  createBroadcastCard,
-  updateBroadcastCard,
-  type BroadcastCardNode,
-  type BroadcastLayout,
-} from './broadcast-card';
-import {
-  createStatsCard,
-  updateStatsCard,
-  type StatsCardLayout,
-  type StatsCardNode,
-} from './stats-card';
+import { type HouseRect } from './hit-regions';
 
+/**
+ * The house scene is art-only now: a single Pixi pixel sprite plus the
+ * geometry React needs to position its DOM chrome and to hit-test the sprite.
+ * Every text/card surface moved to {@link HouseOverlay}.
+ */
 export interface HouseNodeViewport {
   /** Logical window width, before entity pixel scale is applied. */
   width: number;
@@ -51,82 +31,98 @@ export interface HouseNodeViewport {
 export interface HouseNodeOutput {
   root: RenderContainer;
   houseRect: HouseRect;
-  closeRect?: HouseRect;
-  hitRects: HouseHitRect[];
-  passthrough: boolean;
-  target?: HouseHitTarget;
-  bodyTargeted: boolean;
-  closeTargeted: boolean;
-  status?: StatusLabelLayout;
-  broadcast?: BroadcastLayout;
-  stats?: StatsCardLayout;
-  tipsCardRect?: HouseRect;
 }
 
 export interface HouseScene {
   readonly root: RenderContainer;
   update(
     state: HouseRendererState,
-    pointer: PointerInput,
-    dragging: boolean,
     viewport: HouseNodeViewport,
     nowMs: number,
   ): HouseNodeOutput;
+  /** Alpha test against the authored sprite program at CSS-pixel coordinates. */
+  hitTestScreen(x: number, y: number): boolean;
   destroy(): void;
 }
 
 interface HouseNodeLayers {
   root: RenderContainer;
   sprite: RenderPixel;
-  status: StatusLabelNode;
-  broadcast: BroadcastCardNode;
-  stats: StatsCardNode;
-  x: number;
-  y: number;
+  hitProgram: PixelProgram;
+  hitSkin: HouseRendererState['houseSkin'];
+  logicalX: number;
+  logicalY: number;
   scale: number;
 }
 
 export function createHouseScene(
   surface: RenderSurface,
   state: HouseRendererState,
-  pointer: PointerInput,
-  dragging: boolean,
   viewport: HouseNodeViewport,
   nowMs = 0,
 ): HouseScene {
   const root = surface.createContainer();
   const sprite = surface.createPixel(new PixelBuilder(HOUSE_PX_W, HOUSE_PX_H).build());
-  const statusContainer = surface.createContainer();
-  const broadcastContainer = surface.createContainer();
-  const statsContainer = surface.createContainer();
-
   root.add(sprite);
-  root.add(statusContainer);
-  root.add(broadcastContainer);
-  root.add(statsContainer);
 
+  const initial = houseLogicalPosition(viewport, state.placement);
   const layers: HouseNodeLayers = {
     root,
     sprite,
-    status: createStatusLabel(statusContainer, surface),
-    broadcast: createBroadcastCard(broadcastContainer, surface),
-    stats: createStatsCard(statsContainer, surface),
-    x: 0,
-    y: 0,
+    hitProgram: buildHousePixelProgram(state.houseSkin),
+    hitSkin: state.houseSkin,
+    logicalX: initial.x,
+    logicalY: initial.y,
     scale: viewport.scale,
   };
 
-  const initial = baseOutput(root, viewport, pointer, dragging);
-  let output = updateHouseSceneOutput(initial, layers, state, pointer, dragging, viewport, nowMs);
+  surface.root.add(root);
   let destroyed = false;
 
-  surface.root.add(root);
+  const paint = (nextState: HouseRendererState, nextViewport: HouseNodeViewport): HouseNodeOutput => {
+    const logical = houseLogicalPosition(nextViewport, nextState.placement);
+    layers.logicalX = logical.x;
+    layers.logicalY = logical.y;
+    layers.scale = nextViewport.scale;
+    if (layers.hitSkin !== nextState.houseSkin) {
+      layers.hitProgram = buildHousePixelProgram(nextState.houseSkin);
+      layers.hitSkin = nextState.houseSkin;
+    }
+
+    const runningWorkerCount = nextState.workers.filter((worker) => worker.phase === 'working').length;
+    updateHouseSprite(
+      layers.sprite,
+      logical.x,
+      logical.y,
+      nextViewport.scale,
+      runningWorkerCount > 0,
+      runningWorkerCount,
+      nextState.dailyStats?.totalTokens ?? 0,
+      nextState.dailyStats?.dispatchCount ?? 0,
+      nextState.houseSkin,
+    );
+
+    return {
+      root,
+      houseRect: physicalHouseRect(logical.x, logical.y, nextViewport.scale),
+    };
+  };
 
   return {
     root,
-    update(nextState, nextPointer, nextDragging, nextViewport, nextNowMs) {
-      output = updateHouseSceneOutput(output, layers, nextState, nextPointer, nextDragging, nextViewport, nextNowMs);
-      return output;
+    update(nextState, nextViewport) {
+      return paint(nextState, nextViewport);
+    },
+    hitTestScreen(x: number, y: number): boolean {
+      const scale = layers.scale;
+      if (!Number.isFinite(scale) || scale <= 0) return false;
+      const originX = Math.round(layers.logicalX * scale);
+      const originY = Math.round(layers.logicalY * scale);
+      return pixelProgramCoversPoint(
+        layers.hitProgram,
+        Math.floor((x - originX) / scale),
+        Math.floor((y - originY) / scale),
+      );
     },
     destroy() {
       if (destroyed) return;
@@ -134,99 +130,6 @@ export function createHouseScene(
       safeRemove(surface, root);
       safeDestroy(root);
     },
-  };
-}
-
-function updateHouseSceneOutput(
-  node: HouseNodeOutput,
-  layers: HouseNodeLayers,
-  state: HouseRendererState,
-  pointer: PointerInput,
-  dragging: boolean,
-  viewport: HouseNodeViewport,
-  nowMs: number,
-): HouseNodeOutput {
-  const logical = houseLogicalPosition(viewport, state.placement);
-  layers.x = logical.x;
-  layers.y = logical.y;
-  layers.scale = viewport.scale;
-  const houseRect = physicalHouseRect(logical.x, logical.y, viewport.scale);
-  const viewportWidth = Math.round(viewport.width * viewport.scale);
-  const viewportHeight = Math.round(viewport.height * viewport.scale);
-
-  // Compute running state and tiers
-  const runningWorkerCount = state.workers.filter((w) => w.phase === 'working').length;
-  const isRunning = runningWorkerCount > 0;
-  const totalTokens = state.dailyStats?.totalTokens ?? 0;
-  const dispatchCount = state.dailyStats?.dispatchCount ?? 0;
-
-  updateHouseSprite(
-    layers.sprite,
-    logical.x,
-    logical.y,
-    viewport.scale,
-    isRunning,
-    runningWorkerCount,
-    totalTokens,
-    dispatchCount,
-    state.houseSkin,
-  );
-
-  const status = updateStatusLabel(layers.status, {
-    workers: state.workers ?? [],
-    queuedCount: state.queuedCount ?? 0,
-    dailyStats: state.dailyStats,
-    pointer,
-    houseRect,
-    viewportWidth,
-    viewportHeight,
-  });
-  const broadcast = updateBroadcastCard(layers.broadcast, {
-    broadcast: state.broadcast,
-    houseRect,
-    viewportWidth,
-    viewportHeight,
-    nowMs,
-  });
-  const stats = updateStatsCard(layers.stats, {
-    dailyStats: state.dailyStats,
-    dailyStatsUnavailable: state.dailyStatsUnavailable,
-    runningWorkerCount,
-    queuedCount: state.queuedCount,
-    taskgraphCount: state.taskgraphCount,
-    activityStale: state.activityStale,
-    quotaTips: state.quotaTips,
-    pointer,
-    dragging,
-    houseRect,
-    viewportWidth,
-    viewportHeight,
-  });
-
-  // Tips card rect for hover retention
-  const tipsCardR = stats ? { x: stats.x, y: stats.y, width: stats.width, height: stats.height } : undefined;
-
-  const closeRect = broadcast?.closeRect;
-  const hitRects = collectHitRects({
-    houseRect,
-    closeRect,
-    dragging,
-    tipsCard: tipsCardR,
-  });
-  const target = hitTargetAt(hitRects, pointer);
-  return {
-    root: node.root,
-    houseRect,
-    closeRect,
-    hitRects,
-    passthrough: isPassthrough({ hitRects, pointer, dragging }),
-    target,
-    bodyTargeted: target === 'house',
-    closeTargeted: target === 'broadcast-close',
-    status,
-    broadcast,
-    stats,
-    tipsCardRect: tipsCardR,
   };
 }
 
@@ -255,27 +158,6 @@ export function physicalHouseRect(x: number, y: number, scale: number): HouseRec
   };
 }
 
-function baseOutput(
-  root: RenderContainer,
-  viewport: HouseNodeViewport,
-  pointer: PointerInput,
-  dragging: boolean,
-): HouseNodeOutput {
-  const logical = houseLogicalPosition(viewport);
-  const houseRect = physicalHouseRect(logical.x, logical.y, viewport.scale);
-  const hitRects = collectHitRects({ houseRect, dragging });
-  const target = hitTargetAt(hitRects, pointer);
-  return {
-    root,
-    houseRect,
-    hitRects,
-    passthrough: isPassthrough({ hitRects, pointer, dragging }),
-    target,
-    bodyTargeted: target === 'house',
-    closeTargeted: target === 'broadcast-close',
-  };
-}
-
 function clamp(value: number, min: number, max: number): number {
   if (max < min) return min;
   return Math.min(Math.max(value, min), max);
@@ -297,9 +179,5 @@ function safeDestroy(root: RenderContainer): void {
   }
 }
 
-export {
-  HOUSE_PX_H,
-  HOUSE_PX_W,
-  pointInRect,
-};
-export type { HouseHitRect, HouseHitTarget, HouseRect, PointerInput };
+export { HOUSE_PX_H, HOUSE_PX_W };
+export type { HouseRect };

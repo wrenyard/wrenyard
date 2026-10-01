@@ -3,7 +3,6 @@ import type {
   PixelRect,
   RenderColor,
   RenderPoint,
-  RenderTextStyle,
   ShapeCommand,
 } from './types';
 
@@ -160,50 +159,6 @@ export function cloneCommands(commands: readonly ShapeCommand[]): ShapeCommand[]
     }
   }
   return cloned;
-}
-
-const TEXT_STYLE_KEYS = ['fontFamily', 'fontSize', 'fill', 'align', 'lineHeight', 'fontWeight'] as const;
-const FONT_WEIGHTS = new Set<RenderTextStyle['fontWeight']>([
-  'normal',
-  'bold',
-  100,
-  200,
-  300,
-  400,
-  500,
-  600,
-  700,
-  800,
-  900,
-]);
-
-export function cloneTextStyle(style: RenderTextStyle): RenderTextStyle {
-  if (typeof style !== 'object' || style === null) {
-    throw new TypeError('text style must be an object');
-  }
-  assertExactKeys(style, TEXT_STYLE_KEYS, 'text style');
-
-  if (typeof style.fontFamily !== 'string') {
-    throw new TypeError('fontFamily must be a string');
-  }
-  const fontSize = assertPositiveFinite(style.fontSize, 'fontSize');
-  validateColor(style.fill, 'fill');
-  if (style.align !== 'left' && style.align !== 'center' && style.align !== 'right') {
-    throw new TypeError('align must be left, center, or right');
-  }
-  const lineHeight = assertPositiveFinite(style.lineHeight, 'lineHeight');
-  if (!FONT_WEIGHTS.has(style.fontWeight)) {
-    throw new TypeError('fontWeight must be normal, bold, or 100..900');
-  }
-
-  return {
-    fontFamily: style.fontFamily,
-    fontSize,
-    fill: style.fill,
-    align: style.align,
-    lineHeight,
-    fontWeight: style.fontWeight,
-  };
 }
 
 export function clonePixelProgram(program: PixelProgram): PixelProgram {

@@ -1,6 +1,6 @@
 // ── Pet overlay React root ───────────────────────────────────────────
 // Single transparent React root shared by the house, worker and entity
-// overlays. It layers a Pixi-owned sprite canvas (PixiStage) underneath a
+// overlays. It layers the Pixi-owned sprite canvas (PixiStage) underneath the
 // purely presentational DOM UI (OverlayUi), mirrors the shell appearance on
 // <html>, and owns the hit/passthrough decision.
 //
@@ -9,12 +9,13 @@
 
 import {
   useEffect,
-  useRef,
   useState,
-  type CSSProperties,
   type ReactElement,
   type ReactNode,
+  type RefObject,
 } from 'react';
+import { OverlayUi } from './OverlayUi';
+import { PixiStage } from './PixiStage';
 
 /** Resolved Pet overlay appearance (structural mirror of the shell DTO). */
 export interface PetAppearance {
@@ -25,8 +26,8 @@ export interface PetAppearance {
 
 /**
  * Minimal appearance bridge. Pet preloads are narrow and must not import
- * `renderer/lib/theme`, so an adapter exposing the existing
- * `appearanceSnapshot` / `appearanceChanged` channels plugs in here.
+ * `renderer/lib/theme`, so the shared `petAppearanceBridge` adapter (owned by
+ * the Pet appearance wiring) plugs in here.
  */
 export interface PetAppearanceBridge {
   getSnapshot(): PetAppearance;
@@ -37,10 +38,10 @@ export interface PetAppearanceBridge {
 export type CanvasHitTest = (x: number, y: number) => boolean;
 
 export interface OverlayRootProps {
-  /** Mounts the Pixi character stage into the overlay canvas; returns a disposer. */
-  mountStage?: (canvas: HTMLCanvasElement) => void | (() => void);
   /** Live appearance source; defaults to the static light "paper" appearance. */
   appearance?: PetAppearanceBridge;
+  /** Canvas owned by the overlay; created here and wired by the overlay component. */
+  canvasRef: RefObject<HTMLCanvasElement | null>;
   /** Canvas pixel test that preserves transparent click-through. Default: never a hit. */
   isCanvasOpaqueAt?: CanvasHitTest;
   /** Reports passthrough transitions to the sender-owned preload IPC. */
@@ -56,25 +57,6 @@ const DEFAULT_APPEARANCE: PetAppearance = { theme: 'paper', dark: false, reduceM
 
 /** Fully transparent canvas: every canvas pixel stays click-through. */
 const NEVER_OPAQUE: CanvasHitTest = () => false;
-
-// The canvas keeps pointer events so `elementFromPoint` reports it directly
-// over empty areas; the UI layer is inert and only `[data-hit]` children opt in.
-const STAGE_STYLE: CSSProperties = {
-  position: 'absolute',
-  inset: 0,
-  width: '100%',
-  height: '100%',
-  display: 'block',
-  background: 'transparent',
-};
-
-const UI_STYLE: CSSProperties = {
-  position: 'absolute',
-  inset: 0,
-  width: '100%',
-  height: '100%',
-  pointerEvents: 'none',
-};
 
 function applyAppearance(appearance: PetAppearance): void {
   if (typeof document === 'undefined') return;
@@ -125,21 +107,13 @@ export function resolvePassthrough(
 }
 
 export function OverlayRoot({
-  mountStage,
   appearance,
+  canvasRef,
   isCanvasOpaqueAt = NEVER_OPAQUE,
   onPassthroughChange,
   children,
 }: OverlayRootProps): ReactElement {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   usePetAppearance(appearance);
-
-  // Pixi owns the sprite canvas; dispose the stage when the root unmounts.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !mountStage) return;
-    return mountStage(canvas);
-  }, [mountStage]);
 
   // Overlay windows must never paint an opaque document background.
   useEffect(() => {
@@ -174,14 +148,12 @@ export function OverlayRoot({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseleave', onLeave);
     };
-  }, [isCanvasOpaqueAt, onPassthroughChange]);
+  }, [canvasRef, isCanvasOpaqueAt, onPassthroughChange]);
 
   return (
-    <div data-overlay-root style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-      <canvas ref={canvasRef} aria-hidden="true" style={STAGE_STYLE} />
-      <div data-overlay-ui style={UI_STYLE}>
-        {children}
-      </div>
+    <div data-overlay-root className="absolute inset-0">
+      <PixiStage canvasRef={canvasRef} />
+      <OverlayUi>{children}</OverlayUi>
     </div>
   );
 }
