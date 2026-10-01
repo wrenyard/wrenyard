@@ -1,3 +1,4 @@
+import '../api/entity-api';
 // ── Blueprint Wren entity overlay (React) ────────────────────────────
 // The entity window is a transparent React root: the Pixi origami-bird sprite
 // underneath the DOM paper-tag fact slip (`Card` + theme tokens).
