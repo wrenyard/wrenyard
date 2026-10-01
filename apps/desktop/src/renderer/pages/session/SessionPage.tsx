@@ -149,6 +149,7 @@ export function SessionPage() {
             orientation="horizontal"
             defaultLayout={defaultLayout}
             onLayoutChanged={onLayoutChanged}
+            resizeTargetMinimumSize={{ fine: 6, coarse: 20 }}
             className="h-full min-h-0"
           >
             <ResizablePanel
@@ -171,7 +172,7 @@ export function SessionPage() {
                 onSearch={() => setSearchOpen(true)}
               />
             </ResizablePanel>
-            <ResizableHandle />
+            <ResizableHandle className="w-1.5 bg-transparent after:w-px after:bg-border" />
             <ResizablePanel id="main" className="relative flex min-h-0 flex-col">
               <SessionTopBar
                 title={selectedTitle}
@@ -225,7 +226,7 @@ export function SessionPage() {
             </ResizablePanel>
             {inspectorOpen && (
               <>
-                <ResizableHandle />
+                <ResizableHandle className="w-1.5 bg-transparent after:w-px after:bg-border" />
                 <ResizablePanel id="inspector" defaultSize={400} minSize={320} className="min-h-0">
                   <Inspector
                     model={model}
