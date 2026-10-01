@@ -30,7 +30,9 @@ const DETECTORS = [
   },
   {
     name: 'openai-token',
-    pattern: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g,
+    // Not preceded by `-`: kebab-case identifiers such as Emacs Lisp symbols
+    // (`verilog-sk-prompt-state-selector`) are not keys.
+    pattern: /(?<![-\w])sk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g,
   },
   {
     name: 'url-credentials',
