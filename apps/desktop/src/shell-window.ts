@@ -80,6 +80,10 @@ export interface ShellWindowOptions {
   backgroundColor: string;
   titleBarOverlay: { color: string; symbolColor: string };
   additionalArguments: string[];
+  /** Initial shell page; `general.startupPage` resolves it from the last page. */
+  initialPage?: ShellPage;
+  /** Invoked whenever the shell page changes, so main can persist the last page. */
+  onPageChanged?(page: ShellPage): void;
   onCreated?(controller: ShellWindowController): void;
   getAppearance(): ResolvedAppearance;
   getAppearanceSettings(): Promise<AppearanceSettings>;
@@ -533,26 +537,32 @@ function validateAppMenuPosition(value: unknown): { x: number; y: number } | und
 
 export class ShellWindowController {
   readonly window: BrowserWindow;
-  private page: ShellPage = 'session';
+  private page: ShellPage;
   private readonly getPreferences: () => Promise<DesktopPreferences>;
+  private readonly onPageChanged: ((page: ShellPage) => void) | undefined;
 
   private constructor(
     window: BrowserWindow,
     private readonly appVersion: string,
     getPreferences: () => Promise<DesktopPreferences>,
+    initialPage: ShellPage,
+    onPageChanged?: (page: ShellPage) => void,
   ) {
     this.window = window;
     this.getPreferences = getPreferences;
+    this.page = initialPage;
+    this.onPageChanged = onPageChanged;
   }
 
   static async create(options: ShellWindowOptions): Promise<ShellWindowController> {
+    const initialPage = options.initialPage ?? 'session';
     const windowOptions: BrowserWindowConstructorOptions = {
       width: 1280,
       height: 800,
       minWidth: 760,
       minHeight: 520,
       show: false,
-      title: formatShellWindowTitle('session', options.appVersion, !app.isPackaged),
+      title: formatShellWindowTitle(initialPage, options.appVersion, !app.isPackaged),
       backgroundColor: options.backgroundColor,
       ...platformWindowChrome(process.platform, options.titleBarOverlay),
       ...(options.icon ? { icon: options.icon } : {}),
@@ -574,7 +584,13 @@ export class ShellWindowController {
       win.setAutoHideMenuBar(false);
     }
     console.info('[wrenyard-desktop] shell window created');
-    const controller = new ShellWindowController(win, options.appVersion, options.getPreferences);
+    const controller = new ShellWindowController(
+      win,
+      options.appVersion,
+      options.getPreferences,
+      initialPage,
+      options.onPageChanged,
+    );
     controller.installSecurity(options.pageLoader.url('shell'));
     controller.installIpc(options);
     controller.installShortcuts(win.webContents);
@@ -609,12 +625,14 @@ export class ShellWindowController {
   }
 
   setPage(page: ShellPage, focus = true): void {
+    const changed = page !== this.page;
     this.page = page;
     this.window.setTitle(formatShellWindowTitle(page, this.appVersion, !app.isPackaged));
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.viewChanged, page);
       if (focus) this.window.webContents.focus();
     }
+    if (changed) this.onPageChanged?.(page);
   }
 
   notifyQuotaChanged(): void {

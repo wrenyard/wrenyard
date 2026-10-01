@@ -19,6 +19,8 @@ export interface DesktopTrayOptions {
   restartPet(): Promise<void>;
   openDesktop(): void;
   getQuotaSnapshot(): QuotaSnapshot;
+  /** Whether the menu-bar quota submenu is shown (`general.menuBarQuota`). */
+  showQuota(): boolean;
 }
 
 export interface DesktopTrayHandle {
@@ -56,15 +58,18 @@ export function createDesktopTray(
         || (config.house.displayId === undefined && display.id === screen.getPrimaryDisplay().id),
       click: () => run(() => options.selectPetDisplay(display.id)),
     }));
-    const quota = options.getQuotaSnapshot();
-    const quotaItems: MenuItemConstructorOptions[] = quota.providers.length > 0
-      ? quota.providers.map((provider) => {
-          const icon = createQuotaMenuProviderIcon(provider);
-          return icon.isEmpty()
-            ? { label: provider.displayLine ?? `${provider.id} · ${provider.message ?? provider.status}`, enabled: false }
-            : { label: '\u200B', icon, enabled: false };
-        })
-      : [{ label: quota.status === 'available' ? '暂无可展示额度' : '额度暂不可用', enabled: false }];
+    const showQuota = options.showQuota();
+    const quota = showQuota ? options.getQuotaSnapshot() : null;
+    const quotaItems: MenuItemConstructorOptions[] = quota === null
+      ? []
+      : quota.providers.length > 0
+        ? quota.providers.map((provider) => {
+            const icon = createQuotaMenuProviderIcon(provider);
+            return icon.isEmpty()
+              ? { label: provider.displayLine ?? `${provider.id} · ${provider.message ?? provider.status}`, enabled: false }
+              : { label: '\u200B', icon, enabled: false };
+          })
+        : [{ label: quota.status === 'available' ? '暂无可展示额度' : '额度暂不可用', enabled: false }];
 
     const contextMenu = Menu.buildFromTemplate([
       { label: '打开', click: options.openDesktop },
@@ -100,7 +105,7 @@ export function createDesktopTray(
           },
         ],
       },
-      { label: '额度', submenu: quotaItems },
+      ...(showQuota ? [{ label: '额度', submenu: quotaItems } as MenuItemConstructorOptions] : []),
       { type: 'separator' },
       { label: '退出', click: () => app.quit() },
     ]);

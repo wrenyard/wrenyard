@@ -69,6 +69,11 @@ export class DesktopAppearanceController {
     return { ...this.store.load().appearance };
   }
 
+  /** Interface zoom as a webContents zoom factor (`100%` → `1`). */
+  zoomFactor(): number {
+    return this.getSettings().zoom / 100;
+  }
+
   resolve(): ResolvedAppearance {
     const settings = this.getSettings();
     const dark = settings.colorMode === 'system' ? nativeTheme.shouldUseDarkColors : settings.colorMode === 'dark';
