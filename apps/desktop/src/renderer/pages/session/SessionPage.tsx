@@ -403,7 +403,7 @@ export function SessionPage() {
               )}
             </ResizablePanel>
             <ResizableHandle
-              className={cn('w-1.5 bg-transparent after:w-px after:bg-border', !inspectorOpen && 'hidden')}
+              className={cn('w-1.5 bg-transparent after:w-px after:bg-border', !inspectorOpen && 'invisible pointer-events-none')}
               onPointerDown={() => setResizing(true)}
             />
             <ResizablePanel
