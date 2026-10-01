@@ -157,17 +157,16 @@ const REASON_TURN2 = 'console 首页加载慢同样与重试无关，更像是�
 const FINAL_REPLY_2 = 'console 的首页慢主要是首屏 bundle 过大，和 aurora 的重试问题不是一回事。建议先做代码分割，我可以继续跟进。';
 
 /** Live-typing scene chunks: one streaming reason call and one reply call. */
-const LIVE_REASONING_CHUNKS = ['先确认 aurora 的 ', 'billing 重试实现，', '再看能不能直接 ', '改成指数退避。'];
-const LIVE_REASON_TEXT_CHUNKS = ['我会先读取现有实现，', '然后改写重试策略，', '并补齐测试。'];
+const LIVE_REASONING_CHUNKS = ['熔断应包在退避之外：', '统计窗口内失败率超过阈值后', '直接短路，冷却后半开探测。'];
+const LIVE_REASON_TEXT_CHUNKS = ['在 retry 外层加熔断器，', '复用现有指标，', '补充状态切换测试。'];
 const LIVE_REPLY_CHUNKS = [
-  '我已经把 aurora 的 ',
-  'billing 重试逻辑 ',
-  '改成指数退避并加上了抖动。',
-  '新的实现以 500ms 为基数、',
-  '系数 2、上限 30s，',
-  '并采用 full jitter。',
-  '同时补充了 6 个单元测试，',
-  '全部通过；需要我开一个 PR 吗？',
+  '已经在 billing 重试外层加上了熔断：',
+  '最近 20 次调用中失败率超过 50% 时，',
+  '熔断器打开并暂停 30 秒，',
+  '之后放行一次探测请求，',
+  '成功即恢复。',
+  '新增 4 个状态切换测试，全部通过。',
+  '要一起更新运维文档吗？',
 ];
 
 // ─── Fictional model catalogue ─────────────────────────────────────────────

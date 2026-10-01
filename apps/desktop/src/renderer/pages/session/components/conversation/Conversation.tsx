@@ -41,12 +41,14 @@ export function Conversation({ sessionKey, turns, ready }: ConversationProps) {
     for (const turn of turns) {
       if (turn.status !== 'completed' || observed.current.terminal.has(turn.id)) continue;
       observed.current.terminal.add(turn.id);
+      // The reply is already on screen while the window is visible; only a
+      // backgrounded window needs the completion notification.
+      if (document.visibilityState === 'visible') continue;
       notify({
         id: `session-reply-completed:${sessionKey}:${turn.id}`,
         level: 'success',
         source: 'session',
         title: '会话回复完成',
-        description: `${turn.model.provider}/${turn.model.model}`,
         action: { label: '查看', command: { id: 'session.open', args: { sessionId: sessionKey } } },
       });
     }
