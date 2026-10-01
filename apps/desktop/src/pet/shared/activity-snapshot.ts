@@ -105,6 +105,12 @@ export interface ActivityTaskPresence {
   resolvedProfile?: string;
   taskgraphId?: string;
   nodeId?: string;
+  /**
+   * Task-run creation timestamp (ISO 8601), carried through from the wire
+   * `created_at`. The status bar derives elapsed time from this real start; it
+   * must never be replaced with the round's `sampledAt`.
+   */
+  createdAt: string;
 }
 
 export interface ActivityNodePresence {
@@ -402,6 +408,7 @@ export function deriveActivityPresence(snapshot: ActivitySnapshotV1, stale: bool
     ...(task.resolved_profile !== undefined ? { resolvedProfile: task.resolved_profile } : {}),
     ...(task.taskgraph_id !== undefined ? { taskgraphId: task.taskgraph_id } : {}),
     ...(task.node_id !== undefined ? { nodeId: task.node_id } : {}),
+    createdAt: task.created_at,
   }));
 
   const taskgraphs: ActivityTaskGraphPresence[] = snapshot.taskgraphs.map((graph) => {

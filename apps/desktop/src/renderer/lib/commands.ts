@@ -14,6 +14,7 @@ import type { ShellPage } from '@/shell-contract';
 import { isShellPage } from '@/shell-contract';
 import { onCommandAction, onViewChanged, shell } from '@/renderer/lib/desktop';
 import { back, forward, toggleSecondarySidebar } from '@/renderer/lib/navigation';
+import { requestQuotaPanelOpen } from '@/renderer/lib/statusbar';
 import {
   LOCAL_NOTIFICATION_ACTION_ID,
   runLocalNotificationAction,
@@ -63,6 +64,7 @@ const ROUTED_PAGES: Readonly<Record<string, ShellPage>> = {
   'session.open': 'session',
   'session.inspectContext': 'session',
   'settings.open': 'settings',
+  'tasks.open': 'tasks',
 };
 
 function enqueue(id: string, args?: unknown): void {
@@ -77,6 +79,7 @@ export const GLOBAL_COMMANDS: readonly CommandDefinition[] = [
   { id: 'nav.forward', title: '前进', run: () => forward() },
   { id: 'view.toggleSidebar', title: '折叠侧栏', run: () => toggleSecondarySidebar() },
   { id: 'task.open', title: '查看任务', run: runTaskOpen },
+  { id: 'quota.showPanel', title: '查看额度', run: () => requestQuotaPanelOpen() },
 ];
 
 for (const command of GLOBAL_COMMANDS) globalCommands.set(command.id, command);

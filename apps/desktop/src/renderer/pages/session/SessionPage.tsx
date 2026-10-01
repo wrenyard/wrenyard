@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { PanelRight, X } from 'lucide-react';
+import { Loader, PanelRight, X } from 'lucide-react';
 import { cn } from 'cn';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
@@ -15,7 +15,9 @@ import {
   MessageScrollerViewport,
 } from '@/renderer/components/ui/message-scroller';
 import { Page, PageDescription, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
+import { StatusBarButton } from '@/renderer/components/status-bar-button';
 import { registerPageCommands } from '@/renderer/lib/commands';
+import { useStatusBarItem } from '@/renderer/lib/statusbar';
 import { formatSnapshotStamp } from '@/renderer/lib/format';
 import { useNewItemKeys } from '@/renderer/lib/motion';
 import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
@@ -92,6 +94,30 @@ export function SessionPage() {
     () => fold(state.events, state.live, state.tasks, { sessionId: state.selectedId, interrupting: state.interrupting }),
     [state.events, state.live, state.tasks, state.selectedId, state.interrupting],
   );
+
+  // Target the newest running turn, which can precede a later completed turn.
+  const scrollToLatestRunningTurn = useCallback((): void => {
+    const turn = [...model.turns].reverse().find((candidate) => candidate.status === 'running');
+    if (!turn) return;
+    const anchor = document.querySelector<HTMLElement>(`[data-turn-id="${turn.id}"]`);
+    anchor?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, [model.turns]);
+
+  useStatusBarItem({
+    id: 'session.turns',
+    side: 'end',
+    priority: 100,
+    render: () => (model.runningTurns > 0
+      ? (
+        <StatusBarButton
+          icon={Loader}
+          label={`${model.runningTurns} 轮运行中`}
+          tooltip="滚动到最近的运行中轮次"
+          onClick={scrollToLatestRunningTurn}
+        />
+      )
+      : null),
+  });
 
   const inspect = useCallback((next: InspectorTarget): void => {
     setTarget(next);
