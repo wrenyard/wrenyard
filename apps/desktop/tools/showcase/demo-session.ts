@@ -39,7 +39,7 @@ import type {
 const T0 = Date.now();
 
 /** Fictional workspace root: never a real path. */
-const WORKSPACE_ROOT = '/Users/demo/workspace';
+const WORKSPACE_ROOT = '~/workspace';
 /** Fictional device name: never a real hostname. */
 const DEVICE_NAME = 'Demo MacBook Pro';
 /** Fictional workspace-level instructions frozen into every snapshot. */
@@ -316,7 +316,7 @@ function buildProjects(): ProjectSnapshot[] {
       id: 'aurora',
       displayName: 'Aurora',
       workspaceDir: 'projects/aurora',
-      checkoutPath: '/Users/demo/workspace/projects/aurora',
+      checkoutPath: '~/workspace/projects/aurora',
       gitRemote: 'https://github.com/example/aurora.git',
       defaultBranch: 'main',
       branch: 'feat/billing-backoff',
@@ -335,7 +335,7 @@ function buildProjects(): ProjectSnapshot[] {
       id: 'console',
       displayName: 'Console',
       workspaceDir: 'projects/console',
-      checkoutPath: '/Users/demo/workspace/projects/console',
+      checkoutPath: '~/workspace/projects/console',
       gitRemote: 'https://github.com/example/console.git',
       defaultBranch: 'main',
       branch: 'main',
@@ -353,7 +353,7 @@ function buildProjects(): ProjectSnapshot[] {
       id: 'docs-site',
       displayName: 'Docs Site',
       workspaceDir: 'projects/docs-site',
-      checkoutPath: '/Users/demo/workspace/projects/docs-site',
+      checkoutPath: '~/workspace/projects/docs-site',
       gitRemote: 'https://github.com/example/docs-site.git',
       defaultBranch: 'main',
       branch: 'main',
