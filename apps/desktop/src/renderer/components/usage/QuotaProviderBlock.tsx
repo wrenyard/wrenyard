@@ -90,6 +90,7 @@ export function QuotaProviderBlock({ provider, barWidth = 96, className }: Quota
               windowMinutes={window.windowMinutes}
               width={barWidth}
               stale={provider.stale}
+              stacked
             />
           ))}
           {provider.balances.map((balance) => (
