@@ -6,8 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./transport": "./src/transport/index.ts",
-    "./session": "./src/session.ts"
+    "./transport": "./src/transport/index.ts"
   },
   "scripts": {
     "test": "tsx --test test/*.test.ts"

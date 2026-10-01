@@ -78,6 +78,20 @@ import type {
   ExecGetResult,
   ExecStartParams,
   ExecStartResult,
+  SessionListParams,
+  SessionListResult,
+  SessionCreateParams,
+  SessionCreateResult,
+  SessionSendParams,
+  SessionSendResult,
+  SessionInterruptParams,
+  SessionInterruptResult,
+  SessionEventsParams,
+  SessionEventsResult,
+  SessionSummarySettingsParams,
+  SessionSummarySettingsResult,
+  SessionSummarySaveParams,
+  SessionSummarySaveResult,
   ProviderListParams,
   ProviderListResult,
 } from '../protocol/registry.mts'
@@ -249,6 +263,32 @@ export class ForemanClient {
     },
     cancel: (params: ExecCancelParams): Promise<ExecCancelResult> => {
       return this.rpc.request<ExecCancelResult>('exec.cancel', params)
+    },
+  }
+
+  readonly session = {
+    list: (params: SessionListParams = {}): Promise<SessionListResult> => {
+      return this.rpc.request<SessionListResult>('session.list', params)
+    },
+    create: (params: SessionCreateParams = {}): Promise<SessionCreateResult> => {
+      return this.rpc.request<SessionCreateResult>('session.create', params)
+    },
+    send: (params: SessionSendParams): Promise<SessionSendResult> => {
+      return this.rpc.request<SessionSendResult>('session.send', params)
+    },
+    interrupt: (params: SessionInterruptParams): Promise<SessionInterruptResult> => {
+      return this.rpc.request<SessionInterruptResult>('session.interrupt', params)
+    },
+    events: (params: SessionEventsParams): Promise<SessionEventsResult> => {
+      return this.rpc.request<SessionEventsResult>('session.events', params)
+    },
+    summary: {
+      settings: (params: SessionSummarySettingsParams = {}): Promise<SessionSummarySettingsResult> => {
+        return this.rpc.request<SessionSummarySettingsResult>('session.summary.settings', params)
+      },
+      save: (params: SessionSummarySaveParams): Promise<SessionSummarySaveResult> => {
+        return this.rpc.request<SessionSummarySaveResult>('session.summary.save', params)
+      },
     },
   }
 

@@ -55,4 +55,4 @@ export class NdjsonFrameError extends Error {
  * value against it, and the daemon validates the client's value against it.
  * Increment only for an incompatible wire change.
  */
-export const WRENYARD_PROTOCOL_VERSION = 1
+export const WRENYARD_PROTOCOL_VERSION = 2
