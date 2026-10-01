@@ -12,9 +12,10 @@ import {
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { TokenBar, type TokenBarSegment } from '@/renderer/components/usage/TokenBar';
+import { formatTokenCount } from '@/renderer/lib/format';
 import type { ContextInspection, ContextItemKind } from '@/shell-contract';
 import type { TurnGrowth, UsageGroupView } from '../../model/usage.js';
-import { formatExactTokens, formatTokenCount } from '../../model/usage.js';
+import { formatExactTokens, ITEM_KIND_LABEL } from '../../model/usage.js';
 import type { TurnModel } from '../../model/types.js';
 
 /**
@@ -32,17 +33,6 @@ const KIND_ICON: Record<ContextItemKind, LucideIcon> = {
   'action-result': Wrench,
   'ws-update': FilePenLine,
   interrupt: OctagonX,
-};
-
-const KIND_LABEL: Record<ContextItemKind, string> = {
-  user: '用户',
-  assistant: '助手',
-  reply: '回复',
-  doc: '文档',
-  memory: '记忆',
-  'action-result': '动作结果',
-  'ws-update': '工作区更新',
-  interrupt: '打断',
 };
 
 export interface ContextBreakdownProps {
@@ -116,7 +106,7 @@ export function ContextBreakdown({
                 >
                   <Icon className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate" title={item.label}>{item.label}</span>
-                  <span className="shrink-0 text-muted-foreground">{KIND_LABEL[item.kind]}</span>
+                  <span className="shrink-0 text-muted-foreground">{ITEM_KIND_LABEL[item.kind]}</span>
                   <span className="shrink-0 tabular-nums text-muted-foreground">第 {item.turn} 轮</span>
                   <span className="shrink-0 tabular-nums">{formatTokenCount(item.tokens)}</span>
                 </Button>
