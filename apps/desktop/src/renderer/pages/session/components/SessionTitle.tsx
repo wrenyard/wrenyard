@@ -13,15 +13,15 @@ export interface SessionTitleProps {
   draft: boolean;
 }
 
-/** Centred title capsule; a hover card carries the session and snapshot facts. */
+/** Title-bar session title; a hover card carries the session and snapshot facts. */
 export function SessionTitle({ title, session, snapshot, turnCount, draft }: SessionTitleProps) {
   const label = draft ? '新对话' : title;
   if (draft) {
-    return <Button variant="secondary" className="max-w-80 truncate">{label}</Button>;
+    return <Button variant="ghost" className="max-w-80 truncate text-base font-medium">{label}</Button>;
   }
   return (
     <HoverCard>
-      <HoverCardTrigger render={<Button variant="secondary" className="max-w-80 truncate" />}>
+      <HoverCardTrigger render={<Button variant="ghost" className="max-w-80 truncate text-base font-medium" />}>
         {label}
       </HoverCardTrigger>
       <HoverCardContent className="w-80">

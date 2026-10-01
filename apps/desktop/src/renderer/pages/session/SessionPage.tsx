@@ -269,6 +269,38 @@ export function SessionPage() {
 
   return (
     <Page data-page="session">
+      <PageHeader>
+        <PageTitle>
+          <SessionTitle
+            title={selectedTitle}
+            session={selectedSession}
+            snapshot={model.snapshot}
+            turnCount={model.turns.length}
+            draft={draft}
+          />
+        </PageTitle>
+        {!draft && model.snapshot && (
+          <PageDescription className="truncate">快照 {formatSnapshotStamp(model.snapshot.takenAt)}</PageDescription>
+        )}
+      </PageHeader>
+      <TitleBarAuxiliary>
+        <Tooltip>
+          <TooltipTrigger
+            render={(
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={inspectorOpen ? '关闭检查器' : '打开检查器'}
+                aria-pressed={inspectorOpen}
+                onClick={() => setInspectorOpen((value) => !value)}
+              />
+            )}
+          >
+            <PanelRight />
+          </TooltipTrigger>
+          <TooltipContent>{inspectorOpen ? '关闭检查器' : '打开检查器'}</TooltipContent>
+        </Tooltip>
+      </TitleBarAuxiliary>
       <InspectorProvider target={target} inspect={inspect} inspectTimeline={inspectTimeline}>
         <SessionUsageProvider
           sessionKey={sessionKey}
