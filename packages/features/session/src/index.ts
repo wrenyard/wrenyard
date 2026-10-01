@@ -67,6 +67,17 @@ export type {
 export { ActionRunner, ActionSplitter, DOC_TYPE_DIRS, parseDocBlock, validateJsonSchema } from './actions.ts';
 export type { CallLedgerEventDraft, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
 export { CALL_ROLES, checkContextBudget, estimateTokens, resolveModelMetadata } from './calls.ts';
+export type {
+  ContextInspectCalibration,
+  ContextInspectModel,
+  ContextInspectRequest,
+  ContextInspection,
+  ContextItem,
+  ContextItemKind,
+  ContextLayerId,
+  ContextLayerTokens,
+} from './context-inspect.ts';
+export { ContextInspector } from './context-inspect.ts';
 export type { DriverResult, ModelDriver, ModelMessage, Usage } from './driver.ts';
 export { createGatewayDriver } from './driver.ts';
 export type { SummarySettingsOption, SummarySettingsSnapshot } from './summary-model.ts';
