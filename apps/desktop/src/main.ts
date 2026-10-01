@@ -16,14 +16,16 @@ import { reorderProviders } from './provider-order.js';
 import { TaskGraphWindowOwner } from './main/windows/taskgraph-windows.js';
 import { DesktopQuotaController } from './quota-controller.js';
 import { DesktopQuotaSource } from './quota-service.js';
-import { ActivityStatusProjector, TaskRunLifecycleTracker, type VanishedTaskRun } from './main/activity-status.js';
-import { QuotaAlertTracker } from './main/projections/quota-service.js';
+import { ActivityStatusProjector, TaskRunLifecycleTracker } from './main/activity-status.js';
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_MAX, APPEARANCE_ZOOM_MIN, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type QuotaSnapshot, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
-import { NotificationCenter, type NotificationInput, type ShellNotification } from './main/notification-center.js';
+import { NotificationCenter, type NotificationInput } from './main/notification-center.js';
+import { createDesktopNotifications } from './main/notifications/desktop-notifications.js';
+import { createQuotaAlerts } from './main/projections/quota-alerts.js';
+import { createInterfaceZoom } from './main/zoom.js';
 import { DesktopUpdateController } from './updater/controller.js';
 import { DesktopDaemonSupervisor } from './daemon-supervisor.js';
 import { probeWrenyard as probeDaemon } from './daemon-health.js';
@@ -272,49 +274,12 @@ let updateDialogActive = false;
  */
 const macQuitGate = createMacQuitConfirmationGate({ windowMs: 3_000 });
 
-/** Rounds an interface zoom percentage to the allowed step and clamps its range. */
-function clampZoom(value: number): number {
-  const stepped = Math.round(value / APPEARANCE_ZOOM_STEP) * APPEARANCE_ZOOM_STEP;
-  return Math.min(APPEARANCE_ZOOM_MAX, Math.max(APPEARANCE_ZOOM_MIN, stepped));
-}
-
-/** Apply the persisted `appearance.zoom` to the shell window (100% → factor 1). */
-function applyShellZoom(): void {
-  const shell = shellWindow;
-  if (shell === null || shell.window.isDestroyed()) return;
-  try {
-    shell.window.webContents.setZoomFactor(appearanceController?.zoomFactor() ?? 1);
-  } catch {
-    // Zoom is best-effort; the window keeps its current factor.
-  }
-}
-
-/** Set one interface-zoom percentage and persist it through the bridge. */
-function setInterfaceZoom(value: number): void {
-  preferencesController?.set('appearance.zoom', clampZoom(value));
-}
-
-/** Gate for `notifications.events`, shared by renderer- and main-origin events. */
-function isNotificationEventEnabled(input: NotificationInput): boolean {
-  if (desktopSettingsStore === null) return true;
-  const events = desktopSettingsStore.load().notifications.events;
-  switch (input.source) {
-    case 'task':
-      return input.level === 'error' ? events.taskFailed : events.taskCompleted;
-    case 'session':
-      // Only the completed-reply success event is gated; session errors such as
-      // context_overflow stay independent of the completion setting.
-      return input.level === 'success' ? events.sessionReplyCompleted : true;
-    case 'update':
-      return events.updateAvailable;
-    case 'quota':
-      return events.quotaWarning;
-    case 'daemon':
-      return events.daemonDisconnected;
-    default:
-      return true;
-  }
-}
+/** Interface zoom (clamp/apply/persist) lives in its own module. */
+const interfaceZoom = createInterfaceZoom({
+  getShellWindow: () => shellWindow,
+  getAppearanceController: () => appearanceController,
+  getPreferencesController: () => preferencesController,
+});
 
 function daemonSnapshot(): DaemonLifecycleSnapshot {
   return daemonSupervisor?.snapshot()
@@ -325,76 +290,6 @@ function notifyDaemonChanged(): void {
   if (shellWindow && !shellWindow.window.isDestroyed()) {
     shellWindow.window.webContents.send(SHELL_CHANNELS.daemonChanged);
   }
-}
-
-/**
- * OS notification for a background-worthy event. Clicking it focuses the main
- * window and delivers the event's command action to the renderer, which owns
- * the command table.
- */
-function showSystemNotification(notification: ShellNotification): void {
-  if (!ElectronNotification.isSupported()) return;
-  const native = new ElectronNotification({
-    title: notification.title,
-    body: notification.description ?? '',
-    silent: !(desktopSettingsStore?.load().notifications.sound ?? true),
-  });
-  native.on('click', () => {
-    showDesktop();
-    const command = notification.action?.command;
-    if (command) shellWindow?.deliverCommandAction(command);
-  });
-  native.show();
-}
-
-/** An available update feeds the notification center once per version. */
-function notifyUpdateAvailable(): void {
-  if (notificationCenter === null || desktopSettingsStore === null) return;
-  const snapshot = updateController?.snapshot();
-  if (!snapshot || snapshot.state !== 'available') return;
-  if (!desktopSettingsStore.load().notifications.events.updateAvailable) return;
-  notificationCenter.push({
-    id: 'update-available',
-    level: 'info',
-    source: 'update',
-    title: '有可用更新',
-    ...(snapshot.availableVersion !== undefined ? { description: `新版本 ${snapshot.availableVersion} 已可用` } : {}),
-    action: { label: '查看', command: { id: 'settings.open', args: 'update' } },
-  });
-}
-
-/** A daemon drop feeds the center; recovery clears the stale disconnect. */
-let lastDaemonState: DaemonLifecycleSnapshot['state'] | undefined;
-function notifyDaemonStateChanged(snapshot: DaemonLifecycleSnapshot): void {
-  const previous = lastDaemonState;
-  lastDaemonState = snapshot.state;
-  if (notificationCenter === null || desktopSettingsStore === null) return;
-  if (snapshot.state === 'running') {
-    notificationCenter.dismiss('daemon-disconnected');
-    return;
-  }
-  if (previous !== 'running') return;
-  if (!desktopSettingsStore.load().notifications.events.daemonDisconnected) return;
-  notificationCenter.push({
-    id: 'daemon-disconnected',
-    level: 'warning',
-    source: 'daemon',
-    title: 'Daemon 已断开',
-    ...(snapshot.message !== undefined ? { description: snapshot.message } : {}),
-  });
-}
-
-/** Preference gate for task events the Pet module reports. */
-function petNotificationSink(input: NotificationInput): void {
-  if (notificationCenter === null || desktopSettingsStore === null) return;
-  const events = desktopSettingsStore.load().notifications.events;
-  const enabled = input.level === 'success'
-    ? events.taskCompleted
-    : input.level === 'error'
-      ? events.taskFailed
-      : true;
-  if (!enabled) return;
-  notificationCenter.push(input);
 }
 
 /** Final teardown shared by every exit path; the daemon stop already happened. */
@@ -616,6 +511,18 @@ async function bootstrap(): Promise<void> {
       await client.close?.();
     }
   };
+  // Main-origin notification producers (preference gate, OS notification, and
+  // the update/daemon/Pet/vanished-run pushers) live in their own module; every
+  // dependency is read lazily through the getters below.
+  const notifications = createDesktopNotifications({
+    getNotificationCenter: () => notificationCenter,
+    getSettingsStore: () => desktopSettingsStore,
+    getShellWindow: () => shellWindow,
+    getUpdateController: () => updateController,
+    showDesktop: () => showDesktop(),
+    requestForeman,
+    notificationConstructor: ElectronNotification,
+  });
   const readUpdateDaemonIdle = async (): Promise<boolean | null> => {
     try {
       return assertDaemonIdle(await requestForeman('daemon.status', {})).idle;
@@ -755,7 +662,7 @@ async function bootstrap(): Promise<void> {
     },
     onChanged: () => {
       shellWindow?.notifyUpdateChanged();
-      notifyUpdateAvailable();
+      notifications.notifyUpdateAvailable();
     },
     sourceDevelopment: !app.isPackaged,
   });
@@ -799,7 +706,7 @@ async function bootstrap(): Promise<void> {
     onChanged: (snapshot) => {
       reconcileDaemonConnection(snapshot.state === 'running');
       notifyDaemonChanged();
-      notifyDaemonStateChanged(snapshot);
+      notifications.notifyDaemonStateChanged(snapshot);
       void finalizeWhenHealthy();
     },
   });
@@ -870,7 +777,7 @@ async function bootstrap(): Promise<void> {
     onChange: () => {
       desktopTray?.rebuild();
       shellWindow?.notifyPreferencesChanged();
-      applyShellZoom();
+      interfaceZoom.applyShellZoom();
       // `update.autoCheck` gates the periodic schedule; manual checks always work.
       if (!SMOKE && app.isPackaged) updateController?.setAutoCheck(settingsStore.load().update.autoCheck);
     },
@@ -916,8 +823,8 @@ async function bootstrap(): Promise<void> {
       shellWindow && !shellWindow.window.isDestroyed() && shellWindow.window.isFocused(),
     ),
     isSystemEnabled: () => settingsStore.load().notifications.system,
-    isEventEnabled: (input) => isNotificationEventEnabled(input),
-    onSystemNotification: (notification) => showSystemNotification(notification),
+    isEventEnabled: (input) => notifications.isNotificationEventEnabled(input),
+    onSystemNotification: (notification) => notifications.showSystemNotification(notification),
     doNotDisturb: loadedSettings?.notifications.doNotDisturb ?? false,
   });
   // One shared daemon transport and subscription set for the whole Desktop
@@ -952,40 +859,13 @@ async function bootstrap(): Promise<void> {
   // notifications, which must work whether or not Pet is enabled.
   const activityProjector = new ActivityStatusProjector();
   const taskLifecycle = new TaskRunLifecycleTracker();
-  const notifyVanishedTaskRun = async (run: VanishedTaskRun): Promise<void> => {
-    if (notificationCenter === null || desktopSettingsStore === null) return;
-    // Resolve the terminal fact from the authoritative run status; a run that
-    // merely vanished is never reported as success or failure on its own.
-    let status: string | null = null;
-    try {
-      const raw = await requestForeman('task.run.status', { task_run_id: run.taskRunId });
-      if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
-        const value = (raw as { status?: unknown }).status;
-        if (typeof value === 'string') status = value;
-      }
-    } catch {
-      return;
-    }
-    if (status !== 'done' && status !== 'failed' && status !== 'interrupted') return;
-    const events = desktopSettingsStore.load().notifications.events;
-    if (status === 'done' ? !events.taskCompleted : !events.taskFailed) return;
-    const label = run.taskLabel ?? run.taskRunId;
-    notificationCenter.push({
-      id: `task-run:${run.taskRunId}`,
-      level: status === 'done' ? 'success' : 'error',
-      source: 'task',
-      title: status === 'done' ? `任务完成：${label}` : `任务失败：${label}`,
-      ...(run.project !== undefined ? { description: run.project } : {}),
-      action: { label: '查看', command: { id: 'tasks.open', args: { taskRunId: run.taskRunId } } },
-    });
-  };
   desktopSubscriptions.subscribe({
     onActivity: (presence) => {
       windowOwner.applyActivity(presence);
       const changed = activityProjector.update(presence);
       if (changed) shellWindow?.notifyActivityChanged(changed);
       for (const run of taskLifecycle.observe(activityProjector.get())) {
-        void notifyVanishedTaskRun(run);
+        void notifications.notifyVanishedTaskRun(run);
       }
     },
   });
@@ -998,7 +878,7 @@ async function bootstrap(): Promise<void> {
       preloadDir: petAssets.preloadDir,
       subscriptions: desktopSubscriptions!,
       onConfigChange,
-      onNotification: petNotificationSink,
+      onNotification: notifications.petNotificationSink,
       debugRenderer: process.env.PET_DEBUG === '1' || process.env.PET_DEBUG === 'true',
     }),
     listDisplays: () => screen.getAllDisplays().map((display, index) => ({
@@ -1013,40 +893,11 @@ async function bootstrap(): Promise<void> {
   if (SMOKE) await petStart;
   const providerService = new ProviderService({ ipcPath, canConnect: canConnectDaemon });
   // Downward threshold crossings are computed in the main process so a window
-  // in the background still emits a system notification (usage spec 6.6).
-  const quotaAlerts = new QuotaAlertTracker();
-  const emitQuotaAlerts = (snapshot: QuotaSnapshot): void => {
-    if (notificationCenter === null || desktopSettingsStore === null) return;
-    // Tracking consumes every sample even while the quota-warning event is off;
-    // only emission is gated below. Skipping observation would let a crossing
-    // that happened while notifications were disabled replay as a fresh alert
-    // when the event is switched back on. Eligible providers match the
-    // status-bar QuotaItem projection: when an explicit order exists, only
-    // order-enabled configured providers are tracked.
-    const enabledIds = new Set(
-      snapshot.providerOrder.filter((entry) => entry.enabled).map((entry) => entry.id),
-    );
-    const eligible = snapshot.providerOrder.length === 0
-      ? snapshot.providers
-      : snapshot.providers.filter((provider) => enabledIds.has(provider.id));
-    const providers = eligible.map((provider) => ({
-      id: provider.id,
-      label: provider.label,
-      windows: provider.windows.map((window) => ({ name: window.name, remainingPct: window.remainingPct })),
-    }));
-    const alerts = quotaAlerts.observe(providers);
-    if (!desktopSettingsStore.load().notifications.events.quotaWarning) return;
-    for (const alert of alerts) {
-      notificationCenter.push({
-        id: alert.id,
-        level: alert.level,
-        source: 'quota',
-        title: alert.title,
-        description: alert.description,
-        action: { label: '查看额度', command: { id: 'quota.showPanel' } },
-      });
-    }
-  };
+  // in the background still emits a system notification (usage spec 6.6); the
+  // threshold/once-per-cycle bookkeeping lives in the quota-alerts projection.
+  const quotaAlerts = createQuotaAlerts({
+    notify: (input) => { notificationCenter?.push(input); },
+  });
   quotaController = new DesktopQuotaController({
     source: new DesktopQuotaSource(ipcPath, canConnectDaemon),
     providerSource: providerService,
@@ -1055,7 +906,7 @@ async function bootstrap(): Promise<void> {
       petController?.setQuotaProviders(providers);
       desktopTray?.rebuild();
       shellWindow?.notifyQuotaChanged();
-      emitQuotaAlerts(snapshot);
+      quotaAlerts.observe(snapshot);
     },
   });
   // Provider discovery may wait on native clients; it must not delay the window.
@@ -1213,7 +1064,7 @@ async function bootstrap(): Promise<void> {
     openLogsDirectory: async () => { await shell.openPath(join(foremanStateRoot(), 'logs')); },
     revealWorkspace: async (path: string) => { shell.showItemInFolder(path); },
   });
-  applyShellZoom();
+  interfaceZoom.applyShellZoom();
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,
     () => { void requestInstallFromMenu(); },
@@ -1248,9 +1099,9 @@ async function bootstrap(): Promise<void> {
     },
     {
       // The View menu drives the same persisted `appearance.zoom` as the setting.
-      zoomIn: () => setInterfaceZoom((appearanceController?.getSettings().zoom ?? 100) + APPEARANCE_ZOOM_STEP),
-      zoomOut: () => setInterfaceZoom((appearanceController?.getSettings().zoom ?? 100) - APPEARANCE_ZOOM_STEP),
-      reset: () => setInterfaceZoom(100),
+      zoomIn: () => interfaceZoom.setInterfaceZoom((appearanceController?.getSettings().zoom ?? 100) + APPEARANCE_ZOOM_STEP),
+      zoomOut: () => interfaceZoom.setInterfaceZoom((appearanceController?.getSettings().zoom ?? 100) - APPEARANCE_ZOOM_STEP),
+      reset: () => interfaceZoom.setInterfaceZoom(100),
     },
   )));
   // `update.autoCheck` gates the background schedule; a manual check always works.
