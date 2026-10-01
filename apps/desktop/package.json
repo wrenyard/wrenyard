@@ -27,7 +27,8 @@
     "@wrenyard/providers": "workspace:*",
     "@wrenyard/themes": "workspace:*",
     "cmdk": "^1.1.1",
-    "js-tiktoken": "1.0.21"
+    "js-tiktoken": "1.0.21",
+    "recharts": "3.8.0"
   },
   "devDependencies": {
     "@base-ui/react": "^1.8.0",
