@@ -14,7 +14,7 @@ quota window and task visible.
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20arm64%20%7C%20Windows%20x64-lightgrey)
 
-[中文](README.zh-CN.md) · [Download](https://github.com/wrenyard/wrenyard/releases) · [Watch the 77-second tour](docs/media/wrenyard-desktop-promo.mp4)
+[中文](README.zh-CN.md) · [Download](https://github.com/wrenyard/wrenyard/releases)
 
 </div>
 
