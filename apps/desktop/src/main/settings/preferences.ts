@@ -1,10 +1,13 @@
-import type { AppearanceSettings, DesktopPreferences, PreferenceId } from '../../shell-contract.js';
-import { isPreferenceId, validatePreferenceValue } from '../../shell-contract.js';
+import {
+  PREFERENCES,
+  isPreferenceId,
+  validatePreferenceValue,
+  writePreferenceValue,
+  type AppearanceSettings,
+  type DesktopPreferences,
+  type PreferenceId,
+} from '../../shell-contract.js';
 import type { DesktopSettings, DesktopSettingsStore } from './desktop-settings.js';
-import { applyPreference } from './desktop-settings.js';
-
-/** The Desktop settings partition a preference id belongs to. */
-type PreferencePartition = 'general' | 'appearance' | 'session' | 'notifications' | 'statusBar' | 'update';
 
 /** Default menu-bar quota flag when `tray.showQuota` is unset. */
 export const DEFAULT_MENU_BAR_QUOTA = true;
@@ -13,38 +16,6 @@ export const DEFAULT_MENU_BAR_QUOTA = true;
 export interface DesktopPreferencesSystem {
   /** Native login-item state; read from the OS, never persisted in the document. */
   openAtLogin: boolean;
-}
-
-function preferencePartition(id: PreferenceId): PreferencePartition {
-  if (id.startsWith('general.')) return 'general';
-  if (id.startsWith('appearance.')) return 'appearance';
-  if (id.startsWith('session.')) return 'session';
-  if (id.startsWith('statusBar.')) return 'statusBar';
-  if (id.startsWith('update.')) return 'update';
-  return 'notifications';
-}
-
-/** Appearance ids whose write must go through the appearance controller. */
-function isAppearanceResolvedId(id: PreferenceId): boolean {
-  return id === 'appearance.theme'
-    || id === 'appearance.colorMode'
-    || id === 'appearance.motion'
-    || id === 'appearance.zoom';
-}
-
-function appearancePatch(id: PreferenceId, value: unknown): Partial<AppearanceSettings> {
-  switch (id) {
-    case 'appearance.theme':
-      return { theme: value as AppearanceSettings['theme'] };
-    case 'appearance.colorMode':
-      return { colorMode: value as AppearanceSettings['colorMode'] };
-    case 'appearance.motion':
-      return { motion: value as AppearanceSettings['motion'] };
-    case 'appearance.zoom':
-      return { zoom: value as number };
-    default:
-      return {};
-  }
 }
 
 export function preferencesFromDocument(
@@ -87,12 +58,45 @@ export interface DesktopPreferencesControllerOptions {
 }
 
 /**
+ * Ids whose write is owned elsewhere — the appearance controller, the OS login
+ * item, or the tray — so the document write is skipped and the id-keyed side
+ * effect runs instead.
+ */
+const DELEGATED_PREFERENCE_IDS: ReadonlySet<PreferenceId> = new Set([
+  'appearance.theme',
+  'appearance.colorMode',
+  'appearance.motion',
+  'appearance.zoom',
+  'general.openAtLogin',
+  'general.menuBarQuota',
+]);
+
+/**
  * The single main-process writer for the version 3 preference partitions.
  * Every mutation is validated against the shared shell-contract schema before
- * the store is touched, so an illegal value can never be persisted.
+ * the store is touched, so an illegal value can never be persisted. Storage is
+ * generic (the shell-contract descriptor table owns the path); only genuinely
+ * id-dependent side effects live in the map below.
  */
 export class DesktopPreferencesController {
-  constructor(private readonly options: DesktopPreferencesControllerOptions) {}
+  /** Id-dependent side effects; delegated ids run instead of the document write. */
+  private readonly sideEffects: Partial<Record<PreferenceId, (value: unknown) => void>>;
+
+  constructor(private readonly options: DesktopPreferencesControllerOptions) {
+    this.sideEffects = {
+      'appearance.theme': (value) => options.saveAppearance?.({ theme: value as AppearanceSettings['theme'] }),
+      'appearance.colorMode': (value) => options.saveAppearance?.({ colorMode: value as AppearanceSettings['colorMode'] }),
+      'appearance.motion': (value) => options.saveAppearance?.({ motion: value as AppearanceSettings['motion'] }),
+      'appearance.zoom': (value) => options.saveAppearance?.({ zoom: value as number }),
+      'general.openAtLogin': (value) => options.setOpenAtLogin?.(value as boolean),
+      'general.menuBarQuota': (value) => {
+        const tray = options.store.load().tray;
+        options.store.patch('tray', { ...tray, showQuota: value as boolean });
+        options.onMenuBarQuotaChanged?.();
+      },
+      'notifications.doNotDisturb': (value) => options.onDoNotDisturb?.(value as boolean),
+    };
+  }
 
   get(): DesktopPreferences {
     return preferencesFromDocument(this.options.store.load(), {
@@ -103,27 +107,17 @@ export class DesktopPreferencesController {
   set(id: string, value: unknown): DesktopPreferences {
     if (!isPreferenceId(id)) throw new Error('未知偏好');
     if (!validatePreferenceValue(id, value)) throw new Error(`偏好值无效：${id}`);
-    if (isAppearanceResolvedId(id)) {
-      this.options.saveAppearance?.(appearancePatch(id, value));
+    const sideEffect = this.sideEffects[id];
+    if (DELEGATED_PREFERENCE_IDS.has(id)) {
+      sideEffect?.(value);
       return this.get();
     }
-    // System-backed ids never persist a second copy in the general partition:
-    // `openAtLogin` lives in the OS and `menuBarQuota` is `tray.showQuota`.
-    if (id === 'general.openAtLogin') {
-      this.options.setOpenAtLogin?.(value as boolean);
-      return this.get();
-    }
-    if (id === 'general.menuBarQuota') {
-      const tray = this.options.store.load().tray;
-      this.options.store.patch('tray', { ...tray, showQuota: value as boolean });
-      this.options.onMenuBarQuotaChanged?.();
-      return this.get();
-    }
-    const next = applyPreference(this.options.store.load(), id, value);
-    this.options.store.patch(preferencePartition(id), next[preferencePartition(id)]);
-    if (id === 'notifications.doNotDisturb') {
-      this.options.onDoNotDisturb?.(value as boolean);
-    }
+    // Generic storage: the descriptor table maps the id to its partition path.
+    const next = writePreferenceValue(this.options.store.load(), id, value);
+    const section = PREFERENCES[id].path[0] as keyof Omit<DesktopSettings, 'version'>;
+    this.options.store.patch(section, next[section]);
+    // Mirrored ids (e.g. do-not-disturb) notify their owner after the write.
+    sideEffect?.(value);
     return this.get();
   }
 }

@@ -1124,8 +1124,6 @@ async function bootstrap(): Promise<void> {
     },
     onCreated: (controller) => { shellWindow = controller; },
     getAppearance: () => appearanceController!.resolve(),
-    getAppearanceSettings: async () => appearanceController!.getSettings(),
-    setAppearance: async (settings) => appearanceController!.save(settings),
     getSettings,
     getStats: () => { requireDaemonRunning(); return readStatsSnapshot(ipcPath); },
     getQuota: (forceRefresh = false) => quotaController!.getSnapshot(forceRefresh),

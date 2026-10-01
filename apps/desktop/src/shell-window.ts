@@ -87,8 +87,6 @@ export interface ShellWindowOptions {
   onPageChanged?(page: ShellPage): void;
   onCreated?(controller: ShellWindowController): void;
   getAppearance(): ResolvedAppearance;
-  getAppearanceSettings(): Promise<AppearanceSettings>;
-  setAppearance(settings: Partial<AppearanceSettings>): Promise<AppearanceSettings>;
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
@@ -724,14 +722,6 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       return options.getAppearance();
     });
-    ipcMain.handle(SHELL_CHANNELS.appearanceSettingsSnapshot, async (event) => {
-      assertShellSender(event.sender);
-      return options.getAppearanceSettings();
-    });
-    ipcMain.handle(SHELL_CHANNELS.saveAppearance, async (event, settings: unknown) => {
-      assertShellSender(event.sender);
-      return options.setAppearance(validateAppearancePatch(settings));
-    });
     ipcMain.handle(SHELL_CHANNELS.settingsSnapshot, async (event) => {
       assertShellSender(event.sender);
       return options.getSettings();
@@ -942,8 +932,6 @@ export class ShellWindowController {
       SHELL_CHANNELS.navigate,
       SHELL_CHANNELS.showAppMenu,
       SHELL_CHANNELS.appearanceSnapshot,
-      SHELL_CHANNELS.appearanceSettingsSnapshot,
-      SHELL_CHANNELS.saveAppearance,
       SHELL_CHANNELS.settingsSnapshot,
       SHELL_CHANNELS.statsSnapshot,
       SHELL_CHANNELS.quotaSnapshot,
