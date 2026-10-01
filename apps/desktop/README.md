@@ -100,7 +100,7 @@ Desktop renderer + preload + Electron main
   command raises it. Companion enablement, display, visibility and reload stay
   consolidated under “桌宠”.
 - **Lifecycle ownership** — Desktop starts and stops Pet in the same Electron
-  main process. Foreman observes and executes agent work but exposes no Pet
+  main process. The daemon observes and executes agent work but exposes no Pet
   lifecycle RPC, config field or CLI command.
 
 - **Single instance** — a second launch only focuses the existing window.
@@ -110,9 +110,10 @@ Desktop renderer + preload + Electron main
   command quits. The Dock activation event and the tray “打开” command restore
   the same window.
 - **Wrenyard and workspace gates** — Desktop probes
-  `WrenyardIpcClient.health.ping()` on the resolved IPC socket (`WRENYARD_IPC_PATH`, legacy
-  `FOREMAN_*` names, then `\\.\pipe\wrenyard` on Windows or `/tmp/wrenyard.sock`
-  on Unix). Blank environment values are ignored. Only a packaged Desktop
+  `WrenyardIpcClient.health.ping()` on the resolved IPC socket
+  (`WRENYARD_IPC_PATH`, then `\\.\pipe\wrenyard` on Windows or
+  `/tmp/wrenyard.sock` on Unix). Blank environment values are ignored.
+  Only a packaged Desktop
   (`app.isPackaged`) launches the daemon bundle when none is running at startup,
   as a child of its own process running
   `<resources>/wrenyard/runtime/node <resources>/wrenyard/daemon/daemon.mjs run --config <path>`,
@@ -140,10 +141,25 @@ Desktop renderer + preload + Electron main
   to an unavailable state while settings, statistics and quota remain
   usable; no raw environment values cross into the renderer.
 
+## User interface
+
+Desktop is one Electron window with a persistent frame:
+
+- **Title bar** — back/forward navigation, the current page title and the
+  window controls.
+- **Activity rail** — a fixed vertical rail with the primary pages
+  (会话, 工房台账, 模型供应, 任务) and settings in its footer.
+- **Status bar** — a compact bar that projects live daemon, activity and quota
+  state.
+- **Themes** — the built-in paper and neutral themes, each with light and dark
+  modes.
+- **Pet** — an in-process companion rendered in the same Electron main process;
+  it owns only passive overlays and has no settings window or statistics page.
+
 ## Security boundary
 
-- Wrenyard connection context (`WRENYARD_IPC_PATH`, with legacy `FOREMAN_*`
-  fallbacks) is propagated to the daemon without ever being logged. The daemon
+- Wrenyard connection context (`WRENYARD_IPC_PATH`) is propagated to the daemon
+  without ever being logged. The daemon
   has no MCP or HTTP client surface; the gateway that serves its own agents
   binds a random loopback port with an in-memory token.
 - The shell renderer has no Node access and receives only bounded settings,
@@ -157,8 +173,8 @@ Desktop renderer + preload + Electron main
 
 | Command | Purpose |
 | --- | --- |
-| `npm run build` | build the Desktop bundle (`dist/`) |
-| `npm test` | Desktop shell tests (session engine tests live in packages/features/session/test) |
+| `pnpm --filter @wrenyard/desktop run build` | build the Desktop bundle (`dist/`) |
+| `pnpm --filter @wrenyard/desktop test` | Desktop shell tests (session engine tests live in packages/features/session/test) |
 
 From the repository root: `pnpm --filter @wrenyard/desktop dev` runs
 `electron-vite dev --watch` (renderer HMR with React Refresh, preload changes
@@ -179,7 +195,7 @@ unsigned unless a signtool identity is supplied.
 
 ## Requirements
 
-- Node.js `>=22.19.0` for source development (the packaged app ships its own
+- Node.js `>=24.19.0` for source development (the packaged app ships its own
   Node runtime)
 - A Wrenyard daemon. Desktop connects to one that is already running, or
   supervises one itself with the packaged runtime (`wrenyard daemon run`).

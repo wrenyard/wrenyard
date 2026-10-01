@@ -10,17 +10,19 @@ updates. There is no separate agent runtime binary or Go build.
 
 - `apps/cli` exposes commands and consumes daemon IPC. It never starts the
   daemon and requires one to already be running.
-- `apps/desktop` owns UI, communication and its in-tree Pet module (windows,
-  renderer and resource layout are all Desktop-owned). It also supervises the
-  daemon while it runs (tray-resident; closing the window does not quit) and
-  applies its own updates.
+- `apps/desktop` owns UI, communication and Pet, an in-process module at
+  `apps/desktop/src/pet` (windows, renderer and resource layout are all
+  Desktop-owned). It also supervises the daemon while it runs (tray-resident;
+  closing the window does not quit) and applies its own updates.
 - `apps/daemon` owns durable tasks and scheduling and composes feature services
   behind owner-only IPC handlers. It has one run entry point,
   `wrenyard daemon run`; the terminal runs it directly, and the packaged
   Desktop and the daemon dev script (`apps/daemon/scripts/dev.ts`) use
   `@wrenyard/daemon/supervisor`.
 - `packages/protocol` contains type-only IPC definitions grouped by feature.
-  The session contract remains a scaffold; exec and provider have daemon handlers.
+  The session contract is implemented: the daemon hosts the ledger session over
+  `@wrenyard/session` and exposes the `session.*` IPC methods, with Desktop as
+  the conversation client. Exec and provider have daemon handlers.
 - `packages/features/exec` runs raw prompts, owns bounded event replay and
   cancellation. Structured tasks translate their input into this execution API.
 - `packages/features/provider` implements provider listing, configuration and
@@ -34,7 +36,8 @@ updates. There is no separate agent runtime binary or Go build.
   primitives (read-only SQLite and macOS keychain), without provider knowledge.
 - Browser/computer feature packages provide MCP descriptors and instructions;
   clients encode those descriptors in their native configuration.
-- `packages/dsh-shell` provides the Desktop conversation integration.
+- `packages/themes` holds pure theme tokens, metadata and icons consumed by
+  Desktop.
 
 ## Runtime surface
 
@@ -83,7 +86,7 @@ Each release publishes three Desktop artifacts and no suite archive: a Windows
 NSIS `setup.exe` (first install and in-app update), a macOS `.dmg` (first
 install) and a macOS `.zip` (in-app update). The packaged app carries the
 single-file CLI, a Node runtime and the daemon bundle (`daemon/daemon.mjs` plus
-only its native and DSH runtime dependencies) under its Resources, so
+only its native runtime dependencies) under its Resources, so
 no system Node or pnpm is needed. Desktop itself performs updates: it reads the
 channel feed on the `updates` branch, verifies the artifact SHA-256 and applies
 it (`setup.exe /S` on Windows, a verified zip swap on macOS). There is no SEA

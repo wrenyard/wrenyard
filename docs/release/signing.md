@@ -1,8 +1,8 @@
 # Signing
 
 Wrenyard is one public product in one monorepo; the CLI, daemon, and Desktop are
-its three program entry points, and the Pet module plus the DSH shell are
-internal parts of Desktop. Two signing levels are supported:
+its three program entry points, and all components ship inside the Desktop app.
+Two signing levels are supported:
 local/CI preview signing and trusted release signing. No certificates,
 private keys, or personal identifiers are ever committed to the repository,
 and no user-specific paths or secrets appear in signing configuration.
@@ -12,8 +12,8 @@ and no user-specific paths or secrets appear in signing configuration.
 Preview artifacts are signed to prove integrity and buildability, not
 publisher identity.
 
-- macOS: Node SEA artifacts and Desktop `.app` bundles are re-signed ad-hoc
-  with `codesign --sign -` and then verified with `codesign --verify`.
+- macOS: Desktop `.app` bundles are re-signed ad-hoc with `codesign --sign -`
+  and then verified with `codesign --verify`.
 - Windows: unsigned by default; artifacts are signed only when signtool
   credentials are available (see below).
 
@@ -33,23 +33,31 @@ never runs in this repository today.
 
 ## Bundled Node runtime
 
-The suite zip ships a pinned current-platform Node runtime (`runtime/node` on
-POSIX, `runtime/node.exe` on Windows) taken from the exact `node@24.19.0` build
-dependency. It is covered by the feed's SHA-256 digest and the third-party
-notices, but it is signed only by the upstream Node.js project where
-applicable; no trusted signature is claimed on the bundled copy. Applying
-trusted platform signing/notarization to every executable in the suite —
+The Desktop app ships a pinned current-platform Node runtime (`runtime/node` on
+POSIX, `runtime/node.exe` on Windows) under its resources, taken from the exact
+`node@24.19.0` build dependency. It is covered by the feed's SHA-256 digest and
+the third-party notices, but it is signed only by the upstream Node.js project
+where applicable; no trusted signature is claimed on the bundled copy. Applying
+trusted platform signing/notarization to each executable in the Desktop app —
 including the bundled Node runtime — remains an external release credential
 step that never runs in this repository.
 
 ## Unified release, state, and paths
 
 Release artifacts, local state, and install paths are consolidated under the
-unified `wrenyard` identity. Each maintained target publishes two archives
-(the suite zip and the Desktop zip); the `updates` branch carries the static
-update feed and the two bootstrap scripts. Legacy release/state paths and
-legacy compatibility commands are not part of the public contract and are not
-documented for consumers.
+unified `wrenyard` identity. Each release publishes exactly three Desktop
+artifacts:
+
+- `wrenyard-desktop-<v>-win32-x64-setup.exe` — Windows first install and
+  in-app update
+- `wrenyard-desktop-<v>-darwin-arm64.dmg` — macOS first install
+- `wrenyard-desktop-<v>-darwin-arm64.zip` — macOS in-app update
+
+The CLI, Node runtime and daemon bundle ship inside the Desktop app resources,
+so there is no suite archive, install engine or bootstrap script. The `updates`
+branch carries `dev.json` and `versions/<v>.json` only. Legacy release/state
+paths and legacy compatibility commands are not part of the public contract and
+are not documented for consumers.
 
 ## Guarantees
 
