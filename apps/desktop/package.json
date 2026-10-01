@@ -13,7 +13,7 @@
     "build": "node tools/clean-dist.mjs && electron-vite build",
     "dev": "electron-vite dev --watch",
     "test": "node tools/pet/renderer-cleanup-scan.mjs && node --test tools/convert-settings.test.mjs && tsx --test test/*.test.ts && vitest run",
-    "icon": "node tools/render-app-icon.mjs",
+    "icon": "electron tools/render-theme-icons.mjs",
     "pet:preview:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb tools/pet/scripts/preview-capture.mjs",
     "pet:taskgraph:capture": "electron --force-device-scale-factor=1 --force-color-profile=srgb tools/pet/scripts/taskgraph-e2e-capture.mjs",
     "convert:settings": "node tools/convert-settings.mjs"
