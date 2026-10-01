@@ -64,6 +64,7 @@ export function SessionPage() {
   const [tab, setTab] = useState('detail');
   const [retry, setRetry] = useState<{ text: string; nonce: number } | undefined>(undefined);
   const sidebarPanel = usePanelRef();
+  const inspectorPanel = usePanelRef();
 
   // Panel collapse animates at `slow`; while a resize handle is dragged the
   // transition is suspended so dragging stays instant (foundation §2.3).
@@ -131,8 +132,9 @@ export function SessionPage() {
     setInspectorOpen(true);
   }, []);
 
-  const panelIds = inspectorOpen ? ['sidebar', 'main', 'inspector'] : ['sidebar', 'main'];
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: LAYOUT_ID, panelIds, storage: localStorage });
+  // The inspector is always mounted so the group keeps a single, stable
+  // layout; without `panelIds` one persisted layout is shared across toggles.
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: LAYOUT_ID, storage: localStorage });
 
   // Keep the controlled sidebar state and the collapsible panel in sync.
   useEffect(() => {
@@ -141,6 +143,15 @@ export function SessionPage() {
     if (sidebarOpen) panel.expand();
     else panel.collapse();
   }, [sidebarOpen, sidebarPanel]);
+
+  // Keep the controlled inspector state and its always-mounted collapsible
+  // panel in sync, mirroring the sidebar above.
+  useEffect(() => {
+    const panel = inspectorPanel.current;
+    if (!panel) return;
+    if (inspectorOpen) panel.expand();
+    else panel.collapse();
+  }, [inspectorOpen, inspectorPanel]);
 
   // Register the session list as this page's secondary sidebar. The shell
   // title bar and the global Cmd/Ctrl+B command toggle it while this page is
@@ -344,7 +355,11 @@ export function SessionPage() {
               className="w-1.5 bg-transparent after:w-px after:bg-border"
               onPointerDown={() => setResizing(true)}
             />
-            <ResizablePanel id="main" className={cn('relative flex min-h-0 flex-col', panelMotion)}>
+            <ResizablePanel
+              id="main"
+              minSize={360}
+              className={cn('relative flex min-h-0 flex-col', panelMotion)}
+            >
               {empty ? (
                 <EmptySession>
                   {errorAlert}
@@ -387,25 +402,31 @@ export function SessionPage() {
                 </>
               )}
             </ResizablePanel>
-            {inspectorOpen && (
-              <>
-                <ResizableHandle
-                  className="w-1.5 bg-transparent after:w-px after:bg-border"
-                  onPointerDown={() => setResizing(true)}
-                />
-                <ResizablePanel id="inspector" defaultSize={400} minSize={320} className={cn('min-h-0', panelMotion)}>
-                  <Inspector
-                    model={model}
-                    events={state.events}
-                    target={target}
-                    tab={tab}
-                    onTabChange={setTab}
-                    onSelect={inspect}
-                    onClose={() => setInspectorOpen(false)}
-                  />
-                </ResizablePanel>
-              </>
-            )}
+            <ResizableHandle
+              className={cn('w-1.5 bg-transparent after:w-px after:bg-border', !inspectorOpen && 'hidden')}
+              onPointerDown={() => setResizing(true)}
+            />
+            <ResizablePanel
+              id="inspector"
+              defaultSize={400}
+              minSize={320}
+              collapsible
+              collapsedSize={0}
+              groupResizeBehavior="preserve-pixel-size"
+              panelRef={inspectorPanel}
+              className={cn('min-h-0', panelMotion)}
+              onResize={(size) => setInspectorOpen(size.inPixels > 0)}
+            >
+              <Inspector
+                model={model}
+                events={state.events}
+                target={target}
+                tab={tab}
+                onTabChange={setTab}
+                onSelect={inspect}
+                onClose={() => setInspectorOpen(false)}
+              />
+            </ResizablePanel>
           </ResizablePanelGroup>
         </SidebarProvider>
         <SessionSearch
