@@ -1,0 +1,323 @@
+import { getEncoding, type Tiktoken } from 'js-tiktoken';
+import type {
+  ContextInspection,
+  ContextItem,
+  ContextItemKind,
+  ContextLayerId,
+  QuotaSnapshot,
+} from '@/shell-contract';
+import type { CallModel } from './types.js';
+
+/**
+ * Pure usage-meter projections for the session page. No React, DOM, bridge or
+ * window access lives here: the ring, the usage panel and the inspector context
+ * tab render exactly what these functions derive from a `ContextInspection`,
+ * the loaded call models and a quota snapshot.
+ *
+ * The main reasoning view is forward-looking (context ledger spec): the meter
+ * answers "how large will the *next* reasoning view be", not "how large was
+ * the last request". Layer totals are authoritative for the total; individual
+ * items only drive ordering and the composition breakdown (usage spec 3.1).
+ */
+
+/** A turn may issue at most this many expensive (reason) requests (ledger spec). */
+export const MAX_REASON_CALLS_PER_TURN = 10;
+
+/** Composition groups shown in the usage panel, in fixed display order. */
+export type UsageGroupId =
+  | 'resident'
+  | 'workspace'
+  | 'conversation'
+  | 'material'
+  | 'task'
+  | 'runtime'
+  | 'input';
+
+export interface UsageGroupView {
+  id: UsageGroupId;
+  label: string;
+  tokens: number;
+  /** CSS custom property, e.g. `var(--chart-1)`. */
+  color: string;
+}
+
+/** Fixed colour per group so the legend stays stable as groups appear. */
+const GROUP_COLOR: Record<UsageGroupId, string> = {
+  resident: 'var(--chart-1)',
+  workspace: 'var(--chart-2)',
+  conversation: 'var(--chart-3)',
+  material: 'var(--chart-4)',
+  task: 'var(--chart-5)',
+  runtime: 'var(--chart-1)',
+  input: 'var(--chart-2)',
+};
+
+const GROUP_LABEL: Record<UsageGroupId, string> = {
+  resident: '常驻',
+  workspace: '工作区快照',
+  conversation: '对话',
+  material: '资料',
+  task: '任务结果',
+  runtime: '运行信息',
+  input: '本次输入',
+};
+
+const RESIDENT_LAYERS: readonly ContextLayerId[] = ['wy-system', 'wy-global', 'wy-role'];
+const CONVERSATION_KINDS: readonly ContextItemKind[] = ['user', 'assistant', 'reply', 'interrupt'];
+const MATERIAL_KINDS: readonly ContextItemKind[] = ['doc', 'memory'];
+const TASK_KINDS: readonly ContextItemKind[] = ['action-result', 'ws-update'];
+
+export interface ContextBudgetView {
+  /** Layer total plus the text currently in the input box. */
+  total: number;
+  /** Model context window; absent when the model declares none. */
+  window: number | undefined;
+  /** Reserved output allowance; absent when the model declares none. */
+  reserved: number | undefined;
+  /** `window - reserved`, the available input budget; absent when either is unknown. */
+  available: number | undefined;
+  /** `total / available`, undefined when the budget cannot be computed. */
+  ratio: number | undefined;
+  /** True only when both window and reserved are known and the total exceeds the budget. */
+  exceeded: boolean;
+}
+
+/** Forward-looking context budget: the ring's ratio and the send-blocking flag. */
+export function contextBudget(inspection: ContextInspection, inputTokens = 0): ContextBudgetView {
+  const total = inspection.totalTokens + Math.max(0, inputTokens);
+  const contextWindow = inspection.model.contextWindow;
+  const reserved = inspection.model.maxOutputTokens;
+  const available = contextWindow !== undefined && reserved !== undefined
+    ? Math.max(0, contextWindow - reserved)
+    : undefined;
+  const ratio = available !== undefined && available > 0 ? total / available : undefined;
+  return {
+    total,
+    window: contextWindow,
+    reserved,
+    available,
+    ratio,
+    exceeded: available !== undefined && total > available,
+  };
+}
+
+function layerTokens(inspection: ContextInspection, ids: readonly ContextLayerId[]): number {
+  let total = 0;
+  for (const layer of inspection.layers) {
+    if (ids.includes(layer.id)) total += layer.tokens;
+  }
+  return total;
+}
+
+function itemTokens(items: readonly ContextItem[], kinds: readonly ContextItemKind[]): number {
+  let total = 0;
+  for (const item of items) {
+    if (kinds.includes(item.kind)) total += item.tokens;
+  }
+  return total;
+}
+
+/**
+ * User-facing composition groups (usage spec 5.2). Layers and event kinds are
+ * merged into groups that read as sources, not implementation detail. A group
+ * with no tokens is omitted, except that the transient input group only
+ * appears once something is typed.
+ */
+export function usageGroups(inspection: ContextInspection, inputTokens = 0): UsageGroupView[] {
+  const values: Array<{ id: UsageGroupId; tokens: number }> = [
+    { id: 'resident', tokens: layerTokens(inspection, RESIDENT_LAYERS) },
+    { id: 'workspace', tokens: layerTokens(inspection, ['wy-workspace']) },
+    { id: 'conversation', tokens: itemTokens(inspection.items, CONVERSATION_KINDS) },
+    { id: 'material', tokens: itemTokens(inspection.items, MATERIAL_KINDS) },
+    { id: 'task', tokens: itemTokens(inspection.items, TASK_KINDS) },
+    { id: 'runtime', tokens: layerTokens(inspection, ['wy-info']) },
+    { id: 'input', tokens: Math.max(0, inputTokens) },
+  ];
+  return values
+    .filter((entry) => entry.tokens > 0)
+    .map((entry) => ({ id: entry.id, label: GROUP_LABEL[entry.id], tokens: entry.tokens, color: GROUP_COLOR[entry.id] }));
+}
+
+/**
+ * Cache-hit ratio of the most recent main-reasoning call that reported usage:
+ * `cachedInput / input`. Returns undefined when no such call exists so the UI
+ * never fabricates a hit rate.
+ */
+export function recentCacheRatio(calls: readonly CallModel[]): number | undefined {
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const call = calls[index]!;
+    if (call.role !== 'reason' || call.usage === undefined) continue;
+    const input = call.usage.input;
+    if (typeof input !== 'number' || input <= 0) continue;
+    const cached = call.usage.cachedInput ?? 0;
+    return Math.max(0, Math.min(1, cached / input));
+  }
+  return undefined;
+}
+
+type Pricing = readonly [number, number, number];
+
+interface ModelPricing {
+  pricing: Pricing;
+  free: boolean;
+}
+
+/**
+ * Catalog price for a gateway public id (`provider/model`, ledger spec).
+ * Providers expose `[cached, input, output]` USD per million tokens. A model
+ * without a catalog row has unknown price.
+ */
+function pricingFor(publicId: string, quota: QuotaSnapshot | null | undefined): ModelPricing | undefined {
+  const separator = publicId.indexOf('/');
+  if (separator <= 0 || separator === publicId.length - 1) return undefined;
+  const providerId = publicId.slice(0, separator);
+  const modelId = publicId.slice(separator + 1);
+  const entry = quota?.catalog?.find((catalog) => catalog.id === providerId);
+  const model = entry?.models?.find((candidate) => candidate.id === modelId || candidate.canonicalId === modelId);
+  if (!model) return undefined;
+  const pricing = model.pricing;
+  if (!pricing || pricing.length !== 3 || !pricing.every((value) => Number.isFinite(value))) return undefined;
+  return { pricing, free: model.free === true };
+}
+
+function costOf(pricing: ModelPricing, input: number, cachedInput: number, output: number): number {
+  // Reasoning tokens are already inside `output`; adding them again would
+  // double-charge. A free model is exactly zero, never undefined.
+  if (pricing.free) return 0;
+  const freshInput = Math.max(0, input - cachedInput);
+  const [cachedPrice, inputPrice, outputPrice] = pricing.pricing;
+  return (freshInput * inputPrice + cachedInput * cachedPrice + output * outputPrice) / 1_000_000;
+}
+
+/**
+ * Cost of one call in USD from `usage` and the catalog price, or undefined when
+ * the price is unknown (never substituted with zero). Free models cost 0.
+ */
+export function callCost(call: CallModel, quota: QuotaSnapshot | null | undefined): number | undefined {
+  if (call.usage === undefined) return undefined;
+  const pricing = pricingFor(call.model, quota);
+  if (pricing === undefined) return undefined;
+  return costOf(pricing, call.usage.input ?? 0, call.usage.cachedInput ?? 0, call.usage.output ?? 0);
+}
+
+export interface TurnGrowth {
+  turn: number;
+  /** Tokens added by this turn. */
+  tokens: number;
+  /** Running total through this turn. */
+  cumulative: number;
+}
+
+/** Per-turn token growth from the inspection items, ordered oldest-first. */
+export function growthByTurn(items: readonly ContextItem[]): TurnGrowth[] {
+  const perTurn = new Map<number, number>();
+  for (const item of items) {
+    perTurn.set(item.turn, (perTurn.get(item.turn) ?? 0) + item.tokens);
+  }
+  const turns = [...perTurn.keys()].sort((left, right) => left - right);
+  let cumulative = 0;
+  return turns.map((turn) => {
+    const tokens = perTurn.get(turn) ?? 0;
+    cumulative += tokens;
+    return { turn, tokens, cumulative };
+  });
+}
+
+export interface RemainingTurnsView {
+  /** Estimated full turns left at the recent average growth. */
+  turns: number;
+  /** True while fewer than five ended turns back the estimate. */
+  warn: boolean;
+}
+
+/**
+ * Remaining-turn estimate from the recent average growth (usage spec 5.1).
+ * Requires at least three turns of data; fewer than five marks the estimate as
+ * low-confidence. Returns null when the estimate would be meaningless.
+ */
+export function remainingTurns(growth: readonly TurnGrowth[], remainingTokens: number): RemainingTurnsView | null {
+  if (remainingTokens <= 0) return null;
+  const recent = growth.slice(-5);
+  if (recent.length < 3) return null;
+  const average = recent.reduce((sum, entry) => sum + entry.tokens, 0) / recent.length;
+  if (!Number.isFinite(average) || average <= 0) return null;
+  return { turns: Math.floor(remainingTokens / average), warn: recent.length < 5 };
+}
+
+export interface ModelPreviewInput {
+  publicId: string;
+  displayName: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+}
+
+export interface ModelPreviewRow {
+  publicId: string;
+  displayName: string;
+  contextWindow: number | undefined;
+  /** `contextWindow - maxOutputTokens`; absent when either is unknown. */
+  available: number | undefined;
+  /** Current context at this model's available window. */
+  ratio: number | undefined;
+  exceeded: boolean;
+  /** Estimated cost of the next reasoning input in USD; undefined when unknown. */
+  inputCost: number | undefined;
+}
+
+/**
+ * Switching-model preview (usage spec 7): how the current context behaves under
+ * every selectable model. The token count is model-independent; calibration is
+ * deliberately not applied here. Cache-hit ratio from the last reasoning call
+ * estimates the cached share of the next input.
+ */
+export function modelPreviews(
+  models: readonly ModelPreviewInput[],
+  totalTokens: number,
+  cacheRatio: number | undefined,
+  quota: QuotaSnapshot | null | undefined,
+): ModelPreviewRow[] {
+  return models.map((model) => {
+    const available = model.contextWindow !== undefined && model.maxOutputTokens !== undefined
+      ? Math.max(0, model.contextWindow - model.maxOutputTokens)
+      : undefined;
+    const pricing = pricingFor(model.publicId, quota);
+    const ratio = available !== undefined && available > 0 ? totalTokens / available : undefined;
+    const cached = cacheRatio === undefined ? 0 : totalTokens * Math.max(0, Math.min(1, cacheRatio));
+    return {
+      publicId: model.publicId,
+      displayName: model.displayName,
+      contextWindow: model.contextWindow,
+      available,
+      ratio,
+      exceeded: available !== undefined && totalTokens > available,
+      inputCost: pricing === undefined ? undefined : costOf(pricing, totalTokens, cached, 0),
+    };
+  });
+}
+
+/** Three significant figures with a k / M suffix (`182k`, `968k`, `1.08M`). */
+export function formatTokenCount(tokens: number | undefined): string {
+  if (tokens === undefined || !Number.isFinite(tokens)) return '—';
+  const magnitude = Math.abs(tokens);
+  if (magnitude < 1_000) return String(Math.round(tokens));
+  if (magnitude < 1_000_000) return `${significant(tokens / 1_000)}k`;
+  return `${significant(tokens / 1_000_000)}M`;
+}
+
+function significant(value: number): number {
+  return Number(value.toPrecision(3));
+}
+
+/** Exact grouped integer for hover tooltips. */
+export function formatExactTokens(tokens: number): string {
+  return Math.round(tokens).toLocaleString();
+}
+
+let inputEncoder: Tiktoken | undefined;
+
+/** Shared raw input estimator; calibration is only a display hint. */
+export function countInputTokens(text: string): number {
+  if (text === '') return 0;
+  inputEncoder ??= getEncoding('cl100k_base');
+  return inputEncoder.encode(text).length;
+}

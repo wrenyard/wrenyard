@@ -1,8 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
+import { countInputTokens } from '../model/usage.js';
 import { EffortPicker, ModelPicker, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
 import type { ModelEntry, TurnModel } from '../model/types.js';
 import { clearDraft, flushDraft, readDraft, writeDraft } from '../state/drafts.js';
+import { onSessionModelRequest, publishComposerState } from '../state/usage-selection.js';
+import { ContextMeter } from './usage/ContextMeter.js';
+
+/** Input text is token-counted 300ms after typing stops (usage spec 3.3). */
+const INPUT_TOKEN_DEBOUNCE_MS = 300;
+
+/**
+ * Debounced `cl100k_base` count of the composer text, including a paste. The
+ * first count is `undefined`; the meter treats that as zero so the base ring
+ * shows immediately.
+ */
+function useInputTokenCount(text: string): number | undefined {
+  const [tokens, setTokens] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        setTokens(countInputTokens(text));
+      } catch {
+        // Token counting is best-effort; the meter falls back to zero.
+      }
+    }, INPUT_TOKEN_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [text]);
+  return tokens;
+}
 
 const LAST_SENT_KEY = 'session:last-sent';
 
@@ -46,6 +72,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const [modelId, setModelId] = useState('');
   const [effort, setEffort] = useState('');
   const [sending, setSending] = useState(false);
+  const [exceeded, setExceeded] = useState(false);
+  const inputTokens = useInputTokenCount(text);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
@@ -78,6 +106,19 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     textareaRef.current?.focus();
   }, [injectedText?.nonce]);
 
+  // Publish the destination model and text so the usage meter (and the
+  // inspector's model list) read the composer's current selection.
+  useEffect(() => {
+    publishComposerState({ sessionKey, modelId, inputText: text });
+  }, [sessionKey, modelId, text]);
+
+  // The inspector's "use this model" action requests a switch for the active
+  // session only; a request for another session is ignored.
+  useEffect(() => onSessionModelRequest((request) => {
+    if (request.sessionKey !== sessionKey) return;
+    setModelId(request.modelId);
+  }), [sessionKey]);
+
   const selected = models.find((entry) => entry.publicId === modelId);
   const options: ModelOption[] = models.map((entry) => ({
     value: entry.publicId,
@@ -92,7 +133,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
 
   const submit = (): void => {
     const body = text.trim();
-    if (body === '' || !selected || sending || disabled) return;
+    if (body === '' || !selected || sending || disabled || exceeded) return;
     const originKey = sessionKey;
     const bodyText = text;
     setSending(true);
@@ -122,7 +163,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       onValueChange={handleChange}
       onSubmit={submit}
       disabled={disabled || !selected}
-      submitDisabled={sending}
+      submitDisabled={sending || exceeded}
       textareaRef={textareaRef}
       placeholder="输入消息，可随时发起新的并行轮次"
       toolbar={
@@ -130,6 +171,14 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
           <ModelPicker models={options} value={modelId} onChange={setModelId} disabled={models.length === 0} />
           <EffortPicker levels={selected?.thinkingLevels ?? []} value={effort} onChange={setEffort} />
         </>
+      }
+      toolbarTrailing={
+        <ContextMeter
+          sessionKey={sessionKey}
+          modelId={modelId}
+          {...(inputTokens === undefined ? {} : { inputTokens })}
+          onBudgetChange={setExceeded}
+        />
       }
     />
   );
