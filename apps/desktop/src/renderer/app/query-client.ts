@@ -1,5 +1,10 @@
 import { QueryClient } from '@tanstack/react-query';
-import { onDaemonChanged, onQuotaChanged, onUpdateChanged } from '@/renderer/lib/desktop';
+import {
+  onDaemonChanged,
+  onNotificationsChanged,
+  onQuotaChanged,
+  onUpdateChanged,
+} from '@/renderer/lib/desktop';
 
 /**
  * Single renderer query client. Queries retry once and refetch when the window
@@ -27,4 +32,8 @@ onDaemonChanged(() => {
   void queryClient.invalidateQueries({ queryKey: ['daemon'] });
   // Settings are daemon-owned, so a daemon change also refreshes them.
   void queryClient.invalidateQueries({ queryKey: ['shell', 'settings'] });
+});
+
+onNotificationsChanged(() => {
+  void queryClient.invalidateQueries({ queryKey: ['notifications'] });
 });

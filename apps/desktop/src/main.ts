@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, powerMonitor, screen, session, type MessageBoxOptions } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification as ElectronNotification, powerMonitor, screen, session, type MessageBoxOptions } from 'electron';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
@@ -20,6 +20,7 @@ import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.
 import { readStatsSnapshot } from './stats-snapshot.js';
 import { SHELL_CHANNELS, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
+import { NotificationCenter, type NotificationInput, type ShellNotification } from './main/notification-center.js';
 import { DesktopUpdateController } from './updater/controller.js';
 import { DesktopDaemonSupervisor } from './daemon-supervisor.js';
 import { probeWrenyard as probeDaemon } from './daemon-health.js';
@@ -218,6 +219,10 @@ async function refreshQuotaProjectionAfterGatewayRestart(): Promise<void> {
 /** Session IPC relay; null until bootstrap registers it. */
 let sessionRegistration: SessionRegistration | null = null;
 let shellWindow: ShellWindowController | null = null;
+/** The single Desktop notification owner; created during bootstrap. */
+let notificationCenter: NotificationCenter | null = null;
+/** Live settings store, mirrored for notification preference reads. */
+let desktopSettingsStore: DesktopSettingsStore | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
 let desktopSubscriptions: DaemonSubscriptions | null = null;
@@ -266,6 +271,76 @@ function notifyDaemonChanged(): void {
   if (shellWindow && !shellWindow.window.isDestroyed()) {
     shellWindow.window.webContents.send(SHELL_CHANNELS.daemonChanged);
   }
+}
+
+/**
+ * OS notification for a background-worthy event. Clicking it focuses the main
+ * window and delivers the event's command action to the renderer, which owns
+ * the command table.
+ */
+function showSystemNotification(notification: ShellNotification): void {
+  if (!ElectronNotification.isSupported()) return;
+  const native = new ElectronNotification({
+    title: notification.title,
+    body: notification.description ?? '',
+    silent: !(desktopSettingsStore?.load().notifications.sound ?? true),
+  });
+  native.on('click', () => {
+    showDesktop();
+    const command = notification.action?.command;
+    if (command) shellWindow?.deliverCommandAction(command);
+  });
+  native.show();
+}
+
+/** An available update feeds the notification center once per version. */
+function notifyUpdateAvailable(): void {
+  if (notificationCenter === null || desktopSettingsStore === null) return;
+  const snapshot = updateController?.snapshot();
+  if (!snapshot || snapshot.state !== 'available') return;
+  if (!desktopSettingsStore.load().notifications.events.updateAvailable) return;
+  notificationCenter.push({
+    id: 'update-available',
+    level: 'info',
+    source: 'update',
+    title: '有可用更新',
+    ...(snapshot.availableVersion !== undefined ? { description: `新版本 ${snapshot.availableVersion} 已可用` } : {}),
+    action: { label: '查看', command: { id: 'settings.open', args: 'update' } },
+  });
+}
+
+/** A daemon drop feeds the center; recovery clears the stale disconnect. */
+let lastDaemonState: DaemonLifecycleSnapshot['state'] | undefined;
+function notifyDaemonStateChanged(snapshot: DaemonLifecycleSnapshot): void {
+  const previous = lastDaemonState;
+  lastDaemonState = snapshot.state;
+  if (notificationCenter === null || desktopSettingsStore === null) return;
+  if (snapshot.state === 'running') {
+    notificationCenter.dismiss('daemon-disconnected');
+    return;
+  }
+  if (previous !== 'running') return;
+  if (!desktopSettingsStore.load().notifications.events.daemonDisconnected) return;
+  notificationCenter.push({
+    id: 'daemon-disconnected',
+    level: 'warning',
+    source: 'daemon',
+    title: 'Daemon 已断开',
+    ...(snapshot.message !== undefined ? { description: snapshot.message } : {}),
+  });
+}
+
+/** Preference gate for task events the Pet module reports. */
+function petNotificationSink(input: NotificationInput): void {
+  if (notificationCenter === null || desktopSettingsStore === null) return;
+  const events = desktopSettingsStore.load().notifications.events;
+  const enabled = input.level === 'success'
+    ? events.taskCompleted
+    : input.level === 'error'
+      ? events.taskFailed
+      : true;
+  if (!enabled) return;
+  notificationCenter.push(input);
 }
 
 /** Final teardown shared by every exit path; the daemon stop already happened. */
@@ -624,7 +699,10 @@ async function bootstrap(): Promise<void> {
       blockQuitSurfaces();
       quitController?.requestQuit({ bypassDrain: true });
     },
-    onChanged: () => shellWindow?.notifyUpdateChanged(),
+    onChanged: () => {
+      shellWindow?.notifyUpdateChanged();
+      notifyUpdateAvailable();
+    },
     sourceDevelopment: !app.isPackaged,
   });
   // macOS DMG-in-place and AppTranslocation runs are blocked before any window
@@ -667,6 +745,7 @@ async function bootstrap(): Promise<void> {
     onChanged: (snapshot) => {
       reconcileDaemonConnection(snapshot.state === 'running');
       notifyDaemonChanged();
+      notifyDaemonStateChanged(snapshot);
       void finalizeWhenHealthy();
     },
   });
@@ -752,6 +831,19 @@ async function bootstrap(): Promise<void> {
     onChanged: (appearance) => shellWindow?.notifyAppearanceChanged(appearance),
   });
   appearanceController.init();
+  desktopSettingsStore = settingsStore;
+  // One notification owner for the whole process. Main-origin (update, daemon,
+  // Pet task) and renderer-originated events all land here; the center decides
+  // history, foreground toasts and OS notifications, so nothing fires twice.
+  notificationCenter = new NotificationCenter({
+    onChanged: () => shellWindow?.notifyNotificationsChanged(),
+    isForeground: () => Boolean(
+      shellWindow && !shellWindow.window.isDestroyed() && shellWindow.window.isFocused(),
+    ),
+    isSystemEnabled: () => settingsStore.load().notifications.system,
+    onSystemNotification: (notification) => showSystemNotification(notification),
+    doNotDisturb: loadedSettings?.notifications.doNotDisturb ?? false,
+  });
   // One shared daemon transport and subscription set for the whole Desktop
   // process. The shell window, tray and Pet all consume the same rounds; the
   // Pet never opens its own connection or timer.
@@ -792,6 +884,7 @@ async function bootstrap(): Promise<void> {
       preloadDir: petAssets.preloadDir,
       subscriptions: desktopSubscriptions!,
       onConfigChange,
+      onNotification: petNotificationSink,
       debugRenderer: process.env.PET_DEBUG === '1' || process.env.PET_DEBUG === 'true',
     }),
     listDisplays: () => screen.getAllDisplays().map((display, index) => ({
@@ -941,6 +1034,16 @@ async function bootstrap(): Promise<void> {
     execGet: (id: string) => execGet(id),
     execEvents: (request: ExecEventsRequest) => execEvents(request),
     execCancel: (id: string) => execCancel(id),
+    getNotifications: async () => notificationCenter!.snapshot(),
+    notify: async (input: NotificationInput) => notificationCenter!.push(input),
+    dismissNotification: async (id: string) => { notificationCenter?.dismiss(id); },
+    clearNotifications: async () => { notificationCenter?.clear(); },
+    markNotificationsRead: async () => { notificationCenter?.markAllRead(); },
+    setDoNotDisturb: async (value: boolean) => {
+      settingsStore.patch('notifications', { ...settingsStore.load().notifications, doNotDisturb: value });
+      notificationCenter?.setDoNotDisturb(value);
+      return notificationCenter!.snapshot();
+    },
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,

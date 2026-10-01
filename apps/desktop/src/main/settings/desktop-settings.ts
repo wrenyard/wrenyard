@@ -54,6 +54,31 @@ export interface ProviderDisplaySettings {
   providers: QuotaProviderEntry[];
 }
 
+/**
+ * Per-event notification toggles. Each key gates one event family emitted by
+ * the main process or the Pet module; a disabled family is never recorded nor
+ * surfaced. Field names are the persisted contract, so they stay stable.
+ */
+export interface NotificationEventPreferences {
+  taskCompleted: boolean;
+  taskFailed: boolean;
+  sessionReplyCompleted: boolean;
+  quotaWarning: boolean;
+  updateAvailable: boolean;
+  daemonDisconnected: boolean;
+}
+
+/** Desktop notification preferences, including the runtime do-not-disturb flag. */
+export interface NotificationPreferences {
+  /** Whether OS-level notifications are enabled at all. */
+  system: boolean;
+  /** Whether OS notifications play a sound. */
+  sound: boolean;
+  /** Do-not-disturb: history only, except error-level notifications. */
+  doNotDisturb: boolean;
+  events: NotificationEventPreferences;
+}
+
 /** Desktop UI preference for the Pet module, distinct from its runtime state. */
 export interface PetSettings {
   /** User intent: whether the Pet is shown. Distinct from runtime disposal. */
@@ -78,6 +103,7 @@ export interface DesktopSettings {
   pet: PetSettings;
   /** Shared appearance preferences, owned by the main process. */
   appearance: AppearanceSettings;
+  notifications: NotificationPreferences;
 }
 
 /**
@@ -124,6 +150,19 @@ export function defaultDesktopSettings(): DesktopSettings {
       bottomOffset: 0,
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
+    },
+    notifications: {
+      system: true,
+      sound: true,
+      doNotDisturb: false,
+      events: {
+        taskCompleted: true,
+        taskFailed: true,
+        sessionReplyCompleted: true,
+        quotaWarning: true,
+        updateAvailable: true,
+        daemonDisconnected: true,
+      },
     },
   };
 }
@@ -251,6 +290,7 @@ export function normalizeDesktopSettings(parsed: unknown): DesktopSettings {
     providers: normalizeProviderDisplaySettings(obj.providers, defaults.providers),
     appearance: normalizeAppearanceSettings(obj.appearance, defaults.appearance),
     pet: normalizePetSettings(obj.pet, defaults.pet),
+    notifications: normalizeNotificationPreferences(obj.notifications, defaults.notifications),
   };
 }
 
@@ -340,6 +380,29 @@ function normalizePetSettings(value: unknown, fallback: PetSettings): PetSetting
   return result;
 }
 
+function normalizeNotificationPreferences(
+  value: unknown,
+  fallback: NotificationPreferences,
+): NotificationPreferences {
+  const obj = isRecord(value) ? value : {};
+  const events = isRecord(obj.events) ? obj.events : {};
+  const bool = (raw: unknown, fallbackValue: boolean): boolean =>
+    typeof raw === 'boolean' ? raw : fallbackValue;
+  return {
+    system: bool(obj.system, fallback.system),
+    sound: bool(obj.sound, fallback.sound),
+    doNotDisturb: bool(obj.doNotDisturb, fallback.doNotDisturb),
+    events: {
+      taskCompleted: bool(events.taskCompleted, fallback.events.taskCompleted),
+      taskFailed: bool(events.taskFailed, fallback.events.taskFailed),
+      sessionReplyCompleted: bool(events.sessionReplyCompleted, fallback.events.sessionReplyCompleted),
+      quotaWarning: bool(events.quotaWarning, fallback.events.quotaWarning),
+      updateAvailable: bool(events.updateAvailable, fallback.events.updateAvailable),
+      daemonDisconnected: bool(events.daemonDisconnected, fallback.events.daemonDisconnected),
+    },
+  };
+}
+
 function rangeNumber(value: unknown, fallback: number, min: number, max: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   if (value < min || value > max) return fallback;
@@ -372,6 +435,10 @@ function cloneSettings(settings: DesktopSettings): DesktopSettings {
       entities: { ...settings.pet.entities },
       appearance: { ...settings.pet.appearance },
       ...(settings.pet.layout ? { layout: { ...settings.pet.layout } } : {}),
+    },
+    notifications: {
+      ...settings.notifications,
+      events: { ...settings.notifications.events },
     },
   };
 }
