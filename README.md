@@ -84,7 +84,10 @@ Two built-in themes — the warm **Paper** and the shadcn-style **Neutral** — 
 in light and dark, following the system or set by hand. Settings are searchable
 and laid out like an editor's settings page.
 
-![Themes](docs/images/themes.png)
+| Paper Light | Paper Dark |
+| --- | --- |
+| ![Paper Light](docs/images/themes.png) | ![Paper Dark](docs/images/session-paper-dark.png) |
+| ![Neutral Light](docs/images/session-neutral.png) | ![Neutral Dark](docs/images/session-neutral-dark.png) |
 
 ## Install
 
