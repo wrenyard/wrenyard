@@ -6,12 +6,14 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { BUILTIN_THEMES, DEFAULT_THEME_ID } from '@wrenyard/themes';
 import {
   normalizeConfig,
   type AppConfig,
   type QuotaProviderEntry,
 } from '../../pet/main/config';
 import type { EntityVisibilityConfig } from '../../pet/main/config';
+import type { AppearanceSettings } from '../../shell-contract.js';
 
 /**
  * Desktop-owned UI preference document. A single store in the Desktop main
@@ -74,6 +76,8 @@ export interface DesktopSettings {
   tray: TraySettings;
   providers: ProviderDisplaySettings;
   pet: PetSettings;
+  /** Shared appearance preferences, owned by the main process. */
+  appearance: AppearanceSettings;
 }
 
 /**
@@ -101,12 +105,18 @@ const DEFAULT_PROVIDER_IDS = [
   'super-grok',
 ];
 
+/** Appearance defaults used when the partition is absent or partially invalid. */
+export function defaultAppearanceSettings(): AppearanceSettings {
+  return { theme: DEFAULT_THEME_ID, colorMode: 'system', motion: 'system' };
+}
+
 export function defaultDesktopSettings(): DesktopSettings {
   return {
     version: DESKTOP_SETTINGS_VERSION,
     window: {},
     tray: {},
     providers: { providers: DEFAULT_PROVIDER_IDS.map((id) => ({ id, enabled: true })) },
+    appearance: defaultAppearanceSettings(),
     pet: {
       visible: true,
       scale: 3,
@@ -239,8 +249,22 @@ export function normalizeDesktopSettings(parsed: unknown): DesktopSettings {
     window: normalizeWindowSettings(obj.window),
     tray: normalizeTraySettings(obj.tray),
     providers: normalizeProviderDisplaySettings(obj.providers, defaults.providers),
+    appearance: normalizeAppearanceSettings(obj.appearance, defaults.appearance),
     pet: normalizePetSettings(obj.pet, defaults.pet),
   };
+}
+
+function normalizeAppearanceSettings(value: unknown, fallback: AppearanceSettings): AppearanceSettings {
+  const obj = isRecord(value) ? value : {};
+  const rawTheme = obj.theme;
+  const theme: AppearanceSettings['theme'] = typeof rawTheme === 'string' && BUILTIN_THEMES.some((entry) => entry.id === rawTheme)
+    ? (rawTheme as AppearanceSettings['theme'])
+    : fallback.theme;
+  const colorMode = obj.colorMode === 'light' || obj.colorMode === 'dark' || obj.colorMode === 'system'
+    ? obj.colorMode
+    : fallback.colorMode;
+  const motion = obj.motion === 'reduce' || obj.motion === 'system' ? obj.motion : fallback.motion;
+  return { theme, colorMode, motion };
 }
 
 function normalizeWindowSettings(value: unknown): WindowSettings {
@@ -342,6 +366,7 @@ function cloneSettings(settings: DesktopSettings): DesktopSettings {
     window: { ...settings.window },
     tray: { ...settings.tray },
     providers: { providers: settings.providers.providers.map((entry) => ({ ...entry })) },
+    appearance: { ...settings.appearance },
     pet: {
       ...settings.pet,
       entities: { ...settings.pet.entities },

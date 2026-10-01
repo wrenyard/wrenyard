@@ -8,14 +8,17 @@ import {
   type Input,
   type WebContents,
 } from 'electron';
+import { BUILTIN_THEMES } from '@wrenyard/themes';
 import type { PageLoader } from './pages.js';
 import {
   SHELL_CHANNELS,
   acceleratorPage,
   isShellPage,
   providerKeyPageUrl,
+  type AppearanceSettings,
   type StatsSnapshot,
   type QuotaSnapshot,
+  type ResolvedAppearance,
   type SettingsSnapshot,
   type PetCompanionSettings,
   type ShellPage,
@@ -46,7 +49,15 @@ export interface ShellWindowOptions {
   appVersion: string;
   smoke: boolean;
   icon?: string;
+  /** Resolved appearance at creation time: background, chrome palette and args. */
+  initialAppearance: ResolvedAppearance;
+  backgroundColor: string;
+  titleBarOverlay: { color: string; symbolColor: string };
+  additionalArguments: string[];
   onCreated?(controller: ShellWindowController): void;
+  getAppearance(): ResolvedAppearance;
+  getAppearanceSettings(): Promise<AppearanceSettings>;
+  setAppearance(settings: Partial<AppearanceSettings>): Promise<AppearanceSettings>;
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
@@ -118,6 +129,34 @@ function isBoundedString(value: unknown, max: number): value is string {
 
 function isBoundedRevision(value: unknown): value is string {
   return isBoundedString(value, RUNTIME_ALIAS_REVISION_MAX);
+}
+
+/**
+ * IPC-boundary validation for an appearance patch. Only the three known
+ * fields are accepted; the theme id is validated against the shared theme
+ * registry so Desktop never keeps its own theme list.
+ */
+function validateAppearancePatch(value: unknown): Partial<AppearanceSettings> {
+  if (!isBoundedPlainObject(value)) throw new Error('外观设置无效');
+  const patch: Partial<AppearanceSettings> = {};
+  const theme = value.theme;
+  if (theme !== undefined) {
+    if (typeof theme !== 'string' || !BUILTIN_THEMES.some((entry) => entry.id === theme)) {
+      throw new Error('主题无效');
+    }
+    patch.theme = theme as AppearanceSettings['theme'];
+  }
+  const colorMode = value.colorMode;
+  if (colorMode !== undefined) {
+    if (colorMode !== 'system' && colorMode !== 'light' && colorMode !== 'dark') throw new Error('颜色模式无效');
+    patch.colorMode = colorMode;
+  }
+  const motion = value.motion;
+  if (motion !== undefined) {
+    if (motion !== 'system' && motion !== 'reduce') throw new Error('动效设置无效');
+    patch.motion = motion;
+  }
+  return patch;
 }
 
 function validateExplicitReferenceValue(explicitReference: unknown): void {
@@ -390,8 +429,8 @@ export class ShellWindowController {
       minHeight: 520,
       show: false,
       title: formatShellWindowTitle('session', options.appVersion, !app.isPackaged),
-      backgroundColor: '#f7efd8',
-      ...platformWindowChrome(process.platform),
+      backgroundColor: options.backgroundColor,
+      ...platformWindowChrome(process.platform, options.titleBarOverlay),
       ...(options.icon ? { icon: options.icon } : {}),
       webPreferences: {
         preload: options.preloadPath,
@@ -399,6 +438,7 @@ export class ShellWindowController {
         nodeIntegration: false,
         sandbox: true,
         spellcheck: true,
+        additionalArguments: options.additionalArguments,
       },
     };
     const win = new BrowserWindow(windowOptions);
@@ -444,6 +484,12 @@ export class ShellWindowController {
     }
   }
 
+  notifyAppearanceChanged(appearance: ResolvedAppearance): void {
+    if (!this.window.webContents.isDestroyed()) {
+      this.window.webContents.send(SHELL_CHANNELS.appearanceChanged, appearance);
+    }
+  }
+
   private installIpc(options: ShellWindowOptions): void {
     const assertShellSender = (sender: WebContents): void => {
       if (sender.id !== this.window.webContents.id) throw new Error('Untrusted shell IPC sender');
@@ -453,6 +499,18 @@ export class ShellWindowController {
       assertShellSender(event.sender);
       if (!isShellPage(page)) throw new Error('Unsupported shell page');
       this.setPage(page);
+    });
+    ipcMain.handle(SHELL_CHANNELS.appearanceSnapshot, async (event) => {
+      assertShellSender(event.sender);
+      return options.getAppearance();
+    });
+    ipcMain.handle(SHELL_CHANNELS.appearanceSettingsSnapshot, async (event) => {
+      assertShellSender(event.sender);
+      return options.getAppearanceSettings();
+    });
+    ipcMain.handle(SHELL_CHANNELS.saveAppearance, async (event, settings: unknown) => {
+      assertShellSender(event.sender);
+      return options.setAppearance(validateAppearancePatch(settings));
     });
     ipcMain.handle(SHELL_CHANNELS.settingsSnapshot, async (event) => {
       assertShellSender(event.sender);
@@ -603,6 +661,9 @@ export class ShellWindowController {
   private removeIpcHandlers(): void {
     for (const channel of [
       SHELL_CHANNELS.navigate,
+      SHELL_CHANNELS.appearanceSnapshot,
+      SHELL_CHANNELS.appearanceSettingsSnapshot,
+      SHELL_CHANNELS.saveAppearance,
       SHELL_CHANNELS.settingsSnapshot,
       SHELL_CHANNELS.statsSnapshot,
       SHELL_CHANNELS.quotaSnapshot,

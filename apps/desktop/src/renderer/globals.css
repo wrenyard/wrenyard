@@ -643,6 +643,14 @@
   }
 }
 
+/* Added temporarily by the renderer while the theme changes: suppress every
+   transition for one frame so all elements change color in lockstep. */
+html[data-theme-switching] *,
+html[data-theme-switching] *::before,
+html[data-theme-switching] *::after {
+  transition: none !important;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -714,4 +722,11 @@
   html {
     @apply font-sans;
     }
+}
+
+/* Global backdrop tokens leave the CLI-generated primitives untouched. */
+:root [data-slot="dialog-overlay"],
+:root [data-slot="alert-dialog-overlay"],
+:root [data-slot="sheet-overlay"] {
+  background-color: var(--overlay);
 }

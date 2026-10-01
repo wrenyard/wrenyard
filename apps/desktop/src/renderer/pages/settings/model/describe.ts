@@ -1,5 +1,6 @@
 import type { StatusTone } from '@/renderer/components/status-badge';
 import type {
+  ColorMode,
   DaemonProcessState,
   PetCompanionSnapshot,
   WorkspaceConfigurationSnapshot,
@@ -14,7 +15,14 @@ export const PAGE_DESCRIPTION = '管理本地工作环境、更新与桌宠体�
 export const REFRESH_LABEL = '刷新状态';
 
 export const APPEARANCE_TITLE = '外观';
-export const APPEARANCE_DESCRIPTION = '选择界面主题，立即生效。';
+export const APPEARANCE_DESCRIPTION = '选择界面主题与明暗模式，立即生效。';
+export const APPEARANCE_THEME_LABEL = '主题';
+export const APPEARANCE_COLOR_MODE_LABEL = '明暗模式';
+export const APPEARANCE_COLOR_MODE_OPTIONS: ReadonlyArray<{ value: ColorMode; label: string }> = [
+  { value: 'system', label: '跟随系统' },
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' },
+];
 
 export const RUNTIME_TITLE = '运行环境';
 export const RUNTIME_DESCRIPTION = 'Desktop 通过公开协议读取 Wrenyard 控制面。';
@@ -103,6 +111,7 @@ export const ABOUT_DESCRIPTION = '啾啾工坊是 Wrenyard 套件的 Desktop 主
 export const ABOUT_WRENYARD_LABEL = 'Wrenyard';
 export const ABOUT_DESKTOP_LABEL = 'Desktop';
 export const ABOUT_BUILD_TIME_LABEL = '构建时间';
+export const ABOUT_THEME_LABEL = '当前主题';
 
 /** Calm state labels for the local Daemon lifecycle pill. */
 export const DAEMON_STATE_LABEL: Record<DaemonProcessState, string> = {
