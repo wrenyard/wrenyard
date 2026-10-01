@@ -7,6 +7,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/renderer/components/ui/command';
+import { DIALOG_SIZES } from '@/renderer/components/dialog-size';
 import { dateGroupOf, type DateGroup } from '@/renderer/lib/format';
 import type { SessionSummary } from '../model/types.js';
 
@@ -32,7 +33,13 @@ export function SessionSearch({ open, onOpenChange, sessions, onSelect }: Sessio
   }
 
   return (
-    <CommandDialog title="搜索对话" description="按标题搜索全部会话" open={open} onOpenChange={onOpenChange}>
+    <CommandDialog
+      title="搜索对话"
+      description="按标题搜索全部会话"
+      className={DIALOG_SIZES.md}
+      open={open}
+      onOpenChange={onOpenChange}
+    >
       <Command>
       <CommandInput placeholder="搜索对话" />
       <CommandList>

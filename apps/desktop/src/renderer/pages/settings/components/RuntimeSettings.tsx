@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/renderer/components/ui/separator';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { StatusBadge } from '@/renderer/components/status-badge';
+import { useConfirm } from '@/renderer/hooks/use-confirm';
 import { shell } from '@/renderer/lib/desktop';
 import {
   DAEMON_LABEL,
@@ -48,6 +49,7 @@ import { daemonQueryKey, settingsQueryKey, useDaemonQuery, useSettingsQuery } fr
 /** Local service, daemon lifecycle and the fixed workspace binding. */
 export function RuntimeSettings() {
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const settings = useSettingsQuery();
   const daemon = useDaemonQuery();
   const service = settings.data?.service;
@@ -90,6 +92,24 @@ export function RuntimeSettings() {
 
   const readOnly = workspace !== undefined && isWorkspaceReadOnly(workspace);
 
+  // Restarting the daemon briefly drops the local service, so it is confirmed
+  // through the shared ConfirmHost; starting an absent daemon is not.
+  const onDaemonAction = (): void => {
+    if (daemonAction === null) return;
+    if (daemonAction === 'restart') {
+      void confirm({
+        title: '重启 Daemon？',
+        description: '本地服务会短暂断开，正在运行的操作可能中断。',
+        confirmLabel: '重启 Daemon',
+        destructive: true,
+      }).then((confirmed) => {
+        if (confirmed) daemonMutation.mutate('restart');
+      });
+      return;
+    }
+    daemonMutation.mutate(daemonAction);
+  };
+
   return (
     <Card>
       <CardContent className="flex flex-col gap-4">
@@ -129,7 +149,7 @@ export function RuntimeSettings() {
                 variant="outline"
                
                 disabled={daemonPending}
-                onClick={() => { if (daemonAction !== null) daemonMutation.mutate(daemonAction); }}
+                onClick={onDaemonAction}
               >
                 {daemonStarting ? DAEMON_STARTING_LABEL : daemonAction === 'restart' ? DAEMON_RESTART_LABEL : DAEMON_START_LABEL}
               </Button>
