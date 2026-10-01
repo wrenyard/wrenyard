@@ -9,7 +9,7 @@ import { Separator } from '@/renderer/components/ui/separator';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { Switch } from '@/renderer/components/ui/switch';
 import { StatusBadge } from '@/renderer/components/status-badge';
-import { savePetSettings } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import {
   PET_BEHAVIOR_TITLE,
   PET_BOTTOM_OFFSET_HINT,
@@ -94,7 +94,7 @@ export function PetSettings() {
   }, [pet, dirty]);
 
   const save = useMutation({
-    mutationFn: (payload: PetDraft) => savePetSettings(payload),
+    mutationFn: (payload: PetDraft) => shell.savePetSettings(payload),
     onSuccess: (snapshot) => {
       queryClient.setQueryData(settingsQueryKey, snapshot);
       setDirty(false);

@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/renderer/components/ui/card';
 import { Input } from '@/renderer/components/ui/input';
 import { Label } from '@/renderer/components/ui/label';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
-import { saveTaskSettings } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import { taskSettingsQuery } from '@/renderer/lib/queries';
 import type { TaskSettingsRoutingWeights } from '@/shell-contract';
 import {
@@ -56,7 +56,7 @@ export function RoutingWeightsSettings() {
   };
 
   const save = useMutation({
-    mutationFn: (patch: TaskSettingsRoutingWeights) => saveTaskSettings({
+    mutationFn: (patch: TaskSettingsRoutingWeights) => shell.saveTaskSettings({
       scope: 'global',
       expected_revision: revision,
       patch: { routing_weights: patch },
@@ -75,7 +75,7 @@ export function RoutingWeightsSettings() {
   });
 
   const reset = useMutation({
-    mutationFn: () => saveTaskSettings({
+    mutationFn: () => shell.saveTaskSettings({
       scope: 'global',
       expected_revision: revision,
       patch: { routing_weights: null },

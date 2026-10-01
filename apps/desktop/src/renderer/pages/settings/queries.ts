@@ -1,5 +1,5 @@
 import { queryOptions, useQuery } from '@tanstack/react-query';
-import { getSettings, getSummarySettings } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import { daemonQuery, runtimeAliasesQuery, updateQuery } from '@/renderer/lib/queries';
 
 /**
@@ -19,13 +19,13 @@ export const runtimeAliasesQueryKey = runtimeAliasesQuery.queryKey;
 
 export const settingsQuery = queryOptions({
   queryKey: settingsQueryKey,
-  queryFn: () => getSettings(),
+  queryFn: () => shell.getSettings(),
   staleTime: 30_000,
 });
 
 export const summarySettingsQuery = queryOptions({
   queryKey: summarySettingsQueryKey,
-  queryFn: () => getSummarySettings(),
+  queryFn: () => shell.getSummarySettings(),
   staleTime: 30_000,
 });
 

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { saveTaskSettings } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import { runtimeAliasesQuery, taskSettingsQuery } from '@/renderer/lib/queries';
 import type { TaskSettingsSaveRequest, TaskSettingsSnapshot } from '@/shell-contract';
 import { mergeSnapshots } from './model/settings.js';
@@ -26,7 +26,7 @@ export function useRuntimeAliasesQuery(enabled: boolean) {
 export function useSaveTaskSettingsMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),
+    mutationFn: (request: TaskSettingsSaveRequest) => shell.saveTaskSettings(request),
     onSuccess: (saved) => {
       queryClient.setQueryData(
         taskSettingsQuery().queryKey,

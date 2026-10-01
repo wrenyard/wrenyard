@@ -1,11 +1,5 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  configureProviderKey,
-  getQuota,
-  requestTaskRoutingTest,
-  requestRoutingTestTasks,
-  saveProviderOrder,
-} from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import type { QuotaSnapshot, TaskRoutingTestParams } from '@/shell-contract';
 
 /**
@@ -21,7 +15,7 @@ const ROUTING_TASKS_STALE_MS = 5 * 60_000;
 
 export const quotaQuery = queryOptions<QuotaSnapshot>({
   queryKey: ['quota'],
-  queryFn: () => getQuota(false),
+  queryFn: () => shell.getQuota(false),
   staleTime: 30_000,
   refetchInterval: QUOTA_REFETCH_INTERVAL_MS,
   refetchOnWindowFocus: true,
@@ -35,7 +29,7 @@ export function useQuotaQuery() {
 export function useQuotaRefresh() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => getQuota(true),
+    mutationFn: () => shell.getQuota(true),
     onSuccess: (snapshot) => {
       client.setQueryData(quotaQuery.queryKey, snapshot);
     },
@@ -46,7 +40,7 @@ export function useQuotaRefresh() {
 export function useSaveProviderOrder() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (providerIds: string[]) => saveProviderOrder(providerIds),
+    mutationFn: (providerIds: string[]) => shell.saveProviderOrder(providerIds),
     onSuccess: (snapshot) => {
       client.setQueryData(quotaQuery.queryKey, snapshot);
     },
@@ -58,7 +52,7 @@ export function useConfigureProviderKey() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (input: { providerId: string; key: string }) =>
-      configureProviderKey(input.providerId, input.key),
+      shell.configureProviderKey(input.providerId, input.key),
     onSuccess: (snapshot) => {
       client.setQueryData(quotaQuery.queryKey, snapshot);
     },
@@ -71,7 +65,7 @@ export function useConfigureProviderKey() {
  */
 export const routingTestTasksQuery = queryOptions({
   queryKey: ['quota', 'routingTestTasks'] as const,
-  queryFn: () => requestRoutingTestTasks(),
+  queryFn: () => shell.requestRoutingTestTasks(),
   staleTime: ROUTING_TASKS_STALE_MS,
 });
 
@@ -82,6 +76,6 @@ export function useRoutingTestTasksQuery(enabled: boolean) {
 /** One routing-test run. Invoked only from an explicit user click. */
 export function useRoutingTestRun() {
   return useMutation({
-    mutationFn: (params: TaskRoutingTestParams) => requestTaskRoutingTest(params),
+    mutationFn: (params: TaskRoutingTestParams) => shell.requestTaskRoutingTest(params),
   });
 }

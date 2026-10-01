@@ -3,7 +3,7 @@ import { Streamdown, type Components } from 'streamdown';
 import { code } from '@streamdown/code';
 import { cjk } from '@streamdown/cjk';
 import { cn } from 'cn';
-import { openExternal } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 
 const PLUGINS = { code, cjk };
 /** Prototype has no dark theme yet; both slots use the light Shiki theme. */
@@ -18,7 +18,7 @@ function MarkdownLink({ href, children, onClick, ...rest }: ComponentProps<'a'>)
         onClick?.(event);
         if (event.defaultPrevented || !href) return;
         event.preventDefault();
-        void openExternal(href);
+        void shell.openExternal(href);
       }}
     >
       {children}

@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
-import { getDaemon, getTaskSettings, getUpdate, runtimeAliasSnapshot } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 
 /**
  * Shared shell snapshot queries. These are the single cache owners for the
@@ -9,19 +9,19 @@ import { getDaemon, getTaskSettings, getUpdate, runtimeAliasSnapshot } from '@/r
  */
 export const updateQuery = queryOptions({
   queryKey: ['update'] as const,
-  queryFn: () => getUpdate(),
+  queryFn: () => shell.getUpdate(),
   staleTime: 5_000,
 });
 
 export const daemonQuery = queryOptions({
   queryKey: ['daemon'] as const,
-  queryFn: () => getDaemon(),
+  queryFn: () => shell.getDaemon(),
   staleTime: 5_000,
 });
 
 export const runtimeAliasesQuery = queryOptions({
   queryKey: ['runtimeAliases'] as const,
-  queryFn: () => runtimeAliasSnapshot(),
+  queryFn: () => shell.runtimeAliasSnapshot(),
   staleTime: 60_000,
 });
 
@@ -34,7 +34,7 @@ export const runtimeAliasesQuery = queryOptions({
 export function taskSettingsQuery(project?: string, taskId?: string) {
   return queryOptions({
     queryKey: ['taskSettings', project ?? null, taskId ?? null] as const,
-    queryFn: () => getTaskSettings(project, taskId),
+    queryFn: () => shell.getTaskSettings(project, taskId),
     staleTime: 60_000,
   });
 }

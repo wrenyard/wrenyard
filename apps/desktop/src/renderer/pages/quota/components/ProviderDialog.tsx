@@ -11,7 +11,7 @@ import {
 } from '@/renderer/components/ui/dialog';
 import { Field, FieldLabel } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
-import { openProviderKeyPage } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import { providerKeyPageUrl, type ProviderCatalogSnapshot, type QuotaSnapshot } from '@/shell-contract';
 import {
   DIALOG_CANCEL_LABEL,
@@ -92,7 +92,7 @@ export function ProviderDialog({ entry, onClose, onSaved }: ProviderDialogProps)
   const handleOpenKeyPage = (): void => {
     setError('');
     setOpeningPage(true);
-    void openProviderKeyPage(entry.id)
+    void shell.openProviderKeyPage(entry.id)
       .catch((cause: unknown) => setError(errorMessage(cause) || KEY_PAGE_ERROR))
       .finally(() => setOpeningPage(false));
   };

@@ -18,7 +18,7 @@ import {
 } from '@/renderer/components/ui/combobox';
 import { Label } from '@/renderer/components/ui/label';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
-import { saveSummaryModel } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import type { SummarySettingsSnapshot } from '@/shell-contract';
 import { SUMMARY_EMPTY, SUMMARY_PLACEHOLDER, SUMMARY_UNRESOLVED } from '../model/describe.js';
 import { errorMessage } from '../model/settings.js';
@@ -77,7 +77,7 @@ export function SummarySettings() {
   }, [options, snapshot?.selectedCanonicalModel]);
 
   const save = useMutation({
-    mutationFn: (canonicalModel: string) => saveSummaryModel(canonicalModel),
+    mutationFn: (canonicalModel: string) => shell.saveSummaryModel(canonicalModel),
     onSuccess: (next) => queryClient.setQueryData(summarySettingsQueryKey, next),
     onError: () => {
       void queryClient.invalidateQueries({ queryKey: summarySettingsQueryKey });

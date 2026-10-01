@@ -1,4 +1,3 @@
-import type { StatusTone } from '@/renderer/components/status-badge';
 import type { TimelineTone } from '@/renderer/components/timeline-bars';
 import type { ActionKindModel, ActionModel, CallModel, ContextItem, LedgerEvent, Phase, TurnModel } from './types.js';
 
@@ -51,27 +50,8 @@ export const ACTION_TONE: Record<ActionModel['status'], TimelineTone> = {
   aborted: 'muted',
 };
 
-/** Unified status tone and label across turns, actions, calls and tasks. */
-const STATUS_VIEW: Record<string, { tone: StatusTone; label: string }> = {
-  running: { tone: 'running', label: '运行中' },
-  completed: { tone: 'success', label: '已完成' },
-  done: { tone: 'success', label: '完成' },
-  ok: { tone: 'success', label: '成功' },
-  success: { tone: 'success', label: '成功' },
-  failed: { tone: 'danger', label: '失败' },
-  error: { tone: 'danger', label: '失败' },
-  exhausted: { tone: 'warning', label: '达到推理上限' },
-  interrupted: { tone: 'muted', label: '已中断' },
-  cancelled: { tone: 'muted', label: '已取消' },
-  aborted: { tone: 'muted', label: '已取消' },
-  skipped: { tone: 'muted', label: '已跳过' },
-  unavailable: { tone: 'muted', label: '不可用' },
-};
-
-/** Resolve one business status into the tone and label a `StatusBadge` needs. */
-export function statusView(status: string): { tone: StatusTone; label: string } {
-  return STATUS_VIEW[status] ?? { tone: 'muted', label: status };
-}
+/** Unified status label, shared with the stats surface (see lib/task-status). */
+export { statusView } from '@/renderer/lib/task-status';
 
 export function phaseLabel(phase: Phase): string {
   return PHASE_DETAIL_LABEL[phase];

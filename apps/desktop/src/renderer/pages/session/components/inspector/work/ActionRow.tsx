@@ -3,7 +3,7 @@ import { Elapsed } from '@/renderer/components/elapsed';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import { Button } from '@/renderer/components/ui/button';
 import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@/renderer/components/ui/item';
-import { openTaskTranscript } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import { statusView } from '../../../model/describe.js';
 import type { ActionModel } from '../../../model/types.js';
 import { ContextItems } from './ContextItems.js';
@@ -53,7 +53,7 @@ export function ActionRow({ action, turnId }: ActionRowProps) {
           </ItemActions>
         </Item>
         {transcriptId !== undefined && (
-          <Button variant="outline" size="sm" onClick={() => { void openTaskTranscript(transcriptId); }}>
+          <Button variant="outline" size="sm" onClick={() => { void shell.openTaskTranscript(transcriptId); }}>
             查看任务
           </Button>
         )}

@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
+import { QueryError } from '@/renderer/components/query-error';
 import { Button } from '@/renderer/components/ui/button';
 import { Card, CardContent, CardDescription } from '@/renderer/components/ui/card';
 import { Input } from '@/renderer/components/ui/input';
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/renderer/components/ui/item';
 import { Label } from '@/renderer/components/ui/label';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
-import { runtimeAliasPut, runtimeAliasRemove, saveTaskSettings } from '@/renderer/lib/desktop';
+import { shell } from '@/renderer/lib/desktop';
 import { taskSettingsQuery } from '@/renderer/lib/queries';
 import {
   ALIAS_DELETE_LABEL,
@@ -70,7 +70,7 @@ export function ProviderSettings() {
   };
 
   const capSave = useMutation({
-    mutationFn: (value: number | null) => saveTaskSettings({
+    mutationFn: (value: number | null) => shell.saveTaskSettings({
       scope: 'global',
       expected_revision: revision,
       patch: { max_auto_output_usd_per_million: value },
@@ -102,7 +102,7 @@ export function ProviderSettings() {
   };
 
   const put = useMutation({
-    mutationFn: (entry: { name: string; target: string }) => runtimeAliasPut({
+    mutationFn: (entry: { name: string; target: string }) => shell.runtimeAliasPut({
       expected_revision: aliases.data?.revision ?? '',
       name: entry.name,
       target: entry.target,
@@ -121,7 +121,7 @@ export function ProviderSettings() {
   });
 
   const remove = useMutation({
-    mutationFn: (aliasName: string) => runtimeAliasRemove({
+    mutationFn: (aliasName: string) => shell.runtimeAliasRemove({
       expected_revision: aliases.data?.revision ?? '',
       name: aliasName,
     }),
@@ -249,9 +249,7 @@ export function ProviderSettings() {
           {aliases.isPending ? (
             <Skeleton className="h-16 w-full" />
           ) : aliases.isError ? (
-            <Alert variant="destructive">
-              <AlertDescription>{`读取失败：${errorMessage(aliases.error)}`}</AlertDescription>
-            </Alert>
+            <QueryError query={aliases} title="读取失败" />
           ) : entries.length === 0 ? (
             <CardDescription>{ALIAS_EMPTY}</CardDescription>
           ) : (
