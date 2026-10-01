@@ -101,7 +101,7 @@ export class QuotaService {
         const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
         try {
             const result = await quota.read(this.source(provider, context, { ...options, signal }));
-            if (result) {
+            if (result?.status === 'ok') {
                 state.lastSuccess = result;
                 state.lastSuccessAt = this.now();
             }
