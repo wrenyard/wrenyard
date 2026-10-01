@@ -720,8 +720,8 @@ async function bootstrap(): Promise<void> {
   const daemonStart = daemonSupervisor.start().catch((error: unknown) => {
     console.warn('[wrenyard-desktop] daemon start failed:', error instanceof Error ? error.message : String(error));
   });
-  // Smoke asserts a ready backend, so it must wait for the daemon to come up.
-  if (SMOKE) await daemonStart;
+  // Initial page reads must wait for the owned daemon startup to settle.
+  await daemonStart;
   const readDaemonCounts = async (): Promise<QuitCounts | null> => {
     const toCount = (value: unknown): number =>
       (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
