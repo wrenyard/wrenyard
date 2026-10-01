@@ -1,305 +1,195 @@
+<div align="center">
+
+<img src="packages/themes/src/paper/assets/icon-256.png" width="96" alt="" />
+
 # Wrenyard
 
-[![CI](https://github.com/wrenyard/wrenyard/actions/workflows/ci.yml/badge.svg)](https://github.com/wrenyard/wrenyard/actions/workflows/ci.yml)
+**A local-first desktop workbench for orchestrating AI engineering work.**
+
+One conversation reasons about the goal; exploration, edits, tests and commits
+run as parallel tasks on the models you already pay for — with every token,
+quota window and task visible.
+
 [![Release](https://img.shields.io/github/v/release/wrenyard/wrenyard?include_prereleases&label=latest-dev)](https://github.com/wrenyard/wrenyard/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20arm64%20%7C%20Windows%20x64-lightgrey)
 
-Wrenyard is a development-preview product that unifies task orchestration, a
-native agent execution, and a desktop observer under one command surface:
-**`wrenyard`**.
+[中文](README.zh-CN.md) · [Download](https://github.com/wrenyard/wrenyard/releases) · [Watch the 77-second tour](docs/media/wrenyard-desktop-promo.mp4)
 
-> **Status: development preview.** Distributed as Desktop installers from the
-> rolling latest-dev channel and installable from source, but not a supported
-> stable release. See [Status](#status).
+</div>
 
-## What it is
+![Wrenyard Desktop](docs/images/hero.png)
 
-- **`apps/cli`** — the thin `wrenyard` command surface for developers and
-  agents. It talks to the daemon over the owner-only local IPC surface, never
-  starts the daemon itself, and reports a single message when no daemon is
-  running.
-- **`apps/daemon`** — the TypeScript control plane that schedules and tracks
-  task graph work. Its only external interface is the owner-only NDJSON IPC
-  surface, and its one run entry point is `wrenyard daemon run`.
-- **packages/features** — product features, including execution, providers, quota and routing.
-- **packages/clients** — native client arguments, account reads and event normalization.
-- **packages/execution** — subprocess, stdio RPC, SQLite and keychain primitives.
-- **`apps/pet`** — the headless Desktop companion renderer. It reads current
-  activity from the control plane and owns only passive companion overlays;
-  it has no tray, settings, statistics page or hover action buttons.
-- **`apps/desktop`** — the 啾啾工坊 product shell, the primary product surface.
-  It owns the application window, notification-area icon/menu, custom
-  conversation UI, statistics, quota and settings, uses DSH as its conversation
-  backend, manages Pet as a child component, supervises the daemon while it
-  runs, and applies its own updates.
-- **`packages/dsh-shell`** — the dsh profile/bundle shell reused by the
-  desktop host.
+> **Development preview.** Wrenyard ships rolling `1.0.0-dev.N` prereleases.
+> It is used daily by its authors, but it is not a stable release yet — see
+> [Status](#status).
 
-Wrenyard is one product in one monorepo. `wrenyard` is the only public command
-surface; there are no legacy public compatibility commands. The product is
-local-first: the daemon serves only owner-only local IPC, and the gateway it
-runs for its own agents binds a random loopback port with an in-memory token.
+## Why Wrenyard
 
-## Repository layout
+- **Reasoning stays expensive, everything else stays cheap.** The main model
+  only reasons and marks what should happen; cheap models and the task runtime
+  gather context, dispatch work and write the reply.
+- **Context you can audit.** A session is one append-only ledger. Before you
+  send, Wrenyard shows how large the *next* reasoning request will be for the
+  model you picked, what fills it, and how it has grown.
+- **Your providers, your quota.** Claude, ChatGPT, Kimi, Zhipu, Cursor,
+  DeepSeek and others sit side by side with remaining quota, pace and reset
+  times. Task routing weighs price, speed, quota and capability automatically.
+- **Local-first.** A local daemon owns tasks and state over owner-only IPC.
+  Nothing is hosted for you, and nothing leaves your machine except the model
+  requests you make.
 
-```
-apps/          applications (Desktop shell, unified CLI, daemon control plane, observer)
-packages/      features, clients, execution, protocol and shared definitions
-contracts/     cross-component schemas and version index
-tools/         developer tooling, checks, and release scripts
-docs/          architecture, migration, and signing notes
-```
+## A tour
 
-## Targets
+### Conversations that dispatch work
 
-Public releases are maintained for Apple Silicon macOS (`darwin-arm64`) and
-64-bit Windows (`win32-x64`). Wrenyard ships Desktop installers only; each
-release publishes three artifacts:
+The session page is the main workspace. Each turn can fan out into `explore`,
+`edit`, `test` and `commit` tasks across your projects; the timeline and the
+raw ledger are one click away in the inspector.
 
-| Platform | Artifact | Purpose |
-| --- | --- | --- |
-| `win32-x64` | `wrenyard-desktop-<version>-win32-x64-setup.exe` | first install and in-app update |
-| `darwin-arm64` | `wrenyard-desktop-<version>-darwin-arm64.dmg` | first install |
-| `darwin-arm64` | `wrenyard-desktop-<version>-darwin-arm64.zip` | in-app update |
+### See the next request before you send it
 
-There is no suite archive and no one-click install script. Download the
-artifact for your platform from the GitHub release.
+The ring next to the send button shows the predicted context of the next
+reasoning call against the selected model's usable window, the cache hit rate,
+and the quota of that model's provider. Expand it for a breakdown, or open the
+inspector for a full audit: composition by layer and item, growth per turn, a
+preview across every model, and per-role call costs.
 
-## Prerequisites
+<table>
+  <tr>
+    <td><img src="docs/images/context-meter.png" alt="Context meter" /></td>
+    <td><img src="docs/images/context-inspector.png" alt="Context audit in the inspector" /></td>
+  </tr>
+</table>
 
-- Node.js 24.19 or newer
-- pnpm 11.19.0 (frozen via the repository lockfile)
-## Develop from source
+### Quota, pace and resets at a glance
 
-After a clone, from the repository root (not an installed suite):
+The Model Supply page lists every provider on one compact line: remaining
+quota per window, a pace marker that shows whether you are burning faster than
+an even rate, and the time until reset. The status bar always shows the
+tightest window and warns before you run out.
 
-```powershell
-cd D:\GitHub\wrenyard
-pnpm install --frozen-lockfile
-pnpm build
-pnpm dev
-```
+![Model supply](docs/images/providers.png)
 
-macOS uses the same last three commands; only the checkout path changes.
-Toolchain versions come from the root `package.json` and lockfile (Node >=24.19.0, pnpm 11.19.0). The install
-is allowed to run the Electron native build script (`pnpm-workspace.yaml`
-`allowBuilds.electron`). Do not skip that: an install that leaves Electron
-missing cannot start Desktop.
+### A ledger of the work
 
-SQLite uses better-sqlite3 13 Node-API prebuilds shipped with the package; its
-implicit node-gyp build is disabled, so supported x64/arm64 hosts do not need
-Python or a C++ toolchain. After updating dependencies, run `pnpm install` and
-restart `pnpm dev` once to load the pinned Node 24 runtime.
+The Workshop Ledger summarises dispatches, token use, completion rate and task
+time, with a year-long activity heatmap and per-model and per-task breakdowns.
 
-`pnpm build` builds only the Desktop bundle. The CLI and daemon run from source
-through tsx, so no per-package `dist/` is produced and nothing is installed or
-started.
+![Workshop ledger](docs/images/ledger.png)
 
-Daily loop, still from the checkout root:
+### Make it yours
 
-```powershell
-# Runs the daemon and Desktop dev scripts in parallel. Keep this terminal running.
-pnpm dev           # daemon + Desktop dev scripts, in parallel
-```
+Two built-in themes — the warm **Paper** and the shadcn-style **Neutral** — each
+in light and dark, following the system or set by hand. Settings are searchable
+and laid out like an editor's settings page.
 
-`pnpm dev` runs `pnpm --parallel --filter @wrenyard/daemon --filter @wrenyard/desktop run dev`: both dev scripts start in parallel with no orchestration, so their start order does not matter. Run one side alone with `pnpm --filter @wrenyard/daemon dev` or `pnpm --filter @wrenyard/desktop dev`.
-
-`pnpm --filter @wrenyard/daemon dev` runs `apps/daemon/scripts/dev.ts`. It refuses to start if a daemon already answers on the IPC path; otherwise it runs `lib/main.mts run` through tsx with the default config, watches `apps/daemon/**` and `packages/**`, and after a content change type-checks the daemon, waits for `daemon.status` idle, then gracefully restarts it. A clean daemon exit (for example a workspace switch from a source Desktop) is relaunched. Ctrl+C drains and stops it; a second Ctrl+C forces.
-
-`pnpm --filter @wrenyard/desktop dev` runs `electron-vite dev --watch`: the renderer updates through Vite with React Refresh, preload changes reload every window, and main-process changes restart Desktop. A source Desktop never launches a daemon; it shows the daemon as unavailable and reconnects automatically when a daemon with the same product version appears.
-
-Source-development and an installed Desktop share the same user config,
-state, Desktop `userData`, and DSH session location. The Desktop `userData`
-directory is keyed to the installed package identity `@wrenyard/desktop`
-(Electron's default for that package), not to the localized **啾啾工坊**
-display name, so source-development reuses the settings and DSH session an
-installed Desktop already wrote. There is no migration or copy, and your
-existing files are left untouched; set `WRENYARD_DESKTOP_USER_DATA` to point
-source-development at a different directory, and only one Wrenyard instance may
-use that data domain at a time. Because the daemon dev script refuses to start next to a running daemon, quit 啾啾工坊 fully from the tray (or run `wrenyard daemon stop`) before starting it. Closing the window is not enough.
-
-Manifest or lockfile changes: stop the dev scripts and run
-`pnpm install --frozen-lockfile`, then start them again. Install/build
-errors remain visible and the watcher waits for the next save; no release
-installer is involved. Unexpected component exits are reported without an
-automatic crash-restart loop. Save a source file or start `pnpm dev`
-again to retry.
+![Themes](docs/images/themes.png)
 
 ## Install
 
-Wrenyard ships only as a Desktop application. Each release publishes three
-artifacts on the GitHub releases page (see [Targets](#targets)); there is no
-suite archive, no SEA install engine and no one-click bootstrap script.
+Download the installer for your platform from the
+[releases page](https://github.com/wrenyard/wrenyard/releases):
 
-1. Download the artifact for your platform:
-   - Windows: `wrenyard-desktop-<version>-win32-x64-setup.exe`
-   - macOS: `wrenyard-desktop-<version>-darwin-arm64.dmg`
-2. Run it. The packaged app carries the single-file CLI, a Node runtime and the
-   daemon bundle (`daemon/daemon.mjs` with only its native and DSH runtime
-   dependencies) under its Resources, so nothing else is required.
+| Platform | File |
+| --- | --- |
+| macOS (Apple Silicon) | `wrenyard-desktop-<version>-darwin-arm64.dmg` |
+| Windows (x64) | `wrenyard-desktop-<version>-win32-x64-setup.exe` |
 
-**First launch is blocked by the OS** because preview builds are ad-hoc signed
-on macOS and unsigned on Windows:
+The app bundles everything it needs: the `wrenyard` CLI, a Node runtime and the
+daemon.
 
-- **macOS** — Gatekeeper blocks the app; open **System Settings → Privacy &
-  Security** and choose **Open Anyway**. On macOS 15, right-click → Open no
-  longer works.
-- **Windows** — SmartScreen shows “Windows protected your PC”; choose **More
-  info → Run anyway**.
+**First launch.** Preview builds are ad-hoc signed on macOS and unsigned on
+Windows, so the OS asks once:
 
-After that, in-app updates run normally and are not blocked.
+- **macOS** — open *System Settings → Privacy & Security* and choose
+  *Open Anyway*.
+- **Windows** — on the SmartScreen prompt choose *More info → Run anyway*.
 
-### Updating
+**Updates.** The app checks the update feed, verifies the download's SHA-256
+and installs it when you choose. Quit the app fully from the menu bar or tray
+for an update to apply.
 
-啾啾工坊 updates itself. It reads the update feed published on the `updates`
-branch, downloads the new artifact, verifies its SHA-256, and applies it with
-its in-app updater (`setup.exe /S` on Windows, a verified zip swap on macOS).
-The app must be fully quit from the tray for an update to apply. The first
-version does not roll back a failed update.
+## Command line
 
-### Command-line-only installs
+The same `wrenyard` command ships inside the app (on Windows the installer can
+add it to `PATH`). Every business command accepts `--json`.
 
-Without Desktop there is no installer. Install the CLI from source:
+```text
+wrenyard desktop                 launch the desktop app
+wrenyard daemon run|stop|status  run or inspect the local control plane
+wrenyard task list|describe|run  delegate and track project work
+wrenyard quota [provider]        provider quota
+wrenyard project …               registered projects and their worktrees
+wrenyard exec <prompt> --target  one-off agent execution
+wrenyard taskgraph …             task graphs for multi-step work
+wrenyard doctor                  check the local install
+```
+
+The CLI never starts a daemon on its own: open the app, or run
+`wrenyard daemon run` in a terminal.
+
+Seven built-in task roles share one runtime and automatic model selection:
+
+| Task | Use it to |
+| --- | --- |
+| `explore` | investigate code, history, logs and failures |
+| `edit` | apply bounded file changes |
+| `test` | run verification and report evidence |
+| `code-review` | review correctness against requirements |
+| `commit` | create verified local commits |
+| `librarian` | research external documentation |
+| `oracle` | think through hard trade-offs |
+
+Projects can add their own tasks next to these.
+
+## Build from source
+
+Requirements: Node.js ≥ 24.19 and pnpm 11.19 (via `corepack enable`).
 
 ```sh
 git clone https://github.com/wrenyard/wrenyard.git
 cd wrenyard
 pnpm install --frozen-lockfile
-pnpm setup                 # once, if pnpm's global bin directory is not on PATH
-pnpm link --global         # exposes `wrenyard`
+pnpm dev        # daemon + desktop with hot reload
 ```
 
-The linked CLI runs the daemon in the foreground with `wrenyard daemon run`; it
-never starts a background daemon. On Windows the Desktop installer can
-optionally add the bundled CLI directory to `PATH` from its “Add to PATH”
-checkbox (unchecked by default). macOS offers no PATH configuration; create a
-link to `/Applications/啾啾工坊.app/Contents/Resources/wrenyard/wrenyard`
-yourself if needed.
+`pnpm dev` refuses to start next to a running daemon, so quit the installed app
+first. See the [development guide](docs/development.md) for the dev loop, shared
+data directories and release packaging, and read
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
-### Upgrading from a release with external client configuration
+## Repository layout
 
-Earlier preview releases could point your own Claude Code, Codex, Grok Build or
-Claude App configuration at the Wrenyard gateway from the Desktop “客户端”
-(Clients) page. That feature is removed, and there is no automatic restoration.
-
-- **Before upgrading,** open the old Desktop, go to the Clients page and click
-  **Restore** for each configured client.
-- **If you already upgraded,** the page is gone. Manually remove the base URL
-  and credential-helper entries Wrenyard wrote from each affected tool's
-  configuration so it stops pointing at `127.0.0.1:8787/gateway/...`.
-
-Preview binaries are signed ad-hoc on macOS and unsigned by default on Windows
-(see [Signing (honest)](#signing-honest)).
-
-## Command surface
-
-- `wrenyard` — print help and enter the unified command surface
-- `wrenyard desktop` — launch the 啾啾工坊 Desktop application
-- `wrenyard daemon run` — run the control plane in the foreground (first Ctrl+C drains active work, a second forces shutdown)
-- `wrenyard daemon stop` — ask a running daemon to shut down (`--force` skips draining)
-- `wrenyard daemon status` — report daemon health from IPC and the daemon lock
-- `wrenyard doctor` — check the local install and report problems
-- `wrenyard task` — delegate and track bounded project work
-- `wrenyard exec` / `wrenyard quota` / `wrenyard project` / `wrenyard taskgraph` — exec, provider quota, project and task-graph commands (`--json` on all of them)
-
-The daemon has a single run entry point, `wrenyard daemon run`; Desktop and the
-terminal use it, and the daemon dev script runs it through tsx. The CLI never
-starts or restarts the daemon. When no daemon is reachable it reports one
-message: the Wrenyard daemon is not running — open 啾啾工坊, or run
-`wrenyard daemon run` in a terminal.
-
-## Builtin tasks
-
-Seven reusable roles share the same task runtime and automatic cost, speed,
-and capability selection:
-
-| Task | Work to delegate |
-| --- | --- |
-| `explore` | Investigate code, Git history, notes, logs, and concrete failures |
-| `edit` | Implement bounded file changes, including fixes and test code |
-| `test` | Run verification and report evidence |
-| `code-review` | Review correctness and conformance to supplied requirements |
-| `commit` | Commit the declared changes locally |
-| `librarian` | Research external documentation and sources |
-| `oracle` | Analyze difficult technical questions and tradeoffs |
-
-Use `wrenyard task list` and `wrenyard task describe <id>` for current contracts.
-Choose roles as needed; no FP/FU/IU pipeline or staged debugging workflow is
-required. Retired roles (including the old `implement` and `look-at` builtins)
-are removed rather than hidden behind aliases. Existing run records remain
-readable; restarting work that names a retired task requires a current role.
-Project-authored tasks remain available.
-
-## Uninstall
-
-Uninstall 啾啾工坊 the normal way for your platform — remove the app from
-`/Applications` on macOS, or use “Apps & features”/the NSIS uninstaller on
-Windows. The uninstaller also removes the optional PATH entry on Windows. User
-configuration and state directories live outside the install location and are
-never touched. A CLI-only install is removed with
-`pnpm uninstall --global wrenyard`.
-
-The first updater version does not roll back a failed update; it reports the
-failure and points you at the release page for a manual download.
-
-## Building from source
-
-```sh
-pnpm install
-pnpm build
-pnpm test
+```text
+apps/desktop     the desktop app (Electron + React, shadcn/ui, Tailwind)
+apps/daemon      the local control plane: tasks, task graphs, sessions, gateway
+apps/cli         the wrenyard command
+packages/        features (session, providers, quota, routing, exec, …),
+                 protocol, clients, execution primitives and themes
+tools/           checks and release tooling
+docs/            architecture, development and release notes
 ```
 
-`pnpm build` builds only the Desktop bundle; the CLI and daemon run from source
-through tsx (the source CLI is `pnpm wrenyard ...`). Other root scripts:
-`pnpm lint` (oxlint + `tsc`), `pnpm check`
-(release gates: public identifiers, secrets, legal, version consistency) and
-`pnpm test`. These checks are run through the workspace Tasks and repository
-instructions, not by GitHub Actions. All root scripts (`build`, `dev`,
-`release`, `lint`, `check`, `test`, `wrenyard`) are defined only
-at the repository root; internal packages keep no `build` or `typecheck`
-script.
-
-Local release:
-
-```sh
-pnpm release <x.y.z>    # write the version, pack this platform's installer, commit
-```
-
-`pnpm release <x.y.z>` writes the version to the root and Desktop manifests,
-runs `node tools/release/pack.mjs` to build this platform's installer and smoke
-the assembled app, then commits `release: <x.y.z>`; a same-version argument
-repacks without committing. The tag is created and pushed manually. A
-`v*-dev.*` tag triggers `release.yml`: a build job on `macos-15` and
-`windows-latest` produces each platform's artifacts, and a publish job verifies
-the tag, confirms all three artifacts are present, publishes a prerelease, and
-pushes the update feed (`dev.json` and `versions/<version>.json`) to the
-`updates` branch. A manual workflow dispatch is build-only and never creates a
-tag, release, or feed.
-
-## Signing (honest)
-
-Preview builds are signed ad-hoc on macOS and unsigned by default on Windows.
-Ad-hoc signing proves integrity and buildability, not publisher identity.
-Trusted release signing is future work and never runs in this repository. See
-[docs/release/signing.md](docs/release/signing.md).
+Read more in [docs/architecture.md](docs/architecture.md).
 
 ## Status
 
-This repository publishes rolling `1.0.0-dev.N` development prereleases.
-Nothing is published to npm, and no stable release exists. Remaining before a
-stable release:
-
-- Final trusted code signing of the desktop app and platform payloads
-- Wider clean-machine testing and a documented compatibility policy
-
-Licensing: MIT (see `LICENSE`). Third-party notices and asset provenance are
-preserved and verified via `pnpm check`.
+Wrenyard publishes rolling `1.0.0-dev.N` prereleases for macOS (Apple Silicon)
+and Windows (x64). Before a stable release it still needs trusted code signing
+([signing notes](docs/release/signing.md)), wider clean-machine testing and a
+documented compatibility policy. Nothing is published to npm.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security](SECURITY.md)
-- [Migration history](docs/migration/README.md)
-- [Changelog](CHANGELOG.md)
+- [Development guide](docs/development.md)
+- [Task graphs](docs/taskgraph.md)
+- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+- [Upgrade notes for early previews](docs/history/migration.md)
+
+## License
+
+[MIT](LICENSE). Third-party notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and are verified by
+`pnpm check`.
