@@ -175,6 +175,7 @@ function projectProvider(id: string, provider: QuotaProviderState): QuotaProvide
     expectedRemainingPct: window.expectedRemainingPct === null
       ? null
       : clampPercentage(window.expectedRemainingPct),
+    ...windowTiming(window.resetsAt, window.windowMinutes),
   }));
   if (windows.length === 0 && provider.bars?.remainingPct !== null && provider.bars?.remainingPct !== undefined) {
     windows.push({
@@ -311,6 +312,27 @@ function selectVisibleProviderStates(
 
 function clampPercentage(value: number): number {
   return Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+}
+
+/**
+ * Structured reset timing for one quota window. A reset time is passed only
+ * when it parses to a future instant; an absent, invalid or already-past time
+ * is dropped rather than substituted. A non-positive/unknown window length is
+ * likewise omitted.
+ */
+function windowTiming(
+  resetsAt?: string,
+  windowMinutes?: number,
+): Pick<QuotaWindowSnapshot, 'resetsAt' | 'windowMinutes'> {
+  const resetMs = typeof resetsAt === 'string' ? Date.parse(resetsAt) : Number.NaN;
+  return {
+    ...(typeof resetsAt === 'string' && Number.isFinite(resetMs) && resetMs > Date.now()
+      ? { resetsAt }
+      : {}),
+    ...(typeof windowMinutes === 'number' && Number.isFinite(windowMinutes) && windowMinutes > 0
+      ? { windowMinutes }
+      : {}),
+  };
 }
 
 function isQuotaUnavailable(status: QuotaProviderSnapshot['status']): boolean {
