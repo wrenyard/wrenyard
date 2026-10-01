@@ -1,36 +1,60 @@
 # @wrenyard/session
 
-Daemon-hosted conversation feature. Desktop presents its snapshots through
-`@wrenyard/control-client/session`; the wire contract lives exclusively in
-`@wrenyard/protocol/session`.
+Context-ledger conversation core, hosted by the daemon through injected in-process
+ports. Desktop relays `session.*` IPC and ledger events to the React page.
+The feature does not depend on DSH or Desktop.
 
-`SessionService` owns the current conversation context, summary preference and
-revisioned snapshots. `SessionController` serializes backend transitions and
-recovery. `backend.ts` composes the existing DSH client, process, managed profile
-and workspace registry. The conversation engine retains independent sessions,
-parallel turns, task ownership, streaming tools, usage/TPS, summaries and durable
-restore behavior.
+## State architecture
 
-The host injects its configured workspace, state root, gateway snapshot and task
-wait/cancel callbacks. The feature never reads a second daemon configuration or
-imports Desktop/Electron. Gateway reads and owned task operations are in-process;
-DSH MCP tools still use the daemon's public IPC surface.
+The ledger is the only durable state. Everything else — turn stages, running
+actions, budget counts, titles — is a pure fold over the timeline.
 
-Snapshots return a complete product projection and revision. An unchanged
-revision may wait up to 1000ms; existing coalesced change notifications and
-terminal flushes wake those callers. Desktop disconnection does not cancel turns.
-The daemon closes the feature on shutdown. Backend recovery never resends prompts,
-and model/credential changes wait until active turns settle before rebuilding.
+Under `<stateRoot>/session/<sha256(workspaceRoot)>/`:
 
-The host retains the existing Desktop userData identity. Under that root, data
-continues to use `dsh/`, `workspace-state/<sha256(workspace)>.json` and
-`conversation-summary.json`, without changing document formats. DSH and the
-managed `@wrenyard/dsh-shell` are package dependencies in the daemon release,
-resolved from source or deployed package layouts rather than Electron resources.
+- `sessions/<sessionId>.jsonl` — one event per line, appended durably (`fsync`).
+- `index.json` — the session list (`sessionId`, `title`, `createdAt`,
+  `updatedAt`), written atomically and derived from the timelines.
 
-The DSH backend runs under Node with `--expose-internals`, launcher options before
-web options, and `--no-open`. It binds loopback; only product DTOs cross Desktop IPC.
-The existing About runtime version is read through `session.backend`.
+The summary-model preference is stored once per state root at
+`<stateRoot>/session/summary-model.json` (canonical model id only, default
+`deepseek-v4.1-flash`), never per workspace and never with a credential.
 
-This migration was reviewed at source level only. Tests, builds and application
-startup were not run as part of the requested local refactor.
+The daemon supplies its state root and configured workspace root. Desktop restart
+does not interrupt turns; daemon shutdown drains them or interrupts with `shutdown`.
+Old Desktop preview ledgers are not imported.
+
+Appends go through one serialized queue, so `seq` strictly increases per
+session. Events are deep-frozen on the way in and timelines are copied out, so
+callers cannot mutate state. The reader tolerates exactly one torn final JSONL
+line: it truncates the fragment before further appends. Any other malformed line
+is corruption and throws instead of being silently dropped.
+
+## Modules
+
+- `src/ledger.ts` — event types, JSONL storage, serialized durable append,
+  atomic derived index, and the pure `replayLedger` / `applyLedgerEvent` fold.
+- `src/workspace.ts` — read-only file source, path validation, the frozen
+  `WorkspaceSnapshot`, recent-doc scan and the project instruction chain.
+- `src/views.ts` — prompt assembly, event rendering/escaping, layer statistics.
+- `src/driver.ts` — one streaming OpenAI-chat completion against the gateway.
+- `src/calls.ts` — role→model resolution, model metadata, budget check,
+  timeouts and `call` event writing.
+- `src/actions.ts` — `<wy-action>` streaming splitter, parsing and the three
+  action executors.
+- `src/engine.ts` — the work-turn state machine over the ports above.
+- `src/summary-model.ts` — the summary-model preference store and the settings
+  snapshot projected from the live Gateway connection.
+- `src/index.ts` — the composition root and the frozen `createSession` surface.
+
+Dependencies point `engine → actions / calls / views / workspace / ledger`, and
+`calls → driver`. `ledger` replay and `views` are pure functions.
+
+## Provider notes
+
+The MVP driver speaks the gateway's OpenAI-compatible chat path
+(`POST {openaiChatBaseUrl}/chat/completions`, `Authorization: Bearer <token>`).
+Explicit Anthropic cache breakpoints are **not** supported on this path: the
+request body is the plain OpenAI-chat shape with
+`stream_options.include_usage`, and no provider-specific cache-control markers
+are injected. Caching information is reported only through the upstream usage
+frame (`prompt_tokens_details.cached_tokens`); absent fields stay absent.

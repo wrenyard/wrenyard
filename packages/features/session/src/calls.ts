@@ -1,5 +1,5 @@
 /**
- * session-v2 model calls.
+ * session model calls.
  *
  * One call is one stateless request: pick the role's model, resolve its model
  * metadata, estimate the input with `cl100k_base`, enforce the context budget,

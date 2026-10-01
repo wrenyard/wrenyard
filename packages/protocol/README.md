@@ -1,12 +1,16 @@
 # @wrenyard/protocol
 
 IPC conversation IDL plus the pure static update-feed contract. `1.0.0-dev.41`,
-private, MIT, ESM, zero runtime dependencies.
+private, MIT, ESM, zero runtime dependencies. The canonical daemon IPC protocol
+version is `2` (`WRENYARD_PROTOCOL_VERSION` in `@wrenyard/control-client`): the
+version is negotiated through the `health.ping` handshake, and an older client
+fails closed instead of talking to a daemon whose session surface it cannot
+address.
 
 > **These types DO NOT VALIDATE incoming JSON.**
 >
 > Nothing in this package parses, checks, sanitizes, dispatches, or stores a
-> message. A value typed as `ConversationSnapshot` is a compile-time claim about
+> message. A value typed as `ExecSnapshot` is a compile-time claim about
 > a wire shape, not a runtime guarantee. **Runtime validation stays at the
 > adapter** on the transport boundary. Treat every payload crossing the wire as
 > untrusted.
@@ -26,17 +30,19 @@ contain, and must not grow, any of the following:
 - desktop UI state, view models, or presentation projections
 - runtime dependency on any Wrenyard business package
 
-It also does not implement the session engine: `@wrenyard/session` owns the DSH
-backend, persistence and recovery. The types here are the shape it projects.
+It also does not implement the session engine: `@wrenyard/session` owns the
+append-only session ledger, the workspace documents and recovery, and declares
+the product session DTOs it projects. This package no longer declares a
+`./session` subpath; the daemon's `session.*` wire surface is owned by
+`apps/daemon/lib/protocol` and only mirrors the JSON-RPC envelope shape here.
 
 ### Relationship to existing code
 
-This package is **not** the existing worker/daemon session surface. The
-conversation DTOs here are the product conversation API that
-`@wrenyard/session` returns and `@wrenyard/control-client/session` transports.
-The existing `apps/daemon/lib/protocol` wire shape is unchanged and is not
-imported here; the JSON-RPC envelope shape is mirrored so the adapter can carry
-both.
+This package is **not** the daemon session surface. The `session.*` conversation
+API lives on the daemon IPC and is built over `@wrenyard/session`; its
+params/results are declared with the daemon-owned schemas under
+`apps/daemon/lib/protocol`, not here. The JSON-RPC envelope shape is mirrored so
+an adapter can carry both, and no daemon wire type is imported here.
 
 Types are declared as regular interfaces without index signatures. JSON
 serialization safety comes from each concrete DTO being composed only of
@@ -54,11 +60,6 @@ src/
     methods.ts          RpcMethod / RpcNotification descriptors and the
                         helpers that infer params, results, requests, responses
     index.ts
-  session/
-    types.ts            ConversationSnapshot + every product DTO it carries
-    methods.ts          method param/result pairs + SessionMethods, and the
-                        (currently empty) SessionNotifications map
-    index.ts
   exec/
     types.ts            ExecSnapshot + ExecEventEnvelope (no process/env fields)
     methods.ts          the four method param/result pairs + ExecMethods
@@ -75,67 +76,48 @@ tsconfig.json
 ```
 
 `package.json` exports the source directly: `.` -> `src/index.ts`,
-`./common` -> `src/common/index.ts`, `./session` -> `src/session/index.ts`,
+`./common` -> `src/common/index.ts`,
 `./exec` -> `src/exec/index.ts`, `./provider` -> `src/provider/index.ts`,
 `./update-feed` -> `src/update-feed.ts`.
 There is intentionally **no build pipeline**; a `typecheck` script is declared
 but nothing in this task runs it.
 
-## Session methods
+## Canonical session surface
 
-Ten methods, each with explicit named `Params`/`Result` types. Wire names are
-the map keys in `SessionMethods`.
+The daemon IPC exposes the append-only session ledger as seven `session.*`
+methods. Their params/results are declared by the daemon-owned schemas in
+`apps/daemon/lib/protocol/methods/session.mts`; `@wrenyard/session` is the
+engine behind them.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `session.snapshot` | `{ afterRevision?, waitMs? }` | `SessionSnapshotResult` |
-| `session.select` | `{ sessionId }` | `SessionSnapshotResult` |
-| `session.create` | `{}` | `SessionSnapshotResult` |
-| `session.selectModel` | `{ provider, model, reasoningEffort? }` | `SessionSnapshotResult` |
-| `session.send` | `{ text, clientTimeZone? }` | `SessionSnapshotResult` |
-| `session.cancel` | `{ turnId? }` | `SessionSnapshotResult` |
-| `session.setWorkspace` | `{ workspace }` | `SessionSnapshotResult` |
-| `session.summary.model.get` | *none* | `{ summary }` |
-| `session.summary.model.set` | `{ canonicalModel }` | `{ summary }` |
-| `session.backend` | *none* | `SessionBackendResult` |
+| `session.list` | *none* | `{ sessions: SessionSummary[] }` |
+| `session.create` | *none* | `{ sessionId }` |
+| `session.send` | `{ sessionId, text, model }` | `{ turn }` |
+| `session.interrupt` | `{ sessionId, turn }` | *none* |
+| `session.events` | `{ sessionId, afterSeq, limit?, waitMs?, live? }` | `{ events, lastSeq, live? }` |
+| `session.summary.settings` | *none* | `SummarySettingsSnapshot` |
+| `session.summary.save` | `{ canonicalModel }` | `SummarySettingsSnapshot` |
 
 Contract semantics the adapters honor:
 
-- **Every action returns the full projection.** `SessionSnapshotResult` is
-  `{ conversation, revision }`, where `conversation` is the complete
-  `ConversationSnapshot`. A caller replaces the projection it holds; it never
-  merges a delta, so two callers cannot diverge.
-- **`session.snapshot` is the only read.** `afterRevision` is the revision the
-  caller already holds. When it equals the current revision the call waits for
-  the next change or terminal flush — bounded by `waitMs`, never more than
-  1000ms — and still returns a *complete* snapshot. A different revision, or an
-  omitted one, returns immediately. Continuous updates are pull-based; there is
-  no push channel.
-- **`revision` is monotonic and epoch-seeded**, so it never resets within a
-  process and a cursor captured before a reconnect can never be mistaken for a
-  live one. A reconnecting client re-reads with no cursor at all.
-- **`session.cancel`** addresses one turn by `turnId` (or the oldest running turn
-  of the selected conversation when absent). Only that turn's own execution
-  branch and its owned task runs are stopped, so parallel turns and other
-  conversations are unaffected.
-- **`session.setWorkspace`** switches the bound workspace. The workspace is
-  validated against the configured workspace root first; a mismatch is refused
-  instead of silently rebinding the conversation.
-- **`session.summary.model.get` / `.set`** carry `SummarySettingsSnapshot`:
-  the persisted canonical model id plus the options the live local model Gateway
-  can actually serve.
-- **`session.backend`** is main-process diagnostics only — it reports the DSH
-  child process state (`starting`, `running`, `stopped`, `failed`). It is never
-  projected to the renderer.
+- **The ledger is the source of truth.** `session.events` returns the durable
+  events after `afterSeq`; a call's streaming text and reasoning are a separate
+  in-memory snapshot carried only when `live` is set.
+- **`session.events` is a bounded long-poll.** With a positive `waitMs` (never
+  more than 1000ms) an empty page waits for the next durable append or live
+  update and still returns the complete page since the cursor.
+- **`session.interrupt`** addresses one admitted turn by number; only that turn's
+  own execution branch and its owned task runs are stopped, so parallel turns
+  are unaffected.
+- **`session.summary.settings` / `session.summary.save`** own the summary-model
+  preference. `settings` projects the persisted canonical model plus every
+  ordinary-LLM candidate the live local model Gateway can serve; `save` persists
+  the canonical model and returns the re-projected snapshot.
+- Every session method is IPC-only: the HTTP and MCP transports never execute a
+  session action.
 
-`SessionNotifications` is intentionally empty: nothing is pushed today.
-
-### Recommended read flow
-
-1. Read once with no `afterRevision` to seed the projection and its `revision`.
-2. Re-issue `session.snapshot` with `afterRevision: <last revision>, waitMs: 1000`
-   in a loop. Each reply replaces the projection and advances the cursor; a
-   reconnect starts again from step 1 with no cursor.
+No notification channel is part of the composed protocol yet.
 
 ## Typed usage
 
@@ -143,20 +125,22 @@ Contract semantics the adapters honor:
 import type {
   ProtocolResponse,
   RpcTypedRequest,
-  SessionMethods,
-  SessionSendParams,
+  ExecMethods,
+  ExecStartParams,
 } from '@wrenyard/protocol'
 
 // Params/results are inferred from the feature map, not restated:
-type SnapshotRequest = RpcTypedRequest<SessionMethods, 'session.snapshot'>
-//   -> { jsonrpc: '2.0'; method: 'session.snapshot'; params: SessionSnapshotParams; id: JsonRpcId }
-type SendResponse = ProtocolResponse<'session.send'>
-//   -> success carrying SessionSendResult, or an error response
+type StartRequest = RpcTypedRequest<ExecMethods, 'exec.start'>
+//   -> { jsonrpc: '2.0'; method: 'exec.start'; params: ExecStartParams; id: JsonRpcId }
+type StartResponse = ProtocolResponse<'exec.start'>
+//   -> success carrying ExecStartResult, or an error response
 
-const sendParams = {
-  text: 'hello',
-  clientTimeZone: 'Asia/Shanghai',
-} satisfies SessionSendParams
+const startParams = {
+  client: 'codebuddy',
+  model: 'deepseek-v4.1-flash',
+  prompt: 'hello',
+  cwd: '/workspace',
+} satisfies ExecStartParams
 ```
 
 Root aliases keep the method <-> params relationship:
@@ -166,12 +150,12 @@ import type { ProtocolRequestUnion } from '@wrenyard/protocol'
 
 function handle(request: ProtocolRequestUnion) {
   switch (request.method) {
-    case 'session.select':
-      // request.params is narrowed to SessionSelectParams here
-      return request.params.sessionId
-    case 'session.send':
-      // request.params is narrowed to SessionSendParams here
-      return request.params.text
+    case 'exec.start':
+      // request.params is narrowed to ExecStartParams here
+      return request.params.prompt
+    case 'exec.get':
+      // request.params is narrowed to ExecGetParams here
+      return request.params.id
     default:
       return undefined
   }
@@ -249,8 +233,8 @@ To add a feature (for example `taskgraph`):
 2. Compose it in `src/index.ts`:
 
    ```ts
-   export interface ProtocolMethods extends SessionMethods, TaskgraphMethods {}
-   export interface ProtocolNotifications extends SessionNotifications, TaskgraphNotifications {}
+   export interface ProtocolMethods extends ProviderMethods, TaskgraphMethods {}
+   export interface ProtocolNotifications extends TaskgraphNotifications {}
    ```
 
    Conflicting inherited definitions are type errors; features never override
@@ -260,14 +244,17 @@ To add a feature (for example `taskgraph`):
 3. Add subpath exports in `package.json` if the feature should be importable
    on its own (`./<feature>`).
 
-Migrating an existing surface has two rules:
+The wire name is the contract: once a method is published its name and fields
+stay stable, and a change in shape is a new method (or a protocol-version bump),
+never a silent rename. The canonical session surface was one deliberate
+exception: it replaced the retired conversation and versioned-session APIs
+with the ledger-backed `session.*` methods exactly once, coordinated with
+`WRENYARD_PROTOCOL_VERSION` `2`, so a stale client fails closed at the handshake
+instead of misreading the new shape.
 
-- **Preserve legacy wire names and fields.** Keep snake_case field names and
-  existing method names exactly as they are on the wire; the DTOs are the
-  adapter's target, not a wire rename.
-- **Runtime remains outside protocol.** Feature services may consume these
-  type-only contracts. Transport adapters own validation and numeric error-code
-  assignment; protocol never imports the feature implementation.
+Runtime stays outside protocol: feature services may consume these type-only
+contracts. Transport adapters own validation and numeric error-code assignment;
+protocol never imports the feature implementation.
 
 ## Provider surface
 
@@ -326,9 +313,9 @@ but they enforce the same rules.
 
 ## Implementation status
 
-The session contract here is the real, implemented surface: `@wrenyard/session`
-projects `ConversationSnapshot` with a monotonic revision, and
-`@wrenyard/control-client/session` transports it. Exec and provider handlers
-exist in the daemon. The protocol package itself has no IPC runtime wiring and
-never imports a feature implementation; its only runtime module is the pure,
-dependency-free `./update-feed` contract above.
+The session contract is the real, implemented surface: `@wrenyard/session` owns
+the append-only ledger, and the daemon's `session.*` IPC methods project and
+mutate it against the schemas declared in `apps/daemon/lib/protocol`. Exec and
+provider handlers also exist in the daemon. The protocol package itself has no
+IPC runtime wiring and never imports a feature implementation; its only runtime
+module is the pure, dependency-free `./update-feed` contract above.

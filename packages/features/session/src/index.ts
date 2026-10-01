@@ -1,13 +1,148 @@
 /**
- * @wrenyard/session
+ * session public surface.
  *
- * The conversation session feature: it owns the DSH backend child process, the
- * product conversation engine on top of it, the durable conversation document,
- * the summary-model preference and the bounded gateway/backend recovery
- * watcher. It exposes one versioned projection (`SessionSnapshotResult`) for
- * every action, and never exposes a secret, callback or Electron/DSH object to
- * its consumers.
+ * This module is the single composition root for the feature. It wires the
+ * sibling modules into the engine ports and exposes the frozen `createSession`
+ * contract:
  *
- * The service is constructed lazily and is safe to import before DSH exists.
+ *   ledger.ts     `Ledger` (init/append/read/listSessions/subscribe/close) and
+ *                 the `LedgerEvent` union plus the snapshot types.
+ *   workspace.ts  `createWorkspaceSnapshot(input)` and `WorkspaceFileSource`.
+ *   views.ts      `createViews(documentRules?)`.
+ *   calls.ts      `createCallRunner({ driver, cheapModel, append, now })`.
+ *   driver.ts     `createGatewayDriver(connection)`.
+ *
+ * Everything else in the feature depends only on the port interfaces declared
+ * in `engine.ts` / `actions.ts`.
  */
-export { SessionService, createSessionService, type SessionServiceOptions } from './session-service.js';
+
+import { Ledger } from './ledger.ts';
+import { createWorkspaceSnapshot, WorkspaceFileSource, readDocumentRules } from './workspace.ts';
+import { createViews } from './views.ts';
+import { createCallRunner, type CallRunner } from './calls.ts';
+import { createGatewayDriver, type ModelDriver } from './driver.ts';
+import {
+  createEngine,
+  type CallsPort,
+  type EnginePorts,
+  type Session,
+  type SessionHost,
+} from './engine.ts';
+
+export type {
+  ActionBaseContext,
+  ActionRunContext,
+  BuiltView,
+  CallRunRequest,
+  CallRunResult,
+  CallsPort,
+  EnginePorts,
+  FilesPort,
+  LedgerPort,
+  LiveCall,
+  ProjectInfo,
+  RecallGate,
+  RecalledFile,
+  Session,
+  SessionHost,
+  SessionViewInfo,
+  SnapshotInput,
+  SnapshotProjectInput,
+  TurnPhase,
+  ViewMessage,
+  ViewsPort,
+} from './engine.ts';
+export { MAX_CYCLES } from './engine.ts';
+export type {
+  ActionExecutionOutcome,
+  ActionKind,
+  ActionParseResult,
+  ActionStatus,
+  DocType,
+  ParsedAction,
+  ParsedDocBlock,
+  SchemaValidation,
+  SplitActionBlock,
+} from './actions.ts';
+export { ActionRunner, ActionSplitter, DOC_TYPE_DIRS, parseDocBlock, validateJsonSchema } from './actions.ts';
+export type { CallLedgerEventDraft, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
+export { CALL_ROLES, checkContextBudget, estimateTokens, resolveModelMetadata } from './calls.ts';
+export type { DriverResult, ModelDriver, ModelMessage, Usage } from './driver.ts';
+export { createGatewayDriver } from './driver.ts';
+export type { SummarySettingsOption, SummarySettingsSnapshot } from './summary-model.ts';
+export {
+  DEFAULT_SUMMARY_CANONICAL_MODEL,
+  buildSummarySettingsSnapshot,
+  readSummaryModel,
+  saveSummaryModel,
+} from './summary-model.ts';
+export type {
+  ActionBlockEvent,
+  ActionFinishedEvent,
+  ActionStartedEvent,
+  CallEvent,
+  CallStartedEvent,
+  ContextSelectedEvent,
+  DocReadEvent,
+  ErrorEvent,
+  LedgerEvent,
+  LedgerEventBase,
+  LedgerEventDraft,
+  LedgerEventType,
+  MemoryRecalledEvent,
+  ProjectSnapshot,
+  ReasonCompletedEvent,
+  ReplyEvent,
+  SessionCreatedEvent,
+  SessionSummary,
+  TaskBrief,
+  TitleEvent,
+  TurnFinishedEvent,
+  TurnInterruptedEvent,
+  TurnStartedEvent,
+  TurnStatus,
+  WorkspaceSnapshot,
+  WsUpdatedEvent,
+} from './ledger.ts';
+
+/** Create the session feature over a host. */
+export function createSession(host: SessionHost): Session {
+  const ledger = new Ledger({ stateRoot: host.stateRoot, workspaceRoot: host.workspaceRoot, now: host.now });
+  const views = createViews(readDocumentRules(host.workspaceRoot));
+
+  // The call runner is session-scoped because its `append` sink is the only way
+  // a `call` event reaches the owning timeline. The gateway is resolved inside
+  // `driver.complete`, so acquiring it is covered by the call timeout and its
+  // outcome is recorded in the `call` event; a failed lookup is never cached.
+  const runners = new Map<string, CallRunner>();
+  const calls = (sessionId: string): CallsPort => {
+    let runner = runners.get(sessionId);
+    if (!runner) {
+      const driver: ModelDriver = {
+        async complete(request) {
+          const connection = await host.gateway();
+          return createGatewayDriver(connection).complete(request);
+        },
+      };
+      runner = createCallRunner({
+        driver,
+        cheapModel: () => host.cheapModel(),
+        append: async (event) => {
+          await ledger.append(sessionId, event);
+        },
+        ...(host.now === undefined ? {} : { now: () => host.now!() }),
+      });
+      runners.set(sessionId, runner);
+    }
+    return runner;
+  };
+
+  const ports: EnginePorts = {
+    ledger,
+    createSnapshot: (input) => createWorkspaceSnapshot(input),
+    files: (snapshot, workspaceRoot) => new WorkspaceFileSource({ workspaceRoot, snapshot }),
+    views,
+    calls,
+  };
+  return createEngine(host, ports);
+}

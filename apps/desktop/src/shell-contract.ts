@@ -1,24 +1,91 @@
-import type { ConversationSnapshot, SummarySettingsSnapshot, TaskRunSnapshot, WorkspaceConfigurationSnapshot } from '@wrenyard/protocol/session';
 import type { PetSettingsPayload } from './pet/main/config';
+import type { SummarySettingsSnapshot } from '@wrenyard/session';
 
-// Shared conversation DTOs are owned by the protocol session surface. Desktop
-// re-exports them here so existing Desktop consumers keep one import site.
-export type {
-  ConversationItemSnapshot,
-  ConversationModelGroupSnapshot,
-  ConversationModelOptionSnapshot,
-  ConversationModelSelectionSnapshot,
-  ConversationModelsSnapshot,
-  ConversationSessionSnapshot,
-  ConversationSnapshot,
-  ConversationTurnSnapshot,
-  SummaryModelOptionSnapshot,
-  SummarySettingsSnapshot,
-  TaskRunSnapshot,
-  TaskRunSpeedEvidence,
-  TaskRunUsage,
-  WorkspaceConfigurationSnapshot,
-} from '@wrenyard/protocol/session';
+// The summary-settings DTO is owned by the session feature. Desktop re-exports
+// it here so existing Desktop consumers keep one import site.
+export type { SummarySettingsSnapshot };
+
+/**
+ * Whether a workspace is usable, plus where the configuration came from. A
+ * snapshot never carries a credential; `readOnly` marks a configuration the
+ * product itself may not rewrite.
+ */
+export interface WorkspaceConfigurationSnapshot {
+  status: 'configured' | 'missing' | 'invalid';
+  source: 'environment' | 'user-config' | 'none';
+  configPath: string;
+  path?: string;
+  message?: string;
+  readOnly: boolean;
+}
+
+/**
+ * Selection-time speed evidence from the resolved speed contract. This is the
+ * estimate chosen before the run started; it is distinct from the actual
+ * measured `usage.outputTps` captured after the run completed.
+ */
+export interface TaskRunSpeedEvidence {
+  /** Selection-time expected throughput (tokens per second). */
+  effectiveTps: number;
+  /** Where the selection estimate came from. Invalid evidence is omitted as a whole. */
+  source: 'local_31d' | 'provider_override' | 'catalog_default';
+  /** Number of local samples behind the selection estimate, when known. */
+  sampleCount: number | null;
+  /** Whether actual throughput is expected to meet the selection estimate, when known. */
+  expectedTpsMet: boolean | null;
+  /** Reason the selection estimate is considered degraded, when known. */
+  degradationReason?: string;
+}
+
+/**
+ * Per-run usage projection. Completeness reflects the CORE `reference_cost_complete`
+ * flag: only `true` marks a run fully costed. Partial runs keep unknown optional
+ * numbers absent rather than substituting zero; `unavailable` runs carry identity
+ * only. `referenceCostUsd` is an estimate, never a billed amount.
+ */
+export interface TaskRunUsage {
+  completeness: 'complete' | 'partial' | 'unavailable';
+  attemptCount: number;
+  usageEventCount: number;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  generationMs?: number;
+  outputTps?: number;
+  tpsContract?: 'tokenizer_v1';
+  /** Estimated reference cost in USD. Absent (`undefined`) when CORE omits the numeric; never a fabricated value. */
+  referenceCostUsd?: number;
+  /** True when CORE fully costed this run; partial runs omit the cost. */
+  referenceCostComplete: boolean;
+  referenceCostBasis?: string;
+}
+
+/** A single recent Task run, projected from CORE's frozen TaskRunOutputResult metadata. */
+export interface TaskRunSnapshot {
+  taskRunId: string;
+  taskId: string;
+  taskName?: string;
+  source?: 'builtin' | 'project' | 'unknown';
+  /** Exact persisted execution project; present only when nonblank. */
+  project?: string;
+  status?: 'done' | 'failed' | 'cancelled' | 'interrupted' | 'running' | 'queued';
+  startedAt?: string;
+  finishedAt?: string;
+  resolvedClient?: string;
+  resolvedProvider?: string;
+  resolvedProfile?: string;
+  resolvedModel?: string;
+  resolvedModelId?: string;
+  /** Paired Catalog provider display label; present only when the run row carries both labels. */
+  resolvedProviderDisplayName?: string;
+  /** Paired Catalog model display label; present only when the run row carries both labels. */
+  resolvedModelDisplayName?: string;
+  speed?: TaskRunSpeedEvidence;
+  usage: TaskRunUsage;
+}
 
 export const ACTIVITY_BAR_WIDTH = 48;
 
@@ -30,16 +97,9 @@ export const SHELL_CHANNELS = {
   saveProviderOrder: 'wrenyard-shell:save-provider-order',
   savePetSettings: 'wrenyard-shell:save-pet-settings',
   saveWorkspace: 'wrenyard-shell:save-workspace',
-  conversationSnapshot: 'wrenyard-shell:conversation-snapshot',
-  conversationActivity: 'wrenyard-shell:conversation-activity',
   taskTranscript: 'wrenyard-shell:task-transcript',
   copyText: 'wrenyard-shell:copy-text',
   openExternal: 'wrenyard-shell:open-external',
-  conversationSelect: 'wrenyard-shell:conversation-select',
-  conversationCreate: 'wrenyard-shell:conversation-create',
-  conversationSelectModel: 'wrenyard-shell:conversation-select-model',
-  conversationSend: 'wrenyard-shell:conversation-send',
-  conversationCancel: 'wrenyard-shell:conversation-cancel',
   configureProviderKey: 'wrenyard-shell:configure-provider-key',
   openProviderKeyPage: 'wrenyard-shell:open-provider-key-page',
   updateSnapshot: 'wrenyard-shell:update-snapshot',
@@ -48,7 +108,6 @@ export const SHELL_CHANNELS = {
   daemonSnapshot: 'wrenyard-shell:daemon-snapshot',
   daemonStart: 'wrenyard-shell:daemon-start',
   daemonRestart: 'wrenyard-shell:daemon-restart',
-  conversationChanged: 'wrenyard-shell:conversation-changed',
   quotaChanged: 'wrenyard-shell:quota-changed',
   updateChanged: 'wrenyard-shell:update-changed',
   daemonChanged: 'wrenyard-shell:daemon-changed',
@@ -68,7 +127,7 @@ export const SHELL_CHANNELS = {
   execCancel: 'wrenyard-shell:exec-cancel',
 } as const;
 
-export type ShellPage = 'workbench' | 'stats' | 'quota' | 'settings' | 'tasks';
+export type ShellPage = 'session' | 'stats' | 'quota' | 'settings' | 'tasks';
 
 export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
@@ -150,7 +209,6 @@ export interface SettingsSnapshot {
   about: {
     desktopVersion: string;
     wrenyardVersion: string;
-    dshVersion: string;
     buildTime?: string;
     /** Present only while Desktop is running from `pnpm dev`. */
     sourceDevelopment?: boolean;
@@ -198,19 +256,6 @@ export interface StatsDailySnapshot {
   outcomes?: Omit<StatsOutcomesSnapshot, 'running'>;
 }
 
-export interface StatsRankingSnapshot {
-  /** Canonical internal identity: a server `model` when provided, else the legacy `profile`/`taskName`. */
-  name: string;
-  /** Canonical model identity carried by newer payloads; absent on legacy profile-only rows. */
-  model?: string;
-  /** Exact unified Catalog model display label; absent when the server does not supply one. */
-  modelDisplayName?: string;
-  /** Exact Catalog provider display names backing this row, de-duplicated by the server. */
-  providerDisplayNames?: string[];
-  dispatchCount: number;
-  totalTokens: number;
-}
-
 export type StatsPeriod = '24h' | '7d' | '1mo';
 
 export interface StatsWindowSnapshot {
@@ -252,11 +297,8 @@ export interface StatsWindowSnapshot {
 
 export interface StatsSnapshot {
   status: 'available' | 'unavailable';
-  source: 'summary' | 'today' | 'unavailable';
   today: StatsTodaySnapshot | null;
   daily: StatsDailySnapshot[];
-  byProfile: StatsRankingSnapshot[];
-  byTask: StatsRankingSnapshot[];
   windows: StatsWindowSnapshot[];
   recentTaskRuns: TaskRunSnapshot[];
 }
@@ -347,15 +389,6 @@ export interface QuotaSnapshot {
   providerOrder: ProviderOrderSnapshot[];
   refreshedAt?: number;
   message?: string;
-}
-
-export interface ConversationActivityItem {
-  id: string;
-  label: string;
-  status: string;
-  taskRunId?: string;
-  project?: string;
-  runtime?: string;
 }
 
 /**
@@ -735,18 +768,10 @@ export interface WrenyardShellApi {
   onDaemonChanged(listener: () => void): () => void;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
-  getConversation(): Promise<ConversationSnapshot>;
-  getConversationActivity(): Promise<ConversationActivityItem[]>;
   openTaskTranscript(taskRunId: string): Promise<void>;
   copyText(text: string): Promise<void>;
   /** Open an `http:`/`https:` URL in the OS browser; other schemes are rejected. */
   openExternal(url: string): Promise<void>;
-  selectConversation(sessionId: string): Promise<ConversationSnapshot>;
-  createConversation(): Promise<ConversationSnapshot>;
-  selectConversationModel(provider: string, model: string, reasoningEffort?: string): Promise<ConversationSnapshot>;
-  sendConversation(text: string, clientTimeZone?: string): Promise<ConversationSnapshot>;
-  cancelConversation(turnId?: string): Promise<ConversationSnapshot>;
-  onConversationChanged(listener: () => void): () => void;
   onQuotaChanged(listener: () => void): () => void;
   onUpdateChanged(listener: () => void): () => void;
   onViewChanged(listener: (page: ShellPage) => void): () => void;
@@ -766,7 +791,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'workbench' || value === 'stats' || value === 'quota' || value === 'settings' || value === 'tasks';
+  return value === 'session' || value === 'stats' || value === 'quota' || value === 'settings' || value === 'tasks';
 }
 
 /**
@@ -812,7 +837,7 @@ export function acceleratorPage(input: AcceleratorInput, platform: NodeJS.Platfo
   const command = platform === 'darwin' ? input.meta === true : input.control === true;
   if (!command) return null;
   if (input.key === ',') return 'settings';
-  if (input.key === '1') return 'workbench';
+  if (input.key === '1') return 'session';
   if (input.key === '2') return 'stats';
   if (input.key === '3') return 'quota';
   if (input.key === '4') return 'tasks';

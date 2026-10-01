@@ -13,10 +13,10 @@ import type {
 } from './common/methods.ts'
 import type { ExecMethods } from './exec/methods.ts'
 import type { ProviderMethods } from './provider/methods.ts'
-import type { SessionMethods, SessionNotifications } from './session/methods.ts'
 
-export interface ProtocolMethods extends SessionMethods, ExecMethods, ProviderMethods {}
-export interface ProtocolNotifications extends SessionNotifications {}
+export interface ProtocolMethods extends ExecMethods, ProviderMethods {}
+/** No notification channels are part of the composed protocol yet. */
+export interface ProtocolNotifications {}
 
 export type ProtocolMethod = keyof ProtocolMethods
 export type ProtocolNotification = keyof ProtocolNotifications
@@ -37,6 +37,5 @@ export type ProtocolTypedNotification<Notification extends ProtocolNotification>
 export type ProtocolNotificationUnion = RpcTypedNotificationOf<ProtocolNotifications>
 
 export * from './common/index.ts'
-export * from './session/index.ts'
 export * from './exec/index.ts'
 export * from './provider/index.ts'
