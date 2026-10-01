@@ -18,6 +18,7 @@ import {
   type SetStateAction,
 } from 'react';
 import type { LedgerEvent, ModelEntry, TurnModel } from '../model/types.js';
+import { setQuotaFocus } from '@/renderer/lib/statusbar';
 import { clearDraft, flushDraft, readDraft, writeDraft } from './drafts.js';
 
 export interface SessionUsageInspection {
@@ -90,6 +91,14 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
 
   // Flush the outgoing session's pending draft on switch and on unmount.
   useEffect(() => () => { flushDraft(sessionKey); }, [sessionKey]);
+
+  // Publish the quota provider of the composer's currently selected model so
+  // the status-bar quota item focuses it. Cleared when the page hides (effect
+  // cleanup) or when the selection carries no quota provider.
+  useEffect(() => {
+    setQuotaFocus(models.find((entry) => entry.publicId === modelId)?.quotaProvider ?? null);
+    return () => setQuotaFocus(null);
+  }, [models, modelId]);
 
   const seq = useMemo(() => {
     let latest = 0;
