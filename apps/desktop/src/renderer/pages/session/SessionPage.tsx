@@ -32,7 +32,7 @@ import { PendingTurnItem, TurnItem } from './components/conversation/TurnItem.js
 import { Inspector, InspectorProvider } from './components/inspector/Inspector.js';
 import { fold } from './model/fold.js';
 import type { ActionModel, InspectorTarget, SessionBridgeTaskBrief } from './model/types.js';
-import { onContextInspectionRequest, publishSessionContext, requestContextInspection } from './state/usage-selection.js';
+import { SessionUsageProvider } from './state/session-usage.js';
 import { useSessionController } from './state/use-session-controller.js';
 import { useTaskStatus } from './state/use-task-status.js';
 
@@ -184,22 +184,16 @@ export function SessionPage() {
     return true;
   });
 
-  // Publish the loaded context for the sibling session components (composer,
-  // context meter, inspector) through the shared usage store.
-  useEffect(() => {
-    publishSessionContext({ sessionKey, models: state.models, events: state.events, turns: model.turns });
-  }, [sessionKey, state.models, state.events, model.turns]);
-
-  // Inspector/context requests raised by other session components open the
-  // inspector (selecting the session first when it is not the active one).
-  useEffect(() => onContextInspectionRequest((request) => {
+  // Open the inspector for a usage request, selecting the session first when
+  // the request targets a different one.
+  const inspectRequest = useCallback((request: { sessionKey: string; tab: 'context' | 'ledger'; seq?: number }): void => {
     if (request.sessionKey !== sessionKey) {
       if (!state.sessions.some((session) => session.sessionId === request.sessionKey)) return;
       void selectSession(request.sessionKey).catch(() => undefined);
     }
     setTab(request.tab);
     setInspectorOpen(true);
-  }), [sessionKey, state.sessions, selectSession]);
+  }, [sessionKey, state.sessions, selectSession]);
 
   // Page commands: session.open (routed here by the command table),
   // session.inspectContext and the inspector toggle used by the title bar.
@@ -224,7 +218,11 @@ export function SessionPage() {
         const options = args !== null && typeof args === 'object'
           ? (args as { tab?: 'context' | 'ledger'; seq?: number })
           : undefined;
-        requestContextInspection(sessionKey, options);
+        inspectRequest({
+          sessionKey,
+          tab: options?.tab ?? 'context',
+          ...(options?.seq === undefined ? {} : { seq: options.seq }),
+        });
       },
     },
     {
@@ -232,7 +230,7 @@ export function SessionPage() {
       title: '切换检查器',
       run: () => setInspectorOpen((value) => !value),
     },
-  ]), [selectSession, sessionKey]);
+  ]), [selectSession, sessionKey, inspectRequest]);
 
   // Entry animation applies only to messages appended after the conversation
   // settles; history loads are absorbed into the baseline (foundation §2.3).
@@ -272,7 +270,14 @@ export function SessionPage() {
   return (
     <Page data-page="session">
       <InspectorProvider target={target} inspect={inspect} inspectTimeline={inspectTimeline}>
-        <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
+        <SessionUsageProvider
+          sessionKey={sessionKey}
+          models={state.models}
+          events={state.events}
+          turns={model.turns}
+          onInspect={inspectRequest}
+        >
+          <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
         <Conversation sessionKey={sessionKey} turns={model.turns} ready={!state.loadingLedger} />
         <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen} className="h-full min-h-0">
           <ResizablePanelGroup
@@ -377,6 +382,7 @@ export function SessionPage() {
           sessions={state.sessions}
           onSelect={(sessionId) => { void selectSession(sessionId).catch(() => undefined); }}
         />
+        </SessionUsageProvider>
       </InspectorProvider>
     </Page>
   );
