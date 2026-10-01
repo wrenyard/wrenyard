@@ -1,6 +1,5 @@
 import type { ShellPage } from '@/shell-contract';
 import { shell } from '@/renderer/lib/desktop';
-import { useThemeIcon } from '@/renderer/lib/theme';
 import { PRIMARY_NAV, SETTINGS_NAV, UPDATE_NAV } from '@/renderer/app/nav';
 import {
   Sidebar,
@@ -8,7 +7,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -22,25 +20,17 @@ export interface AppSidebarProps {
 }
 
 /**
- * Fixed icon activity rail. It is always collapsed, so the app icon is a
- * decorative local resource and the primary entries keep their tooltips.
+ * Fixed icon activity rail. It is always collapsed. The official `sidebar-16`
+ * pattern (registered full-app exception) pins it between the title bar and
+ * the status bar instead of the full window height; the update entry stays in
+ * the footer until the status bar owns it.
  */
 export function AppSidebar({ page, updateVisible, onOpenUpdate }: AppSidebarProps) {
-  const appIcon = useThemeIcon();
   return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<div />}>
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg">
-                <img className="h-full w-full" src={appIcon} alt="" aria-hidden="true" />
-              </div>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
-
+    <Sidebar
+      collapsible="icon"
+      className="top-(--titlebar-height) h-[calc(100svh_-_var(--titlebar-height)_-_var(--statusbar-height))]!"
+    >
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent>
