@@ -29,15 +29,6 @@ export type ShapeCommand =
       alpha?: number;
     };
 
-export type RenderTextStyle = {
-  fontFamily: string;
-  fontSize: number;
-  fill: RenderColor;
-  align: 'left' | 'center' | 'right';
-  lineHeight: number;
-  fontWeight: 'normal' | 'bold' | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
-};
-
 export type PixelRect = {
   x: number;
   y: number;
@@ -80,12 +71,6 @@ export interface RenderGraphics extends RenderNode {
   setCommands(commands: readonly ShapeCommand[]): void;
 }
 
-export interface RenderText extends RenderNode {
-  setText(text: string): void;
-  setStyle(style: RenderTextStyle): void;
-  measure(): { width: number; height: number };
-}
-
 export interface RenderPixel extends RenderNode {
   setProgram(program: PixelProgram): void;
 }
@@ -101,7 +86,6 @@ export interface RenderSurface {
   readonly ticker: RenderTicker;
   createContainer(): RenderContainer;
   createGraphics(commands?: readonly ShapeCommand[]): RenderGraphics;
-  createText(text: string, style: RenderTextStyle): RenderText;
   createPixel(program: PixelProgram): RenderPixel;
   resize(cssWidth: number, cssHeight: number, resolution: number): void;
   render(): void;

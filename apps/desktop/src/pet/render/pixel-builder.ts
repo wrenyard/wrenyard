@@ -60,3 +60,26 @@ export class PixelBuilder {
     });
   }
 }
+
+/**
+ * Whether a pixel program paints a non-transparent pixel at `(x, y)`.
+ *
+ * Pet hit testing uses this against the authored sprite program instead of
+ * reading the WebGL canvas back, so transparent sprite pixels keep passing the
+ * pointer through without a GPU readback.
+ */
+export function pixelProgramCoversPoint(
+  program: PixelProgram,
+  x: number,
+  y: number,
+): boolean {
+  const px = Math.floor(x);
+  const py = Math.floor(y);
+  if (px < 0 || py < 0 || px >= program.width || py >= program.height) return false;
+  for (const rect of program.rects) {
+    if (px < rect.x || px >= rect.x + rect.width) continue;
+    if (py < rect.y || py >= rect.y + rect.height) continue;
+    if ((rect.alpha ?? 1) > 0) return true;
+  }
+  return false;
+}

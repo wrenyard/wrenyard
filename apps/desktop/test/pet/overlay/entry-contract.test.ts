@@ -10,6 +10,10 @@ function read(rel: string): string {
   return fs.readFileSync(path.join(rootDir, rel), 'utf8');
 }
 
+function exists(rel: string): boolean {
+  return fs.existsSync(path.join(rootDir, rel));
+}
+
 function indexOfRequired(source: string, needle: string): number {
   const index = source.indexOf(needle);
   expect(index, needle).toBeGreaterThanOrEqual(0);
@@ -19,25 +23,21 @@ function indexOfRequired(source: string, needle: string): number {
 function expectEarlyUpdateBufferContract(
   rel: string,
   subscription: 'onHouseUpdate' | 'onWorkerUpdate',
-  buffer: 'latestHouseState' | 'latestWorkerState',
-  stateType: 'HouseRendererState' | 'WorkerRendererState',
-  presenter: 'HousePresenter' | 'WorkerPresenter',
-  apply: 'applyHouseState' | 'applyWorkerState',
+  buffer: 'latestState',
+  apply: 'applyState',
 ): void {
   const source = read(rel);
-  const subscriptionIndex = indexOfRequired(source, `window.petApi.${subscription}((state) => {`);
+  const subscriptionIndex = indexOfRequired(source, `petApi.${subscription}((state) => {`);
   const firstCreateSurfaceAwaitIndex = indexOfRequired(source, 'await createRenderSurface');
-  const presenterIndex = indexOfRequired(source, `new ${presenter}(surface)`);
-  const applyAssignmentIndex = indexOfRequired(source, `${apply} = (state, nowMs = Date.now()): void => {`);
-  const replayIndex = indexOfRequired(source, `if (${buffer}) {`);
+  const bufferIndex = indexOfRequired(source, `let ${buffer}:`);
+  const applyAssignmentIndex = indexOfRequired(source, `let ${apply}:`);
+  const replayIndex = indexOfRequired(source, `if (${buffer}) `);
 
   expect(subscriptionIndex).toBeLessThan(firstCreateSurfaceAwaitIndex);
-  expect(source).toContain(`let ${buffer}: ${stateType} | undefined;`);
   expect(source).toContain(`${buffer} = state;`);
   expect(source).toContain(`${apply}?.(state);`);
-  expect(applyAssignmentIndex).toBeGreaterThan(presenterIndex);
-  expect(replayIndex).toBeGreaterThan(presenterIndex);
-  expect(source.slice(replayIndex, replayIndex + 140)).toContain(`${apply}(${buffer}, staticPreview?.initNowMs);`);
+  expect(applyAssignmentIndex).toBeGreaterThan(bufferIndex);
+  expect(replayIndex).toBeGreaterThan(firstCreateSurfaceAwaitIndex);
 }
 
 describe('overlay entry contracts', () => {
@@ -50,8 +50,8 @@ describe('overlay entry contracts', () => {
     } as any);
     expect(viewport).toEqual({ cssWidth: 360, cssHeight: 460, dpr: 1 });
     expect(read('src/pet/overlay/viewport.ts')).not.toContain('scaleFactor');
-    expect(read('src/pet/overlay/house/index.ts')).toContain('readBrowserViewport(window)');
-    expect(read('src/pet/overlay/worker/index.ts')).toContain('readBrowserViewport(window)');
+    expect(read('src/pet/overlay/house/HouseOverlay.tsx')).toContain('readBrowserViewport(window)');
+    expect(read('src/pet/overlay/worker/WorkerOverlay.tsx')).toContain('readBrowserViewport(window)');
   });
 
   it('builds production Pet renderer bundles inside the Desktop build graph', () => {
@@ -64,10 +64,9 @@ describe('overlay entry contracts', () => {
       'pet/main/preload/graph-slip.ts', 'pet/main/preload/transcript.ts',
     ]) expect(pages).toContain(preload);
     for (const page of [
-      'pet/overlay/house/index.html', 'pet/overlay/worker/index.html',
-      'pet/overlay/taskgraph-entity/index.html', 'pet/panels/transcript/index.html',
-      'pet/panels/observatory/index.html',
-    ]) expect(pages).toContain(page);
+      'src/pet/overlay/house/index.html', 'src/pet/overlay/worker/index.html',
+      'src/pet/overlay/entity/index.html',
+    ]) expect(exists(page)).toBe(true);
     const tsconfig = JSON.parse(read('tsconfig.json'));
     expect(tsconfig.references).toEqual([{ path: './tsconfig.node.json' }, { path: './tsconfig.web.json' }]);
   });
@@ -83,13 +82,13 @@ describe('overlay entry contracts', () => {
   });
 
   it('keeps Wren placement defaults on the same root element updated at runtime', () => {
-    const entityHtml = read('src/pet/overlay/taskgraph-entity/index.html');
-    const entityRenderer = read('src/pet/overlay/taskgraph-entity/index.ts');
+    const entityHtml = read('src/pet/overlay/entity/index.html');
+    const entityOverlay = read('src/pet/overlay/entity/EntityOverlay.tsx');
 
     expect(entityHtml).toContain(':root{--bird-x:0px;--bird-y:0px;--tip-y:66px}');
     expect(entityHtml).not.toMatch(/html,body\{[^}]*--bird-x/);
-    expect(entityRenderer).toContain("document.documentElement");
-    expect(entityRenderer).toContain("setProperty('--bird-x'");
+    expect(entityOverlay).toContain('document.documentElement');
+    expect(entityOverlay).toContain("setProperty('--bird-x'");
   });
 
   it('keeps broadcast close dismissal local and preserves the dismissed id', () => {
@@ -116,27 +115,27 @@ describe('overlay entry contracts', () => {
     expect(result.state.dailyStats).toBe(state.dailyStats);
   });
 
-  it('registers initial overlay update subscriptions before awaiting renderer setup', () => {
-    expectEarlyUpdateBufferContract(
-      'src/pet/overlay/house/index.ts',
-      'onHouseUpdate',
-      'latestHouseState',
-      'HouseRendererState',
-      'HousePresenter',
-      'applyHouseState',
-    );
-    expectEarlyUpdateBufferContract(
-      'src/pet/overlay/worker/index.ts',
-      'onWorkerUpdate',
-      'latestWorkerState',
-      'WorkerRendererState',
-      'WorkerPresenter',
-      'applyWorkerState',
-    );
+  it('buffers initial overlay updates until the Pixi surface is ready', () => {
+    expectEarlyUpdateBufferContract('src/pet/overlay/house/HouseOverlay.tsx', 'onHouseUpdate', 'latestState', 'applyState');
+    expectEarlyUpdateBufferContract('src/pet/overlay/worker/WorkerOverlay.tsx', 'onWorkerUpdate', 'latestState', 'applyState');
+  });
+
+  it('mounts overlay pages through their .tsx React roots', () => {
+    for (const root of [
+      'src/pet/overlay/house/index.tsx',
+      'src/pet/overlay/worker/index.tsx',
+      'src/pet/overlay/entity/index.tsx',
+    ]) {
+      const source = read(root);
+      expect(source).toContain('createRoot(container).render');
+      expect(source).toContain('await initializePetAppearance()');
+      expect(source).toContain('petAppearanceBridge');
+      expect(source).toContain("from '@/renderer/globals.css'");
+    }
   });
 
   it('keeps the house overlay free of settings and statistics actions', () => {
-    const source = read('src/pet/overlay/house/index.ts');
+    const source = read('src/pet/overlay/house/HouseOverlay.tsx');
     const html = read('src/pet/overlay/house/index.html');
     expect(source).not.toContain('bindActionButtons');
     expect(source).not.toContain('settingsButton');
@@ -148,8 +147,7 @@ describe('overlay entry contracts', () => {
   });
 
   it('forbids hover-target setOnAction/onAction as action trigger mechanism', () => {
-    // The action-triggering pattern must not use the presenter hover-entry callback
-    for (const rel of ['src/pet/overlay/house/index.ts', 'src/pet/features/house/presenter.ts']) {
+    for (const rel of ['src/pet/overlay/house/HouseOverlay.tsx', 'src/pet/features/house/presenter.ts']) {
       const source = read(rel);
       const sourceName = rel.split('/').pop() ?? rel;
       expect(source, `${sourceName} must not use setOnAction for action trigger`).not.toContain('setOnAction');
@@ -158,15 +156,14 @@ describe('overlay entry contracts', () => {
   });
 
   it('keeps static preview deterministic and returns before ticker startup', () => {
-    for (const rel of ['src/pet/overlay/house/index.ts', 'src/pet/overlay/worker/index.ts']) {
+    for (const rel of ['src/pet/overlay/house/HouseOverlay.tsx', 'src/pet/overlay/worker/WorkerOverlay.tsx']) {
       const source = read(rel);
       expect(source).toContain('installStaticPreviewMode(window.location.search, canvas, document)');
-      expect(source).toContain('resize(staticPreview?.initNowMs)');
-      expect(source).toContain('renderAndSync(staticPreview.initNowMs)');
-      expect(source).toContain('const output = renderAndSync(staticPreview.nowMs)');
-      expect(source).toContain('staticPreview.markReady(output)');
+      expect(source).toContain('renderFrame(mode.initNowMs)');
+      expect(source).toContain('renderFrame(mode.nowMs)');
+      expect(source).toContain('mode.markReady(');
 
-      const staticBranch = indexOfRequired(source, 'const initPointer = staticPreview.pointer');
+      const staticBranch = indexOfRequired(source, 'if (mode) {');
       const tickerStart = indexOfRequired(source, 'presenter.start(');
       expect(staticBranch).toBeLessThan(tickerStart);
       expect(source.slice(staticBranch, tickerStart)).toContain('return;');

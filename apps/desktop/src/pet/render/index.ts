@@ -1,12 +1,13 @@
 /**
  * Public render barrel (domain-free fixed API).
  *
- * Re-exports all fixed type/interface declarations from types.ts, the
+ * Re-exports the fixed type/interface declarations from types.ts, the
  * PixelBuilder from pixel-builder.ts, and the createRenderSurface factory from
  * the Pixi adapter. No PixiJS types are surfaced, and no pet-domain module is
  * imported.
  *
- * FU-001 / IU-002
+ * Text is no longer part of this layer: every Pet text/card surface is React
+ * DOM, so the surface only builds sprites, graphics and pixel programs.
  */
 
 // Fixed public types only (no implementation details).
@@ -17,10 +18,8 @@ export type {
   RenderNode,
   RenderContainer,
   RenderGraphics,
-  RenderText,
   RenderColor,
   RenderPoint,
-  RenderTextStyle,
   ShapeCommand,
   PixelRect,
   PixelProgram,
@@ -34,5 +33,5 @@ export type {
 // fixed public name. Consumers call createRenderSurface(canvas, options).
 export { createPixiRenderSurface as createRenderSurface } from './pixi/surface';
 
-// Domain-free builder.
-export { PixelBuilder } from './pixel-builder';
+// Domain-free builder plus the program pixel test used by Pet hit testing.
+export { PixelBuilder, pixelProgramCoversPoint } from './pixel-builder';
