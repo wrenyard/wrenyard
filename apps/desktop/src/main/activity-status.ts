@@ -11,7 +11,7 @@
 // disappearance. Cold start seeds the tracker without emitting anything (no
 // historical replay).
 
-import type { ActivityPresence } from '../pet/shared/activity-snapshot';
+import type { ActivityPresence } from '../shell-contract.js';
 import type { ActivityStatusSnapshot, ActivityStatusTask, ActivityStatusTaskGraph } from '../shell-contract';
 
 /** Empty round used before the first projection; never carries activity. */

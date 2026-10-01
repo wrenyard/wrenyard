@@ -1,4 +1,4 @@
-import type { WorkerClient } from '../shared/snapshot';
+import type { WorkerClient } from '../../shared/snapshot';
 
 export function normalizeClientFamily(clientFamily: string | undefined): WorkerClient | null {
   const normalized = clientFamily?.trim().toLowerCase();

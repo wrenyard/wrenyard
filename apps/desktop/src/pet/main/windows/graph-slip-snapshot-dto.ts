@@ -10,10 +10,10 @@ import type {
   TaskGraphNodeState,
   TaskGraphSlipNode,
   TaskGraphInspectResult,
-} from '../../pet/shared/taskgraph';
-import { normalizeServerDisplayString, normalizeTaskTitle, projectTaskSlipDisplayFields } from '../../pet/shared/taskgraph';
-import type { ActivityTaskGraphPresence } from '../../pet/shared/activity-snapshot';
-import type { TaskGraphSnapshot } from '../daemon-client/foreman-taskgraph-reader';
+} from '../../shared/taskgraph';
+import { normalizeServerDisplayString, normalizeTaskTitle, projectTaskSlipDisplayFields } from '../../shared/taskgraph';
+import type { ActivityTaskGraphPresence } from '../../shared/activity-snapshot';
+import type { TaskGraphSnapshot } from '../../../main/daemon-client/foreman-taskgraph-reader';
 
 /**
  * Check whether a stored snapshot authorises opening a transcript for a

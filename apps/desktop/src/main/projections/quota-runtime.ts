@@ -6,4 +6,4 @@
  * reach into the Pet module for quota types.
  */
 export { parseQuotaJson } from './quota-service';
-export type { QuotaProviderState, QuotaProviderStatus, QuotaWindowRow } from '../../pet/shared/entities';
+export type { QuotaProviderState, QuotaProviderStatus, QuotaWindowRow } from '../../shell-contract.js';

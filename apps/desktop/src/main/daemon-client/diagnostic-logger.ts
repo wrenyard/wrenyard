@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { stateDir } from '../../pet/main/xdg';
+import { stateDir } from '../xdg';
 
 export interface DiagnosticLogger {
   info(event: string, fields?: Record<string, unknown>): void;

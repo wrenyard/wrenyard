@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { resolveDisplay, type DisplayLike } from '../../src/pet/main/display-placement';
-import { houseWindowSize, moveRectToDisplay, resolveHousePlacement } from '../../src/pet/main/entity-geometry';
+import { resolveDisplay, type DisplayLike } from '../../src/pet/main/windows/display-placement';
+import { houseWindowSize, moveRectToDisplay, resolveHousePlacement } from '../../src/pet/main/windows/entity-geometry';
 
 function makeDisplay(id: number, x: number, y: number, width: number, height: number): DisplayLike {
   const rect = { x, y, width, height };

@@ -55,7 +55,7 @@ describe('entity windows', () => {
   });
 
   it('creates house and worker windows with backgroundColor #00000000', async () => {
-    const { createHouseWindow, createWorkerWindow } = await import('../../src/pet/main/entity-windows');
+    const { createHouseWindow, createWorkerWindow } = await import('../../src/pet/main/windows/entity-windows');
     const { BrowserWindow } = await import('electron');
 
     const bounds = { x: 0, y: 0, width: 120, height: 160 };
@@ -86,7 +86,7 @@ describe('entity windows', () => {
   });
 
   it('main-frame did-fail-load prevents showing the window', async () => {
-    const { createHouseWindow } = await import('../../src/pet/main/entity-windows');
+    const { createHouseWindow } = await import('../../src/pet/main/windows/entity-windows');
     const { BrowserWindow } = await import('electron');
 
     const mockOn = vi.fn();
@@ -145,7 +145,7 @@ describe('entity windows', () => {
   });
 
   it('loadFile rejection prevents showing the window', async () => {
-    const { createHouseWindow } = await import('../../src/pet/main/entity-windows');
+    const { createHouseWindow } = await import('../../src/pet/main/windows/entity-windows');
     const { BrowserWindow } = await import('electron');
 
     const mockShowInactive = vi.fn();
@@ -198,7 +198,7 @@ describe('entity windows', () => {
   });
 
   it('normal ready-to-show is preserved when load succeeds', async () => {
-    const { createHouseWindow } = await import('../../src/pet/main/entity-windows');
+    const { createHouseWindow } = await import('../../src/pet/main/windows/entity-windows');
     const { BrowserWindow } = await import('electron');
 
     const mockShowInactive = vi.fn();
@@ -249,7 +249,7 @@ describe('entity windows', () => {
   });
 
   it('installs setWindowOpenHandler before loadFile on every entity window', async () => {
-    const { createHouseWindow, createWorkerWindow } = await import('../../src/pet/main/entity-windows');
+    const { createHouseWindow, createWorkerWindow } = await import('../../src/pet/main/windows/entity-windows');
 
     const bounds = { x: 0, y: 0, width: 120, height: 160 };
 
@@ -296,7 +296,7 @@ describe('entity windows', () => {
   });
 
   it('late main-frame did-fail-load hides an already-visible window; successful renderer recovery does not', async () => {
-    const { createHouseWindow } = await import('../../src/pet/main/entity-windows');
+    const { createHouseWindow } = await import('../../src/pet/main/windows/entity-windows');
     const { BrowserWindow } = await import('electron');
 
     const mockShowInactive = vi.fn();
@@ -376,7 +376,7 @@ describe('entity windows', () => {
   });
 
   it('suppresses the default context menu on overlay entities', async () => {
-    const { createHouseWindow } = await import('../../src/pet/main/entity-windows');
+    const { createHouseWindow } = await import('../../src/pet/main/windows/entity-windows');
     const { BrowserWindow } = await import('electron');
 
     const mockOn = vi.fn();

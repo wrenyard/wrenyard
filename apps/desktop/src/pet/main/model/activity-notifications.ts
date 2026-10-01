@@ -15,9 +15,9 @@
 // - the queue is bounded and serial: one card displays at a time, overflow
 //   drops the oldest pending card, and no poll overwrites the card shown.
 
-import type { ActivityPresence, ActivityTaskGraphPresence, ActivityTaskGraphState } from '../shared/activity-snapshot';
-import type { BroadcastInput } from '../shared/broadcast';
-import { petTransitionNotification, type PetNotificationSink } from './service';
+import type { ActivityPresence, ActivityTaskGraphPresence, ActivityTaskGraphState } from '../../shared/activity-snapshot';
+import type { BroadcastInput } from '../../shared/broadcast';
+import { petTransitionNotification, type PetNotificationSink } from '../service';
 
 export const NOTIFICATION_DURATION_MS = 8000;
 export const MAX_NOTIFICATION_QUEUE = 5;

@@ -1,7 +1,7 @@
 import { BrowserWindow } from 'electron';
-import type { PageLoader } from '../../pages.js';
+import type { PageLoader } from '../../../pages.js';
 import { DisplayRect } from './display-placement';
-import { createOverlayWindow } from './windows/overlay-window';
+import { createOverlayWindow } from './overlay-window';
 
 export interface EntityWindowOptions {
   preloadPath: string;

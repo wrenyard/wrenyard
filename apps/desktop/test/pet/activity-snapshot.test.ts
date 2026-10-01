@@ -9,11 +9,11 @@ import {
 } from '../../src/pet/shared/activity-snapshot';
 import { ActivitySnapshotPoller } from '../../src/main/daemon-client/activity-snapshot-poller';
 import type { DiagnosticLogger } from '../../src/main/daemon-client/diagnostic-logger';
-import { SiteModel } from '../../src/pet/main/site-model';
-import { projectGraphSlipFromActivity } from '../../src/main/windows/graph-slip-snapshot-dto';
+import { SiteModel } from '../../src/pet/main/model/site-model';
+import { projectGraphSlipFromActivity } from '../../src/pet/main/windows/graph-slip-snapshot-dto';
 import { nodeTip, taskStatusLabelZh } from '../../src/pet/panels/observatory/graph-visuals';
 import type { TaskGraphInspectResult, GraphSlipSnapshotDto } from '../../src/pet/shared/taskgraph';
-import type { SessionMetaData } from '../../src/pet/main/agent-types';
+import type { SessionMetaData } from '../../src/main/daemon-client/agent-types';
 
 // ── Wire response factories ──────────────────────────────────────────
 

@@ -18,7 +18,7 @@ import {
   type TaskGraphSlipResult,
   type SafeTranscriptEventData,
   type SafeTaskRunEventsResult,
-} from '../../pet/shared/taskgraph';
+} from '../../pet/main/controller.js';
 
 const NODE_INSPECT_CONCURRENCY = 12;
 const TASKGRAPH_EVENT_PAGE_SIZE = 1_000;

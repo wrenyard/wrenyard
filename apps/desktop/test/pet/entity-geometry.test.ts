@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DisplayLike } from '../../src/pet/main/display-placement';
+import { DisplayLike } from '../../src/pet/main/windows/display-placement';
 import {
   houseWindowSize,
   placeHouseCarrier,
@@ -8,7 +8,7 @@ import {
   resolveHouseCarrierPlacement,
   resolveHousePlacement,
   workerWindowSize,
-} from '../../src/pet/main/entity-geometry';
+} from '../../src/pet/main/windows/entity-geometry';
 
 function makeDisplay(
   id: number,

@@ -1,9 +1,9 @@
 import { BrowserWindow, screen } from 'electron';
-import type { PageLoader } from '../../pages.js';
-import { getAppearance } from '../features/worker/appearance';
+import type { PageLoader } from '../../../pages.js';
+import { getAppearance } from '../../features/worker/appearance';
 import { classifyWorkerClient } from './client-family';
-import { AppConfig, type EntityVisibilityConfig } from './config';
-import { DisplayRect, resolveDisplay } from './display-placement';
+import { AppConfig, type EntityVisibilityConfig } from '../config';
+import { DisplayRect, resolveDisplay } from '../windows/display-placement';
 import {
   clampRectToRect,
   defaultHouseBounds,
@@ -15,19 +15,19 @@ import {
   resolveHouseCarrierPlacement,
   workerWindowSize,
   type ResolvedHouseCarrierPlacement,
-} from './entity-geometry';
-import { createHouseWindow, createWorkerWindow } from './entity-windows';
+} from '../windows/entity-geometry';
+import { createHouseWindow, createWorkerWindow } from '../windows/entity-windows';
 import { buildInfoCard, type InfoCard } from './hover-controller';
 import {
   isFadeOutStage,
   nextWorkerBehaviorStage,
   WorkerBehaviorStage,
 } from './worker-behavior';
-import { HouseRendererState, WorkerRendererState } from '../shared/entities';
-import type { DailyStatsSnapshot, SiteSnapshot, WorkerView } from '../shared/snapshot';
-import type { WorkerSnapshot, Phase } from '../shared/snapshot';
-import type { BroadcastSnapshot } from '../shared/broadcast';
-import type { QuotaTipLine } from '../shared/entities';
+import { HouseRendererState, WorkerRendererState } from '../../shared/entities';
+import type { DailyStatsSnapshot, SiteSnapshot, WorkerView } from '../../shared/snapshot';
+import type { WorkerSnapshot, Phase } from '../../shared/snapshot';
+import type { BroadcastSnapshot } from '../../shared/broadcast';
+import type { QuotaTipLine } from '../../shared/entities';
 
 const FADE_DURATION_MS = 500;
 

@@ -1,7 +1,7 @@
 import { createPageLoader } from '../../src/pages';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EntityManager } from '../../src/pet/main/entity-manager';
-import { createHouseWindow, createWorkerWindow } from '../../src/pet/main/entity-windows';
+import { EntityManager } from '../../src/pet/main/model/entity-manager';
+import { createHouseWindow, createWorkerWindow } from '../../src/pet/main/windows/entity-windows';
 import type { AppConfig } from '../../src/pet/main/config';
 import type { DailyStatsSnapshot, SiteSnapshot, WorkerSnapshot } from '../../src/pet/shared/snapshot';
 import type { QuotaTipLine } from '../../src/pet/shared/entities';
@@ -54,12 +54,12 @@ vi.mock('electron', () => ({
   app: { dock: { hide: vi.fn() } },
 }));
 
-vi.mock('../../src/pet/main/entity-windows', () => ({
+vi.mock('../../src/pet/main/windows/entity-windows', () => ({
   createWorkerWindow: vi.fn(() => makeMockWin()),
   createHouseWindow: vi.fn(() => makeMockWin()),
 }));
 
-vi.mock('../../src/pet/main/entity-geometry', () => ({
+vi.mock('../../src/pet/main/windows/entity-geometry', () => ({
   workerWindowSize: vi.fn(() => ({ width: 120, height: 160 })),
   houseWindowSize: vi.fn(() => ({ width: 400, height: 200 })),
   houseEntitySize: vi.fn(() => ({ width: 144, height: 120 })),

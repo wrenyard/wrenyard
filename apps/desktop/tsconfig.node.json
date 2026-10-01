@@ -23,8 +23,8 @@
     "electron.vite.config.ts",
     "src/*.ts",
     "src/main/**/*.ts",
+    "src/pet/entries.ts",
     "src/pet/main/**/*.ts",
-    "src/pet/preloads/**/*.ts",
     "src/pet/shared/**/*.ts",
     "src/session/**/*.ts"
   ]

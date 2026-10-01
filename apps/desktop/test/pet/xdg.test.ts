@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as xdg from '../../tools/pet/scripts/lib/xdg.mjs';
-import * as xdgTs from '../../src/pet/main/xdg';
+import * as xdgTs from '../../src/main/xdg';
 
 const OLD_ENV = process.env;
 

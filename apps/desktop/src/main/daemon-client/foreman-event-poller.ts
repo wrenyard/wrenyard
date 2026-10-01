@@ -1,12 +1,12 @@
 import type { DiagnosticLogger } from './diagnostic-logger';
-import type { AgentEventSignal, SessionMetaData } from '../../pet/main/agent-types';
+import type { AgentEventSignal, SessionMetaData } from './agent-types';
 import { WrenyardDaemonClient, resolveDaemonIpcPath, type DaemonClient } from './client';
 import {
   mapForgeEvent,
   type EventsEventType,
   type EventsLine,
   type EventsLineData,
-} from '../../pet/main/foreman-event-map';
+} from './foreman-event-map';
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_LIMIT = 200;

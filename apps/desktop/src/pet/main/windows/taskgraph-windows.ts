@@ -1,33 +1,35 @@
-import type { PageLoader } from '../../pages.js';
+import type { PageLoader } from '../../../pages.js';
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import * as path from 'node:path';
-import type { DaemonClient } from '../daemon-client/client';
-import { ForemanTaskGraphReader } from '../daemon-client/foreman-taskgraph-reader';
-import { SerializedAsyncPoller } from '../daemon-client/serialized-async-poller';
-import type { TaskGraphEntityDtoWithPresentation, TaskGraphNodeState, GraphSlipSnapshotDto, TaskGraphInspectResult } from '../../pet/shared/taskgraph';
+import type { DaemonClient } from '../../../main/daemon-client/client';
+import { ForemanTaskGraphReader } from '../../../main/daemon-client/foreman-taskgraph-reader';
+import { SerializedAsyncPoller } from '../../../main/daemon-client/serialized-async-poller';
+import type { TaskGraphEntityDtoWithPresentation, TaskGraphNodeState, GraphSlipSnapshotDto, TaskGraphInspectResult } from '../../shared/taskgraph';
 import { projectGraphSlipFromActivity, activityAllowsTranscript } from './graph-slip-snapshot-dto';
-import type { ActivityPresence, ActivityTaskGraphPresence } from '../../pet/shared/activity-snapshot';
-import { clampRectToRect } from '../../pet/main/entity-geometry';
-import { createOverlayWindow } from '../../pet/main/windows/overlay-window';
+import type { ActivityPresence, ActivityTaskGraphPresence } from '../../shared/activity-snapshot';
+import { clampRectToRect } from './entity-geometry';
+import {
+  ENTITY_WINDOW_HEIGHT,
+  GRAPH_SLIP_MIN_HEIGHT,
+  GRAPH_SLIP_MIN_WIDTH,
+  WREN_DISPLAY_HEIGHT,
+  WREN_DISPLAY_WIDTH,
+  fitGraphSlipWindowSize,
+  placeWrenWindow,
+  type SizeArea,
+  type WrenWindowPlacement,
+} from './placement';
+import { createTaskGraphEntityWindow } from './entity-window';
+import { createGraphSlipWindow } from './slip-window';
+import {
+  TRANSCRIPT_HEIGHT,
+  TRANSCRIPT_WIDTH,
+  createTranscriptWindow,
+  standaloneTranscriptNodeId,
+} from './transcript-window';
 
-// K3 Blueprint Wren: 28x22 authored grid at 3x = 84x66 display pixels,
-// hosted inside a 156x84 transparent entity window (fact slip sits below
-// the bird and still fits inside the window).
-const ENTITY_WINDOW_WIDTH = 156;
-const ENTITY_WINDOW_HEIGHT = 84;
-const WREN_DISPLAY_WIDTH = 84;
-const WREN_DISPLAY_HEIGHT = 66;
-
-const GRAPH_SLIP_MIN_WIDTH = 380;
-const GRAPH_SLIP_MIN_HEIGHT = 280;
-const GRAPH_SLIP_HEADER_HEIGHT = 24;
-const GRAPH_SLIP_SCREEN_MARGIN = 32;
 const GRAPH_SLIP_INITIAL_SIZE_WAIT_MS = 750;
 
-const TRANSCRIPT_WIDTH = 420;
-const TRANSCRIPT_HEIGHT = 520;
-const TRANSCRIPT_MIN_WIDTH = 340;
-const TRANSCRIPT_MIN_HEIGHT = 360;
 const MAX_TRANSCRIPT_WINDOWS = 8;
 
 const POLL_INTERVAL_MS = 2000;
@@ -66,48 +68,6 @@ interface EntityState {
   placement: WrenWindowPlacement;
 }
 
-export interface WrenWindowPlacement {
-  windowBounds: { x: number; y: number; width: number; height: number };
-  birdOffsetX: number;
-  birdOffsetY: number;
-  tipSide: 'above' | 'below';
-}
-
-export function placeWrenWindow(
-  desiredBird: { x: number; y: number },
-  workArea: { x: number; y: number; width: number; height: number },
-): WrenWindowPlacement {
-  const maxBirdX = workArea.x + workArea.width - WREN_DISPLAY_WIDTH;
-  const maxBirdY = workArea.y + workArea.height - WREN_DISPLAY_HEIGHT;
-  const birdX = Math.round(Math.max(workArea.x, Math.min(desiredBird.x, maxBirdX)));
-  const birdY = Math.round(Math.max(workArea.y, Math.min(desiredBird.y, maxBirdY)));
-
-  // Keep the tooltip-bearing transparent window on-screen, but slide the
-  // visible bird inside it. Near the right edge the bird moves to the right
-  // side of the window, leaving the fact slip extending left instead of
-  // blocking further movement. Near the bottom the slip flips above.
-  const maxWindowX = workArea.x + workArea.width - ENTITY_WINDOW_WIDTH;
-  const windowX = Math.round(Math.max(workArea.x, Math.min(birdX, maxWindowX)));
-  const tipSide = birdY + ENTITY_WINDOW_HEIGHT <= workArea.y + workArea.height
-    ? 'below'
-    : 'above';
-  const windowY = tipSide === 'below'
-    ? birdY
-    : birdY - (ENTITY_WINDOW_HEIGHT - WREN_DISPLAY_HEIGHT);
-
-  return {
-    windowBounds: {
-      x: windowX,
-      y: Math.round(windowY),
-      width: ENTITY_WINDOW_WIDTH,
-      height: ENTITY_WINDOW_HEIGHT,
-    },
-    birdOffsetX: birdX - windowX,
-    birdOffsetY: tipSide === 'below' ? 0 : ENTITY_WINDOW_HEIGHT - WREN_DISPLAY_HEIGHT,
-    tipSide,
-  };
-}
-
 interface GraphSlipState {
   id: string;
   window: BrowserWindow;
@@ -123,28 +83,6 @@ interface GraphSlipState {
   shown: boolean;
   initialSizeWaitElapsed: boolean;
   initialSizeWaitTimer?: ReturnType<typeof setTimeout>;
-}
-
-interface SizeArea {
-  width: number;
-  height: number;
-}
-
-export function fitGraphSlipWindowSize(
-  content: SizeArea,
-  workArea: SizeArea,
-  saved?: { width?: number; height?: number },
-): { width: number; height: number } {
-  const maxWidth = Math.max(GRAPH_SLIP_MIN_WIDTH, Math.floor(workArea.width - GRAPH_SLIP_SCREEN_MARGIN));
-  const maxHeight = Math.max(GRAPH_SLIP_MIN_HEIGHT, Math.floor(workArea.height - GRAPH_SLIP_SCREEN_MARGIN));
-  const hasSavedSize = typeof saved?.width === 'number' && Number.isFinite(saved.width)
-    && typeof saved?.height === 'number' && Number.isFinite(saved.height);
-  const requestedWidth = hasSavedSize ? saved.width! : Math.ceil(content.width);
-  const requestedHeight = hasSavedSize ? saved.height! : Math.ceil(content.height + GRAPH_SLIP_HEADER_HEIGHT);
-  return {
-    width: Math.min(maxWidth, Math.max(GRAPH_SLIP_MIN_WIDTH, requestedWidth)),
-    height: Math.min(maxHeight, Math.max(GRAPH_SLIP_MIN_HEIGHT, requestedHeight)),
-  };
 }
 
 /** Shared static-structure cache entry (taskgraph.inspect), keyed by graph id.
@@ -723,18 +661,28 @@ export class TaskGraphWindowOwner {
   }
 
   private createEntity(id: string, dto: TaskGraphEntityDtoWithPresentation, positionIndex: number): void {
-    const win = createOverlayWindow({
-      width: ENTITY_WINDOW_WIDTH,
-      height: ENTITY_WINDOW_HEIGHT,
+    // The factory only wires window-scoped behaviour; entityState is assigned
+    // synchronously right after it returns and the async window events fire
+    // later, so the callbacks observe the populated state.
+    let entityState!: EntityState;
+    const win = createTaskGraphEntityWindow({
       preloadPath: path.join(this.preloadDir, 'entity.cjs'),
-      focusable: false,
-      ...(this.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
+      pageLoader: this.pageLoader,
+      windowId: id,
+      stayHidden: this.stayHidden,
+      onLoadFailure: () => {
+        this.logger.warn(`entity ${id} load failed`);
+        this.removeEntity(id);
+      },
+      onReady: () => {
+        if (this.entities.get(id) !== entityState) return;
+        this.pushEntityPlacement(entityState);
+        this.pushEntityState(entityState);
+      },
+      isVisible: () => this.entitiesVisible,
     });
 
-    // Start with full window passthrough; only bird/fact-slip areas become interactive
-    win.setIgnoreMouseEvents(true, { forward: true });
-
-    const entityState: EntityState = {
+    entityState = {
       id,
       dto,
       window: win,
@@ -746,35 +694,6 @@ export class TaskGraphWindowOwner {
     };
     this.entities.set(id, entityState);
     this.positionEntity(entityState, positionIndex);
-
-    let loadFailed = false;
-    const handleLoadFailure = (): void => {
-      if (loadFailed) return;
-      loadFailed = true;
-      this.logger.warn(`entity ${id} load failed`);
-      this.removeEntity(id);
-    };
-
-    win.webContents.on('did-fail-load', (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
-      if (isMainFrame) handleLoadFailure();
-    });
-    win.webContents.on('render-process-gone', () => handleLoadFailure());
-
-    win.webContents.on('did-finish-load', () => {
-      if (this.entities.get(id) === entityState && !win.isDestroyed() && !loadFailed) {
-        this.pushEntityPlacement(entityState);
-        this.pushEntityState(entityState);
-      }
-    });
-    this.pageLoader.load(win, 'entity', { entity_id: id }).catch(() => handleLoadFailure());
-
-    win.once('ready-to-show', () => {
-      if (this.entities.get(id) === entityState && !win.isDestroyed() && !loadFailed) {
-        this.pushEntityPlacement(entityState);
-        this.pushEntityState(entityState);
-        if (!this.stayHidden && this.entitiesVisible) win.showInactive();
-      }
-    });
 
     win.on('closed', () => {
       if (this.entities.get(id) !== entityState) return;
@@ -929,20 +848,56 @@ export class TaskGraphWindowOwner {
       height: initialSize.height,
     }, workArea);
 
-    const win = createOverlayWindow({
-      x: initialBounds.x,
-      y: initialBounds.y,
-      width: initialBounds.width,
-      height: initialBounds.height,
+    let slipState!: GraphSlipState;
+    const win = createGraphSlipWindow({
+      bounds: initialBounds,
       minWidth: GRAPH_SLIP_MIN_WIDTH,
       minHeight: GRAPH_SLIP_MIN_HEIGHT,
       preloadPath: path.join(this.preloadDir, 'graph-slip.cjs'),
-      resizable: true,
-      focusable: true,
-      ...(this.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
+      stayHidden: this.stayHidden,
+      pageLoader: this.pageLoader,
+      graphId,
+      onLoadFailure: () => {
+        this.logger.warn(`graph slip ${graphId} load failed`);
+        if (!slipState.window.isDestroyed()) slipState.window.close();
+      },
+      onDidFinishLoad: () => {
+        if (this.graphSlips.get(graphId) === slipState) this.refreshSlipProjection(slipState);
+      },
+      onReady: () => {
+        if (this.graphSlips.get(graphId) !== slipState) return;
+        slipState.readyToShow = true;
+        this.maybeShowGraphSlip(slipState);
+      },
+      onWillResize: () => {
+        if (!this.stayHidden && Date.now() >= slipState.autoResizeGuardUntil) {
+          slipState.manualResizeArmed = true;
+        }
+      },
+      onWillMove: () => {
+        // Electron emits will-move only for a user-initiated move, so unlike
+        // resize this needs no guard against the initial programmatic fit.
+        if (!this.stayHidden) slipState.manualMoveArmed = true;
+      },
+      onMove: (bounds) => {
+        if (!slipState.manualMoveArmed) return;
+        this.persistGraphSlipGeometry({ x: bounds.x, y: bounds.y });
+      },
+      onResize: (bounds) => {
+        if (!slipState.manualResizeArmed) return;
+        slipState.manualResizeArmed = false;
+        slipState.manualSize = true;
+        slipState.initialAutoSizeApplied = true;
+        this.persistGraphSlipGeometry(bounds);
+      },
+      onClosed: () => {
+        if (this.graphSlips.get(graphId) !== slipState) return;
+        if (slipState.initialSizeWaitTimer) clearTimeout(slipState.initialSizeWaitTimer);
+        this.graphSlips.delete(graphId);
+      },
     });
 
-    const slipState: GraphSlipState = {
+    slipState = {
       id: graphId,
       window: win,
       presence: this.lastPresence?.taskgraphs.find((g) => g.taskgraphId === graphId) ?? null,
@@ -964,68 +919,6 @@ export class TaskGraphWindowOwner {
       }, GRAPH_SLIP_INITIAL_SIZE_WAIT_MS);
     }
 
-    let loadFailed = false;
-    const handleLoadFailure = (): void => {
-      if (loadFailed) return;
-      loadFailed = true;
-      this.logger.warn(`graph slip ${graphId} load failed`);
-      if (!win.isDestroyed()) win.close();
-    };
-
-    win.webContents.on('did-fail-load', (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
-      if (isMainFrame) handleLoadFailure();
-    });
-    win.webContents.on('render-process-gone', () => handleLoadFailure());
-
-    win.webContents.on('did-finish-load', () => {
-      if (this.graphSlips.get(graphId) === slipState && !win.isDestroyed() && !loadFailed) {
-        this.refreshSlipProjection(slipState);
-      }
-    });
-
-    this.pageLoader.load(win, 'graph-slip', { graph_id: graphId }).catch(() => handleLoadFailure());
-
-    win.once('ready-to-show', () => {
-      if (this.graphSlips.get(graphId) === slipState && !win.isDestroyed() && !loadFailed) {
-        slipState.readyToShow = true;
-        this.maybeShowGraphSlip(slipState);
-      }
-    });
-
-    win.on('will-resize', () => {
-      if (!this.stayHidden && Date.now() >= slipState.autoResizeGuardUntil) {
-        slipState.manualResizeArmed = true;
-      }
-    });
-
-    win.on('will-move', () => {
-      // Electron emits will-move only for a user-initiated move, so unlike
-      // resize this needs no guard against the initial programmatic fit.
-      if (!this.stayHidden) {
-        slipState.manualMoveArmed = true;
-      }
-    });
-
-    win.on('move', () => {
-      if (!slipState.manualMoveArmed || win.isDestroyed()) return;
-      const bounds = win.getBounds();
-      this.persistGraphSlipGeometry({ x: bounds.x, y: bounds.y });
-    });
-
-    win.on('resize', () => {
-      if (!slipState.manualResizeArmed || win.isDestroyed()) return;
-      slipState.manualResizeArmed = false;
-      const bounds = win.getBounds();
-      slipState.manualSize = true;
-      slipState.initialAutoSizeApplied = true;
-      this.persistGraphSlipGeometry(bounds);
-    });
-
-    win.on('closed', () => {
-      if (this.graphSlips.get(graphId) !== slipState) return;
-      if (slipState.initialSizeWaitTimer) clearTimeout(slipState.initialSizeWaitTimer);
-      this.graphSlips.delete(graphId);
-    });
   }
 
   private applyInitialGraphSlipSize(slip: GraphSlipState, content: SizeArea): void {
@@ -1132,86 +1025,36 @@ export class TaskGraphWindowOwner {
     const x = Math.round(workArea.x + (workArea.width - TRANSCRIPT_WIDTH) / 2);
     const y = Math.round(workArea.y + (workArea.height - TRANSCRIPT_HEIGHT) / 2);
 
-    const win = new BrowserWindow({
-      x,
-      y,
-      width: TRANSCRIPT_WIDTH,
-      height: TRANSCRIPT_HEIGHT,
-      minWidth: TRANSCRIPT_MIN_WIDTH,
-      minHeight: TRANSCRIPT_MIN_HEIGHT,
-      transparent: false,
-      frame: true,
-      thickFrame: false,
-      hasShadow: true,
-      skipTaskbar: false,
-      alwaysOnTop: false,
-      focusable: true,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      closable: true,
-      title: taskLabel,
-      ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const } : {}),
-      show: false,
-      ...(this.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
-      acceptFirstMouse: true,
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        preload: path.join(this.preloadDir, 'transcript.cjs'),
+    let win!: BrowserWindow;
+    win = createTranscriptWindow({
+      taskRunId,
+      nodeId,
+      taskLabel,
+      bounds: { x, y },
+      preloadPath: path.join(this.preloadDir, 'transcript.cjs'),
+      stayHidden: this.stayHidden,
+      pageLoader: this.pageLoader,
+      attachAppearance: this.attachAppearance,
+      onLoadFailure: () => {
+        this.logger.warn(`transcript panel ${taskRunId} load failed`);
+        if (!win.isDestroyed()) win.close();
       },
-    });
-    // Themed window: follow the resolved appearance instead of a hardcoded paper.
-    this.attachAppearance?.(win);
-
-    win.setMenuBarVisibility(false);
-    if (process.platform === 'darwin') {
-      win.setWindowButtonVisibility(false);
-    }
-    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    win.webContents.on('did-create-window', (childWin) => {
-      if (!childWin.isDestroyed()) childWin.destroy();
-    });
-
-    let loadFailed = false;
-    const handleLoadFailure = (): void => {
-      if (loadFailed) return;
-      loadFailed = true;
-      this.logger.warn(`transcript panel ${taskRunId} load failed`);
-      if (!win.isDestroyed()) win.close();
-    };
-
-    win.webContents.on('did-fail-load', (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
-      if (isMainFrame) handleLoadFailure();
-    });
-    win.webContents.on('render-process-gone', () => handleLoadFailure());
-    win.webContents.on('did-finish-load', () => {
-      if (this.transcriptWindows.get(taskRunId) === win && !win.isDestroyed() && !loadFailed) {
-        void this.loadTranscriptPage(taskRunId);
-      }
-    });
-
-    this.pageLoader.load(win, 'transcript', {
-      task_run_id: taskRunId, node_id: nodeId, task_label: taskLabel, platform: process.platform,
-    }).catch(() => handleLoadFailure());
-
-    win.once('ready-to-show', () => {
-      if (!win.isDestroyed() && !loadFailed) {
-        if (!this.stayHidden) {
-          win.show();
-          win.focus();
-        }
-      }
-    });
-
-    win.on('closed', () => {
-      if (this.transcriptWindows.get(taskRunId) !== win) return;
-      this.transcriptWindows.delete(taskRunId);
-      this.transcriptGraphOwners.delete(taskRunId);
-      this.stopTranscriptPolling(taskRunId);
-      this.transcriptLoadGenerations.delete(taskRunId);
-      this.liveTranscriptRuns.delete(taskRunId);
+      onDidFinishLoad: () => {
+        if (this.transcriptWindows.get(taskRunId) === win) void this.loadTranscriptPage(taskRunId);
+      },
+      onReady: () => {
+        if (this.stayHidden) return;
+        win.show();
+        win.focus();
+      },
+      onClosed: () => {
+        if (this.transcriptWindows.get(taskRunId) !== win) return;
+        this.transcriptWindows.delete(taskRunId);
+        this.transcriptGraphOwners.delete(taskRunId);
+        this.stopTranscriptPolling(taskRunId);
+        this.transcriptLoadGenerations.delete(taskRunId);
+        this.liveTranscriptRuns.delete(taskRunId);
+      },
     });
 
     this.transcriptWindows.set(taskRunId, win);
@@ -1286,7 +1129,7 @@ export class TaskGraphWindowOwner {
     this.transcriptPoller.stop(key);
   }
 
-  private pushTranscriptData(taskRunId: string, data: import('../../pet/shared/taskgraph').SafeTaskRunEventsResult): void {
+  private pushTranscriptData(taskRunId: string, data: import('../../shared/taskgraph').SafeTaskRunEventsResult): void {
     const win = this.transcriptWindows.get(taskRunId);
     if (!win || win.isDestroyed()) return;
     win.webContents.send(`transcript:data-${taskRunId}`, data);
@@ -1340,12 +1183,23 @@ export class TaskGraphWindowOwner {
 }
 
 /**
- * Canonical standalone transcript node id for a direct (non-TaskGraph) task
- * run. A standalone run has no graph/node, so the run id itself is the stable
- * node identity — callers never synthesize an arbitrary graph node id.
+ * The narrow external surface of the TaskGraph window owner. Desktop main
+ * wires this handle and never constructs the owner directly, so the concrete
+ * class stays private to the Pet module.
  */
-export function standaloneTranscriptNodeId(taskRunId: string): string {
-  return taskRunId;
+export interface TaskGraphWindowsHandle {
+  applyActivity(presence: ActivityPresence): void;
+  reconnect(): void;
+  getTrackedTaskgraphIds(): string[];
+  setEntitiesVisible(visible: boolean): void;
+  openTaskTranscript(taskRunId: string): Promise<void>;
+  openTaskGraph(taskGraphId: string): Promise<void>;
+  destroy(): void;
+}
+
+/** Factory for the shared TaskGraph window owner (see the Pet controller). */
+export function createTaskGraphWindows(options: TaskGraphWindowOwnerOptions): TaskGraphWindowsHandle {
+  return new TaskGraphWindowOwner(options);
 }
 
 /**

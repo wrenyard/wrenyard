@@ -32,7 +32,7 @@ describe('overlay PetApi contract', () => {
   });
 
   it('keeps preload channel names and unsubscribe listener removal unchanged', () => {
-    const source = fs.readFileSync(path.join(rootDir, 'src/pet/main/preload.ts'), 'utf8');
+    const source = fs.readFileSync(path.join(rootDir, 'src/pet/main/preload/index.ts'), 'utf8');
     for (const channel of ['site:snapshot', 'house:update', 'worker:update']) {
       expect(source).toContain(`ipcRenderer.on('${channel}', handler)`);
       expect(source).toContain(`ipcRenderer.removeListener('${channel}', handler)`);
@@ -51,7 +51,7 @@ describe('overlay PetApi contract', () => {
   });
 
   it('does not expose product navigation or panel IPC from the companion preload', () => {
-    const source = fs.readFileSync(path.join(rootDir, 'src/pet/main/preload.ts'), 'utf8');
+    const source = fs.readFileSync(path.join(rootDir, 'src/pet/main/preload/index.ts'), 'utf8');
     expect(source).not.toContain("ipcRenderer.invoke('settings:");
     expect(source).not.toContain("ipcRenderer.invoke('stats:");
     expect(source).not.toContain("ipcRenderer.invoke('house:open-");

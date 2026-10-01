@@ -1,9 +1,9 @@
-import type { Phase, WorkerSnapshot, SiteSnapshot, SessionMetaData } from '../shared/snapshot';
-import type { BroadcastInput, BroadcastSnapshot } from '../shared/broadcast';
-import { normalizeBroadcast, shouldExpireBroadcast } from '../shared/broadcast';
-import type { ActivityPresence, ActivityTaskPresence } from '../shared/activity-snapshot';
+import type { Phase, WorkerSnapshot, SiteSnapshot, SessionMetaData } from '../../shared/snapshot';
+import type { BroadcastInput, BroadcastSnapshot } from '../../shared/broadcast';
+import { normalizeBroadcast, shouldExpireBroadcast } from '../../shared/broadcast';
+import type { ActivityPresence, ActivityTaskPresence } from '../../shared/activity-snapshot';
 import { ActivityNotificationQueue } from './activity-notifications';
-import type { PetNotificationSink } from './service';
+import type { PetNotificationSink } from '../service';
 import type {
   AgentEventSignal,
   LifecycleSignal,
@@ -11,7 +11,7 @@ import type {
   ToolUseSignal,
   TurnUsageSignal,
   TextSignal,
-} from './agent-types';
+} from '../../../main/daemon-client/agent-types';
 
 type InputSignal =
   | AgentEventSignal

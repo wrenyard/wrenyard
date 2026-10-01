@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { SiteModel } from '../../src/pet/main/site-model';
+import { SiteModel } from '../../src/pet/main/model/site-model';
 import type { SiteSnapshot, WorkerSnapshot } from '../../src/pet/shared/snapshot';
-import { buildInfoCard } from '../../src/pet/main/hover-controller';
-import type { SessionMetaData } from '../../src/pet/main/agent-types';
+import { buildInfoCard } from '../../src/pet/main/model/hover-controller';
+import type { SessionMetaData } from '../../src/main/daemon-client/agent-types';
 
 function makeClock(startMs = 0) {
   let t = startMs;

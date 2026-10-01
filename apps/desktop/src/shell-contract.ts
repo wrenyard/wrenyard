@@ -1,4 +1,10 @@
-import type { PetSettingsPayload } from './pet/main/config';
+import type {
+  AppConfig,
+  EntityVisibilityConfig,
+  PetSettingsPayload,
+  QuotaProviderEntry,
+  WindowGeometry,
+} from './pet/main/config';
 import { BUILTIN_THEMES, type ThemeId } from '@wrenyard/themes';
 import type {
   NotificationAction,
@@ -16,6 +22,27 @@ import type {
   ContextLayerId,
   SummarySettingsSnapshot,
 } from '@wrenyard/session';
+
+// The Pet module keeps its public DTOs under `src/pet`. Desktop code outside
+// that module reads the text of the contract here (types) and the runtime
+// values from `pet/main/controller`, so no consumer reaches into Pet internals.
+export type {
+  AppConfig,
+  EntityVisibilityConfig,
+  PetSettingsPayload,
+  QuotaProviderEntry,
+  WindowGeometry,
+};
+export type {
+  QuotaBarRow,
+  QuotaProviderState,
+  QuotaProviderStatus,
+  QuotaTipLine,
+  QuotaWindowRow,
+} from './pet/shared/entities';
+export { normalizeConfig } from './pet/main/config';
+export type { DailyStatsSnapshot } from './pet/shared/snapshot';
+export type { ActivityPresence } from './pet/shared/activity-snapshot';
 
 // The summary-settings and context-inspection DTOs are owned by the session
 // feature. Desktop re-exports them here so existing Desktop consumers keep one

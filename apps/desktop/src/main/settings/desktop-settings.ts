@@ -10,9 +10,9 @@ import { BUILTIN_THEMES, DEFAULT_THEME_ID } from '@wrenyard/themes';
 import {
   normalizeConfig,
   type AppConfig,
+  type EntityVisibilityConfig,
   type QuotaProviderEntry,
-} from '../../pet/main/config';
-import type { EntityVisibilityConfig } from '../../pet/main/config';
+} from '../../shell-contract.js';
 import {
   APPEARANCE_ZOOM_OPTIONS,
   isShellPage,

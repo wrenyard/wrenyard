@@ -1,5 +1,5 @@
-import type { QuotaProviderState, QuotaTipLine, QuotaBarRow, QuotaWindowRow } from '../../pet/shared/entities';
-import { floorQuotaPercentage } from '../../pet/shared/quota-percentage';
+import type { QuotaBarRow, QuotaProviderState, QuotaTipLine, QuotaWindowRow } from '../../shell-contract.js';
+import { floorQuotaPercentage } from '../../pet/main/controller.js';
 
 function truncateMessage(message: string, maxLength: number): string {
   if (message.length <= maxLength) return message;

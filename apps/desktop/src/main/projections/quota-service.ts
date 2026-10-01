@@ -1,5 +1,5 @@
-import type { QuotaProviderState, QuotaProviderStatus, QuotaWindowRow } from '../../pet/shared/entities';
-import { floorQuotaPercentage } from '../../pet/shared/quota-percentage';
+import type { QuotaProviderState, QuotaProviderStatus, QuotaWindowRow } from '../../shell-contract.js';
+import { floorQuotaPercentage } from '../../pet/main/controller.js';
 
 interface RawQuotaWindow {
   name?: string;

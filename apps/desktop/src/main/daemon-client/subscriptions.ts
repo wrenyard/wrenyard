@@ -1,7 +1,5 @@
-import type { ActivityPresence } from '../../pet/shared/activity-snapshot';
-import type { DailyStatsSnapshot } from '../../pet/shared/snapshot';
-import type { AgentEventSignal } from '../../pet/main/agent-types';
-import type { SessionMetaData } from '../../pet/main/agent-types';
+import type { ActivityPresence, DailyStatsSnapshot } from '../../shell-contract.js';
+import type { AgentEventSignal, SessionMetaData } from './agent-types';
 import { createDiagnosticLogger, type DiagnosticLogger } from './diagnostic-logger';
 import { ActivitySnapshotPoller } from './activity-snapshot-poller';
 import { ForemanEventPoller } from './foreman-event-poller';

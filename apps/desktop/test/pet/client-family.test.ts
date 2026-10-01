@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyWorkerClient, normalizeClientFamily } from '../../src/pet/main/client-family';
+import { classifyWorkerClient, normalizeClientFamily } from '../../src/pet/main/model/client-family';
 
 describe('client family classification', () => {
   it('uses cb-* profile before Claude-protocol client_family', () => {

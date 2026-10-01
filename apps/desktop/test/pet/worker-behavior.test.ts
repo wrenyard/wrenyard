@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextWorkerBehaviorStage } from '../../src/pet/main/worker-behavior';
+import { nextWorkerBehaviorStage } from '../../src/pet/main/model/worker-behavior';
 
 describe('worker behavior state machine', () => {
   it('new worker starts at spawn', () => {

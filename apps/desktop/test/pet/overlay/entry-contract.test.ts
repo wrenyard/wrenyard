@@ -58,10 +58,10 @@ describe('overlay entry contracts', () => {
     const config = read('electron.vite.config.ts');
     expect(config).toContain('fromSrc(DESKTOP_PRELOADS)');
     expect(config).toContain('fromSrc(DESKTOP_PAGES)');
-    const pages = read('src/entries.ts');
+    const pages = read('src/pet/entries.ts');
     for (const preload of [
-      'pet/main/preload.ts', 'pet/preloads/entity-preload.ts',
-      'pet/preloads/graph-slip-preload.ts', 'pet/preloads/transcript-preload.ts',
+      'pet/main/preload/index.ts', 'pet/main/preload/entity.ts',
+      'pet/main/preload/graph-slip.ts', 'pet/main/preload/transcript.ts',
     ]) expect(pages).toContain(preload);
     for (const page of [
       'pet/overlay/house/index.html', 'pet/overlay/worker/index.html',

@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   hitTest,
   buildInfoCard,
-} from '../../src/pet/main/hover-controller';
-import type { WorkerSnapshot } from '../../src/pet/main/agent-types';
+} from '../../src/pet/main/model/hover-controller';
+import type { WorkerSnapshot } from '../../src/main/daemon-client/agent-types';
 
 // ── Sample WorkerSnapshot ──
 
