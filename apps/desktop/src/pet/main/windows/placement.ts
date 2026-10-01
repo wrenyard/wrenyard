@@ -4,12 +4,17 @@
 // window factories share one source of window bounds.
 
 // K3 Blueprint Wren: 28x22 authored grid at 3x = 84x66 display pixels,
-// hosted inside a 156x84 transparent entity window (fact slip sits below
-// the bird and still fits inside the window).
+// hosted inside a transparent entity window. The fact slip is the shared
+// `Card` (size=sm) at `text-xs`, so the carrier is tall enough to hold it
+// above or below the bird without clipping.
 export const ENTITY_WINDOW_WIDTH = 156;
-export const ENTITY_WINDOW_HEIGHT = 84;
 export const WREN_DISPLAY_WIDTH = 84;
 export const WREN_DISPLAY_HEIGHT = 66;
+/** Rendered height of the shared Card(size=sm) fact slip at text-xs. */
+export const ENTITY_SLIP_HEIGHT = 48;
+/** Breathing room between the bird and its fact slip. */
+export const ENTITY_SLIP_GAP = 6;
+export const ENTITY_WINDOW_HEIGHT = WREN_DISPLAY_HEIGHT + ENTITY_SLIP_GAP + ENTITY_SLIP_HEIGHT;
 
 export const GRAPH_SLIP_MIN_WIDTH = 380;
 export const GRAPH_SLIP_MIN_HEIGHT = 280;

@@ -85,10 +85,14 @@ describe('overlay entry contracts', () => {
     const entityHtml = read('src/pet/overlay/entity/index.html');
     const entityOverlay = read('src/pet/overlay/entity/EntityOverlay.tsx');
 
-    expect(entityHtml).toContain(':root{--bird-x:0px;--bird-y:0px;--tip-y:66px}');
+    // The page only defines the transparent root; the overlay owns every Wren
+    // placement variable and writes it on documentElement at runtime.
+    expect(entityHtml).toContain('html,body{background:transparent}');
     expect(entityHtml).not.toMatch(/html,body\{[^}]*--bird-x/);
     expect(entityOverlay).toContain('document.documentElement');
     expect(entityOverlay).toContain("setProperty('--bird-x'");
+    expect(entityOverlay).toContain("setProperty('--bird-y'");
+    expect(entityOverlay).toContain("setProperty('--tip-y'");
   });
 
   it('keeps broadcast close dismissal local and preserves the dismissed id', () => {

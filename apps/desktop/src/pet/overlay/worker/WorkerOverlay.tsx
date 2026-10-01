@@ -1,12 +1,13 @@
 // ── Worker overlay (React) ───────────────────────────────────────────
 // The worker window is a transparent React root: the Pixi mascot sprite
-// underneath DOM chrome. The speech bubble, age/task label and tool/client
-// cue all reuse `Card`/`Badge` plus lucide icons and theme tokens.
+// underneath DOM chrome. The speech bubble uses the shared Bubble/BubbleContent
+// and the age/task label and tool/client cues reuse `Badge` plus lucide icons
+// and theme tokens.
 
 import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { Bot, Gem, Sparkles, Terminal, Wrench } from 'lucide-react';
 import { Badge } from '@/renderer/components/ui/badge';
-import { Card } from '@/renderer/components/ui/card';
+import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
 import type { PetApi } from '../api/pet-api';
 import { createRenderSurface } from '../../render';
 import type { WorkerRendererState } from '../../shared/entities';
@@ -255,12 +256,15 @@ export function WorkerOverlay({ appearance, api }: WorkerOverlayProps): ReactEle
           className="pointer-events-none absolute"
           style={{ left: anchorX, bottom: footlineY + 26, transform: 'translateX(-50%)', opacity: typewriter.alpha }}
         >
-          <Card
+          <Bubble
             data-hit
-            className="pointer-events-auto max-w-[280px] w-fit rounded-md border-border bg-popover/95 px-2 py-1 text-xs text-popover-foreground shadow"
+            variant="outline"
+            className="pointer-events-auto max-w-[280px]"
           >
-            <span className="whitespace-pre-wrap break-words">{typewriter.text}</span>
-          </Card>
+            <BubbleContent className="px-2 py-1 text-xs">
+              <span className="whitespace-pre-wrap break-words">{typewriter.text}</span>
+            </BubbleContent>
+          </Bubble>
         </div>
       ) : null}
 

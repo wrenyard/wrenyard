@@ -6,6 +6,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 import { exposePetAppearance } from './appearance';
+import { latestPush } from './push';
 
 export interface GraphSlipDto {
   graph_id: string;
@@ -24,24 +25,21 @@ export interface GraphSlipDto {
   edges: Array<{ from: string; to: string; label: string }>;
 }
 
-const graphSlipApi = {
-  onSnapshot: (cb: (data: GraphSlipDto) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: unknown) =>
-      cb(data as GraphSlipDto);
-    ipcRenderer.on('slip:snapshot', handler);
-    return () => {
-      ipcRenderer.removeListener('slip:snapshot', handler);
-    };
-  },
+// Buffer the initial push so a snapshot/error sent before the panel effect
+// subscribes is replayed instead of lost. A fresh snapshot invalidates a
+// previously buffered error, matching the panel's "snapshot clears error"
+// contract without a new endpoint.
+const slipErrorPush = latestPush<unknown>('slip:error');
+const slipSnapshotPush = latestPush<GraphSlipDto>('slip:snapshot', () => {
+  slipErrorPush.reset();
+});
 
-  onError: (cb: (message: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, message: unknown) =>
-      cb(typeof message === 'string' ? message : 'Unknown error');
-    ipcRenderer.on('slip:error', handler);
-    return () => {
-      ipcRenderer.removeListener('slip:error', handler);
-    };
-  },
+const graphSlipApi = {
+  onSnapshot: (cb: (data: GraphSlipDto) => void): (() => void) =>
+    slipSnapshotPush.subscribe((data) => cb(data)),
+
+  onError: (cb: (message: string) => void): (() => void) =>
+    slipErrorPush.subscribe((message) => cb(typeof message === 'string' ? message : 'Unknown error')),
 
   openTranscript: (nodeId: string, taskRunId: string): Promise<void> =>
     ipcRenderer.invoke('slip:open-transcript', nodeId, taskRunId),
