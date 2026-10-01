@@ -3,6 +3,7 @@ import type { ComponentType } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { ShellPage } from '@/shell-contract';
 import { useShellPage } from '@/renderer/lib/desktop';
+import { startViewTransition } from '@/renderer/lib/motion';
 import { SidebarInset, SidebarProvider } from '@/renderer/components/ui/sidebar';
 import { AppSidebar } from '@/renderer/app/AppSidebar';
 import { UpdateDialog, isUpdateVisible } from '@/renderer/app/dialogs/UpdateDialog';
@@ -31,13 +32,22 @@ const PAGES: Record<ShellPage, ComponentType> = {
  */
 export function AppShell() {
   const page = useShellPage();
+  // The rendered page lags the store by one view transition so the page swap
+  // runs inside `document.startViewTransition`; without a transition it follows
+  // the store directly.
+  const [shown, setShown] = useState<ShellPage>(page);
   const [visited, setVisited] = useState<ReadonlySet<ShellPage>>(() => new Set([page]));
   const [updateOpen, setUpdateOpen] = useState(false);
   const update = useQuery(updateQuery);
 
   useEffect(() => {
-    setVisited((previous) => (previous.has(page) ? previous : new Set(previous).add(page)));
-  }, [page]);
+    if (page === shown) return;
+    startViewTransition(() => setShown(page));
+  }, [page, shown]);
+
+  useEffect(() => {
+    setVisited((previous) => (previous.has(shown) ? previous : new Set(previous).add(shown)));
+  }, [shown]);
 
   return (
     <SidebarProvider
@@ -47,16 +57,16 @@ export function AppShell() {
       onOpenChange={() => {}}
     >
       <AppSidebar
-        page={page}
+        page={shown}
         updateVisible={isUpdateVisible(update.data)}
         onOpenUpdate={() => setUpdateOpen(true)}
       />
-      <SidebarInset className="flex min-h-0 flex-col">
+      <SidebarInset className="motion-surface-page flex min-h-0 flex-col">
         {PAGE_ORDER.map((id) => {
           if (!visited.has(id)) return null;
           const PageComponent = PAGES[id];
           return (
-            <Activity key={id} mode={id === page ? 'visible' : 'hidden'}>
+            <Activity key={id} mode={id === shown ? 'visible' : 'hidden'}>
               <div className="flex min-h-0 flex-1 flex-col">
                 <PageComponent />
               </div>
