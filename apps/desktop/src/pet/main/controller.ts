@@ -25,6 +25,7 @@ export {
 
 export {
   broadcastPetAppearance,
+  isRegisteredPetSender,
   registerThemedPetWindow,
 } from './windows/overlay-window.js';
 

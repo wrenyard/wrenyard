@@ -2,15 +2,23 @@
 // single-preference write. Handler semantics are unchanged from the original
 // inline registrations.
 
-import type { IpcMain } from 'electron';
+import type { IpcMain, WebContents } from 'electron';
 import { SHELL_CHANNELS, isPreferenceId } from '../../shell-contract.js';
+import { isRegisteredPetSender } from '../../pet/main/controller.js';
 import type { ShellIpcDeps } from './deps.js';
 
 export function registerAppearancePreferencesIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () => void {
   const { options, assertShellSender } = deps;
 
+  // Only the appearance read admits an owned Pet window, which mirrors the
+  // shared theme; settings, preferences and writes stay shell-only.
+  const assertShellOrPetSender = (sender: WebContents): void => {
+    if (isRegisteredPetSender(sender)) return;
+    assertShellSender(sender);
+  };
+
   ipcMain.handle(SHELL_CHANNELS.appearanceSnapshot, async (event) => {
-    assertShellSender(event.sender);
+    assertShellOrPetSender(event.sender);
     return options.getAppearance();
   });
   ipcMain.handle(SHELL_CHANNELS.settingsSnapshot, async (event) => {
