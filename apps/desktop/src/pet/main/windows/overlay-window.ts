@@ -1,4 +1,4 @@
-import { BrowserWindow, type WebPreferences } from 'electron';
+import { BrowserWindow, type WebContents, type WebPreferences } from 'electron';
 import {
   overlaySkipsTaskbar,
   overlayWorkspaceVisibilityOptions,
@@ -67,6 +67,25 @@ export function broadcastPetAppearance(appearance: ResolvedAppearance): void {
     }
     win.webContents.send(SHELL_CHANNELS.appearanceChanged, appearance);
   }
+}
+
+/**
+ * Whether `sender` is the exact web contents of a currently registered live
+ * Pet window. Stale registry entries are pruned as they are observed, so a
+ * destroyed or unknown sender can never retain trust. Callers use this to
+ * admit the narrow read-only channels an owned Pet surface needs; it grants no
+ * shell trust and is never true for an arbitrary sender id.
+ */
+export function isRegisteredPetSender(sender: WebContents): boolean {
+  if (sender.isDestroyed()) return false;
+  for (const win of petAppearanceWindows) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) {
+      petAppearanceWindows.delete(win);
+      continue;
+    }
+    if (win.webContents === sender) return true;
+  }
+  return false;
 }
 
 /**

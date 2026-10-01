@@ -2,13 +2,21 @@
 // external-link helpers. Handler semantics are unchanged from the original
 // inline registrations.
 
-import { clipboard, shell, type IpcMain } from 'electron';
+import { clipboard, shell, type IpcMain, type WebContents } from 'electron';
 import { SHELL_CHANNELS } from '../../shell-contract.js';
+import { isRegisteredPetSender } from '../../pet/main/controller.js';
 import type { ShellIpcDeps } from './deps.js';
 import { isBoundedExecId, validateExecEventsRequest, validateExecStartRequest } from './validation.js';
 
 export function registerSessionExecIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () => void {
   const { options, assertShellSender } = deps;
+
+  // Only the external-link opener admits an owned Pet window (safe Markdown
+  // links); every other utility handler stays shell-only.
+  const assertShellOrPetSender = (sender: WebContents): void => {
+    if (isRegisteredPetSender(sender)) return;
+    assertShellSender(sender);
+  };
 
   ipcMain.handle(SHELL_CHANNELS.copyText, (event, text: unknown) => {
     assertShellSender(event.sender);
@@ -16,7 +24,7 @@ export function registerSessionExecIpc(ipcMain: IpcMain, deps: ShellIpcDeps): ()
     clipboard.writeText(text);
   });
   ipcMain.handle(SHELL_CHANNELS.openExternal, async (event, url: unknown) => {
-    assertShellSender(event.sender);
+    assertShellOrPetSender(event.sender);
     if (typeof url !== 'string' || url === '') throw new Error('无效链接');
     let target: URL;
     try {
