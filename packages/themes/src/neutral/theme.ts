@@ -6,13 +6,13 @@ export const neutralTheme = {
   description: 'shadcn neutral 中性外观',
   modes: {
     light: {
-      windowBackground: 'oklch(1 0 0)',
-      titleBarOverlay: { color: 'oklch(1 0 0)', symbolColor: 'oklch(0.145 0 0)' },
+      windowBackground: '#ffffff',
+      titleBarOverlay: { color: '#ffffff', symbolColor: '#0a0a0a' },
       codeTheme: 'github-light',
     },
     dark: {
-      windowBackground: 'oklch(0.145 0 0)',
-      titleBarOverlay: { color: 'oklch(0.145 0 0)', symbolColor: 'oklch(0.985 0 0)' },
+      windowBackground: '#0a0a0a',
+      titleBarOverlay: { color: '#0a0a0a', symbolColor: '#fafafa' },
       codeTheme: 'github-dark-default',
     },
   },
