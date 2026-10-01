@@ -6,9 +6,10 @@ import { cn } from 'cn';
  * receives the ratio and a coarse status; the caller owns the tooltip, the
  * popover and the send-blocking decision.
  *
- * A 16px SVG with a 2px stroke: the base ring is `--muted`, the progress arc
- * starts at 12 o'clock and grows clockwise. An unknown window renders a dashed
- * base ring with no arc, and the first load shows a spinner.
+ * A 16px SVG with a 2.5px stroke: the base ring is `--muted-foreground` at 30%
+ * opacity so the full track stays visible, the progress arc starts at 12
+ * o'clock with round caps and grows clockwise. An unknown window renders a
+ * dashed base ring with no arc, and the first load shows a spinner.
  */
 
 export type UsageRingStatus = 'loading' | 'unknown' | 'ready';
@@ -82,20 +83,30 @@ export function UsageRing({ ratio, status = 'ready', quotaAlert, className }: Us
 
   const clamped = Math.max(0, Math.min(1, Number.isFinite(ratio ?? 0) ? ratio! : 0));
   const level = usageRingLevel(clamped);
+  // A non-zero share renders at least a 3% arc so it is distinguishable from an
+  // empty track (a bare round cap would otherwise read like a loading spinner).
+  const share = clamped > 0 ? Math.max(clamped, 0.03) : 0;
   return (
     <span className={cn('relative inline-flex size-4 items-center justify-center', className)}>
       <svg viewBox="0 0 16 16" className="size-4" aria-hidden="true">
-        <circle cx={8} cy={8} r={RADIUS} fill="none" strokeWidth={2} className="stroke-muted" />
+        <circle
+          cx={8}
+          cy={8}
+          r={RADIUS}
+          fill="none"
+          strokeWidth={2.5}
+          className="stroke-muted-foreground/30"
+        />
         <circle
           cx={8}
           cy={8}
           r={RADIUS}
           fill="none"
           stroke="currentColor"
-          strokeWidth={2}
+          strokeWidth={2.5}
           strokeLinecap="round"
           strokeDasharray={CIRCUMFERENCE}
-          strokeDashoffset={CIRCUMFERENCE * (1 - clamped)}
+          strokeDashoffset={CIRCUMFERENCE * (1 - share)}
           transform="rotate(-90 8 8)"
           className={cn(ARC_CLASS[level], 'transition-[stroke-dashoffset] duration-200 motion-reduce:transition-none')}
         />

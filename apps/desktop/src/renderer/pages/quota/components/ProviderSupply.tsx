@@ -1,4 +1,4 @@
-import { Fragment, useId, useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import {
   closestCenter,
   DndContext,
@@ -31,7 +31,7 @@ import {
   ContextMenuTrigger,
 } from '@/renderer/components/ui/context-menu';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/renderer/components/ui/hover-card';
-import { Item, ItemGroup, ItemSeparator } from '@/renderer/components/ui/item';
+import { Item, ItemGroup } from '@/renderer/components/ui/item';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { QuotaBar } from '@/renderer/components/usage/QuotaBar';
 import { providerBrand } from '@/renderer/lib/model-brand';
@@ -153,18 +153,16 @@ export function ProviderSupply({
               <SortableContext items={configuredIds} strategy={verticalListSortingStrategy}>
                 <ItemGroup>
                   {orderedConfigured.map((entry, index) => (
-                    <Fragment key={entry.id}>
-                      {index > 0 && <ItemSeparator />}
-                      <SortableRow
-                        entry={entry}
-                        position={index}
-                        lastPosition={orderedConfigured.length - 1}
-                        savingOrder={savingOrder}
-                        onConfigure={onConfigure}
-                        onRetry={onRetry}
-                        onMove={move}
-                      />
-                    </Fragment>
+                    <SortableRow
+                      key={entry.id}
+                      entry={entry}
+                      position={index}
+                      lastPosition={orderedConfigured.length - 1}
+                      savingOrder={savingOrder}
+                      onConfigure={onConfigure}
+                      onRetry={onRetry}
+                      onMove={move}
+                    />
                   ))}
                 </ItemGroup>
               </SortableContext>
@@ -202,13 +200,10 @@ function UnconfiguredGroup({
       </CollapsibleTrigger>
       <CollapsibleContent>
         <ItemGroup>
-          {entries.map((entry, index) => (
-            <Fragment key={entry.id}>
-              {index > 0 && <ItemSeparator />}
-              <Item role="listitem" size="sm" className="opacity-60">
-                <RowContent entry={entry} onConfigure={onConfigure} onRetry={onRetry} />
-              </Item>
-            </Fragment>
+          {entries.map((entry) => (
+            <Item key={entry.id} role="listitem" size="xs" className="flex-nowrap opacity-60">
+              <RowContent entry={entry} onConfigure={onConfigure} onRetry={onRetry} />
+            </Item>
           ))}
         </ItemGroup>
       </CollapsibleContent>
@@ -245,13 +240,13 @@ function SortableRow({
         render={
           <Item
             role="listitem"
-            size="sm"
+            size="xs"
             data-dragging={isDragging || undefined}
             style={{
               transform: CSS.Transform.toString(transform),
               transition,
             }}
-            className="relative z-0 data-[dragging=true]:z-10 data-[dragging=true]:opacity-80"
+            className="relative z-0 flex-nowrap data-[dragging=true]:z-10 data-[dragging=true]:opacity-80"
           />
         }
       >
@@ -340,7 +335,7 @@ function RowContent({
         <span className="min-w-0 truncate font-medium">{name}</span>
       </div>
       {entry.quota && <ProviderStatusDot quota={entry.quota} />}
-      <div className="order-last w-full min-w-0 @3xl/main:order-none @3xl/main:w-auto @3xl/main:flex-1">
+      <div className="min-w-0 flex-1">
         <QuotaContent entry={entry} onRetry={onRetry} />
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -413,7 +408,7 @@ function QuotaContent({ entry, onRetry }: { entry: ProviderCatalogSnapshot; onRe
   const balances = quota.balances;
   const hasStructured = windows.length > 0 || balances.length > 0;
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+    <div className="flex items-center gap-x-4">
       {windows.map((window) => (
         <QuotaBar
           key={window.name}
