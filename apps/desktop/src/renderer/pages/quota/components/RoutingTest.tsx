@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { QueryError } from '@/renderer/components/query-error';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
 import {
@@ -213,9 +214,10 @@ export function RoutingTest({ snapshot, active }: RoutingTestProps) {
       </div>
 
       {tasks.isError && (
-        <Alert variant="destructive">
-          <AlertDescription>{`${ROUTING_IMPORT_ERROR_PREFIX}${errorMessage(tasks.error)}`}</AlertDescription>
-        </Alert>
+        <QueryError
+          query={tasks}
+          description={`${ROUTING_IMPORT_ERROR_PREFIX}${errorMessage(tasks.error)}`}
+        />
       )}
 
       <div className="grid gap-3 @3xl/main:grid-cols-2">

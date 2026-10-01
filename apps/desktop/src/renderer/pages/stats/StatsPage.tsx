@@ -8,6 +8,7 @@ import {
   PageHeader,
   PageTitle,
 } from '@/renderer/components/page';
+import { QueryError } from '@/renderer/components/query-error';
 import { Button } from '@/renderer/components/ui/button';
 import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
@@ -42,7 +43,7 @@ export function StatsPage() {
 
   const names = useMemo(() => buildTaskNameTables(settings.data ?? null), [settings.data]);
   const snapshot = stats.data;
-  const unavailable = stats.isError || (snapshot !== undefined && snapshot.status === 'unavailable');
+  const snapshotUnavailable = snapshot !== undefined && snapshot.status === 'unavailable';
   const window = snapshot && snapshot.status === 'available' ? selectWindow(snapshot, period) : undefined;
   const range = window
     ? `${formatSnapshotStamp(window.startAt)} 至 ${formatSnapshotStamp(window.endAt)}`
@@ -70,7 +71,9 @@ export function StatsPage() {
           </PageActions>
         </PageHeader>
         <PageContent>
-          {unavailable ? (
+          {stats.isError ? (
+            <QueryError query={stats} title={STATS_UNAVAILABLE_TITLE} />
+          ) : snapshotUnavailable ? (
             <Empty>
               <EmptyHeader>
                 <EmptyTitle>{STATS_UNAVAILABLE_TITLE}</EmptyTitle>

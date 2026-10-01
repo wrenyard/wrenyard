@@ -1,13 +1,13 @@
 import { Fragment, useMemo, useState, type ReactNode } from 'react';
-import { MessageCircle } from 'lucide-react';
+import { FileText, MessageCircle, Sparkles } from 'lucide-react';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
 import { Item, ItemContent, ItemMedia } from '@/renderer/components/ui/item';
+import { Marker, MarkerContent, MarkerIcon } from '@/renderer/components/ui/marker';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { Markdown } from '@/renderer/components/markdown';
 import { Reasoning } from '@/renderer/components/chat/reasoning';
-import { Step, Steps } from '@/renderer/components/chat/steps';
 import { CYCLE_LIMIT_TOOLTIP, PHASE_LABEL, cycleLabel } from '../../../model/describe.js';
 import type { ActionModel, CycleModel, ErrorItem, ReplyModel, TurnModel } from '../../../model/types.js';
 import { ActionMark } from './ActionMark.js';
@@ -25,11 +25,15 @@ function timeOf(value: string | undefined): number {
 
 /** Prepared context, labelled with how many materials were loaded. */
 function Preparation({ cycle, turnId }: { cycle: CycleModel; turnId: number }) {
-  if (cycle.context.length === 0) return <p className="text-muted-foreground">未加载新资料</p>;
   return (
     <section className="flex flex-col gap-1.5">
-      <span className="text-muted-foreground">{`加载了 ${cycle.context.length} 份资料`}</span>
-      <ContextItems items={cycle.context} turnId={turnId} cycle={cycle.index} />
+      <Marker>
+        <MarkerIcon><FileText /></MarkerIcon>
+        <MarkerContent>
+          {cycle.context.length === 0 ? '未加载新资料' : `加载了 ${cycle.context.length} 份资料`}
+        </MarkerContent>
+      </Marker>
+      {cycle.context.length > 0 && <ContextItems items={cycle.context} turnId={turnId} cycle={cycle.index} />}
     </section>
   );
 }
@@ -63,23 +67,23 @@ function ReasoningText({ cycle, turnId }: { cycle: CycleModel; turnId: number })
   );
 }
 
-/** Reasoning segment with a ghost jump link to the full reasoning detail. */
+/** Reasoning segment with a jump link to the full reasoning detail. */
 function ReasoningSection({ cycle, turnId }: { cycle: CycleModel; turnId: number }) {
   const { inspect } = useInspector();
+  const streaming = cycle.reasoning?.streaming ?? false;
   return (
     <section className="flex flex-col gap-1.5">
-      <span className="text-muted-foreground">{PHASE_LABEL.reasoning}</span>
+      <Marker
+        render={<button type="button" />}
+        onClick={() => inspect({ kind: 'reasoning', turnId, cycle: cycle.index })}
+      >
+        <MarkerIcon><Sparkles /></MarkerIcon>
+        <MarkerContent className={streaming ? 'shimmer' : undefined}>{PHASE_LABEL.reasoning}</MarkerContent>
+      </Marker>
       {cycle.reasoning ? (
         <>
           <ReasoningText cycle={cycle} turnId={turnId} />
           {cycle.reasoning.thinking && <Reasoning streaming={cycle.reasoning.streaming}>{cycle.reasoning.thinking}</Reasoning>}
-          <Button
-            variant="ghost"
-            className="w-fit"
-            onClick={() => inspect({ kind: 'reasoning', turnId, cycle: cycle.index })}
-          >
-            查看推理全文
-          </Button>
         </>
       ) : (
         <div className="flex flex-col gap-1">
@@ -165,31 +169,35 @@ export interface WorkStepsProps {
   turn: TurnModel;
 }
 
-/** Expanded work process: one step group per reasoning cycle. */
+/** Expanded work process: one labelled divider per reasoning cycle. */
 export function WorkSteps({ turn }: WorkStepsProps) {
   if (turn.cycles.length === 0) {
     return <p className="text-muted-foreground">还没有可展开的工作过程</p>;
   }
   return (
-    <Steps>
+    <div className="flex flex-col gap-3">
       {turn.cycles.map((cycle) => {
-        const title = (
-          <span className="flex items-center gap-2">
-            <span>{cycleLabel(cycle.index)}</span>
-            <span className="text-muted-foreground">· <Elapsed start={cycle.startedAt} end={cycle.endedAt} /></span>
-          </span>
+        const divider = (
+          <Marker variant="separator">
+            <MarkerContent>
+              {cycleLabel(cycle.index)} · <Elapsed start={cycle.startedAt} end={cycle.endedAt} />
+            </MarkerContent>
+          </Marker>
         );
         return (
-          <Step
-            key={cycle.index}
-            title={cycle.index >= 8
-              ? <Tooltip><TooltipTrigger render={title} /><TooltipContent>{CYCLE_LIMIT_TOOLTIP}</TooltipContent></Tooltip>
-              : title}
-          >
+          <Fragment key={cycle.index}>
+            {cycle.index >= 8 ? (
+              <Tooltip>
+                <TooltipTrigger render={divider} />
+                <TooltipContent>{CYCLE_LIMIT_TOOLTIP}</TooltipContent>
+              </Tooltip>
+            ) : (
+              divider
+            )}
             <CycleWork turn={turn} cycle={cycle} />
-          </Step>
+          </Fragment>
         );
       })}
-    </Steps>
+    </div>
   );
 }

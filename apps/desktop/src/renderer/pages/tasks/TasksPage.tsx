@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Page, PageActions, PageContent, PageHeader, PageTitle } from '@/renderer/components/page';
+import { QueryError } from '@/renderer/components/query-error';
 import { Button } from '@/renderer/components/ui/button';
-import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
+import { Empty, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import type { TaskSettingsPatch } from '@/shell-contract';
 import { TaskDetail } from './components/TaskDetail.js';
 import { TaskTree } from './components/TaskTree.js';
@@ -44,10 +45,8 @@ export function TasksPage() {
   const revision = detail.data?.revision ?? list.data?.revision ?? '';
   const busy = save.isPending;
   const requestFailed = list.isError && list.data === undefined;
-  const listError = list.isError && list.data !== undefined
-    ? `${copy.ERR_LOAD_PREFIX}${tasksErrorMessage(list.error)}`
-    : '';
-  const displayError = error !== '' ? error : listError;
+  const listStaleError = list.isError && list.data !== undefined;
+  const displayError = error;
 
   const toggleGroup = (key: string): void => {
     setCollapsed((current) => {
@@ -113,45 +112,42 @@ export function TasksPage() {
         </PageHeader>
         <PageContent className="min-h-0 overflow-hidden">
           {requestFailed ? (
-            <Empty>
-              <EmptyHeader>
-                <EmptyTitle>{copy.DIRECTORY_LOAD_FAILED}</EmptyTitle>
-              </EmptyHeader>
-              <EmptyContent>
-                <Button variant="outline" onClick={refresh}>{copy.RETRY_LABEL}</Button>
-              </EmptyContent>
-            </Empty>
+            <QueryError query={list} title={copy.DIRECTORY_LOAD_FAILED} />
           ) : (
-            <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] gap-4 @3xl/main:grid-cols-[clamp(170px,23vw,250px)_minmax(0,1fr)]">
-              <TaskTree
-                model={tree}
-                loading={list.isPending}
-                selectedId={selectedIdentity}
-                collapsed={collapsed}
-                onToggleGroup={toggleGroup}
-                onSelect={setSelectedId}
-              />
-              {row !== null ? (
-                <TaskDetail
-                  row={row}
-                  fallbackAliases={aliases}
-                  loading={selectedIdentity !== null && detail.isPending}
-                  busy={busy}
-                  reseedNonce={reseedNonce}
-                  error={displayError}
-                  successNote={successNote}
-                  onCommit={commit}
-                  onError={setError}
-                  onClearError={() => setError('')}
+            <>
+              {listStaleError && <QueryError query={list} />}
+              {detail.isError && <QueryError query={detail} />}
+              <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] gap-4 @3xl/main:grid-cols-[clamp(170px,23vw,250px)_minmax(0,1fr)]">
+                <TaskTree
+                  model={tree}
+                  loading={list.isPending}
+                  selectedId={selectedIdentity}
+                  collapsed={collapsed}
+                  onToggleGroup={toggleGroup}
+                  onSelect={setSelectedId}
                 />
-              ) : (
-                <Empty>
-                  <EmptyHeader>
-                    <EmptyTitle>{copy.DETAIL_EMPTY}</EmptyTitle>
-                  </EmptyHeader>
-                </Empty>
-              )}
-            </div>
+                {row !== null ? (
+                  <TaskDetail
+                    row={row}
+                    fallbackAliases={aliases}
+                    loading={selectedIdentity !== null && detail.isPending}
+                    busy={busy}
+                    reseedNonce={reseedNonce}
+                    error={displayError}
+                    successNote={successNote}
+                    onCommit={commit}
+                    onError={setError}
+                    onClearError={() => setError('')}
+                  />
+                ) : (
+                  <Empty>
+                    <EmptyHeader>
+                      <EmptyTitle>{copy.DETAIL_EMPTY}</EmptyTitle>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </div>
+            </>
           )}
         </PageContent>
       </Page>

@@ -6,7 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/renderer/components/
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/renderer/components/ui/table';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
-import { TASK_RUNS_EMPTY, TASK_RUNS_TITLE, taskRunStatusView } from '../model/describe.js';
+import { statusView } from '@/renderer/lib/task-status';
+import { TASK_RUNS_EMPTY, TASK_RUNS_TITLE } from '../model/describe.js';
 import type { TaskRunRow } from '../model/stats.js';
 
 /** The last fifty runs with status, model brands and terminal-only telemetry. */
@@ -58,7 +59,7 @@ export function TaskRunsTable({ rows }: { rows: TaskRunRow[] }) {
 
 /** Icon-only shared status badge; the label is the tooltip and accessible name. */
 function StatusCell({ status }: { status: TaskRunRow['status'] }) {
-  const view = taskRunStatusView(status);
+  const view = statusView(status);
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex" aria-label={view.label} />}>
