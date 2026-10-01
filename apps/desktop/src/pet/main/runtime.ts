@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import type { PageLoader } from '../../pages.js';
 import { SiteModel } from './site-model';
+import type { PetNotificationSink } from './service';
 import { EntityManager } from './entity-manager';
 import { buildQuotaTips } from '../../main/projections/quota-tips';
 import type { QuotaProviderState } from '../shared/entities';
@@ -24,6 +25,11 @@ export interface DesktopPetRuntimeOptions {
    */
   subscriptions: DaemonSubscriptions;
   onConfigChange(config: AppConfig): void;
+  /**
+   * Forwards activity transitions to the Desktop NotificationCenter. The Pet
+   * never raises an OS notification itself; the host decides whether to.
+   */
+  onNotification?: PetNotificationSink;
   debugRenderer?: boolean;
 }
 
@@ -114,7 +120,9 @@ export class DesktopPetRuntime {
   }
 
   private setup(): void {
-    this.model = new SiteModel();
+    this.model = new SiteModel(
+      this.options.onNotification ? { onNotification: this.options.onNotification } : undefined,
+    );
     this.entityManager = new EntityManager({
       preloadPath: `${this.options.preloadDir}/pet.cjs`,
       pageLoader: this.options.pageLoader,

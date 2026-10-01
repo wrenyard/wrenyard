@@ -39,6 +39,10 @@ import {
   type ExecEventsRequest,
   type ExecEventsResult,
   type ExecCancelResult,
+  type NotificationCommandAction,
+  type NotificationInput,
+  type NotificationSnapshot,
+  type ShellNotification,
 } from './shell-contract.js';
 import { formatShellWindowTitle } from './shell-window-title.js';
 import { platformWindowChrome } from './window-chrome.js';
@@ -82,6 +86,12 @@ export interface ShellWindowOptions {
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
   execCancel(id: string): Promise<ExecCancelResult>;
+  getNotifications(): Promise<NotificationSnapshot>;
+  notify(input: NotificationInput): Promise<ShellNotification>;
+  dismissNotification(id: string): Promise<void>;
+  clearNotifications(): Promise<void>;
+  markNotificationsRead(): Promise<void>;
+  setDoNotDisturb(value: boolean): Promise<NotificationSnapshot>;
 }
 
 const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'max_auto_output_usd_per_million', 'automatic']);
@@ -413,6 +423,75 @@ function validateExecEventsRequest(value: unknown): ExecEventsRequest {
   return request;
 }
 
+const NOTIFICATION_LEVELS = new Set(['info', 'success', 'warning', 'error']);
+const NOTIFICATION_ID_MAX = 200;
+const NOTIFICATION_SOURCE_MAX = 64;
+const NOTIFICATION_TITLE_MAX = 512;
+const NOTIFICATION_DESCRIPTION_MAX = 4_096;
+const NOTIFICATION_LABEL_MAX = 64;
+const NOTIFICATION_COMMAND_ID_MAX = 200;
+const NOTIFICATION_ARGS_MAX = 16_384;
+
+/**
+ * IPC-boundary validation for a renderer notification. The renderer may only
+ * submit serializable data — a bounded id, level, source, title, description
+ * and at most one `{ label, command }` action whose args are JSON-sized.
+ */
+function validateNotificationInput(value: unknown): NotificationInput {
+  if (!isBoundedPlainObject(value)) throw new Error('通知内容无效');
+  const level = value.level;
+  if (typeof level !== 'string' || !NOTIFICATION_LEVELS.has(level)) throw new Error('通知级别无效');
+  const source = value.source;
+  if (typeof source !== 'string' || !source || source.length > NOTIFICATION_SOURCE_MAX) throw new Error('通知来源无效');
+  const title = value.title;
+  if (typeof title !== 'string' || !title || title.length > NOTIFICATION_TITLE_MAX || TASK_SETTINGS_CONTROL_CHARS.test(title)) {
+    throw new Error('通知标题无效');
+  }
+  const input: NotificationInput = {
+    level: level as NotificationInput['level'],
+    source: source as NotificationInput['source'],
+    title,
+  };
+  if (value.id !== undefined && value.id !== null) {
+    const id = value.id;
+    if (typeof id !== 'string' || !id || id.length > NOTIFICATION_ID_MAX) throw new Error('通知 id 无效');
+    input.id = id;
+  }
+  if (value.description !== undefined && value.description !== null) {
+    const description = value.description;
+    if (typeof description !== 'string' || description.length > NOTIFICATION_DESCRIPTION_MAX) {
+      throw new Error('通知描述无效');
+    }
+    input.description = description;
+  }
+  if (value.action !== undefined && value.action !== null) {
+    input.action = validateNotificationAction(value.action);
+  }
+  return input;
+}
+
+function validateNotificationAction(value: unknown): NotificationInput['action'] {
+  if (!isBoundedPlainObject(value)) throw new Error('通知操作无效');
+  const label = value.label;
+  if (typeof label !== 'string' || !label || label.length > NOTIFICATION_LABEL_MAX) throw new Error('通知操作无效');
+  const command = value.command;
+  if (!isBoundedPlainObject(command)) throw new Error('通知操作无效');
+  const id = command.id;
+  if (typeof id !== 'string' || !id || id.length > NOTIFICATION_COMMAND_ID_MAX) throw new Error('通知操作无效');
+  let args: unknown;
+  if (command.args !== undefined && command.args !== null) {
+    args = command.args;
+    let size: number;
+    try {
+      size = JSON.stringify(args)?.length ?? 0;
+    } catch {
+      throw new Error('通知操作参数无效');
+    }
+    if (size > NOTIFICATION_ARGS_MAX) throw new Error('通知操作参数无效');
+  }
+  return { label, command: { id, ...(args !== undefined ? { args } : {}) } };
+}
+
 export class ShellWindowController {
   readonly window: BrowserWindow;
   private page: ShellPage = 'session';
@@ -487,6 +566,19 @@ export class ShellWindowController {
   notifyAppearanceChanged(appearance: ResolvedAppearance): void {
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.appearanceChanged, appearance);
+    }
+  }
+
+  notifyNotificationsChanged(): void {
+    if (!this.window.webContents.isDestroyed()) {
+      this.window.webContents.send(SHELL_CHANNELS.notificationsChanged);
+    }
+  }
+
+  /** Deliver a main-process command action (e.g. a native-notification click). */
+  deliverCommandAction(action: NotificationCommandAction): void {
+    if (!this.window.webContents.isDestroyed()) {
+      this.window.webContents.send(SHELL_CHANNELS.commandAction, action);
     }
   }
 
@@ -656,6 +748,32 @@ export class ShellWindowController {
       if (!isBoundedExecId(id)) throw new Error('执行 id 无效');
       return options.execCancel(id);
     });
+    ipcMain.handle(SHELL_CHANNELS.notificationsSnapshot, async (event) => {
+      assertShellSender(event.sender);
+      return options.getNotifications();
+    });
+    ipcMain.handle(SHELL_CHANNELS.notificationNotify, async (event, input: unknown) => {
+      assertShellSender(event.sender);
+      return options.notify(validateNotificationInput(input));
+    });
+    ipcMain.handle(SHELL_CHANNELS.notificationDismiss, async (event, id: unknown) => {
+      assertShellSender(event.sender);
+      if (!isBoundedString(id, NOTIFICATION_ID_MAX)) throw new Error('通知 id 无效');
+      return options.dismissNotification(id);
+    });
+    ipcMain.handle(SHELL_CHANNELS.notificationsClear, async (event) => {
+      assertShellSender(event.sender);
+      return options.clearNotifications();
+    });
+    ipcMain.handle(SHELL_CHANNELS.notificationsMarkRead, async (event) => {
+      assertShellSender(event.sender);
+      return options.markNotificationsRead();
+    });
+    ipcMain.handle(SHELL_CHANNELS.notificationsSetDoNotDisturb, async (event, value: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof value !== 'boolean') throw new Error('勿扰参数无效');
+      return options.setDoNotDisturb(value);
+    });
   }
 
   private removeIpcHandlers(): void {
@@ -690,6 +808,12 @@ export class ShellWindowController {
       SHELL_CHANNELS.execGet,
       SHELL_CHANNELS.execEvents,
       SHELL_CHANNELS.execCancel,
+      SHELL_CHANNELS.notificationsSnapshot,
+      SHELL_CHANNELS.notificationNotify,
+      SHELL_CHANNELS.notificationDismiss,
+      SHELL_CHANNELS.notificationsClear,
+      SHELL_CHANNELS.notificationsMarkRead,
+      SHELL_CHANNELS.notificationsSetDoNotDisturb,
     ]) ipcMain.removeHandler(channel);
   }
 

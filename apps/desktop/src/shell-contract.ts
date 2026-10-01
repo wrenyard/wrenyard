@@ -1,6 +1,15 @@
 import type { PetSettingsPayload } from './pet/main/config';
 import type { ThemeId } from '@wrenyard/themes';
 import type {
+  NotificationAction,
+  NotificationCommandAction,
+  NotificationInput,
+  NotificationLevel,
+  NotificationSnapshot,
+  NotificationSource,
+  ShellNotification,
+} from './main/notification-center';
+import type {
   ContextInspection,
   ContextItem,
   ContextItemKind,
@@ -12,6 +21,19 @@ import type {
 // feature. Desktop re-exports them here so existing Desktop consumers keep one
 // import site.
 export type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, SummarySettingsSnapshot };
+
+// The notification-center DTOs own the notification wire shape; the shell
+// contract re-exports them so the preload facade, main handlers and renderer
+// all read one definition.
+export type {
+  NotificationAction,
+  NotificationCommandAction,
+  NotificationInput,
+  NotificationLevel,
+  NotificationSnapshot,
+  NotificationSource,
+  ShellNotification,
+};
 
 /**
  * Whether a workspace is usable, plus where the configuration came from. A
@@ -124,6 +146,14 @@ export const SHELL_CHANNELS = {
   updateChanged: 'wrenyard-shell:update-changed',
   daemonChanged: 'wrenyard-shell:daemon-changed',
   viewChanged: 'wrenyard-shell:view-changed',
+  notificationsSnapshot: 'wrenyard-shell:notifications-snapshot',
+  notificationNotify: 'wrenyard-shell:notification-notify',
+  notificationDismiss: 'wrenyard-shell:notification-dismiss',
+  notificationsClear: 'wrenyard-shell:notifications-clear',
+  notificationsMarkRead: 'wrenyard-shell:notifications-mark-read',
+  notificationsSetDoNotDisturb: 'wrenyard-shell:notifications-set-do-not-disturb',
+  notificationsChanged: 'wrenyard-shell:notifications-changed',
+  commandAction: 'wrenyard-shell:command-action',
   taskSettingsSnapshot: 'wrenyard-shell:task-settings-snapshot',
   taskSettingsSave: 'wrenyard-shell:task-settings-save',
   runtimeAliasSnapshot: 'wrenyard-shell:runtime-alias-snapshot',
@@ -847,6 +877,18 @@ export interface WrenyardShellApi {
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
   execCancel(id: string): Promise<ExecCancelResult>;
+  /** Current session-only notification history, unread count and DND flag. */
+  getNotifications(): Promise<NotificationSnapshot>;
+  /** Record an event notification (toast + history); returns the stored item. */
+  notify(input: NotificationInput): Promise<ShellNotification>;
+  dismissNotification(id: string): Promise<void>;
+  clearNotifications(): Promise<void>;
+  /** Open the notification center: marks every notification read. */
+  markNotificationsRead(): Promise<void>;
+  setDoNotDisturb(value: boolean): Promise<NotificationSnapshot>;
+  onNotificationsChanged(listener: () => void): () => void;
+  /** Main-process command delivery (e.g. a native-notification click). */
+  onCommandAction(listener: (action: NotificationCommandAction) => void): () => void;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {

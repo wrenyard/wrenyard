@@ -27,6 +27,10 @@ import {
   type ExecEventsRequest,
   type ExecEventsResult,
   type ExecCancelResult,
+  type NotificationSnapshot,
+  type ShellNotification,
+  type NotificationInput,
+  type NotificationCommandAction,
 } from './shell-contract.js';
 import { exposeSession } from './session/preload.js';
 
@@ -52,6 +56,13 @@ function readInitialAppearance(): ResolvedAppearance {
     }
   }
   return { theme: DEFAULT_THEME_ID, dark: false, reduceMotion: false };
+}
+
+/** A command action is the only main→renderer command payload; validate shape. */
+function isNotificationCommandAction(value: unknown): value is NotificationCommandAction {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const action = value as Record<string, unknown>;
+  return typeof action.id === 'string' && action.id.length > 0;
 }
 
 const api: WrenyardShellApi = {
@@ -188,6 +199,36 @@ const api: WrenyardShellApi = {
   },
   execCancel(id: string): Promise<ExecCancelResult> {
     return ipcRenderer.invoke(SHELL_CHANNELS.execCancel, id) as Promise<ExecCancelResult>;
+  },
+  getNotifications(): Promise<NotificationSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationsSnapshot) as Promise<NotificationSnapshot>;
+  },
+  notify(input: NotificationInput): Promise<ShellNotification> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationNotify, input) as Promise<ShellNotification>;
+  },
+  dismissNotification(id: string): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationDismiss, id) as Promise<void>;
+  },
+  clearNotifications(): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationsClear) as Promise<void>;
+  },
+  markNotificationsRead(): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationsMarkRead) as Promise<void>;
+  },
+  setDoNotDisturb(value: boolean): Promise<NotificationSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationsSetDoNotDisturb, value) as Promise<NotificationSnapshot>;
+  },
+  onNotificationsChanged(listener: () => void): () => void {
+    const handler = (): void => listener();
+    ipcRenderer.on(SHELL_CHANNELS.notificationsChanged, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.notificationsChanged, handler);
+  },
+  onCommandAction(listener: (action: NotificationCommandAction) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, action: unknown): void => {
+      if (isNotificationCommandAction(action)) listener(action);
+    };
+    ipcRenderer.on(SHELL_CHANNELS.commandAction, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.commandAction, handler);
   },
 };
 
