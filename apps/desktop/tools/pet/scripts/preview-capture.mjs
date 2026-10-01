@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PREVIEW_FIXTURES } from './preview/fixtures.mjs';
 import { installBrokenPipeGuard, rethrowUnlessBrokenPipe } from './preview/stdio-guard.mjs';
+import { runAppearanceAlphaSmoke } from './preview/appearance-alpha.mjs';
 import {
   FAILURE_REASONS,
   PET_API_METHOD_NAMES,
@@ -43,6 +44,8 @@ const POLL_MS = 25;
 const CASE_TIMEOUT_MS = 20000;
 
 let failureWritten = false;
+/** Set once `run()` has written the manifest, so mid-run window churn never quits. */
+let captureRunComplete = false;
 const UPDATE_HOUSE_REFS = process.env.PREVIEW_UPDATE_HOUSE_REFERENCES === '1';
 
 installBrokenPipeGuard(process.stdout);
@@ -756,6 +759,9 @@ async function run() {
     }
   }
 
+  const alphaOutputs = await runAppearanceAlphaSmoke({ rootDir, preloadPath });
+  for (const file of alphaOutputs) console.log(`[capture] ${path.basename(file)} passed`);
+
   const manifest = buildManifest(cases);
   const serialized = serializeManifest(manifest);
   fs.writeFileSync(manifestPath, serialized);
@@ -773,6 +779,7 @@ async function run() {
     fs.writeFileSync(refreshedPath, JSON.stringify({ refreshed: refreshedFixtures }, null, 2));
     console.log(`[refresh] wrote ${refreshedPath} with ${refreshedFixtures.length} refreshed house fixtures`);
   }
+  captureRunComplete = true;
   console.log(`[capture] all ${PREVIEW_FIXTURES.length} fixtures passed`);
 }
 
@@ -786,4 +793,8 @@ app.whenReady().then(() => {
     });
 });
 
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => {
+  // The fixture loop closes its last window before the alpha smoke and manifest
+  // write run; only quit once the whole run is complete.
+  if (captureRunComplete) app.quit();
+});

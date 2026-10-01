@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeTheme, systemPreferences } from 'electron';
+import { app, nativeTheme, systemPreferences, type BrowserWindow } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getTheme } from '@wrenyard/themes';
@@ -44,6 +44,11 @@ export class DesktopAppearanceController {
   private readonly onChanged: ((appearance: ResolvedAppearance) => void) | undefined;
   private lastPushed: ResolvedAppearance | null = null;
   private initialized = false;
+  /**
+   * Themed windows registered through {@link attach}. Transparent Pet overlays
+   * are deliberately absent, so they keep their transparent background.
+   */
+  private readonly windows = new Set<BrowserWindow>();
   private readonly handleNativeThemeUpdated = (): void => this.refresh();
 
   constructor(options: DesktopAppearanceControllerOptions) {
@@ -63,6 +68,7 @@ export class DesktopAppearanceController {
   /** Detach the native theme listener during teardown. */
   dispose(): void {
     nativeTheme.removeListener('updated', this.handleNativeThemeUpdated);
+    this.windows.clear();
   }
 
   getSettings(): AppearanceSettings {
@@ -133,11 +139,25 @@ export class DesktopAppearanceController {
     return existsSync(packaged) ? packaged : undefined;
   }
 
-  /** Apply the resolved appearance to one window in place. */
+  /**
+   * Register a themed window. The appearance is applied immediately, re-applied
+   * on every {@link refresh}, and dropped automatically when the window closes.
+   * Transparent Pet overlay windows are never attached, so they stay transparent.
+   */
+  attach(window: BrowserWindow): void {
+    if (this.windows.has(window)) return;
+    this.windows.add(window);
+    window.once('closed', () => { this.windows.delete(window); });
+    this.applyToWindow(window);
+  }
+
+  /**
+   * Apply the resolved appearance to one window in place. Electron cannot report
+   * window transparency reliably, so callers register themed windows explicitly
+   * through {@link attach} instead of this method guessing from window colors.
+   */
   applyToWindow(window: BrowserWindow): void {
     if (window.isDestroyed()) return;
-    // Preserve transparent Pet carriers; their DOM/theme migration is out of scope.
-    if (window.getBackgroundColor().toLowerCase() === '#00000000') return;
     try {
       window.setBackgroundColor(this.backgroundColor());
     } catch {
@@ -157,14 +177,14 @@ export class DesktopAppearanceController {
     }
   }
 
-  /** Re-resolve, push only on change, and re-apply to every live window. */
+  /** Re-resolve, push only on change, and re-apply to every attached window. */
   refresh(): void {
     const resolved = this.resolve();
     if (this.lastPushed === null || !sameAppearance(this.lastPushed, resolved)) {
       this.lastPushed = resolved;
       this.onChanged?.(resolved);
     }
-    for (const window of BrowserWindow.getAllWindows()) this.applyToWindow(window);
+    for (const window of this.windows) this.applyToWindow(window);
     this.applyDockIcon();
   }
 

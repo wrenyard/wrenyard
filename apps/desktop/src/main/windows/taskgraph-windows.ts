@@ -8,10 +8,7 @@ import type { TaskGraphEntityDtoWithPresentation, TaskGraphNodeState, GraphSlipS
 import { projectGraphSlipFromActivity, activityAllowsTranscript } from './graph-slip-snapshot-dto';
 import type { ActivityPresence, ActivityTaskGraphPresence } from '../../pet/shared/activity-snapshot';
 import { clampRectToRect } from '../../pet/main/entity-geometry';
-import {
-  overlaySkipsTaskbar,
-  overlayWorkspaceVisibilityOptions,
-} from '../../pet/main/overlay-window-policy';
+import { createOverlayWindow } from '../../pet/main/windows/overlay-window';
 
 // K3 Blueprint Wren: 28x22 authored grid at 3x = 84x66 display pixels,
 // hosted inside a 156x84 transparent entity window (fact slip sits below
@@ -47,6 +44,11 @@ export interface TaskGraphWindowOwnerOptions {
   onGraphSlipGeometryChange?: (geometry: { x?: number; y?: number; width?: number; height?: number }) => void;
   /** Whether Blueprint Wren entity windows are currently visible. */
   entitiesVisible?: boolean;
+  /**
+   * Register themed windows (the task transcript) with the appearance
+   * controller. Transparent Pet overlays are never attached.
+   */
+  attachAppearance?: (window: BrowserWindow) => void;
   /** Capture harness only: render windows without ever showing or focusing them. */
   stayHidden?: boolean;
   logger?: Pick<Console, 'warn' | 'error' | 'log'>;
@@ -163,6 +165,7 @@ export class TaskGraphWindowOwner {
   private readonly getHouseWindow: () => BrowserWindow | null;
   private graphSlipGeometry: { x?: number; y?: number; width?: number; height?: number } | undefined;
   private readonly onGraphSlipGeometryChange?: TaskGraphWindowOwnerOptions['onGraphSlipGeometryChange'];
+  private readonly attachAppearance?: TaskGraphWindowOwnerOptions['attachAppearance'];
   private readonly stayHidden: boolean;
   private entitiesVisible: boolean;
   private readonly logger: Pick<Console, 'warn' | 'error' | 'log'>;
@@ -230,6 +233,7 @@ export class TaskGraphWindowOwner {
     this.getHouseWindow = opts.getHouseWindow;
     this.graphSlipGeometry = opts.graphSlipGeometry;
     this.onGraphSlipGeometryChange = opts.onGraphSlipGeometryChange;
+    this.attachAppearance = opts.attachAppearance;
     this.stayHidden = opts.stayHidden ?? false;
     this.entitiesVisible = opts.entitiesVisible ?? true;
     this.logger = opts.logger ?? console;
@@ -719,36 +723,14 @@ export class TaskGraphWindowOwner {
   }
 
   private createEntity(id: string, dto: TaskGraphEntityDtoWithPresentation, positionIndex: number): void {
-    const win = new BrowserWindow({
+    const win = createOverlayWindow({
       width: ENTITY_WINDOW_WIDTH,
       height: ENTITY_WINDOW_HEIGHT,
-      transparent: true,
-      frame: false,
-      thickFrame: false,
-      hasShadow: false,
-      backgroundColor: '#00000000',
-      skipTaskbar: overlaySkipsTaskbar(),
-      alwaysOnTop: true,
+      preloadPath: path.join(this.preloadDir, 'entity.cjs'),
       focusable: false,
-      show: false,
       ...(this.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
-      acceptFirstMouse: true,
-      resizable: false,
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        preload: path.join(this.preloadDir, 'entity.cjs'),
-      },
     });
 
-    win.setMenuBarVisibility(false);
-    win.setAlwaysOnTop(true, 'screen-saver');
-    win.setVisibleOnAllWorkspaces(true, overlayWorkspaceVisibilityOptions());
-    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    win.webContents.on('did-create-window', (childWin) => {
-      if (!childWin.isDestroyed()) childWin.destroy();
-    });
     // Start with full window passthrough; only bird/fact-slip areas become interactive
     win.setIgnoreMouseEvents(true, { forward: true });
 
@@ -947,35 +929,17 @@ export class TaskGraphWindowOwner {
       height: initialSize.height,
     }, workArea);
 
-    const win = new BrowserWindow({
-      ...initialBounds,
+    const win = createOverlayWindow({
+      x: initialBounds.x,
+      y: initialBounds.y,
+      width: initialBounds.width,
+      height: initialBounds.height,
       minWidth: GRAPH_SLIP_MIN_WIDTH,
       minHeight: GRAPH_SLIP_MIN_HEIGHT,
-      transparent: true,
-      frame: false,
-      thickFrame: false,
-      hasShadow: false,
-      backgroundColor: '#00000000',
-      skipTaskbar: overlaySkipsTaskbar(),
-      alwaysOnTop: true,
+      preloadPath: path.join(this.preloadDir, 'graph-slip.cjs'),
+      resizable: true,
       focusable: true,
-      show: false,
       ...(this.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
-      acceptFirstMouse: true,
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        preload: path.join(this.preloadDir, 'graph-slip.cjs'),
-      },
-    });
-
-    win.setMenuBarVisibility(false);
-    win.setAlwaysOnTop(true, 'screen-saver');
-    win.setVisibleOnAllWorkspaces(true, overlayWorkspaceVisibilityOptions());
-    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    win.webContents.on('did-create-window', (childWin) => {
-      if (!childWin.isDestroyed()) childWin.destroy();
     });
 
     const slipState: GraphSlipState = {
@@ -1179,7 +1143,6 @@ export class TaskGraphWindowOwner {
       frame: true,
       thickFrame: false,
       hasShadow: true,
-      backgroundColor: '#F7EFD8',
       skipTaskbar: false,
       alwaysOnTop: false,
       focusable: true,
@@ -1199,6 +1162,8 @@ export class TaskGraphWindowOwner {
         preload: path.join(this.preloadDir, 'transcript.cjs'),
       },
     });
+    // Themed window: follow the resolved appearance instead of a hardcoded paper.
+    this.attachAppearance?.(win);
 
     win.setMenuBarVisibility(false);
     if (process.platform === 'darwin') {

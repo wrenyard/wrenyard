@@ -83,6 +83,11 @@ export interface ShellWindowOptions {
   additionalArguments: string[];
   /** Initial shell page; `general.startupPage` resolves it from the last page. */
   initialPage?: ShellPage;
+  /**
+   * Register the shell window with the appearance controller so later theme
+   * changes re-apply in place. Transparent windows never pass this.
+   */
+  attachAppearance?(window: BrowserWindow): void;
   /** Invoked whenever the shell page changes, so main can persist the last page. */
   onPageChanged?(page: ShellPage): void;
   onCreated?(controller: ShellWindowController): void;
@@ -170,6 +175,7 @@ export class ShellWindowController {
       },
     };
     const win = new BrowserWindow(windowOptions);
+    options.attachAppearance?.(win);
     if (process.platform === 'win32') {
       // Hide the native menu bar but keep the application menu so its
       // accelerators (Ctrl+Q, Ctrl+Shift+U, edit and zoom roles) stay live.
