@@ -1,27 +1,27 @@
 import { queryOptions, useQuery } from '@tanstack/react-query';
 import { shell } from '@/renderer/lib/desktop';
-import { daemonQuery, runtimeAliasesQuery, updateQuery } from '@/renderer/lib/queries';
+import {
+  daemonQuery,
+  runtimeAliasesQuery,
+  settingsQuery,
+  settingsQueryKey,
+  updateQuery,
+} from '@/renderer/lib/queries';
 
 /**
- * Page-scoped queries for the Settings page. The update, daemon and runtime
- * alias snapshots are shared shell queries owned by `lib/queries` and refreshed
- * by the app-level push subscriptions (see `app/query-client`); the settings
- * page only owns its own settings snapshot.
+ * Page-scoped queries for the Settings page. The update, daemon, runtime alias
+ * and settings snapshots are shared shell queries owned by `lib/queries` and
+ * refreshed by the app-level push subscriptions (see `app/query-client`); the
+ * settings page only owns its summary-settings snapshot.
  */
 
-export { daemonQuery, runtimeAliasesQuery, updateQuery };
+export { daemonQuery, runtimeAliasesQuery, settingsQuery, settingsQueryKey, updateQuery };
 
-export const settingsQueryKey = ['shell', 'settings'] as const;
-export const summarySettingsQueryKey = ['shell', 'summary-settings'] as const;
 export const daemonQueryKey = daemonQuery.queryKey;
 export const updateQueryKey = updateQuery.queryKey;
 export const runtimeAliasesQueryKey = runtimeAliasesQuery.queryKey;
 
-export const settingsQuery = queryOptions({
-  queryKey: settingsQueryKey,
-  queryFn: () => shell.getSettings(),
-  staleTime: 30_000,
-});
+export const summarySettingsQueryKey = ['shell', 'summary-settings'] as const;
 
 export const summarySettingsQuery = queryOptions({
   queryKey: summarySettingsQueryKey,

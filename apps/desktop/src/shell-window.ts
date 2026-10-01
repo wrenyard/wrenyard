@@ -1,4 +1,5 @@
 import {
+  app,
   BrowserWindow,
   clipboard,
   ipcMain,
@@ -388,7 +389,7 @@ export class ShellWindowController {
       minWidth: 760,
       minHeight: 520,
       show: false,
-      title: formatShellWindowTitle('session', options.appVersion),
+      title: formatShellWindowTitle('session', options.appVersion, !app.isPackaged),
       backgroundColor: '#f7efd8',
       ...platformWindowChrome(process.platform),
       ...(options.icon ? { icon: options.icon } : {}),
@@ -424,7 +425,7 @@ export class ShellWindowController {
 
   setPage(page: ShellPage, focus = true): void {
     this.page = page;
-    this.window.setTitle(formatShellWindowTitle(page, this.appVersion));
+    this.window.setTitle(formatShellWindowTitle(page, this.appVersion, !app.isPackaged));
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.viewChanged, page);
       if (focus) this.window.webContents.focus();
