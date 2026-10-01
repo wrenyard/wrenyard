@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="简约主题应用图标">
+  <title>简约主题应用图标</title>
+  <defs>
+    <path id="wy-bird-body" d="M 0 -100 C 58 -100 100 -60 106 -6 C 110 56 70 128 -72 200 C -26 138 -92 62 -92 -6 C -92 -60 -58 -100 0 -100 Z"/>
+    <path id="wy-bird-beak" d="M 80 -26 L 80 2 L 122 -12 Z"/>
+    <circle id="wy-bird-eye" cx="32" cy="-42" r="16"/>
+  </defs>
+  <rect width="1024" height="1024" fill="#fafafa"/>
+  <path d="M 150 566 C 340 548 530 580 700 650 C 780 688 840 748 878 838" fill="none" stroke="#262626" stroke-width="34" stroke-linecap="round"/>
+  <path d="M 700 650 L 744 574" fill="none" stroke="#737373" stroke-width="12" stroke-linecap="round"/>
+  <path d="M 744 574 C 798.8 568.3 845.2 529.1 860 476 C 805.2 481.7 758.8 520.9 744 574 Z" fill="#737373"/>
+  <path d="M 744 574 C 776.7 606.1 825.5 613.3 866 592 C 833.3 559.9 784.5 552.7 744 574 Z" fill="#737373"/>
+  <use href="#wy-bird-body" transform="translate(330 386) scale(1.05)" fill="#171717"/>
+  <use href="#wy-bird-body" transform="translate(500 418) scale(0.92)" fill="#525252"/>
+  <use href="#wy-bird-body" transform="translate(652 452) scale(0.80)" fill="#a3a3a3"/>
+  <use href="#wy-bird-beak" transform="translate(330 386) scale(1.05)" fill="#171717"/>
+  <use href="#wy-bird-beak" transform="translate(500 418) scale(0.92)" fill="#525252"/>
+  <use href="#wy-bird-beak" transform="translate(652 452) scale(0.80)" fill="#a3a3a3"/>
+  <use href="#wy-bird-eye" transform="translate(330 386) scale(1.05)" fill="#fafafa"/>
+  <use href="#wy-bird-eye" transform="translate(500 418) scale(0.92)" fill="#fafafa"/>
+  <use href="#wy-bird-eye" transform="translate(652 452) scale(0.80)" fill="#fafafa"/>
+</svg>
