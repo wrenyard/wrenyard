@@ -9,6 +9,7 @@
 - Focus status-bar quota on the selected session model, with shared 5h/7d usage cards, pacing and reset times.
 - Respect Claude Code quota refresh intervals and Retry-After cooldowns; retain stale quota data during rate limits.
 - Restore dragging across blank title-bar areas while keeping controls clickable.
+- Wait for daemon startup before loading the shell so initial session reads do not fail during cold startup.
 
 ### Pet
 
