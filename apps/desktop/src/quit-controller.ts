@@ -10,7 +10,7 @@ import type { DaemonConnectionMode } from './shell-contract.js';
 export interface QuitCounts {
   /**
    * Daemon-reported idleness. It already accounts for active tasks, taskgraphs,
-   * executions and conversations, and is the single readiness signal.
+   * executions and sessions, and is the single readiness signal.
    */
   idle: boolean;
   activeTaskCount: number;

@@ -1,5 +1,5 @@
 /**
- * session-v2 action layer.
+ * session action layer.
  *
  * Owns:
  *   - the streaming `<wy-action>` splitter (fence / inline-code aware)
@@ -24,7 +24,7 @@ import type {
   BuiltView,
   CallsPort,
   FilesPort,
-  SessionV2Host,
+  SessionHost,
   ViewsPort,
 } from './engine.ts';
 
@@ -527,7 +527,7 @@ export function validateDocTargetPath(
 // ─── Action runner ─────────────────────────────────────────────────────────
 
 export interface ActionRunnerDeps {
-  host: SessionV2Host;
+  host: SessionHost;
   files: FilesPort;
   views: ViewsPort;
   calls: CallsPort;

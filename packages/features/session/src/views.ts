@@ -1,5 +1,5 @@
 /**
- * session-v2 views: prompt assembly, context event rendering, escaping and
+ * session views: prompt assembly, context event rendering, escaping and
  * per-layer character statistics.
  *
  * Every builder is a pure function of its input. Each view emits its stable

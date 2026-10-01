@@ -13,6 +13,7 @@ import {
   resolveWrenyardIpcPath,
   WrenyardIpcClient,
   WrenyardRpcError,
+  WRENYARD_PROTOCOL_VERSION,
 } from "../src/index.js";
 
 const isWindows = process.platform === "win32";
@@ -60,6 +61,7 @@ interface TestServer {
 
 async function startServer(
   handleFrame: (socket: Socket, frame: string) => void,
+  protocolVersion = WRENYARD_PROTOCOL_VERSION,
 ): Promise<TestServer> {
   const dir = mkdtempSync(join(tmpdir(), "control-client-"));
   const socketPath = join(dir, "ipc.sock");
@@ -77,7 +79,16 @@ async function startServer(
         const frame = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
         if (frame.trim() !== "") {
-          handleFrame(socket, frame);
+          const request = JSON.parse(frame) as { id: number; method: string };
+          if (request.method === "health.ping") {
+            socket.write(JSON.stringify({
+              jsonrpc: "2.0",
+              id: request.id,
+              result: { protocolVersion },
+            }) + "\n");
+          } else {
+            handleFrame(socket, frame);
+          }
         }
       }
     });
@@ -120,6 +131,21 @@ test(
 
     const result = await client.request<{ method: string }>("ping");
     assert.deepEqual(result, { method: "ping" });
+  },
+);
+
+test(
+  "a retired protocol rejects business requests before sending them",
+  { skip: isWindows },
+  async (t) => {
+    let businessRequestReceived = false;
+    const srv = await startServer(() => { businessRequestReceived = true; }, 1);
+    t.after(() => srv.stop());
+    const client = new WrenyardIpcClient({ path: srv.socketPath });
+    t.after(() => client.close());
+
+    await assert.rejects(client.request("ping"), /协议版本不一致/);
+    assert.equal(businessRequestReceived, false);
   },
 );
 

@@ -13,7 +13,7 @@ export type WrenyardIpcEnvironment = NodeJS.ProcessEnv;
 
 /**
  * Shared default control socket for the Wrenyard daemon. Every Wrenyard
- * surface (control-client, dsh-shell, desktop, pet) uses this same default so
+ * surface (control-client, desktop, pet) uses this same default so
  * the legacy per-surface socket mismatch is gone.
  */
 export function defaultWrenyardIpcPath(): string {

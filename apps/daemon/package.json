@@ -47,7 +47,6 @@
     "@wrenyard/providers": "workspace:*",
     "@wrenyard/control-client": "workspace:*",
     "@wrenyard/session": "workspace:*",
-    "@wrenyard/session-v2": "workspace:*",
     "@langchain/core": "1.2.5",
     "ajv": "^8.20.0",
     "better-sqlite3": "13.0.3",

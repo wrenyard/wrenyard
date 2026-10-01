@@ -1,8 +1,8 @@
 /**
- * session-v2 ledger: the append-only timeline and the state derived from it.
+ * session ledger: the append-only timeline and the state derived from it.
  *
  * The ledger is the only durable state of a session. Under
- * `<stateRoot>/session-v2/<sha256(workspaceRoot)>/` it keeps
+ * `<stateRoot>/session/<sha256(workspaceRoot)>/` it keeps
  *
  *   sessions/<sessionId>.jsonl  one event per line, appended durably (`fsync`)
  *   index.json                  the session list, derived from the timelines
@@ -505,7 +505,7 @@ export class Ledger {
   constructor(options: LedgerOptions) {
     this.now = options.now ?? (() => new Date());
     const digest = createHash('sha256').update(options.workspaceRoot, 'utf8').digest('hex');
-    const rootDir = join(options.stateRoot, 'session-v2', digest);
+    const rootDir = join(options.stateRoot, 'session', digest);
     this.sessionsDir = join(rootDir, 'sessions');
     this.indexPath = join(rootDir, 'index.json');
     // Loading is synchronous, so `listSessions` and `read` work immediately
@@ -738,7 +738,7 @@ function parseEventLine(line: string, file: string, offset: number): LedgerEvent
   try {
     value = JSON.parse(line);
   } catch {
-    throw new Error(`session-v2 ledger is corrupt at ${file} byte ${offset}; refusing to discard it`);
+    throw new Error(`session ledger is corrupt at ${file} byte ${offset}; refusing to discard it`);
   }
   if (
     value === null
@@ -747,7 +747,7 @@ function parseEventLine(line: string, file: string, offset: number): LedgerEvent
     || typeof (value as Record<string, unknown>).at !== 'string'
     || typeof (value as Record<string, unknown>).type !== 'string'
   ) {
-    throw new Error(`session-v2 ledger has an invalid event at ${file} byte ${offset}`);
+    throw new Error(`session ledger has an invalid event at ${file} byte ${offset}`);
   }
   return value as LedgerEvent;
 }
