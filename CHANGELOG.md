@@ -1,6 +1,46 @@
 # Changelog
 
-## Unreleased
+## 1.0.0-dev.44
+
+A redesigned Desktop built on shadcn/ui and Tailwind, with a ledger-backed
+conversation page and much deeper observability.
+
+### Desktop
+
+- New window frame: a custom title bar with sidebar toggle, back/forward
+  history and page actions (the Windows menu folds into a title bar button),
+  and a full-width status bar showing the daemon, running tasks and task graphs,
+  the tightest quota window, updates and a notification history.
+- Conversation page rebuilt around the session ledger: per-session drafts, a
+  context ring that predicts the next reasoning request for the selected model,
+  a usage panel with quota, pace and reset times, and an inspector context tab
+  with composition, growth, a cross-model preview and per-role call costs.
+  Sending is blocked when the context no longer fits the selected model.
+- Model Supply restores quota pace markers and reset countdowns in a compact
+  one-line-per-provider list.
+- Settings redesigned after editor settings pages: searchable, with a
+  category outline, modified markers and reset, plus new general, appearance,
+  session and notification settings and a read-only shortcut list.
+- Themes moved into the `@wrenyard/themes` package. Paper and Neutral each
+  come in light and dark (or follow the system), and the app icon follows the
+  theme. A consistent motion system respects reduced-motion settings.
+- Unified toasts, notification history with do-not-disturb, system
+  notifications while the window is in the background, and a single
+  confirmation dialog pattern.
+- `pnpm dev` builds show a 开发模式 badge.
+
+### Fixes
+
+- Long pages (for example the task run history) scroll instead of clipping.
+- Dragging a scrollbar next to a panel divider no longer resizes the panels.
+- Tokens above one billion render as `B` instead of thousands of `M`.
+
+### Documentation
+
+- Rewritten README with screenshots and a product tour video, a development
+  guide, and documentation cleaned of retired components.
+
+## 1.0.0-dev.34 – 1.0.0-dev.43
 
 Development preview release.
 
