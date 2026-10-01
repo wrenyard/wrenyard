@@ -121,6 +121,8 @@ export const ACTIVITY_BAR_WIDTH = 48;
 
 export const SHELL_CHANNELS = {
   navigate: 'wrenyard-shell:navigate',
+  showAppMenu: 'wrenyard-shell:show-app-menu',
+  windowStateChanged: 'wrenyard-shell:window-state-changed',
   appearanceSnapshot: 'wrenyard-shell:appearance-snapshot',
   appearanceSettingsSnapshot: 'wrenyard-shell:appearance-settings-snapshot',
   saveAppearance: 'wrenyard-shell:save-appearance',
@@ -204,14 +206,23 @@ export interface ResolvedAppearance {
   reduceMotion: boolean;
 }
 
+/** Window chrome state pushed by the main process (macOS fullscreen inset). */
+export interface WindowStateSnapshot {
+  fullscreen: boolean;
+}
+
+/** Renderer-supplied popup anchor for the Windows application menu button. */
+export interface AppMenuPosition {
+  x: number;
+  y: number;
+}
+
 export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
   endpoint: string;
   workspace: WorkspaceConfigurationSnapshot;
   uptimeMs?: number;
-}
-
-export interface ModelSnapshot {
+}export interface ModelSnapshot {
   id: string;
   label: string;
   configured: boolean;
@@ -842,6 +853,9 @@ export interface WrenyardShellApi {
   setAppearance(settings: Partial<AppearanceSettings>): Promise<AppearanceSettings>;
   onAppearanceChanged(listener: (appearance: ResolvedAppearance) => void): () => void;
   navigate(page: ShellPage): Promise<void>;
+  /** Pop the native application menu at a renderer anchor (Windows only). */
+  showAppMenu(position?: AppMenuPosition): Promise<void>;
+  onWindowStateChanged(listener: (state: WindowStateSnapshot) => void): () => void;
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;

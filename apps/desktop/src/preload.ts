@@ -4,7 +4,9 @@ import {
   SHELL_CHANNELS,
   isShellPage,
   type AppearanceSettings,
+  type AppMenuPosition,
   type ResolvedAppearance,
+  type WindowStateSnapshot,
   type StatsSnapshot,
   type QuotaSnapshot,
   type SettingsSnapshot,
@@ -65,6 +67,12 @@ function isNotificationCommandAction(value: unknown): value is NotificationComma
   return typeof action.id === 'string' && action.id.length > 0;
 }
 
+/** Window state arrives from the main process; accept only the typed shape. */
+function isWindowStateSnapshot(value: unknown): value is WindowStateSnapshot {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  return typeof (value as { fullscreen?: unknown }).fullscreen === 'boolean';
+}
+
 const api: WrenyardShellApi = {
   platform: process.platform,
   initialAppearance: readInitialAppearance(),
@@ -87,6 +95,16 @@ const api: WrenyardShellApi = {
   navigate(page: ShellPage): Promise<void> {
     if (!isShellPage(page)) return Promise.reject(new Error('Unsupported shell page'));
     return ipcRenderer.invoke(SHELL_CHANNELS.navigate, page) as Promise<void>;
+  },
+  showAppMenu(position?: AppMenuPosition): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.showAppMenu, position) as Promise<void>;
+  },
+  onWindowStateChanged(listener: (state: WindowStateSnapshot) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, state: unknown): void => {
+      if (isWindowStateSnapshot(state)) listener(state);
+    };
+    ipcRenderer.on(SHELL_CHANNELS.windowStateChanged, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.windowStateChanged, handler);
   },
   getSettings(): Promise<SettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.settingsSnapshot) as Promise<SettingsSnapshot>;

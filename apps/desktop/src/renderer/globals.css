@@ -703,6 +703,27 @@ html[data-theme-switching] *::after {
 
 :root {
   --header-height: calc(var(--spacing) * 12);
+  /* Window chrome (chrome spec 1): the title bar matches the old header height
+     and the status bar spans the window at 24px. */
+  --titlebar-height: var(--header-height);
+  --statusbar-height: calc(var(--spacing) * 6);
+  /* Left reserve for window controls; macOS keeps room for the traffic lights
+     and releases it while fullscreen, Windows only needs the small gap before
+     the menu button. The right reserve is the Windows Window Controls Overlay. */
+  --titlebar-inset-start: 8px;
+  --titlebar-inset-end: 0px;
+}
+
+html[data-platform="darwin"] {
+  --titlebar-inset-start: 80px;
+}
+
+html[data-fullscreen="true"] {
+  --titlebar-inset-start: 8px;
+}
+
+html[data-platform="win32"] {
+  --titlebar-inset-end: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
 
 @layer base {

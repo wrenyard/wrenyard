@@ -1,29 +1,30 @@
 import type { ComponentProps } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from 'cn';
-import { SourceDevelopmentBadge } from '@/renderer/components/source-development-badge';
+import { useTitleBarPage, useTitleBarSlot } from '@/renderer/lib/titlebar';
 
 /** Full-height page frame that stacks a header above scrollable content. */
 export function Page({ className, ...props }: ComponentProps<'div'>) {
   return <div className={cn('flex h-full min-h-0 flex-col', className)} {...props} />;
 }
 
-/** Fixed-height page header aligned with the shell chrome height. */
+/**
+ * Page header rendered into the shell title bar (chrome spec 3.5). The page
+ * keeps the same markup; the content is portaled into the slot the title bar
+ * reserves for the calling page, so a hidden page keeps its header state.
+ */
 export function PageHeader({ className, ...props }: ComponentProps<'header'>) {
-  return (
-    <header
-      className={cn('flex h-(--header-height) shrink-0 items-center gap-2 border-b px-4', className)}
-      {...props}
-    />
+  const page = useTitleBarPage();
+  const slot = useTitleBarSlot(page, 'title');
+  if (slot === null) return null;
+  return createPortal(
+    <header className={cn('flex min-w-0 flex-1 items-center gap-2', className)} {...props} />,
+    slot,
   );
 }
 
-export function PageTitle({ className, children, ...props }: ComponentProps<'h1'>) {
-  return (
-    <h1 className={cn('flex items-center gap-2 text-base font-medium', className)} {...props}>
-      <SourceDevelopmentBadge />
-      {children}
-    </h1>
-  );
+export function PageTitle({ className, ...props }: ComponentProps<'h1'>) {
+  return <h1 className={cn('flex min-w-0 items-center gap-2 truncate text-base font-medium', className)} {...props} />;
 }
 
 export function PageDescription({ className, ...props }: ComponentProps<'p'>) {
@@ -33,6 +34,20 @@ export function PageDescription({ className, ...props }: ComponentProps<'p'>) {
 /** Right-aligned action cluster inside a `PageHeader`. */
 export function PageActions({ className, ...props }: ComponentProps<'div'>) {
   return <div className={cn('ml-auto flex items-center gap-2', className)} {...props} />;
+}
+
+/**
+ * Auxiliary page entries rendered into the title bar's right slot (chrome spec
+ * 3.6), e.g. the session inspector toggle.
+ */
+export function TitleBarAuxiliary({ className, ...props }: ComponentProps<'div'>) {
+  const page = useTitleBarPage();
+  const slot = useTitleBarSlot(page, 'auxiliary');
+  if (slot === null) return null;
+  return createPortal(
+    <div className={cn('flex items-center gap-1', className)} {...props} />,
+    slot,
+  );
 }
 
 export interface PageContentProps extends ComponentProps<'div'> {

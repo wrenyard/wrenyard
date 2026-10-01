@@ -2,14 +2,12 @@ import { app, BrowserWindow, nativeTheme, systemPreferences } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getTheme } from '@wrenyard/themes';
+import { TITLE_BAR_HEIGHT } from '../window-chrome.js';
 import type { DesktopSettingsStore } from './settings/desktop-settings.js';
 import type {
   AppearanceSettings,
   ResolvedAppearance,
 } from '../shell-contract.js';
-
-/** Windows title bar button strip height; the theme only owns the colors. */
-const TITLE_BAR_HEIGHT = 32;
 
 export interface DesktopAppearanceControllerOptions {
   /** The single settings store; the appearance partition lives inside it. */
