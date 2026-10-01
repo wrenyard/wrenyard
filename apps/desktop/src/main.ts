@@ -3,17 +3,20 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
 import { registerSession, type SessionRegistration } from './session/ipc.js';
-import { DesktopPetRuntime } from './pet/main/runtime.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
-import { DesktopPetController } from './pet-controller.js';
+import {
+  DesktopPetController,
+  DesktopPetRuntime,
+  createTaskGraphWindows,
+  type TaskGraphWindowsHandle,
+} from './pet/main/controller.js';
 import { DesktopSettingsStore } from './main/settings/desktop-settings.js';
 import { DesktopPreferencesController } from './main/settings/preferences.js';
 import { DesktopAppearanceController } from './main/appearance.js';
 import { WrenyardDaemonClient } from './main/daemon-client/client.js';
 import { DaemonSubscriptions } from './main/daemon-client/subscriptions.js';
 import { reorderProviders } from './provider-order.js';
-import { TaskGraphWindowOwner } from './main/windows/taskgraph-windows.js';
 import { DesktopQuotaController } from './quota-controller.js';
 import { DesktopQuotaSource } from './quota-service.js';
 import { ActivityStatusProjector, TaskRunLifecycleTracker } from './main/activity-status.js';
@@ -237,7 +240,7 @@ let desktopSettingsStore: DesktopSettingsStore | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
 let desktopSubscriptions: DaemonSubscriptions | null = null;
-let taskgraphWindowOwner: TaskGraphWindowOwner | null = null;
+let taskgraphWindowOwner: TaskGraphWindowsHandle | null = null;
 let quotaController: DesktopQuotaController | null = null;
 let appearanceController: DesktopAppearanceController | null = null;
 let preferencesController: DesktopPreferencesController | null = null;
@@ -834,7 +837,7 @@ async function bootstrap(): Promise<void> {
   // process. The shell window, tray and Pet all consume the same rounds; the
   // Pet never opens its own connection or timer.
   const daemonClient = new WrenyardDaemonClient({ path: ipcPath, canConnect: canConnectDaemon });
-  const windowOwner = new TaskGraphWindowOwner({
+  const windowOwner = createTaskGraphWindows({
     daemonClient,
     pageLoader,
     preloadDir: petAssets.preloadDir,

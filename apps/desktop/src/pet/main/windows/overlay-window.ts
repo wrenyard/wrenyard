@@ -2,7 +2,7 @@ import { BrowserWindow, type WebPreferences } from 'electron';
 import {
   overlaySkipsTaskbar,
   overlayWorkspaceVisibilityOptions,
-} from '../overlay-window-policy';
+} from './overlay-window-policy';
 
 export interface OverlayWindowOptions {
   width: number;

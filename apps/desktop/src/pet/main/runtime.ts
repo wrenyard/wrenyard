@@ -1,11 +1,11 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import type { PageLoader } from '../../pages.js';
-import { SiteModel } from './site-model';
+import { SiteModel } from './model/site-model';
 import type { PetNotificationSink } from './service';
-import { EntityManager } from './entity-manager';
+import { EntityManager } from './model/entity-manager';
 import { buildQuotaTips } from '../../main/projections/quota-tips';
 import type { QuotaProviderState } from '../shared/entities';
-import type { AgentEventSignal } from './agent-types';
+import type { AgentEventSignal } from '../../main/daemon-client/agent-types';
 import type { AppConfig } from './config';
 import type { ActivityPresence } from '../shared/activity-snapshot';
 import type { DailyStatsSnapshot } from '../shared/snapshot';

@@ -3,7 +3,7 @@ import {
   WORKER_SPRITE_W,
   WORKER_VISIBLE_H,
   WORKER_WINDOW_TOP_PADDING,
-} from '../shared/worker-metrics';
+} from '../../shared/worker-metrics';
 
 export interface EntitySize {
   width: number;
