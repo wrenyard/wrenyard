@@ -1,6 +1,15 @@
 import type { LedgerEvent, LiveCall, SessionSummary, SummarySettingsSnapshot } from '@wrenyard/session'
 import type { JsonSchema } from '../jsonrpc.mts'
 
+// The context-inspection DTOs are declared once in `@wrenyard/protocol` and
+// re-exported here so every existing daemon import path keeps working, exactly
+// like the provider/exec wire types. The runtime JSON schemas stay daemon-owned.
+export type {
+  SessionContextInspectParams,
+  SessionContextInspectResult,
+  ContextInspection,
+} from '@wrenyard/protocol'
+
 // Canonical `session.*` ledger wire surface. Every DTO and runtime JSON schema
 // for the append-only session timeline lives here; the daemon validates session
 // params/results against these schemas and nothing else.
@@ -118,3 +127,62 @@ export const sessionSummarySaveParamsSchema = {
   properties: { canonicalModel: { type: 'string', minLength: 1, maxLength: 512 } },
 } as const satisfies JsonSchema
 export const sessionSummarySaveResultSchema = summarySettingsSchema
+
+const contextLayerIdSchema = {
+  type: 'string',
+  enum: ['wy-system', 'wy-global', 'wy-role', 'wy-workspace', 'wy-ctx', 'wy-info'],
+} as const
+
+export const sessionContextInspectParamsSchema = {
+  type: 'object', required: ['model'], additionalProperties: false,
+  properties: { sessionId: idSchema, model: idSchema },
+} as const satisfies JsonSchema
+export const sessionContextInspectResultSchema = {
+  type: 'object',
+  required: ['computedAtSeq', 'estimator', 'model', 'layers', 'items', 'totalTokens'],
+  additionalProperties: false,
+  properties: {
+    computedAtSeq: seqSchema,
+    estimator: { type: 'string', enum: ['cl100k_base'] },
+    model: {
+      type: 'object', required: ['publicId'], additionalProperties: false,
+      properties: {
+        publicId: idSchema,
+        contextWindow: { type: 'integer', minimum: 1 },
+        maxOutputTokens: { type: 'integer', minimum: 1 },
+      },
+    },
+    layers: {
+      type: 'array', items: {
+        type: 'object', required: ['id', 'tokens'], additionalProperties: false,
+        properties: { id: contextLayerIdSchema, tokens: { type: 'integer', minimum: 0 } },
+      },
+    },
+    items: {
+      type: 'array', items: {
+        type: 'object', required: ['seq', 'turn', 'kind', 'label', 'tokens'], additionalProperties: false,
+        properties: {
+          seq: seqSchema,
+          turn: seqSchema,
+          cycle: { type: 'integer', minimum: 0 },
+          kind: {
+            type: 'string',
+            enum: ['user', 'assistant', 'reply', 'doc', 'memory', 'action-result', 'ws-update', 'interrupt'],
+          },
+          label: { type: 'string' },
+          tokens: { type: 'integer', minimum: 0 },
+        },
+      },
+    },
+    totalTokens: { type: 'integer', minimum: 0 },
+    calibration: {
+      type: 'object', required: ['callId', 'model', 'estimated', 'actual'], additionalProperties: false,
+      properties: {
+        callId: idSchema,
+        model: idSchema,
+        estimated: { type: 'integer', minimum: 0 },
+        actual: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+} as const satisfies JsonSchema
