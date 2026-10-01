@@ -1,4 +1,4 @@
-import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
+import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import type {
   PixelProgram,
   RenderContainer,
@@ -6,15 +6,12 @@ import type {
   RenderPixel,
   RenderSurface,
   RenderSurfaceOptions,
-  RenderText,
-  RenderTextStyle,
   ShapeCommand,
 } from '../types';
 import { assertPositiveFinite } from '../validation';
 import { PixiRenderContainer } from './container';
 import { PixiRenderGraphics } from './graphics';
 import { PixiRenderPixel } from './pixel';
-import { PixiRenderText } from './text';
 import { PixiRenderTicker } from './ticker';
 
 export class PixiRenderSurface implements RenderSurface {
@@ -39,14 +36,6 @@ export class PixiRenderSurface implements RenderSurface {
     const graphics = new PixiRenderGraphics(new Graphics());
     graphics.setCommands(commands);
     return graphics;
-  }
-
-  createText(text: string, style: RenderTextStyle): RenderText {
-    this.assertAlive();
-    const renderText = new PixiRenderText(new Text({ text: '' }));
-    renderText.setText(text);
-    renderText.setStyle(style);
-    return renderText;
   }
 
   createPixel(program: PixelProgram): RenderPixel {

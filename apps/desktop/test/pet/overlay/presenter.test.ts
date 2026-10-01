@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RenderTextStyle, ShapeCommand } from '../../../src/pet/render';
+import type { ShapeCommand } from '../../../src/pet/render';
 import type { HouseRendererState, WorkerRendererState } from '../../../src/pet/shared/entities';
 import type { Appearance } from '../../../src/pet/shared/snapshot';
 import { HousePresenter, stateWithoutBroadcast } from '../../../src/pet/features/house/presenter';
@@ -8,7 +8,6 @@ import { WorkerPresenter } from '../../../src/pet/features/worker/presenter';
 type Frame = (nowMs: number, deltaMs: number) => void;
 
 function mockSurface() {
-  const texts: any[] = [];
   const pixels: any[] = [];
   const graphics: any[] = [];
   const resizeCalls: unknown[][] = [];
@@ -66,23 +65,6 @@ function mockSurface() {
       pixels.push(node);
       return node;
     },
-    createText(text = '', style?: RenderTextStyle) {
-      const node = {
-        ...baseNode(),
-        value: text,
-        style,
-        setText(next: string) { this.value = next; },
-        setStyle(next: RenderTextStyle) { this.style = next; },
-        measure() {
-          return {
-            width: Math.max(1, Array.from(this.value).length * 6),
-            height: this.style?.lineHeight ?? 12,
-          };
-        },
-      };
-      texts.push(node);
-      return node;
-    },
     resize(...args: unknown[]) { resizeCalls.push(args); },
     render() { renderCount += 1; },
     destroy() {},
@@ -91,7 +73,6 @@ function mockSurface() {
   return {
     surface,
     root,
-    texts,
     pixels,
     graphics,
     callbacks,
@@ -160,7 +141,7 @@ afterEach(() => {
 });
 
 describe('overlay worker presenter', () => {
-  it('attaches the worker root once, resizes with CSS DPR, and exposes hit output', () => {
+  it('attaches the worker sprite root once, resizes with CSS DPR, and exposes a footline hit region', () => {
     const env = mockSurface();
     const presenter = new WorkerPresenter(env.surface);
     presenter.resize(640, 360, 2);
@@ -172,22 +153,30 @@ describe('overlay worker presenter', () => {
     expect(env.root.children).toHaveLength(1);
     expect(first?.root).toBe(second?.root);
     expect(second?.hitRegion).toEqual({ x: 220, y: 200, width: 200, height: 160 });
-    expect(second?.passthrough).toBe(true);
     expect(env.renderCount).toBeGreaterThan(0);
   });
 
-  it('uses Date.now epoch timestamps from ticker callbacks and supports stop/destroy', () => {
+  it('hit-tests the footline region at CSS coordinates', () => {
+    const env = mockSurface();
+    const presenter = new WorkerPresenter(env.surface);
+    presenter.resize(640, 360, 5);
+    presenter.setState(workerState(5));
+
+    // Hit region is { x: 220, y: 200, width: 200, height: 160 }.
+    expect(presenter.hitTest(300, 250)).toBe(true);
+    expect(presenter.hitTest(219, 250)).toBe(false);
+    expect(presenter.hitTest(300, 199)).toBe(false);
+  });
+
+  it('exposes the worker identity key and supports stop/destroy', () => {
     const env = mockSurface();
     const presenter = new WorkerPresenter(env.surface);
     presenter.resize(640, 360, 1);
     presenter.setState(workerState(5));
-    vi.spyOn(Date, 'now').mockReturnValue(34567);
+    expect(presenter.getWorkerId()).toBe('worker-1');
 
     presenter.start();
     expect(env.startCount).toBe(1);
-    env.callbacks[0](123, 16);
-    expect(env.texts.some((text) => text.value === '34s')).toBe(true);
-
     presenter.stop();
     expect(env.callbacks).toHaveLength(0);
     expect(env.stopCount).toBe(1);
@@ -195,25 +184,10 @@ describe('overlay worker presenter', () => {
     presenter.destroy();
     expect(env.root.children).toHaveLength(0);
   });
-
-  it('honors explicit epoch timestamps for deterministic static updates', () => {
-    const env = mockSurface();
-    const presenter = new WorkerPresenter(env.surface);
-    vi.spyOn(Date, 'now').mockReturnValue(999999);
-
-    presenter.resize(640, 360, 1, 10000);
-    presenter.setState(workerState(5), 10000);
-    presenter.setPointer({ x: 300, y: 250, inside: true }, 10000);
-    const output = presenter.setDragging(false, 10000);
-
-    expect(output?.hovering).toBe(true);
-    expect(env.texts.some((text) => text.value === '10s')).toBe(true);
-    expect(env.texts.some((text) => text.value === '99m')).toBe(false);
-  });
 });
 
 describe('overlay house presenter', () => {
-  it('attaches the house root once and exposes body, close and passthrough output', () => {
+  it('attaches the house sprite root once and exposes the physical house rect', () => {
     const env = mockSurface();
     const presenter = new HousePresenter(env.surface);
     presenter.resize(360, 460, 2);
@@ -223,9 +197,18 @@ describe('overlay house presenter', () => {
     expect(env.resizeCalls).toEqual([[360, 460, 2]]);
     expect(env.root.children).toHaveLength(1);
     expect(output?.houseRect).toEqual({ x: 60, y: 260, width: 240, height: 200 });
-    expect(output?.closeRect).toBeDefined();
-    expect(output?.hitRects.map((rect) => rect.target)).toEqual(['house', 'broadcast-close']);
-    expect(output?.passthrough).toBe(true);
+    expect(env.renderCount).toBeGreaterThan(0);
+  });
+
+  it('alpha-tests the house sprite program at CSS coordinates', () => {
+    const env = mockSurface();
+    const presenter = new HousePresenter(env.surface);
+    presenter.resize(360, 460, 5);
+    presenter.setState(houseState(5));
+
+    // House origin is (60,260) at scale 5; the body is painted, the corner is not.
+    expect(presenter.hitTest(180, 360)).toBe(true);
+    expect(presenter.hitTest(61, 261)).toBe(false);
   });
 
   it('replays state with deterministic renderFrame timestamps and removes broadcast locally', () => {
@@ -238,7 +221,7 @@ describe('overlay house presenter', () => {
     });
 
     const output = presenter.renderFrame(10000);
-    expect(output?.broadcast?.alpha).toBeCloseTo(0.5, 5);
+    expect(output?.houseRect).toBeDefined();
 
     const without = stateWithoutBroadcast({
       ...houseState(),
@@ -255,19 +238,5 @@ describe('overlay house presenter', () => {
     });
     expect(without.broadcast).toBeUndefined();
     expect(without.dailyStats?.source).toBe('sqlite');
-  });
-
-  it('honors explicit epoch timestamps for static resize and state replay', () => {
-    const env = mockSurface();
-    const presenter = new HousePresenter(env.surface);
-    vi.spyOn(Date, 'now').mockReturnValue(999999);
-
-    presenter.resize(360, 460, 1, 10000);
-    const output = presenter.setState({
-      ...houseState(),
-      broadcast: { id: 'b1', text: 'fade', intensity: 'transient', untilMs: 10400 },
-    }, 10000);
-
-    expect(output?.broadcast?.alpha).toBeCloseTo(0.5, 5);
   });
 });
