@@ -80,7 +80,8 @@ export function formatTokenCount(value: number | undefined): string {
   if (value === undefined) return '—';
   if (value < 1000) return String(value);
   if (value < 1_000_000) return `${trimOneDecimal(value / 1000)}k`;
-  return `${trimOneDecimal(value / 1_000_000)}M`;
+  if (value < 1_000_000_000) return `${trimOneDecimal(value / 1_000_000)}M`;
+  return `${trimOneDecimal(value / 1_000_000_000)}B`;
 }
 
 /** `42%` from a 0–1 ratio; `undefined` or non-finite renders as an em dash. */

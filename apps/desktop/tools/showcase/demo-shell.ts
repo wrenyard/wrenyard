@@ -1056,17 +1056,6 @@ export function createDemoShell(control?: DemoControl): DemoShell {
     initialAppearance: INITIAL_APPEARANCE,
 
     getAppearance: async () => resolvedAppearance,
-    getAppearanceSettings: async () => appearanceSettings,
-    setAppearance: async (settings) => {
-      appearanceSettings = { ...appearanceSettings, ...settings };
-      resolvedAppearance = {
-        theme: appearanceSettings.theme,
-        dark: appearanceSettings.colorMode === 'dark' ? true : appearanceSettings.colorMode === 'light' ? false : resolvedAppearance.dark,
-        reduceMotion: appearanceSettings.motion === 'reduce' ? true : resolvedAppearance.reduceMotion,
-      };
-      appearanceChanged.emit(resolvedAppearance);
-      return appearanceSettings;
-    },
     onAppearanceChanged: (listener) => appearanceChanged.subscribe(listener),
 
     navigate: async (page) => {
@@ -1253,6 +1242,12 @@ export function createDemoShell(control?: DemoControl): DemoShell {
       if (!isPreferenceId(id) || !validatePreferenceValue(id, value)) return preferences;
       preferences = applyPreference(preferences, id, value);
       preferencesChanged.emit(preferences);
+      // Mirror the main process: appearance preferences re-resolve and push
+      // the appearance to the renderer.
+      if (id === 'appearance.theme' || id === 'appearance.colorMode') {
+        const { theme, colorMode } = preferences.appearance;
+        setAppearance({ theme, dark: colorMode === 'dark' || (colorMode === 'system' && resolvedAppearance.dark) });
+      }
       return preferences;
     },
     onPreferencesChanged: (listener) => preferencesChanged.subscribe(listener),
