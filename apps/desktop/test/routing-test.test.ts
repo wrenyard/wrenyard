@@ -17,6 +17,7 @@ import {
   serializeRoutingTestRequest,
   type RoutingTestFormState,
 } from '../src/renderer/pages/quota/model/routing.js';
+import { shellIpcSource } from './support/shell-ipc-source.ts';
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -66,18 +67,15 @@ test('preload forwards the typed form request and lazily imports tasks without r
   );
 });
 
-/** Every channel named in the removeIpcHandlers disposal list. */
+/** Every channel named in the per-domain IPC disposal lists. */
 function disposedChannels(win: string): string[] {
-  const start = win.indexOf('private removeIpcHandlers(): void {');
-  assert.ok(start >= 0, 'shell-window must dispose its IPC handlers');
-  const loop = win.indexOf('ipcMain.removeHandler(channel)', start);
-  assert.ok(loop > start, 'the disposal loop removes every registered channel');
-  const list = win.slice(start, loop);
-  return [...list.matchAll(/SHELL_CHANNELS\.([A-Za-z0-9_]+)/g)].map((match) => match[1]);
+  const lists = [...win.matchAll(/for \(const channel of \[([\s\S]*?)\]\) ipcMain\.removeHandler\(channel\)/g)];
+  assert.ok(lists.length > 0, 'the IPC modules dispose their handlers');
+  return lists.flatMap((list) => [...list[1].matchAll(/SHELL_CHANNELS\.([A-Za-z0-9_]+)/g)].map((match) => match[1]));
 }
 
 test('shell-window validates the sender, the typed form, and disposes both channels', () => {
-  const win = readFileSync(join(desktopRoot, 'src', 'shell-window.ts'), 'utf8');
+  const win = shellIpcSource(desktopRoot);
   assert.match(win, /requestTaskRoutingTest\(params: TaskRoutingTestParams\): Promise<TaskRoutingTestResult>;/);
   assert.match(win, /requestRoutingTestTasks\(\): Promise<TaskRoutingTestTasksResult>;/);
   assert.match(win, /function validateTaskRoutingTestParams\(value: unknown\): TaskRoutingTestParams \{/);

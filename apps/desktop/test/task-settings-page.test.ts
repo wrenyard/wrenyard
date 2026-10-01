@@ -24,6 +24,7 @@ import {
   taskResolutionFailureMessage,
   taskRuntimeLine,
 } from '../src/renderer/pages/tasks/model/settings.js';
+import { shellIpcSource } from './support/shell-ipc-source.ts';
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -312,5 +313,5 @@ function mainSource(): string {
 }
 
 function shellWindowSource(): string {
-  return readFileSync(join(desktopRoot, 'src', 'shell-window.ts'), 'utf8');
+  return shellIpcSource(desktopRoot);
 }
