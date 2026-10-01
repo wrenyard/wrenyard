@@ -243,7 +243,12 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     ipcMain.handle(channel, (event: IpcMainInvokeEvent, value: unknown) => {
       if (!options.isShellSender(event.sender)) throw new Error('Untrusted shell IPC sender');
       if (closed) throw aborted();
-      return track(Promise.resolve().then(() => operation(event, value)));
+      return track(Promise.resolve().then(() => operation(event, value)).catch((error: unknown) => {
+        // Closing the relay intentionally cancels in-flight IPC requests.
+        // Do not report that known teardown cancellation as a handler failure.
+        if (closed && error instanceof Error && error.message === 'WrenyardIpcClient closed before response') return undefined;
+        throw error;
+      }));
     });
   };
 
