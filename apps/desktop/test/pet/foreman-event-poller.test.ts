@@ -4,9 +4,9 @@ import {
   ForemanEventPoller,
   type ForemanEventRecord,
 } from '../../src/main/daemon-client/foreman-event-poller';
-import { resolveForemanIpcPath } from '../../src/pet/main/foreman-ipc-client';
-import type { EventsLineData } from '../../src/pet/main/foreman-event-map';
-import type { AgentEventSignal, SessionMetaData } from '../../src/pet/main/agent-types';
+import { resolveWrenyardIpcPath } from '@wrenyard/control-client';
+import type { EventsLineData } from '../../src/main/daemon-client/foreman-event-map';
+import type { AgentEventSignal, SessionMetaData } from '../../src/main/daemon-client/agent-types';
 
 describe('ForemanEventPoller', () => {
   afterEach(() => {
@@ -472,16 +472,16 @@ describe('ForemanEventPoller', () => {
   });
 
   it('resolves the Wrenyard IPC path from WRENYARD_IPC_PATH, otherwise the daemon platform default', () => {
-    expect(resolveForemanIpcPath({
+    expect(resolveWrenyardIpcPath({
       WRENYARD_IPC_PATH: '/tmp/wrenyard.sock',
       FOREMAN_IPC_PATH: '/tmp/foreman.sock',
       FOREMAN_PET_FOREMAN_IPC: '/tmp/pet.sock',
     })).toBe('/tmp/wrenyard.sock');
-    expect(resolveForemanIpcPath({
+    expect(resolveWrenyardIpcPath({
       FOREMAN_IPC_PATH: '/tmp/foreman.sock',
       FOREMAN_PET_FOREMAN_IPC: '/tmp/pet.sock',
     })).toBe(process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock');
-    expect(resolveForemanIpcPath({
+    expect(resolveWrenyardIpcPath({
       WRENYARD_IPC_PATH: '',
       FOREMAN_IPC_PATH: ' ',
     })).toBe(process.platform === 'win32' ? '\\\\.\\pipe\\wrenyard' : '/tmp/wrenyard.sock');

@@ -5,7 +5,7 @@
 // do-not-disturb and decides whether a background notification is warranted,
 // so the same task event can never be delivered twice.
 import type { NotificationInput, NotificationLevel } from '../../main/notification-center';
-import type { GraphTransition } from './activity-notifications';
+import type { GraphTransition } from './model/activity-notifications';
 
 /** Sink injected by the Desktop host; writes into the process-wide center. */
 export type PetNotificationSink = (input: NotificationInput) => void;

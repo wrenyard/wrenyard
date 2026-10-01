@@ -1,5 +1,5 @@
 import { SiteSnapshot, WorkerView } from './snapshot';
-import type { InfoCard } from '../main/hover-controller';
+import type { InfoCard } from '../main/model/hover-controller';
 
 export type HouseSkinId = 'classic' | 'mushroom';
 

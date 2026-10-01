@@ -1,4 +1,4 @@
-import type { WorkerSnapshot } from './agent-types';
+import type { WorkerSnapshot } from '../../../main/daemon-client/agent-types';
 
 // ── Hit-test ──
 

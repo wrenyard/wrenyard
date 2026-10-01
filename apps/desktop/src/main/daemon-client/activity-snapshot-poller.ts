@@ -15,7 +15,7 @@ import {
   normalizeActivitySnapshotV1,
   normalizeTrackedTaskgraphIds,
   type ActivityPresence,
-} from '../../pet/shared/activity-snapshot';
+} from '../../pet/main/controller.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const MAX_BACKOFF_MS = 60000;

@@ -6,7 +6,7 @@ import {
   detectGraphTransitions,
   transitionTextZh,
   type GraphTransition,
-} from '../../src/pet/main/activity-notifications';
+} from '../../src/pet/main/model/activity-notifications';
 import type { ActivityPresence, ActivityTaskGraphPresence } from '../../src/pet/shared/activity-snapshot';
 
 // ── Presence factories ────────────────────────────────────────────────

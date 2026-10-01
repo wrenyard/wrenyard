@@ -1,4 +1,4 @@
-import type { Phase } from '../shared/snapshot';
+import type { Phase } from '../../shared/snapshot';
 
 export type WorkerBehaviorStage = 'spawn' | 'fadeIn' | 'work' | 'fadeOut' | 'despawn';
 
