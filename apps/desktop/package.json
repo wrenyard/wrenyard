@@ -32,6 +32,7 @@
   },
   "devDependencies": {
     "@base-ui/react": "^1.8.0",
+    "@dagrejs/dagre": "^3.1.1",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/modifiers": "^9.0.0",
     "@dnd-kit/sortable": "^10.0.0",
@@ -49,6 +50,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "5.2.0",
     "@wrenyard/session": "workspace:*",
+    "@xyflow/react": "^12.12.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "electron": "^39.8.10",

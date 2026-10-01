@@ -24,6 +24,20 @@ export {
 } from './windows/taskgraph-windows.js';
 
 export {
+  broadcastPetAppearance,
+  registerThemedPetWindow,
+} from './windows/overlay-window.js';
+
+export {
+  DEFAULT_PET_APPEARANCE,
+  initializePetAppearance,
+  petAppearanceBridge,
+  type PetAppearanceApi,
+  type PetAppearanceBridge,
+  type PetAppearanceSnapshot,
+} from '../shared/appearance.js';
+
+export {
   normalizeConfig,
   type AppConfig,
   type EntityVisibilityConfig,

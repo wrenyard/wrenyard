@@ -9,8 +9,10 @@ export const PET_PAGES = {
   house: 'pet/overlay/house/index.html',
   worker: 'pet/overlay/worker/index.html',
   entity: 'pet/overlay/taskgraph-entity/index.html',
-  'graph-slip': 'pet/panels/observatory/index.html',
-  transcript: 'pet/panels/transcript/index.html',
+  // Graph Slip and the task transcript share one React entry, selected with
+  // `?panel=slip|transcript`, so both panels reuse the shell's UI components.
+  'graph-slip': 'pet/panels/index.html',
+  transcript: 'pet/panels/index.html',
 } as const;
 
 export const PET_PRELOADS = {

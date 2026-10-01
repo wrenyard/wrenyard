@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { HouseRendererState, RendererConfig, WorkerRendererState } from '../../shared/entities';
 import { SiteSnapshot } from '../../shared/snapshot';
 import type { PetApi } from '../../overlay/api/pet-api';
+import { exposePetAppearance } from './appearance';
 
 const petApi: PetApi = {
   onSnapshot: (cb: (snap: SiteSnapshot) => void) => {
@@ -61,3 +62,4 @@ const petApi: PetApi = {
 };
 
 contextBridge.exposeInMainWorld('petApi', petApi);
+exposePetAppearance();

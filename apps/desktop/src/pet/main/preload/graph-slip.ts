@@ -5,6 +5,7 @@
 // or mutation method.
 
 import { contextBridge, ipcRenderer } from 'electron';
+import { exposePetAppearance } from './appearance';
 
 export interface GraphSlipDto {
   graph_id: string;
@@ -53,3 +54,4 @@ const graphSlipApi = {
 };
 
 contextBridge.exposeInMainWorld('graphSlipApi', graphSlipApi);
+exposePetAppearance();

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { exposePetAppearance } from './appearance';
 
 const transcriptApi = {
   onData: (taskRunId: string, cb: (data: unknown) => void): (() => void) => {
@@ -25,3 +26,4 @@ const transcriptApi = {
 };
 
 contextBridge.exposeInMainWorld('transcriptApi', transcriptApi);
+exposePetAppearance();

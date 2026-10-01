@@ -8,6 +8,7 @@ import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import {
   DesktopPetController,
   DesktopPetRuntime,
+  broadcastPetAppearance,
   createTaskGraphWindows,
   type TaskGraphWindowsHandle,
 } from './pet/main/controller.js';
@@ -801,7 +802,11 @@ async function bootstrap(): Promise<void> {
   // only a changed resolution to the renderer.
   appearanceController = new DesktopAppearanceController({
     store: settingsStore,
-    onChanged: (appearance) => shellWindow?.notifyAppearanceChanged(appearance),
+    onChanged: (appearance) => {
+      shellWindow?.notifyAppearanceChanged(appearance);
+      // Pet overlays and the themed transcript mirror the same resolved value.
+      broadcastPetAppearance(appearance);
+    },
   });
   appearanceController.init();
   desktopSettingsStore = settingsStore;
