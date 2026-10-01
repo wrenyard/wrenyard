@@ -58,7 +58,7 @@ export function createGraphSlipWindow(options: GraphSlipWindowOptions): BrowserW
     if (!win.isDestroyed() && !loadFailed) options.onDidFinishLoad();
   });
 
-  options.pageLoader.load(win, 'graph-slip', { graph_id: options.graphId }).catch(() => handleLoadFailure());
+  options.pageLoader.load(win, 'graph-slip', { panel: 'slip', graph_id: options.graphId }).catch(() => handleLoadFailure());
 
   win.once('ready-to-show', () => {
     if (!win.isDestroyed() && !loadFailed) options.onReady();

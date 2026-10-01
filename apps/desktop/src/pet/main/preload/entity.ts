@@ -4,6 +4,7 @@
 // No query, list, graph selection or control methods.
 
 import { contextBridge, ipcRenderer } from 'electron';
+import { exposePetAppearance } from './appearance';
 
 export interface EntityStatePayload {
   id: string;
@@ -59,3 +60,4 @@ const entityApi = {
 };
 
 contextBridge.exposeInMainWorld('entityApi', entityApi);
+exposePetAppearance();

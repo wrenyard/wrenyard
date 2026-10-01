@@ -5,6 +5,7 @@
 
 import { BrowserWindow } from 'electron';
 import type { PageLoader } from '../../../pages.js';
+import { registerThemedPetWindow } from './overlay-window';
 
 export const TRANSCRIPT_WIDTH = 420;
 export const TRANSCRIPT_HEIGHT = 520;
@@ -62,6 +63,8 @@ export function createTranscriptWindow(options: TranscriptWindowOptions): Browse
   });
   // Themed window: follow the resolved appearance instead of a hardcoded paper.
   options.attachAppearance?.(win);
+  // Opaque Pet window: mirror live appearance updates through the Pet registry.
+  registerThemedPetWindow(win);
 
   win.setMenuBarVisibility(false);
   if (process.platform === 'darwin') {
