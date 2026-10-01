@@ -3,11 +3,13 @@
  * Theme icon pipeline.
  *
  * - paper: crop of the reference illustration (cream square, no page, no
- *   squircle mask, no caption). macOS applies the Dock/app squircle; do not
- *   bake rounded corners. The cropped 1024/256 PNGs also feed the theme package,
- *   while the same crop keeps driving the native installer `.icns`.
+ *   caption). The cropped 1024/256 PNGs feed the theme package and the Windows
+ *   icons. macOS shows an image verbatim, so a separate `icon-mac-1024.png`
+ *   bakes the squircle and the transparent margin; the same macOS composition
+ *   drives the native installer `.icns`.
  * - neutral: hand-authored SVG (`packages/themes/src/neutral/assets/icon.svg`)
- *   captured through an Electron offscreen window at 1024 and 256.
+ *   captured through an Electron offscreen window at 1024 and 256, then given
+ *   the same macOS squircle treatment.
  *
  * Run through Electron (see the `icon` package script) because the SVG capture
  * needs a Chromium surface.
@@ -28,6 +30,12 @@ const neutralSvgPath = join(neutralAssetsDir, 'icon.svg');
 
 const CAPTURE_FALLBACK_MS = 400;
 
+// macOS app-icon grid: an 824×824 rounded square (radius 185) centered on a
+// 1024×1024 canvas, leaving a transparent margin around it.
+const MAC_CANVAS_SIZE = 1024;
+const MAC_RECT_SIZE = 824;
+const MAC_CORNER_RADIUS = 185;
+
 function paeth(a, b, c) {
   const p = a + b - c;
   const pa = Math.abs(p - a);
@@ -36,10 +44,9 @@ function paeth(a, b, c) {
   return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
 }
 
-function decodePng(path) {
-  const buf = readFileSync(path);
+function decodePngBuffer(buf, label = 'buffer') {
   if (buf.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
-    throw new Error(`not a PNG: ${path}`);
+    throw new Error(`not a PNG: ${label}`);
   }
   let off = 8;
   let w;
@@ -104,6 +111,10 @@ function decodePng(path) {
   return { w, h, rgba };
 }
 
+function decodePng(path) {
+  return decodePngBuffer(readFileSync(path), path);
+}
+
 function crc32(buffer) {
   let crc = ~0;
   for (let i = 0; i < buffer.length; i++) {
@@ -122,7 +133,7 @@ function pngChunk(type, data) {
   return Buffer.concat([len, typeBuf, data, crc]);
 }
 
-function writePng(path, size, rgba) {
+function encodePng(size, rgba) {
   const raw = Buffer.alloc((size * 4 + 1) * size);
   for (let y = 0; y < size; y++) {
     raw[y * (size * 4 + 1)] = 0;
@@ -133,13 +144,17 @@ function writePng(path, size, rgba) {
   ihdr.writeUInt32BE(size, 4);
   ihdr[8] = 8;
   ihdr[9] = 6;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, Buffer.concat([
+  return Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     pngChunk('IHDR', ihdr),
     pngChunk('IDAT', deflateSync(raw, { level: 9 })),
     pngChunk('IEND', Buffer.alloc(0)),
-  ]));
+  ]);
+}
+
+function writePng(path, size, rgba) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, encodePng(size, rgba));
 }
 
 function sample(img, x, y) {
@@ -195,6 +210,100 @@ function scaleRgba(img, size) {
   return rgba;
 }
 
+/** Source-over a straight-alpha color onto an RGBA buffer. */
+function blendPixel(dst, index, r, g, b, a) {
+  if (a <= 0) return;
+  const dstA = dst[index + 3] / 255;
+  const outA = a + dstA * (1 - a);
+  if (outA <= 0) return;
+  dst[index] = Math.round((r * a + dst[index] * dstA * (1 - a)) / outA);
+  dst[index + 1] = Math.round((g * a + dst[index + 1] * dstA * (1 - a)) / outA);
+  dst[index + 2] = Math.round((b * a + dst[index + 2] * dstA * (1 - a)) / outA);
+  dst[index + 3] = Math.round(outA * 255);
+}
+
+/** Separable box blur; two passes approximate a Gaussian falloff. */
+function blurAlpha(source, width, height, radius, passes) {
+  const a = Float32Array.from(source);
+  const b = new Float32Array(source.length);
+  const norm = 1 / (radius * 2 + 1);
+  for (let pass = 0; pass < passes; pass++) {
+    for (let y = 0; y < height; y++) {
+      const row = y * width;
+      let sum = 0;
+      for (let k = -radius; k <= radius; k++) sum += a[row + Math.max(0, Math.min(width - 1, k))];
+      for (let x = 0; x < width; x++) {
+        b[row + x] = sum * norm;
+        sum += a[row + Math.min(width - 1, x + radius + 1)] - a[row + Math.max(0, x - radius)];
+      }
+    }
+    for (let x = 0; x < width; x++) {
+      let sum = 0;
+      for (let k = -radius; k <= radius; k++) sum += b[Math.max(0, Math.min(height - 1, k)) * width + x];
+      for (let y = 0; y < height; y++) {
+        a[y * width + x] = sum * norm;
+        sum += b[Math.min(height - 1, y + radius + 1) * width + x] - b[Math.max(0, y - radius) * width + x];
+      }
+    }
+  }
+  return a;
+}
+
+/**
+ * Compose a macOS app icon at `size`: the scene is scaled into a rounded square
+ * (824×824, radius 185 at 1024) centered on a transparent canvas, with a faint
+ * drop shadow. macOS shows this image verbatim, so the squircle and the
+ * transparent margin must be part of the pixels.
+ */
+function composeMacIcon(scene, size) {
+  const rect = Math.max(1, Math.round((size * MAC_RECT_SIZE) / MAC_CANVAS_SIZE));
+  const radius = (size * MAC_CORNER_RADIUS) / MAC_CANVAS_SIZE;
+  const inset = Math.round((size - rect) / 2);
+  const inner = scaleRgba(scene, rect);
+  const out = Buffer.alloc(size * size * 4);
+
+  // Rounded-rect coverage with ~1px antialiasing (signed distance field).
+  const coverage = new Float32Array(size * size);
+  const center = size / 2;
+  const straight = rect / 2 - radius;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = Math.abs(x + 0.5 - center) - straight;
+      const dy = Math.abs(y + 0.5 - center) - straight;
+      const outside = Math.sqrt(Math.max(dx, 0) ** 2 + Math.max(dy, 0) ** 2);
+      const inside = Math.min(Math.max(dx, dy), 0);
+      coverage[y * size + x] = Math.max(0, Math.min(1, 0.5 - (outside + inside - radius)));
+    }
+  }
+
+  // Faint drop shadow behind the squircle, matching the system icon look.
+  const shadowRadius = Math.max(1, Math.round(size * 0.014));
+  const shadowOffset = Math.round(size * 0.012);
+  const shadow = blurAlpha(coverage, size, size, shadowRadius, 2);
+  for (let y = 0; y < size; y++) {
+    const sy = Math.max(0, Math.min(size - 1, y - shadowOffset));
+    for (let x = 0; x < size; x++) {
+      const alpha = shadow[sy * size + x] * 0.16;
+      if (alpha > 0) blendPixel(out, (y * size + x) * 4, 0, 0, 0, alpha);
+    }
+  }
+
+  // Scene clipped to the squircle.
+  for (let y = 0; y < size; y++) {
+    const iy = y - inset;
+    if (iy < 0 || iy >= rect) continue;
+    for (let x = 0; x < size; x++) {
+      const cover = coverage[y * size + x];
+      if (cover <= 0) continue;
+      const ix = x - inset;
+      if (ix < 0 || ix >= rect) continue;
+      const si = (iy * rect + ix) * 4;
+      blendPixel(out, (y * size + x) * 4, inner[si], inner[si + 1], inner[si + 2], (inner[si + 3] / 255) * cover);
+    }
+  }
+  return out;
+}
+
 function renderPaper() {
   const source = decodePng(sourcePath);
   if (source.w !== source.h) {
@@ -212,10 +321,12 @@ function renderPaper() {
   writePng(join(resourcesDir, 'icon.png'), 1024, scaleRgba(source, 1024));
   writePng(join(resourcesDir, 'icon-256.png'), 256, scaleRgba(source, 256));
 
-  // Feed the paper theme package with the same crop.
+  // Feed the paper theme package with the same crop plus the macOS squircle
+  // variant that the Dock renders verbatim.
   mkdirSync(paperAssetsDir, { recursive: true });
   writePng(join(paperAssetsDir, 'icon-1024.png'), 1024, scaleRgba(source, 1024));
   writePng(join(paperAssetsDir, 'icon-256.png'), 256, scaleRgba(source, 256));
+  writePng(join(paperAssetsDir, 'icon-mac-1024.png'), MAC_CANVAS_SIZE, composeMacIcon(source, MAC_CANVAS_SIZE));
 
   if (process.platform === 'darwin') {
     const iconset = join(resourcesDir, 'icon.iconset');
@@ -234,7 +345,7 @@ function renderPaper() {
       [1024, 'icon_512x512@2x.png'],
     ];
     for (const [size, name] of sizes) {
-      writePng(join(iconset, name), size, scaleRgba(source, size));
+      writePng(join(iconset, name), size, composeMacIcon(source, size));
     }
     const icns = join(resourcesDir, 'icon.icns');
     const result = spawnSync('iconutil', ['-c', 'icns', iconset, '-o', icns], { encoding: 'utf8' });
@@ -300,6 +411,11 @@ async function renderNeutral() {
   const icon1024 = captured.resize({ width: 1024, height: 1024, quality: 'best' });
   writeFileSync(join(neutralAssetsDir, 'icon-1024.png'), icon1024.toPNG());
   writeFileSync(join(neutralAssetsDir, 'icon-256.png'), icon1024.resize({ width: 256, height: 256, quality: 'best' }).toPNG());
+  const scene = decodePngBuffer(icon1024.toPNG(), 'neutral capture');
+  writeFileSync(
+    join(neutralAssetsDir, 'icon-mac-1024.png'),
+    encodePng(MAC_CANVAS_SIZE, composeMacIcon(scene, MAC_CANVAS_SIZE)),
+  );
   return join(neutralAssetsDir, 'icon-256.png');
 }
 
@@ -307,8 +423,8 @@ async function main() {
   renderPaper();
   const neutral256 = await renderNeutral();
   console.log(`wrote ${join(resourcesDir, 'icon.png')}, icon-256.png, icon.svg${process.platform === 'darwin' ? ', icon.icns' : ''}`);
-  console.log(`wrote ${join(paperAssetsDir, 'icon-1024.png')}, ${join(paperAssetsDir, 'icon-256.png')}`);
-  console.log(`wrote ${neutral256} (256) and ${join(neutralAssetsDir, 'icon-1024.png')} (1024)`);
+  console.log(`wrote ${join(paperAssetsDir, 'icon-1024.png')}, ${join(paperAssetsDir, 'icon-256.png')}, ${join(paperAssetsDir, 'icon-mac-1024.png')}`);
+  console.log(`wrote ${neutral256} (256), ${join(neutralAssetsDir, 'icon-1024.png')} (1024), ${join(neutralAssetsDir, 'icon-mac-1024.png')} (1024)`);
 }
 
 app.commandLine.appendSwitch('force-device-scale-factor', '1');
