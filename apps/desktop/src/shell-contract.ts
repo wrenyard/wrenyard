@@ -313,9 +313,20 @@ export interface NotificationPreferences {
   events: NotificationEventPreferences;
 }
 
+/** Persisted general partition fields. */
 export interface GeneralPreferences {
   startupPage: StartupPagePreference;
   confirmQuit: boolean;
+}
+
+/**
+ * Renderer view of the general preferences. `openAtLogin` mirrors the OS
+ * login-item state and `menuBarQuota` mirrors the persisted `tray.showQuota`
+ * flag; neither is stored a second time in the general partition.
+ */
+export interface GeneralPreferenceView extends GeneralPreferences {
+  openAtLogin: boolean;
+  menuBarQuota: boolean;
 }
 
 export interface SessionPreferences {
@@ -347,7 +358,7 @@ export interface UpdatePreferences {
  * every mutation against the shared schema before persisting.
  */
 export interface DesktopPreferences {
-  general: GeneralPreferences;
+  general: GeneralPreferenceView;
   appearance: AppearanceSettings;
   session: SessionPreferences;
   notifications: NotificationPreferences;
@@ -359,6 +370,8 @@ export interface DesktopPreferences {
 export const PREFERENCE_IDS = [
   'general.startupPage',
   'general.confirmQuit',
+  'general.openAtLogin',
+  'general.menuBarQuota',
   'appearance.theme',
   'appearance.colorMode',
   'appearance.motion',
@@ -400,6 +413,10 @@ export function validatePreferenceValue(id: PreferenceId, value: unknown): boole
     case 'general.startupPage':
       return value === 'last' || value === 'session';
     case 'general.confirmQuit':
+      return typeof value === 'boolean';
+    case 'general.openAtLogin':
+      return typeof value === 'boolean';
+    case 'general.menuBarQuota':
       return typeof value === 'boolean';
     case 'appearance.theme':
       return typeof value === 'string' && BUILTIN_THEME_IDS.has(value);

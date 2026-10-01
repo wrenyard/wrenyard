@@ -1,4 +1,4 @@
-import { useRef, type ReactNode, type RefObject } from 'react';
+import { useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { ArrowUp } from 'lucide-react';
 import {
   InputGroup,
@@ -7,6 +7,8 @@ import {
   InputGroupTextarea,
 } from '@/renderer/components/ui/input-group';
 
+export type PromptSendKey = 'enter' | 'mod-enter';
+
 export interface PromptInputProps {
   value: string;
   onValueChange: (value: string) => void;
@@ -14,6 +16,8 @@ export interface PromptInputProps {
   placeholder?: string;
   disabled?: boolean;
   submitDisabled?: boolean;
+  /** Which key submits: plain Enter, or Cmd/Ctrl+Enter. */
+  sendKey?: PromptSendKey;
   toolbar?: ReactNode;
   /** Rendered at the trailing edge, just before the send button. */
   toolbarTrailing?: ReactNode;
@@ -22,11 +26,11 @@ export interface PromptInputProps {
 }
 
 /**
- * Auto-growing composed input. `Enter` submits, `Shift+Enter` inserts a
- * newline, and an active IME composition never submits. The send control is
- * always a send button; interrupting a turn happens on that turn's message.
- * `submitDisabled` blocks Enter and the button while keeping the textarea
- * editable, so the user can fix the model or text that blocks sending.
+ * Auto-growing composed input. The submit key follows `sendKey`: plain `Enter`
+ * or `Cmd/Ctrl+Enter`. `Shift+Enter` always inserts a newline, and an active IME
+ * composition never submits. The send button submits in both modes; interrupting
+ * a turn happens on that turn's message. `submitDisabled` blocks the keyboard
+ * submit path and the button while keeping the textarea editable.
  */
 export function PromptInput({
   value,
@@ -35,6 +39,7 @@ export function PromptInput({
   placeholder,
   disabled = false,
   submitDisabled = false,
+  sendKey = 'enter',
   toolbar,
   toolbarTrailing,
   textareaRef,
@@ -45,6 +50,12 @@ export function PromptInput({
 
   const submit = (): void => {
     if (canSubmit) onSubmit();
+  };
+
+  const isSubmitKey = (event: ReactKeyboardEvent<HTMLTextAreaElement>): boolean => {
+    if (event.key !== 'Enter' || event.shiftKey) return false;
+    const modifier = event.metaKey || event.ctrlKey;
+    return sendKey === 'mod-enter' ? modifier : !modifier;
   };
 
   return (
@@ -65,7 +76,7 @@ export function PromptInput({
           className="max-h-60"
           onChange={(event) => onValueChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing) {
+            if (isSubmitKey(event) && !composing.current && !event.nativeEvent.isComposing) {
               event.preventDefault();
               submit();
             }

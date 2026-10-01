@@ -205,6 +205,22 @@ export class DesktopUpdateController {
     this.installAbort?.abort();
   }
 
+  /**
+   * Gate the periodic background schedule from `update.autoCheck`. Turning it
+   * off only clears the check timers; an in-flight (manual) install is never
+   * aborted. Manual checks stay available while the schedule is off.
+   */
+  setAutoCheck(enabled: boolean): void {
+    if (enabled) {
+      this.start();
+      return;
+    }
+    if (this.delayTimer) this.scheduler.clearTimeout(this.delayTimer);
+    if (this.intervalTimer) this.scheduler.clearInterval(this.intervalTimer);
+    this.delayTimer = undefined;
+    this.intervalTimer = undefined;
+  }
+
   async checkForUpdates(manual = true): Promise<UpdateSnapshot> {
     if (this.checkPromise) return this.checkPromise;
     this.checkPromise = this.performCheck(manual);

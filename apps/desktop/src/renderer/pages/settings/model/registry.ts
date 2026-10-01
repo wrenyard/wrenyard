@@ -1,5 +1,10 @@
-import { BUILTIN_THEMES, DEFAULT_THEME_ID } from '@wrenyard/themes';
-import type { PreferenceId } from '@/shell-contract';
+import { DEFAULT_THEME_ID } from '@wrenyard/themes';
+import {
+  APPEARANCE_ZOOM_OPTIONS,
+  SESSION_SEND_KEY_OPTIONS,
+  STARTUP_PAGE_OPTIONS,
+  type PreferenceId,
+} from '@/shell-contract';
 import type { SettingsCategoryId } from './categories.js';
 
 /**
@@ -18,6 +23,7 @@ export type CustomControlKey =
   | 'daemon'
   | 'endpoint'
   | 'logs'
+  | 'notificationEvents'
   | 'petBottomOffset'
   | 'petBubbleSeconds'
   | 'petDisplay'
@@ -31,7 +37,10 @@ export type CustomControlKey =
   | 'routingWeights'
   | 'runtimeAliases'
   | 'service'
+  | 'sessionDefaults'
   | 'settingsFile'
+  | 'statusBarItems'
+  | 'themeCards'
   | 'updateStatus'
   | 'workspace';
 
@@ -86,6 +95,51 @@ export const SETTINGS_GROUP_LABELS: Partial<Readonly<Record<SettingsCategoryId, 
 
 const custom = (render: CustomControlKey): SettingControl => ({ kind: 'custom', render });
 
+const GENERAL_CATEGORY: SettingDefinition[] = [
+  {
+    id: 'general.openAtLogin',
+    category: 'general',
+    title: '登录时启动',
+    description: '登录系统后自动启动啾啾工坊。',
+    keywords: ['登录时启动', '开机', '自启', 'login', 'startup'],
+    platform: ['darwin', 'win32'],
+    control: { kind: 'boolean' },
+    default: false,
+    source: { kind: 'preference', preference: 'general.openAtLogin' },
+  },
+  {
+    id: 'general.startupPage',
+    category: 'general',
+    title: '启动时打开',
+    description: '选择每次启动时进入的页面。',
+    keywords: ['启动页', 'startup', '打开', '页面'],
+    control: { kind: 'enum', options: STARTUP_PAGE_OPTIONS.map((option) => ({ ...option })) },
+    default: 'last',
+    source: { kind: 'preference', preference: 'general.startupPage' },
+  },
+  {
+    id: 'general.confirmQuit',
+    category: 'general',
+    title: '退出前确认',
+    description: '按两次 Cmd/Ctrl+Q 才退出。',
+    keywords: ['退出', '确认', 'quit', 'confirm'],
+    control: { kind: 'boolean' },
+    default: true,
+    source: { kind: 'preference', preference: 'general.confirmQuit' },
+  },
+  {
+    id: 'general.menuBarQuota',
+    category: 'general',
+    title: '在菜单栏显示额度',
+    description: '在菜单栏图标中显示额度。',
+    keywords: ['菜单栏', '额度', 'tray', 'menubar', 'quota'],
+    platform: ['darwin'],
+    control: { kind: 'boolean' },
+    default: true,
+    source: { kind: 'preference', preference: 'general.menuBarQuota' },
+  },
+];
+
 const APPEARANCE_CATEGORY: SettingDefinition[] = [
   {
     id: 'appearance.theme',
@@ -93,10 +147,7 @@ const APPEARANCE_CATEGORY: SettingDefinition[] = [
     title: '主题',
     description: '界面的配色与字体风格。',
     keywords: ['主题', 'theme', '配色', '颜色', '纸本', '简约'],
-    control: {
-      kind: 'enum',
-      options: BUILTIN_THEMES.map((theme) => ({ value: theme.id, label: theme.label })),
-    },
+    control: custom('themeCards'),
     default: DEFAULT_THEME_ID,
     source: { kind: 'preference', preference: 'appearance.theme' },
   },
@@ -118,9 +169,72 @@ const APPEARANCE_CATEGORY: SettingDefinition[] = [
     default: 'system',
     source: { kind: 'preference', preference: 'appearance.colorMode' },
   },
+  {
+    id: 'appearance.zoom',
+    category: 'appearance',
+    title: '界面缩放',
+    description: '缩放整个界面；与「视图」菜单同步，下次启动时恢复。',
+    keywords: ['缩放', 'zoom', '界面', '大小'],
+    control: {
+      kind: 'enum',
+      options: APPEARANCE_ZOOM_OPTIONS.map((option) => ({ value: String(option.value), label: option.label })),
+    },
+    default: 100,
+    source: { kind: 'preference', preference: 'appearance.zoom' },
+  },
+  {
+    id: 'appearance.motion',
+    category: 'appearance',
+    title: '动效',
+    description: '选择跟随系统或减少动效。',
+    keywords: ['动效', 'motion', '动画', '减少'],
+    control: {
+      kind: 'enum',
+      presentation: 'toggle',
+      options: [
+        { value: 'system', label: '跟随系统' },
+        { value: 'reduce', label: '减少' },
+      ],
+    },
+    default: 'system',
+    source: { kind: 'preference', preference: 'appearance.motion' },
+  },
+  {
+    id: 'appearance.statusBar',
+    category: 'appearance',
+    title: '状态栏',
+    description: '选择状态栏中显示的状态项。',
+    keywords: ['状态栏', 'statusbar', '显示', '隐藏'],
+    control: custom('statusBarItems'),
+    source: { kind: 'preference', preference: 'statusBar.hidden' },
+  },
 ];
 
 const SESSION_CATEGORY: SettingDefinition[] = [
+  {
+    id: 'session.defaultModel',
+    category: 'session',
+    title: '新会话的模型',
+    description: '沿用上次发送的模型，或为每个新会话指定模型与推理强度。',
+    keywords: ['模型', 'model', '推理强度', 'effort', '新会话', '默认'],
+    control: custom('sessionDefaults'),
+    default: 'last',
+    source: { kind: 'preference', preference: 'session.defaultModel' },
+  },
+  {
+    id: 'session.sendKey',
+    category: 'session',
+    title: '发送消息',
+    description: '选择发送消息的按键。',
+    keywords: ['发送', 'send', '回车', 'Enter', '快捷键'],
+    control: {
+      kind: 'enum',
+      presentation: 'toggle',
+      options: SESSION_SEND_KEY_OPTIONS.map((option) => ({ ...option })),
+    },
+    default: 'enter',
+    source: { kind: 'preference', preference: 'session.sendKey' },
+  },
   {
     id: 'session.auxiliaryModel',
     category: 'session',
@@ -139,6 +253,50 @@ const SESSION_CATEGORY: SettingDefinition[] = [
     control: custom('workspace'),
     readonly: true,
     source: { kind: 'readonly' },
+  },
+];
+
+const NOTIFICATIONS_CATEGORY: SettingDefinition[] = [
+  {
+    id: 'notifications.system',
+    category: 'notifications',
+    title: '系统通知',
+    description: '窗口不在前台时发送系统通知。',
+    keywords: ['系统通知', 'system', '通知'],
+    control: { kind: 'boolean' },
+    default: true,
+    source: { kind: 'preference', preference: 'notifications.system' },
+  },
+  {
+    id: 'notifications.events',
+    category: 'notifications',
+    title: '通知的事件',
+    description: '选择哪些事件进入通知历史并弹出提示。',
+    keywords: ['事件', 'event', '通知', '完成', '失败', '额度', '更新'],
+    control: custom('notificationEvents'),
+    // One row over several `notifications.events.<id>` preferences; the control
+    // owns its own writes through the bridge.
+    source: { kind: 'custom' },
+  },
+  {
+    id: 'notifications.doNotDisturb',
+    category: 'notifications',
+    title: '勿扰',
+    description: '开启后只记录历史，不弹出提示；错误仍会显示。',
+    keywords: ['勿扰', 'doNotDisturb', '静音'],
+    control: { kind: 'boolean' },
+    default: false,
+    source: { kind: 'preference', preference: 'notifications.doNotDisturb' },
+  },
+  {
+    id: 'notifications.sound',
+    category: 'notifications',
+    title: '通知声音',
+    description: '系统通知播放提示音。',
+    keywords: ['声音', 'sound', '提示音'],
+    control: { kind: 'boolean' },
+    default: true,
+    source: { kind: 'preference', preference: 'notifications.sound' },
   },
 ];
 
@@ -403,9 +561,11 @@ const ABOUT_CATEGORY: SettingDefinition[] = [
 
 /** Every declarative setting, in display order inside each category. */
 export const SETTINGS_REGISTRY: readonly SettingDefinition[] = [
+  ...GENERAL_CATEGORY,
   ...APPEARANCE_CATEGORY,
   ...SESSION_CATEGORY,
   ...MODELS_CATEGORY,
+  ...NOTIFICATIONS_CATEGORY,
   ...PET_CATEGORY,
   ...RUNTIME_CATEGORY,
   ...UPDATE_CATEGORY,

@@ -16,6 +16,7 @@ import type { EntityVisibilityConfig } from '../../pet/main/config';
 import {
   APPEARANCE_ZOOM_OPTIONS,
   NOTIFICATION_EVENT_IDS,
+  isShellPage,
   validatePreferenceValue,
   type AppearanceSettings,
   type GeneralPreferences,
@@ -23,6 +24,7 @@ import {
   type NotificationPreferences,
   type PreferenceId,
   type SessionPreferences,
+  type ShellPage,
   type StatusBarPreferences,
   type UpdatePreferences,
 } from '../../shell-contract.js';
@@ -62,6 +64,8 @@ export interface WindowSettings {
   shell?: WindowGeometry;
   /** Shared TaskGraph detail / transcript geometry, by surface id. */
   graphSlip?: WindowGeometry;
+  /** Last shell page, restored at launch when `general.startupPage` is 'last'. */
+  lastPage?: ShellPage;
 }
 
 export interface TraySettings {
@@ -391,6 +395,7 @@ function normalizeWindowSettings(value: unknown): WindowSettings {
   if (shell) result.shell = shell;
   const graphSlip = normalizeGeometry(obj.graphSlip);
   if (graphSlip) result.graphSlip = graphSlip;
+  if (isShellPage(obj.lastPage)) result.lastPage = obj.lastPage;
   return result;
 }
 
