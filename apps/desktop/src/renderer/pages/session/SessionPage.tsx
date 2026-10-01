@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { PanelRight, X } from 'lucide-react';
 import { cn } from 'cn';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/renderer/components/ui/resizable';
 import { SidebarProvider } from '@/renderer/components/ui/sidebar';
 import {
@@ -13,18 +14,22 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/renderer/components/ui/message-scroller';
-import { Page } from '@/renderer/components/page';
+import { Page, PageDescription, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
+import { registerPageCommands } from '@/renderer/lib/commands';
+import { formatSnapshotStamp } from '@/renderer/lib/format';
 import { useNewItemKeys } from '@/renderer/lib/motion';
+import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
 import { getSessionApi } from './api.js';
 import { Composer } from './components/Composer.js';
 import { EmptySession } from './components/EmptySession.js';
 import { SessionSearch } from './components/SessionSearch.js';
 import { SessionSidebar } from './components/SessionSidebar.js';
-import { SessionTopBar } from './components/SessionTopBar.js';
+import { SessionTitle } from './components/SessionTitle.js';
 import { PendingTurnItem, TurnItem } from './components/conversation/TurnItem.js';
 import { Inspector, InspectorProvider } from './components/inspector/Inspector.js';
 import { fold } from './model/fold.js';
 import type { ActionModel, InspectorTarget, SessionBridgeTaskBrief } from './model/types.js';
+import { onContextInspectionRequest, publishSessionContext, requestContextInspection } from './state/usage-selection.js';
 import { useSessionController } from './state/use-session-controller.js';
 import { useTaskStatus } from './state/use-task-status.js';
 
@@ -110,18 +115,10 @@ export function SessionPage() {
     else panel.collapse();
   }, [sidebarOpen, sidebarPanel]);
 
-  // Page-scoped Cmd/Ctrl+B: stop the outer shell provider from also toggling.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key.toLowerCase() !== 'b' || !(event.metaKey || event.ctrlKey)) return;
-      if (document.visibilityState !== 'visible') return;
-      event.preventDefault();
-      event.stopPropagation();
-      setSidebarOpen((value) => !value);
-    };
-    document.addEventListener('keydown', onKey, { capture: true });
-    return () => document.removeEventListener('keydown', onKey, { capture: true });
-  }, []);
+  // Register the session list as this page's secondary sidebar. The shell
+  // title bar and the global Cmd/Ctrl+B command toggle it while this page is
+  // the active Activity; hidden pages unregister on effect cleanup.
+  useSecondarySidebar({ open: sidebarOpen, setOpen: setSidebarOpen });
 
   // Cmd/Ctrl+K opens search while this Activity is visible; hide closes it.
   useEffect(() => {
@@ -146,6 +143,69 @@ export function SessionPage() {
   const draft = state.selectedId === '';
   const empty = draft || (!state.loadingLedger && model.turns.length === 0 && state.pending.length === 0);
   const sessionKey = state.selectedId === '' ? 'draft' : state.selectedId;
+
+  // Record the selected session in the shell history. Restoring a session that
+  // is no longer in the loaded list returns false so the history skips it.
+  useNavLocation({ sessionId: state.selectedId }, (restored) => {
+    const sessionId = restored.sessionId ?? '';
+    if (sessionId === '') {
+      newDraft();
+      return true;
+    }
+    if (!state.sessions.some((session) => session.sessionId === sessionId)) return false;
+    void selectSession(sessionId).catch(() => undefined);
+    return true;
+  });
+
+  // Publish the loaded context for the sibling session components (composer,
+  // context meter, inspector) through the shared usage store.
+  useEffect(() => {
+    publishSessionContext({ sessionKey, models: state.models, events: state.events, turns: model.turns });
+  }, [sessionKey, state.models, state.events, model.turns]);
+
+  // Inspector/context requests raised by other session components open the
+  // inspector (selecting the session first when it is not the active one).
+  useEffect(() => onContextInspectionRequest((request) => {
+    if (request.sessionKey !== sessionKey) {
+      if (!state.sessions.some((session) => session.sessionId === request.sessionKey)) return;
+      void selectSession(request.sessionKey).catch(() => undefined);
+    }
+    setTab(request.tab);
+    setInspectorOpen(true);
+  }), [sessionKey, state.sessions, selectSession]);
+
+  // Page commands: session.open (routed here by the command table),
+  // session.inspectContext and the inspector toggle used by the title bar.
+  useEffect(() => registerPageCommands('session', [
+    {
+      id: 'session.open',
+      title: '打开会话',
+      run: (args) => {
+        const sessionId = typeof args === 'string'
+          ? args
+          : args !== null && typeof args === 'object'
+            && typeof (args as { sessionId?: unknown }).sessionId === 'string'
+            ? (args as { sessionId: string }).sessionId
+            : undefined;
+        if (sessionId) void selectSession(sessionId).catch(() => undefined);
+      },
+    },
+    {
+      id: 'session.inspectContext',
+      title: '查看上下文',
+      run: (args) => {
+        const options = args !== null && typeof args === 'object'
+          ? (args as { tab?: 'context' | 'ledger'; seq?: number })
+          : undefined;
+        requestContextInspection(sessionKey, options);
+      },
+    },
+    {
+      id: 'session.toggleInspector',
+      title: '切换检查器',
+      run: () => setInspectorOpen((value) => !value),
+    },
+  ]), [selectSession, sessionKey]);
 
   // Entry animation applies only to messages appended after the conversation
   // settles; history loads are absorbed into the baseline (foundation §2.3).
@@ -220,16 +280,6 @@ export function SessionPage() {
               onPointerDown={() => setResizing(true)}
             />
             <ResizablePanel id="main" className={cn('relative flex min-h-0 flex-col', panelMotion)}>
-              <SessionTopBar
-                title={selectedTitle}
-                session={selectedSession}
-                snapshot={model.snapshot}
-                turnCount={model.turns.length}
-                draft={draft}
-                runningTurns={model.runningTurns}
-                inspectorOpen={inspectorOpen}
-                onToggleInspector={() => setInspectorOpen((value) => !value)}
-              />
               {empty ? (
                 <EmptySession>
                   {errorAlert}

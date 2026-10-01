@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   clipboard,
   ipcMain,
+  Menu,
   shell,
   type BrowserWindowConstructorOptions,
   type Input,
@@ -45,7 +46,25 @@ import {
   type ShellNotification,
 } from './shell-contract.js';
 import { formatShellWindowTitle } from './shell-window-title.js';
-import { platformWindowChrome } from './window-chrome.js';
+import { TITLE_BAR_HEIGHT, platformWindowChrome } from './window-chrome.js';
+
+/**
+ * Back/forward accelerators that are not application-menu items: macOS uses
+ * Cmd+[ / Cmd+] and Windows/Linux use Alt+← / Alt+→. The native swipe and
+ * app-command events below cover touchpad and mouse side-button gestures.
+ */
+function navCommandForInput(input: Input, platform: NodeJS.Platform): 'nav.back' | 'nav.forward' | null {
+  if (platform === 'darwin') {
+    if (input.meta !== true) return null;
+    if (input.key === '[') return 'nav.back';
+    if (input.key === ']') return 'nav.forward';
+    return null;
+  }
+  if (input.alt !== true) return null;
+  if (input.key === 'ArrowLeft') return 'nav.back';
+  if (input.key === 'ArrowRight') return 'nav.forward';
+  return null;
+}
 
 export interface ShellWindowOptions {
   pageLoader: PageLoader;
@@ -492,6 +511,18 @@ function validateNotificationAction(value: unknown): NotificationInput['action']
   return { label, command: { id, ...(args !== undefined ? { args } : {}) } };
 }
 
+/** IPC-boundary validation for the Windows application-menu popup anchor. */
+function validateAppMenuPosition(value: unknown): { x: number; y: number } | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isBoundedPlainObject(value)) throw new Error('菜单位置无效');
+  const x = value.x;
+  const y = value.y;
+  if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)) {
+    throw new Error('菜单位置无效');
+  }
+  return { x, y };
+}
+
 export class ShellWindowController {
   readonly window: BrowserWindow;
   private page: ShellPage = 'session';
@@ -521,6 +552,13 @@ export class ShellWindowController {
       },
     };
     const win = new BrowserWindow(windowOptions);
+    if (process.platform === 'win32') {
+      // Hide the native menu bar but keep the application menu so its
+      // accelerators (Ctrl+Q, Ctrl+Shift+U, edit and zoom roles) stay live.
+      // `setAutoHideMenuBar(false)` stops Alt from re-showing the bar.
+      win.setMenuBarVisibility(false);
+      win.setAutoHideMenuBar(false);
+    }
     console.info('[wrenyard-desktop] shell window created');
     const controller = new ShellWindowController(win, options.appVersion);
     controller.installSecurity(options.pageLoader.url('shell'));
@@ -529,6 +567,20 @@ export class ShellWindowController {
 
     win.on('page-title-updated', (event) => event.preventDefault());
     win.on('closed', () => controller.removeIpcHandlers());
+    // macOS hides the traffic lights in fullscreen; the renderer shrinks the
+    // title bar reserve when it learns the state changed.
+    win.on('enter-full-screen', () => controller.notifyWindowStateChanged(true));
+    win.on('leave-full-screen', () => controller.notifyWindowStateChanged(false));
+    // Trackpad swipe reports the gesture direction; mouse side buttons arrive
+    // as app-command. Both dispatch the shared nav commands in the renderer.
+    win.on('swipe', (_event, direction) => {
+      if (direction === 'left') controller.deliverNavCommand('nav.back');
+      else if (direction === 'right') controller.deliverNavCommand('nav.forward');
+    });
+    win.on('app-command', (_event, command) => {
+      if (command === 'browser-backward') controller.deliverNavCommand('nav.back');
+      else if (command === 'browser-forward') controller.deliverNavCommand('nav.forward');
+    });
 
     options.onCreated?.(controller);
     win.webContents.on('did-finish-load', () => controller.setPage(controller.page, false));
@@ -580,6 +632,29 @@ export class ShellWindowController {
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.commandAction, action);
     }
+  }
+
+  /** Run a navigation command in the renderer command table. */
+  deliverNavCommand(id: 'nav.back' | 'nav.forward'): void {
+    this.deliverCommandAction({ id });
+  }
+
+  notifyWindowStateChanged(fullscreen: boolean): void {
+    if (!this.window.webContents.isDestroyed()) {
+      this.window.webContents.send(SHELL_CHANNELS.windowStateChanged, { fullscreen });
+    }
+  }
+
+  /**
+   * Pop the application menu as a native menu (Windows). The anchor is the
+   * button's bottom-left in renderer coordinates; the lone-Alt fallback uses
+   * the button's fixed position.
+   */
+  private popupAppMenu(position?: { x: number; y: number }): void {
+    const menu = Menu.getApplicationMenu();
+    if (!menu || this.window.isDestroyed()) return;
+    const anchor = position ?? { x: 8, y: TITLE_BAR_HEIGHT };
+    menu.popup({ window: this.window, x: Math.round(anchor.x), y: Math.round(anchor.y) });
   }
 
   private installIpc(options: ShellWindowOptions): void {
@@ -779,6 +854,7 @@ export class ShellWindowController {
   private removeIpcHandlers(): void {
     for (const channel of [
       SHELL_CHANNELS.navigate,
+      SHELL_CHANNELS.showAppMenu,
       SHELL_CHANNELS.appearanceSnapshot,
       SHELL_CHANNELS.appearanceSettingsSnapshot,
       SHELL_CHANNELS.saveAppearance,
@@ -818,7 +894,34 @@ export class ShellWindowController {
   }
 
   private installShortcuts(contents: WebContents): void {
+    // Windows keeps the Alt-tap menu habit: a lone Alt press/release pops the
+    // application menu, while Alt combined with any other key is left alone.
+    let altDown = false;
+    let altUsed = false;
     contents.on('before-input-event', (event, input: Input) => {
+      if (process.platform === 'win32' && input.key === 'Alt') {
+        if (input.type === 'keyDown') {
+          if (!altDown) {
+            altDown = true;
+            altUsed = false;
+          }
+        } else {
+          if (altDown && !altUsed) {
+            event.preventDefault();
+            this.popupAppMenu();
+          }
+          altDown = false;
+        }
+        return;
+      }
+      if (input.type === 'keyUp') return;
+      if (altDown) altUsed = true;
+      const nav = navCommandForInput(input, process.platform);
+      if (nav) {
+        event.preventDefault();
+        this.deliverNavCommand(nav);
+        return;
+      }
       const page = acceleratorPage(input, process.platform);
       if (!page) return;
       event.preventDefault();
