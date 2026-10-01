@@ -78,7 +78,7 @@ export function ContextBreakdown({
 
   return (
     <div className="flex flex-col gap-4" data-slot="context-breakdown">
-      {/* 构成 */}
+      {/* Composition */}
       <section className="flex flex-col gap-2">
         <h3 className="text-xs font-medium text-muted-foreground">构成</h3>
         <TokenBar segments={segments} window={inspection.model.contextWindow} reserved={inspection.model.maxOutputTokens} />
@@ -97,7 +97,7 @@ export function ContextBreakdown({
         </div>
       </section>
 
-      {/* 最大的条目 */}
+      {/* Largest entries */}
       <section className="flex flex-col gap-2">
         <h3 className="text-xs font-medium text-muted-foreground">最大的条目</h3>
         {largest.length === 0 ? (
@@ -107,25 +107,26 @@ export function ContextBreakdown({
             {largest.map((item) => {
               const Icon = KIND_ICON[item.kind];
               return (
-                <button
+                <Button
                   key={`${item.seq}:${item.kind}`}
                   type="button"
                   onClick={() => onInspect(item.seq)}
-                  className="flex items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:bg-muted"
+                  variant="ghost"
+                  className="w-full justify-start"
                 >
                   <Icon className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1 truncate" title={item.label}>{item.label}</span>
                   <span className="shrink-0 text-muted-foreground">{KIND_LABEL[item.kind]}</span>
                   <span className="shrink-0 tabular-nums text-muted-foreground">第 {item.turn} 轮</span>
                   <span className="shrink-0 tabular-nums">{formatTokenCount(item.tokens)}</span>
-                </button>
+                </Button>
               );
             })}
           </div>
         )}
       </section>
 
-      {/* 按轮增长 */}
+      {/* Growth per turn */}
       <section className="flex flex-col gap-2">
         <h3 className="text-xs font-medium text-muted-foreground">按轮增长</h3>
         {growth.length === 0 ? (
