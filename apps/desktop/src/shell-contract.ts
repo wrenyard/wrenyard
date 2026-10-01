@@ -124,8 +124,6 @@ export const SHELL_CHANNELS = {
   showAppMenu: 'wrenyard-shell:show-app-menu',
   windowStateChanged: 'wrenyard-shell:window-state-changed',
   appearanceSnapshot: 'wrenyard-shell:appearance-snapshot',
-  appearanceSettingsSnapshot: 'wrenyard-shell:appearance-settings-snapshot',
-  saveAppearance: 'wrenyard-shell:save-appearance',
   appearanceChanged: 'wrenyard-shell:appearance-changed',
   settingsSnapshot: 'wrenyard-shell:settings-snapshot',
   statsSnapshot: 'wrenyard-shell:stats-snapshot',
@@ -369,97 +367,143 @@ export interface DesktopPreferences {
   update: UpdatePreferences;
 }
 
-/** Every writable preference id, addressable by the generic preference bridge. */
-export const PREFERENCE_IDS = [
-  'general.startupPage',
-  'general.confirmQuit',
-  'general.openAtLogin',
-  'general.menuBarQuota',
-  'appearance.theme',
-  'appearance.colorMode',
-  'appearance.motion',
-  'appearance.zoom',
-  'session.defaultModel',
-  'session.model',
-  'session.effort',
-  'session.lastSentModel',
-  'session.lastSentEffort',
-  'session.sendKey',
-  'notifications.system',
-  'notifications.sound',
-  'notifications.doNotDisturb',
-  'notifications.events.taskCompleted',
-  'notifications.events.taskFailed',
-  'notifications.events.sessionReplyCompleted',
-  'notifications.events.quotaWarning',
-  'notifications.events.updateAvailable',
-  'notifications.events.daemonDisconnected',
-  'statusBar.hidden',
-  'update.autoCheck',
-] as const;
-export type PreferenceId = (typeof PREFERENCE_IDS)[number];
+/** The Desktop preference partitions a preference path can address. */
+export type PreferenceSection = 'general' | 'appearance' | 'session' | 'notifications' | 'statusBar' | 'update';
 
-export function isPreferenceId(value: unknown): value is PreferenceId {
-  return typeof value === 'string' && (PREFERENCE_IDS as readonly string[]).includes(value);
+/** Path from a preference id to the value it addresses inside a preference document. */
+export type PreferencePath =
+  | readonly [PreferenceSection, string]
+  | readonly ['notifications', 'events', string];
+
+/** One preference: where its value lives and the single rule that validates it. */
+export interface PreferenceDescriptor {
+  readonly path: PreferencePath;
+  validate(value: unknown): boolean;
+}
+
+/**
+ * The partition shape addressed by preference paths. Both the renderer-facing
+ * {@link DesktopPreferences} and the persisted `DesktopSettings` satisfy it, so
+ * the same helpers read and write either document.
+ */
+export interface PreferenceDocument {
+  general: object;
+  appearance: object;
+  session: object;
+  notifications: object;
+  statusBar: object;
+  update: object;
 }
 
 const PREFERENCE_STRING_MAX = 512;
 const PREFERENCE_STRING_ARRAY_MAX = 64;
 
-/**
- * Central preference value validation. Both the main-process write path and
- * the renderer option lists derive from this one schema, so an illegal value
- * can never be persisted and the two sides cannot drift.
- */
-export function validatePreferenceValue(id: PreferenceId, value: unknown): boolean {
-  switch (id) {
-    case 'general.startupPage':
-      return value === 'last' || value === 'session';
-    case 'general.confirmQuit':
-      return typeof value === 'boolean';
-    case 'general.openAtLogin':
-      return typeof value === 'boolean';
-    case 'general.menuBarQuota':
-      return typeof value === 'boolean';
-    case 'appearance.theme':
-      return typeof value === 'string' && BUILTIN_THEME_IDS.has(value);
-    case 'appearance.colorMode':
-      return value === 'system' || value === 'light' || value === 'dark';
-    case 'appearance.motion':
-      return value === 'system' || value === 'reduce';
-    case 'appearance.zoom':
-      return typeof value === 'number' && APPEARANCE_ZOOM_OPTIONS.some((option) => option.value === value);
-    case 'session.defaultModel':
-      return value === 'last' || value === 'specified';
-    case 'session.model':
-    case 'session.effort':
-    case 'session.lastSentModel':
-    case 'session.lastSentEffort':
-      return value === null || (typeof value === 'string' && value.length <= PREFERENCE_STRING_MAX);
-    case 'session.sendKey':
-      return value === 'enter' || value === 'mod-enter';
-    case 'notifications.system':
-    case 'notifications.sound':
-    case 'notifications.doNotDisturb':
-    case 'notifications.events.taskCompleted':
-    case 'notifications.events.taskFailed':
-    case 'notifications.events.sessionReplyCompleted':
-    case 'notifications.events.quotaWarning':
-    case 'notifications.events.updateAvailable':
-    case 'notifications.events.daemonDisconnected':
-      return typeof value === 'boolean';
-    case 'statusBar.hidden':
-      return Array.isArray(value)
-        && value.length <= PREFERENCE_STRING_ARRAY_MAX
-        && value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= PREFERENCE_STRING_MAX);
-    case 'update.autoCheck':
-      return typeof value === 'boolean';
-    default:
-      return false;
-  }
+function isBoundedPreferenceString(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= PREFERENCE_STRING_MAX;
 }
 
 const BUILTIN_THEME_IDS: ReadonlySet<string> = new Set(BUILTIN_THEMES.map((theme) => theme.id));
+
+/**
+ * The single descriptor table for every writable preference: each id names the
+ * document path it addresses and the one validation rule for its value. Ids,
+ * validation, reading and writing all derive from this table, so adding a
+ * preference is one entry.
+ */
+export const PREFERENCES = {
+  'general.startupPage': { path: ['general', 'startupPage'], validate: (value) => value === 'last' || value === 'session' },
+  'general.confirmQuit': { path: ['general', 'confirmQuit'], validate: (value) => typeof value === 'boolean' },
+  'general.openAtLogin': { path: ['general', 'openAtLogin'], validate: (value) => typeof value === 'boolean' },
+  'general.menuBarQuota': { path: ['general', 'menuBarQuota'], validate: (value) => typeof value === 'boolean' },
+  'appearance.theme': { path: ['appearance', 'theme'], validate: (value) => typeof value === 'string' && BUILTIN_THEME_IDS.has(value) },
+  'appearance.colorMode': { path: ['appearance', 'colorMode'], validate: (value) => value === 'system' || value === 'light' || value === 'dark' },
+  'appearance.motion': { path: ['appearance', 'motion'], validate: (value) => value === 'system' || value === 'reduce' },
+  'appearance.zoom': {
+    path: ['appearance', 'zoom'],
+    validate: (value) => typeof value === 'number' && APPEARANCE_ZOOM_OPTIONS.some((option) => option.value === value),
+  },
+  'session.defaultModel': { path: ['session', 'defaultModel'], validate: (value) => value === 'last' || value === 'specified' },
+  'session.model': { path: ['session', 'model'], validate: (value) => value === null || isBoundedPreferenceString(value) },
+  'session.effort': { path: ['session', 'effort'], validate: (value) => value === null || isBoundedPreferenceString(value) },
+  'session.lastSentModel': { path: ['session', 'lastSentModel'], validate: (value) => value === null || isBoundedPreferenceString(value) },
+  'session.lastSentEffort': { path: ['session', 'lastSentEffort'], validate: (value) => value === null || isBoundedPreferenceString(value) },
+  'session.sendKey': { path: ['session', 'sendKey'], validate: (value) => value === 'enter' || value === 'mod-enter' },
+  'notifications.system': { path: ['notifications', 'system'], validate: (value) => typeof value === 'boolean' },
+  'notifications.sound': { path: ['notifications', 'sound'], validate: (value) => typeof value === 'boolean' },
+  'notifications.doNotDisturb': { path: ['notifications', 'doNotDisturb'], validate: (value) => typeof value === 'boolean' },
+  'notifications.events.taskCompleted': { path: ['notifications', 'events', 'taskCompleted'], validate: (value) => typeof value === 'boolean' },
+  'notifications.events.taskFailed': { path: ['notifications', 'events', 'taskFailed'], validate: (value) => typeof value === 'boolean' },
+  'notifications.events.sessionReplyCompleted': { path: ['notifications', 'events', 'sessionReplyCompleted'], validate: (value) => typeof value === 'boolean' },
+  'notifications.events.quotaWarning': { path: ['notifications', 'events', 'quotaWarning'], validate: (value) => typeof value === 'boolean' },
+  'notifications.events.updateAvailable': { path: ['notifications', 'events', 'updateAvailable'], validate: (value) => typeof value === 'boolean' },
+  'notifications.events.daemonDisconnected': { path: ['notifications', 'events', 'daemonDisconnected'], validate: (value) => typeof value === 'boolean' },
+  'statusBar.hidden': {
+    path: ['statusBar', 'hidden'],
+    validate: (value) => Array.isArray(value)
+      && value.length <= PREFERENCE_STRING_ARRAY_MAX
+      && value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= PREFERENCE_STRING_MAX),
+  },
+  'update.autoCheck': { path: ['update', 'autoCheck'], validate: (value) => typeof value === 'boolean' },
+} as const satisfies Record<string, PreferenceDescriptor>;
+
+/** Every writable preference id, addressable by the generic preference bridge. */
+export type PreferenceId = keyof typeof PREFERENCES;
+
+/** The ids in table order; the bridge validates untrusted ids against this set. */
+export const PREFERENCE_IDS: readonly PreferenceId[] = Object.keys(PREFERENCES) as PreferenceId[];
+
+export function isPreferenceId(value: unknown): value is PreferenceId {
+  return typeof value === 'string' && (PREFERENCE_IDS as readonly string[]).includes(value);
+}
+
+/** Walks a preference's descriptor path in a document; a missing step is `undefined`. */
+export function readPreferenceValue(preferences: PreferenceDocument, id: PreferenceId): unknown {
+  let cursor: unknown = preferences;
+  for (const key of PREFERENCES[id].path as readonly string[]) {
+    if (cursor === null || typeof cursor !== 'object') return undefined;
+    cursor = (cursor as Record<string, unknown>)[key];
+  }
+  return cursor;
+}
+
+/**
+ * Immutable write of one preference: only the touched partition (and, for a
+ * `notifications.events.*` id, the nested events object) is copied.
+ */
+export function writePreferenceValue<T extends PreferenceDocument>(
+  preferences: T,
+  id: PreferenceId,
+  value: unknown,
+): T {
+  const path = PREFERENCES[id].path as readonly string[];
+  const document = preferences as unknown as Record<string, Record<string, unknown>>;
+  if (path.length === 3) {
+    const section = path[0]!;
+    const key = path[2]!;
+    const container = document[section]!;
+    const events = container.events as Record<string, unknown>;
+    return {
+      ...preferences,
+      [section]: { ...container, events: { ...events, [key]: value } },
+    } as T;
+  }
+  const section = path[0]!;
+  const key = path[1]!;
+  const container = document[section]!;
+  return {
+    ...preferences,
+    [section]: { ...container, [key]: value },
+  } as T;
+}
+
+/**
+ * Central preference value validation. Both the main-process write path and
+ * the renderer option lists derive from the one descriptor table, so an illegal
+ * value can never be persisted and the two sides cannot drift.
+ */
+export function validatePreferenceValue(id: PreferenceId, value: unknown): boolean {
+  return PREFERENCES[id].validate(value);
+}
 
 export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
@@ -1126,8 +1170,6 @@ export interface WrenyardShellApi {
    */
   readonly initialAppearance: ResolvedAppearance;
   getAppearance(): Promise<ResolvedAppearance>;
-  getAppearanceSettings(): Promise<AppearanceSettings>;
-  setAppearance(settings: Partial<AppearanceSettings>): Promise<AppearanceSettings>;
   onAppearanceChanged(listener: (appearance: ResolvedAppearance) => void): () => void;
   navigate(page: ShellPage): Promise<void>;
   /** Pop the native application menu at a renderer anchor (Windows only). */

@@ -3,7 +3,6 @@ import { BUILTIN_THEMES, DEFAULT_THEME_ID } from '@wrenyard/themes';
 import {
   SHELL_CHANNELS,
   isShellPage,
-  type AppearanceSettings,
   type AppMenuPosition,
   type ResolvedAppearance,
   type WindowStateSnapshot,
@@ -81,12 +80,6 @@ const api: WrenyardShellApi = {
   initialAppearance: readInitialAppearance(),
   getAppearance(): Promise<ResolvedAppearance> {
     return ipcRenderer.invoke(SHELL_CHANNELS.appearanceSnapshot) as Promise<ResolvedAppearance>;
-  },
-  getAppearanceSettings(): Promise<AppearanceSettings> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.appearanceSettingsSnapshot) as Promise<AppearanceSettings>;
-  },
-  setAppearance(settings: Partial<AppearanceSettings>): Promise<AppearanceSettings> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.saveAppearance, settings) as Promise<AppearanceSettings>;
   },
   onAppearanceChanged(listener: (appearance: ResolvedAppearance) => void): () => void {
     const handler = (_event: Electron.IpcRendererEvent, appearance: ResolvedAppearance): void => {

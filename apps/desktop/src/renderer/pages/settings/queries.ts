@@ -1,5 +1,7 @@
-import { queryOptions, useQuery } from '@tanstack/react-query';
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { shell } from '@/renderer/lib/desktop';
+import { notify } from '@/renderer/lib/notify';
+import type { DesktopPreferences, PreferenceId } from '@/shell-contract';
 import {
   daemonQuery,
   preferencesQuery,
@@ -9,6 +11,7 @@ import {
   settingsQueryKey,
   updateQuery,
 } from '@/renderer/lib/queries';
+import { applyLocalPreference, errorMessage } from './model/settings.js';
 
 /**
  * Page-scoped queries for the Settings page. The update, daemon, runtime alias,
@@ -75,6 +78,31 @@ export function useQuotaQuery() {
 
 export function usePreferencesQuery() {
   return useQuery(preferencesQuery);
+}
+
+/**
+ * The one preference write path shared by settings rows and custom controls:
+ * it optimistically applies the value, persists it through the bridge, rolls
+ * back and notifies on error, and adopts the authoritative snapshot on success.
+ */
+export function usePreferenceMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: PreferenceId; value: unknown }) => shell.setPreference(input.id, input.value),
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: preferencesQueryKey });
+      const previous = queryClient.getQueryData<DesktopPreferences>(preferencesQueryKey);
+      if (previous) {
+        queryClient.setQueryData(preferencesQueryKey, applyLocalPreference(previous, input.id, input.value));
+      }
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      if (context?.previous) queryClient.setQueryData(preferencesQueryKey, context.previous);
+      notify({ level: 'error', source: 'settings', title: '偏好保存失败', description: errorMessage(error) });
+    },
+    onSuccess: (next) => queryClient.setQueryData(preferencesQueryKey, next),
+  });
 }
 
 /** Every page query key, used by the header refresh action. */

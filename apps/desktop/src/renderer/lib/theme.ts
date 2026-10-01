@@ -128,7 +128,7 @@ export async function migrateLegacyTheme(): Promise<void> {
     return;
   }
   try {
-    await shell.setAppearance({ theme: legacy });
+    await shell.setPreference('appearance.theme', legacy);
     localStorage.removeItem(LEGACY_THEME_KEY);
   } catch {
     // Keep the key so the migration is retried on the next start.
