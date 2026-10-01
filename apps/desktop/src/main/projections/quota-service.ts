@@ -86,7 +86,23 @@ function parseWindowBars(e: RawQuotaEntry, nowMs: number): QuotaProviderState['b
         const expectedRemainingPct = isFiniteZeroToOneHundred(w.expected_remaining_pct)
           ? w.expected_remaining_pct
           : expectedRemainingFromWindow(w, nowMs);
-        return { name: w.name, usedPct, remainingPct, expectedRemainingPct };
+        // Carry the raw reset horizon and window length so the desktop
+        // projection can pass structured countdown/label data to the renderer.
+        const resetsAt = typeof w.resets_at === 'string' && Number.isFinite(Date.parse(w.resets_at))
+          ? w.resets_at
+          : undefined;
+        const windowMinutes = typeof w.window_minutes === 'number'
+          && Number.isFinite(w.window_minutes) && w.window_minutes > 0
+          ? w.window_minutes
+          : undefined;
+        return {
+          name: w.name,
+          usedPct,
+          remainingPct,
+          expectedRemainingPct,
+          ...(resetsAt ? { resetsAt } : {}),
+          ...(windowMinutes !== undefined ? { windowMinutes } : {}),
+        };
       });
     // All windows filtered out but original array had entries => invalid
     if (windows.length === 0 && Array.isArray(e.windows) && e.windows.length > 0) return undefined;
