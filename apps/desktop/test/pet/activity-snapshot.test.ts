@@ -11,7 +11,6 @@ import { ActivitySnapshotPoller } from '../../src/main/daemon-client/activity-sn
 import type { DiagnosticLogger } from '../../src/main/daemon-client/diagnostic-logger';
 import { SiteModel } from '../../src/pet/main/model/site-model';
 import { projectGraphSlipFromActivity } from '../../src/pet/main/windows/graph-slip-snapshot-dto';
-import { nodeTip, taskStatusLabelZh } from '../../src/pet/panels/observatory/graph-visuals';
 import type { TaskGraphInspectResult, GraphSlipSnapshotDto } from '../../src/pet/shared/taskgraph';
 import type { SessionMetaData } from '../../src/main/daemon-client/agent-types';
 
@@ -608,17 +607,9 @@ describe('Graph Slip task-status precedence', () => {
     const dto = projectGraphSlipFromActivity(structure, graph);
     expect(dto.nodes['node-a'].state).toBe('running');
     expect(dto.nodes['node-a'].task_status).toBe('queued');
-    const tip = nodeTip(dto.nodes['node-a'], 'task');
-    expect(tip!.rows.find((r) => r.label === '状态')!.value).toBe('排队中');
-    // No separate status/slip source: the node without task_status falls back
-    // to its node state label.
-    expect(nodeTip(dto.nodes['node-b'], 'task')!.rows[0].value).toBe('等待中');
-  });
-
-  it('taskStatusLabelZh prefers task status and falls back to node state', () => {
-    expect(taskStatusLabelZh('queued', 'running')).toBe('排队中');
-    expect(taskStatusLabelZh('running', 'running')).toBe('运行中');
-    expect(taskStatusLabelZh(undefined, 'waiting')).toBe('等待中');
+    // No separate status/slip source: the node without task_status keeps its
+    // own node state.
+    expect(dto.nodes['node-b'].task_status).toBeUndefined();
   });
 });
 
@@ -659,10 +650,6 @@ describe('Graph Slip static task_title projection', () => {
     expect(dto.nodes['node-a'].task_title).toBe('接收订单');
     expect(dto.nodes['node-b'].task_title).toBeUndefined(); // English-only name
     expect(dto.nodes['node-c'].task_title).toBeUndefined(); // no static name
-    // Heading precedence: task_title → display_label → 任务.
-    expect(nodeTip(dto.nodes['node-a'], 'task')!.firstLine).toBe('接收订单');
-    expect(nodeTip(dto.nodes['node-b'], 'task')!.firstLine).toBe('代码审查');
-    expect(nodeTip(dto.nodes['node-c'], 'task')!.firstLine).toBe('终审');
   });
 });
 
@@ -695,31 +682,23 @@ describe('Graph Slip task identity and running profile projection', () => {
     return projectGraphSlipFromActivity(structure, graph);
   }
 
-  it('[task_id] shows the Foreman task definition name in the 任务 ID row and never the runtime instance id', () => {
+  it('[task_id] projects the Foreman task definition name alongside the runtime instance id', () => {
     const dto = projectWith([
       node({ node_id: 'node-deploy', task_run_id: 'task_x', task_id: 'forge-deploy' }),
     ]);
     expect(dto.nodes['node-deploy'].task_id).toBe('forge-deploy');
     expect(dto.nodes['node-deploy'].task_run_id).toBe('task_x');
-    const tip = nodeTip(dto.nodes['node-deploy'], 'task')!;
-    expect(tip.rows.find((r) => r.label === '任务 ID')!.value).toBe('forge-deploy');
-    // task_x is the runtime instance id and is never exposed as 任务 ID.
-    expect(tip.rows.some((r) => r.value === 'task_x')).toBe(false);
-    expect(JSON.stringify(tip)).not.toContain('task_x');
   });
 
-  it('[legacy] omits the 任务 ID row entirely when the node lacks task_id', () => {
+  it('[legacy] omits task_id when the node lacks it but keeps the runtime instance id', () => {
     const dto = projectWith([
       node({ node_id: 'node-legacy', task_run_id: 'task_x' }),
     ]);
     expect(dto.nodes['node-legacy'].task_id).toBeUndefined();
-    const tip = nodeTip(dto.nodes['node-legacy'], 'task')!;
-    expect(tip.rows.some((r) => r.label === '任务 ID')).toBe(false);
-    expect(tip.rows.map((r) => r.label)).toEqual(['状态']);
-    expect(JSON.stringify(tip)).not.toContain('task_x');
+    expect(dto.nodes['node-legacy'].task_run_id).toBe('task_x');
   });
 
-  it('[running_profile] renders 运行配置 for a running task node as soon as the snapshot provides resolved_profile', () => {
+  it('[running_profile] projects 运行配置 for a running task node as soon as the snapshot provides resolved_profile', () => {
     const dto = projectWith([
       node({
         node_id: 'node-deploy',
@@ -729,11 +708,8 @@ describe('Graph Slip task identity and running profile projection', () => {
       }),
     ]);
     expect(dto.nodes['node-deploy'].profile).toBe('chatgpt/gpt-5.6-luna:codex');
-    const tip = nodeTip(dto.nodes['node-deploy'], 'task')!;
-    expect(tip.rows.find((r) => r.label === '运行配置')!.value).toBe('chatgpt/gpt-5.6-luna:codex');
     // Running state is not a blocker — no completion gate around the profile.
     expect(dto.nodes['node-deploy'].state).toBe('running');
-    expect(tip.firstLine).toBe('部署');
   });
 });
 
