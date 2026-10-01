@@ -60,6 +60,7 @@ test('safe source declarations and documentation produce no findings', () => {
     'fetch("https://api.example.com/v1/data")',
     '// npm tokens live in .npmrc, never in source',
     'const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;',
+    '"verilog-sk-prompt-state-selector|verilog-sk-prompt-clock"',
   ].join('\n');
   assert.deepEqual(scanText(safeText), []);
 });
