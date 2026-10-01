@@ -25,6 +25,7 @@
     "@wrenyard/models": "workspace:*",
     "@wrenyard/protocol": "workspace:*",
     "@wrenyard/providers": "workspace:*",
+    "@wrenyard/themes": "workspace:*",
     "cmdk": "^1.1.1",
     "js-tiktoken": "1.0.21"
   },
