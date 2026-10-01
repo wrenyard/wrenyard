@@ -1,13 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { BUILTIN_THEMES, DEFAULT_THEME_ID } from '@wrenyard/themes';
 import { cn } from 'cn';
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
-import { shell } from '@/renderer/lib/desktop';
-import { notify } from '@/renderer/lib/notify';
-import { preferencesQuery, preferencesQueryKey } from '@/renderer/lib/queries';
+import { preferencesQuery } from '@/renderer/lib/queries';
 import { themeIconUrl } from '@/renderer/lib/theme';
-import type { DesktopPreferences } from '@/shell-contract';
-import { errorMessage } from '../model/settings.js';
+import { usePreferenceMutation } from '../queries.js';
 
 /**
  * A theme preview drawn with the theme's own tokens. `data-theme` on each half
@@ -37,18 +34,11 @@ function ThemeThumbnail({ themeId }: { themeId: string }) {
 
 /** Registry-driven theme picker: one 120×72 thumbnail per builtin theme. */
 export function ThemeCardsControl() {
-  const queryClient = useQueryClient();
   const preferences = useQuery(preferencesQuery);
   const current = preferences.data?.appearance.theme ?? DEFAULT_THEME_ID;
-
-  const save = useMutation({
-    mutationFn: (value: string) => shell.setPreference('appearance.theme', value),
-    onSuccess: (next: DesktopPreferences) => queryClient.setQueryData(preferencesQueryKey, next),
-    onError: (error: unknown) => {
-      void queryClient.invalidateQueries({ queryKey: preferencesQueryKey });
-      notify({ level: 'error', source: 'settings', title: '偏好保存失败', description: errorMessage(error) });
-    },
-  });
+  // Writes through the shared preference path so the theme card gets the same
+  // optimistic update, error notification and rollback as every other setting.
+  const save = usePreferenceMutation();
 
   return (
     <ToggleGroup
@@ -56,7 +46,7 @@ export function ThemeCardsControl() {
       value={[current]}
       onValueChange={(next) => {
         const chosen = next[0];
-        if (chosen !== undefined && chosen !== current) save.mutate(chosen);
+        if (chosen !== undefined && chosen !== current) save.mutate({ id: 'appearance.theme', value: chosen });
       }}
     >
       {BUILTIN_THEMES.map((theme) => (

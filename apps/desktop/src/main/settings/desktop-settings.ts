@@ -15,9 +15,9 @@ import {
 import type { EntityVisibilityConfig } from '../../pet/main/config';
 import {
   APPEARANCE_ZOOM_OPTIONS,
-  NOTIFICATION_EVENT_IDS,
   isShellPage,
   validatePreferenceValue,
+  writePreferenceValue,
   type AppearanceSettings,
   type GeneralPreferences,
   type NotificationEventPreferences,
@@ -532,7 +532,8 @@ function cloneSettings(settings: DesktopSettings): DesktopSettings {
 /**
  * Returns the version 3 document produced by applying one validated preference
  * mutation. Unknown ids and illegal values are rejected so the single store is
- * only ever written through the shared shell-contract schema.
+ * only ever written through the shared shell-contract schema; the storage
+ * mapping itself is generic (the descriptor table owns the path).
  */
 export function applyPreference(
   settings: DesktopSettings,
@@ -542,73 +543,7 @@ export function applyPreference(
   if (!validatePreferenceValue(id, value)) {
     throw new Error(`偏好值无效：${id}`);
   }
-  const next = cloneSettings(settings);
-  switch (id) {
-    case 'general.startupPage':
-      next.general.startupPage = value as GeneralPreferences['startupPage'];
-      break;
-    case 'general.confirmQuit':
-      next.general.confirmQuit = value as boolean;
-      break;
-    case 'appearance.theme':
-      next.appearance.theme = value as AppearanceSettings['theme'];
-      break;
-    case 'appearance.colorMode':
-      next.appearance.colorMode = value as AppearanceSettings['colorMode'];
-      break;
-    case 'appearance.motion':
-      next.appearance.motion = value as AppearanceSettings['motion'];
-      break;
-    case 'appearance.zoom':
-      next.appearance.zoom = value as number;
-      break;
-    case 'session.defaultModel':
-      next.session.defaultModel = value as SessionPreferences['defaultModel'];
-      break;
-    case 'session.model':
-      next.session.model = value as string | null;
-      break;
-    case 'session.effort':
-      next.session.effort = value as string | null;
-      break;
-    case 'session.lastSentModel':
-      next.session.lastSentModel = value as string | null;
-      break;
-    case 'session.lastSentEffort':
-      next.session.lastSentEffort = value as string | null;
-      break;
-    case 'session.sendKey':
-      next.session.sendKey = value as SessionPreferences['sendKey'];
-      break;
-    case 'notifications.system':
-      next.notifications.system = value as boolean;
-      break;
-    case 'notifications.sound':
-      next.notifications.sound = value as boolean;
-      break;
-    case 'notifications.doNotDisturb':
-      next.notifications.doNotDisturb = value as boolean;
-      break;
-    case 'statusBar.hidden':
-      next.statusBar.hidden = [...(value as string[])];
-      break;
-    case 'update.autoCheck':
-      next.update.autoCheck = value as boolean;
-      break;
-    default: {
-      const event = notificationEventKey(id);
-      if (event === null) throw new Error(`未知偏好：${id}`);
-      next.notifications.events[event] = value as boolean;
-    }
-  }
-  return next;
-}
-
-function notificationEventKey(id: PreferenceId): keyof NotificationEventPreferences | null {
-  for (const event of NOTIFICATION_EVENT_IDS) {
-    if (id === `notifications.events.${event}`) return event;
-  }
-  return null;
+  return writePreferenceValue(settings, id, value);
 }
 
 /**
