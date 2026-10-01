@@ -5,10 +5,9 @@ Wrenyard repository and to all code and artifacts produced from it.
 
 ## Supported versions
 
-Wrenyard 1.0.0-dev.0 is a development preview. Security support is provided
-on a best-effort basis for the latest-dev channel only; there are no
-supported stable release versions yet. Do not use preview builds for
-sensitive production workloads.
+Wrenyard is in rolling `1.0.0-dev.N` development preview; only the latest
+prerelease receives fixes. There are no supported stable release versions yet,
+and preview builds should not be used for sensitive production workloads.
 
 ## Reporting a vulnerability
 

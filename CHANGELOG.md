@@ -13,8 +13,9 @@ Development preview release.
   client refuses a version mismatch instead of negotiating compatibility.
 - Give the daemon one run entry point, `wrenyard daemon run`, which runs in the
   foreground: the first SIGINT/SIGTERM drains active work and a second forces
-  shutdown. Desktop, `pnpm dev:daemon`/`pnpm dev:desktop` and the terminal all
-  use it. Remove `wrenyard daemon start` (detached mode, the
+  shutdown. Desktop, `pnpm --filter @wrenyard/daemon dev`,
+  `pnpm --filter @wrenyard/desktop dev` and the terminal all use it. Remove
+  `wrenyard daemon start` (detached mode, the
   `wrenyard-daemon.json` state file and `--host`/`--port`) and
   `wrenyard daemon restart`; keep `daemon stop` and `daemon status`.
 - Make Desktop the daemon owner: it connects to a daemon that is already
@@ -50,8 +51,8 @@ Development preview release.
   one-click bootstrap scripts and `pnpm release:local`/`install:local`/
   `version:sync` are gone. Desktop updates itself from the channel feed on the
   `updates` branch and does not roll back a failed update in the first version.
-- Converge root scripts to `build`, `dev:daemon`, `dev:desktop`, `release`,
-  `lint`, `check`, `test` and `wrenyard`.
+- Converge root scripts to `build`, `dev`, `release`, `lint`, `check`, `test`
+  and `wrenyard`.
 
 ### Migration from external client configuration
 
