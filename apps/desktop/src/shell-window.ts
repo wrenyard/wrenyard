@@ -47,6 +47,7 @@ import {
   type NotificationInput,
   type NotificationSnapshot,
   type ShellNotification,
+  type ActivityStatusSnapshot,
 } from './shell-contract.js';
 import { formatShellWindowTitle } from './shell-window-title.js';
 import { TITLE_BAR_HEIGHT, platformWindowChrome } from './window-chrome.js';
@@ -99,6 +100,7 @@ export interface ShellWindowOptions {
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   openTaskTranscript(taskRunId: string): Promise<void>;
+  openTaskGraph(taskGraphId: string): Promise<void>;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
@@ -120,6 +122,8 @@ export interface ShellWindowOptions {
   setDoNotDisturb(value: boolean): Promise<NotificationSnapshot>;
   getPreferences(): Promise<DesktopPreferences>;
   setPreference(id: PreferenceId, value: unknown): Promise<DesktopPreferences>;
+  /** Latest shared activity projection for the status bar (chrome spec 4.4). */
+  getActivityStatus(): ActivityStatusSnapshot;
   openSettingsFile(): Promise<void>;
   openLogsDirectory(): Promise<void>;
   revealWorkspace(path: string): Promise<void>;
@@ -659,6 +663,13 @@ export class ShellWindowController {
     }
   }
 
+  /** Push a changed activity projection to the status bar (content changes only). */
+  notifyActivityChanged(snapshot: ActivityStatusSnapshot): void {
+    if (!this.window.webContents.isDestroyed()) {
+      this.window.webContents.send(SHELL_CHANNELS.activityChanged, snapshot);
+    }
+  }
+
   /** Push a fresh preference snapshot to the renderer. */
   notifyPreferencesChanged(): void {
     if (this.window.webContents.isDestroyed()) return;
@@ -800,6 +811,13 @@ export class ShellWindowController {
       }
       return options.openTaskTranscript(taskRunId);
     });
+    ipcMain.handle(SHELL_CHANNELS.taskGraph, async (event, taskGraphId: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof taskGraphId !== 'string' || taskGraphId.length === 0 || taskGraphId.length > 256) {
+        throw new Error('任务图 id 无效');
+      }
+      return options.openTaskGraph(taskGraphId);
+    });
     ipcMain.handle(SHELL_CHANNELS.taskSettingsSnapshot, async (event, project: unknown, taskId: unknown) => {
       assertShellSender(event.sender);
       const boundedProject = boundedOptionalProject(project);
@@ -900,6 +918,10 @@ export class ShellWindowController {
       if (!isPreferenceId(id)) throw new Error('未知偏好');
       return options.setPreference(id, value);
     });
+    ipcMain.handle(SHELL_CHANNELS.activityStatusSnapshot, async (event) => {
+      assertShellSender(event.sender);
+      return options.getActivityStatus();
+    });
     ipcMain.handle(SHELL_CHANNELS.openSettingsFile, async (event) => {
       assertShellSender(event.sender);
       return options.openSettingsFile();
@@ -934,6 +956,7 @@ export class ShellWindowController {
       SHELL_CHANNELS.savePetSettings,
       SHELL_CHANNELS.saveWorkspace,
       SHELL_CHANNELS.taskTranscript,
+      SHELL_CHANNELS.taskGraph,
       SHELL_CHANNELS.openExternal,
       SHELL_CHANNELS.taskSettingsSnapshot,
       SHELL_CHANNELS.taskSettingsSave,
@@ -956,6 +979,7 @@ export class ShellWindowController {
       SHELL_CHANNELS.notificationsSetDoNotDisturb,
       SHELL_CHANNELS.preferencesSnapshot,
       SHELL_CHANNELS.setPreference,
+      SHELL_CHANNELS.activityStatusSnapshot,
       SHELL_CHANNELS.openSettingsFile,
       SHELL_CHANNELS.openLogsDirectory,
       SHELL_CHANNELS.revealWorkspace,

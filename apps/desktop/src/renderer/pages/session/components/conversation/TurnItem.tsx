@@ -26,7 +26,7 @@ export interface TurnItemProps {
 export const TurnItem = memo(function TurnItem({ turn, previous, latest, enterUser, enterAssistant, onInterrupt }: TurnItemProps) {
   const label = dividerBefore(previous, turn, useNow());
   return (
-    <MessageScrollerItem messageId={`turn-${turn.id}`} scrollAnchor className="flex flex-col gap-4">
+    <MessageScrollerItem data-turn-id={turn.id} messageId={`turn-${turn.id}`} scrollAnchor className="flex flex-col gap-4">
       {label !== undefined && <TimeDivider label={label} />}
       <UserMessage
         text={turn.user.text}
