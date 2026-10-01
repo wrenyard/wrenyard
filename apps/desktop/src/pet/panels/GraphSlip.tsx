@@ -332,7 +332,7 @@ function SlipTaskNode({ data }: NodeProps): ReactElement {
 
   return (
     <HoverCard>
-      <HoverCardTrigger render={<div ref={wrapRef} className="group relative" />}>
+      <HoverCardTrigger render={<div ref={wrapRef} className="group relative pointer-events-auto" />}>
         <NodeHandles state={node.state} />
         <Button
           variant="ghost"
@@ -341,7 +341,7 @@ function SlipTaskNode({ data }: NodeProps): ReactElement {
           onClick={() => {
             if (clickable) void window.graphSlipApi.openTranscript(node.id, node.task_run_id!);
           }}
-          className="h-auto w-44 rounded-[min(var(--radius-4xl),24px)] p-0 text-left hover:bg-transparent disabled:opacity-100"
+          className="nodrag nopan h-auto w-44 rounded-[min(var(--radius-4xl),24px)] p-0 text-left hover:bg-transparent disabled:opacity-100"
         >
           <Card
             size="sm"
@@ -372,7 +372,7 @@ function SlipControlNode({ data }: NodeProps): ReactElement {
   const wrapRef = useNodeMeasurement('control', onMeasure);
   return (
     <HoverCard>
-      <HoverCardTrigger render={<div ref={wrapRef} className="group relative" />}>
+      <HoverCardTrigger render={<div ref={wrapRef} className="group relative pointer-events-auto" />}>
         <NodeHandles state={node.state} />
         <Card
           size="sm"

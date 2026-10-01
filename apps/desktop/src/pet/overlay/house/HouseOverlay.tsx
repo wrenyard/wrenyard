@@ -276,8 +276,8 @@ export function HouseOverlay({ appearance, api }: HouseOverlayProps): ReactEleme
     >
       {chromeVisible ? (
         <div
-          className="pointer-events-none absolute flex flex-col items-center gap-1"
-          style={{ left: anchorLeft, bottom: anchorBottom, transform: 'translateX(-50%)' }}
+          className="pointer-events-none absolute flex flex-col items-center gap-1 overflow-y-auto"
+          style={{ left: anchorLeft, bottom: anchorBottom, maxHeight: Math.max(80, windowSize.height - anchorBottom - 8), transform: 'translateX(-50%)' }}
         >
           {broadcastVisible && broadcast ? (
             <Card

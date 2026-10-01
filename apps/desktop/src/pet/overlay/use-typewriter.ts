@@ -34,6 +34,8 @@ export interface TypewriterInput {
   /** Epoch ms at which the bubble disappears. */
   untilMs: number;
   reduceMotion?: boolean;
+  /** Fixed clock used by deterministic preview captures. */
+  nowMs?: number;
 }
 
 export interface TypewriterOutput {
@@ -53,11 +55,12 @@ export function useTypewriter({
   startMs,
   untilMs,
   reduceMotion = false,
+  nowMs,
 }: TypewriterInput): TypewriterOutput {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (reduceMotion || !text) return;
+    if (nowMs !== undefined || !text) return;
     let raf = 0;
     const tick = (): void => {
       const current = Date.now();
@@ -67,12 +70,13 @@ export function useTypewriter({
     };
     raf = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(raf);
-  }, [text, startMs, untilMs, reduceMotion]);
+  }, [text, startMs, untilMs, nowMs]);
 
-  const alpha = bubbleAlpha(untilMs, now);
+  const current = nowMs ?? now;
+  const alpha = bubbleAlpha(untilMs, current);
   if (reduceMotion) {
     return { text, alpha };
   }
-  const count = revealCharCount(text, startMs, now);
+  const count = revealCharCount(text, startMs, current);
   return { text: Array.from(text).slice(0, count).join(''), alpha };
 }
