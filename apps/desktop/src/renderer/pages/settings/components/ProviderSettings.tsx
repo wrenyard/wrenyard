@@ -7,6 +7,7 @@ import { Input } from '@/renderer/components/ui/input';
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/renderer/components/ui/item';
 import { Label } from '@/renderer/components/ui/label';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
+import { useConfirm } from '@/renderer/hooks/use-confirm';
 import { shell } from '@/renderer/lib/desktop';
 import { taskSettingsQuery } from '@/renderer/lib/queries';
 import {
@@ -45,6 +46,7 @@ import { runtimeAliasesQueryKey, useRuntimeAliasesQuery } from '../queries.js';
  */
 export function ProviderSettings() {
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const settings = useQuery(taskSettingsQuery());
   const aliases = useRuntimeAliasesQuery();
   const revision = settings.data?.revision ?? '';
@@ -143,6 +145,19 @@ export function ProviderSettings() {
     }
     setAliasError('');
     put.mutate({ name: trimmedName, target: trimmedTarget });
+  };
+
+  // Deleting an alias is irreversible for tasks that reference it, so it is
+  // confirmed through the app's shared ConfirmHost (spec section 4.1, rule 3).
+  const onAliasDelete = (aliasName: string): void => {
+    void confirm({
+      title: `删除别名 ${aliasName}？`,
+      description: '引用它的任务将无法解析运行时。',
+      confirmLabel: '删除别名',
+      destructive: true,
+    }).then((confirmed) => {
+      if (confirmed) remove.mutate(aliasName);
+    });
   };
 
   const entries = aliases.data?.aliases ?? [];
@@ -266,7 +281,7 @@ export function ProviderSettings() {
                      
                       disabled={remove.isPending}
                       aria-label={`删除别名 ${entry.name}`}
-                      onClick={() => remove.mutate(entry.name)}
+                      onClick={() => onAliasDelete(entry.name)}
                     >
                       {ALIAS_DELETE_LABEL}
                     </Button>
