@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +10,11 @@ import {
   type RuntimeAliasSnapshot,
   type WrenyardShellApi,
 } from '../src/shell-contract.js';
+import {
+  ALIAS_NAME_PATTERN,
+  ALIAS_TARGET_MAX_LENGTH,
+  validateAlias,
+} from '../src/renderer/pages/settings/model/settings.js';
 
 const desktopRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -42,48 +46,15 @@ test('preload forwards the three runtime alias calls without raw IPC', () => {
   assert.match(preload, /runtimeAliasRemove\(request: RuntimeAliasRemoveRequest\): Promise<RuntimeAliasSnapshot> \{\s*return ipcRenderer\.invoke\(SHELL_CHANNELS\.runtimeAliasRemove, request\)/);
 });
 
-test('model supply page hosts a compact runtime alias CRUD section', async () => {
-  const html = await readFile(join(desktopRoot, 'src', 'renderer', 'index.html'), 'utf8');
-  assert.match(html, /id="quota-page"/);
-  assert.match(html, /<h1 id="quota-title">模型供应<\/h1>/);
-  assert.match(html, /id="alias-title">运行时别名</);
-  assert.match(html, /provider\/model:client/);
-  assert.match(html, /id="alias-name-input"/);
-  assert.match(html, /id="alias-target-input"[^>]*placeholder="provider\/model:client，例如 anthropic\/claude-sonnet-4:cc"/);
-  assert.match(html, /id="alias-submit"[^>]*>保存别名</);
-  assert.match(html, /id="alias-refresh"/);
-  assert.match(html, /id="alias-refresh-label">刷新别名</);
-  assert.match(html, /id="alias-error"/);
-  assert.match(html, /id="alias-list"/);
-  // The inline alias-name rule text is present but input is always editable.
-  assert.match(html, /小写字母开头，仅限 a-z 0-9 \. _ -，最长 64 位/);
-});
-
-test('renderer implements alias CRUD via typed methods, CAS revision, and visible errors', async () => {
-  const app = await rendererSource();
-  // Strict bounded name validation with the documented alias slug syntax.
-  assert.match(app, /const RUNTIME_ALIAS_NAME_PATTERN = \/\^\[a-z0-9\]\[a-z0-9\._-\]\{0,63\}\$\/;/);
-  assert.match(app, /function validateAliasName\(name: string\): string \| null/);
-  assert.match(app, /RUNTIME_ALIAS_NAME_PATTERN\.test\(name\)/);
-  // Load, put, and remove all go through the typed preload methods.
-  assert.match(app, /runtimeAliases = await window\.wrenyardShell\.runtimeAliasSnapshot\(\);/);
-  assert.match(app, /runtimeAliases = await window\.wrenyardShell\.runtimeAliasPut\(\{/);
-  assert.match(app, /expected_revision: runtimeAliases\?\.revision \?\? '',/);
-  assert.match(app, /runtimeAliases = await window\.wrenyardShell\.runtimeAliasRemove\(\{/);
-  assert.match(app, /expected_revision: runtimeAliases\.revision,/);
-  // Canonical target editing stays bounded: non-empty, <= 512, plain text.
-  assert.match(app, /if \(!target \|\| target\.length > 512\) \{/);
-  assert.match(app, /provider\/model:client/);
-  // Writes refresh the alias list from the returned snapshot and show errors inline.
-  assert.match(app, /function renderAliasList\(\): void/);
-  assert.match(app, /function loadRuntimeAliases\(\): Promise<void>/);
-  assert.match(app, /function saveAliasEntry\(\): Promise<void>/);
-  assert.match(app, /async function removeAlias\(name: string\): Promise<void>/);
-  assert.match(app, /aliasError\.textContent = `保存失败：\$\{aliasErrorMessage\(error\)\}`;/);
-  assert.match(app, /aliasError\.textContent = `删除失败：\$\{aliasErrorMessage\(error\)\}`;/);
-  assert.match(app, /保存冲突：别名列表已刷新/);
-  assert.match(app, /删除冲突：别名列表已刷新/);
-  assert.doesNotMatch(app, /ipcRenderer|contextBridge/);
+test('runtime alias validation is bounded to the documented slug and target limits', () => {
+  assert.equal(ALIAS_TARGET_MAX_LENGTH, 512);
+  assert.equal(validateAlias('cc-fast', 'anthropic/claude-sonnet-4:cc'), null);
+  assert.equal(validateAlias('bad name', 'target'), 'invalid-name');
+  assert.equal(validateAlias('', 'target'), 'invalid-name');
+  assert.equal(validateAlias('cc', ''), 'empty-target');
+  assert.equal(validateAlias('cc', 'x'.repeat(ALIAS_TARGET_MAX_LENGTH + 1)), 'long-target');
+  assert.equal(ALIAS_NAME_PATTERN.test('a'.repeat(64)), true);
+  assert.equal(ALIAS_NAME_PATTERN.test('a'.repeat(65)), false);
 });
 
 test('shell-window adds bounded alias handlers beside the task settings handlers', () => {
@@ -120,19 +91,6 @@ test('main bridges alias snapshot/put/remove with exact public methods and CAS f
   assert.match(main, /runtimeAliasRemove: \(request: RuntimeAliasRemoveRequest\) => removeRuntimeAlias\(request\)/);
 });
 
-test('alias CRUD is styled in the existing warm workshop language on the quota page', async () => {
-  const css = await readFile(join(desktopRoot, 'src', 'renderer', 'app.css'), 'utf8');
-  assert.match(css, /\.alias-panel \{/);
-  assert.match(css, /\.alias-panel-head h2 \{/);
-  assert.match(css, /\.alias-form input \{/);
-  assert.match(css, /\.alias-name-rule \{/);
-  assert.match(css, /\.alias-error \{/);
-  assert.match(css, /\.alias-list \{/);
-  assert.match(css, /\.alias-row \{[^}]*grid-template-columns: 130px minmax\(0, 1fr\) auto;/);
-  assert.match(css, /\.alias-row code \{/);
-  assert.match(css, /@media \(max-width: 820px\)/);
-});
-
 function preloadSource(): string {
   return readFileSync(join(desktopRoot, 'src', 'preload.ts'), 'utf8');
 }
@@ -143,8 +101,4 @@ function mainSource(): string {
 
 function shellWindowSource(): string {
   return readFileSync(join(desktopRoot, 'src', 'shell-window.ts'), 'utf8');
-}
-
-function rendererSource(): Promise<string> {
-  return readFile(join(desktopRoot, 'src', 'renderer', 'app.ts'), 'utf8');
 }

@@ -29,7 +29,6 @@ test('settings snapshot exposes health and credential presence without secrets',
     },
     desktopVersion: '1.0.0-dev.14',
     wrenyardVersion: '1.0.0-dev.14',
-    dshVersion: '0.1.0-rc.6',
     buildTime: '2026-09-01T02:03:04.000Z',
     readHealth: async () => ({ connected: true, uptimeMs: 125_000 }),
     readGatewayModels: async () => [
@@ -39,7 +38,6 @@ test('settings snapshot exposes health and credential presence without secrets',
     ],
     readPet: async () => pet,
     readUpdate: () => ({
-      channel: 'dev',
       state: 'up-to-date',
       currentVersion: '1.0.0-dev.14',
       installSupported: true,
@@ -64,7 +62,6 @@ test('settings snapshot degrades health and credentials independently', async ()
     },
     desktopVersion: '1.0.0-dev.14',
     wrenyardVersion: '1.0.0-dev.14',
-    dshVersion: '0.1.0-rc.6',
     readHealth: async () => {
       throw new Error('offline');
     },
@@ -73,7 +70,6 @@ test('settings snapshot degrades health and credentials independently', async ()
     },
     readPet: async () => pet,
     readUpdate: () => ({
-      channel: 'stable',
       state: 'idle',
       currentVersion: '1.0.0',
       installSupported: true,
