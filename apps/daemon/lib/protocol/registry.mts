@@ -7,6 +7,7 @@ import {
   sessionEventsParamsSchema, sessionEventsResultSchema,
   sessionSummarySettingsParamsSchema, sessionSummarySettingsResultSchema,
   sessionSummarySaveParamsSchema, sessionSummarySaveResultSchema,
+  sessionContextInspectParamsSchema, sessionContextInspectResultSchema,
   type SessionListParams, type SessionListResult,
   type SessionCreateParams, type SessionCreateResult,
   type SessionSendParams, type SessionSendResult,
@@ -14,6 +15,7 @@ import {
   type SessionEventsParams, type SessionEventsResult,
   type SessionSummarySettingsParams, type SessionSummarySettingsResult,
   type SessionSummarySaveParams, type SessionSummarySaveResult,
+  type SessionContextInspectParams, type SessionContextInspectResult,
 } from './methods/session.mts'
 export type {
   SessionListParams, SessionListResult,
@@ -23,6 +25,7 @@ export type {
   SessionEventsParams, SessionEventsResult,
   SessionSummarySettingsParams, SessionSummarySettingsResult,
   SessionSummarySaveParams, SessionSummarySaveResult,
+  SessionContextInspectParams, SessionContextInspectResult,
 } from './methods/session.mts'
 import {
   activitySnapshotParamsSchema,
@@ -479,6 +482,7 @@ export interface ForemanMethodParams {
   'session.events': SessionEventsParams
   'session.summary.settings': SessionSummarySettingsParams
   'session.summary.save': SessionSummarySaveParams
+  'session.context.inspect': SessionContextInspectParams
 }
 
 export interface ForemanMethodResults {
@@ -545,6 +549,7 @@ export interface ForemanMethodResults {
   'session.events': SessionEventsResult
   'session.summary.settings': SessionSummarySettingsResult
   'session.summary.save': SessionSummarySaveResult
+  'session.context.inspect': SessionContextInspectResult
 }
 
 export type ForemanMethod = keyof ForemanMethodParams & keyof ForemanMethodResults
@@ -790,6 +795,10 @@ export const methodRegistry: {
   'session.summary.save': {
     params: sessionSummarySaveParamsSchema,
     result: sessionSummarySaveResultSchema,
+  },
+  'session.context.inspect': {
+    params: sessionContextInspectParamsSchema,
+    result: sessionContextInspectResultSchema,
   },
 }
 

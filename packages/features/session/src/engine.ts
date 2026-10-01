@@ -32,6 +32,7 @@ import type {
   WorkspaceSnapshot,
 } from './ledger.ts';
 import { resolveModelMetadata, type CallRole } from './calls.ts';
+import { ContextInspector, type ContextInspectRequest, type ContextInspection } from './context-inspect.ts';
 import type { ModelMessage, Usage } from './driver.ts';
 import {
   ActionRunner,
@@ -106,6 +107,11 @@ export interface Session {
   /** True while any admitted turn has not reached its durable terminal append. */
   hasRunningTurns(): boolean;
   readLedger(sessionId: string): LedgerEvent[];
+  /**
+   * Read-only, forward-looking inspection of the next main reasoning view.
+   * Omitted `sessionId` inspects a new session (resident layers plus snapshot).
+   */
+  inspectContext(request: ContextInspectRequest): Promise<ContextInspection>;
   /** Current in-memory streaming snapshots for the session's live calls. */
   readLive(sessionId: string): LiveCall[];
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void;
@@ -170,6 +176,12 @@ export interface BuiltView {
   messages: ViewMessage[];
   /** Character count per prompt layer, for the `call` event. */
   layers: Record<string, number>;
+  /**
+   * Raw text of each assembled prompt layer. Present only on views that expose
+   * it (the reason view), so the read-only context inspector can token-count
+   * each layer with the same assembly the model call uses.
+   */
+  segments?: Record<string, string>;
 }
 
 export type TurnPhase = 'preparing' | 'reasoning' | 'acting' | 'replying' | 'terminal';
@@ -453,6 +465,7 @@ export function createEngine(host: SessionHost, ports: EnginePorts): Session {
 class Engine implements Session {
   private readonly host: SessionHost;
   private readonly ports: EnginePorts;
+  private readonly inspector: ContextInspector;
   private readonly sessions = new Map<string, SessionRuntime>();
   /** Per-session, in-memory streaming snapshots keyed by call id. */
   private readonly liveCalls = new Map<string, Map<string, LiveCall>>();
@@ -468,6 +481,15 @@ class Engine implements Session {
   constructor(host: SessionHost, ports: EnginePorts) {
     this.host = host;
     this.ports = ports;
+    this.inspector = new ContextInspector({
+      workspaceRoot: host.workspaceRoot,
+      deviceName: host.deviceName,
+      maxCycles: MAX_CYCLES,
+      views: ports.views,
+      ledger: ports.ledger,
+      now: () => this.now(),
+      createSnapshot: () => this.buildSnapshot(),
+    });
     for (const summary of ports.ledger.listSessions()) {
       let events: LedgerEvent[];
       try {
@@ -506,6 +528,25 @@ class Engine implements Session {
   async createSession(): Promise<{ sessionId: string }> {
     this.assertOpen();
     await this.ready;
+    const snapshot = await this.buildSnapshot();
+
+    const sessionId = randomUUID();
+    this.assertOpen();
+    this.registerSession(sessionId, this.host.workspaceRoot, snapshot);
+    await this.ports.ledger.append(sessionId, {
+      type: 'session.created',
+      workspaceRoot: this.host.workspaceRoot,
+      snapshot,
+    });
+    return { sessionId };
+  }
+
+  /**
+   * Build the frozen workspace snapshot a new session would take right now.
+   * Shared by `createSession` and the new-session context inspection, so both
+   * freeze the same facts instead of inspecting a different shape.
+   */
+  private async buildSnapshot(): Promise<WorkspaceSnapshot> {
     const takenAt = this.now();
     const projects = await this.host.listProjects();
     const taskDefinitions = await this.host.listTaskDefinitions();
@@ -528,7 +569,7 @@ class Engine implements Session {
       });
     }
 
-    const snapshot = await this.ports.createSnapshot({
+    return this.ports.createSnapshot({
       workspaceRoot: this.host.workspaceRoot,
       deviceName: this.host.deviceName,
       takenAt,
@@ -537,16 +578,6 @@ class Engine implements Session {
         .filter((definition) => definition.project === undefined)
         .map((definition) => ({ id: definition.id, description: definition.description })),
     });
-
-    const sessionId = randomUUID();
-    this.assertOpen();
-    this.registerSession(sessionId, this.host.workspaceRoot, snapshot);
-    await this.ports.ledger.append(sessionId, {
-      type: 'session.created',
-      workspaceRoot: this.host.workspaceRoot,
-      snapshot,
-    });
-    return { sessionId };
   }
 
   listSessions(): SessionSummary[] {
@@ -647,6 +678,11 @@ class Engine implements Session {
 
   readLedger(sessionId: string): LedgerEvent[] {
     return this.ports.ledger.read(sessionId);
+  }
+
+  async inspectContext(request: ContextInspectRequest): Promise<ContextInspection> {
+    this.assertOpen();
+    return this.inspector.inspect(request);
   }
 
   readLive(sessionId: string): LiveCall[] {
