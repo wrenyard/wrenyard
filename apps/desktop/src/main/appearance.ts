@@ -115,10 +115,15 @@ export class DesktopAppearanceController {
    * Absolute theme icon path. Packaged builds read the `resources/themes/<id>`
    * copy staged by electron-builder; a source run resolves the same file from
    * the shared theme package.
+   *
+   * `mac1024` is the squircle variant macOS shows verbatim, so the Dock uses
+   * it; `png256` stays the plain artwork for the Windows window/taskbar.
    */
-  iconPath(size: 'png1024' | 'png256'): string | undefined {
+  iconPath(size: 'png1024' | 'png256' | 'mac1024'): string | undefined {
     const theme = getTheme(this.resolve().theme);
-    const relative = theme.icon[size];
+    const relative = size === 'mac1024'
+      ? theme.icon.png1024.replace(/[^/]+$/, 'icon-mac-1024.png')
+      : theme.icon[size];
     const file = relative.split('/').pop();
     if (!file) return undefined;
     const packaged = join(process.resourcesPath, 'themes', theme.id, 'assets', file);
@@ -165,7 +170,7 @@ export class DesktopAppearanceController {
 
   private applyDockIcon(): void {
     if (process.platform !== 'darwin' || !app.dock) return;
-    const icon = this.iconPath('png1024');
+    const icon = this.iconPath('mac1024');
     if (!icon) return;
     try {
       app.dock.setIcon(icon);
