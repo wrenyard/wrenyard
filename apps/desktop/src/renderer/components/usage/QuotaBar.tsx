@@ -117,6 +117,11 @@ export interface QuotaBarProps {
   width?: number;
   /** When true the whole row is dimmed and the name is marked stale. */
   stale?: boolean;
+  /**
+   * Narrow surfaces (popovers) put pace and reset on a second line under the
+   * bar, which then fills the row instead of using a fixed width.
+   */
+  stacked?: boolean;
   className?: string;
 }
 
@@ -132,6 +137,7 @@ export function QuotaBar({
   windowMinutes,
   width = 96,
   stale = false,
+  stacked = false,
   className,
 }: QuotaBarProps) {
   const now = useMinuteNow();
@@ -144,41 +150,61 @@ export function QuotaBar({
     ? `${Math.max(0, Math.min(100, expectedRemainingPct))}%`
     : null;
 
-  return (
-    <div className={cn('flex items-center gap-2', stale && 'opacity-60', className)}>
+  const bar = (
+    <div className={cn('relative flex h-2 items-center', stacked ? 'min-w-0 flex-1' : 'shrink-0')} style={stacked ? undefined : { width }}>
+      <ProgressPrimitive.Root
+        value={bounded}
+        aria-label={`${label} 剩余 ${Math.floor(bounded)}%`}
+        className="w-full"
+      >
+        <ProgressTrack className="h-1 w-full rounded-full">
+          <ProgressIndicator className={FILL_CLASS[level]} />
+        </ProgressTrack>
+      </ProgressPrimitive.Root>
+      {paceLeft !== null && (
+        <span
+          data-slot="quota-pace-marker"
+          className="pointer-events-none absolute top-0 h-2 w-0.5 -translate-x-1/2 rounded-full bg-foreground"
+          style={{ left: paceLeft }}
+        />
+      )}
+    </div>
+  );
+  const meta = (pace !== null || reset !== null) && (
+    <span className={cn('flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground', stacked && 'pl-16')}>
+      {pace !== null && (
+        <span className={cn(pace.warn && 'text-warning')}>{pace.label}</span>
+      )}
+      {pace !== null && reset !== null && <span aria-hidden="true">·</span>}
+      {reset !== null && (
+        <Tooltip>
+          <TooltipTrigger render={<span className="cursor-default">{reset.label}</span>} />
+          <TooltipContent>{reset.exact}</TooltipContent>
+        </Tooltip>
+      )}
+    </span>
+  );
+  const head = (
+    <>
       <span className="w-14 shrink-0 truncate text-xs text-muted-foreground">{label}</span>
       {stale && <span className="shrink-0 text-xs text-warning">（数据过期）</span>}
-      <div className="relative flex h-2 shrink-0 items-center" style={{ width }}>
-        <ProgressPrimitive.Root
-          value={bounded}
-          aria-label={`${label} 剩余 ${Math.floor(bounded)}%`}
-          className="w-full"
-        >
-          <ProgressTrack className="h-1 w-full rounded-full">
-            <ProgressIndicator className={FILL_CLASS[level]} />
-          </ProgressTrack>
-        </ProgressPrimitive.Root>
-        {paceLeft !== null && (
-          <span
-            data-slot="quota-pace-marker"
-            className="pointer-events-none absolute top-0 h-2 w-0.5 -translate-x-1/2 rounded-full bg-foreground"
-            style={{ left: paceLeft }}
-          />
-        )}
+      {bar}
+      <span className="w-9 shrink-0 text-right text-xs tabular-nums">{Math.floor(bounded)}%</span>
+    </>
+  );
+
+  if (stacked) {
+    return (
+      <div className={cn('flex flex-col gap-0.5', stale && 'opacity-60', className)}>
+        <div className="flex items-center gap-2">{head}</div>
+        {meta}
       </div>
-      <span className="text-xs tabular-nums">{Math.floor(bounded)}%</span>
-      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-        {pace !== null && (
-          <span className={cn(pace.warn && 'text-warning')}>{pace.label}</span>
-        )}
-        {pace !== null && reset !== null && <span aria-hidden="true">·</span>}
-        {reset !== null && (
-          <Tooltip>
-            <TooltipTrigger render={<span className="cursor-default">{reset.label}</span>} />
-            <TooltipContent>{reset.exact}</TooltipContent>
-          </Tooltip>
-        )}
-      </span>
+    );
+  }
+  return (
+    <div className={cn('flex items-center gap-2', stale && 'opacity-60', className)}>
+      {head}
+      {meta}
     </div>
   );
 }
