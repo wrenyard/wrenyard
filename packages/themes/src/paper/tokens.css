@@ -7,9 +7,9 @@
   --line: #d4c9a8;
   --ink: #2e2018;
   --ink-soft: #514238;
-  --ink-muted: #8b7d6b;
+  --ink-muted: #766856;
   --moss: #7ba05b;
-  --moss-deep: #5e7c46;
+  --moss-deep: #587442;
   --lamp: #ffc94d;
   --lamp-deep: #e8a33d;
   --terracotta: #c44e3a;
@@ -52,6 +52,68 @@
     --warning-foreground: var(--ink);
     --scrollbar-thumb: rgba(94, 124, 70, .52);
     --scrollbar-track: rgba(232, 220, 196, .28);
+    --overlay: oklch(0 0 0 / 10%);
     --app-font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
     --app-font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+/* Dark "reading paper under a lamp": warm brown base instead of pure black.
+   The shadcn token mappings mirror the light block; only the palette variables
+   and the mappings listed in the interaction foundations spec §1.4 differ. */
+[data-theme="paper"].dark {
+  --paper: #1c1813;
+  --paper-raised: #241f19;
+  --paper-dim: #2c261f;
+  --paper-deep: #352e26;
+  --line: #40372d;
+  --ink: #ece3d0;
+  --ink-soft: #c8bba3;
+  --ink-muted: #94866f;
+  --moss: #94b874;
+  --moss-deep: #a8c886;
+  --lamp: #ffd166;
+  --lamp-deep: #f0b44f;
+  --terracotta: #e2705a;
+  --slate: #93a4b4;
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--paper-raised);
+  --card-foreground: var(--ink);
+  --popover: var(--paper-raised);
+  --popover-foreground: var(--ink);
+  --primary: var(--moss-deep);
+  --primary-foreground: var(--paper);
+  --secondary: var(--paper-dim);
+  --secondary-foreground: var(--ink-soft);
+  --muted: var(--paper-dim);
+  --muted-foreground: var(--ink-muted);
+  --accent: var(--paper-deep);
+  --accent-foreground: var(--ink);
+  --destructive: var(--terracotta);
+  --border: var(--line);
+  --input: var(--line);
+  --ring: var(--moss);
+  --chart-1: var(--moss-deep);
+  --chart-2: var(--lamp-deep);
+  --chart-3: var(--slate);
+  --chart-4: var(--terracotta);
+  --chart-5: var(--ink-soft);
+  --radius: 0.625rem;
+  --sidebar: var(--paper-raised);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--moss-deep);
+  --sidebar-primary-foreground: var(--paper);
+  --sidebar-accent: var(--paper-dim);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--moss);
+  --success: var(--moss-deep);
+  --success-foreground: var(--paper);
+  --warning: var(--lamp-deep);
+  --warning-foreground: var(--ink);
+  --scrollbar-thumb: rgba(168, 200, 134, .35);
+  --scrollbar-track: rgba(232, 220, 196, .28);
+  --overlay: oklch(0 0 0 / 50%);
+  --app-font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --app-font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
