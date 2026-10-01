@@ -30,9 +30,9 @@ export const RESET_PENDING_LABEL = '等待刷新';
 
 /** Window-name overrides keyed by the provider window length in minutes. */
 const WINDOW_MINUTE_LABELS: Readonly<Record<number, string>> = {
-  300: '5 小时',
-  10080: '每周',
-  43200: '每月',
+  300: '5h',
+  10080: '7d',
+  43200: '30d',
 };
 
 /**
@@ -51,7 +51,7 @@ export function formatWindowName(name: string, windowMinutes?: number): string {
   if (windowMinutes !== undefined && WINDOW_MINUTE_LABELS[windowMinutes] !== undefined) {
     return WINDOW_MINUTE_LABELS[windowMinutes];
   }
-  if (name === '1mo') return '每月';
+  if (name === '1mo') return '30d';
   return name;
 }
 
@@ -122,6 +122,11 @@ export interface QuotaBarProps {
    * bar, which then fills the row instead of using a fixed width.
    */
   stacked?: boolean;
+  /**
+   * Current time in ms for the reset countdown. Injected by pure consumers
+   * (e.g. the reusable quota tips); omitted to use the live minute clock.
+   */
+  now?: number;
   className?: string;
 }
 
@@ -138,9 +143,11 @@ export function QuotaBar({
   width = 96,
   stale = false,
   stacked = false,
+  now: injectedNow,
   className,
 }: QuotaBarProps) {
-  const now = useMinuteNow();
+  const minuteNow = useMinuteNow();
+  const now = injectedNow ?? minuteNow;
   const bounded = Math.max(0, Math.min(100, Number.isFinite(remainingPct) ? remainingPct : 0));
   const label = formatWindowName(name, windowMinutes);
   const level = quotaLevel(bounded);
