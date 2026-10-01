@@ -21,3 +21,6 @@ export const neutralTheme = {
     png256: 'src/neutral/assets/icon-256.png',
   },
 } as const satisfies ThemeDefinition;
+
+/** Vite bundles the icon for renderer consumers; native consumers use the relative icon paths. */
+export const neutralIconUrl = new URL('./assets/icon-256.png', import.meta.url).href;

@@ -1,7 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { BUILTIN_THEMES, DEFAULT_THEME_ID } from '@wrenyard/themes';
 import {
   SHELL_CHANNELS,
   isShellPage,
+  type AppearanceSettings,
+  type ResolvedAppearance,
   type StatsSnapshot,
   type QuotaSnapshot,
   type SettingsSnapshot,
@@ -27,8 +30,49 @@ import {
 } from './shell-contract.js';
 import { exposeSession } from './session/preload.js';
 
+const APPEARANCE_ARG_PREFIX = '--wy-appearance=';
+
+/**
+ * Read the main-process-resolved appearance from `additionalArguments`. An
+ * absent or malformed argument falls back to the default theme, light, and
+ * system motion rather than failing the preload.
+ */
+function readInitialAppearance(): ResolvedAppearance {
+  const raw = process.argv.find((argument) => argument.startsWith(APPEARANCE_ARG_PREFIX));
+  const value = raw?.slice(APPEARANCE_ARG_PREFIX.length);
+  if (value) {
+    const [theme, mode, motion] = value.split(':');
+    if (
+      typeof theme === 'string'
+      && BUILTIN_THEMES.some((entry) => entry.id === theme)
+      && (mode === 'light' || mode === 'dark')
+      && (motion === 'system' || motion === 'reduce')
+    ) {
+      return { theme: theme as ResolvedAppearance['theme'], dark: mode === 'dark', reduceMotion: motion === 'reduce' };
+    }
+  }
+  return { theme: DEFAULT_THEME_ID, dark: false, reduceMotion: false };
+}
+
 const api: WrenyardShellApi = {
   platform: process.platform,
+  initialAppearance: readInitialAppearance(),
+  getAppearance(): Promise<ResolvedAppearance> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.appearanceSnapshot) as Promise<ResolvedAppearance>;
+  },
+  getAppearanceSettings(): Promise<AppearanceSettings> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.appearanceSettingsSnapshot) as Promise<AppearanceSettings>;
+  },
+  setAppearance(settings: Partial<AppearanceSettings>): Promise<AppearanceSettings> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.saveAppearance, settings) as Promise<AppearanceSettings>;
+  },
+  onAppearanceChanged(listener: (appearance: ResolvedAppearance) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, appearance: ResolvedAppearance): void => {
+      listener(appearance);
+    };
+    ipcRenderer.on(SHELL_CHANNELS.appearanceChanged, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.appearanceChanged, handler);
+  },
   navigate(page: ShellPage): Promise<void> {
     if (!isShellPage(page)) return Promise.reject(new Error('Unsupported shell page'));
     return ipcRenderer.invoke(SHELL_CHANNELS.navigate, page) as Promise<void>;
