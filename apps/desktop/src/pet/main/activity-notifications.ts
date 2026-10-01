@@ -17,6 +17,7 @@
 
 import type { ActivityPresence, ActivityTaskGraphPresence, ActivityTaskGraphState } from '../shared/activity-snapshot';
 import type { BroadcastInput } from '../shared/broadcast';
+import { petTransitionNotification, type PetNotificationSink } from './service';
 
 export const NOTIFICATION_DURATION_MS = 8000;
 export const MAX_NOTIFICATION_QUEUE = 5;
@@ -140,6 +141,7 @@ interface GraphRegistryEntry {
 
 export class ActivityNotificationQueue {
   private readonly now: () => number;
+  private readonly onNotification: PetNotificationSink | undefined;
   private seenFirstSnapshot = false;
   private lastPresence: ActivityPresence | null = null;
   private registry = new Map<string, GraphRegistryEntry>();
@@ -147,8 +149,9 @@ export class ActivityNotificationQueue {
   private current: ActivityNotification | null = null;
   private nextId = 0;
 
-  constructor(opts?: { now?: () => number }) {
+  constructor(opts?: { now?: () => number; onNotification?: PetNotificationSink }) {
     this.now = opts?.now ?? (() => Date.now());
+    this.onNotification = opts?.onNotification;
   }
 
   getCurrent(): ActivityNotification | null {
@@ -240,6 +243,7 @@ export class ActivityNotificationQueue {
       entry.lastKey = transitionKey(t);
       this.registry.set(t.taskgraphId, entry);
       this.emit(this.makeCard(stickyIdFor(t.taskgraphId), transitionTextZh(t), 'sticky', t.taskgraphId));
+      this.report(t);
       return;
     }
 
@@ -256,6 +260,24 @@ export class ActivityNotificationQueue {
     entry.lastKey = key;
     this.registry.set(t.taskgraphId, entry);
     this.emit(this.makeCard(t.taskgraphId, transitionTextZh(t), 'transient'));
+    this.report(t);
+  }
+
+  /**
+   * Mirror a fresh transition into the Desktop NotificationCenter. Only
+   * transitions that actually produced a Pet card are reported, so the two
+   * surfaces share one dedup boundary and never double-notify.
+   */
+  private report(t: GraphTransition): void {
+    if (!this.onNotification) return;
+    this.onNotification(petTransitionNotification({
+      taskgraphId: t.taskgraphId,
+      fromState: t.fromState,
+      toState: t.toState,
+      latestSeq: t.latestSeq,
+      kind: t.kind,
+      titleZh: transitionTextZh(t),
+    }));
   }
 
   private revokeSticky(graphId: string): void {

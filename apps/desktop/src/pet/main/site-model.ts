@@ -3,6 +3,7 @@ import type { BroadcastInput, BroadcastSnapshot } from '../shared/broadcast';
 import { normalizeBroadcast, shouldExpireBroadcast } from '../shared/broadcast';
 import type { ActivityPresence, ActivityTaskPresence } from '../shared/activity-snapshot';
 import { ActivityNotificationQueue } from './activity-notifications';
+import type { PetNotificationSink } from './service';
 import type {
   AgentEventSignal,
   LifecycleSignal,
@@ -48,9 +49,9 @@ export class SiteModel {
   private readonly celebrateMs = 4000;
   private readonly dejectedMs = 4000;
 
-  constructor(opts?: { now?: () => number }) {
+  constructor(opts?: { now?: () => number; onNotification?: PetNotificationSink }) {
     this.now = opts?.now ?? (() => Date.now());
-    this.notifications = new ActivityNotificationQueue({ now: this.now });
+    this.notifications = new ActivityNotificationQueue({ now: this.now, onNotification: opts?.onNotification });
   }
 
   ingest(signal: InputSignal, meta: SessionMetaData | null): void {
