@@ -99,6 +99,8 @@ export interface ModelCallInput {
   layers: Record<string, number>;
   /** Required for `reason`; ignored for every other role. */
   reason?: ReasonSelection;
+  /** Output-token cap forwarded as the wire `max_tokens` when the driver supports it. */
+  maxTokens?: number;
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
@@ -420,6 +422,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           model,
           messages: input.messages,
           ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+          ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
           signal: controller.signal,
           onText,
           onReasoning,
