@@ -2,8 +2,6 @@ import type { StatusTone } from '@/renderer/components/status-badge';
 import type {
   DaemonProcessState,
   PetCompanionSnapshot,
-  UpdateInstallReason,
-  UpdateSnapshot,
   WorkspaceConfigurationSnapshot,
 } from '@/shell-contract';
 import type { AliasValidationReason, AutoCapParseResult } from './settings.js';
@@ -99,10 +97,6 @@ export const PET_SAVE_FAILED_NOTE = '应用失败，请检查桌宠资源与本�
 
 export const UPDATE_TITLE = '更新';
 export const UPDATE_DESCRIPTION = '自动检查啾啾工坊套件的新版本，由你决定何时安装。';
-export const UPDATE_CURRENT_VERSION_LABEL = '当前版本';
-export const UPDATE_CURRENT_VERSION_HINT = 'Desktop 与本地 Wrenyard 服务使用同一套件版本。';
-export const UPDATE_AUTO_LABEL = '自动更新';
-export const UPDATE_FOOTNOTE = '安装前会确认当前没有运行中的任务，更新由已安装的 Wrenyard 引擎完成。';
 
 export const ABOUT_TITLE = '关于';
 export const ABOUT_DESCRIPTION = '啾啾工坊是 Wrenyard 套件的 Desktop 主界面。';
@@ -139,99 +133,6 @@ export function petStatusTone(status: PetCompanionSnapshot['status']): StatusTon
   if (status === 'running') return 'success';
   if (status === 'failed') return 'danger';
   return 'muted';
-}
-
-/* ------------------------------------------------------------------ */
-/* Update presentation                                                 */
-/* ------------------------------------------------------------------ */
-
-export interface UpdateView {
-  label: string;
-  tone: StatusTone;
-  description: string;
-  action: string;
-  primary: boolean;
-  disabled: boolean;
-}
-
-export function formatUpdateCheckTime(checkedAt: number | undefined): string {
-  if (checkedAt === undefined) return '启动后会在后台自动检查';
-  return `上次检查 ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(checkedAt)}`;
-}
-
-/**
- * Why in-app installation is unavailable, phrased for the user. The reason
- * code comes from the updater's own re-probe so every surface agrees.
- */
-export function updateInstallReasonText(reason: UpdateInstallReason | undefined): string {
-  switch (reason) {
-    case 'missing-cli':
-      return '未找到 Wrenyard CLI：请先安装或修复啾啾工坊套件，然后点“重新检测”。';
-    case 'missing-runtime':
-      return '未找到与当前 CLI 配套的 Node 运行时：请修复套件安装，然后点“重新检测”。';
-    case 'unsupported-platform':
-      return '当前平台暂不支持应用内更新，请从发布页下载安装包。';
-    case 'source-development':
-      return '当前为源码开发模式，不会检查或安装发行版更新。停止 `pnpm dev` 后可再使用已安装的啾啾工坊。';
-    default:
-      return '当前无法应用内更新，请检查本机安装后点“重新检测”。';
-  }
-}
-
-/**
- * Projects one update snapshot into pill tone, description and the single
- * action button's label/primacy/disabled state.
- */
-export function updateView(snapshot: UpdateSnapshot, busy: boolean): UpdateView {
-  let label = '尚未检查';
-  let tone: StatusTone = 'muted';
-  let description = snapshot.message ?? '尚未检查更新。';
-  let action = '检查更新';
-  let primary = false;
-  let disabled = busy;
-
-  if (snapshot.state === 'checking') {
-    label = '检查中';
-    tone = 'running';
-    description = '正在检查更新…';
-    action = '正在检查…';
-    disabled = true;
-  } else if (snapshot.state === 'up-to-date') {
-    label = '已是最新';
-    tone = 'success';
-    description = snapshot.message ?? '当前已是最新版本。';
-  } else if (snapshot.state === 'available') {
-    label = '有新版本';
-    tone = 'warning';
-    description = `发现新版本 v${snapshot.availableVersion ?? '—'}（当前 v${snapshot.currentVersion}），将一次升级整个啾啾工坊套件。`;
-    if (snapshot.installSupported) {
-      action = `安装更新 v${snapshot.availableVersion ?? ''}`;
-      primary = true;
-    } else {
-      action = '重新检测';
-      tone = 'danger';
-      description = updateInstallReasonText(snapshot.installReason);
-    }
-  } else if (snapshot.state === 'waiting') {
-    label = '等待空闲安装';
-    tone = 'warning';
-    description = snapshot.message ?? '有任务运行中，完成后自动更新。';
-    action = '立即重试';
-    primary = true;
-  } else if (snapshot.state === 'installing') {
-    label = '正在安装';
-    tone = 'running';
-    description = snapshot.message ?? '正在安装更新，完成后会自动重启。';
-    action = '正在安装…';
-    disabled = true;
-  } else if (snapshot.state === 'error') {
-    label = '更新未完成';
-    tone = 'danger';
-    description = snapshot.message ?? '更新未完成，当前版本未受影响。';
-    action = '重试';
-  }
-
-  return { label, tone, description, action, primary, disabled };
 }
 
 /* ------------------------------------------------------------------ */

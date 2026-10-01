@@ -1,16 +1,14 @@
 import type { ReactNode } from 'react';
-import { ChevronRight } from 'lucide-react';
-import { Badge } from '@/renderer/components/ui/badge';
+import { ChevronRight, File, Folder } from 'lucide-react';
 import { Card, CardContent } from '@/renderer/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/components/ui/collapsible';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import {
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
 } from '@/renderer/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import type { TaskSettingsTaskRow } from '@/shell-contract';
@@ -61,7 +59,6 @@ export function TaskTree({ model, loading, selectedId, collapsed, onToggleGroup,
               {model.projects.map((group) => (
                 <TreeGroup
                   key={group.key}
-                  nested
                   label={group.label}
                   count={group.rows.length + group.errors.length}
                   open={!collapsed.has(group.key)}
@@ -77,7 +74,6 @@ export function TaskTree({ model, loading, selectedId, collapsed, onToggleGroup,
               ))}
               {model.unknownErrors.length > 0 ? (
                 <TreeGroup
-                  nested
                   label={copy.CATEGORY_UNKNOWN_SOURCE}
                   count={model.unknownErrors.length}
                   open={!collapsed.has(copy.UNKNOWN_GROUP_KEY)}
@@ -96,40 +92,31 @@ export function TaskTree({ model, loading, selectedId, collapsed, onToggleGroup,
   );
 }
 
-function TreeGroup({ label, count, open, onToggle, nested = false, children }: {
+function TreeGroup({ label, count, open, onToggle, children }: {
   label: string;
   count: number;
   open: boolean;
   onToggle: () => void;
-  nested?: boolean;
   children: ReactNode;
 }) {
-  const trigger = (
-    <>
-      <ChevronRight className="transition-transform group-data-[panel-open]/tree:rotate-90" />
-      <span className="truncate">{label}</span>
-      <span className="ml-auto shrink-0 tabular-nums">{count}</span>
-    </>
-  );
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={onToggle}
-      render={nested ? <SidebarMenuSubItem /> : <SidebarMenuItem />}
-    >
-      {nested ? (
-        <SidebarMenuSubButton className="group/tree" render={<CollapsibleTrigger />}>
-          {trigger}
-        </SidebarMenuSubButton>
-      ) : (
-        <SidebarMenuButton className="group/tree" render={<CollapsibleTrigger />}>
-          {trigger}
+    <SidebarMenuItem>
+      <Collapsible
+        open={open}
+        onOpenChange={onToggle}
+        className="group/collapsible [&[data-open]>button>svg:first-child]:rotate-90"
+      >
+        <SidebarMenuButton render={<CollapsibleTrigger />}>
+          <ChevronRight className="transition-transform" />
+          <Folder />
+          <span>{label}</span>
         </SidebarMenuButton>
-      )}
-      <CollapsibleContent>
-        <SidebarMenuSub>{children}</SidebarMenuSub>
-      </CollapsibleContent>
-    </Collapsible>
+        <SidebarMenuBadge>{count}</SidebarMenuBadge>
+        <CollapsibleContent>
+          <SidebarMenuSub>{children}</SidebarMenuSub>
+        </CollapsibleContent>
+      </Collapsible>
+    </SidebarMenuItem>
   );
 }
 
@@ -139,48 +126,47 @@ function TaskLeaf({ row, selected, onSelect }: {
   onSelect: (identity: string) => void;
 }) {
   const failure = taskResolutionFailureMessage(row);
+  const body = (
+    <>
+      <File />
+      <span>{row.display_name}</span>
+    </>
+  );
+  if (failure === null) {
+    return (
+      <SidebarMenuItem>
+        <SidebarMenuButton isActive={selected} onClick={() => onSelect(row.identity)}>
+          {body}
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    );
+  }
   return (
-    <SidebarMenuSubItem>
-      <SidebarMenuSubButton
-        render={<button type="button" />}
-        isActive={selected}
-        aria-current={selected ? 'true' : undefined}
-        onClick={() => onSelect(row.identity)}
-      >
-        <span className="truncate">{row.display_name}</span>
-        {failure !== null ? <IssueIndicator message={failure} label={copy.ISSUE_UNRESOLVED_LABEL} /> : null}
-      </SidebarMenuSubButton>
-    </SidebarMenuSubItem>
+    <SidebarMenuItem>
+      <Tooltip>
+        <SidebarMenuButton render={<TooltipTrigger />} isActive={selected} onClick={() => onSelect(row.identity)}>
+          {body}
+        </SidebarMenuButton>
+        <TooltipContent>{failure}</TooltipContent>
+      </Tooltip>
+      <SidebarMenuBadge>{copy.ISSUE_BADGE}</SidebarMenuBadge>
+    </SidebarMenuItem>
   );
 }
 
 /** Non-executable leaf for a backend load failure: file name plus failure marker. */
 function ErrorLeaf({ entry }: { entry: TaskTreeLoadError }) {
   return (
-    <SidebarMenuSubItem>
-      <SidebarMenuSubButton render={<div />} className="text-muted-foreground" title={entry.source_path}>
-        <span className="truncate">{entry.file_name}</span>
-        <IssueIndicator message={entry.message} label={copy.ISSUE_LOAD_FAILED_LABEL} />
-      </SidebarMenuSubButton>
-    </SidebarMenuSubItem>
-  );
-}
-
-function IssueIndicator({ message, label }: { message: string; label: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<span
-          className="ml-auto inline-flex shrink-0"
-          tabIndex={0}
-          aria-label={label}
-          onClick={(event) => event.stopPropagation()}
-        />}
-      >
-        <Badge variant="destructive">{copy.ISSUE_BADGE}</Badge>
-      </TooltipTrigger>
-      <TooltipContent>{message}</TooltipContent>
-    </Tooltip>
+    <SidebarMenuItem>
+      <Tooltip>
+        <SidebarMenuButton render={<TooltipTrigger />} title={entry.source_path}>
+          <File />
+          <span>{entry.file_name}</span>
+        </SidebarMenuButton>
+        <TooltipContent>{entry.message}</TooltipContent>
+      </Tooltip>
+      <SidebarMenuBadge>{copy.ISSUE_BADGE}</SidebarMenuBadge>
+    </SidebarMenuItem>
   );
 }
 

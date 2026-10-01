@@ -1,5 +1,6 @@
 import { Square } from 'lucide-react';
 import { Button } from '@/renderer/components/ui/button';
+import { Marker, MarkerContent, MarkerIcon } from '@/renderer/components/ui/marker';
 import { Message, MessageContent } from '@/renderer/components/ui/message';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
@@ -23,13 +24,14 @@ export function TurnStatus({ turn, onInterrupt }: TurnStatusProps) {
     <Message>
       <MessageContent>
         <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            className="shimmer"
+          <Marker
+            role="status"
+            render={<button type="button" />}
             onClick={() => inspect({ kind: 'turn', turnId: turn.id })}
           >
-            {turnStatusText(turn)}
-          </Button>
+            <MarkerIcon><Spinner /></MarkerIcon>
+            <MarkerContent className="shimmer">{turnStatusText(turn)}</MarkerContent>
+          </Marker>
           {turn.interrupting ? (
             <Button variant="ghost" size="icon-sm" disabled aria-label="正在中断">
               <Spinner />

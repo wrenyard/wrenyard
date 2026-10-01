@@ -41,6 +41,7 @@ export function AppShell() {
 
   return (
     <SidebarProvider
+      className="h-full min-h-0"
       open={false}
       // The outer rail is fixed; Cmd+B must only toggle a page's inner sidebar.
       onOpenChange={() => {}}

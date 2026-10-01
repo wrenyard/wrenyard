@@ -8,8 +8,9 @@ import {
   PageHeader,
   PageTitle,
 } from '@/renderer/components/page';
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/renderer/components/ui/alert';
+import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
+import { QueryError } from '@/renderer/components/query-error';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/renderer/components/ui/tabs';
 import type { ProviderCatalogSnapshot } from '@/shell-contract';
@@ -23,7 +24,6 @@ import {
   QUOTA_UNAVAILABLE_FALLBACK,
   REFRESHING_LABEL,
   REFRESH_LABEL,
-  RETRY_LABEL,
   errorMessage,
   isQuotaTab,
   type QuotaTab,
@@ -78,17 +78,7 @@ export function QuotaPage() {
           {quota.isPending ? (
             <QuotaSkeleton />
           ) : quota.isError || snapshot === null ? (
-            <Alert variant="destructive">
-              <AlertTitle>{QUOTA_UNAVAILABLE_FALLBACK}</AlertTitle>
-              <AlertDescription>
-                {quota.isError ? errorMessage(quota.error) : ''}
-              </AlertDescription>
-              <AlertAction>
-                <Button variant="outline" onClick={() => { void quota.refetch(); }}>
-                  {RETRY_LABEL}
-                </Button>
-              </AlertAction>
-            </Alert>
+            <QueryError query={quota} title={QUOTA_UNAVAILABLE_FALLBACK} />
           ) : (
             <Tabs
               value={tab}
