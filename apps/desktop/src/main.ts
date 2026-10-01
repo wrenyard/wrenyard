@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification as ElectronNotification, powerMonitor, screen, session, type MessageBoxOptions } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification as ElectronNotification, powerMonitor, screen, session, shell, type MessageBoxOptions } from 'electron';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
@@ -8,6 +8,7 @@ import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import { DesktopPetController } from './pet-controller.js';
 import { DesktopSettingsStore } from './main/settings/desktop-settings.js';
+import { DesktopPreferencesController } from './main/settings/preferences.js';
 import { DesktopAppearanceController } from './main/appearance.js';
 import { WrenyardDaemonClient } from './main/daemon-client/client.js';
 import { DaemonSubscriptions } from './main/daemon-client/subscriptions.js';
@@ -18,7 +19,7 @@ import { DesktopQuotaSource } from './quota-service.js';
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { NotificationCenter, type NotificationInput, type ShellNotification } from './main/notification-center.js';
 import { DesktopUpdateController } from './updater/controller.js';
@@ -229,6 +230,7 @@ let desktopSubscriptions: DaemonSubscriptions | null = null;
 let taskgraphWindowOwner: TaskGraphWindowOwner | null = null;
 let quotaController: DesktopQuotaController | null = null;
 let appearanceController: DesktopAppearanceController | null = null;
+let preferencesController: DesktopPreferencesController | null = null;
 let updateController: DesktopUpdateController | null = null;
 let daemonSupervisor: DesktopDaemonSupervisor | null = null;
 /** Latest known product workspace; refreshed when a save activates a new root. */
@@ -813,7 +815,10 @@ async function bootstrap(): Promise<void> {
   console.info(`[wrenyard-desktop] settings path: ${settingsPath}`);
   const settingsStore = new DesktopSettingsStore({
     path: settingsPath,
-    onChange: () => desktopTray?.rebuild(),
+    onChange: () => {
+      desktopTray?.rebuild();
+      shellWindow?.notifyPreferencesChanged();
+    },
   });
   // Surface an unreadable/incompatible document explicitly instead of letting a
   // corrupt file be silently replaced with defaults. The original file is kept.
@@ -832,6 +837,14 @@ async function bootstrap(): Promise<void> {
   });
   appearanceController.init();
   desktopSettingsStore = settingsStore;
+  // Single writer for the version 3 preference partitions. Appearance
+  // theme/colorMode/motion still flow through the appearance controller so
+  // nativeTheme and the resolved push stay in one owner.
+  preferencesController = new DesktopPreferencesController({
+    store: settingsStore,
+    saveAppearance: (patch) => { appearanceController?.save(patch); },
+    onDoNotDisturb: (value) => { notificationCenter?.setDoNotDisturb(value); },
+  });
   // One notification owner for the whole process. Main-origin (update, daemon,
   // Pet task) and renderer-originated events all land here; the center decides
   // history, foreground toasts and OS notifications, so nothing fires twice.
@@ -1044,6 +1057,11 @@ async function bootstrap(): Promise<void> {
       notificationCenter?.setDoNotDisturb(value);
       return notificationCenter!.snapshot();
     },
+    getPreferences: async () => preferencesController!.get(),
+    setPreference: async (id: PreferenceId, value: unknown) => preferencesController!.set(id, value),
+    openSettingsFile: async () => { await shell.openPath(settingsPath); },
+    openLogsDirectory: async () => { await shell.openPath(join(foremanStateRoot(), 'logs')); },
+    revealWorkspace: async (path: string) => { shell.showItemInFolder(path); },
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,
@@ -1052,6 +1070,11 @@ async function bootstrap(): Promise<void> {
       // A pending quit already owns the flow; never start another one.
       if (quitController?.isQuitting()) return;
       if (origin === 'direct') {
+        app.quit();
+        return;
+      }
+      // `general.confirmQuit` off means a single accelerator quits directly.
+      if (!settingsStore.load().general.confirmQuit) {
         app.quit();
         return;
       }
@@ -1073,7 +1096,8 @@ async function bootstrap(): Promise<void> {
       });
     },
   )));
-  if (!SMOKE && app.isPackaged) updateController.start();
+  // `update.autoCheck` gates the background schedule; a manual check always works.
+  if (!SMOKE && app.isPackaged && settingsStore.load().update.autoCheck) updateController.start();
 
   // A new version health-starts and the shell is loaded: settle the pending
   // update result and run the platform finalize (applier cleanup). If the

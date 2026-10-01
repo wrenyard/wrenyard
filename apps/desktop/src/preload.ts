@@ -33,6 +33,8 @@ import {
   type ShellNotification,
   type NotificationInput,
   type NotificationCommandAction,
+  type DesktopPreferences,
+  type PreferenceId,
 } from './shell-contract.js';
 import { exposeSession } from './session/preload.js';
 
@@ -247,6 +249,28 @@ const api: WrenyardShellApi = {
     };
     ipcRenderer.on(SHELL_CHANNELS.commandAction, handler);
     return () => ipcRenderer.removeListener(SHELL_CHANNELS.commandAction, handler);
+  },
+  getPreferences(): Promise<DesktopPreferences> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.preferencesSnapshot) as Promise<DesktopPreferences>;
+  },
+  setPreference(id: PreferenceId, value: unknown): Promise<DesktopPreferences> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.setPreference, id, value) as Promise<DesktopPreferences>;
+  },
+  onPreferencesChanged(listener: (preferences: DesktopPreferences) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, preferences: DesktopPreferences): void => {
+      listener(preferences);
+    };
+    ipcRenderer.on(SHELL_CHANNELS.preferencesChanged, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.preferencesChanged, handler);
+  },
+  openSettingsFile(): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.openSettingsFile) as Promise<void>;
+  },
+  openLogsDirectory(): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.openLogsDirectory) as Promise<void>;
+  },
+  revealWorkspace(path: string): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.revealWorkspace, path) as Promise<void>;
   },
 };
 

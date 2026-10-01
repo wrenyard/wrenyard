@@ -13,7 +13,21 @@ import {
   type QuotaProviderEntry,
 } from '../../pet/main/config';
 import type { EntityVisibilityConfig } from '../../pet/main/config';
-import type { AppearanceSettings } from '../../shell-contract.js';
+import {
+  APPEARANCE_ZOOM_OPTIONS,
+  NOTIFICATION_EVENT_IDS,
+  validatePreferenceValue,
+  type AppearanceSettings,
+  type GeneralPreferences,
+  type NotificationEventPreferences,
+  type NotificationPreferences,
+  type PreferenceId,
+  type SessionPreferences,
+  type StatusBarPreferences,
+  type UpdatePreferences,
+} from '../../shell-contract.js';
+
+export type { NotificationEventPreferences, NotificationPreferences };
 
 /**
  * Desktop-owned UI preference document. A single store in the Desktop main
@@ -24,10 +38,16 @@ import type { AppearanceSettings } from '../../shell-contract.js';
  *
  * Source layout and document schema are the only migration surface. The
  * runtime never reads a Pet-specific file or a legacy document: a one-time
- * offline conversion tool (`apps/desktop/tools/convert-settings.mjs`) produces
- * this exact version 2 document from older layouts.
+ * offline conversion tool (`apps/desktop/tools/convert-settings.mjs`) produced
+ * the version 2 document from older layouts; version 3 is produced in place by
+ * normalization, which preserves every version 2 partition and fills the new
+ * `general`, `session`, `statusBar` partitions (and `appearance.zoom`) with
+ * defaults.
  */
-export const DESKTOP_SETTINGS_VERSION = 2 as const;
+export const DESKTOP_SETTINGS_VERSION = 3 as const;
+
+/** Highest version this store can upgrade in place. */
+const UPGRADABLE_SETTINGS_VERSIONS = new Set([2, 3]);
 
 /** Low-level window chrome the Desktop shell reuses across restarts. */
 export interface WindowGeometry {
@@ -52,31 +72,6 @@ export interface TraySettings {
 /** Desktop display preference for provider ordering/visibility. */
 export interface ProviderDisplaySettings {
   providers: QuotaProviderEntry[];
-}
-
-/**
- * Per-event notification toggles. Each key gates one event family emitted by
- * the main process or the Pet module; a disabled family is never recorded nor
- * surfaced. Field names are the persisted contract, so they stay stable.
- */
-export interface NotificationEventPreferences {
-  taskCompleted: boolean;
-  taskFailed: boolean;
-  sessionReplyCompleted: boolean;
-  quotaWarning: boolean;
-  updateAvailable: boolean;
-  daemonDisconnected: boolean;
-}
-
-/** Desktop notification preferences, including the runtime do-not-disturb flag. */
-export interface NotificationPreferences {
-  /** Whether OS-level notifications are enabled at all. */
-  system: boolean;
-  /** Whether OS notifications play a sound. */
-  sound: boolean;
-  /** Do-not-disturb: history only, except error-level notifications. */
-  doNotDisturb: boolean;
-  events: NotificationEventPreferences;
 }
 
 /** Desktop UI preference for the Pet module, distinct from its runtime state. */
@@ -104,6 +99,14 @@ export interface DesktopSettings {
   /** Shared appearance preferences, owned by the main process. */
   appearance: AppearanceSettings;
   notifications: NotificationPreferences;
+  /** General shell behaviour (startup page, quit confirmation). */
+  general: GeneralPreferences;
+  /** Session defaults and last-sent model memory. */
+  session: SessionPreferences;
+  /** Status-bar item visibility. */
+  statusBar: StatusBarPreferences;
+  /** Update behaviour. */
+  update: UpdatePreferences;
 }
 
 /**
@@ -133,7 +136,38 @@ const DEFAULT_PROVIDER_IDS = [
 
 /** Appearance defaults used when the partition is absent or partially invalid. */
 export function defaultAppearanceSettings(): AppearanceSettings {
-  return { theme: DEFAULT_THEME_ID, colorMode: 'system', motion: 'system' };
+  return { theme: DEFAULT_THEME_ID, colorMode: 'system', motion: 'system', zoom: 100 };
+}
+
+export function defaultGeneralPreferences(): GeneralPreferences {
+  return { startupPage: 'last', confirmQuit: true };
+}
+
+export function defaultSessionPreferences(): SessionPreferences {
+  return {
+    defaultModel: 'last',
+    model: null,
+    effort: null,
+    lastSentModel: null,
+    lastSentEffort: null,
+    sendKey: 'enter',
+  };
+}
+
+export function defaultNotificationPreferences(): NotificationPreferences {
+  return {
+    system: true,
+    sound: true,
+    doNotDisturb: false,
+    events: {
+      taskCompleted: true,
+      taskFailed: true,
+      sessionReplyCompleted: true,
+      quotaWarning: true,
+      updateAvailable: true,
+      daemonDisconnected: true,
+    },
+  };
 }
 
 export function defaultDesktopSettings(): DesktopSettings {
@@ -151,19 +185,11 @@ export function defaultDesktopSettings(): DesktopSettings {
       entities: { house: true, workers: true, taskgraphs: true },
       appearance: { houseSkin: 'classic' },
     },
-    notifications: {
-      system: true,
-      sound: true,
-      doNotDisturb: false,
-      events: {
-        taskCompleted: true,
-        taskFailed: true,
-        sessionReplyCompleted: true,
-        quotaWarning: true,
-        updateAvailable: true,
-        daemonDisconnected: true,
-      },
-    },
+    notifications: defaultNotificationPreferences(),
+    general: defaultGeneralPreferences(),
+    session: defaultSessionPreferences(),
+    statusBar: { hidden: [] },
+    update: { autoCheck: true },
   };
 }
 
@@ -260,10 +286,12 @@ export class DesktopSettingsStore {
 }
 
 /**
- * Normalize a persisted document into the version 2 shape. Rejects an
- * unsupported (future) version explicitly; a document without a version is a
- * pre-version-2 layout and is an error, because migration is offline-only and
- * must never be inferred at runtime.
+ * Normalize a persisted document into the version 3 shape. Version 2 files are
+ * upgraded in place: every existing partition is preserved and the new
+ * `general`, `session`, `statusBar` partitions and `appearance.zoom` receive
+ * defaults. An unsupported (future or pre-version-2, unversioned) document is
+ * rejected explicitly, because older migration is offline-only and must never
+ * be inferred at runtime.
  */
 export function normalizeDesktopSettings(parsed: unknown): DesktopSettings {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -275,7 +303,7 @@ export function normalizeDesktopSettings(parsed: unknown): DesktopSettings {
   }
   const obj = parsed as Record<string, unknown>;
   const version = obj.version;
-  if (version !== DESKTOP_SETTINGS_VERSION) {
+  if (typeof version !== 'number' || !UPGRADABLE_SETTINGS_VERSIONS.has(version)) {
     throw new DesktopSettingsCorruptError(
       'unsupported_version',
       '',
@@ -291,7 +319,16 @@ export function normalizeDesktopSettings(parsed: unknown): DesktopSettings {
     appearance: normalizeAppearanceSettings(obj.appearance, defaults.appearance),
     pet: normalizePetSettings(obj.pet, defaults.pet),
     notifications: normalizeNotificationPreferences(obj.notifications, defaults.notifications),
+    general: normalizeGeneralPreferences(obj.general, defaults.general),
+    session: normalizeSessionPreferences(obj.session, defaults.session),
+    statusBar: normalizeStatusBarPreferences(obj.statusBar, defaults.statusBar),
+    update: normalizeUpdatePreferences(obj.update, defaults.update),
   };
+}
+
+function normalizeUpdatePreferences(value: unknown, fallback: UpdatePreferences): UpdatePreferences {
+  const obj = isRecord(value) ? value : {};
+  return { autoCheck: typeof obj.autoCheck === 'boolean' ? obj.autoCheck : fallback.autoCheck };
 }
 
 function normalizeAppearanceSettings(value: unknown, fallback: AppearanceSettings): AppearanceSettings {
@@ -304,7 +341,47 @@ function normalizeAppearanceSettings(value: unknown, fallback: AppearanceSetting
     ? obj.colorMode
     : fallback.colorMode;
   const motion = obj.motion === 'reduce' || obj.motion === 'system' ? obj.motion : fallback.motion;
-  return { theme, colorMode, motion };
+  const zoom = typeof obj.zoom === 'number' && APPEARANCE_ZOOM_OPTIONS.some((option) => option.value === obj.zoom)
+    ? obj.zoom
+    : fallback.zoom;
+  return { theme, colorMode, motion, zoom };
+}
+
+function normalizeGeneralPreferences(value: unknown, fallback: GeneralPreferences): GeneralPreferences {
+  const obj = isRecord(value) ? value : {};
+  return {
+    startupPage: obj.startupPage === 'session' ? 'session' : fallback.startupPage,
+    confirmQuit: typeof obj.confirmQuit === 'boolean' ? obj.confirmQuit : fallback.confirmQuit,
+  };
+}
+
+function normalizeOptionalPreferenceString(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 512) return null;
+  return value;
+}
+
+function normalizeSessionPreferences(value: unknown, fallback: SessionPreferences): SessionPreferences {
+  const obj = isRecord(value) ? value : {};
+  return {
+    defaultModel: obj.defaultModel === 'specified' ? 'specified' : fallback.defaultModel,
+    model: obj.model === undefined ? fallback.model : normalizeOptionalPreferenceString(obj.model),
+    effort: obj.effort === undefined ? fallback.effort : normalizeOptionalPreferenceString(obj.effort),
+    lastSentModel: obj.lastSentModel === undefined
+      ? fallback.lastSentModel
+      : normalizeOptionalPreferenceString(obj.lastSentModel),
+    lastSentEffort: obj.lastSentEffort === undefined
+      ? fallback.lastSentEffort
+      : normalizeOptionalPreferenceString(obj.lastSentEffort),
+    sendKey: obj.sendKey === 'mod-enter' ? 'mod-enter' : fallback.sendKey,
+  };
+}
+
+function normalizeStatusBarPreferences(value: unknown, fallback: StatusBarPreferences): StatusBarPreferences {
+  const obj = isRecord(value) ? value : {};
+  const raw = Array.isArray(obj.hidden) ? obj.hidden : undefined;
+  if (!raw) return { hidden: [...fallback.hidden] };
+  const hidden = raw.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 512);
+  return { hidden: [...new Set(hidden)] };
 }
 
 function normalizeWindowSettings(value: unknown): WindowSettings {
@@ -440,7 +517,93 @@ function cloneSettings(settings: DesktopSettings): DesktopSettings {
       ...settings.notifications,
       events: { ...settings.notifications.events },
     },
+    general: { ...settings.general },
+    session: { ...settings.session },
+    statusBar: { hidden: [...settings.statusBar.hidden] },
+    update: { ...settings.update },
   };
+}
+
+/**
+ * Returns the version 3 document produced by applying one validated preference
+ * mutation. Unknown ids and illegal values are rejected so the single store is
+ * only ever written through the shared shell-contract schema.
+ */
+export function applyPreference(
+  settings: DesktopSettings,
+  id: PreferenceId,
+  value: unknown,
+): DesktopSettings {
+  if (!validatePreferenceValue(id, value)) {
+    throw new Error(`偏好值无效：${id}`);
+  }
+  const next = cloneSettings(settings);
+  switch (id) {
+    case 'general.startupPage':
+      next.general.startupPage = value as GeneralPreferences['startupPage'];
+      break;
+    case 'general.confirmQuit':
+      next.general.confirmQuit = value as boolean;
+      break;
+    case 'appearance.theme':
+      next.appearance.theme = value as AppearanceSettings['theme'];
+      break;
+    case 'appearance.colorMode':
+      next.appearance.colorMode = value as AppearanceSettings['colorMode'];
+      break;
+    case 'appearance.motion':
+      next.appearance.motion = value as AppearanceSettings['motion'];
+      break;
+    case 'appearance.zoom':
+      next.appearance.zoom = value as number;
+      break;
+    case 'session.defaultModel':
+      next.session.defaultModel = value as SessionPreferences['defaultModel'];
+      break;
+    case 'session.model':
+      next.session.model = value as string | null;
+      break;
+    case 'session.effort':
+      next.session.effort = value as string | null;
+      break;
+    case 'session.lastSentModel':
+      next.session.lastSentModel = value as string | null;
+      break;
+    case 'session.lastSentEffort':
+      next.session.lastSentEffort = value as string | null;
+      break;
+    case 'session.sendKey':
+      next.session.sendKey = value as SessionPreferences['sendKey'];
+      break;
+    case 'notifications.system':
+      next.notifications.system = value as boolean;
+      break;
+    case 'notifications.sound':
+      next.notifications.sound = value as boolean;
+      break;
+    case 'notifications.doNotDisturb':
+      next.notifications.doNotDisturb = value as boolean;
+      break;
+    case 'statusBar.hidden':
+      next.statusBar.hidden = [...(value as string[])];
+      break;
+    case 'update.autoCheck':
+      next.update.autoCheck = value as boolean;
+      break;
+    default: {
+      const event = notificationEventKey(id);
+      if (event === null) throw new Error(`未知偏好：${id}`);
+      next.notifications.events[event] = value as boolean;
+    }
+  }
+  return next;
+}
+
+function notificationEventKey(id: PreferenceId): keyof NotificationEventPreferences | null {
+  for (const event of NOTIFICATION_EVENT_IDS) {
+    if (id === `notifications.events.${event}`) return event;
+  }
+  return null;
 }
 
 /**

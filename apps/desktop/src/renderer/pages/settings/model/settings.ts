@@ -2,8 +2,11 @@ import type { StatusTone } from '@/renderer/components/status-badge';
 import type {
   DaemonLifecycleSnapshot,
   DaemonProcessState,
+  DesktopPreferences,
+  NotificationEventPreferences,
   PetCompanionSettings,
   PetCompanionSnapshot,
+  PreferenceId,
   ServiceSnapshot,
   SettingsSnapshot,
   WorkspaceConfigurationSnapshot,
@@ -233,3 +236,134 @@ export function clampPetNumber(value: number, min: number, max: number, fallback
 export { formatBuildTime } from '@/renderer/lib/format';
 
 export type AboutSnapshot = SettingsSnapshot['about'];
+
+/* ------------------------------------------------------------------ */
+/* Desktop preference bindings                                         */
+/* ------------------------------------------------------------------ */
+
+function notificationEventKey(id: PreferenceId): keyof NotificationEventPreferences | null {
+  if (!id.startsWith('notifications.events.')) return null;
+  return id.slice('notifications.events.'.length) as keyof NotificationEventPreferences;
+}
+
+/** Reads one preference value out of the version 3 snapshot. */
+export function readPreference(preferences: DesktopPreferences, id: PreferenceId): unknown {
+  switch (id) {
+    case 'general.startupPage':
+      return preferences.general.startupPage;
+    case 'general.confirmQuit':
+      return preferences.general.confirmQuit;
+    case 'appearance.theme':
+      return preferences.appearance.theme;
+    case 'appearance.colorMode':
+      return preferences.appearance.colorMode;
+    case 'appearance.motion':
+      return preferences.appearance.motion;
+    case 'appearance.zoom':
+      return preferences.appearance.zoom;
+    case 'session.defaultModel':
+      return preferences.session.defaultModel;
+    case 'session.model':
+      return preferences.session.model;
+    case 'session.effort':
+      return preferences.session.effort;
+    case 'session.lastSentModel':
+      return preferences.session.lastSentModel;
+    case 'session.lastSentEffort':
+      return preferences.session.lastSentEffort;
+    case 'session.sendKey':
+      return preferences.session.sendKey;
+    case 'notifications.system':
+      return preferences.notifications.system;
+    case 'notifications.sound':
+      return preferences.notifications.sound;
+    case 'notifications.doNotDisturb':
+      return preferences.notifications.doNotDisturb;
+    case 'statusBar.hidden':
+      return preferences.statusBar.hidden;
+    case 'update.autoCheck':
+      return preferences.update.autoCheck;
+    default: {
+      const key = notificationEventKey(id);
+      return key === null ? undefined : preferences.notifications.events[key];
+    }
+  }
+}
+
+/**
+ * Renderer-side optimistic update for one preference, mirroring the main
+ * process `applyPreference` so an immediate-save control does not lag behind
+ * its input. The authoritative snapshot still replaces this on success.
+ */
+export function applyLocalPreference(
+  preferences: DesktopPreferences,
+  id: PreferenceId,
+  value: unknown,
+): DesktopPreferences {
+  const next: DesktopPreferences = {
+    general: { ...preferences.general },
+    appearance: { ...preferences.appearance },
+    session: { ...preferences.session },
+    notifications: { ...preferences.notifications, events: { ...preferences.notifications.events } },
+    statusBar: { hidden: [...preferences.statusBar.hidden] },
+    update: { ...preferences.update },
+  };
+  switch (id) {
+    case 'general.startupPage':
+      next.general.startupPage = value as DesktopPreferences['general']['startupPage'];
+      break;
+    case 'general.confirmQuit':
+      next.general.confirmQuit = value as boolean;
+      break;
+    case 'appearance.theme':
+      next.appearance.theme = value as DesktopPreferences['appearance']['theme'];
+      break;
+    case 'appearance.colorMode':
+      next.appearance.colorMode = value as DesktopPreferences['appearance']['colorMode'];
+      break;
+    case 'appearance.motion':
+      next.appearance.motion = value as DesktopPreferences['appearance']['motion'];
+      break;
+    case 'appearance.zoom':
+      next.appearance.zoom = value as number;
+      break;
+    case 'session.defaultModel':
+      next.session.defaultModel = value as DesktopPreferences['session']['defaultModel'];
+      break;
+    case 'session.model':
+      next.session.model = value as string | null;
+      break;
+    case 'session.effort':
+      next.session.effort = value as string | null;
+      break;
+    case 'session.lastSentModel':
+      next.session.lastSentModel = value as string | null;
+      break;
+    case 'session.lastSentEffort':
+      next.session.lastSentEffort = value as string | null;
+      break;
+    case 'session.sendKey':
+      next.session.sendKey = value as DesktopPreferences['session']['sendKey'];
+      break;
+    case 'notifications.system':
+      next.notifications.system = value as boolean;
+      break;
+    case 'notifications.sound':
+      next.notifications.sound = value as boolean;
+      break;
+    case 'notifications.doNotDisturb':
+      next.notifications.doNotDisturb = value as boolean;
+      break;
+    case 'statusBar.hidden':
+      next.statusBar.hidden = [...(value as string[])];
+      break;
+    case 'update.autoCheck':
+      next.update.autoCheck = value as boolean;
+      break;
+    default: {
+      const key = notificationEventKey(id);
+      if (key !== null) next.notifications.events[key] = value as boolean;
+    }
+  }
+  return next;
+}

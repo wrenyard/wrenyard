@@ -14,9 +14,12 @@ import type { PageLoader } from './pages.js';
 import {
   SHELL_CHANNELS,
   acceleratorPage,
+  isPreferenceId,
   isShellPage,
   providerKeyPageUrl,
   type AppearanceSettings,
+  type DesktopPreferences,
+  type PreferenceId,
   type StatsSnapshot,
   type QuotaSnapshot,
   type ResolvedAppearance,
@@ -111,6 +114,11 @@ export interface ShellWindowOptions {
   clearNotifications(): Promise<void>;
   markNotificationsRead(): Promise<void>;
   setDoNotDisturb(value: boolean): Promise<NotificationSnapshot>;
+  getPreferences(): Promise<DesktopPreferences>;
+  setPreference(id: PreferenceId, value: unknown): Promise<DesktopPreferences>;
+  openSettingsFile(): Promise<void>;
+  openLogsDirectory(): Promise<void>;
+  revealWorkspace(path: string): Promise<void>;
 }
 
 const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'max_auto_output_usd_per_million', 'automatic']);
@@ -526,9 +534,15 @@ function validateAppMenuPosition(value: unknown): { x: number; y: number } | und
 export class ShellWindowController {
   readonly window: BrowserWindow;
   private page: ShellPage = 'session';
+  private readonly getPreferences: () => Promise<DesktopPreferences>;
 
-  private constructor(window: BrowserWindow, private readonly appVersion: string) {
+  private constructor(
+    window: BrowserWindow,
+    private readonly appVersion: string,
+    getPreferences: () => Promise<DesktopPreferences>,
+  ) {
     this.window = window;
+    this.getPreferences = getPreferences;
   }
 
   static async create(options: ShellWindowOptions): Promise<ShellWindowController> {
@@ -560,7 +574,7 @@ export class ShellWindowController {
       win.setAutoHideMenuBar(false);
     }
     console.info('[wrenyard-desktop] shell window created');
-    const controller = new ShellWindowController(win, options.appVersion);
+    const controller = new ShellWindowController(win, options.appVersion, options.getPreferences);
     controller.installSecurity(options.pageLoader.url('shell'));
     controller.installIpc(options);
     controller.installShortcuts(win.webContents);
@@ -625,6 +639,16 @@ export class ShellWindowController {
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.notificationsChanged);
     }
+  }
+
+  /** Push a fresh preference snapshot to the renderer. */
+  notifyPreferencesChanged(): void {
+    if (this.window.webContents.isDestroyed()) return;
+    void this.getPreferences().then((preferences) => {
+      if (!this.window.webContents.isDestroyed()) {
+        this.window.webContents.send(SHELL_CHANNELS.preferencesChanged, preferences);
+      }
+    }).catch(() => undefined);
   }
 
   /** Deliver a main-process command action (e.g. a native-notification click). */
@@ -849,6 +873,28 @@ export class ShellWindowController {
       if (typeof value !== 'boolean') throw new Error('勿扰参数无效');
       return options.setDoNotDisturb(value);
     });
+    ipcMain.handle(SHELL_CHANNELS.preferencesSnapshot, async (event) => {
+      assertShellSender(event.sender);
+      return options.getPreferences();
+    });
+    ipcMain.handle(SHELL_CHANNELS.setPreference, async (event, id: unknown, value: unknown) => {
+      assertShellSender(event.sender);
+      if (!isPreferenceId(id)) throw new Error('未知偏好');
+      return options.setPreference(id, value);
+    });
+    ipcMain.handle(SHELL_CHANNELS.openSettingsFile, async (event) => {
+      assertShellSender(event.sender);
+      return options.openSettingsFile();
+    });
+    ipcMain.handle(SHELL_CHANNELS.openLogsDirectory, async (event) => {
+      assertShellSender(event.sender);
+      return options.openLogsDirectory();
+    });
+    ipcMain.handle(SHELL_CHANNELS.revealWorkspace, async (event, path: unknown) => {
+      assertShellSender(event.sender);
+      if (typeof path !== 'string' || path.length === 0 || path.length > 4_096) throw new Error('工作区路径无效');
+      return options.revealWorkspace(path);
+    });
   }
 
   private removeIpcHandlers(): void {
@@ -890,6 +936,11 @@ export class ShellWindowController {
       SHELL_CHANNELS.notificationsClear,
       SHELL_CHANNELS.notificationsMarkRead,
       SHELL_CHANNELS.notificationsSetDoNotDisturb,
+      SHELL_CHANNELS.preferencesSnapshot,
+      SHELL_CHANNELS.setPreference,
+      SHELL_CHANNELS.openSettingsFile,
+      SHELL_CHANNELS.openLogsDirectory,
+      SHELL_CHANNELS.revealWorkspace,
     ]) ipcMain.removeHandler(channel);
   }
 

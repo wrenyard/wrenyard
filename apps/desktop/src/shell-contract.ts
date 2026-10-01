@@ -1,5 +1,5 @@
 import type { PetSettingsPayload } from './pet/main/config';
-import type { ThemeId } from '@wrenyard/themes';
+import { BUILTIN_THEMES, type ThemeId } from '@wrenyard/themes';
 import type {
   NotificationAction,
   NotificationCommandAction,
@@ -169,6 +169,12 @@ export const SHELL_CHANNELS = {
   execGet: 'wrenyard-shell:exec-get',
   execEvents: 'wrenyard-shell:exec-events',
   execCancel: 'wrenyard-shell:exec-cancel',
+  preferencesSnapshot: 'wrenyard-shell:preferences-snapshot',
+  setPreference: 'wrenyard-shell:set-preference',
+  preferencesChanged: 'wrenyard-shell:preferences-changed',
+  openSettingsFile: 'wrenyard-shell:open-settings-file',
+  openLogsDirectory: 'wrenyard-shell:open-logs-directory',
+  revealWorkspace: 'wrenyard-shell:reveal-workspace',
 } as const;
 
 export type ShellPage = 'session' | 'stats' | 'quota' | 'settings' | 'tasks';
@@ -185,13 +191,16 @@ export type MotionPreference = 'system' | 'reduce';
 
 /**
  * Persisted appearance preferences. Stored in the Desktop main-process
- * settings document (version 2), replacing the renderer localStorage scheme.
- * `theme` is a theme-registry id; Desktop never hardcodes the list.
+ * settings document (version 3), replacing the renderer localStorage scheme.
+ * `theme` is a theme-registry id; Desktop never hardcodes the list. `zoom` is
+ * the persisted interface zoom percentage, applied on the next launch.
  */
 export interface AppearanceSettings {
   theme: ThemeId;
   colorMode: ColorMode;
   motion: MotionPreference;
+  /** Interface zoom as a percentage (see the appearance zoom option bounds). */
+  zoom: number;
 }
 
 /**
@@ -216,6 +225,221 @@ export interface AppMenuPosition {
   x: number;
   y: number;
 }
+
+/* ------------------------------------------------------------------ */
+/* Desktop preferences (settings schema version 3)                     */
+/* ------------------------------------------------------------------ */
+
+/** Which page the shell opens after launch. */
+export type StartupPagePreference = 'last' | 'session';
+
+/** The message-submit key binding for the prompt input. */
+export type SessionSendKey = 'enter' | 'mod-enter';
+
+/** Whether a new session reuses the last sent model or a fixed one. */
+export type SessionDefaultModelMode = 'last' | 'specified';
+
+/** Allowed interface zoom percentages (80%–150%, step 10%). */
+export const APPEARANCE_ZOOM_MIN = 80;
+export const APPEARANCE_ZOOM_MAX = 150;
+export const APPEARANCE_ZOOM_STEP = 10;
+
+export const APPEARANCE_ZOOM_OPTIONS: ReadonlyArray<{ value: number; label: string }> =
+  Array.from(
+    { length: (APPEARANCE_ZOOM_MAX - APPEARANCE_ZOOM_MIN) / APPEARANCE_ZOOM_STEP + 1 },
+    (_unused, index) => {
+      const value = APPEARANCE_ZOOM_MIN + index * APPEARANCE_ZOOM_STEP;
+      return { value, label: `${value}%` };
+    },
+  );
+
+export const STARTUP_PAGE_OPTIONS: ReadonlyArray<{ value: StartupPagePreference; label: string }> = [
+  { value: 'last', label: '上次的页面' },
+  { value: 'session', label: '会话' },
+];
+
+export const SESSION_DEFAULT_MODEL_OPTIONS: ReadonlyArray<{ value: SessionDefaultModelMode; label: string }> = [
+  { value: 'last', label: '沿用上次发送的模型' },
+  { value: 'specified', label: '指定模型' },
+];
+
+export const SESSION_SEND_KEY_OPTIONS: ReadonlyArray<{ value: SessionSendKey; label: string }> = [
+  { value: 'enter', label: 'Enter 发送' },
+  { value: 'mod-enter', label: 'Cmd/Ctrl+Enter 发送' },
+];
+
+/** Stable notification event ids; the persisted keys of `notifications.events`. */
+export const NOTIFICATION_EVENT_IDS = [
+  'taskCompleted',
+  'taskFailed',
+  'sessionReplyCompleted',
+  'quotaWarning',
+  'updateAvailable',
+  'daemonDisconnected',
+] as const;
+export type NotificationEventId = (typeof NOTIFICATION_EVENT_IDS)[number];
+
+export const NOTIFICATION_EVENT_LABELS: Readonly<Record<NotificationEventId, string>> = {
+  taskCompleted: '任务完成',
+  taskFailed: '任务失败',
+  sessionReplyCompleted: '会话回复完成',
+  quotaWarning: '额度告警',
+  updateAvailable: '有可用更新',
+  daemonDisconnected: 'Daemon 断开',
+};
+
+/**
+ * Per-event notification toggles. Each key gates one event family emitted by
+ * the main process or the Pet module; a disabled family is never recorded nor
+ * surfaced. Field names are the persisted contract, so they stay stable.
+ */
+export interface NotificationEventPreferences {
+  taskCompleted: boolean;
+  taskFailed: boolean;
+  sessionReplyCompleted: boolean;
+  quotaWarning: boolean;
+  updateAvailable: boolean;
+  daemonDisconnected: boolean;
+}
+
+/** Desktop notification preferences, including the runtime do-not-disturb flag. */
+export interface NotificationPreferences {
+  /** Whether OS-level notifications are enabled at all. */
+  system: boolean;
+  /** Whether OS notifications play a sound. */
+  sound: boolean;
+  /** Do-not-disturb: history only, except error-level notifications. */
+  doNotDisturb: boolean;
+  events: NotificationEventPreferences;
+}
+
+export interface GeneralPreferences {
+  startupPage: StartupPagePreference;
+  confirmQuit: boolean;
+}
+
+export interface SessionPreferences {
+  defaultModel: SessionDefaultModelMode;
+  /** Canonical model used when `defaultModel` is 'specified'; null means unset. */
+  model: string | null;
+  /** Reasoning effort used with the specified model; null means unset. */
+  effort: string | null;
+  /** Last model actually sent, mirrored from the prompt composer. */
+  lastSentModel: string | null;
+  /** Last reasoning effort actually sent; null means unset. */
+  lastSentEffort: string | null;
+  sendKey: SessionSendKey;
+}
+
+export interface StatusBarPreferences {
+  /** Ids of status items the user chose to hide. */
+  hidden: string[];
+}
+
+export interface UpdatePreferences {
+  /** Whether Desktop checks for updates automatically; manual check always works. */
+  autoCheck: boolean;
+}
+
+/**
+ * The renderer-facing projection of the version 3 Desktop preference
+ * partitions. The main process is the single writer; the bridge validates
+ * every mutation against the shared schema before persisting.
+ */
+export interface DesktopPreferences {
+  general: GeneralPreferences;
+  appearance: AppearanceSettings;
+  session: SessionPreferences;
+  notifications: NotificationPreferences;
+  statusBar: StatusBarPreferences;
+  update: UpdatePreferences;
+}
+
+/** Every writable preference id, addressable by the generic preference bridge. */
+export const PREFERENCE_IDS = [
+  'general.startupPage',
+  'general.confirmQuit',
+  'appearance.theme',
+  'appearance.colorMode',
+  'appearance.motion',
+  'appearance.zoom',
+  'session.defaultModel',
+  'session.model',
+  'session.effort',
+  'session.lastSentModel',
+  'session.lastSentEffort',
+  'session.sendKey',
+  'notifications.system',
+  'notifications.sound',
+  'notifications.doNotDisturb',
+  'notifications.events.taskCompleted',
+  'notifications.events.taskFailed',
+  'notifications.events.sessionReplyCompleted',
+  'notifications.events.quotaWarning',
+  'notifications.events.updateAvailable',
+  'notifications.events.daemonDisconnected',
+  'statusBar.hidden',
+  'update.autoCheck',
+] as const;
+export type PreferenceId = (typeof PREFERENCE_IDS)[number];
+
+export function isPreferenceId(value: unknown): value is PreferenceId {
+  return typeof value === 'string' && (PREFERENCE_IDS as readonly string[]).includes(value);
+}
+
+const PREFERENCE_STRING_MAX = 512;
+const PREFERENCE_STRING_ARRAY_MAX = 64;
+
+/**
+ * Central preference value validation. Both the main-process write path and
+ * the renderer option lists derive from this one schema, so an illegal value
+ * can never be persisted and the two sides cannot drift.
+ */
+export function validatePreferenceValue(id: PreferenceId, value: unknown): boolean {
+  switch (id) {
+    case 'general.startupPage':
+      return value === 'last' || value === 'session';
+    case 'general.confirmQuit':
+      return typeof value === 'boolean';
+    case 'appearance.theme':
+      return typeof value === 'string' && BUILTIN_THEME_IDS.has(value);
+    case 'appearance.colorMode':
+      return value === 'system' || value === 'light' || value === 'dark';
+    case 'appearance.motion':
+      return value === 'system' || value === 'reduce';
+    case 'appearance.zoom':
+      return typeof value === 'number' && APPEARANCE_ZOOM_OPTIONS.some((option) => option.value === value);
+    case 'session.defaultModel':
+      return value === 'last' || value === 'specified';
+    case 'session.model':
+    case 'session.effort':
+    case 'session.lastSentModel':
+    case 'session.lastSentEffort':
+      return value === null || (typeof value === 'string' && value.length <= PREFERENCE_STRING_MAX);
+    case 'session.sendKey':
+      return value === 'enter' || value === 'mod-enter';
+    case 'notifications.system':
+    case 'notifications.sound':
+    case 'notifications.doNotDisturb':
+    case 'notifications.events.taskCompleted':
+    case 'notifications.events.taskFailed':
+    case 'notifications.events.sessionReplyCompleted':
+    case 'notifications.events.quotaWarning':
+    case 'notifications.events.updateAvailable':
+    case 'notifications.events.daemonDisconnected':
+      return typeof value === 'boolean';
+    case 'statusBar.hidden':
+      return Array.isArray(value)
+        && value.length <= PREFERENCE_STRING_ARRAY_MAX
+        && value.every((item) => typeof item === 'string' && item.length > 0 && item.length <= PREFERENCE_STRING_MAX);
+    case 'update.autoCheck':
+      return typeof value === 'boolean';
+    default:
+      return false;
+  }
+}
+
+const BUILTIN_THEME_IDS: ReadonlySet<string> = new Set(BUILTIN_THEMES.map((theme) => theme.id));
 
 export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
@@ -903,6 +1127,17 @@ export interface WrenyardShellApi {
   onNotificationsChanged(listener: () => void): () => void;
   /** Main-process command delivery (e.g. a native-notification click). */
   onCommandAction(listener: (action: NotificationCommandAction) => void): () => void;
+  /** Current version 3 Desktop preference partitions, main-process owned. */
+  getPreferences(): Promise<DesktopPreferences>;
+  /** Validate and persist one preference by id; returns the fresh snapshot. */
+  setPreference(id: PreferenceId, value: unknown): Promise<DesktopPreferences>;
+  onPreferencesChanged(listener: (preferences: DesktopPreferences) => void): () => void;
+  /** Open the Desktop settings file with the OS default editor. */
+  openSettingsFile(): Promise<void>;
+  /** Open the Wrenyard state logs directory. */
+  openLogsDirectory(): Promise<void>;
+  /** Reveal a workspace path in the OS file manager. */
+  revealWorkspace(path: string): Promise<void>;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
@@ -957,4 +1192,71 @@ export function acceleratorPage(input: AcceleratorInput, platform: NodeJS.Platfo
   if (input.key === '3') return 'quota';
   if (input.key === '4') return 'tasks';
   return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Keyboard shortcuts                                                  */
+/* ------------------------------------------------------------------ */
+
+/** Where a shortcut applies, as a product-facing Chinese label. */
+export type ShortcutScope = '全局' | '会话页' | '输入框';
+
+/**
+ * One read-only shortcut row. `mac`/`other` use the platform glyphs; a missing
+ * value means the shortcut does not exist on that platform. `page` is present
+ * when the shortcut is also handled by {@link acceleratorPage}; `command` is
+ * the command-table id the shell runs, when it is not a plain navigation key.
+ */
+export interface KnownShortcut {
+  category: string;
+  title: string;
+  mac?: string;
+  other?: string;
+  scope: ShortcutScope;
+  page?: ShellPage;
+  command?: string;
+}
+
+/**
+ * The complete static shortcut table shown by the settings shortcuts category.
+ * It mirrors the implemented accelerators: every {@link acceleratorPage}
+ * combination appears here, and every accelerator spelled out in
+ * `desktopMenuTemplate` is present. Menu roles (`editMenu`, `resetZoom`, …)
+ * list Electron's default bindings by hand. Customization will later be
+ * derived from the command table; the layout stays the same.
+ */
+export const KNOWN_SHORTCUTS: readonly KnownShortcut[] = [
+  { category: '导航', title: '会话', mac: '⌘1', other: 'Ctrl+1', scope: '全局', page: 'session' },
+  { category: '导航', title: '台账', mac: '⌘2', other: 'Ctrl+2', scope: '全局', page: 'stats' },
+  { category: '导航', title: '模型供应', mac: '⌘3', other: 'Ctrl+3', scope: '全局', page: 'quota' },
+  { category: '导航', title: '任务', mac: '⌘4', other: 'Ctrl+4', scope: '全局', page: 'tasks' },
+  { category: '导航', title: '设置', mac: '⌘,', other: 'Ctrl+,', scope: '全局', page: 'settings' },
+  { category: '导航', title: '后退', mac: '⌘[', other: 'Alt+←', scope: '全局', command: 'nav.back' },
+  { category: '导航', title: '前进', mac: '⌘]', other: 'Alt+→', scope: '全局', command: 'nav.forward' },
+  { category: '视图', title: '切换侧栏', mac: '⌘B', other: 'Ctrl+B', scope: '全局', command: 'view.toggleSidebar' },
+  { category: '视图', title: '实际大小', mac: '⌘0', other: 'Ctrl+0', scope: '全局' },
+  { category: '视图', title: '放大', mac: '⌘+', other: 'Ctrl++', scope: '全局' },
+  { category: '视图', title: '缩小', mac: '⌘-', other: 'Ctrl+-', scope: '全局' },
+  { category: '视图', title: '全屏', mac: '⌃⌘F', other: 'F11', scope: '全局' },
+  { category: '会话', title: '搜索会话', mac: '⌘K', other: 'Ctrl+K', scope: '会话页' },
+  { category: '会话', title: '发送消息', mac: 'Enter', other: 'Enter', scope: '输入框' },
+  { category: '会话', title: '换行', mac: '⇧Enter', other: 'Shift+Enter', scope: '输入框' },
+  { category: '会话', title: '关闭检查器', mac: 'Esc', other: 'Esc', scope: '会话页' },
+  { category: '编辑', title: '撤销', mac: '⌘Z', other: 'Ctrl+Z', scope: '全局' },
+  { category: '编辑', title: '重做', mac: '⇧⌘Z', other: 'Ctrl+Y', scope: '全局' },
+  { category: '编辑', title: '剪切', mac: '⌘X', other: 'Ctrl+X', scope: '全局' },
+  { category: '编辑', title: '复制', mac: '⌘C', other: 'Ctrl+C', scope: '全局' },
+  { category: '编辑', title: '粘贴', mac: '⌘V', other: 'Ctrl+V', scope: '全局' },
+  { category: '编辑', title: '全选', mac: '⌘A', other: 'Ctrl+A', scope: '全局' },
+  { category: '窗口', title: '最小化', mac: '⌘M', scope: '全局' },
+  { category: '窗口', title: '关闭窗口', mac: '⌘W', scope: '全局' },
+  { category: '应用', title: '隐藏啾啾工坊', mac: '⌘H', scope: '全局' },
+  { category: '应用', title: '隐藏其他', mac: '⌥⌘H', scope: '全局' },
+  { category: '应用', title: '检查更新', mac: '⇧⌘U', other: 'Ctrl+Shift+U', scope: '全局' },
+  { category: '应用', title: '退出', mac: '⌘Q（连按两次）', other: 'Ctrl+Q', scope: '全局' },
+];
+
+/** Platform key text for one shortcut, or null when it does not apply. */
+export function knownShortcutKeys(shortcut: KnownShortcut, platform: NodeJS.Platform): string | null {
+  return platform === 'darwin' ? shortcut.mac ?? null : shortcut.other ?? null;
 }

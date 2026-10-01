@@ -40,6 +40,19 @@ export const settingsQuery = queryOptions({
 });
 
 /**
+ * Version 3 Desktop preference partitions, owned by the main process. Shared
+ * because the settings page and the status bar both read the same snapshot; a
+ * `preferences-changed` push invalidates this key once at module load.
+ */
+export const preferencesQueryKey = ['preferences'] as const;
+
+export const preferencesQuery = queryOptions({
+  queryKey: preferencesQueryKey,
+  queryFn: () => shell.getPreferences(),
+  staleTime: 30_000,
+});
+
+/**
  * Shared task-settings snapshot used by the tasks and stats pages. The daemon
  * owns merge/persistence, so the cached snapshot is treated as fresh for one
  * minute before a background refetch. Page-specific queries live with their

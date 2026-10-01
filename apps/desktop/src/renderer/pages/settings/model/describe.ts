@@ -10,9 +10,40 @@ import { isWorkspaceReadOnly } from './settings.js';
 
 /* Central product copy and status mappings for the Settings page. */
 
-export const PAGE_TITLE = '啾啾工坊设置';
+export const PAGE_TITLE = '设置';
 export const PAGE_DESCRIPTION = '管理本地工作环境、更新与桌宠体验';
 export const REFRESH_LABEL = '刷新状态';
+
+/* ------------------------------------------------------------------ */
+/* Settings editor chrome                                              */
+/* ------------------------------------------------------------------ */
+
+export const SEARCH_PLACEHOLDER = '搜索设置';
+export const SEARCH_RESULT_SUFFIX = ' 项';
+export const SEARCH_EMPTY_TITLE = '没有匹配的设置';
+export const SEARCH_EMPTY_DESCRIPTION = '试试更短的关键词，或清除筛选条件。';
+export const SEARCH_FILTER_MODIFIED = '@modified';
+export const SEARCH_FILTER_ID_PREFIX = '@id:';
+export const SEARCH_FILTER_MODIFIED_LABEL = '只看已修改';
+export const SEARCH_FILTER_ID_LABEL = '按设置 ID 定位';
+export const GEAR_RESET_LABEL = '重置此设置';
+export const GEAR_COPY_ID_LABEL = '复制设置 ID';
+export const GEAR_COPY_JSON_LABEL = '复制为 JSON';
+export const OPEN_SETTINGS_FILE_LABEL = '打开设置文件';
+
+/* ------------------------------------------------------------------ */
+/* Category and group labels                                           */
+/* ------------------------------------------------------------------ */
+
+export const GENERAL_TITLE = '通用';
+export const NOTIFICATIONS_TITLE = '通知';
+export const SHORTCUTS_TITLE = '快捷键';
+export const SHORTCUTS_DESCRIPTION = '当前平台生效的全部快捷键；暂不支持自定义。';
+export const SHORTCUTS_SEARCH_PLACEHOLDER = '搜索命令或按键';
+export const SHORTCUTS_COMMAND_LABEL = '命令';
+export const SHORTCUTS_KEYS_LABEL = '快捷键';
+export const SHORTCUTS_SCOPE_LABEL = '生效范围';
+export const SHORTCUTS_EMPTY = '没有匹配的快捷键';
 
 export const APPEARANCE_TITLE = '外观';
 export const APPEARANCE_DESCRIPTION = '选择界面主题与明暗模式，立即生效。';
@@ -175,3 +206,47 @@ export function workspaceSaveLabel(workspace: WorkspaceConfigurationSnapshot, sa
 
 export const CONFLICT_MESSAGE = '保存冲突：已刷新到最新配置，你填写的值仍保留，请核对后重新保存。';
 export const CONFLICT_REFRESHED_REVISION_MESSAGE = '保存冲突：列表已刷新，请重新提交。';
+
+/* ------------------------------------------------------------------ */
+/* Migrated category additions                                         */
+/* ------------------------------------------------------------------ */
+
+export const SESSION_AUXILIARY_MODEL_TITLE = '辅助模型';
+export const SESSION_AUXILIARY_MODEL_DESCRIPTION =
+  '用于上下文选择、action 解析、派发编译、写文档、回复撰写和标题等便宜调用。';
+export const SESSION_WORKSPACE_TITLE = '工作区';
+export const SESSION_WORKSPACE_DESCRIPTION = '会话固定绑定此目录，不在聊天界面提供临时切换。';
+export const SESSION_WORKSPACE_REVEAL_LABEL = '在访达中显示';
+export const SESSION_WORKSPACE_UNAVAILABLE = '尚未配置工作区。';
+
+export const PROVIDER_SUMMARY_TITLE = '供应商';
+export const PROVIDER_SUMMARY_DESCRIPTION = '凭据与排序在模型供应页管理，设置页不重复。';
+export const PROVIDER_MANAGE_LABEL = '在模型供应页管理';
+export const PROVIDER_COUNT_SUFFIX = ' 个已配置';
+
+export const RUNTIME_LOGS_TITLE = '日志';
+export const RUNTIME_LOGS_DESCRIPTION = 'Daemon 与 Desktop 的运行日志目录。';
+export const RUNTIME_LOGS_OPEN_LABEL = '打开日志目录';
+export const RUNTIME_SETTINGS_FILE_TITLE = '设置文件';
+export const RUNTIME_SETTINGS_FILE_DESCRIPTION = 'Desktop 偏好设置文件，可直接用系统编辑器打开。';
+export const RUNTIME_SETTINGS_FILE_OPEN_LABEL = '打开';
+export const RUNTIME_ENDPOINT_COPY_LABEL = '复制 Endpoint';
+
+export const UPDATE_AUTO_CHECK_TITLE = '自动检查更新';
+export const UPDATE_AUTO_CHECK_DESCRIPTION = '关闭后只在手动检查时检查。';
+
+export const ABOUT_DIAGNOSTIC_TITLE = '诊断信息';
+export const ABOUT_DIAGNOSTIC_DESCRIPTION = '把版本、平台与 Daemon 状态复制为一段文本，便于反馈问题。';
+export const ABOUT_DIAGNOSTIC_COPY_LABEL = '复制诊断信息';
+export const ABOUT_COPY_LABEL = '复制';
+
+export const PET_BASIC_TITLE = '基本';
+export const PET_APPLY_BAR_NOTE = '桌宠设置有未应用的修改';
+export const PET_APPLY_LABEL = '应用';
+export const PET_DISCARD_LABEL = '放弃';
+export const PET_APPLYING_LABEL = '正在应用…';
+
+export const SETTING_SAVE_FAILED_PREFIX = '保存失败：';
+export const SETTING_SAVED_LABEL = '已保存';
+export const SETTING_INVALID_NUMBER = '请输入有效数值';
+export const SETTING_NUMBER_RANGE = '数值超出允许范围';

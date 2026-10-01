@@ -2,6 +2,8 @@ import { queryOptions, useQuery } from '@tanstack/react-query';
 import { shell } from '@/renderer/lib/desktop';
 import {
   daemonQuery,
+  preferencesQuery,
+  preferencesQueryKey,
   runtimeAliasesQuery,
   settingsQuery,
   settingsQueryKey,
@@ -9,13 +11,22 @@ import {
 } from '@/renderer/lib/queries';
 
 /**
- * Page-scoped queries for the Settings page. The update, daemon, runtime alias
- * and settings snapshots are shared shell queries owned by `lib/queries` and
- * refreshed by the app-level push subscriptions (see `app/query-client`); the
- * settings page only owns its summary-settings snapshot.
+ * Page-scoped queries for the Settings page. The update, daemon, runtime alias,
+ * preferences and settings snapshots are shared shell queries owned by
+ * `lib/queries` and refreshed by the app-level push subscriptions (see
+ * `app/query-client`); the settings page only owns its summary-settings and
+ * quota snapshots.
  */
 
-export { daemonQuery, runtimeAliasesQuery, settingsQuery, settingsQueryKey, updateQuery };
+export {
+  daemonQuery,
+  preferencesQuery,
+  preferencesQueryKey,
+  runtimeAliasesQuery,
+  settingsQuery,
+  settingsQueryKey,
+  updateQuery,
+};
 
 export const daemonQueryKey = daemonQuery.queryKey;
 export const updateQueryKey = updateQuery.queryKey;
@@ -26,6 +37,15 @@ export const summarySettingsQueryKey = ['shell', 'summary-settings'] as const;
 export const summarySettingsQuery = queryOptions({
   queryKey: summarySettingsQueryKey,
   queryFn: () => shell.getSummarySettings(),
+  staleTime: 30_000,
+});
+
+/** Provider catalog projection; drives the read-only provider count. */
+export const quotaQueryKey = ['quota'] as const;
+
+export const quotaQuery = queryOptions({
+  queryKey: quotaQueryKey,
+  queryFn: () => shell.getQuota(),
   staleTime: 30_000,
 });
 
@@ -49,6 +69,14 @@ export function useRuntimeAliasesQuery() {
   return useQuery(runtimeAliasesQuery);
 }
 
+export function useQuotaQuery() {
+  return useQuery(quotaQuery);
+}
+
+export function usePreferencesQuery() {
+  return useQuery(preferencesQuery);
+}
+
 /** Every page query key, used by the header refresh action. */
 export const SETTINGS_QUERY_KEYS = [
   settingsQueryKey,
@@ -56,4 +84,6 @@ export const SETTINGS_QUERY_KEYS = [
   updateQueryKey,
   summarySettingsQueryKey,
   runtimeAliasesQueryKey,
+  quotaQueryKey,
+  preferencesQueryKey,
 ] as const;

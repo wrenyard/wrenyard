@@ -2,6 +2,7 @@ import { QueryClient } from '@tanstack/react-query';
 import {
   onDaemonChanged,
   onNotificationsChanged,
+  onPreferencesChanged,
   onQuotaChanged,
   onUpdateChanged,
 } from '@/renderer/lib/desktop';
@@ -36,4 +37,8 @@ onDaemonChanged(() => {
 
 onNotificationsChanged(() => {
   void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+});
+
+onPreferencesChanged(() => {
+  void queryClient.invalidateQueries({ queryKey: ['preferences'] });
 });
