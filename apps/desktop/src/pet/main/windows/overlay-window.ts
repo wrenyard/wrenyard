@@ -112,6 +112,7 @@ export function createOverlayWindow(options: OverlayWindowOptions): BrowserWindo
     },
   });
 
+  trackAppearanceWindow(win);
   win.setMenuBarVisibility(false);
   win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, overlayWorkspaceVisibilityOptions());
@@ -131,6 +132,8 @@ export function createOverlayWindow(options: OverlayWindowOptions): BrowserWindo
     options.onLoadFailure?.();
   };
 
+  win.webContents.on('did-start-loading', () => { loadFailed = false; });
+
   win.webContents.on('did-fail-load', (_event, _errorCode, _errorDescription, _validatedURL, isMainFrame) => {
     if (isMainFrame) reportLoadFailure();
   });
@@ -141,6 +144,7 @@ export function createOverlayWindow(options: OverlayWindowOptions): BrowserWindo
   win.webContents.on('render-process-gone', () => {
     if (win.isDestroyed()) return;
     visibleBeforeCrash = !options.stayHidden && isWindowVisible(win);
+    win.hide();
     win.webContents.reload();
   });
 
