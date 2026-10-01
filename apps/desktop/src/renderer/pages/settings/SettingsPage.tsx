@@ -39,7 +39,7 @@ import {
 } from './model/registry.js';
 import { parseSearchQuery, settingMatches, shortcutMatches, isEmptyQuery, type SearchQuery } from './model/search.js';
 import { registerPageCommands } from '@/renderer/lib/commands';
-import { applyLocalPreference, errorMessage, readPreference } from './model/settings.js';
+import { applyLocalPreference, errorMessage, preferenceValuesEqual, readPreference } from './model/settings.js';
 import { SETTINGS_QUERY_KEYS, usePreferencesQuery } from './queries.js';
 
 interface CategoryMatch {
@@ -125,15 +125,19 @@ export function SettingsPage() {
       if (definition.source.kind !== 'preference') continue;
       const id = definition.source.preference;
       const value = readPreference(data, id);
+      // A numeric preference surfaced through an enum Select (zoom) arrives as a
+      // string from the option value; coerce it back before validation.
+      const coerce = (next: unknown): unknown =>
+        typeof definition.default === 'number' && typeof next === 'string' ? Number(next) : next;
       map.set(definition.id, {
         value,
-        modified: definition.default !== undefined && value !== definition.default,
+        modified: definition.default !== undefined && !preferenceValuesEqual(value, definition.default),
         readonly: definition.readonly === true,
         pending: savePreference.isPending && savePreference.variables?.id === id,
         ...(savePreference.isError && savePreference.variables?.id === id
           ? { error: errorMessage(savePreference.error) }
           : {}),
-        onChange: (next) => savePreference.mutate({ id, value: next }),
+        onChange: (next) => savePreference.mutate({ id, value: coerce(next) }),
         ...(definition.default !== undefined
           ? { onReset: () => savePreference.mutate({ id, value: definition.default }) }
           : {}),
@@ -153,17 +157,19 @@ export function SettingsPage() {
   const matches = useMemo(() => {
     const result: CategoryMatch[] = [];
     for (const category of SETTINGS_CATEGORIES) {
-      const definitions = settingsForCategory(category.id).filter((definition) => {
-        const binding = preferenceBindings.get(definition.id);
-        return settingMatches(
-          {
-            ...settingSearchFields(definition),
-            categoryLabel: category.label,
-            modified: binding?.modified === true,
-          },
-          query,
-        );
-      });
+      const definitions = settingsForCategory(category.id)
+        .filter((definition) => definition.platform === undefined || definition.platform.includes(platform))
+        .filter((definition) => {
+          const binding = preferenceBindings.get(definition.id);
+          return settingMatches(
+            {
+              ...settingSearchFields(definition),
+              categoryLabel: category.label,
+              modified: binding?.modified === true,
+            },
+            query,
+          );
+        });
       const groupLabels = SETTINGS_GROUP_LABELS[category.id] ?? [];
       const groups = groupLabels
         .map((group) => ({

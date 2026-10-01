@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Copy, RotateCcw, Settings2 } from 'lucide-react';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
+import { Checkbox } from '@/renderer/components/ui/checkbox';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,7 +13,6 @@ import {
 import { Field, FieldDescription, FieldError, FieldLabel } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
-import { Switch } from '@/renderer/components/ui/switch';
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import { copyText } from '@/renderer/lib/desktop';
 import { settingsCategoryLabel } from '../model/categories.js';
@@ -64,8 +64,9 @@ function BooleanControl({ value, disabled, onChange }: {
   disabled: boolean;
   onChange: (value: unknown) => void;
 }) {
+  // VS Code-style boolean: the official Checkbox, with its description to the right.
   return (
-    <Switch
+    <Checkbox
       checked={value === true}
       disabled={disabled}
       onCheckedChange={(checked: boolean) => onChange(checked)}
@@ -269,7 +270,7 @@ export function SettingRow({ definition, binding, highlightTerms = [], flashed =
     }
   })();
 
-  // A boolean's description sits to the right of the switch, like VS Code.
+  // A boolean's description sits to the right of the checkbox, like VS Code.
   const booleanControl = definition.control.kind === 'boolean';
 
   return (
