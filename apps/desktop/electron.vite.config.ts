@@ -14,8 +14,16 @@ if (!process.stdout.isTTY) {
 const here = dirname(fileURLToPath(import.meta.url));
 const src = resolve(here, 'src');
 const dist = resolve(here, 'dist');
-const fromSrc = (entries: Record<string, string>) =>
-  Object.fromEntries(Object.entries(entries).map(([id, file]) => [id, resolve(src, file)]));
+const fromSrc = (entries: Record<string, string>) => {
+  // Pet panels share one HTML entry for two page ids (`?panel=slip|transcript`),
+  // so resolve to absolute paths first and keep the first id per file.
+  const byFile = new Map<string, string>();
+  for (const [id, file] of Object.entries(entries)) {
+    const absolute = resolve(src, file);
+    if (!byFile.has(absolute)) byFile.set(absolute, id);
+  }
+  return Object.fromEntries([...byFile.entries()].map(([absolute, id]) => [id, absolute]));
+};
 
 export default defineConfig({
   main: {
@@ -56,7 +64,7 @@ export default defineConfig({
     },
     plugins: [react(), tailwindcss(), devShellCsp()],
     // Pre-bundle up front so a first page load never triggers a dependency re-optimization reload.
-    optimizeDeps: { include: ['react', 'react-dom/client', 'react/jsx-dev-runtime', 'pixi.js'] },
+    optimizeDeps: { include: ['react', 'react-dom/client', 'react/jsx-dev-runtime', 'pixi.js', '@xyflow/react', '@dagrejs/dagre'] },
     server: { host: '127.0.0.1', port: 5199, strictPort: false },
     build: {
       outDir: resolve(dist, 'web'),

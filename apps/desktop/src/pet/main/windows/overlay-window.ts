@@ -3,6 +3,7 @@ import {
   overlaySkipsTaskbar,
   overlayWorkspaceVisibilityOptions,
 } from './overlay-window-policy';
+import { SHELL_CHANNELS, type ResolvedAppearance } from '../../../shell-contract.js';
 
 export interface OverlayWindowOptions {
   width: number;
@@ -23,6 +24,43 @@ export interface OverlayWindowOptions {
   paintWhenInitiallyHidden?: boolean;
   /** Extra web preferences merged over the overlay defaults. */
   webPreferences?: Omit<WebPreferences, 'preload'>;
+}
+
+/**
+ * Every Pet window that mirrors the resolved appearance (transparent overlays
+ * and the themed transcript). The registry lives beside the overlay factory so
+ * a new overlay is tracked automatically and can never miss a live appearance
+ * update.
+ */
+const petAppearanceWindows = new Set<BrowserWindow>();
+
+function trackAppearanceWindow(win: BrowserWindow): void {
+  petAppearanceWindows.add(win);
+  win.once('closed', () => {
+    petAppearanceWindows.delete(win);
+  });
+}
+
+/**
+ * Register a themed Pet window that the overlay factory does not construct —
+ * currently the task transcript, which is opaque and appearance-attached.
+ */
+export function registerThemedPetWindow(win: BrowserWindow): void {
+  trackAppearanceWindow(win);
+}
+
+/**
+ * Push the resolved appearance to every live Pet window. Called from the sole
+ * appearance `onChanged` hook in `main.ts`, alongside the shell notification.
+ */
+export function broadcastPetAppearance(appearance: ResolvedAppearance): void {
+  for (const win of petAppearanceWindows) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) {
+      petAppearanceWindows.delete(win);
+      continue;
+    }
+    win.webContents.send(SHELL_CHANNELS.appearanceChanged, appearance);
+  }
 }
 
 /**
