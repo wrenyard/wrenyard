@@ -15,11 +15,15 @@ export interface TurnItemProps {
   previous?: TurnModel;
   /** Whether this turn carries the latest actual user message. */
   latest: boolean;
+  /** Whether the user message was appended after the conversation settled. */
+  enterUser?: boolean;
+  /** Whether the assistant reply was appended after the conversation settled. */
+  enterAssistant?: boolean;
   onInterrupt: (turn: number) => void;
 }
 
 /** One turn: optional divider, user message, assistant reply and live status. */
-export const TurnItem = memo(function TurnItem({ turn, previous, latest, onInterrupt }: TurnItemProps) {
+export const TurnItem = memo(function TurnItem({ turn, previous, latest, enterUser, enterAssistant, onInterrupt }: TurnItemProps) {
   const label = dividerBefore(previous, turn, useNow());
   return (
     <MessageScrollerItem messageId={`turn-${turn.id}`} scrollAnchor className="flex flex-col gap-4">
@@ -27,9 +31,10 @@ export const TurnItem = memo(function TurnItem({ turn, previous, latest, onInter
       <UserMessage
         text={turn.user.text}
         at={turn.user.at}
+        enter={enterUser}
         {...(latest ? { readAt: turn.receivedAt } : {})}
       />
-      <AssistantMessage turn={turn} />
+      <AssistantMessage turn={turn} enter={enterAssistant} />
       {turn.status === 'running' && <TurnStatus turn={turn} onInterrupt={onInterrupt} />}
     </MessageScrollerItem>
   );
