@@ -1,5 +1,6 @@
-import { queryOptions } from '@tanstack/react-query';
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { shell } from '@/renderer/lib/desktop';
+import type { QuotaSnapshot } from '@/shell-contract';
 
 /**
  * Shared shell snapshot queries. These are the single cache owners for the
@@ -49,5 +50,36 @@ export function taskSettingsQuery(project?: string, taskId?: string) {
     queryKey: ['taskSettings', project ?? null, taskId ?? null] as const,
     queryFn: () => shell.getTaskSettings(project, taskId),
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Shared quota snapshot. Hoisted from the Model Supply page so the status-bar
+ * quota panel and the session usage panel read the same cache entry instead of
+ * importing another page's module (usage spec 5.1, 6). Snapshots refresh on a
+ * slow interval and whenever the window regains focus.
+ */
+const QUOTA_REFETCH_INTERVAL_MS = 60_000;
+
+export const quotaQuery = queryOptions<QuotaSnapshot>({
+  queryKey: ['quota'],
+  queryFn: () => shell.getQuota(false),
+  staleTime: 30_000,
+  refetchInterval: QUOTA_REFETCH_INTERVAL_MS,
+  refetchOnWindowFocus: true,
+});
+
+export function useQuotaQuery() {
+  return useQuery(quotaQuery);
+}
+
+/** Force-refresh from a refresh button: bypass the cache, then seed it with the fresh snapshot. */
+export function useQuotaRefresh() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => shell.getQuota(true),
+    onSuccess: (snapshot) => {
+      client.setQueryData(quotaQuery.queryKey, snapshot);
+    },
   });
 }

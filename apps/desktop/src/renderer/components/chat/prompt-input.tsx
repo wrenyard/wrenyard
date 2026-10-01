@@ -15,6 +15,8 @@ export interface PromptInputProps {
   disabled?: boolean;
   submitDisabled?: boolean;
   toolbar?: ReactNode;
+  /** Rendered at the trailing edge, just before the send button. */
+  toolbarTrailing?: ReactNode;
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
   className?: string;
 }
@@ -23,6 +25,8 @@ export interface PromptInputProps {
  * Auto-growing composed input. `Enter` submits, `Shift+Enter` inserts a
  * newline, and an active IME composition never submits. The send control is
  * always a send button; interrupting a turn happens on that turn's message.
+ * `submitDisabled` blocks Enter and the button while keeping the textarea
+ * editable, so the user can fix the model or text that blocks sending.
  */
 export function PromptInput({
   value,
@@ -32,6 +36,7 @@ export function PromptInput({
   disabled = false,
   submitDisabled = false,
   toolbar,
+  toolbarTrailing,
   textareaRef,
   className,
 }: PromptInputProps) {
@@ -70,9 +75,12 @@ export function PromptInput({
         />
         <InputGroupAddon align="block-end">
           <div className="flex min-w-0 items-center gap-1.5">{toolbar}</div>
-          <InputGroupButton type="submit" variant="default" size="icon-sm" className="ml-auto" disabled={!canSubmit} aria-label="发送" title="发送">
-            <ArrowUp />
-          </InputGroupButton>
+          <div className="ml-auto flex items-center gap-1.5">
+            {toolbarTrailing}
+            <InputGroupButton type="submit" variant="default" size="icon-sm" disabled={!canSubmit} aria-label="发送" title="发送">
+              <ArrowUp />
+            </InputGroupButton>
+          </div>
         </InputGroupAddon>
       </InputGroup>
     </form>
