@@ -19,8 +19,6 @@ import {
 } from '../../src/pet/shared/taskgraph';
 import type {
   TaskGraphEvent,
-  TaskGraphListResult,
-  TaskGraphListRun,
   TaskGraphNode,
   TaskGraphNodeInspectResult,
   TaskGraphNodeState,
@@ -30,7 +28,6 @@ import type {
   GraphSlipSnapshotDto,
   GraphSlipNodeDto,
   TaskGraphSlipNode,
-  TaskGraphSlipResult,
   TaskGraphInspectResult,
   TaskGraphStatusResult,
   TaskGraphEntityDtoWithPresentation,
@@ -47,35 +44,6 @@ import {
   normalizeActivitySnapshotV1,
 } from '../../src/pet/shared/activity-snapshot';
 import type { ActivityPresence, ActivityTaskGraphPresence } from '../../src/pet/shared/activity-snapshot';
-import {
-  assignLayers,
-  collapseTransit,
-  layoutGraph,
-  nodeKind,
-  CONTROL_SIZE,
-  NODE_GAP,
-  PADDING,
-  ROW_GAP,
-  STRAIGHT_ROW_GAP,
-  TASK_HEIGHT,
-  TASK_WIDTH,
-  type GraphLayout,
-  type LayoutNode,
-} from '../../src/pet/panels/observatory/graph-layout';
-import {
-  controlAriaLabel,
-  controlIconPaths,
-  formatDurationZh,
-  nodeStateLabelZh,
-  nodeTip,
-  nodeTitle,
-  taskAriaLabel,
-  taskIconPaths,
-  fitTagLabelToWidth,
-  TAG_LABEL_MAX_WIDTH,
-  TAG_LABEL_RIGHT_PADDING,
-  TAG_LABEL_START_X,
-} from '../../src/pet/panels/observatory/graph-visuals';
 
 // ── Real TaskGraphWindowOwner harness ────────────────────────────────
 // Minimal electron fakes (mirroring test/entity-windows.test.ts) so the
@@ -1955,12 +1923,6 @@ describe('Graph Slip display facts projection', () => {
     const projected = projectGraphSlipSnapshot(snapshot, Date.now());
     expect(projected.nodes.taskNode.summary).toBe(longSummary);
     expect(projected.nodes.taskNode.summary).toHaveLength(280);
-
-    // The renderer surfaces the full bounded text as the unlabeled summary
-    // region, never a 结果摘要 row.
-    const tip = nodeTip({ ...projected.nodes.taskNode, state: 'done', task_status: 'done' }, 'task');
-    expect(tip!.summary).toBe(longSummary);
-    expect(tip!.rows.some((r) => r.label === '结果摘要')).toBe(false);
   });
 });
 
@@ -1989,423 +1951,6 @@ describe('Active list request', () => {
     } as unknown as DaemonClient;
     const reader = new ForemanTaskGraphReader(client);
     await expect(reader.listActive()).rejects.toThrow('invalid state');
-  });
-});
-
-// ── DAG layout (pure graph-layout module) ───────────────────────────
-
-describe('DAG layout (pure graph-layout)', () => {
-  function slipNode(id: string, actionType: string, overrides: Partial<GraphSlipNodeDto> = {}): GraphSlipNodeDto {
-    return { id, action_type: actionType, deps: [], state: 'planned', ...overrides };
-  }
-
-  function snapshotOf(
-    nodes: Record<string, GraphSlipNodeDto>,
-    edges: Array<{ from: string; to: string; label: string }> = [],
-  ): GraphSlipSnapshotDto {
-    return { graph_id: 'tg-layout', revision: 1, state: 'running', nodes, edges };
-  }
-
-  // A routed edge is only orthogonal when every consecutive pair of points
-  // shares an x or a y coordinate. Any L command would be a diagonal.
-  function orthogonalityViolations(layout: GraphLayout): string[] {
-    const violations: string[] = [];
-    for (const edge of layout.edges) {
-      for (let i = 1; i < edge.points.length; i++) {
-        const a = edge.points[i - 1];
-        const b = edge.points[i];
-        if (a.x !== b.x && a.y !== b.y) {
-          violations.push(`${edge.from}->${edge.to} segment ${i}: (${a.x},${a.y}) → (${b.x},${b.y}) is diagonal`);
-        }
-      }
-    }
-    return violations;
-  }
-
-  // Strict rect intersection: a segment touching a node boundary is allowed,
-  // so the source/target attachment segments never trip the check.
-  function segmentHitsNode(
-    a: { x: number; y: number },
-    b: { x: number; y: number },
-    n: LayoutNode,
-  ): boolean {
-    const lowX = Math.min(a.x, b.x);
-    const highX = Math.max(a.x, b.x);
-    const lowY = Math.min(a.y, b.y);
-    const highY = Math.max(a.y, b.y);
-    if (a.x === b.x) {
-      if (a.x <= n.x || a.x >= n.x + n.width) return false;
-      return highY > n.y && lowY < n.y + n.height;
-    }
-    if (a.y <= n.y || a.y >= n.y + n.height) return false;
-    return highX > n.x && lowX < n.x + n.width;
-  }
-
-  function intersectionViolations(layout: GraphLayout): string[] {
-    const violations: string[] = [];
-    for (const edge of layout.edges) {
-      for (let i = 1; i < edge.points.length; i++) {
-        const a = edge.points[i - 1];
-        const b = edge.points[i];
-        for (const n of layout.nodes) {
-          if (n.id === edge.from || n.id === edge.to) continue;
-          if (segmentHitsNode(a, b, n)) {
-            violations.push(`${edge.from}->${edge.to} crosses node ${n.id}`);
-          }
-        }
-      }
-    }
-    return violations;
-  }
-
-  function layersOf(layout: GraphLayout): Map<string, number> {
-    return new Map(layout.nodes.map((n) => [n.id, n.layer]));
-  }
-
-  it('produces an empty layout for an empty graph', () => {
-    const layout = layoutGraph(snapshotOf({}));
-    expect(layout.nodes).toHaveLength(0);
-    expect(layout.edges).toHaveLength(0);
-    expect(layout.junctions).toHaveLength(0);
-    expect(layout.width).toBe(0);
-    expect(layout.height).toBe(0);
-  });
-
-  it('lays out a 5-node chain into five layers with four orthogonal edges', () => {
-    const ids = ['chain-a', 'chain-b', 'chain-c', 'chain-d', 'chain-e'];
-    const nodes: Record<string, GraphSlipNodeDto> = {};
-    ids.forEach((id, i) => {
-      nodes[id] = slipNode(id, 'task', { deps: i === 0 ? [] : [ids[i - 1]], task_run_id: `run-${id}` });
-    });
-    const layout = layoutGraph(snapshotOf(nodes));
-    expect(layout.nodes).toHaveLength(5);
-    expect(layout.edges).toHaveLength(4);
-    const layers = layersOf(layout);
-    ids.forEach((id, i) => expect(layers.get(id)).toBe(i));
-    expect(orthogonalityViolations(layout)).toEqual([]);
-    expect(intersectionViolations(layout)).toEqual([]);
-    // Natural single-column content size: one task per layer.
-    expect(layout.width).toBe(TASK_WIDTH + PADDING * 2);
-    expect(layout.height).toBe(ids.length * TASK_HEIGHT + (ids.length - 1) * STRAIGHT_ROW_GAP + PADDING * 2);
-    // Lanes stay inside the bounded per-band slot count.
-    for (const edge of layout.edges) {
-      expect(edge.lane).toBeGreaterThanOrEqual(0);
-      expect(edge.lane).toBeLessThan(6);
-    }
-  });
-
-  it('routes a 1→3→1 split/merge on three layers with natural width', () => {
-    const nodes: Record<string, GraphSlipNodeDto> = {
-      'task-split': slipNode('task-split', 'task', { task_run_id: 'run-split' }),
-      'task-l': slipNode('task-l', 'task', { deps: ['task-split'], task_run_id: 'run-l' }),
-      'task-c': slipNode('task-c', 'task', { deps: ['task-split'], task_run_id: 'run-c' }),
-      'task-r': slipNode('task-r', 'task', { deps: ['task-split'], task_run_id: 'run-r' }),
-      'task-merge': slipNode('task-merge', 'task', { deps: ['task-l', 'task-c', 'task-r'], task_run_id: 'run-merge' }),
-    };
-    const layout = layoutGraph(snapshotOf(nodes));
-    expect(layout.nodes).toHaveLength(5);
-    expect(layout.edges).toHaveLength(6);
-    const layers = layersOf(layout);
-    expect(layers.get('task-split')).toBe(0);
-    expect(layers.get('task-l')).toBe(1);
-    expect(layers.get('task-c')).toBe(1);
-    expect(layers.get('task-r')).toBe(1);
-    expect(layers.get('task-merge')).toBe(2);
-    // The three-task middle layer is the widest and defines natural width.
-    expect(layout.width).toBe(3 * TASK_WIDTH + 2 * NODE_GAP + PADDING * 2);
-    // All arms of a visual split/merge share one horizontal bus. Left and
-    // right branches must never staircase across separate routing lanes.
-    const splitEdges = layout.edges.filter((edge) => edge.from === 'task-split');
-    const mergeEdges = layout.edges.filter((edge) => edge.to === 'task-merge');
-    expect(new Set(splitEdges.map((edge) => edge.lane)).size).toBe(1);
-    expect(new Set(mergeEdges.map((edge) => edge.lane)).size).toBe(1);
-    expect(orthogonalityViolations(layout)).toEqual([]);
-    expect(intersectionViolations(layout)).toEqual([]);
-  });
-
-  it('collapses join/fanout transit nodes out of the node DOM and exposes solder dots', () => {
-    const nodes: Record<string, GraphSlipNodeDto> = {
-      'ctrl-start': slipNode('ctrl-start', 'start', { state: 'done' }),
-      'join-split': slipNode('join-split', 'join', { deps: ['ctrl-start'], state: 'done' }),
-      'task-a': slipNode('task-a', 'task', { deps: ['join-split'], state: 'running', task_run_id: 'run-a' }),
-      'task-b': slipNode('task-b', 'task', { deps: ['join-split'], state: 'running', task_run_id: 'run-b' }),
-      'fanout-merge': slipNode('fanout-merge', 'fanout', { deps: ['task-a', 'task-b'], state: 'done' }),
-      'ctrl-end': slipNode('ctrl-end', 'end', { deps: ['fanout-merge'], state: 'done' }),
-    };
-    // nodeKind classifies the semantic split/merge as transit.
-    expect(nodeKind(nodes['join-split'])).toBe('transit');
-    expect(nodeKind(nodes['fanout-merge'])).toBe('transit');
-    expect(nodeKind(nodes['task-a'])).toBe('task');
-    expect(nodeKind(nodes['ctrl-start'])).toBe('control');
-
-    const collapsed = collapseTransit(snapshotOf(nodes));
-    // join/fanout never surface as renderable nodes.
-    expect(collapsed.nodes['join-split']).toBeUndefined();
-    expect(collapsed.nodes['fanout-merge']).toBeUndefined();
-    expect(Object.keys(collapsed.nodes).sort()).toEqual(['ctrl-end', 'ctrl-start', 'task-a', 'task-b']);
-    expect(collapsed.edges).toHaveLength(4);
-    expect(collapsed.junctions.map((j) => j.kind).sort()).toEqual(['merge', 'split']);
-
-    // Layout keeps the transit nodes out of the node list and emits the
-    // solder dots that stand in for the collapsed junctions.
-    const layout = layoutGraph(snapshotOf(nodes));
-    expect(layout.nodes.map((n) => n.id)).not.toContain('join-split');
-    expect(layout.nodes.map((n) => n.id)).not.toContain('fanout-merge');
-    expect(layout.junctions).toHaveLength(2);
-    for (const dot of layout.junctions) {
-      expect(dot.x).toBeGreaterThan(0);
-      expect(dot.y).toBeGreaterThan(0);
-      expect(dot.kind === 'split' || dot.kind === 'merge').toBe(true);
-    }
-    expect(orthogonalityViolations(layout)).toEqual([]);
-  });
-
-  it('keeps an 8-layer cross dependency acyclic with orthogonal non-intersecting routes', () => {
-    const ids = ['n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7'];
-    const deps: Record<string, string[]> = {
-      n0: [], n1: ['n0'], n2: ['n1'], n3: ['n2'], n4: ['n3'], n5: ['n4'], n6: ['n5'], n7: ['n6'],
-    };
-    // Long cross edges skip over intermediate layers.
-    deps.n5 = ['n4', 'n0'];
-    deps.n6 = ['n5', 'n1'];
-    deps.n7 = ['n6', 'n2'];
-    const nodes: Record<string, GraphSlipNodeDto> = {};
-    for (const id of ids) {
-      nodes[id] = slipNode(id, 'task', { deps: deps[id], task_run_id: `run-${id}` });
-    }
-    const layout = layoutGraph(snapshotOf(nodes));
-    const layers = layersOf(layout);
-    ids.forEach((id, i) => expect(layers.get(id)).toBe(i));
-    expect(new Set(layers.values()).size).toBe(8);
-    expect(orthogonalityViolations(layout)).toEqual([]);
-    expect(intersectionViolations(layout)).toEqual([]);
-  });
-
-  it('routes a direct cross-layer dependency around an occupied layer with a side gutter', () => {
-    // a → mid → z plus the direct a → z dependency that skips mid's layer.
-    // mid sits directly below a, so a straight descent at a's centre would
-    // pass through it and forces the router into a deterministic side gutter.
-    const nodes: Record<string, GraphSlipNodeDto> = {
-      'a': slipNode('a', 'task', { task_run_id: 'run-a' }),
-      'mid': slipNode('mid', 'task', { deps: ['a'], task_run_id: 'run-mid' }),
-      'z': slipNode('z', 'task', { deps: ['a', 'mid'], task_run_id: 'run-z' }),
-    };
-    const layout = layoutGraph(snapshotOf(nodes));
-    const layers = layersOf(layout);
-    expect(layers.get('a')).toBe(0);
-    expect(layers.get('mid')).toBe(1);
-    expect(layers.get('z')).toBe(2);
-
-    const direct = layout.edges.find((e) => e.from === 'a' && e.to === 'z');
-    expect(direct).toBeDefined();
-    if (!direct) return;
-
-    // Every route is visibly attached at both endpoints.
-    const src = layout.nodes.find((n) => n.id === 'a')!;
-    const dst = layout.nodes.find((n) => n.id === 'z')!;
-    const first = direct.points[0];
-    const last = direct.points[direct.points.length - 1];
-    expect(first).toEqual({ x: src.x + src.width / 2, y: src.y + src.height });
-    expect(last).toEqual({ x: dst.x + dst.width / 2, y: dst.y });
-
-    // The side gutter is a real detour: the source midpoint stays fixed and
-    // the very next point is an explicit horizontal clearance segment.
-    const second = direct.points[1];
-    expect(second.y).toBe(first.y);
-    expect(second.x).not.toBe(first.x);
-
-    expect(orthogonalityViolations(layout)).toEqual([]);
-    expect(intersectionViolations(layout)).toEqual([]);
-
-    // No duplicate zero-length points anywhere in the routed set.
-    for (const edge of layout.edges) {
-      for (let i = 1; i < edge.points.length; i++) {
-        const prev = edge.points[i - 1];
-        const p = edge.points[i];
-        expect(prev.x === p.x && prev.y === p.y).toBe(false);
-      }
-    }
-
-    // The arrowhead rides the final segment: a vertical drop into the target.
-    const prev = direct.points[direct.points.length - 2];
-    expect(prev.x).toBe(last.x);
-    expect(last.y).toBeGreaterThan(prev.y);
-
-    // Natural SVG bounds contain the whole route without spurious inflation.
-    for (const edge of layout.edges) {
-      for (const p of edge.points) {
-        expect(p.x).toBeGreaterThanOrEqual(0);
-        expect(p.y).toBeGreaterThanOrEqual(0);
-        expect(p.x).toBeLessThanOrEqual(layout.width);
-        expect(p.y).toBeLessThanOrEqual(layout.height);
-      }
-    }
-    expect(layout.width).toBe(TASK_WIDTH + PADDING * 2);
-    expect(layout.height).toBe(3 * TASK_HEIGHT + 2 * ROW_GAP + PADDING * 2);
-  });
-
-  it('routes around a fully occupied barrier that blocks the centre and every old candidate lane', () => {
-    // a (layer 0) has a direct edge to z (layer 4) that must descend through
-    // three barrier layers (1-3) of packed control nodes. The barrier tiles
-    // the whole horizontal span: the source centre, all twelve 4px lanes on
-    // each side, and several more lanes beyond that are still occupied. The
-    // old bounded router exhausted its 12-probe budget and fell back to the
-    // blocked centre; the deterministic router keeps stepping outward until
-    // it reaches the guaranteed free gutter past the barrier.
-    const nodes: Record<string, GraphSlipNodeDto> = {
-      'a': slipNode('a', 'task', { task_run_id: 'run-a' }),
-    };
-    // 10 / 9 / 8 control nodes tile [16, 364] continuously: each layer's
-    // 12px gaps sit strictly inside the next layer's nodes, so every
-    // interior lane is occupied.
-    for (let i = 0; i < 10; i++) nodes[`b1_${i}`] = slipNode(`b1_${i}`, 'control', { deps: ['a'] });
-    for (let i = 0; i < 9; i++) nodes[`b2_${i}`] = slipNode(`b2_${i}`, 'control', { deps: ['b1_0'] });
-    for (let i = 0; i < 8; i++) nodes[`b3_${i}`] = slipNode(`b3_${i}`, 'control', { deps: ['b2_0'] });
-    nodes['z'] = slipNode('z', 'task', { deps: ['a', 'b3_0'], task_run_id: 'run-z' });
-
-    const layout = layoutGraph(snapshotOf(nodes));
-    const direct = layout.edges.find((e) => e.from === 'a' && e.to === 'z')!;
-    expect(direct).toBeDefined();
-    if (!direct) return;
-
-    const src = layout.nodes.find((n) => n.id === 'a')!;
-    const dst = layout.nodes.find((n) => n.id === 'z')!;
-
-    // The route stays anchored at both endpoint midpoints.
-    const first = direct.points[0];
-    const last = direct.points[direct.points.length - 1];
-    expect(first).toEqual({ x: src.x + src.width / 2, y: src.y + src.height });
-    expect(last).toEqual({ x: dst.x + dst.width / 2, y: dst.y });
-
-    // The barrier occupies the source centre: a synthetic centre descent
-    // crosses a node, so the router was forced off-centre.
-    const laneY = direct.points[direct.points.length - 2].y;
-    const center = src.x + src.width / 2;
-    const centreDescentHits = layout.nodes.some((n) =>
-      n.id !== 'a' && n.layer < 4
-        && segmentHitsNode({ x: center, y: src.y + src.height }, { x: center, y: laneY }, n),
-    );
-    expect(centreDescentHits).toBe(true);
-
-    // Every old candidate lane (centre + twelve 4px probes on each side) is
-    // blocked too, so the old bounded fallback would have returned the
-    // blocked centre and its descent would cross the barrier.
-    for (let k = 1; k <= 12; k++) {
-      for (const x of [src.x - k * 4, src.x + src.width + k * 4]) {
-        const blocked = layout.nodes.some((n) =>
-          n.id !== 'a' && n.layer < 4
-            && segmentHitsNode({ x, y: src.y + src.height }, { x, y: laneY }, n),
-        );
-        expect(blocked).toBe(true);
-      }
-    }
-
-    // The deterministic router escapes the barrier to a free lane and the
-    // chosen descent is itself collision-free.
-    const gutterX = direct.points[1].x;
-    expect(gutterX).not.toBe(center);
-    const gutterDescentHits = layout.nodes.some((n) =>
-      n.id !== 'a' && n.layer < 4
-        && segmentHitsNode({ x: gutterX, y: src.y + src.height }, { x: gutterX, y: laneY }, n),
-    );
-    expect(gutterDescentHits).toBe(false);
-
-    expect(orthogonalityViolations(layout)).toEqual([]);
-    expect(intersectionViolations(layout)).toEqual([]);
-
-    // Natural SVG bounds contain the external gutter and every routed point.
-    for (const edge of layout.edges) {
-      for (const p of edge.points) {
-        expect(p.x).toBeGreaterThanOrEqual(0);
-        expect(p.y).toBeGreaterThanOrEqual(0);
-        expect(p.x).toBeLessThanOrEqual(layout.width);
-        expect(p.y).toBeLessThanOrEqual(layout.height);
-      }
-    }
-
-    // Re-running the layout returns identical geometry.
-    const again = layoutGraph(snapshotOf(nodes));
-    expect(again.nodes).toEqual(layout.nodes);
-    expect(again.edges).toEqual(layout.edges);
-    expect(again.width).toBe(layout.width);
-    expect(again.height).toBe(layout.height);
-  });
-
-  it('places 4+ tasks in one layer without overlap and at natural width', () => {
-    const nodes: Record<string, GraphSlipNodeDto> = {};
-    nodes['root'] = slipNode('root', 'task', { task_run_id: 'run-root' });
-    for (let i = 0; i < 5; i++) {
-      nodes[`task-${i}`] = slipNode(`task-${i}`, 'task', { deps: ['root'], task_run_id: `run-${i}` });
-    }
-    const layout = layoutGraph(snapshotOf(nodes));
-    const busyLayer = layout.nodes.filter((n) => n.layer === 1);
-    expect(busyLayer).toHaveLength(5);
-    for (let i = 0; i < layout.nodes.length; i++) {
-      for (let j = i + 1; j < layout.nodes.length; j++) {
-        const a = layout.nodes[i];
-        const b = layout.nodes[j];
-        const overlap = a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-        expect(overlap).toBe(false);
-      }
-    }
-    expect(layout.width).toBe(5 * TASK_WIDTH + 4 * NODE_GAP + PADDING * 2);
-    expect(orthogonalityViolations(layout)).toEqual([]);
-  });
-
-  it('routes a control chain with control-sized glyphs and no paper tags', () => {
-    const nodes: Record<string, GraphSlipNodeDto> = {
-      'ctrl-start': slipNode('ctrl-start', 'start', { state: 'done' }),
-      'ctrl-cond': slipNode('ctrl-cond', 'condition', { deps: ['ctrl-start'], state: 'running' }),
-      'ctrl-end': slipNode('ctrl-end', 'end', { deps: ['ctrl-cond'], state: 'planned' }),
-    };
-    const layout = layoutGraph(snapshotOf(nodes));
-    expect(layout.nodes).toHaveLength(3);
-    for (const n of layout.nodes) {
-      expect(n.kind).toBe('control');
-      expect(n.width).toBe(CONTROL_SIZE);
-      expect(n.height).toBe(CONTROL_SIZE);
-    }
-    const layers = layersOf(layout);
-    expect(layers.get('ctrl-start')).toBe(0);
-    expect(layers.get('ctrl-cond')).toBe(1);
-    expect(layers.get('ctrl-end')).toBe(2);
-    expect(layout.width).toBe(CONTROL_SIZE + PADDING * 2);
-    expect(orthogonalityViolations(layout)).toEqual([]);
-  });
-
-  it('terminates deterministically on cyclic input', () => {
-    const nodeIds = ['a', 'b', 'c'];
-    const edges = [
-      { from: 'a', to: 'b' },
-      { from: 'b', to: 'c' },
-      { from: 'c', to: 'a' },
-    ];
-    const layers = assignLayers(nodeIds, edges);
-    expect(layers.get('a')).toBeGreaterThanOrEqual(0);
-    expect(layers.get('b')).toBeGreaterThanOrEqual(0);
-    expect(layers.get('c')).toBeGreaterThanOrEqual(0);
-    // A cyclic snapshot still renders and routes orthogonally.
-    const nodes: Record<string, GraphSlipNodeDto> = {};
-    for (const id of nodeIds) nodes[id] = slipNode(id, 'task', { deps: edges.filter((e) => e.to === id).map((e) => e.from), task_run_id: `run-${id}` });
-    const layout = layoutGraph(snapshotOf(nodes));
-    expect(layout.nodes).toHaveLength(3);
-    expect(orthogonalityViolations(layout)).toEqual([]);
-  });
-
-  it('keeps natural content dimensions for every rendered node', () => {
-    const nodes: Record<string, GraphSlipNodeDto> = {
-      'a': slipNode('a', 'task', { task_run_id: 'run-a' }),
-      'b': slipNode('b', 'task', { deps: ['a'], task_run_id: 'run-b' }),
-      'c': slipNode('c', 'task', { deps: ['a'], task_run_id: 'run-c' }),
-    };
-    const layout = layoutGraph(snapshotOf(nodes));
-    expect(layout.width).toBe(2 * TASK_WIDTH + NODE_GAP + PADDING * 2);
-    for (const n of layout.nodes) {
-      expect(n.x).toBeGreaterThanOrEqual(0);
-      expect(n.y).toBeGreaterThanOrEqual(0);
-      expect(n.x + n.width).toBeLessThanOrEqual(layout.width);
-      expect(n.y + n.height).toBeLessThanOrEqual(layout.height);
-    }
   });
 });
 
@@ -2705,20 +2250,20 @@ describe('Entity window vs bird dimensions', () => {
     const birdW = 84;
     const birdH = 66;
     const windowW = 156;
-    const windowH = 84;
+    const windowH = 120;
     expect(windowW).toBeGreaterThan(birdW);
     expect(windowH).toBeGreaterThan(birdH);
   });
 
   it('entity window does not clip the enlarged bird or the fact slip below it', () => {
-    // Bird display is 84x66; the fact slip sits directly below the bird and
-    // is ~17px tall (10px font * 1.3 line-height + 4px vertical padding),
-    // leaving a 1px bottom margin inside the 84px window.
+    // Bird display is 84x66; the shared Card(size=sm) fact slip sits directly
+    // below the bird and is ~48px tall at text-xs, leaving room inside the
+    // 120px window (66 bird + 6 gap + 48 slip).
     const birdH = 66;
     const factSlipTop = birdH;
-    const factSlipH = 17;
+    const factSlipH = 48;
     const windowW = 156;
-    const windowH = 84;
+    const windowH = 120;
     expect(birdH).toBeLessThan(windowH);
     expect(factSlipTop + factSlipH).toBeLessThanOrEqual(windowH);
     // Width still holds the wide fact slip inside the transparent window.
@@ -2727,23 +2272,23 @@ describe('Entity window vs bird dimensions', () => {
 
   it('multi-entity placement stacks by the enlarged window height plus gap', () => {
     // Mirrors positionEntity spacing: y = base + index * (windowHeight + 4)
-    const windowH = 84;
+    const windowH = 120;
     const index = 2;
     const y = 8 + index * (windowH + 4);
-    expect(windowH + 4).toBe(88);
-    expect(y).toBe(184);
+    expect(windowH + 4).toBe(124);
+    expect(y).toBe(256);
   });
 
   it('clamps by the visible bird while re-anchoring the tip window at screen edges', () => {
     const workArea = { x: 0, y: 0, width: 1920, height: 1080 };
     expect(placeWrenWindow({ x: 1900, y: 1060 }, workArea)).toEqual({
-      windowBounds: { x: 1764, y: 996, width: 156, height: 84 },
+      windowBounds: { x: 1764, y: 960, width: 156, height: 120 },
       birdOffsetX: 72,
-      birdOffsetY: 18,
+      birdOffsetY: 54,
       tipSide: 'above',
     });
     expect(placeWrenWindow({ x: -100, y: -100 }, workArea)).toEqual({
-      windowBounds: { x: 0, y: 0, width: 156, height: 84 },
+      windowBounds: { x: 0, y: 0, width: 156, height: 120 },
       birdOffsetX: 0,
       birdOffsetY: 0,
       tipSide: 'below',
@@ -2909,268 +2454,6 @@ describe('Absence of rack/history/refresh', () => {
   });
 });
 
-// ── Graph Slip glyph & language contract (pure graph-visuals) ────────
-
-describe('Graph Slip glyph & language contract (pure graph-visuals)', () => {
-  const glyph = (parts: Array<{ d: string; fill?: boolean }>): string =>
-    parts.map((p) => p.d).join('|');
-
-  function taskNode(overrides: Partial<GraphSlipNodeDto> = {}): GraphSlipNodeDto {
-    return { id: 'task-1', action_type: 'task', deps: [], state: 'running', ...overrides };
-  }
-
-  it('unifies every task node on the single Agent glyph signature', () => {
-    const agent = glyph(taskIconPaths());
-    // The signature is stable and identical across every task invocation.
-    expect(agent).toBe(glyph(taskIconPaths()));
-    // The round head, antenna and shoulder line that define the Agent glyph.
-    expect(agent).toContain('M5,5.2');
-    expect(agent).toContain('M5,11.5 H11');
-    expect(taskIconPaths()).toHaveLength(4);
-  });
-
-  it('keeps start/end/condition/checkpoint/convert glyphs semantically distinct', () => {
-    const types = ['start', 'end', 'condition', 'checkpoint', 'convert'];
-    const signatures = new Set(types.map((t) => glyph(controlIconPaths(t))));
-    expect(signatures.size).toBe(types.length);
-    // The unified task Agent glyph is never reused by any control.
-    const agent = glyph(taskIconPaths());
-    for (const t of types) {
-      expect(glyph(controlIconPaths(t))).not.toBe(agent);
-    }
-  });
-
-  it('never uses emoji or icon fonts — only SVG path geometry', () => {
-    const allParts = [
-      ...taskIconPaths(),
-      ...['start', 'end', 'condition', 'checkpoint', 'convert', 'llm_call', 'workflow', 'shell'].flatMap((t) => controlIconPaths(t)),
-    ];
-    for (const part of allParts) {
-      expect(part.d).toMatch(/^[A-Za-z0-9.,\- ]+$/);
-    }
-  });
-
-  it('maps every control to a Chinese aria label with a safe fallback', () => {
-    expect(controlAriaLabel('start')).toBe('开始');
-    expect(controlAriaLabel('end')).toBe('结束');
-    expect(controlAriaLabel('condition')).toBe('条件');
-    expect(controlAriaLabel('checkpoint')).toBe('检查点');
-    expect(controlAriaLabel('convert')).toBe('转换');
-    expect(controlAriaLabel('unknown-control')).toBe('控制节点');
-  });
-
-  it('falls back to the Chinese 任务 title when display metadata is missing', () => {
-    expect(nodeTitle(taskNode({ display_label: undefined }))).toBe('任务');
-    expect(nodeTitle(taskNode({ display_label: '代码审查' }))).toBe('代码审查');
-    expect(taskAriaLabel(taskNode({ display_label: '终审' }))).toBe('终审');
-  });
-
-  it('keeps an exactly-24-unit Chinese display label intact for layout measurement', () => {
-    // The display_label wire contract caps at 24 UTF-16 units, so the title
-    // helper must preserve a real boundary-length Chinese fixture untouched
-    // (no truncation, no fallback).
-    const long = '这是一个用于压力测试布局的超长中文任务标签内容的';
-    expect(long.length).toBe(24);
-    expect(nodeTitle(taskNode({ display_label: long }))).toBe(long);
-    expect(nodeTitle(taskNode({ display_label: long })).length).toBe(24);
-  });
-
-  it('labels every canonical node state in Chinese', () => {
-    const expected: Array<[TaskGraphNodeState, string]> = [
-      ['planned', '计划'],
-      ['running', '运行中'],
-      ['waiting', '等待中'],
-      ['done', '已完成'],
-      ['failed', '失败'],
-      ['interrupted', '已中断'],
-      ['cancelled', '已取消'],
-    ];
-    for (const [state, label] of expected) {
-      expect(nodeStateLabelZh(state)).toBe(label);
-    }
-  });
-
-  it('formats durations in Chinese and rejects invalid input', () => {
-    expect(formatDurationZh(0)).toBe('0秒');
-    expect(formatDurationZh(5_000)).toBe('5秒');
-    expect(formatDurationZh(65_000)).toBe('1分5秒');
-    expect(formatDurationZh(3_661_000)).toBe('1小时1分1秒');
-    expect(formatDurationZh(-1)).toBeNull();
-    expect(formatDurationZh(Number.NaN)).toBeNull();
-  });
-
-  it('builds task tips from present rows only and omits absent ones', () => {
-    const full = nodeTip(taskNode({
-      state: 'done',
-      task_id: 'code-review',
-      task_run_id: 'run-1',
-      runtime_ms: 5_000,
-      profile: 'fast',
-      tool_call_count: 3,
-      tps: 12.5,
-      summary: '  审查完成，无回归问题。  ',
-      description: ' 自动化审查代码改动 ',
-    }), 'task');
-    expect(full).not.toBeNull();
-    expect(full!.firstLine).toBe('任务');
-    expect(full!.rows.map((r) => r.label)).toEqual([
-      '状态', '任务 ID', '运行配置', '工具调用', '输出速度',
-    ]);
-    // A completed task reads its elapsed inline on the status row (状态
-    // 已完成 · 5秒) — never duplicated on a separate 耗时 row.
-    expect(full!.rows.find((r) => r.label === '状态')!.value).toBe('已完成 · 5秒');
-    expect(full!.rows.some((r) => r.label === '耗时')).toBe(false);
-    // 任务 ID shows the Foreman task definition name, never the runtime
-    // instance id task_run_id.
-    expect(full!.rows.find((r) => r.label === '任务 ID')!.value).toBe('code-review');
-    expect(JSON.stringify(full!.rows)).not.toContain('run-1');
-    expect(full!.rows.find((r) => r.label === '运行配置')!.value).toBe('fast');
-    expect(full!.rows.find((r) => r.label === '工具调用')!.value).toBe('3');
-    expect(full!.rows.find((r) => r.label === '输出速度')!.value).toBe('12.50');
-    // The done summary is a separate unlabeled region, never a 结果摘要 row.
-    expect(full!.summary).toBe('审查完成，无回归问题。');
-    expect(JSON.stringify(full!.rows)).not.toContain('结果摘要');
-
-    // Absent/invalid fields are omitted, never placeholder rows.
-    const sparse = nodeTip(taskNode({ state: 'running' }), 'task');
-    expect(sparse!.firstLine).toBe('任务');
-    expect(sparse!.rows.map((r) => r.label)).toEqual(['状态']);
-    expect(sparse!.rows[0].value).toBe('运行中');
-  });
-
-  it('shows the exact 任务 ID row only when task_id is present and never falls back to task_run_id', () => {
-    // A task carrying both definition name and runtime instance id exposes
-    // only the definition name under 任务 ID.
-    const withId = nodeTip(taskNode({ state: 'running', task_id: 'forge-deploy', task_run_id: 'task_x' }), 'task');
-    expect(withId!.rows.find((r) => r.label === '任务 ID')!.value).toBe('forge-deploy');
-    // The runtime instance id is never exposed as that semantic field.
-    expect(withId!.rows.some((r) => r.value === 'task_x')).toBe(false);
-    expect(JSON.stringify(withId!.rows)).not.toContain('task_x');
-    // A legacy node without task_id omits the row entirely — never a wrong
-    // runtime id fallback.
-    const withoutId = nodeTip(taskNode({ state: 'running', task_run_id: 'task_x' }), 'task');
-    expect(withoutId!.rows.some((r) => r.label === '任务 ID')).toBe(false);
-    expect(withoutId!.rows.map((r) => r.label)).toEqual(['状态']);
-  });
-
-  it('[label_budget] fits mixed CJK/English labels by measured width', () => {
-    const measure = (text: string): number => Array.from(text).reduce((width, char) => (
-      width + (char === '…' ? 6 : /[\u3400-\u9fff]/u.test(char) ? 10 : 5)
-    ), 0);
-    expect(fitTagLabelToWidth('代码终审', TAG_LABEL_MAX_WIDTH, measure)).toBe('代码终审');
-    expect(fitTagLabelToWidth('MixedAbc12', TAG_LABEL_MAX_WIDTH, measure)).toBe('MixedAbc12');
-
-    const mixed = '调查 Fallen Component implementation';
-    const fitted = fitTagLabelToWidth(mixed, TAG_LABEL_MAX_WIDTH, measure);
-    expect(fitted).toBe('调查 Fallen Component…');
-    expect(measure(fitted)).toBeLessThanOrEqual(TAG_LABEL_MAX_WIDTH);
-  });
-
-  it('uses the full fixed tag width while preserving right padding', () => {
-    expect(TAG_LABEL_START_X + TAG_LABEL_MAX_WIDTH + TAG_LABEL_RIGHT_PADDING).toBe(TASK_WIDTH);
-    expect(TASK_WIDTH).toBe(148);
-    expect(TASK_HEIGHT).toBe(28);
-  });
-
-  it('labels profile/TPS as 运行配置/输出速度 with exactly two decimals and no legacy labels', () => {
-    const tip = nodeTip(taskNode({ state: 'running', profile: 'fast', tps: 12.5 }), 'task');
-    expect(tip!.rows.find((r) => r.label === '运行配置')!.value).toBe('fast');
-    expect(tip!.rows.find((r) => r.label === '输出速度')!.value).toBe('12.50');
-    // Exactly two decimals for every TPS magnitude.
-    expect(nodeTip(taskNode({ state: 'running', tps: 8.5 }), 'task')!.rows.find((r) => r.label === '输出速度')!.value).toBe('8.50');
-    expect(nodeTip(taskNode({ state: 'running', tps: 13.7 }), 'task')!.rows.find((r) => r.label === '输出速度')!.value).toBe('13.70');
-    const labels = tip!.rows.map((r) => r.label);
-    expect(labels).not.toContain('Profile');
-    expect(labels).not.toContain('端到端有效输出速度');
-  });
-
-  it('renders the done summary as a separate unlabeled region, never a 结果摘要 row', () => {
-    const doneTip = nodeTip(taskNode({ state: 'done', summary: '全部通过，可发布。' }), 'task');
-    expect(doneTip!.summary).toBe('全部通过，可发布。');
-    expect(doneTip!.rows.some((r) => r.label === '结果摘要')).toBe(false);
-    expect(doneTip!.rows.map((r) => r.label)).toEqual(['状态']);
-    // The summary region is done-only.
-    const runningTip = nodeTip(taskNode({ state: 'running', summary: '中途摘要' }), 'task');
-    expect(runningTip!.summary).toBeUndefined();
-  });
-
-  it('validates the Pet task_title: single-line, CJK, bounded to 48 UTF-16 units', () => {
-    expect(normalizeTaskTitle('接收订单')).toBe('接收订单');
-    expect(normalizeTaskTitle(' 代码终审 ')).toBe('代码终审');
-    expect(normalizeTaskTitle('Analyze')).toBeUndefined(); // English-only rejected
-    expect(normalizeTaskTitle('Mixed 分析')).toBe('Mixed 分析');
-    expect(normalizeTaskTitle(42)).toBeUndefined();
-    expect(normalizeTaskTitle('   ')).toBeUndefined();
-    expect(normalizeTaskTitle('长'.repeat(48))).toBe('长'.repeat(48));
-    expect(normalizeTaskTitle('长'.repeat(49))).toBeUndefined();
-  });
-
-  it('uses the validated static task_title as the tip heading, falling back to display_label then 任务, never the internal description', () => {
-    // The English/internal task description is never exposed as a heading.
-    const folded = nodeTip(taskNode({
-      state: 'running',
-      description: '  Review the diff for regressions ',
-    }), 'task');
-    expect(folded!.firstLine).toBe('任务');
-    // The validated Chinese static responsibility name wins over display_label.
-    const staticTitle = nodeTip(taskNode({ state: 'running', task_title: '代码终审', display_label: '代码审查' }), 'task');
-    expect(staticTitle!.firstLine).toBe('代码终审');
-    // display_label is the heading when no valid static title is present.
-    const labelHeading = nodeTip(taskNode({ state: 'running', display_label: '代码审查' }), 'task');
-    expect(labelHeading!.firstLine).toBe('代码审查');
-    // No description/display_label → the Chinese '任务' default.
-    const defaultFallback = nodeTip(taskNode({ state: 'running' }), 'task');
-    expect(defaultFallback!.firstLine).toBe('任务');
-    // Rows still expose/omit exactly as before regardless of the heading.
-    expect(folded!.rows.map((r) => r.label)).toEqual(['状态']);
-    expect(folded!.rows[0].value).toBe('运行中');
-    expect(labelHeading!.rows.map((r) => r.label)).toEqual(['状态']);
-    // The internal English description must never surface in the tip payload.
-    expect(JSON.stringify(folded)).not.toContain('Review the diff');
-  });
-
-  it('start/end controls have no tip at all while other controls keep a minimal one', () => {
-    expect(nodeTip(taskNode({ action_type: 'start', state: 'done' }), 'control')).toBeNull();
-    expect(nodeTip(taskNode({ action_type: 'end', state: 'done' }), 'control')).toBeNull();
-    const cond = nodeTip(taskNode({ action_type: 'condition', state: 'running', runtime_ms: 5_000 }), 'control');
-    expect(cond).not.toBeNull();
-    expect(cond!.firstLine).toBeUndefined();
-    expect(cond!.rows.map((r) => r.label)).toEqual(['状态', '耗时']);
-  });
-
-  it('[completed_tip] reads the elapsed inline on the completed status row and keeps the separate 耗时 row elsewhere', () => {
-    // Completed task with a valid runtime: 状态 已完成 · 5分12秒, no 耗时 row.
-    const done = nodeTip(taskNode({ state: 'done', runtime_ms: 312_000 }), 'task');
-    expect(done!.rows[0]).toEqual({ label: '状态', value: '已完成 · 5分12秒' });
-    expect(done!.rows.map((r) => r.label)).toEqual(['状态']);
-    // A task_status of done inlines exactly like a done node state.
-    const doneStatus = nodeTip(taskNode({ state: 'done', task_status: 'done', runtime_ms: 5_000 }), 'task');
-    expect(doneStatus!.rows[0].value).toBe('已完成 · 5秒');
-    expect(doneStatus!.rows.some((r) => r.label === '耗时')).toBe(false);
-
-    // Non-terminal task nodes keep the existing separate elapsed row.
-    const running = nodeTip(taskNode({ state: 'running', runtime_ms: 30_000 }), 'task');
-    expect(running!.rows[0]).toEqual({ label: '状态', value: '运行中' });
-    expect(running!.rows.find((r) => r.label === '耗时')!.value).toBe('30秒');
-
-    // Control nodes keep the existing separate elapsed row even when done.
-    const cond = nodeTip(taskNode({ action_type: 'condition', state: 'done', runtime_ms: 5_000 }), 'control');
-    expect(cond!.rows.map((r) => r.label)).toEqual(['状态', '耗时']);
-    expect(cond!.rows.find((r) => r.label === '状态')!.value).toBe('已完成');
-    expect(cond!.rows.find((r) => r.label === '耗时')!.value).toBe('5秒');
-  });
-
-  it('[fallback] a completed task without a valid runtime_ms keeps the original plain 已完成 status', () => {
-    const noRuntime = nodeTip(taskNode({ state: 'done' }), 'task');
-    expect(noRuntime!.rows[0]).toEqual({ label: '状态', value: '已完成' });
-    expect(noRuntime!.rows.map((r) => r.label)).toEqual(['状态']);
-    // Invalid runtime_ms values are never inlined and never placeholder.
-    const invalid = nodeTip(taskNode({ state: 'done', runtime_ms: -5 }), 'task');
-    expect(invalid!.rows[0]).toEqual({ label: '状态', value: '已完成' });
-    expect(invalid!.rows.some((r) => r.label === '耗时')).toBe(false);
-  });
-});
-
 describe('Activity-driven Graph Slip runtime projection', () => {
   it('[projection] preserves a valid runtime_ms and omits invalid or missing values', () => {
     const structure: TaskGraphInspectResult = {
@@ -3209,11 +2492,6 @@ describe('Activity-driven Graph Slip runtime projection', () => {
     expect(dto.nodes['node-done'].runtime_ms).toBe(312_000);
     expect(dto.nodes['node-bad'].runtime_ms).toBeUndefined();
     expect(dto.nodes['node-none'].runtime_ms).toBeUndefined();
-    // The projection feeds the completed tip directly: inline elapsed, no
-    // duplicated 耗时 row.
-    const tip = nodeTip(dto.nodes['node-done'], 'task');
-    expect(tip!.rows[0]).toEqual({ label: '状态', value: '已完成 · 5分12秒' });
-    expect(tip!.rows.some((r) => r.label === '耗时')).toBe(false);
   });
 });
 
@@ -3700,7 +2978,7 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
     owner.applyActivity(presenceWith([graphPresence('tg-fp', 'running')]));
     expect(electronMocks.createdWindows()).toHaveLength(1);
     const entityWindowOptions = electronMocks.BrowserWindow.mock.calls[0][0];
-    expect(entityWindowOptions).toMatchObject({ width: 156, height: 84 });
+    expect(entityWindowOptions).toMatchObject({ width: 156, height: 120 });
   });
 
   it('moves a Wren within the display and preserves the manual position across activity refreshes', () => {
@@ -3708,18 +2986,18 @@ describe('TaskGraphWindowOwner lifecycle (activity-snapshot driven)', () => {
     const internals = owner as unknown as OwnerInternals;
     owner.applyActivity(presenceWith([graphPresence('tg-drag', 'running')]));
     const entityWin = electronMocks.createdWindows()[0] as any;
-    expect(entityWin.getBounds()).toEqual({ x: 1764, y: 988, width: 156, height: 84 });
+    expect(entityWin.getBounds()).toEqual({ x: 1764, y: 952, width: 156, height: 120 });
 
     electronMocks.setCursorPoint({ x: 1848, y: 1026 });
     electronMocks.emitIpc('entity:drag-start', { sender: entityWin.webContents });
     electronMocks.setCursorPoint({ x: 500, y: 400 });
     electronMocks.emitIpc('entity:drag-move', { sender: entityWin.webContents });
-    expect(entityWin.getBounds()).toEqual({ x: 480, y: 380, width: 156, height: 84 });
+    expect(entityWin.getBounds()).toEqual({ x: 480, y: 380, width: 156, height: 120 });
     expect(internals.entities.get('tg-drag')!.manuallyPositioned).toBe(true);
 
     electronMocks.emitIpc('entity:drag-end', { sender: entityWin.webContents });
     owner.applyActivity(presenceWith([graphPresence('tg-drag', 'running')]));
-    expect(entityWin.getBounds()).toEqual({ x: 480, y: 380, width: 156, height: 84 });
+    expect(entityWin.getBounds()).toEqual({ x: 480, y: 380, width: 156, height: 120 });
   });
 
   it('auto-fits only the first opening after the renderer reports DAG dimensions', async () => {

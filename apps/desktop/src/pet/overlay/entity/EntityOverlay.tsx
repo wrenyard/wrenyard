@@ -155,7 +155,7 @@ export function EntityOverlay({ appearance }: EntityOverlayProps): ReactElement 
       const root = document.documentElement;
       root.style.setProperty('--bird-x', `${placement.bird_x}px`);
       root.style.setProperty('--bird-y', `${placement.bird_y}px`);
-      root.style.setProperty('--tip-y', placement.tip_side === 'above' ? '0px' : '66px');
+      root.style.setProperty('--tip-y', placement.tip_side === 'above' ? '0px' : `${WREN_DISPLAY_H}px`);
     };
 
     const applyDto = (data: EntityDto): void => {
@@ -313,19 +313,19 @@ export function EntityOverlay({ appearance }: EntityOverlayProps): ReactElement 
           ref={slipRef}
           id="fact-slip"
           data-hit
+          size="sm"
           role="tooltip"
           aria-label={label}
           title={label}
           className={[
-            'absolute left-1 w-[148px] rounded-none border border-border px-2 py-px text-[10px] leading-[14px] text-foreground shadow-none',
-            'whitespace-nowrap overflow-hidden text-ellipsis',
+            'absolute left-1 w-[148px] border border-border px-2 text-xs text-foreground',
             wrenStitchClasses(stitchInput!),
             stitchInput && dto?.stale ? 'border-dashed opacity-65' : '',
             slipVisible ? 'visible block' : 'hidden',
           ].join(' ')}
           style={{ top: 'var(--tip-y, 66px)' }}
         >
-          {label}
+          <span className="truncate">{label}</span>
           <span
             aria-hidden="true"
             className={`absolute inset-x-1 bottom-0.5 h-0.5 bg-current ${stitchInput ? wrenStitchTokenClass(stitchInput) : ''}`}
