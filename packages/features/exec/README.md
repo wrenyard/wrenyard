@@ -3,7 +3,7 @@
 Raw prompt execution: start one resolved agent client, follow its events under
 explicit bounds, read snapshots, cancel.
 
-`1.0.0-dev.35`, private, MIT, ESM. The package implements `ExecService`; the
+Private, MIT, ESM. The package implements `ExecService`; the
 wire shapes it exchanges live in `@wrenyard/protocol` under `src/exec`.
 
 ## Raw prompt vs structured task
@@ -11,11 +11,11 @@ wire shapes it exchanges live in `@wrenyard/protocol` under `src/exec`.
 These are two different products and the difference is the whole point of this
 package.
 
-A **structured task** is Foreman's unit of work. It carries a task id, a task
+A **structured task** is the daemon's unit of work. It carries a task id, a task
 run, a dispatch snapshot, automatic routing, a repo-write lock, a queue
 position, timeouts, retries, a persisted execution event log, and a taskgraph
 it belongs to. Planning a structured task means resolving *which* client,
-provider, model and mode should run it. Foreman owns all of that.
+provider, model and mode should run it. The daemon owns all of that.
 
 A **raw prompt execution** is what this package does. The caller has already
 decided everything: client, upstream model, canonical model, provider, mode,

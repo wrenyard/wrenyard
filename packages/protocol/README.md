@@ -1,7 +1,7 @@
 # @wrenyard/protocol
 
-IPC conversation IDL plus the pure static update-feed contract. `1.0.0-dev.41`,
-private, MIT, ESM, zero runtime dependencies. The canonical daemon IPC protocol
+IPC conversation IDL plus the pure static update-feed contract. Private, MIT,
+ESM, zero runtime dependencies. The canonical daemon IPC protocol
 version is `2` (`WRENYARD_PROTOCOL_VERSION` in `@wrenyard/control-client`): the
 version is negotiated through the `health.ping` handshake, and an older client
 fails closed instead of talking to a daemon whose session surface it cannot
@@ -272,11 +272,10 @@ The daemon validates and dispatches these methods over local IPC to
 
 `@wrenyard/protocol/update-feed` is the one runtime module in this package. It is
 a pure, dependency-free contract for the static feed published on the `updates`
-branch, shared by the install engine, the one-command bootstrap scripts and
-Desktop. It performs no I/O and has no import side effects, so it bundles into
-the SEA install engine unchanged.
+branch and consumed by Desktop. It performs no I/O and has no import side
+effects, so it bundles into the Desktop main process unchanged.
 
-Feed layout (base URL defaults to `DEFAULT_UPDATE_BASE_URL` and is overridable
+Feed layout (the base URL defaults to the `updates` branch and is overridable
 with `WRENYARD_UPDATE_BASE_URL`):
 
 ```
@@ -292,24 +291,21 @@ Exports:
 
 | Export | Purpose |
 | --- | --- |
-| `UPDATE_FEED_SCHEMA_VERSION`, `DEFAULT_UPDATE_BASE_URL` | schema id and default base |
+| `UPDATE_FEED_SCHEMA_VERSION` | schema id carried by every published document |
+| `PlatformTriplet` | host triplets that publish Desktop assets (`darwin-arm64`, `win32-x64`) |
 | `isSemver`, `compareVersions`, `normalizeVersion` | SemVer validation and numeric ordering |
-| `suiteAssetName`, `desktopAssetName`, `platformAssetNames` | canonical archive names per triplet |
-| `channelForVersion`, `channelDocumentUrl`, `versionDocumentUrl`, `updateDocumentUrl`, `resolveUpdateBaseUrl` | channel inference and URL construction |
-| `parseUpdateFeed`, `parseUpdateFeedJson` | validation and host-asset resolution |
+| `desktopAssetStem`, `installerAssetName`, `updateAssetName` | canonical Desktop asset names per version and triplet |
+| `channelForVersion`, `channelDocumentUrl`, `updateDocumentUrl`, `resolveUpdateBaseUrl` | channel inference and URL construction |
+| `parseUpdateFeedJson` | validation and host-asset resolution |
 
-`parseUpdateFeed(input, { triplet, expectedVersion?, channel? })` validates the
+`parseUpdateFeedJson(text, { triplet, expectedVersion?, channel? })` validates the
 schema, that `version` is valid SemVer (and matches `expectedVersion` when
-given), that both the suite and Desktop assets for the host triplet exist, and
-that every digest is 64 hex. It returns the document, the resolved channel and
-the two assets. Asset URLs are deliberately **not** required to be canonical
+given), that both the installer and update assets for the host triplet exist,
+and that every digest is 64 hex. It returns the document, the resolved channel
+and the two assets. Asset URLs are deliberately **not** required to be canonical
 GitHub download URLs: the URL and digest come from the same document, so the
 check adds no integrity guarantee while it would prevent local end-to-end tests
 from serving the feed over a local HTTP server. Integrity is the sha256.
-
-The bootstrap scripts do not import this module — they are native `bash` and
-PowerShell programs and parse the feed with `plutil` and `ConvertFrom-Json` —
-but they enforce the same rules.
 
 ## Implementation status
 

@@ -1,5 +1,7 @@
 # TaskGraph Operator Notes
 
+TaskGraph runtime signals for operators.
+
 ## TaskGraph Lifecycle Control
 
 - **paused**: stops scheduling new nodes. Already in-flight nodes continue running.

@@ -1,67 +1,60 @@
 # Contributing to Wrenyard
 
-Wrenyard is one product in one monorepo, currently in a 1.0.0-dev.0
-development preview. Contribution acceptance and licensing are governed by
-the public policies in this repository.
+Thanks for helping improve Wrenyard, a local-first TypeScript monorepo. This
+repository publishes rolling `1.0.0-dev.N` development prereleases. Contributions
+are accepted under the [Code of Conduct](CODE_OF_CONDUCT.md), and
+security-relevant reports follow [SECURITY.md](SECURITY.md).
 
 ## Prerequisites
 
-- Node.js 24.19 or newer
-- pnpm 11.19.0
+- Node.js >=24.19.0
+- pnpm 11.19.0, enabled through corepack:
 
-Install dependencies with the frozen lockfile, then build once before the
-long-running source environment:
+  ```sh
+  corepack enable
+  corepack prepare pnpm@11.19.0 --activate
+  ```
+
+## Getting started
+
+From the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm build
 pnpm dev
 ```
 
-`pnpm-workspace.yaml` allows the Electron install script; if Electron is
-missing after install, re-run the frozen install rather than assuming a
-global Wrenyard/Electron binary.
+`pnpm dev` runs the daemon and Desktop dev scripts in parallel. Start one side
+alone with `pnpm --filter @wrenyard/daemon dev` or
+`pnpm --filter @wrenyard/desktop dev`. If a lockfile or package manifest
+changes, stop the dev scripts, re-run `pnpm install --frozen-lockfile`, and start
+them again.
 
-Daily commands from the same checkout root:
+## Checks
 
-```sh
-pnpm dev                              # daemon + Desktop dev scripts, in parallel
-pnpm --filter @wrenyard/daemon dev    # daemon only
-pnpm --filter @wrenyard/desktop dev   # Desktop only
-```
-
-`pnpm dev` runs both dev scripts in parallel with no orchestration, so start order does not matter. The daemon dev script refuses to start while another daemon (for example one started by an installed Desktop) answers on the IPC path, so quit the installed app first. A source Desktop never starts a daemon; it waits until one is available and reconnects automatically. Neither dev script installs a release, changes the installed version, or starts at login.
-
-If a lockfile or package manifest changes, stop the dev scripts, run
-`pnpm install --frozen-lockfile`, then start them again.
-
-`pnpm --filter @wrenyard/desktop dev` runs `electron-vite dev --watch`: the renderer updates through Vite with React Refresh, preload changes reload all windows, and main-process changes restart Desktop. The daemon dev script type-checks the daemon after a change, waits for `daemon.status` idle, then restarts only the daemon; shared package changes restart both processes.
-
-## Working in the workspace
-
-
-Most work happens in a single package. Change into it first and use its
-focused commands:
+Run the root scripts before opening a pull request:
 
 ```sh
-pnpm --filter <package> <script>
+pnpm lint    # oxlint + repository tsc
+pnpm test    # repository tool tests + all package tests
+pnpm check   # release gates: public identifiers, secrets, legal, versions
 ```
 
-At the repository root, the composition checks are:
+## Commit messages
 
-```sh
-pnpm lint              # oxlint + repository tsc
-pnpm check             # release gates: public identifiers, secrets, legal, versions
-pnpm test              # repository tool tests + all package tests
-pnpm build             # Desktop bundle only
-```
+Use [Conventional Commits](https://www.conventionalcommits.org/) in the form
+`type(scope): description`, matching the existing history, for example
+`fix(desktop): align final style and teardown contracts`. Keep the scope to the
+package or app you changed.
 
-## Change guidelines
+## Pull requests
 
-- Keep changesets scoped: name them to the package(s) they affect and
-  describe the user-visible change.
-- Use focused checks for changed behavior; add or update tests when needed.
-- Never commit secrets, internal endpoints, or personal machine paths.
-- Use the workspace Tasks and repository instructions to select and record the
-  checks appropriate to a change. GitHub Actions intentionally does not run the
-  full check composition for main or pull requests.
+- Keep the change focused on one concern.
+- Describe the user-visible effect; include screenshots for UI changes.
+- Make sure `pnpm lint` passes.
+- Update the documentation when behaviour changes.
+
+## Releases
+
+Maintainers cut the development prereleases; contributors do not tag or publish
+releases.
