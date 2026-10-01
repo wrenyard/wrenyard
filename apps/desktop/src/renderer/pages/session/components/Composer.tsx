@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { EffortPicker, ModelPicker, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
 import type { ModelEntry, TurnModel } from '../model/types.js';
+import { clearDraft, flushDraft, readDraft, writeDraft } from '../state/drafts.js';
 
 const LAST_SENT_KEY = 'session:last-sent';
 
@@ -41,13 +42,17 @@ export interface ComposerProps {
 
 /** Bottom composer with model and effort pickers and a send-only button. */
 export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText }: ComposerProps) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(() => readDraft(sessionKey));
   const [modelId, setModelId] = useState('');
   const [effort, setEffort] = useState('');
   const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
+  const textRef = useRef(text);
+  textRef.current = text;
+  const sessionKeyRef = useRef(sessionKey);
+  sessionKeyRef.current = sessionKey;
 
   useEffect(() => {
     const last = turnsRef.current[turnsRef.current.length - 1];
@@ -59,9 +64,17 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     textareaRef.current?.focus();
   }, [sessionKey, models, turns.at(-1)?.id]);
 
+  // Load the destination draft on switch/remount and flush the outgoing one so
+  // no pending edit is lost.
+  useEffect(() => {
+    setText(readDraft(sessionKey));
+    return () => { flushDraft(sessionKey); };
+  }, [sessionKey]);
+
   useEffect(() => {
     if (!injectedText) return;
     setText(injectedText.text);
+    writeDraft(sessionKey, injectedText.text);
     textareaRef.current?.focus();
   }, [injectedText?.nonce]);
 
@@ -72,21 +85,41 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     group: entry.provider,
   }));
 
+  const handleChange = (value: string): void => {
+    setText(value);
+    writeDraft(sessionKey, value);
+  };
+
   const submit = (): void => {
     const body = text.trim();
     if (body === '' || !selected || sending || disabled) return;
+    const originKey = sessionKey;
+    const bodyText = text;
     setSending(true);
-    void Promise.resolve(onSend(body, selected, effort)).finally(() => {
-      setSending(false);
-      setText('');
-      writeLastSent({ model: selected.publicId, effort });
-    });
+    void Promise.resolve(onSend(body, selected, effort))
+      .then(
+        () => {
+          // Clear the sent draft, but never a destination the user switched to
+          // while the send was in flight.
+          if (sessionKeyRef.current !== originKey || textRef.current === bodyText) {
+            clearDraft(originKey);
+            if (sessionKeyRef.current === originKey) setText('');
+          }
+        },
+        () => {
+          // A rejected send keeps the draft so the user can retry.
+        },
+      )
+      .finally(() => {
+        setSending(false);
+        writeLastSent({ model: selected.publicId, effort });
+      });
   };
 
   return (
     <PromptInput
       value={text}
-      onValueChange={setText}
+      onValueChange={handleChange}
       onSubmit={submit}
       disabled={disabled || !selected}
       submitDisabled={sending}
