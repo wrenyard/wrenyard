@@ -52,7 +52,7 @@ export interface ContextMeterProps {
 export function ContextMeter({ sessionKey, modelId, inputTokens, onBudgetChange }: ContextMeterProps) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const { models, turns, seq } = useSessionUsage();
+  const { sessionKey: contextKey, models, turns, seq } = useSessionUsage();
   const throttledSeq = useThrottledSeq(seq);
   const query = useQuery(contextQuery(sessionKey, modelId, throttledSeq));
   const inspection = query.data;
@@ -76,6 +76,7 @@ export function ContextMeter({ sessionKey, modelId, inputTokens, onBudgetChange 
   // Only turns observed running can surface a new failure; loaded history is silent.
   const tracked = useRef<{ key: string; turns: Set<number> }>({ key: sessionKey, turns: new Set() });
   useEffect(() => {
+    if (contextKey !== sessionKey) return;
     if (tracked.current.key !== sessionKey) tracked.current = { key: sessionKey, turns: new Set() };
     for (const turn of turns) {
       if (turn.status === 'running') tracked.current.turns.add(turn.id);
@@ -93,7 +94,7 @@ export function ContextMeter({ sessionKey, modelId, inputTokens, onBudgetChange 
         });
       }
     }
-  }, [turns, models, sessionKey]);
+  }, [turns, models, sessionKey, contextKey]);
   const runningTurn = turns.find((turn) => turn.status === 'running');
   const remaining = budget?.available !== undefined && budget !== undefined
     ? remainingTurns(growth.filter((entry) => turns.some((turn) => turn.id === entry.turn && turn.status !== 'running')), budget.available - budget.total)

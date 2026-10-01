@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Badge } from '@/renderer/components/ui/badge';
 import { CopyButton } from '@/renderer/components/copy-button';
@@ -14,15 +14,18 @@ import type { LedgerEvent, SessionModel } from '../../model/types.js';
 export interface LedgerListProps {
   model: SessionModel;
   events: readonly LedgerEvent[];
+  /** When set, the list clears hiding filters and scrolls this seq into view. */
+  focusSeq?: number;
 }
 
 /** Virtualised raw-ledger list with turn/type/keyword filters. */
-export function LedgerList({ events }: LedgerListProps) {
+export function LedgerList({ events, focusSeq }: LedgerListProps) {
   const [types, setTypes] = useState<string[]>([]);
   const [turn, setTurn] = useState('all');
   const [keyword, setKeyword] = useState('');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const parentRef = useRef<HTMLDivElement>(null);
+  const focusedSeq = useRef<number | null>(null);
 
   const allTypes = useMemo(() => [...new Set(events.map((event) => ledgerEventType(event)))], [events]);
   const turnIds = useMemo(() => [...new Set(events.map((event) => event.turn).filter((value): value is number => value !== undefined))], [events]);
@@ -43,6 +46,27 @@ export function LedgerList({ events }: LedgerListProps) {
   });
 
   const jsonl = useMemo(() => events.map((event) => JSON.stringify(event)).join('\n'), [events]);
+
+  // Deep jump from the usage panel / context tab: drop any filter that would
+  // hide the target, then focus its row once the virtualizer can see it.
+  useEffect(() => {
+    if (focusSeq === undefined) {
+      focusedSeq.current = null;
+      return;
+    }
+    if (focusedSeq.current === focusSeq) return;
+    if (types.length > 0 || turn !== 'all' || keyword !== '') {
+      setTypes([]);
+      setTurn('all');
+      setKeyword('');
+      return;
+    }
+    const index = rows.findIndex((row) => row.seq === focusSeq);
+    if (index < 0) return;
+    focusedSeq.current = focusSeq;
+    virtualizer.scrollToIndex(index, { align: 'center' });
+  }, [focusSeq, types, turn, keyword, rows, virtualizer]);
+
   const toggle = (seq: number): void => {
     setExpanded((current) => {
       const next = new Set(current);

@@ -4,6 +4,8 @@ import { Button } from '@/renderer/components/ui/button';
 import { ScrollArea } from '@/renderer/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/renderer/components/ui/tabs';
 import type { InspectorTarget, LedgerEvent, SessionModel } from '../../model/types.js';
+import { useSessionUsage } from '../../state/usage-selection.js';
+import { ContextTab } from './ContextTab.js';
 import { DetailPane } from './details/DetailPane.js';
 import { LedgerList } from './LedgerList.js';
 import { TurnTimeline } from './TurnTimeline.js';
@@ -36,8 +38,13 @@ export interface InspectorProps {
   onClose(): void;
 }
 
-/** Right-hand inspector: details, turn timeline and the raw ledger. */
+/** Right-hand inspector: details, turn timeline, the raw ledger and the context audit. */
 export function Inspector({ model, events, target, tab, onTabChange, onSelect, onClose }: InspectorProps) {
+  // A requested ledger jump (from the usage panel or the context tab) is
+  // preserved in the shared store; forward its seq so the ledger focuses it.
+  const { inspection, sessionKey } = useSessionUsage();
+  const focusSeq = inspection?.sessionKey === sessionKey && inspection.tab === 'ledger' ? inspection.seq : undefined;
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose();
@@ -54,6 +61,7 @@ export function Inspector({ model, events, target, tab, onTabChange, onSelect, o
             <TabsTrigger value="detail">详情</TabsTrigger>
             <TabsTrigger value="timeline">时间线</TabsTrigger>
             <TabsTrigger value="ledger">账本</TabsTrigger>
+            <TabsTrigger value="context">上下文</TabsTrigger>
           </TabsList>
           <Button variant="ghost" size="icon" aria-label="关闭检查器" onClick={onClose}><X /></Button>
         </div>
@@ -73,8 +81,15 @@ export function Inspector({ model, events, target, tab, onTabChange, onSelect, o
         </TabsContent>
         <TabsContent value="ledger" className="min-h-0 flex-1">
           <div className="flex h-full min-h-0 flex-col p-4">
-            <LedgerList model={model} events={events} />
+            <LedgerList key={focusSeq === undefined ? 'ledger' : inspection?.nonce} model={model} events={events} focusSeq={focusSeq} />
           </div>
+        </TabsContent>
+        <TabsContent value="context" className="min-h-0 flex-1">
+          <ScrollArea className="h-full">
+            <div className="p-4">
+              <ContextTab model={model} />
+            </div>
+          </ScrollArea>
         </TabsContent>
       </Tabs>
     </div>
