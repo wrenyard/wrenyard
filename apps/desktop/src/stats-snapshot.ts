@@ -3,7 +3,6 @@ import type {
   StatsDailySnapshot,
   StatsOutcomesSnapshot,
   StatsPeriod,
-  StatsRankingSnapshot,
   StatsSnapshot,
   StatsTodaySnapshot,
   StatsWindowSnapshot,
@@ -14,11 +13,10 @@ import type {
 
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_DAILY_ROWS = 365;
-const MAX_RANKING_ROWS = 20;
 const MAX_WINDOW_ROWS = 20;
 const MAX_TASK_RUN_ROWS = 50;
 
-export type StatsRequest = (method: 'stats.summary' | 'stats.today', params: Record<string, unknown>) => Promise<unknown>;
+export type StatsRequest = (method: 'stats.summary', params: Record<string, unknown>) => Promise<unknown>;
 
 export async function readStatsSnapshot(ipcPath: string): Promise<StatsSnapshot> {
   const client = new WrenyardIpcClient({ path: ipcPath, requestTimeoutMs: REQUEST_TIMEOUT_MS });
@@ -29,28 +27,15 @@ export async function readStatsSnapshot(ipcPath: string): Promise<StatsSnapshot>
   }
 }
 
+/**
+ * Build the Desktop ledger projection from the authoritative `stats.summary`
+ * method only. Period windows are the single source for rankings, so there is
+ * no `stats.today` fallback and no separate top-level profile/task ranking.
+ */
 export async function buildStatsSnapshot(request: StatsRequest): Promise<StatsSnapshot> {
   try {
-    const summary = parseSummary(await request('stats.summary', { days: MAX_DAILY_ROWS, limit: MAX_RANKING_ROWS }));
+    const summary = parseSummary(await request('stats.summary', { days: MAX_DAILY_ROWS, limit: MAX_WINDOW_ROWS }));
     if (summary) return summary;
-  } catch {
-    // Older control planes may not expose the summary projection yet.
-  }
-
-  try {
-    const today = parseToday(await request('stats.today', {}), false, true);
-    if (today) {
-    return {
-      status: 'available',
-      source: 'today',
-      today,
-      daily: [toDaily(today)],
-      byProfile: [],
-      byTask: [],
-      windows: [],
-      recentTaskRuns: [],
-    };
-    }
   } catch {
     // The renderer gets a stable unavailable projection, never raw IPC errors.
   }
@@ -61,11 +46,8 @@ export async function buildStatsSnapshot(request: StatsRequest): Promise<StatsSn
 export function unavailableStatsSnapshot(): StatsSnapshot {
   return {
     status: 'unavailable',
-    source: 'unavailable',
     today: null,
     daily: [],
-    byProfile: [],
-    byTask: [],
     windows: [],
     recentTaskRuns: [],
   };
@@ -78,19 +60,16 @@ function parseSummary(value: unknown): StatsSnapshot | null {
   if (!today) return null;
   return {
     status: 'available',
-    source: 'summary',
     today,
     daily: parseArray(record.daily, parseDaily, MAX_DAILY_ROWS),
-    byProfile: parseArray(record.byProfile, parseProfileRanking, MAX_RANKING_ROWS),
-    byTask: parseArray(record.byTask, parseTaskRanking, MAX_RANKING_ROWS),
     windows: parseArray(record.windows, parseWindow, 3),
     recentTaskRuns: parseArray(record.recentRuns, parseTaskRunSnapshot, MAX_TASK_RUN_ROWS),
   };
 }
 
-function parseToday(value: unknown, requireOutcomes: boolean, requireSqliteSource = false): StatsTodaySnapshot | null {
+function parseToday(value: unknown, requireOutcomes: boolean): StatsTodaySnapshot | null {
   const record = asRecord(value);
-  if (!record || (requireSqliteSource && record.source !== 'sqlite')) return null;
+  if (!record) return null;
   const base = parseTokenBucket(record);
   const startAt = readString(record.startAt);
   const endAt = readString(record.endAt);
@@ -128,36 +107,6 @@ function parseOutcomes(value: unknown, allowRunning: boolean): StatsOutcomesSnap
   if (done === null || failed === null || cancelled === null) return null;
   const running = allowRunning ? readCount(record.running) : null;
   return { done, failed, cancelled, ...(running !== null ? { running } : {}) };
-}
-
-function parseProfileRanking(value: unknown): StatsRankingSnapshot | null {
-  const record = asRecord(value);
-  if (!record) return null;
-  const model = readString(record.model);
-  const name = model;
-  const dispatchCount = readCount(record.dispatchCount);
-  const totalTokens = readCount(record.totalTokens);
-  if (name === null || dispatchCount === null || totalTokens === null) return null;
-  const result: StatsRankingSnapshot = { name, dispatchCount, totalTokens };
-  if (model !== null) result.model = model;
-  const modelDisplayName = readString(record.model_display_name);
-  if (modelDisplayName !== null) result.modelDisplayName = modelDisplayName;
-  const providerDisplayNames = parseProviderDisplayNames(record.provider_display_names);
-  if (providerDisplayNames !== null) result.providerDisplayNames = providerDisplayNames;
-  return result;
-}
-
-function parseTaskRanking(value: unknown): StatsRankingSnapshot | null {
-  const record = asRecord(value);
-  return record ? parseRanking(record, 'taskName') : null;
-}
-
-function parseRanking(record: Record<string, unknown>, nameKey: 'profile' | 'taskName'): StatsRankingSnapshot | null {
-  const name = readString(record[nameKey]);
-  const dispatchCount = readCount(record.dispatchCount);
-  const totalTokens = readCount(record.totalTokens);
-  if (name === null || dispatchCount === null || totalTokens === null) return null;
-  return { name, dispatchCount, totalTokens };
 }
 
 function parseWindow(value: unknown): StatsWindowSnapshot | null {
@@ -366,23 +315,6 @@ function readCompleteness(value: unknown): TaskRunUsage['completeness'] | null {
 function isTaskRunStatus(value: unknown): value is TaskRunSnapshot['status'] {
   return value === 'done' || value === 'failed' || value === 'cancelled' || value === 'interrupted'
     || value === 'running' || value === 'queued';
-}
-
-function toDaily(today: StatsTodaySnapshot): StatsDailySnapshot {
-  return {
-    dayKey: today.dayKey,
-    dispatchCount: today.dispatchCount,
-    inputTokens: today.inputTokens,
-    outputTokens: today.outputTokens,
-    totalTokens: today.totalTokens,
-    ...(today.outcomes ? {
-      outcomes: {
-        done: today.outcomes.done,
-        failed: today.outcomes.failed,
-        cancelled: today.outcomes.cancelled,
-      },
-    } : {}),
-  };
 }
 
 function parseArray<T>(value: unknown, parse: (item: unknown) => T | null, limit: number): T[] {

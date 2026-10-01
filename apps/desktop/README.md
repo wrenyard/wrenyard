@@ -11,29 +11,27 @@ Electron product shell for Wrenyard daemon features.
 
 `@wrenyard/desktop` is the 啾啾工坊 product boundary. Its Electron main process
 owns the application shell, notification-area integration and product settings,
-while conversations run in the daemon-owned session feature and Pet remains an internal Desktop module:
+while sessions run in the daemon-owned session feature and Pet remains an internal Desktop module:
 
 ```
 Desktop renderer + preload + Electron main
   |-- window, tray, product settings, Pet
-  `-- conversation-adapter -> SessionClient
-          `-- protocol/session IPC -> daemon handlers
-                  `-- @wrenyard/session -> DSH runtime
+  `-- session bridge -> session IPC -> daemon session feature (@wrenyard/session)
 ```
 
 - **Product navigation** — a 48px Wrenyard Activity Bar keeps a fixed,
-  non-interactive Wrenyard brand mark at the top, exposes the Desktop-owned
-  conversation surface as its own navigation item, adds “工房台账” and “模型供应”
+  non-interactive Wrenyard brand mark at the top, exposes the session page as
+  its own navigation item, adds “工房台账” and “模型供应”
   as top-level child functions and places “啾啾工坊设置” at the bottom. The single
-  local renderer owns all four pages; no DSH Web UI or `WebContentsView` is
-  embedded. `Cmd+,` / `Ctrl+,` opens settings; `Cmd+1` /
-  `Ctrl+1` opens the workbench; `Cmd+2` / `Ctrl+2` opens statistics; `Cmd+3` /
+  local renderer owns every page; no embedded web UI or `WebContentsView` is
+  used. `Cmd+,` / `Ctrl+,` opens settings; `Cmd+1` /
+  `Ctrl+1` opens the session; `Cmd+2` / `Ctrl+2` opens statistics; `Cmd+3` /
   `Ctrl+3` opens Providers (模型供应).
 - **Desktop-owned statistics** — Desktop reads the public `stats.summary`
-  projection directly and falls back to `stats.today` for older/unavailable
-  control planes. The full-width ledger receives a bounded view of today
-  totals, completion rate, a 31-day heat map, Profile rows, Task rows and
-  24h/7d/1mo windows. Pet only polls `stats.today` to enrich its passive house
+  projection directly; there is no `stats.today` fallback. The full-width ledger
+  receives a bounded view of today totals, completion rate, a 31-day heat map
+  and 24h/7d/1mo windows, which are the single authoritative source for Profile
+  and Task rankings. Pet only polls `stats.today` to enrich its passive house
   hover summary; it has no statistics window or action.
 - **Desktop-owned quota & providers** — one Desktop controller runs the Runtime
   `quota --json` adapter on a bounded cache/refresh interval, applies the
@@ -50,9 +48,9 @@ Desktop renderer + preload + Electron main
   public API provider set: the renderer sends the key through preload
   IPC and the Electron main process persists it by running the resolved suite
   Runtime binary with the key supplied on stdin only — keys never appear in
-  argv, logs, snapshots or error text. After a successful write the DSH
-  conversation session is rebuilt so launch-time credentials refresh, then the
-  Provider/quota state is force-refreshed. Native-login providers open a
+  argv, logs, snapshots or error text. After a successful write the
+  Provider/quota state is force-refreshed; the session backend reads changed
+  credentials itself on its next call. Native-login providers open a
   guidance-only dialog instead of a fake key input, `deepseek` remains
   environment-variable-only, and no-auth rows are informational. Percentage
   windows retain remaining/expected values, while monetary providers retain
@@ -67,13 +65,14 @@ Desktop renderer + preload + Electron main
   LaunchServices startup resolves the Runtime from the active installed
   Wrenyard suite instead of relying on an inherited shell `PATH`.
 - **Desktop-owned product settings** — the settings page reports public
-  Wrenyard health, uptime, workspace root, IPC endpoint and suite/DSH versions;
+  Wrenyard health, uptime, workspace root and IPC endpoint;
   model credential presence moved to the Providers page. Workspace is a
   product-level fixed binding:
   `WRENYARD_DESKTOP_WORKSPACE` is an optional highest-priority override and is
   shown read-only in settings when present; otherwise Desktop reads and edits
-  the user's `workspace.root` config. With neither source configured, the
-  conversation page remains gated. There is no per-conversation workspace picker. It
+  the user's `workspace.root` config. Saving a workspace writes the config and
+  restarts the daemon, which then binds the new root at startup; there is no
+  per-session workspace picker and no blocking workspace gate. It
   also owns the former Pet settings:
   companion appearance, scale, placement offset, bubble duration, entity
   visibility and quota-provider order. Desktop persists them in one partitioned
@@ -107,7 +106,7 @@ Desktop renderer + preload + Electron main
 - **Single instance** — a second launch only focuses the existing window.
 - **Window identity** — Pet overlays never suppress the macOS Dock identity of
   the Desktop host. Closing the product window hides it to the tray without
-  ending the tray, DSH or Pet lifecycle on every platform; only the tray “退出”
+  ending the tray, session backend or Pet lifecycle on every platform; only the tray “退出”
   command quits. The Dock activation event and the tray “打开” command restore
   the same window.
 - **Wrenyard and workspace gates** — Desktop probes
@@ -124,56 +123,32 @@ Desktop renderer + preload + Electron main
   Desktop version is rejected and never replaced. It restarts an unexpectedly
   exited daemon (1s/5s/15s, at most 3 times in 5 minutes) and, on a clean exit,
   shows “daemon stopped” with a restart action; a failed start shows its reason.
-  A missing or invalid
-  `workspace.root` prevents DSH from starting and places an explicit gate over
-  conversations. The gate can open settings or save a valid directory directly;
-  Desktop persists and activates the daemon workspace, then refreshes the
-  session projection without an App relaunch. Wrenyard remains the sole
-  state/permission owner.
-- **Session ownership** — the daemon's session feature owns the DSH child,
-  conversation history, summary preference, task ownership and recovery.
+  A missing or invalid `workspace.root` prevents the session backend from
+  starting. Saving a valid directory writes the config and restarts the daemon,
+  which binds the new workspace at startup without an App relaunch; there is no
+  blocking gate dialog. Wrenyard remains the sole state/permission owner.
+- **Session ownership** — the daemon's session feature owns the context-ledger
+  sessions, session history, summary preference, task ownership and recovery.
   Desktop receives versioned product snapshots over IPC. Closing Desktop
   detaches the view; daemon shutdown releases the backend. See
   [session feature](../../packages/features/session/README.md).
 - **BrowserWindow hardening** — `contextIsolation: true`, `nodeIntegration:
   false`, `sandbox: true`, a bounded shell preload bridge, `window.open`
   denied, navigation away from the exact origin denied, all permission
-  requests/checks denied. The renderer never receives the DSH loopback URL.
-- **Failure surface** — DSH startup or child exit switches the conversation
-  projection to an unavailable state while settings, statistics and quota remain
+  requests/checks denied.
+- **Failure surface** — session backend failure switches the session projection
+  to an unavailable state while settings, statistics and quota remain
   usable; no raw environment values cross into the renderer.
-
-## Isolated profile / state path
-
-The daemon's session feature prepares the existing DSH home under the per-user Desktop
-data directory (`app.getPath('userData')`):
-
-```
-<userData>/dsh/
-  wrenyard-model-patch.yaml              # secret-free single-Gateway-provider overlay
-  profiles/web/
-    node_modules/@wrenyard/dsh-shell/   # managed copy, replaced atomically each launch
-    node_modules/@deepseek-ai -> ...    # link to packaged DSH runtime modules
-    package.json                        # deterministic manifest with dsh.profile.bundles
-    cordis.patch.yml                    # minimal managed overlay
-```
-
-Only the managed `@wrenyard/dsh-shell` bundle copy and managed DeepSeek module
-link are replaced; unrelated profile content is preserved. Shell sources resolve
-through the session package dependencies in source and deployed layouts. The
-daemon owns the managed copy; Desktop no longer copies DSH resources.
 
 ## Security boundary
 
-- The DSH web child binds loopback only (`127.0.0.1`); the URL parser rejects
-  any non-loopback or malformed line (including DNS-rebinding style input).
 - Wrenyard connection context (`WRENYARD_IPC_PATH`, with legacy `FOREMAN_*`
-  fallbacks) is propagated to the child without ever being logged. The daemon
+  fallbacks) is propagated to the daemon without ever being logged. The daemon
   has no MCP or HTTP client surface; the gateway that serves its own agents
   binds a random loopback port with an in-memory token.
 - The shell renderer has no Node access and receives only bounded settings,
-  statistics, quota and conversation projections. Only the daemon session feature
-  talks to DSH; the renderer cannot open windows or navigate off-origin.
+  statistics, quota and session projections; the renderer cannot open windows or
+  navigate off-origin.
 - The renderer never receives release download URLs, filesystem paths, tokens or
   updater process access. Update checks receive only version and asset metadata;
   the renderer never downloads, stages or swaps files.
@@ -209,4 +184,4 @@ unsigned unless a signtool identity is supplied.
 - A Wrenyard daemon. Desktop connects to one that is already running, or
   supervises one itself with the packaged runtime (`wrenyard daemon run`).
 - `pnpm install` at the monorepo root. Desktop consumes the control client and
-  product protocol; the daemon's session feature owns the pinned DSH runtime.
+  product protocol; the daemon's session feature owns the pinned session runtime.

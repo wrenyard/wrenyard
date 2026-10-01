@@ -26,6 +26,6 @@
     "src/pet/main/**/*.ts",
     "src/pet/preloads/**/*.ts",
     "src/pet/shared/**/*.ts",
-    "src/session-v2/**/*.ts"
+    "src/session/**/*.ts"
   ]
 }

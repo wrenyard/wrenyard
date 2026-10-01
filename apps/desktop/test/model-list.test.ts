@@ -4,81 +4,9 @@ import type { ProviderCatalogSnapshot, ProviderModelSnapshot, QuotaSnapshot } fr
 import {
   averageMeasuredTps,
   buildModelListRows,
-  classifyFamily,
   formatPriceRange,
-  providerBrand,
-  renderModelList,
-} from '../src/renderer/model-list.js';
-
-interface FakeElement {
-  tagName: string;
-  children: FakeElement[];
-  textContent: string;
-  className: string;
-  title: string;
-  colSpan: number;
-  scope: string;
-  src: string;
-  alt: string;
-  width: number;
-  height: number;
-  dataset: Record<string, string>;
-  append(...nodes: unknown[]): void;
-  replaceChildren(...nodes: unknown[]): void;
-  setAttribute(name: string, value: string): void;
-}
-
-function fakeElement(tagName: string): FakeElement {
-  const element: FakeElement = {
-    tagName,
-    children: [],
-    textContent: '',
-    className: '',
-    title: '',
-    colSpan: 0,
-    scope: '',
-    src: '',
-    alt: '',
-    width: 0,
-    height: 0,
-    dataset: {},
-    append(...nodes: unknown[]) {
-      for (const node of nodes) if (isFake(node)) element.children.push(node);
-    },
-    replaceChildren(...nodes: unknown[]) {
-      element.children = [];
-      element.append(...nodes);
-    },
-    setAttribute() {},
-  };
-  return element;
-}
-
-function isFake(value: unknown): value is FakeElement {
-  return typeof value === 'object' && value !== null && typeof (value as FakeElement).tagName === 'string';
-}
-
-(globalThis as { document?: unknown }).document = {
-  createElement: (tag: string) => fakeElement(tag),
-};
-
-/** Depth-first text of a fake node tree. */
-function collectText(node: unknown): string {
-  if (node === null || node === undefined) return '';
-  if (typeof node === 'string') return node;
-  if (Array.isArray(node)) return node.map(collectText).join(' ');
-  const record = node as { textContent?: string; children?: unknown[]; dataset?: Record<string, string> };
-  const own = typeof record.textContent === 'string' ? record.textContent : '';
-  const child = Array.isArray(record.children) ? record.children.map(collectText).join(' ') : '';
-  return `${own} ${child}`.trim();
-}
-
-function find(node: FakeElement, className: string): FakeElement[] {
-  const matches: FakeElement[] = [];
-  if (node.className.split(' ').includes(className)) matches.push(node);
-  for (const child of node.children) matches.push(...find(child, className));
-  return matches;
-}
+} from '../src/renderer/pages/quota/model/models.js';
+import { classifyFamily, providerBrand } from '../src/renderer/lib/model-brand.js';
 
 function catalogEntry(
   id: string,
@@ -243,45 +171,6 @@ test('pricing shows per-component min–max of the actual list prices', () => {
   assert.equal(rows[0].outputLabel, '12');
   assert.equal(rows[0].cacheLabel, '0.3–0.6');
 });
-
-test('rendering exposes the uniform columns, units, and muted unavailable names', () => {
-  const host = fakeElement('div');
-  renderModelList(host as unknown as HTMLElement, snapshot([
-    catalogEntry('openai', 'OpenAI API', [
-      { id: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', intelligence: 'premium', effectiveTps: 50, available: true, pricing: [0.1, 1, 2] as const },
-    ]),
-    catalogEntry('spacex-ai', 'SpaceX AI', [
-      { id: 'grok-4.5', displayName: 'Grok 4.5', available: false, pricing: [0.1, 1, 2] as const },
-    ]),
-  ]));
-
-  const text = collectText(host);
-  for (const header of ['模型', '缓存（$/Mtok）', '输入（$/Mtok）', '输出（$/Mtok）', '速度', '供应商']) {
-    assert.ok(text.includes(header), `missing column heading: ${header}`);
-  }
-  assert.ok(text.includes('GPT-5.6 Sol'));
-  assert.ok(text.includes('OpenAI API'));
-  assert.ok(text.includes('Grok 4.5'));
-
-  const muted = find(host, 'is-muted');
-  const mutedText = muted.map((element) => collectText(element));
-  assert.ok(mutedText.some((value) => value === 'Grok 4.5'), 'an unavailable model name is muted');
-  assert.ok(mutedText.some((value) => value === 'SpaceX AI'), 'an unavailable provider name is muted');
-  assert.ok(
-    find(host, 'model-list-name').some((element) => element.textContent === 'GPT-5.6 Sol' && element.className === 'model-list-name'),
-    'an available model name stays normal',
-  );
-  assert.ok(find(host, 'model-list-icon').length > 0, 'model and provider names carry brand icons');
-});
-
-test('an empty catalog renders one bounded empty row instead of throwing', () => {
-  const host = fakeElement('div');
-  renderModelList(host as unknown as HTMLElement, snapshot([]));
-  assert.ok(collectText(host).includes('未发现受支持的模型。'));
-  renderModelList(host as unknown as HTMLElement, null);
-  assert.ok(collectText(host).includes('未发现受支持的模型。'));
-});
-
 
 test('family activation keeps inactive siblings grouped and TPS counts each provider once', () => {
   const rows = buildModelListRows(snapshot([

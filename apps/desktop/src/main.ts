@@ -2,8 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, powerMonitor, screen, sessio
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
-import { DesktopConversationAdapter } from './conversation-adapter.js';
-import { registerSessionV2, type SessionV2Registration } from './session-v2/ipc.js';
+import { registerSession, type SessionRegistration } from './session/ipc.js';
 import { DesktopPetRuntime } from './pet/main/runtime.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
@@ -16,10 +15,9 @@ import { TaskGraphWindowOwner } from './main/windows/taskgraph-windows.js';
 import { DesktopQuotaController } from './quota-controller.js';
 import { DesktopQuotaSource } from './quota-service.js';
 import { ProviderService } from './provider-service.js';
-import { readConversationActivity } from './conversation-activity.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { DesktopUpdateController } from './updater/controller.js';
 import { DesktopDaemonSupervisor } from './daemon-supervisor.js';
@@ -33,7 +31,6 @@ import { resolveForemanConfigPath } from '../../daemon/lib/config/path.mts';
 import { foremanStateRoot } from '../../daemon/lib/config/state.mts';
 import {
   createMacQuitConfirmationGate,
-  trayPrimaryClickOpensDesktop,
   type QuitOrigin,
 } from './desktop-interaction-policy.js';
 import {
@@ -61,6 +58,8 @@ const RUNTIME_ALIAS_ERROR_MESSAGES: Record<string, string> = {
 };
 /** Smoke drives task enumeration and a routing test over IPC, which can cold-load the workspace and model catalog. */
 const SMOKE_TIMEOUT_MS = 90_000;
+/** Bounded settle budget: React mounts/activates the target page asynchronously after `setPage`. */
+const SMOKE_PAGE_VISIBILITY_TIMEOUT_MS = 10_000;
 
 /** Read the bounded public health projection from the given IPC socket. */
 async function readWrenyardHealth(path: string): Promise<HealthSnapshot> {
@@ -126,17 +125,40 @@ function resolvePetAssets(): { preloadDir: string } {
   return { preloadDir: join(app.getAppPath(), 'dist', 'preload') };
 }
 
+/**
+ * Wait until the `[data-page]` React root that owns the given shell page is
+ * mounted and actually visible. Pages mount on first visit and are then kept
+ * alive off-screen, so existence alone is not enough: the root must have a
+ * non-zero box (`getBoundingClientRect`) and a non-`none` display /
+ * non-`hidden` visibility. Polls within a bound while React activation
+ * settles; never resolves to true for a hidden kept-alive page.
+ */
+async function waitForVisiblePageRoot(shell: ShellWindowController, page: ShellPage): Promise<boolean> {
+  const expression = `(() => {
+    const root = document.querySelector(${JSON.stringify(`[data-page=${JSON.stringify(page)}]`)});
+    if (!(root instanceof HTMLElement)) return false;
+    const style = getComputedStyle(root);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = root.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  })()`;
+  const deadline = Date.now() + SMOKE_PAGE_VISIBILITY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const visible = await shell.window.webContents.executeJavaScript(expression);
+    if (visible === true) return true;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  }
+  return false;
+}
+
 async function runSmoke(shell: ShellWindowController): Promise<void> {
   const check = async (): Promise<void> => {
-    const [shellOk, snapshotOk, conversationOk, quotaOk] = await Promise.all([
+    const [shellOk, snapshotOk, quotaOk] = await Promise.all([
       shell.window.webContents.executeJavaScript(
         "document.body?.innerText.includes('啾啾工坊设置') === true",
       ),
       shell.window.webContents.executeJavaScript(
-        "window.wrenyardShell.getSettings().then((value) => value?.service?.status === 'connected' && value?.pet?.settings?.entities && Array.isArray(value?.pet?.settings?.quota?.providers) && (value?.update?.channel === 'dev' || value?.update?.channel === 'stable')).catch(() => false)",
-      ),
-      shell.window.webContents.executeJavaScript(
-        "window.wrenyardShell.getConversation().then((value) => value?.status === 'ready' && Array.isArray(value?.sessions) && value?.models?.status === 'ready' && value?.models?.routable === true && value.models.groups.length > 0).catch(() => false)",
+        "window.wrenyardShell.getSettings().then((value) => value?.service?.status === 'connected' && value?.pet?.settings?.entities && Array.isArray(value?.pet?.settings?.quota?.providers) && typeof value?.update?.currentVersion === 'string' && typeof value?.update?.installSupported === 'boolean').catch(() => false)",
       ),
       shell.window.webContents.executeJavaScript(
         "window.wrenyardShell.getQuota().then((value) => (value?.status === 'available' || value?.status === 'unavailable') && Array.isArray(value?.providers) && Array.isArray(value?.catalog) && value.providers.every((provider) => value.catalog.some((entry) => entry.id === provider.id && entry.configured === true && entry.quota))).catch(() => false)",
@@ -152,68 +174,25 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     const routingOk = await shell.window.webContents.executeJavaScript(
       "Promise.all([window.wrenyardShell.requestRoutingTestTasks(), window.wrenyardShell.requestTaskRoutingTest({ automatic: {} })]).then(([tasks, test]) => Array.isArray(tasks?.tasks) && tasks.tasks.length > 0 && tasks.tasks.every((task) => typeof task.identity === 'string' && typeof task.name === 'string' && typeof task.display_name === 'string' && task.automatic && typeof task.automatic === 'object') && Array.isArray(test?.rows)).catch(() => false)",
     );
-    // New conversation is an in-memory draft; only the first send persists a
-    // session. Repeated create calls must leave the durable list unchanged.
-    const newConversationOk = await shell.window.webContents.executeJavaScript(
-      "(async () => { const before = await window.wrenyardShell.getConversation(); await window.wrenyardShell.createConversation(); const value = await window.wrenyardShell.createConversation(); return value.status === 'ready' && value.selectedSessionId === undefined && value.selectedRunning === false && value.items.length === 0 && JSON.stringify(value.sessions.map(session => session.id).sort()) === JSON.stringify(before.sessions.map(session => session.id).sort()); })()",
+    // Stats bridge capability: the snapshot must report a known status.
+    const statsOk = await shell.window.webContents.executeJavaScript(
+      "window.wrenyardShell.getStats().then((value) => value?.status === 'available' || value?.status === 'unavailable').catch(() => false)",
     );
+    // Page ownership lives on the mounted `[data-page]` React roots, not on
+    // `<html>`: drive each page and require its root to become visible.
     shell.setPage('settings', false);
-    const settingsVisible = await shell.window.webContents.executeJavaScript(
-      "document.documentElement.dataset.page === 'settings' && document.getElementById('update-action-button') instanceof HTMLButtonElement",
-    );
+    const settingsVisible = await waitForVisiblePageRoot(shell, 'settings');
     shell.setPage('stats', false);
-    const statsVisible = await shell.window.webContents.executeJavaScript(
-      "document.documentElement.dataset.page === 'stats' && window.wrenyardShell.getStats().then((value) => value?.status === 'available' || value?.status === 'unavailable').catch(() => false)",
-    );
+    const statsVisible = await waitForVisiblePageRoot(shell, 'stats');
     shell.setPage('quota', false);
-    const quotaVisible = await shell.window.webContents.executeJavaScript(
-      "document.documentElement.dataset.page === 'quota' && document.getElementById('quota-provider-grid') !== null",
-    );
-    // Routing tab real DOM: the button label must stay on a single line and
-    // never clip at constrained toolbar widths, and the stats surfaces must
-    // render. Ledger rows are not required because smoke may have no history.
-    const routingLayoutOk = await shell.window.webContents.executeJavaScript(
-      `(async () => {
-        document.getElementById('quota-tab-routing')?.click();
-        const button = document.getElementById('routing-test-run');
-        const toolbar = document.querySelector('.routing-test-toolbar');
-        if (!(button instanceof HTMLElement) || !(toolbar instanceof HTMLElement) || button.innerText.trim() !== '测试') return false;
-        const statsOk = document.getElementById('stats-task-runs-list') !== null
-          && document.body.textContent.includes('近期任务消耗');
-        const savedCss = toolbar.style.cssText;
-        let layoutOk = true;
-        try {
-          for (const width of ['140px', '320px']) {
-            toolbar.style.width = width;
-            toolbar.style.maxWidth = width;
-            const rects = Array.from((() => {
-              const range = document.createRange();
-              range.selectNodeContents(button);
-              return range.getClientRects();
-            })());
-            const textRects = rects.filter((rect) => rect.width > 0 && rect.height > 0);
-            if (textRects.length === 0) { layoutOk = false; break; }
-            const tops = new Set(textRects.map((rect) => Math.round(rect.top)));
-            if (tops.size !== 1) { layoutOk = false; break; }
-            if (button.scrollWidth > button.clientWidth) { layoutOk = false; break; }
-            if (button.getBoundingClientRect().width <= 0) { layoutOk = false; break; }
-          }
-        } finally {
-          toolbar.style.cssText = savedCss;
-        }
-        return layoutOk && statsOk;
-      })()`,
-    );
-    if (!routingLayoutOk) {
-      throw new Error('smoke failed: routing test button wraps or clips');
-    }
-    shell.setPage('workbench', false);
-    const workbenchVisible = await shell.window.webContents.executeJavaScript(
-      "document.documentElement.dataset.page === 'workbench' && document.getElementById('conversation-composer') !== null && (() => { const host = document.getElementById('conversation-model-picker'); return host !== null && host.querySelector('button.multi-select-trigger') instanceof HTMLButtonElement && host.querySelector('[role=\"listbox\"]') !== null; })()",
-    );
-    if (!shellOk || !snapshotOk || !conversationOk || !quotaOk || !tasksOk || !routingOk || !newConversationOk || !settingsVisible || !statsVisible || !quotaVisible || !workbenchVisible) {
+    const quotaVisible = await waitForVisiblePageRoot(shell, 'quota');
+    shell.setPage('tasks', false);
+    const tasksVisible = await waitForVisiblePageRoot(shell, 'tasks');
+    shell.setPage('session', false);
+    const sessionVisible = await waitForVisiblePageRoot(shell, 'session');
+    if (!shellOk || !snapshotOk || !quotaOk || !tasksOk || !routingOk || !statsOk || !settingsVisible || !statsVisible || !quotaVisible || !tasksVisible || !sessionVisible) {
       throw new Error(
-        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, conversation=${conversationOk}, quota=${quotaOk}, tasks=${tasksOk}, routing=${routingOk}, newConversation=${newConversationOk}, settings=${settingsVisible}, stats=${statsVisible}, quotaPage=${quotaVisible}, workbench=${workbenchVisible})`,
+        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, quota=${quotaOk}, tasks=${tasksOk}, routing=${routingOk}, stats=${statsOk}, settings=${settingsVisible}, statsPage=${statsVisible}, quotaPage=${quotaVisible}, tasksPage=${tasksVisible}, session=${sessionVisible})`,
       );
     }
   };
@@ -223,64 +202,6 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
       setTimeout(() => reject(new Error(`smoke timed out after ${SMOKE_TIMEOUT_MS}ms`)), SMOKE_TIMEOUT_MS);
     }),
   ]);
-}
-
-/** Smoke-only probe: whether the session backend process is still live. */
-function isBackendAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-/** Read the daemon-owned session backend runtime state, pid included. */
-async function readSessionBackendPid(): Promise<number | undefined> {
-  const backend = await conversationAdapter?.backend();
-  return backend?.pid;
-}
-
-/**
- * Smoke-only lifecycle observability (never exposed to renderer IPC): exercise
- * the production close-to-background and tray-restore paths and verify they
- * preserve the exact same live session backend process reported by the daemon.
- */
-async function runSmokeWindowLifecycle(shell: ShellWindowController): Promise<void> {
-  const originalPid = await readSessionBackendPid();
-  if (!originalPid) {
-    throw new Error('smoke failed: session backend has no live pid');
-  }
-  const window = shell.window;
-  window.show();
-  window.focus();
-  window.close();
-  if (window.isDestroyed() || window.isVisible()) {
-    throw new Error('smoke failed: close did not hide the shell window to the tray');
-  }
-  if (!isBackendAlive(originalPid) || await readSessionBackendPid() !== originalPid) {
-    throw new Error('smoke failed: session backend pid changed or exited after hide');
-  }
-  if (!desktopTray) {
-    throw new Error('smoke failed: tray is unavailable for the restore check');
-  }
-  if (trayPrimaryClickOpensDesktop(process.platform)) {
-    desktopTray.tray.emit('click');
-    if (window.isDestroyed() || !window.isVisible()) {
-      throw new Error('smoke failed: tray primary click did not restore the shell window');
-    }
-  } else {
-    // macOS primary click only opens the tray menu; its explicit 打开 item is
-    // bound to this same shared showDesktop path, which is the restore gesture
-    // to verify here without assuming a click restores.
-    showDesktop('workbench');
-    if (window.isDestroyed() || !window.isVisible()) {
-      throw new Error('smoke failed: tray menu open did not restore the shell window');
-    }
-  }
-  if (!isBackendAlive(originalPid) || await readSessionBackendPid() !== originalPid) {
-    throw new Error('smoke failed: session backend pid changed or exited after tray restore');
-  }
 }
 
 /** Refresh quota/provider projection once and notify existing surfaces after a daemon restart. */
@@ -293,9 +214,8 @@ async function refreshQuotaProjectionAfterGatewayRestart(): Promise<void> {
   }
 }
 
-let conversationAdapter: DesktopConversationAdapter | null = null;
-/** Session-v2 IPC relay; null until bootstrap registers it. */
-let sessionV2Registration: SessionV2Registration | null = null;
+/** Session IPC relay; null until bootstrap registers it. */
+let sessionRegistration: SessionRegistration | null = null;
 let shellWindow: ShellWindowController | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
@@ -304,6 +224,8 @@ let taskgraphWindowOwner: TaskGraphWindowOwner | null = null;
 let quotaController: DesktopQuotaController | null = null;
 let updateController: DesktopUpdateController | null = null;
 let daemonSupervisor: DesktopDaemonSupervisor | null = null;
+/** Latest known product workspace; refreshed when a save activates a new root. */
+let workspaceConfiguration: WorkspaceConfigurationSnapshot | null = null;
 let daemonRunning = false;
 const canConnectDaemon = (): boolean => daemonSupervisor?.snapshot().state === 'running';
 function requireDaemonRunning(): void {
@@ -314,12 +236,10 @@ function reconcileDaemonConnection(running: boolean): void {
   daemonRunning = running;
   if (!running) {
     desktopSubscriptions?.pause();
-    conversationAdapter?.pause();
-    sessionV2Registration?.disconnect();
+    sessionRegistration?.disconnect();
     return;
   }
   desktopSubscriptions?.reconnect();
-  void conversationAdapter?.reconnect().catch(error => console.warn('[wrenyard-desktop] conversation reconnect failed:', error));
   taskgraphWindowOwner?.reconnect();
   void refreshQuotaProjectionAfterGatewayRestart();
 }
@@ -365,12 +285,9 @@ async function finalizeQuit(): Promise<void> {
     desktopSubscriptions = null;
     taskgraphWindowOwner?.destroy();
     taskgraphWindowOwner = null;
-    // Detach only: quit never cancels the daemon-owned session backend.
-    await conversationAdapter?.close();
-    conversationAdapter = null;
-    // Stop the relay; session-v2 turns remain owned by the daemon.
-    await sessionV2Registration?.close();
-    sessionV2Registration = null;
+    // Stop the relay; session turns remain owned by the daemon.
+    await sessionRegistration?.close();
+    sessionRegistration = null;
   } catch {
     // best-effort termination
   } finally {
@@ -382,7 +299,7 @@ async function finalizeQuit(): Promise<void> {
   }
 }
 
-function showDesktop(page: ShellPage = 'workbench'): void {
+function showDesktop(page: ShellPage = 'session'): void {
   // Every surface is inert for the whole pending quit, not only the modal.
   if (quitController?.isQuitting()) return;
   if (!shellWindow || shellWindow.window.isDestroyed()) {
@@ -554,7 +471,7 @@ async function bootstrap(): Promise<void> {
   });
   const ipcPath = resolveWrenyardIpcPath();
   const pageLoader = createPageLoader({ appPath: app.getAppPath(), packaged: app.isPackaged, env: process.env });
-  const workspaceConfiguration = await inspectProductWorkspace();
+  workspaceConfiguration = await inspectProductWorkspace();
   console.info('[wrenyard-desktop] workspace ready');
 
   const requestForeman = async (method: string, params: unknown): Promise<unknown> => {
@@ -760,7 +677,7 @@ async function bootstrap(): Promise<void> {
     try {
       const status = await requestForeman('daemon.status', {}) as Record<string, unknown>;
       // `idle` already accounts for tasks, taskgraphs, executions and
-      // conversations, so it is the only readiness signal; counts are display
+      // sessions, so it is the only readiness signal; counts are display
       // only and taskgraphs come from `activeTaskGraphCount`.
       if (status.ok !== true || typeof status.idle !== 'boolean') return null;
       return {
@@ -793,27 +710,10 @@ async function bootstrap(): Promise<void> {
     quitController?.forceQuit();
   });
 
-  // Conversation state, summary preference and recovery are all daemon-owned
-  // now; Desktop only projects the session IPC surface and relays revisions.
-  conversationAdapter = new DesktopConversationAdapter({
-    ipcPath,
-    canConnect: canConnectDaemon,
-    initialWorkspace: workspaceConfiguration,
-    onChanged: () => shellWindow?.notifyConversationChanged(),
-    // The session transport is the same socket as the daemon status round: an
-    // unavailable→available edge means the daemon restarted, so refresh the
-    // quota projection and republish it to the surfaces.
-    onReconnected: () => { void refreshQuotaProjectionAfterGatewayRestart(); },
-  });
-  const conversationStart = conversationAdapter.start().catch((error: unknown) => {
-    console.error('[wrenyard-desktop] conversation backend failed to start:', error);
-  });
   console.info('[wrenyard-desktop] initializing shell');
-  // Render the shell while the daemon conversation backend is bound.
-  if (SMOKE) await conversationStart;
 
-  // Relay session-v2 over the same owner-only daemon control socket.
-  sessionV2Registration = registerSessionV2({
+  // Relay session IPC over the same owner-only daemon control socket.
+  sessionRegistration = registerSession({
     ipcPath,
     canConnect: canConnectDaemon,
     // The shell window is created after this registration, so read the live
@@ -910,18 +810,17 @@ async function bootstrap(): Promise<void> {
 
   /**
    * Reactivate the daemon after a workspace change: gate on an idle daemon,
-   * run a planned CLI restart, and only then let the conversation controller
-   * bind the saved workspace. Any failure stays visible instead of claiming
+   * run a planned CLI restart, and let the restarted daemon bind the saved
+   * workspace from config. Any failure stays visible instead of claiming
    * activation succeeded, and a busy daemon is never interrupted.
    */
   const version = app.getVersion();
   const buildTime = resolveDesktopBuildTime();
   const getSettings = async () => buildSettingsSnapshot({
     endpoint: ipcPath,
-    workspace: conversationAdapter!.workspace,
+    workspace: workspaceConfiguration!,
     desktopVersion: version,
     wrenyardVersion: version,
-    dshVersion: (await conversationAdapter!.backend().catch(() => undefined))?.version ?? 'unknown',
     buildTime,
     readHealth: () => canConnectDaemon() ? readWrenyardHealth(ipcPath) : Promise.resolve({ connected: false }),
     readGatewayModels: () => { requireDaemonRunning(); return readGatewayConnection(ipcPath).then((connection) => connection.models); },
@@ -996,21 +895,15 @@ async function bootstrap(): Promise<void> {
       } else {
         await restartOwnedDaemon(daemonSupervisor!);
       }
-      await conversationAdapter!.start();
-      // Activation is Desktop's; the daemon validates and owns the binding.
-      await conversationAdapter!.setWorkspace(saved);
+      // The daemon reads the workspace from config at startup, so the restarted
+      // daemon is already bound to it; Desktop only republishes the new root.
+      workspaceConfiguration = saved;
+      notifyDaemonChanged();
       return saved;
     },
-    getConversation: async () => conversationAdapter!.snapshot(),
-    getConversationActivity: () => { requireDaemonRunning(); return readConversationActivity(ipcPath); },
     // Task detail/transcript windows are general Desktop windows, owned by the
     // window owner and reachable even when Pet is hidden.
     openTaskTranscript: (taskRunId) => windowOwner.openTaskTranscript(taskRunId),
-    selectConversation: (sessionId: string) => conversationAdapter!.select(sessionId),
-    createConversation: () => conversationAdapter!.create(),
-    selectConversationModel: (provider: string, model: string, reasoningEffort?: string) => conversationAdapter!.selectModel(provider, model, reasoningEffort),
-    sendConversation: (text: string, clientTimeZone?: string) => conversationAdapter!.send(text, clientTimeZone),
-    cancelConversation: (turnId?: string) => conversationAdapter!.cancel(turnId),
     getTaskSettings: (project?: string, taskId?: string) => getTaskSettings(project, taskId),
     saveTaskSettings: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),
     runtimeAliasSnapshot: () => getRuntimeAliasSnapshot(),
@@ -1018,11 +911,13 @@ async function bootstrap(): Promise<void> {
     runtimeAliasRemove: (request: RuntimeAliasRemoveRequest) => removeRuntimeAlias(request),
     requestTaskRoutingTest: (params: TaskRoutingTestParams) => requestTaskRoutingTest(params),
     requestRoutingTestTasks: () => requestRoutingTestTasks(),
-    // Summary model projection and persistence live in the session feature.
+    // Summary model projection and persistence are owned by the session feature;
+    // Desktop is only a typed transport for its canonical IPC methods, which
+    // return the settings snapshot directly.
     getSummarySettings: async (): Promise<SummarySettingsSnapshot> =>
-      (await conversationAdapter!.getSummaryModel()).summary,
+      (await requestForeman('session.summary.settings', {})) as SummarySettingsSnapshot,
     saveSummaryModel: async (canonicalModel: string): Promise<SummarySettingsSnapshot> =>
-      (await conversationAdapter!.setSummaryModel(canonicalModel)).summary,
+      (await requestForeman('session.summary.save', { canonicalModel })) as SummarySettingsSnapshot,
     execStart: (request: ExecStartRequest) => execStart(request),
     execGet: (id: string) => execGet(id),
     execEvents: (request: ExecEventsRequest) => execEvents(request),
@@ -1108,7 +1003,7 @@ async function bootstrap(): Promise<void> {
       syncTaskgraphEntityVisibility();
     },
     restartPet: () => (quitController?.isQuitting() ? Promise.resolve() : petController!.restart()),
-    openDesktop: () => showDesktop('workbench'),
+    openDesktop: () => showDesktop('session'),
     getQuotaSnapshot: () => quotaController!.snapshot(),
   }, process.platform);
 
@@ -1118,17 +1013,7 @@ async function bootstrap(): Promise<void> {
   }
 
   if (SMOKE) {
-    // The daemon starts sessions asynchronously; observing IPC once is not a
-    // readiness barrier like the former in-process controller.start().
-    const sessionDeadline = Date.now() + 60_000;
-    while (conversationAdapter.snapshot().status === 'unavailable' && Date.now() < sessionDeadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (conversationAdapter.snapshot().status !== 'ready') {
-      throw new Error('smoke requires a configured workspace and a ready session backend');
-    }
     await runSmoke(shellWindow);
-    await runSmokeWindowLifecycle(shellWindow);
     console.log('[wrenyard-desktop] smoke ok');
     // Real explicit quit: skip the drain dialog but run the production teardown.
     if (quitController) quitController.requestQuit({ bypassDrain: true });
@@ -1139,7 +1024,7 @@ async function bootstrap(): Promise<void> {
 app.on('second-instance', (_event, commandLine) => {
   // A second instance only raises the blocking drain dialog.
   if (quitController?.handleSecondInstance()) return;
-  showDesktop(commandLine.some(isSettingsLaunchRequest) ? 'settings' : 'workbench');
+  showDesktop(commandLine.some(isSettingsLaunchRequest) ? 'settings' : 'session');
 });
 
 app.on('open-url', (event, url) => {
@@ -1149,7 +1034,7 @@ app.on('open-url', (event, url) => {
 
 app.on('activate', () => {
   if (quitController?.isQuitting()) return;
-  showDesktop('workbench');
+  showDesktop('session');
 });
 
 // Closing every window only hides it to the tray on every platform. The app
@@ -1201,10 +1086,8 @@ if (!gotSingleInstanceLock) {
       desktopSubscriptions = null;
       taskgraphWindowOwner?.destroy();
       taskgraphWindowOwner = null;
-      await conversationAdapter?.close();
-      conversationAdapter = null;
-      await sessionV2Registration?.close();
-      sessionV2Registration = null;
+      await sessionRegistration?.close();
+      sessionRegistration = null;
     } catch {
       // best-effort termination
     }

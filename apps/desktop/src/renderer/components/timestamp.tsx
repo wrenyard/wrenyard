@@ -1,6 +1,6 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { formatClock, formatClockSeconds, formatDateTime } from '@/renderer/lib/format';
-import { cn } from '@/renderer/lib/utils';
+import { cn } from 'cn';
 
 export interface TimestampProps {
   /** An ISO date-time string. */
