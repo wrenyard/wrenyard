@@ -10,8 +10,17 @@ import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans } from './catalog.ts';
 import { codeBuddy, providerImplementations } from './builtins.ts';
 import type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity } from './codebuddy/index.ts';
 import type { Provider } from './base/index.ts';
+import {
+  applyChatGptNativeHeaders,
+  bindChatGptGatewayCredential,
+  chatGptGatewayAccountId,
+  type ChatGptGatewayAuthAdapter,
+  type ChatGptGatewayCredential,
+} from './chatgpt/runtime.ts';
 
 export type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity, CodeBuddyEnvironment } from './codebuddy/runtime.ts';
+export type { ChatGptGatewayAuthAdapter, ChatGptGatewayCredential } from './chatgpt/runtime.ts';
+export { applyChatGptPromptCacheKey } from './chatgpt/runtime.ts';
 
 import type { ProviderCredential, RoutingFreeSupplyFact } from './base/provider.ts';
 export type { ProviderCredential, RoutingFreeSupplyFact } from './base/provider.ts';
@@ -24,6 +33,14 @@ export interface ProviderRuntime {
   resolveUpstreamModel(provider: ProviderDefinition, model: string, credential?: ProviderCredential): string;
   publicResponseModel(provider: ProviderDefinition, model: string, upstreamModel: string, publicModel: string): string;
   configureApiKey(provider: ProviderDefinition, key: string): Promise<void>;
+  /**
+   * Optional one-shot credential refresh for the single ChatGPT/Codex gateway
+   * auth path. Implemented only through the injected client adapter; every
+   * other provider is rejected. Resolves to the new credential on success and
+   * throws when refresh is unavailable, so a caller can fall back to the
+   * original failure without retrying.
+   */
+  refreshCredential?(provider: ProviderDefinition, credential: ProviderCredential, signal: AbortSignal): Promise<ProviderCredential>;
   /** Exact-model free-supply classification for an already-loaded credential.
    * Unknown credentials/models and paid subscriptions never qualify. */
   freeSupply?(provider: ProviderDefinition, model: string, credential: ProviderCredential): RoutingFreeSupplyFact | undefined;
@@ -58,6 +75,12 @@ export interface BuiltinProviderRuntimeOptions {
   writeFile?: (path: string, data: string, options: { encoding: 'utf8'; mode: number }) => Promise<void>;
   rename?: (oldPath: string, newPath: string) => Promise<void>;
   mkdir?: (path: string, options: { recursive: true; mode: number }) => Promise<unknown>;
+  /**
+   * Injected Codex ChatGPT gateway auth, implemented by @wrenyard/client-codex
+   * and wired by the daemon. Its absence leaves ChatGPT without a gateway
+   * credential; no other provider consults it.
+   */
+  codexGatewayAuth?: ChatGptGatewayAuthAdapter;
 }
 
 /** Reverse only explicit, unambiguous wire identities from the provider SSOT. */
@@ -145,6 +168,30 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
   for (const provider of options.providers ?? []) implementations.set(provider.id, provider);
   return {
     async credential(provider) {
+      // ChatGPT/Codex is the only provider whose gateway credential comes from
+      // the injected native Codex reader. It carries the ChatGPT account id
+      // bound to the returned credential; every other provider keeps its
+      // existing implementation or managed-store path unchanged.
+      if (provider.id === 'chatgpt' && provider.credentialResolver === 'codex') {
+        const adapter = options.codexGatewayAuth;
+        if (!adapter) return undefined;
+        // An absent, malformed, or rejected native login is simply an
+        // unavailable credential, exactly like an empty managed store. The
+        // gateway probes credential() for every provider, so a thrown error
+        // here would break every other protocol's /models directory.
+        let gateway: ChatGptGatewayCredential | undefined;
+        try {
+          gateway = await adapter.read();
+        } catch {
+          return undefined;
+        }
+        const accessToken = nonEmptyString(gateway?.accessToken);
+        const accountId = nonEmptyString(gateway?.accountId);
+        if (accessToken === undefined || accountId === undefined) return undefined;
+        const credential = Object.freeze({ value: accessToken });
+        bindChatGptGatewayCredential(credential, accountId);
+        return credential;
+      }
       const implementation = implementations.get(provider.id);
       if (implementation) {
         const credential = await implementation.credential();
@@ -213,6 +260,24 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       await writeFile(temporary, `${JSON.stringify(entries, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, path);
     },
+    async refreshCredential(provider, credential, signal) {
+      // Only the ChatGPT/Codex gateway credential is refreshable, and only
+      // through the injected client adapter: no credential material or refresh
+      // transport is authored here.
+      if (provider.id !== 'chatgpt' || provider.credentialResolver !== 'codex') {
+        throw new Error(`provider ${provider.id} does not support credential refresh`);
+      }
+      const adapter = options.codexGatewayAuth;
+      if (!adapter) throw new Error('ChatGPT credential refresh is unavailable');
+      const accountId = chatGptGatewayAccountId(credential);
+      if (accountId === undefined || credential.value === '') {
+        throw new Error('ChatGPT credential is not refreshable');
+      }
+      const refreshed = await adapter.refresh({ accessToken: credential.value, accountId }, signal);
+      const next = Object.freeze({ value: refreshed.accessToken });
+      bindChatGptGatewayCredential(next, refreshed.accountId);
+      return next;
+    },
     async codeBuddySnapshot(provider) {
       if (provider.id !== activeCodeBuddy.id || provider.credentialResolver !== 'codebuddy') return undefined;
       const implementation = implementations.get(provider.id);
@@ -270,5 +335,8 @@ export function upstreamAuthHeaders(provider: ProviderDefinition, credential: Pr
   else headers.set('authorization', `Bearer ${credential.value}`);
   const implementation = credentialProviders.get(credential) ?? providerImplementations.get(provider.id);
   if (implementation?.id === provider.id) implementation.applyHeaders(headers, credential, capability.protocol);
+  // The ChatGPT subscription endpoint additionally needs the Codex account
+  // headers, applied only for a bound chatgpt credential and openai_responses.
+  applyChatGptNativeHeaders(headers, provider, credential, capability.protocol);
   return headers;
 }

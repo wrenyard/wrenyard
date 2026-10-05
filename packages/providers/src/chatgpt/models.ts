@@ -9,6 +9,16 @@ export const definition = defineProvider({
     'gpt-6-luna',
   ],
   modelAliases: { 'codex-astra': 'gpt-6-astra' },
+  // The subscription Responses surface of the ChatGPT backend. Codex-native
+  // clients keep their existing native transport; this entry only lets the
+  // Model Gateway forward the exact openai_responses protocol.
+  protocols: [
+    {
+      protocol: 'openai_responses',
+      endpoint: 'https://chatgpt.com/backend-api/codex/responses',
+      authScheme: 'bearer',
+    },
+  ],
   // Native Codex wire identity effort: each declared level is sent as the exact
   // effort token; the public canonical model id is retained.
   thinkingMappings: {
