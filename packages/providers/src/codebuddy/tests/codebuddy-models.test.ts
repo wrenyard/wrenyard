@@ -1,74 +1,95 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createBuiltinCatalog } from '../../index.ts';
-import { resolveCodeBuddyProductModelId } from '../models.ts';
+import { createCodeBuddyModels, resolveCodeBuddyProductModelId } from '../models.ts';
+import type { CodeBuddyProductModelEntry } from '../product.ts';
 
-const REQUIRED_OFFERINGS = [
-  'deepseek-v4.1-flash',
-  'hy4-preview',
-  'hy3',
-  'minimax-m3',
-  'kimi-k3',
-  'glm-5.3',
-  'glm-5.3-flash',
-] as const;
+const entries = (...ids: string[]): CodeBuddyProductModelEntry[] => ids.map((id) => ({ id }));
 
 test('CodeBuddy product ids match the mainstream registry or are ignored', () => {
   assert.equal(resolveCodeBuddyProductModelId('hy3-ioa'), 'hunyuan-hy3');
   assert.equal(resolveCodeBuddyProductModelId('hy4-preview'), 'hunyuan-hy4-preview');
   assert.equal(resolveCodeBuddyProductModelId('gpt-5.6-sol'), 'gpt-5.6-sol');
   assert.equal(resolveCodeBuddyProductModelId('kimi-k3-ioa'), 'kimi-k3');
-  assert.equal(resolveCodeBuddyProductModelId('minimax-m2.7-ioa'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('MiniMax-M2.7'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('claude-haiku-4.5'), 'claude-haiku-4-5');
-  assert.equal(resolveCodeBuddyProductModelId('MiniMax-M3'), 'minimax-m3');
-  assert.equal(resolveCodeBuddyProductModelId('echo'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('glm-4.7-ioa'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('glm-5.2'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('glm-5.2-ioa'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('glm-5.2-internal-ioa'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('kimi-k2.6'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('kimi-k2.6-ioa'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('gpt-5.4'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('gpt-5.4-ioa'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('gpt-5.5'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('gpt-5.5-ioa'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('claude-fable-5'), undefined);
   assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-flash-ioa'), 'deepseek-v4.1-flash');
   assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-pro'), 'deepseek-v4-pro');
   assert.equal(resolveCodeBuddyProductModelId('deepseek-v4-pro-ioa'), 'deepseek-v4-pro');
-  assert.equal(resolveCodeBuddyProductModelId('claude-sonnet-5-1m'), 'claude-sonnet-5');
-  assert.equal(resolveCodeBuddyProductModelId('claude-sonnet-5-1m-ioa'), 'claude-sonnet-5');
-  assert.equal(resolveCodeBuddyProductModelId('claude-sonnet-5'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('claude-opus-5-1m'), 'claude-opus-5');
-  assert.equal(resolveCodeBuddyProductModelId('claude-opus-5-1m-ioa'), 'claude-opus-5');
-  assert.equal(resolveCodeBuddyProductModelId('claude-opus-5'), undefined);
-  assert.equal(resolveCodeBuddyProductModelId('hunyuan-image-v3.0-ioa'), undefined);
+  assert.equal(resolveCodeBuddyProductModelId('claude-opus-5.5'), 'claude-opus-5-5');
+  assert.equal(resolveCodeBuddyProductModelId('claude-sonnet-5.5'), 'claude-sonnet-5-5');
+  for (const ignored of [
+    'minimax-m2.7-ioa',
+    'MiniMax-M2.7',
+    'MiniMax-M3',
+    'echo',
+    'glm-4.7-ioa',
+    'glm-5.2',
+    'glm-5.2-ioa',
+    'glm-5.2-internal-ioa',
+    'kimi-k2.6',
+    'kimi-k2.6-ioa',
+    'gpt-5.4',
+    'gpt-5.4-ioa',
+    'gpt-5.5',
+    'gpt-5.5-ioa',
+    'claude-fable-5',
+    'hunyuan-image-v3.0-ioa',
+  ]) {
+    assert.equal(resolveCodeBuddyProductModelId(ignored), undefined, ignored);
+  }
 });
 
-test('CodeBuddy offerings are mainstream JSON matches plus CUSTOM leftovers', () => {
-  const provider = createBuiltinCatalog().provider('codebuddy')!;
-  const ids = provider.models.map((entry) => entry.id);
-  for (const id of REQUIRED_OFFERINGS) {
-    assert.ok(ids.includes(id), `missing required offering ${id}`);
+test('retired Claude generation-5 rows never become offerings', () => {
+  const built = createCodeBuddyModels(entries(
+    'claude-opus-5',
+    'claude-opus-5-1m',
+    'claude-opus-5-1m-ioa',
+    'claude-sonnet-5',
+    'claude-sonnet-5-1m',
+    'claude-sonnet-5-1m-ioa',
+  ));
+  const ids = new Set(built.definition.models.map((entry) => entry.id));
+  assert.ok(!ids.has('claude-opus-5'));
+  assert.ok(!ids.has('claude-sonnet-5'));
+  assert.ok(!('claude-opus-5' in built.upstreamModels));
+  assert.ok(!('claude-sonnet-5' in built.upstreamModels));
+  // An old 5 id is never aliased forward onto the 5.5 generation.
+  assert.equal(built.definition.modelAliases?.['claude-opus-5'], undefined);
+  assert.equal(built.definition.modelAliases?.['claude-sonnet-5'], undefined);
+});
+
+test('historical old-5 spellings canonicalize without being offered', () => {
+  const history: readonly (readonly [string, string])[] = [
+    ['claude-opus-5', 'claude-opus-5'],
+    ['claude-opus-5-1m', 'claude-opus-5'],
+    ['claude-opus-5-1m-ioa', 'claude-opus-5'],
+    ['claude-sonnet-5', 'claude-sonnet-5'],
+    ['claude-sonnet-5-1m', 'claude-sonnet-5'],
+    ['claude-sonnet-5-1m-ioa', 'claude-sonnet-5'],
+  ];
+  for (const [observed, canonical] of history) {
+    assert.equal(resolveCodeBuddyProductModelId(observed), canonical, observed);
   }
-  assert.equal(provider.models.find((entry) => entry.id === 'hy3')?.canonicalModel, undefined);
-  assert.deepEqual(provider.models.find((entry) => entry.id === 'hy4-preview')?.canonicalModel, {
-    id: 'hunyuan-hy4-preview',
-    displayName: 'HY4 Preview',
-  });
-  assert.equal(provider.models.find((entry) => entry.id === 'deepseek-v4.1-flash')?.canonicalModel, undefined);
-  for (const banned of [
-    'echo',
-    'glm-4.7',
-    'glm-5.2',
-    'kimi-k2.6',
-    'gpt-5.4',
-    'gpt-5.5',
-    'claude-fable-5',
-    'deepseek-v4-flash',
-    'default-model',
-  ]) {
-    assert.ok(!ids.includes(banned), `${banned} leaked into CodeBuddy offerings`);
-  }
+});
+
+test('5.5 offerings come only from an actual product row', () => {
+  const withRows = createCodeBuddyModels(entries('claude-opus-5.5', 'claude-sonnet-5.5'));
+  const ids = new Set(withRows.definition.models.map((entry) => entry.id));
+  assert.ok(ids.has('claude-opus-5-5'));
+  assert.ok(ids.has('claude-sonnet-5-5'));
+  assert.equal(withRows.upstreamModels['claude-opus-5-5'], 'claude-opus-5.5');
+  assert.equal(withRows.upstreamModels['claude-sonnet-5-5'], 'claude-sonnet-5.5');
+
+  const withoutRows = createCodeBuddyModels(entries('deepseek-v4-pro', 'claude-haiku-4.5'));
+  const absent = withoutRows.definition.models.map((entry) => entry.id);
+  assert.ok(absent.includes('deepseek-v4-pro'));
+  assert.ok(absent.includes('claude-haiku-4-5'));
+  assert.ok(!absent.some((id) => id.startsWith('claude-opus-5') || id.startsWith('claude-sonnet-5')));
+});
+
+test('a snapshot with no Claude 5 rows fabricates no offerings', () => {
+  const empty = createCodeBuddyModels([]);
+  assert.deepEqual(empty.definition.models, []);
+  assert.deepEqual(empty.upstreamModels, {});
+  assert.ok(!('claude-opus-5-5' in empty.upstreamModels));
+  assert.ok(!('claude-sonnet-5-5' in empty.upstreamModels));
 });
