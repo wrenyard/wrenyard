@@ -22,6 +22,9 @@ const exact = (name, range) => {
 };
 const external = {
   'better-sqlite3': execution.dependencies['better-sqlite3'],
+  // sharp is a native module: it must stay external and be installed from the
+  // daemon bundle manifest, where its version is pinned to the resolved install.
+  ...(session.dependencies.sharp ? { sharp: session.dependencies.sharp } : {}),
   ...Object.fromEntries(Object.entries(session.dependencies).filter(([name]) => name.startsWith('@deepseek-ai/'))),
 };
 

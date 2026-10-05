@@ -899,7 +899,10 @@ async function createForemanDaemonResources(
     stateRoot: sessionStateRoot,
     gateway: sessionGateway,
     taskService,
-    workspaceDocService,
+    // The session's main inference validates against the same product-wired
+    // catalog already injected into the gateway/provider.list surface, so a
+    // CodeBuddy model is only offered after the daemon read the real install.
+    resolveInferenceProvider: id => catalog.provider(id),
   }))
   registerSessionHandlers(rpcRouter, {
     session,

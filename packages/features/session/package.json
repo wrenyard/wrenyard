@@ -5,13 +5,19 @@
   "license": "MIT",
   "type": "module",
   "description": "Wrenyard context-ledger session core: append-only per-session timeline, derived state, the work-turn engine and the summary-model preference.",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./model-metadata": "./src/calls.ts"
+  },
   "dependencies": {
     "@wrenyard/control-client": "workspace:*",
     "@wrenyard/models": "workspace:*",
+    "@wrenyard/protocol": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "ajv": "^8.17.1",
-    "js-tiktoken": "1.0.21"
+    "diff": "9.0.0",
+    "js-tiktoken": "1.0.21",
+    "sharp": "0.35.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

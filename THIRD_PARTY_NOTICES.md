@@ -19,6 +19,16 @@ any third-party software.
 | esbuild | MIT | esbuild contributors |
 | postject | MIT | postject contributors |
 | archiver | MIT | archiver contributors |
+| sharp (`sharp`) | Apache-2.0 | Copyright 2013 Lovell Fuller and others |
+| sharp native prebuilds (`@img/sharp-<platform>`) | Apache-2.0 | See bundled sharp source notices |
+| libvips native package (`@img/sharp-libvips-<platform>`) | LGPL-3.0-or-later | See bundled upstream library notices; the package README lists its individual bundled library licenses |
+
+Release builds that bundle the session image pipeline ship sharp's
+platform-selected native packages (`@img/sharp-<platform>` and
+`@img/sharp-libvips-<platform>`). The release dependency-copy and pruning steps
+preserve each native package's `README`, license metadata and `package.json`, so
+the libvips native package README and its individual bundled-library license
+listings travel with the shipped package.
 
 ## Machine-readable inventory
 
