@@ -187,6 +187,9 @@ export type {
   TaskSchemaInput,
   TaskConfig,
   TaskDefinition,
+  TaskDeclaration,
+  TaskInheritedDeclaration,
+  InheritanceChainEntry,
   RegisteredTask,
   TaskExecutionResult,
   TaskRunResult,
@@ -198,8 +201,20 @@ export type {
   TaskGate,
 } from './core/task/types.mts'
 
+/**
+ * Authoring global overloads. A complete `TaskConfig` must declare
+ * input/output/prompt; an inherited `TaskInheritedDeclaration` must declare
+ * `extends` and may only layer the inherited fields. Overload excess-property
+ * checking makes a mixed/forbidden shape (for example `extends` plus `input`)
+ * a compile-time error.
+ */
+export interface DefineTask {
+  (config: TaskConfig): TaskDefinition
+  (config: import('./core/task/types.mts').TaskInheritedDeclaration): TaskDefinition
+}
+
 declare global {
-  var defineTask: ((config: TaskConfig) => TaskDefinition) | undefined
+  var defineTask: DefineTask | undefined
   var agent: PrimitiveSet['agent'] | undefined
   var shell: PrimitiveSet['shell'] | undefined
   var checkpoint: CheckpointFn | undefined

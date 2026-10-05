@@ -87,6 +87,7 @@ import type {
   TaskSettingsSourceLayer,
   TaskSettingsTaskRow,
   TaskSettingsValidationIssue,
+  TaskInheritanceChainEntry,
 } from '../../protocol/methods/task.mts'
 import type {
   TaskRunSettingsParams,
@@ -142,6 +143,9 @@ export interface TaskSettingsDefinitionSummary {
   /** Ordered safe preview segments of the builtin prompt template; never
    *  produced by executing definition functions. */
   instructionTemplate?: TaskSettingsInstructionSegment[]
+  /** Base→effective inheritance chain; present only when the effective
+   *  definition was resolved from an inherited declaration. */
+  inheritanceChain?: TaskInheritanceChainEntry[]
 }
 
 export interface TaskSettingsDefinitionDetail extends TaskSettingsDefinitionSummary {
@@ -1525,6 +1529,7 @@ export class TaskSettingsService {
       ? summary.projectDisplayName ?? detail?.projectDisplayName ?? projectName ?? ''
       : undefined
     const instructionTemplate = summary.instructionTemplate ?? detail?.instructionTemplate ?? []
+    const inheritanceChain = summary.inheritanceChain ?? detail?.inheritanceChain
     const automatic = toEffectiveAutomatic(effective.dispatch, effective.sources.dispatch)
 
     // Explicit-mode row: the stored structural reference plus its exact
@@ -1684,6 +1689,7 @@ export class TaskSettingsService {
       },
       ...(explicitRow !== undefined ? { explicit: explicitRow } : {}),
       ...(automaticSelection !== undefined ? { automatic_selection: automaticSelection } : {}),
+      ...(inheritanceChain !== undefined ? { inheritanceChain } : {}),
       issues,
     }
   }
@@ -2826,6 +2832,7 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
             timeoutMs?: unknown
             dispatch?: unknown
             promptTemplate?: unknown
+            inheritanceChain?: unknown
           }
           const projectName = record.project !== undefined ? String(record.project) : undefined
           const projectDisplayName = projectLabel(projectName)
@@ -2844,6 +2851,9 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
               : {}),
             ...(record.promptTemplate === 'dynamic' || record.promptTemplate === 'fixed'
               ? { promptTemplate: record.promptTemplate }
+              : {}),
+            ...(Array.isArray(record.inheritanceChain)
+              ? { inheritanceChain: record.inheritanceChain as TaskInheritanceChainEntry[] }
               : {}),
             instructionTemplate: taskInstructionTemplate(config),
           }
@@ -2911,6 +2921,9 @@ function createWorkspaceDefinitionSource(workspaceRoot: string): TaskSettingsDef
         ...(record.dispatch !== undefined ? { dispatch: record.dispatch } : {}),
         ...(record.promptTemplate === 'dynamic' || record.promptTemplate === 'fixed'
           ? { promptTemplate: record.promptTemplate }
+          : {}),
+        ...(Array.isArray(record.inheritanceChain)
+          ? { inheritanceChain: record.inheritanceChain as TaskInheritanceChainEntry[] }
           : {}),
         instructionTemplate: taskInstructionTemplate(config),
       }

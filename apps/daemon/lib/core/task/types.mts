@@ -84,6 +84,14 @@ export interface TaskConfigBase {
    *  by the shorter retry timeout and by the positive remaining total. Omitted
    *  tasks inherit the 15-minute default. */
   timeoutMs?: number
+  /** A complete replacement config never selects an inheritance base. The
+   *  `extends` selector exists only on `TaskInheritedDeclaration`; making it
+   *  type-level impossible here rejects stored (non-literal) mixed shapes that
+   *  excess-property checking alone cannot catch. */
+  extends?: never
+  /** `promptAppend` is only meaningful on an inherited declaration; a complete
+   *  replacement config cannot carry it. */
+  promptAppend?: never
 }
 
 /** Active authoring contract: an active Task never pins a runtime. It selects
@@ -117,10 +125,74 @@ export interface TaskConfigLegacy extends TaskConfigBase {
 
 export type TaskConfig = TaskConfigActive | TaskConfigLegacy
 
+/**
+ * Provenance entry for one layer of a resolved task-definition inheritance
+ * chain. The chain is ordered base→effective and always includes the effective
+ * definition itself. A builtin layer carries `path: '(builtin)'` and no
+ * project; project layers carry the registered project id and the exact
+ * definition file path.
+ */
+export interface InheritanceChainEntry {
+  source: 'builtin' | 'project'
+  project?: string
+  path: string
+}
+
+/**
+ * Inherited task-definition authoring declaration. A project definition may
+ * declare `extends` (exactly the same id as its filename) to layer on top of
+ * the next lower same-id definition: nearest ancestor project, then builtin.
+ * Only the fields below may be supplied; the base guarantees
+ * input/output/prompt/writeTargets/features/gates/scheduling and every other
+ * resolved config property.
+ *
+ * `promptAppend` is added beneath a fixed
+ * `\n\n## Project task instructions\n\n` heading after the inherited base
+ * prompt. It accepts a plain string or an async input-consuming function.
+ */
+export interface TaskInheritedDeclaration {
+  /** Same-id base selector. Must exactly equal the definition file task id. */
+  extends: string
+  promptAppend?: string | ((input: unknown) => string | Promise<string>)
+  instructions?: Array<string | ((input?: unknown) => string | Promise<string>)>
+  /** Field-level dispatch override; `requiredCapabilities` unions with the
+   *  base and `intelligenceMin` takes the higher (harder) tier. */
+  dispatch?: TaskDispatchRequirements
+  timeoutMs?: number
+  displayName?: string
+  description?: string
+  category?: {
+    id: string
+    displayLabel: string
+  }
+  /** Inherited declarations layer onto a base; they never redeclare the
+   *  resolved config surface. These `never` fields reject stored (non-literal)
+   *  mixed shapes that excess-property checking alone cannot catch, while the
+   *  runtime `TaskConfig` keeps input/output/prompt required. */
+  input?: never
+  output?: never
+  prompt?: never
+  writeTargets?: never
+  features?: never
+  gates?: never
+  scheduling?: never
+  profile?: never
+  agentRuntime?: never
+  permission?: never
+}
+
+/** Raw authoring declaration accepted by `defineTask`: either a complete task
+ *  config or an inherited declaration resolved by the definition registry. */
+export type TaskDeclaration = TaskConfig | TaskInheritedDeclaration
+
 export interface TaskDefinition {
   __type: 'task'
+  /** Runtime config. Not meaningful while `declaration` is set: the definition
+   *  registry replaces it with the config merged onto the base. */
   config: TaskConfig
   sourcePath: string
+  /** Raw inherited declaration captured by `defineTask({ extends, ... })`. */
+  declaration?: TaskInheritedDeclaration
 }
 
 /**
@@ -139,6 +211,9 @@ export interface RegisteredTask {
   source: 'builtin' | 'project'
   /** Registered project qualified id; only for `source === 'project'`. */
   project?: string
+  /** Base→effective inheritance chain; present only when this entry was
+   *  resolved from an inherited declaration. */
+  inheritanceChain?: InheritanceChainEntry[]
 }
 
 export interface TaskExecutionResult {

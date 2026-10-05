@@ -5,11 +5,13 @@ import { discoverProjects } from '../core/project/loader.mts'
 import { listAllManagedWorktreePaths } from '../core/project/manager.mts'
 import { foremanStateRoot } from '../config/state.mts'
 import type {
+  InheritanceChainEntry,
   RegisteredTask,
   ResolvedTarget,
   TaskConfig,
   TaskDefinition,
   TaskDispatchRequirements,
+  TaskInheritedDeclaration,
 } from '../types.mts'
 import {
   STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
@@ -20,6 +22,7 @@ import {
 } from '../task-timeouts.mts'
 import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
 import { generateInputExample, normalizeSchema } from './schema-loader.mts'
+import { getTaskPromptTemplates, withTaskPromptTemplates } from '../core/task/prompt-template.mts'
 import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier, normalizeThinkingLevel } from '@wrenyard/providers/catalog'
 import {
   BUILTIN_SOURCE_PATH,
@@ -84,8 +87,19 @@ interface Registry {
   discovered: boolean
   dirty: boolean
   tasks: RegisteredTask[]
+  /** Loaded `extends` declarations by source path. Each one is merged onto its
+   *  base by `resolveAllInherited`; only a successful merge reaches `tasks`. */
+  inherited: Map<string, InheritedSource>
   fileIndex: Map<string, { mtimeMs: number; kind: 'task' }>
   loadErrors: LoadError[]
+}
+
+interface InheritedSource {
+  name: string
+  project: string
+  sourcePath: string
+  mtime: number
+  declaration: TaskInheritedDeclaration
 }
 
 export interface ListedDefinition {
@@ -130,6 +144,9 @@ export interface ListedDefinition {
   profile?: string
   /** Validated explicit dispatch requirements, projected from the task config. */
   dispatch?: TaskDispatchRequirements
+  /** Base→effective inheritance chain; present only when the definition was
+   *  resolved from an inherited declaration (`defineTask({ extends, ... })`). */
+  inheritanceChain?: InheritanceChainEntry[]
 }
 
 const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'dist', 'out', 'build', 'coverage', '.nyc_output'])
@@ -440,6 +457,7 @@ export function markDirty(workspaceRoot: string): void {
 export async function discoverTasks(workspaceRoot: string): Promise<void> {
   const registry = registryFor(workspaceRoot)
   registry.tasks = []
+  registry.inherited.clear()
   registry.fileIndex.clear()
   registry.loadErrors = []
   registry.discovered = true
@@ -447,9 +465,14 @@ export async function discoverTasks(workspaceRoot: string): Promise<void> {
 
   cleanupStaleImportCopies(registry.workspaceRoot)
 
+  // Builtins are the terminal inheritance layer: inject them before any
+  // external definition so a child that extends a builtin resolves regardless
+  // of scan order.
+  injectBuiltins(registry)
+
   for (const filePath of scanFiles(registry.workspaceRoot)) {
     try {
-      await registerTaskFile(filePath, registry.workspaceRoot)
+      commitLoaded(registry, await loadTaskFile(filePath, registry.workspaceRoot))
       registry.fileIndex.set(filePath, { mtimeMs: statSync(filePath).mtimeMs, kind: 'task' })
     } catch (error) {
       if (error instanceof QualifiedDefinitionIdError) {
@@ -473,7 +496,9 @@ export async function discoverTasks(workspaceRoot: string): Promise<void> {
     }
   }
 
-  injectBuiltins(registry)
+  // Resolve inherited declarations after the full scan so a project child
+  // resolves its ancestor/builtin base regardless of directory order.
+  resolveAllInherited(registry)
 }
 
 /**
@@ -498,7 +523,7 @@ async function refreshDefinitionsIfDirty(workspaceRoot: string): Promise<void> {
     if (!existing || existing.mtimeMs !== mtimeMs || existing.kind !== 'task') {
       // New or changed file — reload
       try {
-        await registerTaskFile(filePath, registry.workspaceRoot)
+        commitLoaded(registry, await loadTaskFile(filePath, registry.workspaceRoot))
         registry.fileIndex.set(filePath, { mtimeMs, kind: 'task' })
       } catch (error) {
         if (error instanceof QualifiedDefinitionIdError) {
@@ -526,6 +551,7 @@ async function refreshDefinitionsIfDirty(workspaceRoot: string): Promise<void> {
   for (const [filePath] of registry.fileIndex.entries()) {
     if (!currentFiles.has(filePath)) {
       registry.fileIndex.delete(filePath)
+      registry.inherited.delete(resolve(filePath))
       removeBySourcePath(registry.tasks, filePath)
     }
   }
@@ -536,6 +562,10 @@ async function refreshDefinitionsIfDirty(workspaceRoot: string): Promise<void> {
 
   // Reassert builtin entries — always present, regardless of refresh results.
   injectBuiltins(registry)
+
+  // Recompute every inherited definition so a changed, removed or inserted
+  // base propagates through the chain.
+  resolveAllInherited(registry)
 }
 
 /**
@@ -558,7 +588,12 @@ function injectBuiltins(registry: Registry): void {
   }
 }
 
-export async function registerTaskFile(filePath: string, workspaceRoot: string): Promise<RegisteredTask> {
+/**
+ * Import and validate one definition file without mutating the registry. A
+ * complete definition comes back as its registry entry; an `extends`
+ * declaration comes back unmerged, because its base may not be loaded yet.
+ */
+async function loadTaskFile(filePath: string, workspaceRoot: string): Promise<RegisteredTask | InheritedSource> {
   const registry = registryFor(workspaceRoot)
   const absolutePath = resolve(filePath)
   const scope = deriveScope(absolutePath, registry.workspaceRoot)
@@ -567,6 +602,18 @@ export async function registerTaskFile(filePath: string, workspaceRoot: string):
   const definition = await importDefinition<TaskDefinition>(absolutePath)
   if (definition.__type !== 'task') {
     throw new Error(`${absolutePath} must export default defineTask(...)`)
+  }
+  const mtime = statSync(absolutePath).mtimeMs
+
+  if (definition.declaration !== undefined) {
+    validateInheritedDeclaration(definition.declaration, name, absolutePath)
+    return { name, project: scope.project, sourcePath: absolutePath, mtime, declaration: definition.declaration }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(definition.config, 'promptAppend')) {
+    throw new Error(
+      `${absolutePath} task config declares promptAppend without extends; promptAppend is only valid on an inherited definition (defineTask({ extends, promptAppend }))`,
+    )
   }
   assertTaskSchemas(definition.config, absolutePath)
   try {
@@ -589,30 +636,368 @@ export async function registerTaskFile(filePath: string, workspaceRoot: string):
   resolveTaskCategory(definition.config, absolutePath)
   resolveTaskDisplayName(definition.config, absolutePath)
 
-  const duplicate = findDuplicateInScope(registry.tasks, name, scope, absolutePath)
-  if (duplicate) {
-    recordDuplicateError(registry, name, scope, absolutePath)
-  }
-
-  // Remove old entry only after successful import (last-good preservation)
-  removeBySourcePath(registry.tasks, absolutePath)
   definition.sourcePath = absolutePath
-  const entry: RegisteredTask = {
+  return {
     name,
     definition,
     sourcePath: absolutePath,
-    mtime: statSync(absolutePath).mtimeMs,
+    mtime,
     source: scope.source,
     ...(scope.source === 'project' ? { project: scope.project } : {}),
   }
+}
+
+/** Detect same-scope duplicates and swap the entry into the registry. */
+function commitEntry(registry: Registry, entry: RegisteredTask): void {
+  const scope = { source: 'project' as const, project: entry.project ?? '' }
+  const duplicate = findDuplicateInScope(registry.tasks, entry.name, scope, entry.sourcePath)
+  if (duplicate) {
+    recordDuplicateError(registry, entry.name, scope, entry.sourcePath)
+  }
+
+  // Remove old entry only after successful import (last-good preservation)
+  removeBySourcePath(registry.tasks, entry.sourcePath)
   registry.tasks.push(entry)
+}
+
+/**
+ * Record one loaded file. An `extends` declaration only joins the pending set:
+ * whatever the file last resolved to stays registered until
+ * `resolveAllInherited` merges the new declaration successfully.
+ */
+function commitLoaded(registry: Registry, loaded: RegisteredTask | InheritedSource): void {
+  if ('declaration' in loaded) {
+    registry.inherited.set(loaded.sourcePath, loaded)
+    return
+  }
+  registry.inherited.delete(loaded.sourcePath)
+  commitEntry(registry, loaded)
+}
+
+export async function registerTaskFile(filePath: string, workspaceRoot: string): Promise<RegisteredTask> {
+  const registry = registryFor(workspaceRoot)
+  // A direct registration into a fresh (never-discovered) registry must still
+  // see the builtin layer so a child that extends a builtin resolves.
+  if (!registry.discovered) injectBuiltins(registry)
+  const loaded = await loadTaskFile(filePath, workspaceRoot)
+  if (!('declaration' in loaded)) {
+    commitLoaded(registry, loaded)
+    return loaded
+  }
+  // Resolve first: a missing or invalid base throws before anything changes.
+  const entry = resolveInherited(registry, loaded, new Map())
+  registry.inherited.set(loaded.sourcePath, loaded)
   return entry
 }
 
 export function invalidateFile(filePath: string, workspaceRoot: string): void {
   const registry = registryFor(workspaceRoot)
   const absolutePath = resolve(filePath)
+  registry.inherited.delete(absolutePath)
   removeBySourcePath(registry.tasks, absolutePath)
+}
+
+// ── Inheritance resolution ───────────────────────────────────────────
+
+/** Fixed heading inserted between the inherited base prompt and each layer's
+ *  `promptAppend` body. */
+const INHERITANCE_PROMPT_HEADING = '\n\n## Project task instructions\n\n'
+
+const INHERITED_ALLOWED_FIELDS = new Set([
+  'extends',
+  'promptAppend',
+  'instructions',
+  'dispatch',
+  'timeoutMs',
+  'displayName',
+  'description',
+  'category',
+])
+
+type TaskInstruction = string | ((input?: unknown) => string | Promise<string>)
+
+/**
+ * Validate one inherited declaration against the inherited authoring contract.
+ * Only the inherited fields are legal; every other key — including a forbidden
+ * key whose value is explicit `undefined` or an unknown field — is rejected
+ * before any legacy normalization. `extends` must be a non-empty string that
+ * exactly equals the filename task id.
+ */
+function validateInheritedDeclaration(
+  declaration: TaskInheritedDeclaration,
+  name: string,
+  sourcePath: string,
+): void {
+  const raw = declaration as unknown as Record<string, unknown>
+  for (const key of Object.keys(raw)) {
+    if (!INHERITED_ALLOWED_FIELDS.has(key)) {
+      throw new Error(
+        `${sourcePath} task config declares '${key}' on an inherited definition (extends '${String(raw.extends)}'); inherited definitions may only declare ${[...INHERITED_ALLOWED_FIELDS].join(', ')}`,
+      )
+    }
+  }
+
+  const ext = raw.extends
+  if (typeof ext !== 'string' || ext.length === 0) {
+    throw new Error(`${sourcePath} task config extends must be a non-empty string task id`)
+  }
+  if (ext !== name) {
+    throw new Error(
+      `${sourcePath} task config extends '${ext}' must exactly equal the definition file task id '${name}'`,
+    )
+  }
+
+  const promptAppend = raw.promptAppend
+  if (promptAppend !== undefined && typeof promptAppend !== 'string' && typeof promptAppend !== 'function') {
+    throw new Error(`${sourcePath} task config promptAppend must be a string or a function returning a string`)
+  }
+
+  const instructions = raw.instructions
+  if (instructions !== undefined) {
+    if (
+      !Array.isArray(instructions) ||
+      !instructions.every((item) => typeof item === 'string' || typeof item === 'function')
+    ) {
+      throw new Error(`${sourcePath} task config instructions must be an array of strings or functions`)
+    }
+  }
+
+  const timeoutMs = raw.timeoutMs
+  if (timeoutMs !== undefined) {
+    try {
+      assertValidTimeoutMs(timeoutMs)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`Invalid timeoutMs in ${sourcePath}. ${message}.`)
+    }
+  }
+
+  // Raw child dispatch is validated on its own before the merge.
+  validateTaskDispatch({ dispatch: raw.dispatch } as unknown as TaskConfig, sourcePath)
+  resolveTaskCategory({ category: raw.category } as unknown as TaskConfig, sourcePath)
+  resolveTaskDisplayName({ displayName: raw.displayName } as unknown as TaskConfig, sourcePath)
+}
+
+/** Base instructions first, then the child's, without repeating an entry. */
+function mergeInstructions(
+  base: TaskInstruction[] | undefined,
+  child: TaskInstruction[] | undefined,
+): TaskInstruction[] | undefined {
+  if (base === undefined && child === undefined) return undefined
+  return [...new Set([...(base ?? []), ...(child ?? [])])]
+}
+
+function higherIntelligence(
+  base: IntelligenceTier | undefined,
+  child: IntelligenceTier | undefined,
+): IntelligenceTier {
+  if (base === undefined) return child as IntelligenceTier
+  if (child === undefined) return base
+  return INTELLIGENCE_ORDER[child] > INTELLIGENCE_ORDER[base] ? child : base
+}
+
+/**
+ * Merge a child inherited declaration onto its resolved base config.
+ * `requiredCapabilities` forms a stable union and `intelligenceMin` takes the
+ * harder tier, so a child omission or empty list can never weaken a base
+ * requirement. Every other dispatch field is a plain child override.
+ */
+function mergeDispatch(
+  base: TaskDispatchRequirements | undefined,
+  child: TaskDispatchRequirements | undefined,
+): TaskDispatchRequirements | undefined {
+  if (base === undefined && child === undefined) return undefined
+  const merged: Record<string, unknown> = { ...(base ?? {}) }
+  if (child !== undefined) {
+    for (const [key, value] of Object.entries(child)) {
+      if (key === 'requiredCapabilities' || key === 'intelligenceMin') continue
+      if (value !== undefined) merged[key] = value
+    }
+    const baseCapabilities = base?.requiredCapabilities ?? []
+    if (baseCapabilities.length > 0 || child.requiredCapabilities !== undefined) {
+      merged.requiredCapabilities = [...new Set([...baseCapabilities, ...(child.requiredCapabilities ?? [])])]
+    }
+    if (base?.intelligenceMin !== undefined || child.intelligenceMin !== undefined) {
+      merged.intelligenceMin = higherIntelligence(base?.intelligenceMin, child.intelligenceMin)
+    }
+    // A child that raises the floor without restating `intelligenceExpected`
+    // (an explicit `undefined` counts as restating it) would leave the base
+    // expectation below the new floor, which validation rejects; lift the
+    // inherited expectation to the floor instead. An expectation the child
+    // states itself is left as written.
+    const childSuppliesExpected = Object.prototype.hasOwnProperty.call(child, 'intelligenceExpected')
+    const effectiveMin = merged.intelligenceMin as IntelligenceTier | undefined
+    const effectiveExpected = merged.intelligenceExpected as IntelligenceTier | undefined
+    if (
+      !childSuppliesExpected &&
+      effectiveMin !== undefined &&
+      effectiveExpected !== undefined &&
+      INTELLIGENCE_ORDER[effectiveExpected] < INTELLIGENCE_ORDER[effectiveMin]
+    ) {
+      merged.intelligenceExpected = effectiveMin
+    }
+  }
+  return merged as TaskDispatchRequirements
+}
+
+/** Compose base prompt + optional per-layer append under the fixed heading. */
+function composeInheritedPrompt(
+  basePrompt: TaskConfig['prompt'],
+  promptAppend: TaskInheritedDeclaration['promptAppend'],
+): TaskConfig['prompt'] {
+  if (promptAppend === undefined) return basePrompt
+  const composed = async (input: unknown): Promise<string> => {
+    const baseText = await basePrompt(input)
+    const appended = typeof promptAppend === 'function' ? await promptAppend(input) : promptAppend
+    if (typeof appended !== 'string') {
+      // A function-typed append that resolves to a non-string is a programming
+      // error: silently dropping it would discard the user's project rule.
+      // An empty string is an explicit no-op that preserves the base prompt.
+      throw new Error(
+        `Inherited task promptAppend must resolve to a string; received ${typeof appended}`,
+      )
+    }
+    if (appended.length === 0) return baseText
+    return `${baseText}${INHERITANCE_PROMPT_HEADING}${appended}`
+  }
+  // Preserve the base's static template metadata so execution placeholder
+  // capture and non-executing previews stay identical across inheritance.
+  const templates = getTaskPromptTemplates(basePrompt)
+  return templates.length > 0 ? withTaskPromptTemplates(composed, templates) : composed
+}
+
+/** Merge one inherited declaration onto a resolved base config. */
+function mergeInheritedConfig(
+  base: TaskConfig,
+  declaration: TaskInheritedDeclaration,
+  sourcePath: string,
+): TaskConfig {
+  const instructions = mergeInstructions(base.instructions, declaration.instructions)
+  const dispatch = mergeDispatch(base.dispatch, declaration.dispatch)
+  const displayName = resolveTaskDisplayName(declaration as unknown as TaskConfig, sourcePath)
+  const category = resolveTaskCategory(declaration as unknown as TaskConfig, sourcePath)
+  const merged: TaskConfig = {
+    ...base,
+    prompt: composeInheritedPrompt(base.prompt, declaration.promptAppend),
+    ...(instructions !== undefined ? { instructions } : {}),
+    ...(dispatch !== undefined ? { dispatch } : {}),
+    ...(declaration.timeoutMs !== undefined ? { timeoutMs: declaration.timeoutMs } : {}),
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...(declaration.description !== undefined ? { description: declaration.description } : {}),
+    ...(category !== undefined ? { category } : {}),
+  }
+
+  // The merged dispatch must satisfy the same contract as an authored one.
+  validateTaskDispatch(merged, sourcePath)
+  if (merged.dispatch?.thinking !== undefined) {
+    merged.dispatch = {
+      ...merged.dispatch,
+      thinking: normalizeThinkingLevel(merged.dispatch.thinking),
+    }
+  }
+  return merged
+}
+
+function inheritanceDescriptor(entry: RegisteredTask): InheritanceChainEntry {
+  return entry.source === 'builtin'
+    ? { source: 'builtin', path: entry.sourcePath }
+    : { source: 'project', project: entry.project!, path: entry.sourcePath }
+}
+
+/**
+ * The next lower same-id definition: the nearest ancestor project (never the
+ * child's own scope), then the builtin layer. An ancestor that is itself an
+ * inherited declaration is resolved first, so the child never merges onto a
+ * superseded result.
+ */
+function resolveInheritanceBase(
+  registry: Registry,
+  source: InheritedSource,
+  resolved: Map<string, RegisteredTask>,
+): RegisteredTask | undefined {
+  for (const projectId of projectAncestorIds(source.project).slice(1)) {
+    const pending = [...registry.inherited.values()].find(
+      (candidate) => candidate.project === projectId && candidate.name === source.name,
+    )
+    if (pending) return resolveInherited(registry, pending, resolved)
+    const match = registry.tasks.find(
+      (candidate) => candidate.source === 'project' && candidate.project === projectId && candidate.name === source.name,
+    )
+    if (match) return match
+  }
+  return registry.tasks.find((candidate) => candidate.source === 'builtin' && candidate.name === source.name)
+}
+
+/**
+ * Merge one inherited declaration onto its base and register the result.
+ * Throws when the base is missing, failed to load, or the merge is invalid;
+ * the registry is untouched in that case, so the file's last-good entry stays.
+ */
+function resolveInherited(
+  registry: Registry,
+  source: InheritedSource,
+  resolved: Map<string, RegisteredTask>,
+): RegisteredTask {
+  const done = resolved.get(source.sourcePath)
+  if (done) return done
+  const base = resolveInheritanceBase(registry, source, resolved)
+  if (!base) {
+    throw new Error(
+      `${source.sourcePath} task definition extends '${source.declaration.extends}' but no lower-scope ancestor or builtin definition with that id is registered`,
+    )
+  }
+  // A base whose file failed to reload is still registered with its last-good
+  // config. Merging onto it would run this definition from a parent that no
+  // longer compiles, so fail here and keep this file's own last-good entry.
+  if (registry.loadErrors.some((error) =>
+    error.kind === undefined && error.stale && resolve(error.sourcePath) === resolve(base.sourcePath),
+  )) {
+    throw new Error(
+      `${source.sourcePath} task definition extends '${source.declaration.extends}' but its base '${base.sourcePath}' failed to load; retaining last-good resolution`,
+    )
+  }
+  const entry: RegisteredTask = {
+    name: source.name,
+    definition: {
+      __type: 'task',
+      config: mergeInheritedConfig(base.definition.config, source.declaration, source.sourcePath),
+      sourcePath: source.sourcePath,
+    },
+    sourcePath: source.sourcePath,
+    mtime: source.mtime,
+    source: 'project',
+    project: source.project,
+    inheritanceChain: [
+      ...(base.inheritanceChain ?? [inheritanceDescriptor(base)]),
+      { source: 'project', project: source.project, path: source.sourcePath },
+    ],
+  }
+  commitEntry(registry, entry)
+  resolved.set(source.sourcePath, entry)
+  return entry
+}
+
+/**
+ * Merge every loaded inherited declaration onto its current base. A failure
+ * leaves the file's last-good entry registered and records a stale diagnostic.
+ */
+function resolveAllInherited(registry: Registry): void {
+  const resolved = new Map<string, RegisteredTask>()
+  for (const source of registry.inherited.values()) {
+    try {
+      resolveInherited(registry, source, resolved)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!registry.loadErrors.some((existing) => existing.sourcePath === source.sourcePath && existing.load_error === message)) {
+        registry.loadErrors.push({
+          sourcePath: source.sourcePath,
+          load_error: message,
+          failedAt: new Date().toISOString(),
+          stale: true,
+        })
+      }
+    }
+  }
 }
 
 export function resolveTaskTarget(name: string, workspaceRoot: string, currentProject?: string): ResolvedTarget | null {
@@ -654,6 +1039,7 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
   timeoutScope?: TaskTimeoutScope
   scheduling?: 'active' | 'legacy'
   dispatch?: TaskDispatchRequirements
+  inheritanceChain?: InheritanceChainEntry[]
 }> {
   const registry = registryFor(workspaceRoot)
   return effectiveEntries(registry.tasks, currentProject)
@@ -673,6 +1059,7 @@ export function listTaskDefinitions(workspaceRoot: string, currentProject?: stri
         : {}),
       ...timeoutMetadata(entry.definition.config),
       ...(entry.definition.config.dispatch ? { dispatch: entry.definition.config.dispatch } : {}),
+      ...(entry.inheritanceChain ? { inheritanceChain: entry.inheritanceChain } : {}),
     }
     })
 }
@@ -912,6 +1299,7 @@ function taskToListed(entry: RegisteredTask): ListedDefinition {
       ? { profile: config.profile }
       : {}),
     ...(config.dispatch ? { dispatch: config.dispatch } : {}),
+    ...(entry.inheritanceChain ? { inheritanceChain: entry.inheritanceChain } : {}),
   }
 }
 
@@ -968,6 +1356,7 @@ function registryFor(workspaceRoot: string): Registry {
       discovered: false,
       dirty: false,
       tasks: [],
+      inherited: new Map(),
       fileIndex: new Map(),
       loadErrors: [],
     }
