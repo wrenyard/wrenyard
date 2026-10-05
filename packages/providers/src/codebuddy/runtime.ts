@@ -1,5 +1,5 @@
 import type { ProviderDefinition } from '../base/index.ts';
-import type { CodeBuddyModels } from './models.ts';
+import { resolveCodeBuddyProductModelId, type CodeBuddyModels } from './models.ts';
 import type { CodeBuddyEnvironment, CodeBuddyProductModelEntry } from './product.ts';
 
 export type { CodeBuddyEnvironment };
@@ -58,13 +58,14 @@ function createModelRouting(state: CodeBuddyModels) {
   }
 
   /**
-   * Reverse an observed wire spelling onto the offering it names. This reads
-   * the provider's published alias map (current wire ids plus historical
-   * spellings) rather than the outbound map, so a retired spelling normalizes
-   * without ever becoming routable again.
+   * Reverse an observed wire spelling onto the offering it names. The
+   * provider's published alias map is consulted first (current wire ids plus
+   * historical spellings); when it does not cover the id, the product-id
+   * resolver maps retired Claude generation-5 spellings onto their historical
+   * identity without ever making them routable again.
    */
   function canonicalizeCodeBuddyObservedModelId(model: string): string {
-    return state.definition.modelAliases?.[model] ?? model;
+    return state.definition.modelAliases?.[model] ?? resolveCodeBuddyProductModelId(model) ?? model;
   }
 
   function evaluateCodeBuddyFreeSupply(
