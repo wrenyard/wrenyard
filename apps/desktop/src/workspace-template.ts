@@ -45,6 +45,8 @@ One task produces a bounded, independently verifiable result. Pass only necessar
 
 Built-in tasks are explore, edit, test, code-review, commit, librarian and oracle. Use TaskGraph only when graph semantics are needed. Project .task.ts files export defineTask(...); inspect current schemas before authoring.
 
+A project task file may extend the same-id definition below it (an ancestor project, then the built-in) instead of replacing it: \`edit.task.ts\` declares \`extends: 'edit'\`. The extending file keeps the base input, output, prompt and writeTargets, and may only add instructions, promptAppend, dispatch, timeoutMs, displayName, description and category. instructions and promptAppend are appended after the base; dispatch overrides per field, except that requiredCapabilities is the union of both layers and intelligenceMin is the higher of the two. A file without extends is a complete replacement and must declare input, output and prompt.
+
 Task dispatch settings may optionally declare \`intelligenceMin\`, \`intelligenceExpected\`, and
 \`thinking\`. There is no maximum intelligence; choose the smallest level that
 fits the work. Thinking accepts low, medium, high, xhigh and max; omission uses the highest supported level. Unconfigured intelligence recommends mid with no minimum. Image/search requirements belong to task definitions.

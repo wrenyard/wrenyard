@@ -4,7 +4,9 @@ import { foremanInstructions } from '../../standard/instructions/index.mts'
 import type {
   PrimitiveSet,
   TaskConfig,
+  TaskDeclaration,
   TaskDefinition,
+  TaskInheritedDeclaration,
 } from '../../types.mts'
 
 export interface RuntimeGlobalOptions {
@@ -13,6 +15,16 @@ export interface RuntimeGlobalOptions {
 }
 
 type GlobalKey = 'defineTask' | 'agent' | 'shell' | 'checkpoint' | 'foremanSchemas' | 'foremanInstructions'
+
+/** Detect an inherited declaration by the own `extends` property, including an
+ *  explicit `undefined` (which the registry later rejects as a wrong type). */
+function isInheritedDeclaration(value: TaskDeclaration): value is TaskInheritedDeclaration {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Object.prototype.hasOwnProperty.call(value, 'extends')
+  )
+}
 
 export function installRuntimeGlobals(opts: RuntimeGlobalOptions = {}): () => void {
   const keys: GlobalKey[] = ['defineTask', 'agent', 'shell', 'checkpoint', 'foremanSchemas', 'foremanInstructions']
@@ -27,11 +39,13 @@ export function installRuntimeGlobals(opts: RuntimeGlobalOptions = {}): () => vo
   globalThis.agent = primitives.agent
   globalThis.shell = primitives.shell
   globalThis.checkpoint = primitives.checkpoint
-  globalThis.defineTask = (config: TaskConfig): TaskDefinition => ({
-    __type: 'task',
-    config,
-    sourcePath: '',
-  })
+  globalThis.defineTask = (declaration: TaskDeclaration): TaskDefinition =>
+    isInheritedDeclaration(declaration)
+      // The resolved runtime config is produced by the definition registry; the
+      // raw declaration is preserved on `declaration` so scope resolution and
+      // dirty-refresh recomputation stay lossless.
+      ? { __type: 'task', config: declaration as unknown as TaskConfig, declaration, sourcePath: '' }
+      : { __type: 'task', config: declaration, sourcePath: '' }
   // Canonical Foreman-owned Zod schema bundle, installed before any
   // external task module is dynamically imported and evaluated.
   globalThis.foremanSchemas = foremanSchemas

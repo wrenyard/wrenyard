@@ -1028,6 +1028,19 @@ export interface TaskSettingsAutomaticSelection {
   reason: string;
 }
 
+/**
+ * One layer of a Task definition's inheritance chain, ordered base→effective.
+ * The final entry is the effective layer; earlier entries are the layers it
+ * inherited from. Desktop renders this read-only and never edits it.
+ */
+export interface TaskDefinitionInheritanceLayer {
+  source: 'builtin' | 'project';
+  /** Registered project id; present only for project layers. */
+  project?: string;
+  /** Path of the Task definition file that supplied this layer. */
+  path: string;
+}
+
 /** Stable per-task identity row with persisted layer and merged effective settings. */
 export interface TaskSettingsTaskRow {
   /** Stable identity: `builtin:<name>` or `project:<project>:<name>`. */
@@ -1046,6 +1059,9 @@ export interface TaskSettingsTaskRow {
   explicit?: TaskSettingsExplicitRow;
   /** Automatic resolution projection; present only on automatic rows the daemon resolves. */
   automatic_selection?: TaskSettingsAutomaticSelection;
+  /** Ordered base→effective definition layers; present only when this row's
+   *  definition inherits from another layer. */
+  inheritanceChain?: TaskDefinitionInheritanceLayer[];
   issues: TaskSettingsValidationIssue[];
 }
 

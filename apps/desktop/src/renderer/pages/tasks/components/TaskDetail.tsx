@@ -89,6 +89,9 @@ export function TaskDetail({
   const overrideTimeout = row.user_task.timeout_ms;
   const hasOverrides = Object.keys(row.user_task).length > 0;
   const disabled = busy || loading;
+  // Read-only definition inheritance: rendered only when the daemon supplies
+  // the ordered base→effective chain.
+  const inheritanceChain = row.inheritanceChain ?? [];
 
   const save = (): void => {
     try {
@@ -203,6 +206,22 @@ export function TaskDetail({
             </div>
           </CardContent>
         </Card>
+
+        {inheritanceChain.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>{copy.INHERITANCE_TITLE}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              {inheritanceChain.map((layer, index) => (
+                <div key={`${layer.path}:${index}`} className="flex flex-col gap-1">
+                  <span>{copy.inheritanceLayerLabel(layer)}</span>
+                  <span className="break-words font-mono text-xs text-muted-foreground">{layer.path}</span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card>
           <CardHeader>
