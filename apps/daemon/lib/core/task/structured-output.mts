@@ -160,6 +160,8 @@ export interface StructuredOutputAgentResult {
   resolvedProfile?: string
   /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
   failureClass?: string | null
+  /** Time this attempt waited in the queue before its process launched. */
+  queueWaitMs?: number
 }
 
 export type StructuredOutputAgent = (
@@ -202,7 +204,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   // window when that resume is enabled), the correction cap stays
   // STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS. An expired budget throws the existing
   // agent-timeout classification without starting another agent.
-  const deadlineMs = Date.now() + totalBudgetMs
+  let deadlineMs = Date.now() + totalBudgetMs
   // ── Time-limit warning resume ──
   // The task still has exactly one total deadline. When the resolved client can
   // resume a native session and the limit leaves room for the warning window,
@@ -271,6 +273,8 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
           codeBuddyExecution: opts.codeBuddyExecution,
         },
       )
+    // The budget is execution time: waiting for a write lock never consumes it.
+    deadlineMs += terminal.queueWaitMs ?? 0
     lastExecutionId = terminal.executionId ?? lastExecutionId
     resume = terminal.nativeSessionId?.trim() || resume
     if (terminal.resolvedProfile) {
@@ -396,6 +400,7 @@ interface StructuredExecutionTerminal {
   nativeSessionId?: string
   resolvedProfile?: string
   failureClass?: string | null
+  queueWaitMs?: number
 }
 
 async function runStructuredAttempt(
@@ -413,6 +418,7 @@ async function runStructuredAttempt(
     nativeSessionId: result.nativeSessionId,
     resolvedProfile: result.resolvedProfile,
     failureClass: result.failureClass ?? null,
+    queueWaitMs: result.queueWaitMs,
   }
 }
 

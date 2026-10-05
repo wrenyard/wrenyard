@@ -36,6 +36,7 @@ export interface ActivitySnapshotTask {
   requested_agent_runtime?: string;
   resolved_profile?: string;
   created_at: string;
+  started_at?: string;
   updated_at: string;
   taskgraph_id?: string;
   node_id?: string;
@@ -111,6 +112,8 @@ export interface ActivityTaskPresence {
    * must never be replaced with the round's `sampledAt`.
    */
   createdAt: string;
+  /** When the run's first execution launched; absent while it is queued. */
+  startedAt?: string;
 }
 
 export interface ActivityNodePresence {
@@ -246,6 +249,8 @@ export function normalizeActivitySnapshotTask(v: unknown, path: string): Activit
     created_at: assertString(r.created_at, `${path}.created_at`),
     updated_at: assertString(r.updated_at, `${path}.updated_at`),
   };
+  const startedAt = assertOptionalString(r.started_at, `${path}.started_at`);
+  if (startedAt !== undefined) result.started_at = startedAt;
   const taskId = assertOptionalString(r.task_id, `${path}.task_id`);
   if (taskId !== undefined) result.task_id = taskId;
   const taskLabel = normalizeOptionalDisplay(r.task_label, ACTIVITY_LABEL_POLICY);
@@ -409,6 +414,7 @@ export function deriveActivityPresence(snapshot: ActivitySnapshotV1, stale: bool
     ...(task.taskgraph_id !== undefined ? { taskgraphId: task.taskgraph_id } : {}),
     ...(task.node_id !== undefined ? { nodeId: task.node_id } : {}),
     createdAt: task.created_at,
+    ...(task.started_at !== undefined ? { startedAt: task.started_at } : {}),
   }));
 
   const taskgraphs: ActivityTaskGraphPresence[] = snapshot.taskgraphs.map((graph) => {

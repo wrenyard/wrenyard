@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildSessionTree } from '../../../model/fold.js';
 import type { LedgerEvent, TurnNode } from '../../../model/types.js';
 import { TreeExpansionContext, type TreeExpansion } from './expansion.js';
+import { QueuedTaskRunsContext } from './ActionRow.js';
 import { TurnRow } from './TurnRow.js';
 import { actionAnchorId, actionNodeId, cycleNodeId, phaseNodeId, turnNodeId } from './ids.js';
 
@@ -34,13 +35,15 @@ function overlappingTurns(turns: readonly TurnNode[]): Set<number> {
 
 export interface SessionTreeProps {
   events: readonly LedgerEvent[];
+  /** Run ids of dispatched tasks still waiting to launch. */
+  queuedTaskRuns: ReadonlySet<string>;
 }
 
 /**
  * Collapsible tree over the whole session: every turn, its reasoning cycles and
  * the 准备 / 推理 / 行动 phases. Expansion is per node and survives new events.
  */
-export function SessionTree({ events }: SessionTreeProps) {
+export function SessionTree({ events, queuedTaskRuns }: SessionTreeProps) {
   const turns = useMemo(() => buildSessionTree(events), [events]);
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [scrollTo, setScrollTo] = useState<string | undefined>(undefined);
@@ -95,6 +98,7 @@ export function SessionTree({ events }: SessionTreeProps) {
   const parallel = overlappingTurns(turns);
 
   return (
+    <QueuedTaskRunsContext.Provider value={queuedTaskRuns}>
     <TreeExpansionContext.Provider value={value}>
       <div className="flex flex-col">
         {turns.map((turn) => (
@@ -102,5 +106,6 @@ export function SessionTree({ events }: SessionTreeProps) {
         ))}
       </div>
     </TreeExpansionContext.Provider>
+    </QueuedTaskRunsContext.Provider>
   );
 }
