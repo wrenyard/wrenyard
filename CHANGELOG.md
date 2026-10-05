@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.0.0-dev.46
+
+Attachments in the conversation, a session context that only ever appends, and
+ChatGPT subscription models as main-reasoning supply.
+
+### Session
+
+- Every main reasoning request is the previous one with a segment appended, so
+  provider prompt caches keep hitting; requests of one session are queued to
+  keep the history linear.
+- The main model declares actions through a native `wy_action` tool call
+  instead of text markers. Task results reach it as Markdown text, and
+  document writes go through the `doc` task.
+- Attach files to a message: images are resized and re-encoded once, text is
+  capped per file, and files stay in the conversation by path. Deleting a
+  session removes its files and run artifacts.
+- Main reasoning runs over the Chat Completions or the Responses protocol,
+  chosen from what the model's provider declares.
+
+### Desktop
+
+- Composer: drop, pick or paste files; they show as a removable attachment
+  strip with thumbnails and are saved with the draft. Messages and task
+  results show their files with previews.
+- Inspector: one expandable tree of turns, cycles, calls and actions replaces
+  the timeline and detail panes, with the main model's raw output and
+  reasoning, the context segments of each request and cache usage.
+- Model picker: entries read `provider · model`, list only models that can run
+  main reasoning, explain the runtime on hover, and mark free, quota-abundant
+  and fast models. Session defaults use the same picker.
+- Queued task runs are shown as queued, with their real start time.
+
+### Tasks
+
+- New `doc` builtin that writes or edits one workspace document.
+- Run artifacts: every run gets its own artifact directory, and a task whose
+  output schema declares artifacts can return files from it.
+- A project task file can `extends` the definition of the same id (the nearest
+  ancestor project, then the builtin) to add instructions, dispatch
+  requirements or a time limit without replacing it. `task describe` and the
+  Desktop task detail show the inheritance chain.
+- A run that is about to exceed its time limit is resumed once to stop and
+  summarize; the output is marked as truncated. Time spent waiting in the queue
+  no longer counts against the limit.
+- `explore` answers one factual question and returns an answer with locations.
+
+### Providers
+
+- ChatGPT subscription models are served through the gateway over the Responses
+  protocol, using the existing Codex ChatGPT login.
+- CodeBuddy offers the Claude 5.5 generation in place of Claude 5, and GPT 6
+  Sol in place of GPT 5.6.
+
 ## 1.0.0-dev.45
 
 ### Desktop
