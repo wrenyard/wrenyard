@@ -27,11 +27,12 @@ quota window and task visible.
 ## Why Wrenyard
 
 - **Reasoning stays expensive, everything else stays cheap.** The main model
-  only reasons and marks what should happen; cheap models and the task runtime
-  gather context, dispatch work and write the reply.
-- **Context you can audit.** A session is one append-only ledger. Before you
-  send, Wrenyard shows how large the *next* reasoning request will be for the
-  model you picked, what fills it, and how it has grown.
+  only reasons and declares what should happen; cheap models and the task
+  runtime gather context, dispatch work and write the reply.
+- **Context you can audit.** A session is one append-only ledger, and each
+  reasoning request is the previous one with a segment appended, so prompt
+  caches keep hitting. Before you send, Wrenyard shows how large the *next*
+  request will be for the model you picked, what fills it, and how it has grown.
 - **Your providers, your quota.** Claude, ChatGPT, Kimi, Zhipu, Cursor,
   DeepSeek and others sit side by side with remaining quota, pace and reset
   times. Task routing weighs price, speed, quota and capability automatically.
@@ -44,8 +45,11 @@ quota window and task visible.
 ### Conversations that dispatch work
 
 The session page is the main workspace. Each turn can fan out into `explore`,
-`edit`, `test` and `commit` tasks across your projects; the timeline and the
-raw ledger are one click away in the inspector.
+`edit`, `test` and `commit` tasks across your projects. Drop, pick or paste
+files into the composer to attach them; messages and task results show their
+files with previews. The inspector lays the session out as one tree of turns,
+reasoning cycles, model calls and actions, down to the main model's raw output
+and the context segments of each request.
 
 ### See the next request before you send it
 
@@ -132,19 +136,21 @@ wrenyard doctor                  check the local install
 The CLI never starts a daemon on its own: open the app, or run
 `wrenyard daemon run` in a terminal.
 
-Seven built-in task roles share one runtime and automatic model selection:
+Eight built-in task roles share one runtime and automatic model selection:
 
 | Task | Use it to |
 | --- | --- |
-| `explore` | investigate code, history, logs and failures |
+| `explore` | answer a factual question about code, history or logs |
 | `edit` | apply bounded file changes |
 | `test` | run verification and report evidence |
 | `code-review` | review correctness against requirements |
 | `commit` | create verified local commits |
+| `doc` | write or edit one workspace document |
 | `librarian` | research external documentation |
 | `oracle` | think through hard trade-offs |
 
-Projects can add their own tasks next to these.
+Projects can add their own tasks next to these, or extend a built-in one with
+extra instructions and requirements.
 
 ## Build from source
 

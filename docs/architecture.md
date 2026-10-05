@@ -23,6 +23,11 @@ updates. There is no separate agent runtime binary or Go build.
   The session contract is implemented: the daemon hosts the ledger session over
   `@wrenyard/session` and exposes the `session.*` IPC methods, with Desktop as
   the conversation client. Exec and provider have daemon handlers.
+- `packages/features/session` is the conversation core. Each main reasoning
+  request appends to the previous one, the main model declares typed `read`,
+  `write` and `dispatch` actions through one native tool, and the request runs
+  over Chat Completions or Responses depending on the protocols the provider
+  declares. See the [session feature](../packages/features/session/README.md).
 - `packages/features/exec` runs raw prompts, owns bounded event replay and
   cancellation. Structured tasks translate their input into this execution API.
 - `packages/features/provider` implements provider listing, configuration and
@@ -52,7 +57,9 @@ The gateway is an internal daemon-process-tree feature: the daemon binds
 every start. Only daemon-launched agents (through `WRENYARD_GATEWAY_*_URL`
 environment variables) and Desktop's embedded DSH sessions (through the
 `gateway.connection` IPC method) consume it, and its listener serves only
-`/gateway/*` and returns 404 elsewhere. Separately injected stdio MCP servers
+`/gateway/*` and returns 404 elsewhere. ChatGPT subscription models are
+forwarded over the Responses protocol with the Codex client's existing ChatGPT
+login, which the daemon reads and refreshes through that client. Separately injected stdio MCP servers
 (`browser-use`, `computer-use` and task-declared `mcpServers`) are unrelated to
 the daemon and remain in place.
 
@@ -79,6 +86,9 @@ Managed provider keys live in `<XDG_CONFIG_HOME or ~/.config>/wrenyard/providers
 Dispatch aliases live in that config root under `wrenyard/dispatch/config.json`.
 Managed client data lives in `<XDG_DATA_HOME or ~/.local/share>/wrenyard/clients`.
 Quota observations live in `<XDG_STATE_HOME or ~/.local/state>/wrenyard/quota`.
+In that state root, session ledgers live under `session/`, a session's attached
+files under `sessions/<sessionId>/files` and each task run's output files under
+`artifacts/<runId>`.
 Official native client credential stores remain owned by those clients.
 No runtime migration or dual-read fallback is shipped.
 
