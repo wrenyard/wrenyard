@@ -6,6 +6,8 @@ export type { OperationOptions as ClientOptions } from '@wrenyard/agent-client';
 export { ClientError } from '@wrenyard/agent-client';
 import { CodexClient } from '@wrenyard/client-codex';
 export { CodexClient } from '@wrenyard/client-codex';
+export { readCodexGatewayCredential, refreshCodexGatewayCredential } from '@wrenyard/client-codex';
+export type { CodexGatewayAuthOptions, CodexGatewayCredential } from '@wrenyard/client-codex';
 import { ClaudeClient } from '@wrenyard/client-claude';
 export { ClaudeClient } from '@wrenyard/client-claude';
 import { CursorClient } from '@wrenyard/client-cursor';

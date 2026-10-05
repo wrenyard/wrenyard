@@ -2,7 +2,7 @@ import type { ProviderDefinition } from '@wrenyard/providers/base';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Catalog, GatewayProtocol, PublicGatewayModel } from '@wrenyard/providers/catalog';
-import { upstreamAuthHeaders, type ProviderRuntime } from '@wrenyard/providers';
+import { applyChatGptPromptCacheKey, upstreamAuthHeaders, type ProviderCredential, type ProviderRuntime } from '@wrenyard/providers';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
 
 export interface GatewayRequestCompletedEvent {
@@ -480,14 +480,68 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
           include_usage: true,
         };
       }
+      // ChatGPT Responses requests pin the subscription wire contract: the
+      // endpoint accepts only streamed turns and never persists them. Both
+      // fields are fixed for this exact provider/protocol; every other field,
+      // instruction, and content part is forwarded byte-for-byte.
+      if (resolved.provider.id === 'chatgpt' && route.protocol === 'openai_responses') {
+        body.stream = true;
+        body.store = false;
+        applyChatGptPromptCacheKey(headers, body);
+      }
       const controller = new AbortController();
       active.add(controller);
       const abort = () => controller.abort();
       request.once('aborted', abort);
       try {
-        const upstream = await fetchImpl(resolved.capability.endpoint, {
+        const send = () => fetchImpl(resolved.capability.endpoint, {
           method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal,
         });
+        let upstream = await send();
+        // One bounded recovery for an expired ChatGPT/Codex gateway credential:
+        // refresh through the injected client adapter and retry the identical
+        // request exactly once. Every other status, provider, or failure is
+        // exposed unchanged and never retried.
+        const refreshCredential = options.providers.refreshCredential;
+        if (upstream.status === 401
+          && resolved.provider.id === 'chatgpt'
+          && resolved.provider.credentialResolver === 'codex'
+          && refreshCredential !== undefined) {
+          let refreshed: ProviderCredential | undefined;
+          try {
+            refreshed = await refreshCredential(resolved.provider, credential, controller.signal);
+          } catch (error) {
+            // Refresh unavailable or failed: keep the original, unconsumed 401
+            // response. Only an abort propagates, so a cancelled request is
+            // never silently served as an auth error.
+            if (controller.signal.aborted) throw error;
+            refreshed = undefined;
+          }
+          // The retry runs outside the refresh catch, so a retry transport
+          // failure propagates to the outer 502 handler rather than falling
+          // back to the now-canceled original 401.
+          if (refreshed !== undefined) {
+            upstreamAuthHeaders(resolved.provider, refreshed, route.protocol).forEach((value, name) => headers.set(name, value));
+            applyChatGptPromptCacheKey(headers, body);
+            await upstream.body?.cancel().catch(() => undefined);
+            upstream = await send();
+          }
+        }
+        // The ChatGPT subscription endpoint can omit Content-Type on a valid
+        // SSE response. Its streamed Responses contract supplies the missing
+        // type for both gateway normalization and downstream stream readers.
+        if (resolved.provider.id === 'chatgpt'
+          && route.protocol === 'openai_responses'
+          && upstream.ok
+          && !upstream.headers.get('content-type')) {
+          const streamHeaders = new Headers(upstream.headers);
+          streamHeaders.set('content-type', 'text/event-stream');
+          upstream = new Response(upstream.body, {
+            status: upstream.status,
+            statusText: upstream.statusText,
+            headers: streamHeaders,
+          });
+        }
         const responseHeaders: Record<string, string> = {};
         upstream.headers.forEach((value, name) => {
           if (RESPONSE_HEADER_ALLOWLIST.has(name)) responseHeaders[name] = value;

@@ -11,8 +11,8 @@ export {
 export { createBuiltinCatalog } from './registry.ts';
 export { resolveModelSpeed } from './base/catalog.ts';
 export type { DispatchCandidate, IntelligenceTier, LocalSpeedSample, ModelPricing, SpeedEvidence, SpeedSource } from './base/catalog.ts';
-export { canonicalizeObservedProviderModelId, createBuiltinProviderRuntime, resolveRuntimeTaskPlans, upstreamAuthHeaders } from './runtime.ts';
-export type { BuiltinProviderRuntimeOptions, CodeBuddyClientIdentity, ProviderCredential, ProviderRuntime } from './runtime.ts';
+export { applyChatGptPromptCacheKey, canonicalizeObservedProviderModelId, createBuiltinProviderRuntime, resolveRuntimeTaskPlans, upstreamAuthHeaders } from './runtime.ts';
+export type { BuiltinProviderRuntimeOptions, ChatGptGatewayAuthAdapter, ChatGptGatewayCredential, CodeBuddyClientIdentity, ProviderCredential, ProviderRuntime } from './runtime.ts';
 export { findProviderQuotaBinding, PROVIDER_QUOTA_BINDINGS } from './provider-quota-metadata.ts';
 export type { ProviderQuotaBinding, ProviderQuotaPool, ProviderQuotaPoolWindow, QuotaEvidenceKind, QuotaPoolKind, QuotaResetKind } from './provider-quota-metadata.ts';
 export { resolveSubscriptionEconomics } from './subscription-economics.ts';

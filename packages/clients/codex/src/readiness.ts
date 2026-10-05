@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { NativeClientReadiness, ReadinessOptions } from '@wrenyard/agent-client';
 import { Executor, rpcSequence } from '@wrenyard/execution';
+import { inspectCodex } from './installation.ts';
 
 /**
  * Bounded byte ceiling for the Codex auth.json probe. Real files are a few
@@ -153,6 +154,80 @@ export async function refreshCodexAuth(auth: CodexAuth, executable: string, prev
             throw new Error('Native Codex refresh produced no ChatGPT token');
         return refreshed;
     });
+}
+
+/**
+ * Resolve the Codex source auth home used by the Model Gateway exactly like the
+ * native path: an explicit WRENYARD_CODEX_AUTH_HOME wins, otherwise the
+ * directory of the CODEX_HOME / home-derived auth.json.
+ */
+export function codexSourceAuthHome(env: NodeJS.ProcessEnv = process.env, home?: string): string {
+    return env.WRENYARD_CODEX_AUTH_HOME?.trim() || dirname(codexAuthPath(env, home));
+}
+
+/** ChatGPT token plus account id, the exact pair the subscription endpoint needs. */
+export interface CodexGatewayCredential {
+    readonly accessToken: string;
+    readonly accountId: string;
+}
+
+export interface CodexGatewayAuthOptions {
+    readonly env?: NodeJS.ProcessEnv;
+    /** Optional explicit home override, mirroring the native readiness path. */
+    readonly home?: string;
+    /** Optional installed Codex executable; when absent the existing lookup runs. */
+    readonly executable?: string;
+}
+
+/**
+ * Read the ChatGPT subscription credential for the Model Gateway from the same
+ * source auth.json the native client already uses. Only a ChatGPT auth-token
+ * login is usable here; an API-key login is rejected because this is a
+ * subscription endpoint. The token and account id are returned to the caller
+ * and never logged.
+ */
+export async function readCodexGatewayCredential(options: CodexGatewayAuthOptions = {}): Promise<CodexGatewayCredential> {
+    const env = options.env ?? process.env;
+    const sourceHome = codexSourceAuthHome(env, options.home);
+    const login = loginParams(await readSourceAuth(sourceHome));
+    if (login.type !== 'chatgptAuthTokens') throw new Error('Codex ChatGPT gateway requires a ChatGPT login');
+    return { accessToken: login.accessToken, accountId: login.chatgptAccountId };
+}
+
+/**
+ * Refresh the gateway credential through the SAME serialized app-server
+ * `account/read` refresh the native path already uses (refreshCodexAuth). It
+ * reuses a token already rotated into the source file, and otherwise spawns the
+ * existing Codex app-server with an executable that is either injected or
+ * resolved by the existing inspectCodex lookup. No new login or token-refresh
+ * HTTP implementation is introduced.
+ */
+export async function refreshCodexGatewayCredential(
+    credential: CodexGatewayCredential,
+    options: CodexGatewayAuthOptions & { readonly signal: AbortSignal },
+): Promise<CodexGatewayCredential> {
+    const env = options.env ?? process.env;
+    const sourceHome = codexSourceAuthHome(env, options.home);
+    const executable = options.executable?.trim() || await resolveCodexExecutable(env);
+    const auth: CodexAuth = {
+        isolatedHome: sourceHome,
+        sourceHome,
+        login: {
+            type: 'chatgptAuthTokens',
+            accessToken: credential.accessToken,
+            chatgptAccountId: credential.accountId,
+        },
+        sourceEnv: env,
+    };
+    const refreshed = await refreshCodexAuth(auth, executable, credential.accessToken, options.signal);
+    if (refreshed.type !== 'chatgptAuthTokens') throw new Error('Native Codex refresh produced no ChatGPT token');
+    return { accessToken: refreshed.accessToken, accountId: refreshed.chatgptAccountId };
+}
+
+async function resolveCodexExecutable(env: NodeJS.ProcessEnv): Promise<string> {
+    const status = await inspectCodex({ env });
+    if (status.installation.state !== 'installed') throw new Error('Codex CLI is not installed');
+    return status.installation.executable;
 }
 
 interface SourceAuth {
