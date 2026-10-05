@@ -1,186 +1,98 @@
 import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
 import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
-import {
-  ConstraintSchema,
-  evidenceWith,
-  findingWith,
-  GoalSchema,
-  QuestionSchema,
-  TargetSchema,
-  type Constraint,
-  type Evidence,
-  type Finding,
-  type Goal,
-  type Question,
-  type Target,
-  type TargetBase,
-} from '../../core/task/concepts.mts'
 import type { TaskDefinition } from '../../core/task/types.mts'
 import shellUsage from '../instructions/shell-usage.mts'
 
 export const TASK_PROMPT_TEMPLATE_1 = { strings: [`
-You are `,
-` - a read-only investigation agent.
+You are `,` - a read-only fact lookup agent.
 
-## Problem
-Answer every question using direct evidence gathered from the declared targets. Do not guess beyond what the evidence supports.
+## Task
+Answer exactly the one factual question below using facts observed in the project checkout. Use targeted search and partial reads, and report only what the code or data says: values, locations, conditions, and call sites. Do NOT diagnose root causes, do NOT propose fixes or designs, and do NOT evaluate. If the fact cannot be found, return \`not_found\` and state what you searched. Stop as soon as the question is answered.
 
-## Goal
-`,
-`
-
-## Questions (answer all, 1:1)
-`,
-`
-
-## Targets to investigate
-`,
-`
-
-`,
-`
 ## Tool Constraints
-`,
-`
+READ-ONLY. Do not modify files.
+- Only read, search, inspect, and analyze.
+- Prefer targeted reads and searches; avoid broad or generated directories.
 
-## Workflow
-1. Read the goal and every question. Treat the questions as the driving problem — each must end as \`answered\`, \`unanswered\`, or \`blocked\`.
-2. Investigate the declared targets only. Prefer rg, targeted reads, and bounded git log/diff for code or history; read note bodies when investigating documents. Avoid broad or generated directories. For failures, trace evidence to a concrete cause and state uncertainty; no mandatory decomposition stages.
-3. As you observe facts, record them as pooled \`evidences\`. Each evidence has an \`id\`, a \`source\` target, and an \`observation\`.
-4. Derive \`findings\` from the evidence pool. Each finding states a \`conclusion\`, references supporting evidence \`ids\`, carries a \`confidence\`, and may reference \`targets\`.
-5. For every input question, produce exactly one result with the same \`question_id\`:
-   - \`answered\`: the evidence supports a conclusion.
-   - \`unanswered\`: investigation was inconclusive or evidence was insufficient.
-   - \`blocked\`: a missing input, access, tooling, or environment limit prevented a verdict. Add a short \`reason\`.
-6. Keep \`evidences\` pooled (shared across findings) and reference them by id — do not duplicate observations inline.
-
-`,
-`
-
+## Question
+`,``,`
 ## Output Format
 Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
 
 Shape:
 {
-  "results": [
-    { "question_id": "<id>", "status": "answered|unanswered|blocked", "reason": "<optional>", "findings": [ ... ] }
-  ],
-  "evidences": [ { "id": "...", "source": { "kind": "...", "value": "..." }, "observation": "..." } ]
+  "status": "answered|not_found",
+  "answer": "<string>",
+  "locations": [ { "path": "<string>", "line": <number, optional> } ]
 }
-`], labels: ["role","goal.outcome","questions","targets","constraints","toolConstraints","workflow"] } as const
+`], labels: ['role','question','hints'] } as const
 
 
 /**
- * Explore — problem-driven read-only exploration builtin.
+ * Explore — read-only single-fact lookup builtin.
  *
- * A direct `TaskDefinition`: input is `goal` + `questions`(≥1) + `targets`
- * (open `Target`) + optional `constraints`; output is `results` (one entry
- * per question, status answered|unanswered|blocked) plus a pooled
- * `evidences` set with derived `findings`. Permission is always
- * `readonly`. Code, history, notes, and diagnostic investigation share this definition.
- * Domain-specific targets remain accepted by the open Target schema.
+ * A direct `TaskDefinition`: input is one `question` (what/where/how many)
+ * with optional `hints`; output is `status` (answered|not_found), a textual
+ * `answer`, and supporting `locations`. Permission is always `readonly`: the
+ * task reports observed facts and never diagnoses, proposes fixes, or edits.
  */
 
-// ─── Direct I/O schemas (canonical concept references) ───────────
+// ─── Direct I/O schemas ─────────────────────────────────────────
 
 export const ExploreInputSchema = z.object({
-  goal: GoalSchema,
-  questions: z.array(QuestionSchema).min(1),
-  targets: z.array(TargetSchema),
-  constraints: z.array(ConstraintSchema).optional(),
+  question: z.string(),
+  hints: z.array(z.string()).optional(),
 })
 
 export const ExploreOutputSchema = z.object({
-  results: z.array(
+  status: z.enum(['answered', 'not_found']),
+  answer: z.string(),
+  locations: z.array(
     z.object({
-      question_id: z.string(),
-      status: z.enum(['answered', 'unanswered', 'blocked']),
-      reason: z.string().optional(),
-      findings: z.array(findingWith(TargetSchema)),
+      path: z.string(),
+      line: z.number().optional(),
     }),
   ),
-  evidences: z.array(evidenceWith(TargetSchema)),
 })
 
 // ─── Generic TS types (mirror z.infer of the schemas) ───────────
 
-export type ExploreInput<TTarget extends TargetBase = Target> = {
-  goal: Goal
-  /** Questions that drive the investigation, 1:1 with output results. */
-  questions: Question[]
-  /** Investigation targets (files, symbols, commands, urls, ...). */
-  targets: TTarget[]
-  /** Optional constraints the exploration must respect. */
-  constraints?: Constraint[]
+export type ExploreInput = {
+  /** The single factual question to answer. */
+  question: string
+  /** Optional file paths, directories, symbols, or keywords to start from. */
+  hints?: string[]
 }
 
-export type ExploreOutput<TTarget extends TargetBase = Target> = {
-  /** One entry per input question, in the same order. */
-  results: Array<{
-    question_id: string
-    status: 'answered' | 'unanswered' | 'blocked'
-    reason?: string
-    findings: Finding<TTarget>[]
+export type ExploreOutput = {
+  status: 'answered' | 'not_found'
+  answer: string
+  locations: Array<{
+    path: string
+    line?: number
   }>
-  /** Pooled evidence referenced by `findings[].evidences`. */
-  evidences: Evidence<TTarget>[]
-}
-
-// ─── Common prompt builder (shared by the explore-family definitions) ──
-
-/**
- * Build the common explore prompt: the problem framing, goal/questions/
- * targets/constraints rendering, the pooled-evidence workflow, and the
- * fixed `<result>` JSON output shape. Each explore-family task contributes
- * its own `role`, `toolConstraints`, and `workflow` string.
- */
-export function buildExplorePrompt(args: {
-  role: string
-  toolConstraints: string
-  workflow: string
-  goal: Goal
-  questions: Question[]
-  targets: TargetBase[]
-  constraints?: Constraint[]
-}): string {
-  const { role, toolConstraints, workflow, goal, questions, targets, constraints } = args
-  return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, [role,
-goal.outcome,
-JSON.stringify(questions, null, 2),
-JSON.stringify(targets, null, 2),
-constraints && constraints.length > 0 ? `## Constraints\n${JSON.stringify(constraints, null, 2)}\n` : '',
-toolConstraints,
-workflow])
 }
 
 // ─── Task definition (direct TaskDefinition object literal) ─────
 
 /**
- * The independent, generic explore builtin. No domain specifics: open
- * `Target`, generic role, READ-ONLY, automatic.
+ * The read-only single-fact lookup builtin. Open question with optional
+ * hints, English fact-only prompt, READ-ONLY, automatic.
  */
 const definition: TaskDefinition = {
   __type: 'task',
   config: {
-    description:
-      'Read-only investigation of code, Git history, notes, logs, or other declared targets. Answer concrete questions with evidence; diagnose causes without editing or requiring a staged workflow.',
+    description: 'Read-only single-fact lookup',
     dispatch: { ...FREQUENT_DISPATCH_REQUIREMENTS, thinking: 'low' },
     instructions: [shellUsage],
     input: ExploreInputSchema,
     output: ExploreOutputSchema,
     prompt: withTaskPromptTemplates((input: unknown): string => {
-      const { goal, questions, targets, constraints } = input as ExploreInput
-      return buildExplorePrompt({
-        role: '**Explorer**',
-        toolConstraints:
-          'READ-ONLY. Do not modify files.\n- Only read, search, inspect, and analyze.\n- Prefer targeted reads and searches; avoid broad or generated directories.',
-        workflow: '',
-        goal,
-        questions,
-        targets,
-        constraints,
-      })
+      const { question, hints } = input as ExploreInput
+      const hintsSection =
+        hints && hints.length > 0 ? `\n\n## Hints\n${hints.map((hint) => `- ${hint}`).join('\n')}` : ''
+      return renderTaskPromptTemplate(TASK_PROMPT_TEMPLATE_1, ['**Explorer**', question, hintsSection])
     }, [TASK_PROMPT_TEMPLATE_1]),
   },
   sourcePath: 'lib/standard/tasks/explore.mts',

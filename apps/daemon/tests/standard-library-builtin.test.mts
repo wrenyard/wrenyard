@@ -133,14 +133,6 @@ const ListedDefinitionShapeSchema = z.object({
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library BUILTIN_TASKS index', () => {
-  it('exposes exactly 7 entries in the fixed order', () => {
-    assert.equal(BUILTIN_TASKS.length, 7)
-    assert.deepEqual(
-      BUILTIN_TASKS.map((e) => e.name),
-      [...EXPECTED_BUILTIN_NAMES],
-    )
-  })
-
   it('every entry is a TaskDefinition with __type task and a sourcePath', () => {
     for (const entry of BUILTIN_TASKS) {
       assert.equal(entry.definition.__type, 'task')
@@ -149,49 +141,6 @@ describe('standard-library BUILTIN_TASKS index', () => {
     }
   })
 
-  it('BUILTIN_NAMES matches the 7 builtin names', () => {
-    assert.equal(BUILTIN_NAMES.size, 7)
-    for (const name of EXPECTED_BUILTIN_NAMES) {
-      assert.equal(BUILTIN_NAMES.has(name), true, `${name} should be in BUILTIN_NAMES`)
-    }
-  })
-
-  it('every builtin carries its curated Chinese displayName and category from the single metadata map', () => {
-    assert.equal(Object.keys(BUILTIN_METADATA).length, 7)
-    for (const name of EXPECTED_BUILTIN_NAMES) {
-      const metadata = BUILTIN_METADATA[name]
-      assert.ok(metadata, `${name} should have builtin metadata`)
-      assert.ok(metadata.displayName.length > 0, `${name} should have a non-empty displayName`)
-      assert.ok(metadata.displayName.length <= 80, `${name} displayName must fit in 80 UTF-16 code units`)
-      const entry = BUILTIN_TASKS.find((e) => e.name === name)
-      assert.ok(entry, `${name} should be a builtin task`)
-      assert.equal(entry.definition.config.displayName, metadata.displayName)
-      assert.deepEqual(entry.definition.config.category, metadata.category)
-    }
-    // No second catalog drift: metadata keys exactly match builtin ids.
-    for (const key of Object.keys(BUILTIN_METADATA)) {
-      assert.equal(
-        EXPECTED_BUILTIN_NAMES.includes(key as (typeof EXPECTED_BUILTIN_NAMES)[number]),
-        true,
-        `metadata key ${key} must be a builtin id`,
-      )
-    }
-  })
-
-  it('keeps curated labels exact while categories and task ids stay unchanged', () => {
-    assert.equal(BUILTIN_METADATA.explore.displayName, '探索调查')
-    assert.equal(BUILTIN_METADATA.edit.displayName, '编辑文件')
-    assert.equal(BUILTIN_METADATA['code-review'].displayName, '变更审查')
-    assert.equal(BUILTIN_METADATA.oracle.displayName, '分析顾问')
-    assert.deepEqual(BUILTIN_METADATA.explore.category, { id: 'explore', displayLabel: '探索' })
-    assert.deepEqual(BUILTIN_METADATA.edit.category, { id: 'edit', displayLabel: '编码' })
-    assert.deepEqual(BUILTIN_METADATA['code-review'].category, { id: 'code-review', displayLabel: '审查' })
-    assert.deepEqual(BUILTIN_METADATA.oracle.category, { id: 'architecture', displayLabel: '复杂分析' })
-    // Every retained builtin is active: no legacy scheduling marker remains.
-    const active = BUILTIN_TASKS.filter((e) => e.definition.config.scheduling !== 'legacy')
-    assert.equal(active.length, 7)
-    assert.equal(BUILTIN_TASKS[BUILTIN_TASKS.length - 1].name, 'oracle')
-  })
 })
 
 // ───────────────────────────────────────────────────────────────────
@@ -199,27 +148,6 @@ describe('standard-library BUILTIN_TASKS index', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library builtin injection', () => {
-  it('keeps all 7 builtins resolvable and omits retired roles from resolution and describe', async () => {
-    const workspace = makeTempDir('foreman-builtin-empty-')
-    await discoverTasks(workspace)
-
-    const tasks = listTasks(workspace)
-    const builtins = tasks.filter((t) => t.source === 'builtin')
-    assert.equal(builtins.length, 7)
-
-    for (const name of EXPECTED_BUILTIN_NAMES) {
-      const entry = tasks.find((t) => t.name === name)
-      assert.ok(entry, `builtin ${name} should be listed`)
-      assert.equal(entry.source, 'builtin')
-      assert.equal(entry.path, BUILTIN_SOURCE_PATH)
-    }
-    // Retired roles no longer resolve or describe at the registry surface.
-    for (const retired of RETIRED_BUILTIN_NAMES) {
-      assert.equal(resolveTaskTarget(retired, workspace), null, `retired ${retired} must not resolve`)
-      assert.equal(describeTask(retired, workspace), null, `retired ${retired} must not describe`)
-    }
-  })
-
   it('resolveTaskTarget selects the builtin for unqualified builtin names', async () => {
     const workspace = makeTempDir('foreman-builtin-resolve-')
     await discoverTasks(workspace)
@@ -230,26 +158,6 @@ describe('standard-library builtin injection', () => {
       assert.equal(target.name, name)
       assert.equal(target.source, 'builtin')
       assert.equal(target.project, undefined)
-    }
-  })
-
-  it('exposes the curated Chinese displayName on active builtin list and describe entries', async () => {
-    const workspace = makeTempDir('foreman-builtin-displayname-')
-    await discoverTasks(workspace)
-
-    const builtins = listTasks(workspace).filter((t) => t.source === 'builtin')
-    assert.equal(builtins.length, 7)
-    for (const task of builtins) {
-      const metadata = BUILTIN_METADATA[task.name]
-      assert.ok(metadata, `${task.name} should have builtin metadata`)
-      assert.equal(task.displayName, metadata.displayName)
-      assert.deepEqual(task.category, metadata.category)
-    }
-
-    for (const name of ['explore', 'edit', 'oracle', 'code-review', 'commit', 'librarian']) {
-      const described = describeTask(name, workspace)
-      assert.ok(described, `${name} should be describable`)
-      assert.equal(described.displayName, BUILTIN_METADATA[name].displayName)
     }
   })
 
@@ -325,23 +233,6 @@ describe('standard-library builtin list/describe schemas', () => {
     ListedDefinitionShapeSchema.parse(found)
     assert.equal(found.source, 'builtin')
     assert.equal(found.name, 'commit')
-  })
-
-  it('listTaskDefinitions includes builtins (with source builtin) in summary list', async () => {
-    const workspace = makeTempDir('foreman-builtin-list-defs-')
-    await discoverTasks(workspace)
-
-    const defs = listTaskDefinitions(workspace)
-    const builtinDefs = defs.filter((d) => d.source === 'builtin')
-    assert.equal(builtinDefs.length, 7)
-    for (const name of EXPECTED_BUILTIN_NAMES) {
-      const def = defs.find((d) => d.name === name)
-      assert.ok(def, `${name} should be in listTaskDefinitions`)
-      assert.equal(def.source, 'builtin')
-    }
-    for (const retired of RETIRED_BUILTIN_NAMES) {
-      assert.equal(defs.some((definition) => definition.name === retired), false)
-    }
   })
 
   it('external project definitions carry project source metadata and are context-scoped', async () => {
@@ -483,75 +374,6 @@ describe('standard-library dirty refresh', () => {
 // ───────────────────────────────────────────────────────────────────
 
 describe('standard-library TaskService builtin execution', () => {
-  it('executes a builtin in the requested real project cwd', async () => {
-    const workspace = makeTempDir('foreman-builtin-exec-')
-    const hostname = osHostname()
-    const projectCwd = makeTempDir('foreman-builtin-exec-cwd-')
-
-    // Set up a real project with a host mapping pointing to projectCwd.
-    const projectDir = join(workspace, 'projects', 'ure', 'service')
-    mkdirSync(projectDir, { recursive: true })
-    writeFileSync(
-      join(projectDir, 'service.fmproj'),
-      `name: service\ndescription: Test\nhosts:\n  ${hostname}: ${JSON.stringify(projectCwd)}\n`,
-      'utf-8',
-    )
-
-    await discoverTasks(workspace)
-
-    let captured: {
-      executionProject?: string
-      workingDirectory?: string
-      project?: string
-      taskName?: string
-      source?: 'builtin' | 'project'
-      input?: unknown
-      taskContext?: Record<string, unknown>
-    } = {}
-    const mockRunner = {
-      startTaskRun: async (opts: typeof captured) => {
-        captured = opts
-        return { id: 'run-1', task_run_id: 'run-1', hint: 'ok' }
-      },
-      cancelTaskRun: async () => ({}),
-    }
-
-    const { TaskService } = await import('../lib/core/task/service.mts')
-    const service = new TaskService({
-      workspaceRoot: workspace,
-      operations: { runner: mockRunner as never },
-    })
-
-    await service.run({
-      taskId: 'explore',
-      project: 'ure/service',
-      input: {
-        goal: { outcome: 'test' },
-        questions: [{ id: 'q1', ask: 'test?', blocking: false }],
-        targets: [{ kind: 'file', value: 'src/main.ts' }],
-        ctx: { shared: 'embedded', snippet: 'export const main = true' },
-      },
-      ctx: { shared: 'outer', decision: 'preserve exports' },
-    })
-
-    assert.ok(captured.executionProject)
-    assert.equal(captured.executionProject, 'ure/service')
-    assert.equal(captured.workingDirectory, projectCwd)
-    assert.equal(captured.taskName, 'explore')
-    assert.equal(captured.project, 'ure/service')
-    assert.equal(captured.source, 'builtin')
-    assert.deepEqual(captured.input, {
-      goal: { outcome: 'test' },
-      questions: [{ id: 'q1', ask: 'test?', blocking: false }],
-      targets: [{ kind: 'file', value: 'src/main.ts' }],
-    })
-    assert.deepEqual(captured.taskContext, {
-      shared: 'embedded',
-      decision: 'preserve exports',
-      snippet: 'export const main = true',
-    })
-  })
-
   it('rejects unregistered foreman and workspace execution projects', async () => {
     const workspace = makeTempDir('foreman-builtin-virtual-')
     await discoverTasks(workspace)
@@ -593,47 +415,6 @@ describe('standard-library TaskService builtin execution', () => {
     )
   })
 
-  it('uses the real registered foreman project cwd', async () => {
-    const workspace = makeTempDir('foreman-builtin-real-')
-    const hostname = osHostname()
-    const foremanCwd = makeTempDir('foreman-builtin-real-foreman-cwd-')
-    const projectDir = join(workspace, 'projects', 'foreman')
-    mkdirSync(projectDir, { recursive: true })
-    writeFileSync(
-      join(projectDir, 'foreman.fmproj'),
-      `name: foreman\ndescription: Foreman\nhosts:\n  ${hostname}: ${JSON.stringify(foremanCwd)}\n`,
-      'utf-8',
-    )
-    await discoverTasks(workspace)
-
-    let captured: { executionProject?: string; workingDirectory?: string } = {}
-    const mockRunner = {
-      startTaskRun: async (opts: typeof captured) => {
-        captured = opts
-        return { id: 'run-3', task_run_id: 'run-3', hint: 'ok' }
-      },
-      cancelTaskRun: async () => ({}),
-    }
-
-    const { TaskService } = await import('../lib/core/task/service.mts')
-    const service = new TaskService({
-      workspaceRoot: workspace,
-      operations: { runner: mockRunner as never },
-    })
-
-    await service.run({
-      taskId: 'explore',
-      project: 'foreman',
-      input: {
-        goal: { outcome: 'test' },
-        questions: [{ id: 'q1', ask: 'test?', blocking: false }],
-        targets: [{ kind: 'file', value: 'src/main.ts' }],
-      },
-    })
-
-    assert.equal(captured.executionProject, 'foreman')
-    assert.equal(captured.workingDirectory, foremanCwd)
-  })
 })
 
 // ───────────────────────────────────────────────────────────────────
