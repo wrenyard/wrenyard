@@ -30,10 +30,12 @@ export function LedgerList({ events, focusSeq }: LedgerListProps) {
   const allTypes = useMemo(() => [...new Set(events.map((event) => ledgerEventType(event)))], [events]);
   const turnIds = useMemo(() => [...new Set(events.map((event) => event.turn).filter((value): value is number => value !== undefined))], [events]);
 
+  const summaryOf = (event: LedgerEvent): string => summarizeLedgerEvent(event);
+
   const rows = useMemo(() => events.filter((event) => {
     if (types.length > 0 && !types.includes(ledgerEventType(event))) return false;
     if (turn !== 'all' && String(event.turn ?? '') !== turn) return false;
-    if (keyword !== '' && !summarizeLedgerEvent(event).toLowerCase().includes(keyword.toLowerCase())) return false;
+    if (keyword !== '' && !summaryOf(event).toLowerCase().includes(keyword.toLowerCase())) return false;
     return true;
   }), [events, types, turn, keyword]);
 
@@ -119,7 +121,7 @@ export function LedgerList({ events, focusSeq }: LedgerListProps) {
                   onClick={() => toggle(event.seq)}
                 >
                   <ItemContent>
-                    <ItemTitle>{summarizeLedgerEvent(event)}</ItemTitle>
+                    <ItemTitle>{summaryOf(event)}</ItemTitle>
                     <ItemDescription className="flex flex-wrap items-center gap-2">
                       <span className="tabular-nums">{event.seq}</span>
                       <Timestamp value={event.at} precision="second" />

@@ -1,4 +1,10 @@
-import { useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
+import {
+  useRef,
+  type ClipboardEvent as ReactClipboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { ArrowUp } from 'lucide-react';
 import {
   InputGroup,
@@ -21,6 +27,12 @@ export interface PromptInputProps {
   toolbar?: ReactNode;
   /** Rendered at the trailing edge, just before the send button. */
   toolbarTrailing?: ReactNode;
+  /** Rendered above the textarea; the composer puts attachment previews here. */
+  attachments?: ReactNode;
+  /** When true, an empty textarea may still submit (attachment-only message). */
+  hasAttachments?: boolean;
+  /** Optional paste hook; the composer stages pasted clipboard images. */
+  onPaste?: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
   className?: string;
 }
@@ -42,11 +54,14 @@ export function PromptInput({
   sendKey = 'enter',
   toolbar,
   toolbarTrailing,
+  attachments,
+  hasAttachments = false,
+  onPaste,
   textareaRef,
   className,
 }: PromptInputProps) {
   const composing = useRef(false);
-  const canSubmit = !disabled && !submitDisabled && value.trim() !== '';
+  const canSubmit = !disabled && !submitDisabled && (value.trim() !== '' || hasAttachments);
 
   const submit = (): void => {
     if (canSubmit) onSubmit();
@@ -67,6 +82,9 @@ export function PromptInput({
       }}
     >
       <InputGroup>
+        {attachments !== undefined && attachments !== null && (
+          <div className="w-full px-2.5 pt-2">{attachments}</div>
+        )}
         <InputGroupTextarea
           ref={textareaRef}
           value={value}
@@ -75,6 +93,7 @@ export function PromptInput({
           rows={1}
           className="max-h-60"
           onChange={(event) => onValueChange(event.target.value)}
+          onPaste={onPaste}
           onKeyDown={(event) => {
             if (isSubmitKey(event) && !composing.current && !event.nativeEvent.isComposing) {
               event.preventDefault();

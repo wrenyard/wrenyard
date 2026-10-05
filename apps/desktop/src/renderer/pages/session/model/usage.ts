@@ -74,14 +74,18 @@ const GROUP_LABEL: Record<UsageGroupId, string> = {
 };
 
 const RESIDENT_LAYERS: readonly ContextLayerId[] = ['wy-system', 'wy-global', 'wy-role'];
-const CONVERSATION_KINDS: readonly ContextItemKind[] = ['user', 'assistant', 'reply', 'interrupt'];
-const MATERIAL_KINDS: readonly ContextItemKind[] = ['doc', 'memory'];
+const CONVERSATION_KINDS: readonly ContextItemKind[] = ['user', 'assistant', 'thinking', 'reply', 'interrupt', 'error'];
+const MATERIAL_KINDS: readonly ContextItemKind[] = ['doc', 'memory', 'doc-search', 'files'];
 const TASK_KINDS: readonly ContextItemKind[] = ['action-result', 'ws-update'];
 
 /** Display label of every context item kind. */
 export const ITEM_KIND_LABEL: Record<ContextItemKind, string> = {
   user: '用户消息',
   assistant: '助手消息',
+  thinking: '主推理思考',
+  'doc-search': '文档检索',
+  files: '文件',
+  error: '错误',
   reply: '回复',
   doc: '文档',
   memory: '记忆',
@@ -93,6 +97,10 @@ export const ITEM_KIND_LABEL: Record<ContextItemKind, string> = {
 const KIND_GROUP: Record<ContextItemKind, UsageGroupId> = {
   user: 'conversation',
   assistant: 'conversation',
+  thinking: 'conversation',
+  error: 'conversation',
+  'doc-search': 'material',
+  files: 'material',
   reply: 'conversation',
   interrupt: 'conversation',
   doc: 'material',
