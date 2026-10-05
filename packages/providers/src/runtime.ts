@@ -69,7 +69,6 @@ export interface BuiltinProviderRuntimeOptions {
   env?: NodeJS.ProcessEnv;
   home?: string;
   platform?: NodeJS.Platform;
-  codeBuddyProductPath?: string;
   readFile?: (path: string, encoding: 'utf8') => Promise<string>;
   realpath?: (path: string) => Promise<string>;
   writeFile?: (path: string, data: string, options: { encoding: 'utf8'; mode: number }) => Promise<void>;
