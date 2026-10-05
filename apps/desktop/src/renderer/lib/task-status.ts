@@ -20,7 +20,7 @@ const STATUS_VIEW: Record<string, { tone: StatusTone; label: string }> = {
   aborted: { tone: 'muted', label: '已取消' },
   skipped: { tone: 'muted', label: '已跳过' },
   unavailable: { tone: 'muted', label: '不可用' },
-  queued: { tone: 'warning', label: '等待中' },
+  queued: { tone: 'warning', label: '排队中' },
 };
 
 /** Resolve one business status into the tone and label a `StatusBadge` needs. */

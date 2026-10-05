@@ -165,6 +165,7 @@ const activitySnapshotTaskSchema = {
     requested_agent_runtime: { type: 'string', minLength: 1 },
     resolved_profile: { type: 'string', minLength: 1 },
     created_at: { type: 'string', format: 'date-time' },
+    started_at: { type: 'string', format: 'date-time' },
     updated_at: { type: 'string', format: 'date-time' },
     taskgraph_id: { type: 'string', minLength: 1 },
     node_id: { type: 'string', minLength: 1 },
