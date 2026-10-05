@@ -120,6 +120,9 @@ export interface ExecutionRecord {
   exit_code: number | null
   kill_reason: string | null
   timeout_ms: number | null
+  /** When the row was created (admitted to the queue) and when its process launched. */
+  created_at?: string | null
+  started_at?: string | null
   requested_agent_runtime?: string | null
   resolved_profile?: string | null
   /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
@@ -136,6 +139,9 @@ export interface AgentExecutionHost {
 export interface TaskRunAcceptedHandle {
   id: string
   task_run_id: string
+  /** Always `queued`: an accepted run has not launched an execution yet. */
+  status: 'queued'
+  created_at: string
   hint: string
 }
 

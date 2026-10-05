@@ -31,7 +31,8 @@ export function projectActivityStatus(presence: ActivityPresence): ActivityStatu
     ...(task.taskLabel !== undefined ? { taskLabel: task.taskLabel } : {}),
     ...(task.project !== undefined ? { project: task.project } : {}),
     ...(task.taskgraphId !== undefined ? { taskgraphId: task.taskgraphId } : {}),
-    startedAt: task.createdAt,
+    // A running task's elapsed time counts from its real launch; a queued one from acceptance.
+    startedAt: task.startedAt ?? task.createdAt,
   }));
 
   const taskgraphs: ActivityStatusTaskGraph[] = presence.taskgraphs.map((graph) => ({

@@ -53,6 +53,8 @@ interface DbTaskStatusRow {
   structured: number | null
   execution_id: string | null
   created_at: string
+  /** When the first execution launched; null while the run is still queued. */
+  started_at?: string | null
   updated_at: string
   ended_at: string | null
   execution_status: string | null
@@ -671,7 +673,7 @@ function readTaskStatusRow(taskRunId: string): DbTaskStatusRow | null {
   return dbGet<DbTaskStatusRow>(
     `SELECT
       t.id, t.template, t.project, t.worktree, t.output, t.summary, t.error,
-      t.status, t.structured, t.execution_id, t.created_at, t.updated_at, t.ended_at,
+      t.status, t.structured, t.execution_id, t.created_at, t.started_at, t.updated_at, t.ended_at,
       t.failure_category, t.suggestion, t.error_message,
       e.status AS execution_status, e.output AS execution_output, e.error AS execution_error,
       e.pid AS execution_pid, e.exit_code, e.kill_reason,
@@ -690,6 +692,8 @@ function taskStatusRowToJson(row: DbTaskStatusRow): JsonRecord {
     task_run_id: row.id,
     task_id: row.template,
     status: row.status,
+    created_at: row.created_at,
+    ...(row.started_at ? { started_at: row.started_at } : {}),
     ...(row.worktree ? { worktree: row.worktree } : {}),
     ...(row.summary ? { summary: row.summary } : {}),
     error: row.error ?? row.execution_error ?? null,
