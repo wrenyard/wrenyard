@@ -4,11 +4,17 @@ import type { JsonSchema } from '../jsonrpc.mts'
 // The context-inspection DTOs are declared once in `@wrenyard/protocol` and
 // re-exported here so every existing daemon import path keeps working, exactly
 // like the provider/exec wire types. The runtime JSON schemas stay daemon-owned.
+// The session-file / attachment shapes are canonical public DTOs and are
+// re-exported too, with no runtime import from the session package.
 export type {
   SessionContextInspectParams,
   SessionContextInspectResult,
   ContextInspection,
+  AttachmentInput,
+  SessionFile,
 } from '@wrenyard/protocol'
+
+import type { AttachmentInput } from '@wrenyard/protocol'
 
 // Canonical `session.*` ledger wire surface. Every DTO and runtime JSON schema
 // for the append-only session timeline lives here; the daemon validates session
@@ -21,10 +27,16 @@ export interface SessionSendParams {
   sessionId: string
   text: string
   model: { provider: string; model: string; reasoningEffort?: string }
+  /** Optional user attachments, bounded to the session media batch limit. */
+  attachments?: AttachmentInput[]
 }
 export interface SessionSendResult { turn: number }
 export interface SessionInterruptParams { sessionId: string; turn: number }
 export type SessionInterruptResult = Record<string, never>
+export interface SessionMediaReadParams { sessionId: string; path: string }
+export interface SessionMediaReadResult { path: string; mime: string; dataUrl?: string }
+export interface SessionDeleteParams { sessionId: string }
+export type SessionDeleteResult = Record<string, never>
 export interface SessionEventsParams {
   sessionId: string
   afterSeq: number
@@ -48,6 +60,18 @@ const idSchema = { type: 'string', minLength: 1 } as const
 const turnSchema = { type: 'integer', minimum: 1 } as const
 const seqSchema = { type: 'integer', minimum: 0 } as const
 const emptySchema = { type: 'object', properties: {}, additionalProperties: false } as const satisfies JsonSchema
+
+/** One attachment entry: a readable absolute path or an inline data URL. */
+const attachmentInputSchema = {
+  type: 'object',
+  anyOf: [{ required: ['path'] }, { required: ['dataUrl'] }],
+  additionalProperties: false,
+  properties: {
+    path: { type: 'string', minLength: 1, maxLength: 4096 },
+    name: { type: 'string', minLength: 1, maxLength: 512 },
+    dataUrl: { type: 'string', minLength: 1, maxLength: 100_000_000 },
+  },
+} as const satisfies JsonSchema
 
 const summaryModelOptionSchema = {
   type: 'object',
@@ -95,6 +119,7 @@ export const sessionSendParamsSchema = {
       type: 'object', required: ['provider', 'model'], additionalProperties: false,
       properties: { provider: idSchema, model: idSchema, reasoningEffort: idSchema },
     },
+    attachments: { type: 'array', maxItems: 128, items: attachmentInputSchema },
   },
 } as const satisfies JsonSchema
 export const sessionSendResultSchema = {
@@ -105,6 +130,23 @@ export const sessionInterruptParamsSchema = {
   type: 'object', required: ['sessionId', 'turn'], additionalProperties: false,
   properties: { sessionId: idSchema, turn: turnSchema },
 } as const satisfies JsonSchema
+export const sessionMediaReadParamsSchema = {
+  type: 'object', required: ['sessionId', 'path'], additionalProperties: false,
+  properties: { sessionId: idSchema, path: { type: 'string', minLength: 1, maxLength: 4096 } },
+} as const satisfies JsonSchema
+export const sessionMediaReadResultSchema = {
+  type: 'object', required: ['path', 'mime'], additionalProperties: false,
+  properties: {
+    path: { type: 'string', maxLength: 4096 },
+    mime: { type: 'string', minLength: 1 },
+    dataUrl: { type: 'string' },
+  },
+} as const satisfies JsonSchema
+export const sessionDeleteParamsSchema = {
+  type: 'object', required: ['sessionId'], additionalProperties: false,
+  properties: { sessionId: idSchema },
+} as const satisfies JsonSchema
+export const sessionDeleteResultSchema = emptySchema
 export const sessionEventsParamsSchema = {
   type: 'object', required: ['sessionId', 'afterSeq'], additionalProperties: false,
   properties: {
@@ -167,7 +209,10 @@ export const sessionContextInspectResultSchema = {
           cycle: { type: 'integer', minimum: 0 },
           kind: {
             type: 'string',
-            enum: ['user', 'assistant', 'reply', 'doc', 'memory', 'action-result', 'ws-update', 'interrupt'],
+            enum: [
+              'user', 'assistant', 'thinking', 'reply', 'doc', 'doc-search', 'memory',
+              'files', 'action-result', 'ws-update', 'interrupt', 'error',
+            ],
           },
           label: { type: 'string' },
           tokens: { type: 'integer', minimum: 0 },
@@ -182,6 +227,13 @@ export const sessionContextInspectResultSchema = {
         model: idSchema,
         estimated: { type: 'integer', minimum: 0 },
         actual: { type: 'integer', minimum: 0 },
+      },
+    },
+    files: {
+      type: 'object', required: ['images', 'omitted'], additionalProperties: false,
+      properties: {
+        images: { type: 'integer', minimum: 0 },
+        omitted: { type: 'integer', minimum: 0 },
       },
     },
   },
