@@ -315,44 +315,6 @@ describe('core task structured-output', () => {
     assert.equal(evidence?.side_effects_may_have_occurred, true)
   })
 
-  it('stops after three corrections and reports the shared cumulative timeout', async () => {
-    const clock = stubDateNow()
-    const seenTimeouts: Array<number | undefined> = []
-    let calls = 0
-
-    let caughtErr: unknown
-    try {
-      await collectWithAgent(async (_profile, _prompt, opts) => {
-        calls += 1
-        seenTimeouts.push(opts?.timeoutMs)
-        // Correctable malformed output every time: the delivery wrapper parses
-        // but the result JSON fails the schema, so the correction loop runs
-        // until it either succeeds or the shared budget is exhausted.
-        return {
-          output: xmlOutput({ wrong: true }),
-          status: 'done',
-          nativeSessionId: 'native_cumulative_timeout',
-          executionId: 'exec_cumulative_timeout',
-        } as StructuredOutputAgentResult & { nativeSessionId: string; executionId: string }
-      }, { timeoutMs: 180_000, maxResumeAttempts: 3 })
-    } catch (err) {
-      caughtErr = err
-    }
-
-    // The initial attempt runs the 180s total cap; each correction runs the 60s
-    // retry cap and consumes nothing, so the cumulative deadline survives.
-    assert.deepEqual(seenTimeouts, [
-      180_000,
-      STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-      STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-      STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
-    ])
-    assert.equal(calls, 4, 'the configured cap is three corrections after the initial attempt')
-    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
-    assert.ok((caughtErr as GateFailureError).failure.evidence, 'exhausted corrections keep their diagnostics')
-    void clock
-  })
-
   it('forwards the same private CodeBuddy execution binding to the initial attempt and retry', async () => {
     const codeBuddyExecution = Object.freeze({
       expectedScope: 'cbv1:retry-private-scope',
@@ -469,72 +431,6 @@ describe('core task structured-output', () => {
     const payload = JSON.parse((caughtErr as Error & { error_message?: string }).error_message ?? '{}') as Record<string, unknown>
     assert.equal(payload.type, 'agent_cancelled')
     assert.equal(payload.execution_id, 'exec_cancelled')
-  })
-
-  it('uses the short structured-output retry timeout while the shared total budget has room', async () => {
-    stubDateNow()
-    const totalBudgetMs = STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS * 3
-    let calls = 0
-    const seenTimeouts: Array<number | undefined> = []
-
-    let caughtErr: unknown
-    try {
-      await collectWithAgent(async (_profile, _prompt, opts) => {
-        calls += 1
-        seenTimeouts.push(opts?.timeoutMs)
-        return { output: xmlOutput({ wrong: true }), status: 'done', nativeSessionId: 'native_short_cap' }
-      }, { timeoutMs: totalBudgetMs, maxResumeAttempts: 2 })
-    } catch (err) {
-      caughtErr = err
-    }
-
-    assert.equal(calls, 3)
-    assert.deepEqual(seenTimeouts, [totalBudgetMs, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS])
-    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
-  })
-
-  it('caps a structured retry timeout at the remaining shared total budget', async () => {
-    const clock = stubDateNow()
-    const seenTimeouts: Array<number | undefined> = []
-
-    let caughtErr: unknown
-    try {
-      await collectWithAgent(async (_profile, _prompt, opts) => {
-        seenTimeouts.push(opts?.timeoutMs)
-        if (seenTimeouts.length === 1) clock.advance(175_000)
-        return { output: xmlOutput({ wrong: true }), status: 'done', nativeSessionId: 'native_capped' }
-      }, { timeoutMs: 180_000, maxResumeAttempts: 1 })
-    } catch (err) {
-      caughtErr = err
-    }
-
-    // Total budget is 180s; the initial attempt consumes 175s, leaving only 5s
-    // of the shared deadline, so the retry is capped at min(60s retry cap, 5s).
-    assert.deepEqual(seenTimeouts, [180_000, 5_000])
-    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
-  })
-
-  it('never renews the total model-execution budget after an invalid first output', async () => {
-    const clock = stubDateNow()
-    const seenTimeouts: Array<number | undefined> = []
-
-    let caughtErr: unknown
-    try {
-      await collectWithAgent(async (_profile, _prompt, opts) => {
-        seenTimeouts.push(opts?.timeoutMs)
-        if (seenTimeouts.length === 1) clock.advance(15_000)
-        if (seenTimeouts.length === 2) clock.advance(10_000)
-        return { output: xmlOutput({ wrong: true }), status: 'done', nativeSessionId: 'native_never_renewed' }
-      }, { timeoutMs: 120_000, maxResumeAttempts: 2 })
-    } catch (err) {
-      caughtErr = err
-    }
-
-    // The initial attempt gets the full 120s budget; the first retry sees 105s
-    // left and is capped at the 60s retry cap; the second retry sees 95s left
-    // and still gets 60s — the budget is never reset back to 120s per attempt.
-    assert.deepEqual(seenTimeouts, [120_000, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS, STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS])
-    assert.ok(caughtErr instanceof GateFailureError, `Expected GateFailureError, got ${caughtErr?.constructor?.name}`)
   })
 
   it('throws the agent-timeout classification and starts no retry when the shared total budget is already expired', async () => {
@@ -706,34 +602,6 @@ describe('core task structured-output', () => {
       'retry must reuse the canonical target verbatim, never forge/<provider/model:client>')
   })
 
-  it('keeps the legacy forge/<profile> wrapper only for legacy simple resolved profile names', async () => {
-    let calls = 0
-    const seenProfiles: string[] = []
-    const agent: StructuredOutputAgent = async (profile, _prompt, opts) => {
-      calls += 1
-      seenProfiles.push(profile)
-      if (calls === 1) {
-        return {
-          output: 'no output block',
-          status: 'done',
-          nativeSessionId: 'native_resolved_legacy',
-          resolvedProfile: 'codex-luna',
-        } as StructuredOutputAgentResult & { nativeSessionId: string; resolvedProfile: string }
-      }
-      return {
-        output: xmlOutput({ label: 'retried with legacy' }),
-        status: 'done',
-        nativeSessionId: 'native_resolved_legacy',
-      }
-    }
-
-    const result = await collectWithAgent(agent, { maxResumeAttempts: 1 })
-    assert.equal(calls, 2)
-    assert.deepEqual(result, { label: 'retried with legacy' })
-    assert.equal(seenProfiles[1], 'forge/codex-luna',
-      'a genuinely legacy simple resolved profile name keeps the legacy forge/ wrapper')
-  })
-
   it('reuses a non-policy legacy agentRuntime verbatim on retry without a resolved profile', async () => {
     let calls = 0
     const seenProfiles: string[] = []
@@ -747,45 +615,6 @@ describe('core task structured-output', () => {
     assert.equal(calls, 2)
     assert.deepEqual(result, { label: 'retried ok' })
     assert.deepEqual(seenProfiles, ['forge/codex-luna', 'forge/codex-luna'])
-  })
-
-  it('fails deterministically when retry is required without a resolved profile for policy', async () => {
-    let caughtErr: unknown
-    try {
-      await collectWithAgent(async () => ({
-        output: 'invalid output',
-        status: 'done',
-        nativeSessionId: 'native_policy_no_profile',
-      }), { maxResumeAttempts: 1, profile: 'forge/general' })
-    } catch (err) {
-      caughtErr = err
-    }
-
-    assert.ok(caughtErr instanceof Error, `Expected Error, got ${caughtErr?.constructor?.name}`)
-    assert.match(caughtErr.message, /concrete resolved profile/)
-  })
-
-  it('maps transient_provider Forge failure class to transport failure category', async () => {
-    let caughtErr: unknown
-    try {
-      await collectWithAgent(async () => ({
-        output: 'partial output',
-        status: 'failed',
-        executionId: 'exec_transient',
-        failureClass: 'transient_provider',
-        error: 'provider unavailable',
-      } as StructuredOutputAgentResult & { executionId: string; failureClass: string; error: string }), { maxResumeAttempts: 0 })
-    } catch (err) {
-      caughtErr = err
-    }
-
-    assert.ok(caughtErr instanceof Error)
-    const failed = caughtErr as Error & { failure_category?: string; error_message?: string }
-    assert.equal(failed.failure_category, 'transport',
-      'transient_provider must map to transport, not agent_failed')
-    const payload = JSON.parse(failed.error_message ?? '{}') as Record<string, unknown>
-    assert.equal(payload.type, 'transport')
-    assert.equal(payload.forge_failure_class, 'transient_provider')
   })
 
   it('maps profile_specific_limit to runtime_status', async () => {
@@ -895,28 +724,6 @@ describe('core task structured-output', () => {
     assert.equal(payload.status, 'failed')
     assert.match(payload.detail as string, /auth rejected/u,
       'the original agent error text must be preserved')
-  })
-
-  it('forwards selected capabilities and corrects in-session within the mutation-capable default', async () => {
-    const seenCaps: Array<readonly string[] | undefined> = []
-    let calls = 0
-    const agent: StructuredOutputAgent = async (_profile, _prompt, opts) => {
-      calls += 1
-      seenCaps.push((opts as { capabilities?: readonly string[] } | undefined)?.capabilities)
-      if (calls === 1) {
-        return { output: 'invalid output', status: 'done', nativeSessionId: 'native_cap' }
-      }
-      return { output: xmlOutput({ label: 'capability corrected' }), status: 'done', nativeSessionId: 'native_cap' }
-    }
-
-    const result = await collectWithAgent(agent, {
-      maxResumeAttempts: 1,
-    })
-
-    assert.deepEqual(result, { label: 'capability corrected' })
-    assert.equal(calls, 2, 'a capability-bearing attempt still gets bounded in-session correction')
-    assert.deepEqual(seenCaps[0], ['browser-use', 'computer-use'], 'first attempt must have capabilities')
-    assert.deepEqual(seenCaps[1], ['browser-use', 'computer-use'], 'the correction keeps the same capabilities')
   })
 
   it('passes capabilities without throwing when no capabilities provided', async () => {

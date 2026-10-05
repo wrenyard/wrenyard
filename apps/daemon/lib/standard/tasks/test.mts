@@ -10,6 +10,10 @@ import {
   type Assessment,
   type Evidence,
 } from '../../core/task/concepts.mts'
+import {
+  TaskArtifactsSchema,
+  type TaskArtifact,
+} from '../../core/task/schemas/artifacts.mts'
 import shellUsage from '../instructions/shell-usage.mts'
 
 export const TASK_PROMPT_TEMPLATE_1 = { label: "通用验证", strings: [`
@@ -38,13 +42,17 @@ You are a **Verification Runner**. Verify the requested behavior and report evid
 2. For each criterion, emit one \`assessment\` with the matching \`criterion_id\`, a \`status\` of \`passed\` | \`failed\` | \`blocked\` | \`not_supported\`, the supporting \`evidences\` ids, and an optional \`reason\`.
 3. Keep \`evidences\` pooled (shared across assessments) and reference them by id.
 
+## Artifacts (optional)
+You may report screenshots or other generated files as optional artifacts. The runtime prompt provides the absolute artifact directory; place files there and declare each one in the optional \`artifacts\` array. Omit \`artifacts\` when there is nothing to report.
+
 ## Output Format
 Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
 
 Shape:
 {
   "evidences": [ { "id": "ev-1", "source": { "kind": "command", "value": "npm test" }, "observation": "..." } ],
-  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ]
+  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ],
+  "artifacts": [ { "path": "<absolute path>", "kind": "image|file", "role": "<short role>", "description": "<what it shows>" } ]
 }
 `], labels: ["criteria","运行时填入任务输入"] } as const
 
@@ -67,13 +75,17 @@ You are a **Verification Runner** with **browser capabilities**. Use the Playwri
 2. For each criterion, emit one \`assessment\` with the matching \`criterion_id\`, a \`status\`, the supporting \`evidences\` ids, and an optional \`reason\`.
 3. Keep \`evidences\` pooled and reference them by id.
 
+## Artifacts (optional)
+You may report screenshots or other generated files as optional artifacts. The runtime prompt provides the absolute artifact directory; place files there and declare each one in the optional \`artifacts\` array. Omit \`artifacts\` when there is nothing to report.
+
 ## Output Format
 Put exactly one JSON object matching the output schema in the Foreman <result> field.
 
 Shape:
 {
   "evidences": [ { "id": "ev-1", "source": { "kind": "screenshot", "value": "dashboard-loaded" }, "observation": "..." } ],
-  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ]
+  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ],
+  "artifacts": [ { "path": "<absolute path>", "kind": "image|file", "role": "<short role>", "description": "<what it shows>" } ]
 }
 `], labels: ["criteria"] } as const
 
@@ -97,13 +109,17 @@ You are a **Verification Runner** with **desktop application capabilities**. Use
 2. For each criterion, emit one \`assessment\` with the matching \`criterion_id\`, a \`status\`, the supporting \`evidences\` ids, and an optional \`reason\`.
 3. Keep \`evidences\` pooled and reference them by id.
 
+## Artifacts (optional)
+You may report screenshots or other generated files as optional artifacts. The runtime prompt provides the absolute artifact directory; place files there and declare each one in the optional \`artifacts\` array. Omit \`artifacts\` when there is nothing to report.
+
 ## Output Format
 Put exactly one JSON object matching the output schema in the Foreman <result> field.
 
 Shape:
 {
   "evidences": [ { "id": "ev-1", "source": { "kind": "screenshot", "value": "app-window-loaded" }, "observation": "..." } ],
-  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ]
+  "assessments": [ { "criterion_id": "<id>", "status": "passed|failed|blocked|not_supported", "evidences": ["ev-1"], "reason": "<optional>" } ],
+  "artifacts": [ { "path": "<absolute path>", "kind": "image|file", "role": "<short role>", "description": "<what it shows>" } ]
 }
 `], labels: ["criteria"] } as const
 
@@ -136,6 +152,7 @@ export const TestInputSchema = z.object({
 export const TestOutputSchema = z.object({
   evidences: z.array(EvidenceSchema),
   assessments: z.array(AssessmentSchema),
+  artifacts: TaskArtifactsSchema.optional(),
 })
 
 export type TestInput = {
@@ -147,6 +164,7 @@ export type TestInput = {
 export type TestOutput = {
   evidences: Evidence[]
   assessments: Assessment[]
+  artifacts?: TaskArtifact[]
 }
 
 // ─── Feature config ────────────────────────────────────────────

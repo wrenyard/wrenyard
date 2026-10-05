@@ -105,7 +105,7 @@ describe('workspace definition registry', () => {
     const tasks = listTasks(workspace)
     // Builtins and project definitions coexist as plain ids; list returns
     // one effective definition per id.
-    assert.equal(tasks.filter((task) => task.source === 'builtin').length, 7)
+    assert.equal(tasks.filter((task) => task.source === 'builtin').length, 8)
     // Project definitions require project context to be selected.
     const appTasks = listTasks(workspace, 'app')
     assert.equal(appTasks.some((task) => task.name === 'probe' && task.source === 'project'), true)

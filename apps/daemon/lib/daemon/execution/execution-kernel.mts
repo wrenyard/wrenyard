@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto'
+import { realpathSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { getDb } from '../../db/connection.mts'
 import { ExecutionEventStore } from '../../db/stores/execution-event-store.mts'
 import {
@@ -32,10 +34,18 @@ import {
   validateAgainstSchema,
 } from '../../workspace/schema-loader.mts'
 import { collectStructuredOutput, type StructuredOutputAgent } from '../../core/task/structured-output.mts'
+import { requireClient } from '@wrenyard/clients'
+import {
+  createTaskArtifactDirectory,
+  outputSchemaDeclaresArtifacts,
+  taskArtifactPromptParagraph,
+  validateTaskArtifacts,
+} from '../../core/task/artifacts.mts'
 import { resolveFeatures } from '../../core/task/features.mts'
 import { buildTaskPrompt } from '../../core/task/prompt.mts'
 import { splitTaskInputContext } from '../../core/task/context.mts'
 import { resolveTaskWritePaths } from '../../core/task/write-targets.mts'
+import { documentExecutionScope } from '../../core/task/doc-scope.mts'
 import {
   extractGateFailure,
   GateFailureError,
@@ -389,8 +399,34 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         )
       }
     }
-    const executionOptions = options
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)
+    // Narrow cwd authority: independently recompute the document scope from the
+    // actual resolved target and effective input. A `doc` target that is not
+    // the trusted singleton is refused — a clone/project definition never
+    // receives the workspace root as cwd. For a trusted document run the
+    // checked cwd flows through executionOptions to lock paths, gates, and the
+    // agent.
+    const docScope = documentExecutionScope(
+      target,
+      effectiveInput,
+      options.workspaceRoot,
+      options.currentProject ?? target.project ?? '',
+      options.worktreeId,
+    )
+    if (target.name === 'doc' && !docScope) {
+      throw new Error(
+        `Builtin document task 'doc' is unavailable: the resolved definition ('${target.sourcePath}') is not the trusted builtin document singleton.`,
+      )
+    }
+    if (docScope && options.workingDirectory !== undefined
+      && canonicalPath(options.workingDirectory) !== canonicalPath(docScope.workingDirectory)) {
+      throw new Error(
+        `Builtin document task 'doc' requires its working directory to equal the authoritative workspace root.`,
+      )
+    }
+    const executionOptions = docScope
+      ? { ...options, workingDirectory: docScope.workingDirectory }
+      : options
     // Resolve selected features from config before launching an agent.
     // Invalid selections surface as deterministic task execution errors.
     const selectedFeatures = resolveFeatures(config.features, effectiveInput)
@@ -495,13 +531,18 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       }
     }
 
-    const prompt = await buildTaskPrompt(
+    const artifactDirectory = await createTaskArtifactDirectory(taskId)
+    let prompt = await buildTaskPrompt(
       definition,
       effectiveInput,
       taskInputContext.ctx,
     )
+    if (outputSchemaDeclaresArtifacts(outputSchema)) {
+      prompt = `${prompt}\n\n${taskArtifactPromptParagraph(artifactDirectory)}`
+    }
     assertTaskStillActive(taskId)
     let structuredSummary: string | undefined
+    let truncatedByTimeLimit = false
 
     try {
       const runAgent: StructuredOutputAgent = (profile, prompt, opts) => {
@@ -538,13 +579,39 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         requestedAgentRuntime: requestedAgentRuntime,
         dispatchSnapshot,
         codeBuddyExecution,
+        canResumeNativeSession: canResumeNativeSessionForDispatch(dispatchSnapshot),
         onDelivery: (delivery) => {
           structuredSummary = delivery.summary
+          if (delivery.truncatedByTimeLimit) truncatedByTimeLimit = true
         },
         beforeAttempt: () => assertTaskStillActive(taskId),
       }
-      const output = await collectStructuredOutput(structuredOptions)
+      const artifactSchema = outputSchemaDeclaresArtifacts(outputSchema)
+      // The hook persists diagnostics from each sanitization pass; the final
+      // sidecar corresponds to the successful collection attempt.
+      if (artifactSchema) {
+        // Artifact validation runs once per collected attempt, before strict
+        // schema validation. Malformed metadata (missing fields, unsupported
+        // kind, >128 entries, non-array) is stripped and a diagnostics sidecar
+        // persisted, so it cannot alone fail the strict collection schema or
+        // trigger a structured retry. Unrelated schema errors still retry.
+        structuredOptions.preSchemaTransform = async (data) => {
+          const validation = await validateTaskArtifacts(data, artifactDirectory)
+          return validation.output
+        }
+      }
+      let output = await collectStructuredOutput(structuredOptions)
       assertTaskStillActive(taskId)
+
+      if (!artifactSchema) {
+        // Non-artifact schemas keep the exact collection path. This is a no-op
+        // for outputs that declare no artifacts, and it is deliberately skipped
+        // for artifact schemas so the successful attempt's diagnostics sidecar
+        // is not overwritten with an empty error list.
+        const artifactValidation = await validateTaskArtifacts(output, artifactDirectory)
+        output = artifactValidation.output
+        assertTaskStillActive(taskId)
+      }
 
       // ── Post-gates ──
       const postGates = definition.config.gates?.post
@@ -584,7 +651,10 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       throw error
     }
 
-    return {
+    // `truncatedByTimeLimit` marks a result produced by the time-limit warning
+    // resume: the work phase was stopped before the limit and the summary
+    // carries the `[truncated by time limit]` marker.
+    const result: TaskExecutionResult & { truncatedByTimeLimit?: boolean } = {
       task_id: taskId,
       name: target.name,
       project: record.project,
@@ -593,7 +663,9 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       summary: record.summary,
       structured: true,
       agentRuntime: requestedAgentRuntime,
+      ...(truncatedByTimeLimit ? { truncatedByTimeLimit: true } : {}),
     }
+    return result
   } catch (error) {
     record.status = stoppedTaskStatusFromError(error) ?? 'failed'
     record.error = errorMessage(error)
@@ -657,6 +729,23 @@ function createKernelTaskRunId(): string {
   return `task_${randomBytes(4).toString('hex')}`
 }
 
+/**
+ * `capabilities.resume` of the client in the resolved dispatch snapshot, used
+ * to gate the time-limit warning resume. A missing/unresolvable client leaves
+ * this undefined so the structured-output default applies.
+ */
+function canResumeNativeSessionForDispatch(
+  snapshot: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null,
+): boolean | undefined {
+  const clientId = snapshot?.client
+  if (!clientId) return undefined
+  try {
+    return requireClient(clientId).capabilities.resume
+  } catch {
+    return undefined
+  }
+}
+
 function mergePrimitives(overrides: Partial<PrimitiveSet> | undefined): PrimitiveSet {
   return createPrimitiveSet({
     shell: defaultShell,
@@ -670,6 +759,14 @@ function validateInput(schemaLike: unknown, input: unknown, subject: string): un
   const value = input === undefined ? {} : input
   validateAgainstSchema(compileSchema(schema), value, subject)
   return value
+}
+
+function canonicalPath(value: string): string {
+  try {
+    return realpathSync.native(resolve(value))
+  } catch {
+    return resolve(value)
+  }
 }
 
 function errorMessage(error: unknown): string {

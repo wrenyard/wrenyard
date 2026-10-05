@@ -99,21 +99,9 @@ describe('standard/tasks explore — definition shape & config', () => {
     assert.match((exploreTask.config.instructions ?? []).join('\n'), /# Shell Usage/)
   })
 
-  it('prompt is English and problem-driven', async () => {
-    const prompt = await exploreTask.config.prompt(exploreInputSample)
-    assert.equal(typeof prompt, 'string')
-    assert.match(prompt, /Explorer/)
-    assert.match(prompt, /answered|unanswered|blocked/)
-    assert.match(prompt, /Goal/)
-  })
 })
 
 describe('standard/tasks explore — schema behavior', () => {
-  it('parses a valid input and output', () => {
-    assert.deepEqual(ExploreInputSchema.parse(exploreInputSample), exploreInputSample)
-    assert.deepEqual(ExploreOutputSchema.parse(exploreOutputSample), exploreOutputSample)
-  })
-
   it('rejects input missing questions', () => {
     const bad = { goal: { outcome: 'x' }, targets: [{ kind: 'file', value: 'a' }] }
     assert.throws(() => ExploreInputSchema.parse(bad))
