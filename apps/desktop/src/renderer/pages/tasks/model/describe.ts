@@ -1,4 +1,4 @@
-import type { TaskSettingsMode } from '@/shell-contract';
+import type { TaskDefinitionInheritanceLayer, TaskSettingsMode } from '@/shell-contract';
 
 /* Central product copy for the Task Settings page. All Chinese UI text lives
  * here so the components and pure model stay copy-free. */
@@ -71,3 +71,13 @@ export const ERR_SAVE_CONFLICT = '保存冲突：配置已刷新，草稿仍保�
 export const ERR_NO_CHANGES = '没有需要保存的更改';
 export const ERR_TIMEOUT_INVALID = '总执行时限必须是正数';
 export const ERR_RUNTIME_REQUIRED = '请填写已保存别名或 provider/model:client 目标';
+
+/* Read-only Task definition inheritance chain. Desktop never edits these
+ * layers; the daemon row carries the ordered base→effective chain. */
+export const INHERITANCE_TITLE = '定义继承链';
+
+/** Layer label: 内置 for builtin layers, else the exact project id. */
+export function inheritanceLayerLabel(layer: TaskDefinitionInheritanceLayer): string {
+  if (layer.source !== 'project') return CATEGORY_BUILTIN;
+  return typeof layer.project === 'string' && layer.project !== '' ? layer.project : CATEGORY_PROJECT;
+}

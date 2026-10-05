@@ -60,7 +60,7 @@ export async function handleTaskList(args: string[]): Promise<number> {
     console.log('ID                            Project                       Timeout              Description')
     console.log('-'.repeat(99))
     for (const task of rows) {
-      console.log(`${field(task, ['name', 'id']).padEnd(30)}${field(task, ['project']).padEnd(30)}${formatTaskTimeout(task).padEnd(21)}${field(task, ['description'])}`)
+      console.log(`${taskListEffectiveId(task).padEnd(30)}${field(task, ['project']).padEnd(30)}${formatTaskTimeout(task).padEnd(21)}${field(task, ['description'])}`)
     }
     return 0
   } finally {
@@ -368,6 +368,16 @@ export async function handleTask(args: string[]): Promise<number> {
   if (subcommand === 'doctor') return handleTaskDoctor(args.slice(1))
   console.error('Usage: wrenyard task <run|cancel|list|describe|status|output|runtimes|doctor> ...')
   return 1
+}
+
+/**
+ * Effective id rendered in the human task list. The service row keeps the
+ * authoritative id and project/source; a definition that carries an inheritance
+ * chain gets a readable English marker instead of a rewritten id.
+ */
+export function taskListEffectiveId(task: Record<string, unknown>): string {
+  const id = field(task, ['name', 'id'])
+  return Array.isArray(task.inheritanceChain) ? `${id} (inherited)` : id
 }
 
 function formatTaskTimeout(task: Record<string, unknown>): string {

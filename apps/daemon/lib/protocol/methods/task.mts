@@ -47,6 +47,15 @@ export interface TaskDispatchRequirements {
   thinking?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 }
 
+/** One provenance layer of a resolved inherited definition. Ordered
+ *  base→effective and always includes the effective definition. A builtin layer
+ *  carries `path: '(builtin)'` and no project. */
+export interface TaskInheritanceChainEntry {
+  source: 'builtin' | 'project'
+  project?: string
+  path: string
+}
+
 export interface TaskDefinitionSummary {
   name: string
   /** Authoritative human-readable task label parsed from the definition;
@@ -65,6 +74,10 @@ export interface TaskDefinitionSummary {
   timeoutScope?: 'task_execution'
   scheduling?: 'active' | 'legacy'
   dispatch?: TaskDispatchRequirements
+  /** Base→effective inheritance chain; present only when this effective
+   *  definition was resolved from an inherited declaration
+   *  (`defineTask({ extends, ... })`). */
+  inheritanceChain?: TaskInheritanceChainEntry[]
 }
 
 export interface TaskDefinitionDetail extends TaskDefinitionSummary {
@@ -242,6 +255,17 @@ const taskCategorySchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
+const taskInheritanceChainEntrySchema = {
+  type: 'object',
+  required: ['source', 'path'],
+  properties: {
+    source: { enum: ['builtin', 'project'] },
+    project: { type: 'string', minLength: 1 },
+    path: { type: 'string', minLength: 1 },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 const taskDispatchRequirementsSchema = {
   type: 'object',
   properties: {
@@ -277,6 +301,7 @@ export const taskDefinitionSummarySchema = {
     timeoutScope: { enum: ['task_execution'] },
     scheduling: { enum: ['active', 'legacy'] },
     dispatch: taskDispatchRequirementsSchema,
+    inheritanceChain: { type: 'array', items: taskInheritanceChainEntrySchema },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -313,6 +338,7 @@ export const taskDefinitionDetailSchema = {
     structuredRetryTimeoutMs: { type: 'number' },
     timeoutScope: { enum: ['task_execution'] },
     scheduling: { enum: ['active', 'legacy'] },
+    inheritanceChain: { type: 'array', items: taskInheritanceChainEntrySchema },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -816,6 +842,9 @@ export interface TaskSettingsTaskRow {
   /** Present when the effective mode is `automatic` and a selection resolved;
    *  exposes the selected automatic dispatch and safe reason. */
   automatic_selection?: TaskSettingsAutomaticSelection
+  /** Base→effective inheritance chain; present only when this row's effective
+   *  definition was resolved from an inherited declaration. */
+  inheritanceChain?: TaskInheritanceChainEntry[]
   issues: TaskSettingsValidationIssue[]
 }
 
@@ -1459,6 +1488,7 @@ const taskSettingsTaskRowSchema = {
     effective: taskSettingsEffectiveSchema,
     explicit: taskSettingsExplicitRowSchema,
     automatic_selection: taskSettingsAutomaticSelectionSchema,
+    inheritanceChain: { type: 'array', items: taskInheritanceChainEntrySchema },
     issues: { type: 'array', items: taskSettingsValidationIssueSchema },
   },
   additionalProperties: true,
