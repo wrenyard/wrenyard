@@ -60,6 +60,17 @@ const CODEBUDDY_HISTORICAL_ALIASES: Readonly<Record<string, string>> = {
   'minimax-m3-ioa': 'minimax-m3',
 };
 
+/**
+ * Claude generation-5 identities retired from the selectable catalog. The
+ * installed product file may still list these rows, but they are withheld from
+ * the offerings; their observed spellings keep this exact identity rather than
+ * being aliased forward onto the 5.5 generation.
+ */
+const RETIRED_CLAUDE_FIVE_MODEL_IDS: ReadonlySet<string> = new Set([
+  'claude-opus-5',
+  'claude-sonnet-5',
+]);
+
 const effortLadder = (levels: readonly ThinkingLevel[]): Readonly<Record<string, { effort: string }>> =>
   Object.fromEntries(levels.map((level) => [level, { effort: level }]));
 
@@ -86,11 +97,17 @@ function lookupUnifiedModelId(productId: string): string | undefined {
   return MAINSTREAM_BY_NORMALIZED_ID.get(normalizeNumericSeparators(stripped));
 }
 
-/** Map a product-file id onto a mainstream unified model, or ignore it. */
+/**
+ * Map a product-file id onto a mainstream unified model, or ignore it. A
+ * retired Claude generation-5 row still resolves to its own historical
+ * identity so observed-id normalization stays stable, but the offering builder
+ * withholds that identity from the selectable catalog.
+ */
 export function resolveCodeBuddyProductModelId(productId: string): string | undefined {
   const modelId = lookupUnifiedModelId(productId);
-  if (!modelId || !isMainstreamModelId(modelId)) return undefined;
-  return modelId;
+  if (modelId && isMainstreamModelId(modelId)) return modelId;
+  const stripped = codeBuddyCanonicalModelId(productId);
+  return RETIRED_CLAUDE_FIVE_MODEL_IDS.has(stripped) ? stripped : undefined;
 }
 
 /**
@@ -174,15 +191,17 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
   variantsByCanonical: ReadonlyMap<string, ReadonlySet<string>>;
 } {
   // Membership is product-driven: an entry exists only when a product-file row
-  // resolves onto the unified registry. When a canonical model is named by both
-  // an ordinary row and an explicit long-context (`-1m`) variant, the actually
-  // discovered variant supplies the outbound wire spelling and the ordinary row
-  // is the fallback; every discovered variant is kept as an inbound alias.
+  // resolves onto the unified registry. Retired Claude generation-5 rows are
+  // withheld even when the product file still lists them. When a canonical
+  // model is named by both an ordinary row and an explicit long-context (`-1m`)
+  // variant, the actually discovered variant supplies the outbound wire
+  // spelling and the ordinary row is the fallback; every discovered variant is
+  // kept as an inbound alias.
   const selectedEntries = new Map<string, CodeBuddyProductModelEntry>();
   const variantsByCanonical = new Map<string, Set<string>>();
   for (const entry of productEntries) {
     const modelId = resolveCodeBuddyProductModelId(entry.id);
-    if (!modelId) continue;
+    if (!modelId || RETIRED_CLAUDE_FIVE_MODEL_IDS.has(modelId)) continue;
     const variants = variantsByCanonical.get(modelId) ?? new Set<string>();
     variants.add(entry.id);
     variantsByCanonical.set(modelId, variants);
