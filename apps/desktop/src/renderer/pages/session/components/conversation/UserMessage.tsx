@@ -8,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/u
 import { formatClock } from '@/renderer/lib/format';
 import { useEnterAnimation } from '@/renderer/lib/motion';
 import type { PendingTurn } from '../../state/session-reducer.js';
+import { MediaAttachments, type MediaAttachmentItem } from '../MediaAttachments.js';
 import { HoverTime } from './HoverTime.js';
 
 export interface UserMessageProps {
@@ -18,6 +19,10 @@ export interface UserMessageProps {
    * message passes this; optimistic messages leave it undefined.
    */
   readAt?: string;
+  /** Ledger media references attached to the user message. */
+  attachments?: MediaAttachmentItem[];
+  /** Session id used to resolve ledger media; omitted for optimistic drafts. */
+  sessionId?: string;
   /** The optimistic turn backing this message, if it has not been persisted yet. */
   pending?: PendingTurn;
   /** Restore the failed text and drop the optimistic turn. */
@@ -27,7 +32,7 @@ export interface UserMessageProps {
 }
 
 /** The user's own message: a right-aligned primary bubble with a hover time. */
-export function UserMessage({ text, at, readAt, pending, onRetry, enter }: UserMessageProps) {
+export function UserMessage({ text, at, readAt, attachments, sessionId, pending, onRetry, enter }: UserMessageProps) {
   const animate = useEnterAnimation(enter === true);
   return (
     <Message
@@ -35,6 +40,13 @@ export function UserMessage({ text, at, readAt, pending, onRetry, enter }: UserM
       className={cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}
     >
       <MessageContent>
+        {attachments !== undefined && attachments.length > 0 && (
+          <MediaAttachments
+            items={attachments}
+            align="end"
+            {...(sessionId === undefined ? {} : { sessionId })}
+          />
+        )}
         <div className="flex items-end justify-end gap-2">
           <HoverTime value={at} />
           <Bubble variant="default" align="end">

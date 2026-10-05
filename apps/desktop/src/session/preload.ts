@@ -7,10 +7,19 @@
  * The renderer only ever sees the frozen `window.wrenyardSession` facade below.
  */
 
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { ContextInspection, LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
+import type { SessionModelEntry } from '@wrenyard/protocol';
+import type {
+  AttachmentInput,
+  ContextInspection,
+  LedgerEvent,
+  LiveCall,
+  SessionFile,
+  SessionSummary,
+} from '@wrenyard/session';
 
 export type { ContextInspection, LiveCall };
+export type { AttachmentInput, SessionFile };
 
 /** Exact main↔renderer channels of the session surface. */
 export const SESSION_CHANNELS = {
@@ -30,25 +39,33 @@ export const SESSION_CHANNELS = {
   context: 'session:context',
   /** Renderer → main: `string[]` of task run ids, resolved to briefs. */
   tasks: 'session:tasks',
+  /** Renderer → main: `{ sessionId, path }`, forwarded to `session.media.read`. */
+  mediaRead: 'session:media-read',
+  /** Renderer → main: `{ sessionId, path }`, ledger-validated then revealed in the file manager. */
+  mediaReveal: 'session:media-reveal',
+  /** Renderer → main: `sessionId`, forwarded to `session.delete`. */
+  delete: 'session:delete',
+  /** Renderer → main: open the native multi-file picker, returning drafts. */
+  mediaPick: 'session:media-pick',
+  /** Renderer → main: describe dropped filesystem paths as drafts. */
+  mediaDescribe: 'session:media-describe',
+  /** Renderer → main: stage a pasted clipboard image as a draft. */
+  mediaStageClipboard: 'session:media-stage-clipboard',
+  /** Renderer → main: clean up only the staged clipboard drafts passed in. */
+  mediaDiscard: 'session:media-discard',
   /** Main → renderer: `{ sessionId, event }` for the subscribed session. */
   event: 'session:event',
   /** Main → renderer: `{ sessionId, live }` streaming snapshot changes. */
   live: 'session:live',
 } as const;
 
-/** One selectable model row: gateway public id plus its thinking levels. */
-export interface SessionBridgeModelEntry {
-  publicId: string;
-  provider: string;
-  model: string;
-  displayName: string;
-  thinkingLevels?: string[];
-  /** Quota provider id backing this model: the catalog `quotaProvider`, else `provider`. */
-  quotaProvider?: string;
-  /** Window facts from the same config as the call budget; absent when unknown. */
-  contextWindow?: number;
-  maxOutputTokens?: number;
-}
+/**
+ * One selectable model row. Reuses the shared {@link SessionModelEntry} DTO so
+ * the bridge and the protocol never drift: the existing fields are preserved
+ * and the supply metadata (runtime, provider label, badges, quota facts) is
+ * carried verbatim.
+ */
+export type SessionBridgeModelEntry = SessionModelEntry;
 
 /** Params of the read-only context inspection (`session.context.inspect`). */
 export interface SessionBridgeContextInspectRequest {
@@ -62,6 +79,40 @@ export interface SessionBridgeSendRequest {
   sessionId: string;
   text: string;
   model: { provider: string; model: string; reasoningEffort?: string };
+  /** Local attachment inputs forwarded untouched to the daemon. */
+  attachments?: AttachmentInput[];
+}
+
+/**
+ * A composer attachment before or alongside a send. Extends the daemon
+ * {@link AttachmentInput} with renderer-facing facts; `path` is always
+ * preferred so the renderer never needs filesystem access.
+ */
+export interface DraftAttachment extends AttachmentInput {
+  /**
+   * Local optimistic/staging identity for this renderer draft; it is never a
+   * ledger session-file id (session files are keyed by `path` + `hash`).
+   */
+  id: string;
+  name: string;
+  bytes: number;
+  mime?: string;
+  /** Bounded thumbnail data URL, never persisted to the ledger. */
+  preview?: string;
+  /** Set when main owns the file (clipboard staging) and may delete it. */
+  staged?: boolean;
+}
+
+export interface SessionBridgeMediaRequest {
+  sessionId: string;
+  path: string;
+}
+
+export interface SessionMediaReadResult {
+  /** Present for images; absent when the daemon only authorizes the path. */
+  dataUrl?: string;
+  mime?: string;
+  path?: string;
 }
 
 export interface SessionBridgeInterruptRequest {
@@ -110,6 +161,22 @@ export interface SessionBridge {
   ledger(sessionId: string): Promise<LedgerEvent[]>;
   /** Send one user message; resolves with the allocated turn number. */
   send(request: SessionBridgeSendRequest): Promise<{ turn: number }>;
+  /** Read one ledger-known media file (image data URL; nonimages authorize only). */
+  mediaRead(request: SessionBridgeMediaRequest): Promise<SessionMediaReadResult>;
+  /** Reveal one ledger-known media file in the OS file manager. */
+  revealMedia(request: SessionBridgeMediaRequest): Promise<void>;
+  /** Delete one session, clearing it from the daemon list. */
+  deleteSession(sessionId: string): Promise<void>;
+  /** Open the native multi-file picker; returns the selected files as drafts. */
+  selectAttachments(): Promise<DraftAttachment[]>;
+  /** Describe already-known filesystem paths (drag-and-drop) as drafts. */
+  describeAttachments(paths: string[]): Promise<DraftAttachment[]>;
+  /** Persist a pasted clipboard image and return it as a staged draft. */
+  stageClipboardImage(input: { dataUrl: string; name?: string }): Promise<DraftAttachment>;
+  /** Delete only the staged clipboard drafts passed in; source files are never touched. */
+  discardDraftAttachments(attachments: readonly DraftAttachment[]): Promise<void>;
+  /** Absolute filesystem path of a dropped `File`, via Electron `webUtils`. */
+  pathForFile(file: File): string;
   /** Interrupt one running turn. */
   interrupt(request: SessionBridgeInterruptRequest): Promise<void>;
   /** The live gateway models the reason-model picker may offer. */
@@ -163,6 +230,30 @@ const bridge: SessionBridge = {
   },
   send(request: SessionBridgeSendRequest): Promise<{ turn: number }> {
     return ipcRenderer.invoke(SESSION_CHANNELS.send, request) as Promise<{ turn: number }>;
+  },
+  mediaRead(request: SessionBridgeMediaRequest): Promise<SessionMediaReadResult> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.mediaRead, request) as Promise<SessionMediaReadResult>;
+  },
+  revealMedia(request: SessionBridgeMediaRequest): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.mediaReveal, request) as Promise<void>;
+  },
+  deleteSession(sessionId: string): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.delete, sessionId) as Promise<void>;
+  },
+  selectAttachments(): Promise<DraftAttachment[]> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.mediaPick) as Promise<DraftAttachment[]>;
+  },
+  describeAttachments(paths: string[]): Promise<DraftAttachment[]> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.mediaDescribe, paths) as Promise<DraftAttachment[]>;
+  },
+  stageClipboardImage(input: { dataUrl: string; name?: string }): Promise<DraftAttachment> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.mediaStageClipboard, input) as Promise<DraftAttachment>;
+  },
+  discardDraftAttachments(attachments: readonly DraftAttachment[]): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.mediaDiscard, attachments) as Promise<void>;
+  },
+  pathForFile(file: File): string {
+    return webUtils.getPathForFile(file);
   },
   interrupt(request: SessionBridgeInterruptRequest): Promise<void> {
     return ipcRenderer.invoke(SESSION_CHANNELS.interrupt, request) as Promise<void>;

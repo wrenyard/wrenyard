@@ -27,6 +27,10 @@ import type { TurnModel } from '../../model/types.js';
 const KIND_ICON: Record<ContextItemKind, LucideIcon> = {
   user: User,
   assistant: Bot,
+  thinking: Brain,
+  'doc-search': FileText,
+  files: FileText,
+  error: OctagonX,
   reply: MessageSquare,
   doc: FileText,
   memory: Brain,

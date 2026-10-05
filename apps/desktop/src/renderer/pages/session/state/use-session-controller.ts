@@ -1,16 +1,34 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { initialSessionPageState, sessionReducer, type SessionPageState } from './session-reducer.js';
-import type { ModelEntry, SessionApi, SessionBridgeTaskBrief } from '../model/types.js';
+import type { AttachmentInput, DraftAttachment, ModelEntry, SessionApi, SessionBridgeTaskBrief } from '../model/types.js';
+import { clearDraft, clearDraftAttachments } from './drafts.js';
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 let localSeq = 0;
+
+/**
+ * Strips renderer-only fields (`id`, `bytes`, `preview`, `staged`) before a
+ * send: the daemon attachment schema accepts only `path`/`name`/`dataUrl`.
+ */
+function toAttachmentInputs(attachments: readonly DraftAttachment[]): AttachmentInput[] {
+  const inputs: AttachmentInput[] = [];
+  for (const attachment of attachments) {
+    if (attachment.dataUrl !== undefined && attachment.dataUrl !== '') {
+      inputs.push({ dataUrl: attachment.dataUrl, ...(attachment.name === undefined ? {} : { name: attachment.name }) });
+    } else if (attachment.path !== undefined && attachment.path !== '') {
+      inputs.push({ path: attachment.path, ...(attachment.name === undefined ? {} : { name: attachment.name }) });
+    }
+  }
+  return inputs;
+}
 
 export interface SessionController {
   state: SessionPageState;
   selectSession(sessionId: string): Promise<void>;
   newDraft(): void;
-  sendMessage(text: string, model: ModelEntry, reasoningEffort: string): Promise<void>;
+  sendMessage(text: string, model: ModelEntry, reasoningEffort: string, attachments: DraftAttachment[]): Promise<void>;
   interruptTurn(turn: number): Promise<void>;
+  deleteSession(sessionId: string): Promise<void>;
   removePending(localId: string): void;
   setTasks(tasks: Record<string, SessionBridgeTaskBrief>): void;
   clearError(): void;
@@ -83,10 +101,15 @@ export function useSessionController(api: SessionApi) {
     return pending;
   }, [api, refreshList, reportError, selectSession]);
 
-  const sendMessage = useCallback(async (text: string, model: ModelEntry, reasoningEffort: string): Promise<void> => {
+  const sendMessage = useCallback(async (text: string, model: ModelEntry, reasoningEffort: string, attachments: DraftAttachment[]): Promise<void> => {
     dispatch({ type: 'clear-error' });
     const localId = `local-${++localSeq}`;
-    const optimistic = { localId, text, at: new Date().toISOString() };
+    const optimistic = {
+      localId,
+      text,
+      at: new Date().toISOString(),
+      ...(attachments.length === 0 ? {} : { attachments }),
+    };
 
     let sessionId = selected.current;
     if (!sessionId) {
@@ -98,6 +121,7 @@ export function useSessionController(api: SessionApi) {
     }
 
     try {
+      const inputs = toAttachmentInputs(attachments);
       const { turn } = await api.send({
         sessionId,
         text,
@@ -106,6 +130,7 @@ export function useSessionController(api: SessionApi) {
           model: model.model,
           ...(reasoningEffort ? { reasoningEffort } : {}),
         },
+        ...(inputs.length === 0 ? {} : { attachments: inputs }),
       });
       if (alive.current) dispatch({ type: 'pending-resolve', localId, turn });
     } catch (error) {
@@ -132,6 +157,27 @@ export function useSessionController(api: SessionApi) {
   const removePending = useCallback((localId: string): void => {
     dispatch({ type: 'pending-remove', localId });
   }, []);
+
+  const deleteSession = useCallback(async (sessionId: string): Promise<void> => {
+    dispatch({ type: 'clear-error' });
+    try {
+      await api.deleteSession(sessionId);
+    } catch (error) {
+      reportError(error, sessionId);
+      throw error;
+    }
+    // Drop the deleted session's drafts before any list refresh so a stale
+    // draft can never be attributed to a reused id.
+    clearDraft(sessionId);
+    clearDraftAttachments(sessionId);
+    const sessions = await refreshList();
+    if (!alive.current) return;
+    if (selected.current === sessionId) {
+      const next = sessions.find((session) => session.sessionId !== sessionId);
+      if (next) await selectSession(next.sessionId);
+      else newDraft();
+    }
+  }, [api, refreshList, reportError, selectSession, newDraft]);
 
   const setTasks = useCallback((tasks: Record<string, SessionBridgeTaskBrief>): void => {
     dispatch({ type: 'tasks', tasks });
@@ -168,5 +214,5 @@ export function useSessionController(api: SessionApi) {
     };
   }, [api, refreshList, reportError, selectSession]);
 
-  return { state, selectSession, newDraft, sendMessage, interruptTurn, removePending, setTasks, clearError };
+  return { state, selectSession, newDraft, sendMessage, interruptTurn, deleteSession, removePending, setTasks, clearError };
 }

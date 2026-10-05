@@ -5,6 +5,8 @@ import type { TurnModel, TurnStatus } from '../../model/types.js';
 export interface ConversationProps {
   /** Active session key (`'draft'` for a new session). */
   sessionKey: string;
+  /** Ledger session id, threaded through so media props can resolve. */
+  sessionId?: string;
   turns: readonly TurnModel[];
   /** True once the ledger has finished loading; history is not trusted before. */
   ready: boolean;
@@ -21,7 +23,7 @@ function isTerminal(status: TurnStatus): boolean {
  * baseline, so cold history never replays a burst of notifications. The
  * notification-center preference gate decides whether the event is recorded.
  */
-export function Conversation({ sessionKey, turns, ready }: ConversationProps) {
+export function Conversation({ sessionKey, sessionId, turns, ready }: ConversationProps) {
   const observed = useRef<{ key: string; terminal: Set<number> }>({ key: sessionKey, terminal: new Set() });
   const primed = useRef(false);
 
@@ -52,7 +54,7 @@ export function Conversation({ sessionKey, turns, ready }: ConversationProps) {
         action: { label: '查看', command: { id: 'session.open', args: { sessionId: sessionKey } } },
       });
     }
-  }, [sessionKey, turns, ready]);
+  }, [sessionKey, sessionId, turns, ready]);
 
   return null;
 }

@@ -5,7 +5,6 @@ import { Item, ItemContent, ItemDescription } from '@/renderer/components/ui/ite
 import { Separator } from '@/renderer/components/ui/separator';
 import type {
   ActionModel,
-  BlockModel,
   ContextItem,
   CycleModel,
   TurnModel,
@@ -74,14 +73,6 @@ export function findCycle(turn: TurnModel, index: number): CycleModel | undefine
 
 export function findAction(turn: TurnModel, actionId: string): ActionModel | undefined {
   return turn.actions.find((action) => action.id === actionId);
-}
-
-export function findBlock(turn: TurnModel, blockId: string): { block: BlockModel; cycle: CycleModel } | undefined {
-  for (const cycle of turn.cycles) {
-    const block = cycle.blocks.find((candidate) => candidate.blockId === blockId);
-    if (block) return { block, cycle };
-  }
-  return undefined;
 }
 
 export function findContext(turn: TurnModel, key: string): { item: ContextItem; cycle?: CycleModel; action?: ActionModel } | undefined {

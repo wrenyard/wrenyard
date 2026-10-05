@@ -1,4 +1,5 @@
 import type {
+  DraftAttachment,
   LedgerEvent,
   LiveCall,
   ModelEntry,
@@ -12,6 +13,8 @@ export interface PendingTurn {
   at: string;
   turn?: number;
   failed?: string;
+  /** Optimistic attachments, retained across a failed send so retry keeps them. */
+  attachments?: DraftAttachment[];
 }
 
 export interface SessionPageState {

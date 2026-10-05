@@ -28,6 +28,7 @@ import type {
   LedgerEventDraft,
   LiveCall,
   ProjectSnapshot,
+  SessionFile,
   SessionSummary,
   Usage,
   WorkspaceSnapshot,
@@ -85,54 +86,50 @@ const MEMORY_BILLING_CONTENT = `# Aurora 计费模块约定
 - 配置项通过 billing/config.ts 注入，便于测试。
 - 涉及金额的日志必须脱敏。`;
 
-const SELECT_OUTPUT =
-  '{"memories":[{"path":"memories/aurora-billing-conventions.md","reason":"与计费重试约定直接相关"}],'
-  + '"docs":[{"path":"projects/aurora/docs/specs/2026-09-28-billing-retry.md","reason":"本次改动对应的规格文档"}]}';
+/** The `doc-search` call's understanding of the first cycle. */
+const DOC_SEARCH_OUTPUT = '需要在 aurora 计费模块找到重试策略的规格与约定。';
+/** The `memory-search` call's recall summary for the first cycle. */
+const MEMORY_SEARCH_OUTPUT = '找到与计费重试相关的记忆：memories/aurora-billing-conventions.md。';
 
-/** Reason text of the featured turn's first cycle, with two action blocks. */
-const REASON_TURN1_CYCLE1 = `我打算分两步：先把 aurora 的 billing 重试实现读出来，确认当前策略；再改成带抖动的指数退避并补齐单测。
+/** Reason text of the featured turn's first cycle: message content only. */
+const REASON_TURN1_CYCLE1 = `我打算分两步：先把 aurora 的 billing 重试实现读出来，确认当前策略；再改成带抖动的指数退避并补齐单测。`;
 
-<wy-action>
-派发任务给 aurora：探查 billing/retry.ts 的现有重试实现，给出文件位置、重试次数与间隔，并指出可复用的测试工具。
-验收标准：说明现有实现的关键参数与文件位置。
-</wy-action>
-
-<wy-action>
-派发任务给 aurora：将 billing 重试逻辑改为指数退避 + full jitter（base 500ms、factor 2、上限 30s），补齐单元测试。
-验收标准：实现可在 billing/retry.ts 找到，新增测试覆盖重试次数、间隔上限与抖动范围。
-</wy-action>`;
-
-const REASON_BLOCK_1 = `派发任务给 aurora：探查 billing/retry.ts 的现有重试实现，给出文件位置、重试次数与间隔，并指出可复用的测试工具。
+const ACTION_INTENT_1 = `派发任务给 aurora：探查 billing/retry.ts 的现有重试实现，给出文件位置、重试次数与间隔，并指出可复用的测试工具。
 验收标准：说明现有实现的关键参数与文件位置。`;
 
-const REASON_BLOCK_2 = `派发任务给 aurora：将 billing 重试逻辑改为指数退避 + full jitter（base 500ms、factor 2、上限 30s），补齐单元测试。
+const ACTION_INTENT_2 = `派发任务给 aurora：将 billing 重试逻辑改为指数退避 + full jitter（base 500ms、factor 2、上限 30s），补齐单元测试。
 验收标准：实现可在 billing/retry.ts 找到，新增测试覆盖重试次数、间隔上限与抖动范围。`;
 
-/** Reason text of the featured turn's second cycle, with one action block. */
-const REASON_TURN1_CYCLE2 = `两个任务都已返回，改动看起来正确。我再派发一次测试，确认 aurora 的 billing 相关用例全部通过。
+/** Reason text of the featured turn's second cycle: message content only. */
+const REASON_TURN1_CYCLE2 = `两个任务都已返回，改动看起来正确。我再派发一次测试，确认 aurora 的 billing 相关用例全部通过。`;
 
-<wy-action>
-派发任务给 aurora：运行 billing 相关的单元测试并报告结果。
-验收标准：全部测试通过，或列出失败用例与原因。
-</wy-action>`;
-
-const REASON_BLOCK_3 = `派发任务给 aurora：运行 billing 相关的单元测试并报告结果。
+const ACTION_INTENT_3 = `派发任务给 aurora：运行 billing 相关的单元测试并报告结果。
 验收标准：全部测试通过，或列出失败用例与原因。`;
 
-const INTERPRET_OUTPUT_1 = '{"actions":['
-  + '{"kind":"dispatch","project":"aurora","task":"explore","goal":"探查 billing/retry.ts 的现有重试实现","acceptance":"说明现有实现的关键参数与文件位置"},'
-  + '{"kind":"dispatch","project":"aurora","task":"edit","goal":"改为指数退避 + full jitter 并补齐单测","acceptance":"实现可在 billing/retry.ts 找到，新增测试覆盖次数、上限与抖动范围"}'
-  + ']}';
+/** Chinese titles (at most 20 characters) for the dispatched actions. */
+const ACTION_TITLE_1 = '探查现有重试实现';
+const ACTION_TITLE_2 = '改为指数退避并补测';
+const ACTION_TITLE_3 = '运行 billing 单元测试';
 
-const INTERPRET_OUTPUT_2 = '{"actions":['
-  + '{"kind":"dispatch","project":"aurora","task":"test","goal":"运行 billing 相关单元测试","acceptance":"全部测试通过"}'
-  + ']}';
+const COMPILE_OUTPUT_1 = '{"kind":"dispatch","intent":"派发任务给 aurora：探查 billing/retry.ts 的现有重试实现"}';
+const COMPILE_OUTPUT_2 = '{"kind":"dispatch","intent":"派发任务给 aurora：改为指数退避 + full jitter 并补齐单测"}';
+const COMPILE_OUTPUT_3 = '{"kind":"dispatch","intent":"派发任务给 aurora：运行 billing 相关单元测试"}';
 
-const COMPILE_OUTPUT_1 = '{"input":{"project":"aurora","path":"billing/retry.ts"},"ctx":{"goal":"探查现有重试实现"}}';
-const COMPILE_OUTPUT_2 = '{"input":{"project":"aurora","path":"billing/retry.ts"},"ctx":{"goal":"改为指数退避并补测"}}';
-const COMPILE_OUTPUT_3 = '{"input":{"project":"aurora","suite":"billing"},"ctx":{"goal":"运行 billing 单元测试"}}';
+/** Task-declared output files, projected from `files` events. */
+const RETRY_SOURCE_FILE: SessionFile = {
+  path: 'projects/aurora/billing/retry.ts',
+  name: 'retry.ts',
+  kind: 'file',
+  mime: 'text/plain',
+  bytes: 4_096,
+  hash: 'd3m0retry5ource',
+  source: 'task',
+  description: '指数退避与 full jitter 实现',
+  taskRunId: 'task_demo02',
+  actionId: 'a3',
+};
 
-const PROGRESS_REPLY = '已派发 explore 与 edit 两个任务，正在执行；完成后我会继续。';
+const REPLY_TURN1_CYCLE1 = '已派发 explore 与 edit 两个任务，正在执行；完成后我会继续。';
 
 const FINAL_REPLY_1 = `已把 aurora 的 billing 重试改为带抖动的指数退避，并补上了测试。
 
@@ -224,12 +221,8 @@ const DEFAULT_MODEL = { provider: 'anthropic', model: 'claude-opus-5-5', reasoni
 const RESIDENT_LAYERS = { system: 6_200, global: 3_900, role: 300, workspace: 9_800, info: 450 } as const;
 
 const REASON_ITEM_TOKENS: Record<string, number> = { c_reason1: 12_000, c_reason2: 8_000, c_reason3: 6_000 };
-const REPLY_FINAL_TOKENS: Record<number, number> = { 1: 1_600, 2: 380 };
-const DOC_ITEM_TOKENS: Record<string, number> = {
-  'projects/aurora/AGENTS.md': 3_100,
-  'projects/aurora/docs/specs/2026-09-28-billing-retry.md': 12_400,
-};
-const ACTION_ITEM_TOKENS: Record<string, number> = { a1: 2_400, a2: 2_100, a3: 2_400 };
+const REPLY_TOKENS: Record<number, number> = { 1: 1_600, 2: 380 };
+const ACTION_ITEM_TOKENS: Record<string, number> = { a1: 1_200, a2: 2_400, a3: 2_100, a4: 2_400 };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -323,9 +316,9 @@ function buildProjects(): ProjectSnapshot[] {
       branch: 'feat/billing-backoff',
       head: 'a1b2c3d',
       tasks: [
-        { id: 'explore', description: '检索代码与资料并给出结论' },
-        { id: 'edit', description: '修改代码并自测' },
-        { id: 'test', description: '运行测试并报告结果' },
+        { id: 'explore', description: '检索代码与资料并给出结论', inputSummary: ['目标', '范围'] },
+        { id: 'edit', description: '修改代码并自测', inputSummary: ['目标', '验收'] },
+        { id: 'test', description: '运行测试并报告结果', inputSummary: ['范围'] },
       ],
       recentDocs: [
         { path: 'projects/aurora/docs/specs/2026-09-28-billing-retry.md', title: 'Billing 重试策略' },
@@ -342,9 +335,9 @@ function buildProjects(): ProjectSnapshot[] {
       branch: 'main',
       head: 'd4e5f6a',
       tasks: [
-        { id: 'explore', description: '检索代码与资料并给出结论' },
-        { id: 'edit', description: '修改代码并自测' },
-        { id: 'test', description: '运行测试并报告结果' },
+        { id: 'explore', description: '检索代码与资料并给出结论', inputSummary: ['目标', '范围'] },
+        { id: 'edit', description: '修改代码并自测', inputSummary: ['目标', '验收'] },
+        { id: 'test', description: '运行测试并报告结果', inputSummary: ['范围'] },
       ],
       recentDocs: [
         { path: 'projects/console/docs/reports/2026-09-30-console-bundle-analysis.md', title: '首页 Bundle 分析' },
@@ -359,7 +352,7 @@ function buildProjects(): ProjectSnapshot[] {
       defaultBranch: 'main',
       branch: 'main',
       head: '9f8e7d6',
-      tasks: [{ id: 'edit', description: '修改文档并自测' }],
+      tasks: [{ id: 'edit', description: '修改文档并自测', inputSummary: ['目标'] }],
       recentDocs: [],
     },
   ];
@@ -372,10 +365,10 @@ function buildSnapshot(takenAt: string): WorkspaceSnapshot {
     agents: WORKSPACE_AGENTS,
     memoryIndex: MEMORY_INDEX,
     builtinTasks: [
-      { id: 'explore', description: '检索代码与资料并给出结论' },
-      { id: 'edit', description: '修改代码并自测' },
-      { id: 'test', description: '运行测试并报告结果' },
-      { id: 'write-doc', description: '撰写或更新文档' },
+      { id: 'explore', description: '检索代码与资料并给出结论', inputSummary: ['目标', '范围'] },
+      { id: 'edit', description: '修改代码并自测', inputSummary: ['目标', '验收'] },
+      { id: 'test', description: '运行测试并报告结果', inputSummary: ['范围'] },
+      { id: 'doc', description: '撰写或更新文档', inputSummary: ['目标项目', '文档类型', '精确路径', '完整对话'] },
     ],
     projects: buildProjects(),
   };
@@ -409,18 +402,26 @@ function contextKind(event: LedgerEvent): ContextItemKind | undefined {
       return 'user';
     case 'reason.completed':
       return 'assistant';
+    case 'thinking':
+      return 'thinking';
     case 'reply':
       return 'reply';
-    case 'doc.read':
+    case 'doc.content':
       return 'doc';
+    case 'doc.search':
+      return 'doc-search';
     case 'memory.recalled':
       return 'memory';
+    case 'files':
+      return 'files';
     case 'action.finished':
       return 'action-result';
     case 'ws.updated':
       return 'ws-update';
     case 'turn.interrupted':
       return 'interrupt';
+    case 'error':
+      return 'error';
     default:
       return undefined;
   }
@@ -430,12 +431,19 @@ function contextLabel(event: LedgerEvent): string {
   switch (event.type) {
     case 'turn.started':
     case 'reason.completed':
+    case 'thinking':
     case 'reply':
       return firstLine(event.text);
-    case 'doc.read':
+    case 'doc.content':
     case 'memory.recalled':
     case 'ws.updated':
       return event.path;
+    case 'doc.search':
+      return firstLine(event.understanding);
+    case 'files':
+      return event.files.map((file) => file.name).join('、');
+    case 'error':
+      return `${event.stage}: ${event.message}`;
     case 'turn.interrupted':
       return event.reason;
     case 'action.finished': {
@@ -451,16 +459,24 @@ function contextTokens(event: LedgerEvent): number {
   switch (event.type) {
     case 'turn.started':
       return 40;
+    case 'thinking':
+      return 320;
     case 'reason.completed':
       return REASON_ITEM_TOKENS[event.callId] ?? 1_800;
     case 'reply':
-      return event.phase === 'progress' ? 96 : REPLY_FINAL_TOKENS[event.turn ?? 0] ?? 400;
-    case 'doc.read':
-      return DOC_ITEM_TOKENS[event.path] ?? 2_000;
+      return REPLY_TOKENS[event.turn ?? 0] ?? 400;
+    case 'doc.content':
+      return event.tokens;
+    case 'doc.search':
+      return 1_200;
     case 'memory.recalled':
       return 1_800;
+    case 'files':
+      return 160;
     case 'action.finished':
       return ACTION_ITEM_TOKENS[event.actionId] ?? 800;
+    case 'error':
+      return 40;
     case 'ws.updated':
       return 40;
     case 'turn.interrupted':
@@ -547,7 +563,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
     const push = makeSink(featured);
     const snapshot = buildSnapshot(sec(2_520));
 
-    push(sec(2_520), { type: 'session.created', workspaceRoot: WORKSPACE_ROOT, snapshot });
+    push(sec(2_520), { type: 'session.created', format: 3, workspaceRoot: WORKSPACE_ROOT, snapshot });
     push(sec(2_520), {
       type: 'turn.started',
       turn: 1,
@@ -555,56 +571,102 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       model: { provider: 'anthropic', model: 'claude-opus-5-5', reasoningEffort: 'high' },
     });
 
+    // Cycle 1 prepares context: a doc-search, a read action that loads the
+    // specs (doc.search/doc.content) and a memory-search that recalls the
+    // billing conventions.
     appendCall(push, {
       at: 2_514,
       seconds: 2,
-      callId: 'c_select1',
-      callRole: 'select',
+      callId: 'c_search1',
+      callRole: 'doc-search',
       modelPublicId: 'deepseek/deepseek-v4.1-flash',
       turn: 1,
       cycle: 1,
-      layers: { 'wy-system': 2_600, 'wy-select': 1_400 },
+      layers: { 'wy-system': 2_600, 'wy-doc-search': 1_400 },
       estimatedInputTokens: 4_100,
-      usage: { input: 4_180, cachedInput: 0, output: 210 },
-      output: SELECT_OUTPUT,
+      usage: { input: 4_180, cachedInput: 0, output: 120 },
+      output: DOC_SEARCH_OUTPUT,
     });
-
     push(sec(2_512), {
-      type: 'context.selected',
+      type: 'action.started',
       turn: 1,
       cycle: 1,
-      callId: 'c_select1',
-      selections: [
-        { path: 'projects/aurora/AGENTS.md', reason: '项目指令，始终加载' },
-        { path: 'projects/aurora/docs/specs/2026-09-28-billing-retry.md', reason: '本次改动对应的规格文档' },
-        { path: 'memories/aurora-billing-conventions.md', reason: '与计费重试约定直接相关' },
+      actionId: 'a1',
+      kind: 'read',
+      parsed: { kind: 'read', intent: '读取 aurora 计费重试相关的规格与约定' },
+    });
+    push(sec(2_512), {
+      type: 'doc.search',
+      turn: 1,
+      cycle: 1,
+      actionId: 'a1',
+      understanding: DOC_SEARCH_OUTPUT,
+      picks: [
+        { path: 'projects/aurora/docs/specs/2026-09-28-billing-retry.md', title: 'Billing 重试策略规格', reason: '本次改动对应的规格文档' },
       ],
+      near: [
+        { path: 'projects/aurora/docs/reports/2026-09-22-billing-latency.md', title: 'Billing 延迟报告', reason: '同一模块的历史分析' },
+      ],
+      notes: ['项目指令始终加载'],
     });
     push(sec(2_511), {
-      type: 'doc.read',
+      type: 'doc.content',
       turn: 1,
       cycle: 1,
+      actionId: 'a1',
       path: 'projects/aurora/AGENTS.md',
       title: 'Aurora 项目指令',
+      updated: '2026-09-20',
+      version: 'v3',
+      tokens: 3_100,
       content: AURORA_AGENTS_CONTENT,
+      format: 'full',
       source: 'project-instructions',
     });
     push(sec(2_511), {
-      type: 'doc.read',
+      type: 'doc.content',
       turn: 1,
       cycle: 1,
+      actionId: 'a1',
       path: 'projects/aurora/docs/specs/2026-09-28-billing-retry.md',
       title: 'Billing 重试策略',
+      updated: '2026-09-28',
+      version: 'v2',
+      tokens: 12_400,
       content: SPEC_CONTENT,
-      source: 'selection',
+      format: 'full',
+      source: 'read',
+    });
+    appendCall(push, {
+      at: 2_513,
+      seconds: 1,
+      callId: 'c_mem1',
+      callRole: 'memory-search',
+      modelPublicId: 'deepseek/deepseek-v4.1-flash',
+      turn: 1,
+      cycle: 1,
+      layers: { 'wy-system': 1_800, 'wy-memory-search': 900 },
+      estimatedInputTokens: 2_800,
+      usage: { input: 2_840, output: 90 },
+      output: MEMORY_SEARCH_OUTPUT,
     });
     push(sec(2_511), {
       type: 'memory.recalled',
       turn: 1,
       cycle: 1,
+      version: 'v4',
+      source: 'memory-search',
       path: 'memories/aurora-billing-conventions.md',
       content: MEMORY_BILLING_CONTENT,
-      source: 'selection',
+    });
+    push(sec(2_510), {
+      type: 'action.finished',
+      turn: 1,
+      cycle: 1,
+      actionId: 'a1',
+      kind: 'read',
+      status: 'done',
+      result: '已加载规格、项目指令与计费记忆。',
     });
 
     appendCall(push, {
@@ -621,23 +683,15 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       output: REASON_TURN1_CYCLE1,
       reasoning: '先读现有实现，确认重试参数；然后改成指数退避，加 full jitter，最后补测试。',
     });
-    push(sec(2_496), { type: 'reason.completed', turn: 1, cycle: 1, callId: 'c_reason1', text: REASON_TURN1_CYCLE1 });
-    push(sec(2_496), { type: 'action.block', turn: 1, cycle: 1, blockId: 'b1', text: REASON_BLOCK_1 });
-    push(sec(2_496), { type: 'action.block', turn: 1, cycle: 1, blockId: 'b2', text: REASON_BLOCK_2 });
-
-    appendCall(push, {
-      at: 2_496,
-      seconds: 1,
-      callId: 'c_interpret1',
-      callRole: 'interpret',
-      modelPublicId: 'deepseek/deepseek-v4.1-flash',
+    push(sec(2_496), {
+      type: 'thinking',
       turn: 1,
       cycle: 1,
-      layers: { 'wy-system': 1_800, 'wy-interpret': 1_000 },
-      estimatedInputTokens: 2_900,
-      usage: { input: 2_940, output: 260 },
-      output: INTERPRET_OUTPUT_1,
+      callId: 'c_reason1',
+      text: '先读现有实现，确认重试参数；然后改成指数退避，加 full jitter，最后补测试。',
     });
+    push(sec(2_496), { type: 'reason.completed', turn: 1, cycle: 1, callId: 'c_reason1', text: REASON_TURN1_CYCLE1 });
+
     appendCall(push, {
       at: 2_495,
       seconds: 1,
@@ -669,39 +723,27 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       type: 'action.started',
       turn: 1,
       cycle: 1,
-      actionId: 'a1',
-      blockId: 'b1',
+      actionId: 'a2',
       kind: 'dispatch',
-      parsed: {
-        kind: 'dispatch',
-        project: 'aurora',
-        task: 'explore',
-        goal: '探查 billing/retry.ts 的现有重试实现',
-        acceptance: '说明现有实现的关键参数与文件位置',
-      },
+      parsed: { kind: 'dispatch', intent: ACTION_INTENT_1 },
       taskRunId: 'task_demo01',
     });
+    push(sec(2_493), { type: 'action.titled', turn: 1, cycle: 1, actionId: 'a2', title: ACTION_TITLE_1 });
     push(sec(2_493), {
       type: 'action.started',
       turn: 1,
       cycle: 1,
-      actionId: 'a2',
-      blockId: 'b2',
+      actionId: 'a3',
       kind: 'dispatch',
-      parsed: {
-        kind: 'dispatch',
-        project: 'aurora',
-        task: 'edit',
-        goal: '改为指数退避 + full jitter 并补齐单测',
-        acceptance: '实现可在 billing/retry.ts 找到，新增测试覆盖次数、上限与抖动范围',
-      },
+      parsed: { kind: 'dispatch', intent: ACTION_INTENT_2 },
       taskRunId: 'task_demo02',
     });
+    push(sec(2_493), { type: 'action.titled', turn: 1, cycle: 1, actionId: 'a3', title: ACTION_TITLE_2 });
     push(sec(2_440), {
       type: 'action.finished',
       turn: 1,
       cycle: 1,
-      actionId: 'a1',
+      actionId: 'a2',
       kind: 'dispatch',
       status: 'done',
       result: '现有实现为固定 3 次间隔 2s 重试，位于 billing/retry.ts。',
@@ -711,11 +753,20 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       type: 'action.finished',
       turn: 1,
       cycle: 1,
-      actionId: 'a2',
+      actionId: 'a3',
       kind: 'dispatch',
       status: 'done',
       result: '已改为指数退避（base 500ms, factor 2, max 30s）+ full jitter，新增 6 个单测。',
       taskRunId: 'task_demo02',
+    });
+    push(sec(2_380), {
+      type: 'files',
+      turn: 1,
+      cycle: 1,
+      source: 'task',
+      actionId: 'a3',
+      taskRunId: 'task_demo02',
+      files: [RETRY_SOURCE_FILE],
     });
 
     appendCall(push, {
@@ -729,9 +780,9 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       layers: { 'wy-system': 1_200, 'wy-workspace': 5_000, 'wy-ctx': 400, 'wy-status': 120 },
       estimatedInputTokens: 6_400,
       usage: { input: 6_460, output: 60 },
-      output: PROGRESS_REPLY,
+      output: REPLY_TURN1_CYCLE1,
     });
-    push(sec(2_376), { type: 'reply', turn: 1, cycle: 1, phase: 'progress', text: PROGRESS_REPLY, callId: 'c_reply1' });
+    push(sec(2_376), { type: 'reply', turn: 1, cycle: 1, text: REPLY_TURN1_CYCLE1, callId: 'c_reply1' });
 
     appendCall(push, {
       at: 2_375,
@@ -747,22 +798,15 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       output: REASON_TURN1_CYCLE2,
       reasoning: '两个任务结果都正常，最后跑一遍 billing 测试确认。',
     });
-    push(sec(2_361), { type: 'reason.completed', turn: 1, cycle: 2, callId: 'c_reason2', text: REASON_TURN1_CYCLE2 });
-    push(sec(2_361), { type: 'action.block', turn: 1, cycle: 2, blockId: 'b3', text: REASON_BLOCK_3 });
-
-    appendCall(push, {
-      at: 2_361,
-      seconds: 1,
-      callId: 'c_interpret2',
-      callRole: 'interpret',
-      modelPublicId: 'deepseek/deepseek-v4.1-flash',
+    push(sec(2_361), {
+      type: 'thinking',
       turn: 1,
       cycle: 2,
-      layers: { 'wy-system': 1_800, 'wy-interpret': 1_050 },
-      estimatedInputTokens: 3_000,
-      usage: { input: 3_020, output: 250 },
-      output: INTERPRET_OUTPUT_2,
+      callId: 'c_reason2',
+      text: '两个任务结果都正常，最后跑一遍 billing 测试确认。',
     });
+    push(sec(2_361), { type: 'reason.completed', turn: 1, cycle: 2, callId: 'c_reason2', text: REASON_TURN1_CYCLE2 });
+
     appendCall(push, {
       at: 2_360,
       seconds: 1,
@@ -781,23 +825,17 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       type: 'action.started',
       turn: 1,
       cycle: 2,
-      actionId: 'a3',
-      blockId: 'b3',
+      actionId: 'a4',
       kind: 'dispatch',
-      parsed: {
-        kind: 'dispatch',
-        project: 'aurora',
-        task: 'test',
-        goal: '运行 billing 相关单元测试',
-        acceptance: '全部测试通过',
-      },
+      parsed: { kind: 'dispatch', intent: ACTION_INTENT_3 },
       taskRunId: 'task_demo03',
     });
+    push(sec(2_359), { type: 'action.titled', turn: 1, cycle: 2, actionId: 'a4', title: ACTION_TITLE_3 });
     push(sec(2_320), {
       type: 'action.finished',
       turn: 1,
       cycle: 2,
-      actionId: 'a3',
+      actionId: 'a4',
       kind: 'dispatch',
       status: 'done',
       result: '12 个测试全部通过。',
@@ -817,7 +855,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       usage: { input: 8_240, output: 380 },
       output: FINAL_REPLY_1,
     });
-    push(sec(2_316), { type: 'reply', turn: 1, cycle: 2, phase: 'final', text: FINAL_REPLY_1, callId: 'c_reply2' });
+    push(sec(2_316), { type: 'reply', turn: 1, cycle: 2, text: FINAL_REPLY_1, callId: 'c_reply2' });
 
     appendCall(push, {
       at: 2_315,
@@ -855,8 +893,15 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       output: REASON_TURN2,
       reasoning: 'console 的加载慢和重试无关，指向首屏 bundle。',
     });
+    push(sec(2_264), {
+      type: 'thinking',
+      turn: 2,
+      cycle: 1,
+      callId: 'c_reason3',
+      text: 'console 的加载慢和重试无关，指向首屏 bundle。',
+    });
     push(sec(2_264), { type: 'reason.completed', turn: 2, cycle: 1, callId: 'c_reason3', text: REASON_TURN2 });
-    push(sec(2_262), { type: 'reply', turn: 2, cycle: 1, phase: 'final', text: FINAL_REPLY_2 });
+    push(sec(2_262), { type: 'reply', turn: 2, cycle: 1, text: FINAL_REPLY_2 });
     push(sec(2_261), { type: 'turn.finished', turn: 2, status: 'completed' });
   }
   register(FEATURED_ID, featured);
@@ -876,6 +921,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
     const push = makeSink(events);
     push(sec(args.createdAt), {
       type: 'session.created',
+      format: 3,
       workspaceRoot: WORKSPACE_ROOT,
       snapshot: buildSnapshot(sec(args.createdAt)),
     });
@@ -900,7 +946,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       reasoning: '快速确认结论后直接回复。',
     });
     push(sec(args.createdAt - 28), { type: 'reason.completed', turn: 1, cycle: 1, callId: `${args.id}_reason`, text: args.reply });
-    push(sec(args.createdAt - 32), { type: 'reply', turn: 1, cycle: 1, phase: 'final', text: args.reply });
+    push(sec(args.createdAt - 32), { type: 'reply', turn: 1, cycle: 1, text: args.reply });
     appendCall(push, {
       at: args.createdAt - 34,
       seconds: 1,
@@ -1057,7 +1103,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       turn,
       cycle: 1,
     }, replyEndedAt);
-    appendEvent(sessionId, { type: 'reply', turn, cycle: 1, phase: 'final', text: replyText, callId: replyCallId }, new Date());
+    appendEvent(sessionId, { type: 'reply', turn, cycle: 1, text: replyText, callId: replyCallId }, new Date());
     appendEvent(sessionId, { type: 'turn.finished', turn, status: 'completed' }, new Date());
     live.length = 0;
     emitLive(sessionId, live);
@@ -1086,6 +1132,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       const events: LedgerEvent[] = [];
       makeSink(events)(new Date().toISOString(), {
         type: 'session.created',
+        format: 3,
         workspaceRoot: WORKSPACE_ROOT,
         snapshot: buildSnapshot(new Date().toISOString()),
       });

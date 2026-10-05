@@ -47,6 +47,9 @@ export function OverviewCard({ inspection, budget, groups, growth, cacheRatio }:
           <span className={cacheRatio !== undefined && cacheRatio < 0.5 ? 'text-warning' : undefined}>
             {cacheRatio === undefined ? '缓存命中 —' : `缓存命中 ${Math.round(cacheRatio * 100)}%`}
           </span>
+          {inspection.files && (
+            <span>{`常驻图片 ${inspection.files.images} · 省略 ${inspection.files.omitted}`}</span>
+          )}
           {rounds && (
             <span className={rounds.warn ? 'text-warning' : undefined}>
               {rounds.rounds > 0 ? `按近 ${Math.min(growth.length, 5)} 轮约还能 ${rounds.rounds} 轮` : '上下文已满，无法继续'}
