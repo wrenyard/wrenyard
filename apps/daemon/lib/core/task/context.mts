@@ -6,7 +6,8 @@ export interface TaskContext {
   [key: string]: TaskContextValue
 }
 
-export const TASK_CONTEXT_MAX_BYTES = 16 * 1024
+// Sized for original documents injected from a session (context: [{ source, content }]).
+export const TASK_CONTEXT_MAX_BYTES = 256 * 1024
 export const TASK_CONTEXT_MAX_KEYS = 64
 export const TASK_CONTEXT_MAX_KEY_LENGTH = 128
 export const TASK_CONTEXT_MAX_DEPTH = 8

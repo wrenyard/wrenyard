@@ -26,6 +26,16 @@ import {
  */
 export type StructuredOutputJsonSchema = ZodType
 
+/**
+ * Optional asynchronous transform applied to the successfully parsed JSON
+ * `<result>` value of each collected attempt, before strict schema validation
+ * and placeholder rejection. The returned value replaces the parsed value for
+ * the rest of the collection path (validation, placeholder rejection, and
+ * summary extraction). A rejection is surfaced as a bounded schema diagnostic
+ * so it participates in the existing in-session correction loop.
+ */
+export type StructuredOutputPreSchemaTransform = (data: unknown) => unknown | Promise<unknown>
+
 // Trivial placeholder strings that agents sometimes return as "done"
 // without doing real work. Rejected outright in required string fields.
 const PLACEHOLDER_STRINGS = new Set([
@@ -34,6 +44,23 @@ const PLACEHOLDER_STRINGS = new Set([
   'placeholder',
   '...',
 ])
+
+/** Lead time before the single task deadline at which the running work phase is
+ *  stopped and the same native session is resumed with the time-limit warning.
+ *  The warning turn is capped at this window, which always sits inside the
+ *  total limit and is never added to it. */
+const TIME_LIMIT_WARNING_LEAD_MS = 60 * 1000
+/** Minimum effective total limit (in ms) that leaves room for both a work phase
+ *  and the warning window. Below this, the previous hard-stop behavior is kept. */
+const MIN_TIMEOUT_FOR_TIME_LIMIT_WARNING_MS = 2 * TIME_LIMIT_WARNING_LEAD_MS
+/** Warning message sent on the resumed native session, in the same language
+ *  style as the existing structured-output correction prompts. */
+const TIME_LIMIT_WARNING_TEXT =
+  'Time limit reached. Stop the work now. Do not start new tool calls. ' +
+  'Summarize what you have found or completed so far and return the final structured output immediately. ' +
+  'You will be terminated in 60 seconds.'
+/** Marker line prepended to the summary of a time-limit-truncated result. */
+const TIME_LIMIT_TRUNCATION_MARKER = '[truncated by time limit]'
 
 function rejectPlaceholders(data: unknown, schema: CompiledSchema): string[] {
   const errors: string[] = []
@@ -74,14 +101,25 @@ export interface StructuredOutputOptions {
   timeoutMs?: number
   taskName?: string
   taskId?: string
+  /** Whether the resolved client can resume a native session (its
+   *  `capabilities.resume`). When explicitly false, the time-limit warning
+   *  resume is skipped and the task hard-stops at its limit exactly as before.
+   *  Defaults to true when omitted. */
+  canResumeNativeSession?: boolean
   /** Repository coordination only. Explicit false keeps observational tasks
    *  retryable even though production clients always launch in their
    *  unrestricted runtime mode. Defaults to true when omitted. */
   repoWriteLock?: boolean
-  onDelivery?: (delivery: { summary?: string; data: unknown }) => void
+  onDelivery?: (delivery: { summary?: string; data: unknown; truncatedByTimeLimit?: boolean }) => void
   beforeAttempt?: () => void | Promise<void>
   features?: readonly string[]
   writePaths?: readonly string[]
+  /** Optional asynchronous pre-schema transform applied exactly once per
+   *  collected attempt to the successfully parsed JSON `<result>` value, before
+   *  strict schema validation and placeholder rejection. Used to sanitize
+   *  artifact metadata so malformed entries strip before collection validation.
+   *  When omitted, the parse and validation path is unchanged. */
+  preSchemaTransform?: StructuredOutputPreSchemaTransform
   /** Original requested agent runtime, carried separately from the exact
    *  approved execution target passed as `profile`. */
   requestedAgentRuntime?: string
@@ -160,10 +198,25 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   // when collection begins (queue/admission/pre-gates run before this function
   // and never consume it), and it is never renewed. Before each attempt the
   // dispatched timeout is min(attempt cap, positive remaining total) — the
-  // initial cap is the total budget, the correction cap stays
+  // initial cap is the total budget (minus the reserved time-limit warning
+  // window when that resume is enabled), the correction cap stays
   // STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS. An expired budget throws the existing
   // agent-timeout classification without starting another agent.
   const deadlineMs = Date.now() + totalBudgetMs
+  // ── Time-limit warning resume ──
+  // The task still has exactly one total deadline. When the resolved client can
+  // resume a native session and the limit leaves room for the warning window,
+  // the running work phase is stopped 60 s before the limit and the same native
+  // session is resumed with a stop-and-summarize warning capped at 60 s. The
+  // resumed turn passes through the ordinary structured-output collection path:
+  // a valid result marks the task as truncated by the time limit, while a
+  // non-resumable client, a missing native session id, or an effective limit
+  // under 120 s keep the previous hard-stop-at-the-limit behavior. The warning
+  // window is always inside the total limit, never added to it.
+  const timeLimitWarningEnabled =
+    (opts.canResumeNativeSession ?? true) &&
+    totalBudgetMs >= MIN_TIMEOUT_FOR_TIME_LIMIT_WARNING_MS
+  let warningResumeIssued = false
   for (let attempt = 0; attempt <= maxResumeAttempts; attempt += 1) {
     await opts.beforeAttempt?.()
     const remainingTotalMs = deadlineMs - Date.now()
@@ -194,7 +247,12 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     const attemptPrompt = attempt === 0
       ? firstPrompt(opts.instructions, schema)
       : resumePrompt(attempt, schema, lastValidationErrors)
-    const attemptCapMs = attempt === 0 ? totalBudgetMs : STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS
+    // Reserve the warning window from the initial work phase so the resumed
+    // warning turn still fits inside the one total deadline.
+    const reservedWarningMs = timeLimitWarningEnabled && attempt === 0 ? TIME_LIMIT_WARNING_LEAD_MS : 0
+    const attemptCapMs = attempt === 0
+      ? totalBudgetMs - reservedWarningMs
+      : STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS
     const attemptTimeoutMs = Math.min(attemptCapMs, remainingTotalMs)
     const terminal = await runStructuredAttempt(
         opts.runAgent,
@@ -223,7 +281,32 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     // Task logic only classifies the terminal agent result it receives.
     if (terminal.status === 'timeout') {
       lastActivity = terminal.output ?? 'agent execution still running at deadline'
-      throw agentTimeoutError(terminal.executionId ?? lastExecutionId ?? 'unknown', attempt + 1, attemptTimeoutMs, lastActivity)
+      // The initial work phase was stopped lead-ms before the limit: resume the
+      // same native session once with the warning so it can return a truncated
+      // but valid structured output inside the remaining window. Without a
+      // captured native session id the run hard-stops exactly as before.
+      if (timeLimitWarningEnabled && !warningResumeIssued && attempt === 0 && resume) {
+        warningResumeIssued = true
+        const truncated = await runTimeLimitWarningResume(
+          opts,
+          schema,
+          resume,
+          assertResolvedProfileForRetry(opts.profile, resolvedProfile),
+          deadlineMs,
+          lastExecutionId,
+        )
+        opts.onDelivery?.({
+          summary: prependTimeLimitMarker(truncated.summary),
+          data: truncated.data,
+          truncatedByTimeLimit: true,
+        })
+        return truncated.data
+      }
+      // No resumable session: report the full total budget so the failure is
+      // identical to the previous hard-stop-at-the-limit behavior.
+      const reportedTimeoutMs =
+        timeLimitWarningEnabled && attempt === 0 ? totalBudgetMs : attemptTimeoutMs
+      throw agentTimeoutError(terminal.executionId ?? lastExecutionId ?? 'unknown', attempt + 1, reportedTimeoutMs, lastActivity)
     }
     if (terminal.status === 'cancelled' || terminal.status === 'interrupted') {
       throw agentStoppedError(
@@ -244,7 +327,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       )
     }
 
-    const parsed = parseStructuredFinalOutput(terminal.output, schema)
+    const parsed = await parseStructuredFinalOutput(terminal.output, schema, opts.preSchemaTransform)
     if (parsed.success) {
       opts.onDelivery?.({ summary: parsed.summary, data: parsed.data })
       return parsed.data
@@ -333,6 +416,108 @@ async function runStructuredAttempt(
   }
 }
 
+/**
+ * Resume the original native session once with the time-limit warning and treat
+ * its output as the normal structured output for the task.
+ *
+ * Reuses the existing structured-output collection path (parse delivery block,
+ * pre-schema transform, strict schema validation, placeholder rejection). The
+ * warning turn is capped at the remaining warning window, itself bounded by the
+ * one total deadline. A valid result is returned for the caller to mark as
+ * truncated; a timeout, stop, runtime failure, or invalid output surfaces the
+ * same terminal classification as a normal attempt, and no further corrections
+ * are made.
+ */
+async function runTimeLimitWarningResume(
+  opts: StructuredOutputOptions,
+  schema: CompiledSchema,
+  nativeSessionId: string,
+  warningProfile: string,
+  deadlineMs: number,
+  lastExecutionId: string | undefined,
+): Promise<{ data: unknown; summary?: string }> {
+  const warningTimeoutMs = Math.min(TIME_LIMIT_WARNING_LEAD_MS, deadlineMs - Date.now())
+  if (warningTimeoutMs <= 0) {
+    throw agentTimeoutError(
+      lastExecutionId ?? 'unknown',
+      1,
+      TIME_LIMIT_WARNING_LEAD_MS,
+      'no remaining budget for the time-limit warning resume',
+    )
+  }
+  await opts.beforeAttempt?.()
+  const terminal = await runStructuredAttempt(
+    opts.runAgent,
+    warningProfile,
+    timeLimitWarningPrompt(schema),
+    {
+      workingDirectory: opts.workingDirectory,
+      timeoutMs: warningTimeoutMs,
+      resume: nativeSessionId,
+      repoWriteLock: opts.repoWriteLock,
+      taskId: opts.taskId,
+      features: opts.features,
+      writePaths: opts.writePaths,
+      requestedAgentRuntime: opts.requestedAgentRuntime,
+      dispatchSnapshot: opts.dispatchSnapshot,
+      codeBuddyExecution: opts.codeBuddyExecution,
+    },
+  )
+  if (terminal.status === 'timeout') {
+    throw agentTimeoutError(
+      terminal.executionId ?? lastExecutionId ?? 'unknown',
+      1,
+      warningTimeoutMs,
+      terminal.output ?? 'agent execution still running at the time-limit warning deadline',
+    )
+  }
+  if (terminal.status === 'cancelled' || terminal.status === 'interrupted') {
+    throw agentStoppedError(
+      terminal.status,
+      terminal.executionId ?? lastExecutionId ?? 'unknown',
+      terminal.error ?? terminal.output,
+    )
+  }
+  if (terminal.status === 'failed') {
+    throw agentFailedError(
+      terminal.executionId ?? lastExecutionId ?? 'unknown',
+      terminal.error ?? terminal.output,
+      terminal.failureClass,
+    )
+  }
+  const parsed = await parseStructuredFinalOutput(terminal.output, schema, opts.preSchemaTransform)
+  if (parsed.success) {
+    return { data: parsed.data, summary: parsed.summary }
+  }
+  // The warning window did not yield a valid structured output: status timeout
+  // exactly as today, with no further structured-output corrections.
+  throw agentTimeoutError(
+    terminal.executionId ?? lastExecutionId ?? 'unknown',
+    1,
+    warningTimeoutMs,
+    terminal.output ?? 'time-limit warning resume returned no valid structured output',
+  )
+}
+
+/** Prepend the truncation marker line to a task summary. */
+function prependTimeLimitMarker(summary: string | undefined): string {
+  return summary && summary.trim()
+    ? `${TIME_LIMIT_TRUNCATION_MARKER}\n${summary}`
+    : TIME_LIMIT_TRUNCATION_MARKER
+}
+
+/**
+ * Stop-and-summarize warning, followed by the standard structured-output
+ * contract so the resumed session can return the final structured output.
+ */
+function timeLimitWarningPrompt(schema: CompiledSchema): string {
+  return [
+    TIME_LIMIT_WARNING_TEXT,
+    '',
+    outputContract(schema),
+  ].join('\n')
+}
+
 function agentStoppedError(
   status: 'cancelled' | 'interrupted',
   executionId: string,
@@ -403,14 +588,18 @@ type ParsedStructuredOutput =
   | { success: true; data: unknown; summary?: string }
   | { success: false; diagnostics: StructuredOutputDiagnostic[]; validationErrors: string[] }
 
-function parseStructuredFinalOutput(output: string | null | undefined, schema: CompiledSchema): ParsedStructuredOutput {
+async function parseStructuredFinalOutput(
+  output: string | null | undefined,
+  schema: CompiledSchema,
+  preSchemaTransform?: StructuredOutputPreSchemaTransform,
+): Promise<ParsedStructuredOutput> {
   const text = output?.trim()
   if (!text) return failWithDiagnostics([{ kind: 'json', message: 'final output is empty' }])
 
   const delivery = parseForemanTaskOutput(text)
   if (delivery.present) {
     if (!delivery.success) return failWithDiagnostics(delivery.diagnostics)
-    const parsed = parseResultJson(delivery.result, schema, '<result>')
+    const parsed = await parseResultJson(delivery.result, schema, '<result>', preSchemaTransform)
     if (!parsed.success) return parsed
     return {
       ...parsed,
@@ -421,7 +610,12 @@ function parseStructuredFinalOutput(output: string | null | undefined, schema: C
   return failWithDiagnostics([protocolDiagnostic(`missing exact ${DELIVERY_START} start tag`)])
 }
 
-function parseResultJson(rawJson: string, schema: CompiledSchema, subject: string): ParsedStructuredOutput {
+async function parseResultJson(
+  rawJson: string,
+  schema: CompiledSchema,
+  subject: string,
+  preSchemaTransform?: StructuredOutputPreSchemaTransform,
+): Promise<ParsedStructuredOutput> {
   const text = rawJson.trim()
   if (!text) return failWithDiagnostics([{ kind: 'json', message: `${subject} JSON is empty` }])
 
@@ -430,6 +624,24 @@ function parseResultJson(rawJson: string, schema: CompiledSchema, subject: strin
     data = JSON.parse(text) as unknown
   } catch (error) {
     return failWithDiagnostics([{ kind: 'json', message: `${subject} is not valid JSON: ${errorMessage(error)}` }])
+  }
+
+  // ── Pre-schema parsed-result transform ──
+  // Applied exactly once per collected attempt, after the delivery protocol and
+  // JSON parsing succeed and before strict schema validation / placeholder
+  // rejection. When no hook is supplied this branch is skipped, so the parse
+  // and validation path is byte-for-byte the previous behavior. A rejected
+  // hook is surfaced as a bounded schema diagnostic (never a thrown parse
+  // error) so it stays inside the existing in-session correction loop.
+  if (preSchemaTransform) {
+    try {
+      data = await preSchemaTransform(data)
+    } catch (error) {
+      return failWithDiagnostics([{
+        kind: 'schema',
+        message: `${subject} pre-schema transform failed: ${errorMessage(error)}`,
+      }])
+    }
   }
 
   const diagnostics: StructuredOutputDiagnostic[] = []

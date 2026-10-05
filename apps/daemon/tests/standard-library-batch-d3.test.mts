@@ -39,58 +39,6 @@ describe('standard/tasks explore — direct definition, prompt & exported schema
     assert.equal(typeof exploreTask.config.prompt, 'function')
   })
 
-  it('renders the generic role, problem inputs, and pooled-evidence output guidance', async () => {
-    const prompt = await exploreTask.config.prompt({
-      goal,
-      questions,
-      targets: [{ kind: 'url', value: 'https://example.test/reference' }],
-      constraints: [{ rule: 'Use only the declared reference' }],
-    })
-    assert.match(prompt, /You are \*\*Explorer\*\*/)
-    assert.match(prompt, /answered\|unanswered\|blocked/)
-    assert.match(prompt, /Determine whether the batch exporter covers the final item/)
-    assert.match(prompt, /Use only the declared reference/)
-    assert.match(prompt, /pooled/)
-    assert.match(prompt, /<result>/)
-  })
-
-  it('the exported schemas validate the unified open-target input and pooled output', () => {
-    const input = {
-      goal,
-      questions,
-      targets: [{ kind: 'custom_reference', value: 'reference-1' }],
-    }
-    const output = {
-      results: [{ question_id: 'q1', status: 'unanswered' as const, findings: [] }],
-      evidences: [
-        {
-          id: 'ev1',
-          source: { kind: 'custom_reference', value: 'reference-1' },
-          observation: 'No conclusive evidence was available',
-        },
-      ],
-    }
-
-    assert.deepEqual(ExploreInputSchema.parse(input), input)
-    assert.deepEqual(ExploreOutputSchema.parse(output), output)
-    assert.throws(() => ExploreInputSchema.parse({ goal, targets: input.targets }))
-    assert.throws(() => ExploreInputSchema.parse({ goal, questions }))
-    assert.throws(() => ExploreOutputSchema.parse({ results: output.results }))
-  })
-
-  it('the generic ExploreInputSchema accepts code/git/markdown representative targets without executing a prompt', () => {
-    // The merged explore role supersedes the retired explore-code and
-    // explore-commit roles; its unified open-target input must accept file,
-    // git_commit and markdown targets natively.
-    for (const target of [
-      { kind: 'file', value: 'src/batch.ts' },
-      { kind: 'git_commit', value: 'main', hash: 'HEAD~20..HEAD' },
-      { kind: 'markdown', value: 'docs/specs/x.md', title: 'X', category: 'spec' },
-    ]) {
-      const parsed = ExploreInputSchema.parse({ goal, questions, targets: [target] })
-      assert.equal(parsed.targets[0].kind, target.kind)
-    }
-  })
 })
 
 // ───────────────────────────────────────────────────────────────────

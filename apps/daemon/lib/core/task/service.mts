@@ -1,7 +1,11 @@
 import { get as dbGet, query as dbQuery } from '../../db/connection.mts'
 import { getForemanEventBus } from '../../events/event-bus.mts'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { ProjectManager } from '../project/manager.mts'
 import { discoverProjects } from '../project/loader.mts'
+import { documentExecutionScope } from './doc-scope.mts'
+import type { DocInput } from '../../standard/tasks/doc.mts'
 import type { OperationHost, TaskWorkflowRunHost } from '../operations/types.mts'
 import { getTaskWorkflowRunHost } from '../operations/primitives/runner.mts'
 import {
@@ -11,6 +15,7 @@ import { ForemanWorkspace } from '../../workspace/workspace.mts'
 import { validateAnyJsonValue } from '../../workspace/schema-loader.mts'
 import type { ListedDefinition } from '../../workspace/definition-registry.mts'
 import { readTaskRunMetadata } from './run-metadata.mts'
+import { readTaskArtifactErrors } from './artifacts.mts'
 import {
   TaskContextError,
   splitTaskInputContext,
@@ -140,6 +145,8 @@ export class TaskService {
     source: string
     project?: string
     description?: string
+    input_schema?: ListedDefinition['input_schema']
+    displayName?: string
     category?: {
       id: string
       displayLabel: string
@@ -150,6 +157,7 @@ export class TaskService {
     timeoutScope?: 'task_execution'
     scheduling?: 'active' | 'legacy'
     dispatch?: ListedDefinition['dispatch']
+    inheritanceChain?: ListedDefinition['inheritanceChain']
   }>> {
     await this.workspace.ensureDiscovered()
     if (project) this.requireRegisteredProject(project)
@@ -254,18 +262,46 @@ export class TaskService {
       }
     }
 
+    // Narrow document admission: only the trusted builtin `doc` singleton may
+    // run against the workspace root. A shadowing project override is refused
+    // here and never enters the write flow; every other task skips this
+    // entirely (documentExecutionScope returns undefined for non-trusted
+    // targets without granting any privilege).
+    const docScope = documentExecutionScope(target, input, this.workspaceRoot, project, params.worktree)
+    if (taskId === 'doc' && !docScope) {
+      throw new TaskServiceError(
+        'builtin_document_task_unavailable',
+        `Builtin document task 'doc' is unavailable: the resolved definition ('${target.sourcePath}') is not the trusted builtin document singleton.`,
+        409,
+        { task: taskId },
+      )
+    }
+    if (docScope) {
+      // Authoritative template rules come from the workspace, never from the
+      // caller; the full conversation is preserved unchanged.
+      const docInput: DocInput = { ...(input as DocInput) }
+      delete docInput.templateRules
+      const authoritativeRules = readWorkspaceDocumentRules(this.workspaceRoot)
+      if (authoritativeRules !== undefined) docInput.templateRules = authoritativeRules
+      input = docInput
+    }
+
     const validation = this.validateInput(description, input)
     if (validation) return validation
 
     let workingDirectory: string
-    try {
-      workingDirectory = this.resolveWorkingDirectory(project, params.worktree)
-    } catch (error) {
-      throw new TaskServiceError(
-        'project_resolution_failed',
-        `Could not resolve working directory for project '${project}': ${errorMessage(error)}`,
-        400,
-      )
+    if (docScope) {
+      workingDirectory = docScope.workingDirectory
+    } else {
+      try {
+        workingDirectory = this.resolveWorkingDirectory(project, params.worktree)
+      } catch (error) {
+        throw new TaskServiceError(
+          'project_resolution_failed',
+          `Could not resolve working directory for project '${project}': ${errorMessage(error)}`,
+          400,
+        )
+      }
     }
 
     const accepted = await this.requireRunner().startTaskRun({
@@ -414,6 +450,8 @@ export class TaskService {
     const output = row.output ?? row.execution_output ?? ''
     const parsedOutput = row.status === 'done' ? parseJsonValue(output) : undefined
     const metadata = readTaskRunMetadata(row.id)
+    const artifactErrors = readTaskArtifactErrors(row.id)
+    const meta = taskRowMeta(row)
     return {
       task_run_id: row.id,
       task_id: row.template,
@@ -426,7 +464,7 @@ export class TaskService {
       ...(metadata.resolved ? { resolved: metadata.resolved } : {}),
       usage: metadata.usage,
       ...(row.execution_pid === null ? {} : { pid: row.execution_pid }),
-      _meta: taskRowMeta(row),
+      _meta: artifactErrors.length > 0 ? { ...meta, artifactErrors } : meta,
     }
   }
 
@@ -773,6 +811,22 @@ function levenshteinDistance(a: string, b: string): number {
     for (let j = 0; j <= b.length; j += 1) previous[j] = current[j]
   }
   return previous[b.length]
+}
+
+/**
+ * Read the authoritative workspace document rules from
+ * `instructions/documents.md`. Absent or blank content yields undefined, so a
+ * caller can never smuggle in a different rules root or rule set.
+ */
+function readWorkspaceDocumentRules(workspaceRoot: string): string | undefined {
+  try {
+    const path = join(workspaceRoot, 'instructions', 'documents.md')
+    if (!existsSync(path)) return undefined
+    const content = readFileSync(path, 'utf-8')
+    return content.trim().length > 0 ? content : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function errorMessage(error: unknown): string {
