@@ -6,6 +6,12 @@ import { inspectCodex } from './installation.ts';
 import { launchCodex } from './launch.ts';
 import { readCodexReadiness } from './readiness.ts';
 import { isolatedCodexHome, prepareCodexAuth } from './readiness.ts';
+export {
+    codexSourceAuthHome,
+    readCodexGatewayCredential,
+    refreshCodexGatewayCredential,
+} from './readiness.ts';
+export type { CodexGatewayAuthOptions, CodexGatewayCredential } from './readiness.ts';
 export class CodexClient implements AgentClient {
     readonly id = 'codex';
     readonly capabilities = { run: true, account: true, resume: true };
