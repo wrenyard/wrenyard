@@ -31,7 +31,7 @@ import {
   projectModelAvailability,
   type NativeProviderReadinessSnapshot,
 } from './execution/native-provider-readiness.mts'
-import { createAgentClients, CodeBuddyClient, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
+import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refreshCodexGatewayCredential, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
 import { ExecService } from '@wrenyard/exec'
 import { ProviderService } from '@wrenyard/provider-service'
 import { createExecFeatureRegistry } from './execution/exec-features.mts'
@@ -1207,7 +1207,16 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     },
   })
   const catalog = createBuiltinCatalog([codeBuddy])
-  const providerRuntime = createBuiltinProviderRuntime({ providers: [codeBuddy] })
+  const providerRuntime = createBuiltinProviderRuntime({
+    providers: [codeBuddy],
+    // The ChatGPT subscription gateway credential is read and refreshed through
+    // the existing Codex native auth path (honoring WRENYARD_CODEX_AUTH_HOME /
+    // CODEX_HOME / home); the providers package authors no login of its own.
+    codexGatewayAuth: {
+      read: () => readCodexGatewayCredential(),
+      refresh: (credential, signal) => refreshCodexGatewayCredential(credential, { signal }),
+    },
+  })
   const dispatchPlans = deriveTaskDispatchPlans(catalog)
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
