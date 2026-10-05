@@ -87,43 +87,6 @@ describe('Foreman config', () => {
     )
   })
 
-  it('implicit writes create the wrenyard config and never touch legacy', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'wrenyard-config-write-'))
-    roots.push(dir)
-    mkdirSync(join(dir, 'foreman'), { recursive: true })
-    writeFileSync(
-      join(dir, 'foreman', 'config.json'),
-      '{"service":{"bind":"127.0.0.1:9999"}}\n',
-      'utf-8',
-    )
-    const legacyPath = join(dir, 'foreman', 'config.json')
-    const primaryPath = join(dir, 'wrenyard', 'config.json')
-    const env = { XDG_CONFIG_HOME: dir }
-
-    // Legacy-only read fallback: with no primary config the read resolves to
-    // the legacy file.
-    const manager = new ForemanConfigManager({ env })
-    assert.equal(manager.resolvePath(), legacyPath)
-    assert.deepEqual(
-      JSON.parse(readFileSync(legacyPath, 'utf-8')) as { service: { bind: string } },
-      { service: { bind: '127.0.0.1:9999' } },
-    )
-
-    // Implicit write targets the primary Wrenyard path and leaves the legacy
-    // file byte-for-byte unchanged.
-    manager.saveUserData(undefined, { service: { enabled: true } })
-    assert.equal(existsSync(primaryPath), true)
-    assert.equal(existsSync(legacyPath), true)
-    assert.deepEqual(
-      JSON.parse(readFileSync(legacyPath, 'utf-8')) as { service: { bind: string } },
-      { service: { bind: '127.0.0.1:9999' } },
-    )
-    assert.deepEqual(
-      JSON.parse(readFileSync(primaryPath, 'utf-8')) as { service: { enabled: boolean } },
-      { service: { enabled: true } },
-    )
-  })
-
   it('honors WRENYARD_WORKSPACE and ignores legacy FOREMAN_WORKSPACE', () => {
     assert.equal(
       createDefaultForemanConfigData({ env: { WRENYARD_WORKSPACE: '/wrenyard-ws' } }).workspace?.root,

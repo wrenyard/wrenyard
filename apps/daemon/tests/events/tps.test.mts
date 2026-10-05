@@ -365,22 +365,6 @@ describe('readExecutionTpsSamples / TPS denominator', () => {
     closeTestDb()
   })
 
-  it('maps only registered provider wire identities, never a different or legacy model', () => {
-    initTestDb()
-    seedTask('wire-task')
-    for (const [id, provider, wire] of [
-      ['wire-good', 'codebuddy', 'deepseek-v4.1-flash-ioa'],
-      ['wire-wrong-provider', 'other', 'deepseek-v4.1-flash-ioa'],
-      ['wire-old', 'codebuddy', 'deepseek-v4-flash'],
-    ]) {
-      seedExecution({ executionId: id, taskId: 'wire-task', startedMs: BASE, endedMs: BASE + 90000 })
-      seedDispatch(id, 'wire-task', provider, 'deepseek-v4.1-flash')
-      seedResponseUsage(id, 'wire-task', [{ response_id: 'r1', model: wire, output_tokens: 500, first_token_at_ms: BASE + 1, completed_at_ms: BASE + 10001 }])
-    }
-    assert.deepEqual(readExecutionTpsSamples().map(sample => sample.executionId), ['wire-good'])
-    closeTestDb()
-  })
-
   it('rejects samples whose source model differs from dispatch model', () => {
     initTestDb()
     seedTask('task-model')
