@@ -37,18 +37,20 @@ export interface AssistantMessageProps {
 }
 
 /**
- * The single assistant message of an ended turn. A streaming final reply is
- * still rendered here while the turn is running, so the live text stays
- * visible; a running turn without a reply renders nothing. The hover footer
- * only appears once the turn has ended, never while the reply streams.
+ * Every committed communication reply of a turn, in chronological order. One
+ * bubble per reply with a subtle phase label for non-final phases; the hover
+ * footer appears once on the last reply of an ended turn. A running turn with
+ * no committed reply yet renders nothing, and raw reason/thinking output is
+ * never shown here (it lives in the inspector only).
  */
 export function AssistantMessage({ turn, enter }: AssistantMessageProps) {
   const { inspect } = useInspector();
   const animate = useEnterAnimation(enter === true);
   const enterClass = cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out');
   const onInspect = (): void => inspect({ kind: 'turn', turnId: turn.id });
+  const replies = turn.replies;
 
-  if (!turn.final) {
+  if (replies.length === 0) {
     if (turn.status === 'running') return null;
     const fallback = noFinalReply(turn);
     return (
@@ -67,18 +69,27 @@ export function AssistantMessage({ turn, enter }: AssistantMessageProps) {
   }
 
   return (
-    <Message className={enterClass}>
-      <MessageContent>
-        <div className="flex items-end gap-2">
-          <Bubble variant="muted">
-            <BubbleContent>
-              <Markdown streaming={turn.final.streaming}>{turn.final.text}</Markdown>
-            </BubbleContent>
-          </Bubble>
-          <HoverTime value={turn.final.at} />
-        </div>
-        {turn.endedAt !== undefined && <AssistantFooter text={turn.final.text} onInspect={onInspect} />}
-      </MessageContent>
-    </Message>
+    <>
+      {replies.map((reply, index) => {
+        const last = index === replies.length - 1;
+        return (
+          <Message key={`${turn.id}-${index}-${reply.at}`} className={enterClass}>
+            <MessageContent>
+              <div className="flex flex-col gap-1">
+                <div className="flex items-end gap-2">
+                  <Bubble variant="muted">
+                    <BubbleContent>
+                      <Markdown streaming={reply.streaming}>{reply.text}</Markdown>
+                    </BubbleContent>
+                  </Bubble>
+                  <HoverTime value={reply.at} />
+                </div>
+              </div>
+              {last && turn.endedAt !== undefined && <AssistantFooter text={reply.text} onInspect={onInspect} />}
+            </MessageContent>
+          </Message>
+        );
+      })}
+    </>
   );
 }

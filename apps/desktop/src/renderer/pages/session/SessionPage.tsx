@@ -30,13 +30,13 @@ import { SessionSidebar } from './components/SessionSidebar.js';
 import { SessionTitle } from './components/SessionTitle.js';
 import { PendingTurnItem, TurnItem } from './components/conversation/TurnItem.js';
 import { Inspector, InspectorProvider } from './components/inspector/Inspector.js';
-import { fold } from './model/fold.js';
-import type { ActionModel, InspectorTarget, SessionBridgeTaskBrief } from './model/types.js';
+import { fold, isFormat2 } from './model/fold.js';
+import type { ActionModel, DraftAttachment, InspectorTarget, SessionBridgeTaskBrief } from './model/types.js';
 import { SessionUsageProvider } from './state/session-usage.js';
 import { useSessionController } from './state/use-session-controller.js';
 import { useTaskStatus } from './state/use-task-status.js';
 
-const LAYOUT_ID = 'session-shell';
+const LAYOUT_ID = 'session-shell-v3';
 
 function RunningDispatchTasks({ api, turns, setTasks }: {
   api: ReturnType<typeof getSessionApi>;
@@ -56,13 +56,13 @@ function RunningDispatchTasks({ api, turns, setTasks }: {
 /** The session page: sidebar, conversation and inspector in one resizable shell. */
 export function SessionPage() {
   const api = getSessionApi();
-  const { state, selectSession, newDraft, sendMessage, interruptTurn, removePending, setTasks, clearError } = useSessionController(api);
+  const { state, selectSession, newDraft, sendMessage, interruptTurn, deleteSession, removePending, setTasks, clearError } = useSessionController(api);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [target, setTarget] = useState<InspectorTarget | undefined>(undefined);
   const [tab, setTab] = useState('detail');
-  const [retry, setRetry] = useState<{ text: string; nonce: number } | undefined>(undefined);
+  const [retry, setRetry] = useState<{ text: string; attachments: DraftAttachment[]; nonce: number } | undefined>(undefined);
   const sidebarPanel = usePanelRef();
   const inspectorPanel = usePanelRef();
 
@@ -179,7 +179,14 @@ export function SessionPage() {
   const selectedSession = state.sessions.find((session) => session.sessionId === state.selectedId);
   const selectedTitle = selectedSession?.title ?? '新会话';
   const draft = state.selectedId === '';
-  const empty = draft || (!state.loadingLedger && model.turns.length === 0 && state.pending.length === 0);
+  // A selected, fully loaded history without the current numeric format-2
+  // marker is an unsupported (legacy/headerless) session: fold already returns
+  // the empty current model for it, so the page shows a raw view, never the
+  // typed conversation/actions/timeline or composer.
+  const currentFormat = isFormat2(state.events);
+  const rawOnly = !draft && !currentFormat;
+  const unsupported = rawOnly && !state.loadingLedger;
+  const empty = !unsupported && (draft || (!state.loadingLedger && model.turns.length === 0 && state.pending.length === 0));
   const sessionKey = state.selectedId === '' ? 'draft' : state.selectedId;
 
   // Record the selected session in the shell history. Restoring a session that
@@ -196,15 +203,16 @@ export function SessionPage() {
   });
 
   // Open the inspector for a usage request, selecting the session first when
-  // the request targets a different one.
+  // the request targets a different one. An unsupported session always opens
+  // the raw ledger, never a typed context request.
   const inspectRequest = useCallback((request: { sessionKey: string; tab: 'context' | 'ledger'; seq?: number }): void => {
     if (request.sessionKey !== sessionKey) {
       if (!state.sessions.some((session) => session.sessionId === request.sessionKey)) return;
       void selectSession(request.sessionKey).catch(() => undefined);
     }
-    setTab(request.tab);
+    setTab(unsupported ? 'ledger' : request.tab);
     setInspectorOpen(true);
-  }, [sessionKey, state.sessions, selectSession]);
+  }, [sessionKey, state.sessions, selectSession, unsupported]);
 
   // Page commands: session.open (routed here by the command table),
   // session.inspectContext and the inspector toggle used by the title bar.
@@ -258,13 +266,13 @@ export function SessionPage() {
     ready: !state.loadingLedger,
   });
 
-  const composer = (
+  const composer = rawOnly ? null : (
     <Composer
       models={state.models}
       turns={model.turns}
       sessionKey={sessionKey}
       disabled={state.loadingLedger}
-      onSend={(text, entry, effort) => sendMessage(text, entry, effort)}
+      onSend={(text, entry, effort, attachments) => sendMessage(text, entry, effort, attachments)}
       injectedText={retry}
     />
   );
@@ -321,14 +329,14 @@ export function SessionPage() {
           onInspect={inspectRequest}
         >
           <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
-        <Conversation sessionKey={sessionKey} turns={model.turns} ready={!state.loadingLedger} />
+        <Conversation sessionKey={sessionKey} sessionId={state.selectedId} turns={model.turns} ready={!state.loadingLedger} />
         <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen} className="h-full min-h-0">
           <ResizablePanelGroup
             orientation="horizontal"
             defaultLayout={defaultLayout}
             onLayoutChanged={onLayoutChanged}
             resizeTargetMinimumSize={{ fine: 6, coarse: 20 }}
-            className="h-full min-h-0"
+            className="h-full min-h-0 min-w-0 overflow-hidden"
           >
             <ResizablePanel
               id="sidebar"
@@ -349,6 +357,7 @@ export function SessionPage() {
                 onSelect={(sessionId) => { void selectSession(sessionId).catch(() => undefined); }}
                 onNew={newDraft}
                 onSearch={() => setSearchOpen(true)}
+                onDelete={(sessionId) => { void deleteSession(sessionId).catch(() => undefined); }}
               />
             </ResizablePanel>
             <ResizableHandle
@@ -357,10 +366,18 @@ export function SessionPage() {
             />
             <ResizablePanel
               id="main"
-              minSize={360}
+              minSize={340}
               className={cn('relative flex min-h-0 flex-col', panelMotion)}
             >
-              {empty ? (
+              {unsupported ? (
+                <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center">
+                  <p className="text-sm text-muted-foreground">此会话使用旧格式，记录已保留。请新建会话。</p>
+                  <div className="flex items-center gap-2">
+                    <Button onClick={newDraft}>新建对话</Button>
+                    <Button variant="outline" onClick={() => { setTab('ledger'); setInspectorOpen(true); }}>查看原始账本</Button>
+                  </div>
+                </div>
+              ) : empty ? (
                 <EmptySession>
                   {errorAlert}
                   {composer}
@@ -377,6 +394,7 @@ export function SessionPage() {
                               turn={turn}
                               previous={index > 0 ? model.turns[index - 1] : undefined}
                               latest={index === model.turns.length - 1 && state.pending.length === 0}
+                              sessionId={state.selectedId}
                               enterUser={freshMessageKeys.has(`u:${turn.id}`)}
                               enterAssistant={freshMessageKeys.has(`a:${turn.id}`)}
                               onInterrupt={(id) => { void interruptTurn(id); }}
@@ -386,7 +404,7 @@ export function SessionPage() {
                             <PendingTurnItem
                               key={pending.localId}
                               pending={pending}
-                              onRetry={(text) => setRetry({ text, nonce: Date.now() })}
+                              onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
                               onRemove={removePending}
                             />
                           ))}
@@ -403,13 +421,13 @@ export function SessionPage() {
               )}
             </ResizablePanel>
             <ResizableHandle
-              className={cn('w-1.5 bg-transparent after:w-px after:bg-border', !inspectorOpen && 'invisible pointer-events-none')}
+              className={cn('w-1.5 bg-transparent after:w-px after:bg-transparent', !inspectorOpen && 'invisible pointer-events-none')}
               onPointerDown={() => setResizing(true)}
             />
             <ResizablePanel
               id="inspector"
-              defaultSize={400}
-              minSize={320}
+              defaultSize="45%"
+              minSize={280}
               collapsible
               collapsedSize={0}
               groupResizeBehavior="preserve-pixel-size"
@@ -417,15 +435,21 @@ export function SessionPage() {
               className={cn('min-h-0', panelMotion)}
               onResize={(size) => setInspectorOpen(size.inPixels > 0)}
             >
+              {/* Floating card: inset from the window edge, own border and shadow. */}
+              <div className="h-full min-h-0 pr-2 pb-2">
+                <div className="h-full min-h-0 overflow-hidden rounded-xl border bg-card shadow-sm">
               <Inspector
                 model={model}
                 events={state.events}
                 target={target}
                 tab={tab}
+                rawOnly={rawOnly}
                 onTabChange={setTab}
                 onSelect={inspect}
                 onClose={() => setInspectorOpen(false)}
               />
+                </div>
+              </div>
             </ResizablePanel>
           </ResizablePanelGroup>
         </SidebarProvider>

@@ -17,9 +17,18 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
-import type { LedgerEvent, ModelEntry, TurnModel } from '../model/types.js';
+import type { DraftAttachment, LedgerEvent, ModelEntry, TurnModel } from '../model/types.js';
 import { setQuotaFocus } from '@/renderer/lib/statusbar';
-import { clearDraft, flushDraft, readDraft, writeDraft } from './drafts.js';
+import {
+  clearDraft,
+  clearDraftAttachments,
+  flushDraft,
+  flushDraftAttachments,
+  readDraft,
+  readDraftAttachments,
+  writeDraft,
+  writeDraftAttachments,
+} from './drafts.js';
 
 export interface SessionUsageInspection {
   sessionKey: string;
@@ -56,6 +65,9 @@ export interface ComposerSelection {
   text: string;
   setText(text: string): void;
   clearText(): void;
+  attachments: DraftAttachment[];
+  setAttachments(attachments: DraftAttachment[]): void;
+  clearAttachments(): void;
 }
 
 interface SessionUsageContextValue extends SessionUsage, ComposerSelection {}
@@ -79,6 +91,7 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
   const [modelId, setModelId] = useState('');
   const [effort, setEffort] = useState('');
   const [text, setTextState] = useState(() => readDraft(sessionKey));
+  const [attachments, setAttachmentsState] = useState<DraftAttachment[]>(() => readDraftAttachments(sessionKey));
   const [inspections, setInspections] = useState<Record<string, SessionUsageInspection>>({});
   const nonce = useRef(0);
 
@@ -87,10 +100,14 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     setModelId('');
     setEffort('');
     setTextState(readDraft(sessionKey));
+    setAttachmentsState(readDraftAttachments(sessionKey));
   }
 
   // Flush the outgoing session's pending draft on switch and on unmount.
-  useEffect(() => () => { flushDraft(sessionKey); }, [sessionKey]);
+  useEffect(() => () => {
+    flushDraft(sessionKey);
+    flushDraftAttachments(sessionKey);
+  }, [sessionKey]);
 
   // Publish the quota provider of the composer's currently selected model so
   // the status-bar quota item focuses it. Cleared when the page hides (effect
@@ -114,6 +131,16 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
   const clearText = useCallback(() => {
     setTextState('');
     clearDraft(sessionKey);
+  }, [sessionKey]);
+
+  const setAttachments = useCallback((next: DraftAttachment[]) => {
+    setAttachmentsState(next);
+    writeDraftAttachments(sessionKey, next);
+  }, [sessionKey]);
+
+  const clearAttachments = useCallback(() => {
+    setAttachmentsState([]);
+    clearDraftAttachments(sessionKey);
   }, [sessionKey]);
 
   // Keep the reasoning effort only when the target model still supports it
@@ -157,9 +184,12 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     text,
     setText,
     clearText,
+    attachments,
+    setAttachments,
+    clearAttachments,
   }), [
-    sessionKey, models, events, turns, seq, modelId, effort, text,
-    inspections, requestModel, requestInspection, setText, clearText,
+    sessionKey, models, events, turns, seq, modelId, effort, text, attachments,
+    inspections, requestModel, requestInspection, setText, clearText, setAttachments, clearAttachments,
   ]);
 
   return <SessionUsageContext.Provider value={value}>{children}</SessionUsageContext.Provider>;
@@ -182,6 +212,12 @@ export function useSessionUsage(): SessionUsage {
 
 /** Read and update the composer selection for the active session. */
 export function useComposerSelection(): ComposerSelection {
-  const { modelId, setModelId, effort, setEffort, text, setText, clearText } = useSessionUsageContext();
-  return { modelId, setModelId, effort, setEffort, text, setText, clearText };
+  const {
+    modelId, setModelId, effort, setEffort, text, setText, clearText,
+    attachments, setAttachments, clearAttachments,
+  } = useSessionUsageContext();
+  return {
+    modelId, setModelId, effort, setEffort, text, setText, clearText,
+    attachments, setAttachments, clearAttachments,
+  };
 }

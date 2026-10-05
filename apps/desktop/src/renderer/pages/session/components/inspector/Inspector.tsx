@@ -6,9 +6,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/renderer/components/
 import type { InspectorTarget, LedgerEvent, SessionModel } from '../../model/types.js';
 import { useSessionUsage } from '../../state/session-usage.js';
 import { ContextTab } from './ContextTab.js';
-import { DetailPane } from './details/DetailPane.js';
 import { LedgerList } from './LedgerList.js';
-import { TurnTimeline } from './TurnTimeline.js';
+import { SessionTree } from './tree/SessionTree.js';
 
 export interface InspectorContextValue {
   target?: InspectorTarget;
@@ -33,13 +32,15 @@ export interface InspectorProps {
   events: readonly LedgerEvent[];
   target?: InspectorTarget;
   tab: string;
+  /** Unsupported (non-format-2) history: show only the raw ledger. */
+  rawOnly?: boolean;
   onTabChange(tab: string): void;
   onSelect(target: InspectorTarget): void;
   onClose(): void;
 }
 
-/** Right-hand inspector: details, turn timeline, the raw ledger and the context audit. */
-export function Inspector({ model, events, target, tab, onTabChange, onSelect, onClose }: InspectorProps) {
+/** Right-hand inspector: the session tree, the raw ledger and the context audit. */
+export function Inspector({ model, events, tab, rawOnly = false, onTabChange, onClose }: InspectorProps) {
   // A requested ledger jump (from the usage panel or the context tab) is
   // preserved in the shared store; forward its seq so the ledger focuses it.
   const { inspection, sessionKey } = useSessionUsage();
@@ -53,31 +54,40 @@ export function Inspector({ model, events, target, tab, onTabChange, onSelect, o
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Unsupported history: reuse the raw LedgerList unchanged, without mounting
+  // the session tree, ContextTab or the typed tab controls.
+  if (rawOnly) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex h-(--header-height) items-center justify-between px-4">
+          <span className="text-sm font-medium">账本</span>
+          <Button variant="ghost" size="icon" aria-label="关闭检查器" onClick={onClose}><X /></Button>
+        </div>
+        <div className="flex h-full min-h-0 flex-col p-4">
+          <LedgerList model={model} events={events} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Tabs value={tab} onValueChange={(value) => onTabChange(String(value))} className="flex h-full min-h-0 flex-col gap-0">
-        <div className="flex h-(--header-height) items-center justify-between px-4">
+        <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
           <TabsList variant="line">
             <TabsTrigger value="detail">详情</TabsTrigger>
-            <TabsTrigger value="timeline">时间线</TabsTrigger>
             <TabsTrigger value="ledger">账本</TabsTrigger>
             <TabsTrigger value="context">上下文</TabsTrigger>
           </TabsList>
           <Button variant="ghost" size="icon" aria-label="关闭检查器" onClick={onClose}><X /></Button>
         </div>
         <TabsContent value="detail" className="min-h-0 flex-1">
-          <ScrollArea className="h-full">
-            <div className="p-4">
-              <DetailPane model={model} target={target} onSelect={onSelect} />
+          {/* Plain scroller: the tree must be sized by the panel, never by its widest row. */}
+          <div className="h-full overflow-x-hidden overflow-y-auto">
+            <div className="min-w-0 p-3 wrap-anywhere">
+              <SessionTree key={sessionKey} events={events} />
             </div>
-          </ScrollArea>
-        </TabsContent>
-        <TabsContent value="timeline" className="min-h-0 flex-1">
-          <ScrollArea className="h-full">
-            <div className="p-4">
-              <TurnTimeline model={model} target={target} onSelect={onSelect} />
-            </div>
-          </ScrollArea>
+          </div>
         </TabsContent>
         <TabsContent value="ledger" className="min-h-0 flex-1">
           <div className="flex h-full min-h-0 flex-col p-4">
