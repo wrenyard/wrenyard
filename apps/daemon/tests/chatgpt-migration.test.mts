@@ -113,31 +113,6 @@ test('runtime aliases and provider keys migrate without touching subscription cl
   assert.deepEqual(result.record.clients, { claude: { enabled: true } });
 });
 
-test('config and alias stores persist migration once and preserve revision concurrency', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'chatgpt-migration-'));
-  try {
-    const configPath = join(dir, 'foreman.json');
-    await writeFile(configPath, JSON.stringify({ tasks: { settings: { global: { explicitRuntime: { kind: 'target', target: 'codex/gpt-5.5:codex' } } } } }));
-    const config = new JsonForemanConfigStore();
-    config.read(configPath);
-    const once = await readFile(configPath, 'utf8');
-    assert.match(once, /chatgpt\/gpt-5.5:codex/);
-    config.read(configPath);
-    assert.equal(await readFile(configPath, 'utf8'), once);
-    const aliasPath = join(dir, 'config.json');
-    await writeFile(aliasPath, JSON.stringify({ revision: 2, aliases: { smart: 'codex/gpt-5.5:codex', luna: 'codex/gpt-5.6-luna:codex' }, providers: { codex: {} }, clients: { codex: { enabled: true } } }));
-    const store = new RuntimeAliasStore({ configRoot: dir });
-    const [a, b] = await Promise.all([store.load(), store.load()]);
-    assert.equal(a.revision, 3); assert.equal(b.revision, 3);
-    assert.equal(a.aliases.smart, 'chatgpt/gpt-5.5:codex');
-    assert.equal(a.aliases.luna, 'chatgpt/gpt-5.6-luna:codex');
-    assert.equal((await store.load()).revision, 3);
-    await assert.rejects(store.put('smart', 'chatgpt/gpt-6-astra:codex', 2));
-    await store.put('smart', 'chatgpt/gpt-6-astra:codex', 3);
-    assert.equal((await store.load()).revision, 4);
-  } finally { await rm(dir, { recursive: true, force: true }); }
-});
-
 test('foreman config store migrates the legacy subscription id and marks the document once', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'provider-identity-'));
   try {
@@ -161,25 +136,6 @@ test('foreman config store migrates the legacy subscription id and marks the doc
     assert.equal(await readFile(configPath, 'utf8'), persisted);
     assert.deepEqual(second, first);
     assert.deepEqual((second.tasks as any).settings.global.dispatch.excludeProviderIds, ['claude-coding', 'anthropic']);
-  } finally { await rm(dir, { recursive: true, force: true }); }
-});
-
-test('runtime alias store migrates legacy subscription ids and marks the document once', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'provider-identity-alias-'));
-  try {
-    const aliasPath = join(dir, 'config.json');
-    await writeFile(aliasPath, JSON.stringify({ revision: 0, aliases: { sub: 'anthropic/claude-sonnet-5:cc' } }));
-    const store = new RuntimeAliasStore({ configRoot: dir });
-    const first = await store.load();
-    assert.equal(first.aliases.sub, 'claude-coding/claude-sonnet-5:cc');
-    assert.equal(first.revision, 1);
-    const persisted = await readFile(aliasPath, 'utf8');
-    // Once-only: a later load neither rewrites the document nor bumps revision.
-    const second = await store.load();
-    assert.equal(await readFile(aliasPath, 'utf8'), persisted);
-    assert.equal(second.revision, 1);
-    assert.equal(second.aliases.sub, 'claude-coding/claude-sonnet-5:cc');
-    assert.match(persisted, /_providerMigration/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

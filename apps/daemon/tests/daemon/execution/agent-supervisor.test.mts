@@ -4,28 +4,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
+import type { AgentEvent } from '@wrenyard/clients'
+import type { ExecService } from '@wrenyard/exec'
+import { Catalog } from '@wrenyard/providers/catalog'
 import type { ForemanDatabase } from '../../../lib/db/types.mts'
 import { AgentExecutionSupervisor, ExecutionTerminationFailure } from '../../../lib/daemon/execution/agent-supervisor.mts'
 import { redactEvent } from '../../../lib/daemon/execution/redaction.mts'
 import { RepoWriteLocks } from '../../../lib/daemon/execution/repo-write-locks.mts'
 import { closeTestDb, initTestDb } from '../../helpers/test-db.mts'
 import type { TaskResolvedDispatch } from '../../../lib/protocol/task-run-metadata.mts'
-
-interface RawResultRow {
-  raw_result: string | null
-  output: string | null
-}
-
-interface NativeSessionRow {
-  native_session_id: string | null
-  client_family: string | null
-  output: string | null
-}
-
-interface EventRow {
-  type: string
-  data: string | null
-}
 
 let db: ForemanDatabase
 let oldForgeBin: string | undefined
@@ -79,1160 +66,6 @@ afterEach(async () => {
 })
 
 describe('AgentExecutionSupervisor', { concurrency: false }, () => {
-  it('queues same-repo write executions until the in-memory repo lock is released', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-lock-')
-    const firstStartedPath = join(cwd, 'first-started')
-    const releasePath = join(cwd, 'release-first')
-    const promptLogPath = join(cwd, 'prompt-log')
-    installBlockingFakeForge(cwd, firstStartedPath, releasePath, promptLogPath)
-
-    const supervisor = makeSupervisor()
-    const first = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'first writer',
-    })
-    await waitForFile(firstStartedPath)
-
-    const second = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'second writer',
-    })
-
-    await sleep(60)
-    assert.deepEqual(readFileSync(promptLogPath, 'utf-8').trim().split('\n'), ['first writer'])
-
-    writeFileSync(releasePath, 'release', 'utf-8')
-    assert.equal((await first.wait()).status, 'done')
-    assert.equal((await second.wait()).status, 'done')
-    assert.deepEqual(readFileSync(promptLogPath, 'utf-8').trim().split('\n'), ['first writer', 'second writer'])
-  })
-
-  it('starts same-repo edit executions concurrently when their exact target paths differ', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-scoped-lock-')
-    const firstStartedPath = join(cwd, 'first-started')
-    const releasePath = join(cwd, 'release-first')
-    const promptLogPath = join(cwd, 'prompt-log')
-    installBlockingFakeForge(cwd, firstStartedPath, releasePath, promptLogPath)
-
-    const supervisor = makeSupervisor()
-    const first = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'first writer',
-      writePaths: [join(cwd, 'src/a.ts')],
-    })
-    await waitForFile(firstStartedPath)
-
-    const second = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'second writer',
-      writePaths: [join(cwd, 'src/b.ts')],
-    })
-
-    assert.equal((await second.wait()).status, 'done',
-      'the disjoint edit must finish while the first writer is still blocked')
-    assert.deepEqual(readFileSync(promptLogPath, 'utf-8').trim().split('\n'), ['first writer', 'second writer'])
-
-    writeFileSync(releasePath, 'release', 'utf-8')
-    assert.equal((await first.wait()).status, 'done')
-  })
-
-  it('does not serialize observational executions merely because their runtime is YOLO', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-yolo-observational-')
-    const firstStartedPath = join(cwd, 'first-started')
-    const releasePath = join(cwd, 'release-first')
-    const promptLogPath = join(cwd, 'prompt-log')
-    installBlockingFakeForge(cwd, firstStartedPath, releasePath, promptLogPath)
-
-    const supervisor = makeSupervisor()
-    const first = await supervisor.startExecution({
-      profile: 'test',
-      repoWriteLock: false,
-      cwd,
-      prompt: 'first writer',
-    })
-    await waitForFile(firstStartedPath)
-
-    const second = await supervisor.startExecution({
-      profile: 'test',
-      repoWriteLock: false,
-      cwd,
-      prompt: 'second writer',
-    })
-
-    assert.equal((await second.wait()).status, 'done')
-    assert.deepEqual(readFileSync(promptLogPath, 'utf-8').trim().split('\n'), ['first writer', 'second writer'])
-    const permissions = db.prepare<unknown[], { permission: string }>(
-      'SELECT permission FROM executions ORDER BY created_at, id',
-    ).all().map((row) => row.permission)
-    assert.deepEqual(permissions, ['yolo', 'yolo'], 'incoming legacy modes must persist only as YOLO')
-
-    writeFileSync(releasePath, 'release', 'utf-8')
-    assert.equal((await first.wait()).status, 'done')
-  })
-
-  it('treats Forge Agent Stream v1 envelope events as the terminal result', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'message', { role: 'assistant', text: 'v1 envelope output' }),
-      forgeStreamEvent(3, 'turn_usage', { input_tokens: 14, output_tokens: 3, duration_ms: 456 }),
-      forgeStreamEvent(4, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'v1 envelope output',
-        native_session_id: 'native-v1-1',
-        client_family: 'claude',
-        usage: { input_tokens: 14, output_tokens: 3, duration_ms: 456 },
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit v1 envelope events',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-    assert.equal(result.output, 'v1 envelope output')
-
-    const execution = db.prepare<unknown[], NativeSessionRow>(
-      `SELECT native_session_id, client_family, output
-      FROM executions
-      WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(execution, 'expected execution row')
-    assert.equal(execution.native_session_id, 'native-v1-1')
-    assert.equal(execution.client_family, 'claude')
-    assert.equal(execution.output, 'v1 envelope output')
-
-    const rows = db.prepare<unknown[], EventRow>(
-      `SELECT type, data FROM events WHERE execution_id = ? ORDER BY seq`,
-    ).all(handle.executionId)
-    assert.ok(rows.some((row) => row.type === 'message' && row.data?.includes('v1 envelope output')))
-    const usage = rows.find((row) => row.type === 'turn_usage')
-    assert.ok(usage?.data, 'expected turn_usage event data')
-    assert.equal((JSON.parse(usage.data) as Record<string, unknown>).input_tokens, 14)
-  })
-
-  it('preserves paired TPS samples through the real child stream and persistence path', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-tps-')
-    const sample = { response_id: 'r1', model: 'sonnet', output_tokens: 300, first_token_at_ms: 1000, completed_at_ms: 4000 }
-    const windowSample = { response_id: 'cursor-turn:r2', model: 'luna', output_tokens: 200, generation_windows: [{ first_token_at_ms: 1000, completed_at_ms: 2000 }, { first_token_at_ms: 5000, completed_at_ms: 7000 }] }
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'turn_usage', {
-        input_tokens: 10, output_tokens: 500, duration_ms: 99999,
-        tps_sampling_contract: 'tokenizer_v1',
-        tps_samples: [{ ...sample, private_payload: 'must-not-persist' }, { ...windowSample, generation_windows: windowSample.generation_windows.map(window => ({ ...window, private_payload: 'must-not-persist' })) }],
-      }),
-      forgeStreamEvent(3, 'run_finished', { status: 'done', exit_code: 0, summary: 'sampled' }),
-    ])
-    const handle = await makeSupervisor().startExecution({ profile: 'test', cwd, prompt: 'test sampling transport' })
-    assert.equal((await handle.wait()).status, 'done')
-    const row = db.prepare<unknown[], EventRow>("SELECT type, data FROM events WHERE execution_id = ? AND type = 'turn_usage'").get(handle.executionId)
-    const data = JSON.parse(row!.data!)
-    assert.equal(data.tps_sampling_contract, 'tokenizer_v1')
-    assert.deepEqual(data.tps_samples, [sample, windowSample])
-    assert.equal(data.output_tokens, 500, 'accounting totals remain independent of the sampled subset')
-  })
-
-  it('persists Codex command execution items as tool call events', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'codex-test', client_family: 'codex', cwd }),
-      forgeStreamEvent(2, 'item.started', {
-        item: {
-          id: 'item_shell_1',
-          type: 'command_execution',
-          command: 'npm test',
-        },
-      }),
-      forgeStreamEvent(3, 'item.completed', {
-        item: {
-          id: 'item_shell_1',
-          type: 'command_execution',
-          command: 'npm test',
-          aggregated_output: 'all tests passed',
-          exit_code: 0,
-          status: 'completed',
-        },
-      }),
-      forgeStreamEvent(4, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'done',
-        native_session_id: 'native-codex-tools',
-        client_family: 'codex',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'codex-test',
-      cwd,
-      prompt: 'emit codex command execution item',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const rows = db.prepare<unknown[], EventRow>(
-      `SELECT type, data FROM events WHERE execution_id = ? ORDER BY seq`,
-    ).all(handle.executionId)
-
-    const toolCall = rows.find((row) => row.type === 'tool_call')
-    assert.ok(toolCall?.data, 'expected command execution to produce tool_call')
-    const callData = JSON.parse(toolCall.data) as Record<string, unknown>
-    assert.equal(callData.name, 'command_execution')
-    assert.equal(callData.call_id, 'item_shell_1')
-    assert.equal(callData.input_summary, 'npm test')
-
-    const toolResult = rows.find((row) => row.type === 'tool_result')
-    assert.ok(toolResult?.data, 'expected command execution to produce tool_result')
-    const resultData = JSON.parse(toolResult.data) as Record<string, unknown>
-    assert.equal(resultData.call_id, 'item_shell_1')
-    assert.equal(resultData.status, 'ok')
-    assert.equal(resultData.output_tail, 'all tests passed')
-  })
-
-  it('captures OpenCode native session ids from Forge Agent Stream v1 events', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'opencode-test', client_family: 'opencode', cwd }),
-      forgeStreamEvent(2, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'opencode output',
-        native_session_id: 'ses_opencode_direct_1',
-        client_family: 'opencode',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'opencode-test',
-      cwd,
-      prompt: 'emit opencode native session',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-    assert.equal(result.output, 'opencode output')
-
-    const execution = db.prepare<unknown[], NativeSessionRow>(
-      `SELECT native_session_id, client_family, output
-      FROM executions
-      WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(execution, 'expected execution row')
-    assert.equal(execution.native_session_id, 'ses_opencode_direct_1')
-    assert.equal(execution.client_family, 'opencode')
-  })
-
-  it('captures native session ids only from run_finished protocol events', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'message', {
-        role: 'assistant',
-        text: 'non-terminal message output',
-        native_session_id: 'native-from-message',
-        client_family: 'claude',
-      }),
-      forgeStreamEvent(3, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'canonical terminal output',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit non-terminal native id',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-    assert.equal(result.output, 'canonical terminal output')
-
-    const execution = db.prepare<unknown[], NativeSessionRow>(
-      `SELECT native_session_id, client_family, output
-      FROM executions
-      WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(execution, 'expected execution row')
-    assert.equal(execution.native_session_id, null)
-    assert.equal(execution.client_family, null)
-  })
-
-  it('passes prompts to Forge direct runtime through stdin instead of argv', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    const argvPath = join(cwd, 'argv.json')
-    const stdinPath = join(cwd, 'stdin.txt')
-    installFakeForgeRecorder(cwd, argvPath, stdinPath, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'stdin prompt ok',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const prompt = 'emit via stdin\nwith shell-sensitive chars: $PATH && "quoted"'
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt,
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const argv = JSON.parse(readFileSync(argvPath, 'utf-8')) as string[]
-    assert.equal(argv.includes(prompt), false)
-    assert.equal(readFileSync(stdinPath, 'utf-8'), prompt)
-  })
-
-  it('rejects bare raw stream events without the Forge Agent Stream v1 envelope', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      { type: 'run_started', profile: 'test', client_family: 'claude', cwd },
-      { type: 'message', role: 'assistant', text: 'bare direct runtime output' },
-      { type: 'turn_usage', input_tokens: 10, output_tokens: 2, duration_ms: 123 },
-      { type: 'run_finished', status: 'done', exit_code: 0 },
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit bare direct runtime events',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'failed')
-    assert.equal(result.output, null)
-    assert.match(result.error ?? '', /no terminal event/u)
-
-    const rows = db.prepare<unknown[], EventRow>(
-      `SELECT type, data FROM events WHERE execution_id = ? ORDER BY seq`,
-    ).all(handle.executionId)
-    assert.equal(rows.some((row) => row.type === 'message'), false)
-    assert.equal(rows.some((row) => row.type === 'turn_usage'), false)
-  })
-
-  it('skips malformed stream-json lines while preserving the terminal Forge Agent Stream v1 result', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeOutput(cwd, [
-      'this is not json',
-      JSON.stringify(forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd })),
-      JSON.stringify(forgeStreamEvent(2, 'message', { role: 'assistant', text: 'survived malformed input' })),
-      JSON.stringify(forgeStreamEvent(3, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'survived malformed input',
-      })),
-      '',
-    ].join('\n'))
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit one malformed line',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-    assert.equal(result.output, 'survived malformed input')
-  })
-
-  it('treats Forge Agent Stream v1 run_finished failures as failed executions', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'error', { message: 'provider rejected the request' }),
-      forgeStreamEvent(3, 'run_finished', {
-        status: 'failed',
-        exit_code: 1,
-        summary: 'agent failed',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit failed v1 terminal event',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'failed')
-    assert.equal(result.exitCode, 0)
-    assert.equal(result.output, 'agent failed')
-    assert.match(result.error ?? '', /agent failed|provider rejected/u)
-  })
-
-  it('redacts secret fields from final stream events before persisting raw_result', async () => {
-    const row = await runFinalEvent(runFinishedFinalEvent())
-    assert.equal(row.output, 'safe final output')
-    assert.ok(row.raw_result, 'expected raw_result to be persisted')
-    assert.doesNotMatch(row.raw_result, /tok-final-secret|api-key-final-secret|Bearer final-auth-secret/u)
-    assert.doesNotMatch(row.raw_result, /private-key-secret|access-key-secret|credential-secret|json-string-token-secret/u)
-    assert.doesNotMatch(row.raw_result, /private-camel-secret|access-camel-secret|api-hyphen-secret/u)
-    assert.match(row.raw_result, /\[REDACTED\]/u)
-
-    const raw = JSON.parse(row.raw_result) as Record<string, unknown>
-    assert.equal(raw.type, 'run_finished')
-    const data = raw.data as Record<string, unknown>
-    assert.equal(data.summary, 'safe final output')
-    const debugPayloadText = data.debug_payload
-    assert.ok(typeof debugPayloadText === 'string')
-    const debugPayload = JSON.parse(debugPayloadText) as Record<string, unknown>
-    assert.equal(debugPayload.token, '[REDACTED]')
-    assert.equal(debugPayload.keep, 'json string debug')
-  })
-
-  it('passes capabilities to the spawned Forge argv as --cap pairs', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-cap-')
-    const argvPath = join(cwd, 'argv.json')
-    const stdinPath = join(cwd, 'stdin.txt')
-    installFakeForgeRecorder(cwd, argvPath, stdinPath, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'capabilities test',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'test capabilities',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const argv = JSON.parse(readFileSync(argvPath, 'utf-8')) as string[]
-    const capIdx1 = argv.indexOf('--cap')
-    assert.notEqual(capIdx1, -1, 'argv must contain --cap for first capability')
-    assert.equal(argv[capIdx1 + 1], 'browser-use')
-    const capIdx2 = argv.indexOf('--cap', capIdx1 + 1)
-    assert.notEqual(capIdx2, -1, 'argv must contain --cap for second capability')
-    assert.equal(argv[capIdx2 + 1], 'computer-use')
-  })
-
-  it('passes no --cap flags when capabilities are absent or empty', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-nocap-')
-    const argvPath = join(cwd, 'argv.json')
-    const stdinPath = join(cwd, 'stdin.txt')
-    installFakeForgeRecorder(cwd, argvPath, stdinPath, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'no capabilities test',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'test no capabilities',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const argv = JSON.parse(readFileSync(argvPath, 'utf-8')) as string[]
-    assert.equal(argv.indexOf('--cap'), -1, 'argv must not contain --cap when capabilities is empty')
-  })
-
-  it('ignores legacy native terminal event types inside the Forge Agent Stream v1 envelope', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'result', {
-        subtype: 'success',
-        is_error: false,
-        session_id: 'native_result_session',
-        result: 'legacy native result output',
-        usage: { input_tokens: 8, output_tokens: 2, duration_ms: 99 },
-      }),
-      forgeStreamEvent(2, 'turn.completed', {
-        status: 'completed',
-        output: 'legacy native turn output',
-        usage: { input_tokens: 9, output_tokens: 3, duration_ms: 111 },
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit legacy native terminal events',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'failed')
-    assert.equal(result.output, null)
-    assert.match(result.error ?? '', /no terminal event/u)
-
-    const rows = db.prepare<unknown[], EventRow>(
-      `SELECT type, data FROM events WHERE execution_id = ? ORDER BY seq`,
-    ).all(handle.executionId)
-    assert.equal(rows.some((row) => row.type === 'turn_usage'), false)
-  })
-
-  it('persists the exact agent_turn_v1 three-field contract on turn_usage events and yields honest telemetry', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-scope-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'turn_usage', {
-        input_tokens: 30,
-        output_tokens: 2000,
-        duration_ms: 4000,
-        token_scope: 'agent_turn',
-        duration_scope: 'agent_turn',
-        tps_contract: 'agent_turn_v1',
-      }),
-      forgeStreamEvent(3, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'scoped usage',
-      }),
-    ])
-
-    const taskId = 'task_usage_scope'
-    const now = new Date().toISOString()
-    db.prepare<unknown[]>(
-      `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
-      VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`,
-    ).run(taskId, now, now)
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit scoped usage',
-      taskId,
-    })
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const rows = db.prepare<unknown[], EventRow>(
-      `SELECT type, data FROM events WHERE execution_id = ? ORDER BY seq`,
-    ).all(handle.executionId)
-    const usage = rows.find((row) => row.type === 'turn_usage')
-    assert.ok(usage?.data, 'expected a persisted turn_usage event')
-    const usageData = JSON.parse(usage.data) as Record<string, unknown>
-    assert.equal(usageData.token_scope, 'agent_turn', 'the exact token_scope must reach the persisted event')
-    assert.equal(usageData.duration_scope, 'agent_turn', 'the exact duration_scope must reach the persisted event')
-    assert.equal(usageData.tps_contract, 'agent_turn_v1', 'the exact tps_contract must reach the persisted event')
-    assert.notEqual(usageData.token_scope, '[REDACTED]', 'token_scope is structural usage provenance, not a credential')
-    assert.equal(usageData.output_tokens, 2000)
-    assert.equal(usageData.duration_ms, 4000)
-
-    const telemetry = db.prepare<[string], { output_tokens: number; usage_event_count: number; completeness: string }>(
-      `SELECT output_tokens, usage_event_count, completeness
-      FROM task_run_telemetry WHERE task_run_id = ?`,
-    ).get(taskId)
-    assert.ok(telemetry, 'expected a durable telemetry row')
-    assert.equal(telemetry.output_tokens, 2000)
-    assert.equal(telemetry.usage_event_count, 1)
-    assert.equal(telemetry.completeness, 'complete', 'a genuine agent_turn_v1 event must keep accounting complete')
-  })
-
-  it('preserves Cursor cache partitions and total_tokens while never upgrading trust', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-cursor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'cur-grok', client_family: 'cursor', cwd }),
-      forgeStreamEvent(2, 'turn_usage', {
-        input_tokens: 40,
-        output_tokens: 60,
-        cached_input_tokens: 120,
-        cache_read_input_tokens: 100,
-        cache_creation_input_tokens: 20,
-        total_tokens: 220,
-        duration_ms: 300,
-        access_token: 'cred-access-token-secret',
-        auth_token: 'cred-auth-token-secret',
-        cache_read_access_token: 'cred-cache-read-token-secret',
-      }),
-      forgeStreamEvent(3, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'cursor usage',
-        native_session_id: 'native-cursor-1',
-        client_family: 'cursor',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'cur-grok',
-      cwd,
-      prompt: 'emit cursor usage',
-    })
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    // Cursor is first-class: the terminal run_finished must be captured and
-    // persisted as a native cursor session, exactly like claude/codex/opencode.
-    const execution = db.prepare<unknown[], NativeSessionRow>(
-      `SELECT native_session_id, client_family
-      FROM executions
-      WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(execution, 'expected execution row')
-    assert.equal(execution.native_session_id, 'native-cursor-1', 'Cursor native session id must persist')
-    assert.equal(execution.client_family, 'cursor', 'Cursor client family must persist')
-
-    // Two-stage security boundary: redaction happens before mapping. Call redactEvent
-    // directly on a turn_usage fixture to prove credential-shaped neighbors are redacted
-    // while the exact numeric cache partition keys survive unchanged.
-    const plainUsageData = {
-      input_tokens: 40,
-      output_tokens: 60,
-      cached_input_tokens: 120,
-      cache_read_input_tokens: 100,
-      cache_creation_input_tokens: 20,
-      total_tokens: 220,
-      duration_ms: 300,
-      access_token: 'cred-access-token-secret',
-      auth_token: 'cred-auth-token-secret',
-      cache_read_access_token: 'cred-cache-read-token-secret',
-    }
-    const redacted = redactEvent('turn_usage', plainUsageData) as Record<string, unknown>
-    assert.equal(redacted.access_token, '[REDACTED]', 'access_token must be redacted before mapping')
-    assert.equal(redacted.auth_token, '[REDACTED]', 'auth_token must be redacted before mapping')
-    assert.equal(redacted.cache_read_access_token, '[REDACTED]', 'credential-shaped cache keys must be redacted before mapping')
-    assert.equal(redacted.cache_read_input_tokens, 100, 'the read cache partition must survive redaction as an exact number')
-    assert.equal(redacted.cache_creation_input_tokens, 20, 'the creation cache partition must survive redaction as an exact number')
-
-    const rows = db.prepare<unknown[], EventRow>(
-      `SELECT type, data FROM events WHERE execution_id = ? ORDER BY seq`,
-    ).all(handle.executionId)
-    const usage = rows.find((row) => row.type === 'turn_usage')
-    assert.ok(usage?.data, 'expected a persisted turn_usage event')
-    const usageData = JSON.parse(usage.data) as Record<string, unknown>
-    assert.equal(usageData.input_tokens, 40)
-    assert.equal(usageData.output_tokens, 60)
-    assert.equal(usageData.cached_input_tokens, 120, 'the cache partition must survive the mapping')
-    assert.equal(usageData.cache_read_input_tokens, 100, 'the read cache partition must survive the mapping')
-    assert.equal(usageData.cache_creation_input_tokens, 20, 'the creation cache partition must survive the mapping')
-    assert.equal(typeof usageData.cache_read_input_tokens, 'number', 'the read cache partition must survive as a number')
-    assert.equal(typeof usageData.cache_creation_input_tokens, 'number', 'the creation cache partition must survive as a number')
-    assert.equal(usageData.total_tokens, 220, 'the aggregate total must survive the mapping')
-    // The mapper allowlists only safe usage fields, so credential-shaped neighbors
-    // must be dropped from the durable mapped event (not persisted as sentinels).
-    assert.equal('access_token' in usageData, false, 'access_token must be dropped by the allowlisted usage mapper')
-    assert.equal('auth_token' in usageData, false, 'auth_token must be dropped by the allowlisted usage mapper')
-    assert.equal('cache_read_access_token' in usageData, false, 'credential-shaped cache keys must be dropped by the allowlisted usage mapper')
-    // Trust is never inferred: a missing token_scope/duration_scope/tps_contract
-    // must stay omitted, not upgraded to agent_turn.
-    assert.equal('token_scope' in usageData, false, 'trust must never be inferred for Cursor usage')
-    assert.equal('duration_scope' in usageData, false, 'trust must never be inferred for Cursor usage')
-    assert.equal('tps_contract' in usageData, false, 'trust must never be inferred for Cursor usage')
-  })
-
-  it('omits missing provenance and never upgrades wrong token/duration/contract values on persisted usage events', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-scope-omit-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'turn_usage', {
-        input_tokens: 5,
-        output_tokens: 100,
-        duration_ms: 200,
-      }),
-      forgeStreamEvent(3, 'turn_usage', {
-        input_tokens: 5,
-        output_tokens: 150,
-        duration_ms: 300,
-        token_scope: 'model_output',
-        duration_scope: 'model_output',
-        tps_contract: 'agent_turn_v0',
-      }),
-      forgeStreamEvent(4, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'unscoped usage',
-      }),
-    ])
-
-    const taskId = 'task_usage_scope_omit'
-    const now = new Date().toISOString()
-    db.prepare<unknown[]>(
-      `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
-      VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`,
-    ).run(taskId, now, now)
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit unscoped usage',
-      taskId,
-    })
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const rows = db.prepare<unknown[], EventRow>(
-      `SELECT type, data FROM events WHERE execution_id = ? ORDER BY seq`,
-    ).all(handle.executionId)
-    const usageRows = rows.filter((row) => row.type === 'turn_usage')
-    assert.equal(usageRows.length, 2)
-    const missingScope = JSON.parse(usageRows[0].data!) as Record<string, unknown>
-    assert.equal('token_scope' in missingScope, false, 'a missing token_scope must be omitted, not fabricated')
-    assert.equal('duration_scope' in missingScope, false, 'a missing duration_scope must be omitted, not fabricated')
-    assert.equal('tps_contract' in missingScope, false, 'a missing tps_contract must be omitted, not fabricated')
-    const otherScope = JSON.parse(usageRows[1].data!) as Record<string, unknown>
-    assert.equal(otherScope.token_scope, 'model_output', 'a wrong token_scope must be preserved, never upgraded')
-    assert.equal(otherScope.duration_scope, 'model_output', 'a wrong duration_scope must be preserved, never upgraded')
-    assert.equal(otherScope.tps_contract, 'agent_turn_v0', 'a wrong tps_contract must be preserved, never upgraded')
-
-    const telemetry = db.prepare<[string], { output_tokens: number; usage_event_count: number; completeness: string }>(
-      `SELECT output_tokens, usage_event_count, completeness
-      FROM task_run_telemetry WHERE task_run_id = ?`,
-    ).get(taskId)
-    assert.ok(telemetry, 'expected a durable telemetry row')
-    assert.equal(telemetry.usage_event_count, 0, 'no persisted event may count as agent-turn usage')
-    assert.equal(telemetry.output_tokens, 0)
-    assert.equal(telemetry.completeness, 'partial', 'missing/other-scope usage must mark the run partial')
-  })
-
-  it('maps normalized Forge stream-json tool_call and tool_result envelope events', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', { profile: 'test', client_family: 'claude', cwd }),
-      forgeStreamEvent(2, 'tool_call', {
-        name: 'bash',
-        call_id: 'toolu_abc123',
-        input: { command: 'echo hello' },
-      }),
-      forgeStreamEvent(3, 'tool_result', {
-        call_id: 'toolu_abc123',
-        output: 'hello',
-        is_error: false,
-      }),
-      forgeStreamEvent(4, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'tool events test',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit normalized tool_call and tool_result',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const rows = db.prepare<unknown[], EventRow>(
-      `SELECT type, data FROM events WHERE execution_id = ? ORDER BY seq`,
-    ).all(handle.executionId)
-
-    const toolCall = rows.find((row) => row.type === 'tool_call')
-    assert.ok(toolCall?.data, 'expected normalized tool_call to produce tool_call event')
-    const callData = JSON.parse(toolCall.data) as Record<string, unknown>
-    assert.equal(callData.name, 'bash')
-    assert.equal(callData.call_id, 'toolu_abc123')
-
-    const toolResult = rows.find((row) => row.type === 'tool_result')
-    assert.ok(toolResult?.data, 'expected normalized tool_result to produce tool_result event')
-    const resultData = JSON.parse(toolResult.data) as Record<string, unknown>
-    assert.equal(resultData.call_id, 'toolu_abc123')
-    assert.equal(resultData.status, 'ok')
-  })
-
-  it('does not capture native session ids from legacy result events', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'system', {
-        subtype: 'init',
-        session_id: 'legacy_system_init',
-      }),
-      forgeStreamEvent(2, 'thread.started', {
-        thread_id: 'legacy_thread_started',
-      }),
-      forgeStreamEvent(3, 'result', {
-        subtype: 'success',
-        is_error: false,
-        session_id: 'legacy_native_result',
-        result: 'legacy native result output',
-      }),
-      forgeStreamEvent(4, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'canonical run finished output',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit legacy native session id and canonical terminal event',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-    assert.equal(result.output, 'canonical run finished output')
-
-    const row = db.prepare<unknown[], NativeSessionRow>(
-      `SELECT native_session_id, client_family, output
-      FROM executions
-      WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(row, 'expected execution row')
-    assert.equal(row.output, 'canonical run finished output')
-    assert.equal(row.native_session_id, null)
-    assert.equal(row.client_family, null)
-  })
-
-  it('persists requested_agent_runtime on execution creation', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForge(cwd, runFinishedFinalEvent())
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'forge/general',
-      cwd,
-      prompt: 'test requested agent runtime',
-      requestedAgentRuntime: 'forge/general',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const row = db.prepare<unknown[], { requested_agent_runtime: string | null }>(
-      `SELECT requested_agent_runtime FROM executions WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(row, 'expected execution row')
-    assert.equal(row.requested_agent_runtime, 'forge/general')
-  })
-
-  it('resolved_profile is NULL for initial runs', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForge(cwd, runFinishedFinalEvent())
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'test resolved profile null',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const row = db.prepare<unknown[], { resolved_profile: string | null }>(
-      `SELECT resolved_profile FROM executions WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(row, 'expected execution row')
-    assert.equal(row.resolved_profile, null)
-  })
-
-  it('captures run_started.profile as resolved_profile exactly once', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', {
-        profile: 'codex-flash',
-        client_family: 'claude',
-        cwd,
-      }),
-      forgeStreamEvent(2, 'run_started', {
-        profile: 'codex-luna',
-        client_family: 'claude',
-        cwd,
-      }),
-      forgeStreamEvent(3, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        summary: 'two start events',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'emit two run_started events',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const row = db.prepare<unknown[], { resolved_profile: string | null }>(
-      `SELECT resolved_profile FROM executions WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(row, 'expected execution row')
-    assert.equal(row.resolved_profile, 'codex-flash',
-      'first run_started.profile must win; second must be ignored')
-  })
-
-  it('captures policy resolved_profile from run_finished when run_started has no profile', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForgeLines(cwd, [
-      forgeStreamEvent(1, 'run_started', {
-        selector: 'policy',
-        policy: 'fast',
-      }),
-      forgeStreamEvent(2, 'attempt_started', {
-        profile: 'cb-hy',
-        attempt: 1,
-        retry: 0,
-        mode: 'initial',
-      }),
-      forgeStreamEvent(3, 'policy_fallback', {
-        from_profile: 'cb-hy',
-        to_profile: 'cb-dsf',
-        reason: 'profile_specific_limit',
-      }),
-      forgeStreamEvent(4, 'run_finished', {
-        status: 'done',
-        exit_code: 0,
-        profile: 'cb-dsf',
-        client_family: 'claude',
-        native_session_id: 'native-policy-1',
-        summary: 'policy result',
-      }),
-    ])
-
-    const supervisor = makeSupervisor()
-    const handle = await supervisor.startExecution({
-      profile: 'forge/fast',
-      cwd,
-      prompt: 'run policy',
-      requestedAgentRuntime: 'forge/fast',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const row = db.prepare<unknown[], { resolved_profile: string | null }>(
-      `SELECT resolved_profile FROM executions WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(row, 'expected execution row')
-    assert.equal(row.resolved_profile, 'cb-dsf',
-      'terminal policy profile must be captured instead of an intermediate candidate')
-  })
-
-  it('historical rows with NULL requested_agent_runtime use frozen profile', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-')
-    installFakeForge(cwd, runFinishedFinalEvent())
-
-    const supervisor = makeSupervisor()
-    // Start without requestedAgentRuntime to simulate legacy
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'legacy execution',
-    })
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-
-    const row = db.prepare<unknown[], { requested_agent_runtime: string | null; profile: string }>(
-      `SELECT requested_agent_runtime, profile FROM executions WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(row, 'expected execution row')
-    assert.equal(row.requested_agent_runtime, null)
-    assert.equal(row.profile, 'test')
-  })
-
-  it('cancelExecution blocks until the child process and execution row are terminal, the repo lock is released, and no active execution remains', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-cancel-')
-    const startedPath = join(cwd, 'started')
-    installLongRunningFakeForge(cwd, startedPath)
-
-    const repoWriteLocks = new RepoWriteLocks()
-    const supervisor = makeSupervisor(repoWriteLocks)
-
-    const taskId = 'task_cancel_wait'
-    const now = new Date().toISOString()
-    db.prepare<unknown[]>(
-      `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
-      VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`,
-    ).run(taskId, now, now)
-
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'long running',
-      taskId,
-    })
-    await waitForFile(startedPath)
-
-    assert.ok(typeof handle.pid === 'number', 'expected the long-running Forge child to expose a real pid')
-    const childPid = handle.pid as number
-
-    assert.ok(repoWriteLocks.isLocked(cwd), 'repo write lock should be held while running')
-
-    // cancelExecution must not resolve until the child is killed and the terminal row is committed.
-    await supervisor.cancelExecution(handle.executionId)
-
-    const execRow = db.prepare<unknown[], { status: string }>(
-      `SELECT status FROM executions WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(execRow, 'expected execution row')
-    assert.equal(execRow.status, 'cancelled', 'execution row must be terminal cancelled')
-
-    assert.equal(repoWriteLocks.isLocked(cwd), null, 'repo write lock must be released after cancel')
-
-    const activeCount = db.prepare<unknown[], { c: number }>(
-      `SELECT COUNT(*) AS c FROM executions WHERE status IN ('queued', 'running', 'starting')`,
-    ).get()?.c ?? 0
-    assert.equal(activeCount, 0, 'no active execution should remain after cancel')
-
-    let alive = true
-    try {
-      process.kill(childPid, 0)
-    } catch {
-      alive = false
-    }
-    assert.equal(alive, false, 'child process must be killed after cancel')
-  })
-
-  it('cancelExecution must settle within a short bound when the registered child PID is absent and the stream/close observer is stalled', {
-    timeout: 15_000,
-  }, async () => {
-    // The fake Forge parent spawns a detached keeper that inherits the parent stdout
-    // pipe, records its pid, then writes the started marker and exits immediately.
-    // Waiting for started therefore means the keeper fixture is fully ready. The keeper
-    // keeps the pipe write-end open forever, so the supervisor's stream consumer never sees EOF
-    // and the child 'close' event never fires: the registered PID is absent but the
-    // stream/close observer is stalled.
-    const cwd = makeTempDir('foreman-agent-supervisor-stalled-cancel-')
-    const startedPath = join(cwd, 'started')
-    const keeperPidPath = join(cwd, 'keeper-pid')
-    installStalledObserverFakeForge(cwd, startedPath, keeperPidPath)
-
-    const repoWriteLocks = new RepoWriteLocks()
-    // Short injected cancellation-settlement bound so a stalled observer cannot
-    // postpone the durable cancelled state beyond the test's own bounded window.
-    const supervisor = new AgentExecutionSupervisor({
-      db,
-      repoWriteLocks,
-      cancelSettlementTimeoutMs: 200,
-    })
-    supervisors.push(supervisor)
-
-    const taskId = 'task_stalled_cancel'
-    const now = new Date().toISOString()
-    db.prepare<unknown[]>(
-      `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
-      VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`,
-    ).run(taskId, now, now)
-
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'stalled observer cancel',
-      taskId,
-    })
-    await waitForFile(startedPath)
-
-    const keeperPid = Number(readFileSync(keeperPidPath, 'utf-8').trim())
-    assert.ok(keeperPid, 'expected stalled stream keeper child pid')
-    assert.ok(typeof handle.pid === 'number', 'expected the fake Forge child to expose a real pid')
-
-    let cancelPromise: Promise<void> | undefined
-    try {
-      // Ensure the registered PID is already absent before cancelling so killProcessTree
-      // cannot terminate the stream keeper for us and unblock the observer. Keep this
-      // readiness assertion inside the cleanup guard so any failure still kills the keeper.
-      await waitForProcessExit(handle.pid as number)
-      assert.ok(repoWriteLocks.isLocked(cwd), 'repo write lock should be held while running')
-
-      cancelPromise = supervisor.cancelExecution(handle.executionId)
-      const settlement = await Promise.race([
-        cancelPromise.then(() => 'settled' as const),
-        sleep(2000).then(() => 'timeout' as const),
-      ])
-      assert.equal(settlement, 'settled',
-        'cancelExecution must settle within a short bound even when the registered child PID is absent and the stream/close observer is stalled')
-
-      const execRow = db.prepare<unknown[], { status: string }>(
-        `SELECT status FROM executions WHERE id = ?`,
-      ).get(handle.executionId)
-      assert.ok(execRow, 'expected execution row')
-      assert.equal(execRow.status, 'cancelled', 'execution row must be durably cancelled exactly once')
-
-      const taskRow = db.prepare<unknown[], { status: string }>(
-        `SELECT status FROM tasks WHERE id = ?`,
-      ).get(taskId)
-      assert.equal(taskRow?.status, 'cancelled', 'linked task must be durably cancelled exactly once')
-
-      assert.equal(repoWriteLocks.isLocked(cwd), null, 'repo write lock must be released after cancel')
-
-      const activeCount = db.prepare<unknown[], { c: number }>(
-        `SELECT COUNT(*) AS c FROM executions WHERE status IN ('queued', 'running', 'starting')`,
-      ).get()?.c ?? 0
-      assert.equal(activeCount, 0, 'no active execution should remain after bounded cancel')
-
-      const cancelledEventCount = db.prepare<unknown[], { c: number }>(
-        `SELECT COUNT(*) AS c FROM events WHERE execution_id = ? AND type = 'cancelled'`,
-      ).get(handle.executionId)?.c ?? 0
-      assert.equal(cancelledEventCount, 1, 'exactly one cancelled execution event must be emitted')
-
-      // Releasing the stream keeper lets the delayed observer (child close +
-      // stream completion) finish and re-enter the terminalize path. It must be a
-      // no-op: terminal generation and the authoritative terminal row guard it.
-      try {
-        process.kill(keeperPid, 'SIGKILL')
-      } catch {
-        // already gone
-      }
-      await sleep(150)
-
-      // Repeated cancel and reconciliation after the late observer delivery is a
-      // no-op and must not duplicate events or overwrite terminal state.
-      await supervisor.cancelExecution(handle.executionId)
-      await supervisor.cancelExecution(handle.executionId)
-
-      const afterExecRow = db.prepare<unknown[], { status: string }>(
-        `SELECT status FROM executions WHERE id = ?`,
-      ).get(handle.executionId)
-      assert.equal(afterExecRow?.status, 'cancelled', 'late delivery must not overwrite terminal execution state')
-
-      const afterTaskRow = db.prepare<unknown[], { status: string }>(
-        `SELECT status FROM tasks WHERE id = ?`,
-      ).get(taskId)
-      assert.equal(afterTaskRow?.status, 'cancelled', 'late delivery must not overwrite terminal task state')
-
-      const afterEvents = db.prepare<unknown[], { c: number }>(
-        `SELECT COUNT(*) AS c FROM events WHERE execution_id = ? AND type = 'cancelled'`,
-      ).get(handle.executionId)?.c ?? 0
-      assert.equal(afterEvents, 1, 'late/repeated delivery must not duplicate the cancelled event')
-    } finally {
-      // Releasing the stream keeper lets the stalled observer complete so the
-      // supervisor terminalizes the execution and shutdown can finish.
-      try {
-        process.kill(keeperPid, 'SIGKILL')
-      } catch {
-        // already gone
-      }
-      if (cancelPromise) await cancelPromise.catch(() => {})
-    }
-  })
-
   it('does not launch Forge when the task is already terminal at binding time', async () => {
     const cwd = makeTempDir('foreman-agent-supervisor-attach-fail-')
     const startedPath = join(cwd, 'started')
@@ -1271,250 +104,6 @@ describe('AgentExecutionSupervisor', { concurrency: false }, () => {
       `SELECT status FROM tasks WHERE id = ?`,
     ).get(taskId)
     assert.equal(taskRow?.status, 'done', 'pre-terminal task must remain untouched')
-  })
-
-  it('passes the authoritative task run id and preserves unrelated environment to Forge children', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-env-')
-    const envPath = join(cwd, 'env.json')
-    installFakeForgeEnvRecorder(cwd, envPath, [
-      forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0, summary: 'env ok' }),
-    ])
-
-    const taskId = 'task_env_authoritative'
-    const now = new Date().toISOString()
-    db.prepare<unknown[]>(
-      `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
-      VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`,
-    ).run(taskId, now, now)
-
-    const oldTaskRunId = process.env.FOREMAN_TASK_RUN_ID
-    const oldSentinel = process.env.FOREMAN_ENV_TEST_SENTINEL
-    try {
-      process.env.FOREMAN_ENV_TEST_SENTINEL = 'parent-sentinel-value'
-      const supervisor = makeSupervisor()
-      const handle = await supervisor.startExecution({
-        profile: 'test',
-        cwd,
-        prompt: 'record env',
-        taskId,
-      })
-
-      const result = await handle.wait()
-      assert.equal(result.status, 'done')
-      assert.ok(existsSync(envPath), 'expected Forge child to record its environment')
-
-      const env = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, unknown>
-      assert.equal(env.FOREMAN_TASK_RUN_ID, taskId, 'child must receive the exact authoritative task run id')
-      assert.equal(env.FOREMAN_ENV_TEST_SENTINEL, 'parent-sentinel-value', 'unrelated parent env must be preserved')
-      assert.ok(typeof env.PATH === 'string' && env.PATH.length > 0, 'PATH must be preserved')
-    } finally {
-      if (oldTaskRunId === undefined) delete process.env.FOREMAN_TASK_RUN_ID
-      else process.env.FOREMAN_TASK_RUN_ID = oldTaskRunId
-      if (oldSentinel === undefined) delete process.env.FOREMAN_ENV_TEST_SENTINEL
-      else process.env.FOREMAN_ENV_TEST_SENTINEL = oldSentinel
-    }
-  })
-
-  it('retains the private CodeBuddy binding in memory when promoting a queued execution', async () => {
-    const supervisor = makeSupervisor()
-
-    const blockers: Array<{ executionId: string; pid?: number }> = []
-    for (let i = 0; i < 10; i += 1) {
-      const blockerCwd = makeTempDir(`foreman-agent-supervisor-queue-${i}-`)
-      const blockerStarted = join(blockerCwd, 'started')
-      installLongRunningFakeForge(blockerCwd, blockerStarted)
-      const handle = await supervisor.startExecution({
-        profile: 'test',
-        cwd: blockerCwd,
-        prompt: 'blocker',
-      })
-      await waitForFile(blockerStarted)
-      blockers.push(handle)
-    }
-
-    const cwd = makeTempDir('foreman-agent-supervisor-queue-promote-')
-    const envPath = join(cwd, 'env.json')
-    const taskId = 'task_queue_promote'
-    const codeBuddyExecution = Object.freeze({
-      expectedScope: 'cbv1:queued-private-scope',
-      expectedEnvironment: 'ioa',
-      expectedWireModel: 'hy3-ioa',
-    })
-    const now = new Date().toISOString()
-    db.prepare<unknown[]>(
-      `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
-      VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`,
-    ).run(taskId, now, now)
-
-    const handle = await supervisor.startExecution({
-      profile: 'codebuddy/deepseek-v3.2:cb',
-      cwd,
-      prompt: 'queued child',
-      taskId,
-      codeBuddyExecution,
-    })
-
-    // The execution must be queued, not launched, while all slots are occupied.
-    await sleep(80)
-    assert.equal(existsSync(envPath), false, 'queued execution must not launch before a slot frees')
-
-    const queuedRow = db.prepare<unknown[], { status: string }>(
-      `SELECT status FROM executions WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.equal(queuedRow?.status, 'queued', 'queued execution should remain queued while slots are full')
-
-    // Install the env-recording script so the promoted child uses it instead of a blocker script.
-    installFakeForgeEnvRecorder(cwd, envPath, [
-      forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0, summary: 'promoted env ok' }),
-    ])
-
-    for (const blocker of blockers) {
-      await supervisor.cancelExecution(blocker.executionId)
-    }
-
-    const result = await handle.wait()
-    assert.equal(result.status, 'done')
-    assert.ok(existsSync(envPath), 'promoted Forge child must record its environment')
-
-    const env = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, unknown>
-    assert.equal(env.FOREMAN_TASK_RUN_ID, taskId, 'promoted child must receive the persisted task id')
-    assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_SCOPE, codeBuddyExecution.expectedScope)
-    assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT, codeBuddyExecution.expectedEnvironment)
-    assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL, codeBuddyExecution.expectedWireModel)
-  })
-
-  it('validates CodeBuddy admission and injects only a complete private binding without logging it', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-codebuddy-env-')
-    const envPath = join(cwd, 'env.json')
-    const privateValues = {
-      expectedScope: 'cbv1:admission-private-scope',
-      expectedEnvironment: 'external',
-      expectedWireModel: 'hy4-external',
-    } as const
-    const logged: unknown[] = []
-    const supervisor = new AgentExecutionSupervisor({
-      db,
-      repoWriteLocks: new RepoWriteLocks(),
-      logger: {
-        debug: (message, meta) => logged.push({ message, meta }),
-        info: (message, meta) => logged.push({ message, meta }),
-        warn: (message, meta) => logged.push({ message, meta }),
-        error: (message, meta) => logged.push({ message, meta }),
-      },
-    })
-    supervisors.push(supervisor)
-
-    const invalidBinding = {
-      expectedScope: 'cbv1:must-not-leak-scope',
-      expectedEnvironment: 'must-not-leak-environment',
-      expectedWireModel: '',
-    }
-    await assert.rejects(
-      supervisor.startExecution({
-        profile: 'codebuddy/deepseek-v3.2:cb',
-        cwd,
-        prompt: 'reject incomplete binding',
-        codeBuddyExecution: invalidBinding,
-      }),
-      (error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error)
-        assert.equal(message, 'CodeBuddy execution admission binding is unavailable')
-        assert.doesNotMatch(message, /must-not-leak/u)
-        return true
-      },
-    )
-
-    installFakeForgeEnvRecorder(cwd, envPath, [
-      forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0, summary: 'codebuddy env ok' }),
-    ])
-    const inheritedKeys = [
-      'WRENYARD_CODEBUDDY_EXPECTED_SCOPE',
-      'wrenyard_codebuddy_expected_scope',
-      'Wrenyard_Codebuddy_Expected_Environment',
-      'WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL',
-    ] as const
-    const oldValues = new Map(inheritedKeys.map((key) => [key, process.env[key]]))
-    try {
-      process.env.WRENYARD_CODEBUDDY_EXPECTED_SCOPE = 'stale-canonical-scope'
-      process.env.wrenyard_codebuddy_expected_scope = 'stale-lower-scope'
-      process.env.Wrenyard_Codebuddy_Expected_Environment = 'stale-mixed-environment'
-      process.env.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL = 'stale-canonical-wire'
-
-      const handle = await supervisor.startExecution({
-        profile: 'codebuddy/deepseek-v3.2:cb',
-        cwd,
-        prompt: 'record private admission env',
-        codeBuddyExecution: privateValues,
-      })
-      assert.equal((await handle.wait()).status, 'done')
-
-      const env = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, unknown>
-      assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_SCOPE, privateValues.expectedScope)
-      assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT, privateValues.expectedEnvironment)
-      assert.equal(env.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL, privateValues.expectedWireModel)
-      assert.equal(env.wrenyard_codebuddy_expected_scope, undefined)
-      assert.equal(env.Wrenyard_Codebuddy_Expected_Environment, undefined)
-
-      const serializedLogs = JSON.stringify(logged)
-      for (const value of Object.values(privateValues)) {
-        assert.ok(!serializedLogs.includes(value), 'private admission values must not enter supervisor logs')
-      }
-
-      installFakeForgeEnvRecorder(cwd, envPath, [
-        forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0, summary: 'non-codebuddy env ok' }),
-      ])
-      const nonCodeBuddy = await supervisor.startExecution({
-        profile: 'test',
-        cwd,
-        prompt: 'do not inject private admission env',
-        codeBuddyExecution: privateValues,
-      })
-      assert.equal((await nonCodeBuddy.wait()).status, 'done')
-      const nonCodeBuddyEnv = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, unknown>
-      assert.equal(nonCodeBuddyEnv.WRENYARD_CODEBUDDY_EXPECTED_SCOPE, undefined)
-      assert.equal(nonCodeBuddyEnv.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT, undefined)
-      assert.equal(nonCodeBuddyEnv.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL, undefined)
-    } finally {
-      for (const [key, value] of oldValues) {
-        if (value === undefined) delete process.env[key]
-        else process.env[key] = value
-      }
-    }
-  })
-
-  it('strips an inherited stale FOREMAN_TASK_RUN_ID from taskless executions', async () => {
-    const cwd = makeTempDir('foreman-agent-supervisor-env-stale-')
-    const envPath = join(cwd, 'env.json')
-    installFakeForgeEnvRecorder(cwd, envPath, [
-      forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0, summary: 'stale env ok' }),
-    ])
-
-    const oldTaskRunId = process.env.FOREMAN_TASK_RUN_ID
-    const oldSentinel = process.env.FOREMAN_ENV_TEST_SENTINEL
-    try {
-      process.env.FOREMAN_TASK_RUN_ID = 'stale-task-run-id'
-      process.env.FOREMAN_ENV_TEST_SENTINEL = 'parent-sentinel-value'
-      const supervisor = makeSupervisor()
-      const handle = await supervisor.startExecution({
-        profile: 'test',
-        cwd,
-        prompt: 'taskless child',
-      })
-
-      const result = await handle.wait()
-      assert.equal(result.status, 'done')
-      assert.ok(existsSync(envPath), 'expected Forge child to record its environment')
-
-      const env = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, unknown>
-      assert.equal(env.FOREMAN_TASK_RUN_ID ?? undefined, undefined, 'stale inherited task context must be removed')
-      assert.equal(env.FOREMAN_ENV_TEST_SENTINEL, 'parent-sentinel-value', 'unrelated parent env must be preserved')
-      assert.ok(typeof env.PATH === 'string' && env.PATH.length > 0, 'PATH must be preserved')
-    } finally {
-      if (oldTaskRunId === undefined) delete process.env.FOREMAN_TASK_RUN_ID
-      else process.env.FOREMAN_TASK_RUN_ID = oldTaskRunId
-      if (oldSentinel === undefined) delete process.env.FOREMAN_ENV_TEST_SENTINEL
-      else process.env.FOREMAN_ENV_TEST_SENTINEL = oldSentinel
-    }
   })
 
   it('cancels a running execution that has no supervisor registry entry by killing and terminalizing it', async () => {
@@ -1895,88 +484,6 @@ setInterval(() => {}, 1000)
     assert.equal(eventCount, 0, 'no terminal event may be inserted for an uncontrolled process')
   })
 
-  it('attempt timeout converges at the deadline even when a descendant holds stdio after child close, and cannot be overwritten', {
-    timeout: 15_000,
-  }, async () => {
-    // The fake Forge parent spawns a detached keeper that inherits the parent
-    // stdout pipe, records its pid, writes the started marker, then exits
-    // immediately. The keeper keeps the pipe write-end open forever, so the
-    // supervisor's stream consumer never sees EOF and the child 'close' event
-    // never fires: child close has claimed an unpersisted exit intent (or
-    // never fires) while streamDone remains unsettled. The attempt deadline
-    // must override that provisional state and durably terminalize as timeout.
-    const cwd = makeTempDir('foreman-agent-supervisor-timeout-race-')
-    const startedPath = join(cwd, 'started')
-    const keeperPidPath = join(cwd, 'keeper-pid')
-    installStalledObserverFakeForge(cwd, startedPath, keeperPidPath)
-
-    const repoWriteLocks = new RepoWriteLocks()
-    // Short attempt deadline plus a short cancellation-settlement bound so the
-    // bounded timeout reconcile cannot postpone the durable timeout state
-    // beyond the test's own window.
-    const supervisor = new AgentExecutionSupervisor({
-      db,
-      repoWriteLocks,
-      cancelSettlementTimeoutMs: 200,
-    })
-    supervisors.push(supervisor)
-
-    const taskId = 'task_timeout_race'
-    const now = new Date().toISOString()
-    db.prepare<unknown[]>(
-      `INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
-      VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`,
-    ).run(taskId, now, now)
-
-    const handle = await supervisor.startExecution({
-      profile: 'test',
-      cwd,
-      prompt: 'timeout race',
-      taskId,
-      timeoutMs: 150,
-    })
-    await waitForFile(startedPath)
-
-    const keeperPid = Number(readFileSync(keeperPidPath, 'utf-8').trim())
-    assert.ok(keeperPid, 'expected stalled stream keeper child pid')
-
-    // The execution must settle as timeout at the deadline, not hang on the
-    // held stdio pipe.
-    const result = await handle.wait()
-    assert.equal(result.status, 'timeout', 'attempt timeout must converge at the deadline as timeout')
-    assert.equal(result.killReason, 'timeout')
-
-    const execRow = db.prepare<unknown[], { status: string }>(
-      `SELECT status FROM executions WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.ok(execRow, 'expected execution row')
-    assert.equal(execRow.status, 'timeout', 'execution row must be durably timed out exactly once')
-
-    const terminalEventCount = db.prepare<unknown[], { c: number }>(
-      `SELECT COUNT(*) AS c FROM events WHERE execution_id = ? AND type = 'terminal'`,
-    ).get(handle.executionId)?.c ?? 0
-    assert.equal(terminalEventCount, 1, 'exactly one terminal execution event must be emitted for the timeout')
-
-    // Releasing the stream keeper lets any late observer (child close + stream
-    // completion) finish and re-enter the terminalize path. It must be a no-op:
-    // terminal generation and the authoritative terminal row guard it, so the
-    // committed timeout state cannot be overwritten as done/failed.
-    try {
-      process.kill(keeperPid, 'SIGKILL')
-    } catch {
-      // already gone
-    }
-    await sleep(200)
-
-    await supervisor.cancelExecution(handle.executionId)
-    await supervisor.cancelExecution(handle.executionId)
-
-    const afterRow = db.prepare<unknown[], { status: string }>(
-      `SELECT status FROM executions WHERE id = ?`,
-    ).get(handle.executionId)
-    assert.equal(afterRow?.status, 'timeout', 'late delivery must not overwrite the committed timeout state')
-  })
-
   it('startExecution persists one dispatch snapshot row per attempt keyed by each execution', async () => {
     const cwd = makeTempDir('foreman-agent-supervisor-dispatch-')
     const taskId = 'task_dispatch_snapshots'
@@ -2098,32 +605,6 @@ setInterval(() => {}, 1000)
   })
 })
 
-async function runFinalEvent(event: Record<string, unknown>): Promise<RawResultRow> {
-  const cwd = makeTempDir('foreman-agent-supervisor-')
-  installFakeForge(cwd, event)
-
-  const supervisor = makeSupervisor()
-  const handle = await supervisor.startExecution({
-    profile: 'test',
-    cwd,
-    prompt: 'emit one final event',
-  })
-  const result = await handle.wait()
-  assert.equal(result.status, 'done')
-
-  const row = db.prepare<unknown[], RawResultRow>(
-    `SELECT raw_result, output
-    FROM executions
-    WHERE id = ?`,
-  ).get(handle.executionId)
-  assert.ok(row, 'expected execution row')
-  return row
-}
-
-function installFakeForge(dir: string, event: Record<string, unknown>): void {
-  installFakeForgeLines(dir, [forgeStreamEvent(1, String(event.type), event)])
-}
-
 function installLongRunningFakeForge(dir: string, startedPath: string): void {
   scriptCounter += 1
   const script = join(dir, `fake-forge-long-${scriptCounter}.mjs`)
@@ -2137,38 +618,6 @@ setInterval(() => {}, 1000)
   process.env.WRENYARD_FORGE_ARGS_PREFIX = JSON.stringify([script])
 }
 
-function installStalledObserverFakeForge(dir: string, startedPath: string, keeperPidPath: string): void {
-  scriptCounter += 1
-  const script = join(dir, `fake-forge-stalled-${scriptCounter}.mjs`)
-  writeFileSync(script, `
-import { spawn } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
-const keeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-  detached: true,
-  stdio: 'inherit',
-})
-writeFileSync(${JSON.stringify(keeperPidPath)}, String(keeper.pid))
-writeFileSync(${JSON.stringify(startedPath)}, 'started')
-process.exit(0)
-`, 'utf-8')
-
-  process.env.WRENYARD_RUNTIME_BIN = process.execPath
-  process.env.WRENYARD_FORGE_ARGS_PREFIX = JSON.stringify([script])
-}
-
-async function waitForProcessExit(pid: number, timeoutMs = 2000): Promise<void> {
-  const startedAt = Date.now()
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      process.kill(pid, 0)
-    } catch {
-      return
-    }
-    await sleep(20)
-  }
-  throw new Error(`Timed out waiting for PID ${pid} to exit`)
-}
-
 function installFakeForgeLines(dir: string, events: Array<Record<string, unknown>>): void {
   installFakeForgeOutput(dir, events.map((event) => JSON.stringify(event)).join('\n') + '\n')
 }
@@ -2177,112 +626,6 @@ function installFakeForgeOutput(dir: string, output: string): void {
   scriptCounter += 1
   const script = join(dir, `fake-forge-${scriptCounter}.mjs`)
   writeFileSync(script, `process.stdout.write(${JSON.stringify(output)})\n`, 'utf-8')
-
-  process.env.WRENYARD_RUNTIME_BIN = process.execPath
-  process.env.WRENYARD_FORGE_ARGS_PREFIX = JSON.stringify([script])
-}
-
-function installBlockingFakeForge(
-  dir: string,
-  firstStartedPath: string,
-  releasePath: string,
-  promptLogPath: string,
-): void {
-  scriptCounter += 1
-  const script = join(dir, `fake-forge-lock-${scriptCounter}.mjs`)
-  writeFileSync(script, `
-import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
-
-let prompt = ''
-process.stdin.setEncoding('utf8')
-process.stdin.on('data', (chunk) => {
-  prompt += chunk
-})
-await new Promise((resolve) => process.stdin.on('end', resolve))
-
-const label = prompt.includes('first writer') ? 'first writer' : 'second writer'
-appendFileSync(${JSON.stringify(promptLogPath)}, label + '\\n')
-
-if (label === 'first writer') {
-  writeFileSync(${JSON.stringify(firstStartedPath)}, 'started')
-  while (!existsSync(${JSON.stringify(releasePath)})) {
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-}
-
-const event = {
-  protocol: 'forge.agent.stream',
-  version: 1,
-  run_id: 'fr_lock',
-  seq: 1,
-  type: 'run_finished',
-  timestamp: '2026-06-19T00:00:00.000Z',
-  data: {
-    status: 'done',
-    exit_code: 0,
-    summary: label + ' done',
-  },
-}
-process.stdout.write(JSON.stringify(event) + '\\n')
-`, 'utf-8')
-
-  process.env.WRENYARD_RUNTIME_BIN = process.execPath
-  process.env.WRENYARD_FORGE_ARGS_PREFIX = JSON.stringify([script])
-}
-
-function installFakeForgeRecorder(
-  dir: string,
-  argvPath: string,
-  stdinPath: string,
-  events: Array<Record<string, unknown>>,
-): void {
-  scriptCounter += 1
-  const script = join(dir, `fake-forge-${scriptCounter}.mjs`)
-  const output = events.map((event) => JSON.stringify(event)).join('\n') + '\n'
-  writeFileSync(script, `
-import { writeFileSync } from 'node:fs'
-
-let stdin = ''
-process.stdin.setEncoding('utf8')
-process.stdin.on('data', (chunk) => {
-  stdin += chunk
-})
-process.stdin.on('end', () => {
-  writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)))
-  writeFileSync(${JSON.stringify(stdinPath)}, stdin)
-  process.stdout.write(${JSON.stringify(output)})
-})
-process.stdin.resume()
-`, 'utf-8')
-
-  process.env.WRENYARD_RUNTIME_BIN = process.execPath
-  process.env.WRENYARD_FORGE_ARGS_PREFIX = JSON.stringify([script])
-}
-
-function installFakeForgeEnvRecorder(
-  dir: string,
-  envPath: string,
-  events: Array<Record<string, unknown>>,
-): void {
-  scriptCounter += 1
-  const script = join(dir, `fake-forge-env-${scriptCounter}.mjs`)
-  const output = events.map((event) => JSON.stringify(event)).join('\n') + '\n'
-  writeFileSync(script, `
-import { writeFileSync } from 'node:fs'
-const inherited = Object.fromEntries(Object.entries(process.env))
-writeFileSync(${JSON.stringify(envPath)}, JSON.stringify({
-  FOREMAN_TASK_RUN_ID: process.env.FOREMAN_TASK_RUN_ID,
-  WRENYARD_DISPATCH_PLANS_JSON: process.env.WRENYARD_DISPATCH_PLANS_JSON,
-  PATH: process.env.PATH,
-  FOREMAN_ENV_TEST_SENTINEL: process.env.FOREMAN_ENV_TEST_SENTINEL,
-  WRENYARD_CODEBUDDY_EXPECTED_SCOPE: inherited.WRENYARD_CODEBUDDY_EXPECTED_SCOPE,
-  WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT: inherited.WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT,
-  WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL: inherited.WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL,
-  wrenyard_codebuddy_expected_scope: inherited.wrenyard_codebuddy_expected_scope,
-  Wrenyard_Codebuddy_Expected_Environment: inherited.Wrenyard_Codebuddy_Expected_Environment,
-}))
-process.stdout.write(${JSON.stringify(output)})
-`, 'utf-8')
 
   process.env.WRENYARD_RUNTIME_BIN = process.execPath
   process.env.WRENYARD_FORGE_ARGS_PREFIX = JSON.stringify([script])
@@ -2313,61 +656,167 @@ function forgeStreamEvent(seq: number, type: string, data: Record<string, unknow
   }
 }
 
-function runFinishedFinalEvent(): Record<string, unknown> {
-  return {
-    type: 'run_finished',
-    status: 'done',
-    exit_code: 0,
-    is_error: false,
-    summary: 'safe final output',
-    token: 'tok-final-secret',
-    api_key: 'api-key-final-secret',
-    authorization: 'Bearer final-auth-secret',
-    debug_payload: JSON.stringify({ token: 'json-string-token-secret', keep: 'json string debug' }),
-    nested: {
-      private_key: 'private-key-secret',
-      privateKey: 'private-camel-secret',
-      access_key: 'access-key-secret',
-      accessKey: 'access-camel-secret',
-      credential: 'credential-secret',
-      debug: 'kept for diagnostics',
+// ── Execution lifecycle over a fake exec service ──────────────────────
+//
+// The supervisor resolves `provider/model:client` through the catalog and
+// launches through its ExecService. These tests inject both, so the lifecycle
+// is exercised without a real client process.
+
+interface FakeRun {
+  prompt: string
+  /** Emit the terminal result and a clean exit. */
+  finish(output?: string): void
+  cancelled: boolean
+}
+
+function makeFakeExec(): { service: ExecService; runs: FakeRun[] } {
+  const runs: FakeRun[] = []
+  let pid = 900_000
+  const service = {
+    async start(request: { prompt: string }) {
+      const queue: AgentEvent[] = []
+      let wake: (() => void) | undefined
+      let closed = false
+      const push = (event: AgentEvent): void => {
+        queue.push(event)
+        wake?.()
+      }
+      const run: FakeRun = {
+        prompt: request.prompt,
+        cancelled: false,
+        finish(output = 'ok') {
+          push({ type: 'output', record: { type: 'run_finished', status: 'done', output } })
+          push({ type: 'exit', exitCode: 0, signal: null })
+        },
+      }
+      runs.push(run)
+      const events: AsyncIterable<AgentEvent> = {
+        async *[Symbol.asyncIterator]() {
+          while (!closed) {
+            const event = queue.shift()
+            if (event === undefined) {
+              await new Promise<void>((resolve) => { wake = resolve })
+              continue
+            }
+            if (event.type === 'exit') closed = true
+            yield event
+          }
+        },
+      }
+      return {
+        events,
+        result: new Promise(() => undefined),
+        async cancel() {
+          run.cancelled = true
+          push({ type: 'exit', exitCode: null, signal: 'SIGTERM' })
+        },
+        diagnostics: { pid: (pid += 1) },
+      }
     },
+    async close() {},
+  }
+  return { service: service as unknown as ExecService, runs }
+}
+
+function makeFakeSupervisor(): { supervisor: AgentExecutionSupervisor; runs: FakeRun[] } {
+  const catalog = new Catalog()
+  catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true })
+  catalog.registerProvider({
+    id: 'p',
+    displayName: 'P',
+    credentialResolver: 'managed',
+    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: 100, pricing: [0.5, 1, 2] }],
+    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+  })
+  const { service, runs } = makeFakeExec()
+  const supervisor = new AgentExecutionSupervisor({
+    db,
+    repoWriteLocks: new RepoWriteLocks(),
+    catalog,
+    execService: service,
+    killProcessTreeImpl: async () => {},
+    isProcessLiveImpl: () => false,
+  })
+  supervisors.push(supervisor)
+  return { supervisor, runs }
+}
+
+async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('condition was not reached in time')
+    await sleep(5)
   }
 }
 
+describe('AgentExecutionSupervisor lifecycle', { concurrency: false }, () => {
+  const PROFILE = 'p/m:cb'
 
-it('spawns automatic low and max with isolated per-attempt plans', async () => {
-  const cwd = makeTempDir('foreman-thinking-plans-')
-  const now = new Date().toISOString()
-  const taskId = 'task_thinking_isolation'
-  db.prepare(`INSERT INTO tasks (id, template, project, input, status, structured, created_at, updated_at)
-    VALUES (?, 'echo', 'ws', '{}', 'running', 1, ?, ?)`).run(taskId, now, now)
-  const profile = 'chatgpt/gpt-5.6-sol:codex'
-  const previous = process.env.WRENYARD_DISPATCH_PLANS_JSON
-  const defaults = JSON.stringify({ other: { model: 'other' }, [profile]: { thinking: 'max' } })
-  process.env.WRENYARD_DISPATCH_PLANS_JSON = defaults
-  const supervisor = makeSupervisor()
-  try {
-    for (const thinking of ['low', 'max'] as const) {
-      const envPath = join(cwd, `${thinking}.json`)
-      installFakeForgeEnvRecorder(cwd, envPath, [forgeStreamEvent(1, 'run_finished', { status: 'done', exit_code: 0 })])
-      const snapshot: TaskResolvedDispatch = {
-        requested_agent_runtime: '', profile, client: 'codex', provider: 'chatgpt', model: 'gpt-5.6-sol',
-        model_id: 'chatgpt/gpt-5.6-sol', mode: 'native', thinking, intelligence: 'high',
-        speed: { effective_tps: 60, source: 'catalog_default', sample_count: 0, checked_at: now, expected_tps_met: true },
-        reference_pricing: { source: 'catalog', checked_at: now },
-      }
-      const handle = await supervisor.startExecution({ profile, cwd, prompt: 'echo', taskId, dispatchSnapshot: snapshot })
-      assert.equal((await handle.wait()).status, 'done')
-      const plans = JSON.parse(JSON.parse(readFileSync(envPath, 'utf8')).WRENYARD_DISPATCH_PLANS_JSON)
-      assert.equal(plans[profile].thinking, thinking)
-      assert.equal(plans[profile].reasoningEffort, thinking)
-      assert.equal(plans[profile].model, 'gpt-5.6-sol')
-      assert.deepEqual(plans.other, { model: 'other' })
-      assert.equal(process.env.WRENYARD_DISPATCH_PLANS_JSON, defaults)
-    }
-  } finally {
-    if (previous === undefined) delete process.env.WRENYARD_DISPATCH_PLANS_JSON
-    else process.env.WRENYARD_DISPATCH_PLANS_JSON = previous
-  }
+  it('runs a resolved target to done and returns its final output', async () => {
+    const cwd = makeTempDir('wy-supervisor-run-')
+    const { supervisor, runs } = makeFakeSupervisor()
+    const handle = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'do it' })
+    await waitFor(() => runs.length === 1)
+    runs[0]!.finish('final answer')
+    const result = await handle.wait()
+    assert.equal(result.status, 'done')
+    assert.equal(result.output, 'final answer')
+  })
+
+  it('fails an execution whose profile names no resolvable client', async () => {
+    const cwd = makeTempDir('wy-supervisor-unresolved-')
+    const { supervisor, runs } = makeFakeSupervisor()
+    const handle = await supervisor.startExecution({ profile: 'test', cwd, prompt: 'do it' })
+    const result = await handle.wait()
+    assert.equal(result.status, 'failed')
+    assert.equal(runs.length, 0)
+  })
+
+  it('queues a second same-repo writer until the first one finishes', async () => {
+    const cwd = makeTempDir('wy-supervisor-lock-')
+    const { supervisor, runs } = makeFakeSupervisor()
+    const first = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'first writer' })
+    await waitFor(() => runs.length === 1)
+    const second = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'second writer' })
+    await sleep(40)
+    assert.deepEqual(runs.map((run) => run.prompt), ['first writer'])
+
+    runs[0]!.finish()
+    assert.equal((await first.wait()).status, 'done')
+    await waitFor(() => runs.length === 2)
+    runs[1]!.finish()
+    assert.equal((await second.wait()).status, 'done')
+  })
+
+  it('runs same-repo writers concurrently when their write paths differ', async () => {
+    const cwd = makeTempDir('wy-supervisor-scoped-lock-')
+    const { supervisor, runs } = makeFakeSupervisor()
+    const first = await supervisor.startExecution({
+      profile: PROFILE, cwd, prompt: 'first writer', writePaths: [join(cwd, 'src/a.ts')],
+    })
+    const second = await supervisor.startExecution({
+      profile: PROFILE, cwd, prompt: 'second writer', writePaths: [join(cwd, 'src/b.ts')],
+    })
+    await waitFor(() => runs.length === 2)
+    runs[1]!.finish()
+    assert.equal((await second.wait()).status, 'done')
+    runs[0]!.finish()
+    assert.equal((await first.wait()).status, 'done')
+  })
+
+  it('cancels a running execution and releases its repo lock to the next writer', async () => {
+    const cwd = makeTempDir('wy-supervisor-cancel-')
+    const { supervisor, runs } = makeFakeSupervisor()
+    const first = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'first writer' })
+    await waitFor(() => runs.length === 1)
+    const second = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'second writer' })
+
+    await first.cancel()
+    assert.equal((await first.wait()).status, 'cancelled')
+    assert.equal(runs[0]!.cancelled, true)
+
+    await waitFor(() => runs.length === 2)
+    runs[1]!.finish()
+    assert.equal((await second.wait()).status, 'done')
+  })
 })

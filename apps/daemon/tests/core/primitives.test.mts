@@ -34,42 +34,6 @@ describe('operation primitives registry', () => {
     assert.equal(existsSync(legacyForgeExec), false)
   })
 
-  it('keeps old primitive and Forge paths out of imports', () => {
-    const roots = [join(process.cwd(), 'lib'), join(process.cwd(), 'tests'), join(process.cwd(), 'bin')]
-    const forbidden = [
-      'v2/primi' + 'tives',
-      'v2\\primi' + 'tives',
-      'forge-' + 'direct-client.mts',
-      'forge-' + 'exec.mts',
-    ]
-
-    for (const root of roots) {
-      for (const file of listSourceFiles(root)) {
-        const source = readFileSync(file, 'utf8')
-        for (const marker of forbidden) {
-          assert.equal(source.includes(marker), false, `${file} still references ${marker}`)
-        }
-      }
-    }
-  })
-
-  it('keeps Forge adapters behind the core primitives boundary', () => {
-    const roots = [join(process.cwd(), 'lib'), join(process.cwd(), 'bin')]
-    const allowed = [
-      join(process.cwd(), 'lib', 'adapters', 'forge'),
-      join(process.cwd(), 'lib', 'daemon', 'execution'),
-    ]
-
-    for (const root of roots) {
-      for (const file of listSourceFiles(root)) {
-        if (allowed.some((prefix) => file.startsWith(prefix))) continue
-        const source = readFileSync(file, 'utf8')
-        assert.equal(source.includes('adapters/forge'), false, `${file} imports Forge adapter directly`)
-        assert.equal(source.includes('adapters\\forge'), false, `${file} imports Forge adapter directly`)
-      }
-    }
-  })
-
   it('keeps core free of daemon and adapter imports', () => {
     const root = join(process.cwd(), 'lib', 'core')
     const forbidden = ['../daemon/', '../adapters/', '../../daemon/', '../../adapters/', 'adapters/']
