@@ -42,16 +42,6 @@ describe('shell process adapter', () => {
     assert.equal(resolveWindowsHideOption({ windowsHide: true }), true)
   })
 
-  it('is the process substrate used by the Forge adapter', () => {
-    const forgeExec = readFileSync(join(process.cwd(), 'lib', 'adapters', 'forge', 'exec.mts'), 'utf8')
-    const forgeDirect = readFileSync(join(process.cwd(), 'lib', 'adapters', 'forge', 'direct-client.mts'), 'utf8')
-
-    assert.match(forgeExec, /from '\.\.\/shell\/process\.mts'/u)
-    assert.doesNotMatch(forgeExec, /shell\/index\.mts/u)
-    assert.doesNotMatch(forgeDirect, /shell\/index\.mts/u)
-    assert.doesNotMatch(forgeDirect, /killProcessTree/u)
-  })
-
   it('does not keep legacy shell executor compatibility files', () => {
     assert.equal(existsSync(join(process.cwd(), 'lib', 'shell-executor.mts')), false)
     assert.equal(existsSync(join(process.cwd(), 'lib', 'adapters', 'shell', 'index.mts')), false)

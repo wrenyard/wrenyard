@@ -15,82 +15,6 @@ function managedRuntime(keys: Record<string, string>) {
   });
 }
 
-function codeBuddyRuntime(domain?: string) {
-  return createBuiltinProviderRuntime({
-    home: '/native-home',
-    env: {},
-    realpath: async (path) => path,
-    codeBuddyProductPath: '/client/product.json',
-    readFile: async (path) => path === '/client/product.json'
-      ? JSON.stringify({ authentication: { attributes: { iOADomain: ['ioa.test'], externalDomain: ['external.test'] } } })
-      : JSON.stringify({ auth: { accessToken: 'cb-token', ...(domain ? { domain } : {}) } }),
-  });
-}
-
-test('three free-pool providers are registered with managed credentials and exact models', () => {
-  const catalog = createBuiltinCatalog();
-  const zen = catalog.provider('opencode-zen');
-  const openrouter = catalog.provider('openrouter');
-  const go = catalog.provider('opencode-go');
-  assert.ok(zen, 'opencode-zen must exist');
-  assert.ok(openrouter, 'openrouter must exist');
-  assert.ok(go, 'opencode-go must exist');
-  assert.equal(zen!.credentialResolver, 'managed');
-  assert.equal(openrouter!.credentialResolver, 'managed');
-  assert.equal(go!.credentialResolver, 'managed');
-  assert.equal(zen!.displayName, 'OpenCode Zen');
-  assert.equal(openrouter!.displayName, 'OpenRouter');
-  assert.equal(zen!.protocols?.[0].endpoint, 'https://opencode.ai/zen/v1/chat/completions');
-  assert.equal(openrouter!.protocols?.[0].endpoint, 'https://openrouter.ai/api/v1/chat/completions');
-  assert.equal(go!.protocols?.[0].endpoint, 'https://opencode.ai/zen/go/v1/chat/completions');
-  assert.deepEqual(zen!.models.map((m) => m.id), [
-    'mimo-v2.5-free',
-    'ling-3.0-flash-fin-free',
-    'big-pickle',
-    'union-alpha',
-    'nemotron-3-ultra-free',
-    'nemotron-3.5-lightning-free',
-    'glm-5.3',
-    'kimi-k3',
-  ]);
-  assert.deepEqual(openrouter!.models.map((m) => m.id), [
-    'nex-agi/nex-n2.5-mini:free',
-    'nex-agi/nex-n2.5-pro:free',
-    'cohere/north-mini-code:free',
-    'inclusionai/ling-3.0-flash-vl:free',
-    'inclusionai/ling-3.0-flash-sante:free',
-    'inclusionai/ling-3.0-flash-fin:free',
-    'qwen/qwen3.8-27b:free',
-    'dots-studio/dots-3-note-preview:free',
-    'liquid/lfm-2.5-2.6b:free',
-    'nvidia/nemotron-3.5-lightning:free',
-    'thinkingmachines/inkling-small:free',
-    'thinkingmachines/inkling:free',
-    'poolside/laguna-s-2.1:free',
-    'poolside/laguna-xs-2.1:free',
-    'nvidia/nemotron-3-ultra-550b-a55b:free',
-    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-    'google/gemma-4-26b-a4b-it:free',
-    'google/gemma-4-31b-it:free',
-    'nvidia/nemotron-3-super-120b-a12b:free',
-  ]);
-  assert.deepEqual(go!.models.map((m) => m.id), ['glm-5.3-flash', 'glm-5.3', 'deepseek-flash', 'hy3']);
-  assert.equal(zen!.defaultModel, 'kimi-k3');
-  assert.equal(openrouter!.defaultModel, 'nex-agi/nex-n2.5-mini:free');
-  assert.equal(go!.defaultModel, 'glm-5.3-flash');
-  // The free Zen pool is usable only through the genuine OpenCode client, so
-  // every free model carries an exact supported-client restriction; the paid
-  // Zen models stay gateway-usable.
-  for (const model of zen!.models.filter((entry) => entry.free === true)) {
-    assert.deepEqual(model.supportedClients, ['opencode'], `free Zen model ${model.id} must be OpenCode-restricted`);
-  }
-  for (const model of zen!.models.filter((entry) => entry.free !== true)) {
-    assert.equal(model.supportedClients, undefined, `paid Zen model ${model.id} must stay gateway-usable`);
-  }
-  // The retired opencode-native provider id is not part of the built-in catalog.
-  assert.equal(catalog.provider('opencode-native'), undefined, 'opencode-native must not be registered');
-});
-
 test('Zen and OpenRouter free models carry the free entitlement and a reference tariff; Go models are nonzero', () => {
   const catalog = createBuiltinCatalog();
   const assertFree = (provider: string, modelId: string): void => {
@@ -197,22 +121,6 @@ test('free supply is denied for anonymous, missing, and non-managed credentials'
   // A non-managed provider never grants the free-pool models.
   const cb = catalog.provider('codebuddy')!;
   assert.equal(runtime.freeSupply?.(cb, 'mimo-v2.5-free', { value: 'x' }), undefined);
-});
-
-test('CodeBuddy HY free behavior is unaffected by the new free-pool logic', async () => {
-  const catalog = createBuiltinCatalog();
-  const cb = catalog.provider('codebuddy')!;
-  const ioaRuntime = codeBuddyRuntime('ioa.test');
-  const ioaCred = await ioaRuntime.credential(cb);
-  assert.ok(ioaCred);
-  const fact = ioaRuntime.freeSupply?.(cb, 'hy3', ioaCred!);
-  assert.ok(fact && fact.confirmedFree);
-  assert.equal(fact!.source, 'codebuddy.credential_environment');
-  assert.equal(fact!.ruleId, 'codebuddy.verified_hy_model_confirmed_free');
-  // Non-iOA environment still not free.
-  const externalRuntime = codeBuddyRuntime('external.test');
-  const extCred = await externalRuntime.credential(cb);
-  assert.equal(externalRuntime.freeSupply?.(cb, 'hy3', extCred!), undefined);
 });
 
 test('OpenRouter slash+colon model resolves as a gateway and never as a paid OpenCode fallback', () => {

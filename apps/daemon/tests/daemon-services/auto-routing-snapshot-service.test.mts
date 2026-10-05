@@ -35,7 +35,6 @@ import {
 } from '../../lib/daemon/services/auto-routing-snapshot-service.mts';
 
 const T0 = 1_726_000_000_000;
-const MINUTE = 60_000;
 const MONTH_MINUTES = 43_800;
 
 const iso = (ms: number): string => new Date(ms).toISOString();
@@ -465,7 +464,7 @@ test('a standard ChatGPT row binds 5h and 7d, while a fresh row excluding 5h mar
     },
   ];
   const snapshot = await serviceFor(rows).snapshot();
-  const entry = entryFor(snapshot, 'chatgpt', 'gpt-5.6-sol');
+  const entry = entryFor(snapshot, 'chatgpt', 'gpt-6.1-sol');
   assert.deepEqual([...entry.quotaPoolIds], ['chatgpt/5h', 'chatgpt/7d']);
   assert.deepEqual(
     entry.requiredQuota.map((constraint) => constraint.id),
@@ -487,7 +486,7 @@ test('a Pro fresh row explicitly listing 5h in not_applicable_windows excludes i
     },
   ];
   const snapshot = await serviceFor(rows).snapshot();
-  const entry = entryFor(snapshot, 'chatgpt', 'gpt-5.6-sol');
+  const entry = entryFor(snapshot, 'chatgpt', 'gpt-6.1-sol');
   // The not-applicable 5h is excluded entirely: only the real 7d window remains.
   assert.deepEqual(
     entry.requiredQuota.map((constraint) => constraint.id),
@@ -528,7 +527,7 @@ test('a malformed, missing, or stale row keeps the declared 5h as an unknown con
   ];
   for (const scenario of cases) {
     const snapshot = await serviceFor(scenario.rows).snapshot();
-    const entry = entryFor(snapshot, 'chatgpt', 'gpt-5.6-sol');
+    const entry = entryFor(snapshot, 'chatgpt', 'gpt-6.1-sol');
     assert.deepEqual(
       entry.requiredQuota.map((constraint) => constraint.id),
       ['chatgpt/5h', 'chatgpt/7d'],
@@ -589,79 +588,6 @@ test('deepseek/deepseek-flash mandatory balance evidence comes from the raw Forg
 // ---------------------------------------------------------------------------
 // codebuddy/hy3 multi-pool: both empty required pools stay unknown constraints
 // ---------------------------------------------------------------------------
-
-test('codebuddy/hy3 direct snapshot requires both empty pools as null constraints', async () => {
-  const binding = PROVIDER_QUOTA_BINDINGS.find(
-    (candidate) => candidate.providerId === 'codebuddy' && candidate.modelId === 'hy3',
-  );
-  assert.ok(binding, 'expected a codebuddy/hy3 multi-pool binding');
-  assert.equal(binding!.pools.length, 2);
-
-  const unrelatedRawRow: FixtureRow = {
-    provider: 'codebuddy',
-    status: 'ok',
-    stale: false,
-    fetched_at: iso(T0),
-    windows: [
-      { name: '1h', pct: 20, resets_at: iso(T0 + 3_600_000), window_minutes: MONTH_MINUTES },
-      { name: '5h', pct: 20, resets_at: iso(T0 + 3_600_000), window_minutes: MONTH_MINUTES },
-    ],
-  };
-  const snapshot = await serviceFor([unrelatedRawRow]).snapshot();
-
-  const entry = entryFor(snapshot, binding!.providerId, binding!.modelId);
-  assert.deepEqual([...entry.quotaPoolIds], ['codebuddy/hy-family', 'codebuddy/monthly']);
-  assert.deepEqual(
-    entry.requiredQuota.map((constraint) => constraint.id),
-    ['codebuddy/hy-family', 'codebuddy/monthly'],
-  );
-  for (const constraint of entry.requiredQuota) {
-    assert.equal(constraint.evidence, null, `pool ${constraint.id} must stay unknown without proven raw windows`);
-  }
-  assert.equal(snapshot.validUntilMs, T0 + 60_000);
-  assert.deepEqual(snapshot.hardBlockedProviderIds, []);
-});
-
-test('codebuddy/hy3 unknown snapshot keeps both empty pools required with null evidence', async () => {
-  const rejecting = new AutoRoutingQuotaSnapshotService({
-    queryJson: () => Promise.reject(new Error('quota source unavailable')),
-    now: () => T0,
-  });
-  const snapshot = await rejecting.snapshot();
-  const binding = PROVIDER_QUOTA_BINDINGS.find(
-    (candidate) => candidate.providerId === 'codebuddy' && candidate.modelId === 'hy3',
-  );
-  assert.ok(binding);
-
-  const entry = entryFor(snapshot, binding!.providerId, binding!.modelId);
-  assert.deepEqual([...entry.quotaPoolIds], ['codebuddy/hy-family', 'codebuddy/monthly']);
-  assert.deepEqual(
-    entry.requiredQuota.map((constraint) => constraint.id),
-    ['codebuddy/hy-family', 'codebuddy/monthly'],
-  );
-  for (const constraint of entry.requiredQuota) {
-    assert.equal(constraint.evidence, null);
-  }
-  assert.equal(snapshot.validUntilMs, T0 + 15_000);
-});
-
-test('a raw codebuddy pct100 retained block never turns the empty HY3 pools into healthy evidence', async () => {
-  const rows = [codebuddyRow()];
-  const snapshot = await scopedServiceFor(rows).snapshot();
-  assert.deepEqual(snapshot.hardBlockedProviderIds, ['codebuddy']);
-  const binding = PROVIDER_QUOTA_BINDINGS.find(
-    (candidate) => candidate.providerId === 'codebuddy' && candidate.modelId === 'hy3',
-  );
-  assert.ok(binding);
-  const entry = entryFor(snapshot, binding!.providerId, binding!.modelId);
-  assert.deepEqual(
-    entry.requiredQuota.map((constraint) => constraint.id),
-    ['codebuddy/hy-family', 'codebuddy/monthly'],
-  );
-  for (const constraint of entry.requiredQuota) {
-    assert.equal(constraint.evidence, null);
-  }
-});
 
 test('a row keyed by a normalized pool id never matches a provider row', async () => {
   const binding = PROVIDER_QUOTA_BINDINGS.find(

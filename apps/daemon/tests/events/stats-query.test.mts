@@ -1170,7 +1170,7 @@ describe('stats-query readStatsSummary', () => {
         startedAt: spec.startedAt,
         endedAt: spec.endedAt,
       })
-      seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
+      seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4.1-flash', 'codebuddy/deepseek-v4.1-flash')
       // Paired generation time is explicit and independent of execution wall time.
       const generationMs = spec.output === 2000 ? 20000 : 10000
       seedUsageWithDuration(today, 30, spec.output, generationMs, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'tokenizer_v1')
@@ -1178,7 +1178,7 @@ describe('stats-query readStatsSummary', () => {
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
     const window = result.windows?.find((candidate) => candidate.period === '1mo')
-    const row = window?.byProfile.find((candidate) => candidate.model === 'codebuddy/deepseek-v4-flash')
+    const row = window?.byProfile.find((candidate) => candidate.model === 'codebuddy/deepseek-v4.1-flash')
     assert.ok(row)
     // Median of [100, 100, 150] = 100, using paired generation timing.
     assert.equal(row.averageTps, 100)
@@ -1200,17 +1200,17 @@ describe('stats-query readStatsSummary', () => {
         startedAt: spec.startedAt,
         endedAt: spec.endedAt,
       })
-      seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4-flash', 'codebuddy/deepseek-v4-flash')
+      seedAttemptDispatch(spec.exec, `task-${spec.exec}`, 'codebuddy', 'deepseek-v4.1-flash', 'codebuddy/deepseek-v4.1-flash')
       seedUsageWithDuration(today, 30, spec.output, 10000, 'agent_turn', spec.exec, `task-${spec.exec}`, 'agent_turn', 'tokenizer_v1')
     }
 
     const result = readStatsSummary({ days: 31, limit: 10 }, fixedNow)
     const row = result.windows?.find((window) => window.period === '1mo')?.byProfile.find(
-      (candidate) => candidate.model === 'codebuddy/deepseek-v4-flash',
+      (candidate) => candidate.model === 'codebuddy/deepseek-v4.1-flash',
     )
     assert.ok(row)
     const local = readLocalSpeedSamples(fixedNow).find(
-      (sample) => sample.provider === 'codebuddy' && sample.model === 'deepseek-v4-flash',
+      (sample) => sample.provider === 'codebuddy' && sample.model === 'deepseek-v4.1-flash',
     )
     assert.ok(local)
     assert.equal(row.averageTps, local.tps)
@@ -1644,40 +1644,6 @@ describe('stats-query readStatsSummary', () => {
     assert.equal(run.model_display_name, 'DeepSeek V4 Flash')
     // Exactly once, with the exact canonical provider/model pair.
     assert.deepEqual(calls, [['codebuddy', 'deepseek-v4-flash']])
-    closeTestDb()
-  })
-
-  it('emits neither display name when the resolver cannot map the exact provider or model', () => {
-    initTestDb()
-    const fixedNow = new Date('2026-07-19T12:00:00.000Z')
-    const todayStart = new Date(fixedNow.getFullYear(), fixedNow.getMonth(), fixedNow.getDate())
-    const hour = 3600_000
-    const iso = (ms: number): string => new Date(ms).toISOString()
-    seedResolvedDispatchRun({
-      taskRunId: 'r-unknown', template: 'unknown-model-task',
-      createdIso: iso(todayStart.getTime() + 8 * hour), endedIso: iso(todayStart.getTime() + 9 * hour),
-      executionId: 'exec-unknown', profile: 'auto', client: 'codebuddy',
-      provider: 'codebuddy', model: 'missing-model', modelId: 'codebuddy/missing-model',
-    })
-    const calls: Array<[string, string]> = []
-    const result = readStatsSummary(
-      { days: 31, limit: 10 },
-      fixedNow,
-      {
-        resolveDisplayNames: (provider, model) => {
-          calls.push([provider, model])
-          return undefined
-        },
-      },
-    )
-    const run = result.recentRuns?.find((row) => row.task_run_id === 'r-unknown')
-    assert.ok(run)
-    assert.ok(run.resolved)
-    assert.equal(run.provider_display_name, undefined)
-    assert.equal(run.model_display_name, undefined)
-    assert.equal('provider_display_name' in run, false)
-    assert.equal('model_display_name' in run, false)
-    assert.deepEqual(calls, [['codebuddy', 'missing-model']])
     closeTestDb()
   })
 

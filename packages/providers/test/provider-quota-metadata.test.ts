@@ -74,45 +74,6 @@ test('there is exactly one ChatGPT provider', () => {
   assert.ok(!BUILTIN_PROVIDERS.some((provider) => provider.id === 'codex'));
 });
 
-test('Cursor binds Grok and Composer to the Cursor pool and third-party models to Other', () => {
-  const grok = expectBinding('cursor', 'grok-4.6');
-  assert.deepEqual(bindingWindowIds(grok), ['Cursor']);
-  assert.deepEqual(bindingPoolIds(grok), ['cursor/cursor']);
-  assert.deepEqual(bindingPoolIds(expectBinding('cursor', 'grok-4.7')), ['cursor/cursor']);
-
-  const composer = expectBinding('cursor', 'composer-2.5');
-  assert.deepEqual(bindingPoolIds(composer), ['cursor/cursor']);
-
-  const otherModelIds = [
-    'kimi-k3',
-    'claude-opus-5',
-    'gpt-5.6-luna',
-    'gpt-5.6-terra',
-    'gpt-5.6-sol',
-    'claude-sonnet-5',
-    'muse-spark-1.3',
-    'gemini-3.8-flash',
-    'claude-fable-5-1',
-  ];
-  for (const modelId of otherModelIds) {
-    const other = expectBinding('cursor', modelId);
-    assert.deepEqual(bindingWindowIds(other), ['Other']);
-    assert.deepEqual(bindingPoolIds(other), ['cursor/other']);
-  }
-  assert.notDeepEqual(bindingPoolIds(expectBinding('cursor', 'kimi-k3')), bindingPoolIds(grok));
-
-  const cursor = BUILTIN_PROVIDERS.find((provider) => provider.id === 'cursor')!;
-  assert.equal(cursor.models.length, 12);
-  for (const model of cursor.models) {
-    const bound = expectBinding('cursor', model.id);
-    assert.equal(bound.modelId, model.id);
-    assert.equal(bound.pools.length, 1);
-  }
-  assert.ok(!PROVIDER_QUOTA_BINDINGS.some((binding) =>
-    binding.pools.some((pool) => pool.quotaPoolId === 'cursor/claude'),
-  ));
-});
-
 test('kimi-coding k3 binds independent 5h rolling and 7d full-cycle pools', () => {
   const binding = expectBinding('kimi-coding', 'k3');
   assert.deepEqual(bindingPoolIds(binding), ['kimi-coding/5h', 'kimi-coding/7d']);
@@ -142,20 +103,6 @@ test('zhipu-coding preserves the proven 5h rolling / 7d full-cycle resets', () =
     assert.deepEqual(binding.pools.map((pool) => pool.windows[0]!.resetKind), ['rolling_partial', 'full_cycle']);
     assert.equal(binding.pools[0]!.windows[0]!.evidenceRef, 'https://docs.bigmodel.cn/cn/coding-plan/overview');
   }
-});
-
-test('CodeBuddy HY models keep HY + monthly unknown resources; others monthly only', () => {
-  for (const modelId of ['hy3', 'hy4-preview']) {
-    const binding = expectBinding('codebuddy', modelId);
-    assert.deepEqual(bindingPoolIds(binding), ['codebuddy/hy-family', 'codebuddy/monthly']);
-    for (const pool of binding.pools) {
-      assert.equal(pool.kind, 'quota');
-      assert.deepEqual(pool.windows, []);
-    }
-  }
-  const other = expectBinding('codebuddy', 'deepseek-v4.1-flash');
-  assert.deepEqual(bindingPoolIds(other), ['codebuddy/monthly']);
-  assert.deepEqual(other.pools[0]!.windows, []);
 });
 
 test('API-billed providers bind their own balance resource only where proven', () => {

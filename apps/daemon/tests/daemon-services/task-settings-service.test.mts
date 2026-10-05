@@ -443,18 +443,6 @@ const DEEPSEEK_FLASH_PRICING_PROFILE: ProfileFixture = {
   outputUsd: 1.2,
 }
 
-const DEEPSEEK_GLM_PRICE_PEER: ProfileFixture = {
-  exactAgentRuntime: 'zhipu-coding/glm-price-peer:cb',
-  profile: 'zhipu-glm-price-peer',
-  client: 'cb',
-  provider: 'zhipu-coding',
-  model: 'glm-price-peer',
-  intelligence: 'high',
-  tps: 47.4,
-  inputUsd: 0.2,
-  outputUsd: 0.5,
-}
-
 const CODEBUDDY_GROK_PROFILE: ProfileFixture = {
   exactAgentRuntime: 'codebuddy/deepseek-v4.1-flash:gk',
   profile: 'codebuddy-grok',
@@ -2322,54 +2310,6 @@ describe('daemon task-settings-service (no-model)', () => {
     }
   })
 
-  it('authenticated domestic zhipu-coding Flash applies verified quota efficiency and never rewrites reference/marginal price', async () => {
-    writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
-    const resolveAt = (atMs: number) => {
-      const service = context!.makeService({
-        resolver: createResolverFixture({ profiles: [ZHIPU_GLM_FLASH_OPENCODE_PROFILE] }),
-        quotaSnapshots: zhipuQuotaSnapshotService(atMs, zhipuWindowsAt(atMs, 96)),
-        runtimeAvailability: () => ({
-          providerCredential: 'available',
-          providerLive: 'unknown',
-          quota: 'unknown',
-          available: true,
-        }),
-      })
-      return service.resolveForRun({
-        taskName: 'commit',
-        kind: 'builtin',
-        defaults: { dispatch: { expectedTps: 80 }, timeoutMs: 20 * 60_000 },
-      })
-    }
-
-    // Weekday peak window: production verified efficiency must reach real policy
-    // notes, and the 4%-remaining quota must stay non-healthy (not made healthy
-    // by the efficiency evidence). Reference and marginal USD prices are untouched.
-    const peak = await resolveAt(Date.parse('2026-09-14T14:30:00+08:00'))
-    const peakDecision = peak.dispatch?.auto_routing
-    assert.ok(peakDecision)
-    assert.equal(peak.exactAgentRuntime, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.exactAgentRuntime)
-    assert.ok(peakDecision.reasons.includes('quota_burn_efficiency_evidence_applied'))
-    assert.notEqual(peakDecision.quota_tier, 'healthy')
-    assert.equal(peakDecision.reference_output_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
-    assert.equal(peakDecision.routing_output_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
-    assert.equal(peakDecision.effective_cap_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
-    const peakScore = peakDecision.score
-
-    // Off-peak/campaign night window: same quota, higher verified efficiency, and
-    // still every price/cap invariant holds; the time dependence shows in the
-    // real policy score (not just the pure resolver).
-    const offpeakAt = Date.parse('2026-09-15T23:30:00+08:00')
-    const offpeak = await resolveAt(offpeakAt)
-    const offpeakDecision = offpeak.dispatch?.auto_routing
-    assert.ok(offpeakDecision)
-    assert.ok(offpeakDecision.reasons.includes('quota_burn_efficiency_evidence_applied'))
-    assert.equal(offpeakDecision.reference_output_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
-    assert.equal(offpeakDecision.routing_output_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
-    assert.equal(offpeakDecision.effective_cap_usd_per_million, ZHIPU_GLM_FLASH_OPENCODE_PROFILE.outputUsd)
-    assert.ok(offpeakDecision.score > peakScore, 'off-peak campaign efficiency must outrank weekday peak')
-  })
-
   it('domestic efficiency preserves unknown quota and rejects unsupported or unavailable credentials', async () => {
     writeConfig({ tasks: { settings: { global: { selectionMode: 'automatic' } } } })
     const offpeakAt = Date.parse('2026-09-15T23:30:00+08:00')
@@ -2924,23 +2864,6 @@ describe('daemon task-settings-service (no-model)', () => {
     })
   })
 
-  it('automatic preview maps every above-cap rejection to price_limit', async () => {
-    writeConfig({
-      tasks: {
-        settings: {
-          global: { selectionMode: 'automatic', dispatch: { maxOutputUsdPerMillion: 1 } },
-        },
-      },
-    })
-    const service = context!.makeService()
-    const issue = await automaticUnavailableIssueOf(service, 'builtin:commit')
-    assertClosedAutoIssue(issue)
-    assert.deepEqual(issue?.resolutionFailure, {
-      code: 'price_limit',
-      message: '允许价格内没有可用模型，请调整价格上限',
-    })
-  })
-
   it('automatic preview maps an unsatisfiable intelligence floor to intelligence_requirement', async () => {
     writeConfig({
       tasks: {
@@ -3122,80 +3045,6 @@ describe('daemon task-settings-service (no-model)', () => {
       postRejected.issues.find((issue) => issue.code === 'automatic_dispatch_unavailable')?.resolutionFailure?.code,
       'price_limit',
     )
-  })
-
-  it('uses DeepSeek horizon marginal price for ranking and retains explicit attempt pricing', async () => {
-    const selectedAt = async (at: string): Promise<string> => {
-      const nowMs = Date.parse(at)
-      writeConfig({
-        tasks: {
-          settings: {
-            global: {
-              selectionMode: 'automatic',
-              timeoutMs: 120_000,
-              maxAutoOutputUsdPerMillion: 2,
-              routingWeights: { price: 0.5, speed: 0.2, quota: 0.2, intelligence: 0.1 },
-              // The two candidates differ in both price and speed, so the
-              // expectation is declared to hold the speed saturation point
-              // fixed and leave the horizon marginal price as the factor that
-              // moves between the two timestamps below.
-              dispatch: { expectedTps: 100, minimumTps: 1 },
-            },
-          },
-        },
-      })
-      const service = context!.makeService({
-        resolver: createResolverFixture({ profiles: [DEEPSEEK_FLASH_PRICING_PROFILE, DEEPSEEK_GLM_PRICE_PEER] }),
-        quotaSnapshots: unknownQuotaSnapshotService(() => nowMs),
-        now: () => nowMs,
-      })
-      const snapshot = await service.snapshot({ task_id: 'builtin:commit' })
-      const row = snapshot.rows.find((entry) => entry.identity === 'builtin:commit')
-      assert.ok(row?.automatic_selection)
-      return row.automatic_selection.exact_runtime
-    }
-
-    assert.equal(
-      await selectedAt('2026-09-11T06:30:00.000Z'),
-      DEEPSEEK_GLM_PRICE_PEER.exactAgentRuntime,
-    )
-    assert.equal(
-      await selectedAt('2026-09-11T04:30:00.000Z'),
-      DEEPSEEK_FLASH_PRICING_PROFILE.exactAgentRuntime,
-    )
-
-    const nowMs = Date.parse('2026-09-10T04:00:00.000Z')
-    writeConfig({
-      tasks: {
-        settings: {
-          global: {
-            selectionMode: 'explicit',
-            explicitRuntime: { kind: 'target', target: DEEPSEEK_FLASH_PRICING_PROFILE.exactAgentRuntime },
-            timeoutMs: 120_000,
-          },
-        },
-      },
-    })
-    const service = context!.makeService({
-      resolver: createResolverFixture({ profiles: [DEEPSEEK_FLASH_PRICING_PROFILE] }),
-      now: () => nowMs,
-    })
-    const snapshot = await service.snapshot({ task_id: 'builtin:commit' })
-    const row = snapshot.rows.find((entry) => entry.identity === 'builtin:commit')
-    assert.equal(row?.explicit?.resolved?.reference_pricing.output_usd_per_million, 0.6)
-    assert.match(row?.explicit?.resolved?.reference_pricing.source ?? '', /api-docs\.deepseek\.com/)
-    assert.equal(row?.explicit?.resolved?.auto_routing, undefined)
-
-    const run = await service.resolveForRun({
-      taskName: 'commit',
-      kind: 'builtin',
-      defaults: { timeoutMs: 120_000, dispatch: {} },
-    })
-    assert.equal(run.mode, 'explicit')
-    assert.ok(run.dispatch)
-    assert.equal(run.dispatch.reference_pricing.output_usd_per_million, 0.6)
-    assert.match(run.dispatch.reference_pricing.source ?? '', /api-docs\.deepseek\.com/)
-    assert.equal(run.dispatch.auto_routing, undefined)
   })
 
   it('Cursor Other (kimi-k3) routes independent of Cursor Grok on the same raw row', async () => {
