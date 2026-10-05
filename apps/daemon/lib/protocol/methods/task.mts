@@ -376,6 +376,8 @@ export const taskRunAcceptedSchema = {
     task_run_id: { type: 'string', minLength: 1 },
     hint: { type: 'string', minLength: 1 },
     task_name: { type: 'string' },
+    status: { enum: taskRunStatusValues },
+    created_at: { type: 'string' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -459,6 +461,8 @@ export const taskRunStatusResultSchema = {
     task_id: { type: 'string', minLength: 1 },
     task_name: { type: 'string' },
     status: { enum: taskRunStatusValues },
+    created_at: { type: 'string' },
+    started_at: { type: 'string' },
     summary: { type: 'string' },
     resolved: taskResolvedDispatchSchema,
     usage: taskUsageSchema,

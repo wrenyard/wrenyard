@@ -41,6 +41,15 @@ export interface InspectorProps {
 
 /** Right-hand inspector: the session tree, the raw ledger and the context audit. */
 export function Inspector({ model, events, tab, rawOnly = false, onTabChange, onClose }: InspectorProps) {
+  const queuedTaskRuns = useMemo(() => {
+    const ids = new Set<string>();
+    for (const turn of model.turns) {
+      for (const action of turn.actions) {
+        if (action.taskRunId !== undefined && action.task?.status === 'queued') ids.add(action.taskRunId);
+      }
+    }
+    return ids;
+  }, [model]);
   // A requested ledger jump (from the usage panel or the context tab) is
   // preserved in the shared store; forward its seq so the ledger focuses it.
   const { inspection, sessionKey } = useSessionUsage();
@@ -85,7 +94,7 @@ export function Inspector({ model, events, tab, rawOnly = false, onTabChange, on
           {/* Plain scroller: the tree must be sized by the panel, never by its widest row. */}
           <div className="h-full overflow-x-hidden overflow-y-auto">
             <div className="min-w-0 p-3 wrap-anywhere">
-              <SessionTree key={sessionKey} events={events} />
+              <SessionTree key={sessionKey} events={events} queuedTaskRuns={queuedTaskRuns} />
             </div>
           </div>
         </TabsContent>

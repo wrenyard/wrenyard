@@ -27,6 +27,8 @@ export interface AgentOpts {
 export interface AgentResult {
   output: string
   status: 'done' | 'failed' | 'cancelled'
+  /** Time the execution waited in the queue before its process launched. */
+  queueWaitMs?: number
   nativeSessionId?: string
   /** Concrete execution profile captured from the terminal stream event.
    *  Set when the runtime reports a resolved agent runtime profile; undefined

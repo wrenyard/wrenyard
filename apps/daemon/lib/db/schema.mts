@@ -16,6 +16,7 @@ export function bootstrapSchema(database: ForemanDatabase): void {
   reconcileTaskgraphRunTitleColumn(database)
   reconcileTaskgraphNodeSlipColumn(database)
   reconcileTaskDefinitionSourceColumn(database)
+  reconcileTaskStartedAtColumn(database)
   dropFwaTranscriptAfterMigration(database)
   reconcileAgentEventKinds(database)
   reconcileAgentTurnOriginColumns(database)
@@ -760,6 +761,19 @@ function reconcileTaskDefinitionSourceColumn(database: ForemanDatabase): void {
       `ALTER TABLE tasks ADD COLUMN definition_source TEXT CHECK(definition_source IN ('builtin','project'))`,
     ).run()
   }
+}
+
+/**
+ * `tasks.started_at`: when a run's first execution actually launched. It is
+ * NULL while the run is still queued; `created_at` stays the acceptance time.
+ * Additive and idempotent.
+ */
+function reconcileTaskStartedAtColumn(database: ForemanDatabase): void {
+  const columns = new Set(database
+    .prepare<[], { name: string }>('PRAGMA table_info(tasks)')
+    .all()
+    .map((column) => column.name))
+  if (!columns.has('started_at')) database.prepare('ALTER TABLE tasks ADD COLUMN started_at TEXT').run()
 }
 
 /**

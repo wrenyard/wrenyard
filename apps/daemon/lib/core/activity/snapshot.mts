@@ -72,6 +72,8 @@ export interface ActivitySnapshotTask {
   requested_agent_runtime?: string
   resolved_profile?: string
   created_at: string
+  /** When the run's first execution launched; absent while it is queued. */
+  started_at?: string
   updated_at: string
   taskgraph_id?: string
   node_id?: string
@@ -130,6 +132,7 @@ interface TaskRow {
   worktree: string | null
   status: ActivityTaskRunStatus
   created_at: string
+  started_at: string | null
   updated_at: string
   requested_agent_runtime: string | null
   resolved_profile: string | null
@@ -176,6 +179,7 @@ const TASK_QUERY = `
     t.worktree,
     t.status,
     t.created_at,
+    t.started_at,
     t.updated_at,
     e.requested_agent_runtime,
     e.resolved_profile
@@ -333,6 +337,7 @@ function taskFromRow(
     created_at: row.created_at,
     updated_at: row.updated_at,
   }
+  if (row.started_at) task.started_at = row.started_at
   if (row.template) task.task_id = row.template
   if (row.project) task.project = row.project
   if (row.worktree) task.worktree = true

@@ -36,6 +36,8 @@ export interface AgentOpts {
 }
 
 export interface AgentResult {
+  /** Time the execution waited in the queue before its process launched. */
+  queueWaitMs?: number
   output: string
   status: AgentStatus
   executionId?: string
@@ -146,7 +148,17 @@ function toAgentResult(result: ExecutionResult, record: ExecutionRecord | undefi
     killReason: result.killReason ?? null,
     resolvedProfile: record?.resolved_profile ?? undefined,
     requestedAgentRuntime: record?.requested_agent_runtime ?? undefined,
+    queueWaitMs: queueWaitMs(record),
   }
+}
+
+/** Time the execution spent admitted but not yet launched (waiting for a lock). */
+function queueWaitMs(record: ExecutionRecord | undefined): number {
+  const created = Date.parse(record?.created_at ?? '')
+  // A row that never launched waited until it was terminalized.
+  const started = Date.parse(record?.started_at ?? '')
+  if (Number.isNaN(created) || Number.isNaN(started)) return 0
+  return Math.max(0, started - created)
 }
 
 function mapExecutionStatus(status: ExecutionStatus): AgentStatus {

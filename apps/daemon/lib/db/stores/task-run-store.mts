@@ -52,7 +52,7 @@ export class TaskRunStore {
       `INSERT OR IGNORE INTO tasks (
         id, template, project, worktree, input, definition_source, status, structured,
         retry_policy, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, 'side-effects', ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 'side-effects', ?, ?)`,
       write.taskRunId,
       write.template,
       write.project,
@@ -65,6 +65,10 @@ export class TaskRunStore {
     )
   }
 
+  /**
+   * Register (or re-register) an accepted run. It is `queued` until its first
+   * execution launches; {@link markStarted} then moves it to `running`.
+   */
   markRunning(write: RunningTaskRunWrite): 'cancelled' | 'interrupted' | null {
     const existing = this.get<{ status: string }>(
       `SELECT status FROM tasks WHERE id = ? AND (status = 'cancelled' OR status = 'interrupted')`,
@@ -77,7 +81,7 @@ export class TaskRunStore {
       `INSERT INTO tasks (
         id, template, project, worktree, input, definition_source, workflow_id, status, structured,
         retry_policy, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, 'side-effects', ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, 'side-effects', ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         template = excluded.template,
         project = excluded.project,
@@ -88,7 +92,8 @@ export class TaskRunStore {
         output = NULL,
         summary = NULL,
         error = NULL,
-        status = 'running',
+        status = 'queued',
+        started_at = NULL,
         structured = excluded.structured,
         execution_id = NULL,
         retry_policy = excluded.retry_policy,
@@ -131,10 +136,31 @@ export class TaskRunStore {
   attachExecution(taskRunId: string, executionId: string, updatedAt: string): boolean {
     return this.run(
       `UPDATE tasks
-      SET status = 'running', execution_id = ?, updated_at = ?
+      SET execution_id = ?, updated_at = ?
       WHERE id = ? AND status IN ('queued', 'running')`,
       executionId,
       updatedAt,
+      taskRunId,
+    ).changes > 0
+  }
+
+  /** An execution of this run launched: it is running, and its first launch is its start time. */
+  markStarted(taskRunId: string, at: string): boolean {
+    return this.run(
+      `UPDATE tasks
+      SET status = 'running', started_at = COALESCE(started_at, ?), updated_at = ?
+      WHERE id = ? AND status IN ('queued', 'running')`,
+      at,
+      at,
+      taskRunId,
+    ).changes > 0
+  }
+
+  /** An execution of this run is waiting for admission (a write lock or a slot). */
+  markWaiting(taskRunId: string, at: string): boolean {
+    return this.run(
+      `UPDATE tasks SET status = 'queued', updated_at = ? WHERE id = ? AND status = 'running'`,
+      at,
       taskRunId,
     ).changes > 0
   }

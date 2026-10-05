@@ -312,6 +312,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           const lock = this.repoWriteLocks.tryAcquire(opts.cwd, executionId, repoWriteLockMode(opts.writePaths), opts.writePaths)
           hasRepoLock = lock.acquired
         }
+        // A later attempt of a running task that has to wait puts the task back in the queue.
+        if (opts.taskId && (!canRunNow || (requiresLock && !hasRepoLock))) {
+          this.taskRuns().markWaiting(opts.taskId, createdAt)
+        }
 
         // Repo lock conflicts wait in the FIFO queue and emit queue-waiting; lock-lost is reserved
         // for an execution that previously held a write lock and then loses it.
@@ -410,7 +414,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     return this.get<ExecutionRecord>(
       `SELECT id, task_id, profile, cwd, prompt, status,
         native_session_id, client_family, pid, pgid, output, raw_result, error, exit_code,
-        kill_reason, timeout_ms, requested_agent_runtime, resolved_profile
+        kill_reason, timeout_ms, created_at, started_at, requested_agent_runtime, resolved_profile
       FROM executions
       WHERE id = ?`,
       executionId,
@@ -634,6 +638,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       entry.executionId,
     )
     if (claimed.changes !== 1) return
+    if (opts.taskId) this.taskRuns().markStarted(opts.taskId, nowIso())
 
     const resolvedProfile = this.readResolvedProfile(entry.executionId)
 

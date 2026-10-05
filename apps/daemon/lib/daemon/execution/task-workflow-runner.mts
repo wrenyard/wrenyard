@@ -59,7 +59,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   async startTaskRun(opts: StartTaskRunOptions): Promise<TaskRunAcceptedHandle> {
     const taskRunId = createTaskRunId()
 
-    this.insertTaskPlaceholder({
+    const createdAt = this.insertTaskPlaceholder({
       taskRunId,
       taskName: opts.taskName,
       project: opts.project,
@@ -96,6 +96,9 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
     return {
       id: taskRunId,
       task_run_id: taskRunId,
+      // An accepted run is queued until its first execution launches.
+      status: 'queued',
+      created_at: createdAt,
       hint: `Use task_status with id "${taskRunId}" for status, then task_output with the same id for result. Do not poll repeatedly.`,
     }
   }
@@ -203,7 +206,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
     input: unknown
     worktree?: string
     source?: 'builtin' | 'project'
-  }): void {
+  }): string {
     const now = new Date().toISOString()
     this.taskRuns().insertAcceptedPlaceholder({
       taskRunId: params.taskRunId,
@@ -215,6 +218,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       definitionSource: params.source ?? null,
       createdAt: now,
     })
+    return now
   }
 
   private markTaskPlaceholderFailed(

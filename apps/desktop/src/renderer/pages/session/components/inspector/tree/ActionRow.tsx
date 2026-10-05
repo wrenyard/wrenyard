@@ -1,3 +1,4 @@
+import { createContext, useContext } from 'react';
 import { BookOpen, ChevronDown, ChevronRight, ExternalLink, FilePenLine, Send } from 'lucide-react';
 import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { Elapsed } from '@/renderer/components/elapsed';
@@ -18,9 +19,16 @@ function KindIcon({ kind }: { kind: ActionNode['kind'] }) {
   return <Send className="size-3.5 shrink-0 text-muted-foreground" />;
 }
 
-function actionStatus(status: ActionNode['status']): { tone: StatusTone; label: string } {
-  if (status === 'timeout') return { tone: 'warning', label: '超时' };
-  return statusView(status);
+/** Run ids of dispatched tasks that are still waiting to launch. */
+export const QueuedTaskRunsContext = createContext<ReadonlySet<string>>(new Set());
+
+function actionStatus(action: ActionNode, queued: ReadonlySet<string>): { tone: StatusTone; label: string } {
+  if (action.status === 'timeout') return { tone: 'warning', label: '超时' };
+  // A dispatched task that has not launched yet is waiting, not working.
+  if (action.status === 'running' && action.taskRunId !== undefined && queued.has(action.taskRunId)) {
+    return { tone: 'warning', label: '排队中' };
+  }
+  return statusView(action.status);
 }
 
 function ResultBox({ actionId, text }: { actionId: string; text: string }) {
@@ -95,7 +103,7 @@ export function ActionRow({ action }: ActionRowProps) {
   const { isOpen, toggle } = useTreeExpansion();
   const nodeId = actionNodeId(action.id);
   const open = isOpen(nodeId);
-  const status = actionStatus(action.status);
+  const status = actionStatus(action, useContext(QueuedTaskRunsContext));
   return (
     <div className="flex flex-col" id={actionAnchorId(action.id)}>
       <button
