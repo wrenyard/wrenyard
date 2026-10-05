@@ -13,19 +13,33 @@ import { createBuiltinCatalog } from '@wrenyard/providers';
 import type { ModelDefinition, ThinkingLevel } from '@wrenyard/providers/base';
 import { models as registeredModels } from '@wrenyard/models';
 import { isContextOverflowError } from './driver.js';
-import type { DriverResult, ModelDriver, ModelMessage, Usage } from './driver.js';
+import type { DriverResult, ModelContentPart, ModelDriver, ModelMessage, ToolCall, Usage } from './driver.js';
 
 export type { ModelMessage, Usage } from './driver.js';
 
+/** The shared main-model precedence policy; also served by the model-metadata subpath. */
+export { selectInferenceMode } from './inference-mode.js';
+
 /** Every role that may issue a call. `reason` is the one expensive role. */
-export const CALL_ROLES = ['reason', 'select', 'interpret', 'compile', 'write', 'reply', 'title'] as const;
+export const CALL_ROLES = ['reason', 'memory-search', 'doc-search', 'compile', 'reply', 'title'] as const;
 export type CallRole = (typeof CALL_ROLES)[number];
 
 /** The expensive role streams with no total deadline; its idle stream is bounded. */
 export const REASON_IDLE_TIMEOUT_MS = 180_000;
-/** A write-doc call is bounded end to end. */
-export const WRITE_TIMEOUT_MS = 180_000;
-/** Every other cheap call is bounded end to end. */
+/** Attempts for one model call when the upstream fails before producing output. */
+const TRANSIENT_ATTEMPTS = 3;
+const TRANSIENT_BACKOFF_MS = 3_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+/** Upstream 5xx / 429 responses and transport errors; never a client-side 4xx. */
+function isTransientFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /HTTP (?:5\d\d|429)\b|fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|network/iu.test(message);
+}
+/** Every cheap call is bounded end to end. */
 export const CHEAP_TIMEOUT_MS = 60_000;
 
 /** Caller-supplied expensive model for the `reason` role. */
@@ -40,6 +54,8 @@ export interface ModelMetadata {
   contextWindow?: number;
   maxOutputTokens?: number;
   thinkingLevels?: readonly ThinkingLevel[];
+  /** True only when the resolved definition declares the `image` capability. */
+  imageInput?: boolean;
 }
 
 /**
@@ -105,6 +121,8 @@ export interface ModelCallInput {
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
+  /** Forwarded to the driver only for `reason`; every other role ignores it. */
+  onToolCall?: (call: ToolCall) => void;
 }
 
 export interface ModelCallOutput {
@@ -112,6 +130,8 @@ export interface ModelCallOutput {
   text: string;
   reasoning?: string;
   usage?: Usage;
+  /** Native tool calls the reason model returned, in call order; empty otherwise. */
+  toolCalls: ToolCall[];
 }
 
 export interface CallRunnerOptions {
@@ -120,6 +140,8 @@ export interface CallRunnerOptions {
   cheapModel: () => string | Promise<string>;
   /** Structural sink: exactly one terminal call event per attempted invocation. */
   append: (event: CallLedgerEventDraft) => void | Promise<void>;
+  /** Forwarded as {@link DriverRequest.cacheKey} on every call of this runner. */
+  cacheKey?: string;
   now?: () => Date;
 }
 
@@ -147,6 +169,9 @@ export class ModelCallError extends Error {
 
 let tokenizer: ReturnType<typeof getEncoding> | undefined;
 
+/** Fallback per-image input-token estimate when only a data URL is available. */
+export const IMAGE_INPUT_TOKEN_ESTIMATE = 1_200;
+
 /** `cl100k_base` token count estimate of one text. */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
@@ -154,11 +179,44 @@ export function estimateTokens(text: string): number {
   return tokenizer.encode(text).length;
 }
 
+/**
+ * Token estimate of one message content. Text parts are counted with the same
+ * tokenizer; an image part contributes a fixed processed-image estimate, never
+ * the base64 payload length.
+ */
+export function estimateContentTokens(content: string | readonly ModelContentPart[]): number {
+  if (typeof content === 'string') return estimateTokens(content);
+  let total = 0;
+  for (const part of content) {
+    total += part.type === 'text' ? estimateTokens(part.text) : IMAGE_INPUT_TOKEN_ESTIMATE;
+  }
+  return total;
+}
+
 /** `cl100k_base` token count estimate of a supplied message list. */
 export function estimateInputTokens(messages: readonly ModelMessage[]): number {
   let total = 0;
-  for (const message of messages) total += estimateTokens(message.role) + estimateTokens(message.content);
+  for (const message of messages) total += estimateTokens(message.role) + estimateContentTokens(message.content);
   return total;
+}
+
+/**
+ * Defense in depth: only the main reasoning role may carry image bytes. For any
+ * other role every `image_url` part is replaced by a textual omitted descriptor
+ * before the budget check and the driver, so a cheap call can never transmit
+ * image content.
+ */
+export function sanitizeMessagesForRole(role: CallRole, messages: readonly ModelMessage[]): readonly ModelMessage[] {
+  if (role === 'reason') return messages;
+  let replaced = false;
+  const next = messages.map((message) => {
+    if (typeof message.content === 'string') return message;
+    replaced = true;
+    const parts: ModelContentPart[] = message.content.map((part) =>
+      part.type === 'text' ? part : { type: 'text', text: '[image omitted: not delivered to a non-reasoning call]' });
+    return { ...message, content: parts };
+  });
+  return replaced ? next : messages;
 }
 
 let catalog: ReturnType<typeof createBuiltinCatalog> | undefined;
@@ -187,10 +245,12 @@ export function resolveModelMetadata(publicId: string): ModelMetadata {
   const contextWindow = definition?.contextWindow ?? defaults?.contextWindow;
   const maxOutputTokens = definition?.maxOutputTokens ?? defaults?.maxOutputTokens;
   const thinkingLevels = definition?.thinkingLevels ?? defaults?.thinkingLevels;
+  const imageInput = definition?.capabilities?.some((capability) => capability === 'image');
   return {
     ...(contextWindow === undefined ? {} : { contextWindow }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     ...(thinkingLevels === undefined ? {} : { thinkingLevels }),
+    ...(imageInput === undefined ? {} : { imageInput }),
   };
 }
 
@@ -289,6 +349,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
   return {
     async run(input: ModelCallInput): Promise<ModelCallOutput> {
       const startedAt = now().toISOString();
+      // Non-reasoning roles never transmit image bytes: image parts become a
+      // textual omitted descriptor before the budget check and the driver.
+      const messages = sanitizeMessagesForRole(input.role, input.messages);
       let model = '';
       let estimatedInputTokens = 0;
       let reasoningEffort: string | undefined;
@@ -363,9 +426,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       if (input.signal.aborted) abort('signal');
       else input.signal.addEventListener('abort', onExternalAbort, { once: true });
 
-      const totalTimeoutMs = input.role === 'reason'
-        ? undefined
-        : input.role === 'write' ? WRITE_TIMEOUT_MS : CHEAP_TIMEOUT_MS;
+      const totalTimeoutMs = input.role === 'reason' ? undefined : CHEAP_TIMEOUT_MS;
       const totalTimer = totalTimeoutMs === undefined
         ? undefined
         : setTimeout(() => abort('timeout'), totalTimeoutMs);
@@ -412,7 +473,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           });
         }
 
-        const budget = checkContextBudget(model, input.messages);
+        const budget = checkContextBudget(model, messages);
         estimatedInputTokens = budget.estimatedInputTokens;
         if (input.role === 'reason' && reasoningEffort !== undefined
           && !isThinkingLevelSupported(budget.metadata, reasoningEffort)) {
@@ -431,16 +492,34 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           ...(input.cycle === undefined ? {} : { cycle: input.cycle }),
         });
 
-        result = await settleWithAbort(options.driver.complete({
-          model,
-          messages: input.messages,
-          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-          ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
-          signal: controller.signal,
-          onText,
-          onReasoning,
-          onUsage: (usage: Usage): void => { partialUsage = usage; },
-        }), controller.signal);
+        // A transient upstream fault before any output is retried in place.
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            result = await settleWithAbort(options.driver.complete({
+              model,
+              messages,
+              ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+              ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
+              ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
+              ...(input.role === 'reason' ? {
+                actionTool: true,
+                ...(input.onToolCall === undefined ? {} : { onToolCall: input.onToolCall }),
+              } : {}),
+              signal: controller.signal,
+              onText,
+              onReasoning,
+              onActivity: resetIdle,
+              onUsage: (usage: Usage): void => { partialUsage = usage; },
+            }), controller.signal);
+            break;
+          } catch (error) {
+            const retryable = attempt < TRANSIENT_ATTEMPTS && firstTokenAt === undefined
+              && !controller.signal.aborted && isTransientFailure(error);
+            if (!retryable) throw error;
+            await settleWithAbort(delay(TRANSIENT_BACKOFF_MS * attempt), controller.signal);
+            resetIdle();
+          }
+        }
       } catch (error) {
         if (error instanceof ModelCallError) throw error;
         const status: 'failed' | 'aborted' = abortKind === 'signal' ? 'aborted' : 'failed';
@@ -475,6 +554,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         text: finalText,
         ...(finalReasoning === undefined ? {} : { reasoning: finalReasoning }),
         ...(usage === undefined ? {} : { usage }),
+        toolCalls: result?.toolCalls ?? [],
       };
     },
   };
