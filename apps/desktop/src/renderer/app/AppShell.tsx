@@ -63,7 +63,7 @@ export function AppShell() {
           onOpenChange={() => {}}
         >
           <AppSidebar page={shown} />
-          <SidebarInset className="motion-surface-page flex min-h-0 flex-col">
+          <SidebarInset className="motion-surface-page flex min-h-0 min-w-0 flex-col">
             {PAGE_ORDER.map((id) => {
               if (!visited.has(id)) return null;
               const PageComponent = PAGES[id];

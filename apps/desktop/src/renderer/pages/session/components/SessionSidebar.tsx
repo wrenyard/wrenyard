@@ -1,4 +1,4 @@
-import { ChevronRight, Search, SquarePen } from 'lucide-react';
+import { ChevronRight, Search, SquarePen, Trash2 } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/components/ui/collapsible';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import {
@@ -8,6 +8,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -27,6 +28,7 @@ export interface SessionSidebarProps {
   onSelect(sessionId: string): void;
   onNew(): void;
   onSearch(): void;
+  onDelete(sessionId: string): void;
 }
 
 /**
@@ -34,7 +36,7 @@ export interface SessionSidebarProps {
  * a bare `Sidebar` (collapsible none); the page owns the surrounding
  * `SidebarProvider` and the panel it collapses.
  */
-export function SessionSidebar({ sessions, selectedId, loading, running, onSelect, onNew, onSearch }: SessionSidebarProps) {
+export function SessionSidebar({ sessions, selectedId, loading, running, onSelect, onNew, onSearch, onDelete }: SessionSidebarProps) {
   const now = useNow();
   const grouped = new Map<DateGroup, SessionSummary[]>();
   const sorted = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -105,6 +107,15 @@ export function SessionSidebar({ sessions, selectedId, loading, running, onSelec
                       {running && session.sessionId === selectedId && (
                         <SidebarMenuBadge><Spinner /></SidebarMenuBadge>
                       )}
+                      <SidebarMenuAction
+                        showOnHover
+                        aria-label="删除对话"
+                        title={running && session.sessionId === selectedId ? '运行中无法删除' : '删除对话'}
+                        disabled={running && session.sessionId === selectedId}
+                        onClick={() => onDelete(session.sessionId)}
+                      >
+                        <Trash2 />
+                      </SidebarMenuAction>
                     </SidebarMenuItem>
                   ))}
                 </SidebarMenu>

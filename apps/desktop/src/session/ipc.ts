@@ -1,25 +1,34 @@
 /** Desktop transport for daemon-owned sessions. */
-import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron';
-import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
+import { isAbsolute } from 'node:path';
+import { dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { WrenyardIpcClient, WrenyardRpcError } from '@wrenyard/control-client';
 import { BUILTIN_PROVIDERS } from '@wrenyard/providers';
-import { resolveModelMetadata, type LedgerEvent, type LiveCall, type SessionSummary } from '@wrenyard/session';
+import type { ProviderListResult } from '@wrenyard/protocol/provider';
+import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
+import { resolveModelMetadata, selectInferenceMode } from '@wrenyard/session/model-metadata';
 import type {
   SessionBridgeEventPayload,
   SessionBridgeLivePayload,
   SessionBridgeModelEntry,
   SessionBridgeTaskBrief,
 } from './preload.js';
+import { describeFiles, discardStagedFiles, stageClipboardImage } from './media.js';
 
 export const SESSION_CHANNELS = {
   list: 'session:list', create: 'session:create', ledger: 'session:ledger',
   send: 'session:send', interrupt: 'session:interrupt', models: 'session:models',
   context: 'session:context', tasks: 'session:tasks',
+  mediaRead: 'session:media-read', mediaReveal: 'session:media-reveal',
+  delete: 'session:delete', mediaPick: 'session:media-pick',
+  mediaDescribe: 'session:media-describe', mediaStageClipboard: 'session:media-stage-clipboard',
+  mediaDiscard: 'session:media-discard',
   event: 'session:event', live: 'session:live',
 } as const;
 export type {
   SessionBridge, SessionBridgeContextInspectRequest, SessionBridgeEventPayload,
-  SessionBridgeInterruptRequest, SessionBridgeLivePayload, SessionBridgeModelEntry,
-  SessionBridgeSendRequest, SessionBridgeTaskBrief,
+  SessionBridgeInterruptRequest, SessionBridgeLivePayload, SessionBridgeMediaRequest,
+  SessionBridgeModelEntry, SessionBridgeSendRequest, SessionBridgeTaskBrief,
+  SessionMediaReadResult, SessionFile, DraftAttachment,
 } from './preload.js';
 
 export interface RegisterSessionOptions {
@@ -60,22 +69,53 @@ const QUOTA_PROVIDER_IDS: ReadonlyMap<string, string> = new Map(
   BUILTIN_PROVIDERS.map(provider => [provider.id, provider.quotaProvider ?? provider.id] as const),
 );
 
-function toModelEntries(connection: WrenyardGatewayConnection): SessionBridgeModelEntry[] {
-  return connection.models.filter(model => !model.taskOnly && model.publicId.includes('/')).map(model => {
-    // Window facts resolve from the same config as the call budget, so the
-    // renderer's model-change preview (and the ring) use identical numbers.
-    const metadata = resolveModelMetadata(model.publicId);
-    return {
-      publicId: model.publicId, provider: model.provider,
-      model: model.publicId.slice(model.publicId.indexOf('/') + 1), displayName: model.displayName,
-      // A catalog provider may bind to a different quota provider (e.g. Claude
-      // Code draws on a shared pool); fall back to the model's own provider.
-      quotaProvider: QUOTA_PROVIDER_IDS.get(model.provider) ?? model.provider,
-      ...(model.thinkingLevels?.length ? { thinkingLevels: [...model.thinkingLevels] } : {}),
-      ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
-      ...(metadata.maxOutputTokens === undefined ? {} : { maxOutputTokens: metadata.maxOutputTokens }),
-    };
-  });
+/**
+ * Public ids whose model definition is client-restricted. Such a model may be
+ * run only through its exact client transport and is never a gateway supply, so
+ * it is not a selectable main-session model.
+ */
+const RESTRICTED_PUBLIC_IDS: ReadonlySet<string> = new Set(
+  BUILTIN_PROVIDERS.flatMap(provider => provider.models
+    .filter(model => model.supportedClients !== undefined)
+    .map(model => `${provider.id}/${model.id}`)),
+);
+
+/**
+ * Selectable main-session model rows from `provider.list`. Each provider's
+ * declared gateway protocols pick exactly one runtime through the shared
+ * {@link selectInferenceMode} precedence. Unconfigured/unavailable providers
+ * and models, task-only rows and client-restricted rows are skipped, so one
+ * provider/model yields exactly one row.
+ */
+function toModelEntries(result: ProviderListResult): SessionBridgeModelEntry[] {
+  const entries = new Map<string, SessionBridgeModelEntry>();
+  for (const provider of result.providers) {
+    if (!provider.configured) continue;
+    const runtime = selectInferenceMode(provider.protocols);
+    if (runtime === undefined) continue;
+    for (const model of provider.models) {
+      const publicId = `${provider.id}/${model.id}`;
+      if (model.available !== true || model.taskOnly === true) continue;
+      if (RESTRICTED_PUBLIC_IDS.has(publicId) || entries.has(publicId)) continue;
+      // Window facts resolve from the same config as the call budget, so the
+      // renderer's model-change preview (and the ring) use identical numbers.
+      const metadata = resolveModelMetadata(publicId);
+      entries.set(publicId, {
+        publicId, provider: provider.id, providerDisplayName: provider.displayName,
+        model: model.id, displayName: model.displayName, runtime,
+        ...(metadata.thinkingLevels?.length ? { thinkingLevels: [...metadata.thinkingLevels] } : {}),
+        // A catalog provider may bind to a different quota provider (e.g. Claude
+        // Code draws on a shared pool); fall back to the model's own provider.
+        quotaProvider: QUOTA_PROVIDER_IDS.get(provider.id) ?? provider.id,
+        ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
+        ...(metadata.maxOutputTokens === undefined ? {} : { maxOutputTokens: metadata.maxOutputTokens }),
+        ...(model.free === undefined ? {} : { free: model.free }),
+        ...(model.effectiveTps === undefined ? {} : { effectiveTps: model.effectiveTps }),
+        ...(model.quotaAbundant === undefined ? {} : { quotaAbundant: model.quotaAbundant }),
+      });
+    }
+  }
+  return [...entries.values()];
 }
 
 /** Full-snapshot equality; an unchanged live table is not re-pushed. */
@@ -95,6 +135,20 @@ function readString(value: unknown): string | undefined {
 
 function readNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value as string[] : undefined;
+}
+
+/** `{ sessionId, path }` shared by the media read/reveal handlers. */
+function readMediaRequest(value: unknown): { sessionId: string; path: string } {
+  if (typeof value !== 'object' || value === null) throw new Error('媒体请求无效');
+  const record = value as Record<string, unknown>;
+  const sessionId = readString(record.sessionId);
+  const path = readString(record.path);
+  if (sessionId === undefined || path === undefined) throw new Error('媒体请求无效');
+  return { sessionId, path };
 }
 
 /** Runtime label from the actual resolved dispatch (execution client + model). */
@@ -268,7 +322,7 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
   handle(SESSION_CHANNELS.send, (_event, value) => request('session.send', value));
   handle(SESSION_CHANNELS.interrupt, async (_event, value) => { await request('session.interrupt', value); });
   handle(SESSION_CHANNELS.models, async () =>
-    toModelEntries(await request<WrenyardGatewayConnection>('gateway.connection', {})));
+    toModelEntries(await request<ProviderListResult>('provider.list', {})));
   handle(SESSION_CHANNELS.context, (_event, value) =>
     request('session.context.inspect', value));
   handle(SESSION_CHANNELS.ledger, (event, value) => {
@@ -287,6 +341,54 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
         return { taskRunId, status: 'unavailable' };
       }
     }));
+  });
+  // `send` above already forwards its request untouched, so `attachments`
+  // ride along without a dedicated channel.
+  handle(SESSION_CHANNELS.mediaRead, (_event, value) =>
+    request('session.media.read', readMediaRequest(value)));
+  handle(SESSION_CHANNELS.mediaReveal, async (_event, value) => {
+    const media = readMediaRequest(value);
+    // The daemon authorizes the ledger-known file and returns its canonical
+    // path. Reveal exactly that path — never the renderer-requested raw value —
+    // and only after it is a nonempty absolute string.
+    const result = await request<{ path?: unknown }>('session.media.read', media);
+    const canonical = readString(result?.path);
+    if (canonical === undefined || !isAbsolute(canonical)) throw new Error('媒体路径无效');
+    shell.showItemInFolder(canonical);
+  });
+  handle(SESSION_CHANNELS.delete, async (_event, value) => {
+    const sessionId = readString(value);
+    if (sessionId === undefined) throw new Error('会话 id 无效');
+    await request('session.delete', { sessionId });
+  });
+  handle(SESSION_CHANNELS.mediaPick, async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] });
+    if (result.canceled) return [];
+    return describeFiles(result.filePaths);
+  });
+  handle(SESSION_CHANNELS.mediaDescribe, async (_event, value) => {
+    const paths = readStringArray(value);
+    if (paths === undefined) throw new Error('文件路径无效');
+    return describeFiles(paths);
+  });
+  handle(SESSION_CHANNELS.mediaStageClipboard, (_event, value) => {
+    if (typeof value !== 'object' || value === null) throw new Error('剪贴板图片无效');
+    const record = value as Record<string, unknown>;
+    const dataUrl = readString(record.dataUrl);
+    if (dataUrl === undefined) throw new Error('剪贴板图片无效');
+    const name = readString(record.name);
+    return stageClipboardImage({ dataUrl, ...(name === undefined ? {} : { name }) });
+  });
+  handle(SESSION_CHANNELS.mediaDiscard, async (_event, value) => {
+    if (!Array.isArray(value)) throw new Error('附件列表无效');
+    // Only drafts explicitly flagged as main-staged are eligible; a user's
+    // source path can never be removed even if the renderer asks.
+    const staged = value
+      .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+      .filter((item) => item.staged === true)
+      .map((item) => (typeof item.path === 'string' ? item.path : ''))
+      .filter((path) => path !== '');
+    await discardStagedFiles(staged);
   });
 
   return {

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { EffortPicker, ModelPicker, type ModelOption } from '@/renderer/components/chat/model-picker';
+import { EffortPicker, ModelPicker, modelBadges, modelRuntimeDescription, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { shell } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
@@ -40,7 +40,9 @@ export function SessionDefaultsControl() {
   const options: ModelOption[] = available.map((model) => ({
     value: model.publicId,
     label: model.displayName,
-    group: model.provider,
+    group: model.providerDisplayName,
+    description: modelRuntimeDescription(model.runtime),
+    badges: modelBadges(model),
   }));
   const levels = available.find((model) => model.publicId === session?.model)?.thinkingLevels ?? [];
 
