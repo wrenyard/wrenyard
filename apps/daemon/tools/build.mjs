@@ -15,10 +15,16 @@ const readJson = async (file) => JSON.parse(await readFile(file, 'utf8'));
 const session = await readJson(join(repo, 'packages', 'features', 'session', 'package.json'));
 const execution = await readJson(join(repo, 'packages', 'execution', 'package.json'));
 const requireFromSession = createRequire(join(repo, 'packages', 'features', 'session', 'package.json'));
-const exact = (name, range) => {
-  const version = requireFromSession(`${name}/package.json`).version;
-  if (!version) throw new Error(`cannot resolve ${name}@${range}`);
-  return version;
+// A package may not export ./package.json (sharp does not), so the manifest is
+// found by walking up from the resolved entry instead of requiring the subpath.
+const exact = async (name, range) => {
+  let dir = dirname(requireFromSession.resolve(name));
+  while (dir !== dirname(dir)) {
+    const manifest = await readJson(join(dir, 'package.json')).catch(() => undefined);
+    if (manifest?.name === name && manifest.version) return manifest.version;
+    dir = dirname(dir);
+  }
+  throw new Error(`cannot resolve ${name}@${range}`);
 };
 const external = {
   'better-sqlite3': execution.dependencies['better-sqlite3'],
@@ -48,5 +54,5 @@ await writeFile(join(dist, 'package.json'), `${JSON.stringify({
   name: '@wrenyard/daemon-bundle',
   private: true,
   type: 'module',
-  dependencies: Object.fromEntries(Object.entries(external).map(([name, range]) => [name, name === 'better-sqlite3' ? range : exact(name, range)])),
+  dependencies: Object.fromEntries(await Promise.all(Object.entries(external).map(async ([name, range]) => [name, name === 'better-sqlite3' ? range : await exact(name, range)]))),
 }, null, 2)}\n`);
