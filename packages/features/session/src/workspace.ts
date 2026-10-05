@@ -1,7 +1,16 @@
-import { readFileSync, readdirSync, realpathSync, statSync, existsSync } from 'node:fs';
-import { resolve, relative, dirname, isAbsolute, basename } from 'node:path';
-import type { FilesPort, SnapshotInput } from './engine.ts';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { resolve, relative, isAbsolute, basename } from 'node:path';
+import type { FilesPort, SnapshotInput } from './ports.ts';
 import type { WorkspaceSnapshot } from './ledger.ts';
+
+/** One catalogued project document, derived from its Markdown header. */
+export interface DocCatalogEntry {
+  path: string;
+  title: string;
+  status: string;
+  updated: string;
+  length: number;
+}
 
 function title(path: string, content: string): string {
   return /^# (.+)$/m.exec(content)?.[1]?.trim() ?? basename(path);
@@ -16,16 +25,8 @@ function contained(root: string, target: string): boolean {
   return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\');
 }
 function safePath(root: string, path: string): string {
-  const actualRoot = realpathSync(root);
-  const absolute = resolve(actualRoot, path);
-  if (!contained(actualRoot, absolute)) throw new Error('Path leaves workspace');
-  let ancestor = absolute;
-  while (!existsSync(ancestor)) {
-    const parent = dirname(ancestor);
-    if (parent === ancestor) throw new Error('Path has no workspace ancestor');
-    ancestor = parent;
-  }
-  if (!contained(actualRoot, realpathSync(ancestor))) throw new Error('Symlink leaves workspace');
+  const absolute = resolve(root, path);
+  if (!contained(root, absolute)) throw new Error('Path leaves workspace');
   return absolute;
 }
 function readInternal(root: string, path: string): string {
@@ -37,6 +38,18 @@ function readInternal(root: string, path: string): string {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
     throw error;
   }
+}
+/** Read a `状态`/`status` (or `更新`/`updated`) value from a `>` header block. */
+function headerField(content: string, labels: readonly string[]): string {
+  for (const line of content.split('\n')) {
+    const quoted = /^\s*>\s*(.+)$/u.exec(line);
+    if (!quoted) continue;
+    for (const label of labels) {
+      const field = new RegExp(`^${label}\\s*[:：]\\s*(.*)$`, 'iu').exec(quoted[1]!.trim());
+      if (field) return field[1]!.trim();
+    }
+  }
+  return '';
 }
 export function readDocumentRules(workspaceRoot: string): string {
   return readInternal(workspaceRoot, 'instructions/documents.md');
@@ -94,6 +107,38 @@ export class WorkspaceFileSource implements FilesPort {
     return paths;
   }
   readDocumentRules(): string { return readDocumentRules(this.root); }
+  /** Catalogue every registered project document, most-specific owner, path sorted. */
+  listDocuments(): DocCatalogEntry[] {
+    const entries = new Map<string, DocCatalogEntry>();
+    for (const project of this.snapshot.projects) {
+      this.walkDocuments(project.workspaceDir + '/docs', (path, content) => {
+        const owner = this.snapshot.projects
+          .filter((candidate) => path.startsWith(candidate.workspaceDir + '/docs/'))
+          .sort((a, b) => b.workspaceDir.length - a.workspaceDir.length)[0];
+        if (owner?.id !== project.id || entries.has(path)) return;
+        entries.set(path, {
+          path,
+          title: title(path, content),
+          status: headerField(content, ['状态', 'status']),
+          updated: headerField(content, ['更新', '更新时间', 'updated', 'update']),
+          length: content.length,
+        });
+      });
+    }
+    return [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }
+  private walkDocuments(dir: string, visit: (path: string, content: string) => void): void {
+    let absolute: string;
+    try { absolute = safePath(this.root, dir); } catch { return; }
+    if (!existsSync(absolute) || !statSync(absolute).isDirectory()) return;
+    for (const entry of readdirSync(absolute, { withFileTypes: true })) {
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) { this.walkDocuments(path, visit); continue; }
+      if (!entry.isFile() || !path.endsWith('.md')) continue;
+      const doc = this.read(path);
+      if (doc) visit(path, doc.content);
+    }
+  }
 }
 export async function createWorkspaceSnapshot(input: SnapshotInput): Promise<WorkspaceSnapshot> {
   const snapshot: WorkspaceSnapshot = {
@@ -106,16 +151,14 @@ export async function createWorkspaceSnapshot(input: SnapshotInput): Promise<Wor
   const source = new WorkspaceFileSource({ workspaceRoot: input.workspaceRoot, snapshot });
   const today = Date.UTC(input.takenAt.getFullYear(), input.takenAt.getMonth(), input.takenAt.getDate());
   for (const project of snapshot.projects) {
-    const visited = new Set<string>();
     const walk = (dir: string): void => {
-      const absolute = safePath(input.workspaceRoot, dir);
+      let absolute: string;
+      try { absolute = safePath(input.workspaceRoot, dir); } catch { return; }
       if (!existsSync(absolute)) return;
-      const actual = realpathSync(absolute);
-      if (visited.has(actual)) return;
-      visited.add(actual);
       for (const entry of readdirSync(absolute, { withFileTypes: true })) {
         const path = dir + '/' + entry.name;
-        const target = safePath(input.workspaceRoot, path);
+        let target: string;
+        try { target = safePath(input.workspaceRoot, path); } catch { continue; }
         if (statSync(target).isDirectory()) { walk(path); continue; }
         const match = /^(\d{4}-\d{2}-\d{2})-.+\.md$/u.exec(entry.name);
         if (!match) continue;
@@ -130,7 +173,6 @@ export async function createWorkspaceSnapshot(input: SnapshotInput): Promise<Wor
       }
     };
     for (const type of ['specs', 'plans', 'reports', 'handoff']) walk(project.workspaceDir + '/docs/' + type);
-    project.recentDocs.sort((a, b) => basename(b.path).localeCompare(basename(a.path)) || a.path.localeCompare(b.path));
   }
   return snapshot;
 }

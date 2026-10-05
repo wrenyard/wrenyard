@@ -1,257 +1,72 @@
 /**
- * session action layer.
+ * session action layer (current-only).
  *
  * Owns:
- *   - the streaming `<wy-action>` splitter (fence / inline-code aware)
- *   - the action JSON schema, plus an AJV-backed draft-07 validator used to
- *     check the interpreter output and task input schemas
- *   - the interpretation of a block into zero or more actions (with one repair)
- *   - execution of the three supported actions and the two rejected forms
- *   - the task-system 16KB `ctx` normalizer
- *   - the `<wy-doc>` write-doc output parser and target-path validation
+ *   - conversion of native driver tool calls into typed actions
+ *     (`actionFromToolCall`)
+ *   - the AJV-backed draft-07 task input validator and the 256KB `ctx`
+ *     normalizer
+ *   - execution of the typed actions, returning context events as deferred
+ *     drafts so the engine keeps append ordering
  *
- * The runner never appends ledger events itself: results that must land after
- * the cycle's `reason.completed` are returned as deferred drafts, and the engine
- * owns append ordering.
+ * The reasoning model declares one native tool; the API returns parsed calls.
+ * There is no hand-written text parsing layer.
  */
+
+import { existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 
-import type { LedgerEventDraft, WorkspaceSnapshot } from './ledger.ts';
-import type {
-  ActionBaseContext,
-  ActionRunContext,
-  BuiltView,
-  CallsPort,
-  FilesPort,
-  SessionHost,
-  ViewsPort,
-} from './engine.ts';
+import { renderTaskResult } from './result-text.ts';
+import { collectSessionFiles, type LedgerEvent, type LedgerEventDraft, type TaskBrief, type WorkspaceSnapshot } from './ledger.ts';
+import { contentVersion, makeDocumentDraft } from './documents.ts';
+import type { ToolCall } from './driver.ts';
+import type { CallsPort, FilesPort, ProjectInfo, SessionHost } from './ports.ts';
+import type { FileStore, SessionFile } from './media.ts';
+import type { DocCatalogEntry } from './workspace.ts';
+import {
+  renderEventsBlock,
+  type BuiltView,
+  type ViewsPort,
+} from './views.ts';
 
-// ─── Action model ─────────────────────────────────────────────────────────
+// ─── Typed action model ────────────────────────────────────────────────────
 
-export type DocType = 'spec' | 'plan' | 'report' | 'handoff';
-
-/** Plural directory under `docs/` for each document type. */
-export const DOC_TYPE_DIRS: Record<DocType, string> = {
-  spec: 'specs',
-  plan: 'plans',
-  report: 'reports',
-  handoff: 'handoff',
-};
-
-export type ParsedAction =
-  | { kind: 'dispatch'; project?: string; task: string; goal: string; acceptance: string }
-  | { kind: 'read'; paths: string[] }
-  | { kind: 'write-doc'; project: string; docType: DocType; path?: string; outline: string }
-  | { kind: 'unsupported'; reason: string };
-
-/** The action discriminants plus the synthetic parse-failure kind. */
-export type ActionKind = ParsedAction['kind'];
-
+export type ActionKind = 'read' | 'dispatch' | 'write';
 export type ActionStatus = 'done' | 'failed' | 'skipped' | 'cancelled';
 
-/** Result of executing one action. */
-export interface ActionExecutionOutcome {
-  taskStatus?: string;
-  status: ActionStatus;
-  result: string;
-  taskRunId?: string;
-  /** Drafts whose append is deferred until after the cycle's `reason.completed`. */
-  deferred: LedgerEventDraft[];
-}
-
-export type ActionParseResult =
-  | { ok: true; actions: ParsedAction[] }
-  | { ok: false; reason: string };
-
-// ─── Streaming splitter ────────────────────────────────────────────────────
-
-const OPEN_TAG = '<wy-action>';
-const CLOSE_TAG = '</wy-action>';
-
-export interface SplitActionBlock {
-  /** Raw block body, exactly as written between the tags. */
-  text: string;
-  /** True when reasoning ended before a matching `</wy-action>` was seen. */
-  unterminated: boolean;
-}
-
-function runLength(text: string, at: number, ch: string): number {
-  let end = at;
-  while (end < text.length && text[end] === ch) end += 1;
-  return end - at;
-}
-
-/** Whether `text` from `pos` is a live (possibly incomplete) prefix of `token`. */
-function isPartialPrefix(text: string, pos: number, token: string): boolean {
-  const rest = text.length - pos;
-  if (rest >= token.length) return false;
-  return token.startsWith(text.slice(pos));
+/** One typed action: its kind plus the natural-language intent body. */
+export interface ParsedAction {
+  kind: ActionKind;
+  intent: string;
 }
 
 /**
- * Incremental `<wy-action>` splitter.
- *
- * Tags are matched case-sensitively and without attributes. Fenced code blocks
- * and inline code spans are skipped both outside and inside an open block, so a
- * `</wy-action>` inside code never closes a block and a nested `<wy-action>` is
- * ordinary body text. Call {@link push} with each visible delta and
- * {@link finish} once the reasoning stream ends; a block still open at that
- * point is emitted with `unterminated: true`. Empty blocks are ignored.
+ * Convert one native driver tool call into a typed action. An `ask` call is
+ * returned separately because it never executes an action; a call carrying a
+ * driver-provided error or an unknown type is rejected.
  */
-export class ActionSplitter {
-  private text = '';
-  private pos = 0;
-  private atLineStart = true;
-  private inBlock = false;
-  private blockStart = 0;
-  private inCode: 'none' | 'inline' | 'fence' = 'none';
-  private inlineLen = 0;
-  private fenceChar = '`';
-  private fenceLen = 3;
-  private fenceBodyStart = -1;
-  private closed = false;
-
-  push(delta: string): SplitActionBlock[] {
-    if (this.closed || delta === '') return [];
-    this.text += delta;
-    return this.scan(false);
+export function actionFromToolCall(
+  call: ToolCall,
+): { ok: true; action: ParsedAction } | { ok: true; ask: string } | { ok: false; reason: string } {
+  if (call.error !== undefined) return { ok: false, reason: call.error };
+  if (call.type === 'ask') return { ok: true, ask: call.intent };
+  if (call.type === 'read' || call.type === 'dispatch' || call.type === 'write') {
+    return { ok: true, action: { kind: call.type, intent: call.intent } };
   }
+  return { ok: false, reason: `unknown action type: ${call.type}` };
+}
 
-  finish(): SplitActionBlock[] {
-    if (this.closed) return [];
-    const blocks = this.scan(true);
-    if (this.inBlock) {
-      const body = this.text.slice(this.blockStart);
-      if (body.trim() !== '') blocks.push({ text: body, unterminated: true });
-      this.inBlock = false;
-    }
-    this.closed = true;
-    return blocks;
-  }
-
-  private scan(ending: boolean): SplitActionBlock[] {
-    const blocks: SplitActionBlock[] = [];
-    const text = this.text;
-    const n = text.length;
-
-    while (this.pos < n) {
-      const ch = text[this.pos]!;
-
-      if (this.inCode === 'fence') {
-        if (this.fenceBodyStart < 0) {
-          const newline = text.indexOf('\n', this.pos);
-          if (newline === -1) return blocks;
-          this.fenceBodyStart = newline + 1;
-        }
-        const close = this.findFenceClose(text, ending);
-        if (close === -1) return blocks;
-        this.pos = close;
-        this.inCode = 'none';
-        this.atLineStart = true;
-        continue;
-      }
-
-      if (this.inCode === 'inline') {
-        // Content inside a code span is skipped until a backtick run of the
-        // exact opening length appears.
-        const close = this.findInlineClose(text, this.pos, ending);
-        if (close === -1) {
-          if (!ending) return blocks;
-          this.inCode = 'none';
-          continue;
-        }
-        this.pos = close + this.inlineLen;
-        this.inCode = 'none';
-        this.atLineStart = false;
-        continue;
-      }
-
-      if (this.atLineStart && (ch === '`' || ch === '~')) {
-        const run = runLength(text, this.pos, ch);
-        if (!ending && this.pos + run === n) return blocks;
-        if (run >= 3) {
-          this.fenceChar = ch;
-          this.fenceLen = run;
-          this.fenceBodyStart = -1;
-          this.pos += run;
-          this.inCode = 'fence';
-          this.atLineStart = false;
-          continue;
-        }
-        // A shorter run at the very end may still grow into a fence.
-        if (!ending && this.pos + run >= n) return blocks;
-      }
-
-      if (ch === '`') {
-        this.inlineLen = runLength(text, this.pos, '`');
-        if (!ending && this.pos + this.inlineLen === n) return blocks;
-        this.pos += this.inlineLen;
-        this.inCode = 'inline';
-        this.atLineStart = false;
-        continue;
-      }
-
-      if (this.inBlock) {
-        if (text.startsWith(CLOSE_TAG, this.pos)) {
-          const body = text.slice(this.blockStart, this.pos);
-          if (body.trim() !== '') blocks.push({ text: body, unterminated: false });
-          this.pos += CLOSE_TAG.length;
-          this.inBlock = false;
-          this.atLineStart = false;
-          continue;
-        }
-        if (!ending && isPartialPrefix(text, this.pos, CLOSE_TAG)) return blocks;
-      } else {
-        if (text.startsWith(OPEN_TAG, this.pos)) {
-          this.pos += OPEN_TAG.length;
-          this.blockStart = this.pos;
-          this.inBlock = true;
-          this.atLineStart = false;
-          continue;
-        }
-        if (!ending && isPartialPrefix(text, this.pos, OPEN_TAG)) return blocks;
-      }
-
-      this.atLineStart = ch === '\n';
-      this.pos += 1;
-    }
-
-    return blocks;
-  }
-
-  /** Index just past the closing fence line, or -1 when the fence never closes. */
-  private findFenceClose(text: string, ending: boolean): number {
-    let search = this.fenceBodyStart < 0 ? this.pos : this.fenceBodyStart;
-    while (search < text.length) {
-      if (text[search] === this.fenceChar && runLength(text, search, this.fenceChar) >= this.fenceLen) {
-        const run = runLength(text, search, this.fenceChar);
-        const newline = text.indexOf('\n', search + run);
-        if (newline === -1 && !ending) return -1;
-        const end = newline === -1 ? text.length : newline;
-        if (/^[ \t\r]*$/u.test(text.slice(search + run, end))) return newline === -1 ? end : end + 1;
-      }
-      const nextNewline = text.indexOf('\n', search);
-      if (nextNewline === -1) return -1;
-      search = nextNewline + 1;
-    }
-    return -1;
-  }
-
-  /** Start of a backtick run that closes the current inline span, or -1. */
-  private findInlineClose(text: string, from: number, ending: boolean): number {
-    let search = from;
-    while (search < text.length) {
-      const found = text.indexOf('`', search);
-      if (found === -1) return -1;
-      const run = runLength(text, found, '`');
-      if (!ending && found + run === text.length) return -1;
-      if (run === this.inlineLen) return found;
-      search = found + run;
-    }
-    return -1;
-  }
+/** Result of executing one action. */
+export interface ActionExecutionOutcome {
+  taskRunId?: string;
+  status: ActionStatus;
+  result: string;
+  taskStatus?: string;
+  task?: string;
+  /** Drafts whose append is deferred until after the cycle's reasoning event. */
+  deferred: LedgerEventDraft[];
 }
 
 // ─── JSON schema validation (AJV, draft-07) ────────────────────────────────
@@ -295,92 +110,9 @@ export function validateJsonSchema(schema: unknown, value: unknown): SchemaValid
   return { ok: false, errors: describeErrors(validate.errors ?? []) };
 }
 
-// ─── Interpreter schema ────────────────────────────────────────────────────
+// ─── Task context normalizer (256KB task-system limit) ─────────────────────
 
-const DISPATCH_SCHEMA = {
-  type: 'object',
-  required: ['kind', 'task', 'goal', 'acceptance'],
-  additionalProperties: false,
-  properties: {
-    kind: { const: 'dispatch' },
-    project: { type: 'string', minLength: 1 },
-    task: { type: 'string', minLength: 1 },
-    goal: { type: 'string' },
-    acceptance: { type: 'string' },
-  },
-} as const;
-
-const READ_SCHEMA = {
-  type: 'object',
-  required: ['kind', 'paths'],
-  additionalProperties: false,
-  properties: {
-    kind: { const: 'read' },
-    paths: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
-  },
-} as const;
-
-const WRITE_DOC_SCHEMA = {
-  type: 'object',
-  required: ['kind', 'project', 'docType', 'outline'],
-  additionalProperties: false,
-  properties: {
-    kind: { const: 'write-doc' },
-    project: { type: 'string', minLength: 1 },
-    docType: { enum: ['spec', 'plan', 'report', 'handoff'] },
-    path: { type: 'string', minLength: 1 },
-    outline: { type: 'string' },
-  },
-} as const;
-
-const UNSUPPORTED_SCHEMA = {
-  type: 'object',
-  required: ['kind', 'reason'],
-  additionalProperties: false,
-  properties: {
-    kind: { const: 'unsupported' },
-    reason: { type: 'string' },
-  },
-} as const;
-
-/** Strict schema of the cheap interpreter's JSON output. */
-export const ACTIONS_SCHEMA = {
-  type: 'object',
-  required: ['actions'],
-  additionalProperties: false,
-  properties: {
-    actions: {
-      type: 'array',
-      items: {
-        anyOf: [DISPATCH_SCHEMA, READ_SCHEMA, WRITE_DOC_SCHEMA, UNSUPPORTED_SCHEMA],
-      },
-    },
-  },
-} as const;
-
-function parseActionsText(text: string): ActionParseResult {
-  const trimmed = text.trim();
-  if (trimmed === '') return { ok: true, actions: [] };
-
-  let value: unknown;
-  try {
-    value = JSON.parse(trimmed);
-  } catch (error) {
-    return { ok: false, reason: `output is not valid JSON: ${(error as Error).message}` };
-  }
-
-  const validation = validateJsonSchema(ACTIONS_SCHEMA, value);
-  if (!validation.ok) {
-    return { ok: false, reason: `output does not match the actions schema: ${validation.errors.join('; ')}` };
-  }
-
-  const actions = (value as { actions: ParsedAction[] }).actions;
-  return { ok: true, actions };
-}
-
-// ─── Task context normalizer (16KB task-system limit) ──────────────────────
-
-export const TASK_CONTEXT_MAX_BYTES = 16 * 1024;
+export const TASK_CONTEXT_MAX_BYTES = 262144;
 const TASK_CONTEXT_MAX_KEYS = 64;
 const TASK_CONTEXT_MAX_KEY_LENGTH = 128;
 const TASK_CONTEXT_MAX_DEPTH = 8;
@@ -450,93 +182,53 @@ export function normalizeTaskContext(value: unknown): Record<string, unknown> {
   return JSON.parse(serialized) as Record<string, unknown>;
 }
 
-// ─── Write-doc output parsing and path validation ──────────────────────────
+// ─── Ports ──────────────────────────────────────────────────────────────────
 
-const DOC_BLOCK = /<wy-doc\s+path="([^"]*)">([\s\S]*?)<\/wy-doc>/gu;
-const DOC_FILENAME = /^\d{4}-\d{2}-\d{2}-.+\.md$/u;
+export type ActionProjectInfo = Pick<ProjectInfo, 'id' | 'displayName' | 'workspaceDir' | 'checkoutPath'>;
 
-export interface ParsedDocBlock {
-  path: string;
-  content: string;
-}
-
-/**
- * Extract the single `<wy-doc>` block required from a writer call output. The
- * document body is taken verbatim (bar one framing newline on each side); no
- * wrapping fence is stripped, so the written file is exactly what the writer
- * produced.
- */
-export function parseDocBlock(text: string): ParsedDocBlock | undefined {
-  const matches = [...text.matchAll(DOC_BLOCK)];
-  if (matches.length !== 1) return undefined;
-  const match = matches[0]!;
-  if (text.trim() !== match[0]) return undefined;
-  const path = match[1]!.trim();
-  const content = match[2]!.replace(/^\n/u, '').replace(/\n$/u, '');
-  return { path, content };
-}
-
-/** First `# ` heading in a Markdown document, falling back to the file name. */
-export function docTitle(path: string, content: string): string {
-  const heading = content.match(/^#\s+(.+?)\s*$/mu);
-  if (heading) return heading[1]!.trim();
-  const name = path.slice(path.lastIndexOf('/') + 1);
-  return name;
-}
-
-export interface DocPathCheck {
-  ok: boolean;
-  reason?: string;
-}
-
-/** Validate the writer's `<wy-doc path>` against the target project and doc type. */
-export function validateDocTargetPath(
-  path: string,
-  projectWorkspaceDir: string,
-  docType: DocType,
-  updatePath: string | undefined,
-  exists: (candidate: string) => boolean,
-): DocPathCheck {
-  if (path.includes('\\') || path.includes('\0') || path.startsWith('/')) {
-    return { ok: false, reason: `doc path must be a workspace-relative POSIX path: ${path}` };
-  }
-  if (path.split('/').includes('..')) {
-    return { ok: false, reason: `doc path must not contain '..': ${path}` };
-  }
-  const directory = `${projectWorkspaceDir}/docs/${DOC_TYPE_DIRS[docType]}/`;
-  if (!path.startsWith(directory)) {
-    return { ok: false, reason: `doc path must live under ${directory}: ${path}` };
-  }
-  const name = path.slice(directory.length);
-  if (name.includes('/')) {
-    return { ok: false, reason: `doc path must be a direct child of ${directory}: ${path}` };
-  }
-  if (!DOC_FILENAME.test(name)) {
-    return { ok: false, reason: `doc file name must match YYYY-MM-DD-<topic>.md: ${name}` };
-  }
-  if (updatePath !== undefined) {
-    if (path !== updatePath) {
-      return { ok: false, reason: `update must write to ${updatePath}: ${path}` };
-    }
-  } else if (exists(path)) {
-    return { ok: false, reason: `refusing to create an existing document: ${path}` };
-  }
-  return { ok: true };
-}
-
-// ─── Action runner ─────────────────────────────────────────────────────────
+export type ActionTaskInfo = Pick<TaskBrief, 'id' | 'description' | 'inputSummary'> & { project?: string };
 
 export interface ActionRunnerDeps {
-  host: SessionHost;
-  files: FilesPort;
-  views: ViewsPort;
-  calls: CallsPort;
+  host: Pick<SessionHost, 'describeTask' | 'createTaskRun' | 'waitTaskRun' | 'cancelTaskRun'>;
+  files: Pick<FilesPort, 'checkPath' | 'exists' | 'read' | 'instructionChain' | 'listDocuments' | 'readDocumentRules'>;
+  views: Pick<ViewsPort, 'compile' | 'docSearch'>;
+  calls: Pick<CallsPort, 'run'>;
+  fileStore: FileStore;
   now(): Date;
 }
 
+/** The host's wait result, derived from the authoritative `SessionHost` type. */
+type Waited = Awaited<ReturnType<ActionRunnerDeps['host']['waitTaskRun']>>;
+
+/** The host's task contract, derived from the authoritative `SessionHost` type. */
+type TaskContract = Awaited<ReturnType<ActionRunnerDeps['host']['describeTask']>>;
+
 /**
- * Parses blocks into actions and executes them. Ledger append ordering stays in
- * the engine; every path that produces context events returns deferred drafts.
+ * Everything one action needs. The engine supplies a fresh `currentEvents`
+ * read per call, so an action always sees the timeline as of now.
+ */
+export interface ActionRunContext {
+  sessionId: string;
+  turn: number;
+  cycle: number;
+  actionId: string;
+  userText: string;
+  workspaceRoot: string;
+  snapshot: WorkspaceSnapshot;
+  currentEvents(): LedgerEvent[];
+  projects: ActionProjectInfo[];
+  tasks: ActionTaskInfo[];
+  signal: AbortSignal;
+  onTaskRun(taskRunId: string): Promise<void>;
+  onTitle?(title: string): void;
+  onDispatched?(): void;
+}
+
+// ─── Action runner ──────────────────────────────────────────────────────────
+
+/**
+ * Executes the three typed actions. The runner never appends ledger events
+ * itself: every path that produces context events returns deferred drafts.
  */
 export class ActionRunner {
   private readonly deps: ActionRunnerDeps;
@@ -546,409 +238,498 @@ export class ActionRunner {
     this.deps = deps;
   }
 
-  /** Interpret one block, retrying exactly once with the failure attached. */
-  async parse(block: SplitActionBlock, ctx: ActionBaseContext): Promise<ActionParseResult> {
-    let failure = '';
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const view = this.deps.views.interpret({
-        blockText: block.text,
-        unterminated: block.unterminated,
-        cycleText: ctx.currentCycleText(),
-        userText: ctx.userText,
-        projects: ctx.projects,
-        tasks: ctx.tasks,
-        scopeRules: ctx.scopeRules,
-        previousFailure: failure === '' ? undefined : failure,
-      });
-      const outcome = await this.runView('interpret', view, ctx);
-      // Transport-level failures (network, timeout, abort) surface immediately;
-      // only the cheap model's own output is retried once.
-      if (!outcome.ok) return { ok: false, reason: outcome.error };
-      const parsed = parseActionsText(outcome.text);
-      if (parsed.ok) return parsed;
-      failure = parsed.reason;
-    }
-    return { ok: false, reason: failure === '' ? 'action interpretation failed' : failure };
-  }
-
   async execute(action: ParsedAction, ctx: ActionRunContext): Promise<ActionExecutionOutcome> {
     switch (action.kind) {
-      case 'dispatch':
-        return this.executeDispatch(action, ctx);
       case 'read':
         return this.executeRead(action, ctx);
-      case 'write-doc':
-        return this.executeWriteDoc(action, ctx);
-      case 'unsupported':
-        return { status: 'failed', result: action.reason, deferred: [] };
+      case 'write':
+      case 'dispatch':
+        return this.executeCompile(action, ctx);
     }
-  }
-
-  // ── dispatch ────────────────────────────────────────────────────────────
-
-  private async executeDispatch(
-    action: Extract<ParsedAction, { kind: 'dispatch' }>,
-    ctx: ActionRunContext,
-  ): Promise<ActionExecutionOutcome> {
-    const project = resolveProject(ctx.snapshot, action.project);
-    if (action.project !== undefined && !project) {
-      return { status: 'failed', result: `unknown project: ${action.project}`, deferred: [] };
-    }
-    // A builtin task is usable with any valid project; a project-scoped task
-    // needs its owning project.
-    const projectScoped = project?.tasks.some((task) => task.id === action.task) ?? false;
-    const builtin = ctx.snapshot.builtinTasks.some((task) => task.id === action.task);
-    if (!projectScoped && !builtin) {
-      return {
-        status: 'failed',
-        result: `unknown task '${action.task}'${project ? ` for project ${project.id}` : ''}`,
-        deferred: [],
-      };
-    }
-
-    const projectId = project?.id;
-    let contract: { description: string; inputSchema: unknown };
-    try {
-      contract = await this.deps.host.describeTask(action.task, projectId);
-    } catch (error) {
-      return { status: 'failed', result: `describeTask failed: ${messageOf(error)}`, deferred: [] };
-    }
-
-    const compiled = await this.compileDispatch(action, contract, ctx);
-    if (!compiled.ok) {
-      return { status: 'failed', result: compiled.reason, deferred: [] };
-    }
-    if (ctx.signal.aborted) {
-      return { status: 'cancelled', result: 'cancelled before task creation', deferred: [] };
-    }
-
-    let taskRunId: string;
-    try {
-      const run = await this.deps.host.createTaskRun({
-        task: action.task,
-        ...(projectId === undefined ? {} : { project: projectId }),
-        input: compiled.input,
-        ctx: compiled.ctx,
-      });
-      taskRunId = run.taskRunId;
-    } catch (error) {
-      return { status: 'failed', result: `createTaskRun failed: ${messageOf(error)}`, deferred: [] };
-    }
-
-    // Register — and persist — the run id immediately, before waiting, so an
-    // interrupt that races this dispatch still cancels the run.
-    await ctx.onTaskRun(taskRunId);
-    if (ctx.signal.aborted) {
-      await this.deps.host.cancelTaskRun(taskRunId).catch(() => undefined);
-      return { status: 'cancelled', result: 'cancelled after interrupt', taskRunId, deferred: [] };
-    }
-
-    try {
-      const waited = await this.deps.host.waitTaskRun(taskRunId, ctx.signal);
-      // The wait may resolve just as the turn is aborted; the terminal status
-      // still wins so the record is a cancellation, not a completion.
-      const status: ActionStatus = mapTaskStatus(waited.status, ctx.signal.aborted);
-      return {
-        status,
-        taskStatus: waited.status,
-        result: waited.output,
-        taskRunId,
-        deferred: [],
-      };
-    } catch (error) {
-      return {
-        status: ctx.signal.aborted ? 'cancelled' : 'failed',
-        result: `waitTaskRun failed: ${messageOf(error)}`,
-        taskRunId,
-        deferred: [],
-      };
-    }
-  }
-
-  private async compileDispatch(
-    action: Extract<ParsedAction, { kind: 'dispatch' }>,
-    contract: { description: string; inputSchema: unknown },
-    ctx: ActionRunContext,
-  ): Promise<{ ok: true; input: unknown; ctx: Record<string, unknown> } | { ok: false; reason: string }> {
-    let failure = '';
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const view = this.deps.views.compile({
-        task: { id: action.task, description: contract.description, inputSchema: contract.inputSchema },
-        action,
-        userText: ctx.userText,
-        events: ctx.currentEvents(),
-        providers: ctx.providers,
-        previousFailure: failure === '' ? undefined : failure,
-      });
-      const outcome = await this.runView('compile', view, ctx);
-      // Transport-level failures surface immediately; only the cheap model's
-      // own JSON or schema mistakes are repaired once.
-      if (!outcome.ok) return { ok: false, reason: outcome.error };
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(outcome.text.trim());
-      } catch (error) {
-        failure = `compile output is not valid JSON: ${messageOf(error)}`;
-        continue;
-      }
-      if (!isObject(parsed) || !('input' in parsed) || !('ctx' in parsed)) {
-        failure = 'compile output must be a JSON object with input and ctx';
-        continue;
-      }
-
-      const validation = validateJsonSchema(contract.inputSchema, parsed.input);
-      if (!validation.ok) {
-        failure = `input does not satisfy the task schema: ${validation.errors.join('; ')}`;
-        continue;
-      }
-
-      let normalized: Record<string, unknown>;
-      try {
-        normalized = normalizeTaskContext(parsed.ctx ?? {});
-      } catch (error) {
-        failure = messageOf(error);
-        continue;
-      }
-
-      return { ok: true, input: parsed.input, ctx: normalized };
-    }
-    return { ok: false, reason: failure === '' ? 'dispatch compilation failed' : failure };
   }
 
   // ── read ────────────────────────────────────────────────────────────────
 
-  private async executeRead(
-    action: Extract<ParsedAction, { kind: 'read' }>,
-    ctx: ActionRunContext,
-  ): Promise<ActionExecutionOutcome> {
+  private async executeRead(action: ParsedAction, ctx: ActionRunContext): Promise<ActionExecutionOutcome> {
+    const events = ctx.currentEvents();
+    const catalog = this.deps.files.listDocuments();
+    const sessionFiles = collectSessionFiles(events);
+    const loadedDocs = new Set<string>();
+    for (const event of events) if (event.type === 'doc.content') loadedDocs.add(event.path);
+
+    const deferred: LedgerEventDraft[] = [];
     const loaded: string[] = [];
     const already: string[] = [];
-    const rejected: string[] = [];
     const missing: string[] = [];
-    const deferred: LedgerEventDraft[] = [];
-    // Paths already queued by this action's own recall step, so a path is never
-    // emitted twice within the same deferred batch.
-    const seen = new Set<string>();
+    const unsupported: string[] = [];
+    const notes: string[] = [];
+    const claimed = new Set<string>();
 
-    for (const raw of action.paths) {
-      if (ctx.signal.aborted) break;
-      const check = this.deps.files.checkPath(raw);
-      if (!check.ok) {
-        rejected.push(`${raw} (${check.reason})`);
+    const runIds = sessionRunIds(events);
+    let listed = false;
+    let loose = false;
+    const tokens = extractPathTokens(action.intent);
+    const exact: { path: string; kind: 'file' | 'doc'; taskRunId?: string }[] = [];
+    for (const token of tokens) {
+      const hit = this.classifyPath(token, catalog, sessionFiles, runIds, ctx);
+      if (hit === undefined) {
+        // An existing path that is not a document is reported, not searched for.
+        const absolute = resolve(ctx.workspaceRoot, token);
+        const run = this.deps.fileStore.runOf(absolute, runIds);
+        if (run !== undefined && statSync(absolute, { throwIfNoEntry: false })?.isDirectory() === true) {
+          notes.push(renderRunFiles(await this.deps.fileStore.listRunFiles(run)));
+          listed = true;
+        } else if (existsSync(absolute)) unsupported.push(absolute);
+        // Only a Markdown or absolute path is a path the model meant to read;
+        // any other slash-separated word is ordinary intent text.
+        else if (token.endsWith('.md') || token.startsWith('/')) missing.push(token);
+        else loose = true;
         continue;
       }
-      if (ctx.recalls.has(raw) || seen.has(raw)) {
-        already.push(raw);
-        continue;
-      }
-      if (check.kind === 'doc') {
-        // A project document — including a directly requested `AGENTS.md` —
-        // triggers the full top-down instruction chain first.
-        await this.recallProjectInstructions(raw, ctx, deferred, seen);
-        if (seen.has(raw)) {
-          loaded.push(raw);
-          continue;
-        }
-        if (ctx.signal.aborted) break;
-      }
-
-      if (!this.deps.files.exists(raw)) {
-        missing.push(raw);
-        continue;
-      }
-      const file = this.deps.files.read(raw);
-      // Read before claiming: a failed read must never consume the path.
-      if (!file) {
-        missing.push(raw);
-        continue;
-      }
-      if (!ctx.recalls.claim(raw)) {
-        already.push(raw);
-        continue;
-      }
-      deferred.push(recallDraft(raw, check.kind, file, ctx));
-      seen.add(raw);
-      loaded.push(raw);
+      if (!exact.some((item) => item.path === hit.path)) exact.push(hit);
     }
 
-    const failed = loaded.length === 0 && already.length === 0;
-    const sections: string[] = [];
-    if (loaded.length > 0) sections.push(`loaded: ${loaded.join(', ')}`);
-    if (already.length > 0) sections.push(`already in context: ${already.join(', ')}`);
-    if (rejected.length > 0) sections.push(`rejected: ${rejected.join(', ')}`);
-    if (missing.length > 0) sections.push(`missing: ${missing.join(', ')}`);
-    if (sections.length === 0) sections.push('no paths were processed');
+    const residual = residualText(action.intent, tokens);
+    // A written path that resolves is read directly; the words around it are a
+    // label, not a search request.
+    const needSearch = (exact.length === 0 && unsupported.length === 0 && !listed) || missing.length > 0 || loose;
+    if (!needSearch && residual !== '') notes.push('只读取了写明的路径；需要其他文档时，另写一个不含路径的 read');
 
-    return {
-      status: failed ? 'failed' : 'done',
-      result: sections.join('\n'),
-      deferred,
-    };
-  }
-
-  // ── write-doc ───────────────────────────────────────────────────────────
-
-  private async executeWriteDoc(
-    action: Extract<ParsedAction, { kind: 'write-doc' }>,
-    ctx: ActionRunContext,
-  ): Promise<ActionExecutionOutcome> {
-    const project = resolveProject(ctx.snapshot, action.project);
-    if (!project) {
-      return { status: 'failed', result: `unknown project: ${action.project}`, deferred: [] };
-    }
-    if (!(action.docType in DOC_TYPE_DIRS)) {
-      return { status: 'failed', result: `unsupported docType: ${action.docType}`, deferred: [] };
-    }
-
-    const deferred: LedgerEventDraft[] = [];
-    const seen = new Set<string>();
-    const recallTarget = action.path ?? `${project.workspaceDir}/docs/${DOC_TYPE_DIRS[action.docType]}/pending.md`;
-    await this.recallProjectInstructions(recallTarget, ctx, deferred, seen);
-    if (ctx.signal.aborted) {
-      return { status: 'cancelled', result: 'cancelled before writing the document', deferred };
-    }
-
-    let currentContent: string | undefined;
-    if (action.path !== undefined) {
-      const check = this.deps.files.checkPath(action.path);
-      if (!check.ok) {
-        return { status: 'failed', result: `cannot update ${action.path}: ${check.reason}`, deferred };
-      }
-      // The update target must belong to the requested project and docType
-      // before the original is read.
-      const target = validateDocTargetPath(action.path, project.workspaceDir, action.docType, action.path, () => false);
-      if (!target.ok) {
-        return { status: 'failed', result: target.reason ?? 'invalid doc target', deferred };
-      }
-      const existing = this.deps.files.read(action.path);
-      if (!existing) {
-        return { status: 'failed', result: `cannot update a missing document: ${action.path}`, deferred };
-      }
-      currentContent = existing.content;
-    }
-
-    const date = isoDate(this.deps.now());
-    let failure = '';
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const view = this.deps.views.writeDoc({
-        globalAgents: ctx.snapshot.agents,
-        snapshot: ctx.snapshot,
-        events: ctx.currentEvents(),
-        pendingRecalls: deferred.filter(isReadDraft),
-        project: { id: project.id, workspaceDir: project.workspaceDir, displayName: project.displayName },
-        docType: action.docType,
-        date,
-        currentContent,
-        outline: failure === '' ? action.outline : `${action.outline}\n\n（上一次输出未被接受：${failure}）`,
-      });
-      const outcome = await this.runView('write', view, ctx);
-      // A transport-level failure is never repaired.
-      if (!outcome.ok) {
-        return { status: 'failed', result: `write call failed: ${outcome.error}`, deferred };
-      }
-      if (ctx.signal.aborted) {
-        // The disk write has not started, so the interrupted call is dropped.
-        return { status: 'cancelled', result: 'cancelled before writing the document', deferred };
-      }
-
-      const block = parseDocBlock(outcome.text);
-      if (!block) {
-        failure = 'the output must contain exactly one <wy-doc path="…">…</wy-doc> block';
-        continue;
-      }
-      const check = validateDocTargetPath(
-        block.path,
-        project.workspaceDir,
-        action.docType,
-        action.path,
-        (candidate) => this.deps.files.exists(candidate),
-      );
-      if (!check.ok) {
-        failure = check.reason ?? 'invalid doc target';
-        continue;
-      }
-
-      const created = action.path === undefined;
-      try {
-        if (created) {
-          await this.deps.host.createWorkspaceDoc(block.path, block.content);
-        } else {
-          await this.deps.host.updateWorkspaceDoc(block.path, block.content, currentContent ?? '');
-        }
-      } catch (error) {
-        return {
-          status: 'failed',
-          result: `${created ? 'createWorkspaceDoc' : 'updateWorkspaceDoc'} failed: ${messageOf(error)}`,
-          deferred,
-        };
-      }
-
-      // The document is on disk; an interrupt that arrived meanwhile completes
-      // normally and still reports the update.
+    let picks: { path: string; reason: string }[] = [];
+    if (needSearch) {
+      const view = this.deps.views.docSearch({ catalog, loadedPaths: [...loadedDocs], intent: action.intent });
+      const outcome = await this.runView('doc-search', view, ctx);
+      if (!outcome.ok) return this.fail(`doc-search call failed: ${outcome.error}`);
+      const parsed = parseDocSearch(outcome.text, catalog);
+      if (!parsed.ok) return this.fail(parsed.reason);
+      notes.push(...parsed.notes);
+      picks = parsed.picks.filter((pick) => !loadedDocs.has(pick.path));
+      const nearTitles = parsed.near.map((near) => `${near.path} (${near.title})`);
+      if (nearTitles.length > 0) notes.push(`near: ${nearTitles.join(', ')}`);
+      // First doc-search draft, before any picked document content.
       deferred.push({
-        type: 'ws.updated',
+        type: 'doc.search',
         turn: ctx.turn,
         cycle: ctx.cycle,
-        path: block.path,
-        change: created ? 'created' : 'updated',
         actionId: ctx.actionId,
+        understanding: parsed.understanding,
+        picks: parsed.picks.map((pick) => ({
+          path: pick.path,
+          title: catalog.find((entry) => entry.path === pick.path)?.title ?? pick.path,
+          reason: pick.reason,
+        })),
+        near: parsed.near.map((near) => ({ path: near.path, title: near.title, reason: near.reason })),
+        notes: parsed.notes,
       });
+    }
 
-      const title = docTitle(block.path, block.content);
-      return {
-        status: 'done',
-        result: `${created ? 'created' : 'updated'} ${block.path}\ntitle: ${title}`,
-        deferred,
+    for (const pick of picks) {
+      if (!exact.some((item) => item.path === pick.path)) exact.push({ path: pick.path, kind: 'doc' });
+    }
+
+    for (const item of exact) {
+      if (ctx.signal.aborted) break;
+      if (claimed.has(item.path)) continue;
+      claimed.add(item.path);
+      if (item.kind === 'file') {
+        await this.readSessionFile(item.path, item.taskRunId, events, ctx, deferred, loaded, already, missing);
+        continue;
+      }
+      const file = this.deps.files.read(item.path);
+      if (!file) {
+        missing.push(item.path);
+        continue;
+      }
+      await this.recallProjectInstructions(item.path, ctx, events, deferred);
+      const draft = makeDocumentDraft(file, events, {
+        turn: ctx.turn,
+        cycle: ctx.cycle,
+        actionId: ctx.actionId,
+        source: 'read',
+      });
+      if (draft === undefined) already.push(item.path);
+      else {
+        deferred.push(draft);
+        loaded.push(item.path);
+      }
+    }
+
+    const failed = loaded.length === 0 && already.length === 0 && unsupported.length === 0 && !listed;
+    const sections: string[] = [];
+    if (loaded.length > 0) sections.push(`loaded: ${loaded.join(', ')}`);
+    if (already.length > 0) sections.push(`已在上下文中，未变化: ${already.join(', ')}`);
+    if (unsupported.length > 0) sections.push(`存在，但不是文档或本会话的文件，没有读入: ${unsupported.join(', ')}`);
+    if (missing.length > 0) sections.push(`missing: ${missing.join(', ')}`);
+    if (notes.length > 0) sections.push(...notes);
+    if (sections.length === 0) sections.push('no paths were processed');
+    return { status: failed ? 'failed' : 'done', result: sections.join('\n'), deferred };
+  }
+
+  private async readSessionFile(
+    path: string,
+    runId: string | undefined,
+    events: readonly LedgerEvent[],
+    ctx: ActionRunContext,
+    deferred: LedgerEventDraft[],
+    loaded: string[],
+    already: string[],
+    missing: string[],
+  ): Promise<void> {
+    const latest = latestSessionFile(events, path);
+    let prepared;
+    try {
+      prepared = await this.deps.fileStore.prepareFile(path, {
+        source: latest?.source ?? 'task',
+        actionId: ctx.actionId,
+        ...((latest?.taskRunId ?? runId) === undefined ? {} : { taskRunId: (latest?.taskRunId ?? runId)! }),
+        ...(latest?.role === undefined ? {} : { role: latest.role }),
+        ...(latest?.description === undefined || latest.description === '' ? {} : { description: latest.description }),
+      });
+    } catch {
+      missing.push(path);
+      return;
+    }
+    // An unchanged file, image or document is already in the context.
+    if (latest !== undefined && latest.hash === prepared.hash) {
+      already.push(path);
+      return;
+    }
+    deferred.push({
+      type: 'files',
+      turn: ctx.turn,
+      cycle: ctx.cycle,
+      source: 'read',
+      files: [prepared],
+      actionId: ctx.actionId,
+    });
+    loaded.push(path);
+  }
+
+  /** Resolve one intent token to an allowed, registered path. */
+  /** A session file, a file one of this session's runs left, or a project document. */
+  private classifyPath(
+    raw: string,
+    catalog: readonly DocCatalogEntry[],
+    sessionFiles: readonly { path: string }[],
+    runIds: ReadonlySet<string>,
+    ctx: ActionRunContext,
+  ): { path: string; kind: 'file' | 'doc'; taskRunId?: string } | undefined {
+    if (sessionFiles.some((file) => file.path === raw)) return { path: raw, kind: 'file' };
+    if (raw.startsWith('/')) {
+      const run = this.deps.fileStore.runOf(raw, runIds);
+      if (run !== undefined && statSync(raw, { throwIfNoEntry: false })?.isFile() === true) {
+        return { path: raw, kind: 'file', taskRunId: run };
+      }
+    }
+    const prefix = `${ctx.workspaceRoot.replace(/\/$/u, '')}/`;
+    const relative = raw.startsWith('/') ? (raw.startsWith(prefix) ? raw.slice(prefix.length) : undefined) : raw;
+    const doc = relative === undefined ? undefined : catalog.find((entry) => entry.path === relative);
+    return doc ? { path: doc.path, kind: 'doc' } : undefined;
+  }
+
+  /** Queue the project instruction chain as full `doc.content` drafts. */
+  private async recallProjectInstructions(
+    docPath: string,
+    ctx: ActionRunContext,
+    events: readonly LedgerEvent[],
+    deferred: LedgerEventDraft[],
+    settledWrite = false,
+  ): Promise<void> {
+    const project = projectForDocPath(ctx.projects, docPath);
+    if (!project) return;
+    const directory = docPath.endsWith('/AGENTS.md') ? docPath.slice(0, -10) : project.workspaceDir;
+    for (const instructionPath of this.deps.files.instructionChain(directory, docPath)) {
+      if (ctx.signal.aborted && !settledWrite) return;
+      const file = this.deps.files.read(instructionPath);
+      if (!file) continue;
+      const draft = makeDocumentDraft(file, events, {
+        turn: ctx.turn,
+        cycle: ctx.cycle,
+        actionId: ctx.actionId,
+        source: 'project-instructions',
+      });
+      if (draft !== undefined) deferred.push(draft);
+    }
+  }
+
+  // ── compile: write / dispatch ───────────────────────────────────────────
+
+  private async executeCompile(action: ParsedAction, ctx: ActionRunContext): Promise<ActionExecutionOutcome> {
+    const contracts: CompileContract[] = [];
+    for (const task of ctx.tasks) {
+      let contract: TaskContract;
+      try {
+        contract = await this.deps.host.describeTask(task.id, task.project);
+      } catch (error) {
+        if (isObject(error) && error.code === 'task_not_found') continue;
+        return this.fail(`describeTask failed: ${messageOf(error)}`);
+      }
+      contracts.push({
+        ...task,
+        inputSchema: contract.inputSchema,
+        builtinDoc: contract.builtinDoc === true,
+        requiredCapabilities: contract.requiredCapabilities ?? [],
+      });
+    }
+
+    const view = this.deps.views.compile({
+      kind: action.kind === 'write' ? 'write' : 'dispatch',
+      intent: action.intent,
+      userText: ctx.userText,
+      events: ctx.currentEvents(),
+      workspaceRoot: ctx.workspaceRoot,
+      projects: ctx.projects.map((project) => ({
+        id: project.id,
+        displayName: project.displayName,
+        workspaceDir: project.workspaceDir,
+        ...(project.checkoutPath === undefined ? {} : { checkoutPath: project.checkoutPath }),
+      })),
+      tasks: contracts,
+    });
+    // A failed call or unusable output is a system fault, not a decision of
+    // the reasoning model. The compiler is asked again with its own output and
+    // the reason it was rejected, so each attempt corrects the previous one.
+    let compiled: Extract<ReturnType<ActionRunner['checkCompiled']>, { ok: true }> | undefined;
+    let compileError = '';
+    let attemptView = view;
+    for (let attempt = 1; attempt <= COMPILE_ATTEMPTS && compiled === undefined && !ctx.signal.aborted; attempt += 1) {
+      const outcome = await this.runView('compile', attemptView, ctx);
+      if (!outcome.ok) {
+        compileError = `compile call failed: ${outcome.error}`;
+        continue;
+      }
+      const checked = this.checkCompiled(outcome.text, action, ctx, contracts);
+      if (checked.ok) {
+        compiled = checked;
+        break;
+      }
+      compileError = checked.error;
+      attemptView = {
+        ...attemptView,
+        messages: [
+          ...attemptView.messages,
+          { role: 'assistant', content: outcome.text },
+          { role: 'user', content: `上一次输出不能使用：${checked.error}\n只输出修正后的完整 JSON。` },
+        ],
       };
     }
-    return { status: 'failed', result: `write output rejected: ${failure}`, deferred };
+    if (compiled === undefined) return this.fail(compileError);
+    const { parsed, project, taskId, effectiveInput, targetPath } = compiled;
+
+    const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
+    const title = rawTitle !== '' && rawTitle.length <= 40 ? rawTitle : '';
+    if (title !== '') ctx.onTitle?.(title);
+
+    let normalizedCtx: Record<string, unknown> | undefined;
+    if (parsed.ctx !== undefined) {
+      try {
+        normalizedCtx = normalizeTaskContext(parsed.ctx);
+      } catch (error) {
+        return this.fail(messageOf(error));
+      }
+    }
+
+    // Injected documents must be the original file text as it exists on disk
+    // now, never the model's own rewrite. Only paths already present in the
+    // timeline as loaded documents or recalled memories are eligible.
+    const contextEvents = ctx.currentEvents();
+    const eligibleContext = new Set<string>();
+    for (const event of contextEvents) {
+      if (event.type === 'doc.content' || event.type === 'memory.recalled') eligibleContext.add(event.path);
+    }
+    const contextDocs: { source: string; content: string }[] = [];
+    if (Array.isArray(parsed.context)) {
+      const seen = new Set<string>();
+      for (const candidate of parsed.context) {
+        if (typeof candidate !== 'string' || seen.has(candidate) || !eligibleContext.has(candidate)) continue;
+        seen.add(candidate);
+        const file = this.deps.files.read(candidate);
+        if (file === undefined) continue;
+        contextDocs.push({ source: candidate, content: file.content });
+      }
+    }
+    let taskCtx: Record<string, unknown> | undefined = normalizedCtx;
+    if (contextDocs.length > 0) {
+      try {
+        taskCtx = normalizeTaskContext({ ...(normalizedCtx ?? {}), context: contextDocs });
+      } catch (error) {
+        return this.fail(messageOf(error));
+      }
+    }
+
+    const before = action.kind === 'write' && targetPath !== undefined
+      ? this.deps.files.read(targetPath)
+      : undefined;
+
+    let taskRunId: string;
+    try {
+      const createParams: Parameters<ActionRunnerDeps['host']['createTaskRun']>[0] & { title?: string } = {
+        task: taskId,
+        project: project.id,
+        input: effectiveInput,
+        ...(taskCtx === undefined ? {} : { ctx: taskCtx }),
+        ...(title === '' ? {} : { title }),
+      };
+      const run = await this.deps.host.createTaskRun(createParams);
+      taskRunId = run.taskRunId;
+    } catch (error) {
+      return this.fail(`createTaskRun failed: ${messageOf(error)}`);
+    }
+
+    await ctx.onTaskRun(taskRunId);
+    if (ctx.signal.aborted) {
+      // Cancelled just after the run opened: cancel, then still wait below so
+      // an in-flight document write settles and is recorded, not lost.
+      await this.deps.host.cancelTaskRun(taskRunId).catch(() => undefined);
+    } else {
+      ctx.onDispatched?.();
+    }
+
+    let waited: Waited | undefined;
+    let waitError: unknown;
+    try {
+      waited = await this.deps.host.waitTaskRun(taskRunId, ctx.signal);
+    } catch (error) {
+      waitError = error;
+    }
+
+    // A thrown wait is failed or cancelled, never a false done.
+    const aborted = ctx.signal.aborted;
+    const status: ActionStatus = waited === undefined
+      ? (aborted ? 'cancelled' : 'failed')
+      : mapTaskStatus(waited.status, aborted);
+    const taskStatus = waited?.status ?? (status === 'failed' ? 'failed' : 'cancelled');
+    const deferred: LedgerEventDraft[] = [];
+    let result = waited === undefined ? `waitTaskRun failed: ${messageOf(waitError)}` : renderTaskResult(waited.output);
+
+    // Disk is recorded after the wait fence for every outcome (done, failed,
+    // cancelled, thrown), so a partial write is never dropped early.
+    if (action.kind === 'write' && targetPath !== undefined) {
+      const after = this.deps.files.read(targetPath);
+      const changed = after !== undefined && (before === undefined || after.content !== before.content);
+      if (changed) {
+        // Project instructions enter the context before the document content,
+        // so the first project document written also carries its chain.
+        await this.recallProjectInstructions(targetPath, ctx, ctx.currentEvents(), deferred, true);
+        const draft = makeDocumentDraft(
+          { path: targetPath, title: after!.title, content: after!.content },
+          ctx.currentEvents(),
+          { turn: ctx.turn, cycle: ctx.cycle, actionId: ctx.actionId, source: 'write' },
+        );
+        // The disk change is factual even when the content is already on the
+        // ledger and no new `doc.content` draft is produced.
+        if (draft !== undefined) deferred.push(draft);
+        deferred.push({
+          type: 'ws.updated',
+          turn: ctx.turn,
+          cycle: ctx.cycle,
+          path: targetPath,
+          change: before === undefined ? 'created' : 'updated',
+          actionId: ctx.actionId,
+          taskRunId,
+          taskStatus,
+        });
+      }
+    } else if (action.kind === 'dispatch' && (waited?.artifacts?.length ?? 0) > 0) {
+      const described = await this.deps.fileStore.describeArtifacts({
+        sessionId: ctx.sessionId,
+        taskRunId,
+        actionId: ctx.actionId,
+        artifacts: waited!.artifacts!,
+      });
+      if (described.files.length > 0) {
+        deferred.push({
+          type: 'files',
+          turn: ctx.turn,
+          cycle: ctx.cycle,
+          source: 'task',
+          files: described.files,
+          taskRunId,
+          actionId: ctx.actionId,
+        });
+      }
+      result = appendDiagnostics(result, described.errors);
+    }
+    // An unfinished run reports what it left behind, so the work is not redone blind.
+    if (action.kind === 'dispatch' && status !== 'done') {
+      const left = await this.deps.fileStore.listRunFiles(taskRunId);
+      if (left.length > 0) result = `${result}\n${renderRunFiles(left)}`;
+    }
+    // Invalid artifact descriptors dropped by the host are surfaced in text.
+    if (waited?.artifactErrors !== undefined) result = appendDiagnostics(result, waited.artifactErrors);
+
+    return { status, result, taskRunId, taskStatus, task: taskId, deferred };
+  }
+
+  /** Parse one compile output and validate it up to the task's input schema. */
+  private checkCompiled(
+    text: string,
+    action: ParsedAction,
+    ctx: ActionRunContext,
+    contracts: readonly CompileContract[],
+  ): { ok: true; parsed: Record<string, unknown>; project: ProjectInfo; taskId: string; effectiveInput: unknown; targetPath: string | undefined }
+    | { ok: false; error: string } {
+    const bad = (error: string): { ok: false; error: string } => ({ ok: false, error });
+    let parsed: Record<string, unknown>;
+    try {
+      const value: unknown = JSON.parse(text.trim());
+      if (!isObject(value)) return bad('compile output must be a single JSON object');
+      parsed = value;
+    } catch (error) {
+      return bad(`compile output is not valid JSON: ${messageOf(error)}`);
+    }
+    const projectId = parsed.project;
+    const taskId = parsed.task;
+    if (typeof projectId !== 'string' || typeof taskId !== 'string') {
+      return bad('compile output must name a project and a task');
+    }
+    const project = ctx.projects.find((candidate) => candidate.id === projectId);
+    if (!project) return bad(`unknown project: ${projectId}`);
+    const contract = contracts.find((candidate) => candidate.id === taskId
+      && (candidate.project === undefined || candidate.project === projectId));
+    if (!contract) return bad(`unknown task '${taskId}' for project ${projectId}`);
+    if (action.kind === 'write' && !contract.builtinDoc) {
+      return bad(`write must target the trusted builtin doc task: ${taskId}`);
+    }
+
+    // Validate the model's own file values against disk before any program
+    // text is bound: the injected conversation/templateRules may legitimately
+    // begin with '/', so they are never treated as missing paths.
+    const missingPath = findMissingAbsolutePath(parsed.input);
+    if (missingPath !== undefined) return bad(`input references a missing path: ${missingPath}`);
+
+    // Bind the authoritative document fields first, then validate the bound
+    // object once. A dispatch validates its raw input strictly.
+    let effectiveInput: unknown = parsed.input;
+    let targetPath: string | undefined;
+    if (action.kind === 'write') {
+      const base = isObject(parsed.input) ? parsed.input : {};
+      const bound: Record<string, unknown> = {
+        ...base,
+        targetProject: project.id,
+        conversation: renderEventsBlock(ctx.currentEvents()),
+        templateRules: this.deps.files.readDocumentRules(),
+      };
+      if (typeof bound.targetPath === 'string') targetPath = bound.targetPath;
+      if (targetPath !== undefined && !targetPath.startsWith(`${project.workspaceDir}/docs/`)) {
+        return bad(`doc target must live under ${project.workspaceDir}/docs/: ${targetPath}`);
+      }
+      effectiveInput = bound;
+    }
+    const validation = validateJsonSchema(contract.inputSchema, effectiveInput);
+    if (!validation.ok) {
+      return bad(`input does not satisfy the task schema: ${validation.errors.join('; ')}`);
+    }
+    return { ok: true, parsed, project, taskId, effectiveInput, targetPath };
   }
 
   // ── shared helpers ──────────────────────────────────────────────────────
 
-  /**
-   * Queue the project instruction chain for a project document as deferred
-   * `doc.read` drafts. Existing instructions that are not already committed on
-   * the timeline (or queued by this batch) are queued outermost first; each
-   * instruction file is queued at most once per batch.
-   */
-  private async recallProjectInstructions(
-    docPath: string,
-    ctx: ActionRunContext,
-    deferred: LedgerEventDraft[],
-    seen: Set<string>,
-  ): Promise<void> {
-    const project = projectForDocPath(ctx.snapshot, docPath);
-    if (!project) return;
-    const directory = docPath.endsWith('/AGENTS.md') ? docPath.slice(0, -10) : project.workspaceDir;
-    const chain = this.deps.files.instructionChain(directory, docPath);
-    for (const instructionPath of chain) {
-      if (ctx.signal.aborted) return;
-      if (ctx.recalls.has(instructionPath) || seen.has(instructionPath)) continue;
-      // Read before claiming so a missing instruction never claims its path.
-      const file = this.deps.files.read(instructionPath);
-      if (!file) continue;
-      if (!ctx.recalls.claim(instructionPath)) continue;
-      deferred.push({
-        type: 'doc.read',
-        turn: ctx.turn,
-        cycle: ctx.cycle,
-        path: instructionPath,
-        title: file.title,
-        content: file.content,
-        source: 'project-instructions',
-        actionId: ctx.actionId,
-      });
-      seen.add(instructionPath);
-    }
-  }
-
   private async runView(
-    role: 'interpret' | 'compile' | 'write',
+    role: 'compile' | 'doc-search',
     view: BuiltView,
-    ctx: ActionBaseContext,
-  ): Promise<{ ok: true; text: string; callId: string } | { ok: false; error: string }> {
+    ctx: ActionRunContext,
+  ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
     const callId = `c${ctx.turn}.${ctx.cycle}.x${++this.callSeq}`;
     try {
       const result = await this.deps.calls.run({
@@ -960,45 +741,148 @@ export class ActionRunner {
         layers: view.layers,
         signal: ctx.signal,
       });
-      return { ok: true, text: result.text, callId };
+      return { ok: true, text: result.text };
     } catch (error) {
       return { ok: false, error: messageOf(error) };
     }
   }
-}
 
-function recallDraft(
-  path: string,
-  kind: 'memory' | 'doc',
-  file: { path: string; title: string; content: string },
-  ctx: ActionRunContext,
-): LedgerEventDraft {
-  if (kind === 'memory') {
-    return {
-      type: 'memory.recalled',
-      turn: ctx.turn,
-      cycle: ctx.cycle,
-      path,
-      content: file.content,
-      source: 'action',
-      actionId: ctx.actionId,
-    };
+  private fail(reason: string): ActionExecutionOutcome {
+    return { status: 'failed', result: reason, deferred: [] };
   }
-  return {
-    type: 'doc.read',
-    turn: ctx.turn,
-    cycle: ctx.cycle,
-    path,
-    title: file.title,
-    content: file.content,
-    source: 'action',
-    actionId: ctx.actionId,
-  };
 }
 
-function isReadDraft(draft: LedgerEventDraft): boolean {
-  const type = (draft as { type?: string }).type;
-  return type === 'doc.read' || type === 'memory.recalled';
+// ─── Doc-search output parsing ──────────────────────────────────────────────
+
+interface ParsedDocSearch {
+  understanding: string;
+  picks: { path: string; reason: string }[];
+  near: { path: string; title: string; reason: string }[];
+  notes: string[];
+}
+
+function parseDocSearch(
+  text: string,
+  catalog: readonly DocCatalogEntry[],
+): ({ ok: true } & ParsedDocSearch) | { ok: false; reason: string } {
+  let value: unknown;
+  try {
+    value = JSON.parse(text.trim());
+  } catch (error) {
+    return { ok: false, reason: `doc-search output is not valid JSON: ${messageOf(error)}` };
+  }
+  if (!isObject(value)) return { ok: false, reason: 'doc-search output must be a JSON object' };
+  if (typeof value.understanding !== 'string') {
+    return { ok: false, reason: 'doc-search output is missing understanding' };
+  }
+  if (!Array.isArray(value.picks) || !Array.isArray(value.near)) {
+    return { ok: false, reason: 'doc-search output must contain picks and near arrays' };
+  }
+  const notes: string[] = [];
+  const known = new Map(catalog.map((entry) => [entry.path, entry]));
+  const picks: { path: string; reason: string }[] = [];
+  for (const raw of value.picks) {
+    if (!isObject(raw) || typeof raw.path !== 'string' || typeof raw.reason !== 'string') {
+      return { ok: false, reason: 'doc-search pick has an invalid shape' };
+    }
+    const entry = known.get(raw.path);
+    if (!entry) {
+      notes.push(`discarded unknown catalog path: ${raw.path}`);
+      continue;
+    }
+    picks.push({ path: entry.path, reason: raw.reason });
+    if (picks.length >= 3) break;
+  }
+  const near: { path: string; title: string; reason: string }[] = [];
+  for (const raw of value.near) {
+    if (!isObject(raw) || typeof raw.path !== 'string' || typeof raw.reason !== 'string') {
+      return { ok: false, reason: 'doc-search near entry has an invalid shape' };
+    }
+    const entry = known.get(raw.path);
+    if (!entry) {
+      notes.push(`discarded unknown catalog path: ${raw.path}`);
+      continue;
+    }
+    near.push({ path: entry.path, title: entry.title, reason: raw.reason });
+    if (near.length >= 5) break;
+  }
+  return { ok: true, understanding: value.understanding, picks, near, notes };
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Path-like tokens in an intent, used for exact-path resolution. */
+/** Task runs this session started or received files from. */
+function sessionRunIds(events: readonly LedgerEvent[]): Set<string> {
+  const ids = new Set<string>();
+  for (const event of events) {
+    if ((event.type === 'action.started' || event.type === 'files') && event.taskRunId !== undefined) ids.add(event.taskRunId);
+  }
+  return ids;
+}
+
+function renderRunFiles(files: readonly { path: string; bytes: number }[]): string {
+  if (files.length === 0) return '任务目录里没有文件';
+  return ['任务目录里的文件:', ...files.map((file) => `- ${file.path} (${file.bytes} 字节)`)].join('\n');
+}
+
+function extractPathTokens(text: string): string[] {
+  const matches = text.match(/[A-Za-z0-9_./-]+\.md|[A-Za-z0-9_./-]*\/[A-Za-z0-9_./-]+/gu) ?? [];
+  const tokens = matches.map((token) => token.replace(/[),.;:!?]+$/u, '')).filter((token) => token !== '');
+  return [...new Set(tokens)];
+}
+
+/** The intent text left once the path tokens, quotes and punctuation are removed. */
+function residualText(text: string, tokens: readonly string[]): string {
+  let rest = text;
+  for (const token of tokens) rest = rest.split(token).join(' ');
+  return rest.replace(/["'`>{}[\]]/gu, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+/** Latest `files` event row for one path, if the path is ledger-registered. */
+function latestSessionFile(events: readonly LedgerEvent[], path: string): SessionFile | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type !== 'files') continue;
+    const file = event.files.find((candidate) => candidate.path === path);
+    if (file) return file;
+  }
+  return undefined;
+}
+
+/** The most specific registered project that owns `docPath`, if any. */
+function projectForDocPath(projects: readonly ActionProjectInfo[], docPath: string): ActionProjectInfo | undefined {
+  const matches = projects.filter((project) => docPath.startsWith(`${project.workspaceDir}/`)
+    || (docPath.endsWith('/AGENTS.md') && project.workspaceDir.startsWith(`${docPath.slice(0, -10)}/`)));
+  if (matches.length === 0) return undefined;
+  return matches.reduce((longest, candidate) =>
+    candidate.workspaceDir.length > longest.workspaceDir.length ? candidate : longest);
+}
+
+const COMPILE_ATTEMPTS = 3;
+
+type CompileContract = ActionTaskInfo & { inputSchema: unknown; builtinDoc: boolean; requiredCapabilities: readonly string[] };
+
+/** Recursively find the first absolute path string in `value` that does not exist. */
+function findMissingAbsolutePath(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    if (!value.startsWith('/')) return undefined;
+    return existsSync(value) ? undefined : value;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const missing = findMissingAbsolutePath(item);
+      if (missing !== undefined) return missing;
+    }
+    return undefined;
+  }
+  if (isObject(value)) {
+    for (const child of Object.values(value)) {
+      const missing = findMissingAbsolutePath(child);
+      if (missing !== undefined) return missing;
+    }
+  }
+  return undefined;
 }
 
 function mapTaskStatus(status: string, aborted: boolean): ActionStatus {
@@ -1014,27 +898,11 @@ function mapTaskStatus(status: string, aborted: boolean): ActionStatus {
   }
 }
 
-/** Resolve an action's project by its registered id, never by a display name. */
-function resolveProject(snapshot: WorkspaceSnapshot, identifier: string | undefined) {
-  if (identifier === undefined) return undefined;
-  return snapshot.projects.find((project) => project.id === identifier);
-}
-
-/** The most specific registered project that owns `docPath`, if any. */
-function projectForDocPath(snapshot: WorkspaceSnapshot, docPath: string) {
-  const matches = snapshot.projects.filter((project) => docPath.startsWith(`${project.workspaceDir}/`)
-    || (docPath.endsWith('/AGENTS.md') && project.workspaceDir.startsWith(`${docPath.slice(0, -10)}/`)));
-  if (matches.length === 0) return undefined;
-  return matches.reduce((longest, candidate) =>
-    candidate.workspaceDir.length > longest.workspaceDir.length ? candidate : longest,
-  );
-}
-
-function isoDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${year}-${month}-${day}`;
+/** Append stripped-artifact diagnostics after the task output. */
+function appendDiagnostics(output: string, notes: readonly string[]): string {
+  if (notes.length === 0) return output;
+  const section = ['artifacts dropped or unavailable:', ...notes.map((note) => `- ${note}`)].join('\n');
+  return output === '' ? section : `${output}\n${section}`;
 }
 
 function messageOf(error: unknown): string {

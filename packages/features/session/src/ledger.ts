@@ -21,21 +21,28 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, truncateSync, writeFileSync } from 'node:fs';
-import { open, rename } from 'node:fs/promises';
+import { open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { SessionFile } from '@wrenyard/protocol';
 
 // ─── Event model ───────────────────────────────────────────────────────────
+
+/** The only live session file format the ledger writes and reads. */
+export const CURRENT_SESSION_FORMAT = 3;
 
 /** The `type` discriminant of every ledger event. */
 export type LedgerEventType =
   | 'session.created'
   | 'turn.started'
-  | 'context.selected'
+  | 'cycle.started'
+  | 'thinking'
+  | 'doc.search'
+  | 'doc.content'
+  | 'files'
   | 'memory.recalled'
-  | 'doc.read'
   | 'reason.completed'
-  | 'action.block'
   | 'action.started'
+  | 'action.titled'
   | 'action.finished'
   | 'reply'
   | 'ws.updated'
@@ -50,13 +57,13 @@ export type LedgerEventType =
 export type TurnStatus = 'completed' | 'failed' | 'interrupted' | 'exhausted';
 
 /** Mirrors the action discriminants owned by `actions.ts`. */
-export type ActionKind = 'dispatch' | 'read' | 'write-doc' | 'unsupported';
+export type ActionKind = 'dispatch' | 'read' | 'write';
 
 /** Mirrors the committed action statuses owned by `actions.ts`. */
 export type ActionStatus = 'done' | 'failed' | 'skipped' | 'cancelled';
 
 /** Mirrors the call roles owned by `calls.ts`. */
-export type CallRole = 'reason' | 'select' | 'interpret' | 'compile' | 'write' | 'reply' | 'title';
+export type CallRole = 'reason' | 'memory-search' | 'doc-search' | 'compile' | 'reply' | 'title';
 
 /** Provider usage as reported by the driver; absent fields stay absent. */
 export interface Usage {
@@ -87,6 +94,7 @@ export interface LedgerEventBase {
 export interface TaskBrief {
   id: string;
   description: string;
+  inputSummary: string[];
 }
 
 export interface ProjectSnapshot {
@@ -120,6 +128,7 @@ export interface WorkspaceSnapshot {
 
 export interface SessionCreatedEvent extends LedgerEventBase {
   type: 'session.created';
+  format: 3;
   workspaceRoot: string;
   snapshot: WorkspaceSnapshot;
 }
@@ -130,27 +139,72 @@ export interface TurnStartedEvent extends LedgerEventBase {
   model: TurnModel;
 }
 
-export interface ContextSelectedEvent extends LedgerEventBase {
-  type: 'context.selected';
+/**
+ * Marks the start of one reasoning cycle. It is appended before the cycle's
+ * request is assembled and rendered as that cycle's `<wy-info>` line, so the
+ * per-request facts are part of the append-only context instead of a block
+ * rewritten on every request.
+ */
+export interface CycleStartedEvent extends LedgerEventBase {
+  type: 'cycle.started';
+  /** Main model public id serving this cycle. */
+  model: string;
+  contextWindow?: number;
+  /** Upstream-reported input tokens of the previous reasoning request, when known. */
+  lastInputTokens?: number;
+}
+
+export interface ThinkingEvent extends LedgerEventBase {
+  type: 'thinking';
   callId: string;
-  selections: { path: string; reason: string }[];
+  text: string;
+}
+
+/** One document pick in a doc-search result. */
+export interface DocPick {
+  path: string;
+  title: string;
+  reason: string;
+}
+
+export interface DocSearchEvent extends LedgerEventBase {
+  type: 'doc.search';
+  actionId: string;
+  understanding: string;
+  picks: DocPick[];
+  near: DocPick[];
+  notes: string[];
+}
+
+export interface DocContentEvent extends LedgerEventBase {
+  type: 'doc.content';
+  path: string;
+  title: string;
+  updated: string;
+  version: string;
+  tokens: number;
+  content: string;
+  format: 'full' | 'diff';
+  base?: string;
+  source: 'read' | 'write' | 'project-instructions';
+  actionId?: string;
+}
+
+export interface FilesEvent extends LedgerEventBase {
+  type: 'files';
+  source: 'user' | 'task' | 'read';
+  files: SessionFile[];
+  actionId?: string;
+  taskRunId?: string;
 }
 
 export interface MemoryRecalledEvent extends LedgerEventBase {
   type: 'memory.recalled';
+  version: string;
+  source: 'memory-search' | 'read';
+  actionId?: string;
   path: string;
   content: string;
-  source: 'selection' | 'action';
-  actionId?: string;
-}
-
-export interface DocReadEvent extends LedgerEventBase {
-  type: 'doc.read';
-  path: string;
-  title: string;
-  content: string;
-  source: 'selection' | 'action' | 'project-instructions';
-  actionId?: string;
 }
 
 export interface ReasonCompletedEvent extends LedgerEventBase {
@@ -159,21 +213,19 @@ export interface ReasonCompletedEvent extends LedgerEventBase {
   text: string;
 }
 
-export interface ActionBlockEvent extends LedgerEventBase {
-  type: 'action.block';
-  blockId: string;
-  text: string;
-  unterminated?: boolean;
-}
-
 export interface ActionStartedEvent extends LedgerEventBase {
   type: 'action.started';
   actionId: string;
-  blockId: string;
   kind: ActionKind;
   /** The parsed action payload; opaque here because `actions.ts` owns its shape. */
   parsed: unknown;
   taskRunId?: string;
+}
+
+export interface ActionTitledEvent extends LedgerEventBase {
+  type: 'action.titled';
+  actionId: string;
+  title: string;
 }
 
 export interface ActionFinishedEvent extends LedgerEventBase {
@@ -190,7 +242,6 @@ export interface ActionFinishedEvent extends LedgerEventBase {
 
 export interface ReplyEvent extends LedgerEventBase {
   type: 'reply';
-  phase: 'progress' | 'final';
   text: string;
   callId?: string;
 }
@@ -200,6 +251,8 @@ export interface WsUpdatedEvent extends LedgerEventBase {
   path: string;
   change: 'created' | 'updated';
   actionId: string;
+  taskRunId?: string;
+  taskStatus?: string;
 }
 
 export interface TurnInterruptedEvent extends LedgerEventBase {
@@ -263,12 +316,15 @@ export interface ErrorEvent extends LedgerEventBase {
 export type LedgerEvent =
   | SessionCreatedEvent
   | TurnStartedEvent
-  | ContextSelectedEvent
+  | CycleStartedEvent
+  | ThinkingEvent
+  | DocSearchEvent
+  | DocContentEvent
+  | FilesEvent
   | MemoryRecalledEvent
-  | DocReadEvent
   | ReasonCompletedEvent
-  | ActionBlockEvent
   | ActionStartedEvent
+  | ActionTitledEvent
   | ActionFinishedEvent
   | ReplyEvent
   | WsUpdatedEvent
@@ -306,7 +362,6 @@ export interface ReplayedAction {
   turn: number;
   cycle: number;
   kind: ActionKind;
-  blockId?: string;
   status: ActionStatus | 'running';
   result?: string;
   taskRunId?: string;
@@ -389,17 +444,13 @@ function foldEvent(accumulator: ReplayAccumulator, event: LedgerEvent): void {
         if (turn.phase !== 'terminal') turn.phase = 'reasoning';
       });
       break;
-    case 'action.block':
-      setTurn(accumulator, event.turn, event.cycle, (turn) => {
-        if (turn.phase !== 'terminal') turn.phase = 'reasoning';
-      });
-      break;
     case 'turn.started':
       setTurn(accumulator, event.turn, event.cycle, (turn) => {
         turn.phase = 'preparing';
       });
       break;
-    case 'context.selected':
+    case 'doc.search':
+    case 'memory.recalled':
       setTurn(accumulator, event.turn, event.cycle, (turn) => {
         turn.phase = 'preparing';
       });
@@ -419,7 +470,6 @@ function foldEvent(accumulator: ReplayAccumulator, event: LedgerEvent): void {
         cycle: event.cycle ?? 0,
         kind: event.kind,
         status: 'running',
-        blockId: event.blockId,
         ...(event.taskRunId === undefined ? {} : { taskRunId: event.taskRunId }),
       });
       break;
@@ -431,7 +481,6 @@ function foldEvent(accumulator: ReplayAccumulator, event: LedgerEvent): void {
         cycle: event.cycle ?? previous?.cycle ?? 0,
         kind: event.kind,
         status: event.status,
-        ...(previous?.blockId === undefined ? {} : { blockId: previous.blockId }),
         result: event.result,
         ...(event.taskRunId === undefined ? {} : { taskRunId: event.taskRunId }),
         ...(event.afterInterrupt === undefined ? {} : { afterInterrupt: event.afterInterrupt }),
@@ -441,13 +490,6 @@ function foldEvent(accumulator: ReplayAccumulator, event: LedgerEvent): void {
       });
       break;
     }
-    case 'reply':
-      if (event.phase === 'final') {
-        setTurn(accumulator, event.turn, event.cycle, (turn) => {
-          turn.phase = 'replying';
-        });
-      }
-      break;
     case 'turn.interrupted':
       setTurn(accumulator, event.turn, event.cycle, (turn) => {
         turn.interrupted = true;
@@ -563,6 +605,36 @@ export class Ledger {
   async close(): Promise<void> {
     await this.queue.catch(() => undefined);
     this.listeners.clear();
+  }
+
+  /**
+   * Serialized session deletion: removes the timeline file and the derived
+   * index entry. Only a known session may be deleted and an invalid id is
+   * rejected before any filesystem work.
+   */
+  async deleteSession(sessionId: string): Promise<void> {
+    const run = this.queue.then(() => this.deleteSessionNow(sessionId));
+    this.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async deleteSessionNow(sessionId: string): Promise<void> {
+    assertSessionId(sessionId);
+    const file = this.sessionFile(sessionId);
+    const known = this.summaries.has(sessionId) || this.events.has(sessionId) || existsSync(file);
+    if (!known) throw new Error(`unknown session: ${sessionId}`);
+    this.events.delete(sessionId);
+    this.summaries.delete(sessionId);
+    const listeners = this.listeners.get(sessionId);
+    if (listeners) {
+      listeners.clear();
+      this.listeners.delete(sessionId);
+    }
+    await rm(file, { force: true });
+    this.writeIndexSync();
   }
 
   // ── append internals ───────────────────────────────────────────────────
@@ -683,6 +755,36 @@ export class Ledger {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Every distinct session file a timeline records through `files` events, keyed
+ * by path + hash, with the latest record kept and first-seen timeline order.
+ */
+export function collectSessionFiles(events: readonly LedgerEvent[]): SessionFile[] {
+  const files = new Map<string, SessionFile>();
+  for (const event of events) {
+    if (event.type !== 'files') continue;
+    for (const file of event.files) files.set(`${file.path}\u0000${file.hash}`, { ...file });
+  }
+  return [...files.values()];
+}
+
+/**
+ * Every image occurrence in the context, in event order. An image stays in the
+ * context for the life of the session, exactly like a loaded document.
+ * Occurrences are identified by the actual `SessionFile` objects (no path/hash
+ * dedup), and an occurrence is counted even when its preview is missing.
+ */
+export function contextImageFiles(events: readonly LedgerEvent[]): ReadonlySet<SessionFile> {
+  const selected = new Set<SessionFile>();
+  for (const event of events) {
+    if (event.type !== 'files') continue;
+    for (const file of event.files) {
+      if (file.kind === 'image') selected.add(file);
+    }
+  }
+  return selected;
+}
 
 function assertSessionId(sessionId: string): void {
   if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error(`invalid session id: ${sessionId}`);

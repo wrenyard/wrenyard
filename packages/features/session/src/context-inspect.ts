@@ -17,10 +17,16 @@
  * This module never calls a model and never mutates the ledger.
  */
 
-import { estimateTokens, resolveModelMetadata } from './calls.ts';
-import { renderContextEvent } from './views.ts';
-import type { LedgerPort, SessionViewInfo, ViewsPort } from './engine.ts';
-import type { LedgerEvent, WorkspaceSnapshot } from './ledger.ts';
+import { estimateTokens, IMAGE_INPUT_TOKEN_ESTIMATE, resolveModelMetadata } from './calls.ts';
+import {
+  CURRENT_SESSION_FORMAT,
+  type LedgerEvent,
+  type SessionCreatedEvent,
+  type WorkspaceSnapshot,
+} from './ledger.ts';
+import { renderEventText } from './views.ts';
+import type { LedgerPort, SessionViewInfo } from './ports.ts';
+import type { ViewsPort } from './views.ts';
 
 /** Every layer of the main reasoning view except the transient `wy-user`. */
 export type ContextLayerId = 'wy-system' | 'wy-global' | 'wy-role' | 'wy-workspace' | 'wy-ctx' | 'wy-info';
@@ -29,12 +35,16 @@ export type ContextLayerId = 'wy-system' | 'wy-global' | 'wy-role' | 'wy-workspa
 export type ContextItemKind =
   | 'user'
   | 'assistant'
+  | 'thinking'
   | 'reply'
   | 'doc'
+  | 'doc-search'
   | 'memory'
+  | 'files'
   | 'action-result'
   | 'ws-update'
-  | 'interrupt';
+  | 'interrupt'
+  | 'error';
 
 export interface ContextInspectRequest {
   /** Omitted means a new session: resident layers plus the workspace snapshot. */
@@ -53,7 +63,7 @@ export interface ContextItem {
   turn: number;
   cycle?: number;
   kind: ContextItemKind;
-  /** Document/memory path, action kind and target, or the first line of a message. */
+  /** Document/memory path, search intent, file list, or the first line of a message. */
   label: string;
   tokens: number;
 }
@@ -73,6 +83,14 @@ export interface ContextInspectCalibration {
   actual: number;
 }
 
+/** Persisted session-file image counts for the inspected model. */
+export interface ContextInspectFiles {
+  /** Selected recent occurrences carried for the inspected model (prepared preview). */
+  images: number;
+  /** Occurrences omitted: older than the window, unprepared, or unseen by the model. */
+  omitted: number;
+}
+
 export interface ContextInspection {
   /** Latest ledger `seq` at compute time. */
   computedAtSeq: number;
@@ -84,13 +102,14 @@ export interface ContextInspection {
   totalTokens: number;
   /** The most recent main-reasoning call that reported usage. */
   calibration?: ContextInspectCalibration;
+  /** Persisted session-file image counts, when the timeline carries any. */
+  files?: ContextInspectFiles;
 }
 
 /** Dependencies the inspector reads; wired by the engine. */
 export interface ContextInspectHost {
   workspaceRoot: string;
   deviceName: string;
-  maxCycles: number;
   views: ViewsPort;
   ledger: LedgerPort;
   now(): Date;
@@ -104,39 +123,17 @@ const LAYER_IDS: readonly ContextLayerId[] = ['wy-system', 'wy-global', 'wy-role
 /** Layers that never change for a session with a frozen snapshot. */
 const RESIDENT_LAYER_IDS: readonly ContextLayerId[] = ['wy-system', 'wy-global', 'wy-role', 'wy-workspace'];
 
+/** An unsupported (pre-current) session format never enters a model view. */
+const OLD_SESSION_FORMAT_ERROR = '此会话使用旧格式，记录已保留。请新建会话。';
+
 function firstLine(text: string): string {
   return text.split('\n', 1)[0]?.trim() ?? '';
 }
 
-/** Describe a committed action from its parsed payload, when it has one. */
-function describeParsedAction(parsed: unknown): string | undefined {
-  if (parsed === null || typeof parsed !== 'object') return undefined;
-  const action = parsed as {
-    kind?: unknown;
-    project?: unknown;
-    task?: unknown;
-    goal?: unknown;
-    paths?: unknown;
-    docType?: unknown;
-    reason?: unknown;
-  };
-  switch (action.kind) {
-    case 'dispatch': {
-      const project = typeof action.project === 'string' && action.project !== '' ? ` @${action.project}` : '';
-      const goal = typeof action.goal === 'string' ? action.goal : '';
-      return `dispatch${project} ${String(action.task ?? '')}${goal === '' ? '' : `: ${goal}`}`.trim();
-    }
-    case 'read': {
-      const paths = Array.isArray(action.paths) ? action.paths.filter((path): path is string => typeof path === 'string') : [];
-      return `read ${paths.join(', ')}`.trim();
-    }
-    case 'write-doc':
-      return `write-doc ${String(action.project ?? '')}/${String(action.docType ?? '')}`.trim();
-    case 'unsupported':
-      return `unsupported ${String(action.reason ?? '')}`.trim();
-    default:
-      return undefined;
-  }
+/** First `session.created` event, using a real type guard. */
+function findCreated(events: readonly LedgerEvent[]): SessionCreatedEvent | undefined {
+  for (const event of events) if (event.type === 'session.created') return event;
+  return undefined;
 }
 
 /** The context-item kind of a rendered event, or undefined when it is not one. */
@@ -146,44 +143,54 @@ function itemKind(event: LedgerEvent): ContextItemKind | undefined {
       return 'user';
     case 'reason.completed':
       return 'assistant';
+    case 'thinking':
+      return 'thinking';
     case 'reply':
       return 'reply';
-    case 'doc.read':
+    case 'doc.content':
       return 'doc';
+    case 'doc.search':
+      return 'doc-search';
     case 'memory.recalled':
       return 'memory';
+    case 'files':
+      return 'files';
     case 'action.finished':
       return 'action-result';
     case 'ws.updated':
       return 'ws-update';
     case 'turn.interrupted':
       return 'interrupt';
+    case 'error':
+      return 'error';
     default:
       return undefined;
   }
 }
 
-function itemLabel(event: LedgerEvent, parsedActions: Map<string, unknown>): string {
+function itemLabel(event: LedgerEvent): string {
   switch (event.type) {
     case 'turn.started':
-      return firstLine(event.text);
     case 'reason.completed':
-      return firstLine(event.text);
     case 'reply':
+    case 'thinking':
       return firstLine(event.text);
-    case 'doc.read':
+    case 'doc.content':
     case 'memory.recalled':
-      return event.path;
     case 'ws.updated':
       return event.path;
+    case 'doc.search':
+      return firstLine(event.understanding);
+    case 'files':
+      return event.files.map((file) => file.path).join(', ');
     case 'turn.interrupted':
       return event.reason;
     case 'action.finished': {
-      const described = describeParsedAction(parsedActions.get(event.actionId));
-      if (described !== undefined && described !== '') return described;
       const result = firstLine(event.result);
       return result === '' ? event.kind : result;
     }
+    case 'error':
+      return firstLine(event.message);
     default:
       return '';
   }
@@ -200,6 +207,29 @@ function calibrationOf(events: readonly LedgerEvent[]): ContextInspectCalibratio
     return { callId: event.callId, model: event.model, estimated: event.estimatedInputTokens, actual: input };
   }
   return undefined;
+}
+
+/**
+ * Persisted image counts: every image occurrence at every `files` event
+ * position is carried when the inspected model accepts images and the
+ * occurrence has a prepared preview. Every other occurrence is reported as
+ * omitted.
+ */
+function fileCountsOf(
+  events: readonly LedgerEvent[],
+  allowImages: boolean,
+): { images: number; omitted: number } {
+  let images = 0;
+  let omitted = 0;
+  for (const event of events) {
+    if (event.type !== 'files') continue;
+    for (const file of event.files) {
+      if (file.kind !== 'image') continue;
+      if (allowImages && file.processedPath !== undefined) images += 1;
+      else omitted += 1;
+    }
+  }
+  return { images, omitted };
 }
 
 /** The next turn number: one past the highest turn the timeline mentions. */
@@ -231,25 +261,25 @@ export class ContextInspector {
       : this.snapshotOf(sessionId, events);
 
     const metadata = resolveModelMetadata(request.model);
+    const allowImages = metadata.imageInput === true;
+    const fileCounts = fileCountsOf(events, allowImages);
     const session: SessionViewInfo = {
       now: this.host.now().toISOString(),
       sessionId: sessionId ?? '',
       turn: nextTurn(events),
       cycle: 1,
-      maxCycles: this.host.maxCycles,
       model: request.model,
       deviceName: this.host.deviceName,
       ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
     };
 
     const view = this.host.views.reason({
-      workspaceRoot: this.host.workspaceRoot,
       deviceName: this.host.deviceName,
       snapshot,
       events,
       userText: '',
       session,
-      runningTurns: [],
+      allowImages: false,
     });
     const segments = view.segments ?? {};
 
@@ -261,7 +291,9 @@ export class ContextInspector {
       const text = segments[id] ?? '';
       const cached = resident?.get(id);
       if (cached !== undefined) return { id, tokens: cached };
-      const tokens = estimateTokens(text);
+      // The rendered `wy-ctx` layer is text only; each eligible image adds its
+      // real processed-image estimate instead of its base64 payload length.
+      const tokens = estimateTokens(text) + (id === 'wy-ctx' ? fileCounts.images * IMAGE_INPUT_TOKEN_ESTIMATE : 0);
       if (cacheable && RESIDENT_LAYER_IDS.includes(id)) {
         resident ??= new Map();
         resident.set(id, tokens);
@@ -271,20 +303,14 @@ export class ContextInspector {
     });
     const totalTokens = layers.reduce((sum, layer) => sum + layer.tokens, 0);
 
-    const parsedActions = new Map<string, unknown>();
-    for (const event of events) {
-      if (event.type === 'action.started') parsedActions.set(event.actionId, event.parsed);
-    }
     const items: ContextItem[] = [];
     for (const event of events) {
-      const rendered = renderContextEvent(event);
-      if (rendered === undefined) continue;
       const kind = itemKind(event);
       if (kind === undefined) continue;
       const key = `${sessionId ?? ''}:${event.seq}`;
       let tokens = this.itemTokens.get(key);
       if (tokens === undefined) {
-        tokens = estimateTokens(rendered);
+        tokens = estimateTokens(renderEventText(event) ?? '');
         this.itemTokens.set(key, tokens);
       }
       items.push({
@@ -292,12 +318,13 @@ export class ContextInspector {
         turn: event.turn ?? 0,
         ...(event.cycle === undefined ? {} : { cycle: event.cycle }),
         kind,
-        label: itemLabel(event, parsedActions),
+        label: itemLabel(event),
         tokens,
       });
     }
 
     const calibration = calibrationOf(events);
+    const hasFiles = fileCounts.images > 0 || fileCounts.omitted > 0;
     return {
       computedAtSeq: events.at(-1)?.seq ?? 0,
       estimator: 'cl100k_base',
@@ -310,19 +337,20 @@ export class ContextInspector {
       items,
       totalTokens,
       ...(calibration === undefined ? {} : { calibration }),
+      ...(hasFiles ? { files: fileCounts } : {}),
     };
   }
 
   private readEvents(sessionId: string): LedgerEvent[] {
     const events = this.host.ledger.read(sessionId);
-    if (!events.some((event) => event.type === 'session.created')) {
-      throw new Error(`Unknown session: ${sessionId}`);
-    }
+    const created = findCreated(events);
+    if (!created) throw new Error(`Unknown session: ${sessionId}`);
+    if (created.format !== CURRENT_SESSION_FORMAT) throw new Error(OLD_SESSION_FORMAT_ERROR);
     return events;
   }
 
   private snapshotOf(sessionId: string, events: readonly LedgerEvent[]): WorkspaceSnapshot {
-    const created = events.find((event) => event.type === 'session.created');
+    const created = findCreated(events);
     if (!created) throw new Error(`Unknown session: ${sessionId}`);
     return created.snapshot;
   }

@@ -66,7 +66,8 @@ const RESPONSE_HEADER_ALLOWLIST = new Set([
   // Preserved for all providers so native clients observe 429 boundaries.
   'retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset',
 ]);
-const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
+// Sized for a request that carries its session's images inline as base64.
+const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 
 const CODEBUDDY_ROUND_TTL_MS = 30 * 60 * 1000;
 const CODEBUDDY_ROUND_CACHE_LIMIT = 512;

@@ -124,7 +124,11 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
   router.register('session.create', (_params, _message, context) =>
     call(context, 'session.create', () => session.createSession()))
   router.register('session.send', (params, _message, context) =>
-    call(context, 'session.send', () => session.send(params.sessionId, { text: params.text, model: params.model })))
+    call(context, 'session.send', () => session.send(params.sessionId, {
+      text: params.text,
+      model: params.model,
+      ...(params.attachments === undefined ? {} : { attachments: params.attachments }),
+    })))
   router.register('session.interrupt', (params, _message, context) =>
     call(context, 'session.interrupt', async () => {
       await session.interrupt(params.sessionId, params.turn)
@@ -134,6 +138,13 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
     call(context, 'session.events', () => pollEvents(session, params)))
   router.register('session.context.inspect', (params, _message, context) =>
     call(context, 'session.context.inspect', () => session.inspectContext(params)))
+  router.register('session.media.read', (params, _message, context) =>
+    call(context, 'session.media.read', () => session.readMedia(params.sessionId, params.path)))
+  router.register('session.delete', (params, _message, context) =>
+    call(context, 'session.delete', async () => {
+      await session.deleteSession(params.sessionId)
+      return {}
+    }))
   router.register('session.summary.settings', (_params, _message, context) =>
     call(context, 'session.summary.settings', () => summarySnapshot()))
   router.register('session.summary.save', (params, _message, context) =>

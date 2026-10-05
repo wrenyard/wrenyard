@@ -8,6 +8,8 @@ import {
   sessionSummarySettingsParamsSchema, sessionSummarySettingsResultSchema,
   sessionSummarySaveParamsSchema, sessionSummarySaveResultSchema,
   sessionContextInspectParamsSchema, sessionContextInspectResultSchema,
+  sessionMediaReadParamsSchema, sessionMediaReadResultSchema,
+  sessionDeleteParamsSchema, sessionDeleteResultSchema,
   type SessionListParams, type SessionListResult,
   type SessionCreateParams, type SessionCreateResult,
   type SessionSendParams, type SessionSendResult,
@@ -16,6 +18,8 @@ import {
   type SessionSummarySettingsParams, type SessionSummarySettingsResult,
   type SessionSummarySaveParams, type SessionSummarySaveResult,
   type SessionContextInspectParams, type SessionContextInspectResult,
+  type SessionMediaReadParams, type SessionMediaReadResult,
+  type SessionDeleteParams, type SessionDeleteResult,
 } from './methods/session.mts'
 export type {
   SessionListParams, SessionListResult,
@@ -26,6 +30,8 @@ export type {
   SessionSummarySettingsParams, SessionSummarySettingsResult,
   SessionSummarySaveParams, SessionSummarySaveResult,
   SessionContextInspectParams, SessionContextInspectResult,
+  SessionMediaReadParams, SessionMediaReadResult,
+  SessionDeleteParams, SessionDeleteResult,
 } from './methods/session.mts'
 import {
   activitySnapshotParamsSchema,
@@ -483,6 +489,8 @@ export interface ForemanMethodParams {
   'session.summary.settings': SessionSummarySettingsParams
   'session.summary.save': SessionSummarySaveParams
   'session.context.inspect': SessionContextInspectParams
+  'session.media.read': SessionMediaReadParams
+  'session.delete': SessionDeleteParams
 }
 
 export interface ForemanMethodResults {
@@ -550,6 +558,8 @@ export interface ForemanMethodResults {
   'session.summary.settings': SessionSummarySettingsResult
   'session.summary.save': SessionSummarySaveResult
   'session.context.inspect': SessionContextInspectResult
+  'session.media.read': SessionMediaReadResult
+  'session.delete': SessionDeleteResult
 }
 
 export type ForemanMethod = keyof ForemanMethodParams & keyof ForemanMethodResults
@@ -799,6 +809,14 @@ export const methodRegistry: {
   'session.context.inspect': {
     params: sessionContextInspectParamsSchema,
     result: sessionContextInspectResultSchema,
+  },
+  'session.media.read': {
+    params: sessionMediaReadParamsSchema,
+    result: sessionMediaReadResultSchema,
+  },
+  'session.delete': {
+    params: sessionDeleteParamsSchema,
+    result: sessionDeleteResultSchema,
   },
 }
 

@@ -1,460 +1,87 @@
 /**
- * session engine: the work-turn state machine.
+ * session engine: the work-turn state machine (current-only).
  *
  * Cross-module contract (implemented by the concurrent sibling tasks):
  *
  *   ledger.ts    owns the append-only timeline. Its `Ledger` class is adapted to
  *                {@link LedgerPort} and its event/snapshot types are imported
  *                directly because the spec fixes their shapes.
- *   workspace.ts owns the read-only file source, path validation, snapshot
- *                generation and the project instruction chain. Adapted to
- *                {@link FilesPort} / {@link EnginePorts.createSnapshot}.
+ *   workspace.ts owns the read-only file source, the document catalogue and the
+ *                snapshot. Adapted to {@link FilesPort} / {@link SnapshotInput}.
  *   views.ts     owns prompt assembly, event rendering/escaping and layer
  *                character statistics. Adapted to {@link ViewsPort}.
  *   calls.ts     owns role→model resolution, model metadata, the budget check,
  *                timeouts and `call` event writing. Adapted to {@link CallsPort}.
  *   driver.ts    owns the single gateway streaming request, used by calls.ts.
+ *   actions.ts   owns the reason action contract and execution.
+ *   documents.ts owns the `doc.content` reconstruction helpers.
+ *   media.ts     owns the session file store.
+ *   ports.ts     declares the host surface and the ports above.
+ *   runtime.ts   declares the in-memory session and turn state.
+ *   replies.ts   owns the progress/final replies and the session title.
+ *   live.ts      owns the streaming snapshots of running calls.
  *
- * `index.ts` is the only composition root: it builds the ports from those
- * sibling modules and hands them to {@link createEngine}. Keeping the concrete
- * wiring there means this file and `actions.ts` stay self-contained.
+ * `index.ts` is the only composition root: it builds the ports and hands them to
+ * {@link createEngine}. There is no compatibility mechanism and no legacy role.
  */
-
 import { randomUUID } from 'node:crypto';
-
-import type { WrenyardGatewayConnection, WrenyardGatewayModel } from '@wrenyard/control-client';
-import type {
-  LedgerEvent,
-  LedgerEventDraft,
-  SessionSummary,
-  TaskBrief,
-  TurnStatus,
-  WorkspaceSnapshot,
-} from './ledger.ts';
-import { resolveModelMetadata, type CallRole } from './calls.ts';
-import { ContextInspector, type ContextInspectRequest, type ContextInspection } from './context-inspect.ts';
-import type { ModelMessage, Usage } from './driver.ts';
+import { rm } from 'node:fs/promises';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import {
+  collectSessionFiles,
+  CURRENT_SESSION_FORMAT,
+  contextImageFiles,
+  type LedgerEvent,
+  type LedgerEventDraft,
+  type SessionCreatedEvent,
+  type SessionSummary,
+  type WorkspaceSnapshot,
+} from './ledger.ts';
+import { ModelCallError, resolveModelMetadata, type CallRole } from './calls.ts';
+import { contentVersion } from './documents.ts';
+import { ContextInspector, type ContextInspectRequest, type ContextInspection } from './context-inspect.ts';
+import { type ToolCall } from './driver.ts';
+import type { AttachmentInput, FileStore } from './media.ts';
+import {
+  actionFromToolCall,
   ActionRunner,
-  ActionSplitter,
   type ActionExecutionOutcome,
-  type ActionKind,
-  type ActionStatus,
-  type DocType,
+  type ActionRunContext,
   type ParsedAction,
 } from './actions.ts';
+import type { BuiltView } from './views.ts';
+import { LiveCalls } from './live.ts';
+import type {
+  ActionBaseContext,
+  EnginePorts,
+  LiveCall,
+  Session,
+  SessionHost,
+  SessionViewInfo,
+  SnapshotProjectInput,
+} from './ports.ts';
+import { latestReasonText, ReplyWriter } from './replies.ts';
+import type { RuntimeAction, SessionRuntime, TurnRuntime } from './runtime.ts';
 
-export const MAX_CYCLES = 10;
-/** Output-token allowance for the single final reply call. */
-const REPLY_MAX_TOKENS = 800;
+export type {
+  BuiltView,
+  CompileViewInput,
+  DocSearchViewInput,
+  MemorySearchViewInput,
+  ReasonViewInput,
+  ReplyViewInput,
+  TitleViewInput,
+  ViewMessage,
+  ViewsPort,
+} from './views.ts';
+export type * from './ports.ts';
+export { fallbackReply } from './replies.ts';
 
-// ─── Public host and session surface ───────────────────────────────────────
+/** How much of one action result the memory-search view carries. */
+const ACTION_RESULT_EXCERPT = 200;
 
-export interface ProjectInfo {
-  id: string;
-  displayName?: string;
-  workspaceDir: string;
-  checkoutPath?: string;
-  gitRemote?: string;
-  defaultBranch?: string;
-}
-
-export interface SessionHost {
-  workspaceRoot: string;
-  stateRoot: string;
-  deviceName: string;
-  gateway(): Promise<WrenyardGatewayConnection>;
-  cheapModel(): Promise<string>;
-  listProjects(): Promise<ProjectInfo[]>;
-  gitHead(checkoutPath: string): Promise<{ branch?: string; head?: string }>;
-  listTaskDefinitions(): Promise<{ id: string; description: string; project?: string }[]>;
-  describeTask(id: string, project?: string): Promise<{ description: string; inputSchema: unknown }>;
-  createTaskRun(params: {
-    task: string;
-    project?: string;
-    input: unknown;
-    ctx?: Record<string, unknown>;
-  }): Promise<{ taskRunId: string }>;
-  waitTaskRun(taskRunId: string, signal: AbortSignal): Promise<{ status: string; output: string }>;
-  cancelTaskRun(taskRunId: string): Promise<void>;
-  createWorkspaceDoc(path: string, content: string): Promise<void>;
-  updateWorkspaceDoc(path: string, content: string, expectedContent: string): Promise<void>;
-  now?(): Date;
-}
-
-/**
- * An in-memory streaming snapshot of one call. It is never written to the
- * ledger: the durable `call.started` / `call` events remain authoritative, and
- * the live table only bridges the gap while a call is still running. The
- * complete accumulated text (not a delta) is exposed on each notification.
- */
-export interface LiveCall {
-  callId: string;
-  text: string;
-  reasoning: string;
-}
-
-export interface Session {
-  createSession(): Promise<{ sessionId: string }>;
-  listSessions(): SessionSummary[];
-  send(
-    sessionId: string,
-    input: { text: string; model: { provider: string; model: string; reasoningEffort?: string } },
-  ): Promise<{ turn: number }>;
-  interrupt(sessionId: string, turn: number): Promise<void>;
-  /** Admitted turns whose terminal `turn.finished` is not yet durable. */
-  activeTurnCount(): number;
-  /** True while any admitted turn has not reached its durable terminal append. */
-  hasRunningTurns(): boolean;
-  readLedger(sessionId: string): LedgerEvent[];
-  /**
-   * Read-only, forward-looking inspection of the next main reasoning view.
-   * Omitted `sessionId` inspects a new session (resident layers plus snapshot).
-   */
-  inspectContext(request: ContextInspectRequest): Promise<ContextInspection>;
-  /** Current in-memory streaming snapshots for the session's live calls. */
-  readLive(sessionId: string): LiveCall[];
-  subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void;
-  /** Subscribe to live-snapshot changes; the returned function unsubscribes. */
-  subscribeLive(sessionId: string, listener: (live: LiveCall[]) => void): () => void;
-  close(): Promise<void>;
-}
-
-// ─── Ports (concrete wiring lives in index.ts) ─────────────────────────────
-
-export interface LedgerPort {
-  init(): Promise<void>;
-  append(sessionId: string, draft: LedgerEventDraft): Promise<LedgerEvent>;
-  read(sessionId: string): LedgerEvent[];
-  listSessions(): SessionSummary[];
-  subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void;
-  close(): Promise<void>;
-}
-
-export interface RecalledFile {
-  path: string;
-  title: string;
-  content: string;
-}
-
-export interface FilesPort {
-  /** Validate a workspace-relative path against the read/write scope. */
-  checkPath(path: string): { ok: true; kind: 'memory' | 'doc' } | { ok: false; reason: string };
-  exists(path: string): boolean;
-  /** Read a validated path; undefined when it is missing or unreadable. */
-  read(path: string): RecalledFile | undefined;
-  /** Existing project instruction files, outermost first. */
-  instructionChain(workspaceDir: string, docPath: string): string[];
-}
-
-export interface SnapshotProjectInput {
-  id: string;
-  displayName?: string;
-  workspaceDir: string;
-  checkoutPath?: string;
-  gitRemote?: string;
-  defaultBranch?: string;
-  branch?: string;
-  head?: string;
-  tasks: TaskBrief[];
-}
-
-export interface SnapshotInput {
-  workspaceRoot: string;
-  deviceName: string;
-  takenAt: Date;
-  projects: SnapshotProjectInput[];
-  builtinTasks: TaskBrief[];
-}
-
-export interface ViewMessage {
-  role: 'system' | 'user';
-  content: string;
-}
-
-export interface BuiltView {
-  messages: ViewMessage[];
-  /** Character count per prompt layer, for the `call` event. */
-  layers: Record<string, number>;
-  /**
-   * Raw text of each assembled prompt layer. Present only on views that expose
-   * it (the reason view), so the read-only context inspector can token-count
-   * each layer with the same assembly the model call uses.
-   */
-  segments?: Record<string, string>;
-}
-
-export type TurnPhase = 'preparing' | 'reasoning' | 'acting' | 'replying' | 'terminal';
-
-export interface SessionViewInfo {
-  now?: string;
-  sessionId: string;
-  turn: number;
-  cycle: number;
-  maxCycles: number;
-  model: string;
-  deviceName: string;
-  contextWindow?: number;
-}
-
-export interface RunningActionInfo {
-  actionId: string;
-  turn: number;
-  kind: ActionKind;
-  goal: string;
-  startedAt: string;
-  taskRunId?: string;
-}
-
-export interface RunningTurnInfo {
-  turn: number;
-  phase: TurnPhase;
-  actions: RunningActionInfo[];
-}
-
-export interface ReasonViewInput {
-  workspaceRoot: string;
-  deviceName: string;
-  snapshot: WorkspaceSnapshot;
-  events: LedgerEvent[];
-  userText: string;
-  session: SessionViewInfo;
-  runningTurns: RunningTurnInfo[];
-}
-
-export interface SelectViewInput {
-  snapshot: WorkspaceSnapshot;
-  events: LedgerEvent[];
-  userText: string;
-  loadedPaths: string[];
-  session: SessionViewInfo;
-  cycle: number;
-}
-
-export interface ReplyViewInput {
-  phase: 'final';
-  snapshot: WorkspaceSnapshot;
-  events: LedgerEvent[];
-  userText: string;
-  session: SessionViewInfo;
-  runningTurns: RunningTurnInfo[];
-  status?: TurnStatus;
-  error?: string;
-}
-
-export interface TitleViewInput {
-  userText: string;
-  finalReply?: string;
-}
-
-export interface InterpretViewInput {
-  blockText: string;
-  unterminated: boolean;
-  cycleText: string;
-  userText: string;
-  projects: ProjectInfo[];
-  tasks: { id: string; description: string; project?: string }[];
-  scopeRules: string;
-  previousFailure?: string;
-}
-
-export interface CompileViewInput {
-  task: { id: string; description: string; inputSchema: unknown };
-  action: Extract<ParsedAction, { kind: 'dispatch' }>;
-  userText: string;
-  events: LedgerEvent[];
-  providers: { provider: string; model: string }[];
-  previousFailure?: string;
-}
-
-export interface WriteDocViewInput {
-  globalAgents: string;
-  snapshot: WorkspaceSnapshot;
-  events: LedgerEvent[];
-  pendingRecalls: LedgerEventDraft[];
-  project: { id: string; workspaceDir: string; displayName?: string };
-  docType: DocType;
-  date: string;
-  currentContent?: string;
-  outline: string;
-}
-
-export interface ViewsPort {
-  reason(input: ReasonViewInput): BuiltView;
-  select(input: SelectViewInput): BuiltView;
-  reply(input: ReplyViewInput): BuiltView;
-  title(input: TitleViewInput): BuiltView;
-  interpret(input: InterpretViewInput): BuiltView;
-  compile(input: CompileViewInput): BuiltView;
-  writeDoc(input: WriteDocViewInput): BuiltView;
-}
-
-export interface CallRunRequest {
-  callId: string;
-  role: CallRole;
-  turn?: number;
-  cycle?: number;
-  messages: readonly ModelMessage[];
-  layers: Record<string, number>;
-  /** Required for the `reason` role; ignored for every other role. */
-  reason?: { provider: string; model: string; reasoningEffort?: string };
-  /** Output-token cap forwarded to the wire `max_tokens` when the driver supports it. */
-  maxTokens?: number;
-  signal: AbortSignal;
-  onText?: (delta: string) => void;
-  onReasoning?: (delta: string) => void;
-}
-
-export interface CallRunResult {
-  model: string;
-  text: string;
-  reasoning?: string;
-  usage?: Usage;
-}
-
-/** Structural match for `calls.ts`'s `CallRunner`. */
-export interface CallsPort {
-  run(input: CallRunRequest): Promise<CallRunResult>;
-}
-
-/**
- * The committed-recall gate. `has` and `claim` both answer from the recalls
- * already published to the timeline: `claim` reports whether the path is new
- * but never reserves it, so nothing is poisoned by a read that never lands.
- * The engine alone decides what becomes a committed recall, at publish time.
- */
-export interface RecallGate {
-  has(path: string): boolean;
-  claim(path: string): boolean;
-}
-
-/**
- * Everything an action needs except its own id and task-run hook; the engine
- * supplies both per action. `currentEvents` / `currentCycleText` are read at
- * each cheap request, so an action always sees the timeline as of now.
- */
-export type ActionBaseContext = Omit<ActionRunContext, 'actionId' | 'onTaskRun'>;
-
-export interface ActionRunContext {
-  turn: number;
-  cycle: number;
-  actionId: string;
-  userText: string;
-  snapshot: WorkspaceSnapshot;
-  currentEvents(): LedgerEvent[];
-  currentCycleText(): string;
-  runningTurns: RunningTurnInfo[];
-  session: SessionViewInfo;
-  projects: ProjectInfo[];
-  tasks: { id: string; description: string; project?: string }[];
-  scopeRules: string;
-  providers: { provider: string; model: string }[];
-  signal: AbortSignal;
-  recalls: RecallGate;
-  /**
-   * Called by a dispatch action as soon as it created a task run, before it
-   * waits. The engine records the run id (a second `action.started` carrying it)
-   * and cancels the run immediately when the turn is already aborted.
-   */
-  onTaskRun(taskRunId: string): Promise<void>;
-}
-
-export interface EnginePorts {
-  ledger: LedgerPort;
-  createSnapshot(input: SnapshotInput): Promise<WorkspaceSnapshot>;
-  files(snapshot: WorkspaceSnapshot, workspaceRoot: string): FilesPort;
-  views: ViewsPort;
-  /** Session-scoped so a `call` event lands on the right timeline. */
-  calls(sessionId: string): CallsPort;
-}
-
-// ─── Internal runtime state ────────────────────────────────────────────────
-
-/** Committed recalls only: `mark` is called by the engine at publish time. */
-class RecallGateImpl implements RecallGate {
-  private readonly paths = new Set<string>();
-  has(path: string): boolean {
-    return this.paths.has(path);
-  }
-  claim(path: string): boolean {
-    return !this.paths.has(path);
-  }
-  mark(path: string): void {
-    this.paths.add(path);
-  }
-  list(): string[] {
-    return [...this.paths];
-  }
-}
-
-interface RuntimeAction {
-  actionId: string;
-  turn: number;
-  cycle: number;
-  kind: ActionKind;
-  goal: string;
-  startedAt: string;
-  taskRunId?: string;
-}
-
-interface ResultBundle {
-  finished: LedgerEventDraft;
-  deferred: LedgerEventDraft[];
-}
-
-interface TurnRuntime {
-  turn: number;
-  userText: string;
-  model: { provider: string; model: string; reasoningEffort?: string };
-  publicId: string;
-  contextWindow?: number;
-  phase: TurnPhase;
-  status?: TurnStatus;
-  cycle: number;
-  abort: AbortController;
-  actions: Map<string, RuntimeAction>;
-  finished: boolean;
-  /** Unlike `finished`, this flag changes only after the terminal append. */
-  durableTerminal: boolean;
-  resultQueue: ResultBundle[];
-  flushPromise: Promise<void>;
-  /** Set when reasoning failed: late results are still recorded, reads are not. */
-  dropDeferred: boolean;
-  reasonCompleted: boolean;
-  actionsThisCycle: number;
-  blocksThisCycle: number;
-  actionSeq: number;
-  /** Blocks being parsed/started; separate from the executions they spawn. */
-  parsePromises: Set<Promise<void>>;
-  actionPromises: Set<Promise<void>>;
-  cycleText: string;
-  taskRunIds: Set<string>;
-}
-
-interface SessionRuntime {
-  sessionId: string;
-  workspaceRoot: string;
-  snapshot: WorkspaceSnapshot;
-  files: FilesPort;
-  actions: ActionRunner;
-  calls: CallsPort;
-  callSeq: number;
-  title: string;
-  lastTitleVersion: number;
-  titleVersion: number;
-  titleUpdatedWithReply: boolean;
-  firstUserText?: string;
-  turns: Map<number, TurnRuntime>;
-  nextTurn: number;
-  recalls: RecallGateImpl;
-  recallQueue: Promise<void>;
-}
-
-const SCOPE_RULES = [
-  'Readable: root `memories/*.md` except INDEX.md and `projects/<qualified-name>/docs/**/*.md` only.',
-  'Writable: project docs via the write-doc action only (root `docs/`, other `instructions/*.md` and project `instructions/` are rejected).',
-  'Paths must be workspace-relative Markdown without `..`, NUL or absolute forms; project instruction files load automatically.',
-].join(' ');
+/** An unsupported (pre-current) session format is never recovered or migrated. */
+const OLD_SESSION_FORMAT_ERROR = '此会话使用旧格式，记录已保留。请新建会话。';
 
 // ─── Engine ────────────────────────────────────────────────────────────────
 
@@ -467,13 +94,20 @@ class Engine implements Session {
   private readonly ports: EnginePorts;
   private readonly inspector: ContextInspector;
   private readonly sessions = new Map<string, SessionRuntime>();
-  /** Per-session, in-memory streaming snapshots keyed by call id. */
-  private readonly liveCalls = new Map<string, Map<string, LiveCall>>();
-  private readonly liveListeners = new Map<string, Set<(live: LiveCall[]) => void>>();
+  private readonly live = new LiveCalls();
+  private readonly replies: ReplyWriter;
   private readonly ensuring = new Map<string, Promise<SessionRuntime>>();
   private readonly recoveringTurns = new Set<string>();
+  /**
+   * Per-session count of in-flight attachment imports/admissions. A plain Set
+   * was wrong: two concurrent imports of the same session would let the first
+   * `finally` drop the flag while the second was still copying bytes, so a
+   * concurrent delete could remove the files directory out from under it.
+   */
+  private readonly pendingAdmissions = new Map<string, number>();
+  /** Sessions deleted in this process; a stale send must not resurrect one. */
+  private readonly deletedSessions = new Set<string>();
   private readonly pipeline = new Set<Promise<unknown>>();
-  private gatewayModelsPromise?: Promise<WrenyardGatewayModel[]>;
   private ready: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
@@ -481,10 +115,10 @@ class Engine implements Session {
   constructor(host: SessionHost, ports: EnginePorts) {
     this.host = host;
     this.ports = ports;
+    this.replies = new ReplyWriter(ports, this);
     this.inspector = new ContextInspector({
       workspaceRoot: host.workspaceRoot,
       deviceName: host.deviceName,
-      maxCycles: MAX_CYCLES,
       views: ports.views,
       ledger: ports.ledger,
       now: () => this.now(),
@@ -510,7 +144,8 @@ class Engine implements Session {
 
   /**
    * Recover every stored session at startup, not only the ones a later `send`
-   * touches: a restart must cancel task runs orphaned by any session.
+   * touches: a restart must cancel task runs orphaned by any session. A session
+   * in an unsupported historical format is skipped without being rewritten.
    */
   private async initialize(): Promise<void> {
     await this.ports.ledger.init();
@@ -535,6 +170,7 @@ class Engine implements Session {
     this.registerSession(sessionId, this.host.workspaceRoot, snapshot);
     await this.ports.ledger.append(sessionId, {
       type: 'session.created',
+      format: CURRENT_SESSION_FORMAT,
       workspaceRoot: this.host.workspaceRoot,
       snapshot,
     });
@@ -565,7 +201,11 @@ class Engine implements Session {
         ...(head.head === undefined ? {} : { head: head.head }),
         tasks: taskDefinitions
           .filter((definition) => definition.project === project.id)
-          .map((definition) => ({ id: definition.id, description: definition.description })),
+          .map((definition) => ({
+            id: definition.id,
+            description: definition.description,
+            inputSummary: definition.inputSummary,
+          })),
       });
     }
 
@@ -576,7 +216,11 @@ class Engine implements Session {
       projects: snapshotProjects,
       builtinTasks: taskDefinitions
         .filter((definition) => definition.project === undefined)
-        .map((definition) => ({ id: definition.id, description: definition.description })),
+        .map((definition) => ({
+          id: definition.id,
+          description: definition.description,
+          inputSummary: definition.inputSummary,
+        })),
     });
   }
 
@@ -586,9 +230,14 @@ class Engine implements Session {
 
   async send(
     sessionId: string,
-    input: { text: string; model: { provider: string; model: string; reasoningEffort?: string } },
+    input: {
+      text: string;
+      model: { provider: string; model: string; reasoningEffort?: string };
+      attachments?: AttachmentInput[];
+    },
   ): Promise<{ turn: number }> {
     this.assertOpen();
+    // Requires the current-format marker before any import, copy or append.
     const session = await this.ensureSession(sessionId);
     const publicId = `${input.model.provider}/${input.model.model}`;
     this.assertOpen();
@@ -602,6 +251,23 @@ class Engine implements Session {
         `reasoningEffort '${input.model.reasoningEffort}' is not supported by ${publicId}; expected one of ${metadata.thinkingLevels.join(', ')}`,
       );
     }
+
+    // A deletion that completed while this send was waiting on the session lock
+    // must not be undone by admitting a turn after the fact.
+    this.assertNotDeleted(sessionId);
+
+    // Hold an admission for the whole import so a concurrent delete cannot
+    // remove the session (and its files directory) out from under this send.
+    this.beginAdmission(sessionId);
+    let files: Awaited<ReturnType<FileStore['importAttachments']>>;
+    try {
+      files = input.attachments === undefined || input.attachments.length === 0
+        ? []
+        : await this.ports.fileStore.importAttachments(sessionId, input.attachments);
+    } finally {
+      this.endAdmission(sessionId);
+    }
+    this.assertNotDeleted(sessionId);
 
     // Turn numbers are assigned synchronously here, so concurrent sends take
     // their numbers in invocation order rather than in resolution order.
@@ -626,6 +292,11 @@ class Engine implements Session {
       throw error;
     }
 
+    // The imported files enter the context immediately before the turn runs.
+    if (files.length > 0) {
+      await this.ports.ledger.append(sessionId, { type: 'files', turn: turnNumber, source: 'user', files });
+    }
+
     this.track(this.runTurn(session, turn));
     return { turn: turnNumber };
   }
@@ -635,6 +306,81 @@ class Engine implements Session {
     const operation = this.interruptTurn(sessionId, turn, 'user');
     this.track(operation);
     await operation;
+  }
+
+  async readMedia(sessionId: string, path: string): Promise<{ path: string; mime: string; dataUrl?: string }> {
+    this.assertOpen();
+    await this.ready;
+    const events = this.ports.ledger.read(sessionId);
+    if (findCreated(events) === undefined) throw new Error(`Unknown session: ${sessionId}`);
+    assertCurrentFormat(events, sessionId);
+    // Exact canonical path only; the ledger's own file rows are authoritative.
+    const file = collectSessionFiles(events).find((candidate) => candidate.path === path);
+    if (!file) throw new Error(`Unknown session file: ${path}`);
+    if (!this.isOwnedSessionFile(sessionId, file.path, events)) {
+      throw new Error(`Path is outside this session's files: ${path}`);
+    }
+    if (file.kind !== 'image') return { path: file.path, mime: file.mime };
+    const image = await this.ports.fileStore.readImage(file);
+    return { path: file.path, mime: file.mime, dataUrl: image.dataUrl };
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    this.assertOpen();
+    await this.ready;
+    const prefix = `${sessionId}:`;
+    if ([...this.recoveringTurns].some((key) => key.startsWith(prefix))) {
+      throw new Error(`Cannot delete a session with a recovering turn: ${sessionId}`);
+    }
+    if ((this.pendingAdmissions.get(sessionId) ?? 0) > 0) {
+      throw new Error(`Cannot delete a session while an attachment import is pending: ${sessionId}`);
+    }
+    const runtime = this.sessions.get(sessionId);
+    if (runtime) {
+      for (const turn of runtime.turns.values()) {
+        // A durable terminal alone is not enough: a turn can still be parsing
+        // blocks, running actions, or holding late results to flush.
+        const lateWork = turn.parsePromises.size > 0
+          || turn.actionPromises.size > 0
+          || turn.resultQueue.length > 0;
+        if (!turn.durableTerminal || lateWork) {
+          throw new Error(`Cannot delete a session with a running turn: ${sessionId}`);
+        }
+      }
+    }
+    const events = this.ports.ledger.read(sessionId);
+    if (events.length === 0 && !runtime) throw new Error(`Unknown session: ${sessionId}`);
+
+    // Mark synchronously, before any await, so a send that already passed its
+    // admission check cannot append a turn after the timeline is removed.
+    this.deletedSessions.add(sessionId);
+
+    const taskRunIds = new Set<string>();
+    for (const event of events) {
+      if (event.type === 'action.started' && event.taskRunId !== undefined) taskRunIds.add(event.taskRunId);
+    }
+    for (const turn of runtime?.turns.values() ?? []) {
+      for (const taskRunId of turn.taskRunIds) taskRunIds.add(taskRunId);
+    }
+
+    try {
+      // Remove only the bounded session files directory and each recorded run's
+      // bounded artifact directory. Never a checkout or an arbitrary path.
+      assertStorageSegment(sessionId);
+      await rm(join(this.host.stateRoot, 'sessions', sessionId), { recursive: true, force: true });
+      for (const taskRunId of taskRunIds) {
+        assertStorageSegment(taskRunId);
+        await rm(join(this.host.stateRoot, 'artifacts', taskRunId), { recursive: true, force: true });
+      }
+      await this.ports.ledger.deleteSession(sessionId);
+    } catch (error) {
+      // The session survived a failed deletion; allow it to be used again.
+      this.deletedSessions.delete(sessionId);
+      throw error;
+    }
+    this.sessions.delete(sessionId);
+    this.ensuring.delete(sessionId);
+    this.live.drop(sessionId);
   }
 
   private async interruptTurn(
@@ -653,9 +399,12 @@ class Engine implements Session {
     runtime.finished = true;
     // Late action results are appended immediately, flagged as post-interrupt.
     runtime.reasonCompleted = true;
+    // A queued intermediate reply must never land after the terminal reply.
+    this.replies.clearIntermediateReply(runtime);
 
     await this.ports.ledger.append(sessionId, { type: 'turn.interrupted', turn, reason });
     runtime.abort.abort();
+    await runtime.replyPromise.catch(() => undefined);
     await Promise.allSettled([...runtime.taskRunIds].map((id) => this.safeCancelTask(id)));
     await this.flushResults(session, runtime);
     await this.ports.ledger.append(sessionId, { type: 'turn.finished', turn, status: 'interrupted' });
@@ -686,7 +435,7 @@ class Engine implements Session {
   }
 
   readLive(sessionId: string): LiveCall[] {
-    return this.snapshotLive(sessionId);
+    return this.live.read(sessionId);
   }
 
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void {
@@ -694,17 +443,7 @@ class Engine implements Session {
   }
 
   subscribeLive(sessionId: string, listener: (live: LiveCall[]) => void): () => void {
-    let set = this.liveListeners.get(sessionId);
-    if (!set) {
-      set = new Set();
-      this.liveListeners.set(sessionId, set);
-    }
-    set.add(listener);
-    const current = set;
-    return () => {
-      current.delete(listener);
-      if (current.size === 0) this.liveListeners.delete(sessionId);
-    };
+    return this.live.subscribe(sessionId, listener);
   }
 
   async close(): Promise<void> {
@@ -731,16 +470,17 @@ class Engine implements Session {
     while (this.pipeline.size > 0) {
       await Promise.allSettled([...this.pipeline]);
     }
-    this.liveListeners.clear();
-    this.liveCalls.clear();
+    this.live.clear();
     await this.ports.ledger.close();
   }
 
   // ── session lifecycle ───────────────────────────────────────────────────
 
   private registerSession(sessionId: string, workspaceRoot: string, snapshot: WorkspaceSnapshot): SessionRuntime {
+    // Never resurrect a deleted session from a late recovery.
+    this.assertNotDeleted(sessionId);
     const files = this.ports.files(snapshot, workspaceRoot);
-    const calls = this.withLive(sessionId, this.ports.calls(sessionId));
+    const calls = this.live.wrap(sessionId, this.ports.calls(sessionId));
     const session: SessionRuntime = {
       sessionId,
       workspaceRoot,
@@ -751,18 +491,18 @@ class Engine implements Session {
         files,
         views: this.ports.views,
         calls,
+        fileStore: this.ports.fileStore,
         now: () => this.now(),
       }),
       calls,
       callSeq: 0,
+      reasonQueue: Promise.resolve(),
       title: '新会话',
       lastTitleVersion: 0,
       titleVersion: 0,
       titleUpdatedWithReply: false,
       turns: new Map(),
       nextTurn: 1,
-      recalls: new RecallGateImpl(),
-      recallQueue: Promise.resolve(),
     };
     this.sessions.set(sessionId, session);
     return session;
@@ -791,36 +531,31 @@ class Engine implements Session {
   /** Rebuild a session runtime from its stored timeline. */
   private async recoverSession(sessionId: string): Promise<SessionRuntime> {
     const events = this.ports.ledger.read(sessionId);
-    const created = events.find((event) => event.type === 'session.created');
+    const created = findCreated(events);
     if (!created) throw new Error(`unknown session: ${sessionId}`);
-    const workspaceRoot = (created as { workspaceRoot: string }).workspaceRoot;
-    const snapshot = (created as { snapshot: WorkspaceSnapshot }).snapshot;
-    const session = this.registerSession(sessionId, workspaceRoot, snapshot);
+    assertCurrentFormat(events, sessionId);
+    const session = this.registerSession(sessionId, created.workspaceRoot, created.snapshot);
     this.replay(session, events);
     await this.recover(session, events);
     return session;
   }
 
-  /** Rebuild cheap derived state (title, dedupe set, next turn) from the ledger. */
+  /** Rebuild cheap derived state (title, next turn) from the ledger. */
   private replay(session: SessionRuntime, events: LedgerEvent[]): void {
     let nextTurn = 1;
     for (const event of events) {
       if (typeof event.turn === 'number' && event.turn >= nextTurn) nextTurn = event.turn + 1;
       switch (event.type) {
-        case 'memory.recalled':
-        case 'doc.read':
-          session.recalls.mark((event as { path: string }).path);
-          break;
         case 'title':
-          session.title = (event as { text: string }).text;
+          session.title = event.text;
           session.lastTitleVersion += 1;
           session.titleVersion = session.lastTitleVersion;
           break;
         case 'turn.started':
-          if (session.firstUserText === undefined) session.firstUserText = (event as { text: string }).text;
+          if (session.firstUserText === undefined) session.firstUserText = event.text;
           break;
         case 'reply':
-          if ((event as { phase: string }).phase === 'final') session.titleUpdatedWithReply = true;
+          session.titleUpdatedWithReply = true;
           break;
         default:
           break;
@@ -839,8 +574,8 @@ class Engine implements Session {
       if (typeof event.turn !== 'number') continue;
       if (event.type === 'turn.started') started.add(event.turn);
       if (event.type === 'turn.finished') finished.add(event.turn);
-      if (event.type === 'action.started' && (event as { taskRunId?: string }).taskRunId) {
-        liveTaskRuns.set(event.turn, [...(liveTaskRuns.get(event.turn) ?? []), (event as { taskRunId: string }).taskRunId]);
+      if (event.type === 'action.started' && event.taskRunId !== undefined) {
+        liveTaskRuns.set(event.turn, [...(liveTaskRuns.get(event.turn) ?? []), event.taskRunId]);
       }
     }
 
@@ -870,6 +605,7 @@ class Engine implements Session {
       model,
       publicId,
       ...(contextWindow === undefined ? {} : { contextWindow }),
+      imageUnsupported: false,
       phase: 'preparing',
       cycle: 0,
       abort: new AbortController(),
@@ -881,41 +617,48 @@ class Engine implements Session {
       dropDeferred: false,
       reasonCompleted: false,
       actionsThisCycle: 0,
-      blocksThisCycle: 0,
+      toolCallsThisCycle: 0,
+      asksThisCycle: [],
       actionSeq: 0,
       parsePromises: new Set(),
       actionPromises: new Set(),
       cycleText: '',
       taskRunIds: new Set(),
+      correctionRequired: false,
+      emptyReasonRetried: false,
+      currentReasonText: '',
+      replyPending: false,
+      replyInFlight: false,
+      replyPromise: Promise.resolve(),
     };
   }
 
   private async runTurn(session: SessionRuntime, turn: TurnRuntime): Promise<void> {
     try {
-      for (let cycle = 1; cycle <= MAX_CYCLES; cycle += 1) {
+      for (let cycle = 1; ; cycle += 1) {
         if (turn.finished || turn.abort.signal.aborted) return;
         turn.cycle = cycle;
         turn.actionsThisCycle = 0;
-        turn.blocksThisCycle = 0;
+        turn.toolCallsThisCycle = 0;
+        turn.asksThisCycle = [];
         turn.actionSeq = 0;
         turn.reasonCompleted = false;
+        turn.correctionRequired = false;
         turn.cycleText = '';
+        turn.currentReasonText = '';
 
-        if (turn.turn === 1 && cycle === 1) this.startInitialTitle(session, turn);
+        if (turn.turn === 1 && cycle === 1) this.replies.startInitialTitle(session, turn);
 
+        // One memory-search call precedes every reason request, including the first.
         turn.phase = 'preparing';
-        try {
-          await this.runSelection(session, turn, cycle);
-        } catch (error) {
-          await this.appendError(session.sessionId, 'select', messageOf(error), turn);
-        }
+        await this.runMemorySearch(session, turn, cycle);
         if (turn.finished) return;
 
         turn.phase = 'reasoning';
-        const reasoned = await this.runReason(session, turn, cycle);
+        const reasoned = await this.queueReason(session, () => this.runReason(session, turn, cycle));
         if (turn.finished) return;
         if (!reasoned.ok) {
-          await this.finishReply(session, turn, 'failed', reasoned.error);
+          await this.replies.finishReply(session, turn, 'failed', reasoned.error);
           return;
         }
 
@@ -923,14 +666,60 @@ class Engine implements Session {
         await this.awaitCycleActions(turn);
         if (turn.finished) return;
 
-        if (cycle === MAX_CYCLES) {
-          await this.finishReply(session, turn, 'exhausted', undefined);
+        const asks = turn.asksThisCycle;
+        const actionRan = turn.actionsThisCycle > 0;
+
+        // More than one question in one cycle is invalid: no action runs and the
+        // cycle is corrected.
+        if (asks.length > 1) {
+          await this.appendError(session.sessionId, 'reason', 'only one ask is allowed per output', turn, cycle);
+          turn.correctionRequired = true;
+          continue;
+        }
+
+        // A question may only be sent alone; when actions ran in the same cycle
+        // the question is ignored and the actions stand.
+        if (asks.length === 1 && actionRan) {
+          await this.appendError(session.sessionId, 'reason', 'ask must be sent alone; it was ignored', turn, cycle);
+          continue;
+        }
+
+        // Exactly one question and no action becomes the communication reply.
+        if (asks.length === 1) {
+          await this.replies.finishReply(session, turn, 'completed', undefined, asks[0]);
           return;
         }
-        if (turn.actionsThisCycle === 0) {
-          await this.finishReply(session, turn, 'completed', undefined);
+
+        if (turn.toolCallsThisCycle === 0) {
+          // A successful reason call with no tool call and no visible text gives
+          // the turn nothing to act on. The error goes back to the model for one
+          // correction cycle; a second empty output in the same turn fails it.
+          if (turn.currentReasonText.trim() === '') {
+            const reason = 'reason call returned no visible output';
+            await this.appendError(session.sessionId, 'reason', reason, turn, cycle);
+            if (turn.emptyReasonRetried) {
+              await this.replies.finishReply(session, turn, 'failed', reason);
+              return;
+            }
+            turn.emptyReasonRetried = true;
+            continue;
+          }
+
+          // Hand-written action markup is no longer a delivery channel; actions
+          // must be started through the wy_action tool.
+          if (turn.currentReasonText.includes('<action') || turn.currentReasonText.includes('<wy-action')) {
+            await this.appendError(session.sessionId, 'reason', 'actions can only be started through the wy_action tool', turn, cycle);
+            turn.correctionRequired = true;
+            continue;
+          }
+
+          // Ordinary text with no tool call ends the turn.
+          await this.replies.finishReply(session, turn, 'completed', undefined);
           return;
         }
+
+        // Tool calls are present: executed actions (or a pending correction)
+        // drive the next cycle.
       }
     } catch (error) {
       if (!turn.finished) {
@@ -943,185 +732,154 @@ class Engine implements Session {
         await this.flushResults(session, turn);
         if (turn.finished) return;
         turn.abort = new AbortController();
-        await this.finishReply(session, turn, 'failed', messageOf(error));
+        await this.replies.finishReply(session, turn, 'failed', messageOf(error));
       }
     }
   }
 
   // ── prepare ─────────────────────────────────────────────────────────────
 
-  private async runSelection(session: SessionRuntime, turn: TurnRuntime, cycle: number): Promise<void> {
-    const context = this.turnViewContext(session, turn);
-    let failure = '';
-    // Parse/schema failures get exactly one retry; a failed call is never retried.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const view = this.ports.views.select({
-        snapshot: session.snapshot,
-        events: this.ports.ledger.read(session.sessionId),
-        userText: turn.userText,
-        loadedPaths: session.recalls.list(),
-        session: context.session,
-        cycle,
-      });
-      if (failure) {
-        const repair = `\n<wy-repair>${failure}</wy-repair>`;
-        view.messages[1]!.content += repair;
-        view.layers['wy-repair'] = repair.length;
-      }
-      const outcome = await this.invoke(session, turn, 'select', view);
-      if (!outcome.ok) {
-        await this.appendError(session.sessionId, 'select', outcome.error ?? 'selection call failed', turn);
-        return;
-      }
-
-      const selection = parseSelection(outcome.text);
-      if (!selection.ok) {
-        failure = selection.reason;
-        continue;
-      }
-
-      await this.ports.ledger.append(session.sessionId, {
-        type: 'context.selected',
-        turn: turn.turn,
-        cycle,
-        callId: outcome.callId,
-        selections: selection.selections,
-      });
-      await this.applySelection(session, turn, cycle, selection.selections);
+  /**
+   * One memory-search call before every reason request. It selects at most
+   * three root memory files from the frozen index and publishes each changed
+   * one as a `memory.recalled` event with source `memory-search`. A failed or
+   * invalid call is reported and the reason request still runs.
+   */
+  private async runMemorySearch(session: SessionRuntime, turn: TurnRuntime, cycle: number): Promise<void> {
+    const events = this.ports.ledger.read(session.sessionId);
+    const view: BuiltView = this.ports.views.memorySearch({
+      memoryIndex: session.snapshot.memoryIndex,
+      loadedPaths: memoryPathsInContext(events),
+      userText: turn.userText,
+      lastReasonText: latestReasonText(events),
+      actionResults: turnActionResults(turn, events),
+    });
+    const outcome = await this.invoke(session, turn, 'memory-search', view);
+    if (!outcome.ok) {
+      await this.appendError(session.sessionId, 'memory-search', outcome.error ?? 'memory-search call failed', turn);
       return;
     }
-
-    await this.appendError(session.sessionId, 'select', failure === '' ? 'selection output could not be parsed' : failure, turn);
-  }
-
-  /**
-   * Publish the selected files as committed recalls. A selected path that is
-   * out of scope or missing is reported instead of being silently dropped.
-   */
-  private async applySelection(
-    session: SessionRuntime,
-    turn: TurnRuntime,
-    cycle: number,
-    selections: SelectionEntry[],
-  ): Promise<void> {
-    const unusable: string[] = [];
-    for (const entry of selections) {
-      if (turn.abort.signal.aborted || turn.finished) return;
-      const check = session.files.checkPath(entry.path);
-      if (!check.ok) {
-        unusable.push(`${entry.path} (${check.reason})`);
-        continue;
-      }
-      if (check.kind === 'doc') await this.recallInstructions(session, turn, cycle, entry.path);
+    const parsed = parseMemoryPicks(outcome.text, session.snapshot.memoryIndex);
+    if (!parsed.ok) {
+      await this.appendError(session.sessionId, 'memory-search', parsed.reason, turn);
+      return;
+    }
+    for (const pick of parsed.picks) {
       if (turn.finished || turn.abort.signal.aborted) return;
-      const file = session.files.read(entry.path);
-      if (!file) {
-        unusable.push(`${entry.path} (missing)`);
-        continue;
-      }
-      if (check.kind === 'memory') {
-        await this.publishRecall(session, {
-          type: 'memory.recalled',
-          turn: turn.turn,
-          cycle,
-          path: entry.path,
-          content: file.content,
-          source: 'selection',
-        });
-      } else {
-        await this.publishRecall(session, {
-          type: 'doc.read',
-          turn: turn.turn,
-          cycle,
-          path: entry.path,
-          title: file.title,
-          content: file.content,
-          source: 'selection',
-        });
-      }
-    }
-    if (unusable.length > 0) {
-      await this.appendError(session.sessionId, 'select', `selection could not be loaded: ${unusable.join(', ')}`, turn);
-    }
-  }
-
-  /** Publish each not-yet-committed project instruction file, outermost first. */
-  private async recallInstructions(
-    session: SessionRuntime,
-    turn: TurnRuntime,
-    cycle: number,
-    docPath: string,
-  ): Promise<void> {
-    const project = projectForDocPath(session.snapshot, docPath);
-    if (!project) return;
-    const directory = docPath.endsWith('/AGENTS.md') ? docPath.slice(0, -10) : project.workspaceDir;
-    for (const instructionPath of session.files.instructionChain(directory, docPath)) {
-      if (turn.abort.signal.aborted || turn.finished) return;
-      const file = session.files.read(instructionPath);
+      const file = session.files.read(pick.path);
       if (!file) continue;
-      await this.publishRecall(session, {
-        type: 'doc.read',
+      const version = contentVersion(file.content);
+      if (latestMemoryVersion(events, pick.path) === version) continue;
+      await this.ports.ledger.append(session.sessionId, {
+        type: 'memory.recalled',
         turn: turn.turn,
         cycle,
-        path: instructionPath,
-        title: file.title,
+        path: pick.path,
         content: file.content,
-        source: 'project-instructions',
+        version,
+        source: 'memory-search',
       });
     }
   }
 
   // ── reason ──────────────────────────────────────────────────────────────
 
+  /** Run `task` after every earlier reasoning request of this session has settled. */
+  private async queueReason<T>(session: SessionRuntime, task: () => Promise<T>): Promise<T> {
+    const previous = session.reasonQueue;
+    let release!: () => void;
+    session.reasonQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  }
+
   private async runReason(
     session: SessionRuntime,
     turn: TurnRuntime,
     cycle: number,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
-    const context = this.turnViewContext(session, turn);
+    const metadata = resolveModelMetadata(turn.publicId);
+    const allowImages = metadata.imageInput === true;
+    // The cycle marker is appended before the request is assembled: it renders
+    // as this cycle's `<wy-info>` line, so the request only ever grows at its end.
+    const previous = this.ports.ledger.read(session.sessionId);
+    const lastInputTokens = lastReasonInputTokens(previous);
+    await this.ports.ledger.append(session.sessionId, {
+      type: 'cycle.started',
+      turn: turn.turn,
+      cycle,
+      model: turn.publicId,
+      ...(turn.contextWindow === undefined ? {} : { contextWindow: turn.contextWindow }),
+      ...(lastInputTokens === undefined ? {} : { lastInputTokens }),
+    });
+    const events = this.ports.ledger.read(session.sessionId);
+
+    // Images enter at their native `files` event position and stay in the
+    // context. A model that cannot see images disables them for this turn.
+    if (!allowImages && contextImageFiles(events).size > 0) turn.imageUnsupported = true;
+    const images: Record<string, { dataUrl: string; mime: string }> = allowImages
+      ? await this.collectReasonImages(session, events)
+      : {};
+
+    const maxTokens = metadata.maxOutputTokens;
     const view = this.ports.views.reason({
-      workspaceRoot: session.workspaceRoot,
       deviceName: this.host.deviceName,
       snapshot: session.snapshot,
-      events: this.ports.ledger.read(session.sessionId),
+      events,
       userText: turn.userText,
-      session: context.session,
-      runningTurns: context.runningTurns,
+      session: this.sessionInfo(session, turn),
+      images,
+      allowImages,
     });
 
-    const splitter = new ActionSplitter();
-    const spawn = (block: { text: string; unterminated: boolean }): void => {
-      if (turn.finished || turn.abort.signal.aborted) return;
-      if (turn.finished) return;
-      const promise = this.handleBlock(session, turn, cycle, block).catch((error) =>
-        this.appendError(session.sessionId, 'action', messageOf(error), turn),
-      );
-      turn.parsePromises.add(promise);
-      void promise.then(
-        () => turn.parsePromises.delete(promise),
-        () => turn.parsePromises.delete(promise),
-      );
-      this.track(promise);
-    };
-
+    // The reason call declares the wy_action tool; completed calls are started
+    // as they arrive, while the visible text keeps streaming to the UI.
+    turn.cycleText = '';
     const outcome = await this.invoke(session, turn, 'reason', view, {
       reason: {
         provider: turn.model.provider,
         model: turn.model.model,
         ...(turn.model.reasoningEffort === undefined ? {} : { reasoningEffort: turn.model.reasoningEffort }),
       },
+      ...(maxTokens === undefined ? {} : { maxTokens }),
       onText: (delta) => {
         turn.cycleText += delta;
-        for (const block of splitter.push(delta)) spawn(block);
+      },
+      onToolCall: (call) => {
+        if (turn.finished || turn.abort.signal.aborted) return;
+        const promise = this.handleToolCall(session, turn, cycle, call)
+          .catch((error) => this.appendError(session.sessionId, 'action', messageOf(error), turn));
+        turn.parsePromises.add(promise);
+        void promise.then(
+          () => turn.parsePromises.delete(promise),
+          () => turn.parsePromises.delete(promise),
+        );
+        this.track(promise);
       },
     });
+
+    // The reasoning trace is a context event; it is persisted before the visible
+    // message both on success and as the returned partial text on failure.
+    if (outcome.reasoning !== undefined && outcome.reasoning !== '') {
+      await this.ports.ledger.append(session.sessionId, {
+        type: 'thinking',
+        turn: turn.turn,
+        cycle,
+        callId: outcome.callId,
+        text: outcome.reasoning,
+      });
+    }
 
     if (turn.finished) return { ok: false, error: 'interrupted' };
 
     if (!outcome.ok) {
-      // Failed reasoning must not turn the unterminated remainder into new
-      // actions. Cancel the work already in flight; its late results are still
-      // recorded, but the reads it queued are not published to the context.
+      // Failed reasoning must not leave half-started work running. Cancel what
+      // is in flight; late results are still recorded, but the reads it queued
+      // are not published to the context.
       turn.reasonCompleted = true;
       turn.dropDeferred = true;
       turn.abort.abort();
@@ -1133,9 +891,7 @@ class Engine implements Session {
       return { ok: false, error: outcome.error ?? 'reason call failed' };
     }
 
-    // Reasoning succeeded, so the unterminated remainder is a real final block.
-    for (const block of splitter.finish()) spawn(block);
-
+    // Reasoning succeeded; its message content is the visible text.
     await this.ports.ledger.append(session.sessionId, {
       type: 'reason.completed',
       turn: turn.turn,
@@ -1143,136 +899,130 @@ class Engine implements Session {
       callId: outcome.callId,
       text: outcome.text,
     });
+    turn.currentReasonText = outcome.text;
     turn.reasonCompleted = true;
     await this.flushResults(session, turn);
 
-    // Wait only for every block to be parsed into started actions here; the
+    // Wait only for every tool call to be started as an action here; the
     // executions keep running and are awaited before the next cycle.
     await this.awaitParses(turn);
     return { ok: true };
+  }
+
+  /** Reserve the next call id for one turn. */
+  private nextCallId(session: SessionRuntime, turn: TurnRuntime): string {
+    return `c${turn.turn}.${++session.callSeq}`;
+  }
+
+  /**
+   * Read the prepared preview for every image occurrence at its native
+   * timeline position. Only the local disk read is de-duplicated by processed
+   * path, so two occurrences of the same preview share one payload without
+   * dropping either row.
+   */
+  private async collectReasonImages(
+    session: SessionRuntime,
+    events: readonly LedgerEvent[],
+  ): Promise<Record<string, { dataUrl: string; mime: string }>> {
+    const images: Record<string, { dataUrl: string; mime: string }> = {};
+    for (const event of events) {
+      if (event.type !== 'files') continue;
+      for (const file of event.files) {
+        if (file.kind !== 'image' || file.processedPath === undefined) continue;
+        if (images[file.processedPath] !== undefined) continue;
+        try {
+          const image = await this.ports.fileStore.readImage(file);
+          images[file.processedPath] = { dataUrl: image.dataUrl, mime: image.mime };
+        } catch {
+          // An unreadable preview is omitted; its metadata row still renders.
+        }
+      }
+    }
+    return images;
   }
 
   private async cancelRunningWork(turn: TurnRuntime): Promise<void> {
     await Promise.allSettled([...turn.taskRunIds].map((id) => this.safeCancelTask(id)));
   }
 
-  private async handleBlock(
+  /**
+   * Apply one completed wy_action tool call: an invalid call forces a
+   * correction, a question is remembered for the cycle decision, and a valid
+   * action starts executing immediately.
+   */
+  private async handleToolCall(
     session: SessionRuntime,
     turn: TurnRuntime,
     cycle: number,
-    block: { text: string; unterminated: boolean },
+    call: ToolCall,
   ): Promise<void> {
-    const blockId = `b${turn.turn}-${cycle}-${++turn.blocksThisCycle}`;
-    await this.ports.ledger.append(session.sessionId, {
-      type: 'action.block',
-      turn: turn.turn,
-      cycle,
-      blockId,
-      text: block.text,
-      ...(block.unterminated ? { unterminated: true } : {}),
-    });
-    if (turn.finished) return;
-
-    const context = await this.actionBaseContext(session, turn);
-    const parsed = await session.actions.parse(block, context);
-    if (turn.finished) return;
-
+    turn.toolCallsThisCycle += 1;
+    const parsed = actionFromToolCall(call);
     if (!parsed.ok) {
-      const actionId = `a${turn.turn}-${cycle}-${++turn.actionSeq}`;
-      await this.enqueueResult(
-        session,
-        turn,
-        {
-          type: 'action.finished',
-          turn: turn.turn,
-          cycle,
-          actionId,
-          kind: 'unsupported',
-          status: 'failed',
-          result: parsed.reason,
-        },
-        [],
-      );
-      turn.actionsThisCycle += 1;
+      turn.correctionRequired = true;
+      await this.appendError(session.sessionId, 'reason', `invalid action call: ${parsed.reason}`, turn, cycle);
       return;
     }
-
-    for (const action of parsed.actions) {
-      if (turn.finished) return;
-      const actionId = `a${turn.turn}-${cycle}-${++turn.actionSeq}`;
-      turn.actionsThisCycle += 1;
-
-      if (cycle === MAX_CYCLES) {
-        await this.ports.ledger.append(session.sessionId, {
-          type: 'action.started',
-          turn: turn.turn,
-          cycle,
-          actionId,
-          blockId,
-          kind: action.kind,
-          parsed: action,
-        });
-        await this.enqueueResult(
-          session,
-          turn,
-          {
-            type: 'action.finished',
-            turn: turn.turn,
-            cycle,
-            actionId,
-            kind: action.kind,
-            status: 'skipped',
-            result: 'skipped: the final reasoning cycle may not produce actions',
-          },
-          [],
-        );
-        continue;
-      }
-
-      const runtimeAction: RuntimeAction = {
-        actionId,
-        turn: turn.turn,
-        cycle,
-        kind: action.kind,
-        goal: describeAction(action),
-        startedAt: this.now().toISOString(),
-      };
-      turn.actions.set(actionId, runtimeAction);
-      await this.ports.ledger.append(session.sessionId, {
-        type: 'action.started',
-        turn: turn.turn,
-        cycle,
-        actionId,
-        blockId,
-        kind: action.kind,
-        parsed: action,
-      });
-
-      const executeContext: ActionRunContext = {
-        ...context,
-        actionId,
-        onTaskRun: (taskRunId: string) =>
-          this.recordTaskRun(session, turn, cycle, blockId, actionId, action, runtimeAction, taskRunId),
-      };
-      const promise = this.runAction(session, turn, action, executeContext, actionId, cycle);
-      turn.actionPromises.add(promise);
-      void promise.then(
-        () => turn.actionPromises.delete(promise),
-        () => turn.actionPromises.delete(promise),
-      );
-      this.track(promise);
+    if ('ask' in parsed) {
+      turn.asksThisCycle.push(parsed.ask);
+      return;
     }
+    await this.startAction(session, turn, cycle, parsed.action);
+  }
+
+  /** Start one parsed action, exactly as a valid block once did. */
+  private async startAction(
+    session: SessionRuntime,
+    turn: TurnRuntime,
+    cycle: number,
+    action: ParsedAction,
+  ): Promise<void> {
+    turn.actionsThisCycle += 1;
+    const actionId = `a${turn.turn}-${cycle}-${++turn.actionSeq}`;
+
+    const runtimeAction: RuntimeAction = {
+      actionId,
+      turn: turn.turn,
+      cycle,
+      kind: action.kind,
+      goal: describeAction(action),
+      startedAt: this.now().toISOString(),
+    };
+    turn.actions.set(actionId, runtimeAction);
+    await this.ports.ledger.append(session.sessionId, {
+      type: 'action.started',
+      turn: turn.turn,
+      cycle,
+      actionId,
+      kind: action.kind,
+      parsed: action,
+    });
+
+    const executeContext: ActionRunContext = {
+      ...this.actionBaseContext(session, turn),
+      actionId,
+      onTaskRun: (taskRunId: string) =>
+        this.recordTaskRun(session, turn, cycle, actionId, action, runtimeAction, taskRunId),
+      onDispatched: () => this.replies.scheduleReply(session, turn),
+      onTitle: (title: string) => this.recordActionTitle(session, turn, cycle, actionId, title),
+    };
+    const promise = this.runAction(session, turn, action, executeContext, actionId, cycle);
+    turn.actionPromises.add(promise);
+    void promise.then(
+      () => turn.actionPromises.delete(promise),
+      () => turn.actionPromises.delete(promise),
+    );
+    this.track(promise);
   }
 
   /**
    * Record a dispatch's task run: a second `action.started` with the same
-   * id/block/parsed plus `taskRunId`, so a restart can find and cancel it.
+   * id/parsed plus `taskRunId`, so a restart can find and cancel it.
    */
   private async recordTaskRun(
     session: SessionRuntime,
     turn: TurnRuntime,
     cycle: number,
-    blockId: string,
     actionId: string,
     action: ParsedAction,
     runtimeAction: RuntimeAction,
@@ -1285,12 +1035,43 @@ class Engine implements Session {
       turn: turn.turn,
       cycle,
       actionId,
-      blockId,
       kind: action.kind,
       parsed: action,
       taskRunId,
     });
     if (turn.abort.signal.aborted) await this.safeCancelTask(taskRunId);
+  }
+
+  /** Publish a model-named title for one running action. */
+  private recordActionTitle(
+    session: SessionRuntime,
+    turn: TurnRuntime,
+    cycle: number,
+    actionId: string,
+    title: string,
+  ): void {
+    const promise = this.appendActionTitle(session, turn, cycle, actionId, title);
+    this.track(promise);
+  }
+
+  private async appendActionTitle(
+    session: SessionRuntime,
+    turn: TurnRuntime,
+    cycle: number,
+    actionId: string,
+    title: string,
+  ): Promise<void> {
+    try {
+      await this.ports.ledger.append(session.sessionId, {
+        type: 'action.titled',
+        turn: turn.turn,
+        cycle,
+        actionId,
+        title,
+      });
+    } catch {
+      // Title reporting must never take the pipeline down.
+    }
   }
 
   /** Execute one action; a thrown execution still records an `action.finished`. */
@@ -1322,13 +1103,18 @@ class Engine implements Session {
         kind: action.kind,
         status: outcome.status,
         result: outcome.result,
-        ...(action.kind === 'dispatch' ? { task: action.task } : {}),
+        ...(outcome.task === undefined ? {} : { task: outcome.task }),
         ...(outcome.taskStatus === undefined ? {} : { taskStatus: outcome.taskStatus }),
         ...(outcome.taskRunId === undefined ? {} : { taskRunId: outcome.taskRunId }),
         ...(turn.abort.signal.aborted ? { afterInterrupt: true } : {}),
       },
       outcome.deferred,
     );
+
+    // An action failure is an immediate intermediate reply trigger, scheduled
+    // after the result is queued so the reply can report the failure instead of
+    // calling already-failed work running.
+    if (outcome.status === 'failed') this.replies.scheduleReply(session, turn);
   }
 
   private async awaitParses(turn: TurnRuntime): Promise<void> {
@@ -1358,8 +1144,8 @@ class Engine implements Session {
   /**
    * Append queued results, but only once the cycle's `reason.completed` is on
    * the timeline so results always render after the request that produced them.
-   * Context reads are routed through {@link publishRecall} so their ledger
-   * dedupe is serialized here, at the single point of publication.
+   * Reads are dropped from a failed/interrupted turn; write-sourced document and
+   * workspace facts are always appended.
    */
   private async flushResults(session: SessionRuntime, turn: TurnRuntime): Promise<void> {
     const work = turn.flushPromise.then(async () => {
@@ -1369,11 +1155,13 @@ class Engine implements Session {
           ? { ...bundle.finished, afterInterrupt: true } : bundle.finished;
         await this.ports.ledger.append(session.sessionId, finished);
         for (const draft of bundle.deferred) {
-          if (isRecallDraft(draft)) {
-            // A failed turn still records its late results, but not the reads.
-            if (!turn.dropDeferred && !turn.abort.signal.aborted) await this.publishRecall(session, draft);
-            continue;
-          }
+          const writeInstructions = finished.type === 'action.finished' && finished.kind === 'write'
+            && draft.type === 'doc.content' && draft.source === 'project-instructions';
+          if (!writeInstructions && isReadDraft(draft) && (turn.dropDeferred || turn.abort.signal.aborted)) continue;
+          // Parallel reads snapshot the timeline before any of them lands, so the
+          // same document version can be queued more than once; append it once.
+          if (draft.type === 'doc.content' && this.ports.ledger.read(session.sessionId).some((event) =>
+            event.type === 'doc.content' && event.path === draft.path && event.version === draft.version)) continue;
           await this.ports.ledger.append(session.sessionId, draft);
         }
       }
@@ -1382,242 +1170,94 @@ class Engine implements Session {
     await work;
   }
 
+  // ── intermediate replies ──────────────────────────────────────────────────
+
   /**
-   * Commit one recall unless the path is already committed. The path is marked
-   * synchronously before the append, which serializes concurrent publications.
+   * Trigger an intermediate reply. The first trigger fires immediately; later
+   * triggers within the minimum interval are coalesced into one pending timer,
+   * using a fixed fallback when the communication call fails. An empty reply is
+   * skipped: the communicator had nothing new to report.
    */
-  private async publishRecall(session: SessionRuntime, draft: LedgerEventDraft): Promise<void> {
-    const work = session.recallQueue.then(async () => {
-      const owner = draft.turn === undefined ? undefined : session.turns.get(draft.turn);
-      if (owner?.finished || owner?.abort.signal.aborted) return;
-      const path = (draft as { path?: string }).path;
-      if (typeof path === 'string' && session.recalls.has(path)) return;
-      await this.ports.ledger.append(session.sessionId, draft);
-      if (typeof path === 'string') session.recalls.mark(path);
-    });
-    session.recallQueue = work.catch(() => undefined);
-    await work;
-  }
-
-  // ── replies ─────────────────────────────────────────────────────────────
-
-  private async finishReply(
-    session: SessionRuntime,
-    turn: TurnRuntime,
-    status: TurnStatus,
-    error: string | undefined,
-  ): Promise<void> {
-    if (turn.finished || turn.abort.signal.aborted) return;
-    turn.phase = 'replying';
-
-    let text: string | undefined;
-    let callId: string | undefined;
-    if (status !== 'interrupted') {
-      await (async () => {
-        const context = this.turnViewContext(session, turn);
-        const view = this.ports.views.reply({
-          phase: 'final',
-          snapshot: session.snapshot,
-          events: this.ports.ledger.read(session.sessionId),
-          userText: turn.userText,
-          session: context.session,
-          runningTurns: context.runningTurns,
-          status,
-          ...(error === undefined ? {} : { error }),
-        });
-        const outcome = await this.invoke(session, turn, 'reply', view, { maxTokens: REPLY_MAX_TOKENS });
-        if (outcome.ok) {
-          text = outcome.text;
-          callId = outcome.callId;
-        }
-      })().catch(() => undefined);
-    }
-
-    // An interrupt that landed while the final reply was in flight owns the end.
-    if (turn.finished) return;
-    if (text === undefined) text = fallbackReply(status, error);
-
-    await this.ports.ledger.append(session.sessionId, {
-      type: 'reply',
-      turn: turn.turn,
-      cycle: turn.cycle,
-      phase: 'final',
-      text,
-      ...(callId === undefined ? {} : { callId }),
-    });
-
-    if (turn.finished) return;
-    turn.status = status;
-    turn.phase = 'terminal';
-    turn.finished = true;
-    await this.ports.ledger.append(session.sessionId, {
-      type: 'turn.finished',
-      turn: turn.turn,
-      status,
-      ...(error === undefined ? {} : { error }),
-    });
-    turn.durableTerminal = true;
-
-    await this.maybeUpdateTitle(session, turn, text);
-  }
-
-  // ── title ───────────────────────────────────────────────────────────────
-
-  private startInitialTitle(session: SessionRuntime, turn: TurnRuntime): void {
-    const version = ++session.titleVersion;
-    const userText = session.firstUserText ?? turn.userText;
-    const promise = (async () => {
-      const view = this.ports.views.title({ userText });
-      const outcome = await this.invoke(session, turn, 'title', view);
-      if (!outcome.ok) return;
-      await this.applyTitle(session, version, outcome.callId, outcome.text);
-    })();
-    this.track(promise);
-  }
-
-  private async maybeUpdateTitle(session: SessionRuntime, turn: TurnRuntime, finalReply: string): Promise<void> {
-    if (session.titleUpdatedWithReply) return;
-    session.titleUpdatedWithReply = true;
-    const version = ++session.titleVersion;
-    const userText = session.firstUserText ?? turn.userText;
-    try {
-      const view = this.ports.views.title({ userText, finalReply });
-      const outcome = await this.invoke(session, turn, 'title', view);
-      if (!outcome.ok) return;
-      await this.applyTitle(session, version, outcome.callId, outcome.text);
-    } catch {
-      // Title updates are best-effort; keep the existing title.
-    }
-  }
-
-  /** Later title generations always win, so an older slow call cannot overwrite one. */
-  private async applyTitle(
-    session: SessionRuntime,
-    version: number,
-    callId: string,
-    text: string,
-  ): Promise<void> {
-    const title = text.trim().split('\n')[0]!.trim();
-    if (title === '') return;
-    if (version < session.lastTitleVersion) return;
-    session.lastTitleVersion = version;
-    session.title = title;
-    await this.ports.ledger.append(session.sessionId, {
-      type: 'title',
-      text: title,
-      callId,
-    });
-  }
-
   // ── helpers ─────────────────────────────────────────────────────────────
 
-  private turnViewContext(
-    session: SessionRuntime,
-    turn: TurnRuntime,
-  ): { session: SessionViewInfo; runningTurns: RunningTurnInfo[] } {
+  private sessionInfo(session: SessionRuntime, turn: TurnRuntime): SessionViewInfo {
     return {
-      session: {
-        now: this.now().toISOString(),
-        sessionId: session.sessionId,
-        turn: turn.turn,
-        cycle: turn.cycle,
-        maxCycles: MAX_CYCLES,
-        model: turn.publicId,
-        deviceName: this.host.deviceName,
-        ...(turn.contextWindow === undefined ? {} : { contextWindow: turn.contextWindow }),
-      },
-      runningTurns: this.runningTurns(session, -1),
+      now: this.now().toISOString(),
+      sessionId: session.sessionId,
+      turn: turn.turn,
+      cycle: turn.cycle,
+      model: turn.publicId,
+      deviceName: this.host.deviceName,
+      ...(turn.contextWindow === undefined ? {} : { contextWindow: turn.contextWindow }),
     };
   }
 
-  private async actionBaseContext(session: SessionRuntime, turn: TurnRuntime): Promise<ActionBaseContext> {
-    const context = this.turnViewContext(session, turn);
+  private actionBaseContext(session: SessionRuntime, turn: TurnRuntime): ActionBaseContext {
+    const snapshot = session.snapshot;
     const tasks = [
-      ...session.snapshot.projects.flatMap((project) =>
-        project.tasks.map((task) => ({ id: task.id, description: task.description, project: project.id })),
+      ...snapshot.projects.flatMap((project) =>
+        project.tasks.map((task) => ({
+          id: task.id,
+          project: project.id,
+          description: task.description,
+          inputSummary: task.inputSummary,
+        })),
       ),
-      ...session.snapshot.builtinTasks.map((task) => ({ id: task.id, description: task.description })),
+      ...snapshot.builtinTasks.map((task) => ({
+        id: task.id,
+        description: task.description,
+        inputSummary: task.inputSummary,
+      })),
     ];
     return {
+      sessionId: session.sessionId,
       turn: turn.turn,
       cycle: turn.cycle,
       userText: turn.userText,
-      snapshot: session.snapshot,
+      workspaceRoot: session.workspaceRoot,
+      snapshot,
       currentEvents: () => this.ports.ledger.read(session.sessionId),
-      currentCycleText: () => turn.cycleText,
-      runningTurns: context.runningTurns,
-      session: context.session,
-      projects: session.snapshot.projects.map((project) => ({
+      projects: snapshot.projects.map((project) => ({
         id: project.id,
         ...(project.displayName === undefined ? {} : { displayName: project.displayName }),
         workspaceDir: project.workspaceDir,
         ...(project.checkoutPath === undefined ? {} : { checkoutPath: project.checkoutPath }),
-        ...(project.gitRemote === undefined ? {} : { gitRemote: project.gitRemote }),
-        ...(project.defaultBranch === undefined ? {} : { defaultBranch: project.defaultBranch }),
       })),
       tasks,
-      scopeRules: SCOPE_RULES,
-      providers: await this.providerList(),
       signal: turn.abort.signal,
-      recalls: session.recalls,
     };
   }
 
-  private runningTurns(session: SessionRuntime, excludeTurn: number): RunningTurnInfo[] {
-    const running: RunningTurnInfo[] = [];
-    for (const candidate of session.turns.values()) {
-      if (candidate.finished || candidate.turn === excludeTurn) continue;
-      running.push({
-        turn: candidate.turn,
-        phase: candidate.phase,
-        actions: [...candidate.actions.values()].map((action) => ({
-          actionId: action.actionId,
-          turn: action.turn,
-          kind: action.kind,
-          goal: action.goal,
-          startedAt: action.startedAt,
-          ...(action.taskRunId === undefined ? {} : { taskRunId: action.taskRunId }),
-        })),
-      });
+  private isOwnedSessionFile(sessionId: string, path: string, events: readonly LedgerEvent[]): boolean {
+    if (isInside(path, join(this.host.stateRoot, 'sessions', sessionId, 'files'))) return true;
+    const runIds = new Set<string>();
+    for (const event of events) {
+      if ((event.type === 'action.started' || event.type === 'files') && event.taskRunId !== undefined) {
+        runIds.add(event.taskRunId);
+      }
     }
-    return running.sort((a, b) => a.turn - b.turn);
+    for (const runId of runIds) {
+      if (isInside(path, join(this.host.stateRoot, 'artifacts', runId))) return true;
+    }
+    return false;
   }
 
-  private async appendError(
+  async appendError(
     sessionId: string,
     stage: string,
     message: string,
     turn: TurnRuntime,
+    cycle?: number,
   ): Promise<void> {
     try {
       await this.ports.ledger.append(sessionId, {
         type: 'error',
         stage,
         message,
-        ...(turn.turn > 0 ? { turn: turn.turn, cycle: turn.cycle } : {}),
+        ...(turn.turn > 0 ? { turn: turn.turn, cycle: cycle ?? turn.cycle } : {}),
       });
     } catch {
       // Error reporting must never take the pipeline down.
-    }
-  }
-
-  /** Gateway model catalogue; a failed lookup is not cached. */
-  private async gatewayModels(): Promise<WrenyardGatewayModel[]> {
-    if (this.gatewayModelsPromise) return this.gatewayModelsPromise;
-    const promise = this.host.gateway().then((connection) => connection.models);
-    this.gatewayModelsPromise = promise;
-    promise.catch(() => {
-      if (this.gatewayModelsPromise === promise) this.gatewayModelsPromise = undefined;
-    });
-    return promise;
-  }
-
-  private async providerList(): Promise<{ provider: string; model: string }[]> {
-    try {
-      const models = await this.gatewayModels();
-      return models.map((model) => ({ provider: model.provider, model: model.id }));
-    } catch {
-      return [];
     }
   }
 
@@ -1625,36 +1265,52 @@ class Engine implements Session {
    * Run one model call. `calls.ts` writes the `call` event and throws on
    * failure, so every role's failure consequence is decided here.
    */
-  private async invoke(
+  async invoke(
     session: SessionRuntime,
     turn: TurnRuntime,
     role: CallRole,
     view: BuiltView,
     extra: {
+      callId?: string;
       reason?: { provider: string; model: string; reasoningEffort?: string };
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
+      onToolCall?: (call: ToolCall) => void;
       maxTokens?: number;
+      cycle?: number;
     } = {},
-  ): Promise<{ ok: boolean; callId: string; text: string; error?: string }> {
-    const callId = `c${turn.turn}.${++session.callSeq}`;
+  ): Promise<{ ok: boolean; callId: string; text: string; reasoning?: string; error?: string }> {
+    const callId = extra.callId ?? this.nextCallId(session, turn);
     try {
       const result = await session.calls.run({
         callId,
         role,
         turn: turn.turn,
-        cycle: turn.cycle,
+        cycle: extra.cycle ?? turn.cycle,
         messages: view.messages,
         layers: view.layers,
         signal: turn.abort.signal,
         ...(extra.reason === undefined ? {} : { reason: extra.reason }),
         ...(extra.onText === undefined ? {} : { onText: extra.onText }),
         ...(extra.onReasoning === undefined ? {} : { onReasoning: extra.onReasoning }),
+        ...(extra.onToolCall === undefined ? {} : { onToolCall: extra.onToolCall }),
         ...(extra.maxTokens === undefined ? {} : { maxTokens: extra.maxTokens }),
       });
-      return { ok: true, callId, text: result.text };
+      return {
+        ok: true,
+        callId,
+        text: result.text,
+        ...(result.reasoning === undefined ? {} : { reasoning: result.reasoning }),
+      };
     } catch (error) {
-      return { ok: false, callId, text: '', error: messageOf(error) };
+      const reasoning = error instanceof ModelCallError ? error.detail.partialReasoning : undefined;
+      return {
+        ok: false,
+        callId,
+        text: '',
+        error: messageOf(error),
+        ...(reasoning === undefined ? {} : { reasoning }),
+      };
     }
   }
 
@@ -1668,194 +1324,211 @@ class Engine implements Session {
 
   // ── live streaming snapshots ────────────────────────────────────────────
 
-  /**
-   * Wrap a session's call port so the three streaming roles (`reason`, `reply`,
-   * `write`) publish an in-memory snapshot while they run. The durable
-   * `call.started` / `call` events, not this table, are the source of truth.
-   */
-  private withLive(sessionId: string, inner: CallsPort): CallsPort {
-    return { run: (input) => this.runCallWithLive(sessionId, inner, input) };
-  }
-
-  private async runCallWithLive(
-    sessionId: string,
-    inner: CallsPort,
-    input: CallRunRequest,
-  ): Promise<CallRunResult> {
-    const streaming = input.role === 'reason' || input.role === 'reply' || input.role === 'write';
-    if (!streaming) return inner.run(input);
-    this.beginLive(sessionId, input.callId);
-    const onText = input.onText;
-    const onReasoning = input.onReasoning;
-    try {
-      return await inner.run({
-        ...input,
-        onText: (delta) => {
-          this.appendLive(sessionId, input.callId, 'text', delta);
-          onText?.(delta);
-        },
-        onReasoning: (delta) => {
-          this.appendLive(sessionId, input.callId, 'reasoning', delta);
-          onReasoning?.(delta);
-        },
-      });
-    } finally {
-      // Covers success, failure and abort: the entry exists only while running.
-      this.endLive(sessionId, input.callId);
-    }
-  }
-
-  private snapshotLive(sessionId: string): LiveCall[] {
-    const table = this.liveCalls.get(sessionId);
-    if (!table) return [];
-    return [...table.values()].map((call) => ({ ...call }));
-  }
-
-  private notifyLive(sessionId: string): void {
-    const listeners = this.liveListeners.get(sessionId);
-    if (!listeners || listeners.size === 0) return;
-    const snapshot = this.snapshotLive(sessionId);
-    for (const listener of [...listeners]) {
-      try {
-        listener(snapshot);
-      } catch {
-        // A listener must never break the call it observes.
-      }
-    }
-  }
-
-  private beginLive(sessionId: string, callId: string): void {
-    let table = this.liveCalls.get(sessionId);
-    if (!table) {
-      table = new Map();
-      this.liveCalls.set(sessionId, table);
-    }
-    table.set(callId, { callId, text: '', reasoning: '' });
-    this.notifyLive(sessionId);
-  }
-
-  private appendLive(sessionId: string, callId: string, field: 'text' | 'reasoning', delta: string): void {
-    if (delta === '') return;
-    const entry = this.liveCalls.get(sessionId)?.get(callId);
-    if (!entry) return;
-    entry[field] += delta;
-    this.notifyLive(sessionId);
-  }
-
-  private endLive(sessionId: string, callId: string): void {
-    const table = this.liveCalls.get(sessionId);
-    if (!table) return;
-    if (table.delete(callId)) this.notifyLive(sessionId);
-    if (table.size === 0) this.liveCalls.delete(sessionId);
-  }
-
-  private track(promise: Promise<unknown>): void {
+  track(promise: Promise<unknown>): void {
     this.pipeline.add(promise);
     void promise
       .catch(() => undefined)
       .finally(() => this.pipeline.delete(promise));
   }
 
-  private now(): Date {
+  now(): Date {
     return this.host.now ? this.host.now() : new Date();
   }
 
   private assertOpen(): void {
     if (this.closed) throw new Error('session is closed');
   }
+
+  private assertNotDeleted(sessionId: string): void {
+    if (this.deletedSessions.has(sessionId)) throw new Error(`Unknown session: ${sessionId}`);
+  }
+
+  /** Count one in-flight attachment import for the session. */
+  private beginAdmission(sessionId: string): void {
+    this.pendingAdmissions.set(sessionId, (this.pendingAdmissions.get(sessionId) ?? 0) + 1);
+  }
+
+  /** Release one admission; the entry is dropped only when the last one ends. */
+  private endAdmission(sessionId: string): void {
+    const remaining = (this.pendingAdmissions.get(sessionId) ?? 1) - 1;
+    if (remaining <= 0) this.pendingAdmissions.delete(sessionId);
+    else this.pendingAdmissions.set(sessionId, remaining);
+  }
 }
 
 // ─── shared helpers ────────────────────────────────────────────────────────
 
-interface SelectionEntry {
-  path: string;
-  reason: string;
+/** First `session.created` event, using a real type guard. */
+function findCreated(events: readonly LedgerEvent[]): SessionCreatedEvent | undefined {
+  for (const event of events) if (event.type === 'session.created') return event;
+  return undefined;
 }
 
-type SelectionResult = { ok: true; selections: SelectionEntry[] } | { ok: false; reason: string };
+/** Reject any session whose timeline is not the current on-disk format. */
+function assertCurrentFormat(events: readonly LedgerEvent[], sessionId: string): void {
+  const created = findCreated(events);
+  if (!created) throw new Error(`unknown session: ${sessionId}`);
+  if (created.format !== CURRENT_SESSION_FORMAT) throw new Error(OLD_SESSION_FORMAT_ERROR);
+}
 
-/** Validate the selector's strict JSON: two arrays of `{ path, reason }`. */
-function parseSelection(text: string): SelectionResult {
+/** Guard one storage directory segment (session id / task run id). */
+function assertStorageSegment(value: string): void {
+  if (value === '.' || value === '..' || value === '' || /[/\\\u0000]/u.test(value)) {
+    throw new Error(`invalid storage segment: ${value}`);
+  }
+}
+
+/** Simple lexical containment: `child` is `root` or a path below it. */
+function isInside(child: string, root: string): boolean {
+  if (child === root) return true;
+  const rel = relative(root, child);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/** Distinct memory paths already recalled into the context, in timeline order. */
+function memoryPathsInContext(events: readonly LedgerEvent[]): string[] {
+  const paths: string[] = [];
+  for (const event of events) {
+    if (event.type === 'memory.recalled' && !paths.includes(event.path)) paths.push(event.path);
+  }
+  return paths;
+}
+
+/** The latest visible reasoning output on the timeline. */
+/** Upstream-reported input tokens of the most recent finished reasoning call. */
+function lastReasonInputTokens(events: readonly LedgerEvent[]): number | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type === 'call' && event.role === 'reason') return event.usage?.input;
+  }
+  return undefined;
+}
+
+/** The content version of the latest memory recall for one path. */
+function latestMemoryVersion(events: readonly LedgerEvent[], path: string): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type === 'memory.recalled' && event.path === path) return event.version;
+  }
+  return undefined;
+}
+
+/** This turn's committed action results, trimmed for the memory-search view. */
+function turnActionResults(
+  turn: TurnRuntime,
+  events: readonly LedgerEvent[],
+): { name: string; status: string; text: string }[] {
+  const results: { name: string; status: string; text: string }[] = [];
+  for (const event of events) {
+    if (event.type !== 'action.finished' || event.turn !== turn.turn) continue;
+    results.push({ name: event.kind, status: event.status, text: event.result.slice(0, ACTION_RESULT_EXCERPT) });
+  }
+  return results;
+}
+
+/** A draft whose body is a read (dropped from a failed/interrupted turn). */
+function isReadDraft(draft: LedgerEventDraft): boolean {
+  switch (draft.type) {
+    case 'doc.content':
+      return draft.source === 'read' || draft.source === 'project-instructions';
+    case 'files':
+      return draft.source === 'read';
+    case 'memory.recalled':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Exact canonical root memory paths actually listed in the frozen raw index.
+ * Only inline Markdown link targets and standalone canonical path entries are
+ * considered, so a name that merely appears in a link label or prose never
+ * admits a path. Root `name.md` / `./name.md` targets normalize relative to
+ * `memories/INDEX.md` to `memories/name.md`. Parent traversal, nested folders,
+ * absolute/external targets and INDEX.md are excluded.
+ */
+function canonicalMemoryTargets(memoryIndex: string): Set<string> {
+  const targets = new Set<string>();
+  const candidates: string[] = [];
+  // Actual inline Markdown link targets: `[label](target)`.
+  const link = /\[[^\]\n]*\]\(\s*<?([^()<>\s]+)>?\s*\)/gu;
+  for (let match = link.exec(memoryIndex); match !== null; match = link.exec(memoryIndex)) {
+    candidates.push(match[1]!);
+  }
+  // Standalone canonical path list entries such as `- memories/m1.md`.
+  const entry = /^[ \t]*(?:[-*+]|\d+[.)])?[ \t]*(memories\/[^/ \t()[\]<>]+\.md)[ \t]*$/gmu;
+  for (let match = entry.exec(memoryIndex); match !== null; match = entry.exec(memoryIndex)) {
+    candidates.push(match[1]!);
+  }
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim();
+    if (trimmed === '' || trimmed.startsWith('/') || trimmed.includes('://')) continue;
+    const segments = trimmed.replace(/^\.\//u, '').split('/');
+    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) continue;
+    let canonical: string | undefined;
+    if (segments.length === 1 && segments[0]!.endsWith('.md')) canonical = `memories/${segments[0]!}`;
+    else if (segments.length === 2 && segments[0] === 'memories' && segments[1]!.endsWith('.md')) canonical = `memories/${segments[1]!}`;
+    if (canonical === undefined || !/^memories\/[^/]+\.md$/u.test(canonical)) continue;
+    if (canonical.toLowerCase() === 'memories/index.md') continue;
+    targets.add(canonical);
+  }
+  return targets;
+}
+
+/**
+ * Validate the memory selector's strict JSON: at most three `{ path, reason }`
+ * picks, each an existing root `memories/*.md` file listed in the frozen index.
+ * A malformed result is reported, never repaired.
+ */
+function parseMemoryPicks(
+  text: string,
+  memoryIndex: string,
+): { ok: true; picks: { path: string; reason: string }[] } | { ok: false; reason: string } {
   let value: unknown;
   try {
     value = JSON.parse(text.trim());
   } catch (error) {
-    return { ok: false, reason: `selection output is not valid JSON: ${messageOf(error)}` };
+    return { ok: false, reason: `memory-search output is not valid JSON: ${messageOf(error)}` };
   }
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return { ok: false, reason: 'selection output must be a JSON object' };
+    return { ok: false, reason: 'memory-search output must be a JSON object' };
   }
-
-  const record = value as { memories?: unknown; docs?: unknown };
-  const selections: SelectionEntry[] = [];
-  for (const [group, items] of [['memories', record.memories], ['docs', record.docs]] as const) {
-    if (!Array.isArray(items)) return { ok: false, reason: `selection '${group}' must be an array` };
-    for (const item of items) {
-      if (item === null || typeof item !== 'object' || Array.isArray(item)) {
-        return { ok: false, reason: `selection '${group}' entries must be objects` };
-      }
-      const path = (item as { path?: unknown }).path;
-      if (typeof path !== 'string' || path.trim() === '') {
-        return { ok: false, reason: `selection '${group}' entries need a non-empty path` };
-      }
-      const reason = (item as { reason?: unknown }).reason;
-      if (typeof reason !== 'string') {
-        return { ok: false, reason: `selection '${group}' reason must be a string` };
-      }
-      selections.push({ path, reason: reason ?? '' });
+  const picks = (value as { picks?: unknown }).picks;
+  if (!Array.isArray(picks)) return { ok: false, reason: 'memory-search output must contain a picks array' };
+  const indexedTargets = canonicalMemoryTargets(memoryIndex);
+  const result: { path: string; reason: string }[] = [];
+  for (const raw of picks) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, reason: 'memory-search pick must be an object' };
     }
+    const path = (raw as { path?: unknown }).path;
+    const reason = (raw as { reason?: unknown }).reason;
+    if (typeof path !== 'string' || path.trim() === '') {
+      return { ok: false, reason: 'memory-search pick needs a non-empty path' };
+    }
+    if (typeof reason !== 'string') return { ok: false, reason: 'memory-search pick needs a reason string' };
+    if (!/^memories\/[^/]+\.md$/u.test(path) || path.toLowerCase() === 'memories/index.md') {
+      return { ok: false, reason: `memory-search path is not a root memory file: ${path}` };
+    }
+    if (!indexedTargets.has(path)) {
+      return { ok: false, reason: `memory-search path is not in the memory index: ${path}` };
+    }
+    if (!result.some((pick) => pick.path === path)) result.push({ path, reason });
+    if (result.length >= 3) break;
   }
-  return { ok: true, selections };
+  return { ok: true, picks: result };
 }
 
-function isRecallDraft(draft: LedgerEventDraft): boolean {
-  const type = (draft as { type?: string }).type;
-  return type === 'doc.read' || type === 'memory.recalled';
-}
-
+/** Intent-only description of one typed action, for the running-action table. */
 function describeAction(action: ParsedAction): string {
-  switch (action.kind) {
-    case 'dispatch':
-      return `dispatch ${action.project ? `${action.project}/` : ''}${action.task}: ${oneLine(action.goal)}`;
-    case 'read':
-      return `read ${action.paths.join(', ')}`;
-    case 'write-doc':
-      return `write-doc ${action.project} ${action.docType}: ${oneLine(action.outline)}`;
-    case 'unsupported':
-      return `unsupported: ${oneLine(action.reason)}`;
-  }
+  return `${action.kind}: ${oneLine(action.intent)}`;
 }
 
 function oneLine(text: string): string {
-  const collapsed = text.replace(/\s+/gu, ' ').trim();
-  return collapsed;
-}
-
-function projectForDocPath(snapshot: WorkspaceSnapshot, docPath: string) {
-  const matches = snapshot.projects.filter((project) => docPath.startsWith(`${project.workspaceDir}/`)
-    || (docPath.endsWith('/AGENTS.md') && project.workspaceDir.startsWith(`${docPath.slice(0, -10)}/`)));
-  if (matches.length === 0) return undefined;
-  return matches.reduce((longest, candidate) =>
-    candidate.workspaceDir.length > longest.workspaceDir.length ? candidate : longest,
-  );
-}
-
-/** Fixed-format fallback used when the communication call itself fails. */
-export function fallbackReply(status: TurnStatus, error: string | undefined): string {
-  switch (status) {
-    case 'failed':
-      return `处理没有完成。错误：${error ?? '未知错误'}。如需继续，请告诉我下一步要做什么。`;
-    case 'exhausted':
-      return '已达到本轮的最大推理次数，仍有未完成的部分。请告诉我优先继续哪一部分。';
-    case 'interrupted':
-      return '本轮已中断。';
-    default:
-      return '本轮已结束。';
-  }
+  return text.replace(/\s+/gu, ' ').trim();
 }
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
-export type { ActionStatus, DocType, ParsedAction };
