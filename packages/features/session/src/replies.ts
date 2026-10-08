@@ -1,6 +1,9 @@
 /**
- * session replies: the communication calls of a turn (spaced progress replies
- * and the final reply) and the session title derived from them.
+ * session replies: the communication calls of a session. Exactly one call is
+ * made after each main reasoning output that produced something (a progress
+ * reply while the turn runs, or the terminal reply that also ends the turn),
+ * plus one closing call when a turn ends without fresh output. The session
+ * title is derived from the same replies.
  */
 
 import type { LedgerEvent, TurnStatus } from './ledger.ts';
@@ -11,13 +14,11 @@ import type { SessionRuntime, TurnRuntime } from './runtime.ts';
 
 /** Output-token allowance for the single communication reply call. */
 const REPLY_MAX_TOKENS = 800;
-/** Minimum spacing between two actually-appended intermediate replies. */
-const INTERMEDIATE_REPLY_MIN_INTERVAL_MS = 20_000;
 
 /** What the reply writer needs from the engine that owns the turn. */
 export interface ReplyHost {
-  now(): Date;
   track(promise: Promise<unknown>): void;
+  now(): Date;
   invoke(
     session: SessionRuntime,
     turn: TurnRuntime,
@@ -28,153 +29,141 @@ export interface ReplyHost {
   appendError(sessionId: string, stage: string, message: string, turn: TurnRuntime, cycle?: number): Promise<void>;
 }
 
-/** Writes a turn's progress replies, its final reply and the session title. */
+/** One queued communication invocation. */
+interface ReplyRequest {
+  turn: number;
+  cycle: number;
+  status: ReplyViewInput['status'];
+  /** True for the invocation that also finalizes the turn. */
+  terminal: boolean;
+  error?: string;
+}
+
+/** The statuses a terminal communication call carries. */
+type TerminalStatus = 'completed' | 'failed' | 'exhausted';
+
+/** Writes a session's communication replies and its title. */
 export class ReplyWriter {
   constructor(
     private readonly ports: Pick<EnginePorts, 'ledger' | 'views'>,
     private readonly engine: ReplyHost,
+    private readonly deviceName: string,
   ) {}
 
-  scheduleReply(session: SessionRuntime, turn: TurnRuntime): void {
-    if (turn.finished || turn.abort.signal.aborted) return;
-    // Several dispatches in one cycle share one progress message; a second
-    // message within the cycle could only restate the first.
-    if (turn.lastReplyCycle === turn.cycle) return;
-    const now = this.engine.now().getTime();
-    if (turn.replyInFlight) {
-      turn.replyPending = true;
-      return;
-    }
-    const since = turn.lastReplyAt === undefined ? Number.POSITIVE_INFINITY : now - turn.lastReplyAt;
-    if (since >= INTERMEDIATE_REPLY_MIN_INTERVAL_MS) {
-      this.startIntermediateReply(session, turn);
-      return;
-    }
-    turn.replyPending = true;
-    if (turn.replyTimer === undefined) {
-      turn.replyTimer = setTimeout(() => {
-        turn.replyTimer = undefined;
-        turn.replyPending = false;
-        this.startIntermediateReply(session, turn);
-      }, INTERMEDIATE_REPLY_MIN_INTERVAL_MS - since);
-    }
-  }
-
-  private startIntermediateReply(session: SessionRuntime, turn: TurnRuntime): void {
-    if (turn.finished || turn.abort.signal.aborted) return;
-    turn.replyInFlight = true;
-    turn.lastReplyCycle = turn.cycle;
-    const promise = this.emitIntermediateReply(session, turn)
-      .catch(() => undefined)
-      .finally(() => {
-        turn.replyInFlight = false;
-        if (turn.replyPending && !turn.finished && !turn.abort.signal.aborted) {
-          // Re-enter through the scheduler so a pending trigger after an
-          // in-flight reply still respects the minimum spacing.
-          turn.replyPending = false;
-          this.scheduleReply(session, turn);
-        }
-      });
-    turn.replyPromise = promise;
-    this.engine.track(promise);
-  }
-
-  private async emitIntermediateReply(session: SessionRuntime, turn: TurnRuntime): Promise<void> {
-    if (turn.finished || turn.abort.signal.aborted) return;
-    // Snapshot the originating cycle before any await: the turn's `cycle` field
-    // advances as soon as the next cycle starts, but this reply call, its
-    // reply event and any call error belong to the cycle that triggered it.
-    const replyCycle = turn.cycle;
-    // An intermediate reply always reports a running turn: current actions may
-    // all be finished while the reason call is still streaming. The newest
-    // current-turn action failure rides the existing `error` field so the
-    // authoritative latest failure outranks stale reason text and prior replies.
-    const error = this.latestFailedActionResultForCycle(turn, this.ports.ledger.read(session.sessionId), replyCycle);
-    const view = this.ports.views.reply(this.buildReplyInput(session, turn, {
-      status: 'running',
-      ...(error === undefined ? {} : { error }),
-    }));
-    const outcome = await this.engine.invoke(session, turn, 'reply', view, { maxTokens: REPLY_MAX_TOKENS, cycle: replyCycle });
-    turn.lastReplyAt = this.engine.now().getTime();
-    if (turn.finished || turn.abort.signal.aborted) return;
-    if (!outcome.ok) {
-      await this.engine.appendError(session.sessionId, 'reply', outcome.error ?? 'reply call failed', turn, replyCycle);
-      if (turn.finished || turn.abort.signal.aborted) return;
-    }
-    // An empty progress reply means nothing new since the last message: skip it.
-    if (outcome.ok && outcome.text.trim() === '') return;
-    const text = outcome.ok ? outcome.text : fallbackReply('running', error);
-    await this.ports.ledger.append(session.sessionId, {
-      type: 'reply',
+  /**
+   * Enqueue the one communication invocation for a nonempty main reason output.
+   * The invocation is serialized with every other reply of the session, and its
+   * ledger view is built when it is dequeued.
+   */
+  request(
+    session: SessionRuntime,
+    turn: TurnRuntime,
+    options: { cycle: number; status: 'running' | 'completed'; terminal: boolean },
+  ): void {
+    this.enqueue(session, {
       turn: turn.turn,
-      cycle: replyCycle,
-      text,
-      callId: outcome.callId,
+      cycle: options.cycle,
+      status: options.status,
+      terminal: options.terminal,
     });
   }
 
-  clearIntermediateReply(turn: TurnRuntime): void {
-    if (turn.replyTimer !== undefined) {
-      clearTimeout(turn.replyTimer);
-      turn.replyTimer = undefined;
-    }
-    turn.replyPending = false;
-  }
-
-  async finishReply(
+  /**
+   * Enqueue the one closing communication of a turn that ends without fresh
+   * output (reason failure or exhaustion). Always terminal.
+   */
+  close(
     session: SessionRuntime,
     turn: TurnRuntime,
-    status: TurnStatus,
+    status: 'failed' | 'exhausted',
     error: string | undefined,
-    question?: string,
   ): Promise<void> {
+    return this.enqueue(session, {
+      turn: turn.turn,
+      cycle: turn.cycle,
+      status,
+      terminal: true,
+      ...(error === undefined ? {} : { error }),
+    });
+  }
+
+  /** Append one request to the session's serialized reply chain. */
+  private enqueue(session: SessionRuntime, request: ReplyRequest): Promise<void> {
+    const run = session.replyQueue.then(
+      () => this.process(session, request),
+      () => this.process(session, request),
+    );
+    // Keep the chain alive after a failed reply so later replies still run.
+    session.replyQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.engine.track(run);
+    return run;
+  }
+
+  private async process(session: SessionRuntime, request: ReplyRequest): Promise<void> {
+    const turn = session.turns.get(request.turn);
+    if (!turn) return;
+    // An interrupted or already-finished turn never communicates.
     if (turn.finished || turn.abort.signal.aborted) return;
-    turn.phase = 'replying';
-    this.clearIntermediateReply(turn);
-    // Any in-flight intermediate reply finishes before the terminal reply starts.
-    await turn.replyPromise.catch(() => undefined);
-    if (turn.finished) return;
+
+    const input: ReplyViewInput = {
+      events: this.ports.ledger.read(session.sessionId),
+      turn: request.turn,
+      cycle: request.cycle,
+      status: request.status,
+      now: this.engine.now().toISOString(),
+      deviceName: this.deviceName,
+      ...(request.error === undefined ? {} : { error: request.error }),
+      ...(turn.imageUnsupported ? { imageUnsupported: true } : {}),
+    };
+    const outcome = await this.engine.invoke(session, turn, 'reply', this.ports.views.reply(input), {
+      maxTokens: REPLY_MAX_TOKENS,
+      cycle: request.cycle,
+    });
+    // An interrupt that landed while the call was in flight suppresses it.
+    if (turn.finished || turn.abort.signal.aborted) return;
 
     let text: string | undefined;
     let callId: string | undefined;
-    if (status !== 'interrupted') {
-      const input = this.buildReplyInput(session, turn, {
-        status,
-        ...(error === undefined ? {} : { error }),
-        ...(question === undefined ? {} : { question }),
-        ...(turn.imageUnsupported ? { imageNotice: true } : {}),
-      });
-      const outcome = await this.engine.invoke(session, turn, 'reply', this.ports.views.reply(input), { maxTokens: REPLY_MAX_TOKENS });
+    if (outcome.ok) {
+      callId = outcome.callId;
+      // A call that did not use the reply tool records the call only; a reply
+      // is stored unchanged.
+      if (outcome.text.trim() !== '') text = outcome.text;
+    } else if (request.terminal) {
+      // Running failures stay in the call record only; they add no error to
+      // the main reasoning context. Terminal failures retain the fixed fallback.
+      await this.engine.appendError(session.sessionId, 'reply', outcome.error ?? 'reply call failed', turn, request.cycle);
       if (turn.finished || turn.abort.signal.aborted) return;
-      if (outcome.ok) {
-        callId = outcome.callId;
-        if (outcome.text.trim() !== '') text = outcome.text;
-      } else {
-        await this.engine.appendError(session.sessionId, 'reply', outcome.error ?? 'reply call failed', turn);
-      }
+      text = fallbackReply(request.status as TerminalStatus, request.error);
     }
 
-    // The one communication call is recorded as written. An empty or failed
-    // call uses the fixed fallback line; the turn's own status and error are
-    // never changed by the reply.
-    if (turn.finished) return;
-    if (text === undefined || text === '') {
-      text = fallbackReply(status, error);
+    if (text !== undefined) {
+      await this.ports.ledger.append(session.sessionId, {
+        type: 'reply',
+        turn: request.turn,
+        cycle: request.cycle,
+        text,
+        ...(callId === undefined ? {} : { callId }),
+      });
     }
     if (turn.finished) return;
-    // The image notice must reach the user even when the reply omitted it.
-    if (turn.imageUnsupported && !text.includes('当前模型看不到图片')) {
-      text = `${text}\n（当前模型看不到图片）`;
+
+    if (request.terminal) {
+      await this.finishTurn(session, turn, request.status as TerminalStatus, request.error, text);
     }
+  }
 
-    await this.ports.ledger.append(session.sessionId, {
-      type: 'reply',
-      turn: turn.turn,
-      cycle: turn.cycle,
-      text,
-      ...(callId === undefined ? {} : { callId }),
-    });
-
+  /** Write the durable terminal rows and update the title. */
+  private async finishTurn(
+    session: SessionRuntime,
+    turn: TurnRuntime,
+    status: TerminalStatus,
+    error: string | undefined,
+    replyText: string | undefined,
+  ): Promise<void> {
     if (turn.finished) return;
     turn.status = status;
     turn.phase = 'terminal';
@@ -187,95 +176,10 @@ export class ReplyWriter {
     });
     turn.durableTerminal = true;
 
-    await this.maybeUpdateTitle(session, turn, text);
-  }
-
-  private buildReplyInput(
-    session: SessionRuntime,
-    turn: TurnRuntime,
-    options: {
-      status?: string;
-      error?: string;
-      question?: string;
-      imageNotice?: boolean;
-    } = {},
-  ): ReplyViewInput {
-    const events = this.ports.ledger.read(session.sessionId);
-    // While the main reason call is streaming, its partial text is the latest.
-    const lastReasonText = turn.phase === 'reasoning' && turn.cycleText !== ''
-      ? turn.cycleText
-      : latestReasonText(events);
-    return {
-      userText: turn.userText,
-      lastReasonText,
-      actions: this.replyActions(turn, events),
-      recentReplies: replyTexts(events).slice(-5),
-      ...(options.status === undefined ? {} : { status: options.status }),
-      ...(options.error === undefined ? {} : { error: options.error }),
-      ...(options.imageNotice === true ? { imageNotice: true } : {}),
-      ...(options.question === undefined ? {} : { question: options.question }),
-    };
-  }
-
-  /**
-   * Factual action table for the reply view: current-turn running actions from
-   * the runtime map, finished results still queued, and committed results. A
-   * later fact for the same action id replaces the running one.
-   */
-  private replyActions(turn: TurnRuntime, events: readonly LedgerEvent[]): { name: string; status: string }[] {
-    const byId = new Map<string, { name: string; status: string }>();
-    for (const action of turn.actions.values()) {
-      byId.set(action.actionId, { name: action.goal, status: 'running' });
-    }
-    for (const bundle of turn.resultQueue) {
-      const finished = bundle.finished;
-      if (finished.type === 'action.finished') {
-        byId.set(finished.actionId, { name: finished.task ?? finished.kind, status: finished.status });
-      }
-    }
-    for (const event of events) {
-      if (event.type === 'action.finished' && event.turn === turn.turn) {
-        byId.set(event.actionId, { name: event.task ?? event.kind, status: event.status });
-      }
-    }
-    return [...byId.values()];
-  }
-
-  /**
-   * Newest failed action result for the current turn and the given captured
-   * cycle. A result still queued but not yet committed is newer than the
-   * committed ones, so it wins within the same cycle; the scan is bounded to
-   * that turn and cycle and never aggregates history, so an earlier cycle's
-   * failure cannot ride a later cycle's intermediate reply error.
-   */
-  private latestFailedActionResultForCycle(
-    turn: TurnRuntime,
-    events: readonly LedgerEvent[],
-    cycle: number,
-  ): string | undefined {
-    for (let index = turn.resultQueue.length - 1; index >= 0; index -= 1) {
-      const finished = turn.resultQueue[index]!.finished;
-      if (
-        finished.type === 'action.finished'
-        && finished.turn === turn.turn
-        && finished.cycle === cycle
-        && finished.status === 'failed'
-      ) {
-        return finished.result;
-      }
-    }
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const event = events[index]!;
-      if (
-        event.type === 'action.finished'
-        && event.turn === turn.turn
-        && event.cycle === cycle
-        && event.status === 'failed'
-      ) {
-        return event.result;
-      }
-    }
-    return undefined;
+    // A terminal call without a reply leaves no new reply; the title still uses
+    // the latest real reply already on the timeline.
+    const titleReply = replyText ?? latestReplyText(this.ports.ledger.read(session.sessionId));
+    await this.maybeUpdateTitle(session, turn, titleReply);
   }
 
   // ── title ───────────────────────────────────────────────────────────────
@@ -292,13 +196,16 @@ export class ReplyWriter {
     this.engine.track(promise);
   }
 
-  private async maybeUpdateTitle(session: SessionRuntime, turn: TurnRuntime, finalReply: string): Promise<void> {
+  private async maybeUpdateTitle(session: SessionRuntime, turn: TurnRuntime, finalReply: string | undefined): Promise<void> {
     if (session.titleUpdatedWithReply) return;
     session.titleUpdatedWithReply = true;
     const version = ++session.titleVersion;
     const userText = session.firstUserText ?? turn.userText;
     try {
-      const view = this.ports.views.title({ userText, finalReply });
+      const view = this.ports.views.title({
+        userText,
+        ...(finalReply === undefined ? {} : { finalReply }),
+      });
       const outcome = await this.engine.invoke(session, turn, 'title', view);
       if (!outcome.ok) return;
       await this.applyTitle(session, version, outcome.callId, outcome.text);
@@ -327,6 +234,7 @@ export class ReplyWriter {
   }
 }
 
+/** The visible text of the latest completed reasoning output, or the empty string. */
 export function latestReasonText(events: readonly LedgerEvent[]): string {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;
@@ -335,20 +243,18 @@ export function latestReasonText(events: readonly LedgerEvent[]): string {
   return '';
 }
 
-/** Every visible reply text on the timeline, in timeline order. */
-function replyTexts(events: readonly LedgerEvent[]): string[] {
-  const texts: string[] = [];
-  for (const event of events) {
-    if (event.type === 'reply') texts.push(event.text);
+/** The text of the latest visible reply on the timeline, if any. */
+function latestReplyText(events: readonly LedgerEvent[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type === 'reply') return event.text;
   }
-  return texts;
+  return undefined;
 }
 
-/** Fixed-format fallback used when the communication call itself fails. */
-export function fallbackReply(status: TurnStatus | 'running', _error: string | undefined): string {
+/** Fixed-format fallback used when a terminal communication call itself fails. */
+export function fallbackReply(status: TurnStatus, _error: string | undefined): string {
   switch (status) {
-    case 'running':
-      return '本轮仍在进行。';
     case 'failed':
       return '本轮未完成。';
     case 'exhausted':

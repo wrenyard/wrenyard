@@ -79,7 +79,7 @@ export function AssistantMessage({ turn, enter }: AssistantMessageProps) {
                 <div className="flex items-end gap-2">
                   <Bubble variant="muted">
                     <BubbleContent>
-                      <Markdown streaming={reply.streaming}>{reply.text}</Markdown>
+                      <Markdown>{reply.text}</Markdown>
                     </BubbleContent>
                   </Bubble>
                   <HoverTime value={reply.at} />
