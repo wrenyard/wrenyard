@@ -29,11 +29,11 @@ export class ConstrainedDispatcher {
         continue;
       let plan: DispatchPlan;
       try {
-        // Eligibility/scoring resolve the candidate WITHOUT the requested thinking
-        // level: thinking is a selected runtime parameter that adapts through the
-        // Catalog, so it must never change which candidates are eligible or how
-        // they rank. The requested level is applied only to the chosen resolution
-        // below.
+        // Eligibility/scoring resolve the candidate WITHOUT the expected
+        // reasoning effort: reasoning effort is a selected runtime parameter
+        // that adapts through the Catalog, so it must never change which
+        // candidates are eligible or how they rank. The expected level is
+        // applied only to the chosen resolution below.
         plan = this.catalog.resolveRun(candidate.client, candidate.provider, candidate.model);
       }
       catch {
@@ -134,7 +134,7 @@ export class ConstrainedDispatcher {
       // Deterministic ordering across the collapsed model representatives:
       // expected-speed group first (meets expectedTps), then lower reference
       // output price first, then stable canonical provider/model identity. No
-      // concrete runtime selection and no thinking level is consulted in
+      // concrete runtime selection and no reasoning-effort level is consulted in
       // automatic mode.
       const aMeets = expected !== undefined && expected > 0 && a.speed.tps >= expected;
       const bMeets = expected !== undefined && expected > 0 && b.speed.tps >= expected;
@@ -151,12 +151,12 @@ export class ConstrainedDispatcher {
     collapsed.forEach((entry, index) => {
       entry.rank = index + 1;
     });
-    // Thinking is applied ONLY to the chosen resolution, after eligibility and
-    // ranking are already fixed: it adapts the selected target's runtime
-    // parameters and can never change which candidate wins.
+    // Reasoning effort is applied ONLY to the chosen resolution, after
+    // eligibility and ranking are already fixed: it adapts the selected target's
+    // runtime parameters and can never change which candidate wins.
     const winner = collapsed[0];
-    if (requirements.thinking !== undefined) {
-      winner.plan = this.catalog.resolveRun(winner.plan.client, winner.plan.provider, winner.plan.model, requirements.thinking);
+    if (requirements.expectedReasoningEffort !== undefined) {
+      winner.plan = this.catalog.resolveRun(winner.plan.client, winner.plan.provider, winner.plan.model, requirements.expectedReasoningEffort);
     }
     return { ok: true, selected: winner, considered };
   }

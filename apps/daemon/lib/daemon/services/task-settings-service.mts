@@ -1,6 +1,6 @@
 import { assessRequiredQuota } from '@wrenyard/auto-routing';
 import { createHash } from 'node:crypto'
-import { INTELLIGENCE_ORDER, type IntelligenceTier } from '@wrenyard/providers/catalog';
+import { INTELLIGENCE_ORDER, type IntelligenceTier, type ReasoningEffort } from '@wrenyard/providers/catalog';
 import { rankAutoRoutingCandidates, type RankedCandidate } from '@wrenyard/auto-routing';
 import type { CandidateInput, RequiredQuotaConstraint } from '@wrenyard/auto-routing';
 import {
@@ -885,7 +885,7 @@ export class TaskSettingsService {
         ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
         ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
         ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
-        ...(effective.dispatch.thinking !== undefined ? { thinking: effective.dispatch.thinking } : {}),
+        ...(effective.dispatch.expectedReasoningEffort !== undefined ? { expectedReasoningEffort: effective.dispatch.expectedReasoningEffort } : {}),
       })
       if (!explicitResolution.ok) {
         // Explicit mode bypasses automatic ranking and never falls back.
@@ -1238,7 +1238,7 @@ export class TaskSettingsService {
       ...(requiredCapabilities !== undefined && requiredCapabilities.length > 0 ? { requiredCapabilities } : {}),
       ...(requirements.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
       ...(requirements.intelligenceMin !== undefined ? { intelligenceMin: requirements.intelligenceMin } : {}),
-      ...(requirements.thinking !== undefined ? { thinking: requirements.thinking } : {}),
+      ...(requirements.expectedReasoningEffort !== undefined ? { expectedReasoningEffort: requirements.expectedReasoningEffort } : {}),
     })
 
     // One request-bound readiness sample + memo shared by every enumerated
@@ -1438,7 +1438,7 @@ export class TaskSettingsService {
           ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
           ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
           ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
-          ...(effective.dispatch.thinking !== undefined ? { thinking: effective.dispatch.thinking } : {}),
+          ...(effective.dispatch.expectedReasoningEffort !== undefined ? { expectedReasoningEffort: effective.dispatch.expectedReasoningEffort } : {}),
         })
         if (!explicitResolution.ok) {
           throw new TaskSettingsInvalidSettingsError(explicitResolution.error.message)
@@ -1561,7 +1561,7 @@ export class TaskSettingsService {
             ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
           ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
           ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
-          ...(effective.dispatch.thinking !== undefined ? { thinking: effective.dispatch.thinking } : {}),
+          ...(effective.dispatch.expectedReasoningEffort !== undefined ? { expectedReasoningEffort: effective.dispatch.expectedReasoningEffort } : {}),
           })
           if (explicitResolution.ok) {
             resolvedTarget = explicitResolution.exactAgentRuntime
@@ -2714,7 +2714,7 @@ interface TaskSettingsEffectiveAutomaticDto {
   exclude_profile_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
   exclude_client_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
   exclude_provider_ids: { value: string[] | null; source: TaskSettingsSourceLayer }
-  thinking?: { value: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null; source: TaskSettingsSourceLayer }
+  expected_reasoning_effort?: { value: ReasoningEffort | null; source: TaskSettingsSourceLayer }
 }
 
 function toEffectiveAutomatic(

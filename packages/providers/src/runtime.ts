@@ -93,7 +93,7 @@ export function canonicalizeObservedProviderModelId(provider: string, model: str
   const matches = new Set<string>();
   const alias = definition.modelAliases?.[model];
   if (alias) matches.add(alias);
-  for (const [canonical, clients] of Object.entries(definition.thinkingMappings ?? {})) {
+  for (const [canonical, clients] of Object.entries(definition.reasoningEffortMappings ?? {})) {
     for (const levels of Object.values(clients)) {
       if (Object.values(levels).some((mapping) => mapping?.model === model)) matches.add(canonical);
     }

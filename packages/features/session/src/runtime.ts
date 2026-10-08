@@ -3,6 +3,7 @@
  * turns. None of it is durable; the ledger is the source of truth.
  */
 
+import type { ReasoningEffort } from '@wrenyard/models';
 import type { LedgerEventDraft, TurnStatus, WorkspaceSnapshot } from './ledger.ts';
 import type { ActionKind, ActionRunner } from './actions.ts';
 import type { CallsPort, FilesPort, TurnPhase } from './ports.ts';
@@ -25,7 +26,7 @@ export interface ResultBundle {
 export interface TurnRuntime {
   turn: number;
   userText: string;
-  model: { provider: string; model: string; reasoningEffort?: string };
+  model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
   publicId: string;
   contextWindow?: number;
   /** True when this turn carried images the reasoning model cannot see. */

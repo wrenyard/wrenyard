@@ -1,80 +1,83 @@
-import { GATEWAY_PROTOCOLS, type GatewayProtocol, type IntelligenceTier, THINKING_LEVELS, type ThinkingLevel, THINKING_ORDER, INTELLIGENCE_ORDER, type ModelCapability, type ModelPricing, type SpeedSource, type SpeedEvidence, type CanonicalModelDefinition, type ModelDefinition, type DispatchCandidate, type LocalSpeedSample, type ClientDefinition, type PublicGatewayModel, type ResolvedGatewayModel, type DispatchPlan, type RunSyntaxRef, PUBLIC_CLIENT_KEYS, type ProtocolCapability, type ProviderDefinition, type ProviderThinkingMappings } from './contracts.ts';
+import { REASONING_EFFORTS, resolveReasoningEffort, type ReasoningEffort } from '@wrenyard/models';
+import { GATEWAY_PROTOCOLS, type GatewayProtocol, type IntelligenceTier, INTELLIGENCE_ORDER, type ModelCapability, type ModelPricing, type SpeedSource, type SpeedEvidence, type CanonicalModelDefinition, type ModelDefinition, type DispatchCandidate, type LocalSpeedSample, type ClientDefinition, type PublicGatewayModel, type ResolvedGatewayModel, type DispatchPlan, type RunSyntaxRef, PUBLIC_CLIENT_KEYS, type ProtocolCapability, type ProviderDefinition, type ProviderReasoningEffortMappings } from './contracts.ts';
 export * from './contracts.ts';
 
-const THINKING_LEVEL_SET: ReadonlySet<string> = new Set(THINKING_LEVELS);
+const REASONING_EFFORT_SET: ReadonlySet<string> = new Set(REASONING_EFFORTS);
 
-// Normalizer: the single accepted input alias is the misspelling 'midium', which
-// emits the canonical 'medium'. Every other unknown value normalizes to
-// undefined and is never emitted.
-export function normalizeThinkingLevel(level: string | undefined): ThinkingLevel | undefined {
-  if (level === undefined) return undefined;
-  if (level === 'midium') return 'medium';
-  return THINKING_LEVEL_SET.has(level) ? (level as ThinkingLevel) : undefined;
+// Strict normalizer: accepts only the current effort vocabulary. The legacy
+// misspelling 'midium' is no longer an accepted alias, so every unknown value
+// (including 'midium') normalizes to undefined and is never emitted.
+export function normalizeReasoningEffort(effort: string | undefined): ReasoningEffort | undefined {
+  if (effort === undefined) return undefined;
+  return REASONING_EFFORT_SET.has(effort) ? (effort as ReasoningEffort) : undefined;
 }
 
-function validateThinkingLevels(providerID: string, model: ModelDefinition): void {
-  const levels = model.thinkingLevels;
-  if (levels === undefined) return;
-  if (!Array.isArray(levels) || levels.length === 0) {
-    throw new Error(`provider ${providerID} model ${model.id} thinkingLevels must be a non-empty array`);
+function validateReasoningEfforts(providerID: string, model: ModelDefinition): void {
+  const efforts = model.reasoningEfforts;
+  if (!Array.isArray(efforts) || efforts.length === 0) {
+    throw new Error(`provider ${providerID} model ${model.id} reasoningEfforts must be a non-empty array`);
   }
   const seen = new Set<string>();
-  for (const level of levels) {
-    if (!THINKING_LEVEL_SET.has(level)) {
+  for (const effort of efforts) {
+    if (!REASONING_EFFORT_SET.has(effort)) {
       throw new Error(
-        `provider ${providerID} model ${model.id} has invalid thinking level: ${JSON.stringify(level)}`,
+        `provider ${providerID} model ${model.id} has invalid reasoning effort: ${JSON.stringify(effort)}`,
       );
     }
-    if (seen.has(level)) {
-      throw new Error(`provider ${providerID} model ${model.id} has duplicate thinking level ${level}`);
+    if (seen.has(effort)) {
+      throw new Error(`provider ${providerID} model ${model.id} has duplicate reasoning effort ${effort}`);
     }
-    seen.add(level);
+    seen.add(effort);
   }
 }
 
-function validateThinkingMappings(
+function validateReasoningEffortMappings(
   providerID: string,
-  mappings: ProviderThinkingMappings | undefined,
+  mappings: ProviderReasoningEffortMappings | undefined,
   modelIDs: ReadonlySet<string>,
+  models: readonly ModelDefinition[],
 ): void {
   if (mappings === undefined) return;
   for (const [modelID, byClient] of Object.entries(mappings)) {
     if (!modelIDs.has(modelID)) {
       throw new Error(
-        `provider ${providerID} thinking mappings model ${JSON.stringify(modelID)} must reference an exact declared model id`,
+        `provider ${providerID} reasoning effort mappings model ${JSON.stringify(modelID)} must reference an exact declared model id`,
       );
     }
     if (byClient === null || typeof byClient !== 'object') {
-      throw new Error(`provider ${providerID} thinking mappings model ${modelID} must be keyed by client id`);
+      throw new Error(`provider ${providerID} reasoning effort mappings model ${modelID} must be keyed by client id`);
     }
     for (const [clientID, byLevel] of Object.entries(byClient)) {
       if (clientID.trim() === '') {
-        throw new Error(`provider ${providerID} thinking mappings model ${modelID} has an empty client id`);
+        throw new Error(`provider ${providerID} reasoning effort mappings model ${modelID} has an empty client id`);
       }
       if (byLevel === null || typeof byLevel !== 'object') {
         throw new Error(
-          `provider ${providerID} thinking mappings model ${modelID} client ${clientID} must be keyed by thinking level`,
+          `provider ${providerID} reasoning effort mappings model ${modelID} client ${clientID} must be keyed by reasoning effort`,
         );
       }
-      for (const [level, mapping] of Object.entries(byLevel)) {
-        if (!THINKING_LEVEL_SET.has(level)) {
+      for (const [effort, mapping] of Object.entries(byLevel)) {
+        if (!REASONING_EFFORT_SET.has(effort)) {
           throw new Error(
-            `provider ${providerID} thinking mappings model ${modelID} client ${clientID} has invalid thinking level: ${JSON.stringify(level)}`,
+            `provider ${providerID} reasoning effort mappings model ${modelID} client ${clientID} has invalid reasoning effort: ${JSON.stringify(effort)}`,
           );
         }
+        if (!models.find(model => model.id === modelID)!.reasoningEfforts.includes(effort as ReasoningEffort)) throw new Error(`provider ${providerID} client ${clientID} mapping ${effort} must belong to the route ladder`);
         if (mapping === null || typeof mapping !== 'object') {
           throw new Error(
-            `provider ${providerID} thinking mappings model ${modelID} client ${clientID} level ${level} must be an object`,
+            `provider ${providerID} reasoning effort mappings model ${modelID} client ${clientID} level ${effort} must be an object`,
           );
         }
+        if (mapping.environment !== undefined && (mapping.environment === null || typeof mapping.environment !== 'object' || Object.keys(mapping.environment).length === 0 || Object.entries(mapping.environment).some(([key, value]) => key.trim() === '' || typeof value !== 'string'))) throw new Error('reasoning mapping environment must be a non-empty string map');
+        if (mapping.effort === undefined && mapping.model === undefined && mapping.environment === undefined) throw new Error('reasoning mapping must materialize an effort, model, or environment');
         if (mapping.model !== undefined && (typeof mapping.model !== 'string' || mapping.model.trim() === '')) {
           throw new Error(
-            `provider ${providerID} thinking mappings model ${modelID} client ${clientID} level ${level} model must be a non-empty string`,
+            `provider ${providerID} reasoning effort mappings model ${modelID} client ${clientID} level ${effort} model must be a non-empty string`,
           );
         }
         if (mapping.effort !== undefined && (typeof mapping.effort !== 'string' || mapping.effort.trim() === '')) {
           throw new Error(
-            `provider ${providerID} thinking mappings model ${modelID} client ${clientID} level ${level} effort must be a non-empty string`,
+            `provider ${providerID} reasoning effort mappings model ${modelID} client ${clientID} level ${effort} effort must be a non-empty string`,
           );
         }
       }
@@ -219,7 +222,7 @@ export class Catalog {
           throw new Error(`provider ${provider.id} model ${model.id} supportedClients must not be empty`);
         }
       }
-      validateThinkingLevels(provider.id, model);
+      validateReasoningEfforts(provider.id, model);
       if (model.canonicalModel) {
         requireID('canonical model', model.canonicalModel.id);
         const displayName = model.canonicalModel.displayName.trim();
@@ -253,10 +256,15 @@ export class Catalog {
       }
       validateSpeed(override, `provider ${provider.id} model speed override ${modelID}`);
     }
-    // Thinking mappings may only reference exact declared model ids and legal
-    // levels, and every mapping entry must be an object. References/values are
-    // validated here so a registration never stages an unusable mapping.
-    validateThinkingMappings(provider.id, provider.thinkingMappings, modelIDs);
+    // Reasoning-effort mappings may only reference exact declared model ids and
+    // legal levels, and every mapping entry must be an object. References/values
+    // are validated here so a registration never stages an unusable mapping.
+    validateReasoningEffortMappings(provider.id, provider.reasoningEffortMappings, modelIDs, provider.models);
+    // Every provider must declare a protocol-aware effort translator so a
+    // resolved level is never silently dropped (no default/dont-send path).
+    if (typeof provider.convertReasoningEffort !== 'function') {
+      throw new Error(`provider ${provider.id} must declare convertReasoningEffort`);
+    }
     const protocols = new Set<GatewayProtocol>();
     for (const capability of provider.protocols ?? []) {
       if (protocols.has(capability.protocol)) {
@@ -360,7 +368,7 @@ export class Catalog {
           ...(model.claudeTier === undefined ? {} : { claudeTier: model.claudeTier }),
           ...(model.supports1MContext === undefined ? {} : { supports1MContext: model.supports1MContext }),
           intelligence: model.intelligence,
-          ...(model.thinkingLevels === undefined ? {} : { thinkingLevels: model.thinkingLevels }),
+          reasoningEfforts: model.reasoningEfforts,
           ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
           ...(model.capabilities === undefined ? {} : { capabilities: model.capabilities }),
           pricing: model.pricing,
@@ -395,7 +403,36 @@ export class Catalog {
     };
   }
 
-  resolveRun(clientID: string, providerID: string, modelID: string, thinking?: ThinkingLevel): DispatchPlan {
+  /**
+   * The exact reasoning-effort subset a client can materialize for a route: the
+   * route-owned ladder filtered to levels this exact client maps. A
+   * header-forwarding Gateway client may inherit the route ladder. Every other
+   * client needs an explicit mapping; missing or empty mappings are not dispatchable.
+   */
+  reasoningEfforts(clientID: string, providerID: string, modelID: string): readonly ReasoningEffort[] {
+    const client = this.clientsByID.get(clientID);
+    if (!client) throw new Error(`unknown client: ${clientID}`);
+    const provider = this.providersByID.get(providerID);
+    if (!provider) throw new Error(`unknown provider: ${providerID}`);
+    const resolvedModelID = provider.modelAliases?.[modelID] ?? modelID;
+    const modelDef = provider.models.find((model) => model.id === resolvedModelID);
+    if (!modelDef) throw new Error(`unknown model: ${providerID}/${modelID}`);
+    const byLevel = provider.reasoningEffortMappings?.[modelDef.id]?.[clientID];
+    const forwardsGatewayEffort = client.forwardsGatewayReasoningEffort === true
+      && !provider.nativeClients?.includes(clientID)
+      && client.gatewayProtocols.some(protocol => provider.protocols?.some(capability => capability.protocol === protocol))
+      && !client.unsupportedGatewayProviders?.includes(providerID)
+      && (modelDef.supportedClients === undefined || modelDef.supportedClients.includes(clientID));
+    if (byLevel === undefined && forwardsGatewayEffort) return modelDef.reasoningEfforts;
+    if (byLevel === undefined) throw new Error(`client ${clientID} has no reasoning-effort mapping for ${providerID}/${modelDef.id}`);
+    const subset = modelDef.reasoningEfforts.filter((effort) => byLevel[effort] !== undefined);
+    if (subset.length === 0) {
+      throw new Error(`client ${clientID} has no reasoning-effort mapping for ${providerID}/${modelDef.id}`);
+    }
+    return subset;
+  }
+
+  resolveRun(clientID: string, providerID: string, modelID: string, expected?: ReasoningEffort): DispatchPlan {
     const client = this.clientsByID.get(clientID);
     if (!client) throw new Error(`unknown client: ${clientID}`);
     const provider = this.providersByID.get(providerID);
@@ -410,17 +447,17 @@ export class Catalog {
     }
     // Runtime invalid *public enum* validation. A legal level is never rejected
     // here for being unsupported by a model/runtime; it is adapted into the
-    // plan's runtime parameters by resolveThinking.
-    if (thinking !== undefined && !THINKING_LEVEL_SET.has(thinking)) {
-      throw new Error(`invalid thinking level: ${JSON.stringify(thinking)}`);
+    // plan's runtime parameters by resolveReasoning.
+    if (expected !== undefined && !REASONING_EFFORT_SET.has(expected)) {
+      throw new Error(`invalid reasoning effort: ${JSON.stringify(expected)}`);
     }
-    const thinkingFields = this.resolveThinking(provider, modelDef, clientID, thinking);
     if (provider.nativeClients?.includes(clientID)) {
+      const effortFields = this.resolveReasoning(provider, modelDef, clientID, expected);
       // Native web search is admitted ONLY for an explicitly supported native
       // client/provider pair: the client must declare supportsNativeWebSearch and
       // the resolved provider must be that client's exact nativeProvider. This is
       // native-provider capability alone — never third-party gateway support.
-      const plan: DispatchPlan = { client: clientID, provider: providerID, model: modelID, mode: 'native', ...thinkingFields };
+      const plan: DispatchPlan = { client: clientID, provider: providerID, model: modelID, mode: 'native', ...effortFields };
       if (client.supportsNativeWebSearch === true && client.nativeProvider === providerID) {
         plan.supportsWebSearch = true;
       }
@@ -432,46 +469,27 @@ export class Catalog {
     const protocol = client.gatewayProtocols.find((candidate) =>
       provider.protocols?.some((capability) => capability.protocol === candidate));
     if (!protocol) throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
-    return { client: clientID, provider: providerID, model: modelID, mode: 'gateway', protocol, ...thinkingFields };
+    const effortFields = this.resolveReasoning(provider, modelDef, clientID, expected);
+    return { client: clientID, provider: providerID, model: modelID, mode: 'gateway', protocol, ...effortFields };
   }
 
-  // Resolves the thinking portion of a plan by parameter adaptation. Only a
-  // *public* invalid enum value is a hard error; an unsupported-but-legal level
-  // is never a rejection. A level is usable only when the model declares it AND
-  // this exact client has an explicit mapping for it — the intersection is the
-  // sole candidate set:
-  // - No usable level at all (no declared levels, no exact-client mappings, or
-  //   an empty intersection): the plan carries no thinking and no transport is
-  //   invented.
-  // - Omitted request: the highest usable level.
-  // - Requested level: the smallest usable level >= the request, else the
-  //   highest usable level.
-  // Only an explicit mapping may set upstreamModel / mapped wire reasoningEffort.
-  private resolveThinking(
+  // Enumeration resolves compatibility only; operational callers supply an expectation.
+  private resolveReasoning(
     provider: ProviderDefinition,
     modelDef: ModelDefinition,
     clientID: string,
-    requested?: ThinkingLevel,
-  ): Pick<DispatchPlan, 'thinking' | 'reasoningEffort' | 'upstreamModel'> {
-    const byLevel = provider.thinkingMappings?.[modelDef.id]?.[clientID];
-    // Usable = declared by the model AND explicitly mapped for this exact client.
-    const usable = (modelDef.thinkingLevels ?? []).filter((level) => byLevel?.[level] !== undefined);
-    if (usable.length === 0) return {};
-    const ordered = [...usable].sort((a, b) => THINKING_ORDER[a] - THINKING_ORDER[b]);
-    let selected: ThinkingLevel;
-    if (requested === undefined) {
-      // Omitted request selects the highest usable level.
-      selected = ordered[ordered.length - 1]!;
-    } else {
-      // Requested level adapts to the smallest usable level at or above it,
-      // otherwise to the highest usable level.
-      const atOrAbove = ordered.find((level) => THINKING_ORDER[level] >= THINKING_ORDER[requested]);
-      selected = atOrAbove ?? ordered[ordered.length - 1]!;
+    expected?: ReasoningEffort,
+  ): Pick<DispatchPlan, 'reasoningEffort' | 'clientReasoningEffort' | 'clientReasoningEnvironment' | 'upstreamModel'> {
+    const supported = this.reasoningEfforts(clientID, provider.id, modelDef.id);
+    if (expected === undefined) return {};
+    const selected = resolveReasoningEffort(expected, supported);
+    const mapping = provider.reasoningEffortMappings?.[modelDef.id]?.[clientID]?.[selected] ?? { effort: selected };
+    if (mapping.effort === undefined && mapping.model === undefined && mapping.environment === undefined) {
+      throw new Error('reasoning-effort mapping must materialize an effort or model');
     }
-    const mapping = byLevel![selected]!;
-    return {
-      thinking: selected,
-      ...(mapping.effort === undefined ? {} : { reasoningEffort: mapping.effort }),
+    return { reasoningEffort: selected,
+      ...(mapping.environment === undefined ? {} : { clientReasoningEnvironment: mapping.environment }),
+      ...(mapping.effort === undefined ? {} : { clientReasoningEffort: mapping.effort }),
       ...(mapping.model === undefined ? {} : { upstreamModel: mapping.model }),
     };
   }

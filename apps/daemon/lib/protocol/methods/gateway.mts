@@ -1,3 +1,4 @@
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import type { JsonSchema } from '../jsonrpc.mts'
 
 export interface GatewayConnectionParams {}
@@ -22,11 +23,11 @@ export interface GatewayConnectionResult {
     maxOutputTokens?: number
     capabilities?: readonly ('text' | 'image')[]
     /**
-     * The legal thinking levels this model accepts, in ascending intensity.
-     * Replaces the legacy fixed `reasoningEffort` field so a per-run thinking
-     * choice can be validated against this exact ladder.
+     * The legal reasoning-effort levels this model accepts, in ascending
+     * intensity. A per-run reasoning-effort choice is validated against this
+     * exact ladder.
      */
-    thinkingLevels?: readonly ('low' | 'medium' | 'high' | 'xhigh' | 'max')[]
+    reasoningEfforts: readonly ReasoningEffort[]
     speed?: number
     /** USD per million tokens: [cached, input, output]. */
     pricing?: readonly [number, number, number]
@@ -49,7 +50,7 @@ export const gatewayConnectionResultSchema = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['id', 'publicId', 'provider', 'displayName', 'intelligence'],
+        required: ['id', 'publicId', 'provider', 'displayName', 'intelligence', 'reasoningEfforts'],
         properties: {
           id: { type: 'string' }, publicId: { type: 'string' }, provider: { type: 'string' },
           displayName: { type: 'string' }, contextWindow: { type: 'integer', minimum: 1 }, maxTokens: { type: 'integer', minimum: 1 },
@@ -58,9 +59,9 @@ export const gatewayConnectionResultSchema = {
           intelligence: { enum: ['low', 'mid', 'high', 'premium'] },
           maxOutputTokens: { type: 'integer', minimum: 1 },
           capabilities: { type: 'array', items: { enum: ['text', 'image'] } },
-          thinkingLevels: {
-            type: 'array',
-            items: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
+          reasoningEfforts: {
+            type: 'array', minItems: 1, uniqueItems: true,
+            items: { enum: REASONING_EFFORTS },
           },
           speed: { type: 'number', exclusiveMinimum: 0 },
           pricing: {

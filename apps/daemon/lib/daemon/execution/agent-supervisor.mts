@@ -12,7 +12,7 @@ import { killProcessTree } from '../../adapters/shell/process.mts'
 import { redactEvent, redactJsonString } from './redaction.mts'
 import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protocol.mts'
 import { RepoWriteLocks } from './repo-write-locks.mts'
-import { parseRunSyntax } from '@wrenyard/providers/catalog'
+import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
   AgentExecutionHost,
@@ -265,7 +265,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
               execution_id, task_run_id, requested_agent_runtime,
               profile, client, provider, model, model_id, mode, protocol,
               speed_effective_tps, speed_source, speed_sample_count, speed_checked_at,
-              speed_expected_tps_met, speed_degradation_reason, intelligence, thinking,
+              speed_expected_tps_met, speed_degradation_reason, intelligence, reasoning_effort,
               reference_pricing_input, reference_pricing_output, reference_pricing_cache,
               reference_pricing_cache_write, reference_pricing_source, reference_pricing_checked_at,
               auto_routing,
@@ -288,7 +288,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             snap.speed.expected_tps_met ? 1 : 0,
             snap.speed.degradation_reason ?? null,
             snap.intelligence ?? null,
-            snap.thinking ?? null,
+            snap.reasoningEffort ?? null,
             snap.reference_pricing.input_usd_per_million ?? null,
             snap.reference_pricing.output_usd_per_million ?? null,
             snap.reference_pricing.cached_input_usd_per_million ?? null,
@@ -650,23 +650,24 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       const client = clientId ? agentClients.get(clientId) : undefined;
       if (!client?.capabilities.run) throw new Error('Execution requires a resolved agent client');
       if (!syntax?.model) throw new Error('Execution requires a resolved model');
-      const plan = this.buildThinkingPlanEnv(entry.executionId)?.plan ?? this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model);
+      const plan = this.buildReasoningEffortPlanEnv(entry.executionId)?.plan ?? this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model, opts.dispatchSnapshot?.reasoningEffort);
       // A native dispatch must hand the CLI the exact wire spelling the
       // installed product/login declares — e.g. canonical `claude-sonnet-5` is
       // the product's 1M row `claude-sonnet-5-1m`, not the 200K row that shares
       // the public id. The admission binding already carries that wire id for
       // this exact execution (resolved from the current product snapshot when
-      // the run was admitted); an explicit thinking-mapped substitution still
+      // the run was admitted); an explicit reasoning-effort-mapped substitution still
       // wins. The public canonical id stays in canonicalModel, so observed ids
       // normalize back and no wire spelling ever reaches a public surface.
       const launchModel = plan.upstreamModel
         ?? (plan.mode === 'native' ? entry.codeBuddyExecution?.expectedWireModel : undefined)
         ?? syntax.model;
       this.log('debug', '[foreman] starting agent execution ' + entry.executionId, {client: client.id, model: syntax.model});
-      // The resolved client/provider/model/mode/thinking/cwd are all owned by
+      // The resolved client/provider/model/mode/reasoning-effort/cwd are all owned by
       // the task layer. The daemon's shared ExecService only runs the resolved
       // client, so both this path and an explicit `wrenyard exec` share one
       // launch/feature/replay implementation.
+      if (plan.reasoningEffort === undefined) throw new Error("Execution requires a persisted reasoningEffort");
       const agentRequest: AgentRequest = {
         model: launchModel,
         canonicalModel: syntax.model,
@@ -676,9 +677,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         prompt: opts.prompt,
         cwd: opts.cwd,
         ...(opts.resume === undefined ? {} : { resumeSessionId: opts.resume }),
-        ...(plan.reasoningEffort ?? plan.thinking
-          ? { thinking: plan.reasoningEffort ?? plan.thinking }
-          : {}),
+        reasoningEffort: plan.reasoningEffort,
+        ...(plan.clientReasoningEffort === undefined ? {} : { clientReasoningEffort: plan.clientReasoningEffort }),
+        ...(plan.clientReasoningEnvironment === undefined ? {} : { clientReasoningEnvironment: plan.clientReasoningEnvironment }),
       };
       // The fully resolved user request is shaped once, then lowered onto the
       // shared exec surface. Task-declared feature ids map to exec feature ids
@@ -696,7 +697,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           process.env,
           opts.taskId,
           entry.codeBuddyExecution,
-          this.buildThinkingPlanEnv(entry.executionId),
+          this.buildReasoningEffortPlanEnv(entry.executionId),
           entry.executionId,
         ),
       };
@@ -1497,27 +1498,27 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
   /**
    * Resolve the dispatch-plan override for this exact execution attempt's
-   * persisted thinking choice. The snapshot is read from the attempt's own
+   * persisted reasoning-effort choice. The snapshot is read from the attempt's own
    * `task_run_attempt_dispatch` row (never the latest attempt of the task), so
-   * a queued execution promoted later still spawns with the thinking level it
-   * was admitted with. Only when a legal thinking value is persisted does this
+   * a queued execution promoted later still spawns with the reasoning-effort level it
+   * was admitted with. Only when a legal reasoning-effort value is persisted does this
    * build a fresh plan through the builtin catalog; legacy runs without a
    * snapshot return undefined and spawn exactly as before. The returned value
    * is a plan keyed by the attempt's own canonical profile only — it never
    * mutates the process env or any global/default plans.
    */
-  private buildThinkingPlanEnv(executionId: string): ThinkingPlanEnvOverride | undefined {
-    const row = this.get<AttemptThinkingRow>(
-      `SELECT thinking, provider, model, profile, mode, requested_agent_runtime, client
+  private buildReasoningEffortPlanEnv(executionId: string): ReasoningEffortPlanEnvOverride | undefined {
+    const row = this.get<AttemptReasoningEffortRow>(
+      `SELECT reasoning_effort, provider, model, profile, mode, requested_agent_runtime, client
        FROM task_run_attempt_dispatch WHERE execution_id = ?`,
       executionId,
     )
-    const thinking = row ? toPersistedThinkingLevel(row.thinking) : undefined
-    if (!row || !thinking) return undefined
+    const reasoningEffort = row ? toPersistedReasoningEffort(row.reasoning_effort) : undefined
+    if (!row || !reasoningEffort) return undefined
     if ((row.mode !== 'native' && row.mode !== 'gateway') || !row.client || !row.provider || !row.model || !row.profile) {
-      throw new Error('Persisted thinking dispatch is incomplete')
+      throw new Error('Persisted reasoning-effort dispatch is incomplete')
     }
-    const plan = this.catalog.resolveRun(row.client, row.provider, row.model, thinking)
+    const plan = this.catalog.resolveRun(row.client, row.provider, row.model, reasoningEffort)
     return { profile: row.profile, plan }
   }
 
@@ -1628,13 +1629,13 @@ const CODEBUDDY_PRIVATE_ENV_NAMES = new Set([
 const DISPATCH_PLANS_ENV = 'WRENYARD_DISPATCH_PLANS_JSON'
 
 /** A single per-run dispatch plan override keyed by its canonical profile. */
-interface ThinkingPlanEnvOverride {
+interface ReasoningEffortPlanEnvOverride {
   profile: string
   plan: Partial<ReturnType<ReturnType<typeof createBuiltinCatalog>['resolveRun']>>
 }
 
-interface AttemptThinkingRow {
-  thinking: string | null
+interface AttemptReasoningEffortRow {
+  reasoning_effort: string | null
   provider: string | null
   model: string | null
   profile: string | null
@@ -1643,8 +1644,8 @@ interface AttemptThinkingRow {
   client: string | null
 }
 
-function toPersistedThinkingLevel(raw: string | null): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined {
-  return raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh' || raw === 'max'
+function toPersistedReasoningEffort(raw: string | null): ReasoningEffort | undefined {
+  return raw === 'none' || raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh' || raw === 'max'
     ? raw
     : undefined
 }
@@ -1688,7 +1689,7 @@ export function resolveTaskAgentEnv(
   env: NodeJS.ProcessEnv,
   taskRunId?: string,
   codeBuddyExecution?: CodeBuddyExecutionBinding,
-  thinkingPlan?: ThinkingPlanEnvOverride,
+  reasoningEffortPlan?: ReasoningEffortPlanEnvOverride,
   executionId?: string,
 ): NodeJS.ProcessEnv {
   // Copy the inherited environment so unrelated values (PATH, credentials, etc.) reach the
@@ -1713,13 +1714,14 @@ export function resolveTaskAgentEnv(
     next[CODEBUDDY_EXPECTED_ENVIRONMENT_ENV] = codeBuddyExecution.expectedEnvironment
     next[CODEBUDDY_EXPECTED_WIRE_MODEL_ENV] = codeBuddyExecution.expectedWireModel
   }
-  // Per-run thinking plan: overwrite ONLY this run's canonical profile entry in a
-  // freshly parsed copy of the inherited plan map, preserving every other plan.
-  // The process env and any global/default plan map are never mutated, so
-  // concurrent children cannot leak a thinking level into one another.
-  if (thinkingPlan) {
+  // Per-run reasoning-effort plan: overwrite ONLY this run's canonical profile
+  // entry in a freshly parsed copy of the inherited plan map, preserving every
+  // other plan. The process env and any global/default plan map are never
+  // mutated, so concurrent children cannot leak a reasoning-effort level into one
+  // another.
+  if (reasoningEffortPlan) {
     const plans = parseDispatchPlans(next[DISPATCH_PLANS_ENV])
-    plans[thinkingPlan.profile] = thinkingPlan.plan
+    plans[reasoningEffortPlan.profile] = reasoningEffortPlan.plan
     next[DISPATCH_PLANS_ENV] = JSON.stringify(plans)
   }
   // Scope the inherited gateway endpoint URLs to this exact execution so the

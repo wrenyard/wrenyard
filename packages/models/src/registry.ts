@@ -1,5 +1,5 @@
 import { MAINSTREAM_MODEL_IDS } from './mainstream.ts';
-import { INTELLIGENCE_TIERS, THINKING_LEVELS, type RegisteredModel } from './types.ts';
+import { INTELLIGENCE_TIERS, type RegisteredModel } from './types.ts';
 import { alibabaModels } from './definitions/alibaba.ts';
 import { anthropicModels } from './definitions/anthropic.ts';
 import { bytedanceModels } from './definitions/bytedance.ts';
@@ -25,7 +25,6 @@ import { zhipuModels } from './definitions/zhipu.ts';
 
 const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const INTELLIGENCE_SET: ReadonlySet<string> = new Set(INTELLIGENCE_TIERS);
-const THINKING_SET: ReadonlySet<string> = new Set(THINKING_LEVELS);
 
 function freezeDeep<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -64,18 +63,6 @@ function validateModel(model: RegisteredModel, seen: Set<string>): void {
   }
   if (model.defaults.capabilities.length === 0) {
     throw new Error(`registered model ${model.id} capabilities must not be empty`);
-  }
-  const levels = model.defaults.thinkingLevels;
-  if (levels !== undefined) {
-    if (levels.length === 0) throw new Error(`registered model ${model.id} thinkingLevels must not be empty`);
-    const seenLevels = new Set<string>();
-    for (const level of levels) {
-      if (!THINKING_SET.has(level)) {
-        throw new Error(`registered model ${model.id} has invalid thinking level: ${JSON.stringify(level)}`);
-      }
-      if (seenLevels.has(level)) throw new Error(`registered model ${model.id} has duplicate thinking level ${level}`);
-      seenLevels.add(level);
-    }
   }
 }
 

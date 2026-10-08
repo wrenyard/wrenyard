@@ -1,4 +1,4 @@
-import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
+import type { ProviderListResult, ProviderQuotaResult, ProviderListModel } from '@wrenyard/protocol/provider';
 import { createConnection, type Socket } from "node:net";
 import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from "./transport/index.ts";
 
@@ -66,11 +66,11 @@ export interface WrenyardGatewayModel {
   maxOutputTokens?: number;
   capabilities?: readonly ('text' | 'image')[];
   /**
-   * The legal thinking levels this model accepts, in ascending intensity.
+   * The legal reasoning efforts this model accepts, in ascending intensity.
    * Replaces the legacy fixed `reasoningEffort` field on the public gateway
-   * contract; absent for models that do not expose thinking controls.
+   * contract; every route declares a non-empty ladder.
    */
-  thinkingLevels?: readonly ('low' | 'medium' | 'high' | 'xhigh' | 'max')[];
+  reasoningEfforts: ProviderListModel['reasoningEfforts'];
   speed?: number;
   pricing?: WrenyardGatewayModelPricing;
 }
@@ -147,8 +147,8 @@ export interface WrenyardTaskResolvedDispatch {
   speed: WrenyardTaskResolvedSpeed;
   intelligence: string;
   reference_pricing: WrenyardTaskReferencePricing;
-  /** Mirrors the frozen snake_case wire DTO `ThinkingLevel`. */
-  thinking?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** Actual reasoning effort emitted by the resolved dispatch DTO. */
+  reasoningEffort?: ProviderListModel['reasoningEfforts'][number];
   protocol?: string;
 }
 

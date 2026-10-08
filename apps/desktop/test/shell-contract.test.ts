@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  PREFERENCE_IDS,
   SHELL_CHANNELS,
   acceleratorPage,
   isSettingsLaunchRequest,
@@ -87,6 +88,14 @@ test('task settings and runtime alias IPC channels are the only task surface', (
   assert.equal('layer' in snapshot.user_global, false);
   assert.equal('keyed_by' in snapshot, false);
   assert.equal('tasks' in snapshot, false);
+});
+
+test('session preferences expose only the send key after retiring model defaults', () => {
+  const ids = PREFERENCE_IDS as readonly string[];
+  assert.deepEqual([...ids].filter((id) => id.startsWith('session.')), ['session.sendKey']);
+  assert.equal(ids.includes('session.lastSentModel'), false);
+  assert.equal(ids.includes('session.lastSentEffort'), false);
+  assert.equal(ids.includes('session.defaultModel'), false);
 });
 
 test('settings launch requests accept only the Desktop settings route', () => {

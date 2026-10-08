@@ -6,6 +6,7 @@ import { defineProvider } from '../base/model-defaults.ts';
 // with SpaceXAI (the model API) by an id rewrite.
 export const definition = defineProvider({
   id: 'super-grok', displayName: 'Super Grok', credentialResolver: 'grok-oauth',
+  convertReasoningEffort: () => { throw new Error('Super Grok has no runnable model routes'); },
   models: [], quotaProvider: 'super-grok',
   description: 'Super Grok 订阅服务：仅提供订阅额度观测。',
   setupHint: '请使用 Grok 客户端完成 OAuth 登录，返回啾啾工坊后刷新订阅额度。',

@@ -1,5 +1,4 @@
 import { defineModel } from './define.ts';
-import { THINKING_FULL } from '../types.ts';
 
 export const anthropicModels = [
   defineModel('claude-fable-5', 'Claude Fable 5', {
@@ -24,7 +23,6 @@ export const anthropicModels = [
   defineModel('claude-opus-5-5', 'Claude Opus 5.5', {
     intelligence: 'premium',
     capabilities: ['text', 'image'],
-    thinkingLevels: THINKING_FULL,
     contextWindow: 1_000_000,
     maxOutputTokens: 128_000,
     pricing: [0.2, 4, 20],
@@ -41,7 +39,6 @@ export const anthropicModels = [
   defineModel('claude-sonnet-5-5', 'Claude Sonnet 5.5', {
     intelligence: 'high',
     capabilities: ['text', 'image'],
-    thinkingLevels: THINKING_FULL,
     contextWindow: 1_000_000,
     maxOutputTokens: 128_000,
     pricing: [0.2, 2, 10],

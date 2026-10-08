@@ -1,3 +1,4 @@
+import { REASONING_EFFORTS } from '@wrenyard/providers/catalog'
 import type { JsonSchema } from '../jsonrpc.mts'
 export type {
   ExecStartParams, ExecStartResult, ExecSnapshot, ExecGetParams, ExecGetResult,
@@ -9,7 +10,7 @@ export const EXEC_STATUS_VALUES = ['running', 'completed', 'failed', 'cancelled'
 
 export const execStartParamsSchema = {
   type: 'object',
-  required: ['client', 'model', 'prompt', 'cwd'],
+  required: ['client', 'model', 'prompt', 'cwd', 'reasoningEffort'],
   properties: {
     client: { type: 'string', minLength: 1, maxLength: 120 },
     provider: { type: 'string', minLength: 1, maxLength: 200 },
@@ -18,7 +19,7 @@ export const execStartParamsSchema = {
     prompt: { type: 'string', minLength: 1, maxLength: 4_000_000 },
     cwd: { type: 'string', minLength: 1, maxLength: 4_096 },
     resumeSessionId: { type: 'string', minLength: 1, maxLength: 1_024 },
-    thinking: { type: 'string', minLength: 1, maxLength: 128 },
+    reasoningEffort: { enum: REASONING_EFFORTS },
     features: {
       type: 'array',
       maxItems: 32,

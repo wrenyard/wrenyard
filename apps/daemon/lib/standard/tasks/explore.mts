@@ -84,7 +84,7 @@ const definition: TaskDefinition = {
   __type: 'task',
   config: {
     description: 'Read-only single-fact lookup',
-    dispatch: { ...FREQUENT_DISPATCH_REQUIREMENTS, thinking: 'low' },
+    dispatch: { ...FREQUENT_DISPATCH_REQUIREMENTS, expectedReasoningEffort: 'low' },
     instructions: [shellUsage],
     input: ExploreInputSchema,
     output: ExploreOutputSchema,

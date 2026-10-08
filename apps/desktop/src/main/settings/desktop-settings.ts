@@ -148,14 +148,7 @@ export function defaultGeneralPreferences(): GeneralPreferences {
 }
 
 export function defaultSessionPreferences(): SessionPreferences {
-  return {
-    defaultModel: 'last',
-    model: null,
-    effort: null,
-    lastSentModel: null,
-    lastSentEffort: null,
-    sendKey: 'enter',
-  };
+  return { sendKey: 'enter' };
 }
 
 export function defaultNotificationPreferences(): NotificationPreferences {
@@ -279,13 +272,38 @@ export class DesktopSettingsStore {
   }
 
   private write(settings: DesktopSettings): void {
-    const document: DesktopSettings = { ...settings, version: DESKTOP_SETTINGS_VERSION };
+    const document: DesktopSettings = {
+      ...settings,
+      // Preserve every opaque key already present in the raw on-disk `session`
+      // partition (for example retired model-memory keys) so an unrelated
+      // settings write never drops it, while the live `sendKey` stays
+      // authoritative. Unknown keys are carried on disk but never consumed as
+      // preferences.
+      session: { ...this.rawSessionPartition(), ...settings.session } as SessionPreferences,
+      version: DESKTOP_SETTINGS_VERSION,
+    };
     mkdirSync(dirname(this.path), { recursive: true });
     const temporary = `${this.path}.${process.pid}.tmp`;
     writeFileSync(temporary, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
     renameSync(temporary, this.path);
     this.cached = cloneSettings(document);
     this.onChange?.(cloneSettings(document));
+  }
+
+  /** Opaque keys of the raw on-disk `session` partition, or `{}` when unusable. */
+  private rawSessionPartition(): Record<string, unknown> {
+    let parsed: unknown;
+    try {
+      parsed = this.read();
+    } catch {
+      // A missing or unreadable document contributes no opaque keys; the live
+      // partition (validated by load before write) remains authoritative.
+      return {};
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const session = (parsed as Record<string, unknown>).session;
+    if (session === null || typeof session !== 'object' || Array.isArray(session)) return {};
+    return { ...(session as Record<string, unknown>) };
   }
 }
 
@@ -359,23 +377,13 @@ function normalizeGeneralPreferences(value: unknown, fallback: GeneralPreference
   };
 }
 
-function normalizeOptionalPreferenceString(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 512) return null;
-  return value;
-}
-
 function normalizeSessionPreferences(value: unknown, fallback: SessionPreferences): SessionPreferences {
   const obj = isRecord(value) ? value : {};
+  // Only the submit key is a live preference. The retired model-default and
+  // last-sent keys are neither read nor rewritten as defaults: unknown keys are
+  // left untouched in the raw partition so an unrelated settings write preserves
+  // them on disk.
   return {
-    defaultModel: obj.defaultModel === 'specified' ? 'specified' : fallback.defaultModel,
-    model: obj.model === undefined ? fallback.model : normalizeOptionalPreferenceString(obj.model),
-    effort: obj.effort === undefined ? fallback.effort : normalizeOptionalPreferenceString(obj.effort),
-    lastSentModel: obj.lastSentModel === undefined
-      ? fallback.lastSentModel
-      : normalizeOptionalPreferenceString(obj.lastSentModel),
-    lastSentEffort: obj.lastSentEffort === undefined
-      ? fallback.lastSentEffort
-      : normalizeOptionalPreferenceString(obj.lastSentEffort),
     sendKey: obj.sendKey === 'mod-enter' ? 'mod-enter' : fallback.sendKey,
   };
 }

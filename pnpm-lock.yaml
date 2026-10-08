@@ -48,6 +48,9 @@ importers:
       '@wrenyard/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../../packages/models
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../packages/providers
@@ -331,6 +334,9 @@ importers:
       '@wrenyard/execution':
         specifier: workspace:*
         version: link:../../execution
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../../models
       js-tiktoken:
         specifier: 1.0.21
         version: 1.0.21
@@ -753,6 +759,10 @@ importers:
         version: 5.9.3
 
   packages/protocol:
+    dependencies:
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../models
     devDependencies:
       typescript:
         specifier: ^5.9.0
