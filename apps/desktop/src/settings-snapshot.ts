@@ -6,6 +6,7 @@ import type { WorkspaceConfigurationSnapshot } from './shell-contract.js';
 
 export interface HealthSnapshot {
   connected: boolean;
+  runtimeMode?: 'source' | 'installed';
   uptimeMs?: number;
 }
 
@@ -19,7 +20,6 @@ export interface SettingsSnapshotOptions {
   readGatewayModels?: () => Promise<WrenyardGatewayModel[]>;
   readPet(): Promise<PetCompanionSnapshot>;
   readUpdate(): UpdateSnapshot;
-  sourceDevelopment?: boolean;
 }
 
 /**
@@ -39,6 +39,7 @@ export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): P
       status: health.connected ? 'connected' : 'unavailable',
       endpoint: options.endpoint,
       workspace: options.workspace,
+      ...(health.connected && health.runtimeMode ? { runtimeMode: health.runtimeMode } : {}),
       ...(typeof health.uptimeMs === 'number' ? { uptimeMs: health.uptimeMs } : {}),
     },
     models: [...new Map(gatewayModels.map((model) => [model.provider, {
@@ -52,7 +53,6 @@ export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): P
       desktopVersion: options.desktopVersion,
       wrenyardVersion: options.wrenyardVersion,
       ...(options.buildTime ? { buildTime: options.buildTime } : {}),
-      ...(options.sourceDevelopment ? { sourceDevelopment: true } : {}),
     },
   };
 }

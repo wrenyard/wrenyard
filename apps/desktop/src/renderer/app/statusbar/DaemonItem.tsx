@@ -11,6 +11,7 @@ import type {
   DaemonConnectionMode,
   DaemonLifecycleSnapshot,
   DaemonProcessState,
+  ServiceSnapshot,
 } from '@/shell-contract';
 import { cn } from 'cn';
 
@@ -45,6 +46,20 @@ const STATE_LABEL: Readonly<Record<DaemonProcessState, string>> = {
   failed: '失败',
   unavailable: '不可用',
 };
+
+function connectionLabel(
+  snapshot: DaemonLifecycleSnapshot | undefined,
+  runtimeMode: ServiceSnapshot['runtimeMode'],
+): string {
+  if (snapshot?.state !== 'running') {
+    return snapshot?.state === 'starting' ? '连接中' : '离线';
+  }
+  if (runtimeMode === 'source') return '在线（本地 · 开发）';
+  if (runtimeMode === 'installed') {
+    return snapshot.mode === 'connected' ? '在线（本地 · CLI）' : '在线（本地）';
+  }
+  return snapshot.mode === 'supervised' ? '在线（本地）' : '在线';
+}
 
 function lifecycleLabel(snapshot: DaemonLifecycleSnapshot | undefined): string {
   if (snapshot === undefined) return '未知';
@@ -102,7 +117,7 @@ export function DaemonItem() {
   const label = (
     <span className="flex items-center gap-1">
       {indicator}
-      Daemon
+      {starting ? '连接中' : connectionLabel(snapshot, settings.data?.service.runtimeMode)}
     </span>
   );
   const tooltip = disconnected ? (snapshot?.message ?? 'Daemon 已断开') : lifecycleLabel(snapshot);
@@ -115,10 +130,10 @@ export function DaemonItem() {
   return (
     <Popover>
       <PopoverTrigger nativeButton={false} render={<span className="inline-flex" />}>
-        <StatusBarButton label={label} tooltip={tooltip} ariaLabel="Daemon 状态" />
+        <StatusBarButton label={label} tooltip={tooltip} ariaLabel="连接状态" />
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className="w-72">
-        <PopoverTitle>Daemon</PopoverTitle>
+        <PopoverTitle>连接状态</PopoverTitle>
         <dl className="flex flex-col gap-1.5 text-xs">
           <LifecycleRow label="版本" value={settings.data?.about.wrenyardVersion ?? '—'} />
           <LifecycleRow label="运行时长" value={formatUptime(settings.data?.service.uptimeMs)} />
