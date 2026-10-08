@@ -33,7 +33,6 @@ import {
 } from './RuntimeSettings.js';
 import { AuxiliaryModelControl } from './SummarySettings.js';
 import { NotificationEventsControl } from './NotificationEvents.js';
-import { SessionDefaultsControl } from './SessionDefaults.js';
 import { StatusBarSettingsControl } from './StatusBarSettings.js';
 import { ThemeCardsControl } from './ThemeCards.js';
 import { UpdateStatusControl } from './UpdateSettings.js';
@@ -69,7 +68,6 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   routingWeights: RoutingWeightsControl,
   runtimeAliases: RuntimeAliasesControl,
   service: ServiceControl,
-  sessionDefaults: SessionDefaultsControl,
   settingsFile: SettingsFileControl,
   statusBarItems: StatusBarSettingsControl,
   themeCards: ThemeCardsControl,

@@ -21,12 +21,15 @@ async function fixture(includeImage: boolean) {
     ...(includeImage ? [{ id: 'vision', capabilities: ['text', 'image'] as const, tps: 90, price: 2 }] : []),
   ]
   catalog.registerProvider({
+    convertReasoningEffort: (_model, effort) => ({ reasoning_effort: effort }),
     id: 'fixture', displayName: 'Fixture', credentialResolver: 'managed',
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://fixture.invalid/chat/completions', authScheme: 'bearer' }],
+    reasoningEffortMappings: Object.fromEntries(definitions.map(({ id }) => [id, { opencode: { none: { effort: 'none' } } }])),
     models: definitions.map(({ id, capabilities, tps, price }) => ({
       id, displayName: id, capabilities, intelligence: 'mid',
       speed: tps,
       pricing: [price, price, price],
+      reasoningEfforts: ['none'],
     })),
   })
   return createTaskDispatchResolver({ catalog, runtime })

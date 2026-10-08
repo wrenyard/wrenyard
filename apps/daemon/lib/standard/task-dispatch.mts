@@ -20,6 +20,7 @@ import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
 
 /** Frequent explore / edit / test tasks use speed, intelligence, and price requirements. */
 export const FREQUENT_DISPATCH_REQUIREMENTS = {
+  expectedReasoningEffort: 'high',
   expectedTps: 200,
   minimumTps: 60,
   intelligenceMin: 'low' as IntelligenceTier,
@@ -33,6 +34,7 @@ export const FREQUENT_DISPATCH_REQUIREMENTS = {
  * price and intelligence class with a lower speed expectation.
  */
 export const COMMIT_DISPATCH_REQUIREMENTS = {
+  expectedReasoningEffort: 'high',
   expectedTps: 100,
   minimumTps: 60,
   intelligenceMin: 'low' as IntelligenceTier,
@@ -45,6 +47,7 @@ export const COMMIT_DISPATCH_REQUIREMENTS = {
  * bounded values (mid intelligence minimum, moderate output cost ceiling).
  */
 export const GENERAL_DISPATCH_REQUIREMENTS = {
+  expectedReasoningEffort: 'high',
   expectedTps: 100,
   minimumTps: 30,
   intelligenceMin: 'mid' as IntelligenceTier,
@@ -58,6 +61,7 @@ export const GENERAL_DISPATCH_REQUIREMENTS = {
  * (maxOutputUsdPerMillion 60) and no unrelated model/profile exclusions.
  */
 export const REVIEW_DISPATCH_REQUIREMENTS = {
+  expectedReasoningEffort: 'high',
   expectedTps: 100,
   minimumTps: 30,
   intelligenceMin: 'high' as IntelligenceTier,
@@ -70,6 +74,7 @@ export const REVIEW_DISPATCH_REQUIREMENTS = {
  * bounded values (high intelligence minimum, permissive output cost ceiling).
  */
 export const ULTRA_DISPATCH_REQUIREMENTS = {
+  expectedReasoningEffort: 'high',
   expectedTps: 60,
   minimumTps: 20,
   intelligenceMin: 'high' as IntelligenceTier,

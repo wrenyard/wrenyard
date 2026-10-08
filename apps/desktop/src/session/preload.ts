@@ -8,6 +8,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
+import type { ReasoningEffort } from '@wrenyard/models';
 import type { SessionModelEntry } from '@wrenyard/protocol';
 import type {
   AttachmentInput,
@@ -78,7 +79,8 @@ export interface SessionBridgeContextInspectRequest {
 export interface SessionBridgeSendRequest {
   sessionId: string;
   text: string;
-  model: { provider: string; model: string; reasoningEffort?: string };
+  /** A send always carries the selected public reasoning effort. */
+  model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
   /** Local attachment inputs forwarded untouched to the daemon. */
   attachments?: AttachmentInput[];
 }

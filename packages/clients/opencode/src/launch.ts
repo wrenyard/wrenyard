@@ -44,16 +44,68 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
     const session = request.resumeSessionId || randomBytes(16).toString('hex');
     const home = clientStateDir('opencode', session);
     const configPath = join(home, 'opencode.json');
-    const gateway = env.WRENYARD_GATEWAY_OPENAI_CHAT_URL;
-    const base = request.mode === 'gateway' && gateway
-        ? { provider: { wrenyard: { npm: '@ai-sdk/openai-compatible', name: 'Wrenyard', models: { [request.model]: { id: request.model } }, options: { baseURL: gateway, apiKey: '{env:WRENYARD_GATEWAY_TOKEN}', headers: { 'x-opencode-session': session } } } } }
-        : { model: request.model };
+    const gateway = request.protocol === 'anthropic_messages'
+        ? env.WRENYARD_GATEWAY_ANTHROPIC_URL
+        : env.WRENYARD_GATEWAY_OPENAI_CHAT_URL;
+    // The variant key is the mapped wire effort; `--variant` selects it and the
+    // model config binds that variant to the exact reasoning-effort option.
+    const variant = request.clientReasoningEffort;
+    const model = request.model;
+    let selector: string;
+    let base: Record<string, unknown>;
+    if (request.mode === 'gateway' && gateway) {
+        if (!variant)
+            throw new Error('opencode: a gateway launch requires a mapped reasoning effort');
+        selector = `wrenyard/${model}`;
+        base = {
+            provider: {
+                wrenyard: {
+                    npm: request.protocol === 'anthropic_messages' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible',
+                    name: 'Wrenyard',
+                    models: { [model]: { id: model, variants: { [variant]: { reasoningEffort: variant } } } },
+                    options: {
+                        baseURL: gateway,
+                        apiKey: '{env:WRENYARD_GATEWAY_TOKEN}',
+                        headers: {
+                            'x-opencode-session': session,
+                            // The Gateway owns effort conversion: it reads this
+                            // public-level header and overwrites any erroneous
+                            // reasoning-effort field the client
+                            // writes into the request body.
+                            'x-wrenyard-reasoning-effort': request.reasoningEffort,
+                        },
+                    },
+                },
+            },
+        };
+    }
+    else if (request.provider === 'opencode-zen') {
+        // The genuine OpenCode client owns Zen transport: select its built-in
+        // `opencode` provider and bind the model to the variant that materializes
+        // the mapped effort. Only config is overlaid here, so the persistent
+        // OpenCode credential location (XDG data home) is left untouched.
+        selector = `opencode/${model}`;
+        base = {
+            model: selector,
+            provider: {
+                opencode: {
+                    models: { [model]: variant ? { variants: { [variant]: { reasoningEffort: variant } } } : {} },
+                },
+            },
+        };
+    }
+    else {
+        selector = model;
+        base = { model };
+    }
     const mcp = openCodeMcpConfig(resolveMcpServers(request.mcpServers));
     const config = JSON.stringify(mcp ? { ...base, mcp } : base);
     const args = ['run'];
     if (request.resumeSessionId)
         args.push('--session', request.resumeSessionId);
-    args.push('-m', request.mode === 'gateway' ? `wrenyard/${request.model}` : request.model, '--title', 'Wrenyard task', '--format', 'json', '--pure', request.prompt);
+    if (variant)
+        args.push('--variant', variant);
+    args.push('-m', selector, '--title', 'Wrenyard task', '--format', 'json', '--pure', request.prompt);
     return {
         executable: status.installation.executable,
         args,

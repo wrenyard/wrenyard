@@ -18,7 +18,7 @@ export const startRequest = {
     mode: 'native',
     prompt: 'Summarize this workspace.',
     cwd: '/workspace',
-    thinking: 'medium',
+    reasoningEffort: 'medium',
     features: ['browser'],
   },
 } satisfies ProtocolRequest<'exec.start'>

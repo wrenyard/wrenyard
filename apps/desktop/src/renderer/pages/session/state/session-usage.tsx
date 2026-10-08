@@ -18,6 +18,7 @@ import {
   type SetStateAction,
 } from 'react';
 import type { DraftAttachment, LedgerEvent, ModelEntry, TurnModel } from '../model/types.js';
+import { retainReasoningEffort, type ReasoningEffort } from './reasoning-effort.js';
 import { setQuotaFocus } from '@/renderer/lib/statusbar';
 import {
   clearDraft,
@@ -50,7 +51,7 @@ export interface SessionUsage {
   turns: readonly TurnModel[];
   seq: number;
   modelId: string;
-  effort: string;
+  effort: ReasoningEffort;
   inputText: string;
   inspection?: SessionUsageInspection;
   requestModel(modelId: string): void;
@@ -60,8 +61,8 @@ export interface SessionUsage {
 export interface ComposerSelection {
   modelId: string;
   setModelId(modelId: string): void;
-  effort: string;
-  setEffort: Dispatch<SetStateAction<string>>;
+  effort: ReasoningEffort;
+  setEffort: Dispatch<SetStateAction<ReasoningEffort>>;
   text: string;
   setText(text: string): void;
   clearText(): void;
@@ -89,7 +90,8 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
   // resets the model/effort and reloads the destination draft during render.
   const [selectionKey, setSelectionKey] = useState(sessionKey);
   const [modelId, setModelId] = useState('');
-  const [effort, setEffort] = useState('');
+  // A valid level until the composer seeds the real one for the active session.
+  const [effort, setEffort] = useState<ReasoningEffort>('medium');
   const [text, setTextState] = useState(() => readDraft(sessionKey));
   const [attachments, setAttachmentsState] = useState<DraftAttachment[]>(() => readDraftAttachments(sessionKey));
   const [inspections, setInspections] = useState<Record<string, SessionUsageInspection>>({});
@@ -98,7 +100,7 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
   if (selectionKey !== sessionKey) {
     setSelectionKey(sessionKey);
     setModelId('');
-    setEffort('');
+    setEffort('medium');
     setTextState(readDraft(sessionKey));
     setAttachmentsState(readDraftAttachments(sessionKey));
   }
@@ -143,12 +145,14 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     clearDraftAttachments(sessionKey);
   }, [sessionKey]);
 
-  // Keep the reasoning effort only when the target model still supports it
-  // (same rule as `supportedEffort` in Composer.tsx).
+  // Retain the reasoning effort when the target route still supports it;
+  // otherwise fall back to the nearest-supported rule (shared with Composer).
   const requestModel = useCallback((nextModelId: string) => {
     const target = models.find((entry) => entry.publicId === nextModelId);
     setModelId(nextModelId);
-    setEffort((current) => (current === '' || (target?.thinkingLevels ?? []).includes(current) ? current : ''));
+    const supported = target?.reasoningEfforts ?? [];
+    if (supported.length === 0) return;
+    setEffort((current) => retainReasoningEffort(current, supported));
   }, [models]);
 
   const requestInspection = useCallback((options?: { tab?: 'context' | 'ledger'; seq?: number }) => {

@@ -1,6 +1,7 @@
 import { StringDecoder } from 'node:string_decoder';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import type { AgentEvent, AgentRequest, StreamChunk } from './index.ts';
 
 export function messageEvent(text: string, role = 'assistant'): AgentEvent {
@@ -323,11 +324,24 @@ export function clientStateDir(...parts: string[]): string {
     return join(base, 'wrenyard', 'clients', ...parts);
 }
 
+/** True when `value` is one of the shared public reasoning-effort levels. */
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+    return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value);
+}
+
+/**
+ * Reject a launch that is not fully resolved. Every run names an exact public
+ * reasoning level — there is no omit-to-send path — and the value must be one
+ * of the shared {@link REASONING_EFFORTS} levels, so a runtime can never
+ * silently drop effort.
+ */
 export function assertLaunch(request: AgentRequest): void {
     if (!isAbsolute(request.cwd))
         throw new Error('Agent directory must be absolute');
     if (!request.model.trim())
         throw new Error('A resolved model is required');
+    if (!isReasoningEffort(request.reasoningEffort))
+        throw new Error('A valid reasoning effort is required');
 }
 
 export function stringEnv(env: NodeJS.ProcessEnv, extra: Record<string, string> = {}): Record<string, string> {

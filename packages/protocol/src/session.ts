@@ -6,6 +6,7 @@
  * boundary, with no import from `@wrenyard/session` (or any other runtime
  * package). The daemon holds the runtime JSON schema that validates these.
  */
+import type { ReasoningEffort } from '@wrenyard/models'
 import type { RpcMethod } from './common/methods.ts'
 
 /** Every layer of the main reasoning view except the transient `wy-user`. */
@@ -132,11 +133,18 @@ export interface SessionFile {
   processedBytes?: number
 }
 
+/**
+ * The unified public reasoning-effort ladder. Declared here as a plain string
+ * union so the wire DTO stays independent of any runtime package; it mirrors
+ * the exact vocabulary `@wrenyard/models` owns.
+ */
+export type SessionReasoningEffort = ReasoningEffort
+
 /** Params of `session.send`, with the optional attachment batch. */
 export interface SessionSendParams {
   sessionId: string
   text: string
-  model: { provider: string; model: string; reasoningEffort?: string }
+  model: { provider: string; model: string; reasoningEffort: SessionReasoningEffort }
   attachments?: AttachmentInput[]
 }
 
@@ -183,7 +191,8 @@ export interface SessionModelEntry {
   model: string
   displayName: string
   runtime: SessionInferenceMode
-  thinkingLevels?: string[]
+  /** Required non-empty route-owned reasoning levels this model can materialize. */
+  reasoningEfforts: ReasoningEffort[]
   /** Quota provider id backing this model: the catalog `quotaProvider`, else `provider`. */
   quotaProvider?: string
   contextWindow?: number

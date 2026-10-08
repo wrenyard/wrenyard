@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
+import type { AgentRequest } from '@wrenyard/agent-client';
 import {
   codexSourceAuthHome,
   readCodexGatewayCredential,
   refreshCodexGatewayCredential,
 } from '../src/index.ts';
+import { launchCodex } from '../src/launch.ts';
 
 function chatGptAuth(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -128,4 +130,33 @@ test('refresh stays bounded when the source auth file is unavailable', async (t)
     ),
     /auth\.json is unavailable/u,
   );
+});
+
+test('gateway launch declares the wrenyard provider and the mapped reasoning effort', async (t) => {
+  // A throwaway PATH with empty codex stand-ins lets the launch resolve an
+  // executable without running any real client.
+  const root = await mkdtemp(join(tmpdir(), 'wrenyard-codex-effort-'));
+  const bin = join(root, 'bin');
+  await mkdir(bin, { recursive: true });
+  for (const name of ['codex', 'codex.cmd', 'codex.exe'])
+    await writeFile(join(bin, name), '');
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const env: NodeJS.ProcessEnv = {
+    PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`,
+    WRENYARD_GATEWAY_OPENAI_RESPONSES_URL: 'http://127.0.0.1:8080/v1/responses',
+  };
+  const request = {
+    model: 'gpt-5-codex',
+    prompt: 'Hello.',
+    cwd: '/workspace',
+    mode: 'gateway',
+    provider: 'chatgpt',
+    reasoningEffort: 'high',
+    clientReasoningEffort: 'high-wire',
+  } as unknown as AgentRequest;
+
+  const spec = await launchCodex(request, env, join(root, 'codex-home'));
+  assert.ok(spec.args.includes('model_provider="wrenyard"'));
+  assert.ok(spec.args.includes('model_reasoning_effort="high-wire"'));
 });

@@ -1,5 +1,5 @@
-import type { ClientDefinition, ModelDefinition, ProviderDefinition, ThinkingLevel } from '../base/index.ts';
-import { resolveProviderModel, type CanonicalModelOverrides } from '../base/model-defaults.ts';
+import type { ClientDefinition, ModelDefinition, ProviderDefinition, ReasoningEffort } from '../base/index.ts';
+import { resolveProviderModel, REASONING_LOW_HIGH_MAX, type CanonicalModelOverrides } from '../base/model-defaults.ts';
 import { MAINSTREAM_MODEL_IDS, isMainstreamModelId, models } from '@wrenyard/models';
 import {
   codeBuddyCanonicalModelId,
@@ -71,7 +71,28 @@ const RETIRED_CLAUDE_FIVE_MODEL_IDS: ReadonlySet<string> = new Set([
   'claude-sonnet-5',
 ]);
 
-const effortLadder = (levels: readonly ThinkingLevel[]): Readonly<Record<string, { effort: string }>> =>
+/**
+ * Listed CodeBuddy routes accept the disable switch, even where the upstream
+ * still thinks. Other strengths retain their documented/probed ladders. Every possible
+ * offering is a mainstream registry model, whose registered identity is the
+ * canonical id used here.
+ */
+const CODEBUDDY_REASONING_EFFORTS: Readonly<Record<string, readonly ReasoningEffort[]>> = {
+  'claude-opus-5-5': ['none', ...REASONING_LOW_HIGH_MAX],
+  'gpt-6-astra': ['none', ...REASONING_LOW_HIGH_MAX],
+  'glm-5.3': ['none', ...REASONING_LOW_HIGH_MAX],
+  'glm-5.3-flash': ['none', ...REASONING_LOW_HIGH_MAX],
+  'kimi-k3': ['none', ...REASONING_LOW_HIGH_MAX],
+  'deepseek-v4.1-flash': ['none', 'high'],
+  'deepseek-v4-pro': ['none', 'high'],
+  'hunyuan-hy3': ['none', 'high'],
+  'hunyuan-hy4-preview': ['none', 'high'],
+};
+
+const codeBuddyReasoningEfforts = (modelId: string): readonly ReasoningEffort[] =>
+  CODEBUDDY_REASONING_EFFORTS[modelId] ?? ['high'];
+
+const effortLadder = (levels: readonly ReasoningEffort[]): Readonly<Record<string, { effort: string }>> =>
   Object.fromEntries(levels.map((level) => [level, { effort: level }]));
 
 export const codeBuddyClient: ClientDefinition = {
@@ -156,11 +177,12 @@ function historicalAliasesFor(offerings: readonly ModelDefinition[]): Record<str
   return aliases;
 }
 
-function thinkingMappingsFor(offerings: readonly ModelDefinition[]): NonNullable<ProviderDefinition['thinkingMappings']> {
+function reasoningEffortMappingsFor(offerings: readonly ModelDefinition[]): NonNullable<ProviderDefinition['reasoningEffortMappings']> {
   const mappings: Record<string, { codebuddy: ReturnType<typeof effortLadder> }> = {};
   for (const entry of offerings) {
-    if (!entry.thinkingLevels?.length) continue;
-    mappings[entry.id] = { codebuddy: effortLadder(entry.thinkingLevels) };
+    // Native settings serialize effort, not the Gateway's verified disable switch.
+    const nativeEfforts = codeBuddyReasoningEfforts(entry.id).filter(effort => effort !== 'none');
+    mappings[entry.id] = { codebuddy: effortLadder(nativeEfforts) };
   }
   return mappings;
 }
@@ -222,6 +244,7 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
     const overrides: CanonicalModelOverrides = {
       ...productMetadataOverrides(entry, models.get(modelId)?.defaults.contextWindow),
       ...claudeMetadataOverrides(modelId),
+      reasoningEfforts: codeBuddyReasoningEfforts(modelId),
     };
     const resolved = resolveProviderModel({ canonical: modelId, overrides });
     byOfferingId.set(
@@ -256,9 +279,21 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
       ...historicalAliasesFor(built.models),
       ...discoveredAliasesFor(built.variantsByCanonical, offeringIds),
     },
-    thinkingMappings: thinkingMappingsFor(built.models),
+    reasoningEffortMappings: reasoningEffortMappingsFor(built.models),
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://copilot.tencent.com/v2/chat/completions', authScheme: 'bearer' }],
+    convertReasoningEffort: (modelId, effort, protocol) => {
+      if (effort === 'none') {
+        if (!codeBuddyReasoningEfforts(modelId).includes('none')) {
+          throw new Error(`CodeBuddy model ${modelId} cannot disable thinking`);
+        }
+        return { thinking: { type: 'disabled' } };
+      }
+      if (protocol === 'openai_responses') return { reasoning: { effort } };
+      if (protocol === 'anthropic_messages') return { output_config: { effort } };
+      return { reasoning_effort: effort };
+    },
   };
+
 
   return { definition, upstreamModels };
 }

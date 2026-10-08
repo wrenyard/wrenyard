@@ -5,11 +5,17 @@ import { countInputTokens } from '../model/usage.js';
 import { EffortPicker, ModelPicker, modelBadges, modelRuntimeDescription, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
 import { InputGroupButton } from '@/renderer/components/ui/input-group';
-import { shell } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
 import { preferencesQuery } from '@/renderer/lib/queries';
-import type { SessionPreferences } from '@/shell-contract';
 import type { DraftAttachment, ModelEntry, TurnModel } from '../model/types.js';
+import {
+  firstRequestAfterSend,
+  initialReasoningEffort,
+  readFirstRequest,
+  retainReasoningEffort,
+  writeFirstRequest,
+  type ReasoningEffort,
+} from '../state/reasoning-effort.js';
 import { useComposerSelection } from '../state/session-usage.js';
 import { clearDraftAttachments, isStagedPathRetained, readDraftAttachments, reconcileSentDraft } from '../state/drafts.js';
 import { ContextMeter } from './usage/ContextMeter.js';
@@ -38,49 +44,6 @@ function useInputTokenCount(text: string): number | undefined {
   return tokens;
 }
 
-/** Legacy pre-bridge storage key; migrated once into the main preference. */
-const LAST_SENT_KEY = 'session:last-sent';
-
-interface LegacyLastSent {
-  model: string;
-  effort: string;
-}
-
-function readLegacyLastSent(): LegacyLastSent | undefined {
-  try {
-    const raw = window.localStorage.getItem(LAST_SENT_KEY);
-    if (!raw) return undefined;
-    const parsed = JSON.parse(raw) as Partial<LegacyLastSent>;
-    return { model: parsed.model ?? '', effort: parsed.effort ?? '' };
-  } catch {
-    return undefined;
-  }
-}
-
-function clearLegacyLastSent(): void {
-  try {
-    window.localStorage.removeItem(LAST_SENT_KEY);
-  } catch {
-    // Removing the legacy key is best-effort.
-  }
-}
-
-/** Keeps a reasoning effort only when the target model supports it. */
-function supportedEffort(entry: ModelEntry | undefined, effort: string): string {
-  if (effort === '') return '';
-  return (entry?.thinkingLevels ?? []).includes(effort) ? effort : '';
-}
-
-/** Mirror of the persisted session defaults, used until the preference loads. */
-const DEFAULT_SESSION_PREFS: SessionPreferences = {
-  defaultModel: 'last',
-  model: null,
-  effort: null,
-  lastSentModel: null,
-  lastSentEffort: null,
-  sendKey: 'enter',
-};
-
 /** Upper bound on attachments held by the composer in one draft. */
 const MAX_ATTACHMENTS = 32;
 
@@ -90,7 +53,7 @@ export interface ComposerProps {
   /** Changes on session switch (or `'draft'`), resetting the model and focus. */
   sessionKey: string;
   disabled?: boolean;
-  onSend(text: string, model: ModelEntry, reasoningEffort: string, attachments: DraftAttachment[]): void | Promise<void>;
+  onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): void | Promise<void>;
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
 }
 
@@ -214,52 +177,36 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     reader.readAsDataURL(file);
   };
 
-  // New-session model/effort defaults and the submit key come from the shared
-  // Desktop preferences; the composer only reads them.
+  // The submit key still comes from the shared Desktop preferences; the model
+  // and effort of a new session come from the client-local first-request record.
   const preferences = useQuery(preferencesQuery);
-  const sessionPrefs = preferences.data?.session;
-  const prefsReady = sessionPrefs !== undefined;
-  const prefs = sessionPrefs ?? DEFAULT_SESSION_PREFS;
-
-  // One-time migration of the pre-bridge localStorage "last sent" value.
-  const migrated = useRef(false);
-  useEffect(() => {
-    if (!prefsReady || migrated.current) return;
-    migrated.current = true;
-    const legacy = readLegacyLastSent();
-    if (legacy === undefined) return;
-    const writes: Promise<unknown>[] = [];
-    if (legacy.model !== '' && sessionPrefs.lastSentModel === null) {
-      writes.push(shell.setPreference('session.lastSentModel', legacy.model));
-    }
-    if (legacy.effort !== '' && sessionPrefs.lastSentEffort === null) {
-      writes.push(shell.setPreference('session.lastSentEffort', legacy.effort));
-    }
-    void Promise.all(writes).then(clearLegacyLastSent).catch(() => {
-      migrated.current = false;
-    });
-  }, [prefsReady, sessionPrefs]);
 
   useEffect(() => {
     const last = turnsRef.current[turnsRef.current.length - 1];
-    // An existing session keeps its model immutable; only a new session reads
-    // the default-model preference.
+    // An existing session's model is authoritative; its effort is kept when the
+    // route still supports it, else resolved by the shared nearest rule.
     if (last !== undefined) {
       const match = models.find((entry) => entry.publicId === `${last.model.provider}/${last.model.model}`) ?? models[0];
       setModelId(match?.publicId ?? '');
-      // An existing session's model and effort are authoritative and never change.
-      setEffort(last.model.reasoningEffort ?? '');
+      const supported = match?.reasoningEfforts ?? [];
+      if (supported.length > 0) setEffort(retainReasoningEffort(last.model.reasoningEffort, supported));
       textareaRef.current?.focus();
       return;
     }
-    const specified = prefs.defaultModel === 'specified';
-    const wanted = specified ? prefs.model : prefs.lastSentModel;
-    const storedEffort = specified ? prefs.effort : prefs.lastSentEffort;
-    const match = (wanted === null ? undefined : models.find((entry) => entry.publicId === wanted)) ?? models[0];
+    // A brand-new session inherits the previous session's FIRST request model
+    // and effort (Desktop local state only); absent a match it starts at medium.
+    const first = readFirstRequest();
+    const inherited = first === undefined ? undefined : models.find((entry) => entry.publicId === first.model);
+    const match = inherited ?? models[0];
     setModelId(match?.publicId ?? '');
-    setEffort(supportedEffort(match, storedEffort ?? ''));
+    const supported = match?.reasoningEfforts ?? [];
+    if (supported.length > 0) {
+      setEffort(inherited !== undefined && first !== undefined
+        ? retainReasoningEffort(first.effort, supported)
+        : initialReasoningEffort(supported));
+    }
     textareaRef.current?.focus();
-  }, [sessionKey, models, turns.at(-1)?.id, prefsReady]);
+  }, [sessionKey, models, turns.at(-1)?.id]);
 
   useEffect(() => {
     if (!injectedText) return;
@@ -284,7 +231,9 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const selectModel = (value: string): void => {
     const target = models.find((entry) => entry.publicId === value);
     setModelId(value);
-    setEffort((current) => supportedEffort(target, current));
+    const supported = target?.reasoningEfforts ?? [];
+    if (supported.length === 0) return;
+    setEffort((current) => retainReasoningEffort(current, supported));
   };
 
   const submit = (): void => {
@@ -294,6 +243,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     const originKey = sessionKey;
     const bodyText = text;
     const submittedIds = submitted.map((item) => item.id);
+    // Capture whether this is the session's first request *before* the send or
+    // any optimistic turn is added, so a successful completion records the first
+    // request even though the model list has already changed by then.
+    const firstInSession = turnsRef.current.length === 0;
     setSending(true);
     void Promise.resolve(onSend(body, selected, effort, submitted))
       .then(
@@ -322,9 +275,15 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
           if (releasable.length > 0) {
             void getSessionBridge().discardDraftAttachments(releasable).catch(() => undefined);
           }
-          // Remember the successful send for the "沿用上次发送的模型" default.
-          void shell.setPreference('session.lastSentModel', selected.publicId).catch(() => undefined);
-          void shell.setPreference('session.lastSentEffort', effort === '' ? null : effort).catch(() => undefined);
+          // Remember a session's FIRST request (model + effort) in Desktop local
+          // state so a later new session can inherit it. A request after the
+          // first in the same session never overwrites that record.
+          const record = firstRequestAfterSend(
+            readFirstRequest(),
+            { model: selected.publicId, effort },
+            !firstInSession,
+          );
+          if (record !== undefined) writeFirstRequest(record);
         },
         () => {
           // A rejected send keeps the text and every attachment so the user can retry.
@@ -360,7 +319,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         onSubmit={submit}
         disabled={disabled || !selected}
         submitDisabled={sending || exceeded}
-        sendKey={sessionPrefs?.sendKey ?? 'enter'}
+        sendKey={preferences.data?.session.sendKey ?? 'enter'}
         textareaRef={textareaRef}
         placeholder="输入消息，可随时发起新的并行轮次"
         attachments={attachmentStrip}
@@ -379,7 +338,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
               <Plus />
             </InputGroupButton>
             <ModelPicker models={options} value={modelId} onChange={selectModel} disabled={models.length === 0} />
-            <EffortPicker levels={selected?.thinkingLevels ?? []} value={effort} onChange={setEffort} />
+            <EffortPicker levels={selected?.reasoningEfforts ?? []} value={effort} onChange={setEffort} />
           </>
         }
         toolbarTrailing={

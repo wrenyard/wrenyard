@@ -43,6 +43,8 @@ function codexMcpArgs(servers: readonly ResolvedMcpServer[]): string[] {
 
 export async function launchCodex(request: AgentRequest, env: NodeJS.ProcessEnv, isolatedHome: string): Promise<ProcessSpec> {
     assertLaunch(request);
+    if (!request.clientReasoningEffort)
+        throw new Error('codex: launch requires a mapped reasoning effort');
     const status = await inspectCodex({ env });
     if (status.installation.state !== 'installed')
         throw new Error('codex is not installed');
@@ -57,8 +59,8 @@ export async function launchCodex(request: AgentRequest, env: NodeJS.ProcessEnv,
             '-c', 'model_providers.wrenyard.wire_api="responses"',
         );
     }
-    if (request.thinking)
-        args.push('-c', `model_reasoning_effort=${JSON.stringify(request.thinking)}`);
+    if (request.clientReasoningEffort)
+        args.push('-c', `model_reasoning_effort=${JSON.stringify(request.clientReasoningEffort)}`);
     // MCP servers are registered as -c overrides ahead of the app-server bridge.
     args.push(...codexMcpArgs(resolveMcpServers(request.mcpServers)));
     args.push('app-server', '--stdio');

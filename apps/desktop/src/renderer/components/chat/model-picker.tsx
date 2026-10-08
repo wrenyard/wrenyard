@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import type { SessionInferenceMode } from '@wrenyard/protocol';
 import {
   Combobox,
@@ -83,8 +84,6 @@ export interface ModelPickerProps {
   className?: string;
 }
 
-const DEFAULT_VALUE = '__default__';
-
 /** One option's label followed by its supply badges. */
 function ModelOptionContent({ option }: { option: ModelOption }) {
   return (
@@ -168,31 +167,37 @@ export function ModelPicker({ models, value, onChange, disabled = false, placeho
 }
 
 export interface EffortPickerProps {
-  levels: string[];
-  value: string;
-  onChange: (value: string) => void;
+  /** The current route's supported efforts, in ladder order (non-empty by contract). */
+  levels: readonly ReasoningEffort[];
+  value: ReasoningEffort;
+  onChange: (value: ReasoningEffort) => void;
   className?: string;
 }
 
-/** Reasoning-effort picker. Renders nothing when the model has no levels. */
+/**
+ * Reasoning-effort picker. Offers only the current route's supported levels,
+ * labelled with the shared Chinese names, with no unset/default option, so a
+ * level is always selected. Renders nothing only when the route declares none.
+ */
 export function EffortPicker({ levels, value, onChange }: EffortPickerProps) {
   if (levels.length === 0) return null;
-  const options = [DEFAULT_VALUE, ...levels];
-  const labelOf = (current: string): string => (current === DEFAULT_VALUE ? '默认' : current);
-  const current = value === '' ? DEFAULT_VALUE : value;
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<InputGroupButton variant="ghost" />}>
-        {labelOf(current)}
+        {REASONING_EFFORT_NAMES[value]}
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top">
         <DropdownMenuRadioGroup
-          value={current}
-          onValueChange={(next) => onChange(next === DEFAULT_VALUE ? '' : String(next))}
+          value={value}
+          onValueChange={(next) => {
+            if (typeof next === 'string' && (levels as readonly string[]).includes(next)) {
+              onChange(next as ReasoningEffort);
+            }
+          }}
         >
-          {options.map((option) => (
-            <DropdownMenuRadioItem key={option} value={option}>{labelOf(option)}</DropdownMenuRadioItem>
+          {levels.map((level) => (
+            <DropdownMenuRadioItem key={level} value={level}>{REASONING_EFFORT_NAMES[level]}</DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>

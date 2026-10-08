@@ -160,13 +160,13 @@ export interface ResolveExplicitDispatchInput {
   /** Hard intelligence minimum enforced even in explicit mode (the catalog's
    *  constrained probe owns the actual gate). */
   intelligenceMin?: TaskDispatchRequirements['intelligenceMin']
-  /** Optional requested thinking level. Thinking is a resolved runtime
-   *  parameter owned by the Catalog adaptation, not an eligibility constraint:
-   *  the request is clamped to the nearest level the exact target can
-   *  materialize and the plan carries the ACTUAL adapted level, or no thinking
-   *  at all when the target has no usable level. It never fails admission and
-   *  never falls back to another target. */
-  thinking?: TaskDispatchRequirements['thinking']
+  /** Optional expected reasoning-effort level. Reasoning effort is a resolved
+   *  runtime parameter owned by the Catalog adaptation, not an eligibility
+   *  constraint: the request is adapted to the nearest level the exact target
+   *  can materialize and the plan carries the ACTUAL adapted level, or no
+   *  reasoning effort at all when the target has no usable level. It never
+   *  fails admission and never falls back to another target. */
+  expectedReasoningEffort?: TaskDispatchRequirements['expectedReasoningEffort']
 }
 
 export type TaskDispatchExplicitResolution =
@@ -181,8 +181,8 @@ export interface TaskDispatchExactRuntimeListInput {
   requiresWebSearch?: boolean
   /** Hard intelligence minimum passed through to each explicit evaluation. */
   intelligenceMin?: TaskDispatchRequirements['intelligenceMin']
-  /** Requested thinking level passed through to each explicit evaluation. */
-  thinking?: TaskDispatchRequirements['thinking']
+  /** Expected reasoning-effort level passed through to each explicit evaluation. */
+  expectedReasoningEffort?: TaskDispatchRequirements['expectedReasoningEffort']
 }
 
 /**
@@ -281,7 +281,7 @@ function toReferencePricing(pricing: ModelPricing): TaskResolvedDispatch['refere
 function toResolvedDispatch(
   requestedAgentRuntime: string,
   profileId: string,
-  plan: { client: string; provider: string; model: string; mode: 'native' | 'gateway'; protocol?: string; thinking?: TaskResolvedDispatch['thinking'] },
+  plan: { client: string; provider: string; model: string; mode: 'native' | 'gateway'; protocol?: string; reasoningEffort?: TaskResolvedDispatch['reasoningEffort']; clientReasoningEffort?: TaskResolvedDispatch['clientReasoningEffort'] },
   model: ModelDefinition,
   speed: SpeedEvidence,
   pricing: ModelPricing,
@@ -308,7 +308,8 @@ function toResolvedDispatch(
     reference_pricing: toReferencePricing(pricing),
   }
   if (plan.protocol) resolved.protocol = plan.protocol
-  if (plan.thinking !== undefined) resolved.thinking = plan.thinking
+  if (plan.reasoningEffort !== undefined) resolved.reasoningEffort = plan.reasoningEffort
+  if (plan.clientReasoningEffort !== undefined) resolved.clientReasoningEffort = plan.clientReasoningEffort
   return resolved
 }
 
@@ -374,7 +375,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
 
     let plan: { client: string; provider: string; model: string; supportsWebSearch?: boolean }
     try {
-      plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, requirements.thinking)
+      plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, requirements.expectedReasoningEffort)
     } catch {
       // Unresolvable plan mirrors the authoritative continue: no truthful path.
       return { code: 'no_available_provider', detail: 'runtime_unresolved' }
@@ -541,7 +542,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities'],
     requiresWebSearch?: boolean,
     intelligenceMin?: TaskDispatchRequirements['intelligenceMin'],
-    thinking?: TaskDispatchRequirements['thinking'],
+    expectedReasoningEffort?: TaskDispatchRequirements['expectedReasoningEffort'],
   ): TaskDispatchExplicitResolution => {
     const canonicalTarget = canonicalTargetOf(candidate)
     if (canonicalTarget !== exactAgentRuntime) {
@@ -570,8 +571,8 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // automatic path relies on (resolveRun computes supportsWebSearch from the
     // native-provider allowlist); we never duplicate that allowlist here. Gateway
     // and unsupported combinations fail closed via no_available_provider. The
-    // resolved thinking parameter is deliberately not passed: it can never change
-    // web-search admission.
+    // resolved reasoning-effort parameter is deliberately not passed: it can never
+    // change web-search admission.
     if (requiresWebSearch === true) {
       let plan: DispatchPlan
       try {
@@ -623,13 +624,13 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       [candidate],
     )
 
-    // Availability probe. The pool is exactly this candidate. Thinking is an
-    // optional runtime parameter adapted by the Catalog (requested levels are
-    // clamped to the nearest usable level, or withheld when the exact runtime
+    // Availability probe. The pool is exactly this candidate. Reasoning effort
+    // is an optional runtime parameter adapted by the Catalog (requested levels
+    // are adapted to the nearest usable level, or withheld when the exact runtime
     // has no usable level), never an eligibility constraint. It is forwarded only to adapt the
     // selected plan parameters. Admission means the target can
     // produce a truthful resolved snapshot — never a fabricated one.
-    const availability = probe({ thinking })
+    const availability = probe({ expectedReasoningEffort })
     if (!availability.ok) {
       return {
         ok: false,
@@ -644,7 +645,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!requiredCapabilities || requiredCapabilities.length === 0) return availability
 
     // Capability compatibility is the only remaining eligibility constraint.
-    const capable = probe({ requiredCapabilities, thinking })
+    const capable = probe({ requiredCapabilities, expectedReasoningEffort })
     if (!capable.ok) {
       return {
         ok: false,
@@ -752,7 +753,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     },
 
     resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution {
-      const { taskName, exactRuntime, requiredCapabilities, requiresWebSearch, intelligenceMin, thinking } = input
+      const { taskName, exactRuntime, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort } = input
       const unavailable = (reason: string): TaskDispatchExplicitResolution => ({
         ok: false,
         error: new ExplicitRuntimeUnavailableError(taskName, exactRuntime, reason),
@@ -770,7 +771,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
 
       // Resolve through the Catalog (canonicalizing model aliases) and require
       // the exact canonical target to exist in the task-capable candidate set.
-      let resolvedPlan: { client: string; provider: string; model: string; thinking?: string }
+      let resolvedPlan: { client: string; provider: string; model: string; reasoningEffort?: string }
       try {
         resolvedPlan = catalog.resolveRun(parsed.client, parsed.provider, parsed.model)
       } catch (error) {
@@ -786,7 +787,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       if (!candidate) {
         return unavailable(`canonical target '${canonicalTarget}' is not a task-capable candidate or runtime plan`)
       }
-      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin, thinking)
+      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort)
     },
 
     listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult {
@@ -800,7 +801,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
           input.requiredCapabilities,
           input.requiresWebSearch,
           input.intelligenceMin,
-          input.thinking,
+          input.expectedReasoningEffort,
         )
         if (outcome.ok) {
           items.push({ exactAgentRuntime, available: true, resolved: outcome.resolved })

@@ -63,6 +63,8 @@ function tomlString(value: string): string {
 
 export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv): Promise<ProcessSpec> {
     assertLaunch(request);
+    if (!request.clientReasoningEffort)
+        throw new Error('grok: launch requires a mapped reasoning effort');
     const status = await inspectGrok({ env });
     if (status.installation.state !== 'installed')
         throw new Error('grok is not installed');
@@ -98,8 +100,8 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
         ? `models.default = ${JSON.stringify(modelId)}\n[model.${JSON.stringify(modelId).slice(1, -1)}]\nname = "Wrenyard"\nmodel = ${JSON.stringify(request.model)}\nbase_url = ${JSON.stringify(gateway)}\nenv_key = "WRENYARD_GATEWAY_TOKEN"\napi_backend = "chat_completions"\nsupports_backend_search = false\n`
         : '') + mcpToml;
     const args = ['--permission-mode', 'bypassPermissions', '--always-approve', ...mcpPermissionArgs, '--model', modelId];
-    if (request.thinking)
-        args.push('--reasoning-effort', request.thinking);
+    if (request.clientReasoningEffort)
+        args.push('--reasoning-effort', request.clientReasoningEffort);
     if (request.resumeSessionId)
         args.push('--resume', request.resumeSessionId);
     args.push('--output-format', 'streaming-json', '--prompt-file', promptPath);

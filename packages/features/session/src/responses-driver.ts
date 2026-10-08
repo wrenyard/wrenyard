@@ -18,6 +18,7 @@ import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
 
 import {
   ACTION_TOOL,
+  REASONING_EFFORT_HEADER,
   type DriverRequest,
   type DriverResult,
   type ModelContentPart,
@@ -34,7 +35,7 @@ export interface ResponsesDriverOptions {
 }
 
 /** The subset of a driver request that is serialized onto the Responses wire. */
-export type ResponsesRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'reasoningEffort' | 'maxTokens' | 'actionTool' | 'cacheKey'>;
+export type ResponsesRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'maxTokens' | 'actionTool' | 'cacheKey'> & Partial<Pick<DriverRequest, 'reasoningEffort'>>;
 
 /** Only a non-2xx response body is ever truncated, so an upstream error stays readable. */
 const ERROR_EXCERPT_CHARS = 2_000;
@@ -71,11 +72,9 @@ function buildResponsesBody(request: ResponsesRequestFields): Record<string, unk
   };
   if (systems.length === 1) body.instructions = plainText(systems[0]!.content);
   // The summary is the only reasoning text the protocol exposes; request it so
-  // the thinking channel is filled whenever the model reasons.
-  body.reasoning = {
-    ...(request.reasoningEffort ? { effort: request.reasoningEffort } : {}),
-    summary: 'auto',
-  };
+  // the thinking channel is filled whenever the model reasons. The reasoning
+  // level itself travels in the request header, never as a body `effort`.
+  body.reasoning = { summary: 'auto' };
   if (request.cacheKey) body.prompt_cache_key = request.cacheKey;
   if (request.maxTokens !== undefined) body.max_output_tokens = request.maxTokens;
   if (request.actionTool) {
@@ -137,6 +136,7 @@ export function createResponsesDriver(
   const fetchImpl = options.fetch ?? globalThis.fetch;
   return {
     async complete(request: DriverRequest): Promise<DriverResult> {
+      if (!request.reasoningEffort) throw new Error("Model request requires reasoningEffort");
       if (request.signal.aborted) throw abortError();
       const url = `${connection.openaiResponsesBaseUrl.replace(/\/+$/u, '')}/responses`;
       const body = serializeResponsesRequest(request);
@@ -152,6 +152,9 @@ export function createResponsesDriver(
           headers: {
             'content-type': 'application/json',
             authorization: `Bearer ${connection.token}`,
+            ...(request.reasoningEffort === undefined
+              ? {}
+              : { [REASONING_EFFORT_HEADER]: request.reasoningEffort }),
           },
           body,
           signal: request.signal,

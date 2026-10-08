@@ -1,5 +1,4 @@
 import { defineModel } from './define.ts';
-import { THINKING_FULL } from '../types.ts';
 
 export const minimaxModels = [
   // https://platform.minimax.io/docs/guides/text-generation
@@ -8,7 +7,6 @@ export const minimaxModels = [
   defineModel('minimax-m3.1-flash-preview', 'MiniMax M3.1 Flash Preview', {
     intelligence: 'low',
     capabilities: ['text', 'image'],
-    thinkingLevels: THINKING_FULL,
     contextWindow: 1_000_000,
     pricing: [0.003, 0.15, 0.6],
     speed: 156,

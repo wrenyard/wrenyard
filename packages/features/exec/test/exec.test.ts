@@ -67,7 +67,7 @@ function stubClient(session: AgentSession, capture?: { request?: AgentRequest })
   };
 }
 
-const BASE_REQUEST = { model: 'gpt-5-codex', prompt: 'Hello.', cwd: '/workspace', client: 'stub' };
+const BASE_REQUEST = { model: 'gpt-5-codex', prompt: 'Hello.', cwd: '/workspace', client: 'stub', reasoningEffort: 'medium' as const };
 
 test('retains events under both ceilings and reports an eviction gap', () => {
   const buffer = new ExecReplayBuffer({ maxEvents: 2, maxBytes: 1024 });

@@ -10,9 +10,10 @@
  */
 import { getEncoding } from 'js-tiktoken';
 import { createBuiltinCatalog } from '@wrenyard/providers';
-import type { ModelDefinition, ThinkingLevel } from '@wrenyard/providers/base';
-import { models as registeredModels } from '@wrenyard/models';
+import type { ProviderDefinition, ModelDefinition } from '@wrenyard/providers/base';
+import { models as registeredModels, resolveReasoningEffort, type ReasoningEffort } from '@wrenyard/models';
 import { isContextOverflowError } from './driver.js';
+import { auxiliaryReasoningRequirement } from './role-requirements.js';
 import type { DriverResult, ModelContentPart, ModelDriver, ModelMessage, ToolCall, Usage } from './driver.js';
 
 export type { ModelMessage, Usage } from './driver.js';
@@ -46,14 +47,16 @@ export const CHEAP_TIMEOUT_MS = 60_000;
 export interface ReasonSelection {
   provider: string;
   model: string;
-  reasoningEffort?: string;
+  /** Explicit public reasoning level; required for the `reason` role. */
+  reasoningEffort: ReasoningEffort;
 }
 
 /** Model facts used by the budget check and by the `<wy-info>` view. */
 export interface ModelMetadata {
   contextWindow?: number;
   maxOutputTokens?: number;
-  thinkingLevels?: readonly ThinkingLevel[];
+  /** Route-owned reasoning levels this exact model can materialize. */
+  reasoningEfforts?: readonly ReasoningEffort[];
   /** True only when the resolved definition declares the `image` capability. */
   imageInput?: boolean;
 }
@@ -81,6 +84,14 @@ export interface CallEventDraft {
   /** Visible output; partial output when the call was aborted or interrupted. */
   output: string;
   reasoning?: string;
+  /** Public reasoning level actually sent on the wire for this attempt. */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * The effort that was asked for: the explicit level on a `reason` call, or an
+   * auxiliary role's declared expectation. Recorded alongside the actual level
+   * so a nearest-supported adaptation is visible in the ledger.
+   */
+  requestedReasoningEffort?: string;
   error?: string;
   turn?: number;
   cycle?: number;
@@ -136,6 +147,7 @@ export interface ModelCallOutput {
 }
 
 export interface CallRunnerOptions {
+  resolveProvider?: (providerId: string) => ProviderDefinition | undefined;
   driver: ModelDriver;
   /** Cheap model public id used by every role except `reason`. */
   cheapModel: () => string | Promise<string>;
@@ -234,23 +246,25 @@ function builtinCatalog(): ReturnType<typeof createBuiltinCatalog> {
  * field neither source declares stays undefined, and the budget check is then
  * skipped instead of being invented.
  */
-export function resolveModelMetadata(publicId: string): ModelMetadata {
+export function resolveModelMetadata(publicId: string, resolveProvider: (providerId: string) => ProviderDefinition | undefined = id => builtinCatalog().provider(id)): ModelMetadata {
   const separator = publicId.indexOf('/');
   if (separator <= 0 || separator === publicId.length - 1) return {};
   const providerId = publicId.slice(0, separator);
   const requestedModelId = publicId.slice(separator + 1);
-  const provider = builtinCatalog().provider(providerId);
+  const provider = resolveProvider(providerId);
   const modelId = provider?.modelAliases?.[requestedModelId] ?? requestedModelId;
   const definition: ModelDefinition | undefined = provider?.models.find((entry) => entry.id === modelId);
   const defaults = registeredModels.get(definition?.canonicalModel?.id ?? modelId)?.defaults;
   const contextWindow = definition?.contextWindow ?? defaults?.contextWindow;
   const maxOutputTokens = definition?.maxOutputTokens ?? defaults?.maxOutputTokens;
-  const thinkingLevels = definition?.thinkingLevels ?? defaults?.thinkingLevels;
+  // Reasoning levels are route-owned: only the resolved provider definition
+  // declares them, and the canonical registry never carries an effort list.
+  const reasoningEfforts = definition?.reasoningEfforts;
   const imageInput = definition?.capabilities?.some((capability) => capability === 'image');
   return {
     ...(contextWindow === undefined ? {} : { contextWindow }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
-    ...(thinkingLevels === undefined ? {} : { thinkingLevels }),
+    ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
     ...(imageInput === undefined ? {} : { imageInput }),
   };
 }
@@ -269,8 +283,8 @@ export interface ContextBudget {
  * extra soft budget — and a call is refused when the estimate plus the model's
  * output allowance would exceed its window.
  */
-export function checkContextBudget(publicId: string, messages: readonly ModelMessage[]): ContextBudget {
-  const metadata = resolveModelMetadata(publicId);
+export function checkContextBudget(publicId: string, messages: readonly ModelMessage[], resolveProvider?: (providerId: string) => ProviderDefinition | undefined): ContextBudget {
+  const metadata = resolveModelMetadata(publicId, resolveProvider);
   const estimatedInputTokens = estimateInputTokens(messages);
   if (metadata.contextWindow === undefined || metadata.maxOutputTokens === undefined) {
     return { metadata, estimatedInputTokens, ok: true };
@@ -288,11 +302,30 @@ export function checkContextBudget(publicId: string, messages: readonly ModelMes
 }
 
 /**
- * True only when the model definition declares the level as a legal thinking
- * level. An undeclared list is not a licence to accept an arbitrary string.
+ * True only when the route declares the level as a legal reasoning effort. An
+ * undeclared list is not a licence to accept an arbitrary level.
  */
-export function isThinkingLevelSupported(metadata: ModelMetadata, level: string): boolean {
-  return metadata.thinkingLevels?.some((candidate) => candidate === level) ?? false;
+export function isReasoningEffortSupported(metadata: ModelMetadata, effort: ReasoningEffort): boolean {
+  return metadata.reasoningEfforts?.includes(effort) ?? false;
+}
+
+/**
+ * The exact public level an auxiliary role should send on one route.
+ *
+ * The earliest level of the role's declared preference ladder that the route
+ * supports is chosen; when no level is shared, the nearest supported level at
+ * or above the first preference (else the highest supported level) is used. An
+ * unknown role, or a route without a declared ladder, yields undefined.
+ */
+export function resolveAuxiliaryReasoningEffort(
+  role: string,
+  supported: readonly ReasoningEffort[] | undefined,
+): ReasoningEffort | undefined {
+  const expected = auxiliaryReasoningRequirement(role);
+  if (expected === undefined || expected.length === 0) return undefined;
+  if (supported === undefined || supported.length === 0) return undefined;
+  const shared = expected.find((effort) => supported.includes(effort));
+  return shared ?? resolveReasoningEffort(expected[0], supported);
 }
 
 /** Reject promptly when the signal aborts, even while awaiting a plain promise. */
@@ -355,7 +388,8 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       const messages = sanitizeMessagesForRole(input.role, input.messages);
       let model = '';
       let estimatedInputTokens = 0;
-      let reasoningEffort: string | undefined;
+      let actualReasoningEffort: ReasoningEffort | undefined;
+      let requestedReasoningEffort: string | undefined;
       let partialUsage: Usage | undefined;
       let emitted = false;
       /** First nonempty delta time, shared by the terminal call event. */
@@ -381,6 +415,8 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           ...(fields.firstTokenAt === undefined ? {} : { firstTokenAt: fields.firstTokenAt }),
           output: fields.output,
           ...(fields.reasoning === undefined ? {} : { reasoning: fields.reasoning }),
+          reasoningEffort: actualReasoningEffort,
+          ...(requestedReasoningEffort === undefined ? {} : { requestedReasoningEffort }),
           ...(fields.error === undefined ? {} : { error: fields.error }),
           ...(input.turn === undefined ? {} : { turn: input.turn }),
           ...(input.cycle === undefined ? {} : { cycle: input.cycle }),
@@ -464,7 +500,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           const selection = input.reason;
           if (!selection) return await fail('The reason role requires a model selection');
           model = `${selection.provider}/${selection.model}`;
-          reasoningEffort = selection.reasoningEffort;
+          requestedReasoningEffort = selection.reasoningEffort;
         } else {
           model = await settleWithAbort(options.cheapModel(), controller.signal);
         }
@@ -474,12 +510,24 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           });
         }
 
-        const budget = checkContextBudget(model, messages);
+        const budget = checkContextBudget(model, messages, options.resolveProvider);
         estimatedInputTokens = budget.estimatedInputTokens;
-        if (input.role === 'reason' && reasoningEffort !== undefined
-          && !isThinkingLevelSupported(budget.metadata, reasoningEffort)) {
-          return await fail(`Model ${model} does not support reasoning effort "${reasoningEffort}"`);
+        if (input.role === 'reason') {
+          // An explicit level must be exactly materializable by this route. The
+          // caller validates against the same route list before forwarding, so
+          // an unsupported level is normally rejected even earlier.
+          if (requestedReasoningEffort === undefined
+            || !isReasoningEffortSupported(budget.metadata, requestedReasoningEffort as ReasoningEffort)) {
+            return await fail(`Model ${model} does not support reasoning effort "${requestedReasoningEffort ?? ''}"`);
+          }
+          actualReasoningEffort = requestedReasoningEffort as ReasoningEffort;
+        } else {
+          // Auxiliary roles adapt their declared preference onto this route: the
+          // earliest shared level, else the nearest supported level.
+          requestedReasoningEffort = auxiliaryReasoningRequirement(input.role)?.[0];
+          actualReasoningEffort = resolveAuxiliaryReasoningEffort(input.role, budget.metadata.reasoningEfforts);
         }
+        if (actualReasoningEffort === undefined) return await fail(`Model ${model} has no reasoning-effort declaration for role ${input.role}`);
         if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
 
         // Observational marker: the driver call is about to be issued. It never
@@ -499,7 +547,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             result = await settleWithAbort(options.driver.complete({
               model,
               messages,
-              ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+              reasoningEffort: actualReasoningEffort,
               ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
               ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
               ...(input.role === 'reason' ? {

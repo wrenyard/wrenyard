@@ -4,6 +4,7 @@
 // daemon-owned settings, so a validated request is always passed through
 // unchanged. Grouped here so each domain IPC module shares one implementation.
 
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import type {
   ExecEventsRequest,
   ExecStartRequest,
@@ -241,7 +242,8 @@ export const EXEC_MODEL_MAX = 512;
 export const EXEC_PROVIDER_MAX = 200;
 export const EXEC_CLIENT_MAX = 120;
 export const EXEC_SESSION_MAX = 1_024;
-export const EXEC_THINKING_MAX = 128;
+/** Legal public reasoning-effort levels (including `none`); the shared ladder is the authority. */
+export const EXEC_REASONING_EFFORT_VALUES = new Set<string>(REASONING_EFFORTS);
 export const EXEC_MODE_VALUES = new Set(['native', 'gateway']);
 
 export function isBoundedExecId(value: unknown): value is string {
@@ -266,7 +268,14 @@ export function validateExecStartRequest(value: unknown): ExecStartRequest {
   if (typeof cwd !== 'string' || !cwd.trim() || cwd.length > EXEC_CWD_MAX || TASK_SETTINGS_CONTROL_CHARS.test(cwd)) {
     throw new Error('执行工作目录无效');
   }
-  const request: ExecStartRequest = { client, model, prompt, cwd };
+  // The wire field is the required public reasoning effort (the exec protocol
+  // was renamed away from `thinking`); `none` is a valid level.
+  const reasoningEffort = value.reasoningEffort;
+  if (typeof reasoningEffort !== 'string' || !EXEC_REASONING_EFFORT_VALUES.has(reasoningEffort)) {
+    throw new Error('推理强度无效');
+  }
+  if (value.thinking !== undefined) throw new Error('推理强度无效');
+  const request: ExecStartRequest = { client, model, prompt, cwd, reasoningEffort: reasoningEffort as ReasoningEffort };
   if (value.provider !== undefined) {
     if (typeof value.provider !== 'string' || !value.provider.trim() || value.provider.length > EXEC_PROVIDER_MAX) {
       throw new Error('执行 provider 无效');
@@ -282,12 +291,6 @@ export function validateExecStartRequest(value: unknown): ExecStartRequest {
       throw new Error('恢复会话 id 无效');
     }
     request.resumeSessionId = value.resumeSessionId;
-  }
-  if (value.thinking !== undefined) {
-    if (typeof value.thinking !== 'string' || !value.thinking.trim() || value.thinking.length > EXEC_THINKING_MAX) {
-      throw new Error('思考强度无效');
-    }
-    request.thinking = value.thinking;
   }
   if (value.features !== undefined) {
     const features = value.features;

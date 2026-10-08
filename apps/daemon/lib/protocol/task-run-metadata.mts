@@ -1,3 +1,4 @@
+import { REASONING_EFFORTS } from '../task-run-metadata-types.mts'
 import type { JsonSchema } from './jsonrpc.mts'
 import type {
   TaskAutoRoutingDecision,
@@ -11,9 +12,9 @@ export type {
   TaskResolvedSpeed,
   TaskUsage,
   TaskUsageCompleteness,
-  ThinkingLevel,
+  ReasoningEffort,
 } from '../task-run-metadata-types.mts'
-export { THINKING_LEVELS, isThinkingLevel } from '../task-run-metadata-types.mts'
+export { REASONING_EFFORTS, isReasoningEffort } from '../task-run-metadata-types.mts'
 
 /**
  * Exclusive shared protocol schema for a task run's resolved dispatch and
@@ -99,7 +100,8 @@ export const taskResolvedDispatchSchema = {
     model_id: { type: 'string' },
     mode: { enum: ['native', 'gateway'] },
     protocol: { type: 'string' },
-    thinking: { enum: ['low', 'medium', 'high', 'xhigh', 'max'] },
+    reasoningEffort: { enum: REASONING_EFFORTS },
+    clientReasoningEffort: { type: 'string' },
     auto_routing: taskAutoRoutingDecisionSchema,
     speed: {
       type: 'object',

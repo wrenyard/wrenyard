@@ -1,4 +1,4 @@
-import { INTELLIGENCE_ORDER, type IntelligenceTier, type ThinkingLevel, normalizeIntelligenceTier, normalizeThinkingLevel } from '@wrenyard/providers/catalog';
+import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier, normalizeReasoningEffort } from '@wrenyard/providers/catalog';
 import { type TaskDispatchRequirements as AutoRoutingTaskDispatchRequirements, validateScoreWeights } from '@wrenyard/auto-routing';
 
 /**
@@ -89,7 +89,7 @@ export const TASK_DISPATCH_FIELDS = [
   'excludeProviderIds',
   'requiredCapabilities',
   'requiresWebSearch',
-  'thinking',
+  'expectedReasoningEffort',
 ] as const
 
 export type TaskDispatchField = (typeof TASK_DISPATCH_FIELDS)[number]
@@ -108,7 +108,7 @@ const DISPATCH_FIELD_ALIASES: Record<TaskDispatchField, readonly string[]> = {
   excludeProviderIds: ['excludeProviderIds', 'exclude_provider_ids'],
   requiredCapabilities: ['requiredCapabilities', 'required_capabilities'],
   requiresWebSearch: ['requiresWebSearch', 'requires_web_search'],
-  thinking: ['thinking'],
+  expectedReasoningEffort: ['expectedReasoningEffort', 'expected_reasoning_effort'],
 }
 
 const POSITIVE_NUMBER_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
@@ -134,7 +134,7 @@ const BOOLEAN_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
   'requiresWebSearch',
 ])
 
-const THINKING_FIELDS: ReadonlySet<TaskDispatchField> = new Set(['thinking'])
+const REASONING_EFFORT_FIELDS: ReadonlySet<TaskDispatchField> = new Set(['expectedReasoningEffort'])
 
 /* -------------------------------------------------------------------------- *
  * Layer model
@@ -368,13 +368,13 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
       continue
     }
 
-    if (THINKING_FIELDS.has(field)) {
+    if (REASONING_EFFORT_FIELDS.has(field)) {
       if (typeof value !== 'string') {
-        fail(scope, `dispatch.${field} must be one of: low, medium, high, xhigh, max`)
+        fail(scope, `dispatch.${field} must be one of: none, low, medium, high, xhigh, max`)
       }
-      const normalized: ThinkingLevel | undefined = normalizeThinkingLevel(value)
+      const normalized = normalizeReasoningEffort(value)
       if (normalized === undefined) {
-        fail(scope, `dispatch.${field} must be one of: low, medium, high, xhigh, max`)
+        fail(scope, `dispatch.${field} must be one of: none, low, medium, high, xhigh, max`)
       }
       ;(out as Record<string, unknown>)[field] = normalized
       continue

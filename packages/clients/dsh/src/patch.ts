@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { DSH_BRIDGE_PLUGIN_FILENAME, DSH_BRIDGE_PLUGIN_SOURCE, DSH_BRIDGE_ROW_ID } from './bridge-asset.ts';
 import { DSH_YOLO_PLUGIN_FILENAME, DSH_YOLO_PLUGIN_SOURCE, DSH_YOLO_ROW_ID } from './yolo-asset.ts';
+import { DSH_REASONING_EFFORT_PLUGIN_FILENAME, DSH_REASONING_EFFORT_PLUGIN_SOURCE, DSH_REASONING_EFFORT_ROW_ID } from './reasoning-effort-asset.ts';
 
 /** File name of the generated loader overlay inside the per-run DSH home. */
 export const DSH_LOADER_PATCH_FILENAME = 'wrenyard-loader-patch.yaml';
@@ -65,6 +66,13 @@ export interface DshModelRoute {
   readonly baseUrl?: string;
   /** Optional context-window annotation for the declared model. */
   readonly contextWindow?: number;
+  /**
+   * Public reasoning-effort level for a Gateway route. When present, the overlay
+   * mounts the reasoning-effort forwarder plugin, which adds the internal
+   * Gateway effort header to requests for the exact configured chat-completions
+   * URL. Absent for a native route, which never reaches Wrenyard's Gateway.
+   */
+  readonly reasoningEffort?: string;
 }
 
 /**
@@ -81,11 +89,13 @@ export interface DshModelRoute {
  *
  * `yoloPluginPath` and `bridgePluginPath` are absolute plugin paths, exactly as
  * the retired Go renderer required them; an empty bridge path omits its row.
+ * `reasoningPluginPath` mounts the effort forwarder and is emitted only for a
+ * Gateway route carrying a public reasoning effort.
  *
  * `mcpServers` are projected as `@deepseek-ai/dsh-mcp-client` insert rows after
  * the plugin rows, sorted by server name, matching the retired Go projection.
  */
-export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath: string, bridgePluginPath: string, mcpServers: readonly DshMcpServer[] = []): string {
+export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath: string, bridgePluginPath: string, reasoningPluginPath: string, mcpServers: readonly DshMcpServer[] = []): string {
   const lines: string[] = ['# wrenyard dsh patch (generated; secret-free)'];
 
   if (route) {
@@ -148,6 +158,14 @@ export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath:
       `    id: ${yamlStr(DSH_BRIDGE_ROW_ID)}`,
       `    name: ${yamlStr(bridgePluginPath)}`,
     );
+  // The effort forwarder mounts only for a Gateway route that declares the
+  // public effort; a native route never reaches Wrenyard's Gateway.
+  if (route?.baseUrl && route.reasoningEffort && reasoningPluginPath)
+    lines.push(
+      '- insert:',
+      `    id: ${yamlStr(DSH_REASONING_EFFORT_ROW_ID)}`,
+      `    name: ${yamlStr(reasoningPluginPath)}`,
+    );
 
   // MCP servers are inserted after the plugins, sorted by name. A transport the
   // loader cannot represent is rejected before any row is emitted.
@@ -196,7 +214,7 @@ export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath:
 }
 
 /**
- * Materialize the generated overlay and its two plugin assets into the isolated
+ * Materialize the generated overlay and its plugin assets into the isolated
  * per-run DSH home, returning the absolute overlay path. The caller owns the
  * home and removes it through its lifecycle cleanup.
  */
@@ -204,9 +222,11 @@ export async function writeLoaderPatch(home: string, route?: DshModelRoute, mcpS
   await fs.mkdir(home, { recursive: true });
   const bridgePath = join(home, DSH_BRIDGE_PLUGIN_FILENAME);
   const yoloPath = join(home, DSH_YOLO_PLUGIN_FILENAME);
+  const reasoningPath = join(home, DSH_REASONING_EFFORT_PLUGIN_FILENAME);
   await fs.writeFile(bridgePath, DSH_BRIDGE_PLUGIN_SOURCE, { encoding: 'utf8', mode: 0o600 });
   await fs.writeFile(yoloPath, DSH_YOLO_PLUGIN_SOURCE, { encoding: 'utf8', mode: 0o600 });
+  await fs.writeFile(reasoningPath, DSH_REASONING_EFFORT_PLUGIN_SOURCE, { encoding: 'utf8', mode: 0o600 });
   const target = join(home, DSH_LOADER_PATCH_FILENAME);
-  await fs.writeFile(target, renderDshPatch(route, yoloPath, bridgePath, mcpServers), { encoding: 'utf8', mode: 0o600 });
+  await fs.writeFile(target, renderDshPatch(route, yoloPath, bridgePath, reasoningPath, mcpServers), { encoding: 'utf8', mode: 0o600 });
   return target;
 }

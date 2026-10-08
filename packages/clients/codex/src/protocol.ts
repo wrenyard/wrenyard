@@ -93,7 +93,7 @@ async function* protocol(
                 if (thread && typeof thread === 'object' && typeof (thread as { id?: unknown }).id === 'string')
                     threadId = (thread as { id: string }).id;
                 const turn: Record<string, unknown> = { threadId, input: [{ type: 'text', text: request.prompt }] };
-                if (request.thinking) turn.effort = request.thinking;
+                if (request.clientReasoningEffort) turn.effort = request.clientReasoningEffort;
                 return call('turn/start', turn);
             })
                 .catch(() => { if (!finished) void execution.cancel(); });

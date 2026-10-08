@@ -60,6 +60,7 @@ async function createSpeedOverrideResolver(
   const catalog = new Catalog()
   catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true })
   catalog.registerProvider({
+    convertReasoningEffort: (_model, effort) => ({ reasoning_effort: effort }),
     id: 'p',
     displayName: 'P',
     credentialResolver: 'managed',
@@ -69,7 +70,9 @@ async function createSpeedOverrideResolver(
       intelligence: 'mid',
       speed: defaultTps,
       pricing: [0.5, 1, 2],
+      reasoningEfforts: ['none'],
     }],
+    reasoningEffortMappings: { m: { codebuddy: { none: { effort: 'none' } } } },
     modelSpeedOverrides: {
       m: overrideTps,
     },
@@ -660,11 +663,11 @@ describe('core task dispatch-resolver structured failure codes (no-model)', () =
     // pair is never lost because one ready client was excluded.
     const result = resolver.diagnose({
       taskName: 'code-exclusion-sibling',
-      requirements: { excludeClientIds: ['cursor'] } satisfies TaskDispatchRequirements,
+      requirements: { excludeClientIds: ['opencode'] } satisfies TaskDispatchRequirements,
     })
     assert.equal(result.ok, true)
 
-    const cur = result.choices.find((choice) => choice.exactAgentRuntime === K3_CUR)
+    const cur = result.choices.find((choice) => choice.exactAgentRuntime === 'kimi-coding/k3:oc')
     assert.ok(cur, `expected ${K3_CUR} in diagnostic choices`)
     assert.equal(cur.rejectionCode, 'no_available_provider')
     assert.equal(cur.rejectionDetail, 'client_excluded')
@@ -760,7 +763,7 @@ describe('core task dispatch-resolver requiresWebSearch (no-model)', () => {
   })
 })
 
-describe('core task dispatch-resolver thinking (no-model)', () => {
+describe('core task dispatch-resolver reasoning effort (no-model)', () => {
   let resolver: TaskDispatchResolver
 
   beforeEach(async () => {
@@ -771,94 +774,91 @@ describe('core task dispatch-resolver thinking (no-model)', () => {
     })
   })
 
-  it('explicit resolves and returns a requested supported thinking level', () => {
-    // deepseek-v4.1-flash declares low/high/max and maps each to a wire effort.
+  it('explicit adapts a request to the probed route level and its wire effort', () => {
+    // The CodeBuddy DeepSeek route exposes none/high, so low rounds up to high.
     const explicit = resolver.resolveExplicit({
-      taskName: 'explicit-thinking-ok',
+      taskName: 'explicit-reasoning-ok',
       exactRuntime: DSF_CB,
-      thinking: 'low',
+      expectedReasoningEffort: 'low',
     })
     assert.equal(explicit.ok, true)
     assert.equal(explicit.exactAgentRuntime, DSF_CB)
-    assert.equal(explicit.resolved.thinking, 'low')
+    assert.equal(explicit.resolved.reasoningEffort, 'high')
+    assert.equal(explicit.resolved.clientReasoningEffort, 'high')
   })
 
-  it('explicit adapts a requested thinking level instead of failing admission', () => {
-    // glm-5.3 declares no thinking levels, so the request cannot be materialized:
-    // the target stays selected and dispatchable and simply carries no invented
-    // effort instead of being disqualified.
+  it('explicit adapts a requested reasoning-effort level to the nearest usable level', () => {
+    // The route declares low/high/max; `medium` is unusable, so the request
+    // adapts to the smallest usable level at or above it (high) instead of
+    // failing admission.
     const explicit = resolver.resolveExplicit({
-      taskName: 'explicit-thinking-unsupported',
+      taskName: 'explicit-reasoning-adapted',
+      exactRuntime: DSF_CB,
+      expectedReasoningEffort: 'medium',
+    })
+    assert.equal(explicit.ok, true)
+    assert.equal(explicit.exactAgentRuntime, DSF_CB)
+    assert.equal(explicit.resolved.reasoningEffort, 'high')
+  })
+
+  it('explicit adapts an above-ceiling request to the highest usable level', () => {
+    const explicit = resolver.resolveExplicit({
+      taskName: 'explicit-reasoning-clamped',
       exactRuntime: GLM_CB,
-      thinking: 'high',
+      expectedReasoningEffort: 'max',
     })
     assert.equal(explicit.ok, true)
     assert.equal(explicit.exactAgentRuntime, GLM_CB)
-    assert.equal(explicit.resolved.thinking, undefined)
+    assert.equal(explicit.resolved.reasoningEffort, 'max')
   })
 
-  it('explicit adapts an unmapped-but-declared level to the nearest usable level', () => {
-    // deepseek-v4.1-flash maps low/high/max only; `medium` is unmapped, so the
-    // request clamps to the smallest mapped level at or above it (high).
-    const explicit = resolver.resolveExplicit({
-      taskName: 'explicit-thinking-unmapped',
-      exactRuntime: DSF_CB,
-      thinking: 'medium',
-    })
-    assert.equal(explicit.ok, true)
-    assert.equal(explicit.exactAgentRuntime, DSF_CB)
-    assert.equal(explicit.resolved.thinking, 'high')
-  })
-
-  it('automatic without a thinking requirement selects the highest supported level', () => {
+  it('catalog diagnostics without a run expectation do not invent an effort', () => {
     const resolution = resolver.resolve({
-      taskName: 'auto-thinking-default',
+      taskName: 'auto-reasoning-default',
       requirements: { minimumTps: 1, excludeProviderIds: createBuiltinCatalog().providers().map(p => p.id).filter(id => id !== 'chatgpt'), excludeModelIds: ['gpt-5.5', 'gpt-5.4'] } satisfies TaskDispatchRequirements,
     })
     assert.equal(resolution.ok, true)
-    // The selection includes only thinking-capable models; the Catalog default
-    // picks the highest declared+mapped level.
-    assert.ok(resolution.resolved.thinking !== undefined)
-    assert.equal(resolution.resolved.thinking, 'max')
+    // A task always declares an expected level; when a caller omits it the
+    // diagnostic enumeration carries no run effort.
+    assert.equal(resolution.resolved.reasoningEffort, undefined)
   })
 
-  it('automatic honors a requested thinking level and returns it', () => {
+  it('automatic honors an expected reasoning-effort level and returns it', () => {
     const resolution = resolver.resolve({
-      taskName: 'auto-thinking-requested',
+      taskName: 'auto-reasoning-requested',
       requirements: {
         excludeProviderIds: createBuiltinCatalog().providers().map(p => p.id).filter(id => id !== 'codebuddy'),
         minimumTps: 1,
         excludeModelIds: createBuiltinCatalog().provider('codebuddy')!.models.map(m => m.id).filter(id => id !== 'deepseek-v4.1-flash'),
-        thinking: 'low',
+        expectedReasoningEffort: 'low',
       } satisfies TaskDispatchRequirements,
     })
     assert.equal(resolution.ok, true)
-    assert.equal(resolution.resolved.thinking, 'low')
+    assert.equal(resolution.resolved.reasoningEffort, 'high')
   })
 
-  it('a requested thinking level cannot disqualify the highest-scoring model', () => {
-    // Pin a single candidate whose model has no usable thinking level: the
-    // requested level is a runtime parameter, so the target must remain
-    // dispatchable and carry no invented effort.
-    const supported = resolver.resolveExplicit({
-      taskName: 'thinking-cannot-disqualify',
+  it('an expected reasoning-effort level never disqualifies the highest-scoring model', () => {
+    // The expected level is a runtime parameter, so every target remains
+    // dispatchable and carries its own adapted level.
+    const first = resolver.resolveExplicit({
+      taskName: 'reasoning-cannot-disqualify',
       exactRuntime: DSF_CB,
-      thinking: 'low',
+      expectedReasoningEffort: 'low',
     })
-    assert.equal(supported.ok, true)
-    assert.equal(supported.resolved.thinking, 'low')
+    assert.equal(first.ok, true)
+    assert.equal(first.resolved.reasoningEffort, 'high')
 
-    const unsupported = resolver.resolveExplicit({
-      taskName: 'thinking-cannot-disqualify',
+    const second = resolver.resolveExplicit({
+      taskName: 'reasoning-cannot-disqualify',
       exactRuntime: GLM_CB,
-      thinking: 'low',
+      expectedReasoningEffort: 'low',
     })
-    assert.equal(unsupported.ok, true)
-    assert.equal(unsupported.exactAgentRuntime, GLM_CB)
-    assert.equal(unsupported.resolved.thinking, undefined)
+    assert.equal(second.ok, true)
+    assert.equal(second.exactAgentRuntime, GLM_CB)
+    assert.equal(second.resolved.reasoningEffort, 'low')
   })
 
-  it('thinking requests never reorder automatic selection across differently mapped models', () => {
+  it('reasoning-effort requests never reorder automatic selection across differently mapped models', () => {
     const requirements = {
       maxOutputUsdPerMillion: 2,
       minimumTps: 40,
@@ -866,32 +866,32 @@ describe('core task dispatch-resolver thinking (no-model)', () => {
       excludeProviderIds: ['opencode-zen', 'openrouter', 'opencode-go'],
     } satisfies TaskDispatchRequirements
 
-    const baseline = resolver.resolve({ taskName: 'thinking-ranking', requirements })
-    const withThinking = resolver.resolve({
-      taskName: 'thinking-ranking',
-      requirements: { ...requirements, thinking: 'low' },
+    const baseline = resolver.resolve({ taskName: 'reasoning-ranking', requirements })
+    const withEffort = resolver.resolve({
+      taskName: 'reasoning-ranking',
+      requirements: { ...requirements, expectedReasoningEffort: 'low' },
     })
 
     assert.equal(baseline.ok, true)
-    assert.equal(withThinking.ok, true)
-    // Same selected target and profile whether or not thinking was requested.
-    assert.equal(withThinking.exactAgentRuntime, baseline.exactAgentRuntime)
-    assert.equal(withThinking.resolved.profile, baseline.resolved.profile)
-    assert.equal(withThinking.resolved.model_id, baseline.resolved.model_id)
+    assert.equal(withEffort.ok, true)
+    // Same selected target and profile whether or not a level was requested.
+    assert.equal(withEffort.exactAgentRuntime, baseline.exactAgentRuntime)
+    assert.equal(withEffort.resolved.profile, baseline.resolved.profile)
+    assert.equal(withEffort.resolved.model_id, baseline.resolved.model_id)
   })
 
-  it('listExactRuntimes keeps targets available regardless of the requested thinking level', () => {
-    const listed = resolver.listExactRuntimes({ taskName: 'list-thinking', thinking: 'high' })
+  it('listExactRuntimes keeps targets available regardless of the expected reasoning-effort level', () => {
+    const listed = resolver.listExactRuntimes({ taskName: 'list-reasoning', expectedReasoningEffort: 'high' })
     assert.equal(listed.ok, true)
     const glm = listed.items.find((item) => item.exactAgentRuntime === GLM_CB)
     assert.ok(glm !== undefined)
-    // A target without usable thinking stays available and dispatchable.
+    // A target whose ladder adapts the request stays available and dispatchable.
     assert.equal(glm.available, true)
-    assert.equal(glm.resolved?.thinking, undefined)
+    assert.equal(glm.resolved?.reasoningEffort, 'high')
     const dsf = listed.items.find((item) => item.exactAgentRuntime === DSF_CB)
     assert.ok(dsf !== undefined)
     assert.equal(dsf.available, true)
     assert.ok(dsf.resolved)
-    assert.equal(dsf.resolved.thinking, 'high')
+    assert.equal(dsf.resolved.reasoningEffort, 'high')
   })
 })

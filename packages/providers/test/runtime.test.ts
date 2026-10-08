@@ -23,7 +23,7 @@ test('DeepSeek resolves the managed auth.json API entry and never leaks it into 
   assert.equal(credential?.value, 'managed-deepseek-key');
   assert.equal(upstreamAuthHeaders(provider, credential!, 'openai_chat').get('authorization'), 'Bearer managed-deepseek-key');
   // The credential store path is the only file read; nothing is written.
-  assert.deepEqual(requestedPaths, ['/config/wrenyard/providers/auth.json']);
+  assert.deepEqual(requestedPaths.map(p => p.replaceAll('\\', '/')), ['/config/wrenyard/providers/auth.json']);
 });
 
 test('DeepSeek falls back to an environment key only when the managed store has no entry', async () => {
@@ -111,14 +111,15 @@ test('Kimi Coding maps the canonical kimi-k2.8 identity to the official kimi-for
   assert.equal(plans['kimi-coding/k3:cc']?.upstreamModel, undefined);
 });
 
-test('runtime task plans honor an explicit thinking-mapped upstream model over the provider remap', async () => {
+test('runtime task plans honor an explicit effort-mapped upstream model over the provider remap', async () => {
   const catalog = createBuiltinCatalog();
-  // A native Cursor run has no provider-level remap; the thinking mapping's
+  // A native Cursor run has no provider-level remap; the effort mapping's
   // own upstream substitution must survive compilation.
   const runtime = createBuiltinProviderRuntime({ readFile: async () => '' });
   const plans = await resolveRuntimeTaskPlans(catalog, runtime);
   assert.equal(plans['cursor/gpt-5.6-sol:cur']?.model, 'gpt-5.6-sol');
-  assert.equal(plans['cursor/gpt-5.6-sol:cur']?.upstreamModel, 'gpt-5.6-sol[context=272k,reasoning=max,fast=false]');
+  assert.equal(plans['cursor/gpt-5.6-sol:cur']?.upstreamModel, undefined);
+  assert.equal(catalog.resolveRun('cursor', 'cursor', 'gpt-5.6-sol', 'max').upstreamModel, 'gpt-5.6-sol-max');
 });
 
 test('canonicalizeObservedProviderModelId reverses the Kimi Coding wire alias from the registry SSOT', () => {
@@ -135,12 +136,12 @@ test('canonicalizeObservedProviderModelId reverses the Kimi Coding wire alias fr
   assert.equal(canonicalizeObservedProviderModelId('moonshot', 'kimi-for-coding'), 'kimi-for-coding');
 });
 
-test('canonicalizeObservedProviderModelId reverses the Cursor Grok thinking wire alias to its registered model', () => {
-  // Cursor confirms Grok only at high, materialized as the suffixed wire id.
+test('canonicalizeObservedProviderModelId reverses the Cursor Grok effort wire alias to its registered model', () => {
+  // Listed Cursor Grok variants canonicalize to their route identity.
   assert.equal(canonicalizeObservedProviderModelId('cursor', 'cursor-grok-4.6-high'), 'grok-4.6');
   assert.equal(canonicalizeObservedProviderModelId('cursor', 'grok-4.7-high'), 'grok-4.7');
   // The canonical id and any unknown/legacy Cursor id are left unchanged.
-  for (const model of ['grok-4.6', 'grok-4.7', 'cursor-grok-4.6-low', 'grok-4.5', 'grok-4.7-high-fast', 'composer-2.5', 'cursor-composer-2.5']) {
+  for (const model of ['grok-4.6', 'grok-4.7', 'grok-4.5', 'grok-4.7-high-fast', 'composer-2.5', 'cursor-composer-2.5']) {
     assert.equal(canonicalizeObservedProviderModelId('cursor', model), model);
   }
   // Ambiguity is never guessed: the grok wire alias belongs to cursor, not to

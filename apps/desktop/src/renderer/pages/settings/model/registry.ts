@@ -37,7 +37,6 @@ export type CustomControlKey =
   | 'routingWeights'
   | 'runtimeAliases'
   | 'service'
-  | 'sessionDefaults'
   | 'settingsFile'
   | 'statusBarItems'
   | 'themeCards'
@@ -211,16 +210,6 @@ const APPEARANCE_CATEGORY: SettingDefinition[] = [
 ];
 
 const SESSION_CATEGORY: SettingDefinition[] = [
-  {
-    id: 'session.defaultModel',
-    category: 'session',
-    title: '新会话的模型',
-    description: '沿用上次发送的模型，或为每个新会话指定模型与推理强度。',
-    keywords: ['模型', 'model', '推理强度', 'effort', '新会话', '默认'],
-    control: custom('sessionDefaults'),
-    default: 'last',
-    source: { kind: 'preference', preference: 'session.defaultModel' },
-  },
   {
     id: 'session.sendKey',
     category: 'session',

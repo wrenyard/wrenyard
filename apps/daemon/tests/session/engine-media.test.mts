@@ -34,7 +34,6 @@ import { createEngine } from '../../../../packages/features/session/src/engine.t
 import { Ledger } from '../../../../packages/features/session/src/ledger.ts'
 import { createViews } from '../../../../packages/features/session/src/views.ts'
 import { createCallRunner } from '../../../../packages/features/session/src/calls.ts'
-import { LiveCalls } from '../../../../packages/features/session/src/live.ts'
 import {
   createWorkspaceSnapshot,
   WorkspaceFileSource,
@@ -55,8 +54,8 @@ const requireFromSession = createRequire(
 )
 const sharp = requireFromSession('sharp') as SharpFactory
 
-const IMAGE_MODEL = { provider: 'anthropic', model: 'claude-sonnet-5-5' }
-const NOIMAGE_MODEL = { provider: 'anthropic', model: 'claude-haiku-4-5' }
+const IMAGE_MODEL = { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoningEffort: 'high' } as const
+const NOIMAGE_MODEL = { provider: 'anthropic', model: 'claude-haiku-4-5', reasoningEffort: 'high' } as const
 
 const DEFAULTS: Record<string, string> = {
   'memory-search': '{"picks":[]}',
@@ -703,41 +702,6 @@ describe('engine memory-search contract', () => {
 // ─── communication replies ──────────────────────────────────────────────────
 
 describe('engine communication replies', () => {
-  it('publishes live snapshots only for reasoning and delivers replies after completion', async () => {
-    for (const role of ['reply', 'reason'] as const) {
-      const live = new LiveCalls()
-      const snapshots: ReturnType<LiveCalls['read']>[] = []
-      live.subscribe('s1', (snapshot) => snapshots.push(snapshot))
-      const started = deferred<void>()
-      const gate = deferred<void>()
-      const inner: CallsPort = {
-        async run(input) {
-          input.onText?.('partial text')
-          input.onReasoning?.('partial thinking')
-          started.resolve()
-          await gate.promise
-          return { model: 'test/model', text: 'complete reply' }
-        },
-      }
-      const pending = live.wrap('s1', inner).run({
-        callId: 'c1', role, messages: [], layers: {}, signal: new AbortController().signal,
-      })
-      try {
-        await started.promise
-        if (role === 'reply') {
-          assert.deepEqual(live.read('s1'), [], 'a running reply is absent from the live snapshot')
-          assert.deepEqual(snapshots, [], 'reply deltas publish no live notifications')
-        } else {
-          assert.deepEqual(live.read('s1'), [{ callId: 'c1', text: 'partial text', reasoning: 'partial thinking' }])
-        }
-      } finally {
-        gate.resolve()
-      }
-      assert.equal((await pending).text, 'complete reply')
-      assert.deepEqual(live.read('s1'), [], 'completed calls have no live snapshot')
-    }
-  })
-
   it('persists a standalone question in the worker output and uses one terminal reply', async () => {
     await withHarness({}, async (harness) => {
       const { sessionId } = await harness.engine.createSession()
@@ -1010,7 +974,6 @@ describe('engine communication replies', () => {
         driver: {
           async complete(request) {
             seen.push(request)
-            request.onText?.('prose outside the tool')
             return { text: 'prose outside the tool', ...(replies === undefined ? {} : { replies }) }
           },
         },

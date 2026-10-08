@@ -18,6 +18,7 @@ import type {
   SessionBridgeModelEntry,
   SessionBridgeTaskBrief,
 } from '../../src/session/preload.ts';
+import type { ReasoningEffort } from '@wrenyard/models';
 import type {
   CallRole,
   ContextInspection,
@@ -171,7 +172,8 @@ const LIVE_REPLY = [
 interface ModelSpec {
   publicId: string;
   displayName: string;
-  thinkingLevels?: string[];
+  /** Route-owned, non-empty effort ladder the picker may offer. */
+  reasoningEfforts: ReasoningEffort[];
   contextWindow?: number;
   maxOutputTokens?: number;
 }
@@ -180,18 +182,18 @@ const MODEL_SPECS: readonly ModelSpec[] = [
   {
     publicId: 'anthropic/claude-opus-5-5',
     displayName: 'Claude Opus 5.5',
-    thinkingLevels: ['low', 'medium', 'high', 'xhigh'],
+    reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
     contextWindow: 1_000_000,
     maxOutputTokens: 128_000,
   },
-  { publicId: 'anthropic/claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', contextWindow: 1_000_000, maxOutputTokens: 64_000 },
-  { publicId: 'chatgpt/gpt-5.6-sol', displayName: 'GPT-5.6 Sol', contextWindow: 1_050_000, maxOutputTokens: 128_000 },
-  { publicId: 'kimi-coding/kimi-k3', displayName: 'Kimi K3', contextWindow: 1_048_576, maxOutputTokens: 32_768 },
-  { publicId: 'zhipu-coding/glm-5.3', displayName: 'GLM-5.3', contextWindow: 200_000, maxOutputTokens: 32_000 },
-  { publicId: 'deepseek/deepseek-v4.1', displayName: 'DeepSeek V4.1', contextWindow: 1_000_000, maxOutputTokens: 64_000 },
-  { publicId: 'deepseek/deepseek-v4.1-flash', displayName: 'DeepSeek V4.1 Flash', contextWindow: 1_000_000, maxOutputTokens: 32_000 },
+  { publicId: 'anthropic/claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', reasoningEfforts: ['none', 'low', 'medium', 'high'], contextWindow: 1_000_000, maxOutputTokens: 64_000 },
+  { publicId: 'chatgpt/gpt-5.6-sol', displayName: 'GPT-5.6 Sol', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'], contextWindow: 1_050_000, maxOutputTokens: 128_000 },
+  { publicId: 'kimi-coding/kimi-k3', displayName: 'Kimi K3', reasoningEfforts: ['none', 'low', 'medium', 'high'], contextWindow: 1_048_576, maxOutputTokens: 32_768 },
+  { publicId: 'zhipu-coding/glm-5.3', displayName: 'GLM-5.3', reasoningEfforts: ['none', 'low', 'medium'], contextWindow: 200_000, maxOutputTokens: 32_000 },
+  { publicId: 'deepseek/deepseek-v4.1', displayName: 'DeepSeek V4.1', reasoningEfforts: ['none', 'low', 'medium', 'high'], contextWindow: 1_000_000, maxOutputTokens: 64_000 },
+  { publicId: 'deepseek/deepseek-v4.1-flash', displayName: 'DeepSeek V4.1 Flash', reasoningEfforts: ['none', 'low', 'medium'], contextWindow: 1_000_000, maxOutputTokens: 32_000 },
   // Window facts unknown on the gateway: the picker shows them as unknown.
-  { publicId: 'cursor/composer-2', displayName: 'Composer 2' },
+  { publicId: 'cursor/composer-2', displayName: 'Composer 2', reasoningEfforts: ['none', 'medium', 'high'] },
 ];
 
 const MODEL_ENTRIES: SessionBridgeModelEntry[] = MODEL_SPECS.map((spec) => {
@@ -202,7 +204,7 @@ const MODEL_ENTRIES: SessionBridgeModelEntry[] = MODEL_SPECS.map((spec) => {
     quotaProvider: spec.publicId.slice(0, separator),
     model: spec.publicId.slice(separator + 1),
     displayName: spec.displayName,
-    ...(spec.thinkingLevels === undefined ? {} : { thinkingLevels: [...spec.thinkingLevels] }),
+    reasoningEfforts: [...spec.reasoningEfforts],
     ...(spec.contextWindow === undefined ? {} : { contextWindow: spec.contextWindow }),
     ...(spec.maxOutputTokens === undefined ? {} : { maxOutputTokens: spec.maxOutputTokens }),
   };
@@ -1149,7 +1151,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
     async models(): Promise<SessionBridgeModelEntry[]> {
       return MODEL_ENTRIES.map((entry) => ({
         ...entry,
-        ...(entry.thinkingLevels === undefined ? {} : { thinkingLevels: [...entry.thinkingLevels] }),
+        reasoningEfforts: [...entry.reasoningEfforts],
       }));
     },
     async contextInspect(request) {

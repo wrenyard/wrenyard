@@ -7,8 +7,8 @@
  *
  * The parameter shapes are the exact wire contract the product feature service
  * implements. They are narrow on purpose: an exec request may select a
- * provider, model, mode, thinking level, working directory, resume session and
- * feature set, and nothing else. There is no field for a process environment,
+ * provider, model, mode, reasoning effort, working directory, resume session
+ * and feature set, and nothing else. There is no field for a process environment,
  * an executable path, a credential, a timeout, a retry policy, or a task id —
  * those are not part of this protocol.
  *
@@ -18,6 +18,7 @@
  */
 
 import type { RpcMethod } from '../common/methods.ts'
+import type { ReasoningEffort } from '@wrenyard/models'
 import type {
   ExecFeatureId,
   ExecEventEnvelope,
@@ -43,8 +44,13 @@ export interface ExecStartParams {
   cwd: string
   /** Native session id to continue; omitted for a fresh session. */
   resumeSessionId?: string
-  /** Thinking/reasoning level selected by the caller. */
-  thinking?: string
+  /**
+   * Public reasoning-effort level selected by the caller. It is a mandatory
+   * exact combination level (there is no omit-to-send path) validated by the
+   * catalog before a run starts; the wire alias the upstream client receives is
+   * resolved separately.
+   */
+  reasoningEffort: ReasoningEffort
   /**
    * Configured execution-feature ids to activate. Every id must be known
    * before the child is spawned; an unknown id fails the request.

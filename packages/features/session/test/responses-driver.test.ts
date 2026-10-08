@@ -27,6 +27,7 @@ const encoder = new TextEncoder();
 function baseRequest(overrides: Partial<DriverRequest> = {}): DriverRequest {
   return {
     model: 'vendor/model',
+    reasoningEffort: 'medium',
     messages: [
       { role: 'system', content: 'You are helpful.' },
       { role: 'user', content: 'hello' },
@@ -62,7 +63,7 @@ function streamResponse(chunks: readonly string[]): Response {
   }), { headers: { 'content-type': 'text/event-stream' } });
 }
 
-test('serializeResponsesRequest maps one system and one user message, image and effort', () => {
+test('serializeResponsesRequest maps one system and one user message, image and body fields', () => {
   const body = JSON.parse(serializeResponsesRequest({
     model: 'vendor/model',
     messages: [
@@ -92,7 +93,8 @@ test('serializeResponsesRequest maps one system and one user message, image and 
   assert.equal(body.stream, true);
   assert.equal(body.store, false);
   assert.equal('previous_response_id' in body, false);
-  assert.deepEqual(body.reasoning, { effort: 'high', summary: 'auto' });
+  // The reasoning level travels in the request header, never in the body.
+  assert.deepEqual(body.reasoning, { summary: 'auto' });
   assert.equal(body.max_output_tokens, 4096);
   assert.deepEqual(body.tools, [{
     type: 'function',

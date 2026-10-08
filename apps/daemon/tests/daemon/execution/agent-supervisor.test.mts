@@ -722,12 +722,16 @@ function makeFakeSupervisor(): { supervisor: AgentExecutionSupervisor; runs: Fak
   const catalog = new Catalog()
   catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true })
   catalog.registerProvider({
+    convertReasoningEffort: (_model, effort) => ({ reasoning_effort: effort }),
     id: 'p',
     displayName: 'P',
     credentialResolver: 'managed',
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: 100, pricing: [0.5, 1, 2] }],
+    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: 100, pricing: [0.5, 1, 2], reasoningEfforts: ['none'] }],
+    reasoningEffortMappings: { m: { codebuddy: { none: { effort: 'none' } } } },
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   })
+  const resolveRun = catalog.resolveRun.bind(catalog)
+  catalog.resolveRun = (client, provider, model, effort = 'none') => resolveRun(client, provider, model, effort)
   const { service, runs } = makeFakeExec()
   const supervisor = new AgentExecutionSupervisor({
     db,
@@ -751,11 +755,12 @@ async function waitFor(condition: () => boolean, timeoutMs = 1000): Promise<void
 
 describe('AgentExecutionSupervisor lifecycle', { concurrency: false }, () => {
   const PROFILE = 'p/m:cb'
+  const dispatchSnapshot: TaskResolvedDispatch = { requested_agent_runtime: '', profile: PROFILE, client: 'codebuddy', provider: 'p', model: 'm', model_id: 'p/m', mode: 'gateway', protocol: 'openai_chat', reasoningEffort: 'none', intelligence: 'mid', speed: { effective_tps: 100, source: 'catalog_default', sample_count: 0, expected_tps_met: true }, reference_pricing: { input_usd_per_million: 1, output_usd_per_million: 2, cached_input_usd_per_million: 0.5, source: 'catalog' } }
 
   it('runs a resolved target to done and returns its final output', async () => {
     const cwd = makeTempDir('wy-supervisor-run-')
     const { supervisor, runs } = makeFakeSupervisor()
-    const handle = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'do it' })
+    const handle = await supervisor.startExecution({ profile: PROFILE, dispatchSnapshot, cwd, prompt: 'do it' })
     await waitFor(() => runs.length === 1)
     runs[0]!.finish('final answer')
     const result = await handle.wait()
@@ -775,9 +780,9 @@ describe('AgentExecutionSupervisor lifecycle', { concurrency: false }, () => {
   it('queues a second same-repo writer until the first one finishes', async () => {
     const cwd = makeTempDir('wy-supervisor-lock-')
     const { supervisor, runs } = makeFakeSupervisor()
-    const first = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'first writer' })
+    const first = await supervisor.startExecution({ profile: PROFILE, dispatchSnapshot, cwd, prompt: 'first writer' })
     await waitFor(() => runs.length === 1)
-    const second = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'second writer' })
+    const second = await supervisor.startExecution({ profile: PROFILE, dispatchSnapshot, cwd, prompt: 'second writer' })
     await sleep(40)
     assert.deepEqual(runs.map((run) => run.prompt), ['first writer'])
 
@@ -792,10 +797,10 @@ describe('AgentExecutionSupervisor lifecycle', { concurrency: false }, () => {
     const cwd = makeTempDir('wy-supervisor-scoped-lock-')
     const { supervisor, runs } = makeFakeSupervisor()
     const first = await supervisor.startExecution({
-      profile: PROFILE, cwd, prompt: 'first writer', writePaths: [join(cwd, 'src/a.ts')],
+      profile: PROFILE, dispatchSnapshot, cwd, prompt: 'first writer', writePaths: [join(cwd, 'src/a.ts')],
     })
     const second = await supervisor.startExecution({
-      profile: PROFILE, cwd, prompt: 'second writer', writePaths: [join(cwd, 'src/b.ts')],
+      profile: PROFILE, dispatchSnapshot, cwd, prompt: 'second writer', writePaths: [join(cwd, 'src/b.ts')],
     })
     await waitFor(() => runs.length === 2)
     runs[1]!.finish()
@@ -807,9 +812,9 @@ describe('AgentExecutionSupervisor lifecycle', { concurrency: false }, () => {
   it('cancels a running execution and releases its repo lock to the next writer', async () => {
     const cwd = makeTempDir('wy-supervisor-cancel-')
     const { supervisor, runs } = makeFakeSupervisor()
-    const first = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'first writer' })
+    const first = await supervisor.startExecution({ profile: PROFILE, dispatchSnapshot, cwd, prompt: 'first writer' })
     await waitFor(() => runs.length === 1)
-    const second = await supervisor.startExecution({ profile: PROFILE, cwd, prompt: 'second writer' })
+    const second = await supervisor.startExecution({ profile: PROFILE, dispatchSnapshot, cwd, prompt: 'second writer' })
 
     await first.cancel()
     assert.equal((await first.wait()).status, 'cancelled')

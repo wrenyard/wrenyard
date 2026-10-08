@@ -44,6 +44,7 @@ import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../ev
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
 import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy } from '@wrenyard/providers'
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
@@ -739,21 +740,37 @@ async function createForemanDaemonResources(
     resolveExecRequest: (params) => {
       const provider = params.provider ?? catalog.clients().find(client => client.id === params.client)?.nativeProvider
       if (!provider) throw new Error('Execution requires a provider')
-      if (params.thinking && !['low', 'medium', 'high', 'xhigh', 'max'].includes(params.thinking)) throw new Error('Invalid thinking level')
-      const plan = catalog.resolveRun(params.client, provider, params.model, params.thinking as Parameters<typeof catalog.resolveRun>[3])
+      // A precise execution reasoning effort is an EXACT combination request: it
+      // must be a legal public level AND be supported verbatim by the exact
+      // client/provider/model route (catalog.reasoningEfforts), never silently
+      // adapted downstream. Only then is the run resolved (which may still adapt
+      // an omitted request to the route's highest usable level).
+      const expectedReasoningEffort = params.reasoningEffort as ReasoningEffort
+      if (params.reasoningEffort === undefined) throw new Error("Execution requires reasoningEffort")
+      if (params.reasoningEffort !== undefined) {
+        if (!(REASONING_EFFORTS as readonly string[]).includes(params.reasoningEffort)) {
+          throw new Error('Invalid reasoning effort')
+        }        const supported = catalog.reasoningEfforts(params.client, provider, params.model)
+        if (!supported.includes(expectedReasoningEffort)) {
+          throw new Error(`Reasoning effort '${expectedReasoningEffort}' is not supported by ${provider}/${params.model}`)
+        }
+      }
+      const plan = catalog.resolveRun(params.client, provider, params.model, expectedReasoningEffort)
       if (params.mode && params.mode !== plan.mode) throw new Error('Requested mode does not match the selected client/provider')
       // The native wire spelling is owned by the provider, not by this request:
       // resolve it through the provider runtime so an explicit exec launches the
       // exact product id (e.g. canonical Claude 5 -> its `-1m` row) in every
-      // environment. An explicit thinking-mapped substitution still wins, and
-      // the public canonical id is preserved for the gateway/id surfaces.
+      // environment. An explicit reasoning-effort-mapped substitution still wins,
+      // and the public canonical id is preserved for the gateway/id surfaces.
       const providerDefinition = catalog.provider(provider)
       const upstreamModel = plan.upstreamModel
         ?? (providerDefinition ? providerRuntime.resolveUpstreamModel(providerDefinition, plan.model) : plan.model)
       return {
         ...params, provider, canonicalModel: plan.model,
         model: upstreamModel, mode: plan.mode, protocol: plan.protocol,
-        thinking: plan.reasoningEffort ?? plan.thinking,
+        ...(plan.reasoningEffort === undefined ? {} : { reasoningEffort: plan.reasoningEffort }),
+        ...(plan.clientReasoningEffort === undefined ? {} : { clientReasoningEffort: plan.clientReasoningEffort }),
+        ...(plan.clientReasoningEnvironment === undefined ? {} : { clientReasoningEnvironment: plan.clientReasoningEnvironment }),
       }
     },
     // Display-name lookup for stats rows. The persisted provider id arrives

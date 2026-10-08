@@ -101,7 +101,7 @@ Usage:
   wrenyard task output <task_run_id> [--config path] [--json]
   wrenyard task runtimes <task_id> [-p project] [--config path] [--json]
   wrenyard task doctor [--config path] [--json]
-  wrenyard exec <prompt> --target <provider/model:client> [--cwd path] [--resume <session-id>] [--thinking <level>] [--features a,b] [--config path] [--json] [--no-stream]
+  wrenyard exec <prompt> --target <provider/model:client> --reasoning-effort <level> [--cwd path] [--resume <session-id>] [--features a,b] [--config path] [--json] [--no-stream]
   wrenyard daemon <run|stop|status> [--config path] [--force] [--json]
   wrenyard -v | --version
   wrenyard desktop

@@ -86,9 +86,13 @@ export {
   estimateContentTokens,
   estimateInputTokens,
   estimateTokens,
+  isReasoningEffortSupported,
+  resolveAuxiliaryReasoningEffort,
   resolveModelMetadata,
   sanitizeMessagesForRole,
 } from './calls.ts';
+export type { AuxiliaryCallRole, RoleReasoningRequirement } from './role-requirements.ts';
+export { ROLE_REQUIREMENTS, auxiliaryReasoningRequirement } from './role-requirements.ts';
 export type { AttachmentInput, SessionFile, TaskArtifact } from './media.ts';
 export { FileStore, MEDIA_LIMITS } from './media.ts';
 export type { DocCatalogEntry } from './workspace.ts';
@@ -187,6 +191,7 @@ export function createSession(host: SessionHost): Session {
           resolveProvider: (providerId) => host.resolveInferenceProvider(providerId),
         }),
         cheapModel: () => host.cheapModel(),
+        resolveProvider: (id) => host.resolveInferenceProvider(id),
         cacheKey: sessionId,
         append: async (event) => {
           await ledger.append(sessionId, event);

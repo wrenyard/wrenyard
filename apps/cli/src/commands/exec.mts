@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util'
 import { resolve } from 'node:path'
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models'
 import { parseRunSyntax } from '@wrenyard/providers/catalog'
 import {
   connectConfiguredForemanClient,
@@ -13,7 +14,7 @@ import type { ExecSnapshot } from '@wrenyard/daemon/protocol/methods/exec'
 
 const TERMINAL_STATUSES = new Set<ExecSnapshot['status']>(['completed', 'failed', 'cancelled'])
 
-const USAGE = 'Usage: wrenyard exec <prompt> --target <provider/model:client> [--cwd path] [--resume <session-id>] [--thinking <level>] [--features a,b] [--config path] [--json] [--no-stream]'
+const USAGE = 'Usage: wrenyard exec <prompt> --target <provider/model:client> --reasoning-effort <level> [--cwd path] [--resume <session-id>] [--features a,b] [--config path] [--json] [--no-stream]'
 
 /**
  * `wrenyard exec` runs one RAW PROMPT through the daemon's exec surface.
@@ -29,6 +30,13 @@ export async function handleExec(args: string[]): Promise<number> {
     console.log(USAGE)
     return 0
   }
+  // `--thinking` was renamed; reject the old spelling by name rather than the
+  // generic unknown-option error so the migration is explicit.
+  if (args.some((arg) => arg === '--thinking' || arg.startsWith('--thinking='))) {
+    console.error('--thinking was renamed to --reasoning-effort')
+    console.error(USAGE)
+    return 1
+  }
 
   const { values, positionals } = parseArgs({
     args,
@@ -36,7 +44,7 @@ export async function handleExec(args: string[]): Promise<number> {
       target: { type: 'string' },
       cwd: { type: 'string' },
       resume: { type: 'string' },
-      thinking: { type: 'string' },
+      'reasoning-effort': { type: 'string' },
       features: { type: 'string' },
       config: { type: 'string' },
       json: { type: 'boolean' },
@@ -48,10 +56,27 @@ export async function handleExec(args: string[]): Promise<number> {
 
   const prompt = positionals.join(' ').trim()
   const target = typeof values.target === 'string' ? values.target.trim() : ''
+  const reasoningEffort = typeof values['reasoning-effort'] === 'string' ? values['reasoning-effort'].trim() : ''
   if (!prompt || !target) {
     console.error(USAGE)
     return 1
   }
+  // A run always names an exact effort level; there is no default and no
+  // omit-to-send path. The old `--thinking` spelling is rejected by name.
+  if (!reasoningEffort) {
+    console.error('wrenyard exec requires --reasoning-effort <level>; there is no default level')
+    console.error(USAGE)
+    return 1
+  }
+  // Validate the level against the shared public ladder BEFORE opening any IPC
+  // connection. The daemon still validates that this exact level is supported
+  // for the resolved model; this only rejects a value outside the ladder.
+  if (!(REASONING_EFFORTS as readonly string[]).includes(reasoningEffort)) {
+    console.error(`Unknown --reasoning-effort '${reasoningEffort}'; expected one of ${REASONING_EFFORTS.join(', ')}`)
+    console.error(USAGE)
+    return 1
+  }
+  const effort = reasoningEffort as ReasoningEffort
 
   const client = await connectConfiguredForemanClient(values.config)
   let cancelling = false
@@ -80,7 +105,7 @@ export async function handleExec(args: string[]): Promise<number> {
       cwd: resolve(typeof values.cwd === 'string' && values.cwd.trim() ? values.cwd : process.cwd()),
       ...(resolved.mode === undefined ? {} : { mode: resolved.mode }),
       ...(typeof values.resume === 'string' && values.resume.trim() ? { resumeSessionId: values.resume.trim() } : {}),
-      ...(typeof values.thinking === 'string' && values.thinking.trim() ? { thinking: values.thinking.trim() } : {}),
+      reasoningEffort: effort,
       ...(features.length > 0 ? { features } : {}),
     })
     activeExecutionId = started.execution.id

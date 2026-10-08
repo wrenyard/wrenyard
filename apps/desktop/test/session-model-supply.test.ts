@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { REASONING_EFFORTS } from '@wrenyard/models';
+import { BUILTIN_PROVIDERS } from '@wrenyard/providers';
 import { selectInferenceMode } from '@wrenyard/session/model-metadata';
 import { modelBadges } from '../src/renderer/components/chat/model-picker.js';
 
@@ -48,4 +50,28 @@ test('the free badge appears only for an explicit free flag', () => {
   assert.deepEqual(modelBadges({ free: true }), [{ kind: 'free', label: '免费模型' }]);
   // Abundant quota and a free flag are independent markers.
   assert.deepEqual(modelBadges({ quotaAbundant: true }), [{ kind: 'quota', label: '额度充足' }]);
+});
+
+/**
+ * The session model bridge projects a row's effort ladder from route-owned
+ * provider metadata, never from the canonical registry, and never sends a model
+ * with an undefined effort. A selectable model must therefore declare a
+ * non-empty ladder of known levels; a missing one is a supply defect.
+ */
+test('every route-owned builtin model declares a non-empty known effort ladder', () => {
+  const levels = new Set<string>(REASONING_EFFORTS);
+  for (const provider of BUILTIN_PROVIDERS) {
+    for (const model of provider.models) {
+      assert.ok(
+        model.reasoningEfforts.length > 0,
+        `${provider.id}/${model.id} declares no reasoning efforts`,
+      );
+      for (const effort of model.reasoningEfforts) {
+        assert.ok(
+          levels.has(effort),
+          `${provider.id}/${model.id} declares unknown effort ${effort}`,
+        );
+      }
+    }
+  }
 });

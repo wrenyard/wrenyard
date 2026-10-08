@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from '@wrenyard/models'
 /**
  * Provider feature wire DTOs.
  *
@@ -16,6 +17,8 @@ export type ProviderListModelPricing = readonly [number, number, number]
 
 /** One model advertised by a configured provider. */
 export interface ProviderListModel {
+  reasoningEfforts: readonly ReasoningEffort[]
+  supportedClients?: readonly string[]
   id: string
   displayName: string
   contextWindow?: number
@@ -38,6 +41,7 @@ export interface ProviderListModel {
 
 /** One provider entry in a `provider.list` result. */
 export interface ProviderListEntry {
+  quotaProvider?: string
   id: string
   displayName: string
   description: string

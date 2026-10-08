@@ -1,3 +1,4 @@
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import type { LedgerEvent, LiveCall, SessionSummary, SummarySettingsSnapshot } from '@wrenyard/session'
 import type { JsonSchema } from '../jsonrpc.mts'
 
@@ -26,7 +27,7 @@ export interface SessionCreateResult { sessionId: string }
 export interface SessionSendParams {
   sessionId: string
   text: string
-  model: { provider: string; model: string; reasoningEffort?: string }
+  model: { provider: string; model: string; reasoningEffort: ReasoningEffort }
   /** Optional user attachments, bounded to the session media batch limit. */
   attachments?: AttachmentInput[]
 }
@@ -57,6 +58,11 @@ export interface SessionSummarySaveParams { canonicalModel: string }
 export type SessionSummarySaveResult = SummarySettingsSnapshot
 
 const idSchema = { type: 'string', minLength: 1 } as const
+// The unified public reasoning-effort enum; a send always names one level.
+const reasoningEffortSchema = {
+  type: 'string',
+  enum: REASONING_EFFORTS,
+} as const
 const turnSchema = { type: 'integer', minimum: 1 } as const
 const seqSchema = { type: 'integer', minimum: 0 } as const
 const emptySchema = { type: 'object', properties: {}, additionalProperties: false } as const satisfies JsonSchema
@@ -116,8 +122,8 @@ export const sessionSendParamsSchema = {
     sessionId: idSchema,
     text: { type: 'string' },
     model: {
-      type: 'object', required: ['provider', 'model'], additionalProperties: false,
-      properties: { provider: idSchema, model: idSchema, reasoningEffort: idSchema },
+      type: 'object', required: ['provider', 'model', 'reasoningEffort'], additionalProperties: false,
+      properties: { provider: idSchema, model: idSchema, reasoningEffort: reasoningEffortSchema },
     },
     attachments: { type: 'array', maxItems: 128, items: attachmentInputSchema },
   },

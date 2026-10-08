@@ -1,6 +1,6 @@
-import type { IntelligenceTier, ModelCapability, ModelPricing, ThinkingLevel } from '@wrenyard/models';
-export type { IntelligenceTier, ModelCapability, ModelPricing, ThinkingLevel } from '@wrenyard/models';
-export { THINKING_LEVELS } from '@wrenyard/models';
+import type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
+export type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
+export { REASONING_EFFORTS } from '@wrenyard/models';
 
 export const GATEWAY_PROTOCOLS = [
   'openai_chat',
@@ -10,20 +10,11 @@ export const GATEWAY_PROTOCOLS = [
 
 export type GatewayProtocol = (typeof GATEWAY_PROTOCOLS)[number];
 
-// Public thinking levels exposed as a product-owned capability. A level is a
-// legal *public* request token; whether a concrete runtime can materialize it is
-// decided only by that runtime's ProviderDefinition.thinkingMappings. Levels are
-// never inferred lexically from a model id, and an unmapped runtime must not
-// have transport invented for it.
-
-// Ordered weak-to-strong; index is the only authority for "highest" selection.
-export const THINKING_ORDER: Readonly<Record<ThinkingLevel, number>> = {
-  low: 0,
-  medium: 1,
-  high: 2,
-  xhigh: 3,
-  max: 4,
-};
+// Public reasoning effort levels exposed as a product-owned capability. A level
+// is a legal *public* request token; whether a concrete runtime can materialize
+// it is decided only by that runtime's ProviderDefinition.reasoningEffortMappings
+// and convertReasoningEffort. Levels are never inferred lexically from a model
+// id, and an unmapped runtime must not have transport invented for it.
 
 export const INTELLIGENCE_ORDER: Readonly<Record<IntelligenceTier, number>> = {
   low: 0,
@@ -64,8 +55,10 @@ export interface ModelDefinition {
   claudeTier?: 'haiku' | 'sonnet' | 'opus';
   supports1MContext?: boolean;
   intelligence: IntelligenceTier;
-  /** Public thinking levels this model supports. Absent means configurable thinking is not declared; an empty array is rejected at registration. */
-  thinkingLevels?: readonly ThinkingLevel[];
+  /** Route-owned reasoning efforts this model can materialize. Required and
+   * non-empty: every registered route must declare its effort ladder. An empty
+   * array is rejected at registration. */
+  reasoningEfforts: readonly ReasoningEffort[];
   maxOutputTokens?: number;
   /** Supported input types, including image content returned by tools; not output generation. */
   capabilities?: readonly ModelCapability[];
@@ -100,6 +93,7 @@ export interface ClientDefinition {
   id: string;
   nativeProvider?: string;
   gatewayProtocols: readonly GatewayProtocol[];
+  forwardsGatewayReasoningEffort?: boolean;
   // Provider-level execution boundaries that cannot be expressed by protocol
   // compatibility alone. A listed provider may still be native to another
   // client, but this client must never receive it as a gateway run.
@@ -138,14 +132,14 @@ export interface DispatchPlan {
   // id === client.nativeProvider AND mode native). Gateway and unknown
   // combinations are never marked supported.
   supportsWebSearch?: boolean;
-  // Public thinking level this plan was resolved at. Absent means no thinking
-  // was requested and/or the model declares no levels; it is never inferred.
-  thinking?: ThinkingLevel;
-  // Upstream wire effort produced ONLY by an explicit thinking mapping for this
-  // runtime. This is a mapped transport value, not policy: no model- or
-  // client-level fixed effort policy exists.
-  reasoningEffort?: string;
-  // Upstream model substitution produced ONLY by an explicit thinking mapping.
+  // Public reasoning effort this plan was resolved at. Absent only for catalog
+  // enumeration; an explicit request always resolves to a level.
+  reasoningEffort?: ReasoningEffort;
+  // Upstream wire effort alias produced ONLY by an explicit effort mapping for
+  // this runtime. This is a mapped transport value, not policy.
+  clientReasoningEffort?: string;
+  clientReasoningEnvironment?: Readonly<Record<string, string>>;
+  // Upstream model substitution produced ONLY by an explicit effort mapping.
   // The public model id is always propagated unchanged.
   upstreamModel?: string;
 }
@@ -180,16 +174,17 @@ export type CredentialResolver =
   | 'grok-oauth'
   | 'cursor';
 
-// A concrete runtime materialization for one thinking level: an optional
+// A concrete runtime materialization for one reasoning effort: an optional
 // upstream-model substitution and/or an optional wire effort alias. This is the
 // only place a runtime may express how a level is realized.
-export interface ThinkingMapping {
+export interface ReasoningEffortMapping {
+  environment?: Readonly<Record<string, string>>;
   model?: string;
   effort?: string;
 }
 
-export type ProviderThinkingMappings = Readonly<
-  Record<string, Readonly<Record<string, Partial<Record<ThinkingLevel, ThinkingMapping>>>>>
+export type ProviderReasoningEffortMappings = Readonly<
+  Record<string, Readonly<Record<string, Partial<Record<ReasoningEffort, ReasoningEffortMapping>>>>>
 >;
 
 export interface ProtocolCapability {
@@ -211,15 +206,23 @@ export interface ProviderDefinition {
   // Canonical model speed overrides keyed by exact declared model id; alias keys
   // and unknown model keys are rejected at registration.
   modelSpeedOverrides?: Readonly<Record<string, number>>;
-  // Per-runtime thinking materializations, keyed model id then client id then
-  // thinking level. The presence of an entry is the only claim that a runtime
+  // Per-runtime reasoning-effort materializations, keyed model id then client id
+  // then effort level. The presence of an entry is the only claim that a runtime
   // explicitly supports realizing that level; absent means capability unknown,
   // and no transport is ever invented. Keys and values are validated at
   // registration against the exact declared model ids and legal levels.
-  thinkingMappings?: ProviderThinkingMappings;
+  reasoningEffortMappings?: ProviderReasoningEffortMappings;
+  // Protocol-aware translation of a resolved public effort into the exact
+  // upstream request fields (e.g. `reasoning_effort`, `thinking`, `reasoning`).
+  // Declared by each provider module; the shared layer never branches on
+  // provider identity.
+  convertReasoningEffort(
+    modelId: string,
+    effort: ReasoningEffort,
+    protocol: GatewayProtocol,
+  ): Record<string, unknown>;
   credentialResolver: CredentialResolver;
   defaultModel?: string;
   quotaProvider?: string;
   useClientBinary?: boolean;
 }
-

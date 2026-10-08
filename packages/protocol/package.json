@@ -15,6 +15,9 @@
   "scripts": {
     "test": "tsx --test src/*.test.ts"
   },
+  "dependencies": {
+    "@wrenyard/models": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "^5.9.0"
   },

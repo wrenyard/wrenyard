@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { buildSettingsSnapshot } from '../src/settings-snapshot.js';
+import { DesktopSettingsStore, defaultDesktopSettings } from '../src/main/settings/desktop-settings.js';
 
 const pet = {
   status: 'running' as const,
@@ -84,4 +88,48 @@ test('settings snapshot degrades health and credentials independently', async ()
   assert.equal('runtimeMode' in snapshot.service, false);
   assert.deepEqual(snapshot.models, []);
   assert.equal('buildTime' in snapshot.about, false);
+});
+
+test('an unrelated settings write preserves opaque session keys without consuming them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'wrenyard-session-preserve-'));
+  const path = join(root, 'settings.json');
+  try {
+    // A raw version 3 document still carrying retired session keys exactly as an
+    // older build may have left them on disk.
+    const raw = `${JSON.stringify({
+      ...defaultDesktopSettings(),
+      session: {
+        defaultModel: 'last',
+        model: 'a/b',
+        effort: null,
+        lastSentModel: 'a/b',
+        lastSentEffort: 'high',
+        sendKey: 'mod-enter',
+      },
+    }, null, 2)}\n`;
+    writeFileSync(path, raw, 'utf8');
+    const store = new DesktopSettingsStore({ path });
+
+    // The normalized, renderer-facing view exposes only the live submit key.
+    const loaded = store.load();
+    assert.deepEqual(loaded.session, { sendKey: 'mod-enter' });
+
+    // An unrelated partition write keeps every retired key on disk untouched.
+    store.patch('appearance', { ...loaded.appearance, colorMode: 'dark' });
+    const persisted = JSON.parse(readFileSync(path, 'utf8')) as {
+      appearance: { colorMode: string };
+      session: Record<string, unknown>;
+    };
+    assert.equal(persisted.appearance.colorMode, 'dark');
+    assert.deepEqual(persisted.session, {
+      defaultModel: 'last',
+      model: 'a/b',
+      effort: null,
+      lastSentModel: 'a/b',
+      lastSentEffort: 'high',
+      sendKey: 'mod-enter',
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

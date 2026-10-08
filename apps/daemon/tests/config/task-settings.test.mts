@@ -335,52 +335,53 @@ describe('resolveEffectiveTaskSettings requiresWebSearch', () => {
   })
 })
 
-describe('resolveEffectiveTaskSettings thinking', () => {
-  it('stays absent by default so the Catalog selects the highest supported level', () => {
+describe('resolveEffectiveTaskSettings expectedReasoningEffort', () => {
+  it('stays absent when no layer declares it', () => {
     const result = resolveEffectiveTaskSettings({})
-    assert.equal(result.dispatch.thinking, undefined)
-    assert.equal(result.sources.dispatch?.thinking, undefined)
+    assert.equal(result.dispatch.expectedReasoningEffort, undefined)
+    assert.equal(result.sources.dispatch?.expectedReasoningEffort, undefined)
   })
 
-  it('normalizes the canonical levels low and max through camel and snake keys', () => {
-    const low = normalizeTaskSettingsLayer({ dispatch: { thinking: 'low' } })
-    assert.equal(low.dispatch?.thinking, 'low')
-    const maxSnake = normalizeTaskSettingsLayer({ dispatch: { thinking: 'max' } })
-    assert.equal(maxSnake.dispatch?.thinking, 'max')
+  it('normalizes the canonical levels through camel and snake keys', () => {
+    const low = normalizeTaskSettingsLayer({ dispatch: { expectedReasoningEffort: 'low' } })
+    assert.equal(low.dispatch?.expectedReasoningEffort, 'low')
+    const noneSnake = normalizeTaskSettingsLayer({ dispatch: { expected_reasoning_effort: 'none' } })
+    assert.equal(noneSnake.dispatch?.expectedReasoningEffort, 'none')
+    const max = normalizeTaskSettingsLayer({ dispatch: { expectedReasoningEffort: 'max' } })
+    assert.equal(max.dispatch?.expectedReasoningEffort, 'max')
   })
 
-  it('accepts midium only as an input alias and normalizes it to medium', () => {
-    const normalized = normalizeTaskSettingsLayer({ dispatch: { thinking: 'midium' } })
-    assert.equal(normalized.dispatch?.thinking, 'medium')
-  })
-
-  it('rejects an unknown or non-string thinking value', () => {
+  it('rejects the retired midium spelling and any unknown or non-string value', () => {
     assert.throws(
-      () => normalizeTaskSettingsLayer({ dispatch: { thinking: 'frontier' } }),
-      /dispatch\.thinking must be one of: low, medium, high, xhigh, max/,
+      () => normalizeTaskSettingsLayer({ dispatch: { expectedReasoningEffort: 'midium' } }),
+      /dispatch\.expectedReasoningEffort must be one of: none, low, medium, high, xhigh, max/,
     )
     assert.throws(
-      () => normalizeTaskSettingsLayer({ dispatch: { thinking: 3 as unknown as string } }),
-      /dispatch\.thinking must be one of: low, medium, high, xhigh, max/,
+      () => normalizeTaskSettingsLayer({ dispatch: { expectedReasoningEffort: 'frontier' } }),
+      /dispatch\.expectedReasoningEffort must be one of: none, low, medium, high, xhigh, max/,
+    )
+    assert.throws(
+      () => normalizeTaskSettingsLayer({ dispatch: { expectedReasoningEffort: 3 as unknown as string } }),
+      /dispatch\.expectedReasoningEffort must be one of: none, low, medium, high, xhigh, max/,
     )
   })
 
-  it('merges thinking per field with rightmost-defined precedence and per-field source', () => {
+  it('merges per field with rightmost-defined precedence and per-field source', () => {
     const result = resolveEffectiveTaskSettings({
-      builtin: { dispatch: { thinking: 'low' } },
-      userTask: { dispatch: { thinking: 'high' } },
+      builtin: { dispatch: { expectedReasoningEffort: 'low' } },
+      userTask: { dispatch: { expectedReasoningEffort: 'high' } },
     })
-    assert.equal(result.dispatch.thinking, 'high')
-    assert.equal(result.sources.dispatch?.thinking, 'user_task')
+    assert.equal(result.dispatch.expectedReasoningEffort, 'high')
+    assert.equal(result.sources.dispatch?.expectedReasoningEffort, 'user_task')
   })
 
-  it('re-inherits the lower thinking value when the winning layer omits it', () => {
+  it('re-inherits the lower value when the winning layer omits it', () => {
     const result = resolveEffectiveTaskSettings({
-      builtin: { dispatch: { thinking: 'low' } },
+      builtin: { dispatch: { expectedReasoningEffort: 'low' } },
       userTask: { dispatch: { minimumTps: 42 } },
     })
-    assert.equal(result.dispatch.thinking, 'low')
-    assert.equal(result.sources.dispatch?.thinking, 'builtin_task')
+    assert.equal(result.dispatch.expectedReasoningEffort, 'low')
+    assert.equal(result.sources.dispatch?.expectedReasoningEffort, 'builtin_task')
   })
 })
 

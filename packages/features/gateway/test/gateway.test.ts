@@ -19,9 +19,19 @@ function fixture(
       displayName: 'Public',
       intelligence: 'mid',
       speed: 40,
+      reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+      pricing: [1.5, 3, 15],
+    }, {
+      id: 'limited',
+      displayName: 'Limited',
+      intelligence: 'mid',
+      speed: 40,
+      reasoningEfforts: ['low'],
       pricing: [1.5, 3, 15],
     }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://upstream.test/v1/chat/completions', authScheme: 'bearer' }],
+    // The owning module decides the exact upstream wire fields for a level.
+    convertReasoningEffort: (_modelId, effort) => ({ reasoning_effort: effort }),
   });
   return createModelGateway({
     catalog,
@@ -269,7 +279,7 @@ test('unscoped non-streaming requests are unchanged and carry no sample', async 
 test('/models only returns credential-available protocol models', async (t) => {
   const gateway = fixture(fetch);
   const connection = await gateway.connection('http://127.0.0.1:8787');
-  assert.deepEqual(connection.models.map((entry) => entry.publicId), ['vendor/public']);
+  assert.deepEqual(connection.models.map((entry) => entry.publicId), ['vendor/public', 'vendor/limited']);
   assert.equal(connection.openaiChatBaseUrl, 'http://127.0.0.1:8787/gateway/openai-chat/v1');
 });
 
@@ -311,9 +321,11 @@ function headerFixture(fetchImpl: typeof fetch) {
         displayName: model,
         intelligence: 'mid',
         speed: 40,
+        reasoningEfforts: ['low', 'high'],
         pricing: [1.5, 3, 15],
       }],
       protocols: [{ protocol: 'openai_chat', endpoint, authScheme: 'bearer' }],
+      convertReasoningEffort: (_modelId, effort) => ({ reasoning_effort: effort }),
     });
   };
   register('vendor', 'https://upstream.test/v1/chat/completions', 'public', 'private');
@@ -486,9 +498,11 @@ function codeBuddyFixture(fetchImpl: typeof fetch, identity?: { platform: string
         displayName: model,
         intelligence: 'mid',
         speed: 40,
+        reasoningEfforts: ['low', 'high'],
         pricing: [1.5, 3, 15],
       }],
       protocols: [{ protocol: 'openai_chat', endpoint, authScheme: 'bearer' }],
+      convertReasoningEffort: (_modelId, effort) => ({ reasoning_effort: effort }),
     });
   };
   register('codebuddy', 'cb-public', 'https://codebuddy.test/v1/chat/completions');
@@ -1086,4 +1100,103 @@ test('an abort during chatgpt refresh neither retries nor falls back to the orig
   assert.equal(attempts, 1, 'an aborted refresh must not retry');
   server.close();
   await once(server, 'close');
+});
+
+// ─── unified reasoning effort (header-driven) ──────────────────────────────
+
+async function serve(gateway: ReturnType<typeof createModelGateway>, t: { after(fn: () => void): void }): Promise<string> {
+  const server = createServer((request, response) => { void gateway.handle(request, response); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  return `http://127.0.0.1:${address.port}`;
+}
+
+test('a reasoning-effort header is translated to provider wire fields and recorded, never forwarded raw', async (t) => {
+  let seenBody: Record<string, unknown> = {};
+  let seenHeaders: Headers | undefined;
+  const events: GatewayRequestCompletedEvent[] = [];
+  const gateway = fixture(async (_url, init) => {
+    seenBody = JSON.parse(String(init?.body));
+    seenHeaders = new Headers(init?.headers);
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { headers: { 'content-type': 'application/json' } });
+  }, (event) => { events.push(event); });
+  const origin = await serve(gateway, t);
+
+  const response = await fetch(`${origin}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer local', 'content-type': 'application/json', 'x-wrenyard-reasoning-effort': 'high' },
+    body: JSON.stringify({
+      model: 'vendor/public', messages: [], reasoning_effort: 'low', reasoning: { summary: 'x' }, thinking: true, enable_thinking: true, output_config: { effort: 'low', format: { type: 'json_schema' } },
+    }),
+  });
+  assert.equal(response.status, 200);
+  await response.text();
+  // Every raw body spelling is stripped; the provider's translation is merged.
+  assert.equal(seenBody.reasoning_effort, 'high');
+  assert.equal('reasoning' in seenBody, false);
+  assert.equal('thinking' in seenBody, false);
+  assert.equal('enable_thinking' in seenBody, false);
+  assert.deepEqual(seenBody.output_config, { format: { type: 'json_schema' } });
+  // The internal header is never forwarded upstream.
+  assert.equal(seenHeaders?.get('x-wrenyard-reasoning-effort'), null);
+  assert.equal(events.at(-1)?.reasoningEffort, 'high');
+});
+
+test('a request without the effort header forwards its raw body fields unchanged', async (t) => {
+  let seenBody: Record<string, unknown> = {};
+  const gateway = fixture(async (_url, init) => {
+    seenBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { headers: { 'content-type': 'application/json' } });
+  });
+  const origin = await serve(gateway, t);
+
+  const response = await fetch(`${origin}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer local', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [], reasoning_effort: 'legacy-raw', thinking: true }),
+  });
+  assert.equal(response.status, 200);
+  await response.text();
+  // Without the header the body keeps pre-existing forwarding behavior.
+  assert.equal(seenBody.reasoning_effort, 'legacy-raw');
+  assert.equal(seenBody.thinking, true);
+});
+
+test('an invalid reasoning-effort header is rejected before any upstream call', async (t) => {
+  let fetched = 0;
+  const gateway = fixture(async () => {
+    fetched += 1;
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  });
+  const origin = await serve(gateway, t);
+
+  const response = await fetch(`${origin}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer local', 'content-type': 'application/json', 'x-wrenyard-reasoning-effort': 'midium' },
+    body: JSON.stringify({ model: 'vendor/public', messages: [] }),
+  });
+  assert.equal(response.status, 400);
+  await response.text();
+  assert.equal(fetched, 0);
+});
+
+test('a level the route does not support is rejected before any upstream call', async (t) => {
+  let fetched = 0;
+  const gateway = fixture(async () => {
+    fetched += 1;
+    return new Response('{}', { headers: { 'content-type': 'application/json' } });
+  });
+  const origin = await serve(gateway, t);
+
+  const response = await fetch(`${origin}/gateway/openai-chat/v1/chat/completions`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer local', 'content-type': 'application/json', 'x-wrenyard-reasoning-effort': 'max' },
+    body: JSON.stringify({ model: 'vendor/limited', messages: [] }),
+  });
+  assert.equal(response.status, 400);
+  await response.text();
+  assert.equal(fetched, 0);
 });

@@ -31,6 +31,7 @@ description: test project
 function taskSource(extraConfig = ''): string {
   return `export default defineTask({
   permission: 'readonly',
+  dispatch: { expectedReasoningEffort: 'high' },
 ${extraConfig}
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),

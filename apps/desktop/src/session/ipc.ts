@@ -2,10 +2,10 @@
 import { isAbsolute } from 'node:path';
 import { dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { WrenyardIpcClient, WrenyardRpcError } from '@wrenyard/control-client';
-import { BUILTIN_PROVIDERS } from '@wrenyard/providers';
+import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderListResult } from '@wrenyard/protocol/provider';
 import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
-import { resolveModelMetadata, selectInferenceMode } from '@wrenyard/session/model-metadata';
+import { toModelEntries } from './model-entries.js';
 import type {
   SessionBridgeEventPayload,
   SessionBridgeLivePayload,
@@ -62,60 +62,6 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
 function isShuttingDown(error: unknown): boolean {
   return error instanceof WrenyardRpcError && typeof error.data === 'object' && error.data !== null
     && 'code' in error.data && error.data.code === 'daemon_shutting_down';
-}
-
-/** Catalog provider id → quota provider id; identity when none is declared. */
-const QUOTA_PROVIDER_IDS: ReadonlyMap<string, string> = new Map(
-  BUILTIN_PROVIDERS.map(provider => [provider.id, provider.quotaProvider ?? provider.id] as const),
-);
-
-/**
- * Public ids whose model definition is client-restricted. Such a model may be
- * run only through its exact client transport and is never a gateway supply, so
- * it is not a selectable main-session model.
- */
-const RESTRICTED_PUBLIC_IDS: ReadonlySet<string> = new Set(
-  BUILTIN_PROVIDERS.flatMap(provider => provider.models
-    .filter(model => model.supportedClients !== undefined)
-    .map(model => `${provider.id}/${model.id}`)),
-);
-
-/**
- * Selectable main-session model rows from `provider.list`. Each provider's
- * declared gateway protocols pick exactly one runtime through the shared
- * {@link selectInferenceMode} precedence. Unconfigured/unavailable providers
- * and models, task-only rows and client-restricted rows are skipped, so one
- * provider/model yields exactly one row.
- */
-function toModelEntries(result: ProviderListResult): SessionBridgeModelEntry[] {
-  const entries = new Map<string, SessionBridgeModelEntry>();
-  for (const provider of result.providers) {
-    if (!provider.configured) continue;
-    const runtime = selectInferenceMode(provider.protocols);
-    if (runtime === undefined) continue;
-    for (const model of provider.models) {
-      const publicId = `${provider.id}/${model.id}`;
-      if (model.available !== true || model.taskOnly === true) continue;
-      if (RESTRICTED_PUBLIC_IDS.has(publicId) || entries.has(publicId)) continue;
-      // Window facts resolve from the same config as the call budget, so the
-      // renderer's model-change preview (and the ring) use identical numbers.
-      const metadata = resolveModelMetadata(publicId);
-      entries.set(publicId, {
-        publicId, provider: provider.id, providerDisplayName: provider.displayName,
-        model: model.id, displayName: model.displayName, runtime,
-        ...(metadata.thinkingLevels?.length ? { thinkingLevels: [...metadata.thinkingLevels] } : {}),
-        // A catalog provider may bind to a different quota provider (e.g. Claude
-        // Code draws on a shared pool); fall back to the model's own provider.
-        quotaProvider: QUOTA_PROVIDER_IDS.get(provider.id) ?? provider.id,
-        ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
-        ...(metadata.maxOutputTokens === undefined ? {} : { maxOutputTokens: metadata.maxOutputTokens }),
-        ...(model.free === undefined ? {} : { free: model.free }),
-        ...(model.effectiveTps === undefined ? {} : { effectiveTps: model.effectiveTps }),
-        ...(model.quotaAbundant === undefined ? {} : { quotaAbundant: model.quotaAbundant }),
-      });
-    }
-  }
-  return [...entries.values()];
 }
 
 /** Full-snapshot equality; an unchanged live table is not re-pushed. */

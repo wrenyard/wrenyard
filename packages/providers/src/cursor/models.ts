@@ -1,42 +1,45 @@
-import { defineProvider, model, THINKING_FULL } from '../base/model-defaults.ts';
-import type { ThinkingLevel } from '../base/index.ts';
+import { defineProvider, model, REASONING_UP_TO_XHIGH, REASONING_FULL, REASONING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
+import type { ReasoningEffort } from '../base/index.ts';
 
-// Cursor GPT-5.6 exposes thinking by model id substitution; the target carries
-// the 272k context, the exact reasoning level and fast=false, so no separate
-// effort argument is ever emitted.
-const cursorGptThinkingMappings = (modelId: string): Readonly<Record<ThinkingLevel, { model: string }>> =>
-  Object.fromEntries(THINKING_FULL.map((level) => [level, { model: `${modelId}[context=272k,reasoning=${level},fast=false]` }])) as Readonly<Record<ThinkingLevel, { model: string }>>;
+// Exact native model names from PC3 cursor-agent --list-models (2026-10-08).
+const suffixMappings = (id: string, levels: readonly ReasoningEffort[]) =>
+  Object.fromEntries(levels.map(effort => [effort, { model: `${id}-${effort}` }]));
+const FIVE_LEVELS = REASONING_FULL.filter(effort => effort !== 'none');
 
 export const definition = defineProvider({
   id: 'cursor', displayName: 'Cursor', credentialResolver: 'cursor', nativeClients: ['cursor'],
   defaultModel: 'composer-2.5', quotaProvider: 'cursor', useClientBinary: true,
   models: [
-    { ...model('composer-2.5', 200_000), pricing: [0.2, 0.5, 2.5] },
-    model('grok-4.6', 256_000, undefined, undefined, ['high']),
-    model('grok-4.7', 256_000, undefined, 'grok-4.7', ['high']),
-    model('kimi-k3', 1_048_576, undefined, 'kimi-k3'),
-    { canonical: 'claude-opus-5-5', overrides: { contextWindow: 300_000, supports1MContext: true } },
-    { ...model('gpt-5.6-luna', 272_000, undefined, 'gpt-5.6-luna', THINKING_FULL), capabilities: ['text', 'image'], pricing: [0.02, 0.2, 1.2] },
-    { ...model('gpt-5.6-sol', 272_000, undefined, 'gpt-5.6-sol', THINKING_FULL), capabilities: ['text', 'image'], pricing: [0.4, 4, 20] },
-    { canonical: 'claude-sonnet-5-5', overrides: { contextWindow: 200_000, supports1MContext: true } },
-    model('muse-spark-1.3', 300_000),
-    model('gemini-3.8-flash', 1_000_000),
-    model('claude-fable-5-1', 300_000),
+    { ...model('composer-2.5', 200_000), pricing: [0.2, 0.5, 2.5], reasoningEfforts: ['high'] },
+    model('grok-4.6', 256_000, undefined, undefined, REASONING_UP_TO_XHIGH),
+    model('grok-4.7', 256_000, undefined, 'grok-4.7', REASONING_UP_TO_XHIGH),
+    model('kimi-k3', 1_048_576, undefined, 'kimi-k3', REASONING_LOW_HIGH_MAX),
+    { canonical: 'claude-opus-5-5', overrides: { contextWindow: 300_000, supports1MContext: true, reasoningEfforts: FIVE_LEVELS } },
+    { ...model('gpt-5.6-luna', 272_000, undefined, 'gpt-5.6-luna', REASONING_FULL), capabilities: ['text', 'image'], pricing: [0.02, 0.2, 1.2] },
+    { ...model('gpt-5.6-sol', 272_000, undefined, 'gpt-5.6-sol', REASONING_FULL), capabilities: ['text', 'image'], pricing: [0.4, 4, 20] },
+    { canonical: 'claude-sonnet-5-5', overrides: { contextWindow: 200_000, supports1MContext: true, reasoningEfforts: FIVE_LEVELS } },
+    model('muse-spark-1.3', 300_000, undefined, undefined, FIVE_LEVELS),
+    model('gemini-3.8-flash', 1_000_000, undefined, undefined, ['low', 'medium', 'high']),
+    model('claude-fable-5-1', 300_000, undefined, undefined, FIVE_LEVELS),
   ],
   modelAliases: {
     'cursor-grok-4.6-high': 'grok-4.6',
     'grok-4.7-high': 'grok-4.7',
   },
-  // Cursor GPT-5.6 materializes a level as a suffixed model id plus an inline
-  // [context=272k,reasoning=LEVEL,fast=false] target; effort is never an
-  // argument. Cursor Grok 4.6 maps to cursor-grok-4.6-high. Grok 4.7 maps only
-  // high, to the listed grok-4.7-high id, so an omitted request stays at high.
-  thinkingMappings: {
-    'gpt-5.6-sol': { cursor: cursorGptThinkingMappings('gpt-5.6-sol') },
-    'gpt-5.6-luna': { cursor: cursorGptThinkingMappings('gpt-5.6-luna') },
-    'grok-4.6': { cursor: { high: { model: 'cursor-grok-4.6-high' } } },
-    'grok-4.7': { cursor: { high: { model: 'grok-4.7-high' } } },
+  reasoningEffortMappings: {
+    'gpt-5.6-sol': { cursor: suffixMappings('gpt-5.6-sol', REASONING_FULL) },
+    'gpt-5.6-luna': { cursor: suffixMappings('gpt-5.6-luna', REASONING_FULL) },
+    'composer-2.5': { cursor: { high: { model: 'composer-2.5' } } },
+    'kimi-k3': { cursor: suffixMappings('kimi-k3', REASONING_LOW_HIGH_MAX) },
+    'claude-opus-5-5': { cursor: suffixMappings('claude-opus-5-5', FIVE_LEVELS) },
+    'claude-sonnet-5-5': { cursor: suffixMappings('claude-sonnet-5-5', FIVE_LEVELS) },
+    'muse-spark-1.3': { cursor: suffixMappings('muse-spark-1.3', FIVE_LEVELS) },
+    'gemini-3.8-flash': { cursor: suffixMappings('gemini-3.8-flash', ['low', 'medium', 'high']) },
+    'claude-fable-5-1': { cursor: suffixMappings('claude-fable-5-1-thinking', FIVE_LEVELS) },
+    'grok-4.6': { cursor: suffixMappings('cursor-grok-4.6', REASONING_UP_TO_XHIGH) },
+    'grok-4.7': { cursor: suffixMappings('grok-4.7', REASONING_UP_TO_XHIGH) },
   },
+  convertReasoningEffort: () => { throw new Error('Cursor only supports native model substitutions'); },
   description: 'Cursor 提供 Composer、Grok 以及 GPT、Claude、Muse 与 Gemini 等多厂商模型服务。',
   setupHint: '请在 Cursor Desktop 中完成登录，返回啾啾工坊后刷新状态。',
 });
