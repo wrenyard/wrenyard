@@ -76,6 +76,8 @@ export interface DriverRequest {
   cacheKey?: string;
   /** Declare {@link ACTION_TOOL}; parsed calls are reported through {@link DriverRequest.onToolCall}. */
   actionTool?: boolean;
+  /** Declare {@link REPLY_TOOL}; the `text` of each call is returned in {@link DriverResult.replies}. */
+  replyTool?: boolean;
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
@@ -121,6 +123,22 @@ export const ACTION_TOOL = {
   },
 } as const;
 
+/** The one native tool the communication call declares; not calling it sends nothing. */
+export const REPLY_TOOL = {
+  type: 'function',
+  function: {
+    name: 'reply',
+    description: '把一条消息发给用户。用户只看得到这里的 text。',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '发给用户的消息，Markdown 文本。' },
+      },
+      required: ['text'],
+    },
+  },
+} as const;
+
 /** One completed inference result. */
 export interface DriverResult {
   /** Message content only; native tool calls are never folded back into text. */
@@ -129,6 +147,8 @@ export interface DriverResult {
   usage?: Usage;
   /** Native tool calls the model returned, in call order. */
   toolCalls?: ToolCall[];
+  /** The `text` of each {@link REPLY_TOOL} call, in call order. */
+  replies?: string[];
 }
 
 /** The in-process inference port every adapter implements. */
@@ -158,7 +178,7 @@ const ERROR_EXCERPT_CHARS = 2_000;
 export const GATEWAY_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
 
 /** The subset of a driver request that is serialized onto the wire. */
-export type GatewayRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'reasoningEffort' | 'maxTokens' | 'actionTool'>;
+export type GatewayRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'reasoningEffort' | 'maxTokens' | 'actionTool' | 'replyTool'>;
 
 /**
  * Serialize the exact OpenAI-chat body `complete` sends. A caller can use this
@@ -175,6 +195,7 @@ export function serializeGatewayRequest(request: GatewayRequestFields): string {
   if (request.reasoningEffort) body[REASONING_EFFORT_FIELD] = request.reasoningEffort;
   if (request.maxTokens !== undefined) body.max_tokens = request.maxTokens;
   if (request.actionTool) body.tools = [ACTION_TOOL];
+  else if (request.replyTool) body.tools = [REPLY_TOOL];
   return JSON.stringify(body);
 }
 
@@ -302,7 +323,8 @@ async function readJsonCompletion(response: Response, request: DriverRequest): P
   if (failure !== undefined) throw new Error(describeFailure(failure, 'Model request failed'));
   const choice = firstChoice(root);
   const message = choice ? record(choice.message) : undefined;
-  const toolCalls = message ? toolCallsOfMessage(message.tool_calls) : [];
+  const toolCalls = message && !request.replyTool ? toolCallsOfMessage(message.tool_calls) : [];
+  const replies = message && request.replyTool ? repliesOfMessage(message.tool_calls) : [];
   const text = message ? stringField(message.content) ?? '' : '';
   const reasoning = message ? reasoningField(message) : undefined;
   if (text) request.onText?.(text);
@@ -315,6 +337,7 @@ async function readJsonCompletion(response: Response, request: DriverRequest): P
     ...(reasoning ? { reasoning } : {}),
     ...(usage ? { usage } : {}),
     toolCalls,
+    ...(replies.length === 0 ? {} : { replies }),
   };
 }
 
@@ -331,6 +354,8 @@ interface ToolCallState {
   completed: Set<number>;
   /** Completed calls, in index order. */
   calls: ToolCall[];
+  /** Completed {@link REPLY_TOOL} texts, in index order. */
+  replies: string[];
 }
 
 interface StreamState {
@@ -364,6 +389,19 @@ export function toolCallFromArguments(index: number, rawArguments: string | unde
   return { index, type, intent, ...(error === undefined ? {} : { error }) };
 }
 
+/** The message text of one {@link REPLY_TOOL} call; a malformed payload fails the call. */
+export function replyTextFromArguments(rawArguments: string | undefined): string {
+  let parsed: Record<string, unknown> | undefined;
+  try {
+    parsed = record(JSON.parse(rawArguments ?? ''));
+  } catch {
+    parsed = undefined;
+  }
+  const text = parsed?.text;
+  if (typeof text !== 'string') throw new Error('Model returned an invalid reply call');
+  return text;
+}
+
 /** Complete and report every observed call below `limit` that is still pending. */
 function completeToolCallsBelow(state: ToolCallState, limit: number, request: DriverRequest): void {
   const pending = [...state.seen].filter((index) => index < limit && !state.completed.has(index)).sort((a, b) => a - b);
@@ -378,6 +416,10 @@ function completeToolCalls(state: ToolCallState, request: DriverRequest): void {
 
 function completeToolCall(state: ToolCallState, index: number, request: DriverRequest): void {
   state.completed.add(index);
+  if (request.replyTool) {
+    state.replies.push(replyTextFromArguments(state.args[index]));
+    return;
+  }
   const call = toolCallFromArguments(index, state.args[index]);
   state.calls.push(call);
   request.onToolCall?.(call);
@@ -410,6 +452,12 @@ function toolCallsOfMessage(raw: unknown): ToolCall[] {
   return calls;
 }
 
+/** The {@link REPLY_TOOL} texts of a non-streamed message, in call order. */
+function repliesOfMessage(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => replyTextFromArguments(stringField(record(record(entry)?.function)?.arguments)));
+}
+
 /**
  * Collect an OpenAI chat SSE body. `delta.content` is visible text, the
  * reasoning variants feed the reasoning channel, and the usage frame carries
@@ -428,7 +476,7 @@ async function readStreamCompletion(response: Response, request: DriverRequest):
     reasoning: '',
     done: false,
     finished: false,
-    toolCalls: { args: [], seen: new Set(), completed: new Set(), calls: [] },
+    toolCalls: { args: [], seen: new Set(), completed: new Set(), calls: [], replies: [] },
   };
   let buffer = '';
   const onAbort = (): void => { void reader.cancel().catch(() => undefined); };
@@ -471,6 +519,7 @@ async function readStreamCompletion(response: Response, request: DriverRequest):
     ...(state.reasoning ? { reasoning: state.reasoning } : {}),
     ...(state.usage ? { usage: state.usage } : {}),
     toolCalls: state.toolCalls.calls,
+    ...(state.toolCalls.replies.length === 0 ? {} : { replies: state.toolCalls.replies }),
   };
 }
 
