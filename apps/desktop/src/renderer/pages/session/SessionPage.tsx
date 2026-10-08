@@ -13,6 +13,7 @@ import {
   MessageScrollerContent,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScroller,
 } from '@/renderer/components/ui/message-scroller';
 import { Page, PageDescription, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
 import { StatusBarButton } from '@/renderer/components/status-bar-button';
@@ -37,6 +38,15 @@ import { useSessionController } from './state/use-session-controller.js';
 import { useTaskStatus } from './state/use-task-status.js';
 
 const LAYOUT_ID = 'session-shell-v3';
+
+/** Sending a message resumes bottom following even while reading history. */
+function FollowSentMessage({ pendingId }: { pendingId: string | undefined }) {
+  const { scrollToEnd } = useMessageScroller();
+  useLayoutEffect(() => {
+    if (pendingId !== undefined) scrollToEnd({ behavior: 'auto' });
+  }, [pendingId, scrollToEnd]);
+  return null;
+}
 
 function RunningDispatchTasks({ api, turns, setTasks }: {
   api: ReturnType<typeof getSessionApi>;
@@ -384,7 +394,7 @@ export function SessionPage() {
                 </EmptySession>
               ) : (
                 <>
-                  <MessageScrollerProvider key={sessionKey}>
+                  <MessageScrollerProvider key={sessionKey} autoScroll>
                     <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
                       <MessageScrollerViewport className="scroll-fade-t">
                         <MessageScrollerContent className="mx-auto w-full max-w-3xl px-4 pt-(--header-height) pb-4">
@@ -410,6 +420,7 @@ export function SessionPage() {
                           ))}
                         </MessageScrollerContent>
                       </MessageScrollerViewport>
+                      <FollowSentMessage pendingId={state.pending.at(-1)?.localId} />
                       <MessageScrollerButton />
                     </MessageScroller>
                   </MessageScrollerProvider>
