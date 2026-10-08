@@ -60,7 +60,7 @@ export const TurnItem = memo(function TurnItem({ turn, previous, latest, session
   const label = dividerBefore(previous, turn, useNow());
   const attachments = (turn.user.attachments ?? []).map(fromSessionFile);
   return (
-    <MessageScrollerItem data-turn-id={turn.id} messageId={`turn-${turn.id}`} scrollAnchor className="flex flex-col gap-4">
+    <MessageScrollerItem data-turn-id={turn.id} messageId={`turn-${turn.id}`} className="flex flex-col gap-4">
       {label !== undefined && <TimeDivider label={label} />}
       <UserMessage
         text={turn.user.text}
@@ -87,7 +87,7 @@ export interface PendingTurnItemProps {
 export function PendingTurnItem({ pending, onRetry, onRemove }: PendingTurnItemProps) {
   const attachments = (pending.attachments ?? []).map(fromDraftAttachment);
   return (
-    <MessageScrollerItem messageId={`pending-${pending.localId}`} scrollAnchor className="flex flex-col gap-4">
+    <MessageScrollerItem messageId={`pending-${pending.localId}`} className="flex flex-col gap-4">
       <UserMessage
         text={pending.text}
         at={pending.at}
