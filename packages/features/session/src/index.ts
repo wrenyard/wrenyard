@@ -115,6 +115,7 @@ export type {
 } from './driver.ts';
 export {
   ACTION_TOOL,
+  REPLY_TOOL,
   GATEWAY_REQUEST_MAX_BYTES,
   createGatewayDriver,
   serializeGatewayRequest,

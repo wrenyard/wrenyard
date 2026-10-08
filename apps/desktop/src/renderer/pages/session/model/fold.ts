@@ -344,7 +344,6 @@ function replyModel(event: ReplyEvent): ReplyModel {
   return {
     text: event.text,
     at: event.at,
-    streaming: false,
     ...(event.cycle === undefined ? {} : { cycle: event.cycle }),
   };
 }

@@ -127,6 +127,7 @@ export interface ModelCallInput {
 
 export interface ModelCallOutput {
   model: string;
+  /** Visible text; for `reply`, the text sent through the reply tool (empty when it was not called). */
   text: string;
   reasoning?: string;
   usage?: Usage;
@@ -505,6 +506,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
                 actionTool: true,
                 ...(input.onToolCall === undefined ? {} : { onToolCall: input.onToolCall }),
               } : {}),
+              ...(input.role === 'reply' ? { replyTool: true } : {}),
               signal: controller.signal,
               onText,
               onReasoning,
@@ -538,7 +540,11 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         input.signal.removeEventListener('abort', onExternalAbort);
       }
 
-      const finalText = result ? result.text : text;
+      // A communication call speaks only through its reply tool; content outside
+      // it never reaches the user, and no call at all means nothing is sent.
+      const finalText = input.role === 'reply'
+        ? (result?.replies ?? []).join('\n\n')
+        : result ? result.text : text;
       const finalReasoning = result?.reasoning ?? (reasoning || undefined);
       const usage = result?.usage ?? partialUsage;
 
