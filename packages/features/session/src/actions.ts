@@ -293,7 +293,7 @@ export class ActionRunner {
     // A written path that resolves is read directly; the words around it are a
     // label, not a search request.
     const needSearch = (exact.length === 0 && unsupported.length === 0 && !listed) || missing.length > 0 || loose;
-    if (!needSearch && residual !== '') notes.push('只读取了写明的路径；需要其他文档时，另写一个不含路径的 read');
+    if (!needSearch && residual !== '') notes.push('Only the stated paths were read. For other documents, send a separate read without paths.');
 
     let picks: { path: string; reason: string }[] = [];
     if (needSearch) {
@@ -357,8 +357,8 @@ export class ActionRunner {
     const failed = loaded.length === 0 && already.length === 0 && unsupported.length === 0 && !listed;
     const sections: string[] = [];
     if (loaded.length > 0) sections.push(`loaded: ${loaded.join(', ')}`);
-    if (already.length > 0) sections.push(`已在上下文中，未变化: ${already.join(', ')}`);
-    if (unsupported.length > 0) sections.push(`存在，但不是文档或本会话的文件，没有读入: ${unsupported.join(', ')}`);
+    if (already.length > 0) sections.push(`Already in context, unchanged: ${already.join(', ')}`);
+    if (unsupported.length > 0) sections.push(`Exists but is not a document or a file of this session, not read: ${unsupported.join(', ')}`);
     if (missing.length > 0) sections.push(`missing: ${missing.join(', ')}`);
     if (notes.length > 0) sections.push(...notes);
     if (sections.length === 0) sections.push('no paths were processed');
@@ -509,7 +509,7 @@ export class ActionRunner {
         messages: [
           ...attemptView.messages,
           { role: 'assistant', content: outcome.text },
-          { role: 'user', content: `上一次输出不能使用：${checked.error}\n只输出修正后的完整 JSON。` },
+          { role: 'user', content: `The previous output cannot be used: ${checked.error}\nOutput only the corrected complete JSON.` },
         ],
       };
     }
@@ -822,8 +822,8 @@ function sessionRunIds(events: readonly LedgerEvent[]): Set<string> {
 }
 
 function renderRunFiles(files: readonly { path: string; bytes: number }[]): string {
-  if (files.length === 0) return '任务目录里没有文件';
-  return ['任务目录里的文件:', ...files.map((file) => `- ${file.path} (${file.bytes} 字节)`)].join('\n');
+  if (files.length === 0) return 'The task directory has no files';
+  return ['Files in the task directory:', ...files.map((file) => `- ${file.path} (${file.bytes} bytes)`)].join('\n');
 }
 
 function extractPathTokens(text: string): string[] {

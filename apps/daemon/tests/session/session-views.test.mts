@@ -191,7 +191,7 @@ describe('reply view is one system message and one ctx + info user message', () 
     assert.ok(inputOf(replyView(events, { cycle: 1 })).includes('<wy-output>第一次</wy-output>'))
     assert.ok(inputOf(replyView(events, { cycle: 2 })).includes('<wy-output>第二次</wy-output>'))
     assert.ok(
-      inputOf(replyView(events, { cycle: 3, status: 'failed' })).includes('<wy-output>(无)</wy-output>'),
+      inputOf(replyView(events, { cycle: 3, status: 'failed' })).includes('<wy-output>(none)</wy-output>'),
       'a closing call without fresh output repeats no earlier output',
     )
   })
@@ -226,9 +226,9 @@ describe('reply view is one system message and one ctx + info user message', () 
     const infos = input.slice(input.indexOf('<infos>'), input.indexOf('</infos>'))
     assert.ok(infos.includes('time: 2026-10-08T10:00:00.000Z'))
     assert.ok(infos.includes('device: test-device'))
-    assert.ok(infos.includes('本轮状态: failed'))
+    assert.ok(infos.includes('turn status: failed'))
     assert.ok(infos.includes('error: 编译失败'))
-    assert.ok(infos.includes('推理模型看不到用户发的图片。'))
+    assert.ok(infos.includes('The reasoning model cannot see the images the user sent.'))
   })
 
   it('states the replier identity and the reply tool, without a skip sentinel or examples', () => {
@@ -236,8 +236,9 @@ describe('reply view is one system message and one ctx + info user message', () 
     const system = view.messages[0]!.content
     assert.equal(typeof system, 'string')
     const prompt = system as string
-    assert.ok(prompt.includes('回复者'), 'the replier identity is stated')
+    assert.ok(prompt.includes('You are the replier'), 'the replier identity is stated')
     assert.ok(prompt.includes('reply(text)'), 'the reply tool is described')
+    assert.ok(prompt.includes('language of the latest user message'), 'replies follow the user language')
     assert.equal(prompt.includes('SKIP'), false, 'not calling the tool replaces the skip sentinel')
     assert.equal(/<example|few-shot|示例|样例/u.test(prompt), false, 'no example scaffolding is embedded')
   })
@@ -258,7 +259,7 @@ describe('reply view framing', () => {
 
 describe('reply view worker output carries actions and questions but no thinking or results', () => {
   it('renders the worker visible output including ordered action and question intents', () => {
-    const workerOutput = ['正文结论。', '- dispatch：跑构建', '- read：读配置', '- ask：用哪个分支'].join('\n')
+    const workerOutput = ['正文结论。', '- dispatch: 跑构建', '- read: 读配置', '- ask: 用哪个分支'].join('\n')
     const view = replyView([
       turnStarted(1, 1, '做吧'),
       event(2, { type: 'thinking', turn: 1, cycle: 1, callId: 'k', text: 'THINKING-SECRET' }),
@@ -501,13 +502,13 @@ describe('compile view current-intent authority and reference ordering', () => {
     const system = compileView('dispatch').messages[0]!.content
     assert.equal(typeof system, 'string')
     const prompt = system as string
-    assert.match(prompt, /唯一权威/u, 'the current intent is the sole authority for this one action')
+    assert.match(prompt, /sole authority/u, 'the current intent is the sole authority for this one action')
     assert.match(prompt, /reference-context/u, 'the reference context is named reference only')
-    assert.match(prompt, /不能授权/u, 'the reference cannot authorize siblings or history')
-    assert.match(prompt, /不得替换为父项目/u, 'an exact named project is preserved, not replaced')
-    assert.match(prompt, /兄弟/u, 'sibling substitution is forbidden')
-    assert.match(prompt, /无关/u, 'unrelated substitution is forbidden')
-    assert.match(prompt, /内置任务/u, 'inherited builtin tasks remain available')
+    assert.match(prompt, /cannot authorize/u, 'the reference cannot authorize siblings or history')
+    assert.match(prompt, /must not be replaced with a parent project/u, 'an exact named project is preserved, not replaced')
+    assert.match(prompt, /sibling project/u, 'sibling substitution is forbidden')
+    assert.match(prompt, /unrelated project/u, 'unrelated substitution is forbidden')
+    assert.match(prompt, /Builtin tasks/u, 'inherited builtin tasks remain available')
   })
 })
 

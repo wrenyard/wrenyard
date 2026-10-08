@@ -365,7 +365,7 @@ describe('engine media delivery', () => {
       const replyCalls = callsOfRole(harness, sessionId, 'reply')
       assert.equal(replyCalls.length, 1, 'one communication call is forwarded for the turn')
       assert.ok(
-        messageText(replyCalls[0]!.messages).includes('推理模型看不到用户发的图片'),
+        messageText(replyCalls[0]!.messages).includes('The reasoning model cannot see the images the user sent'),
         'the infos block carries the image limitation',
       )
 
@@ -748,12 +748,12 @@ describe('engine communication replies', () => {
       const rows = harness.ledger.read(sessionId)
       const reason = eventsOfType(rows, 'reason.completed')[0]!
       assert.equal(reason.text, '需要选择。')
-      assert.equal(reason.workerOutput, '需要选择。\n- ask：选择哪一个？')
+      assert.equal(reason.workerOutput, '需要选择。\n- ask: 选择哪一个？')
       const replies = callsOfRole(harness, sessionId, 'reply')
       assert.equal(replies.length, 1)
       const prompt = messageText(replies[0]!.messages)
-      assert.ok(prompt.includes('- ask：选择哪一个？'))
-      assert.ok(prompt.includes('本轮状态: completed'))
+      assert.ok(prompt.includes('- ask: 选择哪一个？'))
+      assert.ok(prompt.includes('turn status: completed'))
       assert.ok(prompt.includes('device: test-device'))
       assert.equal(prompt.includes('PRIVATE-THINKING'), false)
       assert.equal(eventsOfType(rows, 'turn.finished').at(-1)!.status, 'completed')
@@ -770,7 +770,7 @@ describe('engine communication replies', () => {
       assert.equal(callsOfRole(harness, sessionId, 'reason').length, 2)
       const replies = callsOfRole(harness, sessionId, 'reply')
       assert.equal(replies.length, 1)
-      assert.ok(messageText(replies[0]!.messages).includes('本轮状态: failed'))
+      assert.ok(messageText(replies[0]!.messages).includes('turn status: failed'))
       assert.equal(eventsOfType(harness.ledger.read(sessionId), 'turn.finished').at(-1)!.status, 'failed')
     })
   })
