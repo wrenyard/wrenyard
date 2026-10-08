@@ -22,11 +22,18 @@ export const quota = {
 
 function normalizeDeepSeekQuota(raw: unknown): QuotaSnapshot {
     const { data, source, fetched_at } = observation(raw), root = object(data);
-    if (root.is_available !== true || !Array.isArray(root.balance_infos) || !root.balance_infos.length)
+    // `is_available` is a boolean flag, not a success indicator: false means the
+    // account simply has insufficient funds, which is a valid observation rather
+    // than a query failure. Only a missing or non-boolean value is rejected.
+    if (typeof root.is_available !== 'boolean' || !Array.isArray(root.balance_infos) || !root.balance_infos.length)
         throw new Error('Balance unavailable');
     const balances = root.balance_infos.map(value => {
         const row = object(value), currency = String(row.currency ?? '').trim().toUpperCase();
-        const amount = typeof row.total_balance === 'string' ? row.total_balance.trim() : '';
+        let amount = typeof row.total_balance === 'string' ? row.total_balance.trim() : '';
+        // Normalize negative zero decimal strings (e.g. '-0.00') to their
+        // non-negative form so an exhausted balance is reported as '0.00'
+        // instead of being rejected by the non-negative monetary validation.
+        if (/^-0(?:\.0+)?$/.test(amount)) amount = amount.slice(1);
         if (!/^[A-Z]{3}$/.test(currency) || !/^\d+(?:\.\d+)?$/.test(amount))
             throw new Error('Invalid monetary balance');
         return { currency, amount };
