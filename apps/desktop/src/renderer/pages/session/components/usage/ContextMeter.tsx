@@ -17,7 +17,6 @@ import { formatTokenCount } from '@/renderer/lib/format';
 import { useQuotaQuery } from '@/renderer/lib/queries';
 import type { ContextInspection, QuotaProviderSnapshot } from '@/shell-contract';
 import {
-  MAX_REASON_CALLS_PER_TURN,
   contextBudget,
   formatExactTokens,
   growthByTurn,
@@ -95,7 +94,6 @@ export function ContextMeter({ sessionKey, modelId, inputTokens, onBudgetChange 
       }
     }
   }, [turns, models, sessionKey, contextKey]);
-  const runningTurn = turns.find((turn) => turn.status === 'running');
   const remaining = budget?.available !== undefined && budget !== undefined
     ? remainingTurns(growth.filter((entry) => turns.some((turn) => turn.id === entry.turn && turn.status !== 'running')), budget.available - budget.total)
     : null;
@@ -205,11 +203,6 @@ export function ContextMeter({ sessionKey, modelId, inputTokens, onBudgetChange 
                       />
                       {cacheRatio < 0.5 && <TooltipContent>前缀未命中缓存，费用和延迟都会增加</TooltipContent>}
                     </Tooltip>
-                  )}
-                  {runningTurn && (
-                    <span className={MAX_REASON_CALLS_PER_TURN - runningTurn.cycle <= 2 ? 'text-warning' : undefined}>
-                      {`本轮推理 ${runningTurn.cycle} / ${MAX_REASON_CALLS_PER_TURN}`}
-                    </span>
                   )}
                   {remaining && (
                     <span className={remaining.warn ? 'text-warning' : undefined}>

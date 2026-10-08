@@ -68,7 +68,6 @@ const SESSION = {
   sessionId: 's1',
   turn: 1,
   cycle: 1,
-  maxCycles: 5,
   model: 'test/model',
 }
 
@@ -133,7 +132,7 @@ function replyView(
   over: {
     turn?: number
     cycle?: number
-    status?: 'running' | 'completed' | 'failed' | 'exhausted'
+    status?: 'running' | 'completed' | 'failed'
     error?: string
     imageUnsupported?: boolean
   } = {},
