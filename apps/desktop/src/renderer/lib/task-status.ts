@@ -14,7 +14,6 @@ const STATUS_VIEW: Record<string, { tone: StatusTone; label: string }> = {
   success: { tone: 'success', label: '成功' },
   failed: { tone: 'danger', label: '失败' },
   error: { tone: 'danger', label: '失败' },
-  exhausted: { tone: 'warning', label: '达到推理上限' },
   interrupted: { tone: 'muted', label: '已中断' },
   cancelled: { tone: 'muted', label: '已取消' },
   aborted: { tone: 'muted', label: '已取消' },

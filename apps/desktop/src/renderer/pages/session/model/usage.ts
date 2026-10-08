@@ -20,9 +20,6 @@ import type { CallModel } from './types.js';
  * items only drive ordering and the composition breakdown (usage spec 3.1).
  */
 
-/** A turn may issue at most this many expensive (reason) requests (ledger spec). */
-export const MAX_REASON_CALLS_PER_TURN = 10;
-
 /** Composition groups shown in the usage panel, in fixed display order. */
 export type UsageGroupId =
   | 'resident'

@@ -102,7 +102,6 @@ export function noFinalReply(turn: TurnModel): NoFinalReply {
     return { text: `出错了：${summarizeError(turn.errors[0]?.message ?? '未知错误')}`, variant: 'destructive' };
   }
   if (turn.status === 'interrupted') return { text: '已中断', variant: 'outline' };
-  if (turn.status === 'exhausted') return { text: '达到推理上限，没有给出回复', variant: 'outline' };
   return { text: '没有给出回复', variant: 'outline' };
 }
 

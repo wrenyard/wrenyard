@@ -40,7 +40,7 @@ interface ReplyRequest {
 }
 
 /** The statuses a terminal communication call carries. */
-type TerminalStatus = 'completed' | 'failed' | 'exhausted';
+type TerminalStatus = 'completed' | 'failed';
 
 /** Writes a session's communication replies and its title. */
 export class ReplyWriter {
@@ -69,19 +69,14 @@ export class ReplyWriter {
   }
 
   /**
-   * Enqueue the one closing communication of a turn that ends without fresh
-   * output (reason failure or exhaustion). Always terminal.
+   * Enqueue the one closing communication of a turn whose reasoning failed
+   * without fresh output. Always terminal.
    */
-  close(
-    session: SessionRuntime,
-    turn: TurnRuntime,
-    status: 'failed' | 'exhausted',
-    error: string | undefined,
-  ): Promise<void> {
+  close(session: SessionRuntime, turn: TurnRuntime, error: string | undefined): Promise<void> {
     return this.enqueue(session, {
       turn: turn.turn,
       cycle: turn.cycle,
-      status,
+      status: 'failed',
       terminal: true,
       ...(error === undefined ? {} : { error }),
     });
@@ -257,8 +252,6 @@ export function fallbackReply(status: TurnStatus, _error: string | undefined): s
   switch (status) {
     case 'failed':
       return '本轮未完成。';
-    case 'exhausted':
-      return '已达到本轮的最大推理次数。';
     case 'interrupted':
       return '本轮已中断。';
     default:

@@ -571,7 +571,7 @@ export interface ReplyViewInput {
   turn: number;
   /** The reasoning cycle whose output triggered this call. */
   cycle: number;
-  status: 'running' | 'completed' | 'failed' | 'exhausted';
+  status: 'running' | 'completed' | 'failed';
   /** ISO time of this call. */
   now: string;
   deviceName: string;
