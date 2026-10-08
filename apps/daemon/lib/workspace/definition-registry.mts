@@ -23,7 +23,7 @@ import {
 import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
 import { generateInputExample, normalizeSchema } from './schema-loader.mts'
 import { getTaskPromptTemplates, withTaskPromptTemplates } from '../core/task/prompt-template.mts'
-import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier, normalizeThinkingLevel } from '@wrenyard/providers/catalog'
+import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier, normalizeReasoningEffort } from '@wrenyard/providers/catalog'
 import {
   BUILTIN_SOURCE_PATH,
   BUILTIN_TASKS,
@@ -229,11 +229,23 @@ function normalizeLegacyTaskPermission(config: TaskConfig): TaskConfig {
  * Validation never synthesizes a wider profile pool — exact declared profiles
  * remain exact, and resolver behavior is unchanged.
  */
-function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
+function validateTaskDispatch(config: TaskConfig, sourcePath: string, options?: { inherited?: boolean }): void {
   const raw = config.dispatch as Record<string, unknown> | undefined
-  if (raw === undefined) return
+  if (raw === undefined) {
+    if (options?.inherited) return
+    throw new Error(`${sourcePath} task config dispatch.expectedReasoningEffort is required`)
+  }
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error(`${sourcePath} task config dispatch must be an object when present`)
+  }
+
+  // The reasoning-effort family replaced the legacy thinking family. ANY legacy
+  // `thinking` field — on a definition or an inherited declaration, before merge
+  // — is rejected with the exact field id rather than silently accepted.
+  if ('thinking' in raw) {
+    throw new Error(
+      `${sourcePath} task config dispatch.thinking is no longer supported; use dispatch.expectedReasoningEffort`,
+    )
   }
 
   // Reject legacy alias keys explicitly rather than silently accepting them.
@@ -262,7 +274,7 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     excludeClientIds,
     excludeProviderIds,
     requiresWebSearch,
-    thinking,
+    expectedReasoningEffort,
   } = raw
 
   // The dispatch object must contain at least one recognized hard requirement.
@@ -278,7 +290,7 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     excludeClientIds,
     excludeProviderIds,
     requiresWebSearch,
-    thinking,
+    expectedReasoningEffort,
   ].some((value) => value !== undefined)
   if (!hasRecognizedHardRequirement) {
     throw new Error(
@@ -347,13 +359,23 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string): void {
     throw new Error(`${sourcePath} task config dispatch.requiresWebSearch must be a boolean`)
   }
 
-  // Thinking level is a recognized dispatch requirement. It is optional both
-  // here and in the effective settings: when omitted, the Catalog selects the
-  // highest thinking level the resolved runtime supports. Only the five
-  // canonical levels are accepted (with the input alias `midium` normalized to
-  // `medium`); the definition itself is never mutated.
-  if (thinking !== undefined && (typeof thinking !== 'string' || normalizeThinkingLevel(thinking) === undefined)) {
-    throw new Error(`${sourcePath} task config dispatch.thinking must be one of: low, medium, high, xhigh, max`)
+  // Reasoning effort is the required dispatch declaration. Every task declares
+  // the public level it expects; inherited declarations may omit it to inherit
+  // the base's level. Only the six canonical levels are accepted (including
+  // `none`); the retired `midium` spelling and every unknown value are rejected.
+  if (expectedReasoningEffort === undefined) {
+    if (!options?.inherited) {
+      throw new Error(
+        `${sourcePath} task config dispatch.expectedReasoningEffort is required and must be one of: none, low, medium, high, xhigh, max`,
+      )
+    }
+  } else if (
+    typeof expectedReasoningEffort !== 'string'
+    || normalizeReasoningEffort(expectedReasoningEffort) === undefined
+  ) {
+    throw new Error(
+      `${sourcePath} task config dispatch.expectedReasoningEffort must be one of: none, low, medium, high, xhigh, max`,
+    )
   }
 
   for (const axis of ['excludeModelIds', 'excludeProfileIds', 'excludeClientIds', 'excludeProviderIds'] as const) {
@@ -628,9 +650,9 @@ async function loadTaskFile(filePath: string, workspaceRoot: string): Promise<Re
   }
   validateTaskRuntimePin(definition.config, absolutePath)
   validateTaskDispatch(definition.config, absolutePath)
-  if (definition.config.dispatch?.thinking !== undefined) {
+  if (definition.config.dispatch?.expectedReasoningEffort !== undefined) {
     definition.config = { ...definition.config, dispatch: { ...definition.config.dispatch,
-      thinking: normalizeThinkingLevel(definition.config.dispatch.thinking),
+      expectedReasoningEffort: normalizeReasoningEffort(definition.config.dispatch.expectedReasoningEffort),
     } }
   }
   resolveTaskCategory(definition.config, absolutePath)
@@ -772,8 +794,10 @@ function validateInheritedDeclaration(
     }
   }
 
-  // Raw child dispatch is validated on its own before the merge.
-  validateTaskDispatch({ dispatch: raw.dispatch } as unknown as TaskConfig, sourcePath)
+  // Raw child dispatch is validated on its own before the merge. An inherited
+  // declaration may omit expectedReasoningEffort to inherit the base's level,
+  // but ANY legacy thinking field is rejected here, before merge.
+  validateTaskDispatch({ dispatch: raw.dispatch } as unknown as TaskConfig, sourcePath, { inherited: true })
   resolveTaskCategory({ category: raw.category } as unknown as TaskConfig, sourcePath)
   resolveTaskDisplayName({ displayName: raw.displayName } as unknown as TaskConfig, sourcePath)
 }
@@ -889,10 +913,10 @@ function mergeInheritedConfig(
 
   // The merged dispatch must satisfy the same contract as an authored one.
   validateTaskDispatch(merged, sourcePath)
-  if (merged.dispatch?.thinking !== undefined) {
+  if (merged.dispatch?.expectedReasoningEffort !== undefined) {
     merged.dispatch = {
       ...merged.dispatch,
-      thinking: normalizeThinkingLevel(merged.dispatch.thinking),
+      expectedReasoningEffort: normalizeReasoningEffort(merged.dispatch.expectedReasoningEffort),
     }
   }
   return merged

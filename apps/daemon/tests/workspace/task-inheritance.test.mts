@@ -41,7 +41,7 @@ function writeFile(dir: string, name: string, source: string): string {
 /** A complete (non-inherited) replacement definition. */
 function fullSource(promptFn: string, extra = ''): string {
   return `export default defineTask({
-${extra}  input: foremanSchemas.z.object({}),
+${extra.includes('dispatch:') ? extra.replace('dispatch: {', "dispatch: { expectedReasoningEffort: 'high',") : "  dispatch: { expectedReasoningEffort: 'high' },\n" + extra}  input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
   prompt: ${promptFn},
 })
@@ -385,7 +385,7 @@ describe('task definition inheritance', () => {
       parentDir,
       'thing',
       `export default defineTask({
-  dispatch: { intelligenceMin: 'high' },
+  dispatch: { intelligenceMin: 'high', expectedReasoningEffort: 'high' },
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
   prompt: async () => 'BASE',
@@ -435,7 +435,7 @@ describe('task definition inheritance', () => {
       parentDir,
       'thing',
       `export default defineTask({
-  dispatch: { intelligenceMin: 'high' },
+  dispatch: { intelligenceMin: 'high', expectedReasoningEffort: 'high' },
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
   prompt: async () => 'BASE',
@@ -450,6 +450,7 @@ describe('task definition inheritance', () => {
       childDir,
       'thing',
       `export default defineTask({
+  dispatch: { expectedReasoningEffort: 'high' },
   input: foremanSchemas.z.object({ original: foremanSchemas.z.string() }),
   output: foremanSchemas.z.object({ answer: foremanSchemas.z.number() }),
   prompt: async () => 'ORIGINAL',

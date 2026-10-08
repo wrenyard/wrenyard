@@ -1,3 +1,4 @@
+import { REASONING_EFFORTS } from '@wrenyard/providers/catalog'
 import type { JsonSchema } from '../jsonrpc.mts'
 import type {
   ProviderConfigureParams,
@@ -38,12 +39,15 @@ export const providerListResultSchema = {
         displayName: { type: 'string', minLength: 1, maxLength: 160 },
         description: { type: 'string', maxLength: 500 },
         setupHint: { type: 'string', maxLength: 500 },
+        quotaProvider: { type: 'string' },
         authMode: { type: 'string', enum: ['api-key', 'native', 'none'] },
         protocols: { type: 'array', maxItems: 3, uniqueItems: true, items: {
           type: 'string', enum: ['openai_chat', 'openai_responses', 'anthropic_messages'],
         } },
         models: { type: 'array', maxItems: 128, items: {
-          type: 'object', required: ['id', 'displayName'], properties: {
+          type: 'object', required: ['id', 'displayName', 'reasoningEfforts'], properties: {
+            reasoningEfforts: { type: 'array', minItems: 1, uniqueItems: true, items: { enum: REASONING_EFFORTS } },
+            supportedClients: { type: 'array', items: { type: 'string' } },
             id: { type: 'string', minLength: 1, maxLength: 200 },
             displayName: { type: 'string', minLength: 1, maxLength: 200 },
             contextWindow: { type: 'integer', minimum: 1 },

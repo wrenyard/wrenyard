@@ -109,6 +109,7 @@ export class ProviderService {
         authMode: provider.credentialResolver === 'managed' ? 'api-key' as const
           : provider.credentialResolver ? 'native' as const : 'none' as const,
         protocols: (provider.protocols ?? []).map((capability) => capability.protocol),
+        quotaProvider: provider.quotaProvider ?? provider.id,
         models: provider.models.map((model) => this.projectModel(provider, model, modelStatus, localSpeed, configured)),
       }
     }))
@@ -164,6 +165,8 @@ export class ProviderService {
     const speed = resolveModelSpeed(provider, model, localSpeed)
     return {
       id: model.id,
+      reasoningEfforts: [...model.reasoningEfforts],
+      ...(model.supportedClients === undefined ? {} : { supportedClients: model.supportedClients }),
       displayName: model.displayName,
       ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
       ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),

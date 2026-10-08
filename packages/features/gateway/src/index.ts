@@ -1,7 +1,7 @@
 import type { ProviderDefinition } from '@wrenyard/providers/base';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
-import type { Catalog, GatewayProtocol, PublicGatewayModel } from '@wrenyard/providers/catalog';
+import { normalizeReasoningEffort, type Catalog, type GatewayProtocol, type PublicGatewayModel, type ReasoningEffort } from '@wrenyard/providers/catalog';
 import { applyChatGptPromptCacheKey, upstreamAuthHeaders, type ProviderCredential, type ProviderRuntime } from '@wrenyard/providers';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
 
@@ -13,6 +13,8 @@ export interface GatewayRequestCompletedEvent {
   durationMs: number;
   /** Scoped execution id attributed by the request path, when present. */
   executionId?: string;
+  /** Public reasoning effort this request was translated at, when it carried one. */
+  reasoningEffort?: ReasoningEffort;
   /** Response sampling contract used for this request, when sampled. */
   tps_sampling_contract?: 'tokenizer_v1';
   /** Attributable paired response samples for this request, when sampled. */
@@ -68,6 +70,11 @@ const RESPONSE_HEADER_ALLOWLIST = new Set([
 ]);
 // Sized for a request that carries its session's images inline as base64.
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
+
+// Resolved public reasoning effort carried out-of-band from the client. Its
+// value is the unified public level; the Gateway translates it into the exact
+// per-provider wire fields and never forwards the header upstream.
+const REASONING_EFFORT_HEADER = 'x-wrenyard-reasoning-effort';
 
 const CODEBUDDY_ROUND_TTL_MS = 30 * 60 * 1000;
 const CODEBUDDY_ROUND_CACHE_LIMIT = 512;
@@ -408,6 +415,29 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         return true;
       }
       publicModel = resolved.publicId;
+
+      // A resolved public reasoning effort arrives in a request header, never as
+      // a raw body field. When present it is validated against the public enum
+      // and this route's own ladder here, before any upstream call; a request
+      // without the header keeps its body exactly as delivered.
+      const rawEffortHeader = request.headers[REASONING_EFFORT_HEADER];
+      const effortHeader = Array.isArray(rawEffortHeader) ? rawEffortHeader[0] : rawEffortHeader;
+      let reasoningEffort: ReasoningEffort | undefined;
+      if (effortHeader !== undefined) {
+        const normalized = normalizeReasoningEffort(effortHeader);
+        if (normalized === undefined) {
+          json(response, 400, { error: { type: 'invalid_request_error', message: `Invalid reasoning effort: ${effortHeader}` } });
+          await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: 400, durationMs: Date.now() - startedAt, executionId });
+          return true;
+        }
+        if (!resolved.model.reasoningEfforts.includes(normalized)) {
+          json(response, 400, { error: { type: 'invalid_request_error', message: `Model ${publicModel} does not support reasoning effort "${normalized}"` } });
+          await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: 400, durationMs: Date.now() - startedAt, executionId });
+          return true;
+        }
+        reasoningEffort = normalized;
+      }
+
       const credential = await options.providers.credential(resolved.provider);
       if (!credential) {
         json(response, 503, { error: { type: 'credential_unavailable', message: `Provider ${resolved.provider.id} is not configured` } });
@@ -419,6 +449,27 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       upstreamAuthHeaders(resolved.provider, credential, route.protocol).forEach((value, name) => headers.set(name, value));
       const upstreamModel = options.providers.resolveUpstreamModel(resolved.provider, resolved.upstreamModel, credential);
       body.model = upstreamModel;
+
+      // The header is the sole authority for reasoning: strip every raw body
+      // spelling and merge the owning provider's exact protocol fields. Without
+      // the header the body is left untouched (existing forwarding behavior).
+      if (reasoningEffort !== undefined) {
+        delete body.reasoning_effort;
+        delete body.reasoning;
+        delete body.thinking;
+        delete body.enable_thinking;
+        if (body.output_config !== null && typeof body.output_config === 'object' && !Array.isArray(body.output_config)) {
+          const outputConfig = { ...body.output_config as Record<string, unknown> };
+          delete outputConfig.effort;
+          if (Object.keys(outputConfig).length === 0) delete body.output_config;
+          else body.output_config = outputConfig;
+        }
+        const fields = resolved.provider.convertReasoningEffort(resolved.model.id, reasoningEffort, route.protocol);
+        if (fields.output_config !== null && typeof fields.output_config === 'object' && !Array.isArray(fields.output_config)) {
+          fields.output_config = { ...body.output_config as Record<string, unknown>, ...fields.output_config as Record<string, unknown> };
+        }
+        Object.assign(body, fields);
+      }
 
       // OpenCode service providers require the stable OpenCode User-Agent and
       // the forwarded session header. Other providers are left untouched and
@@ -569,6 +620,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
           status: upstream.status,
           durationMs: Date.now() - startedAt,
           ...(executionId ? { executionId } : {}),
+          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
           ...(sampler.sample() ?? {}),
         });
       } catch (error) {
@@ -577,7 +629,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         } else {
           response.destroy();
         }
-        await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: controller.signal.aborted ? 499 : 502, durationMs: Date.now() - startedAt, executionId });
+        await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: controller.signal.aborted ? 499 : 502, durationMs: Date.now() - startedAt, executionId, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) });
       } finally {
         request.off('aborted', abort);
         active.delete(controller);

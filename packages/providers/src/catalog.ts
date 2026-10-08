@@ -12,7 +12,7 @@ export const BUILTIN_CLIENTS: readonly ClientDefinition[] = [
   // Cursor CLI gained WebSearch/WebFetch per https://cursor.com/changelog/cli-jan-16-2026
   // (checked 2026-09-10).
   { id: 'cursor', nativeProvider: 'cursor', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'], taskCapable: true, supportsNativeWebSearch: true },
-  { id: 'dsh', unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'] },
+  { id: 'dsh', forwardsGatewayReasoningEffort: true, unsupportedGatewayProviders: ['opencode-go'], gatewayProtocols: ['openai_chat'] },
   {
     id: 'grok',
     nativeProvider: 'spacex-ai',
@@ -23,7 +23,7 @@ export const BUILTIN_CLIENTS: readonly ClientDefinition[] = [
     // (checked 2026-09-10); our Grok gateway projection stays SupportsBackendSearch=false.
     supportsNativeWebSearch: true,
   },
-  { id: 'opencode', nativeProvider: 'opencode-zen', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
+  { id: 'opencode', forwardsGatewayReasoningEffort: true, nativeProvider: 'opencode-zen', gatewayProtocols: ['openai_chat', 'anthropic_messages'], taskCapable: true },
 ];
 
 /**

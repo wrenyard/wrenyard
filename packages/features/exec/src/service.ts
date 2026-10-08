@@ -100,7 +100,7 @@ interface PreparedRun {
  *
  * Boundaries this class deliberately does NOT cross:
  *
- * - It never resolves a provider, canonical model, mode, thinking level or
+ * - It never resolves a provider, canonical model, mode, reasoning effort or
  *   working directory. The caller supplies all of them.
  * - It never touches the task graph, the database or the provider catalog.
  * - It never retries, backs off or opens a circuit: one request starts one run.

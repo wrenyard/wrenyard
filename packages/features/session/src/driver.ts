@@ -11,6 +11,7 @@
  * identically.
  */
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
+import type { ReasoningEffort } from '@wrenyard/models';
 
 /**
  * One OpenAI-compatible content part. `text` carries visible text; `image_url`
@@ -65,8 +66,8 @@ export interface DriverRequest {
   /** Gateway public id, always exactly `provider/model`. */
   model: string;
   messages: readonly ModelMessage[];
-  /** Public thinking level; forwarded as the wire reasoning-effort parameter. */
-  reasoningEffort?: string;
+  /** Public reasoning level; forwarded to the gateway as a request header. */
+  reasoningEffort: ReasoningEffort;
   /** Optional output-token cap; forwarded as the wire `max_tokens` when set. */
   maxTokens?: number;
   /**
@@ -161,15 +162,14 @@ export interface GatewayDriverOptions {
 }
 
 /**
- * Wire name of the reasoning-effort request field.
+ * Request header carrying the resolved public reasoning effort to the Gateway.
  *
- * The Gateway forwards the OpenAI-chat body to the upstream provider verbatim
- * (it only rewrites `model` and `stream_options.include_usage`), and the DSH
- * model patch declares the Gateway route with `api: openai-completions` and no
- * provider-specific thinking mapping, so the OpenAI-style `reasoning_effort`
- * field is the parameter the existing stack actually sends.
+ * The body is forwarded to the upstream provider verbatim; the effort travels
+ * out-of-band so the Gateway can translate it into the exact per-provider wire
+ * fields (`reasoning_effort`, `reasoning`, `thinking`, ...) through the owning
+ * provider module. The body never carries a raw `reasoning_effort` field.
  */
-const REASONING_EFFORT_FIELD = 'reasoning_effort';
+export const REASONING_EFFORT_HEADER = 'x-wrenyard-reasoning-effort';
 
 /** Only a non-2xx response body is ever truncated, so an upstream error stays readable. */
 const ERROR_EXCERPT_CHARS = 2_000;
@@ -178,12 +178,15 @@ const ERROR_EXCERPT_CHARS = 2_000;
 export const GATEWAY_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
 
 /** The subset of a driver request that is serialized onto the wire. */
-export type GatewayRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'reasoningEffort' | 'maxTokens' | 'actionTool' | 'replyTool'>;
+export type GatewayRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'maxTokens' | 'actionTool' | 'replyTool'> & Partial<Pick<DriverRequest, 'reasoningEffort'>>;
 
 /**
  * Serialize the exact OpenAI-chat body `complete` sends. A caller can use this
  * to preflight the local-gateway byte cap before issuing the request, without
  * guessing any provider-specific limit.
+ *
+ * The resolved reasoning effort is deliberately absent: it travels in
+ * {@link REASONING_EFFORT_HEADER}, never as a raw body field.
  */
 export function serializeGatewayRequest(request: GatewayRequestFields): string {
   const body: Record<string, unknown> = {
@@ -192,7 +195,6 @@ export function serializeGatewayRequest(request: GatewayRequestFields): string {
     stream: true,
     stream_options: { include_usage: true },
   };
-  if (request.reasoningEffort) body[REASONING_EFFORT_FIELD] = request.reasoningEffort;
   if (request.maxTokens !== undefined) body.max_tokens = request.maxTokens;
   if (request.actionTool) body.tools = [ACTION_TOOL];
   else if (request.replyTool) body.tools = [REPLY_TOOL];
@@ -255,6 +257,7 @@ export function createGatewayDriver(
   const fetchImpl = options.fetch ?? globalThis.fetch;
   return {
     async complete(request: DriverRequest): Promise<DriverResult> {
+      if (!request.reasoningEffort) throw new Error("Model request requires reasoningEffort");
       if (request.signal.aborted) throw abortError();
       const url = `${connection.openaiChatBaseUrl.replace(/\/+$/u, '')}/chat/completions`;
       // The exact serialized body is also what the preflight measures, so the
@@ -272,6 +275,7 @@ export function createGatewayDriver(
           headers: {
             'content-type': 'application/json',
             authorization: `Bearer ${connection.token}`,
+            [REASONING_EFFORT_HEADER]: request.reasoningEffort,
           },
           body,
           signal: request.signal,

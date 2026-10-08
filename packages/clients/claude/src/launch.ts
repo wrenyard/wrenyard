@@ -5,6 +5,8 @@ import type { ProcessSpec } from '@wrenyard/execution';
 
 export async function launchClaude(request: AgentRequest, env: NodeJS.ProcessEnv): Promise<ProcessSpec> {
     assertLaunch(request);
+    if (!request.clientReasoningEffort && !request.clientReasoningEnvironment)
+        throw new Error('claude: launch requires mapped effort or thinking-budget settings');
     const status = await findExecutable(['claude'], { env });
     if (status.installation.state !== 'installed')
         throw new Error('claude is not installed');
@@ -20,8 +22,12 @@ export async function launchClaude(request: AgentRequest, env: NodeJS.ProcessEnv
         executable: status.installation.executable,
         args,
         cwd: request.cwd,
-        env: stringEnv(env, {
+        env: stringEnv({ ...env, CLAUDE_CODE_EFFORT_LEVEL: undefined, MAX_THINKING_TOKENS: undefined }, {
             CLAUDE_CONFIG_DIR: clientStateDir('claude'),
+            ...request.clientReasoningEnvironment,
+            // The mapped wire effort rides the per-launch environment so it is
+            // scoped to this run and never written into persistent config.
+            ...(request.clientReasoningEffort ? { CLAUDE_CODE_EFFORT_LEVEL: request.clientReasoningEffort } : {}),
             ...(request.mode === 'gateway' && env.WRENYARD_GATEWAY_TOKEN ? {
                 ANTHROPIC_BASE_URL: env.WRENYARD_GATEWAY_ANTHROPIC_URL ?? '',
                 ANTHROPIC_AUTH_TOKEN: env.WRENYARD_GATEWAY_TOKEN,

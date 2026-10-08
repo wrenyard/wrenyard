@@ -4,15 +4,15 @@ export type {
   ModelDefaults,
   ModelNativeAttributes,
   ModelPricing,
+  ReasoningEffort,
   RegisteredModel,
-  ThinkingLevel,
 } from './types.ts';
 export {
   INTELLIGENCE_TIERS,
-  THINKING_FULL,
-  THINKING_LEVELS,
-  THINKING_LOW_HIGH_MAX,
-  THINKING_UP_TO_XHIGH,
+  REASONING_EFFORTS,
+  REASONING_EFFORT_NAMES,
+  reasoningEffortRank,
+  resolveReasoningEffort,
 } from './types.ts';
 export {
   ModelRegistry,

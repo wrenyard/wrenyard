@@ -6,6 +6,7 @@ import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-clien
 import { assertLaunch, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
 import { writeLoaderPatch, type DshMcpServer, type DshModelRoute } from './patch.ts';
+import { DSH_REASONING_EFFORT_ENV, DSH_REASONING_EFFORT_URL_ENV } from './reasoning-effort-asset.ts';
 
 /** DSH profile used for a one-shot background agent invocation. */
 const DSH_AGENT_PROFILE = 'headless';
@@ -105,7 +106,15 @@ export async function prepareDshLaunch(
       // public Gateway directory publishes as `provider/model`; `request.model`
       // may be an upstream wire id, so it is only the fallback.
       const model = (request.canonicalModel?.trim() || request.model.trim());
-      route = { publicModelId: `${request.provider}/${model}`, baseUrl: chatBaseUrl(env) };
+      // A Gateway route forwards the PUBLIC effort level unchanged: the
+      // Gateway owns provider-owned conversion. The generated forwarder plugin
+      // adds the internal header only for this route's exact chat-completions
+      // URL, so no body/field rewrite happens in the adapter.
+      route = {
+        publicModelId: `${request.provider}/${model}`,
+        baseUrl: chatBaseUrl(env),
+        reasoningEffort: request.reasoningEffort,
+      };
       gatewayToken = env[GATEWAY_TOKEN_ENV]?.trim();
       if (!gatewayToken)
         throw new Error(`dsh: a gateway launch requires ${GATEWAY_TOKEN_ENV}`);
@@ -135,6 +144,16 @@ export async function prepareDshLaunch(
     ];
 
     const scrubbed = scrubInheritedEnv(env);
+    // The exact Gateway chat-completions endpoint and the public effort are
+    // handed to the generated forwarder plugin through this run's environment;
+    // the scrub above removed any inherited effort values, so only these fresh
+    // ones can reach the child.
+    const effortEnv: Record<string, string> = route?.baseUrl && route.reasoningEffort
+      ? {
+          [DSH_REASONING_EFFORT_ENV]: route.reasoningEffort,
+          [DSH_REASONING_EFFORT_URL_ENV]: `${route.baseUrl}/chat/completions`,
+        }
+      : {};
     // The launch's own values are applied afterwards and always win. Only the
     // explicitly selected gateway credential survives the scrub; every other
     // inherited Gateway secret was already dropped.
@@ -146,6 +165,7 @@ export async function prepareDshLaunch(
         DSH_HOME: home,
         DSH_PERMISSION_MODE,
         ...(gatewayToken ? { [GATEWAY_TOKEN_ENV]: gatewayToken } : {}),
+        ...effortEnv,
       }),
     };
 
@@ -193,15 +213,20 @@ function chatBaseUrl(env: NodeJS.ProcessEnv): string {
 
 /**
  * Drop inherited DSH credential variables so no parent-process secret can
- * reach the child, matching the retired Go launcher's scrub, and drop the
+ * reach the child, matching the retired Go launcher's scrub; drop any inherited
+ * reasoning-effort wiring so a stale effort can never leak; and drop the
  * Desktop-only asynchronous dispatch flag so a background invocation keeps
- * DSH's blocking contract. The launch's own DSH_HOME, permission, and selected
- * gateway token are applied afterwards and always win.
+ * DSH's blocking contract. The launch's own DSH_HOME, permission, effort, and
+ * selected gateway token are applied afterwards and always win.
  */
 function scrubInheritedEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const scrubbed: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(env)) {
     if (key.startsWith('WRENYARD_DSH_') || key.startsWith('WRENYARD_GATEWAY_'))
+      continue;
+    // Drop any inherited effort wiring so a stale URL/level from a parent
+    // process can never be forwarded; the launch sets its own fresh values.
+    if (key.startsWith('WRENYARD_REASONING_'))
       continue;
     if (key === DSH_ASYNC_TASKS_ENV)
       continue;
