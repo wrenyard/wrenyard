@@ -54,6 +54,7 @@ describe('DesktopAppearanceController attach bookkeeping', () => {
 
     controller.attach(win as never);
 
+    expect(controller.titleBarOverlay()).toEqual({ color: '#00000000', symbolColor: '#2e2018' });
     expect(win.setBackgroundColor).toHaveBeenCalledTimes(1);
   });
 

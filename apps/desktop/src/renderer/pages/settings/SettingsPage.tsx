@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Braces, RefreshCw } from 'lucide-react';
 import { Page, PageActions, PageHeader, PageTitle } from '@/renderer/components/page';
-import { SourceDevelopmentBadge } from '@/renderer/components/source-development-badge';
 import { Button } from '@/renderer/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { Sidebar, SidebarContent, SidebarProvider } from '@/renderer/components/ui/sidebar';
@@ -371,7 +370,6 @@ export function SettingsPage() {
                         >
                           <h2 className="flex items-center gap-3 text-lg font-medium">
                             {category.label}
-                            {category.id === 'runtime' && <SourceDevelopmentBadge />}
                             {category.id === 'pet' && <PetStatusBadge />}
                           </h2>
                           {renderCategoryBody(category)}
