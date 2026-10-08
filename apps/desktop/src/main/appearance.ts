@@ -114,7 +114,9 @@ export class DesktopAppearanceController {
 
   titleBarOverlay(): { color: string; symbolColor: string } {
     const resolved = this.resolve();
-    return { ...getTheme(resolved.theme).modes[resolved.dark ? 'dark' : 'light'].titleBarOverlay };
+    const { symbolColor } = getTheme(resolved.theme).modes[resolved.dark ? 'dark' : 'light'].titleBarOverlay;
+    // Let the renderer paint one continuous title bar behind native controls.
+    return { color: '#00000000', symbolColor };
   }
 
   /**

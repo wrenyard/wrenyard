@@ -116,7 +116,7 @@ export function TitleBar() {
         ))}
       </div>
 
-      <div className={cn('flex items-center gap-1', DRAG, SLOT_NO_DRAG)}>
+      <div className={cn('flex shrink-0 items-center gap-1 px-2', DRAG, SLOT_NO_DRAG)}>
         {TITLE_BAR_PAGES.map((id) => (
           <div
             key={id}

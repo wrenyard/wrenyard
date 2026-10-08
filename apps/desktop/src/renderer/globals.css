@@ -726,6 +726,35 @@ html[data-platform="win32"] {
   --titlebar-inset-end: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
 
+/* Keep shell actions aligned with the native window controls. */
+[data-titlebar] [data-slot="button"] {
+  border-radius: 4px;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+[data-titlebar] [data-slot="button"]:active {
+  transform: none;
+  translate: none;
+}
+
+[data-titlebar] [data-slot="button"]:hover {
+  background: color-mix(in oklch, var(--sidebar), var(--sidebar-foreground) 8%);
+}
+
+[data-titlebar] [data-slot="button"] svg {
+  stroke-width: 1.5;
+}
+
+[data-titlebar-auxiliary] [data-slot="button"] {
+  width: 28px;
+  height: 28px;
+}
+
+[data-titlebar-auxiliary] [data-slot="button"] svg {
+  width: 18px;
+  height: 18px;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
