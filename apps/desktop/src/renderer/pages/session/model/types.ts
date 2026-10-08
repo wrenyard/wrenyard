@@ -22,7 +22,7 @@ export type ModelEntry = SessionBridgeModelEntry;
 export type EventPayload = SessionBridgeEventPayload;
 export type { LedgerEvent, SessionSummary, WorkspaceSnapshot, ProjectSnapshot };
 
-export type TurnStatus = 'running' | 'completed' | 'failed' | 'interrupted' | 'exhausted';
+export type TurnStatus = 'running' | 'completed' | 'failed' | 'interrupted';
 export type Phase = 'preparing' | 'reasoning' | 'acting' | 'replying';
 export type ItemStatus = 'running' | 'done' | 'failed' | 'skipped' | 'cancelled' | 'aborted';
 export type ActionKindModel = 'dispatch' | 'read' | 'write' | 'parse-failed';
@@ -200,7 +200,7 @@ export interface CycleNode {
 export interface TurnNode {
   turn: number;
   userText: string;
-  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'exhausted';
+  status: 'running' | 'completed' | 'failed' | 'interrupted';
   startedAt: string;
   endedAt?: string;
   cycles: CycleNode[];
