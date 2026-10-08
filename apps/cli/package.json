@@ -10,6 +10,7 @@
   "dependencies": {
     "@wrenyard/control-client": "workspace:*",
     "@wrenyard/daemon": "workspace:*",
+    "@wrenyard/models": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "tsx": "^4.22.4"
   },

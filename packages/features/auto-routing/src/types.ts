@@ -1,4 +1,4 @@
-import type { IntelligenceTier, ModelCapability, ThinkingLevel } from '@wrenyard/models';
+import type { IntelligenceTier, ModelCapability, ReasoningEffort } from '@wrenyard/models';
 import type { DispatchPlan, ModelDefinition, SpeedEvidence } from '@wrenyard/providers/base';
 /**
  * Pure, deterministic, quota-aware conservative auto-routing policy.
@@ -321,12 +321,13 @@ export interface TaskDispatchRequirements {
    * This is enforced as a hard gate and fails closed for gateway and unknown
    * combinations; it is not surfaced in any search settings UI. */
   requiresWebSearch?: boolean;
-  /** Optional thinking level. Thinking is a resolved runtime PARAMETER, never an
-   * eligibility or ranking constraint: a requested level adapts to the nearest
-   * usable level (only levels declared by the model AND explicitly mapped for
-   * the exact runtime are usable; otherwise the request withholds thinking and
-   * no transport is invented). An invalid public enum value is rejected. */
-  thinking?: ThinkingLevel;
+  /** Expected reasoning-effort level. Reasoning effort is a resolved runtime
+   * PARAMETER, never an eligibility or ranking constraint: the expected level
+   * adapts to the nearest usable level (only levels declared by the model AND
+   * explicitly mapped for the exact runtime are usable; otherwise the request
+   * withholds reasoning effort and no transport is invented). Task dispatch
+   * declarations always carry one; the catalog omits it only for enumeration. */
+  expectedReasoningEffort?: ReasoningEffort;
 }
 export interface DispatchResolution {
   plan: DispatchPlan;

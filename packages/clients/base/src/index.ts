@@ -1,5 +1,6 @@
 import { access, realpath } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
+import type { ReasoningEffort } from '@wrenyard/models';
 /** Stable agent protocol. No Forge process, profile command, or client switch. */
 export interface ClientCapabilities {
     readonly run: boolean;
@@ -56,7 +57,19 @@ export interface AgentRequest {
     readonly prompt: string;
     readonly cwd: string;
     readonly resumeSessionId?: string;
-    readonly thinking?: string;
+    /**
+     * Public reasoning-effort level selected by the caller. Every run names an
+     * exact level; `assertLaunch` rejects a missing or unknown value.
+     */
+    readonly reasoningEffort: ReasoningEffort;
+    /**
+     * Provider-mapped wire effort alias transported to the native runtime. It
+     * is optional because a runtime that substitutes the upstream model instead
+     * of a wire effort (Cursor) carries no alias, and a runtime that forwards
+     * the public level (DSH) reads {@link reasoningEffort} directly.
+     */
+    readonly clientReasoningEffort?: string;
+    readonly clientReasoningEnvironment?: Readonly<Record<string, string>>;
     /** MCP servers to inject, keyed by the name exposed to the client. */
     readonly mcpServers?: Readonly<Record<string, McpServer>>;
 }

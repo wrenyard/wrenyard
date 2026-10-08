@@ -7,12 +7,12 @@
 
 export type TaskUsageCompleteness = 'complete' | 'partial' | 'unavailable'
 
-import { THINKING_LEVELS, type ThinkingLevel } from '@wrenyard/providers/catalog'
-export type { ThinkingLevel } from '@wrenyard/providers/catalog'
-export { THINKING_LEVELS } from '@wrenyard/providers/catalog'
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
+export type { ReasoningEffort } from '@wrenyard/providers/catalog'
+export { REASONING_EFFORTS } from '@wrenyard/providers/catalog'
 
-export function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return typeof value === 'string' && (THINKING_LEVELS as readonly string[]).includes(value)
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value)
 }
 
 export interface TaskResolvedSpeed {
@@ -74,8 +74,10 @@ export interface TaskResolvedDispatch {
   intelligence: string
   reference_pricing: TaskReferencePricing
   protocol?: string
-  /** Legal per-run thinking level; absent on legacy dispatches that never chose one. */
-  thinking?: ThinkingLevel
+  /** Public reasoning-effort level the run was resolved at; absent on legacy dispatches that never chose one. */
+  reasoningEffort?: ReasoningEffort
+  /** Provider-mapped upstream wire effort alias; present only when the resolved route mapped one. */
+  clientReasoningEffort?: string
   /** Present only on a resolved automatic dispatch; never on an explicit one. */
   auto_routing?: TaskAutoRoutingDecision
 }

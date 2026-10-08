@@ -4,6 +4,7 @@
  */
 
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
+import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderDefinition } from '@wrenyard/providers';
 import type {
   LedgerEvent,
@@ -90,7 +91,8 @@ export interface Session {
     sessionId: string,
     input: {
       text: string;
-      model: { provider: string; model: string; reasoningEffort?: string };
+      /** Explicit public reasoning level; required for every turn. */
+      model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
       /** Optional user attachments imported before the turn starts. */
       attachments?: AttachmentInput[];
     },
@@ -196,7 +198,7 @@ export interface CallRunRequest {
   messages: readonly ModelMessage[];
   layers: Record<string, number>;
   /** Required for the `reason` role; ignored for every other role. */
-  reason?: { provider: string; model: string; reasoningEffort?: string };
+  reason?: { provider: string; model: string; reasoningEffort: ReasoningEffort };
   /** Output-token cap forwarded to the wire `max_tokens` when the driver supports it. */
   maxTokens?: number;
   signal: AbortSignal;

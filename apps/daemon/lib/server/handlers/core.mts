@@ -496,7 +496,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     return callRuntimeAliasService(() => service.remove(params))
   })
   // exec.* delegate to the injected daemon-owned shared ExecService; the RPC
-  // surface never resolves a client/provider/model/mode/thinking/cwd and never
+  // surface never resolves a client/provider/model/mode/reasoning-effort/cwd and never
   // persists anything — the caller has already resolved all of it. IPC-only,
   // because a raw prompt plus a working directory must not be reachable over
   // the HTTP or MCP transports. When the dependency is absent the methods fail
@@ -529,7 +529,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       // The resolved request is built by spreading the original params (see
       // daemon.resolveExecRequest), so spreading params first and the resolved
       // request second carries every mandatory field exactly once while letting
-      // the resolved provider/model/mode/thinking override the raw input.
+      // the resolved provider/model/mode/reasoning-effort override the raw input.
       handle = await service.start({ ...params, ...request })
     } catch (error) {
       throw protocolErrorFromExecStart(error, params.client)

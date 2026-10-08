@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { initialSessionPageState, sessionReducer, type SessionPageState } from './session-reducer.js';
 import type { AttachmentInput, DraftAttachment, ModelEntry, SessionApi, SessionBridgeTaskBrief } from '../model/types.js';
+import type { ReasoningEffort } from './reasoning-effort.js';
 import { clearDraft, clearDraftAttachments } from './drafts.js';
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -26,7 +27,7 @@ export interface SessionController {
   state: SessionPageState;
   selectSession(sessionId: string): Promise<void>;
   newDraft(): void;
-  sendMessage(text: string, model: ModelEntry, reasoningEffort: string, attachments: DraftAttachment[]): Promise<void>;
+  sendMessage(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): Promise<void>;
   interruptTurn(turn: number): Promise<void>;
   deleteSession(sessionId: string): Promise<void>;
   removePending(localId: string): void;
@@ -101,7 +102,7 @@ export function useSessionController(api: SessionApi) {
     return pending;
   }, [api, refreshList, reportError, selectSession]);
 
-  const sendMessage = useCallback(async (text: string, model: ModelEntry, reasoningEffort: string, attachments: DraftAttachment[]): Promise<void> => {
+  const sendMessage = useCallback(async (text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): Promise<void> => {
     dispatch({ type: 'clear-error' });
     const localId = `local-${++localSeq}`;
     const optimistic = {
@@ -128,7 +129,7 @@ export function useSessionController(api: SessionApi) {
         model: {
           provider: model.provider,
           model: model.model,
-          ...(reasoningEffort ? { reasoningEffort } : {}),
+          reasoningEffort,
         },
         ...(inputs.length === 0 ? {} : { attachments: inputs }),
       });

@@ -38,6 +38,7 @@ import {
   type WorkspaceSnapshot,
 } from './ledger.ts';
 import { ModelCallError, resolveModelMetadata, type CallRole } from './calls.ts';
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import { contentVersion } from './documents.ts';
 import { ContextInspector, type ContextInspectRequest, type ContextInspection } from './context-inspect.ts';
 import { type ToolCall } from './driver.ts';
@@ -232,7 +233,8 @@ class Engine implements Session {
     sessionId: string,
     input: {
       text: string;
-      model: { provider: string; model: string; reasoningEffort?: string };
+      /** Explicit public reasoning level; required for every turn. */
+      model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
       attachments?: AttachmentInput[];
     },
   ): Promise<{ turn: number }> {
@@ -242,13 +244,13 @@ class Engine implements Session {
     const publicId = `${input.model.provider}/${input.model.model}`;
     this.assertOpen();
     const metadata = resolveModelMetadata(publicId);
-    if (
-      input.model.reasoningEffort !== undefined
-      && metadata.thinkingLevels !== undefined
-      && !metadata.thinkingLevels.some((level) => level === input.model.reasoningEffort)
-    ) {
+    const effort = input.model.reasoningEffort;
+    if (effort === undefined || !REASONING_EFFORTS.includes(effort)) {
+      throw new Error(`reasoningEffort '${effort ?? ''}' is not a valid reasoning effort`);
+    }
+    if (metadata.reasoningEfforts !== undefined && !metadata.reasoningEfforts.includes(effort)) {
       throw new Error(
-        `reasoningEffort '${input.model.reasoningEffort}' is not supported by ${publicId}; expected one of ${metadata.thinkingLevels.join(', ')}`,
+        `reasoningEffort '${effort}' is not supported by ${publicId}; expected one of ${metadata.reasoningEfforts.join(', ')}`,
       );
     }
 
@@ -595,7 +597,7 @@ class Engine implements Session {
   private createTurn(
     turn: number,
     userText: string,
-    model: { provider: string; model: string; reasoningEffort?: string },
+    model: { provider: string; model: string; reasoningEffort: ReasoningEffort },
     publicId: string,
     contextWindow: number | undefined,
   ): TurnRuntime {
@@ -841,7 +843,7 @@ class Engine implements Session {
       reason: {
         provider: turn.model.provider,
         model: turn.model.model,
-        ...(turn.model.reasoningEffort === undefined ? {} : { reasoningEffort: turn.model.reasoningEffort }),
+        reasoningEffort: turn.model.reasoningEffort,
       },
       ...(maxTokens === undefined ? {} : { maxTokens }),
       onText: (delta) => {
@@ -1288,7 +1290,7 @@ class Engine implements Session {
     view: BuiltView,
     extra: {
       callId?: string;
-      reason?: { provider: string; model: string; reasoningEffort?: string };
+      reason?: { provider: string; model: string; reasoningEffort: ReasoningEffort };
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;

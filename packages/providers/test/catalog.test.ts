@@ -7,7 +7,7 @@ import {
   deriveTaskDispatchPlans,
   isBuiltinClientGatewayProviderSupported,
 } from '../src/index.ts';
-import { builtinModelDisplayName, models } from '@wrenyard/models';
+import { builtinModelDisplayName, models, resolveReasoningEffort } from '@wrenyard/models';
 
 test('GPT-6 Astra carries exact truthful SSOT metadata and is the canonical premium profile target', () => {
   const catalog = createBuiltinCatalog();
@@ -16,13 +16,13 @@ test('GPT-6 Astra carries exact truthful SSOT metadata and is the canonical prem
   const astra = provider!.models.find((entry) => entry.id === 'gpt-6-astra');
   assert.ok(astra, 'gpt-6-astra model must exist');
   assert.equal(astra!.intelligence, 'premium');
-  assert.deepEqual(astra!.thinkingLevels, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(astra!.reasoningEfforts, ['none', 'low', 'medium', 'high', 'xhigh', 'max']);
   assert.deepEqual(astra!.pricing, [1, 10, 50]);
   assert.deepEqual(astra!.capabilities, ['text', 'image']);
   const plans = deriveTaskDispatchPlans(catalog);
   assert.equal(plans['chatgpt/gpt-6-astra:codex'].model, 'gpt-6-astra');
-  assert.equal(plans['chatgpt/gpt-6-astra:codex'].thinking, 'max');
-  assert.equal(plans['chatgpt/gpt-6-astra:codex'].reasoningEffort, 'max');
+  assert.equal(plans['chatgpt/gpt-6-astra:codex'].reasoningEffort, undefined);
+  assert.equal(plans['chatgpt/gpt-6-astra:codex'].clientReasoningEffort, undefined);
 });
 
 test('built-in display names are hyphen-free, sourced from the SSOT, and canonical-consistent', () => {
@@ -75,3 +75,50 @@ test('built-in display names are hyphen-free, sourced from the SSOT, and canonic
   assert.equal(catalog.provider('cursor')!.modelAliases?.['grok-4.7-high'], 'grok-4.7');
 });
 
+test('every built-in route declares a non-empty route-owned reasoning-effort ladder', () => {
+  for (const provider of BUILTIN_PROVIDERS) {
+    for (const model of provider.models) {
+      assert.ok(
+        Array.isArray(model.reasoningEfforts) && model.reasoningEfforts.length > 0,
+        `${provider.id}/${model.id} must declare a non-empty reasoningEfforts ladder`,
+      );
+    }
+  }
+});
+
+test('resolveReasoningEffort picks the nearest supported level at or above, else the highest, and rejects an empty set', () => {
+  assert.equal(resolveReasoningEffort('medium', ['low', 'high', 'max']), 'high');
+  assert.equal(resolveReasoningEffort('xhigh', ['low', 'high', 'max']), 'max');
+  assert.equal(resolveReasoningEffort('max', ['low', 'high', 'max']), 'max');
+  assert.throws(() => resolveReasoningEffort(undefined as never, ['low', 'high', 'max']), /required/);
+  assert.equal(resolveReasoningEffort('none', ['none', 'medium']), 'none');
+  assert.throws(() => resolveReasoningEffort('low', []), /must not be empty/);
+});
+
+test('Catalog.reasoningEfforts returns a non-empty exact client subset of the route ladder', () => {
+  const catalog = createBuiltinCatalog();
+  const route = catalog.provider('anthropic')!.models.find((entry) => entry.id === 'claude-opus-5-5')!;
+  const supported = catalog.reasoningEfforts('claude', 'anthropic', 'claude-opus-5-5');
+  assert.ok(supported.length > 0, 'the client subset must be non-empty');
+  for (const effort of supported) {
+    assert.ok(route.reasoningEfforts.includes(effort), `${effort} must be a route-owned level`);
+  }
+});
+
+test('convertReasoningEffort is declared per provider module and is protocol-aware', () => {
+  const catalog = createBuiltinCatalog();
+  const chatgpt = catalog.provider('chatgpt')!;
+  assert.deepEqual(
+    chatgpt.convertReasoningEffort('gpt-6-astra', 'high', 'openai_responses'),
+    { reasoning: { effort: 'high' } },
+  );
+  const anthropicProvider = catalog.provider('anthropic')!;
+  assert.deepEqual(
+    anthropicProvider.convertReasoningEffort('claude-haiku-4-5-20251001', 'none', 'anthropic_messages'),
+    { thinking: { type: 'disabled' } },
+  );
+  assert.deepEqual(
+    anthropicProvider.convertReasoningEffort('claude-opus-5-5', 'high', 'anthropic_messages'),
+    { thinking: { type: 'adaptive' }, output_config: { effort: 'high' } },
+  );
+});

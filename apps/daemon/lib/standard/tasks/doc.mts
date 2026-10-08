@@ -84,7 +84,7 @@ const definition = {
   config: {
     description:
       'Document author/reviser. Authors or revises exactly one Markdown document under the target workspace project docs directory, guided by the supplied conversation, intent, and workspace template rules.',
-    dispatch: { ...FREQUENT_DISPATCH_REQUIREMENTS, thinking: 'low' },
+    dispatch: { ...FREQUENT_DISPATCH_REQUIREMENTS, expectedReasoningEffort: 'low' },
     writeTargets: (input: unknown): readonly string[] => {
       const docInput = input as DocInput
       return [docInput.targetPath]

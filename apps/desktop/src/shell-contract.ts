@@ -264,9 +264,6 @@ export type StartupPagePreference = 'last' | 'session';
 /** The message-submit key binding for the prompt input. */
 export type SessionSendKey = 'enter' | 'mod-enter';
 
-/** Whether a new session reuses the last sent model or a fixed one. */
-export type SessionDefaultModelMode = 'last' | 'specified';
-
 /** Allowed interface zoom percentages (80%–150%, step 10%). */
 export const APPEARANCE_ZOOM_MIN = 80;
 export const APPEARANCE_ZOOM_MAX = 150;
@@ -284,11 +281,6 @@ export const APPEARANCE_ZOOM_OPTIONS: ReadonlyArray<{ value: number; label: stri
 export const STARTUP_PAGE_OPTIONS: ReadonlyArray<{ value: StartupPagePreference; label: string }> = [
   { value: 'last', label: '上次的页面' },
   { value: 'session', label: '会话' },
-];
-
-export const SESSION_DEFAULT_MODEL_OPTIONS: ReadonlyArray<{ value: SessionDefaultModelMode; label: string }> = [
-  { value: 'last', label: '沿用上次发送的模型' },
-  { value: 'specified', label: '指定模型' },
 ];
 
 export const SESSION_SEND_KEY_OPTIONS: ReadonlyArray<{ value: SessionSendKey; label: string }> = [
@@ -357,16 +349,13 @@ export interface GeneralPreferenceView extends GeneralPreferences {
   menuBarQuota: boolean;
 }
 
+/**
+ * Renderer-visible session preferences. The retired model-default and
+ * last-sent memory keys are no longer part of the product surface: a new
+ * session inherits the model and effort from the client-local first-request
+ * record, so only the message-submit key remains here.
+ */
 export interface SessionPreferences {
-  defaultModel: SessionDefaultModelMode;
-  /** Canonical model used when `defaultModel` is 'specified'; null means unset. */
-  model: string | null;
-  /** Reasoning effort used with the specified model; null means unset. */
-  effort: string | null;
-  /** Last model actually sent, mirrored from the prompt composer. */
-  lastSentModel: string | null;
-  /** Last reasoning effort actually sent; null means unset. */
-  lastSentEffort: string | null;
   sendKey: SessionSendKey;
 }
 
@@ -425,10 +414,6 @@ export interface PreferenceDocument {
 const PREFERENCE_STRING_MAX = 512;
 const PREFERENCE_STRING_ARRAY_MAX = 64;
 
-function isBoundedPreferenceString(value: unknown): value is string {
-  return typeof value === 'string' && value.length <= PREFERENCE_STRING_MAX;
-}
-
 const BUILTIN_THEME_IDS: ReadonlySet<string> = new Set(BUILTIN_THEMES.map((theme) => theme.id));
 
 /**
@@ -449,11 +434,6 @@ export const PREFERENCES = {
     path: ['appearance', 'zoom'],
     validate: (value) => typeof value === 'number' && APPEARANCE_ZOOM_OPTIONS.some((option) => option.value === value),
   },
-  'session.defaultModel': { path: ['session', 'defaultModel'], validate: (value) => value === 'last' || value === 'specified' },
-  'session.model': { path: ['session', 'model'], validate: (value) => value === null || isBoundedPreferenceString(value) },
-  'session.effort': { path: ['session', 'effort'], validate: (value) => value === null || isBoundedPreferenceString(value) },
-  'session.lastSentModel': { path: ['session', 'lastSentModel'], validate: (value) => value === null || isBoundedPreferenceString(value) },
-  'session.lastSentEffort': { path: ['session', 'lastSentEffort'], validate: (value) => value === null || isBoundedPreferenceString(value) },
   'session.sendKey': { path: ['session', 'sendKey'], validate: (value) => value === 'enter' || value === 'mod-enter' },
   'notifications.system': { path: ['notifications', 'system'], validate: (value) => typeof value === 'boolean' },
   'notifications.sound': { path: ['notifications', 'sound'], validate: (value) => typeof value === 'boolean' },

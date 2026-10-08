@@ -51,9 +51,16 @@ function assertTaskTarget(target: ResolvedTarget | null): asserts target is Reso
 }
 
 function taskSource(promptExpression: string, extraConfig = ''): string {
+  // Every authored task must declare dispatch.expectedReasoningEffort. A caller
+  // that supplies its own `dispatch:` block governs effort itself (including the
+  // rejection cases); otherwise a valid `high` default is injected so unrelated
+  // fixtures keep loading.
+  const config = /\bdispatch\s*:/.test(extraConfig)
+    ? extraConfig
+    : `  dispatch: { expectedReasoningEffort: 'high' },\n${extraConfig}`
   return `export default defineTask({
   permission: 'readonly',
-${extraConfig}
+${config}
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
   prompt: () => ${promptExpression},
@@ -399,6 +406,7 @@ describe('workspace definition registry', () => {
     registerProject(projectDir, 'app')
     // Active: no agentRuntime, no profile — only dispatch requirements.
     const dispatch = {
+      expectedReasoningEffort: 'high',
       expectedTps: 20,
       minimumTps: 10,
       intelligenceMin: 'high',
@@ -408,6 +416,7 @@ describe('workspace definition registry', () => {
     writeFileSync(join(projectDir, 'modern.task.ts'), `export default defineTask({
   permission: 'readonly',
   dispatch: {
+    expectedReasoningEffort: 'high',
     expectedTps: 20,
     minimumTps: 10,
     intelligenceMin: 'high',
@@ -556,6 +565,7 @@ export default defineTask(config)
     writeFileSync(join(projectDir, 'legacy-source.task.ts'), `export default defineTask({
   scheduling: 'legacy',
   permission: 'readonly',
+  dispatch: { expectedReasoningEffort: 'high' },
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
   prompt: () => 'legacy-source',
@@ -655,13 +665,14 @@ ${extraConfig}  permission: 'readonly',
     const projectDir = join(workspace, 'projects', 'app')
     registerProject(projectDir, 'app')
     writeFileSync(join(projectDir, 'min-tps.task.ts'), taskSource("'min-tps'",
-      '  dispatch: { minimumTps: 5 },\n'), 'utf-8')
+      "  dispatch: { minimumTps: 5, expectedReasoningEffort: 'high' },\n"), 'utf-8')
 
     await discoverTasks(workspace)
 
     const target = resolveTaskTarget('min-tps', workspace, 'app')
     assertTaskTarget(target)
     assert.equal(target.definition.config.dispatch?.minimumTps, 5)
+    assert.equal(target.definition.config.dispatch?.expectedReasoningEffort, 'high')
     assert.equal(getLoadErrors(workspace).length, 0)
   })
 
@@ -676,6 +687,7 @@ ${extraConfig}  permission: 'readonly',
     intelligenceExpected: 'premium',
     maxOutputUsdPerMillion: 4.5,
     requiredCapabilities: ['text'],
+    expectedReasoningEffort: 'high',
     excludeModelIds: ['m1'],
     excludeProfileIds: ['p1'],
     excludeClientIds: ['c1'],
@@ -691,84 +703,161 @@ ${extraConfig}  permission: 'readonly',
     assert.equal(target.definition.config.dispatch?.intelligenceMin, 'mid')
     assert.equal(target.definition.config.dispatch?.intelligenceExpected, 'premium')
     assert.equal(target.definition.config.dispatch?.maxOutputUsdPerMillion, 4.5)
+    assert.equal(target.definition.config.dispatch?.expectedReasoningEffort, 'high')
     assert.deepEqual([...target.definition.config.dispatch?.excludeModelIds ?? []], ['m1'])
     assert.equal(getLoadErrors(workspace).length, 0)
   })
 
-  it('leaves dispatch.thinking absent when the declaration omits it', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-dispatch-thinking-default-')
+  it('rejects a definition whose dispatch omits the required expectedReasoningEffort', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-effort-missing-')
     const projectDir = join(workspace, 'projects', 'app')
     registerProject(projectDir, 'app')
-    writeFileSync(join(projectDir, 'no-thinking.task.ts'), taskSource("'no-thinking'", `  dispatch: {
+    writeFileSync(join(projectDir, 'no-effort.task.ts'), taskSource("'no-effort'", `  dispatch: {
     minimumTps: 5,
   },
 `), 'utf-8')
 
     await discoverTasks(workspace)
 
-    const target = resolveTaskTarget('no-thinking', workspace, 'app')
-    assertTaskTarget(target)
-    assert.equal(target.definition.config.dispatch?.thinking, undefined)
-    assert.equal(getLoadErrors(workspace).length, 0)
-  })
-
-  it('lists an optional dispatch.thinking declaration for low and max', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-dispatch-thinking-valid-')
-    const projectDir = join(workspace, 'projects', 'app')
-    registerProject(projectDir, 'app')
-    writeFileSync(join(projectDir, 'think-low.task.ts'), taskSource("'think-low'", `  dispatch: {
-    thinking: 'low',
-  },
-`), 'utf-8')
-    writeFileSync(join(projectDir, 'think-max.task.ts'), taskSource("'think-max'", `  dispatch: {
-    thinking: 'max',
-  },
-`), 'utf-8')
-
-    await discoverTasks(workspace)
-
-    const low = resolveTaskTarget('think-low', workspace, 'app')
-    assertTaskTarget(low)
-    assert.equal(low.definition.config.dispatch?.thinking, 'low')
-    const max = resolveTaskTarget('think-max', workspace, 'app')
-    assertTaskTarget(max)
-    assert.equal(max.definition.config.dispatch?.thinking, 'max')
-    assert.equal(getLoadErrors(workspace).length, 0)
-  })
-
-  it('accepts the midium input alias for dispatch.thinking and normalizes it in settings', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-dispatch-thinking-alias-')
-    const projectDir = join(workspace, 'projects', 'app')
-    registerProject(projectDir, 'app')
-    writeFileSync(join(projectDir, 'think-alias.task.ts'), taskSource("'think-alias'", `  dispatch: {
-    thinking: 'midium',
-  },
-`), 'utf-8')
-
-    await discoverTasks(workspace)
-
-    // The alias is accepted at input validation; the projected definition
-    // emits the canonical spelling.
-    const target = resolveTaskTarget('think-alias', workspace, 'app')
-    assertTaskTarget(target)
-    assert.equal(target.definition.config.dispatch?.thinking, 'medium')
-    assert.equal(getLoadErrors(workspace).length, 0)
-  })
-
-  it('rejects an unknown dispatch.thinking value', async () => {
-    const workspace = makeTempDir('foreman-v2-loader-dispatch-thinking-bad-')
-    const projectDir = join(workspace, 'projects', 'app')
-    registerProject(projectDir, 'app')
-    const taskPath = join(projectDir, 'bad-thinking.task.ts')
-    writeFileSync(taskPath, taskSource("'bad-thinking'", "  dispatch: { thinking: 'maximum' },\n"), 'utf-8')
-
-    await discoverTasks(workspace)
-
-    const target = resolveTaskTarget('bad-thinking', workspace, 'app')
+    const target = resolveTaskTarget('no-effort', workspace, 'app')
     assert.equal(target, null)
     const errors = getLoadErrors(workspace)
     assert.ok(
-      errors.some((error) => error.load_error.includes('dispatch.thinking must be one of: low, medium, high, xhigh, max')),
+      errors.some((error) => error.load_error.includes('dispatch.expectedReasoningEffort is required')),
+      errors.map((e) => e.load_error).join('; '),
+    )
+  })
+
+  it('lists dispatch.expectedReasoningEffort declarations across the full ladder including none', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-effort-valid-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'eff-low.task.ts'), taskSource("'eff-low'", `  dispatch: {
+    expectedReasoningEffort: 'low',
+  },
+`), 'utf-8')
+    writeFileSync(join(projectDir, 'eff-none.task.ts'), taskSource("'eff-none'", `  dispatch: {
+    expectedReasoningEffort: 'none',
+  },
+`), 'utf-8')
+    writeFileSync(join(projectDir, 'eff-max.task.ts'), taskSource("'eff-max'", `  dispatch: {
+    expectedReasoningEffort: 'max',
+  },
+`), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const low = resolveTaskTarget('eff-low', workspace, 'app')
+    assertTaskTarget(low)
+    assert.equal(low.definition.config.dispatch?.expectedReasoningEffort, 'low')
+    const none = resolveTaskTarget('eff-none', workspace, 'app')
+    assertTaskTarget(none)
+    assert.equal(none.definition.config.dispatch?.expectedReasoningEffort, 'none')
+    const max = resolveTaskTarget('eff-max', workspace, 'app')
+    assertTaskTarget(max)
+    assert.equal(max.definition.config.dispatch?.expectedReasoningEffort, 'max')
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('rejects ANY legacy dispatch.thinking field with the definition id and field', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-legacy-thinking-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    const taskPath = join(projectDir, 'legacy-thinking.task.ts')
+    writeFileSync(taskPath, taskSource("'legacy-thinking'", `  dispatch: {
+    thinking: 'low',
+    expectedReasoningEffort: 'low',
+  },
+`), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const target = resolveTaskTarget('legacy-thinking', workspace, 'app')
+    assert.equal(target, null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(
+      errors.some((error) => error.load_error.includes('dispatch.thinking is no longer supported')),
+      errors.map((e) => e.load_error).join('; '),
+    )
+  })
+
+  it('rejects the retired midium spelling and any unknown expectedReasoningEffort value', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-effort-bad-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'eff-midium.task.ts'), taskSource("'eff-midium'", `  dispatch: {
+    expectedReasoningEffort: 'midium',
+  },
+`), 'utf-8')
+    writeFileSync(join(projectDir, 'eff-bad.task.ts'), taskSource("'eff-bad'", `  dispatch: {
+    expectedReasoningEffort: 'maximum',
+  },
+`), 'utf-8')
+
+    await discoverTasks(workspace)
+
+    assert.equal(resolveTaskTarget('eff-midium', workspace, 'app'), null)
+    assert.equal(resolveTaskTarget('eff-bad', workspace, 'app'), null)
+    const errors = getLoadErrors(workspace)
+    assert.ok(
+      errors.some((error) => error.load_error.includes('dispatch.expectedReasoningEffort must be one of: none, low, medium, high, xhigh, max')),
+      errors.map((e) => e.load_error).join('; '),
+    )
+  })
+
+  it('lets an inherited declaration override expectedReasoningEffort', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-effort-inherit-override-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    // The builtin 'edit' declares low; the child overrides it to high.
+    writeFileSync(join(projectDir, 'edit.task.ts'), `export default defineTask({
+  extends: 'edit',
+  dispatch: { expectedReasoningEffort: 'high' },
+})
+`, 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const target = resolveTaskTarget('edit', workspace, 'app')
+    assertTaskTarget(target)
+    assert.equal(target.definition.config.dispatch?.expectedReasoningEffort, 'high')
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('lets an inherited declaration inherit the base expectedReasoningEffort when it omits it', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-effort-inherit-omit-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    // The builtin 'explore' declares low; the child omits effort to inherit it.
+    writeFileSync(join(projectDir, 'explore.task.ts'), `export default defineTask({
+  extends: 'explore',
+  description: 'child',
+})
+`, 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const target = resolveTaskTarget('explore', workspace, 'app')
+    assertTaskTarget(target)
+    assert.equal(target.definition.config.dispatch?.expectedReasoningEffort, 'low')
+    assert.equal(getLoadErrors(workspace).length, 0)
+  })
+
+  it('rejects a legacy thinking field in an inherited declaration before merge', async () => {
+    const workspace = makeTempDir('foreman-v2-loader-dispatch-effort-inherit-legacy-')
+    const projectDir = join(workspace, 'projects', 'app')
+    registerProject(projectDir, 'app')
+    writeFileSync(join(projectDir, 'doc.task.ts'), `export default defineTask({
+  extends: 'doc',
+  dispatch: { thinking: 'low' },
+})
+`, 'utf-8')
+
+    await discoverTasks(workspace)
+
+    const errors = getLoadErrors(workspace)
+    assert.ok(
+      errors.some((error) => error.load_error.includes('dispatch.thinking is no longer supported')),
       errors.map((e) => e.load_error).join('; '),
     )
   })
@@ -828,7 +917,7 @@ ${extraConfig}  permission: 'readonly',
     registerProject(projectDir, 'app')
     writeFileSync(join(projectDir, 'web-search.task.ts'), `export default defineTask({
   permission: 'readonly',
-  dispatch: { requiresWebSearch: true },
+  dispatch: { requiresWebSearch: true, expectedReasoningEffort: 'high' },
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),
   prompt: () => 'web-search',
@@ -876,7 +965,7 @@ ${extraConfig}  permission: 'readonly',
     const projectDir = join(workspace, 'projects', 'app')
     const taskPath = join(projectDir, 'bad-excl.task.ts')
     registerProject(projectDir, 'app')
-    writeFileSync(taskPath, taskSource("'bad-excl'", '  dispatch: { excludeModelIds: [\'ok\', \'\'] },\n'), 'utf-8')
+    writeFileSync(taskPath, taskSource("'bad-excl'", '  dispatch: { expectedReasoningEffort: \'high\', excludeModelIds: [\'ok\', \'\'] },\n'), 'utf-8')
 
     await discoverTasks(workspace)
 

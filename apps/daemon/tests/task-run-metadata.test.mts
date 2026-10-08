@@ -132,7 +132,7 @@ interface DispatchFields {
   speed_expected_tps_met?: number
   speed_degradation_reason?: string
   intelligence?: string
-  thinking?: string
+  reasoning_effort?: string
   reference_pricing_input?: number | null
   reference_pricing_output?: number | null
   reference_pricing_cache?: number | null
@@ -151,11 +151,11 @@ function seedDispatch(
     `INSERT INTO task_run_attempt_dispatch
       (execution_id, task_run_id, requested_agent_runtime, profile, client, provider, model, model_id, mode, protocol,
        speed_effective_tps, speed_source, speed_sample_count, speed_checked_at, speed_expected_tps_met, speed_degradation_reason,
-       intelligence, thinking, reference_pricing_input, reference_pricing_output, reference_pricing_cache, reference_pricing_cache_write,
+       intelligence, reasoning_effort, reference_pricing_input, reference_pricing_output, reference_pricing_cache, reference_pricing_cache_write,
        reference_pricing_source, reference_pricing_checked_at, created_at, updated_at)
      VALUES (@execution_id,@task_run_id,@requested_agent_runtime,@profile,@client,@provider,@model,@model_id,@mode,@protocol,
        @speed_effective_tps,@speed_source,@speed_sample_count,@speed_checked_at,@speed_expected_tps_met,@speed_degradation_reason,
-       @intelligence,@thinking,@reference_pricing_input,@reference_pricing_output,@reference_pricing_cache,@reference_pricing_cache_write,
+       @intelligence,@reasoning_effort,@reference_pricing_input,@reference_pricing_output,@reference_pricing_cache,@reference_pricing_cache_write,
        @reference_pricing_source,@reference_pricing_checked_at,@created_at,@updated_at)`,
   ).run({
     execution_id: executionId,
@@ -175,7 +175,7 @@ function seedDispatch(
     speed_expected_tps_met: o.speed_expected_tps_met ?? 1,
     speed_degradation_reason: o.speed_degradation_reason ?? null,
     intelligence: o.intelligence ?? 'mid',
-    thinking: o.thinking ?? null,
+    reasoning_effort: o.reasoning_effort ?? null,
     reference_pricing_input: o.reference_pricing_input ?? null,
     reference_pricing_output: o.reference_pricing_output ?? null,
     reference_pricing_cache: o.reference_pricing_cache ?? null,
@@ -804,75 +804,89 @@ test('genuinely incomplete identity still omits resolved', () => {
   })
 })
 
-test('persisted low and max thinking levels round-trip into run metadata', () => {
+test('persisted none/low/max reasoning-effort levels round-trip into run metadata', () => {
   withDb((db) => {
-    const lowTask = 'task-thinking-low'
+    const lowTask = 'task-reasoning-low'
     seedTask(db, lowTask)
     seedExecution(db, 'e-low', lowTask)
     seedTurnUsage(db, 'e-low', lowTask, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
     seedTelemetry(db, lowTask, { usage_event_count: 1 })
     seedDispatch(db, 'e-low', lowTask, {
       ...fullPricedDispatch('e-low', lowTask, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }),
-      thinking: 'low',
+      reasoning_effort: 'low',
     })
 
     const low = readTaskRunMetadata(lowTask)
-    assert.ok(low.resolved, 'a legal low thinking level must resolve')
-    assert.equal(low.resolved!.thinking, 'low')
+    assert.ok(low.resolved, 'a legal low reasoning-effort level must resolve')
+    assert.equal(low.resolved!.reasoningEffort, 'low')
 
-    const maxTask = 'task-thinking-max'
+    const noneTask = 'task-reasoning-none'
+    seedTask(db, noneTask)
+    seedExecution(db, 'e-none', noneTask)
+    seedTurnUsage(db, 'e-none', noneTask, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
+    seedTelemetry(db, noneTask, { usage_event_count: 1 })
+    seedDispatch(db, 'e-none', noneTask, {
+      ...fullPricedDispatch('e-none', noneTask, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }),
+      reasoning_effort: 'none',
+    })
+
+    const none = readTaskRunMetadata(noneTask)
+    assert.ok(none.resolved, 'the none reasoning-effort level must resolve')
+    assert.equal(none.resolved!.reasoningEffort, 'none')
+
+    const maxTask = 'task-reasoning-max'
     seedTask(db, maxTask)
     seedExecution(db, 'e-max', maxTask)
     seedTurnUsage(db, 'e-max', maxTask, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
     seedTelemetry(db, maxTask, { usage_event_count: 1 })
     seedDispatch(db, 'e-max', maxTask, {
       ...fullPricedDispatch('e-max', maxTask, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }),
-      thinking: 'max',
+      reasoning_effort: 'max',
     })
 
     const max = readTaskRunMetadata(maxTask)
-    assert.ok(max.resolved, 'a legal max thinking level must resolve')
-    assert.equal(max.resolved!.thinking, 'max')
+    assert.ok(max.resolved, 'a legal max reasoning-effort level must resolve')
+    assert.equal(max.resolved!.reasoningEffort, 'max')
   })
 })
 
-test('legacy rows without a thinking snapshot never invent a level', () => {
+test('legacy rows without a reasoning-effort snapshot never invent a level', () => {
   withDb((db) => {
-    const task = 'task-thinking-legacy'
+    const task = 'task-reasoning-legacy'
     seedTask(db, task)
     seedExecution(db, 'e1', task)
     seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
     seedTelemetry(db, task, { usage_event_count: 1 })
-    // seedDispatch omits thinking, persisting NULL exactly like a pre-column row.
+    // seedDispatch omits reasoning_effort, persisting NULL exactly like a pre-column row.
     seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
 
     const { resolved } = readTaskRunMetadata(task)
 
     assert.ok(resolved, 'legacy rows must still resolve')
-    assert.equal(resolved!.thinking, undefined, 'NULL thinking must be omitted, never invented')
+    assert.equal(resolved!.reasoningEffort, undefined, 'NULL reasoning effort must be omitted, never invented')
   })
 })
 
-test('an unknown persisted thinking value is omitted rather than projected', () => {
+test('an unknown persisted reasoning-effort value is omitted rather than projected', () => {
   withDb((db) => {
-    const task = 'task-thinking-invalid'
+    const task = 'task-reasoning-invalid'
     seedTask(db, task)
     seedExecution(db, 'e1', task)
     seedTurnUsage(db, 'e1', task, { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 })
     seedTelemetry(db, task, { usage_event_count: 1 })
     seedDispatch(db, 'e1', task, fullPricedDispatch('e1', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }))
     db.prepare(
-      `UPDATE task_run_attempt_dispatch SET thinking = 'ultra' WHERE execution_id = ?`,
+      `UPDATE task_run_attempt_dispatch SET reasoning_effort = 'ultra' WHERE execution_id = ?`,
     ).run('e1')
 
     const { resolved } = readTaskRunMetadata(task)
 
-    assert.ok(resolved, 'an illegal thinking value must not invalidate the dispatch')
-    assert.equal(resolved!.thinking, undefined, 'only the exact legal ladder may be projected')
+    assert.ok(resolved, 'an illegal reasoning-effort value must not invalidate the dispatch')
+    assert.equal(resolved!.reasoningEffort, undefined, 'only the exact legal ladder may be projected')
   })
 })
 
-test('a per-run thinking plan replaces only its own profile and preserves every other plan', () => {
+test('a per-run reasoning-effort plan replaces only its own profile and preserves every other plan', () => {
   const inherited = JSON.stringify({
     'anthropic/sonnet': { model: 'sonnet', reasoningEffort: 'low' },
     'anthropic/opus': { model: 'opus', reasoningEffort: 'high' },
@@ -911,33 +925,33 @@ test('two children resolve independently without cross-run plan leakage', () => 
   assert.equal(JSON.parse(env.WRENYARD_DISPATCH_PLANS_JSON)['anthropic/sonnet'].reasoningEffort, 'low')
 })
 
-test('legacy runs without a thinking plan spawn with the unchanged inherited env', () => {
+test('legacy runs without a reasoning-effort plan spawn with the unchanged inherited env', () => {
   const inherited = JSON.stringify({ 'anthropic/sonnet': { model: 'sonnet', reasoningEffort: 'low' } })
   const env = { WRENYARD_DISPATCH_PLANS_JSON: inherited }
   const resolved = resolveTaskAgentEnv(env, 'task-legacy', undefined, undefined)
   assert.equal(resolved.WRENYARD_DISPATCH_PLANS_JSON, inherited)
 })
 
-test('a queued attempt persists its own thinking level independently of the latest attempt', () => {
+test('a queued attempt persists its own reasoning-effort level independently of the latest attempt', () => {
   withDb((db) => {
-    const task = 'task-queued-thinking'
+    const task = 'task-queued-reasoning'
     seedTask(db, task)
     // The queued first attempt chose 'low'; a later attempt chose 'max'.
     seedExecution(db, 'e-queued', task)
     seedExecution(db, 'e-latest', task)
     seedDispatch(db, 'e-queued', task, {
       ...fullPricedDispatch('e-queued', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }),
-      thinking: 'low',
+      reasoning_effort: 'low',
     })
     seedDispatch(db, 'e-latest', task, {
       ...fullPricedDispatch('e-latest', task, { input: 1.0, output: 2.0, cache: 0.5, cache_write: 0.25 }),
-      thinking: 'max',
+      reasoning_effort: 'max',
     })
 
     const persisted = db.prepare(
-      `SELECT thinking FROM task_run_attempt_dispatch WHERE execution_id = ?`,
-    ).get('e-queued') as { thinking: string | null }
-    assert.equal(persisted.thinking, 'low', 'the queued attempt keeps its own thinking level')
+      `SELECT reasoning_effort FROM task_run_attempt_dispatch WHERE execution_id = ?`,
+    ).get('e-queued') as { reasoning_effort: string | null }
+    assert.equal(persisted.reasoning_effort, 'low', 'the queued attempt keeps its own reasoning-effort level')
   })
 })
 
@@ -986,6 +1000,7 @@ function registerNamedProject(projectDir: string, name: string): void {
 function namedTaskSource(name: string, extraConfig = ''): string {
   return `export default defineTask({
   permission: 'readonly',
+  dispatch: { expectedReasoningEffort: 'high' },
 ${extraConfig}
   input: foremanSchemas.z.object({}),
   output: foremanSchemas.z.object({ result: foremanSchemas.z.string() }),

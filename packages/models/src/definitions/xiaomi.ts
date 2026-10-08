@@ -8,7 +8,7 @@ export const xiaomiModels = [
     speed: 29,
   }, { lab: 'xiaomi', family: 'mimo' }),
   // Speed defaults for the entries below are initial catalog estimates pending local measured samples.
-  // MiMo exposes thinking as on/off only, so no graded thinkingLevels are declared.
+  // Reasoning effort is route-owned: providers declare the levels they materialize, never the registry.
   defineModel('mimo-v2.6-pro', 'MiMo V2.6 Pro', {
     intelligence: 'high',
     capabilities: ['text', 'image'],
