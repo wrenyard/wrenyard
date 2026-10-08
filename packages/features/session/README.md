@@ -46,8 +46,8 @@ is corruption and throws instead of being silently dropped.
 
 ## Modules
 
-- `src/ledger.ts` — event types, JSONL storage, serialized durable append,
-  atomic derived index, and the pure `replayLedger` / `applyLedgerEvent` fold.
+- `src/ledger.ts` — event types, JSONL storage, serialized durable append and
+  the atomic derived index.
 - `src/workspace.ts` — read-only file source, path validation, the frozen
   `WorkspaceSnapshot`, recent-doc scan and the project instruction chain.
 - `src/views.ts` — prompt assembly, event rendering/escaping, layer statistics.

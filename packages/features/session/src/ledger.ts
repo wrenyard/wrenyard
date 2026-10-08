@@ -15,15 +15,13 @@
  * fragment with no closing newline). It truncates that fragment before any
  * further append. Any other malformed line is corruption and throws instead of
  * being silently discarded.
- *
- * `replayLedger` / `applyLedgerEvent` are pure folds used to derive the turn
- * stages, committed actions and title from a timeline.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, truncateSync, writeFileSync } from 'node:fs';
 import { open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionFile } from '@wrenyard/protocol';
+import type { ReasoningEffort } from '@wrenyard/models';
 
 // ─── Event model ───────────────────────────────────────────────────────────
 
@@ -53,8 +51,8 @@ export type LedgerEventType =
   | 'call'
   | 'error';
 
-/** The four terminal states of a work turn. */
-export type TurnStatus = 'completed' | 'failed' | 'interrupted' | 'exhausted';
+/** The terminal states of a work turn. */
+export type TurnStatus = 'completed' | 'failed' | 'interrupted';
 
 /** Mirrors the action discriminants owned by `actions.ts`. */
 export type ActionKind = 'dispatch' | 'read' | 'write';
@@ -77,7 +75,8 @@ export interface Usage {
 export interface TurnModel {
   provider: string;
   model: string;
-  reasoningEffort?: string;
+  /** Explicit public reasoning level this turn runs at. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 /** Fields common to every ledger event; `seq` and `at` are assigned on append. */
@@ -311,6 +310,10 @@ export interface CallEvent extends LedgerEventBase {
   /** Visible output; partial output when the call was aborted or interrupted. */
   output: string;
   reasoning?: string;
+  /** Public reasoning level actually sent for this attempt. */
+  reasoningEffort?: ReasoningEffort;
+  /** The explicitly requested level, or an auxiliary role's declared expectation. */
+  requestedReasoningEffort?: string;
   error?: string;
 }
 
@@ -354,176 +357,6 @@ export interface SessionSummary {
   title: string;
   createdAt: string;
   updatedAt: string;
-}
-
-// ─── Derived (replay) state ────────────────────────────────────────────────
-
-/**
- * The phase a turn can be shown in from the persisted timeline alone. An
- * in-flight `reasoning` phase is deliberately absent: it is never an event.
- */
-export type LedgerTurnPhase = 'preparing' | 'reasoning' | 'acting' | 'replying' | 'terminal';
-
-export interface ReplayedAction {
-  actionId: string;
-  turn: number;
-  cycle: number;
-  kind: ActionKind;
-  status: ActionStatus | 'running';
-  result?: string;
-  taskRunId?: string;
-  afterInterrupt?: boolean;
-}
-
-export interface ReplayedTurn {
-  reasonCalls?: number;
-  turn: number;
-  cycle: number;
-  phase: LedgerTurnPhase;
-  status?: TurnStatus;
-  interrupted: boolean;
-}
-
-export interface LedgerReplay {
-  title: string;
-  turns: ReplayedTurn[];
-  actions: ReplayedAction[];
-  /** Number of `call` events on the timeline. */
-  calls: number;
-}
-
-interface ReplayAccumulator {
-  title: string;
-  calls: number;
-  turns: Map<number, ReplayedTurn>;
-  actions: Map<string, ReplayedAction>;
-}
-
-/** Fold a whole timeline into derived turn/action/title state. */
-export function replayLedger(events: readonly LedgerEvent[]): LedgerReplay {
-  const accumulator = createAccumulator();
-  for (const event of events) foldEvent(accumulator, event);
-  return finishAccumulator(accumulator);
-}
-
-/** Incrementally fold one more event; pure, returns a fresh `LedgerReplay`. */
-export function applyLedgerEvent(state: LedgerReplay, event: LedgerEvent): LedgerReplay {
-  const accumulator = accumulatorFromState(state);
-  foldEvent(accumulator, event);
-  return finishAccumulator(accumulator);
-}
-
-function createAccumulator(): ReplayAccumulator {
-  return { title: DEFAULT_TITLE, calls: 0, turns: new Map(), actions: new Map() };
-}
-
-function accumulatorFromState(state: LedgerReplay): ReplayAccumulator {
-  return {
-    title: state.title,
-    calls: state.calls,
-    turns: new Map(state.turns.map((turn) => [turn.turn, { ...turn }])),
-    actions: new Map(state.actions.map((action) => [action.actionId, { ...action }])),
-  };
-}
-
-function finishAccumulator(accumulator: ReplayAccumulator): LedgerReplay {
-  return {
-    title: accumulator.title,
-    calls: accumulator.calls,
-    turns: [...accumulator.turns.values()]
-      .sort((a, b) => a.turn - b.turn)
-      .map((turn) => ({ ...turn })),
-    actions: [...accumulator.actions.values()]
-      .sort((a, b) => a.turn - b.turn || a.actionId.localeCompare(b.actionId))
-      .map((action) => ({ ...action })),
-  };
-}
-
-function foldEvent(accumulator: ReplayAccumulator, event: LedgerEvent): void {
-  switch (event.type) {
-    case 'title':
-      if (event.text.trim() !== '') accumulator.title = event.text.trim();
-      break;
-    case 'call':
-      accumulator.calls += 1;
-      if (event.role === 'reason') setTurn(accumulator, event.turn, event.cycle, (turn) => {
-        turn.reasonCalls = (turn.reasonCalls ?? 0) + 1;
-        if (turn.phase !== 'terminal') turn.phase = 'reasoning';
-      });
-      break;
-    case 'turn.started':
-      setTurn(accumulator, event.turn, event.cycle, (turn) => {
-        turn.phase = 'preparing';
-      });
-      break;
-    case 'doc.search':
-    case 'memory.recalled':
-      setTurn(accumulator, event.turn, event.cycle, (turn) => {
-        turn.phase = 'preparing';
-      });
-      break;
-    case 'reason.completed':
-      setTurn(accumulator, event.turn, event.cycle, (turn) => {
-        turn.phase = 'acting';
-      });
-      break;
-    case 'action.started':
-      setTurn(accumulator, event.turn, event.cycle, (turn) => {
-        turn.phase = 'acting';
-      });
-      accumulator.actions.set(event.actionId, {
-        actionId: event.actionId,
-        turn: event.turn ?? 0,
-        cycle: event.cycle ?? 0,
-        kind: event.kind,
-        status: 'running',
-        ...(event.taskRunId === undefined ? {} : { taskRunId: event.taskRunId }),
-      });
-      break;
-    case 'action.finished': {
-      const previous = accumulator.actions.get(event.actionId);
-      accumulator.actions.set(event.actionId, {
-        actionId: event.actionId,
-        turn: event.turn ?? previous?.turn ?? 0,
-        cycle: event.cycle ?? previous?.cycle ?? 0,
-        kind: event.kind,
-        status: event.status,
-        result: event.result,
-        ...(event.taskRunId === undefined ? {} : { taskRunId: event.taskRunId }),
-        ...(event.afterInterrupt === undefined ? {} : { afterInterrupt: event.afterInterrupt }),
-      });
-      setTurn(accumulator, event.turn, event.cycle, (turn) => {
-        if (turn.phase !== 'terminal') turn.phase = 'acting';
-      });
-      break;
-    }
-    case 'turn.interrupted':
-      setTurn(accumulator, event.turn, event.cycle, (turn) => {
-        turn.interrupted = true;
-      });
-      break;
-    case 'turn.finished':
-      setTurn(accumulator, event.turn, event.cycle, (turn) => {
-        turn.phase = 'terminal';
-        turn.status = event.status;
-      });
-      break;
-    default:
-      break;
-  }
-}
-
-function setTurn(
-  accumulator: ReplayAccumulator,
-  turn: number | undefined,
-  cycle: number | undefined,
-  apply: (turn: ReplayedTurn) => void,
-): void {
-  const key = turn ?? 0;
-  const existing = accumulator.turns.get(key) ?? { turn: key, cycle: 0, phase: 'preparing', interrupted: false };
-  if (cycle !== undefined) existing.cycle = cycle;
-  apply(existing);
-  accumulator.turns.set(key, existing);
 }
 
 // ─── Ledger ────────────────────────────────────────────────────────────────

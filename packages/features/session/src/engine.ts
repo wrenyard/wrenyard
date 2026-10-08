@@ -657,7 +657,7 @@ class Engine implements Session {
         if (!reasoned.ok) {
           // A failed reason call leaves no fresh output: one closing message
           // ends the turn.
-          await this.replies.close(session, turn, 'failed', reasoned.error);
+          await this.replies.close(session, turn, reasoned.error);
           return;
         }
         // A cycle whose single communication invocation was classified as
@@ -696,7 +696,7 @@ class Engine implements Session {
             const reason = 'reason call returned no visible output';
             await this.appendError(session.sessionId, 'reason', reason, turn, cycle);
             if (turn.emptyReasonRetried) {
-              await this.replies.close(session, turn, 'failed', reason);
+              await this.replies.close(session, turn, reason);
               return;
             }
             turn.emptyReasonRetried = true;
@@ -728,7 +728,7 @@ class Engine implements Session {
         await this.flushResults(session, turn);
         if (turn.finished) return;
         turn.abort = new AbortController();
-        await this.replies.close(session, turn, 'failed', messageOf(error));
+        await this.replies.close(session, turn, messageOf(error));
       }
     }
   }
