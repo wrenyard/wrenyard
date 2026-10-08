@@ -115,7 +115,7 @@ class Engine implements Session {
   constructor(host: SessionHost, ports: EnginePorts) {
     this.host = host;
     this.ports = ports;
-    this.replies = new ReplyWriter(ports, this);
+    this.replies = new ReplyWriter(ports, this, host.deviceName);
     this.inspector = new ContextInspector({
       workspaceRoot: host.workspaceRoot,
       deviceName: host.deviceName,
@@ -399,12 +399,11 @@ class Engine implements Session {
     runtime.finished = true;
     // Late action results are appended immediately, flagged as post-interrupt.
     runtime.reasonCompleted = true;
-    // A queued intermediate reply must never land after the terminal reply.
-    this.replies.clearIntermediateReply(runtime);
 
     await this.ports.ledger.append(sessionId, { type: 'turn.interrupted', turn, reason });
     runtime.abort.abort();
-    await runtime.replyPromise.catch(() => undefined);
+    // Queued and in-flight replies check this turn's terminal flag before
+    // writing. Do not wait for communication belonging to other live turns.
     await Promise.allSettled([...runtime.taskRunIds].map((id) => this.safeCancelTask(id)));
     await this.flushResults(session, runtime);
     await this.ports.ledger.append(sessionId, { type: 'turn.finished', turn, status: 'interrupted' });
@@ -497,6 +496,7 @@ class Engine implements Session {
       calls,
       callSeq: 0,
       reasonQueue: Promise.resolve(),
+      replyQueue: Promise.resolve(),
       title: '新会话',
       lastTitleVersion: 0,
       titleVersion: 0,
@@ -627,9 +627,6 @@ class Engine implements Session {
       correctionRequired: false,
       emptyReasonRetried: false,
       currentReasonText: '',
-      replyPending: false,
-      replyInFlight: false,
-      replyPromise: Promise.resolve(),
     };
   }
 
@@ -658,9 +655,15 @@ class Engine implements Session {
         const reasoned = await this.queueReason(session, () => this.runReason(session, turn, cycle));
         if (turn.finished) return;
         if (!reasoned.ok) {
-          await this.replies.finishReply(session, turn, 'failed', reasoned.error);
+          // A failed reason call leaves no fresh output: one closing message
+          // ends the turn.
+          await this.replies.close(session, turn, 'failed', reasoned.error);
           return;
         }
+        // A cycle whose single communication invocation was classified as
+        // terminal already ends the turn; that invocation finalizes it, so no
+        // second finish call is made here.
+        if (reasoned.terminal) return;
 
         turn.phase = 'acting';
         await this.awaitCycleActions(turn);
@@ -684,21 +687,16 @@ class Engine implements Session {
           continue;
         }
 
-        // Exactly one question and no action becomes the communication reply.
-        if (asks.length === 1) {
-          await this.replies.finishReply(session, turn, 'completed', undefined, asks[0]);
-          return;
-        }
-
         if (turn.toolCallsThisCycle === 0) {
-          // A successful reason call with no tool call and no visible text gives
-          // the turn nothing to act on. The error goes back to the model for one
-          // correction cycle; a second empty output in the same turn fails it.
+          // A successful reason call with no tool call and no visible text gave
+          // the turn nothing to act on and triggered no communication. The error
+          // goes back to the model for one correction cycle; a second empty
+          // output in the same turn fails it with a closing message.
           if (turn.currentReasonText.trim() === '') {
             const reason = 'reason call returned no visible output';
             await this.appendError(session.sessionId, 'reason', reason, turn, cycle);
             if (turn.emptyReasonRetried) {
-              await this.replies.finishReply(session, turn, 'failed', reason);
+              await this.replies.close(session, turn, 'failed', reason);
               return;
             }
             turn.emptyReasonRetried = true;
@@ -706,20 +704,18 @@ class Engine implements Session {
           }
 
           // Hand-written action markup is no longer a delivery channel; actions
-          // must be started through the wy_action tool.
-          if (turn.currentReasonText.includes('<action') || turn.currentReasonText.includes('<wy-action')) {
+          // must be started through the wy_action tool. The cycle's one running
+          // communication was already triggered.
+          if (hasHandwrittenAction(turn.currentReasonText)) {
             await this.appendError(session.sessionId, 'reason', 'actions can only be started through the wy_action tool', turn, cycle);
             turn.correctionRequired = true;
             continue;
           }
-
-          // Ordinary text with no tool call ends the turn.
-          await this.replies.finishReply(session, turn, 'completed', undefined);
-          return;
         }
 
-        // Tool calls are present: executed actions (or a pending correction)
-        // drive the next cycle.
+        // Tool calls are present, or a correction was requested: the next cycle
+        // continues the turn. The cycle's one running communication was already
+        // triggered without waiting for its action executions.
       }
     } catch (error) {
       if (!turn.finished) {
@@ -732,7 +728,7 @@ class Engine implements Session {
         await this.flushResults(session, turn);
         if (turn.finished) return;
         turn.abort = new AbortController();
-        await this.replies.finishReply(session, turn, 'failed', messageOf(error));
+        await this.replies.close(session, turn, 'failed', messageOf(error));
       }
     }
   }
@@ -801,7 +797,7 @@ class Engine implements Session {
     session: SessionRuntime,
     turn: TurnRuntime,
     cycle: number,
-  ): Promise<{ ok: true } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; terminal: boolean } | { ok: false; error: string }> {
     const metadata = resolveModelMetadata(turn.publicId);
     const allowImages = metadata.imageInput === true;
     // The cycle marker is appended before the request is assembled: it renders
@@ -837,8 +833,10 @@ class Engine implements Session {
     });
 
     // The reason call declares the wy_action tool; completed calls are started
-    // as they arrive, while the visible text keeps streaming to the UI.
+    // as they arrive, while the visible text keeps streaming to the UI. Their
+    // raw intents/questions are captured in order for the worker output.
     turn.cycleText = '';
+    const workerLines: string[] = [];
     const outcome = await this.invoke(session, turn, 'reason', view, {
       reason: {
         provider: turn.model.provider,
@@ -851,7 +849,7 @@ class Engine implements Session {
       },
       onToolCall: (call) => {
         if (turn.finished || turn.abort.signal.aborted) return;
-        const promise = this.handleToolCall(session, turn, cycle, call)
+        const promise = this.handleToolCall(session, turn, cycle, call, workerLines)
           .catch((error) => this.appendError(session.sessionId, 'action', messageOf(error), turn));
         turn.parsePromises.add(promise);
         void promise.then(
@@ -891,22 +889,50 @@ class Engine implements Session {
       return { ok: false, error: outcome.error ?? 'reason call failed' };
     }
 
-    // Reasoning succeeded; its message content is the visible text.
+    // Reasoning succeeded; its message content is the visible text. Wait for
+    // every tool call to be parsed (its intent or question is captured in order)
+    // before persisting, so the worker output is complete; executions keep
+    // running and are awaited before the next cycle.
+    turn.currentReasonText = outcome.text;
+    await this.awaitParses(turn);
+    if (turn.finished) return { ok: false, error: 'interrupted' };
+
+    const workerOutput = buildWorkerOutput(outcome.text, workerLines);
+    const terminal = this.isTerminalCycle(turn, outcome.text);
     await this.ports.ledger.append(session.sessionId, {
       type: 'reason.completed',
       turn: turn.turn,
       cycle,
       callId: outcome.callId,
       text: outcome.text,
+      workerOutput,
     });
-    turn.currentReasonText = outcome.text;
     turn.reasonCompleted = true;
     await this.flushResults(session, turn);
 
-    // Wait only for every tool call to be started as an action here; the
-    // executions keep running and are awaited before the next cycle.
-    await this.awaitParses(turn);
-    return { ok: true };
+    // Exactly one communication invocation per nonempty output, immediately
+    // after persisting — the action executions are deliberately not awaited. A
+    // terminal cycle reuses this same invocation to end the turn.
+    if (workerOutput.trim() !== '') {
+      this.replies.request(session, turn, {
+        cycle,
+        status: terminal ? 'completed' : 'running',
+        terminal,
+      });
+    }
+    return { ok: true, terminal };
+  }
+
+  /**
+   * True when a successful reason cycle ends the turn: ordinary visible text
+   * with no tool call, or a single question sent alone. A correction, any
+   * executed action, or extra questions keep the turn running.
+   */
+  private isTerminalCycle(turn: TurnRuntime, prose: string): boolean {
+    if (turn.correctionRequired) return false;
+    const hasActions = turn.actionsThisCycle > 0;
+    if (turn.asksThisCycle.length === 1 && !hasActions) return true;
+    return turn.toolCallsThisCycle === 0 && prose.trim() !== '' && !hasHandwrittenAction(prose);
   }
 
   /** Reserve the next call id for one turn. */
@@ -948,13 +974,15 @@ class Engine implements Session {
   /**
    * Apply one completed wy_action tool call: an invalid call forces a
    * correction, a question is remembered for the cycle decision, and a valid
-   * action starts executing immediately.
+   * action starts executing immediately. Each valid call appends its raw intent
+   * or question to the cycle's ordered worker output.
    */
   private async handleToolCall(
     session: SessionRuntime,
     turn: TurnRuntime,
     cycle: number,
     call: ToolCall,
+    workerLines: string[],
   ): Promise<void> {
     turn.toolCallsThisCycle += 1;
     const parsed = actionFromToolCall(call);
@@ -965,8 +993,10 @@ class Engine implements Session {
     }
     if ('ask' in parsed) {
       turn.asksThisCycle.push(parsed.ask);
+      workerLines.push(`- ask：${parsed.ask}`);
       return;
     }
+    workerLines.push(`- ${parsed.action.kind}：${parsed.action.intent}`);
     await this.startAction(session, turn, cycle, parsed.action);
   }
 
@@ -1003,7 +1033,6 @@ class Engine implements Session {
       actionId,
       onTaskRun: (taskRunId: string) =>
         this.recordTaskRun(session, turn, cycle, actionId, action, runtimeAction, taskRunId),
-      onDispatched: () => this.replies.scheduleReply(session, turn),
       onTitle: (title: string) => this.recordActionTitle(session, turn, cycle, actionId, title),
     };
     const promise = this.runAction(session, turn, action, executeContext, actionId, cycle);
@@ -1110,11 +1139,6 @@ class Engine implements Session {
       },
       outcome.deferred,
     );
-
-    // An action failure is an immediate intermediate reply trigger, scheduled
-    // after the result is queued so the reply can report the failure instead of
-    // calling already-failed work running.
-    if (outcome.status === 'failed') this.replies.scheduleReply(session, turn);
   }
 
   private async awaitParses(turn: TurnRuntime): Promise<void> {
@@ -1170,14 +1194,6 @@ class Engine implements Session {
     await work;
   }
 
-  // ── intermediate replies ──────────────────────────────────────────────────
-
-  /**
-   * Trigger an intermediate reply. The first trigger fires immediately; later
-   * triggers within the minimum interval are coalesced into one pending timer,
-   * using a fixed fallback when the communication call fails. An empty reply is
-   * skipped: the communicator had nothing new to report.
-   */
   // ── helpers ─────────────────────────────────────────────────────────────
 
   private sessionInfo(session: SessionRuntime, turn: TurnRuntime): SessionViewInfo {
@@ -1531,4 +1547,21 @@ function oneLine(text: string): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The complete worker output of one reason cycle: the visible prose followed by
+ * the raw action intents and questions of its wy_action calls, in order. The
+ * prose itself is never altered, so the event's `text` stays the main reasoning
+ * rendering while `workerOutput` feeds the communication view.
+ */
+function buildWorkerOutput(prose: string, lines: readonly string[]): string {
+  if (lines.length === 0) return prose;
+  const block = lines.join('\n');
+  return prose.trim() === '' ? block : `${prose}\n${block}`;
+}
+
+/** True when visible text pretends to start an action with hand-written markup. */
+function hasHandwrittenAction(text: string): boolean {
+  return text.includes('<action') || text.includes('<wy-action');
 }

@@ -12,19 +12,13 @@
  * the test fails as a genuine regression rather than being weakened.
  */
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, it } from 'node:test'
 import {
-  ContextInspector,
-  estimateInputTokens,
   estimateTokens,
   type BuiltView,
-  type ContextInspection,
   type DocContentEvent,
   type LedgerEvent,
   type ModelContentPart,
@@ -32,10 +26,9 @@ import {
   type WorkspaceSnapshot,
 } from '@wrenyard/session'
 import {
-  COMMUNICATION_EXAMPLES,
   createViews,
+  renderEventText,
 } from '../../../../packages/features/session/src/views.ts'
-import { Ledger } from '../../../../packages/features/session/src/ledger.ts'
 import {
   applyDocumentDiff,
   contentVersion,
@@ -45,64 +38,6 @@ import {
 } from '../../../../packages/features/session/src/documents.ts'
 
 const VIEWS = createViews()
-
-// The performance regression runs in its own subprocess so a synchronous
-// tokenizer stall can never hang the whole test process. `tsx` is resolved from
-// this package and the child imports the real source views by file URL.
-const require = createRequire(import.meta.url)
-const TSX_LOADER = pathToFileURL(require.resolve('tsx')).href
-const VIEWS_URL = new URL('../../../../packages/features/session/src/views.ts', import.meta.url).href
-const CALLS_URL = new URL('../../../../packages/features/session/src/calls.ts', import.meta.url).href
-
-function giantReplyChild(): string {
-  return `
-const started = performance.now();
-const views = await import(${JSON.stringify(VIEWS_URL)});
-const calls = await import(${JSON.stringify(CALLS_URL)});
-process.stderr.write('loadedMs=' + Math.round(performance.now() - started) + '\\n');
-const lone = (text) => {
-  for (let i = 0; i < text.length; i += 1) {
-    const c = text.charCodeAt(i);
-    if (c >= 0xd800 && c <= 0xdbff) {
-      const n = text.charCodeAt(i + 1);
-      if (!(n >= 0xdc00 && n <= 0xdfff)) return true;
-      i += 1;
-    } else if (c >= 0xdc00 && c <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-};
-const giant = 'x'.repeat(200000);
-const cjk = '中'.repeat(200000);
-const emoji = '🚀'.repeat(200000);
-const short = '请继续处理这个任务';
-const view = views.createViews().reply({
-  userText: short,
-  lastReasonText: '决定: 采纳甲方案\\n' + cjk + '\\n终态: 已完成',
-  actions: [{ name: 'dispatch:' + emoji, status: 'running:' + giant }],
-  recentReplies: [emoji, cjk, giant, emoji, cjk],
-  status: giant,
-  error: cjk,
-  question: emoji,
-});
-process.stderr.write('builtMs=' + Math.round(performance.now() - started) + '\\n');
-const text = view.messages
-  .map((message) => typeof message.content === 'string'
-    ? message.content
-    : message.content.map((part) => part.type === 'text' ? part.text : '').join(''))
-  .join('\\n');
-const total = calls.estimateInputTokens(view.messages);
-process.stderr.write('estimatedMs=' + Math.round(performance.now() - started) + '\\n');
-process.stdout.write(JSON.stringify({
-  total,
-  shortKept: text.includes(short),
-  omitted: text.includes('…[omitted]…'),
-  terminal: text.includes('终态: 已完成'),
-  lone: lone(text),
-}));
-`
-}
 
 const tempDirs: string[] = []
 function makeTempDir(prefix: string): string {
@@ -176,243 +111,213 @@ function loneSurrogate(text: string): boolean {
   return false
 }
 
-// ─── reply view: deterministic budget and exact head/tail ───────────────────
+// ─── reply view: append-only communication conversation ─────────────────────
 
-describe('reply view budget contract', () => {
-  it('keeps system plus every message within 3000 tokens even for giant fields', () => {
-    const giant = 'x'.repeat(20_000)
-    const view = VIEWS.reply({
-      userText: giant,
-      lastReasonText: giant,
-      actions: [{ name: giant, status: giant }],
-      recentReplies: [giant, giant, giant, giant, giant],
-      status: giant,
-      error: giant,
-      question: giant,
-    })
-    const total = estimateInputTokens(view.messages)
-    assert.ok(total <= 3_000, `reply view must stay within 3000 tokens, got ${total}`)
-    assert.equal(estimateTokens(COMMUNICATION_EXAMPLES.join('\n')), 0, 'no unapproved examples are embedded')
+function turnStarted(seq: number, turn: number, text: string): LedgerEvent {
+  return event(seq, { type: 'turn.started', turn, text, model: { provider: 'p', model: 'm' } })
+}
+
+function reasonCompleted(seq: number, turn: number, cycle: number, text: string, workerOutput?: string): LedgerEvent {
+  return event(seq, {
+    type: 'reason.completed', turn, cycle, callId: `call-${seq}`, text,
+    ...(workerOutput === undefined ? {} : { workerOutput }),
   })
+}
 
-  it('preserves short decisive facts and the terminal outcome around an explicit omission', () => {
-    const lastReason = `决定: 采纳甲方案\n${'中'.repeat(4_000)}\n终态: 已完成`
-    const view = VIEWS.reply({
-      userText: '请继续',
-      lastReasonText: lastReason,
-      actions: [{ name: 'dispatch', status: 'done' }],
-      recentReplies: ['收到'],
-    })
-    const text = messageText(view)
-    assert.ok(text.includes('决定: 采纳甲方案'), 'the decisive head fact is preserved')
-    assert.ok(text.includes('终态: 已完成'), 'the terminal outcome is preserved')
-    assert.ok(text.includes('…[omitted]…'), 'the omission is explicit')
+function replyEvent(seq: number, turn: number, text: string): LedgerEvent {
+  return event(seq, { type: 'reply', turn, text })
+}
+
+function replyView(
+  events: LedgerEvent[],
+  over: {
+    turn?: number
+    cycle?: number
+    status?: 'running' | 'completed' | 'failed' | 'exhausted'
+    error?: string
+    imageUnsupported?: boolean
+  } = {},
+): BuiltView {
+  return VIEWS.reply({
+    events, turn: 1, cycle: 1, status: 'running', now: '2026-10-08T10:00:00.000Z', deviceName: 'test-device', ...over,
   })
+}
 
-  it('never produces malformed UTF-16 when clipping Unicode', () => {
-    const view = VIEWS.reply({
-      userText: '🚀👩‍🔬'.repeat(2_000),
-      lastReasonText: '🧪'.repeat(3_000),
-      actions: [{ name: '🔧', status: 'done' }],
-      recentReplies: ['✅'],
-    })
-    for (const message of view.messages) {
-      const text = typeof message.content === 'string'
-        ? message.content
-        : message.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
-      assert.equal(loneSurrogate(text), false, 'a clipped prompt must never end on a lone surrogate')
-    }
-    assert.ok(estimateInputTokens(view.messages) <= 3_000)
-  })
+function messagesOf(view: BuiltView): { role: string; text: string }[] {
+  return view.messages.map((message) => ({
+    role: message.role,
+    text: typeof message.content === 'string'
+      ? message.content
+      : message.content.map((part) => (part.type === 'text' ? part.text : '')).join(''),
+  }))
+}
 
-  it('ships no unapproved example scaffolding and no example section in the system prompt', () => {
-    assert.equal(COMMUNICATION_EXAMPLES.length, 0)
-    const view = VIEWS.reply({ userText: 'x', lastReasonText: 'r', actions: [], recentReplies: [] })
-    const system = view.messages[0]!.content
-    assert.equal(typeof system, 'string')
-    assert.equal(/<example|few-shot|示例/u.test(system as string), false)
-  })
-})
+function inputOf(view: BuiltView): string {
+  return messagesOf(view)[1]!.text
+}
 
-describe('reply view raw-field codepoint boundary', () => {
-  it('returns a field at the 1024-codepoint cap exactly, supplementary pairs included and no omission', () => {
-    const exact = `${'a'.repeat(1_022)}🚀🚀`
-    assert.equal(Array.from(exact).length, 1_024, 'the fixture is exactly at the cap')
-    const view = VIEWS.reply({ userText: 'x', lastReasonText: exact, actions: [], recentReplies: [] })
-    const text = messageText(view)
-    assert.ok(text.includes(exact), 'a field at the cap is retained exactly')
-    assert.equal(text.includes('…[omitted]…'), false, 'no omission is introduced at the cap')
-    for (const message of view.messages) {
-      const body = typeof message.content === 'string'
-        ? message.content
-        : message.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
-      assert.equal(loneSurrogate(body), false, 'an untouched field stays well-formed')
-    }
-    assert.ok(estimateInputTokens(view.messages) <= 3_000)
-  })
-
-  it('trims a 1025-codepoint field to exactly 512 head + omission + 512 tail around valid pairs', () => {
-    const O = '\n…[omitted]…\n'
-    const cases = [
-      {
-        label: 'a pair begins the tail',
-        field: `${'a'.repeat(513)}🚀${'b'.repeat(511)}`,
-        head: 'a'.repeat(512),
-        tail: `🚀${'b'.repeat(511)}`,
-      },
-      {
-        label: 'a pair ends the head',
-        field: `${'a'.repeat(511)}🚀${'b'.repeat(513)}`,
-        head: `${'a'.repeat(511)}🚀`,
-        tail: 'b'.repeat(512),
-      },
-    ]
-    for (const { label, field, head, tail } of cases) {
-      assert.equal(Array.from(field).length, 1_025, `${label}: the fixture is one past the cap`)
-      const view = VIEWS.reply({ userText: 'x', lastReasonText: field, actions: [], recentReplies: [] })
-      const body = messageText(view)
-      const expected = `${head}${O}${tail}`
-      assert.ok(body.includes(expected), `${label}: exactly 512 head + omission + 512 tail is retained`)
-      assert.equal(body.includes(field), false, `${label}: the untrimmed giant field is not retained whole`)
-      for (const message of view.messages) {
-        const content = typeof message.content === 'string'
-          ? message.content
-          : message.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
-        assert.equal(loneSurrogate(content), false, `${label}: a clipped field never splits a surrogate pair`)
-      }
-      assert.ok(estimateInputTokens(view.messages) <= 3_000, `${label}: the whole real-token input stays bounded`)
-    }
-  })
-
-  it('keeps the running and failed action facts and the current-attempt error', () => {
-    const view = VIEWS.reply({
-      status: 'running',
-      userText: '继续',
-      lastReasonText: 'r',
-      actions: [
-        { name: 'dispatch tool', status: 'running' },
-        { name: 'dispatch tool-1', status: 'failed' },
-      ],
-      recentReplies: [],
-      error: 'compile failed for dispatch tool-1',
-    })
-    const text = messageText(view)
-    assert.ok(text.includes('turn status: running'), 'the turn stays reported running')
-    assert.ok(text.includes('action running: dispatch tool'), 'the running action state is retained')
-    assert.ok(text.includes('action failed: dispatch tool-1'), 'the failed action state is retained')
-    assert.ok(text.includes('error: compile failed for dispatch tool-1'), 'the current-attempt error is conveyed')
+describe('reply view is one system message and one ctx + info user message', () => {
+  it('renders the whole conversation in wy-ctx and the triggering worker output in wy-info', () => {
+    const view = replyView([
+      turnStarted(1, 1, '问题一'),
+      reasonCompleted(2, 1, 1, '答复一'),
+      replyEvent(3, 1, '回复一'),
+      turnStarted(4, 2, '问题二'),
+      reasonCompleted(5, 2, 1, '答复二'),
+    ], { turn: 2, cycle: 1, status: 'completed' })
+    const messages = messagesOf(view)
+    assert.deepEqual(messages.map((message) => message.role), ['system', 'user'])
+    const input = messages[1]!.text
+    const ctx = input.slice(0, input.indexOf('<wy-info>'))
+    const info = input.slice(input.indexOf('<wy-info>'))
+    assert.ok(ctx.startsWith('<wy-ctx>\n<wy-conversation>'), 'the conversation leads the input')
+    assert.ok(ctx.includes('<message role="user" turn="1">问题一</message>'), 'earlier user inputs are present')
+    assert.ok(ctx.includes('<message role="assistant" turn="1">回复一</message>'), 'earlier replies are present')
+    assert.ok(ctx.includes('<message role="user" turn="2">问题二</message>'), 'the current user input is present')
     assert.ok(
-      text.includes('actions: 2') && text.includes('running 1') && text.includes('failed 1'),
-      'both mixed states are tallied',
+      ctx.indexOf('问题一') < ctx.indexOf('回复一') && ctx.indexOf('回复一') < ctx.indexOf('问题二'),
+      'messages keep timeline order',
     )
-    assert.ok(estimateInputTokens(view.messages) <= 3_000)
+    assert.ok(info.includes('<wy-output>答复二</wy-output>'), 'the triggering worker output is in wy-info')
+    assert.equal(input.includes('答复一'), false, 'earlier worker outputs are excluded')
+    assert.deepEqual(Object.keys(view.layers), ['wy-system', 'wy-ctx', 'wy-info'])
   })
-})
 
-describe('reply view finite-time bounding', () => {
-  // A pathological reply must be bounded before tokenization, not after: the
-  // subprocess hard-deadline fails (and kills only the child) if the real
-  // source stalls on the giant fields.
-  it('bounds giant fields before tokenization inside a hard subprocess deadline', (t) => {
-    const result = spawnSync(
-      process.execPath,
-      ['--no-warnings', '--import', TSX_LOADER, '--input-type=module', '--eval', giantReplyChild()],
-      {
-        timeout: 5_000,
-        maxBuffer: 4_096,
-        encoding: 'utf8',
-        cwd: fileURLToPath(new URL('../../', import.meta.url)),
-      },
+  it('shows only the worker output of the triggering cycle', () => {
+    const events = [
+      turnStarted(1, 1, '问题'),
+      reasonCompleted(2, 1, 1, '第一次'),
+      reasonCompleted(3, 1, 2, '第二次'),
+    ]
+    assert.ok(inputOf(replyView(events, { cycle: 1 })).includes('<wy-output>第一次</wy-output>'))
+    assert.ok(inputOf(replyView(events, { cycle: 2 })).includes('<wy-output>第二次</wy-output>'))
+    assert.ok(
+      inputOf(replyView(events, { cycle: 3, status: 'failed' })).includes('<wy-output>(无)</wy-output>'),
+      'a closing call without fresh output repeats no earlier output',
     )
-    t.diagnostic(result.stderr.trim())
-    assert.equal(result.error, undefined, `subprocess failed: ${result.error?.message ?? 'unknown'}; ${result.stderr}`)
-    assert.equal(result.status, 0, `subprocess exited ${result.status}: ${result.stderr}`)
-    const measured = JSON.parse(result.stdout) as {
-      total: number
-      shortKept: boolean
-      omitted: boolean
-      terminal: boolean
-      lone: boolean
-    }
-    assert.ok(measured.total <= 3_000, `giant reply view must stay within 3000 tokens, got ${measured.total}`)
-    assert.equal(measured.shortKept, true, 'the short user request is retained in full')
-    assert.equal(measured.omitted, true, 'an explicit head/tail omission marker is present')
-    assert.equal(measured.terminal, true, 'the terminal outcome is preserved around the omission')
-    assert.equal(measured.lone, false, 'no clipped prompt ends on a lone surrogate')
-  })
-})
-
-// ─── reply view: authoritative status/action facts ──────────────────────────
-
-describe('reply view status and action facts lead the status block', () => {
-  it('places the running status and action state before a giant action goal', () => {
-    const goal = `ACTIONMARK${'长'.repeat(2_000)}`
-    const view = VIEWS.reply({
-      status: 'running',
-      userText: '继续',
-      lastReasonText: `决定: 采纳甲方案\n${'大纲'.repeat(1_000)}\n报告已写好。`,
-      actions: [{ name: goal, status: 'running' }],
-      recentReplies: ['报告已写好。'],
-    })
-    const text = messageText(view)
-    assert.ok(text.includes('turn status: running'), 'the running turn state is explicit')
-    assert.ok(text.includes('actions: 1 (running 1)'), 'the action tally survives a giant goal')
-    assert.ok(text.includes('action running:'), 'each action entry is status-first')
-    const statusAt = text.indexOf('turn status: running')
-    const goalAt = text.indexOf('ACTIONMARK')
-    assert.ok(statusAt !== -1 && goalAt !== -1 && statusAt < goalAt, 'factual state precedes the giant goal')
-    assert.ok(estimateInputTokens(view.messages) <= 3_000)
   })
 
-  it('retains factual status and action state for a giant raw input within the token budget', () => {
-    const giant = 'x'.repeat(20_000)
-    const view = VIEWS.reply({
-      status: 'running',
-      userText: giant,
-      lastReasonText: giant,
-      actions: [{ name: `写报告${giant}`, status: 'running' }],
-      recentReplies: [giant, giant],
-    })
-    const text = messageText(view)
-    assert.ok(text.includes('turn status: running'), 'the running state survives the giant input')
-    assert.ok(text.includes('action running:'), 'the status-first action entry survives the giant input')
-    assert.ok(estimateInputTokens(view.messages) <= 3_000, 'the whole real-token input stays bounded')
+  it('keeps every reply of the session', () => {
+    const events: LedgerEvent[] = [turnStarted(1, 1, '问题')]
+    for (let index = 1; index <= 7; index += 1) events.push(replyEvent(index + 1, 1, `回复${index}`))
+    const input = inputOf(replyView(events))
+    for (let index = 1; index <= 7; index += 1) assert.ok(input.includes(`>回复${index}</message>`))
   })
 
-  it('makes program status/action facts authoritative over intent, outline and prior replies', () => {
-    const view = VIEWS.reply({
-      userText: 'x',
-      lastReasonText: '决定完成后写报告',
-      actions: [{ name: 'dispatch tool', status: 'running' }],
-      recentReplies: ['报告已写好。'],
-    })
+  it('lists only the actions that are still running, by title', () => {
+    const input = inputOf(replyView([
+      turnStarted(1, 1, '做吧'),
+      event(2, { type: 'action.started', turn: 1, cycle: 1, actionId: 'a1', kind: 'dispatch', parsed: {} }),
+      event(3, { type: 'action.titled', turn: 1, cycle: 1, actionId: 'a1', title: '跑构建' }),
+      event(4, { type: 'action.started', turn: 1, cycle: 1, actionId: 'a2', kind: 'read', parsed: {} }),
+      event(5, { type: 'action.titled', turn: 1, cycle: 1, actionId: 'a2', title: '读配置' }),
+      event(6, { type: 'action.finished', turn: 1, cycle: 1, actionId: 'a1', kind: 'dispatch', status: 'done', result: 'RESULT-SECRET' }),
+      reasonCompleted(7, 1, 1, '已派出'),
+    ]))
+    assert.ok(input.includes('<actions>- 读配置</actions>'))
+    assert.equal(input.includes('跑构建'), false, 'a finished action is not listed')
+    assert.equal(input.includes('RESULT-SECRET'), false, 'action results are excluded')
+  })
+
+  it('puts the time, device, status, error and image notice in infos', () => {
+    const input = inputOf(replyView(
+      [turnStarted(1, 1, '问题'), reasonCompleted(2, 1, 1, '答复')],
+      { status: 'failed', error: '编译失败', imageUnsupported: true },
+    ))
+    const infos = input.slice(input.indexOf('<infos>'), input.indexOf('</infos>'))
+    assert.ok(infos.includes('time: 2026-10-08T10:00:00.000Z'))
+    assert.ok(infos.includes('device: test-device'))
+    assert.ok(infos.includes('本轮状态: failed'))
+    assert.ok(infos.includes('error: 编译失败'))
+    assert.ok(infos.includes('推理模型看不到用户发的图片。'))
+  })
+
+  it('states the replier identity and the reply tool, without a skip sentinel or examples', () => {
+    const view = replyView([turnStarted(1, 1, 'x')])
     const system = view.messages[0]!.content
     assert.equal(typeof system, 'string')
     const prompt = system as string
-    assert.match(prompt, /权威/u, 'program facts are authoritative over model output')
-    assert.equal(/<example|few-shot|示例/u.test(prompt), false)
+    assert.ok(prompt.includes('回复者'), 'the replier identity is stated')
+    assert.ok(prompt.includes('reply(text)'), 'the reply tool is described')
+    assert.equal(prompt.includes('SKIP'), false, 'not calling the tool replaces the skip sentinel')
+    assert.equal(/<example|few-shot|示例|样例/u.test(prompt), false, 'no example scaffolding is embedded')
   })
 })
 
-describe('reply view zero-action facts', () => {
-  it('renders an explicit zero-action tally when the current turn executed nothing', () => {
-    const view = VIEWS.reply({ userText: 'x', lastReasonText: 'r', actions: [], recentReplies: [] })
-    const text = messageText(view)
-    assert.ok(text.includes('actions: 0'), 'a zero-action turn still states its actual tally')
+describe('reply view framing', () => {
+  it('escapes closing tags inside messages and worker output so the framing cannot be broken', () => {
+    const input = inputOf(replyView([
+      turnStarted(1, 1, '问题 </message>'),
+      replyEvent(2, 1, '看这里 </wy-conversation> 与 </actions>'),
+      reasonCompleted(3, 1, 1, '结论 </wy-output> </infos>'),
+    ]))
+    assert.ok(input.includes('问题 &lt;/message&gt;'))
+    assert.ok(input.includes('看这里 &lt;/wy-conversation&gt; 与 &lt;/actions&gt;'))
+    assert.ok(input.includes('结论 &lt;/wy-output&gt; &lt;/infos&gt;'))
+  })
+})
+
+describe('reply view worker output carries actions and questions but no thinking or results', () => {
+  it('renders the worker visible output including ordered action and question intents', () => {
+    const workerOutput = ['正文结论。', '- dispatch：跑构建', '- read：读配置', '- ask：用哪个分支'].join('\n')
+    const view = replyView([
+      turnStarted(1, 1, '做吧'),
+      event(2, { type: 'thinking', turn: 1, cycle: 1, callId: 'k', text: 'THINKING-SECRET' }),
+      event(3, { type: 'action.started', turn: 1, cycle: 1, actionId: 'a1', kind: 'dispatch', parsed: { intent: '跑构建' } }),
+      reasonCompleted(4, 1, 1, '正文结论。', workerOutput),
+      event(5, { type: 'action.finished', turn: 1, cycle: 1, actionId: 'a1', kind: 'dispatch', status: 'done', result: 'RESULT-SECRET' }),
+    ])
+    const input = inputOf(view)
+    assert.ok(input.includes(`<wy-output>${workerOutput}</wy-output>`), 'the visible prose and ordered intents are present')
+    assert.equal(input.includes('THINKING-SECRET'), false, 'thinking rows are excluded')
+    assert.equal(input.includes('RESULT-SECRET'), false, 'action result rows are excluded')
   })
 
-  it('renders the prior overall done action without any missing-result structure', () => {
-    const view = VIEWS.reply({
-      userText: '继续',
-      lastReasonText: '',
-      actions: [{ name: 'dispatch tool', status: 'done' }],
-      recentReplies: [],
-    })
-    const text = messageText(view)
-    assert.ok(text.includes('actions: 1 (done 1)'), 'the prior overall done action is tallied')
-    assert.ok(text.includes('action done: dispatch tool'), 'the prior completed action is rendered')
-    assert.equal(text.includes('missing visible result'), false, 'no missing-result structure is rendered')
-    assert.ok(estimateInputTokens(view.messages) <= 3_000, 'the whole real-token input stays bounded')
+  it('falls back to reason.completed text when no workerOutput is present', () => {
+    const view = replyView([reasonCompleted(1, 1, 1, '只有正文')])
+    assert.ok(inputOf(view).includes('<wy-output>只有正文</wy-output>'))
+  })
+})
+
+describe('reply view preserves full content without truncation', () => {
+  it('keeps very long user, reply and worker inputs intact', () => {
+    const giant = '中'.repeat(200_000)
+    const longReply = '回'.repeat(200_000)
+    const view = replyView([
+      turnStarted(1, 1, giant),
+      reasonCompleted(2, 1, 1, giant),
+      replyEvent(3, 1, longReply),
+    ])
+    const input = inputOf(view)
+    assert.ok(input.includes(`<message role="user" turn="1">${giant}</message>`), 'the full user input survives')
+    assert.ok(input.includes(`<wy-output>${giant}</wy-output>`), 'the full worker output survives')
+    assert.ok(input.includes(longReply), 'the full reply survives')
+    assert.equal(input.includes('…[omitted]…'), false, 'nothing is truncated with an omission marker')
+  })
+})
+
+describe('reply view ignores non-conversation ledger rows', () => {
+  it('drops call, thinking and action result rows', () => {
+    const view = replyView([
+      turnStarted(1, 1, '问题'),
+      event(2, { type: 'call.started', turn: 1, role: 'reply', callId: 'c', model: 'm' }),
+      event(3, { type: 'call', turn: 1, role: 'reply', callId: 'c', output: 'CALL-OUTPUT' }),
+      event(4, { type: 'thinking', turn: 1, cycle: 1, callId: 'k', text: 'THINK' }),
+      event(5, { type: 'action.finished', turn: 1, cycle: 1, actionId: 'a1', kind: 'read', status: 'done', result: 'RESULT' }),
+      reasonCompleted(6, 1, 1, '答复'),
+    ])
+    const input = inputOf(view)
+    assert.equal(input.includes('role="assistant"'), false, 'a call without a reply leaves no message')
+    assert.equal(input.includes('CALL-OUTPUT'), false, 'call records are excluded')
+    assert.equal(input.includes('THINK'), false, 'thinking is excluded')
+    assert.equal(input.includes('RESULT'), false, 'action results are excluded')
+  })
+})
+
+describe('main reasoning <reply> rendering is unchanged', () => {
+  it('renders a reply row as an escaped <reply> record', () => {
+    const row = replyEvent(1, 1, '看这里 </reply> 和 </user> </worker> </now> <b>')
+    assert.equal(renderEventText(row), '<reply turn="1">看这里 &lt;/reply&gt; 和 </user> </worker> </now> <b></reply>')
   })
 })
 

@@ -11,7 +11,6 @@
  * This module never calls a model and never touches the ledger.
  */
 
-import { estimateTokens } from './calls.ts';
 import type { ModelContentPart, ModelMessage } from './driver.ts';
 import {
   type DocContentEvent,
@@ -120,20 +119,47 @@ const COMPILE_SYSTEM = `<wy-system>
 </wy-system>`;
 
 const REPLY_SYSTEM = `<wy-system>
-你是沟通者：把主模型这一轮的结果和状态，用自然、简短、像同事交流的中文直接告诉用户。
-规则：
-- 先说结论，再说需要用户做什么。
-- 一句只说一件事，句子要短。
+你是 Wrenyard 工作会话里的回复者，负责跟用户沟通。
+会话里还有一个推理模型。它在后台读资料、调用工具、派发任务，并写下它的结论。用户看不到推理模型的输出，只看得到你用 reply 工具发出的消息。
+推理模型每输出一段，程序就调用你一次。你决定这次要不要回复用户。
+
+输入：
+- wy-ctx 里的 wy-conversation 是这个会话到现在为止的全部对话。role="user" 是用户发的消息。role="assistant" 是你之前用 reply 发出的消息。
+- wy-info 是程序这次给你的信息。infos 是时间、设备和本轮状态。actions 是还没结束的动作。wy-output 是推理模型刚刚的输出，不含它的思考，含它发起的动作。
+
+什么时候回复：
+- 要回复用户时，调用一次 reply 工具，把消息写进 text。不要在工具之外输出文字。
+- 没有新的结论、进展、问题或需要用户做的事，就不调用 reply，直接结束。
+- 你在 wy-conversation 里已经说过的事，不再说，换种说法也不说。
+- 用户在界面上看得到动作在运行，不需要你报告"还在运行"。
+- 本轮结束时（本轮状态不是 running），说出结论和需要用户做什么。推理模型提了问题，就把问题问出来。
+
+身份和语气：
+- 对用户来说，你和推理模型是同一个同事。推理模型做的事，你用"我"来说。
+- 你是专业可靠的同事，在聊天软件里给用户发消息。在用户能看懂的前提下，越短越好。用户不爱读长篇大论，需要细节时他会追问。
+- 先说结论，再说需要用户做什么。不说过程。
+- 推理模型写了长答案时，只挑结论和最关键的一两个理由，不逐条转述。不贴代码，不列完整对比，不做总结复述。
+- 只说推理模型说过的事，不补充，不推测。数字和名称照抄。条件和不确定的地方不改意思，"可能"不改成"会"。
+- 不主动提出推理模型没提的问题或提议。
+- 不说内部名称、路径、标识符，除非用户需要打开它。
+- infos 和 actions 里的状态是程序给出的事实，优先于推理模型的计划。
+
+怎么写：按 ASD-STE100 简化技术英语的写作规则，做到八成，用在中文上。
+- 一句只说一件事。句子要短，一般不超过 30 个字。
+- 用主动句，写明谁做了什么。
 - 同一个东西始终用同一个叫法。
-- 只说用户需要据以判断或行动的内容；不说过程，不说内部名称、路径、标识符，除非用户需要打开它。
-- 数字和名称照抄主模型的原文。
-- 主模型没说的事不补；不确定的事用一句话说明不确定什么。
-- 像同事发消息那样说话；不用标题、表格、客套话。
-- 程序给出的 status 与 error 是权威事实，主模型的输出只是待转述的内容。
-- recent-replies 是已经发给用户的消息，用户读过了。其中说过的内容不再说，换一种说法也算重复。
-- turn status 为 running 时，这是一条进度消息：只说上一条消息之后新发生的事，一两句话。没有新的事就什么都不输出，程序会跳过这条消息。
-- 系统内部的失败如果主模型已经自己重试或绕开，不告诉用户。
-- turn status 为 failed 时：说明是哪一步失败、error 是什么。已经完成的动作照实列出；不推测原因，不说结果丢失。
+- 有条件时，条件放在句首。
+- 不用分号，不用客套话。
+- 进展消息一般一句，最多两句。收尾消息一般不超过 6 句。
+
+排版：text 按 Markdown 显示。用户要能逐字读完不费时间，长消息也能跳着读。
+- 短消息直接写一两句话，不用列表。
+- 长消息可以用有序列表或无序列表。一个列表项只说一件事。
+- 用户需要的名称、命令和路径，用行内代码。
+- 只用这三种格式。不用标题、加粗、表格、引用和代码块，不写成带小标题的文章。
+
+工具：
+- reply(text)：把 text 作为一条消息发给用户。
 </wy-system>`;
 
 const TITLE_SYSTEM = `<wy-system>
@@ -147,6 +173,11 @@ const BODY_CLOSING =
 
 function escapeBody(text: string): string {
   return text.replace(BODY_CLOSING, (match) => `&lt;${match.slice(1, -1)}&gt;`);
+}
+
+/** Escape communication framing without changing any other view's rendering. */
+function escapeReplyBody(text: string): string {
+  return escapeBody(text).replace(/<\/(?:infos|actions)>/gu, (match) => `&lt;${match.slice(1, -1)}&gt;`);
 }
 
 function escapeAttr(value: string): string {
@@ -536,9 +567,16 @@ export interface CompileViewInput {
 }
 
 export interface ReplyViewInput {
-  userText: string; lastReasonText: string;
-  actions: { name: string; status: string }[]; recentReplies: string[];
-  status?: string; error?: string; imageNotice?: boolean; question?: string;
+  events: readonly LedgerEvent[];
+  turn: number;
+  /** The reasoning cycle whose output triggered this call. */
+  cycle: number;
+  status: 'running' | 'completed' | 'failed' | 'exhausted';
+  /** ISO time of this call. */
+  now: string;
+  deviceName: string;
+  error?: string;
+  imageUnsupported?: boolean;
 }
 
 export interface TitleViewInput {
@@ -710,154 +748,73 @@ function buildCompile(input: CompileViewInput): BuiltView {
   return twoPartView(COMPILE_SYSTEM, tag('wy-compile', [], body), 'wy-compile');
 }
 
-const REPLY_BUDGET_TOKENS = 3_000;
-/** Placeholder for a field trimmed by the deterministic reply budget. */
-const OMISSION = '\n…[omitted]…\n';
-/** Raw reply fields are capped before any tokenizer work: 512 head + 512 tail. */
-const REPLY_FIELD_MAX_CODEPOINTS = 1_024;
-/** Per-field token caps in priority order; the flexible trace takes the rest. */
-const REPLY_USER_TOKENS = 600;
-const REPLY_STATUS_TOKENS = 900;
-const REPLY_RECENT_TOKENS = 300;
-
 /**
- * Bound one raw reply field before any `estimateTokens`/binary search runs.
- * A bounded forward `for...of` visits at most 1025 codepoints (never a full
- * `Array.from` copy), recording the UTF-16 offset after the 512th codepoint as
- * the head boundary. A field within the cap is returned exactly unchanged. A
- * longer field keeps exactly 512 leading and 512 trailing codepoints around the
- * shared omission marker; the trailing cut is a bounded backward scan that
- * pairs a low surrogate with its preceding high surrogate, so both cuts land on
- * codepoint boundaries and no valid UTF-16 pair is ever split.
+ * Render the communication request as one system and one user message. The
+ * user message carries `<wy-ctx>`, the whole session conversation (every user
+ * input and every visible reply, in timeline order), then `<wy-info>`: the
+ * call's facts, the actions still running, and the worker output of the
+ * triggering cycle. Earlier worker outputs, thinking, action results and call
+ * records are never rendered.
  */
-function boundRawField(text: string): string {
-  const half = REPLY_FIELD_MAX_CODEPOINTS / 2;
-  let count = 0;
-  let offset = 0;
-  let headBoundary = 0;
-  for (const point of text) {
-    if (count === REPLY_FIELD_MAX_CODEPOINTS) {
-      // The 1025th codepoint proves the field is over the cap: trim it. Record
-      // exactly 512 trailing codepoints by walking code units backwards.
-      let tailStart = text.length;
-      for (let taken = 0; taken < half && tailStart > 0;) {
-        const code = text.charCodeAt(tailStart - 1);
-        if (code >= 0xdc00 && code <= 0xdfff && tailStart >= 2) {
-          const high = text.charCodeAt(tailStart - 2);
-          if (high >= 0xd800 && high <= 0xdbff) {
-            tailStart -= 2;
-            taken += 1;
-            continue;
-          }
-        }
-        tailStart -= 1;
-        taken += 1;
-      }
-      return `${text.slice(0, headBoundary)}${OMISSION}${text.slice(tailStart)}`;
-    }
-    if (count === half) headBoundary = offset;
-    offset += point.length;
-    count += 1;
-  }
-  return text;
-}
-
-/** Largest codepoint prefix (or suffix) of `points` within the token budget. */
-function sliceByTokens(points: readonly string[], maxTokens: number, fromEnd: boolean): string {
-  let low = 0;
-  let high = points.length;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    const slice = fromEnd ? points.slice(points.length - mid) : points.slice(0, mid);
-    if (estimateTokens(slice.join('')) <= maxTokens) low = mid;
-    else high = mid - 1;
-  }
-  return (fromEnd ? points.slice(points.length - low) : points.slice(0, low)).join('');
-}
-
-/**
- * The single deterministic, Unicode-safe head/tail trim, applied only to raw
- * fields already bounded to 1024 retained codepoints. Both ends are found by
- * binary search over codepoints against the real tokenizer budget, so a
- * surrogate pair is never split.
- */
-function clipHeadTail(text: string, maxTokens: number): string {
-  if (maxTokens <= 0) return '';
-  if (estimateTokens(text) <= maxTokens) return text;
-  const points = Array.from(text);
-  const budget = Math.max(0, maxTokens - estimateTokens(OMISSION));
-  const head = Math.ceil(budget / 2);
-  const tail = Math.floor(budget / 2);
-  return `${sliceByTokens(points, head, false)}${OMISSION}${sliceByTokens(points, tail, true)}`;
-}
-
-/** Bounded one-line action name; head/tail trimmed by codepoint, deterministic. */
-function compactActionName(name: string): string {
-  const oneLine = name.replace(/\s+/gu, ' ').trim();
-  const points = Array.from(oneLine);
-  const MAX_NAME_CODEPOINTS = 48;
-  if (points.length <= MAX_NAME_CODEPOINTS) return oneLine;
-  return `${points.slice(0, 36).join('')}…${points.slice(-11).join('')}`;
-}
-
 function buildReply(input: ReplyViewInput): BuiltView {
-  const status: string[] = [];
-  // The explicit turn status leads the block, so the factual state a
-  // communicator must trust survives any bounded clip of what follows.
-  if (input.status !== undefined) status.push(`turn status: ${input.status}`);
-  // Compact, status-first action table: the always-present tally and each
-  // `status: name` line keep the running signal ahead of long action goals, so
-  // even a giant goal cannot bury the state that decides whether work is
-  // genuinely finished. The tally is rendered even at zero.
-  const tally = new Map<string, number>();
-  for (const action of input.actions) tally.set(action.status, (tally.get(action.status) ?? 0) + 1);
-  const counts = [...tally.entries()].map(([state, count]) => `${state} ${count}`).join(', ');
-  status.push(`actions: ${input.actions.length}${counts === '' ? '' : ` (${counts})`}`);
-  for (const action of input.actions) {
-    status.push(`action ${action.status}: ${compactActionName(action.name)}`);
+  const conversation: string[] = [];
+  const running = new Map<string, string>();
+  let worker: Extract<LedgerEvent, { type: 'reason.completed' }> | undefined;
+  for (const event of input.events) {
+    switch (event.type) {
+      case 'turn.started':
+        conversation.push(tag('message', [['role', 'user'], ['turn', event.turn]], escapeReplyBody(event.text)));
+        break;
+      case 'reply':
+        conversation.push(tag('message', [['role', 'assistant'], ['turn', event.turn]], escapeReplyBody(event.text)));
+        break;
+      case 'reason.completed':
+        if (event.turn === input.turn && event.cycle === input.cycle) worker = event;
+        break;
+      case 'action.started':
+        running.set(event.actionId, event.kind);
+        break;
+      case 'action.titled':
+        if (running.has(event.actionId)) running.set(event.actionId, event.title);
+        break;
+      case 'action.finished':
+        running.delete(event.actionId);
+        break;
+      default:
+        break;
+    }
   }
-  if (input.error !== undefined) status.push(`error: ${input.error}`);
-  if (input.imageNotice === true) status.push('注意：当前主推理模型看不到图片，请在回复中明确告诉用户。');
-  if (input.question !== undefined) status.push(`question: ${input.question}`);
 
-  const recent = input.recentReplies.slice(-5).join('\n');
-  // Every raw field is Unicode-bounded before any tokenizer work; factual
-  // fields lead so the short user request survives intact.
-  const fields = [
-    { label: 'user', text: boundRawField(input.userText), cap: REPLY_USER_TOKENS },
-    { label: 'status', text: boundRawField(status.join('\n')), cap: REPLY_STATUS_TOKENS },
-    { label: 'recent-replies', text: boundRawField(recent), cap: REPLY_RECENT_TOKENS },
-    { label: 'last-reason', text: boundRawField(input.lastReasonText), cap: Number.POSITIVE_INFINITY },
+  const infos = [
+    `time: ${input.now}`,
+    `device: ${input.deviceName}`,
+    `本轮状态: ${input.status}`,
+    ...(input.error === undefined ? [] : [`error: ${input.error}`]),
+    ...(input.imageUnsupported === true ? ['推理模型看不到用户发的图片。'] : []),
   ];
-  const system = [
-    REPLY_SYSTEM,
-    ...(COMMUNICATION_EXAMPLES.length === 0 ? [] : [COMMUNICATION_EXAMPLES.join('\n')]),
-  ].join('\n');
-  const assemble = (texts: readonly string[]): string => [
-    '<wy-reply>',
-    ...fields.flatMap((field, index) => [`<${field.label}>`, escapeBody(texts[index]!), `</${field.label}>`]),
-    '</wy-reply>',
-  ].join('\n');
+  const actions = [...running.values()].map((name) => `- ${name}`);
 
-  // Charge the fixed framing once, then let each field spend what remains.
-  let remaining = Math.max(0, REPLY_BUDGET_TOKENS - estimateTokens(system) - estimateTokens(assemble(fields.map(() => ''))));
-  const bounded = fields.map((field) => {
-    const text = clipHeadTail(field.text, Math.max(0, Math.min(field.cap, remaining)));
-    remaining = Math.max(0, remaining - estimateTokens(text));
-    return text;
-  });
-  let userSeg = assemble(bounded);
-  // A concatenation boundary can nudge the real join over the estimate; one
-  // bounded pass over the fields restores the exact budget.
-  for (let index = fields.length - 1; index >= 0; index -= 1) {
-    const total = estimateTokens(system) + estimateTokens(userSeg);
-    if (total <= REPLY_BUDGET_TOKENS) break;
-    const current = bounded[index]!;
-    const over = total - REPLY_BUDGET_TOKENS + estimateTokens(OMISSION);
-    bounded[index] = clipHeadTail(current, Math.max(0, estimateTokens(current) - over));
-    userSeg = assemble(bounded);
-  }
-  return twoPartView(system, userSeg, 'wy-reply');
+  const ctx = [
+    '<wy-ctx>',
+    tag('wy-conversation', [], conversation.length === 0 ? '(无)' : `\n${conversation.join('\n')}\n`),
+    '</wy-ctx>',
+  ].join('\n');
+  const info = [
+    '<wy-info>',
+    tag('infos', [], escapeReplyBody(infos.join('\n'))),
+    tag('actions', [], actions.length === 0 ? '(无)' : escapeReplyBody(actions.join('\n'))),
+    tag('wy-output', [], escapeReplyBody(worker === undefined ? '(无)' : worker.workerOutput ?? worker.text)),
+    '</wy-info>',
+  ].join('\n');
+  const user = `${ctx}\n${info}`;
+  return {
+    messages: [
+      { role: 'system', content: REPLY_SYSTEM },
+      { role: 'user', content: user },
+    ],
+    layers: { 'wy-system': REPLY_SYSTEM.length, 'wy-ctx': ctx.length, 'wy-info': info.length },
+    segments: { 'wy-system': REPLY_SYSTEM, 'wy-ctx': ctx, 'wy-info': info },
+  };
 }
 
 function buildTitle(input: TitleViewInput): BuiltView {
@@ -869,12 +826,6 @@ function buildTitle(input: TitleViewInput): BuiltView {
 }
 
 // ─── Composition root ───────────────────────────────────────────────────────
-
-/**
- * Approved communication few-shot examples. Deliberately empty: the root
- * supplies approved samples later. Do not embed unapproved candidates.
- */
-export const COMMUNICATION_EXAMPLES: readonly string[] = [];
 
 export function createViews(): ViewsPort {
   return {

@@ -153,10 +153,10 @@ const REASON_TURN2 = 'console 首页加载慢同样与重试无关，更像是�
 
 const FINAL_REPLY_2 = 'console 的首页慢主要是首屏 bundle 过大，和 aurora 的重试问题不是一回事。建议先做代码分割，我可以继续跟进。';
 
-/** Live-typing scene chunks: one streaming reason call and one reply call. */
+/** Live scene: one streaming reason call, then a reply delivered whole when its call ends. */
 const LIVE_REASONING_CHUNKS = ['熔断应包在退避之外：', '统计窗口内失败率超过阈值后', '直接短路，冷却后半开探测。'];
 const LIVE_REASON_TEXT_CHUNKS = ['在 retry 外层加熔断器，', '复用现有指标，', '补充状态切换测试。'];
-const LIVE_REPLY_CHUNKS = [
+const LIVE_REPLY = [
   '已经在 billing 重试外层加上了熔断：',
   '最近 20 次调用中失败率超过 50% 时，',
   '熔断器打开并暂停 30 秒，',
@@ -164,7 +164,7 @@ const LIVE_REPLY_CHUNKS = [
   '成功即恢复。',
   '新增 4 个状态切换测试，全部通过。',
   '要一起更新运维文档吗？',
-];
+].join('');
 
 // ─── Fictional model catalogue ─────────────────────────────────────────────
 
@@ -1075,17 +1075,9 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       turn,
       cycle: 1,
     }, replyStartedAt);
+    await sleep(1_800);
 
-    const replyLive: LiveCall = { callId: replyCallId, text: '', reasoning: '' };
-    live.push(replyLive);
-    emitLive(sessionId, live);
-    for (const chunk of LIVE_REPLY_CHUNKS) {
-      replyLive.text += chunk;
-      emitLive(sessionId, live);
-      await sleep(360);
-    }
-
-    const replyText = LIVE_REPLY_CHUNKS.join('');
+    const replyText = LIVE_REPLY;
     const replyEndedAt = new Date();
     appendEvent(sessionId, {
       type: 'call',
@@ -1096,7 +1088,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       startedAt: replyStartedAt.toISOString(),
       endedAt: replyEndedAt.toISOString(),
       firstTokenAt: new Date(replyStartedAt.getTime() + 300).toISOString(),
-      layers: { 'wy-system': 1_200, 'wy-workspace': 5_200, 'wy-ctx': 600, 'wy-status': 120 },
+      layers: { 'wy-system': 2_400, 'wy-ctx': 3_600, 'wy-info': 900 },
       estimatedInputTokens: 6_800,
       usage: { input: 6_900, output: 120 },
       output: replyText,
@@ -1105,8 +1097,6 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
     }, replyEndedAt);
     appendEvent(sessionId, { type: 'reply', turn, cycle: 1, text: replyText, callId: replyCallId }, new Date());
     appendEvent(sessionId, { type: 'turn.finished', turn, status: 'completed' }, new Date());
-    live.length = 0;
-    emitLive(sessionId, live);
   }
 
   async function playTurn(text: string): Promise<void> {

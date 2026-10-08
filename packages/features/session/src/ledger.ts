@@ -211,6 +211,13 @@ export interface ReasonCompletedEvent extends LedgerEventBase {
   type: 'reason.completed';
   callId: string;
   text: string;
+  /**
+   * The complete worker output of this cycle: the visible prose plus the
+   * ordered raw action intents and questions parsed from its wy_action tool
+   * calls. The communication view renders this; `text` stays the main reasoning
+   * prose so main reasoning rendering is unchanged.
+   */
+  workerOutput?: string;
 }
 
 export interface ActionStartedEvent extends LedgerEventBase {

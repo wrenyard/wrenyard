@@ -60,14 +60,6 @@ export interface TurnRuntime {
   emptyReasonRetried: boolean;
   /** The visible text of the last successful reason output. */
   currentReasonText: string;
-  /** Intermediate reply scheduling. */
-  lastReplyAt?: number;
-  /** Cycle that already produced a progress reply: one per reasoning cycle. */
-  lastReplyCycle?: number;
-  replyTimer?: ReturnType<typeof setTimeout>;
-  replyPending: boolean;
-  replyInFlight: boolean;
-  replyPromise: Promise<void>;
 }
 
 export interface SessionRuntime {
@@ -91,4 +83,10 @@ export interface SessionRuntime {
    * request sees is one linear, append-only history.
    */
   reasonQueue: Promise<void>;
+  /**
+   * Tail of the session-scoped queue of communication (reply) invocations.
+   * Replies are serialized per session, and each request builds its ledger view
+   * when it is dequeued, so it always sees the earlier assistant replies.
+   */
+  replyQueue: Promise<void>;
 }

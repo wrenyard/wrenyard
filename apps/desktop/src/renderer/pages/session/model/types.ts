@@ -229,7 +229,6 @@ export interface CallModel {
 export interface ReplyModel {
   text: string;
   at: string;
-  streaming: boolean;
   cycle?: number;
 }
 

@@ -246,6 +246,69 @@ test('unknown, unavailable and retired injected models fail before any call', as
   }
 });
 
+function sseResponse(frames: readonly unknown[]): Response {
+  const body = [...frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`), 'data: [DONE]\n\n'].join('');
+  return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+}
+
+test('a reply-tool request declares only the reply tool and returns each streamed reply text', async () => {
+  const capture: Capture = {};
+  const driver = createInferenceDriver(fakeGateway({ calls: 0 }), {
+    resolveProvider: builtinProvider,
+    fetch: fakeFetch(sseResponse([
+      { choices: [{ delta: { content: 'ignored prose' } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'reply', arguments: '{"text":"第一' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '句"}' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 1, function: { name: 'reply', arguments: '{"text":"- 第二条"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+    ]), capture),
+  });
+
+  let actionCalls = 0;
+  const result = await driver.complete(baseRequest({
+    model: 'codebuddy/kimi-k3', replyTool: true, onToolCall: () => { actionCalls += 1; },
+  }));
+
+  const body = JSON.parse(String(capture.init?.body)) as { tools: { function: { name: string } }[] };
+  assert.deepEqual(body.tools.map((tool) => tool.function.name), ['reply']);
+  assert.deepEqual(result.replies, ['第一句', '- 第二条']);
+  assert.deepEqual(result.toolCalls, [], 'reply calls are never reported as actions');
+  assert.equal(actionCalls, 0, 'reply calls never invoke the action callback');
+  assert.equal(result.text, 'ignored prose');
+});
+
+test('a reply-tool request without a tool call returns no replies', async () => {
+  const driver = createInferenceDriver(fakeGateway({ calls: 0 }), {
+    resolveProvider: builtinProvider,
+    fetch: fakeFetch(jsonResponse({ choices: [{ message: { content: 'prose without a reply call' } }] })),
+  });
+  const result = await driver.complete(baseRequest({ model: 'codebuddy/kimi-k3', replyTool: true }));
+  assert.equal(result.replies, undefined);
+});
+
+test('a malformed reply call fails the request', async () => {
+  for (const args of ['not JSON', '[]', '{"txt":1}', '{"text":1}', '{"text":null}']) {
+    for (const streamed of [false, true]) {
+      const toolCall = { function: { name: 'reply', arguments: args } };
+      const response = streamed
+        ? sseResponse([
+          { choices: [{ delta: { tool_calls: [{ index: 0, ...toolCall }] } }] },
+          { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+        ])
+        : jsonResponse({ choices: [{ message: { content: null, tool_calls: [toolCall] } }] });
+      const driver = createInferenceDriver(fakeGateway({ calls: 0 }), {
+        resolveProvider: builtinProvider,
+        fetch: fakeFetch(response),
+      });
+      await assert.rejects(
+        driver.complete(baseRequest({ model: 'codebuddy/kimi-k3', replyTool: true })),
+        /invalid reply call/u,
+        `${streamed ? 'streamed' : 'JSON'} reply arguments: ${args}`,
+      );
+    }
+  }
+});
+
 test('auxiliary requests bypass the injected resolver entirely', async () => {
   const gateway = { calls: 0 };
   const capture: Capture = {};

@@ -1,7 +1,8 @@
 /**
  * session live calls: in-memory streaming snapshots of the running `reason`
- * and `reply` calls, keyed by session and call id. The durable `call.started`
- * and `call` events, not this table, are the source of truth.
+ * calls, keyed by session and call id. A reply is short and is delivered whole
+ * when its call ends, so it is never streamed. The durable `call.started` and
+ * `call` events, not this table, are the source of truth.
  */
 import type { CallRunRequest, CallRunResult, CallsPort, LiveCall } from './ports.ts';
 
@@ -34,9 +35,9 @@ export class LiveCalls {
   }
 
   /**
-   * Wrap a session's call port so the streaming roles (`reason`, `reply`)
-   * publish an in-memory snapshot while they run. The durable `call.started` /
-   * `call` events, not this table, are the source of truth.
+   * Wrap a session's call port so `reason` calls publish an in-memory snapshot
+   * while they run. The durable `call.started` / `call` events, not this table,
+   * are the source of truth.
    */
   wrap(sessionId: string, inner: CallsPort): CallsPort {
     return { run: (input) => this.runCallWithLive(sessionId, inner, input) };
@@ -47,8 +48,7 @@ export class LiveCalls {
     inner: CallsPort,
     input: CallRunRequest,
   ): Promise<CallRunResult> {
-    const streaming = input.role === 'reason' || input.role === 'reply';
-    if (!streaming) return inner.run(input);
+    if (input.role !== 'reason') return inner.run(input);
     this.beginLive(sessionId, input.callId);
     const onText = input.onText;
     const onReasoning = input.onReasoning;
