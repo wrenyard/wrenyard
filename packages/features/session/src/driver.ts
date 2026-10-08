@@ -107,16 +107,16 @@ export const ACTION_TOOL = {
   function: {
     name: 'wy_action',
     description:
-      '读取资料用 read，派发任务用 dispatch，撰写或修订文档用 write，向用户提出一个需要其决定的问题用 ask。一次可以调用多次，每次只表达一件事，intent 用自然语言。',
+      'Use read to read material, dispatch to dispatch a task, write to write or revise a document, and ask to ask the user one question that needs their decision. You can call it several times at once. Each call expresses one thing, with intent in natural language.',
     parameters: {
       type: 'object',
       properties: {
         type: {
           type: 'string',
           enum: ['read', 'dispatch', 'write', 'ask'],
-          description: 'read=读取资料，dispatch=派发任务，write=撰写或修订文档，ask=向用户提出一个需要其决定的问题。',
+          description: 'read = read material, dispatch = dispatch a task, write = write or revise a document, ask = ask the user one question that needs their decision.',
         },
-        intent: { type: 'string', description: '用自然语言表达这次动作的意图。' },
+        intent: { type: 'string', description: 'The intent of this action, in natural language.' },
       },
       required: ['type', 'intent'],
     },
@@ -128,11 +128,11 @@ export const REPLY_TOOL = {
   type: 'function',
   function: {
     name: 'reply',
-    description: '把一条消息发给用户。用户只看得到这里的 text。',
+    description: 'Send one message to the user. The user sees only this text.',
     parameters: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: '发给用户的消息，Markdown 文本。' },
+        text: { type: 'string', description: 'The message to the user, as Markdown text.' },
       },
       required: ['text'],
     },

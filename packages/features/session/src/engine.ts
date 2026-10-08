@@ -993,10 +993,10 @@ class Engine implements Session {
     }
     if ('ask' in parsed) {
       turn.asksThisCycle.push(parsed.ask);
-      workerLines.push(`- ask：${parsed.ask}`);
+      workerLines.push(`- ask: ${parsed.ask}`);
       return;
     }
-    workerLines.push(`- ${parsed.action.kind}：${parsed.action.intent}`);
+    workerLines.push(`- ${parsed.action.kind}: ${parsed.action.intent}`);
     await this.startAction(session, turn, cycle, parsed.action);
   }
 
