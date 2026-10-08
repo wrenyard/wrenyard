@@ -28,8 +28,8 @@ export const runtimeAliasesQuery = queryOptions({
 
 /**
  * Full shell settings snapshot. Shared because both the settings page and the
- * window chrome read `about` (the source-development marker), so a single
- * cache owner avoids a second bridge fetch.
+ * status bar read service health and version details, so a single cache owner
+ * avoids a second bridge fetch.
  */
 export const settingsQueryKey = ['shell', 'settings'] as const;
 

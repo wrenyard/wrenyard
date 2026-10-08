@@ -30,7 +30,7 @@ test('settings snapshot exposes health and credential presence without secrets',
     desktopVersion: '1.0.0-dev.14',
     wrenyardVersion: '1.0.0-dev.14',
     buildTime: '2026-09-01T02:03:04.000Z',
-    readHealth: async () => ({ connected: true, uptimeMs: 125_000 }),
+    readHealth: async () => ({ connected: true, runtimeMode: 'source', uptimeMs: 125_000 }),
     readGatewayModels: async () => [
       { id: 'k3', publicId: 'kimi-coding/k3', provider: 'kimi-coding', displayName: 'Kimi K3', intelligence: 'high' },
       { id: 'glm-5.3', publicId: 'zhipu-coding/glm-5.3', provider: 'zhipu-coding', displayName: 'GLM 5.3', intelligence: 'high' },
@@ -44,6 +44,10 @@ test('settings snapshot exposes health and credential presence without secrets',
     }),
   });
 
+  assert.equal(snapshot.service.status, 'connected');
+  assert.equal(snapshot.service.runtimeMode, 'source');
+  assert.equal(snapshot.service.uptimeMs, 125_000);
+  assert.equal('sourceDevelopment' in snapshot.about, false);
   assert.deepEqual(snapshot.models, [
     { id: 'kimi-coding', label: 'kimi-coding', configured: true },
     { id: 'zhipu-coding', label: 'zhipu-coding', configured: true },
@@ -77,6 +81,7 @@ test('settings snapshot degrades health and credentials independently', async ()
   });
 
   assert.equal(snapshot.service.status, 'unavailable');
+  assert.equal('runtimeMode' in snapshot.service, false);
   assert.deepEqual(snapshot.models, []);
   assert.equal('buildTime' in snapshot.about, false);
 });

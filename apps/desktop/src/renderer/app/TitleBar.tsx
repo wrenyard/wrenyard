@@ -4,7 +4,6 @@ import type { ShellPage } from '@/shell-contract';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { SourceDevelopmentBadge } from '@/renderer/components/source-development-badge';
 import { shell, useShellPage } from '@/renderer/lib/desktop';
 import { back, forward, toggleSecondarySidebar, useNavigation, useSecondarySidebarToggle } from '@/renderer/lib/navigation';
 import { registerTitleBarSlot } from '@/renderer/lib/titlebar';
@@ -102,7 +101,6 @@ export function TitleBar() {
         <TitleBarButton label="前进" tooltip={`前进 ${forwardShortcut}`} disabled={!navigation.canForward} onClick={forward}>
           <ChevronRight />
         </TitleBarButton>
-        <SourceDevelopmentBadge />
       </div>
 
       <div className={cn('flex min-w-0 flex-1 items-center gap-2', DRAG, SLOT_NO_DRAG)}>

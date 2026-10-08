@@ -536,6 +536,8 @@ export interface ServiceSnapshot {
   status: 'connected' | 'unavailable';
   endpoint: string;
   workspace: WorkspaceConfigurationSnapshot;
+  /** Runtime mode reported by the connected daemon's health projection. */
+  runtimeMode?: 'source' | 'installed';
   uptimeMs?: number;
 }export interface ModelSnapshot {
   id: string;
@@ -644,8 +646,6 @@ export interface SettingsSnapshot {
     desktopVersion: string;
     wrenyardVersion: string;
     buildTime?: string;
-    /** Present only while Desktop is running from `pnpm dev`. */
-    sourceDevelopment?: boolean;
   };
 }
 

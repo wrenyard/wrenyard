@@ -83,7 +83,10 @@ async function readWrenyardHealth(path: string): Promise<HealthSnapshot> {
       const uptimeMs = 'uptimeMs' in result && typeof result.uptimeMs === 'number'
         ? result.uptimeMs
         : undefined;
-      return { connected: true, ...(uptimeMs !== undefined ? { uptimeMs } : {}) };
+      const identity = 'identity' in result ? result.identity : undefined;
+      const runtimeMode = identity != null && typeof identity === 'object' && 'mode' in identity
+        && (identity.mode === 'source' || identity.mode === 'installed') ? identity.mode : undefined;
+      return { connected: true, ...(runtimeMode ? { runtimeMode } : {}), ...(uptimeMs !== undefined ? { uptimeMs } : {}) };
     }
     return { connected: true };
   } catch {
@@ -944,7 +947,6 @@ async function bootstrap(): Promise<void> {
     readGatewayModels: () => { requireDaemonRunning(); return readGatewayConnection(ipcPath).then((connection) => connection.models); },
     readPet: async () => petController!.snapshot(),
     readUpdate: () => updateController!.snapshot(),
-    sourceDevelopment: !app.isPackaged,
   });
   // Daemon lifecycle surface: read the live projection, or start/restart the
   // daemon when this Desktop supervises it.
