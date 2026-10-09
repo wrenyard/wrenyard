@@ -139,7 +139,7 @@ export function workspaceDraftFromSnapshot(workspace: WorkspaceConfigurationSnap
 /** Note under the workspace input; explains the binding source and its owner. */
 export function workspaceNote(workspace: WorkspaceConfigurationSnapshot): string {
   if (isWorkspaceReadOnly(workspace)) {
-    return '由环境变量 WRENYARD_DESKTOP_WORKSPACE 提供；路径只读，如需修改请调整启动环境。';
+    return '由环境变量 WRENYARD_WORKSPACE 提供；路径只读，如需修改请调整启动环境。';
   }
   if (workspace.status === 'configured') {
     return `已绑定 · 配置写入 ${workspace.configPath}`;

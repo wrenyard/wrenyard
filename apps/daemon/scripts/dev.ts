@@ -156,7 +156,7 @@ async function main(): Promise<void> {
     return;
   } catch { /* No daemon: this runner owns one. */ }
   const closeWatchers = watchSources();
-  process.on('SIGINT', () => {
+  const handleSignal = (): void => {
     if (stopping) {
       print('forcing daemon shutdown...');
       void daemon?.shutdown({ force: true, timeoutMs: 10_000 });
@@ -170,7 +170,12 @@ async function main(): Promise<void> {
       await daemon?.shutdown();
       process.exit(0);
     })();
-  });
+  };
+  process.on('SIGINT', handleSignal);
+  // An unhandled SIGTERM (e.g. from the pnpm supervisor or tools/dev.mjs) would
+  // terminate this runner without shutting down the DaemonProcess it owns,
+  // orphaning the daemon. Reuse the exact same owned-daemon shutdown path.
+  process.on('SIGTERM', handleSignal);
   await start();
 }
 

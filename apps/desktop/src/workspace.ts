@@ -49,14 +49,14 @@ export async function inspectProductWorkspace(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<WorkspaceConfiguration> {
   const configPath = resolveWrenyardConfigPath(env);
-  const override = env.WRENYARD_DESKTOP_WORKSPACE?.trim();
+  const override = env.WRENYARD_WORKSPACE?.trim();
   if (override) {
     try {
       return {
         status: 'configured',
         source: 'environment',
         configPath,
-        path: await assertDirectory(override, 'WRENYARD_DESKTOP_WORKSPACE'),
+        path: await assertDirectory(override, 'WRENYARD_WORKSPACE'),
         readOnly: true,
       };
     } catch (error) {
@@ -110,8 +110,8 @@ export async function saveProductWorkspace(
   requestedPath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<WorkspaceConfiguration> {
-  if (env.WRENYARD_DESKTOP_WORKSPACE?.trim()) {
-    throw new Error('当前工作区由 WRENYARD_DESKTOP_WORKSPACE 环境变量管理，无法在 App 内修改');
+  if (env.WRENYARD_WORKSPACE?.trim()) {
+    throw new Error('当前工作区由 WRENYARD_WORKSPACE 环境变量管理，无法在 App 内修改');
   }
   if (!requestedPath.trim()) throw new Error('请输入 workspace 路径');
   const canonicalPath = await assertDirectory(requestedPath.trim(), 'Workspace');
@@ -161,8 +161,8 @@ export async function createProductWorkspace(
   requestedPath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<WorkspaceConfiguration> {
-  if (env.WRENYARD_DESKTOP_WORKSPACE?.trim()) {
-    throw new Error('当前工作区由 WRENYARD_DESKTOP_WORKSPACE 环境变量管理，无法在 App 内修改');
+  if (env.WRENYARD_WORKSPACE?.trim()) {
+    throw new Error('当前工作区由 WRENYARD_WORKSPACE 环境变量管理，无法在 App 内修改');
   }
   if (!requestedPath.trim()) throw new Error('请输入 workspace 路径');
 
@@ -232,7 +232,7 @@ async function assertDirectory(path: string, label: string): Promise<string> {
 }
 
 /**
- * Product workspace for Desktop: `WRENYARD_DESKTOP_WORKSPACE` override, else
+ * Product workspace for Desktop: `WRENYARD_WORKSPACE` override, else
  * Wrenyard `workspace.root`. No homedir fallback — missing config is a boot error.
  */
 export async function resolveProductWorkspace(
@@ -241,7 +241,7 @@ export async function resolveProductWorkspace(
   const configuration = await inspectProductWorkspace(env);
   if (configuration.status === 'configured' && configuration.path) return configuration.path;
   throw new Error(configuration.message
-    ?? `Wrenyard workspace.root is missing in ${configuration.configPath}; set workspace.root or WRENYARD_DESKTOP_WORKSPACE`);
+    ?? `Wrenyard workspace.root is missing in ${configuration.configPath}; set workspace.root or WRENYARD_WORKSPACE`);
 }
 
 async function atomicWriteJson(target: string, value: unknown): Promise<void> {
