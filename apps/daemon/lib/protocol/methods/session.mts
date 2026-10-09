@@ -1,5 +1,5 @@
 import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
-import type { LedgerEvent, LiveCall, SessionSummary, SummarySettingsSnapshot } from '@wrenyard/session'
+import type { LedgerEvent, LiveCall, SessionSummary, } from '@wrenyard/session'
 import type { JsonSchema } from '../jsonrpc.mts'
 
 // The context-inspection DTOs are declared once in `@wrenyard/protocol` and
@@ -52,10 +52,6 @@ export interface SessionEventsResult {
   /** Complete current live-call snapshot; present only when `live` was requested. */
   live?: LiveCall[]
 }
-export type SessionSummarySettingsParams = Record<string, never>
-export type SessionSummarySettingsResult = SummarySettingsSnapshot
-export interface SessionSummarySaveParams { canonicalModel: string }
-export type SessionSummarySaveResult = SummarySettingsSnapshot
 
 const idSchema = { type: 'string', minLength: 1 } as const
 // The unified public reasoning-effort enum; a send always names one level.
@@ -79,35 +75,9 @@ const attachmentInputSchema = {
   },
 } as const satisfies JsonSchema
 
-const summaryModelOptionSchema = {
-  type: 'object',
-  required: ['canonicalModel', 'displayName', 'available'],
-  properties: {
-    canonicalModel: { type: 'string', minLength: 1 },
-    publicId: { type: 'string' },
-    displayName: { type: 'string' },
-    providerLabel: { type: 'string' },
-    available: { type: 'boolean' },
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
-const summarySettingsSchema = {
-  type: 'object',
-  required: ['selectedCanonicalModel', 'options', 'unresolved'],
-  properties: {
-    selectedCanonicalModel: { type: 'string' },
-    options: { type: 'array', items: summaryModelOptionSchema },
-    unresolved: { type: 'boolean' },
-    message: { type: 'string' },
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
 export const sessionListParamsSchema = emptySchema
 export const sessionCreateParamsSchema = emptySchema
 export const sessionInterruptResultSchema = emptySchema
-export const sessionSummarySettingsParamsSchema = emptySchema
 export const sessionListResultSchema = {
   type: 'object', required: ['sessions'], additionalProperties: false,
   properties: { sessions: { type: 'array', items: { type: 'object' } } },
@@ -169,12 +139,6 @@ export const sessionEventsResultSchema = {
     live: { type: 'array', items: { type: 'object' } },
   },
 } as const satisfies JsonSchema
-export const sessionSummarySettingsResultSchema = summarySettingsSchema
-export const sessionSummarySaveParamsSchema = {
-  type: 'object', required: ['canonicalModel'], additionalProperties: false,
-  properties: { canonicalModel: { type: 'string', minLength: 1, maxLength: 512 } },
-} as const satisfies JsonSchema
-export const sessionSummarySaveResultSchema = summarySettingsSchema
 
 const contextLayerIdSchema = {
   type: 'string',

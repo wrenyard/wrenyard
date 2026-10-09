@@ -36,7 +36,6 @@ import {
   type StatsSnapshot,
   type StatsTodaySnapshot,
   type StatsWindowSnapshot,
-  type SummarySettingsSnapshot,
   type TaskRoutingTestResult,
   type TaskRoutingTestRow,
   type TaskRoutingTestTask,
@@ -963,21 +962,6 @@ const ROUTING_CANDIDATES: Array<Omit<TaskRoutingTestRow, 'rank' | 'reason'>> = [
 ];
 
 /* ------------------------------------------------------------------ */
-/* Summary settings                                                    */
-/* ------------------------------------------------------------------ */
-
-let summarySnapshot: SummarySettingsSnapshot = {
-  selectedCanonicalModel: 'deepseek-v4.1-flash',
-  options: [
-    { canonicalModel: 'deepseek-v4.1-flash', publicId: 'deepseek/deepseek-v4.1-flash', displayName: 'DeepSeek V4.1 Flash', providerLabel: 'DeepSeek', available: true },
-    { canonicalModel: 'kimi-k3', publicId: 'kimi-coding/kimi-k3', displayName: 'Kimi K3', providerLabel: 'Kimi Coding', available: true },
-    { canonicalModel: 'glm-5.3', publicId: 'zhipu-coding/glm-5.3', displayName: 'GLM 5.3', providerLabel: 'Zhipu Coding', available: true },
-    { canonicalModel: 'claude-sonnet-5.5', publicId: 'anthropic/claude-sonnet-5.5', displayName: 'Claude Sonnet 5.5', providerLabel: 'Anthropic', available: true },
-  ],
-  unresolved: false,
-};
-
-/* ------------------------------------------------------------------ */
 /* Preferences                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -1160,12 +1144,6 @@ export function createDemoShell(control?: DemoControl): DemoShell {
       })),
     }),
     requestRoutingTestTasks: async (): Promise<TaskRoutingTestTasksResult> => ({ tasks: ROUTING_TASKS }),
-
-    getSummarySettings: async () => summarySnapshot,
-    saveSummaryModel: async (canonicalModel) => {
-      summarySnapshot = { ...summarySnapshot, selectedCanonicalModel: canonicalModel };
-      return summarySnapshot;
-    },
 
     execStart: async (request) => {
       const id = `exec-${nextExecId}`;

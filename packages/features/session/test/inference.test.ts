@@ -23,7 +23,7 @@ const CONNECTION: WrenyardGatewayConnection = {
   models: [],
 };
 
-const builtinCatalog = createBuiltinCatalog();
+const builtinCatalog = createBuiltinCatalog([createCodeBuddy({ productModels: [{ id: 'kimi-k3' }] })]);
 const builtinProvider = (id: string) => builtinCatalog.provider(id);
 
 function baseRequest(overrides: Partial<DriverRequest> = {}): DriverRequest {
@@ -73,27 +73,14 @@ test('the shared selector prefers chat when both protocols are declared', () => 
   assert.equal(selectInferenceMode([]), undefined);
 });
 
-test('auxiliary requests always use the chat driver regardless of provider protocol', async () => {
-  const gateway = { calls: 0 };
-  const capture: Capture = {};
-  const driver = createInferenceDriver(fakeGateway(gateway), {
-    resolveProvider: builtinProvider,
-    fetch: fakeFetch(jsonResponse({ choices: [{ message: { content: 'hi' } }] }), capture),
-  });
-
-  // The model belongs to a Responses-only provider, but an auxiliary request
-  // has no provider protocol lookup and must stay on chat.
+test('auxiliary requests use the selected Responses-only route transport', async () => {
+  const gateway = { calls: 0 }; const capture: Capture = {};
+  const driver = createInferenceDriver(fakeGateway(gateway), { resolveProvider: builtinProvider,
+    fetch: fakeFetch(jsonResponse({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }] }), capture) });
   const result = await driver.complete(baseRequest({ model: 'openai/gpt-6.1-sol' }));
-
-  assert.equal(gateway.calls, 1);
-  assert.equal(result.text, 'hi');
-  assert.equal(capture.url, 'http://gateway.test/v1/chat/completions');
-  const body = JSON.parse(String(capture.init?.body)) as Record<string, unknown>;
-  assert.equal('tools' in body, false);
-  assert.deepEqual(body.messages, [
-    { role: 'system', content: 'You are helpful.' },
-    { role: 'user', content: 'hello' },
-  ]);
+  assert.equal(gateway.calls, 1); assert.equal(result.text, 'hi');
+  assert.equal(capture.url, 'http://gateway.test/v1/responses');
+  assert.equal('tools' in JSON.parse(String(capture.init?.body)), false);
 });
 
 test('a main request on a chat provider uses the chat driver', async () => {
@@ -175,7 +162,7 @@ test('a provider without a gateway protocol is rejected before any gateway or mo
 // install and injects it as `resolveProvider`. The default built-in CodeBuddy
 // definition offers no models at all, so these cases pin that an injected
 // catalog is honoured, that it is authoritative (never falling back to the
-// static definitions), and that auxiliary requests never consult it.
+// static definitions), and that auxiliary requests resolve their selected transport through it.
 
 /**
  * A real CodeBuddy provider offering two fixture wire models, in a builtin
@@ -296,20 +283,9 @@ test('a malformed reply call fails the request', async () => {
   );
 });
 
-test('auxiliary requests bypass the injected resolver entirely', async () => {
-  const gateway = { calls: 0 };
-  const capture: Capture = {};
-  let resolved = 0;
-  const driver = createInferenceDriver(fakeGateway(gateway), {
-    fetch: fakeFetch(jsonResponse({ choices: [{ message: { content: 'aux answer' } }] }), capture),
-    // A resolver that must never be consulted for an auxiliary request.
-    resolveProvider: () => { resolved += 1; return undefined; },
-  });
-
-  // No `actionTool`: the model is a gateway public id and needs no provider.
-  const result = await driver.complete(baseRequest({ model: 'codebuddy/kimi-k3' }));
-
-  assert.equal(resolved, 0);
-  assert.equal(gateway.calls, 1);
-  assert.equal(result.text, 'aux answer');
+test('unknown auxiliary routes fail before Gateway acquisition', async () => {
+  const gateway = { calls: 0 }; let resolved = 0;
+  const driver = createInferenceDriver(fakeGateway(gateway), { resolveProvider: () => { resolved++; return undefined; } });
+  await assert.rejects(driver.complete(baseRequest({ model: 'missing/model' })), /Unknown inference provider/);
+  assert.equal(resolved, 1); assert.equal(gateway.calls, 0);
 });

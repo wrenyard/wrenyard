@@ -5,8 +5,6 @@ import {
   sessionSendParamsSchema, sessionSendResultSchema,
   sessionInterruptParamsSchema, sessionInterruptResultSchema,
   sessionEventsParamsSchema, sessionEventsResultSchema,
-  sessionSummarySettingsParamsSchema, sessionSummarySettingsResultSchema,
-  sessionSummarySaveParamsSchema, sessionSummarySaveResultSchema,
   sessionContextInspectParamsSchema, sessionContextInspectResultSchema,
   sessionMediaReadParamsSchema, sessionMediaReadResultSchema,
   sessionDeleteParamsSchema, sessionDeleteResultSchema,
@@ -15,8 +13,6 @@ import {
   type SessionSendParams, type SessionSendResult,
   type SessionInterruptParams, type SessionInterruptResult,
   type SessionEventsParams, type SessionEventsResult,
-  type SessionSummarySettingsParams, type SessionSummarySettingsResult,
-  type SessionSummarySaveParams, type SessionSummarySaveResult,
   type SessionContextInspectParams, type SessionContextInspectResult,
   type SessionMediaReadParams, type SessionMediaReadResult,
   type SessionDeleteParams, type SessionDeleteResult,
@@ -27,8 +23,6 @@ export type {
   SessionSendParams, SessionSendResult,
   SessionInterruptParams, SessionInterruptResult,
   SessionEventsParams, SessionEventsResult,
-  SessionSummarySettingsParams, SessionSummarySettingsResult,
-  SessionSummarySaveParams, SessionSummarySaveResult,
   SessionContextInspectParams, SessionContextInspectResult,
   SessionMediaReadParams, SessionMediaReadResult,
   SessionDeleteParams, SessionDeleteResult,
@@ -486,8 +480,6 @@ export interface ForemanMethodParams {
   'session.send': SessionSendParams
   'session.interrupt': SessionInterruptParams
   'session.events': SessionEventsParams
-  'session.summary.settings': SessionSummarySettingsParams
-  'session.summary.save': SessionSummarySaveParams
   'session.context.inspect': SessionContextInspectParams
   'session.media.read': SessionMediaReadParams
   'session.delete': SessionDeleteParams
@@ -555,8 +547,6 @@ export interface ForemanMethodResults {
   'session.send': SessionSendResult
   'session.interrupt': SessionInterruptResult
   'session.events': SessionEventsResult
-  'session.summary.settings': SessionSummarySettingsResult
-  'session.summary.save': SessionSummarySaveResult
   'session.context.inspect': SessionContextInspectResult
   'session.media.read': SessionMediaReadResult
   'session.delete': SessionDeleteResult
@@ -798,14 +788,6 @@ export const methodRegistry: {
   'session.send': { params: sessionSendParamsSchema, result: sessionSendResultSchema },
   'session.interrupt': { params: sessionInterruptParamsSchema, result: sessionInterruptResultSchema },
   'session.events': { params: sessionEventsParamsSchema, result: sessionEventsResultSchema },
-  'session.summary.settings': {
-    params: sessionSummarySettingsParamsSchema,
-    result: sessionSummarySettingsResultSchema,
-  },
-  'session.summary.save': {
-    params: sessionSummarySaveParamsSchema,
-    result: sessionSummarySaveResultSchema,
-  },
   'session.context.inspect': {
     params: sessionContextInspectParamsSchema,
     result: sessionContextInspectResultSchema,

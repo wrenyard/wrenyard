@@ -18,6 +18,8 @@ import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
 
 import {
   ACTION_TOOL,
+  REPLY_TOOL,
+  replyTextFromArguments,
   REASONING_EFFORT_HEADER,
   type DriverRequest,
   type DriverResult,
@@ -35,7 +37,7 @@ export interface ResponsesDriverOptions {
 }
 
 /** The subset of a driver request that is serialized onto the Responses wire. */
-export type ResponsesRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'maxTokens' | 'actionTool' | 'cacheKey'> & Partial<Pick<DriverRequest, 'reasoningEffort'>>;
+export type ResponsesRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'maxTokens' | 'actionTool' | 'replyTool' | 'cacheKey'> & Partial<Pick<DriverRequest, 'reasoningEffort'>>;
 
 /** Only a non-2xx response body is ever truncated, so an upstream error stays readable. */
 const ERROR_EXCERPT_CHARS = 2_000;
@@ -77,13 +79,14 @@ function buildResponsesBody(request: ResponsesRequestFields): Record<string, unk
   body.reasoning = { summary: 'auto' };
   if (request.cacheKey) body.prompt_cache_key = request.cacheKey;
   if (request.maxTokens !== undefined) body.max_output_tokens = request.maxTokens;
-  if (request.actionTool) {
+  if (request.actionTool || request.replyTool) {
+    const tool = request.actionTool ? ACTION_TOOL : REPLY_TOOL;
     // The Responses tool shape is a flattened function, not the nested chat shape.
     body.tools = [{
       type: 'function',
-      name: ACTION_TOOL.function.name,
-      description: ACTION_TOOL.function.description,
-      parameters: ACTION_TOOL.function.parameters,
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters,
     }];
   }
   return body;
@@ -204,6 +207,7 @@ interface ResponsesStreamState {
   /** Saw `response.completed`, the only terminal event. */
   completed: boolean;
   calls: ToolCall[];
+  replies: { index: number; text: string }[];
   byIndex: Map<number, FunctionCallState>;
   byItemId: Map<string, FunctionCallState>;
 }
@@ -229,6 +233,7 @@ async function readStreamResponse(response: Response, request: DriverRequest): P
     reasoning: '',
     completed: false,
     calls: [],
+    replies: [],
     byIndex: new Map(),
     byItemId: new Map(),
   };
@@ -271,6 +276,7 @@ async function readStreamResponse(response: Response, request: DriverRequest): P
     ...(state.reasoning ? { reasoning: state.reasoning } : {}),
     ...(state.usage ? { usage: state.usage } : {}),
     toolCalls: [...state.calls].sort((a, b) => a.index - b.index),
+    ...(request.replyTool ? { replies: state.replies.sort((a, b) => a.index - b.index).map(reply => reply.text) } : {}),
   };
 }
 
@@ -407,6 +413,11 @@ function finishFunctionCall(rawItem: unknown, rawIndex: unknown, state: Response
 function reportFunctionCall(call: FunctionCallState, state: ResponsesStreamState, request: DriverRequest): void {
   if (call.reported) return;
   call.reported = true;
+  if (request.replyTool) {
+    if (call.name !== REPLY_TOOL.function.name) throw new Error(`Model returned an unknown reply tool: ${call.name}`);
+    state.replies.push({ index: call.outputIndex, text: replyTextFromArguments(call.arguments) });
+    return;
+  }
   const parsed = call.name === ACTION_TOOL.function.name
     ? toolCallFromArguments(call.outputIndex, call.arguments)
     : { index: call.outputIndex, type: '', intent: '', error: `unknown tool: ${call.name || 'unnamed'}` };
@@ -455,6 +466,7 @@ async function readJsonResponse(response: Response, request: DriverRequest): Pro
   let text = '';
   let reasoning = '';
   const calls: ToolCall[] = [];
+  const replies: string[] = [];
   const output = root.output;
   if (Array.isArray(output)) {
     output.forEach((entry, position) => {
@@ -484,6 +496,11 @@ async function readJsonResponse(response: Response, request: DriverRequest): Pro
       }
       if (type === 'function_call') {
         const name = stringField(item.name) ?? '';
+        if (request.replyTool) {
+          if (name !== REPLY_TOOL.function.name) throw new Error(`Model returned an unknown reply tool: ${name}`);
+          replies.push(replyTextFromArguments(stringField(item.arguments)));
+          return;
+        }
         const call = name === ACTION_TOOL.function.name
           ? toolCallFromArguments(position, stringField(item.arguments))
           : { index: position, type: '', intent: '', error: `unknown tool: ${name || 'unnamed'}` };
@@ -500,6 +517,7 @@ async function readJsonResponse(response: Response, request: DriverRequest): Pro
     ...(reasoning ? { reasoning } : {}),
     ...(usage ? { usage } : {}),
     toolCalls: calls,
+    ...(request.replyTool ? { replies } : {}),
   };
 }
 

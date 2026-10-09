@@ -40,7 +40,7 @@ export interface SessionHost {
   /** The product-wired provider definitions main inference validates its
    *  target against. */
   resolveInferenceProvider(providerId: string): ProviderDefinition | undefined;
-  cheapModel(): Promise<string>;
+  selectAuxiliary(role: import('./role-requirements.ts').AuxiliaryCallRole): Promise<readonly import('./calls.ts').AuxiliaryRoute[]>;
   listProjects(): Promise<ProjectInfo[]>;
   gitHead(checkoutPath: string): Promise<{ branch?: string; head?: string }>;
   listTaskDefinitions(): Promise<{ id: string; description: string; project?: string; inputSummary: string[] }[]>;
