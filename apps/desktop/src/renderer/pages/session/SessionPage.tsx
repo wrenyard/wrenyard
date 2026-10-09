@@ -72,6 +72,7 @@ export function SessionPage() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [target, setTarget] = useState<InspectorTarget | undefined>(undefined);
   const [tab, setTab] = useState('detail');
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [retry, setRetry] = useState<{ text: string; attachments: DraftAttachment[]; nonce: number } | undefined>(undefined);
   const sidebarPanel = usePanelRef();
   const inspectorPanel = usePanelRef();
@@ -259,7 +260,15 @@ export function SessionPage() {
       title: '切换检查器',
       run: () => setInspectorOpen((value) => !value),
     },
-  ]), [selectSession, sessionKey, inspectRequest]);
+    {
+      id: 'session.newDraft',
+      title: '新建对话',
+      run: () => {
+        newDraft();
+        setComposerFocusRequest((value) => value + 1);
+      },
+    },
+  ]), [selectSession, sessionKey, inspectRequest, newDraft]);
 
   // Entry animation applies only to messages appended after the conversation
   // settles; history loads are absorbed into the baseline (foundation §2.3).
@@ -284,6 +293,7 @@ export function SessionPage() {
       disabled={state.loadingLedger}
       onSend={(text, entry, effort, attachments) => sendMessage(text, entry, effort, attachments)}
       injectedText={retry}
+      focusRequest={composerFocusRequest}
     />
   );
 
