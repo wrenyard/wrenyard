@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Catalog, DispatchPlan } from './base/catalog.ts';
 import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans } from './catalog.ts';
-import { codeBuddy, providerImplementations } from './builtins.ts';
+import { codeBuddy, providerImplementations, providerQuotas } from './builtins.ts';
 import type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity } from './codebuddy/index.ts';
 import type { Provider } from './base/index.ts';
 import {
@@ -29,6 +29,8 @@ export type { ProviderCredential, RoutingFreeSupplyFact } from './base/provider.
 const credentialProviders = new WeakMap<ProviderCredential, Provider>();
 
 export interface ProviderRuntime {
+  /** Current offering bindings, including runtime-only provider models. */
+  quotaPools?(provider: string, model: string): readonly string[];
   credential(provider: ProviderDefinition): Promise<ProviderCredential | undefined>;
   resolveUpstreamModel(provider: ProviderDefinition, model: string, credential?: ProviderCredential): string;
   publicResponseModel(provider: ProviderDefinition, model: string, upstreamModel: string, publicModel: string): string;
@@ -166,6 +168,10 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
   implementations.set(activeCodeBuddy.id, activeCodeBuddy);
   for (const provider of options.providers ?? []) implementations.set(provider.id, provider);
   return {
+    quotaPools(provider, model) {
+      const quota = implementations.get(provider)?.quota ?? providerQuotas.get(provider);
+      return (quota?.bindings.find(binding => binding.modelId === model)?.pools ?? quota?.defaultPools ?? []).map(pool => pool.quotaPoolId);
+    },
     async credential(provider) {
       // ChatGPT/Codex is the only provider whose gateway credential comes from
       // the injected native Codex reader. It carries the ChatGPT account id

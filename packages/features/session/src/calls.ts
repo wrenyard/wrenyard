@@ -10,8 +10,9 @@
  */
 import { getEncoding } from 'js-tiktoken';
 import { createBuiltinCatalog } from '@wrenyard/providers';
-import type { ProviderDefinition, ModelDefinition } from '@wrenyard/providers/base';
+import type { GatewayRouteState, GatewayRouteStatus, ProviderDefinition, ModelDefinition } from '@wrenyard/providers/base';
 import { models as registeredModels, type ReasoningEffort } from '@wrenyard/models';
+import { GatewayRequestError } from './transport.ts';
 import { isContextOverflowError } from './driver.js';
 import { ROLE_REQUIREMENTS, type AuxiliaryCallRole } from './role-requirements.js';
 import type { DriverResult, ModelContentPart, ModelDriver, ModelMessage, ToolCall, Usage } from './driver.js';
@@ -27,19 +28,6 @@ export type CallRole = (typeof CALL_ROLES)[number];
 
 /** The expensive role streams with no total deadline; its idle stream is bounded. */
 export const REASON_IDLE_TIMEOUT_MS = 180_000;
-/** Attempts for one model call when the upstream fails before producing output. */
-const TRANSIENT_ATTEMPTS = 3;
-const TRANSIENT_BACKOFF_MS = 3_000;
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => { setTimeout(resolve, ms); });
-}
-
-/** Upstream 5xx / 429 responses and transport errors; never a client-side 4xx. */
-function isTransientFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /HTTP (?:5\d\d|429)\b|fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|network/iu.test(message);
-}
 /** Every cheap call is bounded end to end. */
 export const CHEAP_TIMEOUT_MS = 60_000;
 
@@ -92,7 +80,11 @@ export interface CallEventDraft {
    * so a nearest-supported adaptation is visible in the ledger.
    */
   requestedReasoningEffort?: string;
-  /** Ordered auxiliary routes of this call; the first one served it. */
+  /** Rank of the route that served (or last attempted) an auxiliary call. */
+  selectedRank?: number;
+  /** Every route tried or skipped, in order. */
+  routeAttempts?: readonly CallRouteAttempt[];
+  /** Ordered auxiliary routes retained for this invocation. */
   routeCandidates?: readonly AuxiliaryRoute[];
   error?: string;
   turn?: number;
@@ -150,10 +142,33 @@ export interface ModelCallOutput {
 
 /** One ranked auxiliary route and the level it is called at. */
 export interface AuxiliaryRoute { model: string; reasoningEffort: ReasoningEffort; }
+/** One route an auxiliary call tried (`ok`/`failed`) or skipped for its Gateway state. */
+export interface CallRouteAttempt {
+  model: string;
+  rank?: number;
+  reasoningEffort: ReasoningEffort;
+  startedAt: string;
+  endedAt: string;
+  status: 'ok' | 'failed' | 'skipped';
+  routeState?: GatewayRouteState;
+  routeUntil?: string;
+  /** Same-route transport retries before this attempt settled. */
+  transportRetries?: number;
+  error?: string;
+  usage?: Usage;
+}
+
+/** Ranked routes an auxiliary call may actually send to; skipped routes do not count. */
+const MAX_ROUTE_ATTEMPTS = 3;
+
 export interface CallRunnerOptions {
   resolveProvider?: (providerId: string) => ProviderDefinition | undefined;
   driver: ModelDriver;
-  /** Fresh non-empty ranked routes for each auxiliary invocation; the first is used. */
+  /** Current Gateway state of a route; a provider or pool failure can block sibling routes. */
+  routeStatus?: (model: string) => GatewayRouteStatus | undefined;
+  /** Session id, sent to the Gateway for request attribution. */
+  sessionId?: string;
+  /** Fresh non-empty ranked routes for each auxiliary invocation. */
   selectAuxiliary: (role: AuxiliaryCallRole) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
   /** Structural sink: exactly one terminal call event per attempted invocation. */
   append: (event: CallLedgerEventDraft) => void | Promise<void>;
@@ -376,6 +391,8 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       let actualReasoningEffort: ReasoningEffort | undefined;
       let requestedReasoningEffort: string | undefined;
       let routes: readonly AuxiliaryRoute[] | undefined;
+      let selectedRank: number | undefined;
+      const routeAttempts: CallRouteAttempt[] = [];
       let partialUsage: Usage | undefined;
       let emitted = false;
       /** First nonempty delta time, shared by the terminal call event. */
@@ -403,6 +420,8 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           ...(fields.reasoning === undefined ? {} : { reasoning: fields.reasoning }),
           reasoningEffort: actualReasoningEffort,
           ...(routes === undefined ? {} : { routeCandidates: routes }),
+          ...(selectedRank === undefined ? {} : { selectedRank }),
+          ...(routeAttempts.length ? { routeAttempts } : {}),
           ...(requestedReasoningEffort === undefined ? {} : { requestedReasoningEffort }),
           ...(fields.error === undefined ? {} : { error: fields.error }),
           ...(input.turn === undefined ? {} : { turn: input.turn }),
@@ -462,25 +481,40 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       };
       resetIdle();
 
+      let outputStarted = false;
+      const onOutput = (): void => { outputStarted = true; firstTokenAt ??= now().toISOString(); resetIdle(); };
       let text = '';
       let reasoning = '';
       const onText = (delta: string): void => {
         text += delta;
         if (delta !== '') {
-          firstTokenAt ??= now().toISOString();
-          resetIdle();
+          onOutput();
         }
         input.onText?.(delta);
       };
       const onReasoning = (delta: string): void => {
         reasoning += delta;
         if (delta !== '') {
-          firstTokenAt ??= now().toISOString();
-          resetIdle();
+          onOutput();
         }
         input.onReasoning?.(delta);
       };
 
+      const recordAttempt = (
+        choice: AuxiliaryRoute, rank: number | undefined, attemptStartedAt: string,
+        status: CallRouteAttempt['status'], fields: Partial<CallRouteAttempt> = {},
+      ): void => {
+        routeAttempts.push({ model: choice.model, ...(rank === undefined ? {} : { rank }), reasoningEffort: choice.reasoningEffort,
+          startedAt: attemptStartedAt, endedAt: now().toISOString(), status, ...fields });
+      };
+      const routeFailureMessage = (): string => {
+        const failures = routeAttempts.map(attempt => [
+          `${attempt.model}: ${attempt.routeState ?? attempt.status}`,
+          attempt.routeUntil ? ` (until ${attempt.routeUntil})` : '',
+          attempt.error ? ` - ${attempt.error}` : '',
+        ].join(''));
+        return `Model call ${input.role} failed: ${failures.join('; ') || 'no available route remains'}`;
+      };
       let result: DriverResult | undefined;
       try {
         if (input.role === 'reason') {
@@ -491,8 +525,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         } else {
           requestedReasoningEffort = ROLE_REQUIREMENTS[input.role].expectedReasoningEffort[0];
           routes = await settleWithAbort(options.selectAuxiliary(input.role), controller.signal);
+          if (!routes.length) throw new Error(`Auxiliary role ${input.role}: no candidate qualified (empty route selection)`);
+          selectedRank = 1;
           model = routes[0]!.model;
-          actualReasoningEffort = routes[0]!.reasoningEffort;
         }
         if (controller.signal.aborted) {
           return await fail(abortMessage(abortKind, totalTimeoutMs), {
@@ -500,60 +535,70 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           });
         }
 
-        const budget = checkContextBudget(model, messages, options.resolveProvider);
-        estimatedInputTokens = budget.estimatedInputTokens;
-        if (input.role === 'reason') {
-          // An explicit level must be exactly materializable by this route. The
-          // caller validates against the same route list before forwarding, so
-          // an unsupported level is normally rejected even earlier.
-          if (requestedReasoningEffort === undefined
-            || !isReasoningEffortSupported(budget.metadata, requestedReasoningEffort as ReasoningEffort)) {
-            return await fail(`Model ${model} does not support reasoning effort "${requestedReasoningEffort ?? ''}"`);
+        // The main reasoning call is explicit and never switches; an auxiliary
+        // call walks its ranked routes, skipping any the Gateway currently marks.
+        const choices: readonly AuxiliaryRoute[] = input.role === 'reason'
+          ? [{ model, reasoningEffort: requestedReasoningEffort as ReasoningEffort }]
+          : routes!;
+        let attempted = 0;
+        for (const [index, choice] of choices.entries()) {
+          const rank = input.role === 'reason' ? undefined : index + 1;
+          const blocked = rank === undefined ? undefined : options.routeStatus?.(choice.model);
+          if (blocked) {
+            recordAttempt(choice, rank, now().toISOString(), 'skipped', { routeState: blocked.state, routeUntil: blocked.until });
+            continue;
           }
-          actualReasoningEffort = requestedReasoningEffort as ReasoningEffort;
-        }
-        if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
-
-        // Observational marker: the driver call is about to be issued. It never
-        // enters the rendered context, so it cannot change prior renderings.
-        await options.append({
-          type: 'call.started',
-          callId: input.callId,
-          role: input.role,
-          model,
-          ...(input.turn === undefined ? {} : { turn: input.turn }),
-          ...(input.cycle === undefined ? {} : { cycle: input.cycle }),
-        });
-
-        // A transient upstream fault before any output is retried in place.
-        for (let attempt = 1; ; attempt += 1) {
+          if (attempted === MAX_ROUTE_ATTEMPTS) break;
+          attempted += 1;
+          model = choice.model;
+          selectedRank = rank;
+          partialUsage = undefined;
+          const budget = checkContextBudget(model, messages, options.resolveProvider);
+          estimatedInputTokens = budget.estimatedInputTokens;
+          if (!isReasoningEffortSupported(budget.metadata, choice.reasoningEffort)) {
+            return await fail(`Model ${model} does not support reasoning effort "${choice.reasoningEffort ?? ''}"`);
+          }
+          actualReasoningEffort = choice.reasoningEffort;
+          if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
+          const attemptStartedAt = now().toISOString();
+          let transportRetries = 0;
+          await options.append({ type: 'call.started', callId: input.callId, role: input.role, model,
+            ...(input.turn === undefined ? {} : { turn: input.turn }),
+            ...(input.cycle === undefined ? {} : { cycle: input.cycle }) });
           try {
             result = await settleWithAbort(options.driver.complete({
-              model,
-              messages,
-              reasoningEffort: actualReasoningEffort!,
-              ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
+              model, messages, reasoningEffort: actualReasoningEffort, role: input.role,
+              ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
               ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
-              ...(input.role === 'reason' ? {
-                actionTool: true,
-                ...(input.onToolCall === undefined ? {} : { onToolCall: input.onToolCall }),
+              ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
+              ...(input.role === 'reason' ? { actionTool: true,
+                onToolCall: (call: ToolCall): void => { onOutput(); input.onToolCall?.(call); },
               } : {}),
               ...(input.role === 'reply' ? { replyTool: true } : {}),
-              signal: controller.signal,
-              onText,
-              onReasoning,
-              onActivity: resetIdle,
-              onUsage: (usage: Usage): void => { partialUsage = usage; },
+              signal: controller.signal, onText, onReasoning, onOutput,
+              onTransportRetry: () => { transportRetries += 1; },
+              onActivity: resetIdle, onUsage: (usage: Usage): void => { partialUsage = usage; },
             }), controller.signal);
+            const usage = result.usage ?? partialUsage;
+            recordAttempt(choice, rank, attemptStartedAt, 'ok', {
+              ...(transportRetries ? { transportRetries } : {}), ...(usage === undefined ? {} : { usage }) });
             break;
           } catch (error) {
-            const retryable = attempt < TRANSIENT_ATTEMPTS && firstTokenAt === undefined
-              && !controller.signal.aborted && isTransientFailure(error);
-            if (!retryable) throw error;
-            await settleWithAbort(delay(TRANSIENT_BACKOFF_MS * attempt), controller.signal);
-            resetIdle();
+            const routeError = error instanceof GatewayRequestError && error.routeState !== undefined ? error : undefined;
+            recordAttempt(choice, rank, attemptStartedAt, 'failed', {
+              ...(routeError ? { routeState: routeError.routeState, ...(routeError.routeUntil ? { routeUntil: routeError.routeUntil } : {}) } : {}),
+              ...(transportRetries ? { transportRetries } : {}),
+              ...(partialUsage === undefined ? {} : { usage: partialUsage }),
+              error: error instanceof Error ? error.message : String(error),
+            });
+            // Only a Gateway route state before any generated output (tool
+            // fragments included) admits the next ranked route.
+            if (routeError && rank !== undefined && !outputStarted && !controller.signal.aborted) continue;
+            if (routeError) throw new Error(routeFailureMessage());
+            throw error;
           }
         }
+        if (result === undefined) throw new Error(routeFailureMessage());
       } catch (error) {
         if (error instanceof ModelCallError) throw error;
         const status: 'failed' | 'aborted' = abortKind === 'signal' ? 'aborted' : 'failed';

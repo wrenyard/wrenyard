@@ -314,7 +314,11 @@ export interface CallEvent extends LedgerEventBase {
   reasoningEffort?: ReasoningEffort;
   /** The explicitly requested level, or an auxiliary role's declared expectation. */
   requestedReasoningEffort?: string;
-  /** Ordered auxiliary routes of this call; the first one served it. */
+  /** Rank of the route that served (or last attempted) an auxiliary call. */
+  selectedRank?: number;
+  /** Every route tried or skipped, in order. */
+  routeAttempts?: readonly import('./calls.ts').CallRouteAttempt[];
+  /** Ordered auxiliary routes retained for this invocation. */
   routeCandidates?: readonly import('./calls.ts').AuxiliaryRoute[];
   error?: string;
 }

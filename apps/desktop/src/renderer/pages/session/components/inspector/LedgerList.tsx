@@ -9,7 +9,7 @@ import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import { Timestamp } from '@/renderer/components/timestamp';
-import { ledgerEventType, summarizeLedgerEvent } from '../../model/describe.js';
+import { callRouteChips, ledgerEventType, summarizeLedgerEvent } from '../../model/describe.js';
 import type { LedgerEvent, SessionModel } from '../../model/types.js';
 
 export interface LedgerListProps {
@@ -128,6 +128,7 @@ export function LedgerList({ events, focusSeq }: LedgerListProps) {
                       <Timestamp value={event.at} precision="second" />
                       {event.type === 'call' && <>
                         <span>{event.model}</span>
+                        {callRouteChips(event).map((chip) => <span key={chip}>{chip}</span>)}
                         {event.requestedReasoningEffort !== undefined && <span>{'期望思考：' + (REASONING_EFFORT_NAMES[event.requestedReasoningEffort as ReasoningEffort] ?? event.requestedReasoningEffort)}</span>}
                         {event.reasoningEffort !== undefined && <span>{'实际思考：' + REASONING_EFFORT_NAMES[event.reasoningEffort]}</span>}
                       </>}

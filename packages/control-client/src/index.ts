@@ -71,6 +71,8 @@ export interface WrenyardGatewayModel {
    * contract; every route declares a non-empty ladder.
    */
   reasoningEfforts: ProviderListModel['reasoningEfforts'];
+  routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'model_unavailable';
+  routeUntil?: string;
   speed?: number;
   pricing?: WrenyardGatewayModelPricing;
 }
