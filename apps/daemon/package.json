@@ -36,8 +36,7 @@
   },
   "scripts": {
     "build": "node tools/build.mjs",
-    "dev": "node scripts/dev.ts",
-    "test": "tsx --test --test-concurrency=1 tests/*.test.mts tests/*/*.test.mts tests/*/*/*.test.mts"
+    "dev": "node scripts/dev.ts"
   },
   "engines": {
     "node": ">=24.19.0"

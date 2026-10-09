@@ -8,9 +8,6 @@
     ".": "./src/index.ts",
     "./transport": "./src/transport/index.ts"
   },
-  "scripts": {
-    "test": "tsx --test test/*.test.ts"
-  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.25.0",
