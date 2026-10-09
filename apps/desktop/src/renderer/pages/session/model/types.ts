@@ -52,8 +52,6 @@ export interface TurnModel {
   phase?: Phase;
   cycle: number;
   startedAt: string;
-  /** When the user message was received; mirrors `startedAt`. */
-  receivedAt: string;
   endedAt?: string;
   interruptReason?: 'user' | 'shutdown' | 'restart';
   /** An interrupt was requested but `turn.finished` has not arrived yet. */

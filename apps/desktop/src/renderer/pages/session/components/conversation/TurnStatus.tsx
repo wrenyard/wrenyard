@@ -1,55 +1,39 @@
-import { Square } from 'lucide-react';
-import { Button } from '@/renderer/components/ui/button';
-import { Marker, MarkerContent, MarkerIcon } from '@/renderer/components/ui/marker';
+import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
 import { Message, MessageContent } from '@/renderer/components/ui/message';
-import { Spinner } from '@/renderer/components/ui/spinner';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { turnStatusText } from '../../model/describe.js';
 import type { TurnModel } from '../../model/types.js';
-import { useInspector } from '../inspector/Inspector.js';
 
 export interface TurnStatusProps {
   turn: TurnModel;
-  onInterrupt: (turn: number) => void;
 }
 
-/**
- * Live status line under a running turn: shimmering phase copy that jumps to
- * the turn, plus the interrupt control (disabled while the request is in
- * flight). Runs on the fold's own state, so it starts no timers.
- */
-export function TurnStatus({ turn, onInterrupt }: TurnStatusProps) {
-  const { inspect } = useInspector();
+/** Require an active reply call so gaps between steps never look like typing. */
+export function isWritingReply(turn: TurnModel): boolean {
+  return turn.status === 'running'
+    && turn.phase === 'replying'
+    && turn.calls.some((call) => call.role === 'reply' && call.status === 'running');
+}
+
+const DOT_DELAYS = ['0ms', '160ms', '320ms'] as const;
+
+/** A compact typing bubble, visible only while a reply is being written. */
+export function TurnStatus({ turn }: TurnStatusProps) {
+  if (!isWritingReply(turn)) return null;
   return (
     <Message>
       <MessageContent>
-        <div className="flex items-center gap-2">
-          <Marker
-            role="status"
-            render={<button type="button" />}
-            onClick={() => inspect({ kind: 'turn', turnId: turn.id })}
-          >
-            <MarkerIcon className="flex items-center justify-center">
-              <span className="size-2 rounded-full bg-current motion-pulse-slow" />
-            </MarkerIcon>
-            <MarkerContent className="shimmer">{turnStatusText(turn)}</MarkerContent>
-          </Marker>
-          {turn.interrupting ? (
-            <Button variant="ghost" size="icon-sm" disabled aria-label="正在中断">
-              <Spinner />
-            </Button>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger
-                render={<Button variant="ghost" size="icon-sm" aria-label="中断此轮次" />}
-                onClick={() => onInterrupt(turn.id)}
-              >
-                <Square />
-              </TooltipTrigger>
-              <TooltipContent>中断此轮次</TooltipContent>
-            </Tooltip>
-          )}
-        </div>
+        <Bubble variant="muted" role="status" aria-label="正在撰写回复">
+          <BubbleContent className="px-4 py-3">
+            <span className="flex items-center gap-1.5" aria-hidden="true">
+              {DOT_DELAYS.map((delay) => (
+                <span
+                  key={delay}
+                  className="motion-typing-dot size-2 rounded-full bg-muted-foreground"
+                  style={{ animationDelay: delay }}
+                />
+              ))}
+            </span>
+          </BubbleContent>
+        </Bubble>
       </MessageContent>
     </Message>
   );
