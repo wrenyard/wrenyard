@@ -15,7 +15,8 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@wrenyard/models": "workspace:*"
+    "@wrenyard/models": "workspace:*",
+    "@wrenyard/paths": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

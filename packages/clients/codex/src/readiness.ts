@@ -1,7 +1,8 @@
 import { mkdir, open } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { NativeClientReadiness, ReadinessOptions } from '@wrenyard/agent-client';
+import { clientStateDirForEnv } from '@wrenyard/agent-client/native';
 import { Executor, rpcSequence } from '@wrenyard/execution';
 import { inspectCodex } from './installation.ts';
 
@@ -85,22 +86,11 @@ export interface CodexAuth {
 
 /** Keep native Codex session data separate from the user's Desktop inventory. */
 export function isolatedCodexHome(env: NodeJS.ProcessEnv): string {
-    const configured = env.WRENYARD_CODEX_HOME?.trim();
-    if (configured) {
-        if (!isAbsolute(configured)) throw new Error('WRENYARD_CODEX_HOME must be absolute');
-        return resolve(configured);
-    }
-    const home = env.USERPROFILE?.trim() || env.HOME?.trim() || homedir();
-    if (process.platform === 'win32')
-        return join(env.LOCALAPPDATA?.trim() || join(home, 'AppData', 'Local'), 'wrenyard', 'codex-home');
-    if (process.platform === 'darwin')
-        return join(home, 'Library', 'Caches', 'wrenyard', 'codex-home');
-    return join(env.XDG_CACHE_HOME?.trim() || join(home, '.cache'), 'wrenyard', 'codex-home');
+    return clientStateDirForEnv(env, 'codex');
 }
 
 export async function prepareCodexAuth(env: NodeJS.ProcessEnv, isolatedHome: string, native: boolean): Promise<CodexAuth> {
-    const sourceHome = env.WRENYARD_CODEX_AUTH_HOME?.trim()
-        || dirname(codexAuthPath(env));
+    const sourceHome = dirname(codexAuthPath(env));
     if (samePath(sourceHome, isolatedHome))
         throw new Error('Codex source and isolated homes must differ');
     await mkdir(isolatedHome, { recursive: true, mode: 0o700 });
@@ -158,11 +148,10 @@ export async function refreshCodexAuth(auth: CodexAuth, executable: string, prev
 
 /**
  * Resolve the Codex source auth home used by the Model Gateway exactly like the
- * native path: an explicit WRENYARD_CODEX_AUTH_HOME wins, otherwise the
- * directory of the CODEX_HOME / home-derived auth.json.
+ * native path: the directory of the CODEX_HOME / home-derived auth.json.
  */
 export function codexSourceAuthHome(env: NodeJS.ProcessEnv = process.env, home?: string): string {
-    return env.WRENYARD_CODEX_AUTH_HOME?.trim() || dirname(codexAuthPath(env, home));
+    return dirname(codexAuthPath(env, home));
 }
 
 /** ChatGPT token plus account id, the exact pair the subscription endpoint needs. */

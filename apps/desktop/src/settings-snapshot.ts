@@ -1,4 +1,4 @@
-import type { WrenyardGatewayModel } from '@wrenyard/control-client';
+import type { WrenyardGatewayModel } from '@wrenyard/control';
 import type { SettingsSnapshot } from './shell-contract.js';
 import type { PetCompanionSnapshot } from './shell-contract.js';
 import type { UpdateSnapshot } from './shell-contract.js';

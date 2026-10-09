@@ -7,9 +7,9 @@ import { readFileSync, readdirSync, statSync, watch } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { resolveWrenyardIpcPath } from '@wrenyard/control-client';
+import { resolveWrenyardIpcPath } from '@wrenyard/control';
 import { DaemonProcess, ipcCall } from '../lib/supervisor.mjs';
-import { resolveForemanConfigPath } from '../lib/config/path.mts';
+import { resolveWrenyardConfigPath as resolveForemanConfigPath } from '@wrenyard/paths';
 
 interface DaemonStatus { idle?: boolean; activeTaskCount?: number; activeTaskGraphCount?: number; activeExecutionCount?: number }
 interface HealthPing { ok?: boolean; identity?: { mode?: string; version?: string } }
@@ -18,8 +18,8 @@ const daemonRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const checkout = resolve(daemonRoot, '..', '..');
 const watchRoots = [daemonRoot, join(checkout, 'packages')];
 const ignoredDirs = new Set(['node_modules', 'dist', '.git', 'coverage', 'test', 'tests', '__tests__']);
-const ipcPath = resolveWrenyardIpcPath();
 const configPath = resolveForemanConfigPath();
+const ipcPath = resolveWrenyardIpcPath(process.env, { configPath });
 const tsxDir = dirname(createRequire(join(daemonRoot, 'package.json')).resolve('tsx/cli'));
 const print = (text: string): void => { process.stdout.write(`[daemon dev] ${text}\n`); };
 const sleep = (ms: number): Promise<void> => new Promise(done => setTimeout(done, ms));

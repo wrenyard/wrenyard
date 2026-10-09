@@ -1,7 +1,7 @@
 import { StringDecoder } from 'node:string_decoder';
-import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute } from 'node:path';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
+import { resolveWrenyardClientStateDir } from '@wrenyard/paths';
 import type { AgentEvent, AgentRequest, StreamChunk } from './index.ts';
 
 export function messageEvent(text: string, role = 'assistant'): AgentEvent {
@@ -319,9 +319,14 @@ export function fnv1a64Hex(...parts: string[]): string {
     return hash.toString(16);
 }
 
+/** Private per-client state dir rooted under the shared WRENYARD state home. */
 export function clientStateDir(...parts: string[]): string {
-    const base = process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state');
-    return join(base, 'wrenyard', 'clients', ...parts);
+    return resolveWrenyardClientStateDir(process.env, ...parts);
+}
+
+/** Same as {@link clientStateDir}, but resolves against a launch-supplied environment. */
+export function clientStateDirForEnv(env: NodeJS.ProcessEnv, ...parts: string[]): string {
+    return resolveWrenyardClientStateDir(env, ...parts);
 }
 
 /** True when `value` is one of the shared public reasoning-effort levels. */

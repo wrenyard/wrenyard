@@ -1,4 +1,4 @@
-import { WrenyardIpcClient } from '@wrenyard/control-client';
+import { WrenyardIpcClient } from '@wrenyard/control';
 import type {
   StatsDailySnapshot,
   StatsOutcomesSnapshot,

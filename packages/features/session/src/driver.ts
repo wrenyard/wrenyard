@@ -10,7 +10,7 @@
  * {@link toolCallFromArguments} so an invalid `wy_action` payload is classified
  * identically.
  */
-import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
+import type { WrenyardGatewayConnection } from '@wrenyard/control';
 import type { ReasoningEffort } from '@wrenyard/models';
 
 import { abortError, IncompleteStreamError, postToGateway } from './transport.ts';

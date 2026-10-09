@@ -14,7 +14,7 @@
  * leaves the cache point at the end of the appended context. The request is
  * never stored upstream (`store: false`, no `previous_response_id`).
  */
-import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
+import type { WrenyardGatewayConnection } from '@wrenyard/control';
 
 import {
   ACTION_TOOL,
