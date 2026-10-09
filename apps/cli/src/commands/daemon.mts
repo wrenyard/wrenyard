@@ -13,7 +13,7 @@ import { stopDaemonProcess } from '../daemon-supervisor.mts'
  * the Task's own work. Refuse before touching the daemon.
  */
 function refuseDaemonLifecycleInTaskContext(command: string): void {
-  if (Object.prototype.hasOwnProperty.call(process.env, 'FOREMAN_TASK_RUN_ID')) {
+  if (Object.prototype.hasOwnProperty.call(process.env, 'WRENYARD_TASK_RUN_ID')) {
     throw new Error(`wrenyard daemon ${command} cannot run inside a Task: the Task runs on this daemon, so stopping it would end the work. Run it from outside the Task instead.`)
   }
 }

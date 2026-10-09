@@ -1079,7 +1079,7 @@ interface ForemanDaemonRuntime {
 }
 
 async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
-  const db = initDb(process.env.FOREMAN_DB_PATH)
+  const db = initDb()
   retainDaemonDb()
 
   // Destructive telemetry cleanup belongs to daemon startup, once this process
