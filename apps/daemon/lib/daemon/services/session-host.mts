@@ -18,6 +18,7 @@ export interface DaemonSessionHostOptions {
   workspaceRoot: string
   stateRoot: string
   gateway(): Promise<WrenyardGatewayConnection>
+  routeStatus?: SessionHost['routeStatus']
   selectAuxiliary: SessionHost['selectAuxiliary']
   taskService: TaskService
   /** The product-wired provider definitions main inference validates its
@@ -155,6 +156,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     gateway: options.gateway,
     resolveInferenceProvider: options.resolveInferenceProvider,
     selectAuxiliary: options.selectAuxiliary,
+    routeStatus: options.routeStatus,
     listProjects,
     gitHead: async checkoutPath => readGitHead(checkoutPath),
     async listTaskDefinitions() {

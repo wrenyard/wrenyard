@@ -78,7 +78,7 @@ export {
   actionFromToolCall,
   validateJsonSchema,
 } from './actions.ts';
-export type { AuxiliaryRoute, CallLedgerEventDraft, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
+export type { AuxiliaryRoute, CallRouteAttempt, CallLedgerEventDraft, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
 export {
   CALL_ROLES,
   CHEAP_TIMEOUT_MS,
@@ -184,8 +184,10 @@ export function createSession(host: SessionHost): Session {
           resolveProvider: (providerId) => host.resolveInferenceProvider(providerId),
         }),
         selectAuxiliary: role => host.selectAuxiliary(role),
+        ...(host.routeStatus === undefined ? {} : { routeStatus: (model: string) => host.routeStatus!(model) }),
         resolveProvider: (id) => host.resolveInferenceProvider(id),
         cacheKey: sessionId,
+        sessionId,
         append: async (event) => {
           await ledger.append(sessionId, event);
         },
