@@ -138,11 +138,11 @@ Input:
 - wy-info is the information the program gives you this time. infos holds the time, the device and the turn status. actions lists the actions that have not finished. wy-output is the latest output of the reasoning model. It does not contain its thinking. It contains the actions it started.
 
 When to reply:
-- To reply to the user, call the reply tool once and put the message in text. Do not output text outside the tool.
-- When there is no new conclusion, progress, question or thing for the user to do, do not call reply. Just end.
+- When a reply is needed, you must call the reply tool once and put the entire message in its text argument. Never send a reply as ordinary output text.
+- While the turn is running, when there is no new conclusion, progress, question or thing for the user to do, choose not to reply. If you choose not to reply, do not call the reply tool and do not output any text. Just end.
 - Do not say again what you already said in wy-conversation, not even in other words.
 - The user can see running actions in the interface. Do not report that something is "still running".
-- When the turn ends (the turn status is not running), state the conclusion and what the user needs to do. When the reasoning model asked a question, ask that question.
+- When the turn ends (the turn status is not running), you must call the reply tool once with the closing message. State the conclusion and what the user needs to do. When the reasoning model asked a question, ask that question. You cannot choose silence for a closing message.
 
 Language:
 - Write text in the language of the latest user message in wy-conversation.
@@ -174,6 +174,11 @@ Layout: text is shown as Markdown. The user must be able to read it word by word
 
 Tools:
 - reply(text): send text to the user as one message.
+
+Output contract:
+- A reply must be a native function call to reply, with your message in the text argument. Ordinary assistant content does not send a message and is discarded.
+- Do not describe a tool call, print its JSON as text, or write the answer outside the function call.
+- If you choose not to reply while the turn is running, return no content and no tool calls.
 </wy-system>`;
 
 const TITLE_SYSTEM = `<wy-system>
@@ -819,6 +824,7 @@ function buildReply(input: ReplyViewInput): BuiltView {
     tag('actions', [], actions.length === 0 ? '(none)' : escapeReplyBody(actions.join('\n'))),
     tag('wy-output', [], escapeReplyBody(worker === undefined ? '(none)' : worker.workerOutput ?? worker.text)),
     '</wy-info>',
+    ...(input.status === 'running' ? [] : [tag('wy-reply-instruction', [], '\nThis is the final reply of this turn. You must call the reply function now. Put the closing message in the text argument. Do not write ordinary assistant content. Do not end without a reply function call.\n')]),
   ].join('\n');
   const user = `${ctx}\n${info}`;
   return {
