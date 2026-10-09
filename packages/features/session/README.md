@@ -15,9 +15,7 @@ Under `<stateRoot>/session/<sha256(workspaceRoot)>/`:
 - `index.json` — the session list (`sessionId`, `title`, `createdAt`,
   `updatedAt`), written atomically and derived from the timelines.
 
-The summary-model preference is stored once per state root at
-`<stateRoot>/session/summary-model.json` (canonical model id only, default
-`deepseek-v4.1-flash`), never per workspace and never with a credential.
+Auxiliary calls select a Gateway route freshly for each role using the shared Task routing evidence and weights. Role requirements and ordered effort preferences live in `src/role-requirements.ts`; the call ledger records the route, rank, ordered candidates, requested effort and actual effort.
 
 The daemon supplies its state root and configured workspace root. Desktop restart
 does not interrupt turns; daemon shutdown drains them or interrupts with `shutdown`.
@@ -75,7 +73,6 @@ is corruption and throws instead of being silently dropped.
 - `src/engine.ts` — the work-turn state machine over the ports in
   `src/ports.ts`, with in-memory turn state in `src/runtime.ts` and streaming
   call snapshots in `src/live.ts`.
-- `src/summary-model.ts` — the summary-model preference store and the settings
   snapshot projected from the live Gateway connection.
 - `src/index.ts` — the composition root and the frozen `createSession` surface.
 

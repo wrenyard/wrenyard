@@ -17,8 +17,7 @@ import { applyLocalPreference, errorMessage } from './model/settings.js';
  * Page-scoped queries for the Settings page. The update, daemon, runtime alias,
  * preferences and settings snapshots are shared shell queries owned by
  * `lib/queries` and refreshed by the app-level push subscriptions (see
- * `app/query-client`); the settings page only owns its summary-settings and
- * quota snapshots.
+ * `app/query-client`); the settings page only owns its quota snapshots.
  */
 
 export {
@@ -34,14 +33,6 @@ export {
 export const daemonQueryKey = daemonQuery.queryKey;
 export const updateQueryKey = updateQuery.queryKey;
 export const runtimeAliasesQueryKey = runtimeAliasesQuery.queryKey;
-
-export const summarySettingsQueryKey = ['shell', 'summary-settings'] as const;
-
-export const summarySettingsQuery = queryOptions({
-  queryKey: summarySettingsQueryKey,
-  queryFn: () => shell.getSummarySettings(),
-  staleTime: 30_000,
-});
 
 /** Provider catalog projection; drives the read-only provider count. */
 export const quotaQueryKey = ['quota'] as const;
@@ -62,10 +53,6 @@ export function useDaemonQuery() {
 
 export function useUpdateQuery() {
   return useQuery(updateQuery);
-}
-
-export function useSummarySettingsQuery() {
-  return useQuery(summarySettingsQuery);
 }
 
 export function useRuntimeAliasesQuery() {
@@ -110,7 +97,6 @@ export const SETTINGS_QUERY_KEYS = [
   settingsQueryKey,
   daemonQueryKey,
   updateQueryKey,
-  summarySettingsQueryKey,
   runtimeAliasesQueryKey,
   quotaQueryKey,
   preferencesQueryKey,

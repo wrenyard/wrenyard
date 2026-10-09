@@ -3,6 +3,7 @@ import { defineModel } from './define.ts';
 export const tencentModels = [
   defineModel('hunyuan-hy3', 'HY3', {
     intelligence: 'low',
+    contextWindow: 200_000,
     capabilities: ['text'],
     pricing: [0.035, 0.139, 0.556],
     speed: 94,

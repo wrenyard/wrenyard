@@ -1,8 +1,4 @@
-import type { WrenyardGatewayConnection } from '@wrenyard/control-client'
 import {
-  buildSummarySettingsSnapshot,
-  readSummaryModel,
-  saveSummaryModel,
   type LiveCall,
   type Session,
 } from '@wrenyard/session'
@@ -10,7 +6,6 @@ import { INVALID_PARAMS, ProtocolError } from '../../protocol/errors.mts'
 import type {
   SessionEventsParams,
   SessionEventsResult,
-  SessionSummarySaveParams,
 } from '../../protocol/methods/session.mts'
 import type { RpcRouter } from '../rpc-router.mts'
 
@@ -82,9 +77,6 @@ async function pollEvents(session: Session, params: SessionEventsParams): Promis
 
 export interface SessionRpcHandlerOptions {
   session: Session
-  /** State root the session feature persists the summary-model preference under. */
-  stateRoot: string
-  gateway(): Promise<WrenyardGatewayConnection>
 }
 
 /**
@@ -114,11 +106,6 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
     }
   }
 
-  const summarySnapshot = () => buildSummarySettingsSnapshot({
-    readGatewayConnection: options.gateway,
-    readSummaryModel: () => readSummaryModel(options.stateRoot),
-  })
-
   router.register('session.list', (_params, _message, context) =>
     call(context, 'session.list', () => ({ sessions: session.listSessions() })))
   router.register('session.create', (_params, _message, context) =>
@@ -144,12 +131,5 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
     call(context, 'session.delete', async () => {
       await session.deleteSession(params.sessionId)
       return {}
-    }))
-  router.register('session.summary.settings', (_params, _message, context) =>
-    call(context, 'session.summary.settings', () => summarySnapshot()))
-  router.register('session.summary.save', (params, _message, context) =>
-    call(context, 'session.summary.save', async () => {
-      saveSummaryModel(options.stateRoot, (params as SessionSummarySaveParams).canonicalModel)
-      return summarySnapshot()
     }))
 }

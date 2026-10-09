@@ -1,3 +1,4 @@
+import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Badge } from '@/renderer/components/ui/badge';
@@ -125,6 +126,11 @@ export function LedgerList({ events, focusSeq }: LedgerListProps) {
                     <ItemDescription className="flex flex-wrap items-center gap-2">
                       <span className="tabular-nums">{event.seq}</span>
                       <Timestamp value={event.at} precision="second" />
+                      {event.type === 'call' && <>
+                        <span>{event.model}</span>
+                        {event.requestedReasoningEffort !== undefined && <span>{'期望思考：' + (REASONING_EFFORT_NAMES[event.requestedReasoningEffort as ReasoningEffort] ?? event.requestedReasoningEffort)}</span>}
+                        {event.reasoningEffort !== undefined && <span>{'实际思考：' + REASONING_EFFORT_NAMES[event.reasoningEffort]}</span>}
+                      </>}
                       {event.turn !== undefined && (
                         <span>{`T${event.turn}${event.cycle !== undefined && event.cycle > 0 ? ` · C${event.cycle}` : ''}`}</span>
                       )}

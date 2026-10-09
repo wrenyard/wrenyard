@@ -29,7 +29,6 @@ import {
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
-  type SummarySettingsSnapshot,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -111,8 +110,6 @@ export interface ShellWindowOptions {
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
-  getSummarySettings(): Promise<SummarySettingsSnapshot>;
-  saveSummaryModel(canonicalModel: string): Promise<SummarySettingsSnapshot>;
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
