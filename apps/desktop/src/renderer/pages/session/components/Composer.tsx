@@ -48,10 +48,12 @@ export interface ComposerProps {
   disabled?: boolean;
   onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): void | Promise<void>;
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
+  /** Bumped to request an explicit input focus (e.g. the new-conversation shortcut). */
+  focusRequest?: number;
 }
 
 /** Bottom composer with model and effort pickers, attachments and a send button. */
-export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText }: ComposerProps) {
+export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0 }: ComposerProps) {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
@@ -203,6 +205,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     if (injectedText.attachments !== undefined) setAttachments(injectedText.attachments);
     textareaRef.current?.focus();
   }, [injectedText?.nonce]);
+
+  useEffect(() => {
+    if (focusRequest > 0 && !disabled) textareaRef.current?.focus();
+  }, [focusRequest, disabled]);
 
   const selected = models.find((entry) => entry.publicId === modelId);
   const options: ModelOption[] = models.map((entry) => ({

@@ -352,6 +352,12 @@ export class ShellWindowController {
       }
       if (input.type === 'keyUp') return;
       if (altDown) altUsed = true;
+      const primary = process.platform === 'darwin' ? input.meta === true && input.control !== true : input.control === true && input.meta !== true;
+      if (primary && input.alt !== true && input.shift !== true && input.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        if (!input.isAutoRepeat) this.deliverCommandAction({ id: 'session.newDraft' });
+        return;
+      }
       const nav = navCommandForInput(input, process.platform);
       if (nav) {
         event.preventDefault();
