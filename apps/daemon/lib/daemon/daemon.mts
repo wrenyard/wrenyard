@@ -12,11 +12,12 @@ import type { OperationHost } from '../core/operations/types.mts'
 import type { ForemanServiceConfig } from '../config/index.mts'
 import { RpcRouter } from '../server/rpc-router.mts'
 import { registerCoreHandlers, readProcessIdentity } from '../server/handlers/core.mts'
-import { createIpcServer, resolveForemanServiceIpcPath, type IpcServer } from '../control/ipc-server.mts'
+import { createIpcServer, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
 import { TaskService } from '../core/task/service.mts'
 import { createSession, type Session } from '@wrenyard/session'
+import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
@@ -467,7 +468,7 @@ async function createForemanDaemonResources(
   const { catalog, providerRuntime, dispatchPlans, taskDispatchResolver } = runtime
   // One daemon-owned RuntimeAliasStore + RuntimeAliasService back the
   // runtime.alias.* IPC surface. The store resolves the
-  // XDG_CONFIG_HOME/~/.config/wrenyard/dispatch/config.json path itself, and no
+  // WRENYARD_CONFIG_HOME/~/.config/wrenyard/dispatch/config.json path itself, and no
   // alias target is cached: every snapshot/put/remove/resolve reloads at call
   // time so the service never serves a stale copied triple. This single alias
   // owner is constructed before TaskSettingsService and shared with it — task
@@ -783,9 +784,7 @@ async function createForemanDaemonResources(
   // instance or a background timer.
   await taskgraphService.reconcileStartup()
 
-  const ipcPath = resolveForemanServiceIpcPath({
-    path: config.service.ipc?.path,
-  })
+  const ipcPath = resolveWrenyardIpcPath(process.env, { config })
   const sessionStateRoot = foremanStateRoot()
   const sessionGateway = async () => ({
     ...await gateway.connection(gatewayOrigin(boundPort)),
@@ -1115,8 +1114,8 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   const providerRuntime = createBuiltinProviderRuntime({
     providers: [codeBuddy],
     // The ChatGPT subscription gateway credential is read and refreshed through
-    // the existing Codex native auth path (honoring WRENYARD_CODEX_AUTH_HOME /
-    // CODEX_HOME / home); the providers package authors no login of its own.
+    // the existing Codex native auth path (honoring the native CODEX_HOME or the
+    // user home); the providers package authors no login of its own.
     codexGatewayAuth: {
       read: () => readCodexGatewayCredential(),
       refresh: (credential, signal) => refreshCodexGatewayCredential(credential, { signal }),

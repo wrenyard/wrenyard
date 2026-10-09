@@ -1,13 +1,12 @@
-import { chmodSync, existsSync, realpathSync, unlinkSync } from 'node:fs'
+import { chmodSync, existsSync, unlinkSync } from 'node:fs'
 import { connect, createServer, type Server, type Socket } from 'node:net'
-import { tmpdir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
 import {
   createFrameDecoder,
   encodeFrame,
   protocolVersionMismatchMessage,
   WRENYARD_PROTOCOL_VERSION,
-} from '@wrenyard/control-client/transport'
+} from '@wrenyard/control/transport'
+import { normalizeWrenyardIpcPath, resolveWrenyardIpcPath } from '@wrenyard/control'
 
 export interface IpcServerOptions {
   path: string
@@ -65,44 +64,19 @@ export interface ForemanIpcPathOptions {
   path?: string
 }
 
-function isWindowsPipePath(path: string): boolean {
-  return path.startsWith('\\\\.\\pipe\\')
-}
+/** @deprecated Compatibility alias for the shared path normalizer. */
+export const resolveIpcPath = normalizeWrenyardIpcPath
 
-function normalizePipeName(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, '-')
-}
-
-export function resolveIpcPath(name: string, baseDir?: string): string {
-  if (process.platform === 'win32') {
-    if (isWindowsPipePath(name)) return name
-    return `\\\\.\\pipe\\${normalizePipeName(name)}`
-  }
-
-  if (isAbsolute(name)) return name
-  if (baseDir) return join(baseDir, `${name}.sock`)
-  return name
-}
-
-export function resolveForemanServiceIpcPath(options: ForemanIpcPathOptions): string {
-  const configuredPath = options.path?.trim()
-  if (configuredPath) {
-    return process.platform === 'win32'
-      ? resolveIpcPath(configuredPath)
-      : resolveIpcPath(configuredPath, shortIpcBaseDir())
-  }
-
-  return resolveIpcPath('wrenyard', shortIpcBaseDir())
-}
-
-function shortIpcBaseDir(): string | undefined {
-  if (process.platform === 'win32') return undefined
-
-  try {
-    return realpathSync('/tmp')
-  } catch {
-    return realpathSync(tmpdir())
-  }
+/**
+ * Thin compatibility wrapper over the shared resolver. The configured IPC path
+ * is handed to `resolveWrenyardIpcPath` as an already-loaded config so all
+ * parsing and precedence live in one place.
+ */
+export function resolveForemanServiceIpcPath(
+  options: ForemanIpcPathOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveWrenyardIpcPath(env, { config: { service: { ipc: { path: options.path } } } })
 }
 
 function removeUnixSocket(path: string): void {

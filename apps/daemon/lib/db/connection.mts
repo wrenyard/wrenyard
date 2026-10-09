@@ -1,6 +1,5 @@
 import Database from 'better-sqlite3'
-import { chmodSync, existsSync, mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 import { foremanStateRoot } from '../config/state.mts'
@@ -73,18 +72,7 @@ export function tx<T>(fn: TransactionCallback<T>): T {
 }
 
 function defaultDbPath(): string {
-  const primary = join(foremanStateRoot(), 'wrenyard.db')
-  // A pre-existing legacy ~/.local/state/foreman/foreman.db is read for
-  // migration fallback only; new databases are created under the wrenyard
-  // state root so schema/history migrations keep working unchanged.
-  const legacy = join(legacyForemanStateRoot(), 'foreman.db')
-  return existsSync(legacy) && !existsSync(primary) ? legacy : primary
-}
-
-function legacyForemanStateRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const xdgStateHome = env.XDG_STATE_HOME?.trim()
-  const stateHome = xdgStateHome ? resolve(xdgStateHome) : join(homedir(), '.local', 'state')
-  return join(stateHome, 'foreman')
+  return join(foremanStateRoot(), 'wrenyard.db')
 }
 
 function normalizeDbPath(path: string): string {

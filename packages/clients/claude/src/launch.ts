@@ -1,6 +1,6 @@
 import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
 import { claudeFamilyMcpConfig, resolveMcpServers } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDir, stringEnv } from '@wrenyard/agent-client/native';
+import { assertLaunch, clientStateDirForEnv, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
 
 export async function launchClaude(request: AgentRequest, env: NodeJS.ProcessEnv): Promise<ProcessSpec> {
@@ -23,7 +23,7 @@ export async function launchClaude(request: AgentRequest, env: NodeJS.ProcessEnv
         args,
         cwd: request.cwd,
         env: stringEnv({ ...env, CLAUDE_CODE_EFFORT_LEVEL: undefined, MAX_THINKING_TOKENS: undefined }, {
-            CLAUDE_CONFIG_DIR: clientStateDir('claude'),
+            CLAUDE_CONFIG_DIR: clientStateDirForEnv(env, 'claude'),
             ...request.clientReasoningEnvironment,
             // The mapped wire effort rides the per-launch environment so it is
             // scoped to this run and never written into persistent config.

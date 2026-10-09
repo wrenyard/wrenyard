@@ -2,7 +2,7 @@
 
 IPC conversation IDL plus the pure static update-feed contract. Private, MIT,
 ESM, zero runtime dependencies. The canonical daemon IPC protocol
-version is `2` (`WRENYARD_PROTOCOL_VERSION` in `@wrenyard/control-client`): the
+version is `2` (`WRENYARD_PROTOCOL_VERSION` in `@wrenyard/control`): the
 version is negotiated through the `health.ping` handshake, and an older client
 fails closed instead of talking to a daemon whose session surface it cannot
 address.
