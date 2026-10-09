@@ -84,7 +84,7 @@ but nothing in this task runs it.
 
 ## Canonical session surface
 
-The daemon IPC exposes the append-only session ledger as seven `session.*`
+The daemon IPC exposes the append-only session ledger as eight `session.*`
 methods. Their params/results are declared by the daemon-owned schemas in
 `apps/daemon/lib/protocol/methods/session.mts`; `@wrenyard/session` is the
 engine behind them.
@@ -96,8 +96,9 @@ engine behind them.
 | `session.send` | `{ sessionId, text, model }` | `{ turn }` |
 | `session.interrupt` | `{ sessionId, turn }` | *none* |
 | `session.events` | `{ sessionId, afterSeq, limit?, waitMs?, live? }` | `{ events, lastSeq, live? }` |
-| `session.summary.settings` | *none* | `SummarySettingsSnapshot` |
-| `session.summary.save` | `{ canonicalModel }` | `SummarySettingsSnapshot` |
+| `session.context.inspect` | `{ sessionId, turn?, cycle?, prompt?, calibrate? }` | `ContextInspection` |
+| `session.media.read` | `{ sessionId, path }` | `{ dataUrl }` |
+| `session.delete` | `{ sessionId }` | *none* |
 
 Contract semantics the adapters honor:
 
@@ -110,10 +111,6 @@ Contract semantics the adapters honor:
 - **`session.interrupt`** addresses one admitted turn by number; only that turn's
   own execution branch and its owned task runs are stopped, so parallel turns
   are unaffected.
-- **`session.summary.settings` / `session.summary.save`** own the summary-model
-  preference. `settings` projects the persisted canonical model plus every
-  ordinary-LLM candidate the live local model Gateway can serve; `save` persists
-  the canonical model and returns the re-projected snapshot.
 - Every session method is IPC-only: the HTTP and MCP transports never execute a
   session action.
 

@@ -1,6 +1,6 @@
 import type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
 export type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
-export { REASONING_EFFORTS } from '@wrenyard/models';
+export { REASONING_EFFORTS, resolveReasoningEffort } from '@wrenyard/models';
 
 export const GATEWAY_PROTOCOLS = [
   'openai_chat',

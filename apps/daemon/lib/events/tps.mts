@@ -386,10 +386,10 @@ export function estimateTps(samples: readonly ExecutionTpsSample[]): TpsEstimate
  * excluded). The injected resolver reads these directly; it never guesses
  * identity from a profile string.
  */
-export function readLocalSpeedSamples(now: Date = new Date()): LocalSpeedSample[] {
+export function readLocalSpeedSamples(now: Date = new Date(), database?: ForemanDatabase): LocalSpeedSample[] {
   const startAt = new Date(now.getTime() - LOCAL_SPEED_WINDOW_MS).toISOString()
   const endAt = now.toISOString()
-  const samples = readExecutionTpsSamples({ startAt, endAt })
+  const samples = readExecutionTpsSamples({ startAt, endAt }, database)
   const grouped = new Map<string, ExecutionTpsSample[]>()
   for (const sample of samples) {
     const key = `${sample.provider}\u0000${sample.model}`

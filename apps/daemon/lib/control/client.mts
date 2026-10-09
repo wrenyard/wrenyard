@@ -88,10 +88,6 @@ import type {
   SessionInterruptResult,
   SessionEventsParams,
   SessionEventsResult,
-  SessionSummarySettingsParams,
-  SessionSummarySettingsResult,
-  SessionSummarySaveParams,
-  SessionSummarySaveResult,
   SessionContextInspectParams,
   SessionContextInspectResult,
   ProviderListParams,
@@ -287,14 +283,6 @@ export class ForemanClient {
     context: {
       inspect: (params: SessionContextInspectParams): Promise<SessionContextInspectResult> => {
         return this.rpc.request<SessionContextInspectResult>('session.context.inspect', params)
-      },
-    },
-    summary: {
-      settings: (params: SessionSummarySettingsParams = {}): Promise<SessionSummarySettingsResult> => {
-        return this.rpc.request<SessionSummarySettingsResult>('session.summary.settings', params)
-      },
-      save: (params: SessionSummarySaveParams): Promise<SessionSummarySaveResult> => {
-        return this.rpc.request<SessionSummarySaveResult>('session.summary.save', params)
       },
     },
   }

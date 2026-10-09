@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "Wrenyard context-ledger session core: append-only per-session timeline, derived state, the work-turn engine and the summary-model preference.",
+  "description": "Wrenyard context-ledger session core: append-only per-session timeline, derived state, the work-turn engine and per-role automatic auxiliary routing.",
   "exports": {
     ".": "./src/index.ts",
     "./model-metadata": "./src/calls.ts"

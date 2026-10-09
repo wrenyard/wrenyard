@@ -8,14 +8,7 @@ import { InputGroupButton } from '@/renderer/components/ui/input-group';
 import { getSessionBridge } from '@/renderer/lib/session';
 import { preferencesQuery } from '@/renderer/lib/queries';
 import type { DraftAttachment, ModelEntry, TurnModel } from '../model/types.js';
-import {
-  firstRequestAfterSend,
-  initialReasoningEffort,
-  readFirstRequest,
-  retainReasoningEffort,
-  writeFirstRequest,
-  type ReasoningEffort,
-} from '../state/reasoning-effort.js';
+import { readFirstRequest, retainReasoningEffort, writeFirstRequest, type ReasoningEffort } from '../state/reasoning-effort.js';
 import { useComposerSelection } from '../state/session-usage.js';
 import { clearDraftAttachments, isStagedPathRetained, readDraftAttachments, reconcileSentDraft } from '../state/drafts.js';
 import { ContextMeter } from './usage/ContextMeter.js';
@@ -200,11 +193,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     const match = inherited ?? models[0];
     setModelId(match?.publicId ?? '');
     const supported = match?.reasoningEfforts ?? [];
-    if (supported.length > 0) {
-      setEffort(inherited !== undefined && first !== undefined
-        ? retainReasoningEffort(first.effort, supported)
-        : initialReasoningEffort(supported));
-    }
+    if (supported.length > 0) setEffort(retainReasoningEffort(inherited === undefined ? undefined : first?.effort, supported));
     textareaRef.current?.focus();
   }, [sessionKey, models, turns.at(-1)?.id]);
 
@@ -275,15 +264,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
           if (releasable.length > 0) {
             void getSessionBridge().discardDraftAttachments(releasable).catch(() => undefined);
           }
-          // Remember a session's FIRST request (model + effort) in Desktop local
-          // state so a later new session can inherit it. A request after the
-          // first in the same session never overwrites that record.
-          const record = firstRequestAfterSend(
-            readFirstRequest(),
-            { model: selected.publicId, effort },
-            !firstInSession,
-          );
-          if (record !== undefined) writeFirstRequest(record);
+          // Only a session's first request is remembered for the next new session.
+          if (firstInSession) writeFirstRequest({ model: selected.publicId, effort });
         },
         () => {
           // A rejected send keeps the text and every attachment so the user can retry.

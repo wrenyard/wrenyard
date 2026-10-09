@@ -24,7 +24,7 @@ import { ActivityStatusProjector, TaskRunLifecycleTracker } from './main/activit
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type SummarySettingsSnapshot, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { NotificationCenter, type NotificationInput } from './main/notification-center.js';
 import { createDesktopNotifications } from './main/notifications/desktop-notifications.js';
@@ -1052,13 +1052,6 @@ async function bootstrap(): Promise<void> {
     runtimeAliasRemove: (request: RuntimeAliasRemoveRequest) => removeRuntimeAlias(request),
     requestTaskRoutingTest: (params: TaskRoutingTestParams) => requestTaskRoutingTest(params),
     requestRoutingTestTasks: () => requestRoutingTestTasks(),
-    // Summary model projection and persistence are owned by the session feature;
-    // Desktop is only a typed transport for its canonical IPC methods, which
-    // return the settings snapshot directly.
-    getSummarySettings: async (): Promise<SummarySettingsSnapshot> =>
-      (await requestForeman('session.summary.settings', {})) as SummarySettingsSnapshot,
-    saveSummaryModel: async (canonicalModel: string): Promise<SummarySettingsSnapshot> =>
-      (await requestForeman('session.summary.save', { canonicalModel })) as SummarySettingsSnapshot,
     execStart: (request: ExecStartRequest) => execStart(request),
     execGet: (id: string) => execGet(id),
     execEvents: (request: ExecEventsRequest) => execEvents(request),

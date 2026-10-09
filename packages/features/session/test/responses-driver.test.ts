@@ -410,3 +410,27 @@ test('surfaces an upstream non-2xx body as an error', async () => {
   });
   await assert.rejects(driver.complete(baseRequest()), /Model request failed \(HTTP 502\): upstream exploded/u);
 });
+
+test('Responses auxiliary reply declares only reply and collects valid JSON tool text', async () => {
+  const capture: Capture = {};
+  const driver = createResponsesDriver(CONNECTION, { fetch: fakeFetch(new Response(JSON.stringify({ status: 'completed', output: [
+    { type: 'message', content: [{ type: 'output_text', text: 'hidden prose' }] },
+    { type: 'function_call', name: 'reply', arguments: JSON.stringify({ text: 'visible reply' }) },
+  ] }), { headers: { 'content-type': 'application/json' } }), capture) });
+  const result = await driver.complete(baseRequest({ replyTool: true }));
+  assert.deepEqual(result.replies, ['visible reply']); assert.deepEqual(result.toolCalls, []);
+  const body = JSON.parse(String(capture.init?.body));
+  assert.deepEqual(body.tools.map((tool: { name: string }) => tool.name), ['reply']);
+});
+test('Responses streamed reply tools preserve output order and never become actions', async () => {
+  const item = (index: number, text: string) => frame('response.output_item.done', { type: 'response.output_item.done', output_index: index,
+    item: { type: 'function_call', id: 'reply-' + index, name: 'reply', arguments: JSON.stringify({ text }) } });
+  const response = streamResponse([item(1, 'second'), item(0, 'first'), item(0, 'first'), frame('response.completed', { type: 'response.completed', response: { status: 'completed' } })]);
+  const result = await createResponsesDriver(CONNECTION, { fetch: fakeFetch(response) }).complete(baseRequest({ replyTool: true }));
+  assert.deepEqual(result.replies, ['first', 'second']); assert.deepEqual(result.toolCalls, []);
+});
+test('Responses reply without tool is silent and malformed reply fails', async () => {
+  const make = (output: unknown[]) => createResponsesDriver(CONNECTION, { fetch: fakeFetch(new Response(JSON.stringify({ status: 'completed', output }), { headers: { 'content-type': 'application/json' } })) });
+  assert.deepEqual((await make([]).complete(baseRequest({ replyTool: true }))).replies, []);
+  await assert.rejects(make([{ type: 'function_call', name: 'reply', arguments: '{}' }]).complete(baseRequest({ replyTool: true })), /invalid reply call/);
+});

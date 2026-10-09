@@ -31,7 +31,6 @@ import {
   SettingsFileControl,
   WorkspaceControl,
 } from './RuntimeSettings.js';
-import { AuxiliaryModelControl } from './SummarySettings.js';
 import { NotificationEventsControl } from './NotificationEvents.js';
 import { StatusBarSettingsControl } from './StatusBarSettings.js';
 import { ThemeCardsControl } from './ThemeCards.js';
@@ -50,7 +49,6 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   aboutTheme: AboutThemeControl,
   aboutWrenyardVersion: AboutWrenyardVersionControl,
   autoPriceCap: AutoPriceCapControl,
-  auxiliaryModel: AuxiliaryModelControl,
   daemon: DaemonControl,
   endpoint: EndpointControl,
   logs: LogsControl,

@@ -1,6 +1,6 @@
 // Task, stats and settings-projection IPC: the stats snapshot, task
 // detail/graph windows, task-settings snapshot/save, runtime aliases, routing
-// tests, the summary-model projection, and the shared activity projection.
+// tests and the shared activity projection.
 // Handler semantics are unchanged from the original inline registrations.
 
 import type { IpcMain } from 'electron';
@@ -71,18 +71,6 @@ export function registerTasksStatsIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () 
     assertShellSender(event.sender);
     return options.requestRoutingTestTasks();
   });
-  ipcMain.handle(SHELL_CHANNELS.summaryModelSnapshot, async (event) => {
-    assertShellSender(event.sender);
-    return options.getSummarySettings();
-  });
-  ipcMain.handle(SHELL_CHANNELS.summaryModelSave, async (event, canonicalModel: unknown) => {
-    assertShellSender(event.sender);
-    if (typeof canonicalModel !== 'string' || !canonicalModel || canonicalModel.length > 256
-      || TASK_SETTINGS_CONTROL_CHARS.test(canonicalModel)) {
-      throw new Error('摘要模型无效');
-    }
-    return options.saveSummaryModel(canonicalModel);
-  });
   ipcMain.handle(SHELL_CHANNELS.activityStatusSnapshot, async (event) => {
     assertShellSender(event.sender);
     return options.getActivityStatus();
@@ -100,8 +88,6 @@ export function registerTasksStatsIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () 
       SHELL_CHANNELS.runtimeAliasRemove,
       SHELL_CHANNELS.taskRoutingTest,
       SHELL_CHANNELS.taskRoutingTestTasks,
-      SHELL_CHANNELS.summaryModelSnapshot,
-      SHELL_CHANNELS.summaryModelSave,
       SHELL_CHANNELS.activityStatusSnapshot,
     ]) ipcMain.removeHandler(channel);
   };

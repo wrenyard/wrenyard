@@ -113,7 +113,7 @@ interface FakeCallsOptions {
   script: Record<string, ScriptEntry[]>
   captured: CallRunRequest[]
   reasonModel: string
-  cheapModel: string
+  auxiliaryModel: string
 }
 
 function createFakeCalls(options: FakeCallsOptions): CallsPort {
@@ -121,7 +121,7 @@ function createFakeCalls(options: FakeCallsOptions): CallsPort {
   return {
     async run(input: CallRunRequest): Promise<CallRunResult> {
       options.captured.push(input)
-      const model = input.role === 'reason' ? options.reasonModel : options.cheapModel
+      const model = input.role === 'reason' ? options.reasonModel : options.auxiliaryModel
       await options.ledger.append(options.sessionId, {
         type: 'call.started',
         callId: input.callId,
@@ -210,7 +210,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
       token: 'test',
       models: [],
     }),
-    cheapModel: async () => 'test/cheap',
+    selectAuxiliary: async () => [{ model: 'openai/gpt-6.1-sol', reasoningEffort: 'none' }],
     listProjects: async () => [{ id: 'demo', workspaceDir: 'projects/demo' }],
     gitHead: async () => ({}),
     listTaskDefinitions: async () => options.taskDefinitions ?? [],
@@ -248,7 +248,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
         script,
         captured: list,
         reasonModel: `${IMAGE_MODEL.provider}/${IMAGE_MODEL.model}`,
-        cheapModel: 'test/cheap',
+        auxiliaryModel: 'test/cheap',
       })
     },
     fileStore,
@@ -949,7 +949,7 @@ describe('engine communication replies', () => {
           return { text: 'ok' }
         },
       },
-      cheapModel: async () => 'test/cheap',
+      selectAuxiliary: async () => [{ model: 'openai/gpt-6.1-sol', reasoningEffort: 'none' }],
       cacheKey: 'session-42',
       append: async () => {},
     })
@@ -977,7 +977,7 @@ describe('engine communication replies', () => {
             return { text: 'prose outside the tool', ...(replies === undefined ? {} : { replies }) }
           },
         },
-        cheapModel: async () => 'test/cheap',
+        selectAuxiliary: async () => [{ model: 'openai/gpt-6.1-sol', reasoningEffort: 'none' }],
         append: async (event) => { if (event.type === 'call') outputs.push(event.output ?? '') },
       })
       const result = await runner.run({

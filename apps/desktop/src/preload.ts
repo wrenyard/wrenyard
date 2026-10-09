@@ -22,7 +22,6 @@ import {
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
-  type SummarySettingsSnapshot,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -198,12 +197,6 @@ const api: WrenyardShellApi = {
   },
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskRoutingTestTasks) as Promise<TaskRoutingTestTasksResult>;
-  },
-  getSummarySettings(): Promise<SummarySettingsSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.summaryModelSnapshot) as Promise<SummarySettingsSnapshot>;
-  },
-  saveSummaryModel(canonicalModel: string): Promise<SummarySettingsSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.summaryModelSave, canonicalModel) as Promise<SummarySettingsSnapshot>;
   },
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto> {
     return ipcRenderer.invoke(SHELL_CHANNELS.execStart, request) as Promise<ExecSnapshotDto>;

@@ -131,6 +131,7 @@ function makeHost(options: FakeTaskServiceOptions): { host: Host; fake: FakeTask
     gateway: async () => {
       throw new Error('gateway must not be used by this test')
     },
+    selectAuxiliary: async () => { throw new Error('selector must not be used by this test') },
     taskService: fake.service,
   })
   return { host, fake }

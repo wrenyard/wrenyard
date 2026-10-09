@@ -3,8 +3,6 @@ import { hostname } from 'node:os'
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client'
 import type { ProviderDefinition } from '@wrenyard/providers'
 import {
-  buildSummarySettingsSnapshot,
-  readSummaryModel,
   type ProjectInfo,
   type SessionHost,
   type TaskArtifact,
@@ -20,6 +18,7 @@ export interface DaemonSessionHostOptions {
   workspaceRoot: string
   stateRoot: string
   gateway(): Promise<WrenyardGatewayConnection>
+  selectAuxiliary: SessionHost['selectAuxiliary']
   taskService: TaskService
   /** The product-wired provider definitions main inference validates its
    *  target against. */
@@ -155,22 +154,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     deviceName: hostname(),
     gateway: options.gateway,
     resolveInferenceProvider: options.resolveInferenceProvider,
-    async cheapModel() {
-      const canonical = readSummaryModel(stateRoot).trim() || 'deepseek-v4.1-flash'
-      const summary = await buildSummarySettingsSnapshot({
-        readGatewayConnection: options.gateway,
-        readSummaryModel: () => readSummaryModel(stateRoot),
-      })
-      const connection = await options.gateway()
-      const usable = connection.models.filter(model => !model.taskOnly)
-      const preferred = summary.options.find(option => option.canonicalModel === canonical && option.available)?.publicId
-      const model = usable.find(model => model.publicId === preferred)
-        ?? usable.find(model => model.publicId === canonical)
-        ?? usable.find(model => model.publicId.slice(model.publicId.indexOf('/') + 1) === canonical)
-        ?? usable.find(model => model.id === canonical)
-      if (!model) throw new Error(`Gateway cannot resolve summary model '${canonical}'`)
-      return model.publicId
-    },
+    selectAuxiliary: options.selectAuxiliary,
     listProjects,
     gitHead: async checkoutPath => readGitHead(checkoutPath),
     async listTaskDefinitions() {

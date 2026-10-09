@@ -314,6 +314,8 @@ export interface CallEvent extends LedgerEventBase {
   reasoningEffort?: ReasoningEffort;
   /** The explicitly requested level, or an auxiliary role's declared expectation. */
   requestedReasoningEffort?: string;
+  /** Ordered auxiliary routes of this call; the first one served it. */
+  routeCandidates?: readonly import('./calls.ts').AuxiliaryRoute[];
   error?: string;
 }
 
