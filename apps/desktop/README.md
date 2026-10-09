@@ -68,7 +68,7 @@ Desktop renderer + preload + Electron main
   Wrenyard health, uptime, workspace root and IPC endpoint;
   model credential presence moved to the Providers page. Workspace is a
   product-level fixed binding:
-  `WRENYARD_DESKTOP_WORKSPACE` is an optional highest-priority override and is
+  `WRENYARD_WORKSPACE` is an optional highest-priority override and is
   shown read-only in settings when present; otherwise Desktop reads and edits
   the user's `workspace.root` config. Saving a workspace writes the config and
   restarts the daemon, which then binds the new root at startup; there is no

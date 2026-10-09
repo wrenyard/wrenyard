@@ -26,7 +26,7 @@
     "lint": "oxlint && tsc -p tsconfig.json --noEmit && tsc -b apps/desktop",
     "check": "node tools/check.mjs",
     "test": "node --test tools/*.test.mjs tools/**/*.test.mjs && pnpm -r --if-present run test",
-    "dev": "pnpm --parallel --filter @wrenyard/daemon --filter @wrenyard/desktop run dev"
+    "dev": "node tools/dev.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
