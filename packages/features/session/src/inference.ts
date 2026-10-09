@@ -2,14 +2,8 @@
  * session inference driver selection.
  *
  * `createInferenceDriver` is the single place a call chooses its transport.
- * An auxiliary request (every role whose request does not declare `actionTool`)
- * always runs through the OpenAI-compatible chat driver with the acquired
- * gateway: its model is a gateway public id, so no provider protocol lookup and
- * no model substitution is applied. A main-reasoning request (`actionTool:
- * true`) is resolved against the host's provider definitions and the
- * shared {@link selectInferenceMode} precedence, which binds a provider's
- * declared gateway protocols to exactly one runtime (`openai_chat` before
- * `openai_responses`), then runs the matching adapter.
+ * Every request resolves its selected route against the host catalog and uses
+ * the shared protocol precedence (Chat before Responses).
  */
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
 import type { ProviderDefinition } from '@wrenyard/providers';
@@ -68,8 +62,7 @@ function selectMainRuntime(
 /**
  * Create the session inference driver over a lazily-acquired gateway. A main
  * reasoning request selects Chat or Responses through {@link selectMainRuntime};
- * every auxiliary request always uses the chat driver with the acquired gateway
- * and forwards the request unchanged.
+ * auxiliary requests use that same selected route transport.
  */
 export function createInferenceDriver(
   gateway: GatewayConnectionSource,
@@ -77,10 +70,6 @@ export function createInferenceDriver(
 ): ModelDriver {
   return {
     async complete(request: DriverRequest): Promise<DriverResult> {
-      if (request.actionTool !== true) {
-        const connection = await gateway();
-        return createGatewayDriver(connection, options).complete(request);
-      }
       // Resolve the runtime before acquiring the gateway so an unsupported
       // target never issues a gateway or model call.
       const runtime = selectMainRuntime(request.model, options.resolveProvider);

@@ -20,7 +20,6 @@ import type {
   ContextItem,
   ContextItemKind,
   ContextLayerId,
-  SummarySettingsSnapshot,
 } from '@wrenyard/session';
 
 // The Pet module keeps its public DTOs under `src/pet`. Desktop code outside
@@ -47,7 +46,7 @@ export type { ActivityPresence } from './pet/shared/activity-snapshot';
 // The summary-settings and context-inspection DTOs are owned by the session
 // feature. Desktop re-exports them here so existing Desktop consumers keep one
 // import site.
-export type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, SummarySettingsSnapshot };
+export type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, };
 
 // The notification-center DTOs own the notification wire shape; the shell
 // contract re-exports them so the preload facade, main handlers and renderer
@@ -191,8 +190,6 @@ export const SHELL_CHANNELS = {
   runtimeAliasRemove: 'wrenyard-shell:runtime-alias-remove',
   taskRoutingTest: 'wrenyard-shell:task-routing-test',
   taskRoutingTestTasks: 'wrenyard-shell:task-routing-test-tasks',
-  summaryModelSnapshot: 'wrenyard-shell:summary-model-snapshot',
-  summaryModelSave: 'wrenyard-shell:summary-model-save',
   execStart: 'wrenyard-shell:exec-start',
   execGet: 'wrenyard-shell:exec-get',
   execEvents: 'wrenyard-shell:exec-events',
@@ -1233,8 +1230,6 @@ export interface WrenyardShellApi {
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
-  getSummarySettings(): Promise<SummarySettingsSnapshot>;
-  saveSummaryModel(canonicalModel: string): Promise<SummarySettingsSnapshot>;
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;

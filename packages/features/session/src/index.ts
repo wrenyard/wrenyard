@@ -10,7 +10,7 @@
  *   workspace.ts  `createWorkspaceSnapshot(input)`, `WorkspaceFileSource` and
  *                 the document catalogue.
  *   views.ts      `createViews()`.
- *   calls.ts      `createCallRunner({ driver, cheapModel, append, now })`.
+ *   calls.ts      `createCallRunner({ driver, selectAuxiliary, append, now })`.
  *   inference.ts  `createInferenceDriver(gateway)`, the one main/auxiliary
  *                 runtime selection site over the shared inference-mode policy.
  *   driver.ts     `createGatewayDriver(connection)` (chat adapter).
@@ -78,21 +78,21 @@ export {
   actionFromToolCall,
   validateJsonSchema,
 } from './actions.ts';
-export type { CallLedgerEventDraft, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
+export type { AuxiliaryRoute, CallLedgerEventDraft, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
 export {
   CALL_ROLES,
+  CHEAP_TIMEOUT_MS,
   IMAGE_INPUT_TOKEN_ESTIMATE,
   checkContextBudget,
   estimateContentTokens,
   estimateInputTokens,
   estimateTokens,
   isReasoningEffortSupported,
-  resolveAuxiliaryReasoningEffort,
   resolveModelMetadata,
   sanitizeMessagesForRole,
 } from './calls.ts';
 export type { AuxiliaryCallRole, RoleReasoningRequirement } from './role-requirements.ts';
-export { ROLE_REQUIREMENTS, auxiliaryReasoningRequirement } from './role-requirements.ts';
+export { ROLE_REQUIREMENTS } from './role-requirements.ts';
 export type { AttachmentInput, SessionFile, TaskArtifact } from './media.ts';
 export { FileStore, MEDIA_LIMITS } from './media.ts';
 export type { DocCatalogEntry } from './workspace.ts';
@@ -133,13 +133,6 @@ export {
   createResponsesDriver,
   serializeResponsesRequest,
 } from './responses-driver.ts';
-export type { SummarySettingsOption, SummarySettingsSnapshot } from './summary-model.ts';
-export {
-  DEFAULT_SUMMARY_CANONICAL_MODEL,
-  buildSummarySettingsSnapshot,
-  readSummaryModel,
-  saveSummaryModel,
-} from './summary-model.ts';
 export type {
   ActionFinishedEvent,
   ActionStartedEvent,
@@ -190,7 +183,7 @@ export function createSession(host: SessionHost): Session {
         driver: createInferenceDriver(() => host.gateway(), {
           resolveProvider: (providerId) => host.resolveInferenceProvider(providerId),
         }),
-        cheapModel: () => host.cheapModel(),
+        selectAuxiliary: role => host.selectAuxiliary(role),
         resolveProvider: (id) => host.resolveInferenceProvider(id),
         cacheKey: sessionId,
         append: async (event) => {

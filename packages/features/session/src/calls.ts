@@ -11,9 +11,9 @@
 import { getEncoding } from 'js-tiktoken';
 import { createBuiltinCatalog } from '@wrenyard/providers';
 import type { ProviderDefinition, ModelDefinition } from '@wrenyard/providers/base';
-import { models as registeredModels, resolveReasoningEffort, type ReasoningEffort } from '@wrenyard/models';
+import { models as registeredModels, type ReasoningEffort } from '@wrenyard/models';
 import { isContextOverflowError } from './driver.js';
-import { auxiliaryReasoningRequirement } from './role-requirements.js';
+import { ROLE_REQUIREMENTS, type AuxiliaryCallRole } from './role-requirements.js';
 import type { DriverResult, ModelContentPart, ModelDriver, ModelMessage, ToolCall, Usage } from './driver.js';
 
 export type { ModelMessage, Usage } from './driver.js';
@@ -92,6 +92,8 @@ export interface CallEventDraft {
    * so a nearest-supported adaptation is visible in the ledger.
    */
   requestedReasoningEffort?: string;
+  /** Ordered auxiliary routes of this call; the first one served it. */
+  routeCandidates?: readonly AuxiliaryRoute[];
   error?: string;
   turn?: number;
   cycle?: number;
@@ -146,11 +148,13 @@ export interface ModelCallOutput {
   toolCalls: ToolCall[];
 }
 
+/** One ranked auxiliary route and the level it is called at. */
+export interface AuxiliaryRoute { model: string; reasoningEffort: ReasoningEffort; }
 export interface CallRunnerOptions {
   resolveProvider?: (providerId: string) => ProviderDefinition | undefined;
   driver: ModelDriver;
-  /** Cheap model public id used by every role except `reason`. */
-  cheapModel: () => string | Promise<string>;
+  /** Fresh non-empty ranked routes for each auxiliary invocation; the first is used. */
+  selectAuxiliary: (role: AuxiliaryCallRole) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
   /** Structural sink: exactly one terminal call event per attempted invocation. */
   append: (event: CallLedgerEventDraft) => void | Promise<void>;
   /** Forwarded as {@link DriverRequest.cacheKey} on every call of this runner. */
@@ -309,25 +313,6 @@ export function isReasoningEffortSupported(metadata: ModelMetadata, effort: Reas
   return metadata.reasoningEfforts?.includes(effort) ?? false;
 }
 
-/**
- * The exact public level an auxiliary role should send on one route.
- *
- * The earliest level of the role's declared preference ladder that the route
- * supports is chosen; when no level is shared, the nearest supported level at
- * or above the first preference (else the highest supported level) is used. An
- * unknown role, or a route without a declared ladder, yields undefined.
- */
-export function resolveAuxiliaryReasoningEffort(
-  role: string,
-  supported: readonly ReasoningEffort[] | undefined,
-): ReasoningEffort | undefined {
-  const expected = auxiliaryReasoningRequirement(role);
-  if (expected === undefined || expected.length === 0) return undefined;
-  if (supported === undefined || supported.length === 0) return undefined;
-  const shared = expected.find((effort) => supported.includes(effort));
-  return shared ?? resolveReasoningEffort(expected[0], supported);
-}
-
 /** Reject promptly when the signal aborts, even while awaiting a plain promise. */
 function settleWithAbort<T>(value: T | Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(abortError());
@@ -390,6 +375,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       let estimatedInputTokens = 0;
       let actualReasoningEffort: ReasoningEffort | undefined;
       let requestedReasoningEffort: string | undefined;
+      let routes: readonly AuxiliaryRoute[] | undefined;
       let partialUsage: Usage | undefined;
       let emitted = false;
       /** First nonempty delta time, shared by the terminal call event. */
@@ -416,6 +402,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           output: fields.output,
           ...(fields.reasoning === undefined ? {} : { reasoning: fields.reasoning }),
           reasoningEffort: actualReasoningEffort,
+          ...(routes === undefined ? {} : { routeCandidates: routes }),
           ...(requestedReasoningEffort === undefined ? {} : { requestedReasoningEffort }),
           ...(fields.error === undefined ? {} : { error: fields.error }),
           ...(input.turn === undefined ? {} : { turn: input.turn }),
@@ -452,7 +439,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       };
 
       // Timers and abort wiring come first so the total deadline also covers
-      // cheap-model resolution and driver acquisition.
+      // auxiliary route selection and driver acquisition.
       const controller = new AbortController();
       let abortKind: 'signal' | 'timeout' | 'idle' | undefined;
       const abort = (kind: 'signal' | 'timeout' | 'idle'): void => {
@@ -502,7 +489,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           model = `${selection.provider}/${selection.model}`;
           requestedReasoningEffort = selection.reasoningEffort;
         } else {
-          model = await settleWithAbort(options.cheapModel(), controller.signal);
+          requestedReasoningEffort = ROLE_REQUIREMENTS[input.role].expectedReasoningEffort[0];
+          routes = await settleWithAbort(options.selectAuxiliary(input.role), controller.signal);
+          model = routes[0]!.model;
+          actualReasoningEffort = routes[0]!.reasoningEffort;
         }
         if (controller.signal.aborted) {
           return await fail(abortMessage(abortKind, totalTimeoutMs), {
@@ -521,13 +511,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             return await fail(`Model ${model} does not support reasoning effort "${requestedReasoningEffort ?? ''}"`);
           }
           actualReasoningEffort = requestedReasoningEffort as ReasoningEffort;
-        } else {
-          // Auxiliary roles adapt their declared preference onto this route: the
-          // earliest shared level, else the nearest supported level.
-          requestedReasoningEffort = auxiliaryReasoningRequirement(input.role)?.[0];
-          actualReasoningEffort = resolveAuxiliaryReasoningEffort(input.role, budget.metadata.reasoningEfforts);
         }
-        if (actualReasoningEffort === undefined) return await fail(`Model ${model} has no reasoning-effort declaration for role ${input.role}`);
         if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
 
         // Observational marker: the driver call is about to be issued. It never
@@ -547,7 +531,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             result = await settleWithAbort(options.driver.complete({
               model,
               messages,
-              reasoningEffort: actualReasoningEffort,
+              reasoningEffort: actualReasoningEffort!,
               ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
               ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
               ...(input.role === 'reason' ? {

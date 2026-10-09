@@ -19,7 +19,6 @@ export type CustomControlKey =
   | 'aboutTheme'
   | 'aboutWrenyardVersion'
   | 'autoPriceCap'
-  | 'auxiliaryModel'
   | 'daemon'
   | 'endpoint'
   | 'logs'
@@ -223,15 +222,6 @@ const SESSION_CATEGORY: SettingDefinition[] = [
     },
     default: 'enter',
     source: { kind: 'preference', preference: 'session.sendKey' },
-  },
-  {
-    id: 'session.auxiliaryModel',
-    category: 'session',
-    title: '辅助模型',
-    description: '用于上下文选择、action 解析、派发编译、写文档、回复撰写和标题等便宜调用。',
-    keywords: ['辅助模型', '摘要', 'summary', 'cheap', '便宜', '标题', 'title'],
-    control: custom('auxiliaryModel'),
-    source: { kind: 'daemon' },
   },
   {
     id: 'session.workspace',
