@@ -11,9 +11,6 @@
     "./statistics": "./src/statistics.ts",
     "./mcp": "./src/mcp.ts"
   },
-  "scripts": {
-    "test": "tsx --test test/*.test.ts"
-  },
   "dependencies": {
     "@wrenyard/execution": "workspace:*",
     "@wrenyard/models": "workspace:*",

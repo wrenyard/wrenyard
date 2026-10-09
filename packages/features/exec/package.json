@@ -6,9 +6,6 @@
   "type": "module",
   "description": "Raw prompt-execution feature: starts one resolved agent client, replays its events under explicit bounds, and exposes snapshots and cancellation.",
   "exports": "./src/index.ts",
-  "scripts": {
-    "test": "tsx --test test/*.test.ts"
-  },
   "dependencies": {
     "@wrenyard/agent-client": "workspace:*",
     "@wrenyard/clients": "workspace:*",

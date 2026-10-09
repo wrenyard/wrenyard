@@ -5,9 +5,6 @@
   "license": "MIT",
   "type": "module",
   "exports": "./src/index.ts",
-  "scripts": {
-    "test": "tsx --test test/*.test.ts"
-  },
   "dependencies": {
     "@wrenyard/providers": "workspace:*",
     "js-tiktoken": "1.0.21"
