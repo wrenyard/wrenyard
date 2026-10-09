@@ -4,9 +4,6 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "scripts": {
-    "test": "tsx --test test/*.test.ts test/*.test.mts"
-  },
   "dependencies": {
     "@wrenyard/control-client": "workspace:*",
     "@wrenyard/daemon": "workspace:*",

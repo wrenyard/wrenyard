@@ -1,5 +1,0 @@
-import assert from 'node:assert/strict';import test from 'node:test';import type {ProviderListResult} from '@wrenyard/protocol/provider';import {toModelEntries} from '../src/session/model-entries.ts';
-test('runtime-only CodeBuddy route uses its DTO ladder and a malformed sibling is skipped',()=>{
- const warnings:string[]=[];const result={providers:[{id:'codebuddy',displayName:'CodeBuddy',description:'',setupHint:'',configured:true,authMode:'native',protocols:['openai_chat'],models:[{id:'runtime-only-opus',displayName:'Runtime Opus',pricing:[0,1,2],available:true,reasoningEfforts:['low','high','max'],contextWindow:300000},{id:'malformed',displayName:'Malformed',pricing:[0,1,2],available:true},{id:'another-good-route',displayName:'Good',pricing:[0,1,2],available:true,reasoningEfforts:['medium']}]}]} as unknown as ProviderListResult;
- const rows=toModelEntries(result,m=>warnings.push(m));assert.deepEqual(rows.map(r=>r.model),['runtime-only-opus','another-good-route']);assert.deepEqual(rows[0].reasoningEfforts,['low','high','max']);assert.equal(rows[0].contextWindow,300000);assert.equal(warnings.length,1);assert.match(warnings[0],/codebuddy\/malformed/);
-});

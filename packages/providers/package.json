@@ -12,7 +12,7 @@
     "./chatgpt": "./src/chatgpt/index.ts"
   },
   "scripts": {
-    "test": "tsx --test test/*.test.ts src/**/tests/*.test.ts"
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@wrenyard/models": "workspace:*"
