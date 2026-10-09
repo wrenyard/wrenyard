@@ -323,7 +323,6 @@ function buildTurn(
     ...(status === 'running' ? { phase: inferPhase(events, calls, actions) } : {}),
     cycle,
     startedAt,
-    receivedAt: startedAt,
     ...(endedAt === undefined ? {} : { endedAt }),
     ...(interrupted === undefined ? {} : { interruptReason: interrupted.reason }),
     interrupting,

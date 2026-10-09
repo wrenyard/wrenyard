@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { countInputTokens } from '../model/usage.js';
 import { EffortPicker, ModelPicker, modelBadges, modelRuntimeDescription, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
@@ -50,10 +50,13 @@ export interface ComposerProps {
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
   /** Bumped to request an explicit input focus (e.g. the new-conversation shortcut). */
   focusRequest?: number;
+  /** Quote of the message being replied to. */
+  reply?: string | undefined;
+  onCancelReply?: () => void;
 }
 
 /** Bottom composer with model and effort pickers, attachments and a send button. */
-export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0 }: ComposerProps) {
+export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, reply, onCancelReply }: ComposerProps) {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
@@ -282,8 +285,16 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       });
   };
 
-  const attachmentStrip = attachmentError === '' && attachments.length === 0 ? undefined : (
+  const attachmentStrip = attachmentError === '' && attachments.length === 0 && reply === undefined ? undefined : (
     <div className="flex flex-col gap-1.5">
+      {reply !== undefined && (
+        <div className="flex items-center gap-2 rounded-lg bg-muted px-2 py-1 text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">回复：{reply}</span>
+          <InputGroupButton type="button" size="icon-xs" aria-label="取消回复" onClick={onCancelReply}>
+            <X />
+          </InputGroupButton>
+        </div>
+      )}
       {attachmentError !== '' && <p className="text-xs text-destructive">{attachmentError}</p>}
       {attachments.length > 0 && (
         <MediaAttachments

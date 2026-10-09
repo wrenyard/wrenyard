@@ -889,6 +889,27 @@ html[data-platform="win32"] {
   animation: wy-pulse-slow 2s var(--ease-in-out) infinite;
 }
 
+/* Typing indicator: a small staggered dot that bounces up then rests while a
+   reply is being written. */
+@keyframes wy-typing-dot {
+  0% {
+    opacity: 0.6;
+    transform: none;
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+  60%,
+  100% {
+    opacity: 0.6;
+    transform: none;
+  }
+}
+.motion-typing-dot {
+  animation: wy-typing-dot 1.3s ease-in-out infinite;
+}
+
 /* One-shot accent flash for a changed number. */
 @keyframes wy-number-flash {
   from {
@@ -948,6 +969,11 @@ html[data-theme-switching] *::after {
   .motion-pulse-slow {
     animation: none;
   }
+  .motion-typing-dot {
+    animation: none;
+    opacity: 0.6;
+    transform: none;
+  }
   ::view-transition-new(app-page) {
     animation-name: wy-fade-in;
   }
@@ -982,6 +1008,11 @@ html[data-motion="reduce"] .transition-all {
 }
 html[data-motion="reduce"] .motion-pulse-slow {
   animation: none;
+}
+html[data-motion="reduce"] .motion-typing-dot {
+  animation: none;
+  opacity: 0.6;
+  transform: none;
 }
 html[data-motion="reduce"] .shimmer {
   animation: none;

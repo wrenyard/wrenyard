@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Loader, PanelRight, X } from 'lucide-react';
+import { PanelRight, X } from 'lucide-react';
 import { cn } from 'cn';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
@@ -15,11 +15,8 @@ import {
   MessageScrollerViewport,
   useMessageScroller,
 } from '@/renderer/components/ui/message-scroller';
-import { Page, PageDescription, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
-import { StatusBarButton } from '@/renderer/components/status-bar-button';
+import { Page, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
 import { registerPageCommands } from '@/renderer/lib/commands';
-import { useStatusBarItem } from '@/renderer/lib/statusbar';
-import { formatSnapshotStamp } from '@/renderer/lib/format';
 import { useNewItemKeys } from '@/renderer/lib/motion';
 import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
 import { getSessionApi } from './api.js';
@@ -29,7 +26,8 @@ import { EmptySession } from './components/EmptySession.js';
 import { SessionSearch } from './components/SessionSearch.js';
 import { SessionSidebar } from './components/SessionSidebar.js';
 import { SessionTitle } from './components/SessionTitle.js';
-import { PendingTurnItem, TurnItem } from './components/conversation/TurnItem.js';
+import { MessageTimeline, buildMessageTimeline } from './components/conversation/MessageTimeline.js';
+import { withReplyQuote } from './components/conversation/UserMessage.js';
 import { Inspector, InspectorProvider } from './components/inspector/Inspector.js';
 import { fold, isFormat2 } from './model/fold.js';
 import type { ActionModel, DraftAttachment, InspectorTarget, SessionBridgeTaskBrief } from './model/types.js';
@@ -66,7 +64,7 @@ function RunningDispatchTasks({ api, turns, setTasks }: {
 /** The session page: sidebar, conversation and inspector in one resizable shell. */
 export function SessionPage() {
   const api = getSessionApi();
-  const { state, selectSession, newDraft, sendMessage, interruptTurn, deleteSession, removePending, setTasks, clearError } = useSessionController(api);
+  const { state, selectSession, newDraft, sendMessage, deleteSession, removePending, setTasks, clearError } = useSessionController(api);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -74,6 +72,7 @@ export function SessionPage() {
   const [tab, setTab] = useState('detail');
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [retry, setRetry] = useState<{ text: string; attachments: DraftAttachment[]; nonce: number } | undefined>(undefined);
+  const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | undefined>(undefined);
   const sidebarPanel = usePanelRef();
   const inspectorPanel = usePanelRef();
 
@@ -106,30 +105,6 @@ export function SessionPage() {
     () => fold(state.events, state.live, state.tasks, { sessionId: state.selectedId, interrupting: state.interrupting }),
     [state.events, state.live, state.tasks, state.selectedId, state.interrupting],
   );
-
-  // Target the newest running turn, which can precede a later completed turn.
-  const scrollToLatestRunningTurn = useCallback((): void => {
-    const turn = [...model.turns].reverse().find((candidate) => candidate.status === 'running');
-    if (!turn) return;
-    const anchor = document.querySelector<HTMLElement>(`[data-turn-id="${turn.id}"]`);
-    anchor?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  }, [model.turns]);
-
-  useStatusBarItem({
-    id: 'session.turns',
-    side: 'end',
-    priority: 100,
-    render: () => (model.runningTurns > 0
-      ? (
-        <StatusBarButton
-          icon={Loader}
-          label={`${model.runningTurns} 轮运行中`}
-          tooltip="滚动到最近的运行中轮次"
-          onClick={scrollToLatestRunningTurn}
-        />
-      )
-      : null),
-  });
 
   const inspect = useCallback((next: InspectorTarget): void => {
     setTarget(next);
@@ -272,28 +247,31 @@ export function SessionPage() {
 
   // Entry animation applies only to messages appended after the conversation
   // settles; history loads are absorbed into the baseline (foundation §2.3).
-  const messageKeys = useMemo(() => {
-    const keys: string[] = [];
-    for (const turn of model.turns) {
-      keys.push(`u:${turn.id}`);
-      if (turn.final !== undefined || turn.status !== 'running') keys.push(`a:${turn.id}`);
-    }
-    return keys;
-  }, [model.turns]);
+  const timeline = useMemo(
+    () => buildMessageTimeline(model.turns, state.pending),
+    [model.turns, state.pending],
+  );
+  const messageKeys = useMemo(() => timeline.map((entry) => entry.id), [timeline]);
   const freshMessageKeys = useNewItemKeys(messageKeys, {
     scope: sessionKey,
     ready: !state.loadingLedger,
   });
 
+  const reply = replyTo?.sessionKey === sessionKey ? replyTo.quote : undefined;
   const composer = rawOnly ? null : (
     <Composer
       models={state.models}
       turns={model.turns}
       sessionKey={sessionKey}
       disabled={state.loadingLedger}
-      onSend={(text, entry, effort, attachments) => sendMessage(text, entry, effort, attachments)}
+      onSend={async (text, entry, effort, attachments) => {
+        await sendMessage(reply === undefined ? text : withReplyQuote(reply, text), entry, effort, attachments);
+        setReplyTo(undefined);
+      }}
       injectedText={retry}
       focusRequest={composerFocusRequest}
+      reply={reply}
+      onCancelReply={() => setReplyTo(undefined)}
     />
   );
 
@@ -318,9 +296,6 @@ export function SessionPage() {
             draft={draft}
           />
         </PageTitle>
-        {!draft && model.snapshot && (
-          <PageDescription className="truncate">快照 {formatSnapshotStamp(model.snapshot.takenAt)}</PageDescription>
-        )}
       </PageHeader>
       <TitleBarAuxiliary>
         <Tooltip>
@@ -407,27 +382,19 @@ export function SessionPage() {
                   <MessageScrollerProvider key={sessionKey} autoScroll>
                     <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
                       <MessageScrollerViewport className="scroll-fade-t">
-                        <MessageScrollerContent className="mx-auto w-full max-w-3xl px-4 pt-(--header-height) pb-4">
-                          {model.turns.map((turn, index) => (
-                            <TurnItem
-                              key={turn.id}
-                              turn={turn}
-                              previous={index > 0 ? model.turns[index - 1] : undefined}
-                              latest={index === model.turns.length - 1 && state.pending.length === 0}
-                              sessionId={state.selectedId}
-                              enterUser={freshMessageKeys.has(`u:${turn.id}`)}
-                              enterAssistant={freshMessageKeys.has(`a:${turn.id}`)}
-                              onInterrupt={(id) => { void interruptTurn(id); }}
-                            />
-                          ))}
-                          {state.pending.map((pending) => (
-                            <PendingTurnItem
-                              key={pending.localId}
-                              pending={pending}
-                              onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
-                              onRemove={removePending}
-                            />
-                          ))}
+                        <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-2 px-4 pt-(--header-height) pb-4">
+                          <MessageTimeline
+                            timeline={timeline}
+                            turns={model.turns}
+                            sessionId={state.selectedId}
+                            freshMessageKeys={freshMessageKeys}
+                            onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
+                            onRemove={removePending}
+                            onReply={(quote) => {
+                              setReplyTo({ sessionKey, quote });
+                              setComposerFocusRequest((value) => value + 1);
+                            }}
+                          />
                         </MessageScrollerContent>
                       </MessageScrollerViewport>
                       <FollowSentMessage pendingId={state.pending.at(-1)?.localId} />

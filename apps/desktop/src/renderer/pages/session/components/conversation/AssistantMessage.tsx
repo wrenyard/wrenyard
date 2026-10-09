@@ -1,95 +1,60 @@
-import { ListTree } from 'lucide-react';
 import { cn } from 'cn';
 import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
-import { Button } from '@/renderer/components/ui/button';
-import { Message, MessageContent, MessageFooter } from '@/renderer/components/ui/message';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { CopyButton } from '@/renderer/components/copy-button';
+import { Message, MessageContent } from '@/renderer/components/ui/message';
 import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { useEnterAnimation } from '@/renderer/lib/motion';
 import { noFinalReply } from '../../model/describe.js';
-import type { TurnModel } from '../../model/types.js';
-import { useInspector } from '../inspector/Inspector.js';
+import type { ReplyModel, TurnModel } from '../../model/types.js';
 import { HoverTime } from './HoverTime.js';
-
-/** Hover-revealed assistant actions: copy the reply and open the work process. */
-function AssistantFooter({ text, onInspect }: { text: string; onInspect: () => void }) {
-  return (
-    <MessageFooter className="gap-2 opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100">
-      <CopyButton text={text} size="icon-sm" label="复制回复" />
-      <Tooltip>
-        <TooltipTrigger
-          render={<Button variant="ghost" size="icon-sm" aria-label="查看工作过程" />}
-          onClick={onInspect}
-        >
-          <ListTree />
-        </TooltipTrigger>
-        <TooltipContent>查看工作过程</TooltipContent>
-      </Tooltip>
-    </MessageFooter>
-  );
-}
+import { ReplyMenu } from './ReplyMenu.js';
 
 export interface AssistantMessageProps {
   turn: TurnModel;
+  /** The reply to render; omitted for the terminal fallback of a turn without replies. */
+  reply?: ReplyModel;
+  /** A contextual reference to an earlier message separated by other turns. */
+  reference?: { author: string; text: string; onJump: () => void };
   /** Play the entry animation; only set for genuinely new appends. */
   enter?: boolean;
+  onReply?: () => void;
 }
 
 /**
- * Every committed communication reply of a turn, in chronological order. One
- * bubble per reply with a subtle phase label for non-final phases; the hover
- * footer appears once on the last reply of an ended turn. A running turn with
- * no committed reply yet renders nothing, and raw reason/thinking output is
- * never shown here (it lives in the inspector only).
+ * One committed communication reply, or the terminal fallback when `reply` is
+ * omitted. Raw reason/thinking output is never shown here (it lives in the
+ * inspector only).
  */
-export function AssistantMessage({ turn, enter }: AssistantMessageProps) {
-  const { inspect } = useInspector();
+export function AssistantMessage({ turn, reply, reference, enter, onReply }: AssistantMessageProps) {
   const animate = useEnterAnimation(enter === true);
-  const enterClass = cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out');
-  const onInspect = (): void => inspect({ kind: 'turn', turnId: turn.id });
-  const replies = turn.replies;
-
-  if (replies.length === 0) {
-    if (turn.status === 'running') return null;
-    const fallback = noFinalReply(turn);
-    return (
-      <Message className={enterClass}>
-        <MessageContent>
-          <div className="flex items-end gap-2">
-            <Bubble variant={fallback.variant === 'destructive' ? 'destructive' : 'outline'}>
-              <BubbleContent className="whitespace-pre-wrap">{fallback.text}</BubbleContent>
-            </Bubble>
-            {turn.endedAt !== undefined && <HoverTime value={turn.endedAt} />}
-          </div>
-          <AssistantFooter text={fallback.text} onInspect={onInspect} />
-        </MessageContent>
-      </Message>
-    );
-  }
-
+  const fallback = reply === undefined ? noFinalReply(turn) : undefined;
+  const at = reply?.at ?? turn.endedAt;
   return (
-    <>
-      {replies.map((reply, index) => {
-        const last = index === replies.length - 1;
-        return (
-          <Message key={`${turn.id}-${index}-${reply.at}`} className={enterClass}>
-            <MessageContent>
-              <div className="flex flex-col gap-1">
-                <div className="flex items-end gap-2">
-                  <Bubble variant="muted">
-                    <BubbleContent>
-                      <Markdown>{reply.text}</Markdown>
-                    </BubbleContent>
-                  </Bubble>
-                  <HoverTime value={reply.at} />
-                </div>
-              </div>
-              {last && turn.endedAt !== undefined && <AssistantFooter text={reply.text} onInspect={onInspect} />}
-            </MessageContent>
-          </Message>
-        );
-      })}
-    </>
+    <Message className={cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}>
+      <MessageContent>
+        <div className="flex items-end gap-2">
+          <ReplyMenu onReply={onReply}>
+            <Bubble variant={fallback === undefined ? 'muted' : fallback.variant === 'destructive' ? 'destructive' : 'outline'}>
+              <BubbleContent className="rounded-2xl px-3 py-1.5">
+                {reference !== undefined && (
+                  <button
+                    type="button"
+                    className="mb-1 flex w-full min-w-0 flex-col rounded-lg bg-foreground/5 px-2 py-1 text-left text-xs hover:bg-foreground/10"
+                    aria-label={`查看引用的${reference.author}消息：${reference.text}`}
+                    onClick={reference.onJump}
+                  >
+                    <span className="text-muted-foreground">{reference.author}</span>
+                    <span className="line-clamp-2 text-muted-foreground">{reference.text}</span>
+                  </button>
+                )}
+                {reply !== undefined
+                  ? <Markdown>{reply.text}</Markdown>
+                  : <span className="whitespace-pre-wrap">{fallback!.text}</span>}
+              </BubbleContent>
+            </Bubble>
+          </ReplyMenu>
+          {at !== undefined && <HoverTime value={at} />}
+        </div>
+      </MessageContent>
+    </Message>
   );
 }
