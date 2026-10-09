@@ -1,10 +1,10 @@
 import type { ForemanConfigData } from './data.mts'
 import { ForemanConfigManager } from './manager.mts'
 import {
-  resolveForemanConfigPath,
-  resolveDefaultForemanConfigPath,
-  resolveForemanConfigDir,
-} from './path.mts'
+  resolveWrenyardConfigPath as resolveForemanConfigPath,
+  resolveDefaultWrenyardConfigPath as resolveDefaultForemanConfigPath,
+  resolveWrenyardConfigRoot as resolveForemanConfigDir,
+} from '@wrenyard/paths'
 import type { ForemanServiceConfig } from './types.mts'
 
 export { resolveForemanConfigPath, resolveDefaultForemanConfigPath, resolveForemanConfigDir }

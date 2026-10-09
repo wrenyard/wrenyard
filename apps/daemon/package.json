@@ -44,7 +44,8 @@
   "dependencies": {
     "@wrenyard/gateway": "workspace:*",
     "@wrenyard/providers": "workspace:*",
-    "@wrenyard/control-client": "workspace:*",
+    "@wrenyard/control": "workspace:*",
+    "@wrenyard/paths": "workspace:*",
     "@wrenyard/session": "workspace:*",
     "@langchain/core": "1.2.5",
     "ajv": "^8.20.0",

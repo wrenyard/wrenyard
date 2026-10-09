@@ -14,6 +14,7 @@
   "dependencies": {
     "@wrenyard/execution": "workspace:*",
     "@wrenyard/models": "workspace:*",
+    "@wrenyard/paths": "workspace:*",
     "js-tiktoken": "1.0.21"
   },
   "devDependencies": {

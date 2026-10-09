@@ -1,5 +1,5 @@
 import type { JsonRpcErrorObject } from './jsonrpc.mts'
-import { ProtocolError } from '@wrenyard/control-client/transport'
+import { ProtocolError } from '@wrenyard/control/transport'
 export { ProtocolError }
 
 export const JSON_RPC_ERROR_CODES = {

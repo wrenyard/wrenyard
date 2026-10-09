@@ -42,12 +42,12 @@ importers:
 
   apps/cli:
     dependencies:
-      '@wrenyard/control-client':
-        specifier: workspace:*
-        version: link:../../packages/control-client
       '@wrenyard/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@wrenyard/control':
+        specifier: workspace:*
+        version: link:../../packages/control
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../packages/models
@@ -85,15 +85,18 @@ importers:
       '@wrenyard/computer-use':
         specifier: workspace:*
         version: link:../../packages/features/computer-use
-      '@wrenyard/control-client':
+      '@wrenyard/control':
         specifier: workspace:*
-        version: link:../../packages/control-client
+        version: link:../../packages/control
       '@wrenyard/exec':
         specifier: workspace:*
         version: link:../../packages/features/exec
       '@wrenyard/gateway':
         specifier: workspace:*
         version: link:../../packages/features/gateway
+      '@wrenyard/paths':
+        specifier: workspace:*
+        version: link:../../packages/paths
       '@wrenyard/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -146,12 +149,15 @@ importers:
       '@wrenyard/clients':
         specifier: workspace:*
         version: link:../../packages/clients
-      '@wrenyard/control-client':
+      '@wrenyard/control':
         specifier: workspace:*
-        version: link:../../packages/control-client
+        version: link:../../packages/control
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../packages/models
+      '@wrenyard/paths':
+        specifier: workspace:*
+        version: link:../../packages/paths
       '@wrenyard/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -337,6 +343,9 @@ importers:
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../models
+      '@wrenyard/paths':
+        specifier: workspace:*
+        version: link:../../paths
       js-tiktoken:
         specifier: 1.0.21
         version: 1.0.21
@@ -508,8 +517,11 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
-  packages/control-client:
+  packages/control:
     dependencies:
+      '@wrenyard/paths':
+        specifier: workspace:*
+        version: link:../paths
       '@wrenyard/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -689,6 +701,9 @@ importers:
       '@wrenyard/clients':
         specifier: workspace:*
         version: link:../../clients
+      '@wrenyard/paths':
+        specifier: workspace:*
+        version: link:../../paths
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../providers
@@ -708,9 +723,9 @@ importers:
 
   packages/features/session:
     dependencies:
-      '@wrenyard/control-client':
+      '@wrenyard/control':
         specifier: workspace:*
-        version: link:../../control-client
+        version: link:../../control
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../../models
@@ -758,6 +773,21 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/paths:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/protocol:
     dependencies:
       '@wrenyard/models':
@@ -773,6 +803,9 @@ importers:
       '@wrenyard/models':
         specifier: workspace:*
         version: link:../models
+      '@wrenyard/paths':
+        specifier: workspace:*
+        version: link:../paths
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

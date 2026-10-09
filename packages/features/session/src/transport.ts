@@ -9,7 +9,7 @@
  * state, a Gateway request error, any other 4xx and any failure after output
  * surface unchanged so the caller can decide whether to switch routes.
  */
-import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
+import type { WrenyardGatewayConnection } from '@wrenyard/control';
 import { GATEWAY_HEADERS, parseGatewayRouteState, type GatewayRouteState } from '@wrenyard/providers/base';
 import type { DriverRequest, DriverResult } from './driver.ts';
 

@@ -1,7 +1,7 @@
 /** Desktop transport for daemon-owned sessions. */
 import { isAbsolute } from 'node:path';
 import { dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
-import { WrenyardIpcClient, WrenyardRpcError } from '@wrenyard/control-client';
+import { WrenyardIpcClient, WrenyardRpcError } from '@wrenyard/control';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderListResult } from '@wrenyard/protocol/provider';
 import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';

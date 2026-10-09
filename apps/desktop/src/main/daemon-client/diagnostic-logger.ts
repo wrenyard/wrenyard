@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { stateDir } from '../xdg';
+import { resolveWrenyardLogsDir } from '@wrenyard/paths';
 
 export interface DiagnosticLogger {
   info(event: string, fields?: Record<string, unknown>): void;
@@ -58,7 +58,7 @@ function sanitizeValue(value: unknown): unknown {
 }
 
 export function createDiagnosticLogger(name: string): DiagnosticLogger {
-  const logDir = path.join(stateDir(), 'logs');
+  const logDir = resolveWrenyardLogsDir();
   const logFile = path.join(logDir, `${name}.log`);
 
   let logPath: string | null = logFile;

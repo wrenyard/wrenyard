@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { hostname } from 'node:os'
-import type { WrenyardGatewayConnection } from '@wrenyard/control-client'
+import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { ProviderDefinition } from '@wrenyard/providers'
 import {
   type ProjectInfo,

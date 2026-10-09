@@ -1,6 +1,7 @@
 import { open, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { clientStateDirForEnv } from '@wrenyard/agent-client/native';
 
 /**
  * Native Grok OAuth candidate paths in required precedence: Wrenyard's managed
@@ -9,9 +10,8 @@ import { join } from 'node:path';
  */
 export function grokOAuthCandidates(env: NodeJS.ProcessEnv = process.env, home?: string): string[] {
     const base = home?.trim() || env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
-    const dataHome = env.XDG_DATA_HOME?.trim() || join(base, '.local', 'share');
     return [
-        join(dataHome, 'wrenyard', 'clients', 'grok', 'auth.json'),
+        join(clientStateDirForEnv(env, 'grok'), 'auth.json'),
         join(base, '.grok', 'auth.json'),
     ];
 }

@@ -1,7 +1,7 @@
 /**
  * Daemon-owned runtime alias store.
  *
- * Persists <XDG_CONFIG_HOME or ~/.config>/wrenyard/dispatch/config.json as a
+ * Persists <WRENYARD_CONFIG_HOME or ~/.config/wrenyard>/dispatch/config.json as a
  * JSON document whose top-level contract is a non-negative integer `revision`
  * and an `aliases` object mapping a user alias name to a canonical
  * "provider/model:client" run string. Any unrelated top-level fields are
@@ -29,6 +29,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { formatRunSyntax, parseRunSyntax } from '@wrenyard/providers/catalog';
+import { resolveWrenyardConfigRoot } from '@wrenyard/paths';
 
 export type StoreFileSystem = Pick<
   typeof defaultFs,
@@ -40,9 +41,9 @@ export interface RuntimeAliasStoreOptions {
   fs?: Partial<StoreFileSystem>;
   /** path facade; defaults to node:path. */
   path?: { join: typeof joinPath };
-  /** HOME used only when XDG_CONFIG_HOME is absent. */
+  /** HOME used only when WRENYARD_CONFIG_HOME is absent. */
   home?: string;
-  /** Environment snapshot consulted for XDG_CONFIG_HOME; defaults to process.env. */
+  /** Environment snapshot consulted for WRENYARD_CONFIG_HOME; defaults to process.env. */
   env?: Record<string, string | undefined>;
   /** Explicit config directory; overrides env/home resolution. */
   configRoot?: string;
@@ -151,9 +152,8 @@ export function resolveConfigDir(
   homeDir: string,
   joinFn: typeof joinPath = joinPath,
 ): string {
-  const xdg = env.XDG_CONFIG_HOME;
-  const base = typeof xdg === 'string' && xdg.trim().length > 0 ? xdg : joinFn(homeDir, '.config');
-  return joinFn(base, 'wrenyard', 'dispatch');
+  const root = resolveWrenyardConfigRoot(env, homeDir, joinFn);
+  return joinFn(root, 'dispatch');
 }
 
 type CanonicalResult = { canonical: string } | { error: string };
@@ -287,7 +287,7 @@ export class RuntimeAliasStore {
   constructor(options: RuntimeAliasStoreOptions = {}) {
     const env: Record<string, string | undefined> =
       options.env ?? (process.env as Record<string, string | undefined>);
-    const home = options.home ?? env.HOME ?? homedir();
+    const home = options.home ?? homedir();
     this.join = options.path?.join ?? joinPath;
     this.fs = {
       mkdir: options.fs?.mkdir ?? defaultFs.mkdir,

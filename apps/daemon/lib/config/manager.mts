@@ -8,9 +8,9 @@ import {
   mergeForemanConfigData,
 } from './data.mts'
 import {
-  resolveForemanConfigPath,
-  resolveWriteForemanConfigPath,
-} from './path.mts'
+  resolveWrenyardConfigPath as resolveForemanConfigPath,
+  resolveWriteWrenyardConfigPath as resolveWriteForemanConfigPath,
+} from '@wrenyard/paths'
 import {
   FOREMAN_PROVIDER_MIGRATION_MARKER_ENTRY,
   hasForemanProviderMigrationMarker,
@@ -120,8 +120,8 @@ export class ForemanConfigManager {
     return resolveForemanConfigPath(configPathValue, this.env)
   }
 
-  // Read resolution may fall back to the legacy config; write resolution never
-  // does. Implicit writes always target the primary Wrenyard config directory.
+  // Explicit config paths are honored; otherwise the current Wrenyard config
+  // location is used for both reads and writes.
   resolveWritePath(configPathValue?: unknown): string {
     return resolveWriteForemanConfigPath(configPathValue, this.env)
   }
@@ -168,8 +168,8 @@ export class ForemanConfigManager {
     configPathValue: unknown,
     updater: (data: ForemanConfigData) => void,
   ): void {
-    // Reads may fall back to the legacy config, but writes always target the
-    // primary Wrenyard path and never overwrite the legacy file.
+    // Explicit config paths are honored; otherwise reads and writes both target
+    // the current Wrenyard config location.
     const { data } = this.loadUserData(configPathValue)
     updater(data)
     this.store.write(this.resolveWritePath(configPathValue), data as ConfigRecord)

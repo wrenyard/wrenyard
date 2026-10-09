@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification as ElectronNotification, powerMonitor, screen, session, shell, type MessageBoxOptions } from 'electron';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control-client';
+import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import { registerSession, type SessionRegistration } from './session/ipc.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
@@ -38,7 +38,7 @@ import { createQuitController, type QuitController, type QuitCounts, type QuitDi
 import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
 import { packagedDaemonLaunch } from '../../daemon/lib/daemon/launch.mts';
-import { resolveForemanConfigPath } from '../../daemon/lib/config/path.mts';
+import { resolveWrenyardConfigPath as resolveForemanConfigPath, resolveWrenyardDesktopDataDir } from '@wrenyard/paths';
 import { foremanStateRoot } from '../../daemon/lib/config/state.mts';
 import {
   createMacQuitConfirmationGate,
@@ -50,6 +50,18 @@ import {
   saveProductWorkspace,
 } from './workspace.js';
 import { assertDaemonIdle, restartOwnedDaemon } from './workspace-activation.js';
+
+// Isolate Electron's data directories before any session/BrowserWindow or the
+// single-instance lock is created when a private state root is requested.
+// `setPath` requires the target to exist, so create it first. `sessionData`
+// must be relocated explicitly: Chromium cache/network storage is not moved
+// by setting `userData` alone. Absent/blank leaves the installed defaults.
+if (process.env.WRENYARD_STATE_HOME?.trim()) {
+  const desktopDataDir = resolveWrenyardDesktopDataDir();
+  mkdirSync(desktopDataDir, { recursive: true });
+  app.setPath('userData', desktopDataDir);
+  app.setPath('sessionData', desktopDataDir);
+}
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
 const FOREMAN_HEALTH_TIMEOUT_MS = 5_000;
@@ -507,7 +519,8 @@ async function bootstrap(): Promise<void> {
     setActivationPolicy: (policy) => app.setActivationPolicy(policy),
     ...(app.dock ? { showDock: () => app.dock!.show() } : {}),
   });
-  const ipcPath = resolveWrenyardIpcPath();
+  const configPath = resolveForemanConfigPath();
+  const ipcPath = resolveWrenyardIpcPath(process.env, { configPath });
   const pageLoader = createPageLoader({ appPath: app.getAppPath(), packaged: app.isPackaged, env: process.env });
   workspaceConfiguration = await inspectProductWorkspace();
   console.info('[wrenyard-desktop] workspace ready');
@@ -702,7 +715,7 @@ async function bootstrap(): Promise<void> {
   // Only an installed Desktop ships a daemon it can launch; a source Desktop connects and waits.
   const initialProbe = await probeWrenyard(ipcPath);
   daemonSupervisor = new DesktopDaemonSupervisor({
-    launch: app.isPackaged ? packagedDaemonLaunch(join(process.resourcesPath, 'wrenyard'), resolveForemanConfigPath()) : null,
+    launch: app.isPackaged ? packagedDaemonLaunch(join(process.resourcesPath, 'wrenyard'), configPath) : null,
     logsDir: join(foremanStateRoot(), 'logs'),
     ipcPath,
     initialProbe,

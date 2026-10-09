@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { resolveWrenyardStateRoot } from '@wrenyard/paths';
 import { CodeBuddyClient, type ClientOptions } from '@wrenyard/clients';
 export interface CodeBuddyQueryContext {
     readonly expectedScope: string;
@@ -19,11 +19,11 @@ export async function readCodeBuddyObservation(context?: CodeBuddyQueryContext, 
     const empty = { source: 'observed', fetched_at: new Date().toISOString(), data: null };
     if (!context?.expectedScope || !context.expectedEnvironment)
         return empty;
-    const env = options?.env ?? process.env, home = env.HOME || env.USERPROFILE || homedir();
+    const env = options?.env ?? process.env;
     const active = await readActiveCodeBuddyScope(options);
     if (!active || active.stableScope !== context.expectedScope || active.environment !== context.expectedEnvironment)
         return empty;
-    const file = join(env.XDG_STATE_HOME || join(home, '.local', 'state'), 'wrenyard', 'quota', 'codebuddy.json');
+    const file = join(resolveWrenyardStateRoot(env), 'quota', 'codebuddy.json');
     try {
         if ((await stat(file)).size > 65536)
             return empty;

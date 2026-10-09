@@ -20,8 +20,9 @@ export interface CursorCredentialOptions {
 /**
  * Resolve the Cursor Desktop state database path for the current platform.
  * Precedence mirrors the retired Go helper: HOME, then USERPROFILE, with
- * APPDATA on Windows and XDG_CONFIG_HOME elsewhere. An explicit home disables
- * the platform environment overrides.
+ * APPDATA on Windows and `~/.config` elsewhere. Cursor is an external
+ * application, so its credential location is never relocated under Wrenyard.
+ * An explicit home disables the platform environment overrides.
  */
 export function cursorStatePath(env: NodeJS.ProcessEnv = process.env, home?: string): string {
     const explicitHome = Boolean(home?.trim());
@@ -33,10 +34,8 @@ export function cursorStatePath(env: NodeJS.ProcessEnv = process.env, home?: str
             const appData = explicitHome ? '' : env.APPDATA?.trim();
             return join(appData || join(base, 'AppData', 'Roaming'), 'Cursor', 'User', 'globalStorage', 'state.vscdb');
         }
-        default: {
-            const config = explicitHome ? '' : env.XDG_CONFIG_HOME?.trim();
-            return join(config || join(base, '.config'), 'Cursor', 'User', 'globalStorage', 'state.vscdb');
-        }
+        default:
+            return join(base, '.config', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
     }
 }
 

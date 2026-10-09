@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, requireHttpServer, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDir, stringEnv } from '@wrenyard/agent-client/native';
+import { assertLaunch, clientStateDirForEnv, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
 import { inspectGrok } from './installation.ts';
 
@@ -73,10 +73,10 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
     // leaves an isolated home behind.
     const mcpToml = grokMcpToml(mcpServers);
     const mcpPermissionArgs = grokMcpPermissionArgs(mcpServers);
-    const home = clientStateDir('grok', 'runs', `${Date.now().toString(36)}`);
+    const home = clientStateDirForEnv(env, 'grok', 'runs', `${Date.now().toString(36)}`);
     await mkdir(home, { recursive: true });
     if (request.resumeSessionId) {
-        const snapshot = clientStateDir('grok', 'sessions', request.resumeSessionId);
+        const snapshot = clientStateDirForEnv(env, 'grok', 'sessions', request.resumeSessionId);
         try {
             await cp(snapshot, home, { recursive: true, force: false });
         }

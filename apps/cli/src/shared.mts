@@ -4,9 +4,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { bundledSuiteRoot, foremanPackageRoot } from '@wrenyard/daemon/layout/suite-root'
 import { connectIpcForemanClient } from '@wrenyard/daemon/control/ipc-client'
-import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
+import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { ProtocolError } from '@wrenyard/daemon/protocol/errors'
-import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from '@wrenyard/control-client/transport'
+import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from '@wrenyard/control/transport'
 import { loadForemanServiceConfig, loadForemanConfigData, resolveDefaultForemanConfigPath, resolveForemanConfigPath as configResolveForemanConfigPath, type ForemanServiceConfig } from '@wrenyard/daemon/config'
 
 /** Daemon package root (owns task/execution lifecycle and the product IPC server). */
@@ -133,7 +133,7 @@ export interface ServicePayload {
 
 export function resolveConfiguredIpcPath(configPathValue: unknown): string {
   const config = loadForemanServiceConfig(resolveConfigPath(configPathValue))
-  return resolveForemanServiceIpcPath({ path: config.service.ipc?.path })
+  return resolveWrenyardIpcPath(process.env, { config })
 }
 
 /**

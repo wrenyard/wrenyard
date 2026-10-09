@@ -72,7 +72,7 @@ import {
 } from '../../runtime-aliases/store.mts'
 import type { ExecService, ExecRequest } from '@wrenyard/exec'
 import type { ExecStartParams } from '@wrenyard/protocol'
-import { WRENYARD_PROTOCOL_VERSION } from '@wrenyard/control-client'
+import { WRENYARD_PROTOCOL_VERSION } from '@wrenyard/control'
 
 export interface DaemonActiveWorkCounts {
   activeTaskCount: number

@@ -7,7 +7,7 @@ import {
   WRENYARD_PROTOCOL_VERSION,
   type IpcClientTransport,
   type NdjsonChunk,
-} from '@wrenyard/control-client/transport'
+} from '@wrenyard/control/transport'
 import { ForemanClient } from './client.mts'
 
 export interface ConnectIpcForemanClientOptions {

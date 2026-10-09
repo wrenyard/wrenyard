@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDir, stringEnv } from '@wrenyard/agent-client/native';
+import { assertLaunch, clientStateDirForEnv, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
 
 /**
@@ -42,7 +42,7 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
     if (status.installation.state !== 'installed')
         throw new Error('opencode is not installed');
     const session = request.resumeSessionId || randomBytes(16).toString('hex');
-    const home = clientStateDir('opencode', session);
+    const home = clientStateDirForEnv(env, 'opencode', session);
     const configPath = join(home, 'opencode.json');
     const gateway = request.protocol === 'anthropic_messages'
         ? env.WRENYARD_GATEWAY_ANTHROPIC_URL
@@ -111,6 +111,8 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
         args,
         cwd: request.cwd,
         env: stringEnv(env, {
+            // OpenCode's child configuration interface; `home` is already
+            // rooted under WRENYARD_STATE_HOME by clientStateDirForEnv().
             XDG_CONFIG_HOME: home,
             OPENCODE_CONFIG_DIR: home,
             OPENCODE_CONFIG: configPath,

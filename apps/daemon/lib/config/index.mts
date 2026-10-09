@@ -18,11 +18,11 @@ export {
 } from './data.mts'
 
 export {
-  FOREMAN_CONFIG_FILE_NAME,
-  resolveForemanConfigDir,
-  resolveDefaultForemanConfigPath,
-  resolveForemanConfigPath,
-} from './path.mts'
+  WRENYARD_CONFIG_FILE_NAME as FOREMAN_CONFIG_FILE_NAME,
+  resolveWrenyardConfigRoot as resolveForemanConfigDir,
+  resolveDefaultWrenyardConfigPath as resolveDefaultForemanConfigPath,
+  resolveWrenyardConfigPath as resolveForemanConfigPath,
+} from '@wrenyard/paths'
 
 export {
   ForemanConfigManager,

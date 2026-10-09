@@ -3,7 +3,7 @@
  * interface, and the module ports the engine is composed from.
  */
 
-import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
+import type { WrenyardGatewayConnection } from '@wrenyard/control';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderDefinition } from '@wrenyard/providers';
 import type {

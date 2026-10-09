@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rmdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+
+import { resolveDefaultWrenyardConfigPath } from '@wrenyard/paths';
 
 import { WORKSPACE_TEMPLATE_FILES } from './workspace-template.js';
 
@@ -16,19 +17,13 @@ export interface WorkspaceConfiguration {
 }
 
 /**
- * Locate Wrenyard `config.json`. Matches Foreman `resolveDefaultForemanConfigPath`:
- * `WRENYARD_CONFIG_HOME` (the directory itself), else `$XDG_CONFIG_HOME/wrenyard`,
- * else `~/.config/wrenyard`, with a legacy `foreman/config.json` read fallback
- * when the primary file is absent.
+ * Locate Wrenyard `config.json` through the shared locator so Desktop and the
+ * IPC reader resolve the same file. Delegates to
+ * `resolveDefaultWrenyardConfigPath`: `WRENYARD_CONFIG_HOME` (the directory
+ * itself) resolves directly; otherwise `~/.config/wrenyard/config.json`.
  */
 export function resolveWrenyardConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  const configHome = env.WRENYARD_CONFIG_HOME?.trim();
-  const xdgRoot = resolve(env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config'));
-  const primary = configHome
-    ? join(resolve(configHome), 'config.json')
-    : join(xdgRoot, 'wrenyard', 'config.json');
-  const legacy = join(xdgRoot, 'foreman', 'config.json');
-  return existsSync(legacy) && !existsSync(primary) ? legacy : primary;
+  return resolveDefaultWrenyardConfigPath(env);
 }
 
 function readWorkspaceRootFromConfig(configPath: string): string | undefined {

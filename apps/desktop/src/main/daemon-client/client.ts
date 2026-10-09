@@ -1,4 +1,4 @@
-import { WrenyardIpcClient, resolveWrenyardIpcPath } from '@wrenyard/control-client';
+import { WrenyardIpcClient, resolveWrenyardIpcPath } from '@wrenyard/control';
 
 /** Extra request options accepted by the shared daemon transport. */
 export interface DaemonRequestOptions {
@@ -8,7 +8,7 @@ export interface DaemonRequestOptions {
 
 /**
  * Uniform request surface every shared Desktop subscription rides on. It wraps
- * the canonical `@wrenyard/control-client` NDJSON transport so Desktop has one
+ * the canonical `@wrenyard/control` NDJSON transport so Desktop has one
  * RPC implementation instead of the former Pet-owned socket client.
  */
 export interface DaemonClient {

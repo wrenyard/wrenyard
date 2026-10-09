@@ -1,4 +1,4 @@
-import { WrenyardIpcClient, type WrenyardProviderStatus } from '@wrenyard/control-client';
+import { WrenyardIpcClient, type WrenyardProviderStatus } from '@wrenyard/control';
 import type { ProviderAuthStatus } from './shell-contract.js';
 
 const MAX_PROVIDER_ID_LENGTH = 120;

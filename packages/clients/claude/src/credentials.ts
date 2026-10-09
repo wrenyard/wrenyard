@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readKeychain, type Executor, type ExecutionOptions } from '@wrenyard/execution';
 import { ClientError } from '@wrenyard/agent-client';
+import { clientStateDirForEnv } from '@wrenyard/agent-client/native';
 
 /** Keychain service holding Claude Code OAuth credentials on macOS. */
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
@@ -44,7 +45,7 @@ export async function readClaudeCredential(execution: Executor, options?: Claude
     const env = options?.env ?? process.env;
     const home = env.HOME || env.USERPROFILE || homedir();
     const credentialsPath = join(home, '.claude', '.credentials.json');
-    const cachePath = join(claudeDataDir(env, home), 'claude-credential.json');
+    const cachePath = join(clientStateDirForEnv(env, 'claude'), 'claude-credential.json');
     let cached: ClaudeCredential | undefined;
     let cachedRead = false;
 
@@ -121,12 +122,6 @@ async function resolveExpired(credential: ClaudeCredential, cachePath: string, o
 function throwIfAborted(options?: ClaudeCredentialOptions): void {
     if (options?.signal?.aborted)
         throw options.signal.reason ?? new ClientError('authentication_required');
-}
-
-/** The legacy filesystem-rooted data dir, used only for the credential cache. */
-function claudeDataDir(env: NodeJS.ProcessEnv, home: string): string {
-    const dataHome = env.XDG_DATA_HOME?.trim();
-    return join(dataHome && dataHome.length > 0 ? dataHome : join(home, '.local', 'share'), 'wrenyard', 'clients', 'claude');
 }
 
 async function keychainAvailable(execution: Executor, env: NodeJS.ProcessEnv): Promise<boolean> {

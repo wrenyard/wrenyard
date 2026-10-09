@@ -10,7 +10,7 @@ import {
   isHelpRequest,
   loadServiceConfigForCli,
 } from '../shared.mts'
-import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
+import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { readDaemonSupervisorStatus } from '../daemon-supervisor.mts'
 
 export async function handleStatus(args: string[]): Promise<number> {
@@ -47,7 +47,7 @@ export async function handleStatus(args: string[]): Promise<number> {
 
 export async function collectForemanStatus(configPathValue: unknown): Promise<ForemanStatus> {
   const { config, resolvedConfigPath } = loadServiceConfigForCli(configPathValue)
-  const ipcPath = resolveForemanServiceIpcPath({ path: config.service.ipc?.path })
+  const ipcPath = resolveWrenyardIpcPath(process.env, { config })
   const supervisor = await readDaemonSupervisorStatus({ config, resolvedConfigPath })
   const ipc = await checkIpcStatus(ipcPath)
   const health = ipcHealthPayload(ipc)
