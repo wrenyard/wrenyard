@@ -193,6 +193,11 @@ export function serializeGatewayRequest(request: GatewayRequestFields): string {
     stream_options: { include_usage: true },
   };
   if (request.maxTokens !== undefined) body.max_tokens = request.maxTokens;
+  // CodeBuddy upstream API limitation (verified 2026-10-09): /v2/chat/completions
+  // does not enforce string tool_choice: required can return ordinary content,
+  // none can return tool calls, and named-tool objects are rejected. Do not rely
+  // on tool_choice to enforce replies; keep the prompt's reply/silence contract
+  // explicit, with an additional mandatory tool-call instruction at turn end.
   if (request.actionTool) body.tools = [ACTION_TOOL];
   else if (request.replyTool) body.tools = [REPLY_TOOL];
   return JSON.stringify(body);
