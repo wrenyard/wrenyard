@@ -36,7 +36,7 @@ export const FREQUENT_DISPATCH_REQUIREMENTS = {
 export const COMMIT_DISPATCH_REQUIREMENTS = {
   expectedReasoningEffort: 'high',
   expectedTps: 100,
-  minimumTps: 60,
+  minimumTps: 19,
   intelligenceMin: 'low' as IntelligenceTier,
   intelligenceExpected: 'mid' as IntelligenceTier,
   maxOutputUsdPerMillion: 6,
