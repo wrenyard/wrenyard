@@ -1,3 +1,4 @@
+import { codeBuddyRouteFailure } from './route-errors.ts';
 import type { ClientDefinition, ModelDefinition, ProviderDefinition, ReasoningEffort } from '../base/index.ts';
 import { resolveProviderModel, REASONING_LOW_HIGH_MAX, type CanonicalModelOverrides } from '../base/model-defaults.ts';
 import { MAINSTREAM_MODEL_IDS, isMainstreamModelId, models } from '@wrenyard/models';
@@ -269,6 +270,7 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     description: 'CodeBuddy 提供的 DeepSeek、混元与 Kimi 模型。',
     setupHint: '请在 CodeBuddy 客户端完成登录，返回啾啾工坊后刷新状态。',
     credentialResolver: 'codebuddy',
+    classifyUpstreamError: codeBuddyRouteFailure,
     nativeClients: ['codebuddy'],
     defaultModel: 'hunyuan-hy4-preview',
     useClientBinary: true,

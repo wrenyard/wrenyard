@@ -1,12 +1,23 @@
-import type { ProviderDefinition } from '@wrenyard/providers/base';
+import { GATEWAY_HEADERS, type GatewayRouteStatus, type ProviderDefinition } from '@wrenyard/providers/base';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import { normalizeReasoningEffort, type Catalog, type GatewayProtocol, type PublicGatewayModel, type ReasoningEffort } from '@wrenyard/providers/catalog';
 import { applyChatGptPromptCacheKey, upstreamAuthHeaders, type ProviderCredential, type ProviderRuntime } from '@wrenyard/providers';
+import { classifyRouteFailure } from './route-failure.ts';
+import { RouteStateStore, type RouteStateChangedEvent } from './route-state.ts';
+import { ResponseUsageObserver, type GatewayUsage } from './response-usage.ts';
 import { ResponseSampler, type ResponseTpsContract } from './response-tps.ts';
+
+export type { RouteStateChangedEvent } from './route-state.ts';
 
 export interface GatewayRequestCompletedEvent {
   protocol: GatewayProtocol;
+  role?: string;
+  sessionId?: string;
+  usage?: GatewayUsage;
+  reasoningParameters?: Record<string, unknown>;
+  routeState?: GatewayRouteStatus['state'];
+  routeUntil?: string;
   publicModel?: string;
   provider?: string;
   status: number;
@@ -33,12 +44,15 @@ export interface ModelGatewayOptions {
   catalog: Catalog;
   providers: ProviderRuntime;
   fetch?: typeof globalThis.fetch;
+  onRouteStateChanged?: (event: RouteStateChangedEvent) => void | Promise<void>;
   onRequestCompleted?: (event: GatewayRequestCompletedEvent) => void | Promise<void>;
 }
 
 export interface ModelGateway {
   handle(request: IncomingMessage, response: ServerResponse): Promise<boolean>;
   connection(origin: string): Promise<GatewayConnection>;
+  /** Current in-memory state of a public `provider/model` route; never queries a provider. */
+  routeStatus(publicModel: string): GatewayRouteStatus | undefined;
   close(): Promise<void>;
 }
 
@@ -71,11 +85,6 @@ const RESPONSE_HEADER_ALLOWLIST = new Set([
 // Sized for a request that carries its session's images inline as base64.
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 
-// Resolved public reasoning effort carried out-of-band from the client. Its
-// value is the unified public level; the Gateway translates it into the exact
-// per-provider wire fields and never forwards the header upstream.
-const REASONING_EFFORT_HEADER = 'x-wrenyard-reasoning-effort';
-
 const CODEBUDDY_ROUND_TTL_MS = 30 * 60 * 1000;
 const CODEBUDDY_ROUND_CACHE_LIMIT = 512;
 
@@ -103,9 +112,21 @@ function parseScopedPath(pathname: string): { executionId?: string; routePath: s
   return { executionId, routePath };
 }
 
-function json(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+function json(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers });
   response.end(JSON.stringify(body));
+}
+
+function allowedResponseHeaders(upstream: Response): Record<string, string> {
+  const headers: Record<string, string> = {};
+  upstream.headers.forEach((value, name) => { if (RESPONSE_HEADER_ALLOWLIST.has(name)) headers[name] = value; });
+  return headers;
+}
+
+/** Attribution value of a local `x-wrenyard-*` request header; malformed values are dropped. */
+function localHeader(request: IncomingMessage, name: string): string | undefined {
+  const value = request.headers[name];
+  return typeof value === 'string' && /^[A-Za-z0-9._-]{1,256}$/u.test(value) ? value : undefined;
 }
 
 async function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -259,6 +280,7 @@ async function writeNormalizedResponse(
   providers: ProviderRuntime,
   context: ResponseModelContext,
   sampler?: ResponseSampler,
+  observer?: ResponseUsageObserver,
 ): Promise<void> {
   if (!upstream.body) return;
   const contentType = upstream.headers.get('content-type')?.toLowerCase() ?? '';
@@ -266,7 +288,9 @@ async function writeNormalizedResponse(
     sampler?.markNonStream();
     const text = await upstream.text();
     try {
-      response.write(JSON.stringify(normalizeResponsePayload(JSON.parse(text), providers, context)));
+      const parsed = JSON.parse(text);
+      observer?.json(parsed);
+      response.write(JSON.stringify(normalizeResponsePayload(parsed, providers, context)));
     } catch {
       response.write(text);
     }
@@ -296,6 +320,7 @@ async function writeNormalizedResponse(
       if (done) break;
       const text = decoder.decode(value, { stream: true });
       sampler?.feed(text);
+      observer?.feed(text);
       pending += text;
       let newline = pending.indexOf('\n');
       while (newline >= 0) {
@@ -307,6 +332,8 @@ async function writeNormalizedResponse(
     const tail = decoder.decode();
     sampler?.feed(tail);
     sampler?.end();
+    observer?.feed(tail);
+    observer?.end();
     pending += tail;
     if (pending) response.write(normalizeSseLine(pending, providers, context));
   } finally {
@@ -314,19 +341,34 @@ async function writeNormalizedResponse(
   }
 }
 
-async function availableModels(catalog: Catalog, providers: ProviderRuntime, protocol: GatewayProtocol): Promise<PublicGatewayModel[]> {
-  const available = new Set<string>();
-  await Promise.all(catalog.providers().map(async (provider) => {
-    if (await providers.credential(provider)) available.add(provider.id);
-  }));
-  return catalog.listGatewayModels(protocol, (provider) => available.has(provider.id));
-}
-
 export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const active = new Set<AbortController>();
   const codeBuddyRounds = new Map<string, CodeBuddyRound>();
   let closed = false;
+  const routeStates = new RouteStateStore(options.now ?? Date.now,
+    options.providers.quotaPools ?? (() => []),
+    event => { void Promise.resolve().then(() => options.onRouteStateChanged?.(event)).catch(() => undefined); });
+
+  const routeStatus = (publicModel: string): GatewayRouteStatus | undefined => {
+    const separator = publicModel.indexOf('/');
+    return separator > 0 ? routeStates.status(publicModel.slice(0, separator), publicModel.slice(separator + 1)) : undefined;
+  };
+
+  /** Credential-backed public models, each annotated with its current route state. */
+  const availableModels = async (protocol: GatewayProtocol): Promise<PublicGatewayModel[]> => {
+    const available = new Set<string>();
+    await Promise.all(options.catalog.providers().map(async (provider) => {
+      const credential = await options.providers.credential(provider);
+      if (!credential) return;
+      routeStates.observeCredential(provider.id, credential.value);
+      available.add(provider.id);
+    }));
+    return options.catalog.listGatewayModels(protocol, (provider) => available.has(provider.id)).map(model => {
+      const status = routeStates.status(model.provider, model.id);
+      return status ? { ...model, routeState: status.state, routeUntil: status.until } : model;
+    });
+  };
 
   const emit = async (event: GatewayRequestCompletedEvent): Promise<void> => {
     try { await options.onRequestCompleted?.(event); } catch { /* stats must not fail inference */ }
@@ -364,6 +406,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   };
 
   return {
+    routeStatus,
     async handle(request, response) {
       const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
       const scoped = parseScopedPath(pathname);
@@ -372,79 +415,72 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       if (!route) return false;
       const executionId = scoped.executionId;
       const startedAt = Date.now();
+      const role = localHeader(request, GATEWAY_HEADERS.callRole);
+      const sessionId = localHeader(request, GATEWAY_HEADERS.sessionId);
+      /** The one completion event of this request, with its attribution. */
+      const finish = (event: Omit<GatewayRequestCompletedEvent, 'protocol' | 'durationMs'>): Promise<void> => emit({
+        protocol: route.protocol, durationMs: Date.now() - startedAt,
+        ...(executionId ? { executionId } : {}), ...(role ? { role } : {}), ...(sessionId ? { sessionId } : {}),
+        ...event,
+      });
+      /** A request the Gateway itself refuses; marked so callers never retry it. */
+      const reject = async (status: number, type: string, message: string, event: Partial<GatewayRequestCompletedEvent> = {}): Promise<true> => {
+        json(response, status, { error: { type, message } }, { [GATEWAY_HEADERS.requestError]: 'true' });
+        await finish({ ...event, status });
+        return true;
+      };
       if (closed) {
         json(response, 503, { error: { type: 'gateway_unavailable', message: 'Model Gateway is stopping' } });
         return true;
       }
       if (route.kind === 'models') {
-        if (request.method !== 'GET') {
-          json(response, 405, { error: { type: 'method_not_allowed', message: 'Method not allowed' } });
-          return true;
-        }
-        const models = await availableModels(options.catalog, options.providers, route.protocol);
-        const data = models.map((entry) => ({ id: entry.publicId, object: 'model', owned_by: entry.provider, display_name: entry.displayName, context_window: entry.contextWindow, max_tokens: entry.maxTokens }));
+        if (request.method !== 'GET') return reject(405, 'method_not_allowed', 'Method not allowed');
+        const models = await availableModels(route.protocol);
+        const data = models.map((entry) => ({ id: entry.publicId, object: 'model', owned_by: entry.provider, display_name: entry.displayName, context_window: entry.contextWindow, max_tokens: entry.maxTokens, route_state: entry.routeState, route_until: entry.routeUntil }));
         json(response, 200, route.protocol === 'anthropic_messages'
           ? { data, has_more: false, first_id: data[0]?.id ?? null, last_id: data.at(-1)?.id ?? null }
           : { object: 'list', data });
-        await emit({ protocol: route.protocol, status: 200, durationMs: Date.now() - startedAt });
+        await finish({ status: 200 });
         return true;
       }
-      if (request.method !== 'POST') {
-        json(response, 405, { error: { type: 'method_not_allowed', message: 'Method not allowed' } });
-        return true;
-      }
+      if (request.method !== 'POST') return reject(405, 'method_not_allowed', 'Method not allowed');
 
       let body: Record<string, unknown>;
       try { body = await readJson(request); } catch (error) {
-        const status = error instanceof Error && error.message === 'request_too_large' ? 413 : 400;
-        json(response, status, { error: { type: 'invalid_request_error', message: status === 413 ? 'Request body too large' : 'Request body must be a JSON object' } });
-        await emit({ protocol: route.protocol, status, durationMs: Date.now() - startedAt, executionId });
-        return true;
+        const tooLarge = error instanceof Error && error.message === 'request_too_large';
+        return reject(tooLarge ? 413 : 400, 'invalid_request_error', tooLarge ? 'Request body too large' : 'Request body must be a JSON object');
       }
-      if (typeof body.model !== 'string') {
-        json(response, 400, { error: { type: 'invalid_request_error', message: 'model must be a provider/model string' } });
-        await emit({ protocol: route.protocol, status: 400, durationMs: Date.now() - startedAt, executionId });
-        return true;
-      }
+      if (typeof body.model !== 'string') return reject(400, 'invalid_request_error', 'model must be a provider/model string');
 
       let publicModel = body.model;
       let resolved;
       try { resolved = options.catalog.resolveGatewayModel(route.protocol, publicModel); } catch (error) {
-        json(response, 404, { error: { type: 'not_found_error', message: error instanceof Error ? error.message : 'Unknown model' } });
-        await emit({ protocol: route.protocol, publicModel, status: 404, durationMs: Date.now() - startedAt, executionId });
-        return true;
+        return reject(404, 'not_found_error', error instanceof Error ? error.message : 'Unknown model', { publicModel });
       }
       publicModel = resolved.publicId;
+      const target = { publicModel, provider: resolved.provider.id };
 
       // A resolved public reasoning effort arrives in a request header, never as
       // a raw body field. When present it is validated against the public enum
       // and this route's own ladder here, before any upstream call; a request
       // without the header keeps its body exactly as delivered.
-      const rawEffortHeader = request.headers[REASONING_EFFORT_HEADER];
+      const rawEffortHeader = request.headers[GATEWAY_HEADERS.reasoningEffort];
       const effortHeader = Array.isArray(rawEffortHeader) ? rawEffortHeader[0] : rawEffortHeader;
       let reasoningEffort: ReasoningEffort | undefined;
       if (effortHeader !== undefined) {
         const normalized = normalizeReasoningEffort(effortHeader);
-        if (normalized === undefined) {
-          json(response, 400, { error: { type: 'invalid_request_error', message: `Invalid reasoning effort: ${effortHeader}` } });
-          await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: 400, durationMs: Date.now() - startedAt, executionId });
-          return true;
-        }
+        if (normalized === undefined) return reject(400, 'invalid_request_error', `Invalid reasoning effort: ${effortHeader}`, target);
         if (!resolved.model.reasoningEfforts.includes(normalized)) {
-          json(response, 400, { error: { type: 'invalid_request_error', message: `Model ${publicModel} does not support reasoning effort "${normalized}"` } });
-          await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: 400, durationMs: Date.now() - startedAt, executionId });
-          return true;
+          return reject(400, 'invalid_request_error', `Model ${publicModel} does not support reasoning effort "${normalized}"`, target);
         }
         reasoningEffort = normalized;
       }
 
       const credential = await options.providers.credential(resolved.provider);
-      if (!credential) {
-        json(response, 503, { error: { type: 'credential_unavailable', message: `Provider ${resolved.provider.id} is not configured` } });
-        await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: 503, durationMs: Date.now() - startedAt, executionId });
-        return true;
-      }
+      if (!credential) return reject(503, 'credential_unavailable', `Provider ${resolved.provider.id} is not configured`, target);
+      routeStates.observeCredential(resolved.provider.id, credential.value);
 
+      let reasoningParameters: Record<string, unknown> | undefined;
       const headers = upstreamHeaders(request.headers);
       upstreamAuthHeaders(resolved.provider, credential, route.protocol).forEach((value, name) => headers.set(name, value));
       const upstreamModel = options.providers.resolveUpstreamModel(resolved.provider, resolved.upstreamModel, credential);
@@ -468,6 +504,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         if (fields.output_config !== null && typeof fields.output_config === 'object' && !Array.isArray(fields.output_config)) {
           fields.output_config = { ...body.output_config as Record<string, unknown>, ...fields.output_config as Record<string, unknown> };
         }
+        reasoningParameters = structuredClone(fields);
         Object.assign(body, fields);
       }
 
@@ -541,6 +578,13 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         body.store = false;
         applyChatGptPromptCacheKey(headers, body);
       }
+      const forwarded: Partial<GatewayRequestCompletedEvent> = {
+        ...target,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        ...(reasoningParameters === undefined ? {} : { reasoningParameters }),
+      };
+      let activeCredential = credential;
+      let observer: ResponseUsageObserver | undefined;
       const controller = new AbortController();
       active.add(controller);
       const abort = () => controller.abort();
@@ -573,6 +617,8 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
           // failure propagates to the outer 502 handler rather than falling
           // back to the now-canceled original 401.
           if (refreshed !== undefined) {
+            activeCredential = refreshed;
+            routeStates.observeCredential(resolved.provider.id, refreshed.value);
             upstreamAuthHeaders(resolved.provider, refreshed, route.protocol).forEach((value, name) => headers.set(name, value));
             applyChatGptPromptCacheKey(headers, body);
             await upstream.body?.cancel().catch(() => undefined);
@@ -594,11 +640,23 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
             headers: streamHeaders,
           });
         }
-        const responseHeaders: Record<string, string> = {};
-        upstream.headers.forEach((value, name) => {
-          if (RESPONSE_HEADER_ALLOWLIST.has(name)) responseHeaders[name] = value;
-        });
-        response.writeHead(upstream.status, responseHeaders);
+        if (!upstream.ok) {
+          // Only errors are buffered for classification. Their bytes and status
+          // are forwarded unchanged, not normalized into a synthetic failure.
+          const errorBytes = await upstream.arrayBuffer();
+          let errorBody: unknown;
+          try { errorBody = JSON.parse(new TextDecoder().decode(errorBytes)); } catch { errorBody = undefined; }
+          const failure = classifyRouteFailure(resolved.provider, resolved.model.id, upstream.status, upstream.headers, errorBody, options.now?.() ?? Date.now());
+          const state = failure && routeStates.mark(resolved.provider.id, resolved.model.id, failure, upstream.status, activeCredential.value);
+          response.writeHead(upstream.status, {
+            ...allowedResponseHeaders(upstream),
+            ...(state ? { [GATEWAY_HEADERS.routeState]: state.state, [GATEWAY_HEADERS.routeUntil]: state.until } : {}),
+          });
+          response.end(Buffer.from(errorBytes));
+          await finish({ ...forwarded, status: upstream.status, ...(state ? { routeState: state.state, routeUntil: state.until } : {}) });
+          return true;
+        }
+        response.writeHead(upstream.status, allowedResponseHeaders(upstream));
         // Raw SSE is observed before model normalization so the sampler sees
         // the upstream wire bytes; the sample model is normalized to the
         // requested canonical public model.
@@ -606,30 +664,26 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
           now: options.now,
           normalizeModel: (model) => options.providers.publicResponseModel(resolved.provider, model, upstreamModel, publicModel),
         });
+        observer = new ResponseUsageObserver(route.protocol);
         await writeNormalizedResponse(upstream, response, options.providers, {
           protocol: route.protocol,
           provider: resolved.provider,
           upstreamModel,
           publicModel,
-        }, sampler);
+        }, sampler, observer);
+        if (observer.succeeded()) routeStates.success(resolved.provider.id, resolved.model.id);
         response.end();
-        await emit({
-          protocol: route.protocol,
-          publicModel,
-          provider: resolved.provider.id,
-          status: upstream.status,
-          durationMs: Date.now() - startedAt,
-          ...(executionId ? { executionId } : {}),
-          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-          ...(sampler.sample() ?? {}),
-        });
+        const usage = observer.result();
+        await finish({ ...forwarded, status: upstream.status, ...(sampler.sample() ?? {}), ...(usage ? { usage } : {}) });
       } catch (error) {
+        const status = controller.signal.aborted ? 499 : 502;
         if (!response.headersSent) {
-          json(response, controller.signal.aborted ? 499 : 502, { error: { type: 'upstream_error', message: controller.signal.aborted ? 'Request cancelled' : 'Provider request failed' } });
+          json(response, status, { error: { type: 'upstream_error', message: controller.signal.aborted ? 'Request cancelled' : 'Provider request failed' } });
         } else {
           response.destroy();
         }
-        await emit({ protocol: route.protocol, publicModel, provider: resolved.provider.id, status: controller.signal.aborted ? 499 : 502, durationMs: Date.now() - startedAt, executionId, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) });
+        const usage = observer?.result();
+        await finish({ ...forwarded, status, ...(usage ? { usage } : {}) });
       } finally {
         request.off('aborted', abort);
         active.delete(controller);
@@ -643,7 +697,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
         openaiChatBaseUrl: `${root}/gateway/openai-chat/v1`,
         openaiResponsesBaseUrl: `${root}/gateway/openai-responses/v1`,
         anthropicBaseUrl: `${root}/gateway/anthropic/v1`,
-        models: await availableModels(options.catalog, options.providers, 'openai_chat'),
+        models: await availableModels('openai_chat'),
       };
     },
 
@@ -652,6 +706,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       for (const controller of active) controller.abort();
       active.clear();
       codeBuddyRounds.clear();
+      routeStates.close();
     },
   };
 }

@@ -572,6 +572,16 @@ async function createForemanDaemonResources(
   const gateway = createModelGateway({
     catalog,
     providers: providerRuntime,
+    onRouteStateChanged: async (event) => {
+      const foremanEvent: ForemanEvent = {
+        id: `gateway_route_${randomBytes(12).toString('hex')}`,
+        kind: 'gateway.route.state.changed', source: 'wrenyard.gateway',
+        severity: event.state === 'available' ? 'info' : 'warning', refs: {},
+        data: { ...event }, occurredAt: new Date().toISOString(),
+      }
+      gatewayEventStore.append(foremanEvent)
+      await getForemanEventBus().publish(foremanEvent)
+    },
     onRequestCompleted: async (event) => {
       const foremanEvent: ForemanEvent = {
         id: `gateway_${randomBytes(12).toString('hex')}`,
@@ -790,7 +800,9 @@ async function createForemanDaemonResources(
     stateRoot: sessionStateRoot,
     gateway: sessionGateway,
     taskService,
+    routeStatus: model => gateway.routeStatus(model),
     selectAuxiliary: createAuxiliarySelector({ catalog, quotaSnapshots: autoRoutingQuotaSnapshots,
+      routeStatus: model => gateway.routeStatus(model),
       runtimeAvailability: createAuxiliaryAvailability(runtimeAvailability, catalog, providerRuntime),
       localSpeed: readLocalSpeedSamples, readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath) }),
     // The session's main inference validates against the same product-wired

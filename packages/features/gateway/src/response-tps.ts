@@ -21,6 +21,7 @@
  * The clock is injected so sampling is deterministic under test.
  */
 import { getEncoding } from 'js-tiktoken';
+import { SseDataReader } from './sse.ts';
 
 /** Minimum observable generation span for a trustworthy speed sample. */
 const MINIMUM_WINDOW_MS = 100;
@@ -88,28 +89,13 @@ export class ResponseSampler {
     this.sawNonStreamJson = true;
   }
 
-  /** Feeds one raw upstream chunk. Handles arbitrary fragmentation and multiline SSE. */
-  feed(chunk: string): void {
-    this.buffer += chunk;
-    for (;;) {
-      const newline = this.buffer.indexOf('\n');
-      if (newline < 0) break;
-      const line = this.buffer.slice(0, newline);
-      this.buffer = this.buffer.slice(newline + 1);
-      this.consumeLine(line.endsWith('\r') ? line.slice(0, -1) : line);
-    }
-  }
+  private readonly reader = new SseDataReader(payload => this.consumeEvent(payload));
 
-  /** Flushes any trailing buffered line at end of stream. */
-  end(): void {
-    if (this.buffer) {
-      const line = this.buffer;
-      this.buffer = '';
-      this.consumeLine(line.endsWith('\r') ? line.slice(0, -1) : line);
-    }
-    // An event left open without its blank separator still terminates the stream.
-    this.flushEvent();
-  }
+  /** Feeds one raw upstream chunk. */
+  feed(chunk: string): void { this.reader.feed(chunk); }
+
+  /** Flushes the stream tail; an event left open still terminates the stream. */
+  end(): void { this.reader.end(); }
 
   /** Emits the contract when the response succeeded and its window is observable. */
   sample(): ResponseTpsContract | undefined {
@@ -138,22 +124,8 @@ export class ResponseSampler {
     };
   }
 
-  private buffer = '';
-  /** Data lines of the currently open SSE event, joined at the blank separator. */
-  private readonly dataLines: string[] = [];
-
-  private consumeLine(line: string): void {
-    if (line === '') { this.flushEvent(); return; }
-    if (line.startsWith(':')) return;
-    const fieldMatch = /^data:\s?(.*)$/u.exec(line);
-    if (fieldMatch) this.dataLines.push(fieldMatch[1]!);
-  }
-
-  /** Parses one complete SSE event's joined data lines, if any. */
-  private flushEvent(): void {
-    if (this.dataLines.length === 0) return;
-    const payload = this.dataLines.join('\n');
-    this.dataLines.length = 0;
+  /** Parses one complete SSE event's joined data payload. */
+  private consumeEvent(payload: string): void {
     if (payload === '[DONE]') {
       this.sawDone = true;
       return;

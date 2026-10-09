@@ -19,8 +19,11 @@ import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
 import {
   ACTION_TOOL,
   REPLY_TOOL,
+  describeFailure,
+  numberField,
+  record,
   replyTextFromArguments,
-  REASONING_EFFORT_HEADER,
+  stringField,
   type DriverRequest,
   type DriverResult,
   type ModelContentPart,
@@ -31,6 +34,7 @@ import {
   toolCallArguments,
   toolCallFromArguments,
 } from './driver.ts';
+import { abortError, IncompleteStreamError, postToGateway } from './transport.ts';
 
 export interface ResponsesDriverOptions {
   fetch?: typeof fetch;
@@ -38,9 +42,6 @@ export interface ResponsesDriverOptions {
 
 /** The subset of a driver request that is serialized onto the Responses wire. */
 export type ResponsesRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'maxTokens' | 'actionTool' | 'replyTool' | 'cacheKey'> & Partial<Pick<DriverRequest, 'reasoningEffort'>>;
-
-/** Only a non-2xx response body is ever truncated, so an upstream error stays readable. */
-const ERROR_EXCERPT_CHARS = 2_000;
 
 /** Hard byte cap for one serialized Responses request body (64 MiB). */
 export const RESPONSES_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
@@ -136,45 +137,16 @@ export function createResponsesDriver(
   connection: WrenyardGatewayConnection,
   options: ResponsesDriverOptions = {},
 ): ModelDriver {
-  const fetchImpl = options.fetch ?? globalThis.fetch;
   return {
-    async complete(request: DriverRequest): Promise<DriverResult> {
-      if (!request.reasoningEffort) throw new Error("Model request requires reasoningEffort");
-      if (request.signal.aborted) throw abortError();
-      const url = `${connection.openaiResponsesBaseUrl.replace(/\/+$/u, '')}/responses`;
-      const body = serializeResponsesRequest(request);
-      const actualBytes = Buffer.byteLength(body, 'utf8');
-      if (actualBytes > RESPONSES_REQUEST_MAX_BYTES) {
-        throw new Error(`Responses request exceeds ${RESPONSES_REQUEST_MAX_BYTES} bytes: ${actualBytes}`);
-      }
-
-      let response: Response;
-      try {
-        response = await fetchImpl(url, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${connection.token}`,
-            ...(request.reasoningEffort === undefined
-              ? {}
-              : { [REASONING_EFFORT_HEADER]: request.reasoningEffort }),
-          },
-          body,
-          signal: request.signal,
-        });
-      } catch (error) {
-        throw normalizeError(error, request.signal);
-      }
-      if (!response.ok) {
-        const excerpt = await errorExcerpt(response);
-        throw new Error(`Model request failed (HTTP ${response.status})${excerpt}`);
-      }
-      try {
-        return await readResponses(response, request);
-      } catch (error) {
-        throw normalizeError(error, request.signal);
-      }
-    },
+    complete: (request) => postToGateway({
+      connection,
+      fetch: options.fetch ?? globalThis.fetch,
+      url: `${connection.openaiResponsesBaseUrl.replace(/\/+$/u, '')}/responses`,
+      body: () => serializeResponsesRequest(request),
+      maxBytes: RESPONSES_REQUEST_MAX_BYTES,
+      label: 'Responses request',
+      read: readResponses,
+    }, request),
   };
 }
 
@@ -270,7 +242,7 @@ async function readStreamResponse(response: Response, request: DriverRequest): P
     await reader.cancel().catch(() => undefined);
   }
   if (request.signal.aborted) throw abortError();
-  if (!state.completed) throw new Error('Model stream ended before the reply was complete');
+  if (!state.completed) throw new IncompleteStreamError();
   return {
     text: state.text,
     ...(state.reasoning ? { reasoning: state.reasoning } : {}),
@@ -320,11 +292,14 @@ function consumeStreamFrame(frame: string, request: DriverRequest, state: Respon
       }
       return;
     }
+    // A started function call is generated output before it completes.
     case 'response.output_item.added': {
+      if (record(event.item)?.type === 'function_call') request.onOutput?.();
       registerFunctionCall(event.item, event.output_index, state);
       return;
     }
     case 'response.function_call_arguments.delta': {
+      if (stringField(event.delta)) request.onOutput?.();
       accumulateFunctionCall(event, state);
       return;
     }
@@ -413,6 +388,7 @@ function finishFunctionCall(rawItem: unknown, rawIndex: unknown, state: Response
 function reportFunctionCall(call: FunctionCallState, state: ResponsesStreamState, request: DriverRequest): void {
   if (call.reported) return;
   call.reported = true;
+  request.onOutput?.();
   if (request.replyTool) {
     if (call.name !== REPLY_TOOL.function.name) throw new Error(`Model returned an unknown reply tool: ${call.name}`);
     state.replies.push({ index: call.outputIndex, text: replyTextFromArguments(call.arguments) });
@@ -454,7 +430,7 @@ function usageOf(root: unknown): Usage | undefined {
 
 /** Non-stream fallback: one complete Responses payload. */
 async function readJsonResponse(response: Response, request: DriverRequest): Promise<DriverResult> {
-  const payload = await response.json().catch(() => undefined);
+  const payload = await response.json().catch((error: unknown) => { if (error instanceof SyntaxError) return undefined; throw error; });
   const root = record(payload);
   if (!root) throw new Error('Model response was not valid JSON');
   if (root.error !== undefined) throw new Error(describeFailure(root.error, 'Model request failed'));
@@ -532,35 +508,6 @@ function describeFailedResponse(response: Record<string, unknown> | undefined, f
   return status ? `Model response ${status}` : fallback;
 }
 
-/** Truncated, non-secret excerpt of a failed upstream response body. */
-async function errorExcerpt(response: Response): Promise<string> {
-  const text = await response.text().catch(() => '');
-  const trimmed = text.trim();
-  if (!trimmed) return '';
-  const excerpt = trimmed.length > ERROR_EXCERPT_CHARS ? trimmed.slice(0, ERROR_EXCERPT_CHARS) : trimmed;
-  return `: ${excerpt}`;
-}
-
-/** Human-readable message of an error event or error object. */
-function describeFailure(failure: unknown, fallback: string): string {
-  if (typeof failure === 'string' && failure) return failure;
-  const message = record(failure)?.message;
-  if (typeof message === 'string' && message) return message;
-  return fallback;
-}
-
-/** Preserve an abort as an abort; rewrite anything else into a plain Error. */
-function normalizeError(error: unknown, signal: AbortSignal): unknown {
-  if (signal.aborted) return abortError();
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-function abortError(): Error {
-  const error = new Error('Model request was aborted');
-  error.name = 'AbortError';
-  return error;
-}
-
 function arrayOfRecords(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) return [];
   const records: Record<string, unknown>[] = [];
@@ -569,18 +516,4 @@ function arrayOfRecords(value: unknown): Record<string, unknown>[] {
     if (item) records.push(item);
   }
   return records;
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-function stringField(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined;
-}
-
-function numberField(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

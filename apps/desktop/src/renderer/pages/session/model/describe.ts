@@ -38,6 +38,25 @@ export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   title: '标题',
 };
 
+const ROUTE_STATE_LABEL: Record<string, string> = {
+  rate_limited: '限流',
+  quota_exhausted: '额度耗尽',
+  auth_failed: '认证失败',
+  model_unavailable: '模型不可用',
+};
+
+/** Inspector chips for an auxiliary call's route selection: rank, routes sent to, last route state. */
+export function callRouteChips(event: Extract<LedgerEvent, { type: 'call' }>): string[] {
+  const chips: string[] = [];
+  if (event.selectedRank !== undefined) chips.push(`排名 ${event.selectedRank}`);
+  const attempts = event.routeAttempts ?? [];
+  const sent = attempts.filter((attempt) => attempt.status !== 'skipped').length;
+  if (sent > 1) chips.push(`已尝试 ${sent} 条线路`);
+  const state = [...attempts].reverse().find((attempt) => attempt.routeState !== undefined)?.routeState;
+  if (state) chips.push(`线路状态：${ROUTE_STATE_LABEL[state] ?? state}`);
+  return chips;
+}
+
 /** Timeline tone of every action status. */
 export const ACTION_TONE: Record<ActionModel['status'], TimelineTone> = {
   running: 'primary',

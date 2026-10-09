@@ -1,4 +1,5 @@
 import type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
+import type { GatewayRouteState } from './gateway-wire.ts';
 export type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
 export { REASONING_EFFORTS, resolveReasoningEffort } from '@wrenyard/models';
 
@@ -108,9 +109,26 @@ export interface ClientDefinition {
   supportsNativeWebSearch?: boolean;
 }
 
+/** A supplier interprets only its own explicit error codes and reset information. */
+export interface UpstreamRouteFailure {
+  state: GatewayRouteState;
+  scope?: 'provider' | 'pool' | 'route';
+  quotaPoolId?: string;
+  until?: string;
+}
+export interface UpstreamRouteErrorInput {
+  modelId: string;
+  status: number;
+  headers: Headers;
+  body: unknown;
+  nowMs: number;
+}
+
 export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
   provider: string;
   publicId: string;
+  routeState?: GatewayRouteState;
+  routeUntil?: string;
 };
 
 export interface ResolvedGatewayModel {
@@ -221,6 +239,7 @@ export interface ProviderDefinition {
     effort: ReasoningEffort,
     protocol: GatewayProtocol,
   ): Record<string, unknown>;
+  classifyUpstreamError?(error: UpstreamRouteErrorInput): UpstreamRouteFailure | undefined;
   credentialResolver: CredentialResolver;
   defaultModel?: string;
   quotaProvider?: string;
