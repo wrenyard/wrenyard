@@ -696,7 +696,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         env: resolveTaskAgentEnv(
           process.env,
           opts.taskId,
-          entry.codeBuddyExecution,
           this.buildReasoningEffortPlanEnv(entry.executionId),
           entry.executionId,
         ),
@@ -1616,15 +1615,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 }
 
-const CODEBUDDY_EXPECTED_SCOPE_ENV = 'WRENYARD_CODEBUDDY_EXPECTED_SCOPE'
-const CODEBUDDY_EXPECTED_ENVIRONMENT_ENV = 'WRENYARD_CODEBUDDY_EXPECTED_ENVIRONMENT'
-const CODEBUDDY_EXPECTED_WIRE_MODEL_ENV = 'WRENYARD_CODEBUDDY_EXPECTED_WIRE_MODEL'
-const CODEBUDDY_PRIVATE_ENV_NAMES = new Set([
-  CODEBUDDY_EXPECTED_SCOPE_ENV,
-  CODEBUDDY_EXPECTED_ENVIRONMENT_ENV,
-  CODEBUDDY_EXPECTED_WIRE_MODEL_ENV,
-].map((name) => name.toLowerCase()))
-
 /** Child-env key carrying the per-run dispatch plan map, copied and narrowed per spawn. */
 const DISPATCH_PLANS_ENV = 'WRENYARD_DISPATCH_PLANS_JSON'
 
@@ -1688,31 +1678,20 @@ function toExecFeatureIds(features: readonly string[] | undefined): readonly str
 export function resolveTaskAgentEnv(
   env: NodeJS.ProcessEnv,
   taskRunId?: string,
-  codeBuddyExecution?: CodeBuddyExecutionBinding,
   reasoningEffortPlan?: ReasoningEffortPlanEnvOverride,
   executionId?: string,
 ): NodeJS.ProcessEnv {
   // Copy the inherited environment so unrelated values (PATH, credentials, etc.) reach the
-  // native client child unchanged, then drop any stale inherited task context...
+  // native client child unchanged, then drop any stale inherited task context.
   const next: NodeJS.ProcessEnv = { ...env }
-  delete next.FOREMAN_TASK_RUN_ID
-  // ...and every case variant of the private CodeBuddy admission tuple. Only a
-  // validated binding for an exact CodeBuddy execution is injected below.
-  for (const key of Object.keys(next)) {
-    if (CODEBUDDY_PRIVATE_ENV_NAMES.has(key.toLowerCase())) delete next[key]
-  }
+  delete next.WRENYARD_TASK_RUN_ID
   // Make the installed bundled CLI discoverable to task agents without any
   // shell setup: an installed suite ships the single-executable `wrenyard` at
   // its root, so prepend that directory to the inherited PATH.
   prependBundledCliToPath(next)
   // ...and inject the authoritative current task run id only when one exists.
   if (taskRunId) {
-    next.FOREMAN_TASK_RUN_ID = taskRunId
-  }
-  if (codeBuddyExecution) {
-    next[CODEBUDDY_EXPECTED_SCOPE_ENV] = codeBuddyExecution.expectedScope
-    next[CODEBUDDY_EXPECTED_ENVIRONMENT_ENV] = codeBuddyExecution.expectedEnvironment
-    next[CODEBUDDY_EXPECTED_WIRE_MODEL_ENV] = codeBuddyExecution.expectedWireModel
+    next.WRENYARD_TASK_RUN_ID = taskRunId
   }
   // Per-run reasoning-effort plan: overwrite ONLY this run's canonical profile
   // entry in a freshly parsed copy of the inherited plan map, preserving every

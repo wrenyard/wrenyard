@@ -351,8 +351,8 @@ export function packagedSeaPath(appDir, triplet = target.triplet) {
 // Inherited daemon pointers from a developer shell or a Wrenyard task must
 // never reach the isolated smoke.
 const INHERITED_SMOKE_KEYS = [
-  'WRENYARD_IPC_PATH', 'FOREMAN_TASK_RUN_ID',
-  'FOREMAN_DB_PATH', 'FOREMAN_OPENCODE_BIN', 'HOST', 'PORT',
+  'WRENYARD_IPC_PATH', 'WRENYARD_TASK_RUN_ID',
+  'FOREMAN_OPENCODE_BIN', 'HOST', 'PORT',
   'XDG_CONFIG_HOME', 'XDG_STATE_HOME',
 ];
 // Isolated HOME plus private Wrenyard roots and an explicit IPC path, so the
@@ -387,9 +387,7 @@ function isolatedSmokeEnv(homeDir) {
     WRENYARD_CONFIG_HOME: configHome,
     WRENYARD_CONFIG: configPath,
     WRENYARD_STATE_HOME: stateHome,
-    WRENYARD_WORK_DIR: workspaceRoot,
     WRENYARD_WORKSPACE: workspaceRoot,
-    WRENYARD_TEST_WORK_DIR: workspaceRoot,
   };
   for (const key of INHERITED_SMOKE_KEYS) delete env[key];
   return env;

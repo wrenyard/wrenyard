@@ -72,9 +72,6 @@ export function loadServiceConfigForCli(configPathValue: unknown, values: Record
 }
 
 export function resolveWorkDir(): string {
-  const override = process.env.WRENYARD_TEST_WORK_DIR?.trim() || process.env.FOREMAN_TEST_WORK_DIR?.trim()
-  if (override) return resolve(override)
-
   const workspaceRoot = process.env.WRENYARD_WORKSPACE?.trim()
   if (workspaceRoot) return resolve(workspaceRoot)
 
