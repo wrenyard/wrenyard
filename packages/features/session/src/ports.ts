@@ -40,6 +40,8 @@ export interface SessionHost {
   /** The product-wired provider definitions main inference validates its
    *  target against. */
   resolveInferenceProvider(providerId: string): ProviderDefinition | undefined;
+  /** In-memory Gateway state of a `provider/model` route; never queries a provider. */
+  routeStatus?(model: string): import('@wrenyard/providers/base').GatewayRouteStatus | undefined;
   selectAuxiliary(role: import('./role-requirements.ts').AuxiliaryCallRole): Promise<readonly import('./calls.ts').AuxiliaryRoute[]>;
   listProjects(): Promise<ProjectInfo[]>;
   gitHead(checkoutPath: string): Promise<{ branch?: string; head?: string }>;

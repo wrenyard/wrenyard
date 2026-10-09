@@ -1,4 +1,5 @@
 export * from './contracts.ts';
+export * from './gateway-wire.ts';
 export type * from './provider.ts';
 export type * from './quota.ts';
 

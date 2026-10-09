@@ -1,3 +1,4 @@
+import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { rankAutoRoutingCandidates, type CandidateInput } from '@wrenyard/auto-routing';
 import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
 import { ROLE_REQUIREMENTS, CHEAP_TIMEOUT_MS, selectInferenceMode, type AuxiliaryCallRole, type AuxiliaryRoute } from '@wrenyard/session';
@@ -13,6 +14,8 @@ export interface AuxiliaryRoutingOptions {
   runtimeAvailability: TaskSettingsRuntimeAvailabilityCallback;
   localSpeed?: () => LocalSpeedSample[];
   readSettings: () => TaskSettingsLayer | undefined;
+  /** In-memory Gateway route state; a marked route never enters the candidate pool. */
+  routeStatus?: (model: string) => GatewayRouteStatus | undefined;
 }
 
 /** Fresh ranked routes on each invocation; no session state or result cache. */
@@ -39,6 +42,8 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
       { codeBuddySnapshot: bound.codeBuddySnapshot, nativeProviderReadiness: null },
     )));
     models.forEach(({ provider, model }, index) => {
+      const routeStatus = options.routeStatus?.(`${provider.id}/${model.id}`);
+      if (routeStatus) return reject(`route ${routeStatus.state}`);
       if (!availability[index]!.available || availability[index]!.providerCredential !== 'available') return reject('provider not configured/available');
       if (snapshot.hardBlockedProviderIds.includes(provider.id)) return reject('quota blocked');
       if (!requirements.requiredCapabilities.every(capability => model.capabilities?.includes(capability))) return reject('text capability missing');

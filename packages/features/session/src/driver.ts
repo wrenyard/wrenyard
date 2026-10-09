@@ -13,6 +13,8 @@
 import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
 import type { ReasoningEffort } from '@wrenyard/models';
 
+import { abortError, IncompleteStreamError, postToGateway } from './transport.ts';
+
 /**
  * One OpenAI-compatible content part. `text` carries visible text; `image_url`
  * carries an image data URL. Only the main reasoning role is ever allowed to
@@ -88,6 +90,14 @@ export interface DriverRequest {
   onToolCall?: (call: ToolCall) => void;
   /** Latest upstream-reported usage, so a caller keeps it on a partial failure. */
   onUsage?: (usage: Usage) => void;
+  /** Public call role, forwarded to the gateway for attribution; never sent upstream. */
+  role?: string;
+  /** Session id, forwarded to the gateway for attribution; never sent upstream. */
+  sessionId?: string;
+  /** Invoked for generated output that has no other callback yet, such as a tool-call fragment. */
+  onOutput?: () => void;
+  /** Invoked before each same-route transport retry. */
+  onTransportRetry?: () => void;
 }
 
 /** One parsed native tool call the main reasoning model returned. */
@@ -161,19 +171,6 @@ export interface GatewayDriverOptions {
   fetch?: typeof fetch;
 }
 
-/**
- * Request header carrying the resolved public reasoning effort to the Gateway.
- *
- * The body is forwarded to the upstream provider verbatim; the effort travels
- * out-of-band so the Gateway can translate it into the exact per-provider wire
- * fields (`reasoning_effort`, `reasoning`, `thinking`, ...) through the owning
- * provider module. The body never carries a raw `reasoning_effort` field.
- */
-export const REASONING_EFFORT_HEADER = 'x-wrenyard-reasoning-effort';
-
-/** Only a non-2xx response body is ever truncated, so an upstream error stays readable. */
-const ERROR_EXCERPT_CHARS = 2_000;
-
 /** Hard byte cap for one serialized local-gateway request body (64 MiB). */
 export const GATEWAY_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -185,8 +182,8 @@ export type GatewayRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'm
  * to preflight the local-gateway byte cap before issuing the request, without
  * guessing any provider-specific limit.
  *
- * The resolved reasoning effort is deliberately absent: it travels in
- * {@link REASONING_EFFORT_HEADER}, never as a raw body field.
+ * The resolved reasoning effort is deliberately absent: it travels in the
+ * Gateway reasoning-effort header, never as a raw body field.
  */
 export function serializeGatewayRequest(request: GatewayRequestFields): string {
   const body: Record<string, unknown> = {
@@ -254,55 +251,19 @@ export function createGatewayDriver(
   connection: WrenyardGatewayConnection,
   options: GatewayDriverOptions = {},
 ): ModelDriver {
-  const fetchImpl = options.fetch ?? globalThis.fetch;
   return {
-    async complete(request: DriverRequest): Promise<DriverResult> {
-      if (!request.reasoningEffort) throw new Error("Model request requires reasoningEffort");
-      if (request.signal.aborted) throw abortError();
-      const url = `${connection.openaiChatBaseUrl.replace(/\/+$/u, '')}/chat/completions`;
+    complete: (request) => postToGateway({
+      connection,
+      fetch: options.fetch ?? globalThis.fetch,
+      url: `${connection.openaiChatBaseUrl.replace(/\/+$/u, '')}/chat/completions`,
       // The exact serialized body is also what the preflight measures, so the
       // cap can never disagree with what is actually sent.
-      const body = serializeGatewayRequest(request);
-      const actualBytes = Buffer.byteLength(body, 'utf8');
-      if (actualBytes > GATEWAY_REQUEST_MAX_BYTES) {
-        throw new Error(`Local gateway request exceeds ${GATEWAY_REQUEST_MAX_BYTES} bytes: ${actualBytes}`);
-      }
-
-      let response: Response;
-      try {
-        response = await fetchImpl(url, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${connection.token}`,
-            [REASONING_EFFORT_HEADER]: request.reasoningEffort,
-          },
-          body,
-          signal: request.signal,
-        });
-      } catch (error) {
-        throw normalizeError(error, request.signal);
-      }
-      if (!response.ok) {
-        const excerpt = await errorExcerpt(response);
-        throw new Error(`Model request failed (HTTP ${response.status})${excerpt}`);
-      }
-      try {
-        return await readCompletion(response, request);
-      } catch (error) {
-        throw normalizeError(error, request.signal);
-      }
-    },
+      body: () => serializeGatewayRequest(request),
+      maxBytes: GATEWAY_REQUEST_MAX_BYTES,
+      label: 'Local gateway request',
+      read: readCompletion,
+    }, request),
   };
-}
-
-/** Truncated, non-secret excerpt of a failed upstream response body. */
-async function errorExcerpt(response: Response): Promise<string> {
-  const text = await response.text().catch(() => '');
-  const trimmed = text.trim();
-  if (!trimmed) return '';
-  const excerpt = trimmed.length > ERROR_EXCERPT_CHARS ? trimmed.slice(0, ERROR_EXCERPT_CHARS) : trimmed;
-  return `: ${excerpt}`;
 }
 
 /**
@@ -320,7 +281,7 @@ async function readCompletion(response: Response, request: DriverRequest): Promi
 
 /** Non-stream fallback: one complete chat completion payload. */
 async function readJsonCompletion(response: Response, request: DriverRequest): Promise<DriverResult> {
-  const payload = await response.json().catch(() => undefined);
+  const payload = await response.json().catch((error: unknown) => { if (error instanceof SyntaxError) return undefined; throw error; });
   const root = record(payload);
   if (!root) throw new Error('Model response was not valid JSON');
   const failure = root.error;
@@ -435,8 +396,11 @@ function accumulateToolCalls(raw: unknown, state: ToolCallState, request: Driver
   for (const entry of raw) {
     const call = record(entry);
     if (!call) continue;
+    const fn = record(call.function);
+    const piece = stringField(fn?.arguments) ?? '';
+    // A tool name or argument fragment is generated output before the call completes.
+    if (stringField(fn?.name) !== undefined || piece !== '') request.onOutput?.();
     const index = numberField(call.index) ?? state.args.length;
-    const piece = stringField(record(call.function)?.arguments) ?? '';
     state.args[index] = `${state.args[index] ?? ''}${piece}`;
     state.seen.add(index);
     // A delta for a higher index means every lower call is now complete.
@@ -515,7 +479,7 @@ async function readStreamCompletion(response: Response, request: DriverRequest):
     await reader.cancel().catch(() => undefined);
   }
   if (request.signal.aborted) throw abortError();
-  if (!state.done && !state.finished) throw new Error('Model stream ended before the reply was complete');
+  if (!state.done && !state.finished) throw new IncompleteStreamError();
   // The stream is over, so the last call (if any) is complete.
   completeToolCalls(state.toolCalls, request);
   return {
@@ -612,32 +576,27 @@ function firstChoice(root: Record<string, unknown>): Record<string, unknown> | u
   return record(choices[0]);
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
+/* Wire parsing helpers shared with the Responses adapter. */
+export function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
 }
 
-function stringField(value: unknown): string | undefined {
+export function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
-function numberField(value: unknown): number | undefined {
+export function numberField(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 /** Human-readable message of a streamed gateway error frame or error object. */
-function describeFailure(failure: unknown, fallback: string): string {
+export function describeFailure(failure: unknown, fallback: string): string {
   if (typeof failure === 'string' && failure) return failure;
   const message = record(failure)?.message;
   if (typeof message === 'string' && message) return message;
   return fallback;
-}
-
-/** Preserve an abort as an abort; rewrite anything else into a plain Error. */
-function normalizeError(error: unknown, signal: AbortSignal): unknown {
-  if (signal.aborted) return abortError();
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 /**
@@ -666,10 +625,4 @@ export function isContextOverflowError(error: unknown): boolean {
   if (message === '') return false;
   if (message.startsWith('context_overflow:')) return true;
   return CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(message));
-}
-
-function abortError(): Error {
-  const error = new Error('Model request was aborted');
-  error.name = 'AbortError';
-  return error;
 }
