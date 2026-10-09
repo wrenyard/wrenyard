@@ -4,37 +4,32 @@ import { protocolVersionMismatchMessage, WRENYARD_PROTOCOL_VERSION } from "./tra
 
 /**
  * Canonical Wrenyard IPC protocol version, re-exported from the transport
- * module so `@wrenyard/control-client` and `@wrenyard/control-client/transport`
+ * module so `@wrenyard/control` and `@wrenyard/control/transport`
  * share exactly one definition.
  */
 export { WRENYARD_PROTOCOL_VERSION } from "./transport/index.ts";
 
-export type WrenyardIpcEnvironment = NodeJS.ProcessEnv;
+import {
+  resolveWrenyardIpcPath,
+  defaultWrenyardIpcPath,
+  normalizeWrenyardIpcPath,
+  type WrenyardIpcEnvironment,
+  type WrenyardIpcPathOptions,
+} from "./ipc-path.ts";
 
 /**
- * Shared default control socket for the Wrenyard daemon. Every Wrenyard
- * surface (control-client, desktop, pet) uses this same default so
- * the legacy per-surface socket mismatch is gone.
+ * Shared IPC path resolution and the canonical default control socket live in
+ * `./ipc-path.ts`, so every Wrenyard surface (control, daemon, desktop,
+ * cli) resolves the same endpoint. Re-exported here as the public
+ * `@wrenyard/control` surface.
  */
-export function defaultWrenyardIpcPath(): string {
-  return process.platform === "win32"
-    ? "\\\\.\\pipe\\wrenyard"
-    : "/tmp/wrenyard.sock";
-}
-
-/**
- * Resolve the Wrenyard NDJSON IPC socket path. `WRENYARD_IPC_PATH` overrides
- * the platform default when set to a non-blank value. Without an override,
- * Windows uses the daemon's `\\.\pipe\wrenyard` named pipe and Unix uses
- * `/tmp/wrenyard.sock`.
- */
-export function resolveWrenyardIpcPath(
-  env: WrenyardIpcEnvironment = process.env,
-): string {
-  const path = env.WRENYARD_IPC_PATH?.trim();
-  if (path) return path;
-  return defaultWrenyardIpcPath();
-}
+export {
+  resolveWrenyardIpcPath,
+  defaultWrenyardIpcPath,
+  normalizeWrenyardIpcPath,
+  type WrenyardIpcEnvironment,
+  type WrenyardIpcPathOptions,
+};
 
 export interface WrenyardIpcClientOptions {
   /** Filesystem path of the control socket. */
@@ -88,7 +83,7 @@ export interface WrenyardGatewayConnection {
 /**
  * Terminal result returned by `task.run.wait`. This reuses the same completion
  * envelope as the Foreman `TaskRunOutputResult` protocol type; do not invent a
- * second envelope. Desktop and other control-client consumers read this shape
+ * second envelope. Desktop and other control consumers read this shape
  * directly, with `output`/`error`/`failure_category` carrying the full
  * terminal metadata for done/failed/cancelled/interrupted runs.
  *
@@ -455,18 +450,3 @@ export class WrenyardIpcClient {
     this.pending.clear();
   }
 }
-
-// ── Deprecated legacy aliases (pre-Wrenyard naming) ────────────────────────
-
-/** @deprecated Use WrenyardIpcClient. */
-export const ForemanIpcClient = WrenyardIpcClient;
-/** @deprecated Use WrenyardRpcError. */
-export const ForemanRpcError = WrenyardRpcError;
-/** @deprecated Use resolveWrenyardIpcPath. */
-export const resolveForemanIpcPath = resolveWrenyardIpcPath;
-/** @deprecated Use WrenyardIpcEnvironment. */
-export type ForemanIpcEnvironment = WrenyardIpcEnvironment;
-/** @deprecated Use WrenyardIpcClientOptions. */
-export type ForemanIpcClientOptions = WrenyardIpcClientOptions;
-/** @deprecated Use WrenyardIpcRequestOptions. */
-export type ForemanIpcRequestOptions = WrenyardIpcRequestOptions;

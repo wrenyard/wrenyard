@@ -353,8 +353,9 @@ export function packagedSeaPath(appDir, triplet = target.triplet) {
 const INHERITED_SMOKE_KEYS = [
   'WRENYARD_IPC_PATH', 'FOREMAN_TASK_RUN_ID',
   'FOREMAN_DB_PATH', 'FOREMAN_OPENCODE_BIN', 'HOST', 'PORT',
+  'XDG_CONFIG_HOME', 'XDG_STATE_HOME',
 ];
-// Isolated HOME/XDG dirs plus a private config with an explicit IPC path, so the
+// Isolated HOME plus private Wrenyard roots and an explicit IPC path, so the
 // smoke never touches a developer's real daemon or config. The gateway binds a
 // random port, so only the IPC path and workspace root are isolated. The config
 // keys mirror apps/daemon/lib/config normalize (service.ipc.path, workspace.root).
@@ -379,10 +380,8 @@ function isolatedSmokeEnv(homeDir) {
     ...process.env,
     HOME: homeDir,
     USERPROFILE: homeDir,
-    XDG_CONFIG_HOME: path.join(homeDir, 'config'),
     XDG_DATA_HOME: path.join(homeDir, 'data'),
     XDG_CACHE_HOME: path.join(homeDir, 'cache'),
-    XDG_STATE_HOME: stateHome,
     LOCALAPPDATA: path.join(homeDir, 'AppData', 'Local'),
     APPDATA: path.join(homeDir, 'AppData', 'Roaming'),
     WRENYARD_CONFIG_HOME: configHome,

@@ -1,4 +1,4 @@
-import { WrenyardIpcClient } from '@wrenyard/control-client';
+import { WrenyardIpcClient } from '@wrenyard/control';
 import { parseQuotaJson, type QuotaProviderState } from './main/projections/quota-runtime';
 
 /**

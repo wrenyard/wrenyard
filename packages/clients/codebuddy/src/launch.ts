@@ -1,6 +1,6 @@
 import type { AgentRequest } from '@wrenyard/agent-client';
 import { claudeFamilyMcpConfig, resolveMcpServers } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDir, stringEnv } from '@wrenyard/agent-client/native';
+import { assertLaunch, clientStateDirForEnv, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
 
 export async function launchCodeBuddy(request: AgentRequest, env: NodeJS.ProcessEnv, executable: string): Promise<ProcessSpec> {
@@ -26,7 +26,7 @@ export async function launchCodeBuddy(request: AgentRequest, env: NodeJS.Process
         args,
         cwd: request.cwd,
         env: stringEnv(env, {
-            CODEBUDDY_CONFIG_DIR: clientStateDir('codebuddy', 'agent-config'),
+            CODEBUDDY_CONFIG_DIR: clientStateDirForEnv(env, 'codebuddy', 'agent-config'),
             DISABLE_AUTOUPDATER: '1',
             DISABLE_TELEMETRY: '1',
             DISABLE_ERROR_REPORTING: '1',

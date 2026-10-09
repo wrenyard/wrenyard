@@ -4,13 +4,13 @@
 // shared version-checked control client, and awaited real exit. The exit
 // callback distinguishes an expected/normal exit from a crash.
 //
-// The module depends only on Node builtins and @wrenyard/control-client so both
+// The module depends only on Node builtins and @wrenyard/control so both
 // the esbuild-bundled Desktop and the source supervisor can import it, and it
 // never derives a path from its own module location: the caller supplies the
 // complete invocation.
 
 import { spawn } from 'node:child_process';
-import { WrenyardIpcClient } from '@wrenyard/control-client';
+import { WrenyardIpcClient } from '@wrenyard/control';
 
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_POLL_INTERVAL_MS = 150;

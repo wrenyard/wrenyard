@@ -5,7 +5,7 @@
  * Every request resolves its selected route against the host catalog and uses
  * the shared protocol precedence (Chat before Responses).
  */
-import type { WrenyardGatewayConnection } from '@wrenyard/control-client';
+import type { WrenyardGatewayConnection } from '@wrenyard/control';
 import type { ProviderDefinition } from '@wrenyard/providers';
 
 import {

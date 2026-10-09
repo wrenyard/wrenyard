@@ -1,4 +1,4 @@
-import { WrenyardIpcClient, WrenyardRpcError } from '@wrenyard/control-client';
+import { WrenyardIpcClient, WrenyardRpcError } from '@wrenyard/control';
 
 export interface DaemonProbe {
   connected: boolean;

@@ -5,6 +5,7 @@ import type { ProviderDefinition } from './base/index.ts';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { resolveWrenyardConfigRoot } from '@wrenyard/paths';
 import type { Catalog, DispatchPlan } from './base/catalog.ts';
 import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans } from './catalog.ts';
 import { codeBuddy, providerImplementations, providerQuotas } from './builtins.ts';
@@ -128,11 +129,11 @@ function evaluateManagedFreeSupply(
 
 /**
  * Canonical managed-provider credential store:
- * `<XDG_CONFIG_HOME or ~/.config>/wrenyard/providers/auth.json`.
+ * `<WRENYARD_CONFIG_HOME or ~/.config/wrenyard>/providers/auth.json`.
  */
 function managedAuthPath(env: NodeJS.ProcessEnv, home: string): string {
-  const configHome = env.XDG_CONFIG_HOME?.trim() || join(home, '.config');
-  return join(configHome, 'wrenyard', 'providers', 'auth.json');
+  const root = resolveWrenyardConfigRoot(env, home);
+  return join(root, 'providers', 'auth.json');
 }
 
 /** Reads one managed API-key entry, accepting only an explicit `api` type. */

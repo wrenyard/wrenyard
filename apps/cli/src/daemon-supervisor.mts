@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { foremanStateRoot } from '@wrenyard/daemon/config/state'
 import type { ForemanServiceConfig } from '@wrenyard/daemon/config'
-import { resolveForemanServiceIpcPath } from '@wrenyard/daemon/control/ipc-server'
+import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { readLiveInstanceLock } from '@wrenyard/daemon/daemon/instance-lock'
 import { ipcCall } from '@wrenyard/daemon/supervisor'
 import { isIpcReachable, sleep } from './shared.mts'
@@ -37,7 +37,7 @@ export interface DaemonSupervisorStatus {
 }
 
 export async function readDaemonSupervisorStatus(options: DaemonLifecycleOptions): Promise<DaemonSupervisorStatus> {
-  const ipcPath = resolveForemanServiceIpcPath({ path: options.config.service.ipc?.path })
+  const ipcPath = resolveWrenyardIpcPath(process.env, { config: options.config })
   const lock = readLiveInstanceLock(resolveDaemonLockPath())
   const reachable = await isIpcReachable(ipcPath)
   return {
@@ -53,7 +53,7 @@ export async function readDaemonSupervisorStatus(options: DaemonLifecycleOptions
  * convert a slow drain into a kill. `--force` skips the drain on the daemon.
  */
 export async function stopDaemonProcess(options: DaemonLifecycleOptions): Promise<DaemonLifecycleResult> {
-  const ipcPath = resolveForemanServiceIpcPath({ path: options.config.service.ipc?.path })
+  const ipcPath = resolveWrenyardIpcPath(process.env, { config: options.config })
   const lockPath = resolveDaemonLockPath()
   const reachable = await isIpcReachable(ipcPath)
   if (reachable) {
