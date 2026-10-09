@@ -20,8 +20,11 @@ export class WorkspaceDocService {
   private readonly workspaceRoot: string
 
   constructor(workspaceRoot: string) {
-    // Canonicalize workspaceRoot to handle symlinks (e.g. macOS /var -> /private/var)
-    this.workspaceRoot = realpathSync(resolve(workspaceRoot))
+    // Resolve the supplied root once, ensure the directory exists, then
+    // canonicalize to handle symlinks (e.g. macOS /var -> /private/var)
+    const resolvedRoot = resolve(workspaceRoot)
+    mkdirSync(resolvedRoot, { recursive: true })
+    this.workspaceRoot = realpathSync(resolvedRoot)
   }
 
   async list(params: { directory?: string }): Promise<WorkspaceDocListResult> {
