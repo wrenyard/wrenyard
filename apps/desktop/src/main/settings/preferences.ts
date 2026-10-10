@@ -30,10 +30,7 @@ export function preferencesFromDocument(
     },
     appearance: { ...settings.appearance },
     session: { ...settings.session },
-    notifications: {
-      ...settings.notifications,
-      events: { ...settings.notifications.events },
-    },
+    notifications: { ...settings.notifications },
     statusBar: { hidden: [...settings.statusBar.hidden] },
     update: { ...settings.update },
   };
@@ -47,8 +44,6 @@ export interface DesktopPreferencesControllerOptions {
    * preference bridge delegates those ids rather than double-writing.
    */
   saveAppearance?: (patch: Partial<AppearanceSettings>) => void;
-  /** Mirrors the do-not-disturb write into the notification center. */
-  onDoNotDisturb?: (value: boolean) => void;
   /** Reads the native login-item state for the general projection. */
   readOpenAtLogin?: () => boolean;
   /** Writes the native login-item state; macOS/Windows only. */
@@ -94,7 +89,6 @@ export class DesktopPreferencesController {
         options.store.patch('tray', { ...tray, showQuota: value as boolean });
         options.onMenuBarQuotaChanged?.();
       },
-      'notifications.doNotDisturb': (value) => options.onDoNotDisturb?.(value as boolean),
     };
   }
 
@@ -116,8 +110,6 @@ export class DesktopPreferencesController {
     const next = writePreferenceValue(this.options.store.load(), id, value);
     const section = PREFERENCES[id].path[0] as keyof Omit<DesktopSettings, 'version'>;
     this.options.store.patch(section, next[section]);
-    // Mirrored ids (e.g. do-not-disturb) notify their owner after the write.
-    sideEffect?.(value);
     return this.get();
   }
 }

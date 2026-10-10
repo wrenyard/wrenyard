@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Checkbox } from '@/renderer/components/ui/checkbox';
 import { shell } from '@/renderer/lib/desktop';
-import { notify } from '@/renderer/lib/notify';
+import { toast } from '@/renderer/lib/notify';
 import { preferencesQuery, preferencesQueryKey } from '@/renderer/lib/queries';
 import { STATUS_BAR_CONFIGURABLE_ITEMS } from '@/renderer/lib/statusbar';
 import type { DesktopPreferences } from '@/shell-contract';
@@ -22,7 +22,7 @@ export function StatusBarSettingsControl() {
     onSuccess: (next: DesktopPreferences) => queryClient.setQueryData(preferencesQueryKey, next),
     onError: (error: unknown) => {
       void queryClient.invalidateQueries({ queryKey: preferencesQueryKey });
-      notify({ level: 'error', source: 'settings', title: '偏好保存失败', description: errorMessage(error) });
+      toast(`偏好保存失败：${errorMessage(error)}`, { level: 'error' });
     },
   });
 

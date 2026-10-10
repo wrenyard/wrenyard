@@ -2,8 +2,6 @@ import type { Phase, WorkerSnapshot, SiteSnapshot, SessionMetaData } from '../..
 import type { BroadcastInput, BroadcastSnapshot } from '../../shared/broadcast';
 import { normalizeBroadcast, shouldExpireBroadcast } from '../../shared/broadcast';
 import type { ActivityPresence, ActivityTaskPresence } from '../../shared/activity-snapshot';
-import { ActivityNotificationQueue } from './activity-notifications';
-import type { PetNotificationSink } from '../service';
 import type {
   AgentEventSignal,
   LifecycleSignal,
@@ -45,13 +43,11 @@ export class SiteModel {
   private broadcast?: BroadcastSnapshot;
   private activityStale = false;
   private taskgraphCount = 0;
-  private notifications: ActivityNotificationQueue;
   private readonly celebrateMs = 4000;
   private readonly dejectedMs = 4000;
 
-  constructor(opts?: { now?: () => number; onNotification?: PetNotificationSink }) {
+  constructor(opts?: { now?: () => number }) {
     this.now = opts?.now ?? (() => Date.now());
-    this.notifications = new ActivityNotificationQueue({ now: this.now, onNotification: opts?.onNotification });
   }
 
   ingest(signal: InputSignal, meta: SessionMetaData | null): void {
@@ -112,8 +108,7 @@ export class SiteModel {
    * Running tasks become workers, queued tasks set the queue count, and
    * workers whose task left the snapshot depart. A stale round keeps the
    * previous complete state untouched and only flips the stale flag — partial
-   * clearing is forbidden. Snapshot state transitions drive the bounded
-   * notification queue; the very first snapshot emits only a recovery summary.
+   * clearing is forbidden.
    */
   reconcileActivity(input: ActivityPresence): void {
     if (input.stale) {
@@ -161,12 +156,6 @@ export class SiteModel {
 
     this.workers = next;
     this.queued = queued;
-
-    // Notification cards only derive from fresh snapshot transitions.
-    const card = this.notifications.applyPresence(input);
-    if (card) {
-      this.broadcast = normalizeBroadcast(card);
-    }
     this.emit();
   }
 
@@ -252,11 +241,7 @@ export class SiteModel {
   clearBroadcast(id?: string): void {
     if (!this.broadcast) return;
     if (id !== undefined && this.broadcast.id !== id) return;
-    const broadcastId = this.broadcast.id;
     this.broadcast = undefined;
-    // Dismissing a notification card promotes the next queued card.
-    const next = this.notifications.dismiss(id ?? broadcastId);
-    if (next) this.broadcast = normalizeBroadcast(next);
     this.emit();
   }
 
@@ -278,14 +263,9 @@ export class SiteModel {
       this.workers.delete(workerIdentityKey);
     }
 
-    // Transient notification cards expire and the next queued card is shown.
+    // A transient bubble expires once its deadline passes.
     if (this.broadcast && shouldExpireBroadcast(this.broadcast, t)) {
-      const wasNotification = this.notifications.isCurrent(this.broadcast.id);
       this.broadcast = undefined;
-      if (wasNotification) {
-        const next = this.notifications.advanceAfterExpiry();
-        if (next) this.broadcast = normalizeBroadcast(next);
-      }
     }
 
     this.emit();

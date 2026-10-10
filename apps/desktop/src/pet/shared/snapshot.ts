@@ -3,7 +3,7 @@
 // in agent-types.ts. This file re-exports them and adds rendering-specific types.
 
 export type { Phase, WorkerSnapshot, SessionMetaData } from '../../main/daemon-client/agent-types';
-export type { BroadcastInput, BroadcastIntensity, BroadcastSnapshot } from './broadcast';
+export type { BroadcastInput, BroadcastSnapshot } from './broadcast';
 
 export type WorkerSkinId =
   | 'classic-codebuddy'

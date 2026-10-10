@@ -1,7 +1,7 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
 import type { PageLoader } from '../../pages.js';
 import { SiteModel } from './model/site-model';
-import type { PetNotificationSink } from './service';
+import type { BroadcastInput } from '../shared/broadcast';
 import { EntityManager } from './model/entity-manager';
 import { buildQuotaTips } from '../../main/projections/quota-tips';
 import type { QuotaProviderState } from '../shared/entities';
@@ -25,11 +25,6 @@ export interface DesktopPetRuntimeOptions {
    */
   subscriptions: DaemonSubscriptions;
   onConfigChange(config: AppConfig): void;
-  /**
-   * Forwards activity transitions to the Desktop NotificationCenter. The Pet
-   * never raises an OS notification itself; the host decides whether to.
-   */
-  onNotification?: PetNotificationSink;
   debugRenderer?: boolean;
 }
 
@@ -112,6 +107,15 @@ export class DesktopPetRuntime {
   }
 
   /**
+   * The single entry point the Desktop Pet notification channel calls to show
+   * one transient bubble. It forwards to `SiteModel.setBroadcast`, which owns
+   * the bubble's dismissal and expiry.
+   */
+  showBroadcast(broadcast: BroadcastInput): void {
+    this.model?.setBroadcast(broadcast);
+  }
+
+  /**
    * House window, exposed so the shared Desktop window owner can place Wren
    * entities relative to it. Null while the runtime is stopped.
    */
@@ -120,9 +124,7 @@ export class DesktopPetRuntime {
   }
 
   private setup(): void {
-    this.model = new SiteModel(
-      this.options.onNotification ? { onNotification: this.options.onNotification } : undefined,
-    );
+    this.model = new SiteModel();
     this.entityManager = new EntityManager({
       preloadPath: `${this.options.preloadDir}/pet.cjs`,
       pageLoader: this.options.pageLoader,

@@ -5,7 +5,7 @@ import { Page, PageActions, PageHeader, PageTitle } from '@/renderer/components/
 import { Button } from '@/renderer/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { Sidebar, SidebarContent, SidebarProvider } from '@/renderer/components/ui/sidebar';
-import { notify } from '@/renderer/lib/notify';
+import { toast } from '@/renderer/lib/notify';
 import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
 import { shell } from '@/renderer/lib/desktop';
 import { preferencesQueryKey } from '@/renderer/lib/queries';
@@ -106,12 +106,7 @@ export function SettingsPage() {
     },
     onError: (error, _input, context) => {
       if (context?.previous) queryClient.setQueryData(preferencesQueryKey, context.previous);
-      notify({
-        level: 'error',
-        source: 'settings',
-        title: '偏好保存失败',
-        description: errorMessage(error),
-      });
+      toast(`偏好保存失败：${errorMessage(error)}`, { level: 'error' });
     },
     onSuccess: (next) => queryClient.setQueryData(preferencesQueryKey, next),
   });

@@ -31,7 +31,6 @@ import {
   SettingsFileControl,
   WorkspaceControl,
 } from './RuntimeSettings.js';
-import { NotificationEventsControl } from './NotificationEvents.js';
 import { StatusBarSettingsControl } from './StatusBarSettings.js';
 import { ThemeCardsControl } from './ThemeCards.js';
 import { UpdateStatusControl } from './UpdateSettings.js';
@@ -52,7 +51,6 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   daemon: DaemonControl,
   endpoint: EndpointControl,
   logs: LogsControl,
-  notificationEvents: NotificationEventsControl,
   petBottomOffset: PetBottomOffsetControl,
   petBubbleSeconds: PetBubbleSecondsControl,
   petDisplay: PetDisplayControl,

@@ -283,7 +283,6 @@ export function HouseOverlay({ appearance, api }: HouseOverlayProps): ReactEleme
             <Card
               data-hit
               data-preview="house-broadcast"
-              data-broadcast-intensity={broadcast.intensity}
               style={{ opacity: broadcastAlpha(broadcast, now) }}
               className="pointer-events-auto gap-1 rounded-lg border-border bg-popover/95 p-2 text-xs text-popover-foreground shadow"
             >

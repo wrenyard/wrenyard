@@ -9,7 +9,6 @@ export type SettingsCategoryId =
   | 'appearance'
   | 'session'
   | 'models'
-  | 'notifications'
   | 'shortcuts'
   | 'pet'
   | 'runtime'
@@ -27,7 +26,6 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
   { id: 'appearance', label: '外观' },
   { id: 'session', label: '会话' },
   { id: 'models', label: '模型与路由' },
-  { id: 'notifications', label: '通知' },
   { id: 'shortcuts', label: '快捷键' },
   { id: 'pet', label: '桌宠' },
   { id: 'runtime', label: '运行环境' },

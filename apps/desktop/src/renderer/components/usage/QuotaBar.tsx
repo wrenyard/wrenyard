@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Progress as ProgressPrimitive } from '@base-ui/react/progress';
 import { ProgressIndicator, ProgressTrack } from '@/renderer/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
+import { QUOTA_PACE_WARN_DELTA } from '@/shell-contract';
 import { cn } from 'cn';
 
 /**
@@ -27,7 +28,7 @@ const FILL_CLASS: Record<QuotaLevel, string> = {
   destructive: 'bg-destructive',
 };
 
-/** Reset-time copy shared by the bar and (later) the quota notifications. */
+/** Reset-pending copy shown on a quota bar while a refresh has not arrived. */
 export const RESET_PENDING_LABEL = '等待刷新';
 
 /** Descriptive window-name overrides keyed by the provider window length in minutes. */
@@ -96,7 +97,7 @@ export function paceView(remainingPct: number, expectedRemainingPct: number | nu
   return {
     label: `配速 ${delta >= 0 ? '+' : '−'}${Math.abs(delta)}%`,
     word: delta < 0 ? '偏快' : '偏慢',
-    warn: delta < -5,
+    warn: delta < -QUOTA_PACE_WARN_DELTA,
   };
 }
 

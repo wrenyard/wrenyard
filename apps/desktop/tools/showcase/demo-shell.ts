@@ -14,12 +14,14 @@ import {
   validatePreferenceValue,
   type ActivityStatusSnapshot,
   type AppearanceSettings,
+  type AppNotification,
+  type NotificationEntry,
+  type NotificationSnapshot,
   type DaemonLifecycleSnapshot,
   type DesktopPreferences,
   type ExecEventsResult,
   type ExecSnapshotDto,
   type ModelSnapshot,
-  type NotificationSnapshot,
   type PetCompanionSettings,
   type PreferenceId,
   type ProviderCatalogSnapshot,
@@ -30,7 +32,6 @@ import {
   type ResolvedAppearance,
   type RuntimeAliasSnapshot,
   type SettingsSnapshot,
-  type ShellNotification,
   type ShellPage,
   type StatsDailySnapshot,
   type StatsSnapshot,
@@ -184,6 +185,7 @@ const daemonChanged = createVoidEmitter();
 const quotaChanged = createVoidEmitter();
 const updateChanged = createVoidEmitter();
 const activityChanged = createEmitter<ActivityStatusSnapshot>();
+const notificationShow = createEmitter<AppNotification>();
 const notificationsChanged = createVoidEmitter();
 const preferencesChanged = createEmitter<DesktopPreferences>();
 
@@ -510,49 +512,44 @@ const ACTIVITY: ActivityStatusSnapshot = {
   ],
 };
 
-let notificationItems: ShellNotification[] = [
+/*
+ * In-memory notification history for the bell panel: a few sample entries,
+ * newest first. Dismiss/clear/mark-read mutate it and emit `changed`.
+ */
+const NOTIFICATION_SAMPLE: NotificationEntry[] = [
   {
-    id: 'n-4001',
+    id: 'demo:task-done',
     level: 'success',
-    source: 'task',
-    title: 'test · aurora 通过',
+    title: '完成',
+    body: '探索调查 · aurora',
+    action: { label: '查看', command: { id: 'tasks.open', args: { taskRunId: 'tr-2101' } } },
     createdAt: NOW - 2 * MINUTE,
-    read: true,
+    read: false,
   },
   {
-    id: 'n-4002',
-    level: 'info',
-    source: 'settings',
-    title: '已为 aurora 写入 spec',
+    id: 'demo:quota',
+    level: 'warning',
+    title: '额度告警',
+    body: 'Kimi Coding 5h 剩余 28%',
+    action: { label: '查看额度', command: { id: 'quota.showPanel' } },
     createdAt: NOW - 18 * MINUTE,
     read: false,
   },
   {
-    id: 'n-4003',
+    id: 'demo:daemon',
     level: 'warning',
-    source: 'quota',
-    title: 'Anthropic 5 小时额度剩余 18%',
-    createdAt: NOW - 1 * HOUR,
-    read: false,
-  },
-  {
-    id: 'n-4004',
-    level: 'success',
-    source: 'task',
-    title: 'commit · console 已提交',
-    createdAt: NOW - 3 * HOUR,
-    read: false,
+    title: 'Daemon 连接已断开',
+    createdAt: NOW - 40 * MINUTE,
+    read: true,
   },
 ];
 
-let doNotDisturb = false;
-let nextNotificationId = 5000;
+let notificationEntries: NotificationEntry[] = NOTIFICATION_SAMPLE.map((entry) => ({ ...entry }));
 
-function buildNotifications(): NotificationSnapshot {
+function snapshotNotifications(): NotificationSnapshot {
   return {
-    items: notificationItems,
-    unreadCount: notificationItems.filter((item) => !item.read).length,
-    doNotDisturb,
+    items: notificationEntries.map((entry) => ({ ...entry })),
+    unreadCount: notificationEntries.reduce((count, entry) => (entry.read ? count : count + 1), 0),
   };
 }
 
@@ -969,19 +966,7 @@ let preferences: DesktopPreferences = {
   general: { startupPage: 'last', confirmQuit: true, openAtLogin: false, menuBarQuota: false },
   appearance: { theme: 'paper', colorMode: 'light', motion: 'system', zoom: 100 },
   session: { defaultModel: 'last', model: null, effort: null, lastSentModel: null, lastSentEffort: null, sendKey: 'enter' },
-  notifications: {
-    system: true,
-    sound: true,
-    doNotDisturb: false,
-    events: {
-      taskCompleted: true,
-      taskFailed: true,
-      sessionReplyCompleted: true,
-      quotaWarning: true,
-      updateAvailable: true,
-      daemonDisconnected: true,
-    },
-  },
+  notifications: { enabled: true },
   statusBar: { hidden: [] },
   update: { autoCheck: true },
 };
@@ -1178,42 +1163,21 @@ export function createDemoShell(control?: DemoControl): DemoShell {
       return { id, status: 'cancelled' };
     },
 
-    getNotifications: async () => buildNotifications(),
-    notify: async (input) => {
-      const id = input.id ?? `n-${nextNotificationId}`;
-      nextNotificationId += 1;
-      const item: ShellNotification = {
-        id,
-        level: input.level,
-        source: input.source,
-        title: input.title,
-        description: input.description,
-        action: input.action,
-        createdAt: Date.now(),
-        read: false,
-      };
-      notificationItems = [item, ...notificationItems.filter((entry) => entry.id !== id)];
-      notificationsChanged.emit();
-      return item;
-    },
+    onNotificationShow: (listener) => notificationShow.subscribe(listener),
+    onNotificationsChanged: (listener) => notificationsChanged.subscribe(listener),
+    getNotificationSnapshot: async () => snapshotNotifications(),
     dismissNotification: async (id) => {
-      notificationItems = notificationItems.filter((item) => item.id !== id);
+      notificationEntries = notificationEntries.filter((entry) => entry.id !== id);
       notificationsChanged.emit();
     },
     clearNotifications: async () => {
-      notificationItems = [];
+      notificationEntries = [];
       notificationsChanged.emit();
     },
     markNotificationsRead: async () => {
-      notificationItems = notificationItems.map((item) => ({ ...item, read: true }));
+      notificationEntries = notificationEntries.map((entry) => (entry.read ? entry : { ...entry, read: true }));
       notificationsChanged.emit();
     },
-    setDoNotDisturb: async (value) => {
-      doNotDisturb = value;
-      notificationsChanged.emit();
-      return buildNotifications();
-    },
-    onNotificationsChanged: (listener) => notificationsChanged.subscribe(listener),
     onCommandAction: () => () => undefined,
 
     getPreferences: async () => preferences,

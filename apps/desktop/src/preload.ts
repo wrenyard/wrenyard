@@ -3,6 +3,7 @@ import { BUILTIN_THEMES, DEFAULT_THEME_ID } from '@wrenyard/themes';
 import {
   SHELL_CHANNELS,
   isShellPage,
+  NOTIFICATION_ID_MAX,
   type AppMenuPosition,
   type ResolvedAppearance,
   type WindowStateSnapshot,
@@ -27,10 +28,9 @@ import {
   type ExecEventsRequest,
   type ExecEventsResult,
   type ExecCancelResult,
-  type NotificationSnapshot,
-  type ShellNotification,
-  type NotificationInput,
+  type AppNotification,
   type NotificationCommandAction,
+  type NotificationSnapshot,
   type DesktopPreferences,
   type PreferenceId,
   type ActivityStatusSnapshot,
@@ -66,6 +66,11 @@ function isNotificationCommandAction(value: unknown): value is NotificationComma
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const action = value as Record<string, unknown>;
   return typeof action.id === 'string' && action.id.length > 0;
+}
+
+/** A notification id must be a bounded non-empty string at the boundary. */
+function isBoundedNotificationId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= NOTIFICATION_ID_MAX;
 }
 
 /** Window state arrives from the main process; accept only the typed shape. */
@@ -210,28 +215,30 @@ const api: WrenyardShellApi = {
   execCancel(id: string): Promise<ExecCancelResult> {
     return ipcRenderer.invoke(SHELL_CHANNELS.execCancel, id) as Promise<ExecCancelResult>;
   },
-  getNotifications(): Promise<NotificationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationsSnapshot) as Promise<NotificationSnapshot>;
-  },
-  notify(input: NotificationInput): Promise<ShellNotification> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationNotify, input) as Promise<ShellNotification>;
-  },
-  dismissNotification(id: string): Promise<void> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationDismiss, id) as Promise<void>;
-  },
-  clearNotifications(): Promise<void> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationsClear) as Promise<void>;
-  },
-  markNotificationsRead(): Promise<void> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationsMarkRead) as Promise<void>;
-  },
-  setDoNotDisturb(value: boolean): Promise<NotificationSnapshot> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.notificationsSetDoNotDisturb, value) as Promise<NotificationSnapshot>;
+  onNotificationShow(listener: (notification: AppNotification) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, notification: AppNotification): void => {
+      listener(notification);
+    };
+    ipcRenderer.on(SHELL_CHANNELS.notificationShow, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.notificationShow, handler);
   },
   onNotificationsChanged(listener: () => void): () => void {
     const handler = (): void => listener();
     ipcRenderer.on(SHELL_CHANNELS.notificationsChanged, handler);
     return () => ipcRenderer.removeListener(SHELL_CHANNELS.notificationsChanged, handler);
+  },
+  getNotificationSnapshot(): Promise<NotificationSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationSnapshot) as Promise<NotificationSnapshot>;
+  },
+  dismissNotification(id: string): Promise<void> {
+    if (!isBoundedNotificationId(id)) return Promise.reject(new Error('通知 id 无效'));
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationDismissEntry, id) as Promise<void>;
+  },
+  clearNotifications(): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationClear) as Promise<void>;
+  },
+  markNotificationsRead(): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.notificationMarkRead) as Promise<void>;
   },
   onCommandAction(listener: (action: NotificationCommandAction) => void): () => void {
     const handler = (_event: Electron.IpcRendererEvent, action: unknown): void => {
