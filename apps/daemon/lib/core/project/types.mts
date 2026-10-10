@@ -171,3 +171,14 @@ export interface ProjectManagerOptions {
   idGenerator?: () => string
   gitBin?: string
 }
+
+export interface ProjectRegisterResult {
+  project: string
+  /** Workspace-relative `.fmproj` path with forward slashes. */
+  file: string
+  /** Absolute checkout path, or null when none was given. */
+  path: string | null
+  git_remote?: string
+  default_branch?: string
+  registered: boolean
+}

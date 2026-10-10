@@ -9,12 +9,46 @@
  * absolute paths, and non-Markdown extensions.
  */
 
+import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { dirname, join, normalize, resolve, sep } from 'node:path'
+import { dirname, join, normalize, posix, resolve, sep } from 'node:path'
 import { INVALID_PARAMS, ProtocolError } from '../../protocol/errors.mts'
+import { ProjectManager } from '../../core/project/manager.mts'
 import type { WorkspaceDocListResult, WorkspaceDocReadResult, WorkspaceDocCreateResult, WorkspaceDocUpdateResult } from '../../protocol/methods/workspace-doc.mts'
 
 const MARKDOWN_EXT = '.md'
+
+/** Document category directories permitted under a project's docs root. */
+const DOC_CATEGORY_DIRECTORIES = ['specs', 'plans', 'reports', 'handoff'] as const
+type DocCategory = typeof DOC_CATEGORY_DIRECTORIES[number]
+
+/** New document file names: `YYYY-MM-DD-<lowercase-slug>.md`. */
+const CREATE_FILENAME_RE = /^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*\.md$/u
+
+/** Structured failure for project-document writes, carrying a specific code. */
+export class WorkspaceDocError extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'WorkspaceDocError'
+    this.code = code
+  }
+}
+
+export interface WriteProjectDocumentInput {
+  path: string
+  content: string
+  expectedContent?: string
+}
+
+export interface WriteProjectDocumentResult {
+  path: string
+  project: string
+  category: DocCategory
+  change: 'created' | 'updated'
+  version: string
+}
 
 export class WorkspaceDocService {
   private readonly workspaceRoot: string
@@ -147,6 +181,103 @@ export class WorkspaceDocService {
     }
     writeFileSync(safePath, params.content, 'utf-8')
     return { path: params.path } satisfies WorkspaceDocUpdateResult
+  }
+
+  /**
+   * The single authority for project documents under
+   * `projects/<registered project id>/docs/<category>/`.
+   *
+   * The path must be workspace-relative, forward-slash, and equal to
+   * `posix.normalize(path)` (the platform normalizer is never used on these
+   * paths). Project ids may contain '/', so the longest registered id whose
+   * `projects/<id>/docs/` prefix matches wins. With `expectedContent`
+   * undefined the document is created (and the file name must be
+   * `YYYY-MM-DD-<slug>.md`); otherwise it is updated with a compare-and-swap
+   * against the supplied content. Every rejection is a WorkspaceDocError with
+   * a specific code whose message states the rule.
+   */
+  writeProjectDocument(input: WriteProjectDocumentInput): WriteProjectDocumentResult {
+    const rawPath = typeof input.path === 'string' ? input.path : ''
+    if (!rawPath) {
+      throw new WorkspaceDocError('not_relative', 'Document path is required and must be workspace-relative.')
+    }
+    if (rawPath.includes('\0')) {
+      throw new WorkspaceDocError('not_relative', 'Document path must not contain NUL bytes.')
+    }
+    if (posix.isAbsolute(rawPath) || /^[A-Za-z]:[/\\]/u.test(rawPath)) {
+      throw new WorkspaceDocError('not_relative', `Document path must be workspace-relative: ${rawPath}`)
+    }
+    if (rawPath.includes('\\')) {
+      throw new WorkspaceDocError('not_normalized', `Document path must use forward slashes: ${rawPath}`)
+    }
+    if (posix.normalize(rawPath) !== rawPath) {
+      throw new WorkspaceDocError('not_normalized', `Document path must be normalized with posix.normalize: ${rawPath}`)
+    }
+    if (!rawPath.endsWith(MARKDOWN_EXT)) {
+      throw new WorkspaceDocError('not_markdown', `Document path must end with '.md': ${rawPath}`)
+    }
+
+    // Longest registered project id whose `projects/<id>/docs/` prefix matches.
+    const registeredProjects = new ProjectManager({ workspaceRoot: this.workspaceRoot })
+      .listProjects()
+      .map((entry) => entry.name)
+    const project = registeredProjects
+      .filter((id) => rawPath.startsWith(`projects/${id}/docs/`))
+      .sort((a, b) => b.length - a.length)[0]
+    if (!project) {
+      throw new WorkspaceDocError(
+        'unknown_project',
+        `Document path must live under projects/<registered project id>/docs/: ${rawPath}`,
+      )
+    }
+
+    const remainder = rawPath.slice(`projects/${project}/docs/`.length)
+    const separator = remainder.indexOf('/')
+    if (separator === -1) {
+      throw new WorkspaceDocError('bad_category', `Document path must include a doc category directory: ${rawPath}`)
+    }
+    const category = remainder.slice(0, separator)
+    if (!(DOC_CATEGORY_DIRECTORIES as readonly string[]).includes(category)) {
+      throw new WorkspaceDocError(
+        'bad_category',
+        `Document category must be one of ${DOC_CATEGORY_DIRECTORIES.join(', ')}: ${rawPath}`,
+      )
+    }
+    const fileName = remainder.slice(separator + 1)
+
+    const absolute = resolve(this.workspaceRoot, rawPath)
+    if (absolute !== this.workspaceRoot && !absolute.startsWith(this.workspaceRoot + sep)) {
+      throw new WorkspaceDocError('outside_workspace', `Document path escapes the workspace: ${rawPath}`)
+    }
+
+    const version = createHash('sha256').update(input.content).digest('hex').slice(0, 8)
+
+    if (input.expectedContent === undefined) {
+      if (!CREATE_FILENAME_RE.test(fileName)) {
+        throw new WorkspaceDocError(
+          'bad_filename',
+          `New document file name must match YYYY-MM-DD-<slug>.md: ${fileName}`,
+        )
+      }
+      if (existsSync(absolute)) {
+        throw new WorkspaceDocError('exists', `Document already exists: ${rawPath}`)
+      }
+      mkdirSync(dirname(absolute), { recursive: true })
+      writeFileSync(absolute, input.content, { encoding: 'utf-8', flag: 'wx' })
+      return { path: rawPath, project, category: category as DocCategory, change: 'created', version }
+    }
+
+    if (!existsSync(absolute)) {
+      throw new WorkspaceDocError('missing', `Document not found: ${rawPath}`)
+    }
+    // Compare-and-swap: the content originally read is the concurrency token;
+    // a stale save is rejected without modifying the file.
+    const currentContent = readFileSync(absolute, 'utf-8')
+    if (currentContent !== input.expectedContent) {
+      throw new WorkspaceDocError('conflict', `Document changed since it was read: ${rawPath}`)
+    }
+    writeFileSync(absolute, input.content, 'utf-8')
+    return { path: rawPath, project, category: category as DocCategory, change: 'updated', version }
   }
 
   /**
