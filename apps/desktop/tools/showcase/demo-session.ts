@@ -87,7 +87,7 @@ const MEMORY_BILLING_CONTENT = `# Aurora 计费模块约定
 - 配置项通过 billing/config.ts 注入，便于测试。
 - 涉及金额的日志必须脱敏。`;
 
-/** The `doc-search` call's understanding of the first cycle. */
+/** The `search` call's understanding of the first cycle. */
 const DOC_SEARCH_OUTPUT = '需要在 aurora 计费模块找到重试策略的规格与约定。';
 /** The `memory-search` call's recall summary for the first cycle. */
 const MEMORY_SEARCH_OUTPUT = '找到与计费重试相关的记忆：memories/aurora-billing-conventions.md。';
@@ -411,7 +411,7 @@ function contextKind(event: LedgerEvent): ContextItemKind | undefined {
     case 'doc.content':
       return 'doc';
     case 'doc.search':
-      return 'doc-search';
+      return 'search';
     case 'memory.recalled':
       return 'memory';
     case 'files':
@@ -438,8 +438,9 @@ function contextLabel(event: LedgerEvent): string {
       return firstLine(event.text);
     case 'doc.content':
     case 'memory.recalled':
-    case 'ws.updated':
       return event.path;
+    case 'ws.updated':
+      return event.target;
     case 'doc.search':
       return firstLine(event.understanding);
     case 'files':
@@ -565,7 +566,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
     const push = makeSink(featured);
     const snapshot = buildSnapshot(sec(2_520));
 
-    push(sec(2_520), { type: 'session.created', format: 3, workspaceRoot: WORKSPACE_ROOT, snapshot });
+    push(sec(2_520), { type: 'session.created', workspaceRoot: WORKSPACE_ROOT, snapshot });
     push(sec(2_520), {
       type: 'turn.started',
       turn: 1,
@@ -573,14 +574,14 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       model: { provider: 'anthropic', model: 'claude-opus-5-5', reasoningEffort: 'high' },
     });
 
-    // Cycle 1 prepares context: a doc-search, a read action that loads the
+    // Cycle 1 prepares context: a search call, a search action that loads the
     // specs (doc.search/doc.content) and a memory-search that recalls the
     // billing conventions.
     appendCall(push, {
       at: 2_514,
       seconds: 2,
       callId: 'c_search1',
-      callRole: 'doc-search',
+      callRole: 'search',
       modelPublicId: 'deepseek/deepseek-v4.1-flash',
       turn: 1,
       cycle: 1,
@@ -594,8 +595,8 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       turn: 1,
       cycle: 1,
       actionId: 'a1',
-      kind: 'read',
-      parsed: { kind: 'read', intent: '读取 aurora 计费重试相关的规格与约定' },
+      kind: 'search',
+      parsed: { kind: 'search', intent: '读取 aurora 计费重试相关的规格与约定' },
     });
     push(sec(2_512), {
       type: 'doc.search',
@@ -666,7 +667,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       turn: 1,
       cycle: 1,
       actionId: 'a1',
-      kind: 'read',
+      kind: 'search',
       status: 'done',
       result: '已加载规格、项目指令与计费记忆。',
     });
@@ -698,7 +699,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       at: 2_495,
       seconds: 1,
       callId: 'c_compile1',
-      callRole: 'compile',
+      callRole: 'dispatch',
       modelPublicId: 'deepseek/deepseek-v4.1-flash',
       turn: 1,
       cycle: 1,
@@ -711,7 +712,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       at: 2_494,
       seconds: 1,
       callId: 'c_compile2',
-      callRole: 'compile',
+      callRole: 'dispatch',
       modelPublicId: 'deepseek/deepseek-v4.1-flash',
       turn: 1,
       cycle: 1,
@@ -813,7 +814,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       at: 2_360,
       seconds: 1,
       callId: 'c_compile3',
-      callRole: 'compile',
+      callRole: 'dispatch',
       modelPublicId: 'deepseek/deepseek-v4.1-flash',
       turn: 1,
       cycle: 2,
@@ -905,6 +906,170 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
     push(sec(2_264), { type: 'reason.completed', turn: 2, cycle: 1, callId: 'c_reason3', text: REASON_TURN2 });
     push(sec(2_262), { type: 'reply', turn: 2, cycle: 1, text: FINAL_REPLY_2 });
     push(sec(2_261), { type: 'turn.finished', turn: 2, status: 'completed' });
+
+    // Turn 3: a document action updates the spec, then a vcs action commits.
+    push(sec(2_200), {
+      type: 'turn.started',
+      turn: 3,
+      text: '把这次的改动提交一下，并把规格文档更新到最新实现。',
+      model: { provider: 'anthropic', model: 'claude-opus-5-5', reasoningEffort: 'high' },
+    });
+    const reason3 = '改动已验证，我先更新规格文档，然后提交这次工作区改动。';
+    appendCall(push, {
+      at: 2_198,
+      seconds: 10,
+      callId: 'c_reason4',
+      callRole: 'reason',
+      modelPublicId: 'anthropic/claude-opus-5-5',
+      turn: 3,
+      cycle: 1,
+      layers: { 'wy-system': 5_200, 'wy-global': 3_800, 'wy-role': 280, 'wy-workspace': 9_600, 'wy-ctx': 4_200, 'wy-info': 420 },
+      estimatedInputTokens: 25_400,
+      usage: { input: 25_800, cachedInput: 22_000, output: 520, reasoning: 180 },
+      output: reason3,
+      reasoning: '先更新规格文档，再把 billing 改动提交到当前分支。',
+    });
+    push(sec(2_188), {
+      type: 'thinking',
+      turn: 3,
+      cycle: 1,
+      callId: 'c_reason4',
+      text: '先更新规格文档，再把 billing 改动提交到当前分支。',
+    });
+    push(sec(2_188), { type: 'reason.completed', turn: 3, cycle: 1, callId: 'c_reason4', text: reason3 });
+
+    // Document action: a document call, a doc.content write and a document-scope ws.updated.
+    appendCall(push, {
+      at: 2_187,
+      seconds: 1,
+      callId: 'a5_document',
+      callRole: 'document',
+      modelPublicId: 'deepseek/deepseek-v4.1-flash',
+      turn: 3,
+      cycle: 1,
+      layers: { 'wy-system': 2_000, 'wy-document': 1_400 },
+      estimatedInputTokens: 3_200,
+      usage: { input: 3_240, output: 260 },
+      output: '{"kind":"document","path":"projects/aurora/docs/specs/2026-09-28-billing-retry.md"}',
+    });
+    push(sec(2_186), {
+      type: 'action.started',
+      turn: 3,
+      cycle: 1,
+      actionId: 'a5',
+      kind: 'document',
+      parsed: { kind: 'document', intent: '把 Billing 重试策略规格更新为指数退避 + full jitter 的实现' },
+    });
+    push(sec(2_185), {
+      type: 'doc.content',
+      turn: 3,
+      cycle: 1,
+      actionId: 'a5',
+      path: 'projects/aurora/docs/specs/2026-09-28-billing-retry.md',
+      title: 'Billing 重试策略',
+      updated: '2026-10-01',
+      version: 'v3',
+      tokens: 12_900,
+      content: SPEC_CONTENT,
+      format: 'full',
+      source: 'write',
+    });
+    push(sec(2_185), {
+      type: 'ws.updated',
+      turn: 3,
+      cycle: 1,
+      actionId: 'a5',
+      scope: 'document',
+      target: 'projects/aurora/docs/specs/2026-09-28-billing-retry.md',
+      change: 'updated',
+      version: 'v3',
+    });
+    push(sec(2_184), {
+      type: 'action.finished',
+      turn: 3,
+      cycle: 1,
+      actionId: 'a5',
+      kind: 'document',
+      status: 'done',
+      result: '规格已更新为指数退避 + full jitter 方案。',
+    });
+
+    // VCS action: a commit call and a workspace-scope ws.updated carrying the commit hash.
+    appendCall(push, {
+      at: 2_183,
+      seconds: 1,
+      callId: 'a6_vcs',
+      callRole: 'vcs',
+      modelPublicId: 'deepseek/deepseek-v4.1-flash',
+      turn: 3,
+      cycle: 1,
+      layers: { 'wy-system': 2_000, 'wy-vcs': 1_600 },
+      estimatedInputTokens: 3_600,
+      usage: { input: 3_640, output: 280 },
+      output: '{"kind":"vcs","intent":"提交 billing 重试改动与规格更新"}',
+    });
+    push(sec(2_182), {
+      type: 'action.started',
+      turn: 3,
+      cycle: 1,
+      actionId: 'a6',
+      kind: 'vcs',
+      parsed: { kind: 'vcs', intent: '提交 billing 重试改动与规格更新' },
+    });
+    push(sec(2_181), {
+      type: 'ws.updated',
+      turn: 3,
+      cycle: 1,
+      actionId: 'a6',
+      scope: 'workspace',
+      target: 'projects/aurora',
+      change: 'committed',
+      hash: 'b7c4d9e',
+      files: [
+        'projects/aurora/billing/retry.ts',
+        'projects/aurora/docs/specs/2026-09-28-billing-retry.md',
+      ],
+    });
+    push(sec(2_180), {
+      type: 'action.finished',
+      turn: 3,
+      cycle: 1,
+      actionId: 'a6',
+      kind: 'vcs',
+      status: 'done',
+      result: '已提交，commit b7c4d9e。',
+    });
+
+    const reply3 = '规格已更新，改动也已经提交（commit b7c4d9e）。需要我开一个 PR 吗？';
+    appendCall(push, {
+      at: 2_179,
+      seconds: 2,
+      callId: 'c_reply3',
+      callRole: 'reply',
+      modelPublicId: 'deepseek/deepseek-v4.1-flash',
+      turn: 3,
+      cycle: 1,
+      layers: { 'wy-system': 1_200, 'wy-workspace': 5_400, 'wy-ctx': 1_200, 'wy-status': 120 },
+      estimatedInputTokens: 9_100,
+      usage: { input: 9_160, output: 340 },
+      output: reply3,
+    });
+    push(sec(2_177), { type: 'reply', turn: 3, cycle: 1, text: reply3, callId: 'c_reply3' });
+
+    appendCall(push, {
+      at: 2_176,
+      seconds: 1,
+      callId: 'c_title3',
+      callRole: 'title',
+      modelPublicId: 'deepseek/deepseek-v4.1-flash',
+      turn: 3,
+      layers: { 'wy-system': 260, 'wy-title': 420 },
+      estimatedInputTokens: 940,
+      usage: { input: 950, output: 14 },
+      output: '更新规格并提交改动',
+    });
+    push(sec(2_175), { type: 'title', turn: 3, text: '更新规格并提交改动', callId: 'c_title3' });
+    push(sec(2_174), { type: 'turn.finished', turn: 3, status: 'completed' });
   }
   register(FEATURED_ID, featured);
 
@@ -923,7 +1088,6 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
     const push = makeSink(events);
     push(sec(args.createdAt), {
       type: 'session.created',
-      format: 3,
       workspaceRoot: WORKSPACE_ROOT,
       snapshot: buildSnapshot(sec(args.createdAt)),
     });
@@ -1124,7 +1288,6 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       const events: LedgerEvent[] = [];
       makeSink(events)(new Date().toISOString(), {
         type: 'session.created',
-        format: 3,
         workspaceRoot: WORKSPACE_ROOT,
         snapshot: buildSnapshot(new Date().toISOString()),
       });

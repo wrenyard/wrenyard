@@ -183,7 +183,7 @@ export const sessionContextInspectResultSchema = {
           kind: {
             type: 'string',
             enum: [
-              'user', 'assistant', 'thinking', 'reply', 'doc', 'doc-search', 'memory',
+              'user', 'assistant', 'thinking', 'reply', 'doc', 'search', 'memory',
               'files', 'action-result', 'ws-update', 'interrupt', 'error',
             ],
           },
@@ -214,7 +214,7 @@ export const sessionContextInspectResultSchema = {
 
 const auxiliaryRouteRoleSchema = {
   type: 'string',
-  enum: ['reply', 'compile', 'doc-search', 'memory-search', 'title'],
+  enum: ['reply', 'dispatch', 'document', 'vcs', 'project', 'search', 'memory-search', 'title'],
 } as const
 
 export const sessionRoutesPreviewParamsSchema = {

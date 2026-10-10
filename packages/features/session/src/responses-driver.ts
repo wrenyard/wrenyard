@@ -4,8 +4,9 @@
  * Implements the in-process {@link ModelDriver} port on the official Responses
  * API (`POST {openaiResponsesBaseUrl}/responses`). One call is one stateless
  * streaming completion: the system message becomes `instructions`, the user
- * messages become the `input` items in order, and native `wy_action` function
- * calls are reported through the shared {@link toolCallFromArguments} parser.
+ * messages become the `input` items in order, and every declared tool is sent
+ * as a flattened function tool whose calls are reported through the generic
+ * {@link ToolCall} shape.
  *
  * The protocol caches implicitly at the end of the latest user message and
  * looks back over earlier user-message endings. The caller supplies user
@@ -17,12 +18,9 @@
 import type { WrenyardGatewayConnection } from '@wrenyard/control';
 
 import {
-  ACTION_TOOL,
-  REPLY_TOOL,
   describeFailure,
   numberField,
   record,
-  replyTextFromArguments,
   stringField,
   type DriverRequest,
   type DriverResult,
@@ -30,9 +28,8 @@ import {
   type ModelDriver,
   type ModelMessage,
   type ToolCall,
+  type ToolSpec,
   type Usage,
-  toolCallArguments,
-  toolCallFromArguments,
 } from './driver.ts';
 import { abortError, IncompleteStreamError, postToGateway } from './transport.ts';
 
@@ -41,7 +38,7 @@ export interface ResponsesDriverOptions {
 }
 
 /** The subset of a driver request that is serialized onto the Responses wire. */
-export type ResponsesRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'maxTokens' | 'actionTool' | 'replyTool' | 'cacheKey'> & Partial<Pick<DriverRequest, 'reasoningEffort'>>;
+export type ResponsesRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'maxTokens' | 'tools' | 'cacheKey'> & Partial<Pick<DriverRequest, 'reasoningEffort'>>;
 
 /** Hard byte cap for one serialized Responses request body (64 MiB). */
 export const RESPONSES_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
@@ -80,15 +77,14 @@ function buildResponsesBody(request: ResponsesRequestFields): Record<string, unk
   body.reasoning = { summary: 'auto' };
   if (request.cacheKey) body.prompt_cache_key = request.cacheKey;
   if (request.maxTokens !== undefined) body.max_output_tokens = request.maxTokens;
-  if (request.actionTool || request.replyTool) {
-    const tool = request.actionTool ? ACTION_TOOL : REPLY_TOOL;
+  if (request.tools !== undefined && request.tools.length > 0) {
     // The Responses tool shape is a flattened function, not the nested chat shape.
-    body.tools = [{
+    body.tools = request.tools.map((tool: ToolSpec) => ({
       type: 'function',
-      name: tool.function.name,
-      description: tool.function.description,
-      parameters: tool.function.parameters,
-    }];
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    }));
   }
   return body;
 }
@@ -102,8 +98,8 @@ function inputItems(message: ModelMessage, closing: boolean): Record<string, unk
       ...(message.toolCalls ?? []).map((call) => ({
         type: 'function_call',
         call_id: call.id,
-        name: ACTION_TOOL.function.name,
-        arguments: toolCallArguments(call),
+        name: call.name,
+        arguments: call.arguments,
       })),
     ];
   }
@@ -179,7 +175,6 @@ interface ResponsesStreamState {
   /** Saw `response.completed`, the only terminal event. */
   completed: boolean;
   calls: ToolCall[];
-  replies: { index: number; text: string }[];
   byIndex: Map<number, FunctionCallState>;
   byItemId: Map<string, FunctionCallState>;
 }
@@ -205,7 +200,6 @@ async function readStreamResponse(response: Response, request: DriverRequest): P
     reasoning: '',
     completed: false,
     calls: [],
-    replies: [],
     byIndex: new Map(),
     byItemId: new Map(),
   };
@@ -248,7 +242,6 @@ async function readStreamResponse(response: Response, request: DriverRequest): P
     ...(state.reasoning ? { reasoning: state.reasoning } : {}),
     ...(state.usage ? { usage: state.usage } : {}),
     toolCalls: [...state.calls].sort((a, b) => a.index - b.index),
-    ...(request.replyTool ? { replies: state.replies.sort((a, b) => a.index - b.index).map(reply => reply.text) } : {}),
   };
 }
 
@@ -380,23 +373,20 @@ function finishFunctionCall(rawItem: unknown, rawIndex: unknown, state: Response
 }
 
 /**
- * Parse and report one completed function call exactly once. A call whose tool
- * name is not the declared `wy_action` is an invalid call rather than a replayed
- * action; an invalid `wy_action` argument payload is classified by the shared
- * {@link toolCallFromArguments} parser.
+ * Parse and report one completed function call exactly once, generically over
+ * its tool name. The raw id, name and argument text are reported unchanged so
+ * the caller can classify the call.
  */
 function reportFunctionCall(call: FunctionCallState, state: ResponsesStreamState, request: DriverRequest): void {
   if (call.reported) return;
   call.reported = true;
   request.onOutput?.();
-  if (request.replyTool) {
-    if (call.name !== REPLY_TOOL.function.name) throw new Error(`Model returned an unknown reply tool: ${call.name}`);
-    state.replies.push({ index: call.outputIndex, text: replyTextFromArguments(call.arguments) });
-    return;
-  }
-  const parsed = call.name === ACTION_TOOL.function.name
-    ? toolCallFromArguments(call.outputIndex, call.arguments)
-    : { index: call.outputIndex, type: '', intent: '', error: `unknown tool: ${call.name || 'unnamed'}` };
+  const parsed: ToolCall = {
+    index: call.outputIndex,
+    id: call.itemId ?? `call_${call.outputIndex}`,
+    name: call.name,
+    arguments: call.arguments,
+  };
   state.calls.push(parsed);
   request.onToolCall?.(parsed);
 }
@@ -442,7 +432,6 @@ async function readJsonResponse(response: Response, request: DriverRequest): Pro
   let text = '';
   let reasoning = '';
   const calls: ToolCall[] = [];
-  const replies: string[] = [];
   const output = root.output;
   if (Array.isArray(output)) {
     output.forEach((entry, position) => {
@@ -471,15 +460,12 @@ async function readJsonResponse(response: Response, request: DriverRequest): Pro
         return;
       }
       if (type === 'function_call') {
-        const name = stringField(item.name) ?? '';
-        if (request.replyTool) {
-          if (name !== REPLY_TOOL.function.name) throw new Error(`Model returned an unknown reply tool: ${name}`);
-          replies.push(replyTextFromArguments(stringField(item.arguments)));
-          return;
-        }
-        const call = name === ACTION_TOOL.function.name
-          ? toolCallFromArguments(position, stringField(item.arguments))
-          : { index: position, type: '', intent: '', error: `unknown tool: ${name || 'unnamed'}` };
+        const call: ToolCall = {
+          index: position,
+          id: stringField(item.call_id) ?? stringField(item.id) ?? `call_${position}`,
+          name: stringField(item.name) ?? '',
+          arguments: stringField(item.arguments) ?? '',
+        };
         calls.push(call);
         request.onToolCall?.(call);
       }
@@ -493,7 +479,6 @@ async function readJsonResponse(response: Response, request: DriverRequest): Pro
     ...(reasoning ? { reasoning } : {}),
     ...(usage ? { usage } : {}),
     toolCalls: calls,
-    ...(request.replyTool ? { replies } : {}),
   };
 }
 

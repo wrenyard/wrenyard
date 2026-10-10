@@ -5,6 +5,7 @@ import type {
   SessionFile,
   SessionSummary,
   WorkspaceSnapshot,
+  WsUpdatedEvent,
 } from '@wrenyard/session';
 import type {
   DraftAttachment,
@@ -25,7 +26,7 @@ export type { LedgerEvent, SessionSummary, WorkspaceSnapshot, ProjectSnapshot };
 export type TurnStatus = 'running' | 'completed' | 'failed' | 'interrupted';
 export type Phase = 'preparing' | 'reasoning' | 'acting' | 'replying';
 export type ItemStatus = 'running' | 'done' | 'failed' | 'skipped' | 'cancelled' | 'aborted';
-export type ActionKindModel = 'dispatch' | 'read' | 'write' | 'parse-failed';
+export type ActionKindModel = 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'parse-failed';
 
 export interface SessionModel {
   snapshot?: { takenAt: string; deviceName: string; projects: ProjectBrief[] };
@@ -88,7 +89,7 @@ export interface ReasoningModel {
 export type ContextItemKindModel =
   | 'memory'
   | 'doc'
-  | 'doc-search'
+  | 'search'
   | 'instructions'
   | 'thinking'
   | 'files'
@@ -127,7 +128,11 @@ export interface ActionModel {
   /** Session files produced by this action, projected from `files` events. */
   files?: SessionFile[];
   outputs: ContextItem[];
-  writes: { path: string; change: 'created' | 'updated' }[];
+  writes: {
+    path: string;
+    change: WsUpdatedEvent['change'];
+    worktreeId?: string;
+  }[];
   afterInterrupt: boolean;
   cycle: number;
 }
@@ -152,7 +157,7 @@ export interface TreeEntry {
 
 export interface ActionNode {
   id: string;
-  kind: 'read' | 'dispatch' | 'write';
+  kind: 'search' | 'dispatch' | 'document' | 'vcs' | 'project';
   title?: string;
   intent: string;
   task?: string;
@@ -204,7 +209,7 @@ export interface TurnNode {
   cycles: CycleNode[];
 }
 
-export type CallRoleModel = 'reason' | 'memory-search' | 'doc-search' | 'compile' | 'reply' | 'title';
+export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project';
 
 export interface CallModel {
   id: string;

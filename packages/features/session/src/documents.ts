@@ -279,7 +279,7 @@ export function currentDocument(
 }
 
 /** Read a `更新`/`updated` value from a `>` header block of a Markdown file. */
-function headerField(content: string, labels: readonly string[]): string {
+export function headerField(content: string, labels: readonly string[]): string {
   for (const line of content.split('\n')) {
     const quoted = /^\s*>\s*(.+)$/u.exec(line);
     if (!quoted) continue;

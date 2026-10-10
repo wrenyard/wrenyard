@@ -11,6 +11,7 @@ import type {
   TurnInterruptedEvent,
   TurnStartedEvent,
   WorkspaceSnapshot,
+  WsUpdatedEvent,
 } from '@wrenyard/session';
 import { actionLabel, CALL_ROLE_LABEL, shortName } from './describe.js';
 import type {
@@ -160,23 +161,6 @@ function formatDocSearch(record: DocSearchEvent): string {
 
 const turnCache = new Map<string, Map<number, { signature: string; model: TurnModel }>>();
 
-/** Current ledger format version; sessions of any other format are rejected. */
-const CURRENT_FORMAT = 3;
-
-/**
- * True when the raw ledger carries the current `session.created` marker. Pure
- * and header-only: it reads the first `session.created` event without touching
- * typed fields, so a legacy or headerless history is classified as unsupported
- * instead of being folded as the current schema.
- */
-export function isFormat2(events: readonly LedgerEvent[]): boolean {
-  for (const event of events) {
-    if (eventType(event) !== 'session.created') continue;
-    return isRecord(event) && (event as { format?: unknown }).format === CURRENT_FORMAT;
-  }
-  return false;
-}
-
 /**
  * Pure fold of the ledger, the live-call snapshot and task statuses into the
  * page view model. A turn whose `lastSeq` and relevant live/task inputs are
@@ -188,14 +172,6 @@ export function fold(
   tasks: Record<string, SessionBridgeTaskBrief>,
   options: FoldOptions = {},
 ): SessionModel {
-  // Current-only: refuse incompatible raw history before any snapshot field,
-  // action or context is interpreted or cached, so a legacy action kind can
-  // never reach `actionLabel`. An empty ledger stays the fresh/loading draft
-  // and a numeric current-format marker folds normally.
-  if (events.length > 0 && !isFormat2(events)) {
-    return { turns: [], runningTurns: 0, calls: [] };
-  }
-
   const sessionKey = options.sessionId ?? '';
   const interrupting = new Set(options.interrupting ?? []);
 
@@ -208,7 +184,7 @@ export function fold(
         snapshot = {
           takenAt: record.snapshot.takenAt,
           deviceName: record.snapshot.deviceName,
-          projects: record.snapshot.projects.map((project) => ({
+          projects: (record.snapshot.projects ?? []).map((project) => ({
             id: project.id,
             workspaceDir: project.workspaceDir,
             ...(project.displayName === undefined ? {} : { displayName: project.displayName }),
@@ -450,7 +426,7 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
       const record = event as DocSearchEvent;
       items.push({
         key: String(event.seq),
-        kind: 'doc-search',
+        kind: 'search',
         path: '',
         title: firstLine(record.understanding),
         content: formatDocSearch(record),
@@ -521,7 +497,11 @@ function buildActions(
   const started = new Map<string, Extract<LedgerEvent, { type: 'action.started' }>>();
   const finished = new Map<string, Extract<LedgerEvent, { type: 'action.finished' }>>();
   const titles = new Map<string, string>();
-  const writes = new Map<string, { path: string; change: 'created' | 'updated' }[]>();
+  const writes = new Map<string, {
+    path: string;
+    change: WsUpdatedEvent['change'];
+    worktreeId?: string;
+  }[]>();
   const filesByAction = new Map<string, SessionFile[]>();
   const filesByTaskRun = new Map<string, SessionFile[]>();
 
@@ -539,7 +519,11 @@ function buildActions(
     } else if (type === 'ws.updated') {
       const record = event as Extract<LedgerEvent, { type: 'ws.updated' }>;
       const bucket = writes.get(record.actionId);
-      const entry = { path: record.path, change: record.change };
+      const entry = {
+        path: record.target,
+        change: record.change,
+        ...(record.worktreeId === undefined ? {} : { worktreeId: record.worktreeId }),
+      };
       if (bucket) bucket.push(entry);
       else writes.set(record.actionId, [entry]);
     } else if (type === 'files') {
@@ -698,7 +682,7 @@ function inferPhase(events: LedgerEvent[], calls: CallModel[], actions: ActionMo
   for (const event of events) {
     const type = eventType(event);
     const role = type === 'call' ? (event as CallEvent).role : undefined;
-    if (role === 'doc-search' || role === 'memory-search') phase = 'preparing';
+    if (role === 'search' || role === 'memory-search') phase = 'preparing';
     if (type === 'doc.search' || type === 'memory.recalled') phase = 'reasoning';
     if (type === 'action.started') phase = 'acting';
     if (type === 'reason.completed') {
@@ -755,7 +739,11 @@ function buildStats(
     cheap: { calls: cheap.length, ...cheapSum },
     dispatches: actions.filter((action) => action.kind === 'dispatch').length,
     docsLoaded: contextItems.length,
-    docsWritten: events.filter((event) => eventType(event) === 'ws.updated').length,
+    docsWritten: events.filter((event) => {
+      if (eventType(event) !== 'ws.updated') return false;
+      const record = event as Extract<LedgerEvent, { type: 'ws.updated' }>;
+      return record.scope === 'document' && (record.change === 'created' || record.change === 'updated');
+    }).length,
   };
 }
 
@@ -940,16 +928,16 @@ function buildActionNode(
   const titled = turnEvents.find((event) => eventType(event) === 'action.titled' && (event as { actionId?: string }).actionId === actionId) as unknown as ActionTitledLike | undefined;
 
   const intent = parsedIntent(start?.parsed) ?? '';
-  const kind = (start?.kind ?? end?.kind ?? 'read') as ActionNode['kind'];
+  const kind = (start?.kind ?? end?.kind ?? 'search') as ActionNode['kind'];
   const taskRunId = end?.taskRunId ?? start?.taskRunId;
 
   const entries: TreeEntry[] = [];
   let compile: TreeEntry | undefined;
   for (const call of calls.values()) {
     if (!callMatchesAction(call, actionId)) continue;
-    if (call.role === 'compile') {
+    if (call.role === 'dispatch') {
       if (compile === undefined) compile = callTreeEntry(call);
-    } else if (call.role === 'doc-search') {
+    } else if (call.role === 'search') {
       entries.push(callTreeEntry(call));
     }
   }

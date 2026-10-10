@@ -12,7 +12,7 @@ import { cn } from 'cn';
 /**
  * Expanded detail of the ctx popover (usage spec 5.2). A Wrenyard session is
  * several separate stateless LLM conversations — reason plus the auxiliary
- * roles reply, compile, doc-search, memory-search and title. The panel groups
+ * roles reply, dispatch, document, vcs, project, search, memory-search and title. The panel groups
  * by internal conversation: the 主推理 row comes first (with the collapsed
  * 构成明细 toggle) and the auxiliary conversations follow under the muted
  * 辅助会话 label. The header shows only the reason conversation's context, never

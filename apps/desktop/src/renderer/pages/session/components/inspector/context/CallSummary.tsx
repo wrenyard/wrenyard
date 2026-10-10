@@ -8,7 +8,7 @@ import { sessionCost } from '../../../model/usage.js';
 import type { CallModel } from '../../../model/types.js';
 import { Section } from '../parts.js';
 
-const ROLE_ORDER: readonly CallModel['role'][] = ['reason', 'memory-search', 'doc-search', 'compile', 'reply', 'title'];
+const ROLE_ORDER: readonly CallModel['role'][] = ['reason', 'reply', 'dispatch', 'document', 'vcs', 'project', 'search', 'memory-search', 'title'];
 
 interface RoleSummary {
   role: CallModel['role'];

@@ -15,11 +15,10 @@ import type {
 } from './ledger.ts';
 import type { CallRole } from './calls.ts';
 import type { ContextInspectRequest, ContextInspection } from './context-inspect.ts';
-import type { ModelMessage, ToolCall, Usage } from './driver.ts';
+import type { ModelContentPart, ModelMessage, ToolCall, ToolSpec, Usage } from './driver.ts';
 import type { AttachmentInput, FileStore, TaskArtifact } from './media.ts';
 import type { DocCatalogEntry } from './workspace.ts';
-import type { ActionRunContext } from './actions.ts';
-import type { ViewsPort } from './views.ts';
+import type { ActionRunContext } from './actions/index.ts';
 
 // ─── Public host and session surface ───────────────────────────────────────
 
@@ -31,6 +30,33 @@ export interface ProjectInfo {
   gitRemote?: string;
   defaultBranch?: string;
 }
+
+/**
+ * One callable protocol method: its name, a human-readable description (which
+ * may be an empty string) and its `params` JSON Schema.
+ */
+export interface MethodInfo {
+  name: string;
+  description: string;
+  params: Record<string, unknown>;
+}
+
+/** Result of writing one project document. */
+export type DocumentWriteResult = {
+  path: string;
+  project: string;
+  category: string;
+  change: 'created' | 'updated';
+  version: string;
+};
+
+/** Result of one commit. */
+export type CommitResult = {
+  hash: string;
+  branch: string | null;
+  files: string[];
+  shortstat: string;
+};
 
 export interface SessionHost {
   workspaceRoot: string;
@@ -47,14 +73,29 @@ export interface SessionHost {
   previewAuxiliaryRoutes(): Promise<readonly import('./role-requirements.ts').AuxiliaryRoutePreview[]>;
   listProjects(): Promise<ProjectInfo[]>;
   gitHead(checkoutPath: string): Promise<{ branch?: string; head?: string }>;
+  /** Write or revise one project document; `expectedContent` guards an update. */
+  writeDocument(params: { path: string; content: string; expectedContent?: string }): Promise<DocumentWriteResult>;
+  /** Version control of the workspace repository itself. */
+  workspaceVcs: {
+    status(): Promise<Record<string, unknown>>;
+    diff(opts: { paths?: string[]; staged?: boolean }): Promise<string>;
+    commit(params: { message: string; files: string[] }): Promise<CommitResult>;
+    push(): Promise<Record<string, unknown>>;
+    pull(): Promise<Record<string, unknown>>;
+  };
+  /** Describe the named protocol methods; unknown names are omitted. */
+  methods(names: readonly string[]): Promise<MethodInfo[]>;
+  /**
+   * Invoke one protocol method with raw params. A rejection is an `Error`
+   * carrying a string `code` and a message; a success returns the result value.
+   */
+  call(method: string, params: unknown): Promise<unknown>;
   listTaskDefinitions(): Promise<{ id: string; description: string; project?: string; inputSummary: string[] }[]>;
   describeTask(id: string, project?: string): Promise<{
     description: string;
     inputSchema: unknown;
     /** Definition source, e.g. `builtin` or `project`. */
     source: string;
-    /** True only for the trusted builtin document singleton. */
-    builtinDoc: boolean;
     /** Input capabilities the task requires, e.g. `['image']`. */
     requiredCapabilities?: readonly string[];
   }>;
@@ -210,6 +251,8 @@ export interface CallRunRequest {
   reason?: { provider: string; model: string; reasoningEffort: ReasoningEffort };
   /** Output-token cap forwarded to the wire `max_tokens` when the driver supports it. */
   maxTokens?: number;
+  /** Tools declared on this call; forwarded to the driver for every role. */
+  tools?: readonly ToolSpec[];
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
@@ -222,11 +265,71 @@ export interface CallRunResult {
   text: string;
   reasoning?: string;
   usage?: Usage;
+  /** Native tool calls the model returned, in call order; empty when it returned none. */
+  toolCalls: readonly ToolCall[];
 }
 
 /** Structural match for `calls.ts`'s `CallRunner`. */
 export interface CallsPort {
   run(input: CallRunRequest): Promise<CallRunResult>;
+}
+
+/** One assembled prompt view: protocol-neutral messages plus layer statistics. */
+export type ViewMessage = ModelMessage;
+
+export interface BuiltView {
+  messages: ViewMessage[];
+  /** Character count per prompt layer, for the `call` event. */
+  layers: Record<string, number>;
+  /** Raw text of each assembled layer, for the read-only context inspector. */
+  segments?: Record<string, string>;
+}
+
+/** The result of one engine model call. */
+export interface InvokedCall {
+  ok: boolean;
+  callId: string;
+  text: string;
+  reasoning?: string;
+  toolCalls?: readonly ToolCall[];
+  error?: string;
+}
+
+/**
+ * The engine surface the turn loop and the auxiliary adapters call back into.
+ * `ledger` is the durable timeline; `host` / `ports` are the composed session
+ * seams.
+ */
+export interface SessionCallHost {
+  readonly host: SessionHost;
+  readonly ports: EnginePorts;
+  readonly ledger: LedgerPort;
+  now(): Date;
+  track(promise: Promise<unknown>): void;
+  appendError(
+    sessionId: string,
+    stage: string,
+    message: string,
+    turn: import('./runtime.ts').TurnRuntime,
+    cycle?: number,
+  ): Promise<void>;
+  invoke(
+    session: import('./runtime.ts').SessionRuntime,
+    turn: import('./runtime.ts').TurnRuntime,
+    role: CallRole,
+    view: BuiltView,
+    extra?: {
+      callId?: string;
+      reason?: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+      onText?: (delta: string) => void;
+      onReasoning?: (delta: string) => void;
+      onToolCall?: (call: ToolCall) => void;
+      tools?: readonly ToolSpec[];
+      maxTokens?: number;
+      cycle?: number;
+    },
+  ): Promise<InvokedCall>;
+  safeCancelTask(taskRunId: string): Promise<void>;
 }
 
 /**
@@ -238,9 +341,7 @@ export type ActionBaseContext = Omit<ActionRunContext, 'actionId' | 'onTaskRun'>
 
 export interface EnginePorts {
   ledger: LedgerPort;
-  createSnapshot(input: SnapshotInput): Promise<WorkspaceSnapshot>;
   files(snapshot: WorkspaceSnapshot, workspaceRoot: string): FilesPort;
-  views: ViewsPort;
   /** Session-scoped so a `call` event lands on the right timeline. */
   calls(sessionId: string): CallsPort;
   /** Session file store: attachment import, artifact description, image reads. */

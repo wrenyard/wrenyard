@@ -26,7 +26,7 @@ export type ContextItemKind =
   | 'thinking'
   | 'reply'
   | 'doc'
-  | 'doc-search'
+  | 'search'
   | 'memory'
   | 'files'
   | 'action-result'
@@ -113,7 +113,7 @@ export interface SessionRoutesPreviewParams {
  */
 export interface SessionRoutesPreviewRole {
   /** Auxiliary conversation role, in the fixed order the preview lists them. */
-  role: 'reply' | 'compile' | 'doc-search' | 'memory-search' | 'title'
+  role: 'reply' | 'dispatch' | 'document' | 'vcs' | 'project' | 'search' | 'memory-search' | 'title'
   model?: string
   modelName?: string
   contextWindow?: number

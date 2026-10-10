@@ -75,7 +75,7 @@ const GROUP_LABEL: Record<UsageGroupId, string> = {
 
 const RESIDENT_LAYERS: readonly ContextLayerId[] = ['wy-system', 'wy-global', 'wy-role'];
 const CONVERSATION_KINDS: readonly ContextItemKind[] = ['user', 'assistant', 'thinking', 'reply', 'interrupt', 'error'];
-const MATERIAL_KINDS: readonly ContextItemKind[] = ['doc', 'memory', 'doc-search', 'files'];
+const MATERIAL_KINDS: readonly ContextItemKind[] = ['doc', 'memory', 'search', 'files'];
 const TASK_KINDS: readonly ContextItemKind[] = ['action-result', 'ws-update'];
 
 /** Display label of every context item kind. */
@@ -83,7 +83,7 @@ export const ITEM_KIND_LABEL: Record<ContextItemKind, string> = {
   user: '用户消息',
   assistant: '助手消息',
   thinking: '主推理思考',
-  'doc-search': '文档检索',
+  search: '检索',
   files: '文件',
   error: '错误',
   reply: '回复',
@@ -99,7 +99,7 @@ const KIND_GROUP: Record<ContextItemKind, UsageGroupId> = {
   assistant: 'conversation',
   thinking: 'conversation',
   error: 'conversation',
-  'doc-search': 'material',
+  search: 'material',
   files: 'material',
   reply: 'conversation',
   interrupt: 'conversation',
@@ -385,10 +385,13 @@ export function callCost(call: CallModel, quota: QuotaSnapshot | null | undefine
 const CALL_ROLE_ORDER: readonly CallModel['role'][] = [
   'reason',
   'memory-search',
-  'doc-search',
-  'compile',
+  'search',
+  'dispatch',
   'reply',
   'title',
+  'document',
+  'vcs',
+  'project',
 ];
 
 /**
@@ -451,8 +454,11 @@ export function sessionCost(calls: readonly CallModel[], quota: QuotaSnapshot | 
 const CONSUMPTION_ROLE_ORDER: readonly CallModel['role'][] = [
   'reason',
   'reply',
-  'compile',
-  'doc-search',
+  'dispatch',
+  'document',
+  'vcs',
+  'project',
+  'search',
   'memory-search',
   'title',
 ];
@@ -600,8 +606,11 @@ export function consumptionRows(
 const ROLE_CONTEXT_ORDER: readonly CallModel['role'][] = [
   'reason',
   'reply',
-  'compile',
-  'doc-search',
+  'dispatch',
+  'document',
+  'vcs',
+  'project',
+  'search',
   'memory-search',
   'title',
 ];

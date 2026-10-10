@@ -1,6 +1,4 @@
 import { randomBytes } from 'node:crypto'
-import { realpathSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { getDb } from '../../db/connection.mts'
 import { ExecutionEventStore } from '../../db/stores/execution-event-store.mts'
 import {
@@ -45,7 +43,6 @@ import { resolveFeatures } from '../../core/task/features.mts'
 import { buildTaskPrompt } from '../../core/task/prompt.mts'
 import { splitTaskInputContext } from '../../core/task/context.mts'
 import { resolveTaskWritePaths } from '../../core/task/write-targets.mts'
-import { documentExecutionScope } from '../../core/task/doc-scope.mts'
 import {
   extractGateFailure,
   GateFailureError,
@@ -400,33 +397,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       }
     }
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)
-    // Narrow cwd authority: independently recompute the document scope from the
-    // actual resolved target and effective input. A `doc` target that is not
-    // the trusted singleton is refused — a clone/project definition never
-    // receives the workspace root as cwd. For a trusted document run the
-    // checked cwd flows through executionOptions to lock paths, gates, and the
-    // agent.
-    const docScope = documentExecutionScope(
-      target,
-      effectiveInput,
-      options.workspaceRoot,
-      options.currentProject ?? target.project ?? '',
-      options.worktreeId,
-    )
-    if (target.name === 'doc' && !docScope) {
-      throw new Error(
-        `Builtin document task 'doc' is unavailable: the resolved definition ('${target.sourcePath}') is not the trusted builtin document singleton.`,
-      )
-    }
-    if (docScope && options.workingDirectory !== undefined
-      && canonicalPath(options.workingDirectory) !== canonicalPath(docScope.workingDirectory)) {
-      throw new Error(
-        `Builtin document task 'doc' requires its working directory to equal the authoritative workspace root.`,
-      )
-    }
-    const executionOptions = docScope
-      ? { ...options, workingDirectory: docScope.workingDirectory }
-      : options
+    const executionOptions = options
     // Resolve selected features from config before launching an agent.
     // Invalid selections surface as deterministic task execution errors.
     const selectedFeatures = resolveFeatures(config.features, effectiveInput)
@@ -759,14 +730,6 @@ function validateInput(schemaLike: unknown, input: unknown, subject: string): un
   const value = input === undefined ? {} : input
   validateAgainstSchema(compileSchema(schema), value, subject)
   return value
-}
-
-function canonicalPath(value: string): string {
-  try {
-    return realpathSync.native(resolve(value))
-  } catch {
-    return resolve(value)
-  }
 }
 
 function errorMessage(error: unknown): string {

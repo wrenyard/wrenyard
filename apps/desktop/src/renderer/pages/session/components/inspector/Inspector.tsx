@@ -32,15 +32,13 @@ export interface InspectorProps {
   events: readonly LedgerEvent[];
   target?: InspectorTarget;
   tab: string;
-  /** Unsupported (non-format-2) history: show only the raw ledger. */
-  rawOnly?: boolean;
   onTabChange(tab: string): void;
   onSelect(target: InspectorTarget): void;
   onClose(): void;
 }
 
 /** Right-hand inspector: the session tree, the raw ledger and the context audit. */
-export function Inspector({ model, events, tab, rawOnly = false, onTabChange, onClose }: InspectorProps) {
+export function Inspector({ model, events, tab, onTabChange, onClose }: InspectorProps) {
   const queuedTaskRuns = useMemo(() => {
     const ids = new Set<string>();
     for (const turn of model.turns) {
@@ -62,22 +60,6 @@ export function Inspector({ model, events, tab, rawOnly = false, onTabChange, on
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-
-  // Unsupported history: reuse the raw LedgerList unchanged, without mounting
-  // the session tree, ContextTab or the typed tab controls.
-  if (rawOnly) {
-    return (
-      <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-(--header-height) items-center justify-between px-4">
-          <span className="text-sm font-medium">账本</span>
-          <Button variant="ghost" size="icon" aria-label="关闭检查器" onClick={onClose}><X /></Button>
-        </div>
-        <div className="flex h-full min-h-0 flex-col p-4">
-          <LedgerList model={model} events={events} />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">

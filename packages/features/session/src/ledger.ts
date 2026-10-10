@@ -22,11 +22,11 @@ import { open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionFile } from '@wrenyard/protocol';
 import type { ReasoningEffort } from '@wrenyard/models';
+import type { CallRole } from './calls.ts';
+import type { ActionKind } from './actions/index.ts';
+import { normalizeStoredEvent } from './event-compat.ts';
 
 // ─── Event model ───────────────────────────────────────────────────────────
-
-/** The only live session file format the ledger writes and reads. */
-export const CURRENT_SESSION_FORMAT = 3;
 
 /** The `type` discriminant of every ledger event. */
 export type LedgerEventType =
@@ -54,14 +54,8 @@ export type LedgerEventType =
 /** The terminal states of a work turn. */
 export type TurnStatus = 'completed' | 'failed' | 'interrupted';
 
-/** Mirrors the action discriminants owned by `actions.ts`. */
-export type ActionKind = 'dispatch' | 'read' | 'write';
-
 /** Mirrors the committed action statuses owned by `actions.ts`. */
 export type ActionStatus = 'done' | 'failed' | 'skipped' | 'cancelled';
-
-/** Mirrors the call roles owned by `calls.ts`. */
-export type CallRole = 'reason' | 'memory-search' | 'doc-search' | 'compile' | 'reply' | 'title';
 
 /** Provider usage as reported by the driver; absent fields stay absent. */
 export interface Usage {
@@ -127,7 +121,6 @@ export interface WorkspaceSnapshot {
 
 export interface SessionCreatedEvent extends LedgerEventBase {
   type: 'session.created';
-  format: 3;
   workspaceRoot: string;
   snapshot: WorkspaceSnapshot;
 }
@@ -254,11 +247,14 @@ export interface ReplyEvent extends LedgerEventBase {
 
 export interface WsUpdatedEvent extends LedgerEventBase {
   type: 'ws.updated';
-  path: string;
-  change: 'created' | 'updated';
   actionId: string;
-  taskRunId?: string;
-  taskStatus?: string;
+  scope: 'document' | 'workspace' | 'project';
+  target: string;
+  change: 'created' | 'updated' | 'committed' | 'pushed' | 'pulled' | 'worktree-created' | 'worktree-removed' | 'worktree-merged' | 'registered';
+  worktreeId?: string;
+  version?: string;
+  hash?: string;
+  files?: string[];
 }
 
 export interface TurnInterruptedEvent extends LedgerEventBase {
@@ -679,7 +675,7 @@ function parseSessionFile(buffer: Buffer, file: string): { events: LedgerEvent[]
     const line = buffer.subarray(offset, index).toString('utf8').replace(/\r$/u, '');
     start = index + 1;
     if (line.trim() === '') continue;
-    events.push(parseEventLine(line, file, offset));
+    events.push(normalizeStoredEvent(parseEventLine(line, file, offset)));
   }
   // Bytes after the last newline are a torn write; truncate them before any
   // further append. A complete line that fails to parse is corruption instead.

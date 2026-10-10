@@ -14,9 +14,11 @@ import { useTreeExpansion } from './expansion.js';
 const COLLAPSE_LINES = 12;
 
 const ACTION_KIND_LABEL: Record<ActionNode['kind'], string> = {
-  read: '读取',
+  search: '读取',
   dispatch: '派发',
-  write: '写入',
+  document: '写入',
+  vcs: '工作区版本',
+  project: '项目',
 };
 
 /** Rough token estimate for the thinking box label. */

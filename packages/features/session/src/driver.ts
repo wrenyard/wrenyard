@@ -6,9 +6,8 @@
  * usage. It owns no session state: orchestration, timeouts, budget checks and
  * the ledger live in `calls.ts`. `ModelDriver` is the port every adapter
  * implements; `createGatewayDriver` is the OpenAI-compatible chat adapter and
- * `responses-driver.ts` is the OpenAI Responses adapter. Both share
- * {@link toolCallFromArguments} so an invalid `wy_action` payload is classified
- * identically.
+ * `responses-driver.ts` is the OpenAI Responses adapter. Both report every
+ * completed tool call through the generic {@link ToolCall} shape.
  */
 import type { WrenyardGatewayConnection } from '@wrenyard/control';
 import type { ReasoningEffort } from '@wrenyard/models';
@@ -24,18 +23,26 @@ export type ModelContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
 
-/** One action the model started in an earlier output, replayed as a native tool call. */
+/** One tool a caller declares on a request, in protocol-neutral form. */
+export interface ToolSpec {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+/** One tool call the model started in an earlier output, replayed as a native tool call. */
 export interface ModelToolCall {
-  /** The action id; it pairs the call with its `tool` message. */
+  /** The upstream call id; it pairs the call with its `tool` message. */
   id: string;
-  type: string;
-  intent: string;
+  name: string;
+  /** Raw JSON arguments text, exactly as the model produced it. */
+  arguments: string;
 }
 
 /**
  * One message of a request, in protocol-neutral form. An `assistant` message is
- * an earlier model output: its text plus the actions it started. A `tool`
- * message is the result of one of those actions and follows its assistant
+ * an earlier model output: its text plus the tool calls it started. A `tool`
+ * message is the result of one of those calls and follows its assistant
  * message directly. Each protocol adapter maps these onto its own wire shape.
  */
 export interface ModelMessage {
@@ -45,11 +52,6 @@ export interface ModelMessage {
   toolCalls?: ModelToolCall[];
   /** `tool` only. */
   toolCallId?: string;
-}
-
-/** The JSON arguments string of a replayed {@link ModelToolCall}. */
-export function toolCallArguments(call: ModelToolCall): string {
-  return JSON.stringify({ type: call.type, intent: call.intent });
 }
 
 /**
@@ -77,10 +79,8 @@ export interface DriverRequest {
    * forwarded as the provider's prompt-cache key where the protocol has one.
    */
   cacheKey?: string;
-  /** Declare {@link ACTION_TOOL}; parsed calls are reported through {@link DriverRequest.onToolCall}. */
-  actionTool?: boolean;
-  /** Declare {@link REPLY_TOOL}; the `text` of each call is returned in {@link DriverResult.replies}. */
-  replyTool?: boolean;
+  /** Tools the model may call; parsed calls are reported through {@link DriverRequest.onToolCall}. */
+  tools?: readonly ToolSpec[];
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
@@ -100,55 +100,15 @@ export interface DriverRequest {
   onTransportRetry?: () => void;
 }
 
-/** One parsed native tool call the main reasoning model returned. */
+/** One native tool call the model returned. */
 export interface ToolCall {
   index: number;
-  type: string;
-  intent: string;
-  error?: string;
+  /** Upstream call id, or `call_<index>` when upstream did not provide one. */
+  id: string;
+  name: string;
+  /** Raw JSON arguments text, exactly as upstream produced it. */
+  arguments: string;
 }
-
-/**
- * The one native tool the main reasoning call declares. The model expresses
- * every action as a call to this tool instead of writing `<wy-action>` text;
- * the parsed calls are reported through {@link DriverRequest.onToolCall}.
- */
-export const ACTION_TOOL = {
-  type: 'function',
-  function: {
-    name: 'wy_action',
-    description:
-      'Use read to read material, dispatch to dispatch a task, write to write or revise a document, and ask to ask the user one question that needs their decision. You can call it several times at once. Each call expresses one thing, with intent in natural language.',
-    parameters: {
-      type: 'object',
-      properties: {
-        type: {
-          type: 'string',
-          enum: ['read', 'dispatch', 'write', 'ask'],
-          description: 'read = read material, dispatch = dispatch a task, write = write or revise a document, ask = ask the user one question that needs their decision.',
-        },
-        intent: { type: 'string', description: 'The intent of this action, in natural language.' },
-      },
-      required: ['type', 'intent'],
-    },
-  },
-} as const;
-
-/** The one native tool the communication call declares; not calling it sends nothing. */
-export const REPLY_TOOL = {
-  type: 'function',
-  function: {
-    name: 'reply',
-    description: 'Send one message to the user. The user sees only this text.',
-    parameters: {
-      type: 'object',
-      properties: {
-        text: { type: 'string', description: 'The message to the user, as Markdown text.' },
-      },
-      required: ['text'],
-    },
-  },
-} as const;
 
 /** One completed inference result. */
 export interface DriverResult {
@@ -158,8 +118,6 @@ export interface DriverResult {
   usage?: Usage;
   /** Native tool calls the model returned, in call order. */
   toolCalls?: ToolCall[];
-  /** The `text` of each {@link REPLY_TOOL} call, in call order. */
-  replies?: string[];
 }
 
 /** The in-process inference port every adapter implements. */
@@ -175,7 +133,7 @@ export interface GatewayDriverOptions {
 export const GATEWAY_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
 
 /** The subset of a driver request that is serialized onto the wire. */
-export type GatewayRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'maxTokens' | 'actionTool' | 'replyTool'> & Partial<Pick<DriverRequest, 'reasoningEffort'>>;
+export type GatewayRequestFields = Pick<DriverRequest, 'model' | 'messages' | 'maxTokens' | 'tools'> & Partial<Pick<DriverRequest, 'reasoningEffort'>>;
 
 /**
  * Serialize the exact OpenAI-chat body `complete` sends. A caller can use this
@@ -198,9 +156,16 @@ export function serializeGatewayRequest(request: GatewayRequestFields): string {
   // none can return tool calls, and named-tool objects are rejected. Do not rely
   // on tool_choice to enforce replies; keep the prompt's reply/silence contract
   // explicit, with an additional mandatory tool-call instruction at turn end.
-  if (request.actionTool) body.tools = [ACTION_TOOL];
-  else if (request.replyTool) body.tools = [REPLY_TOOL];
+  if (request.tools !== undefined && request.tools.length > 0) body.tools = request.tools.map(chatTool);
   return JSON.stringify(body);
+}
+
+/** One declared tool in the chat wire shape (nested `function` object). */
+function chatTool(tool: ToolSpec): Record<string, unknown> {
+  return {
+    type: 'function',
+    function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+  };
 }
 
 /** One message in the chat wire shape. */
@@ -214,7 +179,7 @@ function chatMessage(message: ModelMessage): Record<string, unknown> {
         tool_calls: calls.map((call) => ({
           id: call.id,
           type: 'function',
-          function: { name: ACTION_TOOL.function.name, arguments: toolCallArguments(call) },
+          function: { name: call.name, arguments: call.arguments },
         })),
       }),
     };
@@ -293,8 +258,7 @@ async function readJsonCompletion(response: Response, request: DriverRequest): P
   if (failure !== undefined) throw new Error(describeFailure(failure, 'Model request failed'));
   const choice = firstChoice(root);
   const message = choice ? record(choice.message) : undefined;
-  const toolCalls = message && !request.replyTool ? toolCallsOfMessage(message.tool_calls) : [];
-  const replies = message && request.replyTool ? repliesOfMessage(message.tool_calls) : [];
+  const toolCalls = message ? toolCallsOfMessage(message.tool_calls) : [];
   const text = message ? stringField(message.content) ?? '' : '';
   const reasoning = message ? reasoningField(message) : undefined;
   if (text) request.onText?.(text);
@@ -307,25 +271,22 @@ async function readJsonCompletion(response: Response, request: DriverRequest): P
     ...(reasoning ? { reasoning } : {}),
     ...(usage ? { usage } : {}),
     toolCalls,
-    ...(replies.length === 0 ? {} : { replies }),
   };
 }
 
 /**
- * Streaming native tool calls: raw argument fragments are accumulated per call
- * index until each call is complete, then parsed and reported once.
+ * Streaming native tool calls: raw id, name and argument fragments are
+ * accumulated per call index until each call is complete, then reported once.
  */
 interface ToolCallState {
-  /** Raw argument text per call index. */
-  args: string[];
+  /** Accumulated id, name and raw arguments per call index. */
+  parts: { id: string; name: string; arguments: string }[];
   /** Call indices observed at least once. */
   seen: Set<number>;
   /** Call indices already completed and reported. */
   completed: Set<number>;
   /** Completed calls, in index order. */
   calls: ToolCall[];
-  /** Completed {@link REPLY_TOOL} texts, in index order. */
-  replies: string[];
 }
 
 interface StreamState {
@@ -337,39 +298,6 @@ interface StreamState {
   /** Saw a terminal indication (`[DONE]` or a `finish_reason`). */
   finished: boolean;
   toolCalls: ToolCallState;
-}
-
-/**
- * Parse one native tool call's accumulated arguments into a {@link ToolCall}.
- * Shared by every adapter so an invalid `wy_action` payload is classified
- * identically; a malformed payload yields a call carrying an `error`.
- */
-export function toolCallFromArguments(index: number, rawArguments: string | undefined): ToolCall {
-  let parsed: Record<string, unknown> | undefined;
-  let error: string | undefined;
-  try {
-    parsed = record(JSON.parse(rawArguments ?? ''));
-  } catch {
-    error = 'invalid arguments JSON';
-  }
-  const type = stringField(parsed?.type) ?? '';
-  const intent = stringField(parsed?.intent) ?? '';
-  if (error === undefined && type === '') error = 'missing type';
-  if (error === undefined && intent === '') error = 'missing intent';
-  return { index, type, intent, ...(error === undefined ? {} : { error }) };
-}
-
-/** The message text of one {@link REPLY_TOOL} call; a malformed payload fails the call. */
-export function replyTextFromArguments(rawArguments: string | undefined): string {
-  let parsed: Record<string, unknown> | undefined;
-  try {
-    parsed = record(JSON.parse(rawArguments ?? ''));
-  } catch {
-    parsed = undefined;
-  }
-  const text = parsed?.text;
-  if (typeof text !== 'string') throw new Error('Model returned an invalid reply call');
-  return text;
 }
 
 /** Complete and report every observed call below `limit` that is still pending. */
@@ -386,16 +314,18 @@ function completeToolCalls(state: ToolCallState, request: DriverRequest): void {
 
 function completeToolCall(state: ToolCallState, index: number, request: DriverRequest): void {
   state.completed.add(index);
-  if (request.replyTool) {
-    state.replies.push(replyTextFromArguments(state.args[index]));
-    return;
-  }
-  const call = toolCallFromArguments(index, state.args[index]);
+  const part = state.parts[index] ?? { id: '', name: '', arguments: '' };
+  const call: ToolCall = {
+    index,
+    id: part.id !== '' ? part.id : `call_${index}`,
+    name: part.name,
+    arguments: part.arguments,
+  };
   state.calls.push(call);
   request.onToolCall?.(call);
 }
 
-/** Accumulate streamed native tool-call argument fragments by index. */
+/** Accumulate streamed native tool-call id, name and argument fragments by index. */
 function accumulateToolCalls(raw: unknown, state: ToolCallState, request: DriverRequest): void {
   if (!Array.isArray(raw)) return;
   for (const entry of raw) {
@@ -405,8 +335,14 @@ function accumulateToolCalls(raw: unknown, state: ToolCallState, request: Driver
     const piece = stringField(fn?.arguments) ?? '';
     // A tool name or argument fragment is generated output before the call completes.
     if (stringField(fn?.name) !== undefined || piece !== '') request.onOutput?.();
-    const index = numberField(call.index) ?? state.args.length;
-    state.args[index] = `${state.args[index] ?? ''}${piece}`;
+    const index = numberField(call.index) ?? state.parts.length;
+    const part = state.parts[index] ?? { id: '', name: '', arguments: '' };
+    const id = stringField(call.id);
+    if (id !== undefined) part.id = id;
+    const name = stringField(fn?.name);
+    if (name !== undefined) part.name = name;
+    part.arguments += piece;
+    state.parts[index] = part;
     state.seen.add(index);
     // A delta for a higher index means every lower call is now complete.
     completeToolCallsBelow(state, index, request);
@@ -420,15 +356,15 @@ function toolCallsOfMessage(raw: unknown): ToolCall[] {
   raw.forEach((entry, position) => {
     const call = record(entry);
     const index = numberField(call?.index) ?? position;
-    calls.push(toolCallFromArguments(index, stringField(record(call?.function)?.arguments)));
+    const fn = record(call?.function);
+    calls.push({
+      index,
+      id: stringField(call?.id) ?? `call_${index}`,
+      name: stringField(fn?.name) ?? '',
+      arguments: stringField(fn?.arguments) ?? '',
+    });
   });
   return calls;
-}
-
-/** The {@link REPLY_TOOL} texts of a non-streamed message, in call order. */
-function repliesOfMessage(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((entry) => replyTextFromArguments(stringField(record(record(entry)?.function)?.arguments)));
 }
 
 /**
@@ -449,7 +385,7 @@ async function readStreamCompletion(response: Response, request: DriverRequest):
     reasoning: '',
     done: false,
     finished: false,
-    toolCalls: { args: [], seen: new Set(), completed: new Set(), calls: [], replies: [] },
+    toolCalls: { parts: [], seen: new Set(), completed: new Set(), calls: [] },
   };
   let buffer = '';
   const onAbort = (): void => { void reader.cancel().catch(() => undefined); };
@@ -492,7 +428,6 @@ async function readStreamCompletion(response: Response, request: DriverRequest):
     ...(state.reasoning ? { reasoning: state.reasoning } : {}),
     ...(state.usage ? { usage: state.usage } : {}),
     toolCalls: state.toolCalls.calls,
-    ...(state.toolCalls.replies.length === 0 ? {} : { replies: state.toolCalls.replies }),
   };
 }
 
