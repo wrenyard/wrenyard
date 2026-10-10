@@ -45,7 +45,7 @@ export type ActionProjectInfo = Pick<ProjectInfo, 'id' | 'displayName' | 'worksp
 export type ActionTaskInfo = Pick<TaskBrief, 'id' | 'description' | 'inputSummary'> & { project?: string };
 
 export interface ActionRunnerDeps {
-  host: Pick<SessionHost, 'describeTask' | 'createTaskRun' | 'waitTaskRun' | 'cancelTaskRun' | 'writeDocument' | 'workspaceVcs' | 'methods' | 'call'>;
+  host: Pick<SessionHost, 'describeTask' | 'createTaskRun' | 'waitTaskRun' | 'cancelTaskRun' | 'methods' | 'call'>;
   files: Pick<FilesPort, 'checkPath' | 'exists' | 'read' | 'instructionChain' | 'listDocuments' | 'readDocumentRules'>;
   calls: Pick<CallsPort, 'run'>;
   fileStore: FileStore;
