@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
+import { runGitSync } from '../../core/vcs/index.mts'
 
 export type RepoWriteLockMode = 'edit' | 'yolo'
 
@@ -33,18 +33,13 @@ export function defaultRepoRootResolver(): RepoRootResolver {
     const cached = cache.get(canonical)
     if (cached) return cached
     let root = canonical
-    try {
-      const topLevel = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-        cwd: canonical,
-        encoding: 'utf8',
-        shell: false,
-        windowsHide: true,
-      }).trim()
+    const { stdout, code } = runGitSync(canonical, ['rev-parse', '--show-toplevel'])
+    if (code === 0) {
+      const topLevel = stdout.trim()
       if (topLevel) root = canonicalPath(topLevel)
-    } catch {
-      // Not inside a git repo or git is unavailable: fall back to the canonical
-      // working directory as the lock namespace.
     }
+    // A non-zero exit (not inside a git repo, or git unavailable) falls back to
+    // the canonical working directory as the lock namespace.
     cache.set(canonical, root)
     return root
   }
