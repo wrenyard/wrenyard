@@ -348,7 +348,6 @@ export function SessionPage() {
                 sessions={state.sessions}
                 selectedId={state.selectedId}
                 loading={state.loadingList}
-                running={model.runningTurns > 0}
                 onSelect={(sessionId) => { void selectSession(sessionId).catch(() => undefined); }}
                 onNew={newDraft}
                 onSearch={() => setSearchOpen(true)}
