@@ -742,7 +742,7 @@ function buildStats(
     docsWritten: events.filter((event) => {
       if (eventType(event) !== 'ws.updated') return false;
       const record = event as Extract<LedgerEvent, { type: 'ws.updated' }>;
-      return record.scope === 'document' && (record.change === 'created' || record.change === 'updated');
+      return record.scope === 'document' && (record.change === 'created' || record.change === 'updated' || record.change === 'deleted');
     }).length,
   };
 }
