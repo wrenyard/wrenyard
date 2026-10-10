@@ -65,11 +65,11 @@ not support.
 `,
   'instructions/documents.md': `# Documents
 
-Workspace documents follow a generic spec / plan / report format.
+Workspace documents use three kinds: spec, report and handoff.
 
-- **Spec** — what is being built and why.
-- **Plan** — how it will be built and in what order.
+- **Spec** — what is being built and why, including implementation and acceptance.
 - **Report** — what was done, what was verified, and what remains.
+- **Handoff** — the current state and what the next person needs to continue.
 
 Do not include private paths, accounts, devices, or internal addresses, and do
 not copy private workspace text into documents.
