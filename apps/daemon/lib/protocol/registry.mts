@@ -257,6 +257,9 @@ import {
   workspaceDocCreateResultSchema,
   workspaceDocUpdateParamsSchema,
   workspaceDocUpdateResultSchema,
+  workspaceDocEditParamsSchema,
+  workspaceDocDeleteParamsSchema,
+  workspaceDocDeleteResultSchema,
   type WorkspaceDocListParams,
   type WorkspaceDocListResult,
   type WorkspaceDocReadParams,
@@ -265,7 +268,44 @@ import {
   type WorkspaceDocCreateResult,
   type WorkspaceDocUpdateParams,
   type WorkspaceDocUpdateResult,
+  type WorkspaceDocEditParams,
+  type WorkspaceDocDeleteParams,
+  type WorkspaceDocDeleteResult,
 } from './methods/workspace-doc.mts'
+import {
+  workspaceVcsStatusParamsSchema,
+  workspaceVcsStatusResultSchema,
+  workspaceVcsDiffParamsSchema,
+  workspaceVcsDiffResultSchema,
+  workspaceVcsCommitParamsSchema,
+  workspaceVcsCommitResultSchema,
+  workspaceVcsPushParamsSchema,
+  workspaceVcsPushResultSchema,
+  workspaceVcsPullParamsSchema,
+  workspaceVcsPullResultSchema,
+  type WorkspaceVcsStatusParams,
+  type WorkspaceVcsStatusResult,
+  type WorkspaceVcsDiffParams,
+  type WorkspaceVcsDiffResult,
+  type WorkspaceVcsCommitParams,
+  type WorkspaceVcsCommitResult,
+  type WorkspaceVcsPushParams,
+  type WorkspaceVcsPushResult,
+  type WorkspaceVcsPullParams,
+  type WorkspaceVcsPullResult,
+} from './methods/workspace-vcs.mts'
+export type {
+  WorkspaceVcsStatusParams,
+  WorkspaceVcsStatusResult,
+  WorkspaceVcsDiffParams,
+  WorkspaceVcsDiffResult,
+  WorkspaceVcsCommitParams,
+  WorkspaceVcsCommitResult,
+  WorkspaceVcsPushParams,
+  WorkspaceVcsPushResult,
+  WorkspaceVcsPullParams,
+  WorkspaceVcsPullResult,
+} from './methods/workspace-vcs.mts'
 import {
   runtimeAliasPutParamsSchema,
   runtimeAliasPutResultSchema,
@@ -344,6 +384,9 @@ export type {
   ProjectWorktreeRemoveResult,
 } from './methods/project.mts'
 export type {
+  WorkspaceDocKind,
+  WorkspaceDocEntry,
+  WorkspaceDocEdit,
   WorkspaceDocListParams,
   WorkspaceDocListResult,
   WorkspaceDocReadParams,
@@ -352,6 +395,22 @@ export type {
   WorkspaceDocCreateResult,
   WorkspaceDocUpdateParams,
   WorkspaceDocUpdateResult,
+  WorkspaceDocEditParams,
+  WorkspaceDocDeleteParams,
+  WorkspaceDocDeleteResult,
+} from './methods/workspace-doc.mts'
+export {
+  workspaceDocListParamsSchema,
+  workspaceDocListResultSchema,
+  workspaceDocReadParamsSchema,
+  workspaceDocReadResultSchema,
+  workspaceDocCreateParamsSchema,
+  workspaceDocCreateResultSchema,
+  workspaceDocUpdateParamsSchema,
+  workspaceDocUpdateResultSchema,
+  workspaceDocEditParamsSchema,
+  workspaceDocDeleteParamsSchema,
+  workspaceDocDeleteResultSchema,
 } from './methods/workspace-doc.mts'
 export type {
   RuntimeAliasPutParams,
@@ -494,6 +553,13 @@ export interface ForemanMethodParams {
   'workspace.doc.read': WorkspaceDocReadParams
   'workspace.doc.create': WorkspaceDocCreateParams
   'workspace.doc.update': WorkspaceDocUpdateParams
+  'workspace.doc.edit': WorkspaceDocEditParams
+  'workspace.doc.delete': WorkspaceDocDeleteParams
+  'workspace.vcs.status': WorkspaceVcsStatusParams
+  'workspace.vcs.diff': WorkspaceVcsDiffParams
+  'workspace.vcs.commit': WorkspaceVcsCommitParams
+  'workspace.vcs.push': WorkspaceVcsPushParams
+  'workspace.vcs.pull': WorkspaceVcsPullParams
   'runtime.alias.snapshot': RuntimeAliasSnapshotParams
   'runtime.alias.put': RuntimeAliasPutParams
   'runtime.alias.remove': RuntimeAliasRemoveParams
@@ -565,6 +631,13 @@ export interface ForemanMethodResults {
   'workspace.doc.read': WorkspaceDocReadResult
   'workspace.doc.create': WorkspaceDocCreateResult
   'workspace.doc.update': WorkspaceDocUpdateResult
+  'workspace.doc.edit': WorkspaceDocUpdateResult
+  'workspace.doc.delete': WorkspaceDocDeleteResult
+  'workspace.vcs.status': WorkspaceVcsStatusResult
+  'workspace.vcs.diff': WorkspaceVcsDiffResult
+  'workspace.vcs.commit': WorkspaceVcsCommitResult
+  'workspace.vcs.push': WorkspaceVcsPushResult
+  'workspace.vcs.pull': WorkspaceVcsPullResult
   'runtime.alias.snapshot': RuntimeAliasSnapshotResult
   'runtime.alias.put': RuntimeAliasSnapshotResult
   'runtime.alias.remove': RuntimeAliasSnapshotResult
@@ -795,18 +868,57 @@ export const methodRegistry: {
   'workspace.doc.list': {
     params: workspaceDocListParamsSchema,
     result: workspaceDocListResultSchema,
+    description: 'List the documents of one registered project, optionally limited to one kind, sorted by kind then name. Read-only.',
   },
   'workspace.doc.read': {
     params: workspaceDocReadParamsSchema,
     result: workspaceDocReadResultSchema,
+    description: 'Read one document of one registered project together with its version token (the first 8 hex characters of the content sha256), which is passed back as base_version to workspace.doc.update, workspace.doc.edit or workspace.doc.delete. Read-only.',
   },
   'workspace.doc.create': {
     params: workspaceDocCreateParamsSchema,
     result: workspaceDocCreateResultSchema,
+    description: 'Create one document in a registered project. name is a short lowercase slug and the date prefix is added automatically. Refuses with exists when the document already exists, bad_name when name is not a short lowercase slug, unknown_project when the project is not registered and bad_kind when the kind is not spec, report or handoff.',
   },
   'workspace.doc.update': {
     params: workspaceDocUpdateParamsSchema,
     result: workspaceDocUpdateResultSchema,
+    description: "Overwrite one existing document in a registered project. name is a full name returned by workspace.doc.list or workspace.doc.create and base_version comes from workspace.doc.read. Refuses with missing when the document does not exist and conflict when base_version does not match the current content.",
+  },
+  'workspace.doc.edit': {
+    params: workspaceDocEditParamsSchema,
+    result: workspaceDocUpdateResultSchema,
+    description: 'Apply ordered literal edits to one existing document in a registered project. name is a full name returned by workspace.doc.list or workspace.doc.create. Each old must occur exactly once; otherwise the edit is refused with not_found or not_unique naming the offending edit by index. An optional base_version mismatch is refused with conflict.',
+  },
+  'workspace.doc.delete': {
+    params: workspaceDocDeleteParamsSchema,
+    result: workspaceDocDeleteResultSchema,
+    description: "Delete exactly one document of a registered project. name is a full name returned by workspace.doc.list or workspace.doc.create and base_version comes from workspace.doc.read, so a document changed since it was read is not deleted. Refuses with missing when the document does not exist, not_a_file when it is not a regular document, and conflict when base_version no longer matches.",
+  },
+  'workspace.vcs.status': {
+    params: workspaceVcsStatusParamsSchema,
+    result: workspaceVcsStatusResultSchema,
+    description: "Read-only working-tree status of the workspace's own git repository. Operates only on the workspace's own git repository and refuses with workspace_not_repository otherwise. Changes nothing.",
+  },
+  'workspace.vcs.diff': {
+    params: workspaceVcsDiffParamsSchema,
+    result: workspaceVcsDiffResultSchema,
+    description: "Read-only working-tree diff of the workspace's own git repository, optionally limited to paths or the staged index. Operates only on the workspace's own git repository and refuses with workspace_not_repository otherwise. Changes nothing.",
+  },
+  'workspace.vcs.commit': {
+    params: workspaceVcsCommitParamsSchema,
+    result: workspaceVcsCommitResultSchema,
+    description: "Commit exactly the listed files in the workspace's own git repository. Only the listed files are staged and committed; it refuses with file_unchanged, foreign_staged or staged_mismatch when the staged set does not match. Operates only on the workspace's own git repository and refuses with workspace_not_repository otherwise.",
+  },
+  'workspace.vcs.push': {
+    params: workspaceVcsPushParamsSchema,
+    result: workspaceVcsPushResultSchema,
+    description: "Push the current branch to origin only in the workspace's own git repository. Pushes only to origin on the current branch, never force and never with tags, and the workspace repository may hold uncommitted files. Operates only on the workspace's own git repository and refuses with workspace_not_repository otherwise.",
+  },
+  'workspace.vcs.pull': {
+    params: workspaceVcsPullParamsSchema,
+    result: workspaceVcsPullResultSchema,
+    description: "Fast-forward only pull of the current branch from origin in the workspace's own git repository. The pull requires a clean tree and never merges or rebases. Operates only on the workspace's own git repository and refuses with workspace_not_repository otherwise.",
   },
   'runtime.alias.snapshot': {
     params: runtimeAliasSnapshotParamsSchema,

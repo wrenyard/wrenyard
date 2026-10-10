@@ -52,6 +52,7 @@ import type {
 } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../rpc-router.mts'
 import { registerProjectHandlers } from './project.mts'
+import { registerWorkspaceVcsHandlers } from './workspace-vcs.mts'
 import { registerWorkspaceDocHandlers, type WorkspaceDocHandlerService } from './workspace-doc.mts'
 import {
   TaskSettingsContentConflictError,
@@ -653,6 +654,10 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   })
 
   registerProjectHandlers(router, {
+    workspaceRoot: options.workspaceRoot,
+  })
+
+  registerWorkspaceVcsHandlers(router, {
     workspaceRoot: options.workspaceRoot,
   })
 
