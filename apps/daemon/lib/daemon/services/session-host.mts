@@ -12,9 +12,25 @@ import {
 import { ProjectManager } from '../../core/project/manager.mts'
 import type { TaskContext } from '../../core/task/context.mts'
 import { isTaskRunRejection, type TaskService } from '../../core/task/service.mts'
-import { getAgentExecutionHost } from '../../core/operations/primitives/agent.mts'
-import { ensureDiscovered, resolveTaskTarget } from '../../workspace/task-loader.mts'
-import { isTrustedDocDefinition } from '../../standard/index.mts'
+import { METHOD_NOT_FOUND, ProtocolError } from '../../protocol/errors.mts'
+import { describeMethod } from '../../protocol/registry.mts'
+import type { RpcRouter } from '../../server/rpc-router.mts'
+import { WorkspaceVcsService } from './workspace-vcs-service.mts'
+import type { WorkspaceDocService } from './workspace-doc-service.mts'
+
+/** Project RPC methods a session may invoke through `call`/`methods`. */
+const SESSION_CALLABLE_METHODS = new Set([
+  'project.status',
+  'project.diff',
+  'project.commit',
+  'project.push',
+  'project.pull',
+  'project.worktree.list',
+  'project.worktree.create',
+  'project.worktree.remove',
+  'project.worktree.merge',
+  'project.register',
+])
 
 export interface DaemonSessionHostOptions {
   workspaceRoot: string
@@ -23,9 +39,13 @@ export interface DaemonSessionHostOptions {
   routeStatus?: SessionHost['routeStatus']
   selectAuxiliary: SessionHost['selectAuxiliary']
   taskService: TaskService
+  /** Daemon-owned workspace document authority the session writes through. */
+  workspaceDocService: WorkspaceDocService
   /** The product-wired provider definitions main inference validates its
    *  target against. */
   resolveInferenceProvider(providerId: string): ProviderDefinition | undefined
+  /** The daemon RPC router the session invokes allowlisted project methods through. */
+  router: RpcRouter
 }
 
 function outputText(output: unknown): string {
@@ -120,48 +140,11 @@ function inputSummaryLines(schema: unknown): string[] {
   return lines
 }
 
-/** Verify the `doc` target is the trusted builtin singleton via the real registry. */
-async function isTrustedDocTarget(workspaceRoot: string, project?: string): Promise<boolean> {
-  await ensureDiscovered(workspaceRoot)
-  const target = resolveTaskTarget('doc', workspaceRoot, project || undefined)
-  return Boolean(target && isTrustedDocDefinition(target.definition, target.source))
-}
-
-/**
- * Native settlement fence for a trusted document run. It reads the persisted
- * task status once: when the wait was aborted and the run is still
- * queued/running it cancels the existing run (a terminal run is never
- * re-cancelled), then, when admission recorded a linked execution, awaits the
- * existing supervised native promise. No linked execution means there is
- * nothing to await — the task wait terminal remains the fact.
- */
-async function settleTrustedDocRun(taskService: TaskService, taskRunId: string, signal?: AbortSignal): Promise<void> {
-  const status = taskService.status(taskRunId)
-  const current = typeof status?.status === 'string' ? status.status : undefined
-  if (signal?.aborted && (current === 'queued' || current === 'running')) {
-    try {
-      await taskService.cancel(taskRunId)
-    } catch {
-      // Cancellation is best-effort; the native fence below still runs.
-    }
-  }
-  const meta = status?._meta
-  const executionId = meta && typeof meta === 'object'
-    ? (meta as { execution_id?: unknown }).execution_id
-    : undefined
-  if (typeof executionId === 'string' && executionId.length > 0) {
-    await getAgentExecutionHost().waitExecution(executionId)
-  }
-}
-
 /** In-process feature ports; task admission goes through TaskService, never RPC. */
 export function createDaemonSessionHost(options: DaemonSessionHostOptions): SessionHost {
-  const { stateRoot, taskService } = options
-  // Local, in-memory record of admitted trusted-document runs only. It never
-  // gates admission (definition identity does) and never crosses process
-  // boundaries.
-  const trustedDocRuns = new Set<string>()
+  const { stateRoot, taskService, workspaceDocService } = options
   const projects = new ProjectManager({ workspaceRoot: options.workspaceRoot })
+  const workspaceVcsService = new WorkspaceVcsService(options.workspaceRoot)
   const listProjects = async (): Promise<ProjectInfo[]> => projects.listProjects().map(project => ({
     id: project.name,
     workspaceDir: `projects/${project.name}`,
@@ -230,12 +213,10 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     async describeTask(id, project) {
       const definition = await taskService.describe(id, project)
       const requiredCapabilities = definition.dispatch?.requiredCapabilities
-      const builtinDoc = id === 'doc' ? await isTrustedDocTarget(options.workspaceRoot, project) : false
       return {
         description: definition.description ?? definition.name,
         inputSchema: definition.input_schema,
         source: definition.source,
-        builtinDoc,
         ...(requiredCapabilities === undefined || requiredCapabilities.length === 0
           ? {}
           : { requiredCapabilities }),
@@ -243,54 +224,88 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     },
     async createTaskRun(params) {
       const project = params.project ?? ''
-      // A typed `doc` run is admitted only against the trusted builtin
-      // singleton; a shadowing override is refused before TaskService sees it.
-      const trustedDoc = params.task === 'doc' ? await isTrustedDocTarget(options.workspaceRoot, project) : false
-      if (params.task === 'doc' && !trustedDoc) {
-        throw new Error(
-          `Builtin document task 'doc' is unavailable: the resolved definition is not the trusted builtin document singleton.`,
-        )
-      }
       const result = await taskService.run({
         taskId: params.task, project, input: params.input, ctx: params.ctx as TaskContext | undefined,
       })
       if (isTaskRunRejection(result)) throw new Error(`Task run rejected: ${JSON.stringify(result)}`)
-      if (trustedDoc) trustedDocRuns.add(result.task_run_id)
       return { taskRunId: result.task_run_id }
     },
     async waitTaskRun(taskRunId, signal) {
-      const isTrustedDocRun = trustedDocRuns.has(taskRunId)
-      // Preserve the original task-wait failure so the settlement fence can
-      // never mask it, while a successful wait with a failed settlement must
-      // still surface the settlement error instead of reporting done.
-      let waitFailed = false
-      let waitError: unknown
-      let result: Awaited<ReturnType<TaskService['wait']>> | undefined
-      try {
-        result = await taskService.wait(taskRunId, undefined, signal)
-      } catch (error) {
-        waitFailed = true
-        waitError = error
-      }
-      if (isTrustedDocRun) {
-        try {
-          await settleTrustedDocRun(taskService, taskRunId, signal)
-        } catch (error) {
-          if (!waitFailed) throw error
-        } finally {
-          trustedDocRuns.delete(taskRunId)
-        }
-      }
-      if (waitFailed) throw waitError
-      const artifacts = outputArtifacts(result!.output)
-      const artifactErrors = artifactErrorDescriptors(result!._meta)
+      const result = await taskService.wait(taskRunId, undefined, signal)
+      const artifacts = outputArtifacts(result.output)
+      const artifactErrors = artifactErrorDescriptors(result._meta)
       return {
-        status: result!.status as string,
-        output: outputText(result!.output) || outputText(result!.error),
+        status: result.status as string,
+        output: outputText(result.output) || outputText(result.error),
         ...(artifacts.length === 0 ? {} : { artifacts }),
         ...(artifactErrors.length === 0 ? {} : { artifactErrors }),
       }
     },
     async cancelTaskRun(taskRunId) { await taskService.cancel(taskRunId) },
+    async writeDocument(params) {
+      return workspaceDocService.writeProjectDocument(params)
+    },
+    workspaceVcs: {
+      async status() {
+        return { ...(await workspaceVcsService.status()) }
+      },
+      async diff(opts) {
+        return workspaceVcsService.diff(opts)
+      },
+      async commit(params) {
+        return workspaceVcsService.commit(params)
+      },
+      async push() {
+        return { ...(await workspaceVcsService.push()) }
+      },
+      async pull() {
+        return { ...(await workspaceVcsService.pull()) }
+      },
+    },
+    /**
+     * Describe the allowlisted project methods a session may call, in request
+     * order. Any name outside SESSION_CALLABLE_METHODS is rejected.
+     */
+    async methods(names) {
+      const described: { name: string; description: string; params: Record<string, unknown> }[] = []
+      for (const name of names) {
+        if (!SESSION_CALLABLE_METHODS.has(name)) {
+          throw new ProtocolError(METHOD_NOT_FOUND, { method: name })
+        }
+        const method = describeMethod(name)
+        if (!method) {
+          throw new ProtocolError(METHOD_NOT_FOUND, { method: name })
+        }
+        described.push({
+          name: method.name,
+          description: method.description,
+          params: method.params as Record<string, unknown>,
+        })
+      }
+      return described
+    },
+    /**
+     * Invoke one allowlisted project method through the daemon RPC pipeline.
+     * Non-allowlisted names are rejected. A ProtocolError becomes an Error whose
+     * `code` is the error data's string `code` when present, otherwise the
+     * numeric protocol code, and whose message is the protocol message.
+     */
+    async call(method, params) {
+      if (!SESSION_CALLABLE_METHODS.has(method)) {
+        throw new ProtocolError(METHOD_NOT_FOUND, { method })
+      }
+      try {
+        return await options.router.invoke(method, params, { transport: 'session' })
+      } catch (error) {
+        if (!(error instanceof ProtocolError)) throw error
+        const data = error.data
+        const code = data && typeof data === 'object' && typeof (data as { code?: unknown }).code === 'string'
+          ? (data as { code: string }).code
+          : String(error.code)
+        const mapped = new Error(error.message) as Error & { code: string }
+        mapped.code = code
+        throw mapped
+      }
+    },
   }
 }

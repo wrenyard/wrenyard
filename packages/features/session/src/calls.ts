@@ -15,7 +15,7 @@ import { models as registeredModels, type ReasoningEffort } from '@wrenyard/mode
 import { GatewayRequestError } from './transport.ts';
 import { isContextOverflowError } from './driver.js';
 import { ROLE_REQUIREMENTS, type AuxiliaryCallRole } from './role-requirements.js';
-import type { DriverResult, ModelContentPart, ModelDriver, ModelMessage, ToolCall, Usage } from './driver.js';
+import type { DriverResult, ModelContentPart, ModelDriver, ModelMessage, ToolCall, ToolSpec, Usage } from './driver.js';
 
 export type { ModelMessage, Usage } from './driver.js';
 
@@ -23,7 +23,7 @@ export type { ModelMessage, Usage } from './driver.js';
 export { selectInferenceMode } from './inference-mode.js';
 
 /** Every role that may issue a call. `reason` is the one expensive role. */
-export const CALL_ROLES = ['reason', 'memory-search', 'doc-search', 'compile', 'reply', 'title'] as const;
+export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'vcs', 'project'] as const;
 export type CallRole = (typeof CALL_ROLES)[number];
 
 /** The expensive role streams with no total deadline; its idle stream is bounded. */
@@ -126,17 +126,19 @@ export interface ModelCallInput {
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
-  /** Forwarded to the driver only for `reason`; every other role ignores it. */
+  /** Forwarded to the driver for every role. */
   onToolCall?: (call: ToolCall) => void;
+  /** Tools declared on this call; forwarded to the driver for every role. */
+  tools?: readonly ToolSpec[];
 }
 
 export interface ModelCallOutput {
   model: string;
-  /** Visible text; for `reply`, the text sent through the reply tool (empty when it was not called). */
+  /** Visible text. */
   text: string;
   reasoning?: string;
   usage?: Usage;
-  /** Native tool calls the reason model returned, in call order; empty otherwise. */
+  /** Native tool calls the model returned, in call order; empty when it returned none. */
   toolCalls: ToolCall[];
 }
 
@@ -571,10 +573,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
               ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
               ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
               ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
-              ...(input.role === 'reason' ? { actionTool: true,
+              ...(input.tools === undefined ? {} : { tools: input.tools }),
+              ...(input.onToolCall === undefined ? {} : {
                 onToolCall: (call: ToolCall): void => { onOutput(); input.onToolCall?.(call); },
-              } : {}),
-              ...(input.role === 'reply' ? { replyTool: true } : {}),
+              }),
               signal: controller.signal, onText, onReasoning, onOutput,
               onTransportRetry: () => { transportRetries += 1; },
               onActivity: resetIdle, onUsage: (usage: Usage): void => { partialUsage = usage; },
@@ -617,11 +619,8 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         input.signal.removeEventListener('abort', onExternalAbort);
       }
 
-      // A communication call speaks only through its reply tool; content outside
-      // it never reaches the user, and no call at all means nothing is sent.
-      const finalText = input.role === 'reply'
-        ? (result?.replies ?? []).join('\n\n')
-        : result ? result.text : text;
+      // Visible text only; native tool calls are returned separately.
+      const finalText = result ? result.text : text;
       const finalReasoning = result?.reasoning ?? (reasoning || undefined);
       const usage = result?.usage ?? partialUsage;
 

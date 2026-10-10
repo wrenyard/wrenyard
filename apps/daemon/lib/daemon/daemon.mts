@@ -799,6 +799,8 @@ async function createForemanDaemonResources(
     stateRoot: sessionStateRoot,
     gateway: sessionGateway,
     taskService,
+    workspaceDocService,
+    router: rpcRouter,
     routeStatus: model => gateway.routeStatus(model),
     selectAuxiliary: createAuxiliarySelector({ catalog, quotaSnapshots: autoRoutingQuotaSnapshots,
       routeStatus: model => gateway.routeStatus(model),

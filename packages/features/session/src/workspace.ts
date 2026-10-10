@@ -1,7 +1,8 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { resolve, relative, isAbsolute, basename } from 'node:path';
-import type { FilesPort, SnapshotInput } from './ports.ts';
+import type { FilesPort } from './ports.ts';
 import type { WorkspaceSnapshot } from './ledger.ts';
+import { headerField } from './documents.ts';
 
 /** One catalogued project document, derived from its Markdown header. */
 export interface DocCatalogEntry {
@@ -24,12 +25,12 @@ function contained(root: string, target: string): boolean {
   const rel = relative(root, target);
   return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\');
 }
-function safePath(root: string, path: string): string {
+export function safePath(root: string, path: string): string {
   const absolute = resolve(root, path);
   if (!contained(root, absolute)) throw new Error('Path leaves workspace');
   return absolute;
 }
-function readInternal(root: string, path: string): string {
+export function readInternal(root: string, path: string): string {
   try {
     const absolute = safePath(root, path);
     if (!existsSync(absolute)) return '';
@@ -40,17 +41,6 @@ function readInternal(root: string, path: string): string {
   }
 }
 /** Read a `状态`/`status` (or `更新`/`updated`) value from a `>` header block. */
-function headerField(content: string, labels: readonly string[]): string {
-  for (const line of content.split('\n')) {
-    const quoted = /^\s*>\s*(.+)$/u.exec(line);
-    if (!quoted) continue;
-    for (const label of labels) {
-      const field = new RegExp(`^${label}\\s*[:：]\\s*(.*)$`, 'iu').exec(quoted[1]!.trim());
-      if (field) return field[1]!.trim();
-    }
-  }
-  return '';
-}
 export function readDocumentRules(workspaceRoot: string): string {
   return readInternal(workspaceRoot, 'instructions/documents.md');
 }
@@ -139,40 +129,4 @@ export class WorkspaceFileSource implements FilesPort {
       if (doc) visit(path, doc.content);
     }
   }
-}
-export async function createWorkspaceSnapshot(input: SnapshotInput): Promise<WorkspaceSnapshot> {
-  const snapshot: WorkspaceSnapshot = {
-    takenAt: input.takenAt.toISOString(), deviceName: input.deviceName,
-    agents: readInternal(input.workspaceRoot, 'AGENTS.md'),
-    memoryIndex: readInternal(input.workspaceRoot, 'memories/INDEX.md'),
-    builtinTasks: input.builtinTasks.map((task) => ({ ...task })),
-    projects: input.projects.map((project) => ({ ...project, tasks: project.tasks.map((task) => ({ ...task })), recentDocs: [] })),
-  };
-  const source = new WorkspaceFileSource({ workspaceRoot: input.workspaceRoot, snapshot });
-  const today = Date.UTC(input.takenAt.getFullYear(), input.takenAt.getMonth(), input.takenAt.getDate());
-  for (const project of snapshot.projects) {
-    const walk = (dir: string): void => {
-      let absolute: string;
-      try { absolute = safePath(input.workspaceRoot, dir); } catch { return; }
-      if (!existsSync(absolute)) return;
-      for (const entry of readdirSync(absolute, { withFileTypes: true })) {
-        const path = dir + '/' + entry.name;
-        let target: string;
-        try { target = safePath(input.workspaceRoot, path); } catch { continue; }
-        if (statSync(target).isDirectory()) { walk(path); continue; }
-        const match = /^(\d{4}-\d{2}-\d{2})-.+\.md$/u.exec(entry.name);
-        if (!match) continue;
-        const date = Date.parse(match[1]! + 'T00:00:00Z');
-        const age = (today - date) / 86400000;
-        if (!Number.isFinite(age) || age < 0 || age >= 7) continue;
-        const owner = snapshot.projects.filter((candidate) => path.startsWith(candidate.workspaceDir + '/docs/'))
-          .sort((a, b) => b.workspaceDir.length - a.workspaceDir.length)[0];
-        if (owner?.id !== project.id) continue;
-        const doc = source.read(path);
-        if (doc) project.recentDocs.push({ path, title: doc.title });
-      }
-    };
-    for (const type of ['specs', 'plans', 'reports', 'handoff']) walk(project.workspaceDir + '/docs/' + type);
-  }
-  return snapshot;
 }

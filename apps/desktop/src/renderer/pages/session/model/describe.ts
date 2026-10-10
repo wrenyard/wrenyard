@@ -32,10 +32,13 @@ export const PHASE_TONE: Record<Phase, TimelineTone> = {
 export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   reason: '主推理',
   'memory-search': '记忆检索',
-  'doc-search': '文档检索',
-  compile: '派发编译',
+  search: '检索',
+  dispatch: '派发',
   reply: '沟通',
   title: '标题',
+  document: '文档',
+  vcs: '工作区版本',
+  project: '项目',
 };
 
 const ROUTE_STATE_LABEL: Record<string, string> = {
@@ -153,7 +156,7 @@ export function actionLabel(action: {
   if (title !== '' && taskDisplayName !== '') return `${title} · ${taskDisplayName}`;
   if (title !== '') return title;
   if (taskDisplayName !== '') return taskDisplayName;
-  if (action.kind === 'read' || action.kind === 'write') {
+  if (action.kind === 'search' || action.kind === 'document') {
     return [...action.intent].slice(0, 20).join('');
   }
   return '';
@@ -188,7 +191,7 @@ export function summarizeLedgerEvent(event: LedgerEvent): string {
     case 'action.started': return String(record.kind ?? '');
     case 'action.titled': return oneLine(String(record.title ?? ''));
     case 'action.finished': return oneLine(`${record.kind} · ${record.status}: ${record.result ?? ''}`);
-    case 'ws.updated': return `${record.change} ${record.path}`;
+    case 'ws.updated': return `${record.change} ${record.target}${record.worktreeId ? ` ${record.worktreeId}` : ''}`;
     case 'turn.interrupted': return String(record.reason ?? '');
     case 'turn.finished': return String(record.status ?? '');
     case 'call': return `${record.role} · ${record.model} · ${record.status}`;
