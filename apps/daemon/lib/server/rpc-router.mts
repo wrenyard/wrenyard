@@ -66,29 +66,48 @@ export class RpcRouter {
     const isNotification = !('id' in message)
 
     try {
-      const params = parseMethodParams(message.method, message.params)
-      const handler = this.handlers.get(message.method)
-      if (!handler) {
-        throw new ProtocolError(METHOD_NOT_FOUND, { method: message.method })
-      }
-
-      this.admissionGate?.(message.method, params)
-      const tracksWork = this.activeWorkMethods.has(message.method)
-      if (tracksWork) this.activeWorkRequests += 1
-      let result: unknown
-      try {
-        result = await handler(params, message, context)
-      } finally {
-        if (tracksWork) this.activeWorkRequests -= 1
-      }
+      const validatedResult = await this.dispatchMethod(message.method, message, context)
       if (isNotification) return undefined
-
-      const validatedResult = parseMethodResult(message.method, result)
       return createSuccessResponse((message as JsonRpcRequest).id, validatedResult)
     } catch (error) {
       if (isNotification) return undefined
       return createErrorResponse((message as JsonRpcRequest).id, this.normalizeError(error))
     }
+  }
+
+  /**
+   * Run one method in-process, sharing the exact validation/handler/admission/
+   * result pipeline `handleMessage` uses. A synthetic `internal` request carries
+   * the method and params into the handler; every failure is normalized to a
+   * ProtocolError so callers observe the same error shape as the wire path.
+   */
+  async invoke(method: string, params: unknown, context?: unknown): Promise<unknown> {
+    const message: JsonRpcRequest = { jsonrpc: '2.0', id: 'internal', method, params }
+    try {
+      return await this.dispatchMethod(method, message, context)
+    } catch (error) {
+      throw this.normalizeError(error)
+    }
+  }
+
+  /** The single shared pipeline: validate params, resolve the handler, gate, run, validate the result. */
+  private async dispatchMethod(method: string, message: JsonRpcMessage, context: unknown): Promise<unknown> {
+    const params = parseMethodParams(method, message.params)
+    const handler = this.handlers.get(method)
+    if (!handler) {
+      throw new ProtocolError(METHOD_NOT_FOUND, { method })
+    }
+
+    this.admissionGate?.(method, params)
+    const tracksWork = this.activeWorkMethods.has(method)
+    if (tracksWork) this.activeWorkRequests += 1
+    let result: unknown
+    try {
+      result = await handler(params, message, context)
+    } finally {
+      if (tracksWork) this.activeWorkRequests -= 1
+    }
+    return parseMethodResult(method, result)
   }
 
   private createParseErrorResponse(input: unknown, error: unknown): JsonRpcResponse | undefined {
