@@ -1,5 +1,5 @@
 import { existsSync, realpathSync } from 'node:fs'
-import { dirname, isAbsolute, normalize, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, posix, resolve, sep } from 'node:path'
 import { ProjectManager } from '../project/manager.mts'
 import { isTrustedDocDefinition } from '../../standard/index.mts'
 import type { TaskDefinition } from './types.mts'
@@ -61,7 +61,8 @@ export function documentExecutionScope(
   // directory, with no absolute/traversal/alternate spellings.
   if (!rawTargetPath || rawTargetPath.includes('\0') || rawTargetPath.includes('\\')) return undefined
   if (isAbsolute(rawTargetPath)) return undefined
-  const normalized = normalize(rawTargetPath)
+  // Workspace-relative paths use forward slashes on every platform; win32 normalize would rewrite them to backslashes.
+  const normalized = posix.normalize(rawTargetPath)
   if (normalized !== rawTargetPath) return undefined
   if (normalized.split('/').some((segment) => !segment || segment === '.' || segment === '..')) return undefined
   if (!normalized.endsWith('.md')) return undefined
