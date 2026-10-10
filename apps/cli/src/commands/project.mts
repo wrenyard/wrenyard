@@ -11,7 +11,7 @@ import {
 export async function handleProject(args: string[]): Promise<number> {
   const subcommand = args[0]
   if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-    console.log('Usage: wrenyard project <list|describe|status|pull|push|worktree> ...')
+    console.log('Usage: wrenyard project <list|describe|status|pull|push|register|worktree> ...')
     return subcommand ? 0 : 1
   }
 
@@ -20,9 +20,10 @@ export async function handleProject(args: string[]): Promise<number> {
   if (subcommand === 'status') return handleProjectStatus(args.slice(1))
   if (subcommand === 'pull') return handleProjectPull(args.slice(1))
   if (subcommand === 'push') return handleProjectPush(args.slice(1))
+  if (subcommand === 'register') return handleProjectRegister(args.slice(1))
   if (subcommand === 'worktree') return handleProjectWorktree(args.slice(1))
 
-  console.error('Usage: wrenyard project <list|describe|status|pull|push|worktree> ...')
+  console.error('Usage: wrenyard project <list|describe|status|pull|push|register|worktree> ...')
   return 1
 }
 
@@ -133,6 +134,49 @@ export async function handleProjectPush(args: string[]): Promise<number> {
     const result = await client.project.push({ project })
     writeServicePayload(servicePayload(result))
     return result.pushed ? 0 : 1
+  } finally {
+    client.close()
+  }
+}
+
+export async function handleProjectRegister(args: string[]): Promise<number> {
+  const usage = 'Usage: wrenyard project register <project> --description <text> [--display-name <text>] [--checkout <path>] [--remote <url>] [--default-branch <name>] [--config path] [--json]'
+  if (isHelpRequest(args)) {
+    console.log(usage)
+    return 0
+  }
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      config: { type: 'string' },
+      json: { type: 'boolean' },
+      description: { type: 'string' },
+      'display-name': { type: 'string' },
+      checkout: { type: 'string' },
+      remote: { type: 'string' },
+      'default-branch': { type: 'string' },
+    },
+    allowPositionals: true,
+    strict: true,
+  })
+  const project = requireSinglePositional(positionals, usage)
+  if (!values.description) {
+    console.error(usage)
+    return 1
+  }
+
+  const client = await connectConfiguredForemanClient(values.config)
+  try {
+    const result = await client.project.register({
+      project,
+      description: values.description,
+      ...(values['display-name'] === undefined ? {} : { display_name: values['display-name'] }),
+      ...(values.checkout === undefined ? {} : { checkout_path: values.checkout }),
+      ...(values.remote === undefined ? {} : { git_remote: values.remote }),
+      ...(values['default-branch'] === undefined ? {} : { default_branch: values['default-branch'] }),
+    })
+    writeServicePayload(servicePayload(result))
+    return result.registered ? 0 : 1
   } finally {
     client.close()
   }

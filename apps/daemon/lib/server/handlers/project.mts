@@ -4,10 +4,13 @@ import {
   ProtocolError,
 } from '../../protocol/errors.mts'
 import type {
+  ProjectCommitResult,
   ProjectDescribeResult,
+  ProjectDiffResult,
   ProjectListResult,
   ProjectPullResult,
   ProjectPushResult,
+  ProjectRegisterResult,
   ProjectStatusResult,
   ProjectWorktreeCreateResult,
   ProjectWorktreeListResult,
@@ -42,6 +45,32 @@ export function registerProjectHandlers(router: RpcRouter, options: ProjectRpcHa
       worktreeId: params.worktree_id,
     }))
   })
+  router.register('project.diff', async (params) => {
+    return projectJsonResult<ProjectDiffResult>(async () => {
+      const diff = await manager.diff(
+        { project: params.project, worktree_id: params.worktree_id },
+        { paths: params.paths, staged: params.staged },
+      )
+      return {
+        project: params.project,
+        ...(params.worktree_id === undefined ? {} : { worktree_id: params.worktree_id }),
+        diff,
+      }
+    })
+  })
+  router.register('project.commit', async (params) => {
+    return projectJsonResult<ProjectCommitResult>(async () => {
+      const result = await manager.commit(
+        { project: params.project, worktree_id: params.worktree_id },
+        { message: params.message, files: params.files },
+      )
+      return {
+        project: params.project,
+        ...(params.worktree_id === undefined ? {} : { worktree_id: params.worktree_id }),
+        ...result,
+      }
+    })
+  })
   router.register('project.worktree.list', async (params) => {
     return projectJsonResult<ProjectWorktreeListResult>(() => manager.listWorktrees(params.project))
   })
@@ -68,6 +97,16 @@ export function registerProjectHandlers(router: RpcRouter, options: ProjectRpcHa
   router.register('project.commitLog', async (params) => {
     return projectJsonResult<ProjectCommitLogResult>(() => manager.commitLog(params.project, params.limit ?? 20))
   })
+  router.register('project.register', async (params) => {
+    return projectJsonResult<ProjectRegisterResult>(() => manager.registerProject({
+      project: params.project,
+      description: params.description,
+      display_name: params.display_name,
+      checkout_path: params.checkout_path,
+      git_remote: params.git_remote,
+      default_branch: params.default_branch,
+    }))
+  })
 }
 
 async function projectJsonResult<T>(operation: () => unknown | Promise<unknown>): Promise<T> {
@@ -79,10 +118,19 @@ async function projectJsonResult<T>(operation: () => unknown | Promise<unknown>)
       { code: INVALID_PARAMS.code, message: error instanceof Error ? error.message : String(error) },
       {
         service: 'project',
-        code: 'project_error',
+        code: errorCode(error) ?? 'project_error',
       },
     )
   }
+}
+
+/** Preserve a thrown error's string `code` (e.g. GitCheckoutError) in the error data. */
+function errorCode(error: unknown): string | undefined {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code?: unknown }).code
+    if (typeof code === 'string') return code
+  }
+  return undefined
 }
 
 function toJsonShape<T>(value: T): T {

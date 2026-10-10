@@ -18,6 +18,8 @@ import type {
   ProjectPullResult,
   ProjectPushParams,
   ProjectPushResult,
+  ProjectRegisterParams,
+  ProjectRegisterResult,
   ProjectStatusParams,
   ProjectStatusResult,
   ProjectWorktreeCreateParams,
@@ -309,6 +311,9 @@ export class ForemanClient {
     },
     push: (params: ProjectPushParams): Promise<ProjectPushResult> => {
       return this.rpc.request<ProjectPushResult>('project.push', params)
+    },
+    register: (params: ProjectRegisterParams): Promise<ProjectRegisterResult> => {
+      return this.rpc.request<ProjectRegisterResult>('project.register', params)
     },
     worktree: {
       list: (params: ProjectWorktreeListParams): Promise<ProjectWorktreeListResult> => {
