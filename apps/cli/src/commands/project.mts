@@ -11,7 +11,7 @@ import {
 export async function handleProject(args: string[]): Promise<number> {
   const subcommand = args[0]
   if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-    console.log('Usage: wrenyard project <list|describe|status|pull|push|register|worktree> ...')
+    console.log('Usage: wrenyard project <list|describe|status|pull|push|diff|commit|register|worktree> ...')
     return subcommand ? 0 : 1
   }
 
@@ -20,10 +20,12 @@ export async function handleProject(args: string[]): Promise<number> {
   if (subcommand === 'status') return handleProjectStatus(args.slice(1))
   if (subcommand === 'pull') return handleProjectPull(args.slice(1))
   if (subcommand === 'push') return handleProjectPush(args.slice(1))
+  if (subcommand === 'diff') return handleProjectDiff(args.slice(1))
+  if (subcommand === 'commit') return handleProjectCommit(args.slice(1))
   if (subcommand === 'register') return handleProjectRegister(args.slice(1))
   if (subcommand === 'worktree') return handleProjectWorktree(args.slice(1))
 
-  console.error('Usage: wrenyard project <list|describe|status|pull|push|register|worktree> ...')
+  console.error('Usage: wrenyard project <list|describe|status|pull|push|diff|commit|register|worktree> ...')
   return 1
 }
 
@@ -134,6 +136,80 @@ export async function handleProjectPush(args: string[]): Promise<number> {
     const result = await client.project.push({ project })
     writeServicePayload(servicePayload(result))
     return result.pushed ? 0 : 1
+  } finally {
+    client.close()
+  }
+}
+
+export async function handleProjectDiff(args: string[]): Promise<number> {
+  const usage = 'Usage: wrenyard project diff <project> [--worktree <id>] [--staged] [--path <p>]... [--config path] [--json]'
+  if (isHelpRequest(args)) {
+    console.log(usage)
+    return 0
+  }
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      config: { type: 'string' },
+      json: { type: 'boolean' },
+      worktree: { type: 'string' },
+      staged: { type: 'boolean' },
+      path: { type: 'string', multiple: true },
+    },
+    allowPositionals: true,
+    strict: true,
+  })
+  const project = requireSinglePositional(positionals, usage)
+
+  const client = await connectConfiguredForemanClient(values.config)
+  try {
+    const result = await client.project.diff({
+      project,
+      ...(values.worktree === undefined ? {} : { worktree_id: values.worktree }),
+      ...(values.staged === undefined ? {} : { staged: values.staged }),
+      ...(values.path === undefined ? {} : { paths: values.path }),
+    })
+    writeServicePayload(servicePayload(result))
+    return 0
+  } finally {
+    client.close()
+  }
+}
+
+export async function handleProjectCommit(args: string[]): Promise<number> {
+  const usage = 'Usage: wrenyard project commit <project> [--worktree <id>] -m <message> <file>... [--config path] [--json]'
+  if (isHelpRequest(args)) {
+    console.log(usage)
+    return 0
+  }
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      config: { type: 'string' },
+      json: { type: 'boolean' },
+      worktree: { type: 'string' },
+      message: { type: 'string', short: 'm' },
+    },
+    allowPositionals: true,
+    strict: true,
+  })
+  const project = positionals[0]
+  const files = positionals.slice(1)
+  if (!values.message || !project || files.length === 0) {
+    console.error(usage)
+    return 1
+  }
+
+  const client = await connectConfiguredForemanClient(values.config)
+  try {
+    const result = await client.project.commit({
+      project,
+      ...(values.worktree === undefined ? {} : { worktree_id: values.worktree }),
+      message: values.message,
+      files,
+    })
+    writeServicePayload(servicePayload(result))
+    return result.hash ? 0 : 1
   } finally {
     client.close()
   }

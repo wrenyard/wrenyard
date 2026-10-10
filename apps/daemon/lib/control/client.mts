@@ -10,8 +10,12 @@ import type {
   HealthPingResult,
   EventListParams,
   EventListResult,
+  ProjectCommitParams,
+  ProjectCommitResult,
   ProjectDescribeParams,
   ProjectDescribeResult,
+  ProjectDiffParams,
+  ProjectDiffResult,
   ProjectListParams,
   ProjectListResult,
   ProjectPullParams,
@@ -94,6 +98,27 @@ import type {
   SessionContextInspectResult,
   SessionRoutesPreviewParams,
   SessionRoutesPreviewResult,
+  WorkspaceVcsStatusParams,
+  WorkspaceVcsStatusResult,
+  WorkspaceVcsDiffParams,
+  WorkspaceVcsDiffResult,
+  WorkspaceVcsCommitParams,
+  WorkspaceVcsCommitResult,
+  WorkspaceVcsPushParams,
+  WorkspaceVcsPushResult,
+  WorkspaceVcsPullParams,
+  WorkspaceVcsPullResult,
+  WorkspaceDocListParams,
+  WorkspaceDocListResult,
+  WorkspaceDocReadParams,
+  WorkspaceDocReadResult,
+  WorkspaceDocCreateParams,
+  WorkspaceDocCreateResult,
+  WorkspaceDocUpdateParams,
+  WorkspaceDocUpdateResult,
+  WorkspaceDocEditParams,
+  WorkspaceDocDeleteParams,
+  WorkspaceDocDeleteResult,
   ProviderListParams,
   ProviderListResult,
 } from '../protocol/registry.mts'
@@ -312,6 +337,12 @@ export class ForemanClient {
     push: (params: ProjectPushParams): Promise<ProjectPushResult> => {
       return this.rpc.request<ProjectPushResult>('project.push', params)
     },
+    diff: (params: ProjectDiffParams): Promise<ProjectDiffResult> => {
+      return this.rpc.request<ProjectDiffResult>('project.diff', params)
+    },
+    commit: (params: ProjectCommitParams): Promise<ProjectCommitResult> => {
+      return this.rpc.request<ProjectCommitResult>('project.commit', params)
+    },
     register: (params: ProjectRegisterParams): Promise<ProjectRegisterResult> => {
       return this.rpc.request<ProjectRegisterResult>('project.register', params)
     },
@@ -328,6 +359,45 @@ export class ForemanClient {
       merge: (params: ProjectWorktreeMergeParams): Promise<ProjectWorktreeMergeResult> => {
         return this.rpc.request<ProjectWorktreeMergeResult>('project.worktree.merge', params)
       },
+    },
+  }
+
+  readonly workspaceVcs = {
+    status: (params: WorkspaceVcsStatusParams = {}): Promise<WorkspaceVcsStatusResult> => {
+      return this.rpc.request<WorkspaceVcsStatusResult>('workspace.vcs.status', params)
+    },
+    diff: (params: WorkspaceVcsDiffParams = {}): Promise<WorkspaceVcsDiffResult> => {
+      return this.rpc.request<WorkspaceVcsDiffResult>('workspace.vcs.diff', params)
+    },
+    commit: (params: WorkspaceVcsCommitParams): Promise<WorkspaceVcsCommitResult> => {
+      return this.rpc.request<WorkspaceVcsCommitResult>('workspace.vcs.commit', params)
+    },
+    push: (params: WorkspaceVcsPushParams = {}): Promise<WorkspaceVcsPushResult> => {
+      return this.rpc.request<WorkspaceVcsPushResult>('workspace.vcs.push', params)
+    },
+    pull: (params: WorkspaceVcsPullParams = {}): Promise<WorkspaceVcsPullResult> => {
+      return this.rpc.request<WorkspaceVcsPullResult>('workspace.vcs.pull', params)
+    },
+  }
+
+  readonly workspaceDoc = {
+    list: (params: WorkspaceDocListParams): Promise<WorkspaceDocListResult> => {
+      return this.rpc.request<WorkspaceDocListResult>('workspace.doc.list', params)
+    },
+    read: (params: WorkspaceDocReadParams): Promise<WorkspaceDocReadResult> => {
+      return this.rpc.request<WorkspaceDocReadResult>('workspace.doc.read', params)
+    },
+    create: (params: WorkspaceDocCreateParams): Promise<WorkspaceDocCreateResult> => {
+      return this.rpc.request<WorkspaceDocCreateResult>('workspace.doc.create', params)
+    },
+    update: (params: WorkspaceDocUpdateParams): Promise<WorkspaceDocUpdateResult> => {
+      return this.rpc.request<WorkspaceDocUpdateResult>('workspace.doc.update', params)
+    },
+    edit: (params: WorkspaceDocEditParams): Promise<WorkspaceDocUpdateResult> => {
+      return this.rpc.request<WorkspaceDocUpdateResult>('workspace.doc.edit', params)
+    },
+    delete: (params: WorkspaceDocDeleteParams): Promise<WorkspaceDocDeleteResult> => {
+      return this.rpc.request<WorkspaceDocDeleteResult>('workspace.doc.delete', params)
     },
   }
 

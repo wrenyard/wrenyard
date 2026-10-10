@@ -10,6 +10,7 @@ import componentVersions from '../../../contracts/versions.json' with { type: 'j
 import { handleDaemonRun, handleDaemonStop } from './commands/daemon.mts'
 import { handleDoctor } from './commands/doctor.mts'
 import { handleProject } from './commands/project.mts'
+import { handleWorkspace } from './commands/workspace.mts'
 import { handleStatus } from './commands/status.mts'
 import { handleTask } from './commands/task.mts'
 import { handleExec } from './commands/exec.mts'
@@ -66,6 +67,8 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return handleExec(args.slice(1))
       case 'project':
         return handleProject(args.slice(1))
+      case 'workspace':
+        return handleWorkspace(args.slice(1))
       case 'status':
         return handleStatus(args.slice(1))
       case 'doctor':
@@ -112,10 +115,23 @@ Usage:
   wrenyard project status <project> [--config path] [--json]
   wrenyard project pull <project> [--config path] [--json]
   wrenyard project push <project> [--config path] [--json]
+  wrenyard project diff <project> [--worktree id] [--staged] [--path p]... [--config path] [--json]
+  wrenyard project commit <project> [--worktree id] -m <message> <file>... [--config path] [--json]
   wrenyard project worktree list <project> [--config path] [--json]
   wrenyard project worktree create <project> <worktree_id> [--config path] [--json]
   wrenyard project worktree remove <worktree_id> [--config path] [--json]
   wrenyard project worktree merge <project> <worktree_id> [--config path] [--json]
+  wrenyard workspace status [--config path] [--json]
+  wrenyard workspace diff [--staged] [--path p]... [--config path] [--json]
+  wrenyard workspace commit -m <message> <file>... [--config path] [--json]
+  wrenyard workspace push [--config path] [--json]
+  wrenyard workspace pull [--config path] [--json]
+  wrenyard workspace doc list <project> [--kind <kind>] [--config path] [--json]
+  wrenyard workspace doc read <project> <kind> <name> [--config path] [--json]
+  wrenyard workspace doc create <project> <kind> <slug> --file <f> [--config path] [--json]
+  wrenyard workspace doc update <project> <kind> <name> --file <f> --base <version> [--config path] [--json]
+  wrenyard workspace doc edit <project> <kind> <name> --old <text> --new <text> [--base <version>] [--config path] [--json]
+  wrenyard workspace doc delete <project> <kind> <name> --base <version> [--config path] [--json]
   wrenyard taskgraph create <json-params> [--config path] [--json]
   wrenyard taskgraph patch <json-params> [--config path] [--json]
   wrenyard taskgraph status <json-params> [--config path] [--json]

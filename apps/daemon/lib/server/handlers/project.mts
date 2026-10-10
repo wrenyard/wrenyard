@@ -113,18 +113,27 @@ async function projectJsonResult<T>(operation: () => unknown | Promise<unknown>)
   try {
     return toJsonShape(await operation()) as T
   } catch (error) {
-    if (error instanceof ProtocolError) throw error
-    throw new ProtocolError(
-      { code: INVALID_PARAMS.code, message: error instanceof Error ? error.message : String(error) },
-      {
-        service: 'project',
-        code: errorCode(error) ?? 'project_error',
-      },
-    )
+    throw mapServiceError(error, 'project', 'project_error')
   }
 }
 
-/** Preserve a thrown error's string `code` (e.g. GitCheckoutError) in the error data. */
+/**
+ * Map a thrown service error to a ProtocolError carrying INVALID_PARAMS and
+ * data { service, code }, where `code` is the thrown error's string `code`
+ * property (e.g. VcsError) when present, otherwise `fallback`.
+ */
+export function mapServiceError(error: unknown, service: string, fallback: string): ProtocolError {
+  if (error instanceof ProtocolError) return error
+  return new ProtocolError(
+    { code: INVALID_PARAMS.code, message: error instanceof Error ? error.message : String(error) },
+    {
+      service,
+      code: errorCode(error) ?? fallback,
+    },
+  )
+}
+
+/** Preserve a thrown error's string `code` (e.g. VcsError) in the error data. */
 function errorCode(error: unknown): string | undefined {
   if (error && typeof error === 'object' && 'code' in error) {
     const code = (error as { code?: unknown }).code

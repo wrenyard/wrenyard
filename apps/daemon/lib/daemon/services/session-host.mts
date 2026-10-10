@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { hostname } from 'node:os'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { ProviderDefinition } from '@wrenyard/providers'
@@ -10,13 +9,12 @@ import {
   type TaskArtifact,
 } from '@wrenyard/session'
 import { ProjectManager } from '../../core/project/manager.mts'
+import { runGitSync } from '../../core/vcs/index.mts'
 import type { TaskContext } from '../../core/task/context.mts'
 import { isTaskRunRejection, type TaskService } from '../../core/task/service.mts'
 import { METHOD_NOT_FOUND, ProtocolError } from '../../protocol/errors.mts'
 import { describeMethod } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../../server/rpc-router.mts'
-import { WorkspaceVcsService } from './workspace-vcs-service.mts'
-import type { WorkspaceDocService } from './workspace-doc-service.mts'
 
 /** Project RPC methods a session may invoke through `call`/`methods`. */
 const SESSION_CALLABLE_METHODS = new Set([
@@ -30,6 +28,17 @@ const SESSION_CALLABLE_METHODS = new Set([
   'project.worktree.remove',
   'project.worktree.merge',
   'project.register',
+  'workspace.vcs.status',
+  'workspace.vcs.diff',
+  'workspace.vcs.commit',
+  'workspace.vcs.push',
+  'workspace.vcs.pull',
+  'workspace.doc.list',
+  'workspace.doc.read',
+  'workspace.doc.create',
+  'workspace.doc.update',
+  'workspace.doc.edit',
+  'workspace.doc.delete',
 ])
 
 export interface DaemonSessionHostOptions {
@@ -39,8 +48,6 @@ export interface DaemonSessionHostOptions {
   routeStatus?: SessionHost['routeStatus']
   selectAuxiliary: SessionHost['selectAuxiliary']
   taskService: TaskService
-  /** Daemon-owned workspace document authority the session writes through. */
-  workspaceDocService: WorkspaceDocService
   /** The product-wired provider definitions main inference validates its
    *  target against. */
   resolveInferenceProvider(providerId: string): ProviderDefinition | undefined
@@ -103,9 +110,13 @@ function resolveRouteMetadata(
 }
 
 function readGitHead(checkoutPath: string): { branch?: string; head?: string } {
-  const read = (args: string[]): string => execFileSync('git', ['-C', checkoutPath, 'rev-parse', ...args], {
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
-  }).trim()
+  const read = (args: string[]): string => {
+    const result = runGitSync(checkoutPath, ['rev-parse', ...args])
+    if (result.code !== 0) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || `git rev-parse exited with code ${result.code}`)
+    }
+    return result.stdout.trim()
+  }
   try {
     const branch = read(['--abbrev-ref', 'HEAD'])
     const head = read(['--short', 'HEAD'])
@@ -142,9 +153,8 @@ function inputSummaryLines(schema: unknown): string[] {
 
 /** In-process feature ports; task admission goes through TaskService, never RPC. */
 export function createDaemonSessionHost(options: DaemonSessionHostOptions): SessionHost {
-  const { stateRoot, taskService, workspaceDocService } = options
+  const { stateRoot, taskService } = options
   const projects = new ProjectManager({ workspaceRoot: options.workspaceRoot })
-  const workspaceVcsService = new WorkspaceVcsService(options.workspaceRoot)
   const listProjects = async (): Promise<ProjectInfo[]> => projects.listProjects().map(project => ({
     id: project.name,
     workspaceDir: `projects/${project.name}`,
@@ -242,26 +252,6 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
       }
     },
     async cancelTaskRun(taskRunId) { await taskService.cancel(taskRunId) },
-    async writeDocument(params) {
-      return workspaceDocService.writeProjectDocument(params)
-    },
-    workspaceVcs: {
-      async status() {
-        return { ...(await workspaceVcsService.status()) }
-      },
-      async diff(opts) {
-        return workspaceVcsService.diff(opts)
-      },
-      async commit(params) {
-        return workspaceVcsService.commit(params)
-      },
-      async push() {
-        return { ...(await workspaceVcsService.push()) }
-      },
-      async pull() {
-        return { ...(await workspaceVcsService.pull()) }
-      },
-    },
     /**
      * Describe the allowlisted project methods a session may call, in request
      * order. Any name outside SESSION_CALLABLE_METHODS is rejected.
