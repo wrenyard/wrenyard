@@ -17,7 +17,7 @@ export async function createWorkspaceSnapshot(input: SnapshotInput): Promise<Wor
     builtinTasks: input.builtinTasks.map((task) => ({ ...task })),
     projects: input.projects.map((project) => ({ ...project, tasks: project.tasks.map((task) => ({ ...task })), recentDocs: [] })),
   };
-  const source = new WorkspaceFileSource({ workspaceRoot: input.workspaceRoot, snapshot });
+  const source = new WorkspaceFileSource({ workspaceRoot: input.workspaceRoot });
   const today = Date.UTC(input.takenAt.getFullYear(), input.takenAt.getMonth(), input.takenAt.getDate());
   for (const project of snapshot.projects) {
     const walk = (dir: string): void => {
@@ -41,7 +41,7 @@ export async function createWorkspaceSnapshot(input: SnapshotInput): Promise<Wor
         if (doc) project.recentDocs.push({ path, title: doc.title });
       }
     };
-    for (const type of ['specs', 'plans', 'reports', 'handoff']) walk(project.workspaceDir + '/docs/' + type);
+    for (const type of ['specs', 'reports', 'handoff']) walk(project.workspaceDir + '/docs/' + type);
   }
   return snapshot;
 }

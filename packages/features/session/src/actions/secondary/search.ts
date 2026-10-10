@@ -18,7 +18,6 @@ import type { SessionFile } from '../../media.ts';
 import type { BuiltView } from '../../ports.ts';
 import type {
   ActionExecutionOutcome,
-  ActionProjectInfo,
   ActionRunContext,
   ActionWorkflowDeps,
   ParsedAction,
@@ -310,9 +309,8 @@ async function recallProjectInstructions(
   events: readonly LedgerEvent[],
   deferred: LedgerEventDraft[],
 ): Promise<void> {
-  const project = projectForDocPath(ctx.projects, docPath);
-  if (!project) return;
-  const directory = docPath.endsWith('/AGENTS.md') ? docPath.slice(0, -10) : project.workspaceDir;
+  const directory = projectRootForDocPath(docPath);
+  if (directory === undefined) return;
   for (const instructionPath of deps.files.instructionChain(directory, docPath)) {
     if (ctx.signal.aborted) return;
     const file = deps.files.read(instructionPath);
@@ -420,11 +418,17 @@ function latestSessionFile(events: readonly LedgerEvent[], path: string): Sessio
   return undefined;
 }
 
-/** The most specific registered project that owns `docPath`, if any. */
-function projectForDocPath(projects: readonly ActionProjectInfo[], docPath: string): ActionProjectInfo | undefined {
-  const matches = projects.filter((project) => docPath.startsWith(`${project.workspaceDir}/`)
-    || (docPath.endsWith('/AGENTS.md') && project.workspaceDir.startsWith(`${docPath.slice(0, -10)}/`)));
-  if (matches.length === 0) return undefined;
-  return matches.reduce((longest, candidate) =>
-    candidate.workspaceDir.length > longest.workspaceDir.length ? candidate : longest);
+/**
+ * The `projects/<id>` directory that owns a document or instruction path, if
+ * any. The id is the path segments between `projects/` and `/docs/`, so it may
+ * be nested such as `gol/arts`; it is derived from the path itself, not from the
+ * session snapshot.
+ */
+function projectRootForDocPath(docPath: string): string | undefined {
+  if (docPath.endsWith('/AGENTS.md')) {
+    const directory = docPath.slice(0, -10);
+    return directory.startsWith('projects/') ? directory : undefined;
+  }
+  const match = /^projects\/(.+?)\/docs\//u.exec(docPath);
+  return match === null ? undefined : `projects/${match[1]}`;
 }

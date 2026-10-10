@@ -190,7 +190,7 @@ export function createSession(host: SessionHost): Session {
 
   const ports: EnginePorts = {
     ledger,
-    files: (snapshot, workspaceRoot) => new WorkspaceFileSource({ workspaceRoot, snapshot }),
+    files: (_snapshot, workspaceRoot) => new WorkspaceFileSource({ workspaceRoot }),
     calls,
     fileStore: new FileStore({ stateRoot: host.stateRoot }),
   };

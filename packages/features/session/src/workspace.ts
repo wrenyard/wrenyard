@@ -1,8 +1,10 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { resolve, relative, isAbsolute, basename } from 'node:path';
 import type { FilesPort } from './ports.ts';
-import type { WorkspaceSnapshot } from './ledger.ts';
 import { headerField } from './documents.ts';
+
+/** Directory names under `projects/` that never contain documents. */
+const SKIP_DIRECTORIES = new Set(['.git', 'node_modules', 'dist', 'out', 'build', 'coverage']);
 
 /** One catalogued project document, derived from its Markdown header. */
 export interface DocCatalogEntry {
@@ -46,10 +48,8 @@ export function readDocumentRules(workspaceRoot: string): string {
 }
 export class WorkspaceFileSource implements FilesPort {
   private readonly root: string;
-  private readonly snapshot: WorkspaceSnapshot;
-  constructor(options: { workspaceRoot: string; snapshot: WorkspaceSnapshot }) {
+  constructor(options: { workspaceRoot: string }) {
     this.root = options.workspaceRoot;
-    this.snapshot = options.snapshot;
   }
   checkPath(path: string): { ok: true; kind: 'memory' | 'doc' } | { ok: false; reason: string } {
     try {
@@ -57,10 +57,8 @@ export class WorkspaceFileSource implements FilesPort {
       let kind: 'memory' | 'doc';
       if (/^memories\/[^/]+\.md$/u.test(path) && path.toLowerCase() !== 'memories/index.md') kind = 'memory';
       else {
-        const doc = this.snapshot.projects.some((project) => path.startsWith(project.workspaceDir + '/docs/'));
-        const instructions = this.snapshot.projects.some((project) =>
-          path.endsWith('/AGENTS.md') && (project.workspaceDir === path.slice(0, -10)
-            || project.workspaceDir.startsWith(path.slice(0, -10) + '/')));
+        const doc = /^projects\/(?:[^/]+\/)+docs\/.+\.md$/u.test(path);
+        const instructions = /^projects\/(?:[^/]+\/)*AGENTS\.md$/u.test(path) || path === 'AGENTS.md';
         if (!doc && !instructions) throw new Error('Path is outside memory, project docs and associated instructions');
         kind = 'doc';
       }
@@ -97,24 +95,19 @@ export class WorkspaceFileSource implements FilesPort {
     return paths;
   }
   readDocumentRules(): string { return readDocumentRules(this.root); }
-  /** Catalogue every registered project document, most-specific owner, path sorted. */
+  /** Catalogue every project document under `projects/`, path sorted. */
   listDocuments(): DocCatalogEntry[] {
     const entries = new Map<string, DocCatalogEntry>();
-    for (const project of this.snapshot.projects) {
-      this.walkDocuments(project.workspaceDir + '/docs', (path, content) => {
-        const owner = this.snapshot.projects
-          .filter((candidate) => path.startsWith(candidate.workspaceDir + '/docs/'))
-          .sort((a, b) => b.workspaceDir.length - a.workspaceDir.length)[0];
-        if (owner?.id !== project.id || entries.has(path)) return;
-        entries.set(path, {
-          path,
-          title: title(path, content),
-          status: headerField(content, ['状态', 'status']),
-          updated: headerField(content, ['更新', '更新时间', 'updated', 'update']),
-          length: content.length,
-        });
+    this.walkDocuments('projects', (path, content) => {
+      if (!/^projects\/(?:[^/]+\/)+docs\/.+\.md$/u.test(path)) return;
+      entries.set(path, {
+        path,
+        title: title(path, content),
+        status: headerField(content, ['状态', 'status']),
+        updated: headerField(content, ['更新', '更新时间', 'updated', 'update']),
+        length: content.length,
       });
-    }
+    });
     return [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
   }
   private walkDocuments(dir: string, visit: (path: string, content: string) => void): void {
@@ -122,8 +115,13 @@ export class WorkspaceFileSource implements FilesPort {
     try { absolute = safePath(this.root, dir); } catch { return; }
     if (!existsSync(absolute) || !statSync(absolute).isDirectory()) return;
     for (const entry of readdirSync(absolute, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
       const path = `${dir}/${entry.name}`;
-      if (entry.isDirectory()) { this.walkDocuments(path, visit); continue; }
+      if (entry.isDirectory()) {
+        if (SKIP_DIRECTORIES.has(entry.name)) continue;
+        this.walkDocuments(path, visit);
+        continue;
+      }
       if (!entry.isFile() || !path.endsWith('.md')) continue;
       const doc = this.read(path);
       if (doc) visit(path, doc.content);
