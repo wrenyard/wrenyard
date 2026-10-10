@@ -57,6 +57,7 @@ function vcsSystemPrompt(): string {
     "- When the intent's file list does not match the changed files, do not commit; finish with done failed and explain the difference.",
     '- Push or pull only when the intent asks for it.',
     '- Never retry a refused commit with a file set the intent did not name.',
+    '- If a tool returns workspace_not_repository, do not call any other tool. Finish with done failed and tell the user that the workspace has no git repository of its own.',
     '',
     'A refused commit arrives as an error with a code such as file_unchanged, foreign_staged or staged_mismatch and names the offending paths. Read the code and message, correct the call, and try again only with the files the intent names.',
     'Finish with done and a summary of one to three sentences.',
