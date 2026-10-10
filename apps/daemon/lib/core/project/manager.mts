@@ -3,8 +3,19 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { hostname as osHostname } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { stringify } from 'yaml'
 import { foremanStateRoot } from '../../config/state.mts'
-import { discoverProjects, findProject as findFmprojProject, resolveHostPath } from './loader.mts'
+import { discoverProjects, findProject as findFmprojProject, invalidateProjectCache, resolveHostPath } from './loader.mts'
+import {
+  commitExactFiles,
+  gitDiff,
+  gitStatus,
+  pullCheckout,
+  pushCheckout,
+  type CommitExactFilesResult,
+  type GitDiffOptions,
+  type GitStatus,
+} from '../vcs/git-checkout.mts'
 import type {
   ProjectDetail,
   ProjectEntry,
@@ -13,6 +24,7 @@ import type {
   ProjectManagerOptions,
   ProjectNode,
   ProjectOverview,
+  ProjectRegisterResult,
   WorktreeBaseRestore,
   WorktreeCreateResult,
   WorktreeDirtyDetails,
@@ -44,10 +56,22 @@ interface WorktreeMatch {
 }
 
 const WORKTREE_ID_RE = /^[A-Za-z0-9_-]{8}$/u
+const PROJECT_ID_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u
 const WORKTREE_METADATA_DIR = '.foreman'
 const DIRTY_TEXT_LIMIT = 64 * 1024
 const UNTRACKED_TEXT_LIMIT = 8 * 1024
 const UNTRACKED_LARGE_LIMIT = 64 * 1024
+
+/** A project registration/host configuration failure carrying a machine-readable `code`. */
+export class ProjectConfigError extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'ProjectConfigError'
+    this.code = code
+  }
+}
 
 export function foremanWorkspaceFromEnv(): string | null {
   const workspace = process.env.WRENYARD_WORKSPACE?.trim()
@@ -199,8 +223,15 @@ export class ProjectManager {
     }
   }
 
-  status(projectName?: string): ProjectOverview[] | ProjectDetail {
-    const name = projectName?.trim()
+  status(target: { project: string; worktree_id?: string }): Promise<GitStatus>
+  status(projectName?: string): ProjectOverview[] | ProjectDetail
+  status(arg?: string | { project: string; worktree_id?: string }): ProjectOverview[] | ProjectDetail | Promise<GitStatus> {
+    // Checkout status for a `{ project, worktree_id? }` target.
+    if (arg && typeof arg === 'object') {
+      return gitStatus(this.resolveCheckoutCwd(arg))
+    }
+
+    const name = arg?.trim()
     if (name) {
       const project = this.getProject(name)
       return {
@@ -605,7 +636,7 @@ export class ProjectManager {
     })
   }
 
-  pushProject(options: { project?: string; worktreeId?: string }): ProjectGitPushResult {
+  async pushProject(options: { project?: string; worktreeId?: string }): Promise<ProjectGitPushResult> {
     const requestedProject = options.project?.trim() ?? ''
     const rawWorktreeId = options.worktreeId?.trim() ?? ''
 
@@ -695,7 +726,7 @@ export class ProjectManager {
     return this.pushGitCheckout(project.name, project.path)
   }
 
-  pullProject(projectName: string): ProjectGitPullResult {
+  async pullProject(projectName: string): Promise<ProjectGitPullResult> {
     const requestedProject = projectName.trim()
     let project: ProjectEntry
     try {
@@ -721,61 +752,80 @@ export class ProjectManager {
       })
     }
 
-    if (!this.isGitWorkTree(project.path)) {
-      return this.gitPullFailure({
-        ...base,
-        reason: 'not_git_repository',
-        error: `Path is not a git worktree: ${project.path}`,
-      })
-    }
-
-    const branch = this.attachedBranch(project.path)
-    if (!branch) {
-      return this.gitPullFailure({
-        ...base,
-        reason: 'detached_head',
-        error: `Checkout is not on an attached branch: ${project.path}`,
-      })
-    }
-
-    const dirty = this.dirtyDetails(project.path)
-    if (dirty.dirty) {
-      return this.gitPullFailure({
-        ...base,
-        branch,
-        dirty,
-        reason: 'dirty',
-        error: `Checkout has uncommitted changes: ${project.path}`,
-      })
-    }
-
-    if (!this.remoteExists(project.path, 'origin')) {
-      return this.gitPullFailure({
-        ...base,
-        branch,
-        reason: 'origin_missing',
-        error: `Checkout has no origin remote: ${project.path}`,
-      })
-    }
-
-    try {
-      this.git(project.path, ['pull', '--ff-only', 'origin', branch])
+    const result = await pullCheckout(project.path)
+    if (result.pulled) {
       return {
         ...base,
-        branch,
-        remote: 'origin',
+        branch: result.branch,
+        remote: result.remote,
         pulled: true,
-        summary: `Pulled ${project.name} branch ${branch} from origin.`,
+        summary: `Pulled ${project.name} branch ${result.branch} from origin.`,
       }
-    } catch (error) {
+    }
+
+    if (result.code === 'dirty') {
       return this.gitPullFailure({
         ...base,
-        branch,
-        remote: 'origin',
-        reason: 'pull_failed',
-        error: errorMessage(error),
+        branch: result.branch,
+        dirty: this.dirtyDetails(project.path),
+        reason: result.code,
+        error: result.error,
       })
     }
+    if (result.code === 'pull_failed') {
+      return this.gitPullFailure({
+        ...base,
+        branch: result.branch,
+        remote: 'origin',
+        reason: result.code,
+        error: result.error,
+      })
+    }
+    if (result.code === 'origin_missing') {
+      return this.gitPullFailure({
+        ...base,
+        branch: result.branch,
+        reason: result.code,
+        error: result.error,
+      })
+    }
+    return this.gitPullFailure({
+      ...base,
+      reason: result.code,
+      error: result.error,
+    })
+  }
+
+  /**
+   * Resolve a `{ project, worktree_id? }` target to its checkout working
+   * directory, reusing the managed-worktree metadata checks. A worktree target
+   * resolves through `resolveWorktreePath`; a project target resolves to its
+   * base checkout.
+   */
+  resolveCheckoutCwd(target: { project: string; worktree_id?: string }): string {
+    const project = target.project?.trim() ?? ''
+    if (!project) throw new Error('project is required')
+    const entry = this.getProject(project)
+    const worktreeId = target.worktree_id?.trim() ?? ''
+    if (worktreeId) {
+      if (entry.noWorktree) throw new Error(this.worktreeUnsupportedProjectMessage(entry))
+      return this.resolveWorktreePath(worktreeId, project)
+    }
+    if (!existsSync(entry.path)) throw new Error(`Project path does not exist: ${entry.path}`)
+    return this.resolveBasePath(project)
+  }
+
+  /** Working-tree status of a project or worktree checkout. */
+  async diff(target: { project: string; worktree_id?: string }, options: GitDiffOptions = {}): Promise<string> {
+    return gitDiff(this.resolveCheckoutCwd(target), options)
+  }
+
+  /** Commit exactly the named files in a project or worktree checkout. */
+  async commit(
+    target: { project: string; worktree_id?: string },
+    input: { message: string; files: string[] },
+  ): Promise<CommitExactFilesResult> {
+    return commitExactFiles(this.resolveCheckoutCwd(target), input)
   }
 
   resolveWorktreePath(worktreeId: string, projectName: string): string {
@@ -1086,68 +1136,55 @@ export class ProjectManager {
     }
   }
 
-  private pushGitCheckout(project: string, path: string, worktreeId?: string): ProjectGitPushResult {
+  private async pushGitCheckout(project: string, path: string, worktreeId?: string): Promise<ProjectGitPushResult> {
     const base = {
       project,
       ...(worktreeId ? { worktree_id: worktreeId } : {}),
       path,
     }
 
-    if (!this.isGitWorkTree(path)) {
-      return this.gitPushFailure({
-        ...base,
-        reason: 'not_git_repository',
-        error: `Path is not a git worktree: ${path}`,
-      })
-    }
-
-    const branch = this.attachedBranch(path)
-    if (!branch) {
-      return this.gitPushFailure({
-        ...base,
-        reason: 'detached_head',
-        error: `Checkout is not on an attached branch: ${path}`,
-      })
-    }
-
-    const dirty = this.dirtyDetails(path)
-    if (dirty.dirty) {
-      return this.gitPushFailure({
-        ...base,
-        branch,
-        dirty,
-        reason: 'dirty',
-        error: `Checkout has uncommitted changes: ${path}`,
-      })
-    }
-
-    if (!this.remoteExists(path, 'origin')) {
-      return this.gitPushFailure({
-        ...base,
-        branch,
-        reason: 'origin_missing',
-        error: `Checkout has no origin remote: ${path}`,
-      })
-    }
-
-    try {
-      this.git(path, ['push', 'origin', branch])
+    const result = await pushCheckout(path, { requireClean: true })
+    if (result.pushed) {
       return {
         ...base,
-        branch,
-        remote: 'origin',
+        branch: result.branch,
+        remote: result.remote,
         pushed: true,
-        summary: `Pushed ${project}${worktreeId ? ` worktree ${worktreeId}` : ''} branch ${branch} to origin.`,
+        summary: `Pushed ${project}${worktreeId ? ` worktree ${worktreeId}` : ''} branch ${result.branch} to origin.`,
       }
-    } catch (error) {
+    }
+
+    if (result.code === 'dirty') {
       return this.gitPushFailure({
         ...base,
-        branch,
-        remote: 'origin',
-        reason: 'push_failed',
-        error: errorMessage(error),
+        branch: result.branch,
+        dirty: this.dirtyDetails(path),
+        reason: result.code,
+        error: result.error,
       })
     }
+    if (result.code === 'push_failed') {
+      return this.gitPushFailure({
+        ...base,
+        branch: result.branch,
+        remote: 'origin',
+        reason: result.code,
+        error: result.error,
+      })
+    }
+    if (result.code === 'origin_missing') {
+      return this.gitPushFailure({
+        ...base,
+        branch: result.branch,
+        reason: result.code,
+        error: result.error,
+      })
+    }
+    return this.gitPushFailure({
+      ...base,
+      reason: result.code,
+      error: result.error,
+    })
   }
 
   private gitPushFailure(result: Omit<ProjectGitPushResult, 'pushed' | 'summary'> & { summary?: string }): ProjectGitPushResult {
@@ -1168,14 +1205,6 @@ export class ProjectManager {
       ...result,
       pulled: false,
       summary: result.summary ?? `Pull failed for project ${result.project}: ${result.reason ?? 'unknown'}.`,
-    }
-  }
-
-  private isGitWorkTree(path: string): boolean {
-    try {
-      return this.git(path, ['rev-parse', '--is-inside-work-tree']).trim() === 'true'
-    } catch {
-      return false
     }
   }
 
@@ -1260,6 +1289,15 @@ export class ProjectManager {
     })
   }
 
+  /** Run git and return its trimmed stdout, or null when the command fails. */
+  private gitOutput(cwd: string, args: string[]): string | null {
+    try {
+      return this.git(cwd, args).trim() || null
+    } catch {
+      return null
+    }
+  }
+
   commitLog(projectName: string, limit: number): { project: string; commits: Array<{ sha: string; authored_at: string; author_name: string; subject: string }> } {
     const l = Number.isInteger(limit) && limit >= 1 && limit <= 100 ? Math.floor(limit) : 20
     const project = this.getProject(projectName)
@@ -1276,6 +1314,105 @@ export class ProjectManager {
       }
     })
     return { project: project.name, commits }
+  }
+
+  /**
+   * Register a new project by writing its `.fmproj` metadata. Refuses an id
+   * that is already discovered or whose target file already exists, and never
+   * writes any file other than the one `.fmproj`.
+   */
+  async registerProject(input: {
+    project: string
+    description: string
+    display_name?: string
+    checkout_path?: string
+    git_remote?: string
+    default_branch?: string
+  }): Promise<ProjectRegisterResult> {
+    const project = input.project?.trim() ?? ''
+    const segments = project.split('/')
+    const validId = project.length > 0 && segments.every((segment) => (
+      segment.length > 0 && segment !== '.' && segment !== '..' && PROJECT_ID_SEGMENT_RE.test(segment)
+    ))
+    if (!validId) {
+      throw new ProjectConfigError(
+        'invalid_project_id',
+        `Project id '${input.project}' is invalid: use one or more '/'-separated segments of ` +
+        `[A-Za-z0-9._-] with no empty, '.' or '..' segment.`,
+      )
+    }
+
+    const description = input.description?.trim() ?? ''
+    if (!description) {
+      throw new ProjectConfigError('invalid_description', 'A non-empty project description is required.')
+    }
+
+    const lastSegment = segments[segments.length - 1] as string
+    const projectDir = join(this.workspaceRoot, 'projects', ...segments)
+    const filePath = join(projectDir, `${lastSegment}.fmproj`)
+
+    const discovered = discoverProjects(this.workspaceRoot)
+    if (discovered.has(project) || existsSync(filePath)) {
+      throw new ProjectConfigError('project_exists', `Project '${project}' is already registered.`)
+    }
+
+    let checkoutPath: string | undefined
+    if (input.checkout_path !== undefined) {
+      const raw = input.checkout_path.trim()
+      if (!isAbsolute(raw)) {
+        throw new ProjectConfigError('not_absolute', `Checkout path '${input.checkout_path}' must be an absolute path.`)
+      }
+      if (!existsSync(raw) || !statSync(raw).isDirectory()) {
+        throw new ProjectConfigError('checkout_missing', `Checkout path '${raw}' does not exist or is not a directory.`)
+      }
+      checkoutPath = resolve(raw)
+    }
+
+    let gitRemote = input.git_remote?.trim() || undefined
+    let defaultBranch = input.default_branch?.trim() || undefined
+    if (checkoutPath !== undefined) {
+      const isWorkTree = this.gitOutput(checkoutPath, ['rev-parse', '--is-inside-work-tree']) === 'true'
+      if (isWorkTree) {
+        if (gitRemote === undefined) {
+          gitRemote = this.gitOutput(checkoutPath, ['remote', 'get-url', 'origin']) ?? undefined
+        }
+        if (defaultBranch === undefined) {
+          const originHead = this.gitOutput(checkoutPath, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
+          if (originHead) {
+            defaultBranch = originHead.replace(/^origin\//u, '')
+          } else {
+            defaultBranch = this.gitOutput(checkoutPath, ['rev-parse', '--abbrev-ref', 'HEAD']) ?? undefined
+          }
+        }
+      }
+    }
+
+    const yamlValue: Record<string, unknown> = { name: project }
+    const displayName = input.display_name?.trim()
+    if (displayName) yamlValue.display_name = displayName
+    yamlValue.description = description
+    if (gitRemote !== undefined || defaultBranch !== undefined) {
+      yamlValue.git = {
+        ...(gitRemote !== undefined ? { remote: gitRemote } : {}),
+        ...(defaultBranch !== undefined ? { default_branch: defaultBranch } : {}),
+      }
+    }
+    if (checkoutPath !== undefined) {
+      yamlValue.hosts = { [this.hostname]: checkoutPath }
+    }
+
+    mkdirSync(projectDir, { recursive: true })
+    writeFileSync(filePath, stringify(yamlValue), 'utf-8')
+    invalidateProjectCache()
+
+    return {
+      project,
+      file: relative(this.workspaceRoot, filePath).replace(/\\/gu, '/'),
+      path: checkoutPath ?? null,
+      ...(gitRemote !== undefined ? { git_remote: gitRemote } : {}),
+      ...(defaultBranch !== undefined ? { default_branch: defaultBranch } : {}),
+      registered: true,
+    }
   }
 
   private worktreeUnsupportedProjectMessage(project: ProjectEntry): string {

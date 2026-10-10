@@ -81,14 +81,20 @@ import {
 } from './methods/provider.mts'
 export type { ProviderConfigureParams, ProviderConfigureResult, ProviderListParams, ProviderListResult, ProviderQuotaParams, ProviderQuotaResult } from './methods/provider.mts'
 import {
+  projectCommitParamsSchema,
+  projectCommitResultSchema,
   projectDescribeParamsSchema,
   projectDescribeResultSchema,
+  projectDiffParamsSchema,
+  projectDiffResultSchema,
   projectListParamsSchema,
   projectListResultSchema,
   projectPullParamsSchema,
   projectPullResultSchema,
   projectPushParamsSchema,
   projectPushResultSchema,
+  projectRegisterParamsSchema,
+  projectRegisterResultSchema,
   projectStatusParamsSchema,
   projectStatusResultSchema,
   projectWorktreeCreateParamsSchema,
@@ -99,14 +105,20 @@ import {
   projectWorktreeMergeResultSchema,
   projectWorktreeRemoveParamsSchema,
   projectWorktreeRemoveResultSchema,
+  type ProjectCommitParams,
+  type ProjectCommitResult,
   type ProjectDescribeParams,
   type ProjectDescribeResult,
+  type ProjectDiffParams,
+  type ProjectDiffResult,
   type ProjectListParams,
   type ProjectListResult,
   type ProjectPullParams,
   type ProjectPullResult,
   type ProjectPushParams,
   type ProjectPushResult,
+  type ProjectRegisterParams,
+  type ProjectRegisterResult,
   type ProjectStatusParams,
   type ProjectStatusResult,
   type ProjectWorktreeCreateParams,
@@ -306,14 +318,20 @@ export type {
 export type {
   ProjectCommitLogParams,
   ProjectCommitLogResult,
+  ProjectCommitParams,
+  ProjectCommitResult,
   ProjectDescribeParams,
   ProjectDescribeResult,
+  ProjectDiffParams,
+  ProjectDiffResult,
   ProjectListParams,
   ProjectListResult,
   ProjectPullParams,
   ProjectPullResult,
   ProjectPushParams,
   ProjectPushResult,
+  ProjectRegisterParams,
+  ProjectRegisterResult,
   ProjectStatusParams,
   ProjectStatusResult,
   ProjectWorktreeCreateParams,
@@ -417,6 +435,8 @@ export type {
 export interface MethodSchema<TParams = unknown, TResult = unknown> {
   params: JsonSchema
   result: JsonSchema
+  /** Short, factual description of what the method does and its safety rules. */
+  description?: string
   _params?: TParams
   _result?: TResult
 }
@@ -452,11 +472,14 @@ export interface ForemanMethodParams {
   'project.status': ProjectStatusParams
   'project.pull': ProjectPullParams
   'project.push': ProjectPushParams
+  'project.diff': ProjectDiffParams
+  'project.commit': ProjectCommitParams
   'project.worktree.list': ProjectWorktreeListParams
   'project.worktree.create': ProjectWorktreeCreateParams
   'project.worktree.remove': ProjectWorktreeRemoveParams
   'project.worktree.merge': ProjectWorktreeMergeParams
   'project.commitLog': ProjectCommitLogParams
+  'project.register': ProjectRegisterParams
   'taskgraph.create': TaskGraphCreateParams
   'taskgraph.patch': TaskGraphPatchParams
   'taskgraph.status': TaskGraphStatusParams
@@ -520,11 +543,14 @@ export interface ForemanMethodResults {
   'project.status': ProjectStatusResult
   'project.pull': ProjectPullResult
   'project.push': ProjectPushResult
+  'project.diff': ProjectDiffResult
+  'project.commit': ProjectCommitResult
   'project.worktree.list': ProjectWorktreeListResult
   'project.worktree.create': ProjectWorktreeCreateResult
   'project.worktree.remove': ProjectWorktreeRemoveResult
   'project.worktree.merge': ProjectWorktreeMergeResult
   'project.commitLog': ProjectCommitLogResult
+  'project.register': ProjectRegisterResult
   'taskgraph.create': TaskGraphCreateResult
   'taskgraph.patch': TaskGraphPatchResult
   'taskgraph.status': TaskGraphStatusResult
@@ -675,34 +701,56 @@ export const methodRegistry: {
   'project.status': {
     params: projectStatusParamsSchema,
     result: projectStatusResultSchema,
+    description: 'Read-only status of a project checkout and its worktrees. Never fetches, pulls, commits, or changes files.',
   },
   'project.pull': {
     params: projectPullParamsSchema,
     result: projectPullResultSchema,
+    description: 'Fast-forward only pull of the current branch from origin. Refuses when the tree is dirty or the branch has diverged; never merges or rebases.',
   },
   'project.push': {
     params: projectPushParamsSchema,
     result: projectPushResultSchema,
+    description: 'Push the current branch to origin only. Requires a clean working tree and never pushes to any other remote or with force.',
+  },
+  'project.diff': {
+    params: projectDiffParamsSchema,
+    result: projectDiffResultSchema,
+    description: 'Read-only working-tree diff of a project or worktree checkout, optionally limited to paths or the staged index. Changes nothing.',
+  },
+  'project.commit': {
+    params: projectCommitParamsSchema,
+    result: projectCommitResultSchema,
+    description: 'Commit exactly the listed files in a project or worktree checkout. Refuses with file_unchanged, foreign_staged, or staged_mismatch when the staged set does not match the requested files.',
   },
   'project.worktree.list': {
     params: projectWorktreeListParamsSchema,
     result: projectWorktreeListResultSchema,
+    description: 'List the managed git worktrees of one project. Read-only.',
   },
   'project.worktree.create': {
     params: projectWorktreeCreateParamsSchema,
     result: projectWorktreeCreateResultSchema,
+    description: 'Create a managed git worktree for one project on a new or existing branch.',
   },
   'project.worktree.remove': {
     params: projectWorktreeRemoveParamsSchema,
     result: projectWorktreeRemoveResultSchema,
+    description: 'Remove a managed git worktree without merging its branch.',
   },
   'project.worktree.merge': {
     params: projectWorktreeMergeParamsSchema,
     result: projectWorktreeMergeResultSchema,
+    description: 'Rebase a clean worktree onto its target branch, fast-forward the target, then remove the worktree. Refuses on a dirty worktree, a diverged or stale target, or a non-fast-forward merge.',
   },
   'project.commitLog': {
     params: projectCommitLogParamsSchema,
     result: projectCommitLogResultSchema,
+  },
+  'project.register': {
+    params: projectRegisterParamsSchema,
+    result: projectRegisterResultSchema,
+    description: "Register a project by writing projects/<id>/<last segment>.fmproj. The id is '/'-separated segments matching [A-Za-z0-9._-] and may be nested such as gol/arts; the command refuses an id that already exists. When omitted, the git remote and default branch are detected from the checkout.",
   },
   'taskgraph.create': {
     params: taskgraphCreateParamsSchema,
@@ -818,4 +866,17 @@ export function isForemanMethod(method: string): method is ForemanMethod {
 export function getMethodSchema(method: string): MethodSchema | undefined {
   if (!isForemanMethod(method)) return undefined
   return methodRegistry[method]
+}
+
+/** The public description of a registered method, or undefined when unknown. */
+export function describeMethod(
+  method: string,
+): { name: string; description: string; params: JsonSchema } | undefined {
+  const schema = getMethodSchema(method)
+  if (!schema) return undefined
+  return {
+    name: method,
+    description: schema.description ?? '',
+    params: schema.params,
+  }
 }
