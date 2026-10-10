@@ -363,6 +363,11 @@ export interface SessionSummary {
   title: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Runtime-derived: whether the session has an in-flight turn right now. Never
+   * persisted to `index.json`; only the session engine populates it in memory.
+   */
+  running?: boolean;
 }
 
 // ─── Ledger ────────────────────────────────────────────────────────────────
