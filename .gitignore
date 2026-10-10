@@ -3,6 +3,7 @@ node_modules/
 dist/
 build/
 coverage/
+*.tsbuildinfo
 .artifacts/
 # Desktop installers are written to the repository-root release/ directory, and
 # the publish job stages downloads in release-assets/. A leading slash anchors
