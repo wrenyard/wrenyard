@@ -2,9 +2,9 @@ import { Spinner } from '@/renderer/components/ui/spinner';
 import { cn } from 'cn';
 
 /**
- * The context-usage ring shown in the composer toolbar (usage spec 4). It only
- * receives the ratio and a coarse status; the caller owns the tooltip, the
- * popover and the send-blocking decision.
+ * The context-usage ring shown by the status-bar ctx item and the inspector
+ * (usage spec 4). It only receives the ratio and a coarse status; the caller
+ * owns the tooltip, the popover and the send-blocking decision.
  *
  * A 16px SVG with a 2.5px stroke: the base ring is `--muted-foreground` at 30%
  * opacity so the full track stays visible, the progress arc starts at 12
@@ -28,11 +28,6 @@ const ARC_CLASS: Record<UsageRingLevel, string> = {
   destructive: 'text-destructive',
 };
 
-const DOT_CLASS: Record<Exclude<UsageRingLevel, 'normal'>, string> = {
-  warning: 'bg-warning',
-  destructive: 'bg-destructive',
-};
-
 const RADIUS = 7;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
@@ -40,24 +35,14 @@ export interface UsageRingProps {
   /** Used / available ratio; values above 1 render a full ring. */
   ratio?: number;
   status?: UsageRingStatus;
-  /** Quota alert dot colour when the current provider has a window in alert. */
-  quotaAlert?: Exclude<UsageRingLevel, 'normal'>;
   className?: string;
 }
 
-export function UsageRing({ ratio, status = 'ready', quotaAlert, className }: UsageRingProps) {
-  const dot = quotaAlert === undefined ? null : (
-    <span
-      data-slot="usage-ring-quota-dot"
-      className={cn('absolute -top-0.5 -right-0.5 size-1.5 rounded-full', DOT_CLASS[quotaAlert])}
-    />
-  );
-
+export function UsageRing({ ratio, status = 'ready', className }: UsageRingProps) {
   if (status === 'loading') {
     return (
       <span className={cn('relative inline-flex size-4 items-center justify-center', className)}>
         <Spinner className="size-4" />
-        {dot}
       </span>
     );
   }
@@ -76,7 +61,6 @@ export function UsageRing({ ratio, status = 'ready', quotaAlert, className }: Us
             className="stroke-muted"
           />
         </svg>
-        {dot}
       </span>
     );
   }
@@ -111,7 +95,6 @@ export function UsageRing({ ratio, status = 'ready', quotaAlert, className }: Us
           className={cn(ARC_CLASS[level], 'transition-[stroke-dashoffset] duration-200 motion-reduce:transition-none')}
         />
       </svg>
-      {dot}
     </span>
   );
 }

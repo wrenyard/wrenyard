@@ -9,7 +9,12 @@
 
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import type { ReasoningEffort } from '@wrenyard/models';
-import type { SessionModelEntry } from '@wrenyard/protocol';
+import type {
+  SessionModelEntry,
+  SessionRoutesPreviewParams,
+  SessionRoutesPreviewRole,
+  SessionRoutesPreviewResult,
+} from '@wrenyard/protocol';
 import type {
   AttachmentInput,
   ContextInspection,
@@ -21,6 +26,7 @@ import type {
 
 export type { ContextInspection, LiveCall };
 export type { AttachmentInput, SessionFile };
+export type { SessionRoutesPreviewParams, SessionRoutesPreviewRole, SessionRoutesPreviewResult };
 
 /** Exact main↔renderer channels of the session surface. */
 export const SESSION_CHANNELS = {
@@ -38,6 +44,8 @@ export const SESSION_CHANNELS = {
   models: 'session:models',
   /** Renderer → main: `{ sessionId?, model }`, forwarded to `session.context.inspect`. */
   context: 'session:context',
+  /** Renderer → main: `{ sessionId? }`, forwarded to `session.routes.preview`. */
+  routesPreview: 'session:routes-preview',
   /** Renderer → main: `string[]` of task run ids, resolved to briefs. */
   tasks: 'session:tasks',
   /** Renderer → main: `{ sessionId, path }`, forwarded to `session.media.read`. */
@@ -75,6 +83,9 @@ export interface SessionBridgeContextInspectRequest {
   /** Gateway public id the input box currently has selected. */
   model: string;
 }
+
+/** Params of the read-only route preview (`session.routes.preview`). */
+export type SessionBridgeRoutesPreviewRequest = SessionRoutesPreviewParams;
 
 export interface SessionBridgeSendRequest {
   sessionId: string;
@@ -188,6 +199,11 @@ export interface SessionBridge {
    * currently selected model. Omit `sessionId` for a new session.
    */
   contextInspect(request: SessionBridgeContextInspectRequest): Promise<ContextInspection>;
+  /**
+   * Read-only preview of each auxiliary role's rank-1 route (model, effort,
+   * display name and window). Never calls a model.
+   */
+  routesPreview(request?: SessionBridgeRoutesPreviewRequest): Promise<SessionRoutesPreviewResult>;
   /** Resolve task-run briefs for the given run ids (per-id failures are `unavailable`). */
   tasks(taskRunIds: string[]): Promise<SessionBridgeTaskBrief[]>;
   /** Subscribe to pushed ledger events; the returned function unsubscribes. */
@@ -265,6 +281,9 @@ const bridge: SessionBridge = {
   },
   contextInspect(request: SessionBridgeContextInspectRequest): Promise<ContextInspection> {
     return ipcRenderer.invoke(SESSION_CHANNELS.context, request) as Promise<ContextInspection>;
+  },
+  routesPreview(request: SessionBridgeRoutesPreviewRequest = {}): Promise<SessionRoutesPreviewResult> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.routesPreview, request) as Promise<SessionRoutesPreviewResult>;
   },
   tasks(taskRunIds: string[]): Promise<SessionBridgeTaskBrief[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.tasks, taskRunIds) as Promise<SessionBridgeTaskBrief[]>;

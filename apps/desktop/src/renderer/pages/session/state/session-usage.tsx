@@ -1,9 +1,9 @@
 /**
  * Session usage context: a React context owned by the session page that carries
  * the loaded session projection and the composer selection to sibling session
- * components (composer, context meter, inspector). Draft text is persisted
- * through the per-session drafts module; there is no module-level state and no
- * effect-based publishing.
+ * components (the composer, the status bar ctx item, inspector). Draft text is
+ * persisted through the per-session drafts module; there is no module-level
+ * state and no effect-based publishing.
  */
 import {
   createContext,
@@ -53,9 +53,13 @@ export interface SessionUsage {
   modelId: string;
   effort: ReasoningEffort;
   inputText: string;
+  /** Debounced composer input token count, shared with the status-bar ctx item. */
+  inputTokens: number;
   inspection?: SessionUsageInspection;
   requestModel(modelId: string): void;
   requestInspection(options?: { tab?: 'context' | 'ledger'; seq?: number }): void;
+  /** Publish the composer's debounced input token count (or 0 when empty). */
+  setInputTokens(tokens: number): void;
 }
 
 export interface ComposerSelection {
@@ -95,6 +99,7 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
   const [text, setTextState] = useState(() => readDraft(sessionKey));
   const [attachments, setAttachmentsState] = useState<DraftAttachment[]>(() => readDraftAttachments(sessionKey));
   const [inspections, setInspections] = useState<Record<string, SessionUsageInspection>>({});
+  const [inputTokens, setInputTokensState] = useState(0);
   const nonce = useRef(0);
 
   if (selectionKey !== sessionKey) {
@@ -103,6 +108,7 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     setEffort('medium');
     setTextState(readDraft(sessionKey));
     setAttachmentsState(readDraftAttachments(sessionKey));
+    setInputTokensState(0);
   }
 
   // Flush the outgoing session's pending draft on switch and on unmount.
@@ -145,6 +151,12 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     clearDraftAttachments(sessionKey);
   }, [sessionKey]);
 
+  // The composer publishes its debounced input count so the status-bar context
+  // item can include the draft input in the same budget the composer blocks on.
+  const setInputTokens = useCallback((next: number) => {
+    setInputTokensState(next);
+  }, []);
+
   // Retain the reasoning effort when the target route still supports it;
   // otherwise fall back to the nearest-supported rule (shared with Composer).
   const requestModel = useCallback((nextModelId: string) => {
@@ -180,9 +192,11 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     modelId,
     effort,
     inputText: text,
+    inputTokens,
     inspection: inspections[sessionKey],
     requestModel,
     requestInspection,
+    setInputTokens,
     setModelId,
     setEffort,
     text,
@@ -192,8 +206,8 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     setAttachments,
     clearAttachments,
   }), [
-    sessionKey, models, events, turns, seq, modelId, effort, text, attachments,
-    inspections, requestModel, requestInspection, setText, clearText, setAttachments, clearAttachments,
+    sessionKey, models, events, turns, seq, modelId, effort, text, inputTokens, attachments,
+    inspections, requestModel, requestInspection, setInputTokens, setText, clearText, setAttachments, clearAttachments,
   ]);
 
   return <SessionUsageContext.Provider value={value}>{children}</SessionUsageContext.Provider>;
@@ -208,10 +222,10 @@ function useSessionUsageContext(): SessionUsageContextValue {
 /** Read the loaded session projection and request model/inspection changes. */
 export function useSessionUsage(): SessionUsage {
   const {
-    sessionKey, models, events, turns, seq, modelId, effort, inputText,
-    inspection, requestModel, requestInspection,
+    sessionKey, models, events, turns, seq, modelId, effort, inputText, inputTokens,
+    inspection, requestModel, requestInspection, setInputTokens,
   } = useSessionUsageContext();
-  return { sessionKey, models, events, turns, seq, modelId, effort, inputText, inspection, requestModel, requestInspection };
+  return { sessionKey, models, events, turns, seq, modelId, effort, inputText, inputTokens, inspection, requestModel, requestInspection, setInputTokens };
 }
 
 /** Read and update the composer selection for the active session. */

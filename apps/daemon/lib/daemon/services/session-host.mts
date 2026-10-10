@@ -3,6 +3,8 @@ import { hostname } from 'node:os'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { ProviderDefinition } from '@wrenyard/providers'
 import {
+  AUXILIARY_ROLE_ORDER,
+  type AuxiliaryRoutePreview,
   type ProjectInfo,
   type SessionHost,
   type TaskArtifact,
@@ -58,6 +60,26 @@ function artifactErrorDescriptors(meta: unknown): string[] {
     descriptors.push(`${index}${path}: ${reason}`.trim())
   }
   return descriptors
+}
+
+/**
+ * Resolve a canonical `provider/model` route id to its catalog display name and
+ * context window, using the same provider catalog `provider.list` reads.
+ */
+function resolveRouteMetadata(
+  model: string,
+  resolveProvider: (providerId: string) => ProviderDefinition | undefined,
+): { modelName?: string; contextWindow?: number } {
+  const separator = model.indexOf('/')
+  if (separator <= 0 || separator === model.length - 1) return {}
+  const definition = resolveProvider(model.slice(0, separator))?.models.find(
+    entry => entry.id === model.slice(separator + 1),
+  )
+  if (!definition) return {}
+  return {
+    modelName: definition.displayName,
+    ...(definition.contextWindow === undefined ? {} : { contextWindow: definition.contextWindow }),
+  }
 }
 
 function readGitHead(checkoutPath: string): { branch?: string; head?: string } {
@@ -157,6 +179,32 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     resolveInferenceProvider: options.resolveInferenceProvider,
     selectAuxiliary: options.selectAuxiliary,
     routeStatus: options.routeStatus,
+    /**
+     * Read-only rank-1 preview of every auxiliary role. Reuses the injected
+     * selector and the same provider catalog `provider.list` serves; a role with
+     * no candidate, or whose selection throws, reports `error` and no model.
+     */
+    async previewAuxiliaryRoutes(): Promise<AuxiliaryRoutePreview[]> {
+      const roles: AuxiliaryRoutePreview[] = []
+      for (const role of AUXILIARY_ROLE_ORDER) {
+        try {
+          const route = (await options.selectAuxiliary(role))[0]
+          if (!route) {
+            roles.push({ role, error: 'no candidate route' })
+            continue
+          }
+          roles.push({
+            role,
+            model: route.model,
+            reasoningEffort: route.reasoningEffort,
+            ...resolveRouteMetadata(route.model, options.resolveInferenceProvider),
+          })
+        } catch (error) {
+          roles.push({ role, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      return roles
+    },
     listProjects,
     gitHead: async checkoutPath => readGitHead(checkoutPath),
     async listTaskDefinitions() {
