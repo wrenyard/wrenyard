@@ -6,6 +6,7 @@ import {
   sessionInterruptParamsSchema, sessionInterruptResultSchema,
   sessionEventsParamsSchema, sessionEventsResultSchema,
   sessionContextInspectParamsSchema, sessionContextInspectResultSchema,
+  sessionRoutesPreviewParamsSchema, sessionRoutesPreviewResultSchema,
   sessionMediaReadParamsSchema, sessionMediaReadResultSchema,
   sessionDeleteParamsSchema, sessionDeleteResultSchema,
   type SessionListParams, type SessionListResult,
@@ -14,6 +15,7 @@ import {
   type SessionInterruptParams, type SessionInterruptResult,
   type SessionEventsParams, type SessionEventsResult,
   type SessionContextInspectParams, type SessionContextInspectResult,
+  type SessionRoutesPreviewParams, type SessionRoutesPreviewResult,
   type SessionMediaReadParams, type SessionMediaReadResult,
   type SessionDeleteParams, type SessionDeleteResult,
 } from './methods/session.mts'
@@ -24,6 +26,7 @@ export type {
   SessionInterruptParams, SessionInterruptResult,
   SessionEventsParams, SessionEventsResult,
   SessionContextInspectParams, SessionContextInspectResult,
+  SessionRoutesPreviewParams, SessionRoutesPreviewResult,
   SessionMediaReadParams, SessionMediaReadResult,
   SessionDeleteParams, SessionDeleteResult,
 } from './methods/session.mts'
@@ -481,6 +484,7 @@ export interface ForemanMethodParams {
   'session.interrupt': SessionInterruptParams
   'session.events': SessionEventsParams
   'session.context.inspect': SessionContextInspectParams
+  'session.routes.preview': SessionRoutesPreviewParams
   'session.media.read': SessionMediaReadParams
   'session.delete': SessionDeleteParams
 }
@@ -548,6 +552,7 @@ export interface ForemanMethodResults {
   'session.interrupt': SessionInterruptResult
   'session.events': SessionEventsResult
   'session.context.inspect': SessionContextInspectResult
+  'session.routes.preview': SessionRoutesPreviewResult
   'session.media.read': SessionMediaReadResult
   'session.delete': SessionDeleteResult
 }
@@ -791,6 +796,10 @@ export const methodRegistry: {
   'session.context.inspect': {
     params: sessionContextInspectParamsSchema,
     result: sessionContextInspectResultSchema,
+  },
+  'session.routes.preview': {
+    params: sessionRoutesPreviewParamsSchema,
+    result: sessionRoutesPreviewResultSchema,
   },
   'session.media.read': {
     params: sessionMediaReadParamsSchema,

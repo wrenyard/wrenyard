@@ -2,14 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Gauge } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Popover, PopoverContent, PopoverTrigger } from '@/renderer/components/ui/popover';
-import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/renderer/components/ui/hover-card';
-import { StatusBarButton } from '@/renderer/components/status-bar-button';
-import type { StatusBarTone } from '@/renderer/components/status-bar-button';
-import {
-  formatWindowName,
-  paceView,
-  quotaLevel,
-} from '@/renderer/components/usage/QuotaBar';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
+import { StatusBarButton, levelTone } from '@/renderer/components/status-bar-button';
+import { quotaPoolLevel, shortWindowName } from '@/renderer/components/usage/QuotaBar';
 import type { QuotaLevel } from '@/renderer/components/usage/QuotaBar';
 import { QuotaTips } from '@/renderer/components/usage/QuotaTips';
 import { onQuotaPanelOpen, useQuotaFocus } from '@/renderer/lib/statusbar';
@@ -19,20 +14,15 @@ import type { QuotaProviderSnapshot, QuotaWindowSnapshot } from '@/shell-contrac
 
 /**
  * Status-bar quota item (usage spec 6.2). It focuses the quota provider of the
- * model currently selected in the composer and shows that provider's most tense
- * window, falling back to the global most severe window when nothing is
- * focused. Hovering opens {@link QuotaTips}; clicking opens {@link QuotaPanel}.
- * The global `quota.showPanel` command opens the same panel through
- * {@link onQuotaPanelOpen}.
+ * model currently selected in the composer and shows that provider's pools as a
+ * compact `5h 78% · 7d 40%` label (no provider name), falling back to the global
+ * most severe provider when nothing is focused. Hovering opens {@link QuotaTips}
+ * (the same provider plus a verdict line); clicking opens {@link QuotaPanel}
+ * with every registered provider. The global `quota.showPanel` command opens the
+ * same panel through {@link onQuotaPanelOpen}.
  */
 
 const SEVERITY: Readonly<Record<QuotaLevel, number>> = { normal: 0, warning: 1, destructive: 2 };
-
-const LEVEL_TONE: Readonly<Record<QuotaLevel, StatusBarTone>> = {
-  normal: 'default',
-  warning: 'warning',
-  destructive: 'destructive',
-};
 
 /** Weakened copy shown when a focused provider's quota cannot be read. */
 const FOCUS_UNAVAILABLE_SUFFIX = '额度不可用';
@@ -43,20 +33,13 @@ interface QuotaCandidate {
   level: QuotaLevel;
 }
 
-/** Alert level for a window: the remaining-percentage level, or a bad pace. */
-function windowLevel(window: QuotaWindowSnapshot): QuotaLevel {
-  const level = quotaLevel(window.remainingPct);
-  if (level !== 'normal') return level;
-  return paceView(window.remainingPct, window.expectedRemainingPct)?.warn === true ? 'warning' : 'normal';
-}
-
 /** Most severe window; ties go to the lowest remaining percentage. */
 function selectWindow(providers: readonly QuotaProviderSnapshot[]): QuotaCandidate | null {
   let best: QuotaCandidate | null = null;
   for (const provider of providers) {
     for (const window of provider.windows) {
       if (!Number.isFinite(window.remainingPct)) continue;
-      const candidate: QuotaCandidate = { provider, window, level: windowLevel(window) };
+      const candidate: QuotaCandidate = { provider, window, level: quotaPoolLevel(window) };
       if (best === null) {
         best = candidate;
         continue;
@@ -135,26 +118,40 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
 
   const globalSelected = useMemo(() => selectWindow(candidates), [candidates]);
 
-  const selected = focus === null
-    ? globalSelected
-    : focused.kind === 'window'
-      ? focused.candidate
-      : null;
+  // The provider whose pools both the label and the hover describe: the focused
+  // one, else the global most-tight provider the label falls back to.
+  const shown = useMemo<QuotaProviderSnapshot | null>(() => {
+    const data = quota.data;
+    if (data === undefined) return null;
+    if (focus !== null) return data.providers.find((provider) => provider.id === focus) ?? null;
+    return globalSelected?.provider ?? null;
+  }, [quota.data, focus, globalSelected]);
+
   const unavailableLabel = focused.kind === 'unavailable' ? focused.label : null;
 
   useEffect(() => onQuotaPanelOpen(() => setOpen(true)), []);
 
+  const windows = useMemo(
+    () => (shown?.windows ?? []).filter((window) => Number.isFinite(window.remainingPct)),
+    [shown],
+  );
+  const poolLevel: QuotaLevel = windows.some((window) => quotaPoolLevel(window) === 'destructive')
+    ? 'destructive'
+    : windows.some((window) => quotaPoolLevel(window) === 'warning')
+      ? 'warning'
+      : 'normal';
+
   const label = unavailableLabel !== null
     ? `${unavailableLabel} ${FOCUS_UNAVAILABLE_SUFFIX}`
-    : selected === null
+    : windows.length === 0
       ? undefined
-      : `${selected.provider.label || selected.provider.id} ${formatWindowName(
-          selected.window.name,
-          selected.window.windowMinutes,
-        )} ${Math.floor(selected.window.remainingPct)}%`;
-  const tone: StatusBarTone = unavailableLabel === null && selected !== null
-    ? LEVEL_TONE[selected.level]
-    : 'default';
+      : windows
+          .map((window) => {
+            const used = Math.max(0, Math.min(100, 100 - window.remainingPct));
+            return `${shortWindowName(window.name, window.windowMinutes)} ${Math.floor(used)}%`;
+          })
+          .join(' · ');
+  const tone = unavailableLabel === null ? levelTone(poolLevel) : 'default';
 
   const handleOpenChange = (next: boolean): void => {
     setOpen(next);
@@ -164,14 +161,12 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger nativeButton={false} render={<span className="inline-flex" />}>
-        <HoverCard>
-          <HoverCardTrigger render={<span className="inline-flex" />}>
-            <StatusBarButton icon={Gauge} label={label} tone={tone} ariaLabel="额度" />
-          </HoverCardTrigger>
-          <HoverCardContent side="top" align="end" className="w-80 p-2">
-            <QuotaTips providers={candidates} focusedProvider={focus} now={now} />
-          </HoverCardContent>
-        </HoverCard>
+        <Tooltip>
+          <TooltipTrigger render={<StatusBarButton icon={Gauge} label={label} tone={tone} ariaLabel="额度" />} />
+          <TooltipContent side="top" align="end" className="w-72 max-w-none flex-col items-stretch gap-1.5 py-2">
+            <QuotaTips providers={candidates} focusedProvider={shown?.id ?? null} now={now} surface="inverse" />
+          </TooltipContent>
+        </Tooltip>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-[400px] p-0">
         <QuotaPanel />
