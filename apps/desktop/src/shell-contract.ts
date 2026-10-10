@@ -7,14 +7,15 @@ import type {
 } from './pet/main/config';
 import { BUILTIN_THEMES, type ThemeId } from '@wrenyard/themes';
 import type {
+  AppNotification,
   NotificationAction,
   NotificationCommandAction,
-  NotificationInput,
   NotificationLevel,
+} from './main/notifications/notifier';
+import type {
+  NotificationEntry,
   NotificationSnapshot,
-  NotificationSource,
-  ShellNotification,
-} from './main/notification-center';
+} from './main/notifications/center';
 import type {
   ContextInspection,
   ContextItem,
@@ -48,18 +49,20 @@ export type { ActivityPresence } from './pet/shared/activity-snapshot';
 // import site.
 export type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, };
 
-// The notification-center DTOs own the notification wire shape; the shell
-// contract re-exports them so the preload facade, main handlers and renderer
-// all read one definition.
+// The notifier and in-app center DTOs own the notification wire shape; the
+// shell contract re-exports them so the preload facade, main handlers and
+// renderer all read one definition.
 export type {
+  AppNotification,
   NotificationAction,
   NotificationCommandAction,
-  NotificationInput,
   NotificationLevel,
+  NotificationEntry,
   NotificationSnapshot,
-  NotificationSource,
-  ShellNotification,
 };
+
+/** Upper bound for a renderer-supplied notification id crossing the shell bridge. */
+export const NOTIFICATION_ID_MAX = 200;
 
 /**
  * Whether a workspace is usable, plus where the configuration came from. A
@@ -175,13 +178,12 @@ export const SHELL_CHANNELS = {
   daemonChanged: 'wrenyard-shell:daemon-changed',
   activityChanged: 'wrenyard-shell:activity-changed',
   viewChanged: 'wrenyard-shell:view-changed',
-  notificationsSnapshot: 'wrenyard-shell:notifications-snapshot',
-  notificationNotify: 'wrenyard-shell:notification-notify',
-  notificationDismiss: 'wrenyard-shell:notification-dismiss',
-  notificationsClear: 'wrenyard-shell:notifications-clear',
-  notificationsMarkRead: 'wrenyard-shell:notifications-mark-read',
-  notificationsSetDoNotDisturb: 'wrenyard-shell:notifications-set-do-not-disturb',
+  notificationShow: 'wrenyard-shell:notification-show',
   notificationsChanged: 'wrenyard-shell:notifications-changed',
+  notificationSnapshot: 'wrenyard-shell:notification-snapshot',
+  notificationDismissEntry: 'wrenyard-shell:notification-dismiss-entry',
+  notificationClear: 'wrenyard-shell:notification-clear',
+  notificationMarkRead: 'wrenyard-shell:notification-mark-read',
   commandAction: 'wrenyard-shell:command-action',
   taskSettingsSnapshot: 'wrenyard-shell:task-settings-snapshot',
   taskSettingsSave: 'wrenyard-shell:task-settings-save',
@@ -285,49 +287,12 @@ export const SESSION_SEND_KEY_OPTIONS: ReadonlyArray<{ value: SessionSendKey; la
   { value: 'mod-enter', label: 'Cmd/Ctrl+Enter 发送' },
 ];
 
-/** Stable notification event ids; the persisted keys of `notifications.events`. */
-export const NOTIFICATION_EVENT_IDS = [
-  'taskCompleted',
-  'taskFailed',
-  'sessionReplyCompleted',
-  'quotaWarning',
-  'updateAvailable',
-  'daemonDisconnected',
-] as const;
-export type NotificationEventId = (typeof NOTIFICATION_EVENT_IDS)[number];
-
-export const NOTIFICATION_EVENT_LABELS: Readonly<Record<NotificationEventId, string>> = {
-  taskCompleted: '任务完成',
-  taskFailed: '任务失败',
-  sessionReplyCompleted: '会话回复完成',
-  quotaWarning: '额度告警',
-  updateAvailable: '有可用更新',
-  daemonDisconnected: 'Daemon 断开',
-};
-
 /**
- * Per-event notification toggles. Each key gates one event family emitted by
- * the main process or the Pet module; a disabled family is never recorded nor
- * surfaced. Field names are the persisted contract, so they stay stable.
+ * Desktop notification preferences: one boolean master switch. A disabled
+ * notifier delivers nothing on any channel.
  */
-export interface NotificationEventPreferences {
-  taskCompleted: boolean;
-  taskFailed: boolean;
-  sessionReplyCompleted: boolean;
-  quotaWarning: boolean;
-  updateAvailable: boolean;
-  daemonDisconnected: boolean;
-}
-
-/** Desktop notification preferences, including the runtime do-not-disturb flag. */
 export interface NotificationPreferences {
-  /** Whether OS-level notifications are enabled at all. */
-  system: boolean;
-  /** Whether OS notifications play a sound. */
-  sound: boolean;
-  /** Do-not-disturb: history only, except error-level notifications. */
-  doNotDisturb: boolean;
-  events: NotificationEventPreferences;
+  enabled: boolean;
 }
 
 /** Persisted general partition fields. */
@@ -384,9 +349,7 @@ export interface DesktopPreferences {
 export type PreferenceSection = 'general' | 'appearance' | 'session' | 'notifications' | 'statusBar' | 'update';
 
 /** Path from a preference id to the value it addresses inside a preference document. */
-export type PreferencePath =
-  | readonly [PreferenceSection, string]
-  | readonly ['notifications', 'events', string];
+export type PreferencePath = readonly [PreferenceSection, string];
 
 /** One preference: where its value lives and the single rule that validates it. */
 export interface PreferenceDescriptor {
@@ -432,15 +395,7 @@ export const PREFERENCES = {
     validate: (value) => typeof value === 'number' && APPEARANCE_ZOOM_OPTIONS.some((option) => option.value === value),
   },
   'session.sendKey': { path: ['session', 'sendKey'], validate: (value) => value === 'enter' || value === 'mod-enter' },
-  'notifications.system': { path: ['notifications', 'system'], validate: (value) => typeof value === 'boolean' },
-  'notifications.sound': { path: ['notifications', 'sound'], validate: (value) => typeof value === 'boolean' },
-  'notifications.doNotDisturb': { path: ['notifications', 'doNotDisturb'], validate: (value) => typeof value === 'boolean' },
-  'notifications.events.taskCompleted': { path: ['notifications', 'events', 'taskCompleted'], validate: (value) => typeof value === 'boolean' },
-  'notifications.events.taskFailed': { path: ['notifications', 'events', 'taskFailed'], validate: (value) => typeof value === 'boolean' },
-  'notifications.events.sessionReplyCompleted': { path: ['notifications', 'events', 'sessionReplyCompleted'], validate: (value) => typeof value === 'boolean' },
-  'notifications.events.quotaWarning': { path: ['notifications', 'events', 'quotaWarning'], validate: (value) => typeof value === 'boolean' },
-  'notifications.events.updateAvailable': { path: ['notifications', 'events', 'updateAvailable'], validate: (value) => typeof value === 'boolean' },
-  'notifications.events.daemonDisconnected': { path: ['notifications', 'events', 'daemonDisconnected'], validate: (value) => typeof value === 'boolean' },
+  'notifications.enabled': { path: ['notifications', 'enabled'], validate: (value) => typeof value === 'boolean' },
   'statusBar.hidden': {
     path: ['statusBar', 'hidden'],
     validate: (value) => Array.isArray(value)
@@ -471,8 +426,7 @@ export function readPreferenceValue(preferences: PreferenceDocument, id: Prefere
 }
 
 /**
- * Immutable write of one preference: only the touched partition (and, for a
- * `notifications.events.*` id, the nested events object) is copied.
+ * Immutable write of one preference: only the touched partition is copied.
  */
 export function writePreferenceValue<T extends PreferenceDocument>(
   preferences: T,
@@ -481,16 +435,6 @@ export function writePreferenceValue<T extends PreferenceDocument>(
 ): T {
   const path = PREFERENCES[id].path as readonly string[];
   const document = preferences as unknown as Record<string, Record<string, unknown>>;
-  if (path.length === 3) {
-    const section = path[0]!;
-    const key = path[2]!;
-    const container = document[section]!;
-    const events = container.events as Record<string, unknown>;
-    return {
-      ...preferences,
-      [section]: { ...container, events: { ...events, [key]: value } },
-    } as T;
-  }
   const section = path[0]!;
   const key = path[1]!;
   const container = document[section]!;
@@ -804,6 +748,23 @@ export interface QuotaSnapshot {
   providerOrder: ProviderOrderSnapshot[];
   refreshedAt?: number;
   message?: string;
+}
+
+/**
+ * How many points a window's remaining percentage may trail its expected
+ * remaining percentage before the pace is considered too fast.
+ */
+export const QUOTA_PACE_WARN_DELTA = 5;
+
+/**
+ * The eligible quota providers shared by the quota producer and the status
+ * bar: when an explicit order exists, only the order-enabled providers;
+ * otherwise every provider.
+ */
+export function eligibleQuotaProviders(snapshot: QuotaSnapshot): QuotaProviderSnapshot[] {
+  if (snapshot.providerOrder.length === 0) return snapshot.providers;
+  const enabled = new Set(snapshot.providerOrder.filter((entry) => entry.enabled).map((entry) => entry.id));
+  return snapshot.providers.filter((provider) => enabled.has(provider.id));
 }
 
 /**
@@ -1234,16 +1195,18 @@ export interface WrenyardShellApi {
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
   execCancel(id: string): Promise<ExecCancelResult>;
-  /** Current session-only notification history, unread count and DND flag. */
-  getNotifications(): Promise<NotificationSnapshot>;
-  /** Record an event notification (toast + history); returns the stored item. */
-  notify(input: NotificationInput): Promise<ShellNotification>;
-  dismissNotification(id: string): Promise<void>;
-  clearNotifications(): Promise<void>;
-  /** Open the notification center: marks every notification read. */
-  markNotificationsRead(): Promise<void>;
-  setDoNotDisturb(value: boolean): Promise<NotificationSnapshot>;
+  /** Subscribe to a main-process notification show. */
+  onNotificationShow(listener: (notification: AppNotification) => void): () => void;
+  /** The in-app history changed; invalidates the bell panel query. No payload. */
   onNotificationsChanged(listener: () => void): () => void;
+  /** The in-app notification history snapshot, fetched by the bell panel. */
+  getNotificationSnapshot(): Promise<NotificationSnapshot>;
+  /** Remove one history entry by id. */
+  dismissNotification(id: string): Promise<void>;
+  /** Remove every history entry. */
+  clearNotifications(): Promise<void>;
+  /** Mark the whole in-app history read. */
+  markNotificationsRead(): Promise<void>;
   /** Main-process command delivery (e.g. a native-notification click). */
   onCommandAction(listener: (action: NotificationCommandAction) => void): () => void;
   /** Current version 3 Desktop preference partitions, main-process owned. */

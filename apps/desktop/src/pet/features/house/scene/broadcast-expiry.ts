@@ -7,9 +7,6 @@ export function broadcastAlpha(
   nowMs: number,
 ): number {
   if (!broadcast) return 0;
-  if (broadcast.intensity !== 'transient') return 1;
-  if (typeof broadcast.untilMs !== 'number') return 1;
-
   const remaining = broadcast.untilMs - nowMs;
   if (remaining <= 0) return 0;
   if (remaining >= BROADCAST_FADE_MS) return 1;

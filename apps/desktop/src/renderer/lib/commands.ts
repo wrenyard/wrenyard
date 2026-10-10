@@ -15,19 +15,12 @@ import { isShellPage } from '@/shell-contract';
 import { onCommandAction, onViewChanged, shell } from '@/renderer/lib/desktop';
 import { back, forward, toggleSecondarySidebar } from '@/renderer/lib/navigation';
 import { requestQuotaPanelOpen } from '@/renderer/lib/statusbar';
-import {
-  LOCAL_NOTIFICATION_ACTION_ID,
-  runLocalNotificationAction,
-  setNotificationActionRunner,
-} from '@/renderer/lib/notify';
 
 export interface CommandDefinition {
   id: string;
   title: string;
   run: (args?: unknown) => void;
 }
-
-export { LOCAL_NOTIFICATION_ACTION_ID };
 
 const globalCommands = new Map<string, CommandDefinition>();
 const pageCommands = new Map<ShellPage, Map<string, CommandDefinition>>();
@@ -171,15 +164,4 @@ onViewChanged((page) => {
 });
 onCommandAction((action) => {
   executeCommand(action.id, action.args);
-});
-
-// A renderer notification callback is addressed by a stable key; the command
-// table resolves it so the same action works from a toast or a native click.
-setNotificationActionRunner((action) => {
-  executeCommand(action.command.id, action.command.args);
-});
-registerCommand({
-  id: LOCAL_NOTIFICATION_ACTION_ID,
-  title: '执行通知操作',
-  run: (args) => runLocalNotificationAction(args),
 });

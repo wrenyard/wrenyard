@@ -1,6 +1,6 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { shell } from '@/renderer/lib/desktop';
-import { notify } from '@/renderer/lib/notify';
+import { toast } from '@/renderer/lib/notify';
 import type { DesktopPreferences, PreferenceId } from '@/shell-contract';
 import {
   daemonQuery,
@@ -86,7 +86,7 @@ export function usePreferenceMutation() {
     },
     onError: (error, _input, context) => {
       if (context?.previous) queryClient.setQueryData(preferencesQueryKey, context.previous);
-      notify({ level: 'error', source: 'settings', title: '偏好保存失败', description: errorMessage(error) });
+      toast(`偏好保存失败：${errorMessage(error)}`, { level: 'error' });
     },
     onSuccess: (next) => queryClient.setQueryData(preferencesQueryKey, next),
   });

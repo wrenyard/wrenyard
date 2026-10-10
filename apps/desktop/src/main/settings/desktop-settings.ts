@@ -20,7 +20,6 @@ import {
   writePreferenceValue,
   type AppearanceSettings,
   type GeneralPreferences,
-  type NotificationEventPreferences,
   type NotificationPreferences,
   type PreferenceId,
   type SessionPreferences,
@@ -29,7 +28,7 @@ import {
   type UpdatePreferences,
 } from '../../shell-contract.js';
 
-export type { NotificationEventPreferences, NotificationPreferences };
+export type { NotificationPreferences };
 
 /**
  * Desktop-owned UI preference document. A single store in the Desktop main
@@ -152,19 +151,7 @@ export function defaultSessionPreferences(): SessionPreferences {
 }
 
 export function defaultNotificationPreferences(): NotificationPreferences {
-  return {
-    system: true,
-    sound: true,
-    doNotDisturb: false,
-    events: {
-      taskCompleted: true,
-      taskFailed: true,
-      sessionReplyCompleted: true,
-      quotaWarning: true,
-      updateAvailable: true,
-      daemonDisconnected: true,
-    },
-  };
+  return { enabled: true };
 }
 
 export function defaultDesktopSettings(): DesktopSettings {
@@ -475,21 +462,10 @@ function normalizeNotificationPreferences(
   fallback: NotificationPreferences,
 ): NotificationPreferences {
   const obj = isRecord(value) ? value : {};
-  const events = isRecord(obj.events) ? obj.events : {};
-  const bool = (raw: unknown, fallbackValue: boolean): boolean =>
-    typeof raw === 'boolean' ? raw : fallbackValue;
+  // One boolean master switch. The retired system/sound/doNotDisturb/events.*
+  // fields are silently ignored instead of being migrated.
   return {
-    system: bool(obj.system, fallback.system),
-    sound: bool(obj.sound, fallback.sound),
-    doNotDisturb: bool(obj.doNotDisturb, fallback.doNotDisturb),
-    events: {
-      taskCompleted: bool(events.taskCompleted, fallback.events.taskCompleted),
-      taskFailed: bool(events.taskFailed, fallback.events.taskFailed),
-      sessionReplyCompleted: bool(events.sessionReplyCompleted, fallback.events.sessionReplyCompleted),
-      quotaWarning: bool(events.quotaWarning, fallback.events.quotaWarning),
-      updateAvailable: bool(events.updateAvailable, fallback.events.updateAvailable),
-      daemonDisconnected: bool(events.daemonDisconnected, fallback.events.daemonDisconnected),
-    },
+    enabled: typeof obj.enabled === 'boolean' ? obj.enabled : fallback.enabled,
   };
 }
 
@@ -526,10 +502,7 @@ function cloneSettings(settings: DesktopSettings): DesktopSettings {
       appearance: { ...settings.pet.appearance },
       ...(settings.pet.layout ? { layout: { ...settings.pet.layout } } : {}),
     },
-    notifications: {
-      ...settings.notifications,
-      events: { ...settings.notifications.events },
-    },
+    notifications: { ...settings.notifications },
     general: { ...settings.general },
     session: { ...settings.session },
     statusBar: { hidden: [...settings.statusBar.hidden] },

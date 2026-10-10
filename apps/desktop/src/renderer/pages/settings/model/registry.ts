@@ -22,7 +22,6 @@ export type CustomControlKey =
   | 'daemon'
   | 'endpoint'
   | 'logs'
-  | 'notificationEvents'
   | 'petBottomOffset'
   | 'petBubbleSeconds'
   | 'petDisplay'
@@ -136,6 +135,16 @@ const GENERAL_CATEGORY: SettingDefinition[] = [
     default: true,
     source: { kind: 'preference', preference: 'general.menuBarQuota' },
   },
+  {
+    id: 'notifications.enabled',
+    category: 'general',
+    title: '通知',
+    description: '是否显示通知。',
+    keywords: ['通知', 'notification', '提示'],
+    control: { kind: 'boolean' },
+    default: true,
+    source: { kind: 'preference', preference: 'notifications.enabled' },
+  },
 ];
 
 const APPEARANCE_CATEGORY: SettingDefinition[] = [
@@ -232,50 +241,6 @@ const SESSION_CATEGORY: SettingDefinition[] = [
     control: custom('workspace'),
     readonly: true,
     source: { kind: 'readonly' },
-  },
-];
-
-const NOTIFICATIONS_CATEGORY: SettingDefinition[] = [
-  {
-    id: 'notifications.system',
-    category: 'notifications',
-    title: '系统通知',
-    description: '窗口不在前台时发送系统通知。',
-    keywords: ['系统通知', 'system', '通知'],
-    control: { kind: 'boolean' },
-    default: true,
-    source: { kind: 'preference', preference: 'notifications.system' },
-  },
-  {
-    id: 'notifications.events',
-    category: 'notifications',
-    title: '通知的事件',
-    description: '选择哪些事件进入通知历史并弹出提示。',
-    keywords: ['事件', 'event', '通知', '完成', '失败', '额度', '更新'],
-    control: custom('notificationEvents'),
-    // One row over several `notifications.events.<id>` preferences; the control
-    // owns its own writes through the bridge.
-    source: { kind: 'custom' },
-  },
-  {
-    id: 'notifications.doNotDisturb',
-    category: 'notifications',
-    title: '勿扰',
-    description: '开启后只记录历史，不弹出提示；错误仍会显示。',
-    keywords: ['勿扰', 'doNotDisturb', '静音'],
-    control: { kind: 'boolean' },
-    default: false,
-    source: { kind: 'preference', preference: 'notifications.doNotDisturb' },
-  },
-  {
-    id: 'notifications.sound',
-    category: 'notifications',
-    title: '通知声音',
-    description: '系统通知播放提示音。',
-    keywords: ['声音', 'sound', '提示音'],
-    control: { kind: 'boolean' },
-    default: true,
-    source: { kind: 'preference', preference: 'notifications.sound' },
   },
 ];
 
@@ -544,7 +509,6 @@ export const SETTINGS_REGISTRY: readonly SettingDefinition[] = [
   ...APPEARANCE_CATEGORY,
   ...SESSION_CATEGORY,
   ...MODELS_CATEGORY,
-  ...NOTIFICATIONS_CATEGORY,
   ...PET_CATEGORY,
   ...RUNTIME_CATEGORY,
   ...UPDATE_CATEGORY,
