@@ -19,14 +19,13 @@
 
 import { estimateTokens, IMAGE_INPUT_TOKEN_ESTIMATE, resolveModelMetadata } from './calls.ts';
 import {
-  CURRENT_SESSION_FORMAT,
   type LedgerEvent,
   type SessionCreatedEvent,
   type WorkspaceSnapshot,
 } from './ledger.ts';
-import { renderEventText } from './views.ts';
+import { renderEventText } from './render.ts';
+import { buildReason } from './actions/reason/prompt.ts';
 import type { LedgerPort, SessionViewInfo } from './ports.ts';
-import type { ViewsPort } from './views.ts';
 
 /** Every layer of the main reasoning view except the transient `wy-user`. */
 export type ContextLayerId = 'wy-system' | 'wy-global' | 'wy-role' | 'wy-workspace' | 'wy-ctx' | 'wy-info';
@@ -38,7 +37,7 @@ export type ContextItemKind =
   | 'thinking'
   | 'reply'
   | 'doc'
-  | 'doc-search'
+  | 'search'
   | 'memory'
   | 'files'
   | 'action-result'
@@ -110,7 +109,6 @@ export interface ContextInspection {
 export interface ContextInspectHost {
   workspaceRoot: string;
   deviceName: string;
-  views: ViewsPort;
   ledger: LedgerPort;
   now(): Date;
   /** Build the workspace snapshot a new session would freeze right now. */
@@ -123,15 +121,12 @@ const LAYER_IDS: readonly ContextLayerId[] = ['wy-system', 'wy-global', 'wy-role
 /** Layers that never change for a session with a frozen snapshot. */
 const RESIDENT_LAYER_IDS: readonly ContextLayerId[] = ['wy-system', 'wy-global', 'wy-role', 'wy-workspace'];
 
-/** An unsupported (pre-current) session format never enters a model view. */
-const OLD_SESSION_FORMAT_ERROR = '此会话使用旧格式，记录已保留。请新建会话。';
-
 function firstLine(text: string): string {
   return text.split('\n', 1)[0]?.trim() ?? '';
 }
 
 /** First `session.created` event, using a real type guard. */
-function findCreated(events: readonly LedgerEvent[]): SessionCreatedEvent | undefined {
+export function findCreated(events: readonly LedgerEvent[]): SessionCreatedEvent | undefined {
   for (const event of events) if (event.type === 'session.created') return event;
   return undefined;
 }
@@ -150,7 +145,7 @@ function itemKind(event: LedgerEvent): ContextItemKind | undefined {
     case 'doc.content':
       return 'doc';
     case 'doc.search':
-      return 'doc-search';
+      return 'search';
     case 'memory.recalled':
       return 'memory';
     case 'files':
@@ -177,8 +172,9 @@ function itemLabel(event: LedgerEvent): string {
       return firstLine(event.text);
     case 'doc.content':
     case 'memory.recalled':
-    case 'ws.updated':
       return event.path;
+    case 'ws.updated':
+      return event.target;
     case 'doc.search':
       return firstLine(event.understanding);
     case 'files':
@@ -273,7 +269,7 @@ export class ContextInspector {
       ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
     };
 
-    const view = this.host.views.reason({
+    const view = buildReason({
       deviceName: this.host.deviceName,
       snapshot,
       events,
@@ -345,7 +341,6 @@ export class ContextInspector {
     const events = this.host.ledger.read(sessionId);
     const created = findCreated(events);
     if (!created) throw new Error(`Unknown session: ${sessionId}`);
-    if (created.format !== CURRENT_SESSION_FORMAT) throw new Error(OLD_SESSION_FORMAT_ERROR);
     return events;
   }
 

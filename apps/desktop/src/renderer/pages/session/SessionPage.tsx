@@ -29,7 +29,7 @@ import { SessionStatusItems } from './components/status/SessionStatusItems.js';
 import { MessageTimeline, buildMessageTimeline } from './components/conversation/MessageTimeline.js';
 import { withReplyQuote } from './components/conversation/UserMessage.js';
 import { Inspector, InspectorProvider } from './components/inspector/Inspector.js';
-import { fold, isFormat2 } from './model/fold.js';
+import { fold } from './model/fold.js';
 import type { ActionModel, DraftAttachment, InspectorTarget, SessionBridgeTaskBrief } from './model/types.js';
 import { SessionUsageProvider } from './state/session-usage.js';
 import { useSessionController } from './state/use-session-controller.js';
@@ -165,14 +165,7 @@ export function SessionPage() {
   const selectedSession = state.sessions.find((session) => session.sessionId === state.selectedId);
   const selectedTitle = selectedSession?.title ?? '新会话';
   const draft = state.selectedId === '';
-  // A selected, fully loaded history without the current numeric format-2
-  // marker is an unsupported (legacy/headerless) session: fold already returns
-  // the empty current model for it, so the page shows a raw view, never the
-  // typed conversation/actions/timeline or composer.
-  const currentFormat = isFormat2(state.events);
-  const rawOnly = !draft && !currentFormat;
-  const unsupported = rawOnly && !state.loadingLedger;
-  const empty = !unsupported && (draft || (!state.loadingLedger && model.turns.length === 0 && state.pending.length === 0));
+  const empty = draft || (!state.loadingLedger && model.turns.length === 0 && state.pending.length === 0);
   const sessionKey = state.selectedId === '' ? 'draft' : state.selectedId;
 
   // Record the selected session in the shell history. Restoring a session that
@@ -189,16 +182,15 @@ export function SessionPage() {
   });
 
   // Open the inspector for a usage request, selecting the session first when
-  // the request targets a different one. An unsupported session always opens
-  // the raw ledger, never a typed context request.
+  // the request targets a different one.
   const inspectRequest = useCallback((request: { sessionKey: string; tab: 'context' | 'ledger'; seq?: number }): void => {
     if (request.sessionKey !== sessionKey) {
       if (!state.sessions.some((session) => session.sessionId === request.sessionKey)) return;
       void selectSession(request.sessionKey).catch(() => undefined);
     }
-    setTab(unsupported ? 'ledger' : request.tab);
+    setTab(request.tab);
     setInspectorOpen(true);
-  }, [sessionKey, state.sessions, selectSession, unsupported]);
+  }, [sessionKey, state.sessions, selectSession]);
 
   // Page commands: session.open (routed here by the command table),
   // session.inspectContext and the inspector toggle used by the title bar.
@@ -258,7 +250,7 @@ export function SessionPage() {
   });
 
   const reply = replyTo?.sessionKey === sessionKey ? replyTo.quote : undefined;
-  const composer = rawOnly ? null : (
+  const composer = (
     <Composer
       models={state.models}
       turns={model.turns}
@@ -363,15 +355,7 @@ export function SessionPage() {
               minSize={340}
               className={cn('relative flex min-h-0 flex-col', panelMotion)}
             >
-              {unsupported ? (
-                <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center">
-                  <p className="text-sm text-muted-foreground">此会话使用旧格式，记录已保留。请新建会话。</p>
-                  <div className="flex items-center gap-2">
-                    <Button onClick={newDraft}>新建对话</Button>
-                    <Button variant="outline" onClick={() => { setTab('ledger'); setInspectorOpen(true); }}>查看原始账本</Button>
-                  </div>
-                </div>
-              ) : empty ? (
+              {empty ? (
                 <EmptySession>
                   {errorAlert}
                   {composer}
@@ -430,7 +414,6 @@ export function SessionPage() {
                 events={state.events}
                 target={target}
                 tab={tab}
-                rawOnly={rawOnly}
                 onTabChange={setTab}
                 onSelect={inspect}
                 onClose={() => setInspectorOpen(false)}

@@ -14,9 +14,11 @@ import { TREE_CHILDREN, actionAnchorId, actionNodeId, actionPartId } from './ids
 import { useTreeExpansion } from './expansion.js';
 
 function KindIcon({ kind }: { kind: ActionNode['kind'] }) {
-  if (kind === 'read') return <BookOpen className="size-3.5 shrink-0 text-muted-foreground" />;
-  if (kind === 'write') return <FilePenLine className="size-3.5 shrink-0 text-muted-foreground" />;
-  return <Send className="size-3.5 shrink-0 text-muted-foreground" />;
+  if (kind === 'search') return <BookOpen className="size-3.5 shrink-0 text-muted-foreground" />;
+  if (kind === 'document') return <FilePenLine className="size-3.5 shrink-0 text-muted-foreground" />;
+  if (kind === 'dispatch') return <Send className="size-3.5 shrink-0 text-muted-foreground" />;
+  if (kind === 'vcs') return <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />;
+  return <span className="w-3.5 shrink-0 text-center text-[10px] text-muted-foreground">项</span>;
 }
 
 /** Run ids of dispatched tasks that are still waiting to launch. */

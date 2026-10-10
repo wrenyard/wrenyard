@@ -5,35 +5,30 @@
  * sibling modules into the engine ports and exposes the frozen `createSession`
  * contract:
  *
- *   ledger.ts     `Ledger` (init/append/read/listSessions/subscribe/close) and
- *                 the `LedgerEvent` union plus the snapshot types.
- *   workspace.ts  `createWorkspaceSnapshot(input)`, `WorkspaceFileSource` and
- *                 the document catalogue.
- *   views.ts      `createViews()`.
+ *   ledger.ts     `Ledger` (init/append/read/listSessions/subscribe/close)
+ *                 and the `LedgerEvent` union plus the snapshot types.
+ *   workspace.ts  `WorkspaceFileSource` and the document catalogue.
  *   calls.ts      `createCallRunner({ driver, selectAuxiliary, append, now })`.
  *   inference.ts  `createInferenceDriver(gateway)`, the one main/auxiliary
  *                 runtime selection site over the shared inference-mode policy.
- *   driver.ts     `createGatewayDriver(connection)` (chat adapter).
- *   responses-driver.ts `createResponsesDriver(connection)` (Responses adapter).
  *   media.ts      `FileStore` (attachments, artifact description, images).
  *
  * Everything else in the feature depends only on the port interfaces declared
- * in `engine.ts` / `actions.ts`.
+ * in `ports.ts`.
  */
 
 import { Ledger } from './ledger.ts';
-import { createWorkspaceSnapshot, WorkspaceFileSource } from './workspace.ts';
-import { createViews } from './views.ts';
+import { WorkspaceFileSource } from './workspace.ts';
 import { createCallRunner, type CallRunner } from './calls.ts';
 import { createInferenceDriver } from './inference.ts';
 import { FileStore } from './media.ts';
+import { createEngine } from './engine.ts';
 import {
-  createEngine,
   type CallsPort,
   type EnginePorts,
   type Session,
   type SessionHost,
-} from './engine.ts';
+} from './ports.ts';
 
 export type {
   ActionBaseContext,
@@ -54,30 +49,24 @@ export type {
   SnapshotProjectInput,
   TurnPhase,
   ViewMessage,
-  ViewsPort,
-} from './engine.ts';
-export type {
-  CompileViewInput,
-  DocSearchViewInput,
-  MemorySearchViewInput,
-  ReasonViewInput,
-  ReplyViewInput,
-  TitleViewInput,
-} from './engine.ts';
-export { fallbackReply } from './engine.ts';
+} from './ports.ts';
+export type { CompileViewInput } from './actions/dispatch/dispatch.ts';
+export type { DocSearchViewInput } from './actions/secondary/search.ts';
+export type { MemorySearchViewInput } from './actions/secondary/memory.ts';
+export type { ReasonViewInput } from './actions/reason/prompt.ts';
+export type { ReplyViewInput } from './actions/secondary/reply.ts';
+export type { TitleViewInput } from './actions/secondary/title.ts';
+export { fallbackReply } from './actions/secondary/reply.ts';
 export type {
   ActionExecutionOutcome,
   ActionKind,
   ActionRunContext,
   ActionStatus,
   ParsedAction,
-  SchemaValidation,
-} from './actions.ts';
-export {
-  ActionRunner,
-  actionFromToolCall,
-  validateJsonSchema,
-} from './actions.ts';
+} from './actions/index.ts';
+export { ActionRunner } from './actions/index.ts';
+export type { SchemaValidation } from './actions/dispatch/dispatch.ts';
+export { validateJsonSchema } from './actions/dispatch/dispatch.ts';
 export type { AuxiliaryRoute, CallRouteAttempt, CallLedgerEventDraft, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
 export {
   CALL_ROLES,
@@ -116,11 +105,12 @@ export type {
   ModelDriver,
   ModelMessage,
   ToolCall,
+  ToolSpec,
   Usage,
 } from './driver.ts';
+export { ACTION_TOOL } from './actions/reason/tool.ts';
+export { REPLY_TOOL } from './actions/secondary/reply.ts';
 export {
-  ACTION_TOOL,
-  REPLY_TOOL,
   GATEWAY_REQUEST_MAX_BYTES,
   createGatewayDriver,
   serializeGatewayRequest,
@@ -165,12 +155,11 @@ export type {
   WorkspaceSnapshot,
   WsUpdatedEvent,
 } from './ledger.ts';
-export { CURRENT_SESSION_FORMAT, collectSessionFiles } from './ledger.ts';
+export { collectSessionFiles } from './ledger.ts';
 
 /** Create the session feature over a host. */
 export function createSession(host: SessionHost): Session {
   const ledger = new Ledger({ stateRoot: host.stateRoot, workspaceRoot: host.workspaceRoot, now: host.now });
-  const views = createViews();
 
   // The call runner is session-scoped because its `append` sink is the only way
   // a `call` event reaches the owning timeline. The gateway is resolved inside
@@ -201,9 +190,7 @@ export function createSession(host: SessionHost): Session {
 
   const ports: EnginePorts = {
     ledger,
-    createSnapshot: (input) => createWorkspaceSnapshot(input),
     files: (snapshot, workspaceRoot) => new WorkspaceFileSource({ workspaceRoot, snapshot }),
-    views,
     calls,
     fileStore: new FileStore({ stateRoot: host.stateRoot }),
   };
