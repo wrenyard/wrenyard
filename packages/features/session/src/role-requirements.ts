@@ -1,7 +1,7 @@
 /** Auxiliary selection tuning data; no IO or selection logic. */
 import type { IntelligenceTier, ModelCapability, ReasoningEffort } from '@wrenyard/models';
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
-export type AuxiliaryCallRole = 'title' | 'memory-search' | 'doc-search' | 'compile' | 'reply';
+export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'reply';
 export interface RoleReasoningRequirement {
   intelligenceMin: IntelligenceTier;
   intelligenceExpected: IntelligenceTier;
@@ -14,8 +14,11 @@ export interface RoleReasoningRequirement {
 /** Auxiliary roles in the fixed order the route preview lists them. */
 export const AUXILIARY_ROLE_ORDER: readonly AuxiliaryCallRole[] = [
   'reply',
-  'compile',
-  'doc-search',
+  'dispatch',
+  'document',
+  'vcs',
+  'project',
+  'search',
   'memory-search',
   'title',
 ];
@@ -32,7 +35,10 @@ const NO_THINKING: readonly ReasoningEffort[] = ['none', 'low'];
 export const ROLE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleReasoningRequirement>> = {
   title: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
   'memory-search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
-  'doc-search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
-  compile: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['high'] },
+  'search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
+  dispatch: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['high'] },
+  document: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['low', 'medium'] },
+  vcs: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['none', 'low'] },
+  project: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['none', 'low'] },
   reply: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
 };

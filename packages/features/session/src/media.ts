@@ -11,6 +11,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { getEncoding } from 'js-tiktoken';
 import sharp from 'sharp';
 import type { AttachmentInput, SessionFile } from '@wrenyard/protocol';
+import { messageOf } from './errors.ts';
 
 export type { AttachmentInput, SessionFile } from '@wrenyard/protocol';
 
@@ -77,7 +78,7 @@ function assertSegment(value: string, label: string): void {
 }
 
 /** Simple lexical containment: `child` is `root` or a path below it. */
-function isInside(child: string, root: string): boolean {
+export function isInside(child: string, root: string): boolean {
   if (child === root) return true;
   const rel = relative(root, child);
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
@@ -153,10 +154,6 @@ async function readAttachment(attachment: AttachmentInput, index: number): Promi
     throw new Error(`attachment exceeds ${MEDIA_LIMITS.maxFileBytes} bytes: ${path}`);
   }
   return { bytes: await readFile(path), name: attachment.name ?? basename(path) };
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**

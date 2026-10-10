@@ -5,7 +5,7 @@
 
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { LedgerEventDraft, TurnStatus, WorkspaceSnapshot } from './ledger.ts';
-import type { ActionKind, ActionRunner } from './actions.ts';
+import type { ActionKind, ActionRunner } from './actions/index.ts';
 import type { CallsPort, FilesPort, TurnPhase } from './ports.ts';
 
 export interface RuntimeAction {
