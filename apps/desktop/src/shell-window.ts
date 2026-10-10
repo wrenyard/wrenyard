@@ -35,9 +35,7 @@ import {
   type ExecEventsResult,
   type ExecCancelResult,
   type NotificationCommandAction,
-  type NotificationInput,
   type NotificationSnapshot,
-  type ShellNotification,
   type ActivityStatusSnapshot,
 } from './shell-contract.js';
 import type { ShellIpcDeps } from './main/ipc/deps.js';
@@ -114,12 +112,14 @@ export interface ShellWindowOptions {
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
   execCancel(id: string): Promise<ExecCancelResult>;
-  getNotifications(): Promise<NotificationSnapshot>;
-  notify(input: NotificationInput): Promise<ShellNotification>;
-  dismissNotification(id: string): Promise<void>;
-  clearNotifications(): Promise<void>;
-  markNotificationsRead(): Promise<void>;
-  setDoNotDisturb(value: boolean): Promise<NotificationSnapshot>;
+  /** The in-app notification history snapshot, fetched by the renderer. */
+  getNotificationSnapshot(): NotificationSnapshot;
+  /** Remove one history entry by id. */
+  dismissNotification(id: string): void;
+  /** Remove every history entry. */
+  clearNotifications(): void;
+  /** Mark the whole in-app history read. */
+  markNotificationsRead(): void;
   getPreferences(): Promise<DesktopPreferences>;
   setPreference(id: PreferenceId, value: unknown): Promise<DesktopPreferences>;
   /** Latest shared activity projection for the status bar (chrome spec 4.4). */
@@ -247,12 +247,6 @@ export class ShellWindowController {
   notifyAppearanceChanged(appearance: ResolvedAppearance): void {
     if (!this.window.webContents.isDestroyed()) {
       this.window.webContents.send(SHELL_CHANNELS.appearanceChanged, appearance);
-    }
-  }
-
-  notifyNotificationsChanged(): void {
-    if (!this.window.webContents.isDestroyed()) {
-      this.window.webContents.send(SHELL_CHANNELS.notificationsChanged);
     }
   }
 

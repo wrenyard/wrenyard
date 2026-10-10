@@ -26,9 +26,15 @@ import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.
 import { readStatsSnapshot } from './stats-snapshot.js';
 import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
-import { NotificationCenter, type NotificationInput } from './main/notification-center.js';
-import { createDesktopNotifications } from './main/notifications/desktop-notifications.js';
-import { createQuotaAlerts } from './main/projections/quota-alerts.js';
+import { Notifier } from './main/notifications/notifier.js';
+import { createInAppChannel } from './main/notifications/channels/in-app.js';
+import { createPetChannel } from './main/notifications/channels/pet.js';
+import { createSystemChannel } from './main/notifications/channels/system.js';
+import { createTaskNotifier } from './main/notifications/task.js';
+import { createTaskGraphNotifier } from './main/notifications/taskgraph.js';
+import { createSessionNotifier } from './main/notifications/session.js';
+import { createQuotaNotifier } from './main/notifications/quota.js';
+import { createDaemonNotifier } from './main/notifications/daemon.js';
 import { createInterfaceZoom } from './main/zoom.js';
 import { DesktopUpdateController } from './updater/controller.js';
 import { DesktopDaemonSupervisor } from './daemon-supervisor.js';
@@ -249,9 +255,7 @@ async function refreshQuotaProjectionAfterGatewayRestart(): Promise<void> {
 /** Session IPC relay; null until bootstrap registers it. */
 let sessionRegistration: SessionRegistration | null = null;
 let shellWindow: ShellWindowController | null = null;
-/** The single Desktop notification owner; created during bootstrap. */
-let notificationCenter: NotificationCenter | null = null;
-/** Live settings store, mirrored for notification preference reads. */
+/** Live settings store, read by the notifier's `notifications.enabled` gate. */
 let desktopSettingsStore: DesktopSettingsStore | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
@@ -534,18 +538,28 @@ async function bootstrap(): Promise<void> {
       await client.close?.();
     }
   };
-  // Main-origin notification producers (preference gate, OS notification, and
-  // the update/daemon/Pet/vanished-run pushers) live in their own module; every
-  // dependency is read lazily through the getters below.
-  const notifications = createDesktopNotifications({
-    getNotificationCenter: () => notificationCenter,
-    getSettingsStore: () => desktopSettingsStore,
-    getShellWindow: () => shellWindow,
-    getUpdateController: () => updateController,
-    showDesktop: () => showDesktop(),
-    requestForeman,
-    notificationConstructor: ElectronNotification,
+  // One Notifier for the whole process, gated by `notifications.enabled`.
+  // Each producer states its channels explicitly; the notifier holds no state
+  // of its own and the in-app channel owns the history.
+  const inAppChannel = createInAppChannel({ getShellWindow: () => shellWindow });
+  const notifier = new Notifier({
+    isEnabled: () => desktopSettingsStore?.load().notifications.enabled ?? true,
+    inApp: inAppChannel,
+    pet: createPetChannel({ showBubble: (broadcast) => petController?.showBroadcast(broadcast) }),
+    system: createSystemChannel({
+      notificationConstructor: ElectronNotification,
+      isWindowFocused: () => Boolean(
+        shellWindow && !shellWindow.window.isDestroyed() && shellWindow.window.isFocused(),
+      ),
+      showDesktop: () => showDesktop(),
+      getShellWindow: () => shellWindow,
+    }),
   });
+  const taskNotifier = createTaskNotifier({ notifier, requestForeman });
+  const taskgraphNotifier = createTaskGraphNotifier({ notifier });
+  const sessionNotifier = createSessionNotifier({ notifier });
+  const quotaNotifier = createQuotaNotifier({ notifier });
+  const daemonNotifier = createDaemonNotifier({ notifier });
   const readUpdateDaemonIdle = async (): Promise<boolean | null> => {
     try {
       return assertDaemonIdle(await requestForeman('daemon.status', {})).idle;
@@ -685,7 +699,6 @@ async function bootstrap(): Promise<void> {
     },
     onChanged: () => {
       shellWindow?.notifyUpdateChanged();
-      notifications.notifyUpdateAvailable();
     },
     sourceDevelopment: !app.isPackaged,
   });
@@ -729,7 +742,7 @@ async function bootstrap(): Promise<void> {
     onChanged: (snapshot) => {
       reconcileDaemonConnection(snapshot.state === 'running');
       notifyDaemonChanged();
-      notifications.notifyDaemonStateChanged(snapshot);
+      daemonNotifier.observe(snapshot);
       void finalizeWhenHealthy();
     },
   });
@@ -787,6 +800,9 @@ async function bootstrap(): Promise<void> {
     // pointer on each call instead of capturing it.
     isShellSender: (sender) =>
       Boolean(shellWindow && !shellWindow.window.isDestroyed() && sender.id === shellWindow.window.webContents.id),
+    // Live ledger events feed the conversation notification producer; the
+    // initial catch-up page is never replayed.
+    onLiveEvent: (sessionId, event) => sessionNotifier.observe(sessionId, event),
   });
 
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
@@ -832,7 +848,6 @@ async function bootstrap(): Promise<void> {
   preferencesController = new DesktopPreferencesController({
     store: settingsStore,
     saveAppearance: (patch) => { appearanceController?.save(patch); },
-    onDoNotDisturb: (value) => { notificationCenter?.setDoNotDisturb(value); },
     readOpenAtLogin: () => app.getLoginItemSettings().openAtLogin,
     setOpenAtLogin: (value) => {
       // The login item is a macOS/Windows native concept; other platforms ignore it.
@@ -840,19 +855,6 @@ async function bootstrap(): Promise<void> {
       app.setLoginItemSettings({ openAtLogin: value });
     },
     onMenuBarQuotaChanged: () => { desktopTray?.rebuild(); },
-  });
-  // One notification owner for the whole process. Main-origin (update, daemon,
-  // Pet task) and renderer-originated events all land here; the center decides
-  // history, foreground toasts and OS notifications, so nothing fires twice.
-  notificationCenter = new NotificationCenter({
-    onChanged: () => shellWindow?.notifyNotificationsChanged(),
-    isForeground: () => Boolean(
-      shellWindow && !shellWindow.window.isDestroyed() && shellWindow.window.isFocused(),
-    ),
-    isSystemEnabled: () => settingsStore.load().notifications.system,
-    isEventEnabled: (input) => notifications.isNotificationEventEnabled(input),
-    onSystemNotification: (notification) => notifications.showSystemNotification(notification),
-    doNotDisturb: loadedSettings?.notifications.doNotDisturb ?? false,
   });
   // One shared daemon transport and subscription set for the whole Desktop
   // process. The shell window, tray and Pet all consume the same rounds; the
@@ -893,8 +895,9 @@ async function bootstrap(): Promise<void> {
       const changed = activityProjector.update(presence);
       if (changed) shellWindow?.notifyActivityChanged(changed);
       for (const run of taskLifecycle.observe(activityProjector.get())) {
-        void notifications.notifyVanishedTaskRun(run);
+        void taskNotifier.notifyVanishedTaskRun(run);
       }
+      taskgraphNotifier.observe(presence);
     },
   });
 
@@ -906,7 +909,6 @@ async function bootstrap(): Promise<void> {
       preloadDir: petAssets.preloadDir,
       subscriptions: desktopSubscriptions!,
       onConfigChange,
-      onNotification: notifications.petNotificationSink,
       debugRenderer: process.env.PET_DEBUG === '1' || process.env.PET_DEBUG === 'true',
     }),
     listDisplays: () => screen.getAllDisplays().map((display, index) => ({
@@ -920,12 +922,6 @@ async function bootstrap(): Promise<void> {
   });
   if (SMOKE) await petStart;
   const providerService = new ProviderService({ ipcPath, canConnect: canConnectDaemon });
-  // Downward threshold crossings are computed in the main process so a window
-  // in the background still emits a system notification (usage spec 6.6); the
-  // threshold/once-per-cycle bookkeeping lives in the quota-alerts projection.
-  const quotaAlerts = createQuotaAlerts({
-    notify: (input) => { notificationCenter?.push(input); },
-  });
   quotaController = new DesktopQuotaController({
     source: new DesktopQuotaSource(ipcPath, canConnectDaemon),
     providerSource: providerService,
@@ -934,7 +930,7 @@ async function bootstrap(): Promise<void> {
       petController?.setQuotaProviders(providers);
       desktopTray?.rebuild();
       shellWindow?.notifyQuotaChanged();
-      quotaAlerts.observe(snapshot);
+      quotaNotifier.observe(snapshot);
     },
   });
   // Provider discovery may wait on native clients; it must not delay the window.
@@ -1069,15 +1065,10 @@ async function bootstrap(): Promise<void> {
     execGet: (id: string) => execGet(id),
     execEvents: (request: ExecEventsRequest) => execEvents(request),
     execCancel: (id: string) => execCancel(id),
-    getNotifications: async () => notificationCenter!.snapshot(),
-    notify: async (input: NotificationInput) => notificationCenter!.push(input),
-    dismissNotification: async (id: string) => { notificationCenter?.dismiss(id); },
-    clearNotifications: async () => { notificationCenter?.clear(); },
-    markNotificationsRead: async () => { notificationCenter?.markAllRead(); },
-    setDoNotDisturb: async (value: boolean) => {
-      preferencesController!.set('notifications.doNotDisturb', value);
-      return notificationCenter!.snapshot();
-    },
+    getNotificationSnapshot: () => inAppChannel.snapshot(),
+    dismissNotification: (id: string) => inAppChannel.remove(id),
+    clearNotifications: () => inAppChannel.clear(),
+    markNotificationsRead: () => inAppChannel.markAllRead(),
     getPreferences: async () => preferencesController!.get(),
     setPreference: async (id: PreferenceId, value: unknown) => preferencesController!.set(id, value),
     getActivityStatus: () => activityProjector.get(),
