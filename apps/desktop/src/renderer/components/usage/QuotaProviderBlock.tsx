@@ -8,11 +8,11 @@ import type { QuotaProviderSnapshot } from '@/shell-contract';
 import { cn } from 'cn';
 
 /**
- * One provider's quota block, shared by the status-bar quota panel and the
- * session usage panel (usage spec 6.1). It renders the name, status, every
- * window through the shared {@link QuotaBar}, balances, and a retry action for
- * a failed read. It never parses `displayLine` (usage spec 3.6): pace and reset
- * come only from the structured snapshot fields.
+ * One provider's quota block, used by the status-bar quota panel (QuotaPanel)
+ * (usage spec 6.1). It renders the name, status, every window through the
+ * shared {@link QuotaBar}, balances, and a retry action for a failed read. It
+ * never parses `displayLine` (usage spec 3.6): pace and reset come only from the
+ * structured snapshot fields.
  */
 
 type ProviderTone = 'success' | 'warning' | 'danger' | 'muted';
@@ -39,12 +39,10 @@ function providerTone(provider: QuotaProviderSnapshot): { tone: ProviderTone; la
 
 export interface QuotaProviderBlockProps {
   provider: QuotaProviderSnapshot;
-  /** Bar width in pixels: 96 in panels, 120 on the Model Supply page. */
-  barWidth?: number;
   className?: string;
 }
 
-export function QuotaProviderBlock({ provider, barWidth = 96, className }: QuotaProviderBlockProps) {
+export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockProps) {
   const refresh = useQuotaRefresh();
   const name = provider.label || provider.id;
   const view = providerTone(provider);
@@ -88,9 +86,7 @@ export function QuotaProviderBlock({ provider, barWidth = 96, className }: Quota
               expectedRemainingPct={window.expectedRemainingPct}
               resetsAt={window.resetsAt}
               windowMinutes={window.windowMinutes}
-              width={barWidth}
               stale={provider.stale}
-              stacked
             />
           ))}
           {provider.balances.map((balance) => (

@@ -18,6 +18,7 @@ export const SESSION_CHANNELS = {
   list: 'session:list', create: 'session:create', ledger: 'session:ledger',
   send: 'session:send', interrupt: 'session:interrupt', models: 'session:models',
   context: 'session:context', tasks: 'session:tasks',
+  routesPreview: 'session:routes-preview',
   mediaRead: 'session:media-read', mediaReveal: 'session:media-reveal',
   delete: 'session:delete', mediaPick: 'session:media-pick',
   mediaDescribe: 'session:media-describe', mediaStageClipboard: 'session:media-stage-clipboard',
@@ -28,8 +29,12 @@ export type {
   SessionBridge, SessionBridgeContextInspectRequest, SessionBridgeEventPayload,
   SessionBridgeInterruptRequest, SessionBridgeLivePayload, SessionBridgeMediaRequest,
   SessionBridgeModelEntry, SessionBridgeSendRequest, SessionBridgeTaskBrief,
+  SessionBridgeRoutesPreviewRequest,
   SessionMediaReadResult, SessionFile, DraftAttachment,
 } from './preload.js';
+export type {
+  SessionRoutesPreviewParams, SessionRoutesPreviewResult, SessionRoutesPreviewRole,
+} from '@wrenyard/protocol';
 
 export interface RegisterSessionOptions {
   ipcPath: string;
@@ -271,6 +276,8 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     toModelEntries(await request<ProviderListResult>('provider.list', {})));
   handle(SESSION_CHANNELS.context, (_event, value) =>
     request('session.context.inspect', value));
+  handle(SESSION_CHANNELS.routesPreview, (_event, value) =>
+    request('session.routes.preview', value ?? {}));
   handle(SESSION_CHANNELS.ledger, (event, value) => {
     if (typeof value !== 'string' || !value) throw new Error('Invalid sessionId');
     return openLedger(event.sender, value);

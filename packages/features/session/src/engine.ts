@@ -458,6 +458,11 @@ class Engine implements Session {
     return this.inspector.inspect(request);
   }
 
+  async previewRoutes(): Promise<{ roles: import('./role-requirements.ts').AuxiliaryRoutePreview[] }> {
+    this.assertOpen();
+    return { roles: [...await this.host.previewAuxiliaryRoutes()] };
+  }
+
   readLive(sessionId: string): LiveCall[] {
     return this.live.read(sessionId);
   }

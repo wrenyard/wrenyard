@@ -417,7 +417,6 @@ function QuotaContent({ entry, onRetry }: { entry: ProviderCatalogSnapshot; onRe
           expectedRemainingPct={window.expectedRemainingPct}
           resetsAt={window.resetsAt}
           windowMinutes={window.windowMinutes}
-          width={120}
         />
       ))}
       {balances.map((balance) => (
