@@ -35,10 +35,10 @@ onDaemonChanged(() => {
   void queryClient.invalidateQueries({ queryKey: ['shell', 'settings'] });
 });
 
-onNotificationsChanged(() => {
-  void queryClient.invalidateQueries({ queryKey: ['notifications'] });
-});
-
 onPreferencesChanged(() => {
   void queryClient.invalidateQueries({ queryKey: ['preferences'] });
+});
+
+onNotificationsChanged(() => {
+  void queryClient.invalidateQueries({ queryKey: ['notifications'] });
 });

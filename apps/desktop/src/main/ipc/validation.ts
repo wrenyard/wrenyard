@@ -8,7 +8,6 @@ import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import type {
   ExecEventsRequest,
   ExecStartRequest,
-  NotificationInput,
   RuntimeAliasPutRequest,
   RuntimeAliasRemoveRequest,
   TaskRoutingTestParams,
@@ -317,75 +316,6 @@ export function validateExecEventsRequest(value: unknown): ExecEventsRequest {
     request.afterSeq = afterSeq;
   }
   return request;
-}
-
-export const NOTIFICATION_LEVELS = new Set(['info', 'success', 'warning', 'error']);
-export const NOTIFICATION_ID_MAX = 200;
-export const NOTIFICATION_SOURCE_MAX = 64;
-export const NOTIFICATION_TITLE_MAX = 512;
-export const NOTIFICATION_DESCRIPTION_MAX = 4_096;
-export const NOTIFICATION_LABEL_MAX = 64;
-export const NOTIFICATION_COMMAND_ID_MAX = 200;
-export const NOTIFICATION_ARGS_MAX = 16_384;
-
-/**
- * IPC-boundary validation for a renderer notification. The renderer may only
- * submit serializable data — a bounded id, level, source, title, description
- * and at most one `{ label, command }` action whose args are JSON-sized.
- */
-export function validateNotificationInput(value: unknown): NotificationInput {
-  if (!isBoundedPlainObject(value)) throw new Error('通知内容无效');
-  const level = value.level;
-  if (typeof level !== 'string' || !NOTIFICATION_LEVELS.has(level)) throw new Error('通知级别无效');
-  const source = value.source;
-  if (typeof source !== 'string' || !source || source.length > NOTIFICATION_SOURCE_MAX) throw new Error('通知来源无效');
-  const title = value.title;
-  if (typeof title !== 'string' || !title || title.length > NOTIFICATION_TITLE_MAX || TASK_SETTINGS_CONTROL_CHARS.test(title)) {
-    throw new Error('通知标题无效');
-  }
-  const input: NotificationInput = {
-    level: level as NotificationInput['level'],
-    source: source as NotificationInput['source'],
-    title,
-  };
-  if (value.id !== undefined && value.id !== null) {
-    const id = value.id;
-    if (typeof id !== 'string' || !id || id.length > NOTIFICATION_ID_MAX) throw new Error('通知 id 无效');
-    input.id = id;
-  }
-  if (value.description !== undefined && value.description !== null) {
-    const description = value.description;
-    if (typeof description !== 'string' || description.length > NOTIFICATION_DESCRIPTION_MAX) {
-      throw new Error('通知描述无效');
-    }
-    input.description = description;
-  }
-  if (value.action !== undefined && value.action !== null) {
-    input.action = validateNotificationAction(value.action);
-  }
-  return input;
-}
-
-export function validateNotificationAction(value: unknown): NotificationInput['action'] {
-  if (!isBoundedPlainObject(value)) throw new Error('通知操作无效');
-  const label = value.label;
-  if (typeof label !== 'string' || !label || label.length > NOTIFICATION_LABEL_MAX) throw new Error('通知操作无效');
-  const command = value.command;
-  if (!isBoundedPlainObject(command)) throw new Error('通知操作无效');
-  const id = command.id;
-  if (typeof id !== 'string' || !id || id.length > NOTIFICATION_COMMAND_ID_MAX) throw new Error('通知操作无效');
-  let args: unknown;
-  if (command.args !== undefined && command.args !== null) {
-    args = command.args;
-    let size: number;
-    try {
-      size = JSON.stringify(args)?.length ?? 0;
-    } catch {
-      throw new Error('通知操作参数无效');
-    }
-    if (size > NOTIFICATION_ARGS_MAX) throw new Error('通知操作参数无效');
-  }
-  return { label, command: { id, ...(args !== undefined ? { args } : {}) } };
 }
 
 /** IPC-boundary validation for the Windows application-menu popup anchor. */

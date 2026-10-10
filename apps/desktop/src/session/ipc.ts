@@ -40,6 +40,12 @@ export interface RegisterSessionOptions {
   ipcPath: string;
   canConnect?: () => boolean;
   isShellSender(sender: WebContents): boolean;
+  /**
+   * Observes live ledger events as they are polled and forwarded to the
+   * renderer — never the initial catch-up page, so history is not replayed.
+   * Used by the main-process conversation notification producer.
+   */
+  onLiveEvent?(sessionId: string, event: LedgerEvent): void;
 }
 export interface SessionRegistration { disconnect(): void; close(): Promise<void> }
 interface EventPage { events: LedgerEvent[]; lastSeq: number; live?: LiveCall[] }
@@ -193,6 +199,7 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
             const payload: SessionBridgeEventPayload = { sessionId: state.sessionId, event };
             state.target.send(SESSION_CHANNELS.event, payload);
             state.afterSeq = event.seq;
+            options.onLiveEvent?.(state.sessionId, event);
           }
           const live = page.live;
           if (live !== undefined && (state.lastLive === undefined || !sameLive(state.lastLive, live))) {

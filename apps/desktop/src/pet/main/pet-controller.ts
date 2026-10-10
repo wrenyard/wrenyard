@@ -6,6 +6,7 @@ import {
   type EntityVisibilityConfig,
 } from './config';
 import type { PetRuntimeStatus } from './runtime';
+import type { BroadcastInput } from '../shared/broadcast';
 import type { QuotaProviderState } from '../../main/projections/quota-runtime';
 import type {
   PetCompanionSettings,
@@ -25,6 +26,8 @@ export interface DesktopPetRuntimeHandle {
   stop(): Promise<void>;
   setVisible(visible: boolean): void;
   setQuotaProviders(providers: QuotaProviderState[]): void;
+  /** Show one transient Pet bubble through the mounted runtime. */
+  showBroadcast(broadcast: BroadcastInput): void;
   /** House window, used by the shared window owner to place task entities. */
   getHouseWindow?(): BrowserWindow | null;
 }
@@ -167,6 +170,11 @@ export class DesktopPetController {
   setQuotaProviders(providers: QuotaProviderState[]): void {
     this.quotaProviders = providers.map((provider) => ({ ...provider }));
     this.runtime?.setQuotaProviders(this.quotaProviders);
+  }
+
+  /** Show one transient bubble through the mounted runtime, if any. */
+  showBroadcast(broadcast: BroadcastInput): void {
+    this.runtime?.showBroadcast(broadcast);
   }
 
   private async startRuntime(config: AppConfig): Promise<void> {

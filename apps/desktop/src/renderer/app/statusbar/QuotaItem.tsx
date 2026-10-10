@@ -11,6 +11,7 @@ import { onQuotaPanelOpen, useQuotaFocus } from '@/renderer/lib/statusbar';
 import { quotaQuery } from '@/renderer/lib/queries';
 import { QuotaPanel } from '@/renderer/app/statusbar/QuotaPanel';
 import type { QuotaProviderSnapshot, QuotaWindowSnapshot } from '@/shell-contract';
+import { eligibleQuotaProviders } from '@/shell-contract';
 
 /**
  * Status-bar quota item (usage spec 6.2). It focuses the quota provider of the
@@ -103,11 +104,7 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
   const candidates = useMemo(() => {
     const data = quota.data;
     if (data === undefined) return [] as QuotaProviderSnapshot[];
-    if (data.providerOrder.length === 0) return data.providers;
-    const enabled = new Set(
-      data.providerOrder.filter((entry) => entry.enabled).map((entry) => entry.id),
-    );
-    return data.providers.filter((provider) => enabled.has(provider.id));
+    return eligibleQuotaProviders(data);
   }, [quota.data]);
 
   const focused = useMemo<FocusSelection>(() => {
