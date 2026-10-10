@@ -1,33 +1,58 @@
 /**
  * The document secondary session.
  *
- * It writes and revises Markdown documents under `projects/<project>/docs` by
- * calling the daemon-hosted document service through `deps.host.writeDocument`.
- * It never edits files itself, so every write is path-checked and
- * compare-and-swapped by the host. Each successful write is recorded as a
- * `ws.updated` draft plus a `doc.content` draft, exactly as the action layer
- * defers drafts.
+ * It lists, reads, creates and revises Markdown documents under
+ * `projects/<project>/docs` through the daemon-hosted document protocol
+ * methods, exposed as tools by the shared protocol adapter. A document is
+ * identified by its project, its kind (spec, report or handoff) and its name;
+ * the file location is only the session internal ledger key and is never shown
+ * to the model. Each successful write records a `ws.updated` draft; the written
+ * document is then read back through the protocol and queued as a `doc.content`
+ * draft, exactly as the action layer defers drafts.
  */
 
-import { contentVersion, makeDocumentDraft } from '../../documents.ts';
+import { makeDocumentDraft, type DocContentDraft } from '../../documents.ts';
+import type { LedgerEvent, LedgerEventDraft } from '../../ledger.ts';
 import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../index.ts';
 import {
   buildSecondaryUser,
   createSecondaryRecord,
-  errorResult,
-  jsonResult,
-  optionalStringArg,
-  recordWorkspaceUpdate,
+  protocolTools,
   runSecondary,
-  stringArg,
-  ToolArgumentError,
   toActionOutcome,
+  type MethodEffect,
   type SecondaryRecord,
-  type SecondaryTool,
 } from './framework.ts';
 
 /** Rounds the document loop may run before it fails. */
 const DOCUMENT_MAX_ROUNDS = 24;
+
+/** The document protocol methods this session exposes. */
+const METHODS = [
+  'workspace.doc.list',
+  'workspace.doc.read',
+  'workspace.doc.create',
+  'workspace.doc.update',
+  'workspace.doc.edit',
+  'workspace.doc.delete',
+];
+
+/** Document kind to its directory under `docs/`. */
+const KIND_DIRECTORIES = {
+  spec: 'specs',
+  report: 'reports',
+  handoff: 'handoff',
+} as const;
+
+/**
+ * The session internal ledger key of a document:
+ * `projects/<project>/docs/<dir>/<name>.md`, where `<dir>` is the kind's
+ * directory. It is used only inside this file to key the `doc.content` ledger
+ * draft; models never see it and address a document by project, kind and name.
+ */
+function documentKey(project: string, kind: keyof typeof KIND_DIRECTORIES, name: string): string {
+  return `projects/${project}/docs/${KIND_DIRECTORIES[kind]}/${name}.md`;
+}
 
 /** Start one document session for a parsed write action. */
 export async function runDocumentAction(
@@ -36,17 +61,95 @@ export async function runDocumentAction(
   ctx: ActionRunContext,
 ): Promise<ActionExecutionOutcome> {
   const record = createSecondaryRecord();
+  const after = documentDraftHook(deps, ctx, record);
+  const effects: Readonly<Record<string, MethodEffect>> = {
+    'workspace.doc.create': { scope: 'document', change: 'created', target: documentTarget, after },
+    'workspace.doc.update': { scope: 'document', change: 'updated', target: documentTarget, after },
+    'workspace.doc.edit': { scope: 'document', change: 'updated', target: documentTarget, after },
+    // A delete has no after hook: there is no new content to load back.
+    'workspace.doc.delete': { scope: 'document', change: 'deleted', target: documentTarget },
+  };
   const result = await runSecondary({
     deps,
     ctx,
     role: 'document',
     system: documentSystemPrompt(deps),
     user: buildSecondaryUser(ctx, action.intent),
-    tools: documentTools(deps, ctx, record),
+    tools: await protocolTools(deps, ctx, record, METHODS, effects),
     maxRounds: DOCUMENT_MAX_ROUNDS,
     callIdPrefix: 'doc',
   });
   return toActionOutcome(result, record, record.documents);
+}
+
+/**
+ * The readable `project/kind/name` target of a document method result: the
+ * name is the result's revisited name (a create returns the full dated name)
+ * else the call's name, and project and kind come from the result else the
+ * call. It is never a path.
+ */
+function documentTarget(args: Record<string, unknown>, result: unknown): string {
+  const project = readStringField(result, 'project') ?? readStringField(args, 'project') ?? '';
+  const kind = readStringField(result, 'kind') ?? readStringField(args, 'kind') ?? '';
+  const name = readStringField(result, 'name') ?? readStringField(args, 'name') ?? '';
+  return `${project}/${kind}/${name}`;
+}
+
+/**
+ * The `after` hook shared by the write methods: read the written document back
+ * through the protocol by its returned name and queue its `doc.content` draft
+ * keyed by the session internal document key. A document that cannot be read
+ * back is not an error.
+ */
+function documentDraftHook(
+  deps: ActionRunnerDeps,
+  ctx: ActionRunContext,
+  record: SecondaryRecord,
+): (args: Record<string, unknown>, result: unknown) => Promise<void> {
+  return async (args, result) => {
+    const project = readStringField(result, 'project') ?? readStringField(args, 'project');
+    const kind = readStringField(result, 'kind') ?? readStringField(args, 'kind');
+    const name = readStringField(result, 'name') ?? readStringField(args, 'name');
+    if (project === undefined || kind === undefined || name === undefined) return;
+    if (!(kind in KIND_DIRECTORIES)) return;
+    const read = await deps.host.call('workspace.doc.read', { project, kind, name }) as {
+      title?: unknown;
+      content?: unknown;
+    } | undefined;
+    const content = typeof read?.content === 'string' ? read.content : '';
+    const title = typeof read?.title === 'string' ? read.title : name;
+    const draft = makeDocumentDraft(
+      { path: documentKey(project, kind as keyof typeof KIND_DIRECTORIES, name), title, content },
+      draftEvents(ctx, record.documents),
+      { turn: ctx.turn, cycle: ctx.cycle, actionId: ctx.actionId, source: 'write' },
+    );
+    if (draft !== undefined) record.documents.push(draft);
+  };
+}
+
+/**
+ * The ledger events as of now plus this run's already queued `doc.content`
+ * drafts, in order. A later write in the same loop must diff against the
+ * content its earlier writes produced rather than the ledger base the run
+ * started from, so the whole run stays a valid chained history. The queued
+ * values are `doc.content` bodies, so a synthetic `seq`/`at` is enough to view
+ * each as a ledger event.
+ */
+function draftEvents(ctx: ActionRunContext, drafts: readonly LedgerEventDraft[]): LedgerEvent[] {
+  const events = ctx.currentEvents();
+  const queued = drafts.map((draft, index): LedgerEvent => ({
+    ...(draft as DocContentDraft),
+    seq: events.length + index + 1,
+    at: '',
+  }));
+  return [...events, ...queued];
+}
+
+/** Read a string field from a plain object, or undefined. */
+function readStringField(source: unknown, key: string): string | undefined {
+  if (source === null || typeof source !== 'object') return undefined;
+  const value = (source as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value : undefined;
 }
 
 /** The system prompt: the writer's role, the verbatim rules and the workflow. */
@@ -59,221 +162,25 @@ function documentSystemPrompt(deps: ActionRunnerDeps): string {
     'Document rules:',
     rules.trim() === '' ? '(no document rules are configured)' : rules,
     '',
+    'Tools:',
+    "- workspace_doc_list: list a project's documents to find a name.",
+    '- workspace_doc_read: read one document by project, kind and name; returns its content and version.',
+    '- workspace_doc_create: create one new document; give a short lowercase slug and the full dated name is returned.',
+    '- workspace_doc_update: replace a document with new full content; pass base_version taken from workspace_doc_read.',
+    '- workspace_doc_edit: apply local edits to an existing document; each edit replaces one unique old text.',
+    '',
     'Rules:',
-    '- New documents live under projects/<project>/docs/<specs|plans|reports|handoff>/YYYY-MM-DD-<slug>.md.',
-    '- Read before you revise. Prefer edit_document for local changes; use rewrite_document only for a full rewrite.',
+    '- A document is identified by its project, its kind (spec, report or handoff) and its name.',
+    "- List a project's documents with workspace_doc_list to find a name.",
+    '- To create a document give a short lowercase slug; the full dated name is returned.',
+    '- Read a document before revising or deleting it, and pass base_version taken from workspace_doc_read.',
+    '- Prefer workspace_doc_edit for local changes; give exact old text that occurs exactly once.',
+    '- Use workspace_doc_update only for a full rewrite, and pass base_version taken from workspace_doc_read.',
+    '- When a call returns conflict or missing, read the document again before retrying.',
+    '- Delete a document only when the intent explicitly asks to delete it.',
     '- Use only facts from the conversation and the documents you read.',
     "- The document language follows the project's document rules.",
-    '- When a tool returns an error, fix the call.',
+    '- Never mention files, paths or directories in the done summary; refer to documents by kind and name.',
     '- Finish with done and a summary of one to three sentences.',
   ].join('\n');
-}
-
-/** The five document tools plus the shared `done` tool. */
-function documentTools(
-  deps: ActionRunnerDeps,
-  ctx: ActionRunContext,
-  record: SecondaryRecord,
-): SecondaryTool[] {
-  return [
-    {
-      spec: {
-        name: 'list_documents',
-        description: 'List the project documents in the workspace catalogue. Optionally filter to one project.',
-        parameters: {
-          type: 'object',
-          properties: {
-            project: { type: 'string', description: 'A registered project id to filter the catalogue by.' },
-          },
-          additionalProperties: false,
-        },
-      },
-      async run(args) {
-        const project = optionalStringArg(args, 'project');
-        const catalog = deps.files.listDocuments();
-        const documents = project === undefined
-          ? catalog
-          : catalog.filter((entry) => {
-            const owner = ctx.projects.find((candidate) => candidate.id === project);
-            return owner !== undefined && entry.path.startsWith(`${owner.workspaceDir}/docs/`);
-          });
-        return jsonResult({ documents });
-      },
-    },
-    {
-      spec: {
-        name: 'read_document',
-        description: 'Read one document. Returns its content and a content version.',
-        parameters: {
-          type: 'object',
-          properties: {
-            path: { type: 'string', description: 'The workspace-relative path of the document.' },
-          },
-          required: ['path'],
-          additionalProperties: false,
-        },
-      },
-      async run(args) {
-        const path = stringArg(args, 'path');
-        const file = deps.files.read(path);
-        if (file === undefined) return errorResult('not_found', `Document not found: ${path}`);
-        return jsonResult({ path, content: file.content, version: contentVersion(file.content) });
-      },
-    },
-    {
-      spec: {
-        name: 'create_document',
-        description: 'Create one new document. The path must be a new file under projects/<project>/docs/.',
-        parameters: {
-          type: 'object',
-          properties: {
-            path: { type: 'string', description: 'The workspace-relative path of the new document.' },
-            content: { type: 'string', description: 'The full Markdown content of the new document.' },
-          },
-          required: ['path', 'content'],
-          additionalProperties: false,
-        },
-      },
-      async run(args) {
-        const path = stringArg(args, 'path');
-        const content = stringArg(args, 'content');
-        const written = await deps.host.writeDocument({ path, content });
-        recordWrite(ctx, record, path, content, written);
-        return jsonResult(written);
-      },
-    },
-    {
-      spec: {
-        name: 'edit_document',
-        description: 'Apply local edits to an existing document. Each edit replaces one unique old text with new text.',
-        parameters: {
-          type: 'object',
-          properties: {
-            path: { type: 'string', description: 'The workspace-relative path of the document.' },
-            edits: {
-              type: 'array',
-              description: 'The edits to apply, in order.',
-              items: {
-                type: 'object',
-                properties: {
-                  old: { type: 'string', description: 'The exact existing text to replace; it must occur exactly once.' },
-                  new: { type: 'string', description: 'The replacement text.' },
-                },
-                required: ['old', 'new'],
-                additionalProperties: false,
-              },
-            },
-          },
-          required: ['path', 'edits'],
-          additionalProperties: false,
-        },
-      },
-      async run(args) {
-        const path = stringArg(args, 'path');
-        const edits = editListArg(args, 'edits');
-        const file = deps.files.read(path);
-        if (file === undefined) return errorResult('not_found', `Document not found: ${path}`);
-        const read = file.content;
-        let content = read;
-        for (const edit of edits) {
-          const count = occurrences(content, edit.old);
-          if (count === 0) return errorResult('not_found', `edit old text was not found: ${excerpt(edit.old)}`);
-          if (count > 1) return errorResult('not_unique', `edit old text appears ${count} times: ${excerpt(edit.old)}`);
-          // A function replacement keeps `$` sequences in the new text literal.
-          content = content.replace(edit.old, () => edit.new);
-        }
-        const written = await deps.host.writeDocument({ path, content, expectedContent: read });
-        recordWrite(ctx, record, path, content, written);
-        return jsonResult(written);
-      },
-    },
-    {
-      spec: {
-        name: 'rewrite_document',
-        description: 'Replace an existing document with new full content.',
-        parameters: {
-          type: 'object',
-          properties: {
-            path: { type: 'string', description: 'The workspace-relative path of the document.' },
-            content: { type: 'string', description: 'The complete new Markdown content of the document.' },
-          },
-          required: ['path', 'content'],
-          additionalProperties: false,
-        },
-      },
-      async run(args) {
-        const path = stringArg(args, 'path');
-        const content = stringArg(args, 'content');
-        const file = deps.files.read(path);
-        if (file === undefined) return errorResult('not_found', `Document not found: ${path}`);
-        const written = await deps.host.writeDocument({ path, content, expectedContent: file.content });
-        recordWrite(ctx, record, path, content, written);
-        return jsonResult(written);
-      },
-    },
-  ];
-}
-
-/** The host's write result, as far as this session records it. */
-interface DocumentWriteResult {
-  path: string;
-  change: 'created' | 'updated';
-  version: string;
-}
-
-/** Record a successful write as a workspace update and a `doc.content` draft. */
-function recordWrite(
-  ctx: ActionRunContext,
-  record: SecondaryRecord,
-  path: string,
-  content: string,
-  written: DocumentWriteResult,
-): void {
-  recordWorkspaceUpdate(record, ctx, {
-    scope: 'document',
-    target: path,
-    change: written.change,
-    version: written.version,
-  });
-  const draft = makeDocumentDraft(
-    { path, title: documentTitle(path, content), content },
-    ctx.currentEvents(),
-    { turn: ctx.turn, cycle: ctx.cycle, actionId: ctx.actionId, source: 'write' },
-  );
-  if (draft !== undefined) record.documents.push(draft);
-}
-
-/** Read a list of `{ old, new }` edits with both texts required and non-empty. */
-function editListArg(args: Record<string, unknown>, name: string): { old: string; new: string }[] {
-  const value = args[name];
-  if (!Array.isArray(value)) throw new ToolArgumentError(`"${name}" must be an array of edits.`);
-  return value.map((raw, index) => {
-    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-      throw new ToolArgumentError(`"${name}[${index}]" must be an object with old and new.`);
-    }
-    const edit = raw as { old?: unknown; new?: unknown };
-    if (typeof edit.old !== 'string' || edit.old === '') {
-      throw new ToolArgumentError(`"${name}[${index}].old" must be a non-empty string.`);
-    }
-    if (typeof edit.new !== 'string') {
-      throw new ToolArgumentError(`"${name}[${index}].new" must be a string.`);
-    }
-    return { old: edit.old, new: edit.new };
-  });
-}
-
-/** How many times `needle` occurs in `haystack`. */
-function occurrences(haystack: string, needle: string): number {
-  return haystack.split(needle).length - 1;
-}
-
-/** A short, single-line excerpt of an edit target for an error message. */
-function excerpt(text: string): string {
-  const line = text.replace(/\s+/gu, ' ').trim();
-  return line.length <= 80 ? line : `${line.slice(0, 77)}...`;
-}
-
-/** The document title: its first `# ` heading, or the path when it has none. */
-function documentTitle(path: string, content: string): string {
-  return /^# (.+)$/m.exec(content)?.[1]?.trim() ?? path;
 }

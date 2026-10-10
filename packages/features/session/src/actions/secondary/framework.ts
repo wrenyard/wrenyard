@@ -215,53 +215,7 @@ export function errorCodeOf(error: unknown): string {
   return 'tool_failed';
 }
 
-// ─── Tool argument readers (throw a coded error the loop reports) ───────────
-
-/** Raised for a malformed tool argument; the loop reports it as invalid_arguments. */
-export class ToolArgumentError extends Error {
-  readonly code = 'invalid_arguments';
-  constructor(message: string) {
-    super(message);
-    this.name = 'ToolArgumentError';
-  }
-}
-
-export function stringArg(args: Record<string, unknown>, name: string): string {
-  const value = args[name];
-  if (typeof value !== 'string') throw new ToolArgumentError(`"${name}" must be a string.`);
-  return value;
-}
-
-export function optionalStringArg(args: Record<string, unknown>, name: string): string | undefined {
-  const value = args[name];
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'string') throw new ToolArgumentError(`"${name}" must be a string when present.`);
-  return value;
-}
-
-export function stringListArg(args: Record<string, unknown>, name: string): string[] {
-  const value = args[name];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
-    throw new ToolArgumentError(`"${name}" must be an array of strings.`);
-  }
-  return value as string[];
-}
-
-export function optionalStringListArg(args: Record<string, unknown>, name: string): string[] | undefined {
-  const value = args[name];
-  if (value === undefined || value === null) return undefined;
-  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
-    throw new ToolArgumentError(`"${name}" must be an array of strings when present.`);
-  }
-  return value as string[];
-}
-
-export function optionalBooleanArg(args: Record<string, unknown>, name: string): boolean | undefined {
-  const value = args[name];
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'boolean') throw new ToolArgumentError(`"${name}" must be a boolean when present.`);
-  return value;
-}
+// ─── Tool results ───────────────────────────────────────────────────────────
 
 /** Compact JSON tool result. */
 export function jsonResult(value: unknown): string {
@@ -378,11 +332,16 @@ export function toActionOutcome(
  * How one protocol method's successful call maps to a recorded workspace
  * change. `when` names a boolean field of the call result that must be `true`
  * for the change to be recorded; an absent `when` records on every success.
+ * `after` is an optional per-method hook awaited after the call and its
+ * recorded change.
  */
 export interface MethodEffect {
-  scope: 'workspace' | 'project';
+  scope: 'workspace' | 'project' | 'document';
   change: WsUpdatedEvent['change'];
   when?: string;
+  /** When present, its return value is the recorded target; otherwise the fallback chain is used. */
+  target?(args: Record<string, unknown>, result: unknown): string;
+  after?(args: Record<string, unknown>, result: unknown): void | Promise<void>;
 }
 
 /**
@@ -392,8 +351,9 @@ export interface MethodEffect {
  * arguments to `deps.host.call` and returns the compact JSON result. A
  * successful call whose method has an effect entry (and whose `when` guard, if
  * any, holds in the result) records exactly one `ws.updated` through the shared
- * helpers. A host error keeps its string code and message as an error result
- * and never aborts the caller's loop.
+ * helpers, then awaits the effect's optional `after` hook. A host error keeps
+ * its string code and message as an error result and never aborts the caller's
+ * loop; a throw from the `after` hook becomes the same tool's error result.
  */
 export async function protocolTools(
   deps: ActionRunnerDeps,
@@ -421,6 +381,13 @@ export async function protocolTools(
         if (effect !== undefined && effectApplies(effect, result)) {
           recordMethodEffect(record, ctx, args, result, effect);
         }
+        if (effect?.after !== undefined) {
+          try {
+            await effect.after(args, result);
+          } catch (error) {
+            return errorResult(errorCodeOf(error), messageOf(error));
+          }
+        }
         return jsonResult(result);
       },
     };
@@ -434,9 +401,11 @@ function effectApplies(effect: MethodEffect, result: unknown): boolean {
 }
 
 /**
- * Record the single `ws.updated` a successful protocol call produced: the
- * target is the call's project, then the result's project, then `workspace`
- * when the effect is workspace-scoped; the worktree id and commit facts come
+ * Record the single `ws.updated` a successful protocol call produced. `change`
+ * is the result's own string `change` when present, otherwise the effect's
+ * static change. The target is the effect's own `target` function when present,
+ * otherwise the call's project, then the result's project, then `workspace` when
+ * the effect is workspace-scoped; the worktree id and commit/version facts come
  * from the call arguments and the result.
  */
 function recordMethodEffect(
@@ -446,18 +415,21 @@ function recordMethodEffect(
   result: unknown,
   effect: MethodEffect,
 ): void {
-  const target =
-    readStringField(args, 'project')
+  const change = readStringField(result, 'change') ?? effect.change;
+  const target = effect.target?.(args, result)
+    ?? readStringField(args, 'project')
     ?? readStringField(result, 'project')
     ?? (effect.scope === 'workspace' ? 'workspace' : '');
   const worktreeId = readStringField(args, 'worktree_id') ?? readStringField(result, 'worktree_id');
   const hash = readStringField(result, 'hash');
   const files = readStringListField(result, 'files');
+  const version = readStringField(result, 'version');
   recordWorkspaceUpdate(record, ctx, {
     scope: effect.scope,
     target,
     ...(worktreeId === undefined ? {} : { worktreeId }),
-    change: effect.change,
+    change,
+    ...(version === undefined ? {} : { version }),
     ...(hash === undefined ? {} : { hash }),
     ...(files === undefined ? {} : { files }),
   });

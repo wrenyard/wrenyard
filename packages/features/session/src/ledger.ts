@@ -250,7 +250,7 @@ export interface WsUpdatedEvent extends LedgerEventBase {
   actionId: string;
   scope: 'document' | 'workspace' | 'project';
   target: string;
-  change: 'created' | 'updated' | 'committed' | 'pushed' | 'pulled' | 'worktree-created' | 'worktree-removed' | 'worktree-merged' | 'registered';
+  change: 'created' | 'updated' | 'committed' | 'pushed' | 'pulled' | 'worktree-created' | 'worktree-removed' | 'worktree-merged' | 'registered' | 'deleted';
   worktreeId?: string;
   version?: string;
   hash?: string;
