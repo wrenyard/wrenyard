@@ -226,7 +226,30 @@ class Engine implements Session {
   }
 
   listSessions(): SessionSummary[] {
-    return this.ports.ledger.listSessions();
+    return this.ports.ledger.listSessions().map((summary) => ({
+      ...summary,
+      running: this.sessionHasRunningTurns(summary.sessionId),
+    }));
+  }
+
+  /**
+   * Whether a session has an in-flight turn right now. A loaded runtime is
+   * checked turn by turn; a session still being recovered at startup is running
+   * while any of its recovering turns remain. Never touches the ledger, so it
+   * stays a pure read of in-memory state.
+   */
+  private sessionHasRunningTurns(sessionId: string): boolean {
+    const runtime = this.sessions.get(sessionId);
+    if (runtime) {
+      for (const turn of runtime.turns.values()) {
+        if (!turn.durableTerminal) return true;
+      }
+    }
+    const prefix = `${sessionId}:`;
+    for (const key of this.recoveringTurns) {
+      if (key.startsWith(prefix)) return true;
+    }
+    return false;
   }
 
   async send(

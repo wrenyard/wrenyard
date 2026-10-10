@@ -9,7 +9,6 @@ import {
   SidebarHeader,
   SidebarMenu,
   SidebarMenuAction,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
@@ -24,7 +23,6 @@ export interface SessionSidebarProps {
   sessions: SessionSummary[];
   selectedId: string;
   loading: boolean;
-  running: boolean;
   onSelect(sessionId: string): void;
   onNew(): void;
   onSearch(): void;
@@ -36,7 +34,7 @@ export interface SessionSidebarProps {
  * a bare `Sidebar` (collapsible none); the page owns the surrounding
  * `SidebarProvider` and the panel it collapses.
  */
-export function SessionSidebar({ sessions, selectedId, loading, running, onSelect, onNew, onSearch, onDelete }: SessionSidebarProps) {
+export function SessionSidebar({ sessions, selectedId, loading, onSelect, onNew, onSearch, onDelete }: SessionSidebarProps) {
   const now = useNow();
   const grouped = new Map<DateGroup, SessionSummary[]>();
   const sorted = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -101,17 +99,24 @@ export function SessionSidebar({ sessions, selectedId, loading, running, onSelec
                       <SidebarMenuButton
                         isActive={session.sessionId === selectedId}
                         onClick={() => onSelect(session.sessionId)}
+                        className="group-has-data-[sidebar=menu-action]/menu-item:pr-3 group-has-data-[sidebar=menu-action]/menu-item:group-hover/menu-item:pr-8 group-has-data-[sidebar=menu-action]/menu-item:group-focus-within/menu-item:pr-8"
                       >
-                        <span>{session.title}</span>
+                        {session.running === true ? (
+                          <>
+                            <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                              <Spinner className="size-4" />
+                            </span>
+                            <span className="min-w-0 flex-1 [text-overflow:clip]! [mask-image:linear-gradient(to_right,#000_calc(100%_-_2rem),transparent)]">{session.title}</span>
+                          </>
+                        ) : (
+                          <span className="min-w-0 flex-1 [text-overflow:clip]! [mask-image:linear-gradient(to_right,#000_calc(100%_-_2rem),transparent)]">{session.title}</span>
+                        )}
                       </SidebarMenuButton>
-                      {running && session.sessionId === selectedId && (
-                        <SidebarMenuBadge><Spinner /></SidebarMenuBadge>
-                      )}
                       <SidebarMenuAction
                         showOnHover
                         aria-label="删除对话"
-                        title={running && session.sessionId === selectedId ? '运行中无法删除' : '删除对话'}
-                        disabled={running && session.sessionId === selectedId}
+                        title={session.running === true ? '运行中无法删除' : '删除对话'}
+                        disabled={session.running === true}
                         onClick={() => onDelete(session.sessionId)}
                       >
                         <Trash2 />

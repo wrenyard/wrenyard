@@ -200,6 +200,7 @@ export function useSessionController(api: SessionApi) {
     void api.models().then((models) => {
       if (!cancelled) dispatch({ type: 'models', models });
     }).catch((error: unknown) => { if (!cancelled) reportError(error); });
+    const timer = setInterval(() => { void refreshList(); }, 3000);
     void refreshList().then(async (sessions) => {
       if (!cancelled && !selected.current && !creation.current && sessions[0]) {
         await selectSession(sessions[0].sessionId);
@@ -210,6 +211,7 @@ export function useSessionController(api: SessionApi) {
       alive.current = false;
       selectionVersion.current++;
       listVersion.current++;
+      clearInterval(timer);
       offEvent();
       offLive();
     };
