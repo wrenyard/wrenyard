@@ -41,7 +41,8 @@ export const STATUS_BAR_MANDATORY_IDS: readonly string[] = ['daemon', 'notificat
 export const STATUS_BAR_CONFIGURABLE_ITEMS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'activity.tasks', label: '任务' },
   { id: 'activity.taskgraphs', label: '任务图' },
-  { id: 'session.turns', label: '会话运行轮次' },
+  { id: 'session.ctx', label: '上下文占用' },
+  { id: 'session.metrics', label: '会话指标' },
   { id: 'quota', label: '额度' },
   { id: 'update', label: '更新' },
 ];

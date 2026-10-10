@@ -11,6 +11,9 @@ export type {
   SessionContextInspectParams,
   SessionContextInspectResult,
   ContextInspection,
+  SessionRoutesPreviewParams,
+  SessionRoutesPreviewRole,
+  SessionRoutesPreviewResult,
   AttachmentInput,
   SessionFile,
 } from '@wrenyard/protocol'
@@ -204,6 +207,34 @@ export const sessionContextInspectResultSchema = {
       properties: {
         images: { type: 'integer', minimum: 0 },
         omitted: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+} as const satisfies JsonSchema
+
+const auxiliaryRouteRoleSchema = {
+  type: 'string',
+  enum: ['reply', 'compile', 'doc-search', 'memory-search', 'title'],
+} as const
+
+export const sessionRoutesPreviewParamsSchema = {
+  type: 'object', additionalProperties: false,
+  properties: { sessionId: idSchema },
+} as const satisfies JsonSchema
+export const sessionRoutesPreviewResultSchema = {
+  type: 'object', required: ['roles'], additionalProperties: false,
+  properties: {
+    roles: {
+      type: 'array', items: {
+        type: 'object', required: ['role'], additionalProperties: false,
+        properties: {
+          role: auxiliaryRouteRoleSchema,
+          model: { type: 'string', minLength: 1 },
+          modelName: { type: 'string', minLength: 1 },
+          contextWindow: { type: 'integer', minimum: 1 },
+          reasoningEffort: reasoningEffortSchema,
+          error: { type: 'string', minLength: 1 },
+        },
       },
     },
   },

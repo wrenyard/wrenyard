@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/renderer/components/ui/table';
-import { formatCost } from '@/renderer/lib/format';
+import { formatCost, formatRatio } from '@/renderer/lib/format';
 import type { QuotaSnapshot } from '@/shell-contract';
 import { CALL_ROLE_LABEL } from '../../../model/describe.js';
-import { callCost } from '../../../model/usage.js';
+import { sessionCost } from '../../../model/usage.js';
 import type { CallModel } from '../../../model/types.js';
 import { Section } from '../parts.js';
 
@@ -20,11 +20,9 @@ interface RoleSummary {
   cachedInput: number;
   output: number;
   reasoning: number;
-  /** Undefined when any call's price is unknown; never a partial zero. */
-  fee: number | undefined;
 }
 
-function summarizeRole(role: CallModel['role'], calls: readonly CallModel[], quota: QuotaSnapshot | undefined): RoleSummary {
+function summarizeRole(role: CallModel['role'], calls: readonly CallModel[]): RoleSummary {
   const summary: RoleSummary = {
     role,
     calls: [...calls],
@@ -35,7 +33,6 @@ function summarizeRole(role: CallModel['role'], calls: readonly CallModel[], quo
     cachedInput: 0,
     output: 0,
     reasoning: 0,
-    fee: quota === undefined ? undefined : 0,
   };
   for (const call of calls) {
     if (call.status === 'ok') summary.ok += 1;
@@ -45,11 +42,6 @@ function summarizeRole(role: CallModel['role'], calls: readonly CallModel[], quo
     summary.cachedInput += call.usage?.cachedInput ?? 0;
     summary.output += call.usage?.output ?? 0;
     summary.reasoning += call.usage?.reasoning ?? 0;
-    if (summary.fee !== undefined && quota !== undefined) {
-      const cost = callCost(call, quota);
-      if (cost === undefined) summary.fee = undefined;
-      else summary.fee += cost;
-    }
   }
   return summary;
 }
@@ -67,18 +59,26 @@ export interface CallSummaryProps {
 export function CallSummary({ calls, quota }: CallSummaryProps) {
   const [expanded, setExpanded] = useState(false);
   const summaries = useMemo(() => ROLE_ORDER
-    .map((role) => summarizeRole(role, calls.filter((call) => call.role === role), quota))
-    .filter((summary) => summary.calls.length > 0), [calls, quota]);
+    .map((role) => summarizeRole(role, calls.filter((call) => call.role === role)))
+    .filter((summary) => summary.calls.length > 0), [calls]);
+  // Fees come from the shared sessionCost projection; the table's token and
+  // status columns stay local.
+  const cost = useMemo(() => sessionCost(calls, quota), [calls, quota]);
+  const feeByRole = useMemo(
+    () => new Map(cost.byRole.map((entry) => [entry.role, entry.fee] as const)),
+    [cost],
+  );
 
   if (summaries.length === 0) return <p className="text-sm text-muted-foreground">还没有模型调用</p>;
 
   const reason = summaries.find((summary) => summary.role === 'reason');
-  const cheapSummaries = summaries.filter((summary) => summary.role !== 'reason');
-  const cheapFee = cheapSummaries.some((summary) => summary.fee === undefined)
+  const reasonEntry = cost.byRole.find((entry) => entry.role === 'reason');
+  const reasonFee = reasonEntry ? reasonEntry.fee : 0;
+  const cheapEntries = cost.byRole.filter((entry) => entry.role !== 'reason');
+  const cheapFee = cheapEntries.some((entry) => entry.fee === undefined)
     ? undefined
-    : cheapSummaries.reduce((sum, summary) => sum + (summary.fee ?? 0), 0);
-  const reasonFee = reason ? reason.fee : 0;
-  const totalFee = reasonFee !== undefined && cheapFee !== undefined ? reasonFee + cheapFee : undefined;
+    : cheapEntries.reduce((sum, entry) => sum + (entry.fee ?? 0), 0);
+  const totalFee = cost.total;
 
   return (
     <Section title="调用">
@@ -116,9 +116,9 @@ export function CallSummary({ calls, quota }: CallSummaryProps) {
                   <TableCell className="text-right tabular-nums">{`${summary.input.toLocaleString()}（${summary.cachedInput.toLocaleString()}）`}</TableCell>
                   <TableCell className="text-right tabular-nums">{`${summary.output.toLocaleString()}（${summary.reasoning.toLocaleString()}）`}</TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {cacheHit === undefined ? '—' : <span className={cacheHit < 0.5 ? 'text-warning' : undefined}>{`${Math.round(cacheHit * 100)}%`}</span>}
+                    {cacheHit === undefined ? '—' : <span className={cacheHit < 0.5 ? 'text-warning' : undefined}>{formatRatio(cacheHit)}</span>}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{formatCost(summary.fee)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatCost(feeByRole.get(summary.role))}</TableCell>
                 </TableRow>
               );
             })}

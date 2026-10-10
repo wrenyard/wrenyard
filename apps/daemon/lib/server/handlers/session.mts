@@ -125,6 +125,8 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
     call(context, 'session.events', () => pollEvents(session, params)))
   router.register('session.context.inspect', (params, _message, context) =>
     call(context, 'session.context.inspect', () => session.inspectContext(params)))
+  router.register('session.routes.preview', (_params, _message, context) =>
+    call(context, 'session.routes.preview', () => session.previewRoutes()))
   router.register('session.media.read', (params, _message, context) =>
     call(context, 'session.media.read', () => session.readMedia(params.sessionId, params.path)))
   router.register('session.delete', (params, _message, context) =>

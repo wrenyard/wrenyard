@@ -90,6 +90,8 @@ import type {
   SessionEventsResult,
   SessionContextInspectParams,
   SessionContextInspectResult,
+  SessionRoutesPreviewParams,
+  SessionRoutesPreviewResult,
   ProviderListParams,
   ProviderListResult,
 } from '../protocol/registry.mts'
@@ -283,6 +285,11 @@ export class ForemanClient {
     context: {
       inspect: (params: SessionContextInspectParams): Promise<SessionContextInspectResult> => {
         return this.rpc.request<SessionContextInspectResult>('session.context.inspect', params)
+      },
+    },
+    routes: {
+      preview: (params: SessionRoutesPreviewParams = {}): Promise<SessionRoutesPreviewResult> => {
+        return this.rpc.request<SessionRoutesPreviewResult>('session.routes.preview', params)
       },
     },
   }

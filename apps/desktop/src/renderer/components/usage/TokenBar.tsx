@@ -37,7 +37,7 @@ export function TokenBar({ segments, window, reserved = 0, className }: TokenBar
   return (
     <div
       data-slot="token-bar"
-      className={cn('flex h-1.5 w-full overflow-hidden rounded-full bg-muted', className)}
+      className={cn('flex h-1.5 w-full items-stretch gap-px overflow-hidden rounded-full bg-muted', className)}
     >
       {segments
         .filter((segment) => segment.tokens > 0)

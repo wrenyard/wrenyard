@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/renderer/components/ui/button';
 import { Separator } from '@/renderer/components/ui/separator';
 import { QuotaProviderBlock } from '@/renderer/components/usage/QuotaProviderBlock';
+import { PanelFooterAction } from '@/renderer/components/panel-footer-action';
 import { shell } from '@/renderer/lib/desktop';
 import { quotaQuery, useQuotaRefresh } from '@/renderer/lib/queries';
 import type { ProviderOrderSnapshot, QuotaProviderSnapshot } from '@/shell-contract';
@@ -88,17 +89,7 @@ export function QuotaPanel() {
         )}
       </div>
       <Separator />
-      <div className="p-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="w-full"
-          onClick={() => void shell.navigate('quota')}
-        >
-          打开模型供应页
-        </Button>
-      </div>
+      <PanelFooterAction label="打开模型供应页" onClick={() => void shell.navigate('quota')} />
     </div>
   );
 }

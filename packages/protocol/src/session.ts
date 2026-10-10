@@ -1,5 +1,6 @@
 /**
- * Session feature wire DTOs: the read-only context inspection contract.
+ * Session feature wire DTOs: the read-only context inspection and auxiliary
+ * route preview contracts.
  *
  * Declared independently of any runtime package, exactly like the provider and
  * exec surfaces: the shapes are structural and describe what crosses the IPC
@@ -98,6 +99,33 @@ export interface ContextInspection {
 }
 
 export type SessionContextInspectResult = ContextInspection
+
+/** Params of `session.routes.preview`. */
+export interface SessionRoutesPreviewParams {
+  /** Omitted means a new session; the preview is session-independent. */
+  sessionId?: string
+}
+
+/**
+ * One auxiliary role's rank-1 route preview. A role the selector cannot serve
+ * carries `error` and no model; the model facts are the catalog display name and
+ * window.
+ */
+export interface SessionRoutesPreviewRole {
+  /** Auxiliary conversation role, in the fixed order the preview lists them. */
+  role: 'reply' | 'compile' | 'doc-search' | 'memory-search' | 'title'
+  model?: string
+  modelName?: string
+  contextWindow?: number
+  /** Reasoning effort the rank-1 route would be called at; absent on error. */
+  reasoningEffort?: ReasoningEffort
+  error?: string
+}
+
+/** Result of `session.routes.preview`. */
+export interface SessionRoutesPreviewResult {
+  roles: SessionRoutesPreviewRole[]
+}
 
 /** A user attachment crossing IPC. Exactly one of `path` / `dataUrl` is set. */
 export interface AttachmentInput {
@@ -204,6 +232,7 @@ export interface SessionModelEntry {
 
 export interface SessionMethods {
   'session.context.inspect': RpcMethod<SessionContextInspectParams, ContextInspection>
+  'session.routes.preview': RpcMethod<SessionRoutesPreviewParams, SessionRoutesPreviewResult>
   'session.media.read': RpcMethod<SessionMediaReadParams, SessionMediaReadResult>
   'session.delete': RpcMethod<SessionDeleteParams, SessionDeleteResult>
 }

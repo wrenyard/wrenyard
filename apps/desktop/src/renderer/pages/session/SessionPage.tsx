@@ -26,6 +26,7 @@ import { EmptySession } from './components/EmptySession.js';
 import { SessionSearch } from './components/SessionSearch.js';
 import { SessionSidebar } from './components/SessionSidebar.js';
 import { SessionTitle } from './components/SessionTitle.js';
+import { SessionStatusItems } from './components/status/SessionStatusItems.js';
 import { MessageTimeline, buildMessageTimeline } from './components/conversation/MessageTimeline.js';
 import { withReplyQuote } from './components/conversation/UserMessage.js';
 import { Inspector, InspectorProvider } from './components/inspector/Inspector.js';
@@ -324,6 +325,7 @@ export function SessionPage() {
           onInspect={inspectRequest}
         >
           <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
+          <SessionStatusItems />
         <Conversation sessionKey={sessionKey} sessionId={state.selectedId} turns={model.turns} ready={!state.loadingLedger} />
         <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen} className="h-full min-h-0">
           <ResizablePanelGroup

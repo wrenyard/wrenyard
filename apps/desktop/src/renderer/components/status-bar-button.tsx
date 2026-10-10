@@ -20,6 +20,11 @@ const TONE_CLASS: Record<Exclude<StatusBarTone, 'default'>, string> = {
   destructive: 'text-destructive',
 };
 
+/** Status-bar tone for an alert level: `normal` stays muted, others keep their token. */
+export function levelTone(level: 'normal' | 'warning' | 'destructive'): StatusBarTone {
+  return level === 'normal' ? 'default' : level;
+}
+
 export interface StatusBarButtonProps
   extends Omit<ComponentProps<typeof Button>, 'variant' | 'size' | 'children'> {
   icon?: LucideIcon;

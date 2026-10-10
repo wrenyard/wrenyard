@@ -1,18 +1,15 @@
 import { useMemo } from 'react';
-import { QuotaBar } from '@/renderer/components/usage/QuotaBar';
+import { QuotaBar, quotaVerdict, type QuotaVerdict } from '@/renderer/components/usage/QuotaBar';
 import type { QuotaProviderSnapshot } from '@/shell-contract';
 import { cn } from 'cn';
 
 /**
- * Quota hover-tips card (usage spec 6.2). It renders every enabled provider
- * grouped in one compact ~320px card: the focused provider first and
- * highlighted, then each window as a {@link QuotaBar} row (name, thin bar with
- * pace marker, remaining percentage, pace and reset), with balances on their
- * own rows.
- *
- * The component is pure props — provider snapshots, the focused provider id and
- * the current time — so it never reads a query or the shell and the Pet house
- * card can reuse it directly.
+ * Quota hover-tips card (usage spec 6.2). It shows a single provider — the
+ * focused one, or the same provider the status-bar label falls back to — with a
+ * one-line verdict followed by each window as a {@link QuotaBar} row and its
+ * balances. The component is pure props (provider snapshots, the focused
+ * provider id and the current time) so it never reads a query or the shell and
+ * the Pet house card can reuse it directly.
  */
 
 const PROVIDER_FAILED_LABEL = '额度不可用';
@@ -20,51 +17,57 @@ const NO_DATA_LABEL = '暂无额度数据';
 const BALANCE_LABEL = '余额';
 
 export interface QuotaTipsProps {
-  /** Enabled provider snapshots to display, in the caller's order. */
+  /** Provider snapshots to display; only the focused one is shown. */
   providers: readonly QuotaProviderSnapshot[];
-  /** Provider id of the composer's current model; ordered first and highlighted. */
+  /** Provider id of the composer's current model, else the label's fallback. */
   focusedProvider?: string | null;
   /** Current time in ms, injected so the reset countdown stays deterministic. */
   now: number;
+  /**
+   * Presentation surface. `card` (default) is the light panel/card with its own
+   * width, padding and muted text; `inverse` is the compact variant for the dark
+   * status-bar tooltip, which supplies its own width and padding.
+   */
+  surface?: 'card' | 'inverse';
   className?: string;
 }
 
-/** Focused provider first, then the remaining providers in their given order. */
-function orderProviders(
-  providers: readonly QuotaProviderSnapshot[],
-  focusedProvider: string | null,
-): QuotaProviderSnapshot[] {
-  if (focusedProvider === null) return [...providers];
-  const focused = providers.find((provider) => provider.id === focusedProvider);
-  if (focused === undefined) return [...providers];
-  return [focused, ...providers.filter((provider) => provider.id !== focusedProvider)];
+/** Top-of-card verdict line: label plus a short muted reason. */
+function VerdictLine({ verdict, inverse }: { verdict: QuotaVerdict; inverse: boolean }) {
+  const tone = verdict.level === 'insufficient'
+    ? 'text-destructive'
+    : verdict.level === 'tight'
+      ? 'text-warning'
+      : 'text-success';
+  return (
+    <div className="flex items-baseline gap-1.5" data-slot="quota-verdict">
+      <span className={cn('font-medium', tone)}>{verdict.label}</span>
+      {verdict.reason !== undefined && (
+        <span className={inverse ? 'text-background/60' : 'text-muted-foreground'}>· {verdict.reason}</span>
+      )}
+    </div>
+  );
 }
 
-function ProviderTips({ provider, now, focused }: {
+function ProviderTips({ provider, now, inverse }: {
   provider: QuotaProviderSnapshot;
   now: number;
-  focused: boolean;
+  inverse: boolean;
 }) {
   const name = provider.label || provider.id;
   const failed = provider.status === 'error' || provider.status === 'unavailable';
   const empty = provider.windows.length === 0 && provider.balances.length === 0;
+  const muted = inverse ? 'text-background/60' : 'text-muted-foreground';
 
   return (
-    <div
-      className={cn(
-        'flex flex-col gap-1.5 rounded-lg px-2 py-1.5',
-        focused && 'bg-muted',
-      )}
-      data-slot="quota-tips-provider"
-      data-focused={focused ? 'true' : undefined}
-    >
-      <span className={cn('truncate font-medium', failed && 'text-muted-foreground')}>
+    <div className="flex flex-col gap-1.5" data-slot="quota-tips-provider">
+      <span className={cn('truncate font-medium', failed && muted)}>
         {name}{provider.stale ? '（数据过期）' : ''}
       </span>
       {failed ? (
-        <span className="text-muted-foreground">{provider.message ?? PROVIDER_FAILED_LABEL}</span>
+        <span className={muted}>{provider.message ?? PROVIDER_FAILED_LABEL}</span>
       ) : empty ? (
-        <span className="text-muted-foreground">{provider.message ?? NO_DATA_LABEL}</span>
+        <span className={muted}>{provider.message ?? NO_DATA_LABEL}</span>
       ) : (
         <>
           {provider.windows.map((window) => (
@@ -76,13 +79,13 @@ function ProviderTips({ provider, now, focused }: {
               resetsAt={window.resetsAt}
               windowMinutes={window.windowMinutes}
               stale={provider.stale}
-              stacked
               now={now}
+              surface={inverse ? 'inverse' : 'card'}
             />
           ))}
           {provider.balances.map((balance) => (
             <span key={`${balance.currency}:${balance.display}`} className="flex items-baseline gap-1">
-              <span className="text-muted-foreground">{BALANCE_LABEL}</span>
+              <span className={muted}>{BALANCE_LABEL}</span>
               <strong className="tabular-nums">{balance.display}</strong>
             </span>
           ))}
@@ -92,33 +95,45 @@ function ProviderTips({ provider, now, focused }: {
   );
 }
 
-export function QuotaTips({ providers, focusedProvider = null, now, className }: QuotaTipsProps) {
-  const ordered = useMemo(
-    () => orderProviders(providers, focusedProvider),
-    [providers, focusedProvider],
-  );
+export function QuotaTips({
+  providers,
+  focusedProvider = null,
+  now,
+  surface = 'card',
+  className,
+}: QuotaTipsProps) {
+  const inverse = surface === 'inverse';
+  const provider = useMemo(() => {
+    if (focusedProvider !== null) {
+      return providers.find((entry) => entry.id === focusedProvider) ?? providers[0] ?? null;
+    }
+    return providers[0] ?? null;
+  }, [providers, focusedProvider]);
 
-  if (ordered.length === 0) {
+  if (provider === null) {
     return (
-      <p className={cn('text-xs text-muted-foreground', className)} data-slot="quota-tips">
+      <p
+        className={cn('text-xs', inverse ? 'text-background/60' : 'p-3 text-muted-foreground', className)}
+        data-slot="quota-tips"
+      >
         {NO_DATA_LABEL}
       </p>
     );
   }
 
+  const failed = provider.status === 'error' || provider.status === 'unavailable';
+
   return (
     <div
-      className={cn('flex w-80 flex-col gap-2 text-xs tabular-nums', className)}
+      className={cn(
+        'flex flex-col text-xs tabular-nums',
+        inverse ? 'gap-1.5' : 'w-80 gap-2 p-3',
+        className,
+      )}
       data-slot="quota-tips"
     >
-      {ordered.map((provider) => (
-        <ProviderTips
-          key={provider.id}
-          provider={provider}
-          now={now}
-          focused={provider.id === focusedProvider}
-        />
-      ))}
+      {!failed && <VerdictLine verdict={quotaVerdict(provider.windows)} inverse={inverse} />}
+      <ProviderTips provider={provider} now={now} inverse={inverse} />
     </div>
   );
 }

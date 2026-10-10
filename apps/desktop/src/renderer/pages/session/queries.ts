@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { keepPreviousData, queryOptions } from '@tanstack/react-query';
 import type { ContextInspection } from '@/shell-contract';
-import { getSessionApi } from './api.js';
+import type { SessionRoutesPreviewResult } from '@wrenyard/protocol';
+import { getSessionApi, routesPreview } from './api.js';
 
 /**
  * Session context-inspection query (usage spec 3.4). The key carries the
@@ -31,6 +32,26 @@ export function contextQuery(sessionKey: string, model: string, seq: number) {
     enabled: model !== '',
     placeholderData: keepPreviousData,
     staleTime: CONTEXT_REFETCH_THROTTLE_MS,
+  });
+}
+
+/** Route previews are cheap and change slowly; a modest window avoids churn. */
+export const ROUTES_PREVIEW_STALE_MS = 30_000;
+
+/**
+ * Auxiliary route-preview query. The key carries the session and the throttled
+ * ledger `seq`, so a finished call refetches the preview while focus refreshes
+ * pick up a changed model pool. `keepPreviousData` keeps the last preview on
+ * screen until the next result arrives.
+ */
+export function routesPreviewQuery(sessionKey: string, seq: number) {
+  const sessionId = contextInspectSessionId(sessionKey);
+  return queryOptions<SessionRoutesPreviewResult>({
+    queryKey: ['session', 'routes-preview', sessionKey, seq] as const,
+    queryFn: () => routesPreview({ ...(sessionId === undefined ? {} : { sessionId }) }),
+    staleTime: ROUTES_PREVIEW_STALE_MS,
+    refetchOnWindowFocus: true,
+    placeholderData: keepPreviousData,
   });
 }
 

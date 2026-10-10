@@ -5,19 +5,22 @@ import type {
   ContextItemKind,
   ContextLayerId,
   QuotaSnapshot,
+  TaskRunUsage,
 } from '@/shell-contract';
+import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
 import type { CallModel } from './types.js';
+import { CALL_ROLE_LABEL } from './describe.js';
 
 /**
- * Pure usage-meter projections for the session page. No React, DOM, bridge or
- * window access lives here: the ring, the usage panel and the inspector context
- * tab render exactly what these functions derive from a `ContextInspection`,
- * the loaded call models and a quota snapshot.
+ * Pure usage projections for the session page. No React, DOM, bridge or window
+ * access lives here: the status-bar items and the inspector context tab render
+ * exactly what these functions derive from a `ContextInspection`, the loaded
+ * call models and a quota snapshot.
  *
- * The main reasoning view is forward-looking (context ledger spec): the meter
- * answers "how large will the *next* reasoning view be", not "how large was
- * the last request". Layer totals are authoritative for the total; individual
- * items only drive ordering and the composition breakdown (usage spec 3.1).
+ * The main reasoning view is forward-looking (context ledger spec): the budget
+ * answers "how large will the *next* reasoning view be", not "how large was the
+ * last request". Layer totals are authoritative for the total; individual items
+ * only drive ordering and the composition breakdown (usage spec 3.1).
  */
 
 /** Composition groups shown in the usage panel, in fixed display order. */
@@ -311,6 +314,28 @@ export function recentCacheRatio(calls: readonly CallModel[]): number | undefine
   return undefined;
 }
 
+/**
+ * Output throughput of the most recent finished main-reasoning call that
+ * reported both a first-token and an end timestamp: `(output + reasoning)` over
+ * the elapsed seconds between them. Returns undefined when no such call exists
+ * or the interval is not positive, so the UI never fabricates a rate.
+ */
+export function recentTps(calls: readonly CallModel[]): number | undefined {
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const call = calls[index]!;
+    if (call.role !== 'reason') continue;
+    if (call.status === 'running') continue;
+    if (call.firstTokenAt === undefined || call.endedAt === undefined) continue;
+    if (call.usage === undefined) continue;
+    const start = Date.parse(call.firstTokenAt);
+    const end = Date.parse(call.endedAt);
+    const seconds = (end - start) / 1000;
+    if (!Number.isFinite(seconds) || seconds <= 0) continue;
+    return ((call.usage.output ?? 0) + (call.usage.reasoning ?? 0)) / seconds;
+  }
+  return undefined;
+}
+
 type Pricing = readonly [number, number, number];
 
 interface ModelPricing {
@@ -354,6 +379,328 @@ export function callCost(call: CallModel, quota: QuotaSnapshot | null | undefine
   const pricing = pricingFor(call.model, quota);
   if (pricing === undefined) return undefined;
   return costOf(pricing, call.usage.input ?? 0, call.usage.cachedInput ?? 0, call.usage.output ?? 0);
+}
+
+/** Roles in the fixed order date surfaces list them. */
+const CALL_ROLE_ORDER: readonly CallModel['role'][] = [
+  'reason',
+  'memory-search',
+  'doc-search',
+  'compile',
+  'reply',
+  'title',
+];
+
+/**
+ * Total USD fee of one role's calls. Undefined when the quota is missing or any
+ * call's price is unknown — never a partial zero (ledger spec), matching the
+ * inspector's inline summary exactly.
+ */
+function roleFee(calls: readonly CallModel[], quota: QuotaSnapshot | undefined): number | undefined {
+  if (quota === undefined) return undefined;
+  let fee = 0;
+  for (const call of calls) {
+    const cost = callCost(call, quota);
+    if (cost === undefined) return undefined;
+    fee += cost;
+  }
+  return fee;
+}
+
+export interface SessionRoleCost {
+  role: CallModel['role'];
+  label: string;
+  /** Undefined when the quota is missing or any call's price is unknown. */
+  fee: number | undefined;
+  /** Number of calls with this role. */
+  calls: number;
+}
+
+export interface SessionCostView {
+  /** Total USD cost; undefined when any contributing price is unknown. */
+  total: number | undefined;
+  /** Per-role cost in fixed role order; only roles with calls are listed. */
+  byRole: SessionRoleCost[];
+}
+
+/**
+ * Session cost projection for the inspector's CallSummary: per-role fees and
+ * call counts, plus the total fee. An unknown price makes the affected role (and
+ * the total) undefined rather than a partial zero.
+ */
+export function sessionCost(calls: readonly CallModel[], quota: QuotaSnapshot | undefined): SessionCostView {
+  const byRole: SessionRoleCost[] = [];
+  for (const role of CALL_ROLE_ORDER) {
+    const roleCalls = calls.filter((call) => call.role === role);
+    if (roleCalls.length === 0) continue;
+    byRole.push({ role, label: CALL_ROLE_LABEL[role], fee: roleFee(roleCalls, quota), calls: roleCalls.length });
+  }
+
+  const reason = byRole.find((entry) => entry.role === 'reason');
+  const reasonFee = reason ? reason.fee : 0;
+  const cheap = byRole.filter((entry) => entry.role !== 'reason');
+  const cheapFee = cheap.some((entry) => entry.fee === undefined)
+    ? undefined
+    : cheap.reduce((sum, entry) => sum + (entry.fee ?? 0), 0);
+  const total = reasonFee !== undefined && cheapFee !== undefined ? reasonFee + cheapFee : undefined;
+
+  return { total, byRole };
+}
+
+/** Consumption rows in display order: main reasoning, the auxiliary roles, then tasks. */
+const CONSUMPTION_ROLE_ORDER: readonly CallModel['role'][] = [
+  'reason',
+  'reply',
+  'compile',
+  'doc-search',
+  'memory-search',
+  'title',
+];
+
+/**
+ * One conversation's or dispatched-task group's token consumption. `total` is
+ * `input + output` (output already includes reasoning) and `cacheRatio` is
+ * undefined whenever the row reported no input, never fabricated.
+ */
+export interface ConsumptionRow {
+  /** Row identity: a call role, `task`, or `sum`. */
+  key: string;
+  label: string;
+  /** Calls of the role, or tasks for the `task` row. */
+  calls: number;
+  total: number;
+  input: number;
+  output: number;
+  /** Cached share of the input. */
+  cached: number;
+  /** `cached / input`; undefined when the row reported no input. */
+  cacheRatio: number | undefined;
+  /** `task` row only: true when some dispatched task had no usage in the snapshot. */
+  partial?: boolean;
+}
+
+export interface ConsumptionView {
+  /** Role rows in display order, followed by the `task` row when tasks ran. */
+  rows: ConsumptionRow[];
+  /** Aggregate over every returned row. */
+  sum: ConsumptionRow;
+}
+
+/** One role's consumption, or undefined when none of its calls reported usage. */
+function roleConsumptionRow(role: CallModel['role'], calls: readonly CallModel[]): ConsumptionRow | undefined {
+  const roleCalls = calls.filter((call) => call.role === role);
+  if (!roleCalls.some((call) => call.usage !== undefined)) return undefined;
+  let input = 0;
+  let output = 0;
+  let cached = 0;
+  for (const call of roleCalls) {
+    input += call.usage?.input ?? 0;
+    output += call.usage?.output ?? 0;
+    cached += call.usage?.cachedInput ?? 0;
+  }
+  const total = input + output;
+  return {
+    key: role,
+    label: CALL_ROLE_LABEL[role],
+    calls: roleCalls.length,
+    total,
+    input,
+    output,
+    cached,
+    cacheRatio: input === 0 ? undefined : cached / input,
+  };
+}
+
+/**
+ * The `task` row for tasks this session dispatched. Undefined when nothing was
+ * dispatched; `partial` marks a dispatched task missing from the stats snapshot.
+ * `totalTokens` is preferred over the derived `input + output` per task.
+ */
+function taskConsumptionRow(taskUsages: readonly (TaskRunUsage | undefined)[]): ConsumptionRow | undefined {
+  if (taskUsages.length === 0) return undefined;
+  let input = 0;
+  let output = 0;
+  let cached = 0;
+  let total = 0;
+  let partial = false;
+  for (const usage of taskUsages) {
+    if (usage === undefined) {
+      partial = true;
+      continue;
+    }
+    const rowInput = usage.inputTokens ?? 0;
+    const rowOutput = usage.outputTokens ?? 0;
+    input += rowInput;
+    output += rowOutput;
+    cached += usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? 0;
+    total += usage.totalTokens ?? rowInput + rowOutput;
+  }
+  return {
+    key: 'task',
+    label: '任务',
+    calls: taskUsages.length,
+    total,
+    input,
+    output,
+    cached,
+    cacheRatio: input === 0 ? undefined : cached / input,
+    ...(partial ? { partial: true } : {}),
+  };
+}
+
+/** Aggregate of every returned row, for the status bar's headline total. */
+function sumConsumptionRow(rows: readonly ConsumptionRow[]): ConsumptionRow {
+  let calls = 0;
+  let input = 0;
+  let output = 0;
+  let cached = 0;
+  let total = 0;
+  for (const row of rows) {
+    calls += row.calls;
+    input += row.input;
+    output += row.output;
+    cached += row.cached;
+    total += row.total;
+  }
+  return {
+    key: 'sum',
+    label: '合计',
+    calls,
+    total,
+    input,
+    output,
+    cached,
+    cacheRatio: input === 0 ? undefined : cached / input,
+  };
+}
+
+/**
+ * Consumption of one session: one row per conversation that reported usage, in
+ * fixed role order, plus a `任务` row for tasks this session dispatched.
+ * `taskUsages` carries one entry per dispatched task — its `TaskRunUsage`, or
+ * undefined when the stats snapshot had no matching run. The `task` row is
+ * absent when nothing was dispatched and carries `partial` when any usage was
+ * missing. `sum` aggregates every returned row.
+ */
+export function consumptionRows(
+  calls: readonly CallModel[],
+  taskUsages: readonly (TaskRunUsage | undefined)[],
+): ConsumptionView {
+  const rows: ConsumptionRow[] = [];
+  for (const role of CONSUMPTION_ROLE_ORDER) {
+    const row = roleConsumptionRow(role, calls);
+    if (row !== undefined) rows.push(row);
+  }
+  const taskRow = taskConsumptionRow(taskUsages);
+  if (taskRow !== undefined) rows.push(taskRow);
+  return { rows, sum: sumConsumptionRow(rows) };
+}
+
+/** Internal LLM roles, in the fixed order the ctx popover lists them. */
+const ROLE_CONTEXT_ORDER: readonly CallModel['role'][] = [
+  'reason',
+  'reply',
+  'compile',
+  'doc-search',
+  'memory-search',
+  'title',
+];
+
+/** One internal LLM conversation's managed context: the role's latest model, its
+ *  prompt tokens and its share of the model window. The reason role carries the
+ *  live budget total; auxiliary roles carry their latest finished call's input,
+ *  their rank-1 preview model, or no tokens at all before their first call. */
+export interface RoleContextEntry {
+  role: CallModel['role'];
+  label: string;
+  /** Latest call's or preview's model public id; undefined when neither known. */
+  model: string | undefined;
+  /** Resolved model display name; undefined when the caller knows none. */
+  modelLabel: string | undefined;
+  /** Prompt tokens of the role's current context; undefined before any call. */
+  tokens: number | undefined;
+  /** Model context window; undefined when the model declares none. */
+  window: number | undefined;
+  /** `tokens / window`; undefined when either is unknown. */
+  ratio: number | undefined;
+  /** Preview selection failure; present only when the daemon returned none. */
+  error?: string;
+}
+
+/** Model facts the caller resolves for a public id; fields are omitted when unknown. */
+export interface RoleModelInfo {
+  label?: string;
+  contextWindow?: number;
+}
+
+export interface RoleContextOptions {
+  /** Live reason total (inspection total plus draft input); overrides the latest reason call. */
+  reasonTokens?: number;
+  /** Resolve a model public id to its display name and context window. */
+  resolve(modelId: string): RoleModelInfo | undefined;
+  /**
+   * Per-role auxiliary route preview from the daemon. Every listed role appears
+   * even before its first call, and a role with `error` appears with no model.
+   */
+  preview?: readonly SessionRoutesPreviewRole[];
+}
+
+/** Latest finished (non-running) call of a role, or undefined when it has none. */
+function latestFinishedRoleCall(calls: readonly CallModel[], role: CallModel['role']): CallModel | undefined {
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const call = calls[index]!;
+    if (call.role === role && call.status !== 'running') return call;
+  }
+  return undefined;
+}
+
+/** Reported prompt tokens of a call, else its raw input estimate; 0 when absent. */
+function callContextTokens(call: CallModel | undefined): number {
+  if (call === undefined) return 0;
+  return call.usage?.input ?? call.estimatedInputTokens ?? 0;
+}
+
+/**
+ * Per-role context projection for the ctx popover: one entry per internal LLM
+ * conversation, in fixed role order. The reason role always appears when
+ * `options.reasonTokens` supplies the live total; every auxiliary role the
+ * preview lists appears even before its first call, using the preview's model
+ * and window with no tokens. Model name and window come from the preview first,
+ * then the caller's resolver, so this module never imports React or hooks.
+ */
+export function roleContexts(calls: readonly CallModel[], options: RoleContextOptions): RoleContextEntry[] {
+  const previewByRole = new Map<CallModel['role'], SessionRoutesPreviewRole>();
+  for (const entry of options.preview ?? []) previewByRole.set(entry.role, entry);
+  const entries: RoleContextEntry[] = [];
+  for (const role of ROLE_CONTEXT_ORDER) {
+    const preview = previewByRole.get(role);
+    const isReason = role === 'reason';
+    const roleCalls = calls.filter((call) => call.role === role);
+    const hasReasonTotal = isReason && options.reasonTokens !== undefined;
+    if (roleCalls.length === 0 && !hasReasonTotal && preview === undefined) continue;
+    const latest = roleCalls.length > 0 ? roleCalls[roleCalls.length - 1]! : undefined;
+    const model = isReason ? latest?.model : preview?.model ?? latest?.model;
+    const resolved = model === undefined ? undefined : options.resolve(model);
+    const tokens = isReason
+      ? options.reasonTokens ?? callContextTokens(latest)
+      : roleCalls.length > 0 ? callContextTokens(latestFinishedRoleCall(calls, role) ?? latest) : undefined;
+    const window = isReason ? resolved?.contextWindow : preview?.contextWindow ?? resolved?.contextWindow;
+    const modelLabel = isReason ? resolved?.label : preview?.modelName ?? resolved?.label;
+    const ratio = window !== undefined && tokens !== undefined && Number.isFinite(window) && window > 0
+      ? tokens / window
+      : undefined;
+    entries.push({
+      role,
+      label: CALL_ROLE_LABEL[role],
+      model,
+      modelLabel,
+      tokens,
+      window,
+      ratio,
+      ...(preview?.error === undefined ? {} : { error: preview.error }),
+    });
+  }
+  return entries;
 }
 
 export interface TurnGrowth {
@@ -449,11 +796,6 @@ export function modelPreviews(
       inputCost: pricing === undefined ? undefined : costOf(pricing, totalTokens, cached, 0),
     };
   });
-}
-
-/** Exact grouped integer for hover tooltips. */
-export function formatExactTokens(tokens: number): string {
-  return Math.round(tokens).toLocaleString();
 }
 
 let inputEncoder: Tiktoken | undefined;

@@ -43,6 +43,8 @@ export interface SessionHost {
   /** In-memory Gateway state of a `provider/model` route; never queries a provider. */
   routeStatus?(model: string): import('@wrenyard/providers/base').GatewayRouteStatus | undefined;
   selectAuxiliary(role: import('./role-requirements.ts').AuxiliaryCallRole): Promise<readonly import('./calls.ts').AuxiliaryRoute[]>;
+  /** Read-only, per-role rank-1 auxiliary route preview; never calls a model. */
+  previewAuxiliaryRoutes(): Promise<readonly import('./role-requirements.ts').AuxiliaryRoutePreview[]>;
   listProjects(): Promise<ProjectInfo[]>;
   gitHead(checkoutPath: string): Promise<{ branch?: string; head?: string }>;
   listTaskDefinitions(): Promise<{ id: string; description: string; project?: string; inputSummary: string[] }[]>;
@@ -120,6 +122,11 @@ export interface Session {
    * Omitted `sessionId` inspects a new session (resident layers plus snapshot).
    */
   inspectContext(request: ContextInspectRequest): Promise<ContextInspection>;
+  /**
+   * Read-only preview of each auxiliary role's rank-1 route (model, reasoning
+   * effort, display name and window). Never calls a model and never writes.
+   */
+  previewRoutes(): Promise<{ roles: import('./role-requirements.ts').AuxiliaryRoutePreview[] }>;
   /** Current in-memory streaming snapshots for the session's live calls. */
   readLive(sessionId: string): LiveCall[];
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void;

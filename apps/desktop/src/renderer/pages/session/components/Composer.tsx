@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Plus, X } from 'lucide-react';
+import { AlertTriangle, Plus, X } from 'lucide-react';
 import { countInputTokens } from '../model/usage.js';
 import { EffortPicker, ModelPicker, modelBadges, modelRuntimeDescription, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
@@ -9,9 +9,9 @@ import { getSessionBridge } from '@/renderer/lib/session';
 import { preferencesQuery } from '@/renderer/lib/queries';
 import type { DraftAttachment, ModelEntry, TurnModel } from '../model/types.js';
 import { readFirstRequest, retainReasoningEffort, writeFirstRequest, type ReasoningEffort } from '../state/reasoning-effort.js';
-import { useComposerSelection } from '../state/session-usage.js';
+import { useComposerSelection, useSessionUsage } from '../state/session-usage.js';
 import { clearDraftAttachments, isStagedPathRetained, readDraftAttachments, reconcileSentDraft } from '../state/drafts.js';
-import { ContextMeter } from './usage/ContextMeter.js';
+import { useContextBudget } from '../state/use-context-budget.js';
 import { MediaAttachments, fromDraftAttachment } from './MediaAttachments.js';
 
 /** Input text is token-counted 300ms after typing stops (usage spec 3.3). */
@@ -19,8 +19,7 @@ const INPUT_TOKEN_DEBOUNCE_MS = 300;
 
 /**
  * Debounced `cl100k_base` count of the composer text, including a paste. The
- * first count is `undefined`; the meter treats that as zero so the base ring
- * shows immediately.
+ * first count is `undefined`, which the shared budget treats as zero.
  */
 function useInputTokenCount(text: string): number | undefined {
   const [tokens, setTokens] = useState<number | undefined>(undefined);
@@ -29,7 +28,7 @@ function useInputTokenCount(text: string): number | undefined {
       try {
         setTokens(countInputTokens(text));
       } catch {
-        // Token counting is best-effort; the meter falls back to zero.
+        // Token counting is best-effort; fall back to zero.
       }
     }, INPUT_TOKEN_DEBOUNCE_MS);
     return () => clearTimeout(timer);
@@ -62,10 +61,12 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     attachments, setAttachments, clearAttachments,
   } = useComposerSelection();
   const [sending, setSending] = useState(false);
-  const [exceeded, setExceeded] = useState(false);
   const [attachmentError, setAttachmentError] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const inputTokens = useInputTokenCount(text);
+  const { setInputTokens } = useSessionUsage();
+  const { budget } = useContextBudget(sessionKey, modelId, inputTokens);
+  const exceeded = budget?.exceeded ?? false;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
@@ -76,6 +77,13 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const sessionKeyRef = useRef(sessionKey);
   sessionKeyRef.current = sessionKey;
   const dragDepth = useRef(0);
+
+  // Publish the debounced input count so the status-bar context item counts the
+  // draft text too; reset to zero when the composer unmounts.
+  useEffect(() => () => setInputTokens(0), [setInputTokens]);
+  useEffect(() => {
+    setInputTokens(inputTokens ?? 0);
+  }, [inputTokens, setInputTokens]);
 
   const appendAttachments = (incoming: DraftAttachment[]): void => {
     if (incoming.length === 0) return;
@@ -338,15 +346,13 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
             </InputGroupButton>
             <ModelPicker models={options} value={modelId} onChange={selectModel} disabled={models.length === 0} />
             <EffortPicker levels={selected?.reasoningEfforts ?? []} value={effort} onChange={setEffort} />
+            {exceeded && (
+              <span className="flex items-center gap-1 text-xs text-destructive" role="status">
+                <AlertTriangle className="size-3.5 shrink-0" />
+                超出上下文
+              </span>
+            )}
           </>
-        }
-        toolbarTrailing={
-          <ContextMeter
-            sessionKey={sessionKey}
-            modelId={modelId}
-            {...(inputTokens === undefined ? {} : { inputTokens })}
-            onBudgetChange={setExceeded}
-          />
         }
       />
     </div>
