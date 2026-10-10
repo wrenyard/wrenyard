@@ -41,23 +41,6 @@ export interface MethodInfo {
   params: Record<string, unknown>;
 }
 
-/** Result of writing one project document. */
-export type DocumentWriteResult = {
-  path: string;
-  project: string;
-  category: string;
-  change: 'created' | 'updated';
-  version: string;
-};
-
-/** Result of one commit. */
-export type CommitResult = {
-  hash: string;
-  branch: string | null;
-  files: string[];
-  shortstat: string;
-};
-
 export interface SessionHost {
   workspaceRoot: string;
   stateRoot: string;
@@ -73,16 +56,6 @@ export interface SessionHost {
   previewAuxiliaryRoutes(): Promise<readonly import('./role-requirements.ts').AuxiliaryRoutePreview[]>;
   listProjects(): Promise<ProjectInfo[]>;
   gitHead(checkoutPath: string): Promise<{ branch?: string; head?: string }>;
-  /** Write or revise one project document; `expectedContent` guards an update. */
-  writeDocument(params: { path: string; content: string; expectedContent?: string }): Promise<DocumentWriteResult>;
-  /** Version control of the workspace repository itself. */
-  workspaceVcs: {
-    status(): Promise<Record<string, unknown>>;
-    diff(opts: { paths?: string[]; staged?: boolean }): Promise<string>;
-    commit(params: { message: string; files: string[] }): Promise<CommitResult>;
-    push(): Promise<Record<string, unknown>>;
-    pull(): Promise<Record<string, unknown>>;
-  };
   /** Describe the named protocol methods; unknown names are omitted. */
   methods(names: readonly string[]): Promise<MethodInfo[]>;
   /**

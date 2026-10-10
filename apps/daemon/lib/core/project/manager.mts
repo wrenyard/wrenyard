@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { hostname as osHostname } from 'node:os'
@@ -7,15 +6,13 @@ import { stringify } from 'yaml'
 import { foremanStateRoot } from '../../config/state.mts'
 import { discoverProjects, findProject as findFmprojProject, invalidateProjectCache, resolveHostPath } from './loader.mts'
 import {
-  commitExactFiles,
-  gitDiff,
-  gitStatus,
-  pullCheckout,
-  pushCheckout,
-  type CommitExactFilesResult,
+  GitRepository,
+  VcsError,
+  runGitSync,
+  type GitCommitFilesResult,
   type GitDiffOptions,
   type GitStatus,
-} from '../vcs/git-checkout.mts'
+} from '../vcs/index.mts'
 import type {
   ProjectDetail,
   ProjectEntry,
@@ -228,7 +225,7 @@ export class ProjectManager {
   status(arg?: string | { project: string; worktree_id?: string }): ProjectOverview[] | ProjectDetail | Promise<GitStatus> {
     // Checkout status for a `{ project, worktree_id? }` target.
     if (arg && typeof arg === 'object') {
-      return gitStatus(this.resolveCheckoutCwd(arg))
+      return new GitRepository(this.resolveCheckoutCwd(arg)).status()
     }
 
     const name = arg?.trim()
@@ -752,7 +749,7 @@ export class ProjectManager {
       })
     }
 
-    const result = await pullCheckout(project.path)
+    const result = await new GitRepository(project.path).pull()
     if (result.pulled) {
       return {
         ...base,
@@ -763,35 +760,35 @@ export class ProjectManager {
       }
     }
 
-    if (result.code === 'dirty') {
+    if (result.reason === 'dirty') {
       return this.gitPullFailure({
         ...base,
         branch: result.branch,
         dirty: this.dirtyDetails(project.path),
-        reason: result.code,
+        reason: result.reason,
         error: result.error,
       })
     }
-    if (result.code === 'pull_failed') {
+    if (result.reason === 'pull_failed') {
       return this.gitPullFailure({
         ...base,
         branch: result.branch,
         remote: 'origin',
-        reason: result.code,
+        reason: result.reason,
         error: result.error,
       })
     }
-    if (result.code === 'origin_missing') {
+    if (result.reason === 'origin_missing') {
       return this.gitPullFailure({
         ...base,
         branch: result.branch,
-        reason: result.code,
+        reason: result.reason,
         error: result.error,
       })
     }
     return this.gitPullFailure({
       ...base,
-      reason: result.code,
+      reason: result.reason,
       error: result.error,
     })
   }
@@ -817,15 +814,15 @@ export class ProjectManager {
 
   /** Working-tree status of a project or worktree checkout. */
   async diff(target: { project: string; worktree_id?: string }, options: GitDiffOptions = {}): Promise<string> {
-    return gitDiff(this.resolveCheckoutCwd(target), options)
+    return new GitRepository(this.resolveCheckoutCwd(target)).diff(options)
   }
 
   /** Commit exactly the named files in a project or worktree checkout. */
   async commit(
     target: { project: string; worktree_id?: string },
     input: { message: string; files: string[] },
-  ): Promise<CommitExactFilesResult> {
-    return commitExactFiles(this.resolveCheckoutCwd(target), input)
+  ): Promise<GitCommitFilesResult> {
+    return new GitRepository(this.resolveCheckoutCwd(target)).commitFiles(input)
   }
 
   resolveWorktreePath(worktreeId: string, projectName: string): string {
@@ -1143,7 +1140,7 @@ export class ProjectManager {
       path,
     }
 
-    const result = await pushCheckout(path, { requireClean: true })
+    const result = await new GitRepository(path).push({ requireClean: true })
     if (result.pushed) {
       return {
         ...base,
@@ -1154,35 +1151,35 @@ export class ProjectManager {
       }
     }
 
-    if (result.code === 'dirty') {
+    if (result.reason === 'dirty') {
       return this.gitPushFailure({
         ...base,
         branch: result.branch,
         dirty: this.dirtyDetails(path),
-        reason: result.code,
+        reason: result.reason,
         error: result.error,
       })
     }
-    if (result.code === 'push_failed') {
+    if (result.reason === 'push_failed') {
       return this.gitPushFailure({
         ...base,
         branch: result.branch,
         remote: 'origin',
-        reason: result.code,
+        reason: result.reason,
         error: result.error,
       })
     }
-    if (result.code === 'origin_missing') {
+    if (result.reason === 'origin_missing') {
       return this.gitPushFailure({
         ...base,
         branch: result.branch,
-        reason: result.code,
+        reason: result.reason,
         error: result.error,
       })
     }
     return this.gitPushFailure({
       ...base,
-      reason: result.code,
+      reason: result.reason,
       error: result.error,
     })
   }
@@ -1280,22 +1277,18 @@ export class ProjectManager {
   }
 
   private git(cwd: string, args: string[]): string {
-    return execFileSync(this.gitBin, args, {
-      cwd,
-      encoding: 'utf-8',
-      maxBuffer: 8 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    })
+    const result = runGitSync(cwd, args, { gitBin: this.gitBin })
+    if (result.code !== 0) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || `git exited with code ${result.code}`)
+    }
+    return result.stdout
   }
 
   /** Run git and return its trimmed stdout, or null when the command fails. */
   private gitOutput(cwd: string, args: string[]): string | null {
-    try {
-      return this.git(cwd, args).trim() || null
-    } catch {
-      return null
-    }
+    const result = runGitSync(cwd, args, { gitBin: this.gitBin })
+    if (result.code !== 0) return null
+    return result.stdout.trim() || null
   }
 
   commitLog(projectName: string, limit: number): { project: string; commits: Array<{ sha: string; authored_at: string; author_name: string; subject: string }> } {
@@ -1373,16 +1366,12 @@ export class ProjectManager {
     if (checkoutPath !== undefined) {
       const isWorkTree = this.gitOutput(checkoutPath, ['rev-parse', '--is-inside-work-tree']) === 'true'
       if (isWorkTree) {
+        const repository = new GitRepository(checkoutPath)
         if (gitRemote === undefined) {
-          gitRemote = this.gitOutput(checkoutPath, ['remote', 'get-url', 'origin']) ?? undefined
+          gitRemote = (await repository.remoteUrl('origin')) ?? undefined
         }
         if (defaultBranch === undefined) {
-          const originHead = this.gitOutput(checkoutPath, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
-          if (originHead) {
-            defaultBranch = originHead.replace(/^origin\//u, '')
-          } else {
-            defaultBranch = this.gitOutput(checkoutPath, ['rev-parse', '--abbrev-ref', 'HEAD']) ?? undefined
-          }
+          defaultBranch = (await repository.defaultBranch()) ?? undefined
         }
       }
     }
