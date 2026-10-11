@@ -355,11 +355,6 @@ export function mainSpeed(calls: readonly CallModel[]): number | undefined {
   return weightedTps(mainSamples(calls).slice(-5));
 }
 
-/** Per-sample speed of every valid main sample, oldest first, for the sparkline. */
-export function mainSpeedSeries(calls: readonly CallModel[]): number[] {
-  return mainSamples(calls).map(tpsOf);
-}
-
 /** A dispatched task's usable usage, or undefined when it carries none. */
 function taskUsageData(usage: TaskRunUsage | undefined): { input: number; output: number; cached: number; total: number } | undefined {
   if (usage === undefined || usage.completeness === 'unavailable') return undefined;
@@ -602,6 +597,8 @@ export interface SessionTaskRow {
   speed: number | undefined;
   /** True when a terminal task's usage could not be read. */
   missing: boolean;
+  /** Reference cost the daemon recorded for a terminal task; absent when unknown. */
+  costUsd: number | undefined;
 }
 
 /** Facts the session hook knows about one dispatched task. */
@@ -650,6 +647,7 @@ export function sessionTaskRows(tasks: readonly SessionTaskInput[]): SessionTask
       sample,
       speed: sample === undefined ? undefined : tpsOf(sample),
       missing: !running && usage === undefined,
+      costUsd: terminal && Number.isFinite(task.usage?.referenceCostUsd) ? task.usage?.referenceCostUsd : undefined,
     };
   });
 }
@@ -745,6 +743,241 @@ export function consumptionRows(
     if (!task.running && task.sample !== undefined) samples.push(task.sample);
   }
   return { rows, sum: sumConsumptionRow(rows, samples) };
+}
+
+/** The three sources the status-bar tips cluster a session into. */
+export type MetricClusterKey = 'task' | 'reason' | 'aux';
+
+/** One cluster's accumulated tokens, time and speed for the status-bar tips. */
+export interface MetricCluster {
+  key: MetricClusterKey;
+  label: string;
+  /** Calls of the cluster, or dispatched tasks for `task`. */
+  count: number;
+  input: number;
+  output: number;
+  cached: number;
+  /** `cached / input`; undefined when the cluster reported no input. */
+  cacheRatio: number | undefined;
+  /** Accumulated elapsed time of finished calls, or of finished dispatch actions for `task`. */
+  durationMs: number;
+  /** Token-weighted speed of the cluster's valid samples; undefined when it has none. */
+  speed: number | undefined;
+  /** Estimated reference cost of the cluster. */
+  cost: SessionCostEstimate;
+  /** Distinct models the cluster's calls ran on, most recent first; empty for `task`. */
+  models: string[];
+}
+
+/** The timing facts of one dispatch action; a structural subset of the action model. */
+export interface DispatchTiming {
+  taskRunId?: string;
+  startedAt: string;
+  endedAt?: string;
+}
+
+function elapsedMs(startedAt: string, endedAt: string | undefined): number {
+  if (endedAt === undefined) return 0;
+  const ms = Date.parse(endedAt) - Date.parse(startedAt);
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
+/** Elapsed time of each finished dispatch, keyed by task run and counted once per run. */
+function dispatchDurations(dispatches: readonly DispatchTiming[]): Map<string, number> {
+  const durations = new Map<string, number>();
+  for (const dispatch of dispatches) {
+    if (dispatch.taskRunId === undefined) continue;
+    const ms = elapsedMs(dispatch.startedAt, dispatch.endedAt);
+    durations.set(dispatch.taskRunId, Math.max(durations.get(dispatch.taskRunId) ?? 0, ms));
+  }
+  return durations;
+}
+
+function callCluster(
+  key: 'reason' | 'aux',
+  label: string,
+  calls: readonly CallModel[],
+  quota: QuotaSnapshot | undefined,
+): MetricCluster {
+  let input = 0;
+  let output = 0;
+  let cached = 0;
+  let durationMs = 0;
+  const samples: TpsSample[] = [];
+  for (const call of calls) {
+    input += call.usage?.input ?? 0;
+    output += call.usage?.output ?? 0;
+    cached += call.usage?.cachedInput ?? 0;
+    durationMs += elapsedMs(call.startedAt, call.endedAt);
+    const sample = callSample(call);
+    if (sample !== undefined) samples.push(sample);
+  }
+  return {
+    key, label, count: calls.length, input, output, cached,
+    cacheRatio: input === 0 ? undefined : cached / input,
+    durationMs,
+    speed: weightedTps(samples),
+    cost: sessionCostEstimate(calls, [], quota),
+    models: [...new Set([...calls].reverse().map((call) => call.model))],
+  };
+}
+
+/**
+ * A session clustered into dispatched tasks, main reasoning and auxiliary calls
+ * (session metrics spec). A cluster with nothing in it is omitted. Task time is
+ * the elapsed time of finished dispatch actions, counted once per task run; the
+ * clusters overlap in wall-clock time, so their durations are accumulated work
+ * time rather than a partition of the session's elapsed time.
+ */
+export function metricClusters(
+  calls: readonly CallModel[],
+  tasks: readonly SessionTaskRow[],
+  dispatches: readonly DispatchTiming[],
+  quota: QuotaSnapshot | undefined,
+): MetricCluster[] {
+  const clusters: MetricCluster[] = [];
+  if (tasks.length > 0) {
+    let input = 0;
+    let output = 0;
+    let cached = 0;
+    const samples: TpsSample[] = [];
+    for (const task of tasks) {
+      if (task.running) continue;
+      input += task.input;
+      output += task.output;
+      cached += task.cached;
+      if (task.sample !== undefined) samples.push(task.sample);
+    }
+    let durationMs = 0;
+    for (const ms of dispatchDurations(dispatches).values()) durationMs += ms;
+    clusters.push({
+      key: 'task', label: '任务', count: tasks.length, input, output, cached,
+      cacheRatio: input === 0 ? undefined : cached / input,
+      durationMs,
+      speed: weightedTps(samples),
+      cost: sessionCostEstimate([], tasks, quota),
+      models: [],
+    });
+  }
+  const reason = calls.filter((call) => call.role === 'reason');
+  if (reason.length > 0) clusters.push(callCluster('reason', '推理', reason, quota));
+  const aux = calls.filter((call) => call.role !== 'reason');
+  if (aux.length > 0) clusters.push(callCluster('aux', '辅助', aux, quota));
+  return clusters;
+}
+
+/** The session's estimated reference cost; `partial` when some part has no known price. */
+export interface SessionCostEstimate {
+  /** USD over everything with a known price; undefined when nothing is priced. */
+  value: number | undefined;
+  partial: boolean;
+}
+
+/**
+ * Estimated reference cost of the whole session: internal calls priced from the
+ * catalog plus the reference cost recorded for each finished dispatched task.
+ * Unpriced calls and tasks are left out and flagged through `partial`, never
+ * counted as zero.
+ */
+export function sessionCostEstimate(
+  calls: readonly CallModel[],
+  tasks: readonly SessionTaskRow[],
+  quota: QuotaSnapshot | undefined,
+): SessionCostEstimate {
+  let value = 0;
+  let priced = 0;
+  let partial = false;
+  for (const call of calls) {
+    if (call.usage === undefined) continue;
+    const cost = callCost(call, quota);
+    if (cost === undefined) partial = true;
+    else { value += cost; priced += 1; }
+  }
+  for (const task of tasks) {
+    if (task.running) continue;
+    if (task.costUsd === undefined) partial = true;
+    else { value += task.costUsd; priced += 1; }
+  }
+  return { value: priced === 0 ? undefined : value, partial };
+}
+
+/** Finished dispatched tasks of one model, for the expanded task rows of the tips. */
+export interface TaskModelGroup {
+  /** The model's display name from the resolved runtime, or an empty string when none was resolved. */
+  model: string;
+  count: number;
+  input: number;
+  output: number;
+  cached: number;
+  cost: SessionCostEstimate;
+  /** Accumulated elapsed time of the group's dispatch actions. */
+  durationMs: number;
+  /** Token-weighted speed of the group's valid samples; undefined when it has none. */
+  speed: number | undefined;
+}
+
+/** Finished dispatched tasks grouped by model, largest total first. */
+export function taskModelGroups(
+  tasks: readonly SessionTaskRow[],
+  dispatches: readonly DispatchTiming[],
+): TaskModelGroup[] {
+  const durations = dispatchDurations(dispatches);
+  const groups = new Map<string, SessionTaskRow[]>();
+  for (const task of tasks) {
+    if (task.running) continue;
+    // The runtime label is `<client> · <model display name>`; tasks group by the model alone.
+    const model = (task.model ?? '').split(' · ').at(-1) ?? '';
+    const list = groups.get(model);
+    if (list) list.push(task);
+    else groups.set(model, [task]);
+  }
+  return [...groups.entries()]
+    .map(([model, rows]) => ({
+      model,
+      count: rows.length,
+      input: rows.reduce((sum, row) => sum + row.input, 0),
+      output: rows.reduce((sum, row) => sum + row.output, 0),
+      cached: rows.reduce((sum, row) => sum + row.cached, 0),
+      cost: sessionCostEstimate([], rows, undefined),
+      durationMs: rows.reduce((sum, row) => sum + (durations.get(row.taskRunId) ?? 0), 0),
+      speed: weightedTps(rows.flatMap((row) => (row.sample === undefined ? [] : [row.sample]))),
+    }))
+    .sort((a, b) => (b.input + b.output) - (a.input + a.output));
+}
+
+/**
+ * Calls grouped by model, largest total first. Each call is priced on its own
+ * `provider/model` route first; `nameOf` then maps that public id to the model
+ * name the group is keyed and labelled by, so the same model served by two
+ * providers lands in one group with both routes' costs added up.
+ */
+export function callModelGroups(
+  calls: readonly CallModel[],
+  quota: QuotaSnapshot | undefined,
+  nameOf: (publicId: string) => string,
+): TaskModelGroup[] {
+  const groups = new Map<string, CallModel[]>();
+  for (const call of calls) {
+    const name = nameOf(call.model);
+    const list = groups.get(name);
+    if (list) list.push(call);
+    else groups.set(name, [call]);
+  }
+  return [...groups.entries()]
+    .map(([model, rows]) => {
+      const cluster = callCluster('aux', '', rows, quota);
+      return {
+        model,
+        count: rows.length,
+        input: cluster.input,
+        output: cluster.output,
+        cached: cluster.cached,
+        cost: cluster.cost,
+        durationMs: cluster.durationMs,
+        speed: cluster.speed,
+      };
+    })
+    .sort((a, b) => (b.input + b.output) - (a.input + a.output));
 }
 
 /** Internal LLM roles, in the fixed order the ctx popover lists them. */
