@@ -8,6 +8,7 @@
  * sole same-route retry. The application never sees an endpoint, a wire shape or
  * a retry decision.
  */
+import { TpsGenerationCollector } from '@wrenyard/agent-client/statistics';
 import type { WrenyardGatewayConnection } from '@wrenyard/control';
 import { GATEWAY_HEADERS } from '@wrenyard/providers/base';
 
@@ -138,6 +139,10 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
       const url = adapter.url(endpoints);
 
       let outputStarted = false;
+      // One speed sampler per attempt: the transport owns TPS collection, so an
+      // adapter never references it. The adapter reports real streamed generation
+      // deltas and the protocol's success/failure through `emit`.
+      let tps = new TpsGenerationCollector();
       const emit: AdapterEmit = {
         text: (delta) => { if (delta) outputStarted = true; request.onEvent?.({ type: 'text', delta }); },
         reasoning: (delta) => { if (delta) outputStarted = true; request.onEvent?.({ type: 'reasoning', delta }); },
@@ -145,6 +150,9 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
         usage: (usage) => request.onEvent?.({ type: 'usage', usage }),
         activity: () => request.onEvent?.({ type: 'activity' }),
         output: () => { outputStarted = true; },
+        generation: (channel, delta) => tps.observe(channel, delta, Date.now()),
+        complete: () => tps.complete(),
+        fail: () => tps.fail(),
       };
 
       // Count the requests actually issued, so a cancellation during a retry
@@ -154,6 +162,7 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
       const attempt = async (): Promise<Completion> => {
         if (request.signal.aborted) throw abortError();
         requests += 1;
+        tps = new TpsGenerationCollector();
         let response: Response;
         try {
           response = await fetchImpl(url, { method: 'POST', headers, body, signal: request.signal });
@@ -161,8 +170,18 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
           throw networkError(error, request.signal);
         }
         if (!response.ok) throw await httpError(response);
+        // The transport always requests a stream, so a successful response that
+        // is not an SSE stream is a protocol failure, never a JSON completion.
+        const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+        if (!contentType.includes('text/event-stream')) {
+          throw new ModelError('Model gateway returned a non-streaming response where a text/event-stream stream was required', { kind: 'protocol' });
+        }
         try {
-          return await adapter.read(response, request, emit);
+          const completion = await adapter.read(response, request, emit);
+          // Only a successfully completed stream yields a sample; the sampler
+          // produces nothing for a failed, cancelled or truncated attempt.
+          const sample = tps.sample();
+          return sample === undefined ? completion : { ...completion, tps: sample };
         } catch (error) {
           throw normalizeStreamError(error, request.signal, outputStarted);
         }
