@@ -7,7 +7,6 @@
  * content blocks, and every declared tool becomes an `input_schema` tool. It
  * owns no retry and performs no fetch.
  */
-import { TpsGenerationCollector } from '@wrenyard/agent-client/statistics';
 import {
   numberField,
   parseToolArguments,
@@ -26,7 +25,8 @@ import {
   type ToolSpec,
   type Usage,
 } from '../protocol.ts';
-import { abortError, classifyOfficialError, describeFailure, incompleteStreamError, networkError, streamError, upstreamErrorIdentity } from '../errors.ts';
+import { abortError, classifyOfficialError, describeFailure, incompleteStreamError, streamError, upstreamErrorIdentity } from '../errors.ts';
+import { readSseStream } from '../shared-sse-reader.ts';
 
 /** Hard byte cap for one serialized Messages request body (64 MiB). */
 export const MESSAGES_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
@@ -140,13 +140,6 @@ function parseInput(argumentsText: string): unknown {
   }
 }
 
-/** Read one Messages completion: SSE when the Gateway streams, JSON otherwise. */
-async function readMessages(response: Response, request: ModelRequest, emit: AdapterEmit): Promise<Completion> {
-  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
-  if (!contentType.includes('text/event-stream')) return readJsonMessage(response, emit);
-  return readStreamMessage(response, request, emit);
-}
-
 interface MessagesToolState {
   index: number;
   id: string;
@@ -165,64 +158,22 @@ interface MessagesStreamState {
   calls: ModelToolCall[];
   /** Response headers, so an in-stream error keeps the upstream retry hints. */
   headers: Headers;
-  /** Shared protocol-neutral tokenizer_v1 collector for this attempt's stream. */
-  tps: TpsGenerationCollector;
 }
 
 /** Collect a Messages SSE body. Only `message_stop` is terminal. */
-async function readStreamMessage(response: Response, request: ModelRequest, emit: AdapterEmit): Promise<Completion> {
-  const body = response.body;
-  if (!body) throw new Error('Model response is missing a body');
-  const reader = body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  const state: MessagesStreamState = { text: '', reasoning: '', completed: false, tools: new Map(), calls: [], headers: response.headers, tps: new TpsGenerationCollector() };
-  let buffer = '';
-  const onAbort = (): void => { void reader.cancel().catch(() => undefined); };
-  if (request.signal.aborted) {
-    await reader.cancel().catch(() => undefined);
-    throw abortError();
-  }
-  request.signal.addEventListener('abort', onAbort, { once: true });
-  try {
-    while (!state.completed) {
-      // A stream read rejection is a transport I/O failure, not a parse failure;
-      // a frame/JSON parse error below stays a protocol failure.
-      const chunk = await reader.read().catch((error: unknown) => {
-        throw networkError(error, request.signal);
-      });
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      buffer = buffer.replace(/\r\n|\r(?!$)/gu, '\n');
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary !== -1) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        consumeFrame(frame, state, emit);
-        if (state.completed) break;
-        boundary = buffer.indexOf('\n\n');
-      }
-    }
-    if (!state.completed) {
-      buffer += decoder.decode();
-      buffer = buffer.replace(/\r\n?/gu, '\n');
-      if (buffer.trim()) consumeFrame(buffer, state, emit);
-    }
-  } finally {
-    request.signal.removeEventListener('abort', onAbort);
-    await reader.cancel().catch(() => undefined);
-  }
+async function readMessages(response: Response, request: ModelRequest, emit: AdapterEmit): Promise<Completion> {
+  const state: MessagesStreamState = { text: '', reasoning: '', completed: false, tools: new Map(), calls: [], headers: response.headers };
+  await readSseStream(response, request.signal, (frame) => consumeFrame(frame, state, emit), () => state.completed);
   if (request.signal.aborted) throw abortError();
   if (!state.completed) throw incompleteStreamError();
   // Only `message_stop` is a successful completion; an errored or truncated
   // stream never reaches this point and yields no sample.
-  const tps = state.tps.sample();
   return {
     text: state.text,
     ...(state.reasoning ? { reasoning: state.reasoning } : {}),
     ...(state.usage ? { usage: state.usage } : {}),
     toolCalls: [...state.calls].sort((a, b) => a.index - b.index),
     ...(state.finishReason === undefined ? {} : { finishReason: state.finishReason }),
-    ...(tps === undefined ? {} : { tps }),
   };
 }
 
@@ -245,7 +196,6 @@ function consumeFrame(frame: string, state: MessagesStreamState, emit: AdapterEm
   if (!event) return;
   const type = stringField(event.type);
   emit.activity();
-  const at = Date.now();
   switch (type) {
     case 'message_start': {
       const message = record(event.message);
@@ -290,14 +240,14 @@ function consumeFrame(frame: string, state: MessagesStreamState, emit: AdapterEm
         if (text) {
           state.text += text;
           emit.text(text);
-          state.tps.observe(`text:${index}`, text, at);
+          emit.generation(`text:${index}`, text);
         }
       } else if (deltaType === 'thinking_delta') {
         const thinking = stringField(delta?.thinking);
         if (thinking) {
           state.reasoning += thinking;
           emit.reasoning(thinking);
-          state.tps.observe(`thinking:${index}`, thinking, at);
+          emit.generation(`thinking:${index}`, thinking);
         }
       } else if (deltaType === 'input_json_delta') {
         const piece = stringField(delta?.partial_json);
@@ -305,7 +255,7 @@ function consumeFrame(frame: string, state: MessagesStreamState, emit: AdapterEm
           emit.output();
           // Every real argument fragment is generation and is fed exactly once,
           // partitioned by block index, even before its tool block is tracked.
-          state.tps.observe(`tool:${index}`, piece, at);
+          emit.generation(`tool:${index}`, piece);
           const tool = state.tools.get(index);
           if (tool) tool.arguments += piece;
         }
@@ -326,7 +276,7 @@ function consumeFrame(frame: string, state: MessagesStreamState, emit: AdapterEm
     case 'message_stop': {
       state.completed = true;
       // Only `message_stop` is the Messages protocol's successful completion.
-      state.tps.complete();
+      emit.complete();
       return;
     }
     case 'error': {
@@ -334,6 +284,7 @@ function consumeFrame(frame: string, state: MessagesStreamState, emit: AdapterEm
       // an official Messages error.
       const official = isOfficialMessagesError(event);
       const identity = official ? upstreamErrorIdentity(event) : {};
+      emit.fail();
       throw streamError({
         kind: official ? classifyOfficialError(identity.type, identity.code) : 'protocol',
         message: describeFailure(record(event.error) ?? event, 'Model request failed'),
@@ -402,75 +353,6 @@ function applyOutputUsage(raw: Record<string, unknown> | undefined, state: Messa
   if (output === undefined) return;
   state.usage = { ...state.usage, output };
   emit.usage(state.usage);
-}
-
-/** Non-stream fallback: one complete Messages payload. */
-async function readJsonMessage(response: Response, emit: AdapterEmit): Promise<Completion> {
-  const payload = await response.json().catch((error: unknown) => { if (error instanceof SyntaxError) return undefined; throw error; });
-  const root = record(payload);
-  if (!root) throw new Error('Model response was not valid JSON');
-  if (isOfficialMessagesError(root)) {
-    const identity = upstreamErrorIdentity(root);
-    throw streamError({ kind: classifyOfficialError(identity.type, identity.code), message: describeFailure(record(root.error) ?? root, 'Model request failed'), upstream: identity, headers: response.headers });
-  }
-
-  let text = '';
-  let reasoning = '';
-  const calls: ModelToolCall[] = [];
-  const content = root.content;
-  if (Array.isArray(content)) {
-    content.forEach((entry, position) => {
-      const block = record(entry);
-      if (!block) return;
-      const type = stringField(block.type);
-      if (type === 'text') {
-        const piece = stringField(block.text);
-        if (piece) { text += piece; emit.text(piece); }
-        return;
-      }
-      if (type === 'thinking') {
-        const piece = stringField(block.thinking);
-        if (piece) { reasoning += piece; emit.reasoning(piece); }
-        return;
-      }
-      if (type === 'tool_use') {
-        const argumentsText = JSON.stringify(block.input ?? {});
-        const call: ModelToolCall = {
-          index: position,
-          id: stringField(block.id) ?? `call_${position}`,
-          name: stringField(block.name) ?? '',
-          arguments: argumentsText,
-          ...parseToolArguments(argumentsText),
-        };
-        calls.push(call);
-        emit.toolCall(call);
-      }
-    });
-  }
-
-  const usage = record(root.usage);
-  const mapped = usage ? jsonUsageOf(usage) : undefined;
-  if (mapped) emit.usage(mapped);
-
-  const stopReason = stringField(root.stop_reason);
-  return {
-    text,
-    ...(reasoning ? { reasoning } : {}),
-    ...(mapped ? { usage: mapped } : {}),
-    toolCalls: calls,
-    finishReason: finishReasonOf(stopReason, calls.length),
-  };
-}
-
-/** Map a non-stream Messages usage object, summing the cache fields into total input. */
-function jsonUsageOf(raw: Record<string, unknown>): Usage | undefined {
-  const input = inputUsageOf(raw);
-  const output = numberField(raw.output_tokens);
-  const usage: Usage = {
-    ...(input === undefined ? {} : input),
-    ...(output === undefined ? {} : { output }),
-  };
-  return Object.keys(usage).length === 0 ? undefined : usage;
 }
 
 /** Map the Messages `stop_reason` onto the normalized finish reason. */

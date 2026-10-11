@@ -49,6 +49,19 @@ function firstNonemptyString(source: Record<string, unknown>, fields: readonly s
 }
 
 /**
+ * True when one Chat record reports a failure: a non-null `error` field, or a
+ * choice whose `finish_reason` is `error` or `content_filter`. The usage
+ * observer and the TPS translator share this one condition.
+ */
+function isChatFailure(row: Record<string, unknown>): boolean {
+  if (row.error !== undefined && row.error !== null) return true;
+  return Array.isArray(row.choices) && row.choices.some((choice) => {
+    const reason = object(choice)?.finish_reason;
+    return reason === 'error' || reason === 'content_filter';
+  });
+}
+
+/**
  * OpenAI Chat Completions differences: the `/v1/models` list shape, the
  * `{error:{...}}` envelope, the response `model` position, the
  * `stream_options.include_usage` contract, and usage / completion parsing.
@@ -64,13 +77,7 @@ const adapter: UsageAdapter = {
   // stream truncated before `[DONE]` is never treated as successful here.
   terminal: () => false,
   sentinel: (payload) => payload === '[DONE]',
-  failure: (row) => {
-    if (row.error !== undefined && row.error !== null) return true;
-    return Array.isArray(row.choices) && row.choices.some((choice) => {
-      const reason = object(choice)?.finish_reason;
-      return reason === 'error' || reason === 'content_filter';
-    });
-  },
+  failure: (row) => isChatFailure(row),
   // The official Chat error frame is `{"error":{...}}`; its `type`/`code` are
   // read for observation. The frame is never rewritten.
   errorIdentity: (row) => (row.error !== undefined && row.error !== null
@@ -151,13 +158,11 @@ export const chatProtocol: GatewayProtocolModule = {
         if (!row) return;
         if (typeof row.id === 'string' && row.id !== '') responseId = row.id;
         // The official Chat error frame is `{"error":{...}}`.
-        if (row.error !== undefined && row.error !== null) { sink.fail(); return; }
+        if (isChatFailure(row)) { sink.fail(); return; }
         if (!Array.isArray(row.choices)) return;
         row.choices.forEach((choice, position) => {
           const item = object(choice);
           if (!item) return;
-          const finish = item.finish_reason;
-          if (finish === 'error' || finish === 'content_filter') { sink.fail(); return; }
           // Only a real `delta` is streamed generation; a `message` snapshot is
           // not a generation delta and is never counted.
           const delta = object(item.delta);

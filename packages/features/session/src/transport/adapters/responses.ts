@@ -7,7 +7,6 @@
  * messages become the `input` items in order, and every declared tool is sent
  * as a flattened function tool. It owns no retry and performs no fetch.
  */
-import { TpsGenerationCollector } from '@wrenyard/agent-client/statistics';
 import {
   numberField,
   parseToolArguments,
@@ -26,7 +25,8 @@ import {
   type ToolSpec,
   type Usage,
 } from '../protocol.ts';
-import { abortError, classifyOfficialError, describeFailure, incompleteStreamError, networkError, streamError, upstreamErrorIdentity } from '../errors.ts';
+import { abortError, classifyOfficialError, describeFailure, incompleteStreamError, streamError, upstreamErrorIdentity } from '../errors.ts';
+import { readSseStream } from '../shared-sse-reader.ts';
 
 /** Hard byte cap for one serialized Responses request body (64 MiB). */
 export const RESPONSES_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
@@ -136,13 +136,6 @@ function plainText(content: string | ModelContentPart[]): string {
   return text;
 }
 
-/** Read one Responses completion: SSE when the Gateway streams, JSON otherwise. */
-async function readResponses(response: Response, request: ModelRequest, emit: AdapterEmit): Promise<Completion> {
-  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
-  if (!contentType.includes('text/event-stream')) return readJsonResponse(response, emit);
-  return readStreamResponse(response, request, emit);
-}
-
 interface FunctionCallState {
   outputIndex: number;
   /** The item id used to match streamed delta events. */
@@ -165,16 +158,10 @@ interface ResponsesStreamState {
   byItemId: Map<string, FunctionCallState>;
   /** Response headers, so an in-stream error keeps the upstream retry hints. */
   headers: Headers;
-  /** Shared protocol-neutral tokenizer_v1 collector for this attempt's stream. */
-  tps: TpsGenerationCollector;
 }
 
 /** Collect a Responses SSE body. Only `response.completed` is terminal. */
-async function readStreamResponse(response: Response, request: ModelRequest, emit: AdapterEmit): Promise<Completion> {
-  const body = response.body;
-  if (!body) throw new Error('Model response is missing a body');
-  const reader = body.getReader();
-  const decoder = new TextDecoder('utf-8');
+async function readResponses(response: Response, request: ModelRequest, emit: AdapterEmit): Promise<Completion> {
   const state: ResponsesStreamState = {
     text: '',
     reasoning: '',
@@ -183,55 +170,18 @@ async function readStreamResponse(response: Response, request: ModelRequest, emi
     byIndex: new Map(),
     byItemId: new Map(),
     headers: response.headers,
-    tps: new TpsGenerationCollector(),
   };
-  let buffer = '';
-  const onAbort = (): void => { void reader.cancel().catch(() => undefined); };
-  if (request.signal.aborted) {
-    await reader.cancel().catch(() => undefined);
-    throw abortError();
-  }
-  request.signal.addEventListener('abort', onAbort, { once: true });
-  try {
-    while (!state.completed) {
-      // A stream read rejection is a transport I/O failure, not a parse failure;
-      // a frame/JSON parse error below stays a protocol failure.
-      const chunk = await reader.read().catch((error: unknown) => {
-        throw networkError(error, request.signal);
-      });
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      buffer = buffer.replace(/\r\n|\r(?!$)/gu, '\n');
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary !== -1) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        consumeFrame(frame, state, emit);
-        if (state.completed) break;
-        boundary = buffer.indexOf('\n\n');
-      }
-    }
-    if (!state.completed) {
-      buffer += decoder.decode();
-      buffer = buffer.replace(/\r\n?/gu, '\n');
-      if (buffer.trim()) consumeFrame(buffer, state, emit);
-    }
-  } finally {
-    request.signal.removeEventListener('abort', onAbort);
-    await reader.cancel().catch(() => undefined);
-  }
+  await readSseStream(response, request.signal, (frame) => consumeFrame(frame, state, emit), () => state.completed);
   if (request.signal.aborted) throw abortError();
   if (!state.completed) throw incompleteStreamError();
   // Only `response.completed` is a successful completion; a failed, incomplete,
   // errored or truncated stream never reaches this point and yields no sample.
-  const tps = state.tps.sample();
   return {
     text: state.text,
     ...(state.reasoning ? { reasoning: state.reasoning } : {}),
     ...(state.usage ? { usage: state.usage } : {}),
     toolCalls: [...state.calls].sort((a, b) => a.index - b.index),
     ...(state.finishReason === undefined ? {} : { finishReason: state.finishReason }),
-    ...(tps === undefined ? {} : { tps }),
   };
 }
 
@@ -271,7 +221,6 @@ function consumeFrame(frame: string, state: ResponsesStreamState, emit: AdapterE
   const event = record(parsed);
   if (!event) return;
   emit.activity();
-  const at = Date.now();
   const type = stringField(event.type);
   switch (type) {
     case 'response.output_text.delta': {
@@ -279,7 +228,7 @@ function consumeFrame(frame: string, state: ResponsesStreamState, emit: AdapterE
       if (delta) {
         state.text += delta;
         emit.text(delta);
-        state.tps.observe(`output_text:${tpsItemKey(event)}:${tpsIndexKey(event.content_index)}`, delta, at);
+        emit.generation(`output_text:${tpsItemKey(event)}:${tpsIndexKey(event.content_index)}`, delta);
       }
       return;
     }
@@ -288,7 +237,7 @@ function consumeFrame(frame: string, state: ResponsesStreamState, emit: AdapterE
       if (delta) {
         state.reasoning += delta;
         emit.reasoning(delta);
-        state.tps.observe(`reasoning_summary:${tpsItemKey(event)}:${tpsIndexKey(event.summary_index)}`, delta, at);
+        emit.generation(`reasoning_summary:${tpsItemKey(event)}:${tpsIndexKey(event.summary_index)}`, delta);
       }
       return;
     }
@@ -298,7 +247,7 @@ function consumeFrame(frame: string, state: ResponsesStreamState, emit: AdapterE
         state.reasoning += delta;
         emit.reasoning(delta);
         // Displayed reasoning is never counted as output content.
-        state.tps.observe(`reasoning_text:${tpsItemKey(event)}`, delta, at);
+        emit.generation(`reasoning_text:${tpsItemKey(event)}`, delta);
       }
       return;
     }
@@ -309,7 +258,7 @@ function consumeFrame(frame: string, state: ResponsesStreamState, emit: AdapterE
     }
     case 'response.function_call_arguments.delta': {
       if (stringField(event.delta)) emit.output();
-      accumulateFunctionCall(event, state, at);
+      accumulateFunctionCall(event, state, emit);
       return;
     }
     case 'response.output_item.done': {
@@ -322,7 +271,7 @@ function consumeFrame(frame: string, state: ResponsesStreamState, emit: AdapterE
       state.finishReason = finishReasonOf(record(responseValue?.incomplete_details), state.calls.length);
       state.completed = true;
       // Only `response.completed` is the Responses protocol's success marker.
-      state.tps.complete();
+      emit.complete();
       return;
     }
     case 'response.failed':
@@ -330,6 +279,7 @@ function consumeFrame(frame: string, state: ResponsesStreamState, emit: AdapterE
       const failed = record(event.response);
       applyUsage(failed?.usage, state, emit);
       const identity = upstreamErrorIdentity(failed);
+      emit.fail();
       throw streamError({
         kind: classifyOfficialError(identity.type, identity.code),
         message: describeFailedResponse(failed, 'Model request failed'),
@@ -339,6 +289,7 @@ function consumeFrame(frame: string, state: ResponsesStreamState, emit: AdapterE
     }
     case 'error': {
       const identity = upstreamErrorIdentity(event);
+      emit.fail();
       throw streamError({ kind: classifyOfficialError(identity.type, identity.code), message: describeFailure(event, 'Model request failed'), upstream: identity, headers: state.headers });
     }
     default:
@@ -370,12 +321,12 @@ function registerFunctionCall(rawItem: unknown, rawIndex: unknown, state: Respon
 }
 
 /** Append one `function_call_arguments.delta` fragment to its tracked call. */
-function accumulateFunctionCall(event: Record<string, unknown>, state: ResponsesStreamState, at: number): void {
+function accumulateFunctionCall(event: Record<string, unknown>, state: ResponsesStreamState, emit: AdapterEmit): void {
   const piece = stringField(event.delta) ?? '';
   // Every raw argument fragment is generation and is fed to the sampler exactly
   // once, keyed by the stable function-item identity, independent of whether the
   // call is already tracked. A snapshot or completed arguments is never a delta.
-  if (piece !== '') state.tps.observe(`tool:${tpsItemKey(event)}`, piece, at);
+  if (piece !== '') emit.generation(`tool:${tpsItemKey(event)}`, piece);
   const outputIndex = numberField(event.output_index);
   const itemId = stringField(event.item_id);
   const call = (itemId !== undefined ? state.byItemId.get(itemId) : undefined)
@@ -453,89 +404,6 @@ function usageOf(root: unknown): Usage | undefined {
     ...(reasoning === undefined ? {} : { reasoning }),
   };
   return Object.keys(usage).length === 0 ? undefined : usage;
-}
-
-/** Non-stream fallback: one complete Responses payload. */
-async function readJsonResponse(response: Response, emit: AdapterEmit): Promise<Completion> {
-  const payload = await response.json().catch((error: unknown) => { if (error instanceof SyntaxError) return undefined; throw error; });
-  const root = record(payload);
-  if (!root) throw new Error('Model response was not valid JSON');
-  // Only a non-null official error object is an error; `error: null` is not.
-  const errorObj = record(root.error);
-  if (errorObj) {
-    const identity = upstreamErrorIdentity(root);
-    throw streamError({ kind: classifyOfficialError(identity.type, identity.code), message: describeFailure(errorObj, 'Model request failed'), upstream: identity, headers: response.headers });
-  }
-  const status = stringField(root.status);
-  if (status === 'failed' || status === 'incomplete') {
-    const identity = upstreamErrorIdentity(root);
-    throw streamError({ kind: classifyOfficialError(identity.type, identity.code), message: describeFailedResponse(root, 'Model request failed'), upstream: identity, headers: response.headers });
-  }
-
-  let text = '';
-  let reasoning = '';
-  const calls: ModelToolCall[] = [];
-  const output = root.output;
-  if (Array.isArray(output)) {
-    output.forEach((entry, position) => {
-      const item = record(entry);
-      if (!item) return;
-      const type = stringField(item.type);
-      if (type === 'message') {
-        for (const part of arrayOfRecords(item.content)) {
-          if (part.type !== 'output_text') continue;
-          const piece = stringField(part.text);
-          if (piece) {
-            text += piece;
-            emit.text(piece);
-          }
-        }
-        return;
-      }
-      if (type === 'reasoning') {
-        for (const part of arrayOfRecords(item.summary)) {
-          const piece = stringField(part.text);
-          if (piece) {
-            reasoning += piece;
-            emit.reasoning(piece);
-          }
-        }
-        return;
-      }
-      if (type === 'function_call') {
-        const argumentsText = stringField(item.arguments) ?? '';
-        const call: ModelToolCall = {
-          index: position,
-          id: stringField(item.call_id) ?? stringField(item.id) ?? `call_${position}`,
-          name: stringField(item.name) ?? '',
-          arguments: argumentsText,
-          ...parseToolArguments(argumentsText),
-        };
-        calls.push(call);
-        emit.toolCall(call);
-      }
-    });
-  }
-
-  const usage = usageOf(root.usage);
-  if (usage) emit.usage(usage);
-  return {
-    text,
-    ...(reasoning ? { reasoning } : {}),
-    ...(usage ? { usage } : {}),
-    toolCalls: calls,
-    finishReason: finishReasonOf(record(root.incomplete_details), calls.length),
-  };
-}
-
-function arrayOfRecords(value: unknown): Record<string, unknown>[] {
-  if (!Array.isArray(value)) return [];
-  const records: Record<string, unknown>[] = [];
-  for (const entry of value) {
-    const item = record(entry);
-    if (item) records.push(item);
-  }
-  return records;
 }
 
 /** Human-readable failure message of a failed/incomplete Responses payload. */

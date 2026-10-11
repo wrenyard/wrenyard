@@ -34,6 +34,21 @@ function indexKey(value: unknown): string {
 }
 
 /**
+ * True when one Responses record reports a failure: a non-null top-level
+ * `error` field, an official `error`/`response.failed`/`response.incomplete`
+ * type, or a nested `response` carrying an error or a failed/incomplete status.
+ * The usage observer and the TPS translator share this one condition.
+ */
+function isResponsesFailure(row: Record<string, unknown>): boolean {
+  if (row.error !== undefined && row.error !== null) return true;
+  if (row.type === 'error' || row.type === 'response.failed' || row.type === 'response.incomplete') return true;
+  const response = object(row.response);
+  if (!response) return false;
+  return (response.error !== undefined && response.error !== null)
+    || response.status === 'failed' || response.status === 'incomplete';
+}
+
+/**
  * OpenAI Responses differences: the `/v1/models` list shape, the `{error:{...}}`
  * envelope, the response `model` position (top level and inside `response`),
  * and usage / completion parsing.
@@ -47,14 +62,7 @@ const adapter: UsageAdapter = {
   terminal: (row) => row.type === 'response.completed' || object(row.response)?.status === 'completed',
   // Completion is always a JSON event, never a raw sentinel.
   sentinel: () => false,
-  failure: (row) => {
-    if (row.error !== undefined && row.error !== null) return true;
-    if (row.type === 'error' || row.type === 'response.failed' || row.type === 'response.incomplete') return true;
-    const response = object(row.response);
-    if (!response) return false;
-    return response.error !== undefined && response.error !== null
-      || response.status === 'failed' || response.status === 'incomplete';
-  },
+  failure: (row) => isResponsesFailure(row),
   // The official in-stream error events are `error`, `response.failed` and
   // `response.incomplete`; their raw `type`/`code` are read for observation.
   // The frames themselves are never rewritten.
@@ -141,10 +149,7 @@ export const responsesProtocol: GatewayProtocolModule = {
         if (response && typeof response.id === 'string' && response.id !== '') responseId = response.id;
         // The official in-stream error events are `error`, `response.failed` and
         // `response.incomplete`; unsuccessful termination produces no sample.
-        if (row.type === 'error' || row.type === 'response.failed' || row.type === 'response.incomplete'
-          || (row.error !== undefined && row.error !== null)
-          || (response !== undefined && (response.error !== undefined && response.error !== null
-            || response.status === 'failed' || response.status === 'incomplete'))) {
+        if (isResponsesFailure(row)) {
           sink.fail();
           return;
         }
