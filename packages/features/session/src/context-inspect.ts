@@ -3,7 +3,7 @@
  *
  * The instrument is forward-looking: it reports how large the *next* main
  * reasoning view will be, assembled with the same `buildReason` the engine
- * uses, with `userText` empty. The estimator is `cl100k_base`, exactly the
+ * uses, with `userText` empty. The estimator is `o200k_base`, exactly the
  * counter the call budget uses, and a model's window/output facts come from the
  * same `resolveModelMetadata` the budget check resolves.
  *
@@ -93,7 +93,7 @@ export interface ContextInspectFiles {
 export interface ContextInspection {
   /** Latest ledger `seq` at compute time. */
   computedAtSeq: number;
-  estimator: 'cl100k_base';
+  estimator: 'o200k_base';
   model: ContextInspectModel;
   layers: ContextLayerTokens[];
   items: ContextItem[];
@@ -323,7 +323,7 @@ export class ContextInspector {
     const hasFiles = fileCounts.images > 0 || fileCounts.omitted > 0;
     return {
       computedAtSeq: events.at(-1)?.seq ?? 0,
-      estimator: 'cl100k_base',
+      estimator: 'o200k_base',
       model: {
         publicId: request.model,
         ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),

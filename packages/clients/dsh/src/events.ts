@@ -178,7 +178,7 @@ export function dshGenerationSamples(record: Record<string, unknown>): unknown[]
         samples.push({
             response_id: responseId,
             model,
-            // Approximate cl100k count of observed generation content, never
+            // Approximate o200k count of observed generation content, never
             // billed usage. completed_at_ms is the last observed delta, so
             // completion latency stays excluded.
             output_tokens: tokens,

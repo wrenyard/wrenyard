@@ -8,7 +8,7 @@ import { migrateProviderId } from '../config/chatgpt-migration.mts'
 /**
  * Unified approximate TPS.
  *
- * TPS means cl100k_base tokens counted over only the actually observed
+ * TPS means o200k_base tokens counted over only the actually observed
  * generation content, divided by exactly the generation milliseconds that
  * produced that content. It is independent of execution wall time and native
  * event `duration_ms`, so tool waits and completion latency never change the

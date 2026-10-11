@@ -18,7 +18,7 @@ import { MediaAttachments, fromDraftAttachment } from './MediaAttachments.js';
 const INPUT_TOKEN_DEBOUNCE_MS = 300;
 
 /**
- * Debounced `cl100k_base` count of the composer text, including a paste. The
+ * Debounced `o200k_base` count of the composer text, including a paste. The
  * first count is `undefined`, which the shared budget treats as zero.
  */
 function useInputTokenCount(text: string): number | undefined {
