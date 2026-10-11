@@ -6,10 +6,10 @@
  */
 
 import type { LedgerEvent, TurnStatus } from '../../ledger.ts';
-import type { ToolCall, ToolSpec } from '../../driver.ts';
+import type { ToolCall, ToolSpec } from '../../transport/index.ts';
 import { escapeReplyBody, tag } from '../../render.ts';
 import { messageOf } from '../../errors.ts';
-import type { BuiltView, SessionCallHost } from '../../ports.ts';
+import type { BuiltView, CallFailureSummary, SessionCallHost } from '../../ports.ts';
 import type { SessionRuntime, TurnRuntime } from '../../runtime.ts';
 import { maybeUpdateTitle } from './title.ts';
 
@@ -65,6 +65,8 @@ interface ReplyRequest {
   /** True for the invocation that also finalizes the turn. */
   terminal: boolean;
   error?: string;
+  /** Structured main-reasoning failure facts, when the trigger was a failure. */
+  failure?: CallFailureSummary;
 }
 
 /** The statuses a terminal communication call carries. */
@@ -97,15 +99,17 @@ export class ReplyWriter {
 
   /**
    * Enqueue the one closing communication of a turn whose reasoning failed
-   * without fresh output. Always terminal.
+   * without fresh output. Always terminal. `failure` carries the structured
+   * facts of the failed main reasoning call when they are known.
    */
-  close(session: SessionRuntime, turn: TurnRuntime, error: string | undefined): Promise<void> {
+  close(session: SessionRuntime, turn: TurnRuntime, error: string | undefined, failure?: CallFailureSummary): Promise<void> {
     return this.enqueue(session, {
       turn: turn.turn,
       cycle: turn.cycle,
       status: 'failed',
       terminal: true,
       ...(error === undefined ? {} : { error }),
+      ...(failure === undefined ? {} : { failure }),
     });
   }
 
@@ -138,6 +142,7 @@ export class ReplyWriter {
       now: this.host.now().toISOString(),
       deviceName: this.deviceName,
       ...(request.error === undefined ? {} : { error: request.error }),
+      ...(request.failure === undefined ? {} : { failure: request.failure }),
       ...(turn.imageUnsupported ? { imageUnsupported: true } : {}),
     };
     const outcome = await this.host.invoke(session, turn, 'reply', buildReply(input), {
@@ -300,6 +305,23 @@ Output contract:
 - If you choose not to reply while the turn is running, return no content and no tool calls.
 </wy-system>`;
 
+/**
+ * The `<wy-info>` line for a failed main reasoning call. The reply model must
+ * report this as a main-reasoning failure with the real status and the
+ * supplier's wording, and never as a Task failure.
+ */
+function failureInfo(failure: CallFailureSummary | undefined): string[] {
+  if (failure === undefined) return [];
+  const status = failure.status === undefined ? '' : ` (HTTP ${failure.status})`;
+  // The request count is reported only when it is a real fact; it is never
+  // inferred from the retry count.
+  const requests = failure.attempts === undefined ? '' : `, ${failure.attempts} requests`;
+  const seconds = failure.durationMs === undefined ? '' : `, ${Math.round(failure.durationMs / 1000)} s total`;
+  return [
+    `main reasoning failure (not a Task failure): ${failure.model} failed (${failure.kind}${status})${requests}; retried ${failure.retries} times${seconds}: ${failure.message}`,
+  ];
+}
+
 export interface ReplyViewInput {
   events: readonly LedgerEvent[];
   turn: number;
@@ -310,6 +332,8 @@ export interface ReplyViewInput {
   now: string;
   deviceName: string;
   error?: string;
+  /** Structured facts of the failed main reasoning call, when it failed. */
+  failure?: CallFailureSummary;
   imageUnsupported?: boolean;
 }
 
@@ -355,6 +379,7 @@ function buildReply(input: ReplyViewInput): BuiltView {
     `device: ${input.deviceName}`,
     `turn status: ${input.status}`,
     ...(input.error === undefined ? [] : [`error: ${input.error}`]),
+    ...failureInfo(input.failure),
     ...(input.imageUnsupported === true ? ['The reasoning model cannot see the images the user sent.'] : []),
   ];
   const actions = [...running.values()].map((name) => `- ${name}`);

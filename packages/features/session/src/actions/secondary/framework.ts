@@ -15,7 +15,7 @@
  * loop.
  */
 
-import type { ModelMessage, ModelToolCall, ToolCall, ToolSpec } from '../../driver.ts';
+import type { Message as ModelMessage, MessageToolCall as ModelToolCall, ToolCall, ToolSpec } from '../../transport/index.ts';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,

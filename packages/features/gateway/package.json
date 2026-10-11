@@ -6,6 +6,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@wrenyard/agent-client": "workspace:*",
     "@wrenyard/providers": "workspace:*",
     "js-tiktoken": "1.0.21"
   },

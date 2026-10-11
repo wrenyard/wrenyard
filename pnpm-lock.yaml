@@ -651,6 +651,9 @@ importers:
 
   packages/features/gateway:
     dependencies:
+      '@wrenyard/agent-client':
+        specifier: workspace:*
+        version: link:../../clients/base
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../providers
@@ -723,6 +726,9 @@ importers:
 
   packages/features/session:
     dependencies:
+      '@wrenyard/agent-client':
+        specifier: workspace:*
+        version: link:../../clients/base
       '@wrenyard/control':
         specifier: workspace:*
         version: link:../../control

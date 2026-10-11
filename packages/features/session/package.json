@@ -7,9 +7,10 @@
   "description": "Wrenyard context-ledger session core: append-only per-session timeline, derived state, the work-turn engine and per-role automatic auxiliary routing.",
   "exports": {
     ".": "./src/index.ts",
-    "./model-metadata": "./src/calls.ts"
+    "./model-metadata": "./src/model-metadata.ts"
   },
   "dependencies": {
+    "@wrenyard/agent-client": "workspace:*",
     "@wrenyard/control": "workspace:*",
     "@wrenyard/models": "workspace:*",
     "@wrenyard/protocol": "workspace:*",

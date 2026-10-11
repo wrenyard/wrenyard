@@ -1,7 +1,23 @@
 import { defineProvider, model, openAI } from '../base/model-defaults.ts';
+import type { ProviderRequestHookContext } from '../base/contracts.ts';
+
+/**
+ * The OpenCode service requires the stable OpenCode User-Agent and forwards the
+ * client's session header. Only a well-formed single-line token is forwarded,
+ * so it cannot smuggle extra header lines into the upstream request.
+ */
+function forwardOpenCodeSession(context: ProviderRequestHookContext): void {
+  context.headers.set('user-agent', 'wrenyard');
+  const value = context.requestHeaders['x-opencode-session'];
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256) return;
+  if (value.includes('\r') || value.includes('\n')) return;
+  context.headers.set('x-opencode-session', value);
+}
 
 export const definition = defineProvider({
   id: 'opencode-go', displayName: 'OpenCode Go', credentialResolver: 'managed', defaultModel: 'glm-5.3-flash',
+  // Supplier hook: the OpenCode identity and session-header forwarding.
+  beforeRequest: forwardOpenCodeSession,
   models: [
     { ...model('glm-5.3-flash', undefined, undefined, 'glm-5.3-flash'), capabilities: ['text'], pricing: [0.03, 0.15, 0.50], reasoningEfforts: ['high'] },
     { ...model('glm-5.3', undefined, undefined, 'glm-5.3'), capabilities: ['text'], pricing: [0.26, 1.4, 4.4], reasoningEfforts: ['high'] },

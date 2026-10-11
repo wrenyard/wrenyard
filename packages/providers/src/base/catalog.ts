@@ -343,36 +343,52 @@ export class Catalog {
     return this.providersByID.get(id);
   }
 
-  listGatewayModels(
-    protocol: GatewayProtocol,
+  /**
+   * The complete, protocol-independent public model directory. Every
+   * credential-backed provider model is listed exactly once with the entry
+   * protocols it is served on, so a consumer selects a protocol itself instead
+   * of re-deriving ownership from the provider definition.
+   */
+  gatewayModels(
     credentialAvailable: (provider: ProviderDefinition) => boolean = () => true,
   ): PublicGatewayModel[] {
     return this.providers()
       .filter((provider) => credentialAvailable(provider))
-      .filter((provider) => provider.protocols?.some((entry) => entry.protocol === protocol))
-      .flatMap((provider) => provider.models
-        .filter((model) => !model.taskOnly)
-        // Client-restricted models are usable only through their exact client
-        // transport and are never published through the client-agnostic public
-        // gateway directory.
-        .filter((model) => model.supportedClients === undefined)
-        .map((model) => ({
-          id: model.id,
-          displayName: model.displayName,
-          provider: provider.id,
-          publicId: `${provider.id}/${model.id}`,
-          speed: model.speed,
-          ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
-          ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
-          ...(model.family === undefined ? {} : { family: model.family }),
-          ...(model.claudeTier === undefined ? {} : { claudeTier: model.claudeTier }),
-          ...(model.supports1MContext === undefined ? {} : { supports1MContext: model.supports1MContext }),
-          intelligence: model.intelligence,
-          reasoningEfforts: model.reasoningEfforts,
-          ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
-          ...(model.capabilities === undefined ? {} : { capabilities: model.capabilities }),
-          pricing: model.pricing,
-        })));
+      .flatMap((provider) => {
+        const protocols = (provider.protocols ?? []).map((entry) => entry.protocol);
+        if (protocols.length === 0) return [];
+        return provider.models
+          .filter((model) => !model.taskOnly)
+          // Client-restricted models are usable only through their exact client
+          // transport and are never published through the client-agnostic public
+          // gateway directory.
+          .filter((model) => model.supportedClients === undefined)
+          .map((model) => ({
+            id: model.id,
+            displayName: model.displayName,
+            provider: provider.id,
+            publicId: `${provider.id}/${model.id}`,
+            protocols: [...protocols],
+            speed: model.speed,
+            ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
+            ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
+            ...(model.family === undefined ? {} : { family: model.family }),
+            ...(model.claudeTier === undefined ? {} : { claudeTier: model.claudeTier }),
+            ...(model.supports1MContext === undefined ? {} : { supports1MContext: model.supports1MContext }),
+            intelligence: model.intelligence,
+            reasoningEfforts: model.reasoningEfforts,
+            ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
+            ...(model.capabilities === undefined ? {} : { capabilities: model.capabilities }),
+            pricing: model.pricing,
+          }));
+      });
+  }
+
+  listGatewayModels(
+    protocol: GatewayProtocol,
+    credentialAvailable: (provider: ProviderDefinition) => boolean = () => true,
+  ): PublicGatewayModel[] {
+    return this.gatewayModels(credentialAvailable).filter((model) => model.protocols.includes(protocol));
   }
 
   resolveGatewayModel(protocol: GatewayProtocol, publicID: string): ResolvedGatewayModel {

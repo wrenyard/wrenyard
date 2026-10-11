@@ -45,6 +45,13 @@ export interface FoldOptions {
 
 type CallEvent = Extract<LedgerEvent, { type: 'call' }>;
 
+/** One-line failure text of a call's structured error fact (legacy string tolerated). */
+function callErrorText(error: NonNullable<CallEvent['error']> | string): string {
+  if (typeof error === 'string') return error;
+  const status = error.status === undefined ? '' : ` (HTTP ${error.status})`;
+  return `${error.message}${status}`;
+}
+
 /** Structural view of the P3 `call.started` event, kept independent of the union. */
 interface CallStartedLike {
   seq: number;
@@ -70,6 +77,18 @@ function readString(value: unknown): string | undefined {
 
 function readNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Recorded TPS sample of a ledger call (`{ outputTokens, windowMs }`). Absent on
+ * historical records written before the transport refactor, never synthesized.
+ */
+function readTps(value: unknown): { outputTokens: number; windowMs: number } | undefined {
+  if (!isRecord(value)) return undefined;
+  const outputTokens = readNumber(value.outputTokens);
+  const windowMs = readNumber(value.windowMs);
+  if (outputTokens === undefined || windowMs === undefined) return undefined;
+  return { outputTokens, windowMs };
 }
 
 function readKind(value: unknown): SessionFile['kind'] | undefined {
@@ -354,6 +373,9 @@ function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded:
   const calls: CallModel[] = ids.map((id) => {
     const done = completed.get(id);
     if (done) {
+      // The ledger `call` event carries an optional TPS sample; historical
+      // records lack it and stay without one.
+      const tps = readTps((done as { tps?: unknown }).tps);
       return {
         id,
         role: done.role,
@@ -367,11 +389,12 @@ function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded:
           : {}),
         endedAt: done.endedAt,
         ...(done.usage === undefined ? {} : { usage: done.usage }),
+        ...(tps === undefined ? {} : { tps }),
         estimatedInputTokens: done.estimatedInputTokens,
         layers: done.layers,
         output: done.output,
         ...(done.reasoning === undefined ? {} : { reasoning: done.reasoning }),
-        ...(done.error === undefined ? {} : { error: done.error }),
+        ...(done.error === undefined ? {} : { error: callErrorText(done.error) }),
       };
     }
     const startedEvent = startedEvents.get(id)!;
