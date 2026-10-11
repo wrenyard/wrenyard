@@ -782,7 +782,6 @@ function buildRecentRuns(): TaskRunSnapshot[] {
         totalTokens: inputTokens + outputTokens,
         generationMs: durationMs,
         outputTps: profile.tps,
-        tpsContract: 'tokenizer_v1',
         referenceCostUsd: Number(((inputTokens / 1_000_000) * 0.8 + (outputTokens / 1_000_000) * 3.2).toFixed(4)),
         referenceCostComplete: true,
         referenceCostBasis: 'catalog',

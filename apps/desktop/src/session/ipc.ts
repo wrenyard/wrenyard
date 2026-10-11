@@ -154,7 +154,6 @@ function taskUsage(value: unknown): TaskRunUsage | undefined {
   if (generationMs !== undefined) usage.generationMs = generationMs;
   const outputTps = readNumber(record.output_tps);
   if (outputTps !== undefined) usage.outputTps = outputTps;
-  if (record.tps_contract === 'tokenizer_v1') usage.tpsContract = 'tokenizer_v1';
   const referenceCostUsd = readNumber(record.reference_cost_usd);
   if (referenceCostUsd !== undefined) usage.referenceCostUsd = referenceCostUsd;
   const referenceCostBasis = readString(record.reference_cost_basis);

@@ -67,7 +67,7 @@ export async function* decodeCodeBuddy(
                 data.duration_ms = durationMS;
                 // The delegated result is cumulative and carries no
                 // independently measured invocation duration, so no
-                // agent_turn_v1 claim is made here; only the tokenizer_v1
+                // agent_turn_v1 claim is made here; only the streamed speed
                 // sample from the partial stream is attached.
                 if (sampler.attachable)
                     sampler.takeSamples(data);

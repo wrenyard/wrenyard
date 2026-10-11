@@ -1,6 +1,6 @@
 import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import { finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, sessionIdOf, stringOf, toolCallRecord, toolResultRecord } from '@wrenyard/agent-client/native';
-import { TOKENIZER_MINIMUM_WINDOW_MS, TOKENIZER_TPS_SAMPLING_CONTRACT, addUsageTokens, applyTrustedAgentTurnContract, countTPSTokens, nonnegativeInt, positiveInt } from '@wrenyard/agent-client/statistics';
+import { TOKENIZER_MINIMUM_WINDOW_MS, addUsageTokens, applyTrustedAgentTurnContract, countTPSTokens, nonnegativeInt, positiveInt } from '@wrenyard/agent-client/statistics';
 
 /** JSONL protocol name emitted by the embedded DSH bridge plugin. */
 const DSH_BRIDGE_PROTOCOL = 'wrenyard.dsh.stream.v1';
@@ -89,7 +89,7 @@ export async function* decodeDsh(events: AsyncIterable<StreamChunk>): AsyncGener
  *
  * The bridge may report `tps_generation`, its own record of the generation
  * content it observed streaming. Those are converted into canonical
- * tokenizer_v1 samples with the shared fixed tokenizer, and a window the
+ * tokenizer speed samples with the shared fixed tokenizer, and a window the
  * bridge could not observe is skipped rather than extrapolated. The turn's
  * duration is not provider generation time, so it never becomes a speed
  * denominator.
@@ -118,7 +118,6 @@ function usageOf(record: Record<string, unknown>, failed: boolean): Record<strin
     if (!failed) {
         const samples = dshGenerationSamples(record);
         if (samples) {
-            data.tps_sampling_contract = TOKENIZER_TPS_SAMPLING_CONTRACT;
             data.tps_samples = samples;
         }
     }
@@ -127,7 +126,7 @@ function usageOf(record: Record<string, unknown>, failed: boolean): Record<strin
 
 /**
  * Converts the bridge's transient tps_generation payload into canonical
- * tokenizer_v1 samples: the fixed tokenizer over only the observed generation
+ * tokenizer speed samples: the fixed tokenizer over only the observed generation
  * blocks, divided by that generation's own first-to-last delta window. A
  * malformed payload is rejected outright; a window the bridge could not
  * observe skips only its own sample.

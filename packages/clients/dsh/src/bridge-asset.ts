@@ -381,7 +381,7 @@ export function apply(ctx) {
         // Retained for additive accounting only; never used for TPS.
         duration: Math.max(0, (timeMs(event) === null ? Date.now() : timeMs(event)) - turn.startedAt),
         // Transient generation blocks; the Go adapter counts them into
-        // tokenizer_v1 samples and never persists the raw strings.
+        // speed samples and never persists the raw strings.
         tps_generation: generations
       });
       if (turn.usageObserved) {
