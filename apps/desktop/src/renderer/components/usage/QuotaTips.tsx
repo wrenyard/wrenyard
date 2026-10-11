@@ -12,7 +12,8 @@ import { cn } from 'cn';
  * the Pet house card can reuse it directly.
  */
 
-const PROVIDER_FAILED_LABEL = '额度不可用';
+/** A provider whose quota cannot be read or reports nothing, matching the status-bar label. */
+const PROVIDER_UNKNOWN_LABEL = '未知';
 const NO_DATA_LABEL = '暂无额度数据';
 const BALANCE_LABEL = '余额';
 
@@ -64,10 +65,8 @@ function ProviderTips({ provider, now, inverse }: {
       <span className={cn('truncate font-medium', failed && muted)}>
         {name}{provider.stale ? '（数据过期）' : ''}
       </span>
-      {failed ? (
-        <span className={muted}>{provider.message ?? PROVIDER_FAILED_LABEL}</span>
-      ) : empty ? (
-        <span className={muted}>{provider.message ?? NO_DATA_LABEL}</span>
+      {failed || empty ? (
+        <span className={muted}>{PROVIDER_UNKNOWN_LABEL}</span>
       ) : (
         <>
           {provider.windows.map((window) => (
@@ -122,6 +121,8 @@ export function QuotaTips({
   }
 
   const failed = provider.status === 'error' || provider.status === 'unavailable';
+  // An unknown quota has no verdict: neither a failed read nor an empty snapshot.
+  const unknown = failed || (provider.windows.length === 0 && provider.balances.length === 0);
 
   return (
     <div
@@ -132,7 +133,7 @@ export function QuotaTips({
       )}
       data-slot="quota-tips"
     >
-      {!failed && <VerdictLine verdict={quotaVerdict(provider.windows)} inverse={inverse} />}
+      {!unknown && <VerdictLine verdict={quotaVerdict(provider.windows)} inverse={inverse} />}
       <ProviderTips provider={provider} now={now} inverse={inverse} />
     </div>
   );

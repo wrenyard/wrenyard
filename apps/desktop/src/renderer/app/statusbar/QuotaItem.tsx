@@ -17,7 +17,8 @@ import { eligibleQuotaProviders } from '@/shell-contract';
  * Status-bar quota item (usage spec 6.2). It focuses the quota provider of the
  * model currently selected in the composer and shows that provider's pools as a
  * compact `5h 78% · 7d 40%` label (no provider name), falling back to the global
- * most severe provider when nothing is focused. Hovering opens {@link QuotaTips}
+ * most severe provider when nothing is focused. A focused provider whose quota
+ * cannot be read shows just `未知`. Hovering opens {@link QuotaTips}
  * (the same provider plus a verdict line); clicking opens {@link QuotaPanel}
  * with every registered provider. The global `quota.showPanel` command opens the
  * same panel through {@link onQuotaPanelOpen}.
@@ -26,7 +27,7 @@ import { eligibleQuotaProviders } from '@/shell-contract';
 const SEVERITY: Readonly<Record<QuotaLevel, number>> = { normal: 0, warning: 1, destructive: 2 };
 
 /** Weakened copy shown when a focused provider's quota cannot be read. */
-const FOCUS_UNAVAILABLE_SUFFIX = '额度不可用';
+const FOCUS_UNAVAILABLE_LABEL = '未知';
 
 interface QuotaCandidate {
   provider: QuotaProviderSnapshot;
@@ -56,28 +57,19 @@ function selectWindow(providers: readonly QuotaProviderSnapshot[]): QuotaCandida
 type FocusSelection =
   | { kind: 'none' }
   | { kind: 'window'; candidate: QuotaCandidate }
-  | { kind: 'unavailable'; label: string };
+  | { kind: 'unavailable' };
 
 /**
  * The focused provider's most tense window, or an `unavailable` result when the
- * provider is missing or its quota read failed. The catalog supplies the label
- * for a provider that has no quota snapshot at all.
+ * provider is missing, its quota read failed or it reports no window.
  */
-function selectFocused(
-  providers: readonly QuotaProviderSnapshot[],
-  catalog: readonly { id: string; label: string }[],
-  focus: string,
-): FocusSelection {
+function selectFocused(providers: readonly QuotaProviderSnapshot[], focus: string): FocusSelection {
   const provider = providers.find((entry) => entry.id === focus);
-  if (provider === undefined) {
-    return { kind: 'unavailable', label: catalog.find((entry) => entry.id === focus)?.label ?? focus };
-  }
-  if (provider.status === 'error' || provider.status === 'unavailable') {
-    return { kind: 'unavailable', label: provider.label || provider.id };
+  if (provider === undefined || provider.status === 'error' || provider.status === 'unavailable') {
+    return { kind: 'unavailable' };
   }
   const candidate = selectWindow([provider]);
-  if (candidate === null) return { kind: 'unavailable', label: provider.label || provider.id };
-  return { kind: 'window', candidate };
+  return candidate === null ? { kind: 'unavailable' } : { kind: 'window', candidate };
 }
 
 /** Re-renders once a minute so the reset countdown stays current. */
@@ -110,21 +102,30 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
   const focused = useMemo<FocusSelection>(() => {
     const data = quota.data;
     if (focus === null || data === undefined) return { kind: 'none' };
-    return selectFocused(data.providers, data.catalog, focus);
+    return selectFocused(data.providers, focus);
   }, [focus, quota.data]);
 
   const globalSelected = useMemo(() => selectWindow(candidates), [candidates]);
 
   // The provider whose pools both the label and the hover describe: the focused
-  // one, else the global most-tight provider the label falls back to.
+  // one, else the global most-tight provider the label falls back to. A focused
+  // provider without any quota snapshot still gets an entry of its own, named
+  // from the catalog, so the hover never describes a different provider.
   const shown = useMemo<QuotaProviderSnapshot | null>(() => {
     const data = quota.data;
     if (data === undefined) return null;
-    if (focus !== null) return data.providers.find((provider) => provider.id === focus) ?? null;
-    return globalSelected?.provider ?? null;
+    if (focus === null) return globalSelected?.provider ?? null;
+    return data.providers.find((provider) => provider.id === focus) ?? {
+      id: focus,
+      label: data.catalog.find((entry) => entry.id === focus)?.label ?? focus,
+      status: 'unavailable',
+      stale: false,
+      windows: [],
+      balances: [],
+    };
   }, [quota.data, focus, globalSelected]);
 
-  const unavailableLabel = focused.kind === 'unavailable' ? focused.label : null;
+  const unavailable = focused.kind === 'unavailable';
 
   useEffect(() => onQuotaPanelOpen(() => setOpen(true)), []);
 
@@ -138,8 +139,8 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
       ? 'warning'
       : 'normal';
 
-  const label = unavailableLabel !== null
-    ? `${unavailableLabel} ${FOCUS_UNAVAILABLE_SUFFIX}`
+  const label = unavailable
+    ? FOCUS_UNAVAILABLE_LABEL
     : windows.length === 0
       ? undefined
       : windows
@@ -148,7 +149,7 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
             return `${shortWindowName(window.name, window.windowMinutes)} ${Math.floor(used)}%`;
           })
           .join(' · ');
-  const tone = unavailableLabel === null ? levelTone(poolLevel) : 'default';
+  const tone = unavailable ? 'default' : levelTone(poolLevel);
 
   const handleOpenChange = (next: boolean): void => {
     setOpen(next);
@@ -161,7 +162,7 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
         <Tooltip>
           <TooltipTrigger render={<StatusBarButton icon={Gauge} label={label} tone={tone} ariaLabel="额度" />} />
           <TooltipContent side="top" align="end" className="w-72 max-w-none flex-col items-stretch gap-1.5 py-2">
-            <QuotaTips providers={candidates} focusedProvider={shown?.id ?? null} now={now} surface="inverse" />
+            <QuotaTips providers={shown === null ? candidates : [shown]} focusedProvider={shown?.id ?? null} now={now} surface="inverse" />
           </TooltipContent>
         </Tooltip>
       </PopoverTrigger>
