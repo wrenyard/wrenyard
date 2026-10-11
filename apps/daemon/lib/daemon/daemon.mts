@@ -802,6 +802,8 @@ async function createForemanDaemonResources(
     router: rpcRouter,
     routeStatus: model => gateway.routeStatus(model),
     selectAuxiliary: createAuxiliarySelector({ catalog, quotaSnapshots: autoRoutingQuotaSnapshots,
+      // The Gateway model directory is the only source of per-model protocols.
+      gatewayModels: async () => (await gateway.connection(gatewayOrigin(boundPort))).models,
       routeStatus: model => gateway.routeStatus(model),
       runtimeAvailability: createAuxiliaryAvailability(runtimeAvailability, catalog, providerRuntime),
       localSpeed: readLocalSpeedSamples, readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath) }),
@@ -1113,7 +1115,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
       ...(install.product.identity ? { identity: install.product.identity } : {}),
       ...(install.account ? { account: install.account } : {}),
     },
-    account: () => codeBuddyClient.readAccount(install.product.environment),
+    account: () => codeBuddyClient.readAccountContext(install.product.environment),
   })
   const catalog = createBuiltinCatalog([codeBuddy])
   const providerRuntime = createBuiltinProviderRuntime({

@@ -127,6 +127,11 @@ export interface UpstreamRouteErrorInput {
 export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
   provider: string;
   publicId: string;
+  /** Entry protocols this exact model is served on. Required and non-empty:
+   * the public directory is protocol-independent and every entry declares where
+   * it is reachable, so a consumer never re-derives protocol ownership from a
+   * provider definition. */
+  protocols: readonly GatewayProtocol[];
   routeState?: GatewayRouteState;
   routeUntil?: string;
 };
@@ -212,6 +217,63 @@ export interface ProtocolCapability {
   upstreamModels?: Readonly<Record<string, string>>;
 }
 
+/** Client request headers supplied to a request hook, unmodified. */
+export type ProviderRequestHeaders = Readonly<Record<string, string | readonly string[] | undefined>>;
+
+/**
+ * Everything a supplier request hook may need to reproduce its own wire
+ * contract. The Gateway supplies it generically; the hook owns every supplier
+ * decision and the Gateway never branches on a provider id.
+ */
+export interface ProviderRequestHookContext {
+  protocol: GatewayProtocol;
+  modelId: string;
+  publicModel: string;
+  /** Scoped execution id attributed by the request path, when present. */
+  executionId?: string;
+  /** Incoming client headers, for supplier-required forwarding only. */
+  requestHeaders: ProviderRequestHeaders;
+  /** Mutable upstream request headers. */
+  headers: Headers;
+  /** Mutable upstream JSON request body. */
+  body: Record<string, unknown>;
+  nowMs: number;
+}
+
+/**
+ * Context for an upstream response. Successful responses arrive as a live
+ * `Response`; error responses arrive as buffered bytes so the hook can correct
+ * a private error envelope without consuming a stream.
+ */
+export interface ProviderResponseHookContext {
+  protocol: GatewayProtocol;
+  modelId: string;
+  publicModel: string;
+  status: number;
+  headers: Headers;
+  /** Buffered body bytes of a non-2xx response. */
+  errorBytes?: Uint8Array;
+  /** Parsed body of a non-2xx response, when it was JSON. */
+  errorBody?: unknown;
+  /** Live upstream response of a 2xx response. */
+  response?: Response;
+}
+
+/** A supplier response correction; absent fields keep the upstream value. */
+export interface ProviderResponseHookResult {
+  /** Replacement status (error mapping only). */
+  status?: number;
+  /** Replacement error body, serialized in place of the upstream bytes. */
+  errorBody?: unknown;
+  /** Replacement upstream response (successful-response repair). */
+  response?: Response;
+}
+
+export type ProviderRequestHook = (context: ProviderRequestHookContext) => void | Promise<void>;
+export type ProviderResponseHook = (
+  context: ProviderResponseHookContext,
+) => ProviderResponseHookResult | void | Promise<ProviderResponseHookResult | void>;
+
 export interface ProviderDefinition {
   id: string;
   displayName: string;
@@ -239,6 +301,18 @@ export interface ProviderDefinition {
     effort: ReasoningEffort,
     protocol: GatewayProtocol,
   ): Record<string, unknown>;
+  /**
+   * Supplier request rewrite, executed by the Gateway after auth headers are
+   * applied and before the request is sent. Owns every supplier request
+   * special case (client identity, forwarded session headers, body fixups).
+   */
+  beforeRequest?: ProviderRequestHook;
+  /**
+   * Supplier response correction, executed on an upstream response before it is
+   * relayed to a client. Owns successful-response repair and the minimal
+   * remapping of a private error structure onto the entry protocol.
+   */
+  afterResponse?: ProviderResponseHook;
   classifyUpstreamError?(error: UpstreamRouteErrorInput): UpstreamRouteFailure | undefined;
   credentialResolver: CredentialResolver;
   defaultModel?: string;

@@ -128,6 +128,70 @@ export class TokenizerGeneration {
     }
 }
 
+/** The protocol-neutral TPS result of one successful streamed response. */
+export interface TpsGenerationSample {
+    outputTokens: number;
+    /** First nonempty delta to last nonempty delta, in milliseconds. */
+    windowMs: number;
+}
+
+/**
+ * Protocol-neutral TPS collector for one streamed response.
+ *
+ * A protocol adapter translates its own wire events into nonempty channel
+ * deltas plus one terminal signal: `complete` on the protocol's successful
+ * completion, `fail` on any error, cancellation, or truncated stream. Each
+ * channel's deltas are concatenated and tokenized once by the shared
+ * tokenizer_v1 rule, and the window is the first to last nonempty delta. A
+ * sample is produced only for a completed, non-failed response whose window
+ * spans at least the minimum observable interval and counts at least one
+ * token, so buffered or collapsed streams, single-timestamp windows, sub-100ms
+ * windows, and zero-token responses are skipped rather than extrapolated. This
+ * is the single sampling core the Gateway and the session transport share; no
+ * second tokenizer or algorithm exists.
+ */
+export class TpsGenerationCollector {
+    private readonly generation = new TokenizerGeneration();
+    private completed = false;
+    private failed = false;
+
+    /** Records a nonempty delta of one content channel; an empty delta is not generation activity. */
+    observe(channel: string, text: string, at: number): void {
+        if (text === '') return;
+        // Generation received after the protocol's successful terminal marker
+        // is not part of the measured window and can never enter a sample.
+        if (this.completed) return;
+        this.generation.observe(channel, text, at);
+    }
+
+    /** Marks the protocol's successful completion. */
+    complete(): void {
+        this.completed = true;
+    }
+
+    /** Marks an error, cancellation, or truncation: no sample is ever produced. */
+    fail(): void {
+        this.failed = true;
+    }
+
+    /** True once either a successful completion or a failure has settled the response. */
+    get settled(): boolean {
+        return this.completed || this.failed;
+    }
+
+    /**
+     * The single sample when the response completed and its window is
+     * observable; undefined for failed, cancelled, truncated, buffered
+     * (single-timestamp), sub-100ms, or zero-token responses.
+     */
+    sample(): TpsGenerationSample | undefined {
+        if (!this.completed || this.failed) return undefined;
+        const measured = this.generation.measure();
+        if (!measured) return undefined;
+        return { outputTokens: measured.tokens, windowMs: measured.completed_at_ms - measured.first_token_at_ms };
+    }
+}
+
 /**
  * Attaches the legacy agent_turn_v1 accounting scope to a usage record. The
  * caller must already have established that the duration is a genuine

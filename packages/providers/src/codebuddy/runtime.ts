@@ -1,5 +1,12 @@
-import type { ProviderDefinition } from '../base/index.ts';
+import { createHash, randomUUID } from 'node:crypto';
+import type {
+  ProviderDefinition,
+  ProviderRequestHookContext,
+  ProviderResponseHookContext,
+  ProviderResponseHookResult,
+} from '../base/index.ts';
 import { resolveCodeBuddyProductModelId, type CodeBuddyModels } from './models.ts';
+import { codeBuddyProtocolError } from './route-errors.ts';
 import type { CodeBuddyEnvironment, CodeBuddyProductModelEntry } from './product.ts';
 
 export type { CodeBuddyEnvironment };
@@ -130,6 +137,62 @@ export function applyCodeBuddyNativeHeaders(
   }
 }
 
+/** Conversation round identity of one user turn; see {@link codeBuddyRound}. */
+interface CodeBuddyRound {
+  conversationId: string;
+  conversationRequestId: string;
+  lastSeenMs: number;
+}
+
+const CODEBUDDY_ROUND_TTL_MS = 30 * 60 * 1000;
+const CODEBUDDY_ROUND_CACHE_LIMIT = 512;
+
+/** CodeBuddy ids are UUIDs with the dashes stripped. */
+function codeBuddyId(): string {
+  return randomUUID().replace(/-/gu, '');
+}
+
+/**
+ * True when this request continues the current user turn rather than starting a
+ * new one. The official client keeps one conversation request id for the whole
+ * tool loop and only rotates it on a new user turn, so a trailing tool result -
+ * or an assistant message that is still waiting on its tool calls - must reuse
+ * the cached id.
+ */
+function codeBuddyContinuesTurn(body: Record<string, unknown>): boolean {
+  const messages = body.messages;
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  const last = messages[messages.length - 1];
+  if (!last || typeof last !== 'object' || Array.isArray(last)) return false;
+  const entry = last as Record<string, unknown>;
+  const role = typeof entry.role === 'string' ? entry.role : '';
+  if (role === 'tool' || role === 'function') return true;
+  if (role !== 'assistant') return false;
+  return Array.isArray(entry.tool_calls) || entry.function_call !== undefined;
+}
+
+/**
+ * Stable conversation key for round grouping. A scoped execution id is the
+ * exact caller-supplied conversation scope; without one the conversation is
+ * keyed by a digest of everything up to and including its first user message.
+ * That prefix never changes while the tool loop and later turns append to the
+ * same history, and it still separates two conversations that merely share a
+ * system prompt. No message content is retained.
+ */
+function codeBuddyConversationKey(executionId: string | undefined, body: Record<string, unknown>): string {
+  if (executionId !== undefined) return `execution:${executionId}`;
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const firstUser = messages.findIndex(
+    (entry) =>
+      entry !== null &&
+      typeof entry === 'object' &&
+      !Array.isArray(entry) &&
+      (entry as Record<string, unknown>).role === 'user',
+  );
+  const prefix = messages.slice(0, firstUser >= 0 ? firstUser + 1 : 1);
+  return `prefix:${createHash('sha256').update(JSON.stringify(prefix)).digest('hex')}`;
+}
+
 type CodeBuddyProviderAccount = NonNullable<CodeBuddyProviderProduct['account']>;
 
 export function createCodeBuddyRuntime(
@@ -185,8 +248,81 @@ export function createCodeBuddyRuntime(
     return last;
   }
 
+  /**
+   * Conversation round identity for one CodeBuddy request. Entries expire so a
+   * long-idle client starts a new round instead of being folded into a stale
+   * one, and the map is bounded so an unbounded client population cannot grow
+   * it without limit. The cache lives with the supplier runtime, not the
+   * Gateway.
+   */
+  const rounds = new Map<string, CodeBuddyRound>();
+  const round = (key: string, continuesTurn: boolean, nowMs: number): CodeBuddyRound => {
+    for (const [entryKey, entry] of rounds) {
+      if (nowMs - entry.lastSeenMs > CODEBUDDY_ROUND_TTL_MS) rounds.delete(entryKey);
+    }
+    const existing = rounds.get(key);
+    const next: CodeBuddyRound = existing !== undefined
+      ? {
+          conversationId: existing.conversationId,
+          conversationRequestId: continuesTurn ? existing.conversationRequestId : codeBuddyId(),
+          lastSeenMs: nowMs,
+        }
+      : { conversationId: codeBuddyId(), conversationRequestId: codeBuddyId(), lastSeenMs: nowMs };
+    // Re-inserting refreshes the key's position, so the size trim below evicts
+    // the least recently used conversation rather than the oldest one still in
+    // active use.
+    rounds.delete(key);
+    rounds.set(key, next);
+    while (rounds.size > CODEBUDDY_ROUND_CACHE_LIMIT) {
+      const oldest = rounds.keys().next();
+      if (oldest.done || oldest.value === key) break;
+      rounds.delete(oldest.value);
+    }
+    return next;
+  };
+
   return {
     canonicalizeModel: routing.canonicalizeCodeBuddyObservedModelId,
+    /**
+     * Reproduce the official client's Chat Completions identity: product
+     * headers, the requested-with marker, and the per-turn conversation round
+     * headers. The Gateway calls this generically through the provider hook and
+     * never knows these headers are CodeBuddy-specific.
+     */
+    async beforeRequest(context: ProviderRequestHookContext): Promise<void> {
+      if (context.protocol !== 'openai_chat') return;
+      if (ready?.identity) {
+        const identity = ready.identity;
+        const incomingAgent = context.headers.get('user-agent');
+        const version = identity.version;
+        const agent = [`${identity.platform}/${version}`, `${identity.productName}/${version}`, incomingAgent]
+          .filter((part): part is string => typeof part === 'string' && part.length > 0)
+          .join(' ');
+        context.headers.set('user-agent', agent);
+        context.headers.set('x-product', identity.deploymentType);
+        context.headers.set('x-ide-type', identity.platform);
+        context.headers.set('x-ide-name', identity.platform);
+        context.headers.set('x-ide-version', version);
+      }
+      context.headers.set('x-requested-with', 'XMLHttpRequest');
+      context.headers.set('x-agent-intent', 'craft');
+      const next = round(
+        codeBuddyConversationKey(context.executionId, context.body),
+        codeBuddyContinuesTurn(context.body),
+        context.nowMs,
+      );
+      const messageId = codeBuddyId();
+      context.headers.set('x-conversation-id', next.conversationId);
+      context.headers.set('x-conversation-request-id', next.conversationRequestId);
+      context.headers.set('x-conversation-message-id', messageId);
+      context.headers.set('x-request-id', messageId);
+    },
+    /** Correct only the CodeBuddy departures from the official Chat contract. */
+    afterResponse(context: ProviderResponseHookContext): ProviderResponseHookResult | undefined {
+      if (context.protocol !== 'openai_chat' || context.status < 400) return undefined;
+      const mapped = codeBuddyProtocolError({ status: context.status, body: context.errorBody });
+      return mapped === undefined ? undefined : { status: mapped.status, errorBody: mapped.body };
+    },
     async credential(): Promise<CodeBuddyCredential | undefined> {
       return (await current())?.credential;
     },

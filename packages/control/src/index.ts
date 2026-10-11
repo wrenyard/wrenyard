@@ -46,10 +46,19 @@ export interface WrenyardIpcRequestOptions {
 /** USD per million tokens: [cached, input, output]. */
 export type WrenyardGatewayModelPricing = readonly [number, number, number];
 
+/** The Gateway protocol entry points a model may be served through. */
+export type WrenyardGatewayProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_messages';
+
 export interface WrenyardGatewayModel {
   id: string;
   publicId: string;
   provider: string;
+  /**
+   * The Gateway protocols this exact model supports, not the provider's blanket
+   * capabilities. A session selects its adapter from this list, by precedence
+   * Chat → Responses → Messages.
+   */
+  protocols: readonly WrenyardGatewayProtocol[];
   displayName: string;
   contextWindow?: number;
   maxTokens?: number;

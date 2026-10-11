@@ -1,40 +1,17 @@
 /**
- * Approximate gateway TPS sampler.
+ * Gateway bridge between a protocol module's translated generation signals and
+ * the shared tokenizer_v1 sampling core in `@wrenyard/agent-client/statistics`.
  *
- * Observes an OpenAI chat-completions SSE body and produces at most one
- * approximate speed sample per upstream response. Output tokens are counted
- * with a fixed cl100k_base tokenizer over only the generation content that was
- * actually observed on the wire: assistant text, visible reasoning, and tool
- * call arguments. Each content channel (text, reasoning) and each tool
- * argument block is accumulated and tokenized once as a whole, so the count is
- * independent of how the stream was segmented into deltas or network chunks.
- * The generation interval runs from the first nonempty delta arrival to the
- * last nonempty delta arrival, so completion latency, trailing usage events,
- * and anything after the last generated token never inflate the denominator.
- *
- * A sample exists only when the response completed successfully: error
- * records, malformed events, data after [DONE], conflicting response ids or
- * models, truncated streams, and multi-choice responses yield no sample.
- * Official usage and
- * billing are never read or altered by this contract.
+ * All wire recognition lives in the protocol modules; this bridge only accepts
+ * protocol-neutral channel deltas and a successful-completion / failure signal,
+ * counts each concatenated channel once through the shared core, and preserves
+ * the Gateway's existing `tokenizer_v1` / `tps_samples` wire contract. It never
+ * parses a protocol event.
  *
  * The clock is injected so sampling is deterministic under test.
  */
-import { getEncoding } from 'js-tiktoken';
-import { SseDataReader } from './sse.ts';
-
-/** Minimum observable generation span for a trustworthy speed sample. */
-const MINIMUM_WINDOW_MS = 100;
-
-/** Fixed tokenizer, created lazily on the first sample. */
-let tokenizer: ReturnType<typeof getEncoding> | undefined;
-
-/** Counts text as ordinary text: special-token lookalikes never throw. */
-function countTokens(text: string): number {
-  if (text === '') return 0;
-  tokenizer ??= getEncoding('cl100k_base');
-  return tokenizer.encode(text, [], []).length;
-}
+import { TpsGenerationCollector } from '@wrenyard/agent-client/statistics';
+import type { TpsSink } from './protocols/types.ts';
 
 export interface ResponseTpsSample {
   response_id: string;
@@ -52,198 +29,67 @@ export interface ResponseTpsContract {
 
 export interface ResponseSamplerOptions {
   now?: () => number;
-  /** Canonicalizes an upstream response model id to the public model id. */
-  normalizeModel?: (model: string) => string;
+  /** The canonical public model id this response was requested as. */
+  model?: string;
 }
 
-/** Accumulates one SSE response; state is discarded when the stream is not a fully successful completion. */
-export class ResponseSampler {
+/**
+ * Consumes the protocol-neutral signals of one upstream response and emits the
+ * Gateway's tokenizer_v1 sample. It is the sink a protocol module's
+ * `TpsTranslator` writes into.
+ */
+export class ResponseSampler implements TpsSink {
   private readonly now: () => number;
-  private readonly normalizeModel: (model: string) => string;
-
-  private model: string | undefined;
+  private readonly model: string;
+  private readonly collector = new TpsGenerationCollector();
   private responseId: string | undefined;
-  private firstDeltaAtMs: number | undefined;
-  private lastDeltaAtMs: number | undefined;
-  private readonly deltaTimestamps = new Set<number>();
-  /** Concatenated per-channel generation content; tokenized once at sample time. */
-  private textContent = '';
-  private reasoningContent = '';
-  private readonly toolArguments = new Map<string, string>();
-  private sawData = false;
-  private sawDone = false;
-  private failed = false;
-  private modelConflict = false;
-  private idConflict = false;
-  private sawNonStreamJson = false;
-  private readonly observedIds = new Set<string>();
-  private readonly observedModels = new Set<string>();
+  private firstTokenAtMs: number | undefined;
+  private completedAtMs: number | undefined;
 
   constructor(options: ResponseSamplerOptions = {}) {
     this.now = options.now ?? (() => Date.now());
-    this.normalizeModel = options.normalizeModel ?? ((model) => model);
+    this.model = options.model ?? '';
   }
 
-  /** Marks a non-event-stream (JSON or opaque) body; such responses yield no sample. */
-  markNonStream(): void {
-    this.sawNonStreamJson = true;
+  /** One nonempty generation delta on a stable, distinct channel. */
+  delta(channel: string, text: string): void {
+    if (text === '') return;
+    const at = this.now();
+    this.firstTokenAtMs ??= at;
+    this.completedAtMs = at;
+    this.collector.observe(channel, text, at);
   }
 
-  private readonly reader = new SseDataReader(payload => this.consumeEvent(payload));
+  /** The protocol's successful completion, carrying the upstream response id when observed. */
+  complete(responseId?: string): void {
+    if (typeof responseId === 'string' && responseId !== '') this.responseId = responseId;
+    this.collector.complete();
+  }
 
-  /** Feeds one raw upstream chunk. */
-  feed(chunk: string): void { this.reader.feed(chunk); }
+  /** An error, cancellation, or truncation: no sample is ever produced. */
+  fail(): void {
+    this.collector.fail();
+  }
 
-  /** Flushes the stream tail; an event left open still terminates the stream. */
-  end(): void { this.reader.end(); }
+  /** The stream ended; a stream that never completed successfully is truncated. */
+  end(): void {
+    if (!this.collector.settled) this.collector.fail();
+  }
 
-  /** Emits the contract when the response succeeded and its window is observable. */
+  /** Emits the unchanged wire contract when a valid, completed window exists. */
   sample(): ResponseTpsContract | undefined {
-    if (!this.sawData || !this.sawDone || this.failed || this.sawNonStreamJson) return undefined;
-    if (this.idConflict || this.modelConflict) return undefined;
-    if (this.responseId === undefined || this.model === undefined) return undefined;
-    if (this.firstDeltaAtMs === undefined || this.lastDeltaAtMs === undefined) return undefined;
-    // A fully buffered or otherwise single-timestamp window carries no timing signal.
-    if (this.deltaTimestamps.size < 2) return undefined;
-    const windowMs = this.lastDeltaAtMs - this.firstDeltaAtMs;
-    if (!Number.isFinite(windowMs) || windowMs < MINIMUM_WINDOW_MS) return undefined;
-    const outputTokens = countTokens(this.textContent) + countTokens(this.reasoningContent)
-      + [...this.toolArguments.values()].reduce((sum, args) => sum + countTokens(args), 0);
-    if (!Number.isSafeInteger(outputTokens) || outputTokens <= 0) {
-      return undefined;
-    }
+    const measured = this.collector.sample();
+    if (!measured || this.responseId === undefined || this.model === '') return undefined;
+    if (this.firstTokenAtMs === undefined || this.completedAtMs === undefined) return undefined;
     return {
       tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: this.responseId,
         model: this.model,
-        output_tokens: outputTokens,
-        first_token_at_ms: this.firstDeltaAtMs,
-        completed_at_ms: this.lastDeltaAtMs,
+        output_tokens: measured.outputTokens,
+        first_token_at_ms: this.firstTokenAtMs,
+        completed_at_ms: this.completedAtMs,
       }],
     };
   }
-
-  /** Parses one complete SSE event's joined data payload. */
-  private consumeEvent(payload: string): void {
-    if (payload === '[DONE]') {
-      this.sawDone = true;
-      return;
-    }
-    // Any further data after the terminal marker invalidates the response.
-    if (this.sawDone) {
-      this.failed = true;
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(payload);
-    } catch {
-      // A malformed data line invalidates the response; never sample a partial.
-      this.failed = true;
-      return;
-    }
-    this.sawData = true;
-    const record = asRecord(parsed);
-    if (!record) {
-      this.failed = true;
-      return;
-    }
-    if (record.error !== undefined && record.error !== null) {
-      this.failed = true;
-      return;
-    }
-
-    const id = record.id;
-    if (typeof id === 'string' && id !== '') {
-      if (this.responseId === undefined) this.responseId = id;
-      this.observedIds.add(id);
-      if (this.observedIds.size > 1) this.idConflict = true;
-    }
-
-    const model = record.model;
-    if (typeof model === 'string' && model !== '') {
-      const normalized = this.normalizeModel(model);
-      if (this.model === undefined) this.model = normalized;
-      this.observedModels.add(normalized);
-      if (this.observedModels.size > 1) this.modelConflict = true;
-    }
-
-    // Official usage passes through untouched; it is never a sampling input.
-
-    // Only a single-choice response has an attributable generation interval.
-    if (Array.isArray(record.choices) && record.choices.length > 1) {
-      this.failed = true;
-      return;
-    }
-    const choices = Array.isArray(record.choices) ? record.choices : [];
-    for (const choice of choices) {
-      const choiceRecord = asRecord(choice);
-      if (!choiceRecord) {
-        this.failed = true;
-        continue;
-      }
-      if (choiceRecord.index !== undefined && choiceRecord.index !== 0) {
-        this.failed = true;
-        continue;
-      }
-      const finish = choiceRecord.finish_reason;
-      if (finish === 'error' || finish === 'content_filter') {
-        this.failed = true;
-        continue;
-      }
-      this.observeDelta(asRecord(choiceRecord.delta));
-    }
-  }
-
-  /** Accumulates one delta's observed generation content and its arrival time. */
-  private observeDelta(delta: Record<string, unknown> | undefined): void {
-    if (!delta) return;
-    let observed = false;
-
-    const content = delta.content;
-    if (typeof content === 'string' && content !== '') {
-      this.textContent += content;
-      observed = true;
-    }
-
-    // Only visible reasoning streams here; hidden reasoning and summaries are
-    // never observed on these channels and so are never counted.
-    for (const field of ['reasoning_content', 'reasoning'] as const) {
-      const value = delta[field];
-      if (typeof value === 'string' && value !== '') {
-        this.reasoningContent += value;
-        observed = true;
-      }
-    }
-
-    const toolCalls = delta.tool_calls;
-    if (Array.isArray(toolCalls)) {
-      for (const call of toolCalls) {
-        const callRecord = asRecord(call);
-        const args = asRecord(callRecord?.function)?.arguments;
-        // A tool call without streamed arguments contributes no tokens.
-        if (typeof args !== 'string' || args === '') continue;
-        const index = callRecord?.index;
-        const key = typeof index === 'number'
-          ? `index:${index}`
-          : typeof callRecord?.id === 'string' && callRecord.id !== '' ? `id:${callRecord.id}` : 'index:0';
-        this.toolArguments.set(key, (this.toolArguments.get(key) ?? '') + args);
-        observed = true;
-      }
-    }
-
-    if (observed) {
-      const atMs = this.now();
-      this.firstDeltaAtMs ??= atMs;
-      this.lastDeltaAtMs = atMs;
-      this.deltaTimestamps.add(atMs);
-    }
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
 }

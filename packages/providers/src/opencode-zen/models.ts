@@ -1,8 +1,24 @@
 import { defineProvider, model, openAI, anthropic, REASONING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
+import type { ProviderRequestHookContext } from '../base/contracts.ts';
+
+/**
+ * The OpenCode service requires the stable OpenCode User-Agent and forwards the
+ * client's session header. Only a well-formed single-line token is forwarded,
+ * so it cannot smuggle extra header lines into the upstream request.
+ */
+function forwardOpenCodeSession(context: ProviderRequestHookContext): void {
+  context.headers.set('user-agent', 'wrenyard');
+  const value = context.requestHeaders['x-opencode-session'];
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256) return;
+  if (value.includes('\r') || value.includes('\n')) return;
+  context.headers.set('x-opencode-session', value);
+}
 
 export const definition = defineProvider({
   id: 'opencode-zen', displayName: 'OpenCode Zen', credentialResolver: 'managed',
   nativeClients: ['opencode'], defaultModel: 'kimi-k3',
+  // Supplier hook: the OpenCode identity and session-header forwarding.
+  beforeRequest: forwardOpenCodeSession,
   models: [
     // Zen free pool: usable only through the genuine OpenCode client
     // transport, so these never appear in the client-agnostic gateway

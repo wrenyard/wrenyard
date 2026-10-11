@@ -18,7 +18,7 @@ import {
 import { ModelCallError, resolveModelMetadata, type CallRole } from './calls.ts';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import { ContextInspector, findCreated, type ContextInspectRequest, type ContextInspection } from './context-inspect.ts';
-import { type ToolCall } from './driver.ts';
+import { type ToolCall } from './transport/index.ts';
 import { isInside, type AttachmentInput, type FileStore } from './media.ts';
 import { messageOf } from './errors.ts';
 import { ActionRunner } from './actions/index.ts';
@@ -620,7 +620,7 @@ class Engine implements Session, SessionCallHost {
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
-      tools?: readonly import('./driver.ts').ToolSpec[];
+      tools?: readonly import('./transport/index.ts').ToolSpec[];
       maxTokens?: number;
       cycle?: number;
     } = {},
@@ -651,12 +651,26 @@ class Engine implements Session, SessionCallHost {
       };
     } catch (error) {
       const reasoning = error instanceof ModelCallError ? error.detail.partialReasoning : undefined;
+      const failure = error instanceof ModelCallError && error.detail.failure !== undefined
+        ? {
+            model: error.detail.model,
+            kind: error.detail.failure.kind,
+            ...(error.detail.failure.status === undefined ? {} : { status: error.detail.failure.status }),
+            message: error.detail.failure.message,
+            // Keep the request count and the retry count as separate facts; do
+            // not derive one from the other.
+            ...(error.detail.attempts === undefined ? {} : { attempts: error.detail.attempts.count }),
+            retries: error.detail.attempts === undefined ? 0 : Math.max(0, error.detail.attempts.count - 1),
+            ...(error.detail.attempts === undefined ? {} : { durationMs: error.detail.attempts.totalMs }),
+          }
+        : undefined;
       return {
         ok: false,
         callId,
         text: '',
         error: messageOf(error),
         ...(reasoning === undefined ? {} : { reasoning }),
+        ...(failure === undefined ? {} : { failure }),
       };
     }
   }

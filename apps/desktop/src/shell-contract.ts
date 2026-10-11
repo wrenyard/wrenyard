@@ -146,6 +146,24 @@ export interface TaskRunSnapshot {
   usage: TaskRunUsage;
 }
 
+/**
+ * Exact-ID task brief for the session metrics panel, projected from the
+ * `task.run.status` result for one dispatched `taskRunId`. Every optional field
+ * stays optional so historical runs and unresolved ids remain valid; `usage`
+ * carries the full per-run projection when the daemon returned one.
+ */
+export interface DesktopTaskBrief {
+  taskRunId: string;
+  /** `task_name`, falling back to `task_id` when the definition declares none. */
+  taskName?: string;
+  /** Task-run status, or `unavailable` when this id could not be resolved. */
+  status: string;
+  /** Resolved client/provider/model label, when a runtime was resolved. */
+  runtime?: string;
+  summary?: string;
+  usage?: TaskRunUsage;
+}
+
 export const ACTIVITY_BAR_WIDTH = 48;
 
 export const SHELL_CHANNELS = {

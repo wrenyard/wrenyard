@@ -30,11 +30,19 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
   const entries = product?.status === 'ready' ? product.entries : [];
   const state = createCodeBuddyModels(entries);
   const runtime = createCodeBuddyRuntime(product, state, options.account);
+  // The supplier request/response hooks (client identity, per-turn round cache,
+  // private-error correction) are part of the registered definition, so the
+  // Gateway executes them generically without any CodeBuddy branch of its own.
+  const definition = {
+    ...state.definition,
+    beforeRequest: (context: Parameters<typeof runtime.beforeRequest>[0]) => runtime.beforeRequest(context),
+    afterResponse: (context: Parameters<typeof runtime.afterResponse>[0]) => runtime.afterResponse(context),
+  };
   return {
-    id: state.definition.id,
-    definition: state.definition,
+    id: definition.id,
+    definition,
     clients: [codeBuddyClient],
-    quota: createCodeBuddyQuota(state.definition),
+    quota: createCodeBuddyQuota(definition),
     credential: runtime.credential,
     resolveModel: (model, credential) => runtime.resolveUpstreamModel(model, credential) ?? model,
     canonicalizeModel: runtime.canonicalizeModel,

@@ -203,7 +203,7 @@ export interface SessionDeleteParams {
 export type SessionDeleteResult = Record<string, never>
 
 /** The gateway protocol a selectable main reasoning model runs through. */
-export type SessionInferenceMode = 'openai_chat' | 'openai_responses'
+export type SessionInferenceMode = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
 
 /**
  * One selectable main-session model row: the shared supply DTO consumed by the

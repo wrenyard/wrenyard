@@ -1,10 +1,11 @@
 /** Desktop transport for daemon-owned sessions. */
 import { isAbsolute } from 'node:path';
 import { dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
-import { WrenyardIpcClient, WrenyardRpcError } from '@wrenyard/control';
+import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderListResult } from '@wrenyard/protocol/provider';
 import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
+import type { TaskRunUsage } from '../shell-contract.js';
 import { toModelEntries } from './model-entries.js';
 import type {
   SessionBridgeEventPayload,
@@ -120,16 +121,45 @@ function taskRuntimeLabel(value: unknown): string | undefined {
   return readString(record.runtime);
 }
 
-function taskUsage(value: unknown): { input?: number; output?: number } | undefined {
+/**
+ * Full per-run usage from the daemon wire, or undefined when the row carries
+ * none. Numeric fields stay absent when the daemon omitted them; only the
+ * identity/completeness fields the schema requires are defaulted.
+ */
+function taskUsage(value: unknown): TaskRunUsage | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const record = value as Record<string, unknown>;
-  const input = readNumber(record.input_tokens);
-  const output = readNumber(record.output_tokens);
-  if (input === undefined && output === undefined) return undefined;
-  return {
-    ...(input === undefined ? {} : { input }),
-    ...(output === undefined ? {} : { output }),
+  const completeness = record.completeness;
+  const usage: TaskRunUsage = {
+    completeness: completeness === 'complete' || completeness === 'partial' || completeness === 'unavailable'
+      ? completeness
+      : 'unavailable',
+    attemptCount: readNumber(record.attempt_count) ?? 0,
+    usageEventCount: readNumber(record.usage_event_count) ?? 0,
+    referenceCostComplete: record.reference_cost_complete === true,
   };
+  const inputTokens = readNumber(record.input_tokens);
+  if (inputTokens !== undefined) usage.inputTokens = inputTokens;
+  const cachedInputTokens = readNumber(record.cached_input_tokens);
+  if (cachedInputTokens !== undefined) usage.cachedInputTokens = cachedInputTokens;
+  const cacheReadInputTokens = readNumber(record.cache_read_input_tokens);
+  if (cacheReadInputTokens !== undefined) usage.cacheReadInputTokens = cacheReadInputTokens;
+  const cacheCreationInputTokens = readNumber(record.cache_creation_input_tokens);
+  if (cacheCreationInputTokens !== undefined) usage.cacheCreationInputTokens = cacheCreationInputTokens;
+  const outputTokens = readNumber(record.output_tokens);
+  if (outputTokens !== undefined) usage.outputTokens = outputTokens;
+  const totalTokens = readNumber(record.total_tokens);
+  if (totalTokens !== undefined) usage.totalTokens = totalTokens;
+  const generationMs = readNumber(record.generation_ms);
+  if (generationMs !== undefined) usage.generationMs = generationMs;
+  const outputTps = readNumber(record.output_tps);
+  if (outputTps !== undefined) usage.outputTps = outputTps;
+  if (record.tps_contract === 'tokenizer_v1') usage.tpsContract = 'tokenizer_v1';
+  const referenceCostUsd = readNumber(record.reference_cost_usd);
+  if (referenceCostUsd !== undefined) usage.referenceCostUsd = referenceCostUsd;
+  const referenceCostBasis = readString(record.reference_cost_basis);
+  if (referenceCostBasis !== undefined) usage.referenceCostBasis = referenceCostBasis;
+  return usage;
 }
 
 /** Map a daemon `task.run.status` result into a renderer brief. */
@@ -279,8 +309,16 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
   handle(SESSION_CHANNELS.create, () => request('session.create', {}));
   handle(SESSION_CHANNELS.send, (_event, value) => request('session.send', value));
   handle(SESSION_CHANNELS.interrupt, async (_event, value) => { await request('session.interrupt', value); });
-  handle(SESSION_CHANNELS.models, async () =>
-    toModelEntries(await request<ProviderListResult>('provider.list', {})));
+  handle(SESSION_CHANNELS.models, async () => {
+    // The Provider list carries configured eligibility and display metadata;
+    // the Gateway connection carries each model's own protocols, which is the
+    // only source for the model's session protocol.
+    const [providers, connection] = await Promise.all([
+      request<ProviderListResult>('provider.list', {}),
+      request<WrenyardGatewayConnection>('gateway.connection', {}),
+    ]);
+    return toModelEntries(providers, connection.models);
+  });
   handle(SESSION_CHANNELS.context, (_event, value) =>
     request('session.context.inspect', value));
   handle(SESSION_CHANNELS.routesPreview, (_event, value) =>

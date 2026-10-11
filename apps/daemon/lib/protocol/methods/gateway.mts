@@ -12,6 +12,8 @@ export interface GatewayConnectionResult {
     id: string
     publicId: string
     provider: string
+    /** Gateway protocols this exact model supports; the session picks its adapter from this list. */
+    protocols: readonly ('openai_chat' | 'openai_responses' | 'anthropic_messages')[]
     displayName: string
     contextWindow?: number
     maxTokens?: number
@@ -50,9 +52,10 @@ export const gatewayConnectionResultSchema = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['id', 'publicId', 'provider', 'displayName', 'intelligence', 'reasoningEfforts'],
+        required: ['id', 'publicId', 'provider', 'protocols', 'displayName', 'intelligence', 'reasoningEfforts'],
         properties: {
           id: { type: 'string' }, publicId: { type: 'string' }, provider: { type: 'string' },
+          protocols: { type: 'array', minItems: 1, uniqueItems: true, items: { enum: ['openai_chat', 'openai_responses', 'anthropic_messages'] } },
           displayName: { type: 'string' }, contextWindow: { type: 'integer', minimum: 1 }, maxTokens: { type: 'integer', minimum: 1 },
           taskOnly: { type: 'boolean' }, family: { const: 'claude' },
           claudeTier: { enum: ['haiku', 'sonnet', 'opus'] }, supports1MContext: { type: 'boolean' },
