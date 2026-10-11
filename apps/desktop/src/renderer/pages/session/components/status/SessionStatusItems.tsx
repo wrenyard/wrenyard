@@ -1,22 +1,28 @@
-import { Fragment, useCallback, useMemo, useState, type ReactNode } from 'react';
-import { Coins, DatabaseZap, Zap } from 'lucide-react';
+import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
+import { ChevronRight, Coins, DatabaseZap, Zap } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/renderer/components/ui/popover';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { StatusBarButton, levelTone } from '@/renderer/components/status-bar-button';
 import { StatusBarGroup, type StatusBarSegment } from '@/renderer/components/status-bar-group';
+import { Separator } from '@/renderer/components/ui/separator';
+import { TokenBar, type TokenBarSegment } from '@/renderer/components/usage/TokenBar';
 import { UsageRing, usageRingLevel, type UsageRingStatus } from '@/renderer/components/usage/UsageRing';
 import { AnimatedNumber } from '@/renderer/components/AnimatedNumber';
 import { useStatusBarItem } from '@/renderer/lib/statusbar';
-import { formatCount, formatRatio, formatTokenCount } from '@/renderer/lib/format';
+import { formatCost, formatElapsedMs, formatRatio, formatTokenCount } from '@/renderer/lib/format';
+import { useQuotaQuery } from '@/renderer/lib/queries';
 import type { ContextInspection } from '@/shell-contract';
 import {
   mainSpeed,
-  mainSpeedSeries,
+  callModelGroups,
+  metricClusters,
   roleContexts,
+  taskModelGroups,
   type ConsumptionRow,
+  type MetricCluster,
+  type SessionCostEstimate,
+  type TaskModelGroup,
   type ContextBudgetView,
   type RoleContextEntry,
-  type SessionTaskRow,
   type UsageGroupView,
 } from '../../model/usage.js';
 import { useSessionUsage } from '../../state/session-usage.js';
@@ -41,7 +47,29 @@ export function SessionStatusItems() {
 
   const calls = useMemo(() => turns.flatMap((turn) => turn.calls), [turns]);
   const speed = useMemo(() => mainSpeed(calls), [calls]);
-  const speedSeries = useMemo(() => mainSpeedSeries(calls), [calls]);
+  const quota = useQuotaQuery();
+  const dispatches = useMemo(
+    () => turns.flatMap((turn) => turn.actions.filter((action) => action.kind === 'dispatch')),
+    [turns],
+  );
+  const clusters = useMemo(
+    () => metricClusters(calls, consumption.tasks, dispatches, quota.data),
+    [calls, consumption.tasks, dispatches, quota.data],
+  );
+  const taskGroups = useMemo(
+    () => taskModelGroups(consumption.tasks, dispatches),
+    [consumption.tasks, dispatches],
+  );
+  // Calls priced per `provider/model` route, then grouped by model display name.
+  const callGroups = useMemo(() => {
+    const nameOf = (publicId: string): string => models.find((entry) => entry.publicId === publicId)?.displayName ?? shortModel(publicId);
+    const grouped = (role: 'reason' | 'aux'): TaskModelGroup[] => callModelGroups(
+      calls.filter((call) => (role === 'reason' ? call.role === 'reason' : call.role !== 'reason')),
+      quota.data,
+      nameOf,
+    );
+    return { reason: grouped('reason'), aux: grouped('aux') };
+  }, [calls, quota.data, models]);
   // One entry per internal LLM conversation; the reason role carries the live
   // budget total (inspection total plus draft input) that blocks sending, and
   // every auxiliary role the preview lists appears even before its first call.
@@ -82,10 +110,10 @@ export function SessionStatusItems() {
     render: () => (
       <MetricsStatusItem
         speed={speed}
-        speedSeries={speedSeries}
-        rows={consumption.rows}
         sum={consumption.sum}
-        tasks={consumption.tasks}
+        clusters={clusters}
+        taskGroups={taskGroups}
+        callGroups={callGroups}
         missingTasks={consumption.missingTasks}
         runningTasks={consumption.runningTasks}
       />
@@ -151,23 +179,35 @@ function CtxStatusItem({ budget, groups, roles, inspection, modelName, status, o
 
 interface MetricsStatusItemProps {
   speed: number | undefined;
-  speedSeries: number[];
-  rows: ConsumptionRow[];
   sum: ConsumptionRow;
-  tasks: SessionTaskRow[];
+  clusters: readonly MetricCluster[];
+  taskGroups: readonly TaskModelGroup[];
+  callGroups: { reason: readonly TaskModelGroup[]; aux: readonly TaskModelGroup[] };
   missingTasks: number;
   runningTasks: number;
 }
 
 /**
  * One connected status-bar item (window-chrome spec 4.5) with three segments:
- * generation speed, cache-hit ratio and the session's total tokens. Hovering any
- * segment opens the single read-only metrics panel; the speed icon turns yellow
- * above 100 t/s and blue above 200 t/s while the label text stays muted. Only
- * the values animate, through the shared {@link AnimatedNumber}.
+ * generation speed, main-reasoning cache-hit ratio and the session's total
+ * tokens. Hovering a segment shows a two-line summary; clicking the usage
+ * segment opens the session usage panel with the per-source breakdown. The speed icon turns
+ * yellow above 100 t/s and blue above 200 t/s while the label text stays muted.
+ * Only the segment values animate, through the shared {@link AnimatedNumber}.
  */
-function MetricsStatusItem({ speed, speedSeries, rows, sum, tasks, missingTasks, runningTasks }: MetricsStatusItemProps) {
+function MetricsStatusItem({ speed, sum, clusters, taskGroups, callGroups, missingTasks, runningTasks }: MetricsStatusItemProps) {
+  const [open, setOpen] = useState(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const speedIconClass = speed === undefined ? undefined : speed > 200 ? 'text-sky-500' : speed > 100 ? 'text-warning' : undefined;
+  const reason = clusters.find((cluster) => cluster.key === 'reason');
+  const aux = clusters.find((cluster) => cluster.key === 'aux');
+  const task = clusters.find((cluster) => cluster.key === 'task');
+  // The cache segment tracks main reasoning only: it is the conversation whose
+  // prefix the user's own turns keep extending.
+  const reasonCacheRatio = reason?.cacheRatio;
+  const totals = totalsOf(clusters);
+  const finishedTasks = taskGroups.reduce((count, group) => count + group.count, 0);
+  const average = (ms: number, count: number): string => elapsedText(count > 0 ? ms / count : 0);
 
   const segments: StatusBarSegment[] = [
     {
@@ -180,204 +220,245 @@ function MetricsStatusItem({ speed, speedSeries, rows, sum, tasks, missingTasks,
         </>
       ),
       ariaLabel: '生成速度',
+      tooltip: (
+        <BriefTip
+          title={`推理 ${speedText(speed)} · 平均耗时 ${average(reason?.durationMs ?? 0, reason?.count ?? 0)}`}
+          sub={finishedTasks === 0 ? undefined : `任务 ${speedText(task?.speed)} · 平均耗时 ${average(task?.durationMs ?? 0, finishedTasks)}`}
+        />
+      ),
     },
     {
       key: 'cache',
       icon: DatabaseZap,
-      label: <AnimatedNumber value={sum.cacheRatio} format={formatPercent} />,
-      ariaLabel: '缓存命中',
+      label: <AnimatedNumber value={reasonCacheRatio} format={formatPercent} />,
+      ariaLabel: '推理缓存命中',
+      tooltip: (
+        <BriefTip
+          title={`推理缓存命中 ${formatRatio(reasonCacheRatio)}`}
+          sub={`辅助 ${formatRatio(aux?.cacheRatio)} · 任务 ${formatRatio(task?.cacheRatio)}`}
+        />
+      ),
     },
     {
       key: 'stats',
       icon: Coins,
       label: <AnimatedNumber value={sum.total} format={formatTokenCount} />,
       ariaLabel: '会话用量',
+      onClick: () => setOpen((value) => !value),
+      tooltip: (
+        <BriefTip
+          title={`用量 ${formatTokenCount(totals.total)}${approxCost(totals.cost)}`}
+          sub={`缓存 ${formatTokenCount(totals.cached)} · 输入 ${formatTokenCount(totals.fresh)} · 输出 ${formatTokenCount(totals.output)}`}
+        />
+      ),
     },
   ];
 
   return (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex" />}>
+    // The group anchors the panel, but only the usage segment opens it: an open
+    // request coming from the trigger itself is ignored, a close request is kept.
+    <Popover open={open} onOpenChange={(next) => { if (!next) setOpen(false); }}>
+      <PopoverTrigger nativeButton={false} render={<span className="inline-flex" />}>
         <StatusBarGroup segments={segments} ariaLabel="会话指标" />
-      </TooltipTrigger>
-      <TooltipContent side="top" align="end" className="max-w-none items-stretch px-3 py-2">
-        <SessionMetricsPanel
-          speed={speed}
-          speedSeries={speedSeries}
-          rows={rows}
-          sum={sum}
-          tasks={tasks}
-          missingTasks={missingTasks}
-          runningTasks={runningTasks}
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="w-[360px] p-0" initialFocus={panelRef}>
+        <SessionUsagePanel
+          rootRef={panelRef}
+          clusters={clusters}
+          groups={{ ...callGroups, task: taskGroups }}
+          note={taskNoteOf(runningTasks, missingTasks)}
         />
-      </TooltipContent>
-    </Tooltip>
+      </PopoverContent>
+    </Popover>
   );
 }
 
-interface SessionMetricsPanelProps {
-  speed: number | undefined;
-  speedSeries: number[];
-  rows: readonly ConsumptionRow[];
-  sum: ConsumptionRow;
-  tasks: readonly SessionTaskRow[];
-  missingTasks: number;
-  runningTasks: number;
+/** `2 个任务进行中 · 1 个任务缺数据`, or undefined when neither applies. */
+function taskNoteOf(runningTasks: number, missingTasks: number): string | undefined {
+  const parts: string[] = [];
+  if (runningTasks > 0) parts.push(`${runningTasks} 个任务进行中`);
+  if (missingTasks > 0) parts.push(`${missingTasks} 个任务缺数据`);
+  return parts.length === 0 ? undefined : parts.join(' · ');
+}
+
+/** A two-line hover summary: the figure on top, a muted line of detail below. */
+function BriefTip({ title, sub }: { title: string; sub?: string }) {
+  return (
+    <div className="flex flex-col gap-0.5 py-0.5 text-xs tabular-nums" data-slot="session-metric-tip">
+      <span>{title}</span>
+      {sub === undefined ? null : <span className="text-background/60">{sub}</span>}
+    </div>
+  );
+}
+
+/** ` ≈ $0.0123` after a figure (`≥` when only partly priced); empty when nothing is priced. */
+function approxCost(cost: SessionCostEstimate): string {
+  if (cost.value === undefined) return '';
+  return ` ${cost.partial ? '≥' : '≈'} ${formatCost(cost.value)}`;
+}
+
+/** Colours of the three token kinds, shared by every bar and the legend. */
+const TOKEN_COLORS = { cached: 'var(--chart-2)', fresh: 'var(--chart-1)', output: 'var(--chart-4)' } as const;
+
+/** Cached input, fresh input and output as coloured bar segments. */
+function tokenSegments(input: number, output: number, cached: number): TokenBarSegment[] {
+  return [
+    { id: 'cached', label: '缓存', tokens: cached, color: TOKEN_COLORS.cached },
+    { id: 'fresh', label: '输入', tokens: Math.max(0, input - cached), color: TOKEN_COLORS.fresh },
+    { id: 'output', label: '输出', tokens: output, color: TOKEN_COLORS.output },
+  ];
+}
+
+interface SessionTotals {
+  total: number;
+  cached: number;
+  fresh: number;
+  output: number;
+  cost: SessionCostEstimate;
+}
+
+/** Session totals as the sum of the clusters, so the panel's rows add up to them. */
+function totalsOf(clusters: readonly MetricCluster[]): SessionTotals {
+  let input = 0;
+  let output = 0;
+  let cached = 0;
+  for (const cluster of clusters) {
+    input += cluster.input;
+    output += cluster.output;
+    cached += cluster.cached;
+  }
+  const priced = clusters.filter((cluster) => cluster.cost.value !== undefined);
+  return {
+    total: input + output,
+    cached,
+    fresh: Math.max(0, input - cached),
+    output,
+    cost: {
+      value: priced.length === 0 ? undefined : priced.reduce((sum, cluster) => sum + (cluster.cost.value ?? 0), 0),
+      partial: clusters.some((cluster) => cluster.cost.partial || (cluster.cost.value === undefined && cluster.input + cluster.output > 0)),
+    },
+  };
+}
+
+/** `推理（7）`: the source with its number of requests, or of tasks for the task source. */
+function sourceTitle(label: string, cluster: MetricCluster | undefined): string {
+  return cluster === undefined || cluster.count === 0 ? label : `${label}（${cluster.count}）`;
+}
+
+const speedText = (speed: number | undefined): string => (speed === undefined ? '—' : `${Math.round(speed)} t/s`);
+const elapsedText = (ms: number): string => (ms > 0 ? formatElapsedMs(ms) : '—');
+
+/** `$0.0123`, prefixed with `≥` when part of the row has no known price; an em dash when nothing is priced. */
+function costLabel(cost: SessionCostEstimate): string {
+  if (cost.value === undefined) return '—';
+  return `${cost.partial ? '≥' : ''}${formatCost(cost.value)}`;
+}
+
+/** `chatgpt/gpt-6-astra` → `gpt-6-astra`; other labels are shown as they are. */
+function shortModel(model: string): string {
+  const separator = model.indexOf('/');
+  return separator > 0 && separator < model.length - 1 ? model.slice(separator + 1) : model;
+}
+
+const NO_COST: SessionCostEstimate = { value: undefined, partial: false };
+
+interface SourceSectionProps {
+  label: string;
+  /** The featured section renders its title and bar larger. */
+  featured?: boolean;
+  cluster: MetricCluster | undefined;
+  /** The source's requests grouped by model; a non-empty list makes the section expandable. */
+  groups: readonly TaskModelGroup[];
+  /** Always list the model rows, with no toggle. */
+  alwaysExpanded?: boolean;
 }
 
 /**
- * The combined metrics hover panel (session metrics spec), shared by all three
- * segments. It is read-only — no segment click action — and styled like the
- * inverse quota tips: dark surface, grouped sections and proportional bars.
+ * One source of the usage panel: a title line with the source's request count,
+ * tokens and estimated cost, and a bar splitting cached input, fresh input and
+ * output. The title expands the section into one row per model, unless the
+ * section always lists them.
  */
-function SessionMetricsPanel({ speed, speedSeries, rows, sum, tasks, missingTasks, runningTasks }: SessionMetricsPanelProps) {
+function SourceSection({ label, featured, cluster, groups, alwaysExpanded }: SourceSectionProps) {
+  const [toggled, setExpanded] = useState(false);
+  const expanded = alwaysExpanded === true || toggled;
+  const input = cluster?.input ?? 0;
+  const output = cluster?.output ?? 0;
+  const emphasis = featured === true ? 'text-sm font-medium' : 'font-medium';
+  const title = sourceTitle(label, cluster);
   return (
-    <div className="flex w-[460px] flex-col gap-2.5 text-xs tabular-nums" data-slot="session-metrics-panel">
-      <div className="grid grid-cols-3 gap-3">
-        <OverviewValue
-          label="速度"
-          scope="主推理最近 5 次"
-          value={
-            <>
-              <AnimatedNumber value={speed} format={formatSpeed} /> <span className="text-sm text-background/60">t/s</span>
-            </>
-          }
-        >
-          <Sparkline values={speedSeries} />
-        </OverviewValue>
-        <OverviewValue label="缓存命中" scope="整个会话" value={<AnimatedNumber value={sum.cacheRatio} format={formatPercent} />} />
-        <OverviewValue label="用量" scope="整个会话" value={<AnimatedNumber value={sum.total} format={formatTokenCount} />} />
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-baseline gap-2">
+        {groups.length === 0 || alwaysExpanded === true ? <span className={emphasis}>{title}</span> : (
+          <button
+            type="button"
+            className={`inline-flex items-center gap-0.5 rounded-sm hover:text-muted-foreground ${emphasis}`}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {title}
+            <ChevronRight className={`size-3 text-muted-foreground transition-transform ${expanded ? 'rotate-90' : ''}`} aria-hidden="true" />
+          </button>
+        )}
+        <span className="flex-1" />
+        <span className={emphasis}>{formatTokenCount(input + output)}</span>
+        <span className="w-16 text-right text-muted-foreground">{costLabel(cluster?.cost ?? NO_COST)}</span>
       </div>
-      <MetricsTable rows={rows} sum={sum} />
-      {tasks.length > 0 ? <TaskList tasks={tasks} /> : null}
-      {missingTasks > 0 || runningTasks > 0 ? (
-        <p className="text-background/60">
-          {runningTasks > 0 ? `${runningTasks} 个任务进行中` : ''}
-          {runningTasks > 0 && missingTasks > 0 ? ' · ' : ''}
-          {missingTasks > 0 ? `${missingTasks} 个任务缺数据` : ''}
-        </p>
-      ) : null}
+      <TokenBar segments={tokenSegments(input, output, cluster?.cached ?? 0)} className={featured === true ? 'h-2' : undefined} />
+      {expanded ? groups.map((group) => (
+        <div key={group.model} className="flex items-baseline gap-2">
+          <span className="min-w-0 truncate">{group.model === '' ? '未知模型' : group.model}</span>
+          <span className="shrink-0 text-muted-foreground">×{group.count}</span>
+          <span className="flex-1" />
+          <span className="shrink-0">{formatTokenCount(group.input + group.output)}</span>
+          <span className="w-16 shrink-0 text-right text-muted-foreground">{costLabel(group.cost)}</span>
+        </div>
+      )) : null}
     </div>
   );
 }
 
-/** One overview figure with its label, scope note and optional extra content. */
-function OverviewValue({ label, scope, value, children }: { label: string; scope: string; value: ReactNode; children?: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-background/60">{label}</span>
-      <span className="text-base font-medium">{value}</span>
-      <span className="text-background/60">{scope}</span>
-      {children}
-    </div>
-  );
+interface SessionUsagePanelProps {
+  clusters: readonly MetricCluster[];
+  /** Each source's requests grouped by model. */
+  groups: { reason: readonly TaskModelGroup[]; aux: readonly TaskModelGroup[]; task: readonly TaskModelGroup[] };
+  note: string | undefined;
+  /** The panel root, focused when the popover opens so no toggle shows a focus ring. */
+  rootRef: RefObject<HTMLDivElement | null>;
 }
 
-/** Mini main-reasoning speed trend; absent until two samples exist. */
-function Sparkline({ values }: { values: readonly number[] }) {
-  if (values.length < 2) return null;
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const span = max - min || 1;
-  const width = 128;
-  const height = 20;
-  const step = width / (values.length - 1);
-  const points = values
-    .map((value, index) => `${(index * step).toFixed(1)},${(height - ((value - min) / span) * height).toFixed(1)}`)
-    .join(' ');
+/**
+ * The session usage panel opened from the status bar's usage segment. Main
+ * reasoning leads, followed by auxiliary calls and dispatched tasks in the same
+ * shape: request count, tokens, estimated cost and a token-mix bar, each
+ * expandable into one row per model. A legend with the session's three token
+ * totals closes the panel.
+ */
+function SessionUsagePanel({ clusters, groups, note, rootRef }: SessionUsagePanelProps) {
+  const totals = totalsOf(clusters);
+  const find = (key: MetricCluster['key']): MetricCluster | undefined => clusters.find((cluster) => cluster.key === key);
+
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="mt-0.5 text-background/60" aria-hidden="true">
-      <polyline points={points} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** The per-source detail table: a `合计` row first, then one row per source. */
-function MetricsTable({ rows, sum }: { rows: readonly ConsumptionRow[]; sum: ConsumptionRow }) {
-  return (
-    <div className="grid grid-cols-[auto_auto_auto_auto_auto_auto_auto] items-center gap-x-3 gap-y-1">
-      <span className="text-background/60">来源</span>
-      <span className="text-right text-background/60">次数</span>
-      <span className="text-right text-background/60">速度</span>
-      <span className="text-right text-background/60">输入</span>
-      <span className="text-right text-background/60">输出</span>
-      <span className="text-right text-background/60">缓存命中</span>
-      <span className="text-right text-background/60">总量</span>
-
-      <span className="font-medium">合计</span>
-      <span className="text-right font-medium">{formatCount(sum.calls)}</span>
-      <span className="text-right font-medium">{speedCell(sum.speed)}</span>
-      <span className="text-right font-medium">{formatTokenCount(sum.input)}</span>
-      <span className="text-right font-medium">{formatTokenCount(sum.output)}</span>
-      <span className="flex items-center justify-end gap-1">
-        <span>{formatRatio(sum.cacheRatio)}</span>
-        <ShareBar ratio={sum.cacheRatio} />
-      </span>
-      <span className="flex items-center justify-end gap-1">
-        <span>{formatTokenCount(sum.total)}</span>
-        <ShareBar ratio={1} />
-      </span>
-
-      {rows.map((row) => (
-        <Fragment key={row.key}>
-          <span>
-            {row.key === 'task' ? `${row.label}（${row.calls}）` : row.label}
-            {row.partial === true ? <span className="text-background/60"> *</span> : null}
+    <div ref={rootRef} tabIndex={-1} className="flex flex-col gap-3 p-3 text-xs tabular-nums outline-none" data-slot="session-usage-panel">
+      <SourceSection featured alwaysExpanded label="推理" cluster={find('reason')} groups={groups.reason} />
+      <Separator />
+      <SourceSection label="辅助" cluster={find('aux')} groups={groups.aux} />
+      <SourceSection label="任务" cluster={find('task')} groups={groups.task} />
+      <Separator />
+      <div className="flex items-center gap-3 text-muted-foreground">
+        {([['缓存', TOKEN_COLORS.cached, totals.cached], ['输入', TOKEN_COLORS.fresh, totals.fresh], ['输出', TOKEN_COLORS.output, totals.output]] as const).map(([label, color, value]) => (
+          <span key={label} className="inline-flex items-center gap-1">
+            <span className="size-2 rounded-[2px]" style={{ backgroundColor: color }} aria-hidden="true" />
+            {label}
+            <span className="text-foreground">{formatTokenCount(value)}</span>
           </span>
-          <span className="text-right">{formatCount(row.calls)}</span>
-          <span className="text-right">{speedCell(row.speed)}</span>
-          <span className="text-right">{formatTokenCount(row.input)}</span>
-          <span className="text-right">{formatTokenCount(row.output)}</span>
-          <span className="flex items-center justify-end gap-1">
-            <span>{formatRatio(row.cacheRatio)}</span>
-            <ShareBar ratio={row.cacheRatio} />
-          </span>
-          <span className="flex items-center justify-end gap-1">
-            <span>{formatTokenCount(row.total)}</span>
-            <ShareBar ratio={sum.total > 0 ? row.total / sum.total : undefined} />
-          </span>
-        </Fragment>
-      ))}
+        ))}
+        <span className="flex-1" />
+        <span className="text-foreground">{costLabel(totals.cost)}</span>
+      </div>
+      {note === undefined ? null : <span className="text-muted-foreground">{note}</span>}
     </div>
   );
-}
-
-/** The newest five dispatched tasks, each with a title, model, total and speed. */
-function TaskList({ tasks }: { tasks: readonly SessionTaskRow[] }) {
-  const visible = tasks.slice(0, 5);
-  const rest = tasks.length - visible.length;
-  return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-3 gap-y-1">
-      <span className="text-background/60">任务</span>
-      <span className="text-right text-background/60">模型</span>
-      <span className="text-right text-background/60">总量</span>
-      <span className="text-right text-background/60">速度</span>
-      {visible.map((task) => (
-        <Fragment key={task.taskRunId}>
-          <span className="truncate">{task.title}</span>
-          <span className="max-w-[120px] truncate text-background/60">{task.model ?? '—'}</span>
-          <span className="text-right">{formatTokenCount(task.total)}</span>
-          <span className="text-right">{speedCell(task.speed)}</span>
-        </Fragment>
-      ))}
-      {rest > 0 ? <span className="col-span-4 text-background/60">其余 {rest} 个</span> : null}
-    </div>
-  );
-}
-
-/** Proportional bar for a cache ratio or a share of the session total. */
-function ShareBar({ ratio }: { ratio: number | undefined }) {
-  const pct = ratio === undefined || !Number.isFinite(ratio) ? 0 : Math.max(0, Math.min(1, ratio)) * 100;
-  return (
-    <span className="relative inline-flex h-1 w-10 shrink-0 overflow-hidden rounded-full bg-background/20" aria-hidden="true">
-      <span className="absolute inset-y-0 left-0 rounded-full bg-background/80" style={{ width: `${pct}%` }} />
-    </span>
-  );
-}
-
-/** A speed column cell: whole tokens per second, or an em dash without samples. */
-function speedCell(speed: number | undefined): string {
-  return speed === undefined ? '—' : String(Math.round(speed));
 }
 
 /** Segment speed text without the unit; the caller appends `t/s`. */
