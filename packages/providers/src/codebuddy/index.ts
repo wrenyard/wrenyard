@@ -9,6 +9,12 @@ export interface CodeBuddyOptions {
   product?: CodeBuddyProviderProduct;
   /** @deprecated Prefer product.entries. Kept so callers can pass an already parsed model list. */
   productModels?: readonly CodeBuddyProductModelEntry[];
+  /**
+   * Loader of the current signed-in account, called on every credential read so
+   * a rotated token is picked up without restarting. Absent means the product
+   * snapshot account is used.
+   */
+  account?: () => Promise<CodeBuddyProviderProduct['account'] | undefined>;
 }
 
 export interface CodeBuddy extends Provider {
@@ -23,7 +29,7 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
     : undefined);
   const entries = product?.status === 'ready' ? product.entries : [];
   const state = createCodeBuddyModels(entries);
-  const runtime = createCodeBuddyRuntime(product, state);
+  const runtime = createCodeBuddyRuntime(product, state, options.account);
   return {
     id: state.definition.id,
     definition: state.definition,
