@@ -5,7 +5,6 @@
  * either an SSE stream or, when the Gateway ignores `stream`, one JSON
  * completion. It owns no retry and performs no fetch.
  */
-import { TpsGenerationCollector } from '@wrenyard/agent-client/statistics';
 import {
   numberField,
   parseToolArguments,
@@ -24,7 +23,8 @@ import {
   type ToolSpec,
   type Usage,
 } from '../protocol.ts';
-import { abortError, classifyOfficialError, describeFailure, incompleteStreamError, networkError, streamError, upstreamErrorIdentity } from '../errors.ts';
+import { abortError, classifyOfficialError, describeFailure, incompleteStreamError, streamError, upstreamErrorIdentity } from '../errors.ts';
+import { readSseStream } from '../shared-sse-reader.ts';
 
 /** Hard byte cap for one serialized chat request body (64 MiB). */
 export const CHAT_REQUEST_MAX_BYTES = 64 * 1024 * 1024;
@@ -130,43 +130,6 @@ function contentParts(content: string | ModelContentPart[]): ModelContentPart[] 
   return typeof content === 'string' ? [{ type: 'text', text: content }] : content;
 }
 
-/** Read one completion: SSE when the Gateway streams, JSON otherwise. */
-async function readChat(response: Response, request: ModelRequest, emit: AdapterEmit): Promise<Completion> {
-  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
-  if (!contentType.includes('text/event-stream')) return readJsonChat(response, emit);
-  return readStreamChat(response, request, emit);
-}
-
-/** Non-stream fallback: one complete chat completion payload. */
-async function readJsonChat(response: Response, emit: AdapterEmit): Promise<Completion> {
-  const payload = await response.json().catch((error: unknown) => { if (error instanceof SyntaxError) return undefined; throw error; });
-  const root = record(payload);
-  if (!root) throw new Error('Model response was not valid JSON');
-  // Only a non-null official error object is an error; a null `error` is not.
-  const failure = record(root.error);
-  if (failure) {
-    const identity = upstreamErrorIdentity(root);
-    throw streamError({ kind: classifyOfficialError(identity.type, identity.code), message: describeFailure(failure, 'Model request failed'), upstream: identity, headers: response.headers });
-  }
-  const choice = firstChoice(root);
-  const message = choice ? record(choice.message) : undefined;
-  const toolCalls = message ? toolCallsOfMessage(message.tool_calls) : [];
-  const text = message ? stringField(message.content) ?? '' : '';
-  const reasoning = message ? reasoningField(message) : undefined;
-  if (text) emit.text(text);
-  if (reasoning) emit.reasoning(reasoning);
-  for (const call of toolCalls) emit.toolCall(call);
-  const usage = usageOf(root);
-  if (usage) emit.usage(usage);
-  return {
-    text,
-    ...(reasoning ? { reasoning } : {}),
-    ...(usage ? { usage } : {}),
-    toolCalls,
-    ...(choice === undefined ? {} : { finishReason: finishReasonOf(stringField(choice.finish_reason), toolCalls.length) }),
-  };
-}
-
 /** Per-index accumulation of raw id, name and argument fragments. */
 interface ToolCallState {
   parts: { id: string; name: string; arguments: string }[];
@@ -184,72 +147,29 @@ interface StreamState {
   toolCalls: ToolCallState;
   /** Response headers, so an in-stream error keeps the upstream retry hints. */
   headers: Headers;
-  /** Shared protocol-neutral tokenizer_v1 collector for this attempt's stream. */
-  tps: TpsGenerationCollector;
 }
 
-/** Collect a chat SSE body into a {@link Completion}. */
-async function readStreamChat(response: Response, request: ModelRequest, emit: AdapterEmit): Promise<Completion> {
-  const body = response.body;
-  if (!body) throw new Error('Model response is missing a body');
-  const reader = body.getReader();
-  const decoder = new TextDecoder('utf-8');
+/** Collect a chat SSE body into a {@link Completion}. Only `[DONE]` is terminal. */
+async function readChat(response: Response, request: ModelRequest, emit: AdapterEmit): Promise<Completion> {
   const state: StreamState = {
     text: '',
     reasoning: '',
     done: false,
     toolCalls: { parts: [], seen: new Set(), completed: new Set(), calls: [] },
     headers: response.headers,
-    tps: new TpsGenerationCollector(),
   };
-  let buffer = '';
-  const onAbort = (): void => { void reader.cancel().catch(() => undefined); };
-  if (request.signal.aborted) {
-    await reader.cancel().catch(() => undefined);
-    throw abortError();
-  }
-  request.signal.addEventListener('abort', onAbort, { once: true });
-  try {
-    while (!state.done) {
-      // A stream read rejection is a transport I/O failure, not a parse failure;
-      // a frame/JSON parse error below stays a protocol failure.
-      const chunk = await reader.read().catch((error: unknown) => {
-        throw networkError(error, request.signal);
-      });
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      buffer = buffer.replace(/\r\n|\r(?!$)/gu, '\n');
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary !== -1) {
-        const frame = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        consumeFrame(frame, state, emit);
-        if (state.done) break;
-        boundary = buffer.indexOf('\n\n');
-      }
-    }
-    if (!state.done) {
-      buffer += decoder.decode();
-      buffer = buffer.replace(/\r\n?/gu, '\n');
-      if (buffer.trim()) consumeFrame(buffer, state, emit);
-    }
-  } finally {
-    request.signal.removeEventListener('abort', onAbort);
-    await reader.cancel().catch(() => undefined);
-  }
+  await readSseStream(response, request.signal, (frame) => consumeFrame(frame, state, emit), () => state.done);
   if (request.signal.aborted) throw abortError();
   // The Chat protocol is successful only on `[DONE]`; a `finish_reason` alone
   // is a truncated stream, never a silent success.
   if (!state.done) throw incompleteStreamError();
   completeToolCalls(state.toolCalls, emit);
-  const tps = state.tps.sample();
   return {
     text: state.text,
     ...(state.reasoning ? { reasoning: state.reasoning } : {}),
     ...(state.usage ? { usage: state.usage } : {}),
     toolCalls: state.toolCalls.calls,
     ...(state.finishReason === undefined ? {} : { finishReason: state.finishReason }),
-    ...(tps === undefined ? {} : { tps }),
   };
 }
 
@@ -264,7 +184,7 @@ function consumeFrame(frame: string, state: StreamState, emit: AdapterEmit): voi
   if (payload === '[DONE]') {
     state.done = true;
     // Only `[DONE]` is the Chat protocol's successful completion.
-    state.tps.complete();
+    emit.complete();
     return;
   }
   let parsed: unknown;
@@ -280,7 +200,7 @@ function consumeFrame(frame: string, state: StreamState, emit: AdapterEmit): voi
   const failure = record(root.error);
   if (failure) {
     const identity = upstreamErrorIdentity(root);
-    state.tps.fail();
+    emit.fail();
     throw streamError({ kind: classifyOfficialError(identity.type, identity.code), message: describeFailure(failure, 'Model request failed'), upstream: identity, headers: state.headers });
   }
 
@@ -297,7 +217,7 @@ function consumeFrame(frame: string, state: StreamState, emit: AdapterEmit): voi
     state.finishReason = finishReasonOf(finish, state.toolCalls.seen.size);
     // A content_filtered or errored completion is not a clean generation: no
     // speed sample.
-    if (state.finishReason === 'content_filter' || finish === 'error') state.tps.fail();
+    if (state.finishReason === 'content_filter' || finish === 'error') emit.fail();
   }
   // Only a real `delta` frame is streamed generation; a `message` snapshot is
   // never counted by the sampler.
@@ -305,20 +225,20 @@ function consumeFrame(frame: string, state: StreamState, emit: AdapterEmit): voi
   const delta = streamedDelta ?? record(choice.message);
   if (!delta) return;
   const choiceIndex = numberField(choice.index) ?? 0;
-  const sampleAt = streamedDelta ? Date.now() : undefined;
+  const streamed = streamedDelta !== undefined;
 
   const content = stringField(delta.content);
   if (content) {
     state.text += content;
     emit.text(content);
-    if (sampleAt !== undefined) state.tps.observe(`content:${choiceIndex}`, content, sampleAt);
+    if (streamed) emit.generation(`content:${choiceIndex}`, content);
   }
-  accumulateToolCalls(delta.tool_calls, state, choiceIndex, sampleAt, emit);
+  accumulateToolCalls(delta.tool_calls, state, choiceIndex, streamed, emit);
   const reasoning = reasoningField(delta);
   if (reasoning) {
     state.reasoning += reasoning;
     emit.reasoning(reasoning);
-    if (sampleAt !== undefined) state.tps.observe(`reasoning:${choiceIndex}`, reasoning, sampleAt);
+    if (streamed) emit.generation(`reasoning:${choiceIndex}`, reasoning);
   }
 }
 
@@ -341,7 +261,7 @@ function completeToolCall(state: ToolCallState, index: number, emit: AdapterEmit
 }
 
 /** Accumulate streamed native tool-call id, name and argument fragments by index. */
-function accumulateToolCalls(raw: unknown, state: StreamState, choiceIndex: number, sampleAt: number | undefined, emit: AdapterEmit): void {
+function accumulateToolCalls(raw: unknown, state: StreamState, choiceIndex: number, streamed: boolean, emit: AdapterEmit): void {
   if (!Array.isArray(raw)) return;
   for (const entry of raw) {
     const call = record(entry);
@@ -361,22 +281,9 @@ function accumulateToolCalls(raw: unknown, state: StreamState, choiceIndex: numb
     state.toolCalls.seen.add(index);
     // Only raw argument fragments are generation; a completed call is never
     // counted a second time.
-    if (piece !== '' && sampleAt !== undefined) state.tps.observe(`tool:${choiceIndex}:${index}`, piece, sampleAt);
+    if (piece !== '' && streamed) emit.generation(`tool:${choiceIndex}:${index}`, piece);
     completeToolCallsBelow(state.toolCalls, index, emit);
   }
-}
-
-/** Build the completed calls of a non-streamed message, in call order. */
-function toolCallsOfMessage(raw: unknown): ModelToolCall[] {
-  if (!Array.isArray(raw)) return [];
-  const calls: ModelToolCall[] = [];
-  raw.forEach((entry, position) => {
-    const call = record(entry);
-    const index = numberField(call?.index) ?? position;
-    const fn = record(call?.function);
-    calls.push(parseCall(index, stringField(call?.id) ?? `call_${index}`, stringField(fn?.name) ?? '', stringField(fn?.arguments) ?? ''));
-  });
-  return calls;
 }
 
 /** Build one completed call, deriving `parsed`/`parseError` from the raw arguments. */

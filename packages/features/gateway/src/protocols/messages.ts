@@ -39,6 +39,15 @@ function emitMessagesDelta(delta: Record<string, unknown>, index: number, sink: 
 }
 
 /**
+ * True when one Messages record reports a failure: an `error` type or a
+ * non-null `error` field. The usage observer and the TPS translator share this
+ * one condition.
+ */
+function isMessagesFailure(row: Record<string, unknown>): boolean {
+  return row.type === 'error' || (row.error !== undefined && row.error !== null);
+}
+
+/**
  * Anthropic Messages differences: the `/v1/models` list shape, the
  * `{type:"error",error:{type,message}}` envelope, the response `model` position
  * (top level and inside `message`), and usage / completion parsing.
@@ -62,7 +71,7 @@ const adapter: UsageAdapter = {
   terminal: (row) => row.type === 'message_stop',
   // Completion is always a JSON event, never a raw sentinel.
   sentinel: () => false,
-  failure: (row) => row.type === 'error' || (row.error !== undefined && row.error !== null),
+  failure: (row) => isMessagesFailure(row),
   // The official in-stream error event is `{type:"error",error:{type,message}}`.
   // Recognition requires string `error.type` and `error.message`; a frame that
   // does not match is not the official shape. The frame is never rewritten.
@@ -145,7 +154,7 @@ export const messagesProtocol: GatewayProtocolModule = {
           return;
         }
         // The official in-stream error event is `{type:"error",error:{...}}`.
-        if (row.type === 'error' || (row.error !== undefined && row.error !== null)) { sink.fail(); return; }
+        if (isMessagesFailure(row)) { sink.fail(); return; }
         if (row.type === 'message_stop') { sink.complete(responseId === '' ? undefined : responseId); return; }
         if (row.type !== 'content_block_delta') return;
         const delta = object(row.delta);
