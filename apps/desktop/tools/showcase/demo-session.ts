@@ -1333,7 +1333,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       const events = request.sessionId === undefined ? undefined : sessions.get(request.sessionId);
       if (events === undefined) {
         const totalTokens = resident.reduce((sum, layer) => sum + layer.tokens, 0);
-        return { computedAtSeq: 0, estimator: 'cl100k_base', model, layers: resident, items: [], totalTokens };
+        return { computedAtSeq: 0, estimator: 'o200k_base', model, layers: resident, items: [], totalTokens };
       }
       const items = contextItemsFor(events);
       const ctxTokens = items.reduce((sum, item) => sum + item.tokens, 0);
@@ -1346,7 +1346,7 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
       const calibration = lastReasonCalibration(events);
       return {
         computedAtSeq: events.length > 0 ? events[events.length - 1]!.seq : 0,
-        estimator: 'cl100k_base',
+        estimator: 'o200k_base',
         model,
         layers,
         items,

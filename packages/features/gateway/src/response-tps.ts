@@ -16,7 +16,7 @@ import type { TpsSink } from './protocols/types.ts';
 export interface ResponseTpsSample {
   response_id: string;
   model: string;
-  /** cl100k_base approximation over observed generation content only. */
+  /** o200k_base approximation over observed generation content only. */
   output_tokens: number;
   first_token_at_ms: number;
   completed_at_ms: number;

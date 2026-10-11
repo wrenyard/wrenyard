@@ -1170,6 +1170,6 @@ let inputEncoder: Tiktoken | undefined;
 /** Shared raw input estimator; calibration is only a display hint. */
 export function countInputTokens(text: string): number {
   if (text === '') return 0;
-  inputEncoder ??= getEncoding('cl100k_base');
+  inputEncoder ??= getEncoding('o200k_base');
   return inputEncoder.encode(text).length;
 }

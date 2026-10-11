@@ -158,7 +158,7 @@ export const sessionContextInspectResultSchema = {
   additionalProperties: false,
   properties: {
     computedAtSeq: seqSchema,
-    estimator: { type: 'string', enum: ['cl100k_base'] },
+    estimator: { type: 'string', enum: ['o200k_base'] },
     model: {
       type: 'object', required: ['publicId'], additionalProperties: false,
       properties: {
