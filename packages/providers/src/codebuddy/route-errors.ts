@@ -16,3 +16,74 @@ export function codeBuddyRouteFailure(input: UpstreamRouteErrorInput): UpstreamR
   if (input.status === 429 && typeof quotaPoolId === 'string') return { state: 'rate_limited', scope: 'pool', quotaPoolId, ...(until ? { until } : {}) };
   return undefined;
 }
+
+/** Chat Completions code the Gateway's generic wrapper would use for a status. */
+const STATUS_TYPES: Readonly<Record<number, string>> = {
+  400: 'invalid_request_error', 401: 'authentication_error', 403: 'permission_error',
+  404: 'not_found_error', 408: 'timeout_error', 429: 'rate_limit_error',
+};
+const SERVER_TYPE = 'api_error';
+
+/** Exhaustion codes whose official meaning is HTTP 429. */
+const QUOTA_CODES: ReadonlySet<string> = new Set([
+  'quota_exhausted', 'insufficient_quota', 'insufficient_balance', 'balance_exhausted',
+]);
+/** Codes whose official meaning is HTTP 404. */
+const MODEL_CODES: ReadonlySet<string> = new Set(['model_not_found', 'model_unavailable']);
+
+const envelope = (type: string, message: string, code?: string): Record<string, unknown> => ({
+  error: { message, type, code: code ?? null, param: null },
+});
+
+/** The message a private CodeBuddy error carries, or a status-derived fallback. */
+function supplierMessage(row: Record<string, unknown>, status: number): string {
+  const message = first(row, 'message', 'msg', 'error_message');
+  if (typeof message === 'string' && message !== '') return message;
+  return `CodeBuddy request failed (HTTP ${status})`;
+}
+
+/**
+ * The minimal entry-protocol correction for a CodeBuddy error, applied only
+ * where the supplier departs from the official Chat Completions contract:
+ *
+ * - known permanent quota exhaustion is normalized to the fixed official
+ *   shape: HTTP 429 with the non-retryable `insufficient_quota` code, even
+ *   when the supplier already used status 429, keeping the supplier wording;
+ * - a model code that carries a status whose official meaning is 404 is
+ *   restored to 404;
+ * - a private, non-official structure is wrapped in the official envelope while
+ *   keeping the supplier's status and wording.
+ *
+ * Anything already handled correctly by the official rules is returned as
+ * `undefined` so the Gateway forwards the upstream bytes unchanged. No generic
+ * error vocabulary is introduced here.
+ */
+export function codeBuddyProtocolError(input: { status: number; body: unknown }): { status: number; body: Record<string, unknown> } | undefined {
+  const root = object(input.body);
+  const error = object(root.error);
+  const row = Object.keys(error).length ? error : root;
+  const code = first(row, 'reason_code', 'code', 'type');
+  const official = error.message !== undefined || (typeof error.code === 'string' && error.code !== '');
+  const type = STATUS_TYPES[input.status] ?? (input.status >= 500 ? SERVER_TYPE : 'invalid_request_error');
+
+  if (typeof code === 'string' && QUOTA_CODES.has(code)) {
+    // Known permanent exhaustion is always restored to the fixed official
+    // shape: HTTP 429 with the non-retryable `insufficient_quota` code, even
+    // when the supplier already reported 429, keeping the supplier's wording.
+    // A body that is already the official 429 `insufficient_quota` shape is
+    // left to verbatim pass-through.
+    if (input.status === 429 && code === 'insufficient_quota' && official) return undefined;
+    return { status: 429, body: envelope('rate_limit_error', supplierMessage(row as Record<string, unknown>, input.status), 'insufficient_quota') };
+  }
+  if (typeof code === 'string' && MODEL_CODES.has(code) && input.status !== 404) {
+    return { status: 404, body: envelope('not_found_error', supplierMessage(row as Record<string, unknown>, input.status), code) };
+  }
+  // An official envelope is left to the Gateway's verbatim pass-through.
+  if (official) return undefined;
+  // A private structure is wrapped onto the entry protocol's official shape.
+  return {
+    status: input.status,
+    body: envelope(type, supplierMessage(row as Record<string, unknown>, input.status), typeof code === 'string' ? code : undefined),
+  };
+}
+

@@ -48,15 +48,45 @@ const ROUTE_STATE_LABEL: Record<string, string> = {
   model_unavailable: '模型不可用',
 };
 
-/** Inspector chips for an auxiliary call's route selection: rank, routes sent to, last route state. */
+/** Display name of every normalized transport failure kind. */
+const CALL_ERROR_LABEL: Record<string, string> = {
+  network: '连接错误',
+  server: '服务端错误',
+  rate_limited: '限流',
+  quota_exhausted: '额度耗尽',
+  auth: '认证失败',
+  model_unavailable: '模型不可用',
+  invalid_request: '非法请求',
+  context_overflow: '上下文超限',
+  protocol: '协议错误',
+  interrupted: '输出中断',
+  aborted: '已取消',
+};
+
+function failureLabel(kind: string, status: number | undefined): string {
+  const name = CALL_ERROR_LABEL[kind] ?? kind;
+  return status === undefined ? name : `${name} ${status}`;
+}
+
+/**
+ * Inspector chips for a call's route selection and retry record: rank, retry
+ * count and reason, and the terminal failure. Historical records written before
+ * the transport refactor carry `routeAttempts` with a route state; those are
+ * still shown so old sessions keep their labels.
+ */
 export function callRouteChips(event: Extract<LedgerEvent, { type: 'call' }>): string[] {
   const chips: string[] = [];
   if (event.selectedRank !== undefined) chips.push(`排名 ${event.selectedRank}`);
-  const attempts = event.routeAttempts ?? [];
-  const sent = attempts.filter((attempt) => attempt.status !== 'skipped').length;
-  if (sent > 1) chips.push(`已尝试 ${sent} 条线路`);
+  const retries = event.retries ?? [];
+  if (retries.length > 0) chips.push(`重试 ${retries.length} 次`);
+  const retry = retries.at(-1);
+  if (retry !== undefined) chips.push(`重试原因：${failureLabel(retry.kind, retry.status)}`);
+  const error = event.error;
+  if (error !== undefined) chips.push(`失败：${failureLabel(error.kind, error.status)}`);
+  // Legacy records only: their per-attempt route state is no longer produced.
+  const attempts = (event as unknown as { routeAttempts?: readonly { routeState?: string }[] }).routeAttempts ?? [];
   const state = [...attempts].reverse().find((attempt) => attempt.routeState !== undefined)?.routeState;
-  if (state) chips.push(`线路状态：${ROUTE_STATE_LABEL[state] ?? state}`);
+  if (state !== undefined) chips.push(`线路状态：${ROUTE_STATE_LABEL[state] ?? state}`);
   return chips;
 }
 

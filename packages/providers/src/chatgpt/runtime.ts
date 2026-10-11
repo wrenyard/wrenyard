@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ProviderDefinition } from '../base/index.ts';
+import type { ProviderRequestHookContext, ProviderResponseHookContext, ProviderResponseHookResult } from '../base/contracts.ts';
 import type { ProviderCredential } from '../base/provider.ts';
 
 /**
@@ -75,4 +76,38 @@ export function applyChatGptNativeHeaders(
 export function applyChatGptPromptCacheKey(headers: Headers, body: Record<string, unknown>): void {
   const key = body.prompt_cache_key;
   if (typeof key === 'string' && key !== '') headers.set('session_id', key);
+}
+
+/**
+ * Pin the ChatGPT subscription wire contract on an openai_responses request:
+ * the endpoint accepts only streamed turns, never persists them, and keys its
+ * prompt cache on the `session_id` header rather than the body's
+ * `prompt_cache_key`. Every other field, instruction, and content part is left
+ * exactly as delivered.
+ */
+export function chatGptBeforeRequest(context: ProviderRequestHookContext): void {
+  if (context.protocol !== 'openai_responses') return;
+  context.body.stream = true;
+  context.body.store = false;
+  applyChatGptPromptCacheKey(context.headers, context.body);
+}
+
+/**
+ * The subscription endpoint can omit Content-Type on a valid SSE response. Its
+ * streamed Responses contract supplies the missing type for both Gateway
+ * normalization and downstream stream readers.
+ */
+export function chatGptAfterResponse(context: ProviderResponseHookContext): ProviderResponseHookResult | undefined {
+  if (context.protocol !== 'openai_responses') return undefined;
+  const response = context.response;
+  if (!response || !response.ok || response.headers.get('content-type')) return undefined;
+  const headers = new Headers(response.headers);
+  headers.set('content-type', 'text/event-stream');
+  return {
+    response: new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    }),
+  };
 }

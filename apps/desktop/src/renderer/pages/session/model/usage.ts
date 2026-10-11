@@ -297,43 +297,97 @@ export function contextTreeRows(inspection: ContextInspection, options: ContextT
   return rows;
 }
 
-/**
- * Cache-hit ratio of the most recent main-reasoning call that reported usage:
- * `cachedInput / input`. Returns undefined when no such call exists so the UI
- * never fabricates a hit rate.
- */
-export function recentCacheRatio(calls: readonly CallModel[]): number | undefined {
-  for (let index = calls.length - 1; index >= 0; index -= 1) {
-    const call = calls[index]!;
-    if (call.role !== 'reason' || call.usage === undefined) continue;
-    const input = call.usage.input;
-    if (typeof input !== 'number' || input <= 0) continue;
-    const cached = call.usage.cachedInput ?? 0;
-    return Math.max(0, Math.min(1, cached / input));
+/** One recorded TPS sample: generated tokens over the measured window. */
+export interface TpsSample {
+  outputTokens: number;
+  windowMs: number;
+}
+
+/** True when a sample meets the sampler's minimum tokens and window. */
+function validTps(sample: TpsSample | undefined): sample is TpsSample {
+  return sample !== undefined
+    && Number.isFinite(sample.outputTokens) && sample.outputTokens > 0
+    && Number.isFinite(sample.windowMs) && sample.windowMs >= 100;
+}
+
+/** Tokens per second of one valid sample. */
+function tpsOf(sample: TpsSample): number {
+  return sample.outputTokens / (sample.windowMs / 1000);
+}
+
+/** Token-weighted speed of a sample list (`Σ tokens / Σ window`); undefined when empty. */
+function weightedTps(samples: readonly TpsSample[]): number | undefined {
+  let tokens = 0;
+  let windowMs = 0;
+  for (const sample of samples) {
+    if (!validTps(sample)) continue;
+    tokens += sample.outputTokens;
+    windowMs += sample.windowMs;
   }
-  return undefined;
+  return tokens > 0 && windowMs > 0 ? tokens / (windowMs / 1000) : undefined;
+}
+
+/** A successful call's recorded TPS sample; undefined for historical records. */
+function callSample(call: CallModel): TpsSample | undefined {
+  if (call.status !== 'ok') return undefined;
+  return validTps(call.tps) ? call.tps : undefined;
+}
+
+/** Every valid main-reasoning sample of the session, oldest first. */
+export function mainSamples(calls: readonly CallModel[]): TpsSample[] {
+  const samples: TpsSample[] = [];
+  for (const call of calls) {
+    if (call.role !== 'reason') continue;
+    const sample = callSample(call);
+    if (sample !== undefined) samples.push(sample);
+  }
+  return samples;
 }
 
 /**
- * Output throughput of the most recent finished main-reasoning call that
- * reported both a first-token and an end timestamp: `(output + reasoning)` over
- * the elapsed seconds between them. Returns undefined when no such call exists
- * or the interval is not positive, so the UI never fabricates a rate.
+ * Session generation speed (session metrics spec): the token-weighted speed of
+ * the latest five valid main-reasoning samples. Only recorded samples count, so
+ * historical calls without `tps` are ignored and no rate is inferred from
+ * official output usage and local timestamps. Undefined when no sample is
+ * usable, so the UI shows an em dash instead of a fabricated rate.
  */
-export function recentTps(calls: readonly CallModel[]): number | undefined {
-  for (let index = calls.length - 1; index >= 0; index -= 1) {
-    const call = calls[index]!;
-    if (call.role !== 'reason') continue;
-    if (call.status === 'running') continue;
-    if (call.firstTokenAt === undefined || call.endedAt === undefined) continue;
-    if (call.usage === undefined) continue;
-    const start = Date.parse(call.firstTokenAt);
-    const end = Date.parse(call.endedAt);
-    const seconds = (end - start) / 1000;
-    if (!Number.isFinite(seconds) || seconds <= 0) continue;
-    return ((call.usage.output ?? 0) + (call.usage.reasoning ?? 0)) / seconds;
-  }
-  return undefined;
+export function mainSpeed(calls: readonly CallModel[]): number | undefined {
+  return weightedTps(mainSamples(calls).slice(-5));
+}
+
+/** Per-sample speed of every valid main sample, oldest first, for the sparkline. */
+export function mainSpeedSeries(calls: readonly CallModel[]): number[] {
+  return mainSamples(calls).map(tpsOf);
+}
+
+/** A dispatched task's usable usage, or undefined when it carries none. */
+function taskUsageData(usage: TaskRunUsage | undefined): { input: number; output: number; cached: number; total: number } | undefined {
+  if (usage === undefined || usage.completeness === 'unavailable') return undefined;
+  const input = usage.inputTokens ?? 0;
+  const output = usage.outputTokens ?? 0;
+  return {
+    input,
+    output,
+    cached: usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? 0,
+    total: usage.totalTokens ?? input + output,
+  };
+}
+
+/**
+ * A `tokenizer_v1` task sample. The sampled token weight is reconstructed from
+ * the measured rate and window (`outputTps × generationMs / 1000`) and never
+ * from the official `outputTokens`; other contracts and incomplete rows yield
+ * none. Requires a finite positive `outputTps` and a finite window of at least
+ * 100 ms.
+ */
+function taskSample(usage: TaskRunUsage | undefined): TpsSample | undefined {
+  if (usage === undefined || usage.tpsContract !== 'tokenizer_v1') return undefined;
+  const { outputTps, generationMs } = usage;
+  if (outputTps === undefined || generationMs === undefined) return undefined;
+  if (!Number.isFinite(outputTps) || outputTps <= 0) return undefined;
+  if (!Number.isFinite(generationMs) || generationMs < 100) return undefined;
+  const sample: TpsSample = { outputTokens: (outputTps * generationMs) / 1000, windowMs: generationMs };
+  return validTps(sample) ? sample : undefined;
 }
 
 type Pricing = readonly [number, number, number];
@@ -464,7 +518,7 @@ const CONSUMPTION_ROLE_ORDER: readonly CallModel['role'][] = [
 ];
 
 /**
- * One conversation's or dispatched-task group's token consumption. `total` is
+ * One source's token consumption and generation speed. `total` is
  * `input + output` (output already includes reasoning) and `cacheRatio` is
  * undefined whenever the row reported no input, never fabricated.
  */
@@ -472,8 +526,10 @@ export interface ConsumptionRow {
   /** Row identity: a call role, `task`, or `sum`. */
   key: string;
   label: string;
-  /** Calls of the role, or tasks for the `task` row. */
+  /** Calls of the role, or dispatched tasks for the `task` row. */
   calls: number;
+  /** Token-weighted speed of the row's valid samples; undefined when it has none. */
+  speed: number | undefined;
   total: number;
   input: number;
   output: number;
@@ -481,21 +537,28 @@ export interface ConsumptionRow {
   cached: number;
   /** `cached / input`; undefined when the row reported no input. */
   cacheRatio: number | undefined;
-  /** `task` row only: true when some dispatched task had no usage in the snapshot. */
+  /** `task` row only: true when a terminal dispatched task had no usage. */
   partial?: boolean;
 }
 
 export interface ConsumptionView {
   /** Role rows in display order, followed by the `task` row when tasks ran. */
   rows: ConsumptionRow[];
-  /** Aggregate over every returned row. */
+  /** Aggregate over every returned row, including session-wide speed and cache. */
   sum: ConsumptionRow;
 }
 
-/** One role's consumption, or undefined when none of its calls reported usage. */
+/** One role's row, or undefined when the role has no calls at all. */
 function roleConsumptionRow(role: CallModel['role'], calls: readonly CallModel[]): ConsumptionRow | undefined {
   const roleCalls = calls.filter((call) => call.role === role);
-  if (!roleCalls.some((call) => call.usage !== undefined)) return undefined;
+  // Every role that actually occurs keeps a row (and its call count) even when
+  // its calls reported neither usage nor a TPS sample.
+  if (roleCalls.length === 0) return undefined;
+  const samples: TpsSample[] = [];
+  for (const call of roleCalls) {
+    const sample = callSample(call);
+    if (sample !== undefined) samples.push(sample);
+  }
   let input = 0;
   let output = 0;
   let cached = 0;
@@ -509,6 +572,7 @@ function roleConsumptionRow(role: CallModel['role'], calls: readonly CallModel[]
     key: role,
     label: CALL_ROLE_LABEL[role],
     calls: roleCalls.length,
+    speed: weightedTps(samples),
     total,
     input,
     output,
@@ -518,33 +582,105 @@ function roleConsumptionRow(role: CallModel['role'], calls: readonly CallModel[]
 }
 
 /**
- * The `task` row for tasks this session dispatched. Undefined when nothing was
- * dispatched; `partial` marks a dispatched task missing from the stats snapshot.
- * `totalTokens` is preferred over the derived `input + output` per task.
+ * A dispatched task's row for the metrics panel. `sample`/`speed` are present
+ * only for `tokenizer_v1` usage; `missing` marks a terminal task whose usage
+ * could not be read, while a running task simply has no usage yet.
  */
-function taskConsumptionRow(taskUsages: readonly (TaskRunUsage | undefined)[]): ConsumptionRow | undefined {
-  if (taskUsages.length === 0) return undefined;
+export interface SessionTaskRow {
+  taskRunId: string;
+  title: string;
+  model: string | undefined;
+  status: string;
+  running: boolean;
+  input: number;
+  output: number;
+  cached: number;
+  total: number;
+  /** Recorded `tokenizer_v1` sample; absent while running or unavailable. */
+  sample: TpsSample | undefined;
+  /** Speed of {@link sample}; undefined when absent. */
+  speed: number | undefined;
+  /** True when a terminal task's usage could not be read. */
+  missing: boolean;
+}
+
+/** Facts the session hook knows about one dispatched task. */
+export interface SessionTaskInput {
+  taskRunId: string;
+  title: string;
+  model?: string;
+  status: string;
+  usage?: TaskRunUsage;
+}
+
+/** Terminal task-run statuses whose recorded usage is authoritative. */
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
+  'done',
+  'failed',
+  'cancelled',
+  'interrupted',
+]);
+
+/** The daemon's marker for a task-run read that failed: missing, never running. */
+const UNAVAILABLE_TASK_STATUS = 'unavailable';
+
+/**
+ * Projects dispatched-task facts into metric rows, keeping the input order.
+ * Only terminal tasks (`done`/`failed`/`cancelled`/`interrupted`) may contribute
+ * usage, cache, totals and speed: a non-terminal task counts only as running
+ * even when it already carries partial usage, and `unavailable` counts as a
+ * missing terminal read rather than a running task.
+ */
+export function sessionTaskRows(tasks: readonly SessionTaskInput[]): SessionTaskRow[] {
+  return tasks.map((task) => {
+    const terminal = TERMINAL_TASK_STATUSES.has(task.status);
+    const running = !terminal && task.status !== UNAVAILABLE_TASK_STATUS;
+    const usage = terminal ? taskUsageData(task.usage) : undefined;
+    const sample = terminal ? taskSample(task.usage) : undefined;
+    return {
+      taskRunId: task.taskRunId,
+      title: task.title,
+      model: task.model,
+      status: task.status,
+      running,
+      input: usage?.input ?? 0,
+      output: usage?.output ?? 0,
+      cached: usage?.cached ?? 0,
+      total: usage?.total ?? 0,
+      sample,
+      speed: sample === undefined ? undefined : tpsOf(sample),
+      missing: !running && usage === undefined,
+    };
+  });
+}
+
+/**
+ * The `task` row for tasks this session dispatched. A row is absent when
+ * nothing was dispatched. Running tasks count toward `calls` but contribute no
+ * usage until they are terminal; `partial` marks a terminal task with no usage.
+ */
+function taskConsumptionRow(tasks: readonly SessionTaskRow[]): ConsumptionRow | undefined {
+  if (tasks.length === 0) return undefined;
   let input = 0;
   let output = 0;
   let cached = 0;
   let total = 0;
   let partial = false;
-  for (const usage of taskUsages) {
-    if (usage === undefined) {
-      partial = true;
-      continue;
-    }
-    const rowInput = usage.inputTokens ?? 0;
-    const rowOutput = usage.outputTokens ?? 0;
-    input += rowInput;
-    output += rowOutput;
-    cached += usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? 0;
-    total += usage.totalTokens ?? rowInput + rowOutput;
+  const samples: TpsSample[] = [];
+  for (const task of tasks) {
+    if (task.missing) partial = true;
+    if (task.running) continue;
+    input += task.input;
+    output += task.output;
+    cached += task.cached;
+    total += task.total;
+    if (task.sample !== undefined) samples.push(task.sample);
   }
   return {
     key: 'task',
     label: '任务',
-    calls: taskUsages.length,
+    calls: tasks.length,
+    speed: weightedTps(samples),
     total,
     input,
     output,
@@ -554,8 +690,8 @@ function taskConsumptionRow(taskUsages: readonly (TaskRunUsage | undefined)[]): 
   };
 }
 
-/** Aggregate of every returned row, for the status bar's headline total. */
-function sumConsumptionRow(rows: readonly ConsumptionRow[]): ConsumptionRow {
+/** Aggregate of every returned row, for the panel's headline total. */
+function sumConsumptionRow(rows: readonly ConsumptionRow[], samples: readonly TpsSample[]): ConsumptionRow {
   let calls = 0;
   let input = 0;
   let output = 0;
@@ -572,6 +708,7 @@ function sumConsumptionRow(rows: readonly ConsumptionRow[]): ConsumptionRow {
     key: 'sum',
     label: '合计',
     calls,
+    speed: weightedTps(samples),
     total,
     input,
     output,
@@ -582,24 +719,32 @@ function sumConsumptionRow(rows: readonly ConsumptionRow[]): ConsumptionRow {
 
 /**
  * Consumption of one session: one row per conversation that reported usage, in
- * fixed role order, plus a `任务` row for tasks this session dispatched.
- * `taskUsages` carries one entry per dispatched task — its `TaskRunUsage`, or
- * undefined when the stats snapshot had no matching run. The `task` row is
- * absent when nothing was dispatched and carries `partial` when any usage was
- * missing. `sum` aggregates every returned row.
+ * fixed role order, plus a `任务` row for the tasks this session dispatched.
+ * Speed is token-weighted from valid recorded samples; the `sum` row's speed
+ * covers every call and terminal task sample. Cache ratio and totals cover the
+ * whole session (calls plus dispatched tasks).
  */
 export function consumptionRows(
   calls: readonly CallModel[],
-  taskUsages: readonly (TaskRunUsage | undefined)[],
+  tasks: readonly SessionTaskRow[],
 ): ConsumptionView {
   const rows: ConsumptionRow[] = [];
   for (const role of CONSUMPTION_ROLE_ORDER) {
     const row = roleConsumptionRow(role, calls);
     if (row !== undefined) rows.push(row);
   }
-  const taskRow = taskConsumptionRow(taskUsages);
+  const taskRow = taskConsumptionRow(tasks);
   if (taskRow !== undefined) rows.push(taskRow);
-  return { rows, sum: sumConsumptionRow(rows) };
+
+  const samples: TpsSample[] = [];
+  for (const call of calls) {
+    const sample = callSample(call);
+    if (sample !== undefined) samples.push(sample);
+  }
+  for (const task of tasks) {
+    if (!task.running && task.sample !== undefined) samples.push(task.sample);
+  }
+  return { rows, sum: sumConsumptionRow(rows, samples) };
 }
 
 /** Internal LLM roles, in the fixed order the ctx popover lists them. */

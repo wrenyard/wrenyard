@@ -61,9 +61,11 @@ export function modelBadges(facts: ModelBadgeFacts): ModelBadge[] {
  * an icon or badge. Shared by the composer and the settings model pickers.
  */
 export function modelRuntimeDescription(runtime: SessionInferenceMode): string {
-  return runtime === 'openai_responses'
-    ? '经网关的推理接口运行（Responses 协议）'
-    : '经网关的推理接口运行（Chat 协议）';
+  switch (runtime) {
+    case 'openai_responses': return '经网关的推理接口运行（Responses 协议）';
+    case 'anthropic_messages': return '经网关的推理接口运行（Messages 协议）';
+    default: return '经网关的推理接口运行（Chat 协议）';
+  }
 }
 
 export interface ModelOption {

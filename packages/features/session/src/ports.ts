@@ -15,7 +15,7 @@ import type {
 } from './ledger.ts';
 import type { CallRole } from './calls.ts';
 import type { ContextInspectRequest, ContextInspection } from './context-inspect.ts';
-import type { ModelContentPart, ModelMessage, ToolCall, ToolSpec, Usage } from './driver.ts';
+import type { Message as ModelMessage, ModelContentPart, ToolCall, ToolSpec, Usage } from './transport/index.ts';
 import type { AttachmentInput, FileStore, TaskArtifact } from './media.ts';
 import type { DocCatalogEntry } from './workspace.ts';
 import type { ActionRunContext } from './actions/index.ts';
@@ -258,6 +258,22 @@ export interface BuiltView {
   segments?: Record<string, string>;
 }
 
+/** Structured facts of a failed main reasoning call, handed to the reply view. */
+export interface CallFailureSummary {
+  model: string;
+  /** Normalized transport failure kind. */
+  kind: string;
+  status?: number;
+  /** Supplier's original message. */
+  message: string;
+  /** Requests issued for the failed call, including the first. */
+  attempts?: number;
+  /** Same-route retries issued before the failure. */
+  retries: number;
+  /** Wall-clock duration of the failed call in milliseconds. */
+  durationMs?: number;
+}
+
 /** The result of one engine model call. */
 export interface InvokedCall {
   ok: boolean;
@@ -266,6 +282,8 @@ export interface InvokedCall {
   reasoning?: string;
   toolCalls?: readonly ToolCall[];
   error?: string;
+  /** Structured main-reasoning failure facts; present only when the call failed. */
+  failure?: CallFailureSummary;
 }
 
 /**

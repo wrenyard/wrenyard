@@ -5,13 +5,14 @@
  * sibling modules into the engine ports and exposes the frozen `createSession`
  * contract:
  *
- *   ledger.ts     `Ledger` (init/append/read/listSessions/subscribe/close)
- *                 and the `LedgerEvent` union plus the snapshot types.
- *   workspace.ts  `WorkspaceFileSource` and the document catalogue.
- *   calls.ts      `createCallRunner({ driver, selectAuxiliary, append, now })`.
- *   inference.ts  `createInferenceDriver(gateway)`, the one main/auxiliary
- *                 runtime selection site over the shared inference-mode policy.
- *   media.ts      `FileStore` (attachments, artifact description, images).
+ *   ledger.ts         `Ledger` (init/append/read/listSessions/subscribe/close)
+ *                     and the `LedgerEvent` union plus the snapshot types.
+ *   workspace.ts      `WorkspaceFileSource` and the document catalogue.
+ *   calls.ts          `createCallRunner({ transport, selectAuxiliary, append, now })`.
+ *   transport/        `createModelTransport({ gateway })`, the one unified call
+ *                     protocol, the three protocol adapters and the sole
+ *                     same-route retry.
+ *   media.ts          `FileStore` (attachments, artifact description, images).
  *
  * Everything else in the feature depends only on the port interfaces declared
  * in `ports.ts`.
@@ -20,7 +21,7 @@
 import { Ledger } from './ledger.ts';
 import { WorkspaceFileSource } from './workspace.ts';
 import { createCallRunner, type CallRunner } from './calls.ts';
-import { createInferenceDriver } from './inference.ts';
+import { createModelTransport } from './transport/index.ts';
 import { FileStore } from './media.ts';
 import { createEngine } from './engine.ts';
 import {
@@ -33,6 +34,7 @@ import {
 export type {
   ActionBaseContext,
   BuiltView,
+  CallFailureSummary,
   CallRunRequest,
   CallRunResult,
   CallsPort,
@@ -67,7 +69,7 @@ export type {
 export { ActionRunner } from './actions/index.ts';
 export type { SchemaValidation } from './actions/dispatch/dispatch.ts';
 export { validateJsonSchema } from './actions/dispatch/dispatch.ts';
-export type { AuxiliaryRoute, CallRouteAttempt, CallLedgerEventDraft, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
+export type { AuxiliaryRoute, CallErrorFact, CallLedgerEventDraft, CallRetry, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
 export {
   CALL_ROLES,
   CHEAP_TIMEOUT_MS,
@@ -99,31 +101,51 @@ export type {
 } from './context-inspect.ts';
 export { ContextInspector } from './context-inspect.ts';
 export type {
-  DriverResult,
-  GatewayRequestFields,
+  FinishReason,
+  Message,
+  MessageToolCall,
+  ModelAttempts,
   ModelContentPart,
-  ModelDriver,
-  ModelMessage,
+  ModelErrorKind,
+  ModelEvent,
+  ModelRequest,
+  ModelResult,
+  ModelToolCall,
+  ModelTransport,
   ToolCall,
+  ToolChoice,
   ToolSpec,
+  TpsSample,
   Usage,
-} from './driver.ts';
+} from './transport/index.ts';
+export {
+  BASE_DELAY_MS,
+  CHAT_REQUEST_MAX_BYTES,
+  GATEWAY_REQUEST_MAX_BYTES,
+  MAX_RETRIES,
+  MESSAGES_REQUEST_MAX_BYTES,
+  ModelError,
+  RESPONSES_REQUEST_MAX_BYTES,
+  SESSION_PROTOCOLS,
+  abortError,
+  adapterForProtocol,
+  classifyStatus,
+  createModelTransport,
+  isContextOverflowError,
+  isModelError,
+  isQuotaCode,
+  isRetryable,
+  normalizeStreamError,
+  retryDelayMs,
+  type GatewayConnectionSource,
+  type ModelTransportOptions,
+  type SessionProtocol,
+} from './transport/index.ts';
+// The pure protocol-selection helpers come from the browser-safe protocol
+// module, so exporting them never pulls the Node transport in with them.
+export { selectSessionProtocol, supportsSession } from './transport/protocol.ts';
 export { ACTION_TOOL } from './actions/reason/tool.ts';
 export { REPLY_TOOL } from './actions/secondary/reply.ts';
-export {
-  GATEWAY_REQUEST_MAX_BYTES,
-  createGatewayDriver,
-  serializeGatewayRequest,
-} from './driver.ts';
-export type { GatewayConnectionSource, InferenceDriverOptions } from './inference.ts';
-export { createInferenceDriver } from './inference.ts';
-export { selectInferenceMode } from './inference-mode.ts';
-export type { ResponsesDriverOptions, ResponsesRequestFields } from './responses-driver.ts';
-export {
-  RESPONSES_REQUEST_MAX_BYTES,
-  createResponsesDriver,
-  serializeResponsesRequest,
-} from './responses-driver.ts';
 export type {
   ActionFinishedEvent,
   ActionStartedEvent,
@@ -163,16 +185,14 @@ export function createSession(host: SessionHost): Session {
 
   // The call runner is session-scoped because its `append` sink is the only way
   // a `call` event reaches the owning timeline. The gateway is resolved inside
-  // `createInferenceDriver`, so acquiring it is covered by the call timeout and
-  // its outcome is recorded in the `call` event; a failed lookup is never cached.
+  // the transport, so acquiring it is covered by the call timeout and its
+  // outcome is recorded in the `call` event; a failed lookup is never cached.
   const runners = new Map<string, CallRunner>();
   const calls = (sessionId: string): CallsPort => {
     let runner = runners.get(sessionId);
     if (!runner) {
       runner = createCallRunner({
-        driver: createInferenceDriver(() => host.gateway(), {
-          resolveProvider: (providerId) => host.resolveInferenceProvider(providerId),
-        }),
+        transport: createModelTransport({ gateway: () => host.gateway() }),
         selectAuxiliary: role => host.selectAuxiliary(role),
         ...(host.routeStatus === undefined ? {} : { routeStatus: (model: string) => host.routeStatus!(model) }),
         resolveProvider: (id) => host.resolveInferenceProvider(id),

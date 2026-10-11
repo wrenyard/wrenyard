@@ -1,8 +1,13 @@
 import { defineProvider, REASONING_FULL, effortLadder } from '../base/model-defaults.ts';
+import { chatGptAfterResponse, chatGptBeforeRequest } from './runtime.ts';
 
 export const definition = defineProvider({
   id: 'chatgpt', displayName: 'ChatGPT', credentialResolver: 'codex',
   nativeClients: ['codex'], defaultModel: 'gpt-6.1-sol', quotaProvider: 'chatgpt',
+  // Supplier hooks: the pinned streamed/non-persisted openai_responses request
+  // contract and the missing Content-Type repair on its SSE response.
+  beforeRequest: chatGptBeforeRequest,
+  afterResponse: chatGptAfterResponse,
   models: [
     { canonical: 'gpt-6-astra', overrides: { contextWindow: 1_050_000, reasoningEfforts: REASONING_FULL } },
     { canonical: 'gpt-6.1-sol', overrides: { reasoningEfforts: REASONING_FULL } },

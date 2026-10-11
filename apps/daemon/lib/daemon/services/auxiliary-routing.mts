@@ -1,12 +1,20 @@
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { rankAutoRoutingCandidates, type CandidateInput } from '@wrenyard/auto-routing';
 import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
-import { ROLE_REQUIREMENTS, CHEAP_TIMEOUT_MS, selectInferenceMode, type AuxiliaryCallRole, type AuxiliaryRoute } from '@wrenyard/session';
+import { ROLE_REQUIREMENTS, CHEAP_TIMEOUT_MS, supportsSession, type AuxiliaryCallRole, type AuxiliaryRoute } from '@wrenyard/session';
 import { JsonForemanConfigStore } from '../../config/manager.mts';
 import { readGlobalTaskSettings, type TasksConfigSettingsInput, type TaskSettingsLayer } from '../../config/task-settings.mts';
 import type { AutoRoutingQuotaSnapshotService } from './auto-routing-snapshot-service.mts';
 import type { TaskSettingsRuntimeAvailabilityCallback } from './task-settings-service.mts';
 import { deepSeekAutomaticPricingOf, effectiveRoutingCap, toAutomaticCandidateInput, type ModelRoutingEntry } from './model-routing-inputs.mts';
+
+/** The Gateway model fields auxiliary selection needs: identity and per-model protocols. */
+export interface GatewaySessionModel {
+  publicId: string;
+  provider: string;
+  id: string;
+  protocols: readonly string[];
+}
 
 export interface AuxiliaryRoutingOptions {
   catalog: Catalog;
@@ -16,6 +24,12 @@ export interface AuxiliaryRoutingOptions {
   readSettings: () => TaskSettingsLayer | undefined;
   /** In-memory Gateway route state; a marked route never enters the candidate pool. */
   routeStatus?: (model: string) => GatewayRouteStatus | undefined;
+  /**
+   * The Gateway model directory: each model's own supported protocols, never
+   * the provider's blanket capabilities. Authenticated per invocation so a
+   * newly available provider is admitted without a daemon restart.
+   */
+  gatewayModels: () => Promise<readonly GatewaySessionModel[]>;
 }
 
 /** Fresh ranked routes on each invocation; no session state or result cache. */
@@ -29,13 +43,23 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
     const settings = options.readSettings();
     const reasons: Record<string, number> = {};
     const reject = (reason: string): void => { reasons[reason] = (reasons[reason] ?? 0) + 1; };
-    const models = options.catalog.providers().flatMap(provider => {
-      if (!selectInferenceMode((provider.protocols ?? []).map(capability => capability.protocol))) {
-        reject('no session-supported Gateway protocol'); return [];
-      }
-      return provider.models.filter(model => !model.taskOnly && model.supportedClients === undefined)
-        .map(model => ({ provider, model }));
-    });
+    // Protocol eligibility is read only from the Gateway model directory, matched
+    // per model by its public id / `provider/model`; a provider's own protocol
+    // capabilities are never consulted.
+    const gatewayByPublicId = new Map<string, GatewaySessionModel>();
+    for (const row of await options.gatewayModels()) {
+      gatewayByPublicId.set(row.publicId, row);
+      gatewayByPublicId.set(`${row.provider}/${row.id}`, row);
+    }
+    const models = options.catalog.providers().flatMap(provider => provider.models
+      .filter(model => !model.taskOnly && model.supportedClients === undefined)
+      .flatMap(model => {
+        const gateway = gatewayByPublicId.get(`${provider.id}/${model.id}`);
+        if (gateway === undefined || !supportsSession(gateway)) {
+          reject('no session-supported Gateway protocol'); return [];
+        }
+        return [{ provider, model }];
+      }));
     const entries: { entry: ModelRoutingEntry; levels: typeof requirements.expectedReasoningEffort }[] = [];
     const availability = await Promise.all(models.map(({ provider, model }) => options.runtimeAvailability(
       { provider: provider.id, model: model.id, client: 'gateway', mode: 'gateway' },

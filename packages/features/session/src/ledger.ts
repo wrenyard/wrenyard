@@ -312,11 +312,18 @@ export interface CallEvent extends LedgerEventBase {
   requestedReasoningEffort?: string;
   /** Rank of the route that served (or last attempted) an auxiliary call. */
   selectedRank?: number;
-  /** Every route tried or skipped, in order. */
-  routeAttempts?: readonly import('./calls.ts').CallRouteAttempt[];
   /** Ordered auxiliary routes retained for this invocation. */
   routeCandidates?: readonly import('./calls.ts').AuxiliaryRoute[];
-  error?: string;
+  /** Structured failure fact; present only when the attempt failed. */
+  error?: import('./calls.ts').CallErrorFact;
+  /** Each same-route transport retry, in order. */
+  retries?: readonly import('./calls.ts').CallRetry[];
+  /**
+   * Tokenizer_v1 speed sample of the call; absent on historical records and on
+   * calls that produced no valid sample. The shape is shared with the transport
+   * result so no separate sample is ever fabricated here.
+   */
+  tps?: import('./transport/protocol.ts').TpsSample;
 }
 
 export interface ErrorEvent extends LedgerEventBase {

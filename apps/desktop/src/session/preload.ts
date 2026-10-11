@@ -23,6 +23,7 @@ import type {
   SessionFile,
   SessionSummary,
 } from '@wrenyard/session';
+import type { DesktopTaskBrief } from '../shell-contract.js';
 
 export type { ContextInspection, LiveCall };
 export type { AttachmentInput, SessionFile };
@@ -139,21 +140,12 @@ export interface SessionBridgeEventPayload {
 }
 
 /**
- * One task-run brief, keyed by the run id the renderer already knows. Named
- * distinctly from the ledger's `TaskBrief` (a snapshot task definition) to
- * avoid a collision in the shared public surface.
+ * One task-run brief, keyed by the run id the renderer already knows. Reuses the
+ * shared {@link DesktopTaskBrief} shape so the bridge, the main-process
+ * projection and the renderer metrics panel never drift; the full per-run usage
+ * rides along when the daemon returned one.
  */
-export interface SessionBridgeTaskBrief {
-  taskRunId: string;
-  /** `task_name`, falling back to `task_id` when the definition declares none. */
-  taskName?: string;
-  /** Task-run status, or `unavailable` when this id could not be resolved. */
-  status: string;
-  /** Resolved client/provider/model label, when a runtime was resolved. */
-  runtime?: string;
-  summary?: string;
-  usage?: { input?: number; output?: number };
-}
+export type SessionBridgeTaskBrief = DesktopTaskBrief;
 
 export interface SessionBridgeLivePayload {
   sessionId: string;

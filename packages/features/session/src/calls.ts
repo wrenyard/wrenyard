@@ -3,24 +3,43 @@
  *
  * One call is one stateless request: pick the role's model, resolve its model
  * metadata, estimate the input with `cl100k_base`, enforce the context budget,
- * run it through a `ModelDriver` under the role's timeout, and write exactly
- * one `call` ledger event for the attempt. The runner keeps no session state,
- * never parses JSON output and never repairs schemas — those belong to
+ * run it through the {@link ModelTransport} under the role's timeout, and write
+ * exactly one `call` ledger event for the attempt. The runner keeps no session
+ * state, never parses JSON output and never repairs schemas — those belong to
  * `actions.ts` / `engine.ts`.
+ *
+ * The transport owns the only same-route retry and the protocol adapters. The
+ * runner performs no failover: the main reasoning call keeps the user's model,
+ * and an auxiliary call keeps the one route it selected after skipping blocked
+ * routes, failing on the selected route instead of switching to another.
  */
 import { getEncoding } from 'js-tiktoken';
-import { createBuiltinCatalog } from '@wrenyard/providers';
-import type { GatewayRouteState, GatewayRouteStatus, ProviderDefinition, ModelDefinition } from '@wrenyard/providers/base';
-import { models as registeredModels, type ReasoningEffort } from '@wrenyard/models';
-import { GatewayRequestError } from './transport.ts';
-import { isContextOverflowError } from './driver.js';
+import type { GatewayRouteStatus, ProviderDefinition } from '@wrenyard/providers/base';
+import type { ReasoningEffort } from '@wrenyard/models';
+import {
+  abortError,
+  isContextOverflowError,
+  type ModelAttempts,
+  type ModelContentPart,
+  type ModelErrorKind,
+  type ModelEvent,
+  type ModelResult,
+  type ModelTransport,
+  type RetryAfterHint,
+  type ToolCall,
+  type ToolSpec,
+  type TpsSample,
+  type Usage,
+} from './transport/index.ts';
 import { ROLE_REQUIREMENTS, type AuxiliaryCallRole } from './role-requirements.js';
-import type { DriverResult, ModelContentPart, ModelDriver, ModelMessage, ToolCall, ToolSpec, Usage } from './driver.js';
+import { resolveModelMetadata, type ModelMetadata } from './model-metadata.ts';
 
-export type { ModelMessage, Usage } from './driver.js';
+// The pure metadata helper now lives in the browser-safe model-metadata entry;
+// the call runner re-exports it so existing `./calls.ts` consumers are unchanged.
+export { resolveModelMetadata } from './model-metadata.ts';
+export type { ModelMetadata } from './model-metadata.ts';
 
-/** The shared main-model precedence policy; also served by the model-metadata subpath. */
-export { selectInferenceMode } from './inference-mode.js';
+export type { Message, ModelContentPart, ToolCall, ToolSpec, Usage } from './transport/index.ts';
 
 /** Every role that may issue a call. `reason` is the one expensive role. */
 export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'vcs', 'project'] as const;
@@ -39,14 +58,21 @@ export interface ReasonSelection {
   reasoningEffort: ReasoningEffort;
 }
 
-/** Model facts used by the budget check and by the `<wy-info>` view. */
-export interface ModelMetadata {
-  contextWindow?: number;
-  maxOutputTokens?: number;
-  /** Route-owned reasoning levels this exact model can materialize. */
-  reasoningEfforts?: readonly ReasoningEffort[];
-  /** True only when the resolved definition declares the `image` capability. */
-  imageInput?: boolean;
+/** Structured failure fact recorded on a `call` event and handed to reply. */
+export interface CallErrorFact {
+  kind: ModelErrorKind;
+  status?: number;
+  /** Supplier's original message. */
+  message: string;
+}
+
+/** One same-route transport retry, recorded in order. */
+export interface CallRetry {
+  status?: number;
+  kind: ModelErrorKind;
+  delayMs: number;
+  /** Present only when the upstream retry hint was actually adopted. */
+  retryAfter?: RetryAfterHint;
 }
 
 /**
@@ -82,11 +108,18 @@ export interface CallEventDraft {
   requestedReasoningEffort?: string;
   /** Rank of the route that served (or last attempted) an auxiliary call. */
   selectedRank?: number;
-  /** Every route tried or skipped, in order. */
-  routeAttempts?: readonly CallRouteAttempt[];
   /** Ordered auxiliary routes retained for this invocation. */
   routeCandidates?: readonly AuxiliaryRoute[];
-  error?: string;
+  /** Structured failure fact; present only when the attempt failed. */
+  error?: CallErrorFact;
+  /** Each same-route transport retry, in order. */
+  retries?: readonly CallRetry[];
+  /**
+   * Tokenizer_v1 speed sample of this call. Present only when the successful
+   * transport result carried one; never derived from official usage or local
+   * first-token timing, and absent on failures and legacy records.
+   */
+  tps?: TpsSample;
   turn?: number;
   cycle?: number;
 }
@@ -116,12 +149,12 @@ export interface ModelCallInput {
   turn?: number;
   cycle?: number;
   /** Fully assembled request messages, supplied by the caller's view. */
-  messages: readonly ModelMessage[];
+  messages: readonly import('./transport/index.ts').Message[];
   /** Character count per assembled prompt layer. */
   layers: Record<string, number>;
   /** Required for `reason`; ignored for every other role. */
   reason?: ReasonSelection;
-  /** Output-token cap forwarded as the wire `max_tokens` when the driver supports it. */
+  /** Output-token cap forwarded as the protocol's own token field when set. */
   maxTokens?: number;
   signal: AbortSignal;
   onText?: (delta: string) => void;
@@ -140,32 +173,16 @@ export interface ModelCallOutput {
   usage?: Usage;
   /** Native tool calls the model returned, in call order; empty when it returned none. */
   toolCalls: ToolCall[];
+  finishReason?: import('./transport/index.ts').FinishReason;
 }
 
 /** One ranked auxiliary route and the level it is called at. */
 export interface AuxiliaryRoute { model: string; reasoningEffort: ReasoningEffort; }
-/** One route an auxiliary call tried (`ok`/`failed`) or skipped for its Gateway state. */
-export interface CallRouteAttempt {
-  model: string;
-  rank?: number;
-  reasoningEffort: ReasoningEffort;
-  startedAt: string;
-  endedAt: string;
-  status: 'ok' | 'failed' | 'skipped';
-  routeState?: GatewayRouteState;
-  routeUntil?: string;
-  /** Same-route transport retries before this attempt settled. */
-  transportRetries?: number;
-  error?: string;
-  usage?: Usage;
-}
-
-/** Ranked routes an auxiliary call may actually send to; skipped routes do not count. */
-const MAX_ROUTE_ATTEMPTS = 3;
 
 export interface CallRunnerOptions {
   resolveProvider?: (providerId: string) => ProviderDefinition | undefined;
-  driver: ModelDriver;
+  /** The one unified transport every role calls. */
+  transport: ModelTransport;
   /** Current Gateway state of a route; a provider or pool failure can block sibling routes. */
   routeStatus?: (model: string) => GatewayRouteStatus | undefined;
   /** Session id, sent to the Gateway for request attribution. */
@@ -174,7 +191,7 @@ export interface CallRunnerOptions {
   selectAuxiliary: (role: AuxiliaryCallRole) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
   /** Structural sink: exactly one terminal call event per attempted invocation. */
   append: (event: CallLedgerEventDraft) => void | Promise<void>;
-  /** Forwarded as {@link DriverRequest.cacheKey} on every call of this runner. */
+  /** Forwarded as the request cache key on every call of this runner. */
   cacheKey?: string;
   now?: () => Date;
 }
@@ -183,7 +200,7 @@ export interface CallRunner {
   run(input: ModelCallInput): Promise<ModelCallOutput>;
 }
 
-/** Raised after the call event has been written; carries the partial output. */
+/** Raised after the call event has been written; carries the partial output and failure facts. */
 export class ModelCallError extends Error {
   constructor(
     message: string,
@@ -194,6 +211,10 @@ export class ModelCallError extends Error {
       status: 'failed' | 'aborted';
       partialText: string;
       partialReasoning?: string;
+      /** Structured failure fact for the reply view. */
+      failure?: CallErrorFact;
+      /** Attempt statistics of the failed call. */
+      attempts?: ModelAttempts;
     },
   ) {
     super(message);
@@ -228,7 +249,7 @@ export function estimateContentTokens(content: string | readonly ModelContentPar
 }
 
 /** `cl100k_base` token count estimate of a supplied message list. */
-export function estimateInputTokens(messages: readonly ModelMessage[]): number {
+export function estimateInputTokens(messages: readonly import('./transport/index.ts').Message[]): number {
   let total = 0;
   for (const message of messages) total += estimateTokens(message.role) + estimateContentTokens(message.content);
   return total;
@@ -240,7 +261,10 @@ export function estimateInputTokens(messages: readonly ModelMessage[]): number {
  * before the budget check and the driver, so a cheap call can never transmit
  * image content.
  */
-export function sanitizeMessagesForRole(role: CallRole, messages: readonly ModelMessage[]): readonly ModelMessage[] {
+export function sanitizeMessagesForRole(
+  role: CallRole,
+  messages: readonly import('./transport/index.ts').Message[],
+): readonly import('./transport/index.ts').Message[] {
   if (role === 'reason') return messages;
   let replaced = false;
   const next = messages.map((message) => {
@@ -251,43 +275,6 @@ export function sanitizeMessagesForRole(role: CallRole, messages: readonly Model
     return { ...message, content: parts };
   });
   return replaced ? next : messages;
-}
-
-let catalog: ReturnType<typeof createBuiltinCatalog> | undefined;
-
-function builtinCatalog(): ReturnType<typeof createBuiltinCatalog> {
-  catalog ??= createBuiltinCatalog();
-  return catalog;
-}
-
-/**
- * Model metadata for one `provider/model` public id. The built-in provider
- * catalog is authoritative; a field the provider module leaves undeclared is
- * completed from the canonical model in the `@wrenyard/models` registry. A
- * field neither source declares stays undefined, and the budget check is then
- * skipped instead of being invented.
- */
-export function resolveModelMetadata(publicId: string, resolveProvider: (providerId: string) => ProviderDefinition | undefined = id => builtinCatalog().provider(id)): ModelMetadata {
-  const separator = publicId.indexOf('/');
-  if (separator <= 0 || separator === publicId.length - 1) return {};
-  const providerId = publicId.slice(0, separator);
-  const requestedModelId = publicId.slice(separator + 1);
-  const provider = resolveProvider(providerId);
-  const modelId = provider?.modelAliases?.[requestedModelId] ?? requestedModelId;
-  const definition: ModelDefinition | undefined = provider?.models.find((entry) => entry.id === modelId);
-  const defaults = registeredModels.get(definition?.canonicalModel?.id ?? modelId)?.defaults;
-  const contextWindow = definition?.contextWindow ?? defaults?.contextWindow;
-  const maxOutputTokens = definition?.maxOutputTokens ?? defaults?.maxOutputTokens;
-  // Reasoning levels are route-owned: only the resolved provider definition
-  // declares them, and the canonical registry never carries an effort list.
-  const reasoningEfforts = definition?.reasoningEfforts;
-  const imageInput = definition?.capabilities?.some((capability) => capability === 'image');
-  return {
-    ...(contextWindow === undefined ? {} : { contextWindow }),
-    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
-    ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
-    ...(imageInput === undefined ? {} : { imageInput }),
-  };
 }
 
 export interface ContextBudget {
@@ -304,7 +291,7 @@ export interface ContextBudget {
  * extra soft budget — and a call is refused when the estimate plus the model's
  * output allowance would exceed its window.
  */
-export function checkContextBudget(publicId: string, messages: readonly ModelMessage[], resolveProvider?: (providerId: string) => ProviderDefinition | undefined): ContextBudget {
+export function checkContextBudget(publicId: string, messages: readonly import('./transport/index.ts').Message[], resolveProvider?: (providerId: string) => ProviderDefinition | undefined): ContextBudget {
   const metadata = resolveModelMetadata(publicId, resolveProvider);
   const estimatedInputTokens = estimateInputTokens(messages);
   if (metadata.contextWindow === undefined || metadata.maxOutputTokens === undefined) {
@@ -352,12 +339,6 @@ function settleWithAbort<T>(value: T | Promise<T>, signal: AbortSignal): Promise
   });
 }
 
-function abortError(): Error {
-  const error = new Error('Model call was aborted');
-  error.name = 'AbortError';
-  return error;
-}
-
 /** Human-readable failure message for one abort cause. */
 function abortMessage(kind: 'signal' | 'timeout' | 'idle' | undefined, totalTimeoutMs: number | undefined): string {
   if (kind === 'timeout') return `Call timed out after ${totalTimeoutMs} ms`;
@@ -378,6 +359,22 @@ function withOverflowPrefix(error: unknown): string {
   return isContextOverflowError(error) ? `context_overflow: ${message}` : message;
 }
 
+/** Build the structured failure fact of a thrown transport error. */
+function errorFactOf(error: unknown): CallErrorFact {
+  if (error instanceof Error && 'kind' in error && typeof (error as { kind?: unknown }).kind === 'string') {
+    const typed = error as { kind: ModelErrorKind; status?: number; message: string };
+    return { kind: typed.kind, ...(typed.status === undefined ? {} : { status: typed.status }), message: typed.message };
+  }
+  return { kind: 'protocol', message: error instanceof Error ? error.message : String(error) };
+}
+
+/** Attempt statistics of a thrown transport error, when it carries them. */
+function attemptsOf(error: unknown): ModelAttempts | undefined {
+  return error instanceof Error && 'attempts' in error
+    ? (error as { attempts?: ModelAttempts }).attempts
+    : undefined;
+}
+
 /** Create the role-aware call runner. */
 export function createCallRunner(options: CallRunnerOptions): CallRunner {
   const now = options.now ?? ((): Date => new Date());
@@ -394,7 +391,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       let requestedReasoningEffort: string | undefined;
       let routes: readonly AuxiliaryRoute[] | undefined;
       let selectedRank: number | undefined;
-      const routeAttempts: CallRouteAttempt[] = [];
+      const retries: CallRetry[] = [];
       let partialUsage: Usage | undefined;
       let emitted = false;
       /** First nonempty delta time, shared by the terminal call event. */
@@ -402,7 +399,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
 
       const emit = async (
         status: CallEventDraft['status'],
-        fields: { output: string; reasoning?: string; usage?: Usage; error?: string; firstTokenAt?: string },
+        fields: { output: string; reasoning?: string; usage?: Usage; error?: CallErrorFact; firstTokenAt?: string; tps?: TpsSample },
       ): Promise<void> => {
         if (emitted) return;
         emitted = true;
@@ -423,9 +420,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           reasoningEffort: actualReasoningEffort,
           ...(routes === undefined ? {} : { routeCandidates: routes }),
           ...(selectedRank === undefined ? {} : { selectedRank }),
-          ...(routeAttempts.length ? { routeAttempts } : {}),
+          ...(retries.length ? { retries } : {}),
           ...(requestedReasoningEffort === undefined ? {} : { requestedReasoningEffort }),
           ...(fields.error === undefined ? {} : { error: fields.error }),
+          ...(fields.tps === undefined ? {} : { tps: fields.tps }),
           ...(input.turn === undefined ? {} : { turn: input.turn }),
           ...(input.cycle === undefined ? {} : { cycle: input.cycle }),
         });
@@ -438,16 +436,19 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           partialText?: string;
           partialReasoning?: string;
           usage?: Usage;
+          error?: CallErrorFact;
+          attempts?: ModelAttempts;
         } = {},
       ): Promise<never> => {
         const status = detail.status ?? 'failed';
         const partialText = detail.partialText ?? '';
+        const failure = detail.error ?? { kind: 'protocol' as ModelErrorKind, message };
         await emit(status, {
           output: partialText,
           ...(detail.partialReasoning === undefined ? {} : { reasoning: detail.partialReasoning }),
           ...(detail.usage === undefined ? {} : { usage: detail.usage }),
           ...(firstTokenAt === undefined ? {} : { firstTokenAt }),
-          error: message,
+          error: failure,
         });
         throw new ModelCallError(message, {
           callId: input.callId,
@@ -456,6 +457,8 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           status,
           partialText,
           ...(detail.partialReasoning === undefined ? {} : { partialReasoning: detail.partialReasoning }),
+          failure,
+          ...(detail.attempts === undefined ? {} : { attempts: detail.attempts }),
         });
       };
 
@@ -489,35 +492,38 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       let reasoning = '';
       const onText = (delta: string): void => {
         text += delta;
-        if (delta !== '') {
-          onOutput();
-        }
+        if (delta !== '') onOutput();
         input.onText?.(delta);
       };
       const onReasoning = (delta: string): void => {
         reasoning += delta;
-        if (delta !== '') {
-          onOutput();
-        }
+        if (delta !== '') onOutput();
         input.onReasoning?.(delta);
       };
+      /** Map one transport event onto the runner's output and activity tracking. */
+      const onEvent = (event: ModelEvent): void => {
+        switch (event.type) {
+          case 'text': onText(event.delta); return;
+          case 'reasoning': onReasoning(event.delta); return;
+          case 'tool_call': onOutput(); input.onToolCall?.(event.call); return;
+          case 'usage': partialUsage = event.usage; return;
+          case 'activity': resetIdle(); return;
+          case 'retry':
+            retries.push({
+              kind: event.kind,
+              delayMs: event.delayMs,
+              ...(event.status === undefined ? {} : { status: event.status }),
+              // Recorded only when the upstream hint was actually adopted; a pure
+              // exponential-backoff retry carries no retryAfter.
+              ...(event.retryAfter === undefined ? {} : { retryAfter: event.retryAfter }),
+            });
+            // A retry wait is activity: it must not trip the idle timer.
+            resetIdle();
+            return;
+        }
+      };
 
-      const recordAttempt = (
-        choice: AuxiliaryRoute, rank: number | undefined, attemptStartedAt: string,
-        status: CallRouteAttempt['status'], fields: Partial<CallRouteAttempt> = {},
-      ): void => {
-        routeAttempts.push({ model: choice.model, ...(rank === undefined ? {} : { rank }), reasoningEffort: choice.reasoningEffort,
-          startedAt: attemptStartedAt, endedAt: now().toISOString(), status, ...fields });
-      };
-      const routeFailureMessage = (): string => {
-        const failures = routeAttempts.map(attempt => [
-          `${attempt.model}: ${attempt.routeState ?? attempt.status}`,
-          attempt.routeUntil ? ` (until ${attempt.routeUntil})` : '',
-          attempt.error ? ` - ${attempt.error}` : '',
-        ].join(''));
-        return `Model call ${input.role} failed: ${failures.join('; ') || 'no available route remains'}`;
-      };
-      let result: DriverResult | undefined;
+      let result: ModelResult | undefined;
       try {
         if (input.role === 'reason') {
           const selection = input.reason;
@@ -538,80 +544,51 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         }
 
         // The main reasoning call is explicit and never switches; an auxiliary
-        // call walks its ranked routes, skipping any the Gateway currently marks.
+        // call keeps the one route it selected after skipping blocked routes.
         const choices: readonly AuxiliaryRoute[] = input.role === 'reason'
           ? [{ model, reasoningEffort: requestedReasoningEffort as ReasoningEffort }]
           : routes!;
-        let attempted = 0;
-        for (const [index, choice] of choices.entries()) {
-          const rank = input.role === 'reason' ? undefined : index + 1;
-          const blocked = rank === undefined ? undefined : options.routeStatus?.(choice.model);
-          if (blocked) {
-            recordAttempt(choice, rank, now().toISOString(), 'skipped', { routeState: blocked.state, routeUntil: blocked.until });
-            continue;
-          }
-          if (attempted === MAX_ROUTE_ATTEMPTS) break;
-          attempted += 1;
-          model = choice.model;
-          selectedRank = rank;
-          partialUsage = undefined;
-          const budget = checkContextBudget(model, messages, options.resolveProvider);
-          estimatedInputTokens = budget.estimatedInputTokens;
-          if (!isReasoningEffortSupported(budget.metadata, choice.reasoningEffort)) {
-            return await fail(`Model ${model} does not support reasoning effort "${choice.reasoningEffort ?? ''}"`);
-          }
-          actualReasoningEffort = choice.reasoningEffort;
-          if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
-          const attemptStartedAt = now().toISOString();
-          let transportRetries = 0;
-          await options.append({ type: 'call.started', callId: input.callId, role: input.role, model,
-            ...(input.turn === undefined ? {} : { turn: input.turn }),
-            ...(input.cycle === undefined ? {} : { cycle: input.cycle }) });
-          try {
-            result = await settleWithAbort(options.driver.complete({
-              model, messages, reasoningEffort: actualReasoningEffort, role: input.role,
-              ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
-              ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
-              ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
-              ...(input.tools === undefined ? {} : { tools: input.tools }),
-              ...(input.onToolCall === undefined ? {} : {
-                onToolCall: (call: ToolCall): void => { onOutput(); input.onToolCall?.(call); },
-              }),
-              signal: controller.signal, onText, onReasoning, onOutput,
-              onTransportRetry: () => { transportRetries += 1; },
-              onActivity: resetIdle, onUsage: (usage: Usage): void => { partialUsage = usage; },
-            }), controller.signal);
-            const usage = result.usage ?? partialUsage;
-            recordAttempt(choice, rank, attemptStartedAt, 'ok', {
-              ...(transportRetries ? { transportRetries } : {}), ...(usage === undefined ? {} : { usage }) });
-            break;
-          } catch (error) {
-            const routeError = error instanceof GatewayRequestError && error.routeState !== undefined ? error : undefined;
-            recordAttempt(choice, rank, attemptStartedAt, 'failed', {
-              ...(routeError ? { routeState: routeError.routeState, ...(routeError.routeUntil ? { routeUntil: routeError.routeUntil } : {}) } : {}),
-              ...(transportRetries ? { transportRetries } : {}),
-              ...(partialUsage === undefined ? {} : { usage: partialUsage }),
-              error: error instanceof Error ? error.message : String(error),
-            });
-            // Only a Gateway route state before any generated output (tool
-            // fragments included) admits the next ranked route.
-            if (routeError && rank !== undefined && !outputStarted && !controller.signal.aborted) continue;
-            if (routeError) throw new Error(routeFailureMessage());
-            throw error;
-          }
+        const choice = choices.find((candidate) => input.role === 'reason'
+          || options.routeStatus?.(candidate.model) === undefined);
+        if (choice === undefined) throw new Error(`Model call ${input.role} failed: every candidate route is blocked`);
+        const rank = input.role === 'reason' ? undefined : choices.indexOf(choice) + 1;
+        model = choice.model;
+        selectedRank = rank;
+        const budget = checkContextBudget(model, messages, options.resolveProvider);
+        estimatedInputTokens = budget.estimatedInputTokens;
+        if (!isReasoningEffortSupported(budget.metadata, choice.reasoningEffort)) {
+          return await fail(`Model ${model} does not support reasoning effort "${choice.reasoningEffort ?? ''}"`);
         }
-        if (result === undefined) throw new Error(routeFailureMessage());
+        actualReasoningEffort = choice.reasoningEffort;
+        if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
+        await options.append({ type: 'call.started', callId: input.callId, role: input.role, model,
+          ...(input.turn === undefined ? {} : { turn: input.turn }),
+          ...(input.cycle === undefined ? {} : { cycle: input.cycle }) });
+        result = await settleWithAbort(options.transport.complete({
+          model,
+          messages,
+          reasoningEffort: actualReasoningEffort,
+          attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
+          ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
+          ...(input.maxTokens === undefined ? {} : { maxOutputTokens: input.maxTokens }),
+          ...(input.tools === undefined ? {} : { tools: input.tools }),
+          signal: controller.signal,
+          onEvent,
+        }), controller.signal);
       } catch (error) {
         if (error instanceof ModelCallError) throw error;
         const status: 'failed' | 'aborted' = abortKind === 'signal' ? 'aborted' : 'failed';
         const message = abortKind === undefined
           ? withOverflowPrefix(error)
           : abortMessage(abortKind, totalTimeoutMs);
+        const errorFact = abortKind === undefined ? errorFactOf(error) : { kind: 'aborted' as ModelErrorKind, message };
         return await fail(message, {
           status,
           partialText: text,
           ...(reasoning === '' ? {} : { partialReasoning: reasoning }),
           ...(partialUsage === undefined ? {} : { usage: partialUsage }),
+          error: errorFact,
+          ...(attemptsOf(error) === undefined ? {} : { attempts: attemptsOf(error)! }),
         });
       } finally {
         if (totalTimer !== undefined) clearTimeout(totalTimer);
@@ -629,6 +606,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         ...(finalReasoning === undefined ? {} : { reasoning: finalReasoning }),
         ...(usage === undefined ? {} : { usage }),
         ...(firstTokenAt === undefined ? {} : { firstTokenAt }),
+        // The successful result's optional sample is the only TPS recorded; a
+        // transport failure never produces one.
+        ...(result?.tps === undefined ? {} : { tps: result.tps }),
       });
 
       return {
@@ -637,6 +617,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         ...(finalReasoning === undefined ? {} : { reasoning: finalReasoning }),
         ...(usage === undefined ? {} : { usage }),
         toolCalls: result?.toolCalls ?? [],
+        ...(result?.finishReason === undefined ? {} : { finishReason: result.finishReason }),
       };
     },
   };
