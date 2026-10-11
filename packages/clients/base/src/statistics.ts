@@ -3,7 +3,7 @@
  *
  * Every client decoder that can observe a client's own partial stream uses
  * these primitives so the persisted sample means exactly one thing: a fixed,
- * embedded cl100k_base tokenizer counted over ONLY the generation content that
+ * embedded o200k_base tokenizer counted over ONLY the generation content that
  * was actually observed streaming, divided by that content's own
  * first-to-last nonempty delta window.
  *
@@ -58,7 +58,7 @@ export interface AggregatedResponseTpsSample {
 let tokenizer: ReturnType<typeof getEncoding> | undefined;
 
 /**
- * Counts text as ordinary text with the fixed cl100k_base vocabulary, so a
+ * Counts text as ordinary text with the fixed o200k_base vocabulary, so a
  * special-token lookalike in model output can never throw. Returns undefined
  * when the tokenizer cannot be constructed, which makes the caller skip the
  * sample instead of reporting a partial count.
@@ -66,7 +66,7 @@ let tokenizer: ReturnType<typeof getEncoding> | undefined;
 export function countTPSTokens(text: string): number | undefined {
     if (text === '') return 0;
     try {
-        tokenizer ??= getEncoding('cl100k_base');
+        tokenizer ??= getEncoding('o200k_base');
     } catch {
         return undefined;
     }

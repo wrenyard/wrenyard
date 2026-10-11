@@ -36,7 +36,7 @@ export const MEDIA_LIMITS = {
 const MAX_PREVIEW_BYTES = 4 * 1024 * 1024;
 const MAX_LONG_EDGE = 1568;
 const TEXT_TOKEN_CAP = 20_000;
-const TEXT_ENCODING = getEncoding('cl100k_base');
+const TEXT_ENCODING = getEncoding('o200k_base');
 const SEGMENT_PATTERN = /^[A-Za-z0-9._-]+$/;
 const DATA_URL_PATTERN = /^data:([^;,]*);base64,([A-Za-z0-9+/]*={0,2})$/u;
 
