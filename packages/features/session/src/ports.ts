@@ -12,13 +12,13 @@ import type {
   SessionSummary,
   TaskBrief,
   WorkspaceSnapshot,
-} from './ledger.ts';
-import type { CallRole } from './calls.ts';
-import type { ContextInspectRequest, ContextInspection } from './context-inspect.ts';
-import type { Message as ModelMessage, ModelContentPart, ToolCall, ToolSpec, Usage } from './transport/index.ts';
+} from './ledger/store.ts';
+import type { CallRole } from './model/request.ts';
+import type { ContextInspectRequest, ContextInspection } from './context/inspect.ts';
+import type { Message as ModelMessage, ModelContentPart, ToolCall, ToolSpec, Usage, ModelMetrics } from './transport/index.ts';
 import type { AttachmentInput, FileStore, TaskArtifact } from './media.ts';
 import type { DocCatalogEntry } from './workspace.ts';
-import type { ActionRunContext } from './actions/index.ts';
+import type { ActionRunContext } from './reasoning/actions.ts';
 
 // ─── Public host and session surface ───────────────────────────────────────
 
@@ -51,9 +51,9 @@ export interface SessionHost {
   resolveInferenceProvider(providerId: string): ProviderDefinition | undefined;
   /** In-memory Gateway state of a `provider/model` route; never queries a provider. */
   routeStatus?(model: string): import('@wrenyard/providers/base').GatewayRouteStatus | undefined;
-  selectAuxiliary(role: import('./role-requirements.ts').AuxiliaryCallRole): Promise<readonly import('./calls.ts').AuxiliaryRoute[]>;
+  selectAuxiliary(role: import('./model/roles.ts').AuxiliaryCallRole): Promise<readonly import('./model/request.ts').AuxiliaryRoute[]>;
   /** Read-only, per-role rank-1 auxiliary route preview; never calls a model. */
-  previewAuxiliaryRoutes(): Promise<readonly import('./role-requirements.ts').AuxiliaryRoutePreview[]>;
+  previewAuxiliaryRoutes(): Promise<readonly import('./model/roles.ts').AuxiliaryRoutePreview[]>;
   listProjects(): Promise<ProjectInfo[]>;
   gitHead(checkoutPath: string): Promise<{ branch?: string; head?: string }>;
   /** Describe the named protocol methods; unknown names are omitted. */
@@ -81,6 +81,8 @@ export interface SessionHost {
   waitTaskRun(taskRunId: string, signal: AbortSignal): Promise<{
     status: string;
     output: string;
+    /** The task run's usage and reference cost as the task system reports them. */
+    usage?: Record<string, unknown>;
     /** Sanitized structured artifacts, separate from the free-form output text. */
     artifacts?: TaskArtifact[];
     /** Textual descriptors of stripped artifact entries. */
@@ -92,12 +94,13 @@ export interface SessionHost {
 
 /**
  * An in-memory streaming snapshot of one call. It is never written to the
- * ledger: the durable `call.started` / `call` events remain authoritative, and
- * the live table only bridges the gap while a call is still running. The
- * complete accumulated text (not a delta) is exposed on each notification.
+ * ledger: the durable `span.started` / `span.finished` events remain
+ * authoritative, and the live table only bridges the gap while a call is still
+ * running. The complete accumulated text (not a delta) is exposed on each
+ * notification.
  */
 export interface LiveCall {
-  callId: string;
+  spanId: string;
   text: string;
   reasoning: string;
 }
@@ -140,7 +143,7 @@ export interface Session {
    * Read-only preview of each auxiliary role's rank-1 route (model, reasoning
    * effort, display name and window). Never calls a model and never writes.
    */
-  previewRoutes(): Promise<{ roles: import('./role-requirements.ts').AuxiliaryRoutePreview[] }>;
+  previewRoutes(): Promise<{ roles: import('./model/roles.ts').AuxiliaryRoutePreview[] }>;
   /** Current in-memory streaming snapshots for the session's live calls. */
   readLive(sessionId: string): LiveCall[];
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void;
@@ -207,17 +210,19 @@ export interface SessionViewInfo {
   now?: string;
   sessionId: string;
   turn: number;
-  cycle: number;
+  step: number;
   model: string;
   deviceName: string;
   contextWindow?: number;
 }
 
 export interface CallRunRequest {
-  callId: string;
+  spanId: string;
+  /** The owning step for a reasoning span, or the owning action for an auxiliary span. */
+  parent: string;
   role: CallRole;
   turn?: number;
-  cycle?: number;
+  step?: number;
   messages: readonly ModelMessage[];
   layers: Record<string, number>;
   /** Required for the `reason` role; ignored for every other role. */
@@ -240,11 +245,17 @@ export interface CallRunResult {
   usage?: Usage;
   /** Native tool calls the model returned, in call order; empty when it returned none. */
   toolCalls: readonly ToolCall[];
+  /** Measured facts of the call, produced by the transport. */
+  metrics: ModelMetrics;
 }
 
 /** Structural match for `calls.ts`'s `CallRunner`. */
 export interface CallsPort {
   run(input: CallRunRequest): Promise<CallRunResult>;
+  /** Keep one span open across several requests of the same task. */
+  holdSpan(spanId: string): void;
+  /** Close a held span, writing everything measured so far. */
+  releaseSpan(spanId: string, status?: import('./ledger/events.ts').SpanStatus): Promise<void>;
 }
 
 /** One assembled prompt view: protocol-neutral messages plus layer statistics. */
@@ -266,21 +277,19 @@ export interface CallFailureSummary {
   status?: number;
   /** Supplier's original message. */
   message: string;
-  /** Requests issued for the failed call, including the first. */
-  attempts?: number;
-  /** Same-route retries issued before the failure. */
-  retries: number;
-  /** Wall-clock duration of the failed call in milliseconds. */
-  durationMs?: number;
+  /** Measured facts of the failed call, produced by the transport. */
+  metrics?: ModelMetrics;
 }
 
 /** The result of one engine model call. */
 export interface InvokedCall {
   ok: boolean;
-  callId: string;
+  spanId: string;
   text: string;
   reasoning?: string;
   toolCalls?: readonly ToolCall[];
+  /** Measured facts of the call, produced by the transport. */
+  metrics?: ModelMetrics;
   error?: string;
   /** Structured main-reasoning failure facts; present only when the call failed. */
   failure?: CallFailureSummary;
@@ -297,27 +306,31 @@ export interface SessionCallHost {
   readonly ledger: LedgerPort;
   now(): Date;
   track(promise: Promise<unknown>): void;
+  /** Reserve the next session-wide action id, shared by reasoning and system actions. */
+  nextActionId(session: import('./turn/runtime.ts').SessionRuntime): string;
   appendError(
     sessionId: string,
     stage: string,
     message: string,
-    turn: import('./runtime.ts').TurnRuntime,
-    cycle?: number,
+    turn: import('./turn/runtime.ts').TurnRuntime,
+    step?: number,
   ): Promise<void>;
   invoke(
-    session: import('./runtime.ts').SessionRuntime,
-    turn: import('./runtime.ts').TurnRuntime,
+    session: import('./turn/runtime.ts').SessionRuntime,
+    turn: import('./turn/runtime.ts').TurnRuntime,
     role: CallRole,
     view: BuiltView,
     extra?: {
-      callId?: string;
+      spanId?: string;
+      /** Span parent; defaults to the step id for `reason`, the turn id otherwise. */
+      parent?: string;
       reason?: { provider: string; model: string; reasoningEffort: ReasoningEffort };
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
       tools?: readonly ToolSpec[];
       maxTokens?: number;
-      cycle?: number;
+      step?: number;
     },
   ): Promise<InvokedCall>;
   safeCancelTask(taskRunId: string): Promise<void>;

@@ -244,9 +244,11 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
       const result = await taskService.wait(taskRunId, undefined, signal)
       const artifacts = outputArtifacts(result.output)
       const artifactErrors = artifactErrorDescriptors(result._meta)
+      const usage = taskService.status(taskRunId)?.usage
       return {
         status: result.status as string,
         output: outputText(result.output) || outputText(result.error),
+        ...(usage !== null && typeof usage === 'object' ? { usage: usage as Record<string, unknown> } : {}),
         ...(artifacts.length === 0 ? {} : { artifacts }),
         ...(artifactErrors.length === 0 ? {} : { artifactErrors }),
       }

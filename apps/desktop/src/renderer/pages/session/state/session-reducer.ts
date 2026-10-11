@@ -54,9 +54,14 @@ export function mergeEvents(current: LedgerEvent[], incoming: LedgerEvent[]): Le
 }
 
 function withLedgerTitle(sessions: SessionSummary[], events: LedgerEvent[], sessionId: string): SessionSummary[] {
-  const title = events.filter((event) => (event as { type: string }).type === 'title').at(-1) as { text?: string } | undefined;
-  if (!title?.text) return sessions;
-  return sessions.map((session) => (session.sessionId === sessionId ? { ...session, title: title.text! } : session));
+  // A session title is the text of the last `session.titled` event.
+  let title: string | undefined;
+  for (const event of events) {
+    const record = event as { type?: string; text?: string };
+    if (record.type === 'session.titled') title = record.text;
+  }
+  if (!title) return sessions;
+  return sessions.map((session) => (session.sessionId === sessionId ? { ...session, title: title! } : session));
 }
 
 export type SessionAction =

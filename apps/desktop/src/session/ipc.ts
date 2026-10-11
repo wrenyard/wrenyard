@@ -82,7 +82,7 @@ function sameLive(a: readonly LiveCall[], b: readonly LiveCall[]): boolean {
   for (let index = 0; index < a.length; index += 1) {
     const left = a[index]!;
     const right = b[index]!;
-    if (left.callId !== right.callId || left.text !== right.text || left.reasoning !== right.reasoning) return false;
+    if (left.spanId !== right.spanId || left.text !== right.text || left.reasoning !== right.reasoning) return false;
   }
   return true;
 }

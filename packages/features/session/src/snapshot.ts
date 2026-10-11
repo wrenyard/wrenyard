@@ -6,7 +6,7 @@
 import { readdirSync, existsSync, statSync } from 'node:fs';
 
 import type { SnapshotInput, SnapshotProjectInput, SessionHost } from './ports.ts';
-import type { WorkspaceSnapshot } from './ledger.ts';
+import type { WorkspaceSnapshot } from './ledger/store.ts';
 import { readInternal, WorkspaceFileSource, safePath } from './workspace.ts';
 
 export async function createWorkspaceSnapshot(input: SnapshotInput): Promise<WorkspaceSnapshot> {

@@ -1,7 +1,7 @@
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { rankAutoRoutingCandidates, type CandidateInput } from '@wrenyard/auto-routing';
 import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
-import { ROLE_REQUIREMENTS, CHEAP_TIMEOUT_MS, supportsSession, type AuxiliaryCallRole, type AuxiliaryRoute } from '@wrenyard/session';
+import { ROLE_REQUIREMENTS, AUXILIARY_TIMEOUT_MS, supportsSession, type AuxiliaryCallRole, type AuxiliaryRoute } from '@wrenyard/session';
 import { JsonForemanConfigStore } from '../../config/manager.mts';
 import { readGlobalTaskSettings, type TasksConfigSettingsInput, type TaskSettingsLayer } from '../../config/task-settings.mts';
 import type { AutoRoutingQuotaSnapshotService } from './auto-routing-snapshot-service.mts';
@@ -83,13 +83,13 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
         },
       });
     });
-    const pricings = entries.map(({ entry }) => deepSeekAutomaticPricingOf(entry.choice, nowMs, CHEAP_TIMEOUT_MS));
+    const pricings = entries.map(({ entry }) => deepSeekAutomaticPricingOf(entry.choice, nowMs, AUXILIARY_TIMEOUT_MS));
     const caps = [settings?.dispatch?.maxOutputUsdPerMillion, settings?.maxAutoOutputUsdPerMillion].filter((cap): cap is number => cap !== undefined);
     const capUsdPerM = effectiveRoutingCap(entries.map(({ entry }, index) => pricings[index]?.safetyOutputUsdPerM ?? entry.choice.reference_pricing.output_usd_per_million!), caps);
     const inputs: CandidateInput[] = [];
     entries.forEach(({ entry }, index) => {
       const candidate = toAutomaticCandidateInput(entry, {
-        snapshotId: snapshot.snapshotId, nowMs, timeoutMs: CHEAP_TIMEOUT_MS, snapshot, capUsdPerM,
+        snapshotId: snapshot.snapshotId, nowMs, timeoutMs: AUXILIARY_TIMEOUT_MS, snapshot, capUsdPerM,
         minimumTps: 0, expectedTps: requirements.expectedTps,
         intelligenceMinRank: INTELLIGENCE_ORDER[requirements.intelligenceMin],
         intelligenceExpectedRank: INTELLIGENCE_ORDER[requirements.intelligenceExpected],

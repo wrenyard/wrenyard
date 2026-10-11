@@ -1,5 +1,5 @@
 /**
- * The search secondary session: read workspace material by intent or exact
+ * The search auxiliary task: read workspace material by intent or exact
  * path. It resolves the intent's path tokens against the session's document
  * catalog and files, asks the document retriever which documents to read, and
  * returns the reads as deferred drafts.
@@ -8,20 +8,20 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { collectSessionFiles, type LedgerEvent, type LedgerEventDraft } from '../../ledger.ts';
-import { makeDocumentDraft } from '../../documents.ts';
-import { escapeAttr, escapeBody, tag, twoPartView } from '../../render.ts';
-import { fail, isObject, renderRunFiles } from '../shared.ts';
-import { messageOf } from '../../errors.ts';
-import type { DocCatalogEntry } from '../../workspace.ts';
-import type { SessionFile } from '../../media.ts';
-import type { BuiltView } from '../../ports.ts';
+import { collectSessionFiles, type LedgerEvent, type LedgerEventDraft } from '../ledger/store.ts';
+import { makeDocumentDraft } from '../documents.ts';
+import { escapeAttr, escapeBody, tag, twoPartView } from '../context/render.ts';
+import { fail, isObject, renderRunFiles } from './shared.ts';
+import { messageOf } from '../errors.ts';
+import type { DocCatalogEntry } from '../workspace.ts';
+import type { SessionFile } from '../media.ts';
+import type { BuiltView } from '../ports.ts';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,
   ActionWorkflowDeps,
   ParsedAction,
-} from '../index.ts';
+} from '../reasoning/actions.ts';
 
 // ─── Document-retriever view ────────────────────────────────────────────────
 
@@ -102,7 +102,7 @@ export async function runSearchAction(
   const catalog = deps.files.listDocuments();
   const sessionFiles = collectSessionFiles(events);
   const loadedDocs = new Set<string>();
-  for (const event of events) if (event.type === 'doc.content') loadedDocs.add(event.path);
+  for (const event of events) if (event.type === 'document.content') loadedDocs.add(event.path);
 
   const deferred: LedgerEventDraft[] = [];
   const loaded: string[] = [];
@@ -153,12 +153,12 @@ export async function runSearchAction(
     picks = parsed.picks.filter((pick) => !loadedDocs.has(pick.path));
     const nearTitles = parsed.near.map((near) => `${near.path} (${near.title})`);
     if (nearTitles.length > 0) notes.push(`near: ${nearTitles.join(', ')}`);
-    // First doc-search draft, before any picked document content.
+    // First document-found draft, before any picked document content.
     deferred.push({
-      type: 'doc.search',
+      type: 'document.found',
       turn: ctx.turn,
-      cycle: ctx.cycle,
-      actionId: ctx.actionId,
+      step: ctx.step,
+      parent: ctx.actionId,
       understanding: parsed.understanding,
       picks: parsed.picks.map((pick) => ({
         path: pick.path,
@@ -190,8 +190,8 @@ export async function runSearchAction(
     await recallProjectInstructions(deps, item.path, ctx, events, deferred);
     const draft = makeDocumentDraft(file, events, {
       turn: ctx.turn,
-      cycle: ctx.cycle,
-      actionId: ctx.actionId,
+      step: ctx.step,
+      parent: ctx.actionId,
       source: 'read',
     });
     if (draft === undefined) already.push(item.path);
@@ -218,13 +218,14 @@ async function runDocSearchCall(
   view: BuiltView,
   ctx: ActionRunContext,
 ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
-  const callId = deps.nextCallId();
+  const spanId = deps.nextSpanId();
   try {
     const result = await deps.calls.run({
-      callId,
+      spanId,
+      parent: ctx.actionId,
       role: 'search',
       turn: ctx.turn,
-      cycle: ctx.cycle,
+      step: ctx.step,
       messages: view.messages,
       layers: view.layers,
       signal: ctx.signal,
@@ -266,12 +267,12 @@ async function readSessionFile(
     return;
   }
   deferred.push({
-    type: 'files',
+    type: 'files.attached',
     turn: ctx.turn,
-    cycle: ctx.cycle,
+    step: ctx.step,
     source: 'read',
     files: [prepared],
-    actionId: ctx.actionId,
+    parent: ctx.actionId,
   });
   loaded.push(path);
 }
@@ -317,8 +318,8 @@ async function recallProjectInstructions(
     if (!file) continue;
     const draft = makeDocumentDraft(file, events, {
       turn: ctx.turn,
-      cycle: ctx.cycle,
-      actionId: ctx.actionId,
+      step: ctx.step,
+      parent: ctx.actionId,
       source: 'project-instructions',
     });
     if (draft !== undefined) deferred.push(draft);
@@ -388,7 +389,7 @@ function parseDocSearch(
 function sessionRunIds(events: readonly LedgerEvent[]): Set<string> {
   const ids = new Set<string>();
   for (const event of events) {
-    if ((event.type === 'action.started' || event.type === 'files') && event.taskRunId !== undefined) ids.add(event.taskRunId);
+    if ((event.type === 'action.started' || event.type === 'files.attached') && event.taskRunId !== undefined) ids.add(event.taskRunId);
   }
   return ids;
 }
@@ -407,11 +408,11 @@ function residualText(text: string, tokens: readonly string[]): string {
   return rest.replace(/["'`>{}[\]]/gu, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
-/** Latest `files` event row for one path, if the path is ledger-registered. */
+/** Latest `files.attached` event row for one path, if the path is ledger-registered. */
 function latestSessionFile(events: readonly LedgerEvent[], path: string): SessionFile | undefined {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;
-    if (event.type !== 'files') continue;
+    if (event.type !== 'files.attached') continue;
     const file = event.files.find((candidate) => candidate.path === path);
     if (file) return file;
   }

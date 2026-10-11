@@ -398,10 +398,10 @@ function usageOf(root: unknown): Usage | undefined {
   const cachedInput = inputDetails ? numberField(inputDetails.cached_tokens) : undefined;
   const reasoning = outputDetails ? numberField(outputDetails.reasoning_tokens) : undefined;
   const usage: Usage = {
-    ...(input === undefined ? {} : { input }),
-    ...(output === undefined ? {} : { output }),
-    ...(cachedInput === undefined ? {} : { cachedInput }),
-    ...(reasoning === undefined ? {} : { reasoning }),
+    ...(input === undefined ? {} : { inputTokens: input }),
+    ...(output === undefined ? {} : { outputTokens: output }),
+    ...(cachedInput === undefined ? {} : { cachedInputTokens: cachedInput }),
+    ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }),
   };
   return Object.keys(usage).length === 0 ? undefined : usage;
 }

@@ -216,7 +216,7 @@ function isEventPayload(value: unknown): value is SessionBridgeEventPayload {
 
 function isLiveCall(value: unknown): value is LiveCall {
   return isRecord(value)
-    && typeof value.callId === 'string'
+    && typeof value.spanId === 'string'
     && typeof value.text === 'string'
     && typeof value.reasoning === 'string';
 }

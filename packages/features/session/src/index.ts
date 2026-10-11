@@ -18,12 +18,12 @@
  * in `ports.ts`.
  */
 
-import { Ledger } from './ledger.ts';
+import { Ledger } from './ledger/store.ts';
 import { WorkspaceFileSource } from './workspace.ts';
-import { createCallRunner, type CallRunner } from './calls.ts';
+import { createCallRunner, type CallRunner } from './model/request.ts';
 import { createModelTransport } from './transport/index.ts';
 import { FileStore } from './media.ts';
-import { createEngine } from './engine.ts';
+import { createEngine } from './turn/engine.ts';
 import {
   type CallsPort,
   type EnginePorts,
@@ -52,27 +52,25 @@ export type {
   TurnPhase,
   ViewMessage,
 } from './ports.ts';
-export type { CompileViewInput } from './actions/dispatch/dispatch.ts';
-export type { DocSearchViewInput } from './actions/secondary/search.ts';
-export type { MemorySearchViewInput } from './actions/secondary/memory.ts';
-export type { ReasonViewInput } from './actions/reason/prompt.ts';
-export type { ReplyViewInput } from './actions/secondary/reply.ts';
-export type { TitleViewInput } from './actions/secondary/title.ts';
-export { fallbackReply } from './actions/secondary/reply.ts';
+export type { CompileViewInput } from './auxiliary/dispatch.ts';
+export type { DocSearchViewInput } from './auxiliary/search.ts';
+export type { MemorySearchViewInput } from './auxiliary/memory.ts';
+export type { ReasonViewInput } from './reasoning/prompt.ts';
+export type { ReplyViewInput } from './auxiliary/reply.ts';
+export type { TitleViewInput } from './auxiliary/title.ts';
+export { fallbackReply } from './auxiliary/reply.ts';
 export type {
   ActionExecutionOutcome,
-  ActionKind,
   ActionRunContext,
-  ActionStatus,
   ParsedAction,
-} from './actions/index.ts';
-export { ActionRunner } from './actions/index.ts';
-export type { SchemaValidation } from './actions/dispatch/dispatch.ts';
-export { validateJsonSchema } from './actions/dispatch/dispatch.ts';
-export type { AuxiliaryRoute, CallErrorFact, CallLedgerEventDraft, CallRetry, CallRole, CallStartedEventDraft, ModelCallInput, ModelCallOutput } from './calls.ts';
+} from './reasoning/actions.ts';
+export { ActionRunner } from './reasoning/actions.ts';
+export type { SchemaValidation } from './auxiliary/dispatch.ts';
+export { validateJsonSchema } from './auxiliary/dispatch.ts';
+export type { AuxiliaryRoute, CallErrorFact, CallRole, ModelCallInput, ModelCallOutput, SpanEventDraft } from './model/request.ts';
 export {
   CALL_ROLES,
-  CHEAP_TIMEOUT_MS,
+  AUXILIARY_TIMEOUT_MS,
   IMAGE_INPUT_TOKEN_ESTIMATE,
   checkContextBudget,
   estimateContentTokens,
@@ -81,10 +79,10 @@ export {
   isReasoningEffortSupported,
   resolveModelMetadata,
   sanitizeMessagesForRole,
-} from './calls.ts';
-export type { AuxiliaryCallRole, RoleReasoningRequirement } from './role-requirements.ts';
-export { AUXILIARY_ROLE_ORDER, ROLE_REQUIREMENTS } from './role-requirements.ts';
-export type { AuxiliaryRoutePreview } from './role-requirements.ts';
+} from './model/request.ts';
+export type { AuxiliaryCallRole, RoleReasoningRequirement } from './model/roles.ts';
+export { AUXILIARY_ROLE_ORDER, ROLE_REQUIREMENTS } from './model/roles.ts';
+export type { AuxiliaryRoutePreview } from './model/roles.ts';
 export type { AttachmentInput, SessionFile, TaskArtifact } from './media.ts';
 export { FileStore, MEDIA_LIMITS } from './media.ts';
 export type { DocCatalogEntry } from './workspace.ts';
@@ -98,24 +96,24 @@ export type {
   ContextItemKind,
   ContextLayerId,
   ContextLayerTokens,
-} from './context-inspect.ts';
-export { ContextInspector } from './context-inspect.ts';
+} from './context/inspect.ts';
+export { ContextInspector } from './context/inspect.ts';
 export type {
   FinishReason,
   Message,
   MessageToolCall,
-  ModelAttempts,
+  ModelAttempt,
   ModelContentPart,
   ModelErrorKind,
   ModelEvent,
   ModelRequest,
+  ModelMetrics,
   ModelResult,
   ModelToolCall,
   ModelTransport,
   ToolCall,
   ToolChoice,
   ToolSpec,
-  TpsSample,
   Usage,
 } from './transport/index.ts';
 export {
@@ -144,65 +142,86 @@ export {
 // The pure protocol-selection helpers come from the browser-safe protocol
 // module, so exporting them never pulls the Node transport in with them.
 export { selectSessionProtocol, supportsSession } from './transport/protocol.ts';
-export { ACTION_TOOL } from './actions/reason/tool.ts';
-export { REPLY_TOOL } from './actions/secondary/reply.ts';
+export { ACTION_TOOL } from './reasoning/tool.ts';
+export { REPLY_TOOL } from './auxiliary/reply.ts';
 export type {
   ActionFinishedEvent,
   ActionStartedEvent,
+  ActionStatus,
   ActionTitledEvent,
-  CallEvent,
-  CallStartedEvent,
-  DocContentEvent,
+  ActionType,
   DocPick,
-  DocSearchEvent,
-  ErrorEvent,
-  FilesEvent,
+  DocumentContentEvent,
+  DocumentFoundEvent,
+  FilesAttachedEvent,
   LedgerEvent,
   LedgerEventBase,
   LedgerEventDraft,
   LedgerEventType,
   MemoryRecalledEvent,
+  ModelSpanFinishedEvent,
+  ModelSpanRequest,
+  ModelSpanStartedEvent,
   ProjectSnapshot,
-  ReasonCompletedEvent,
-  ReplyEvent,
+  ReasoningCompletedEvent,
+  ReasoningThinkingEvent,
   SessionCreatedEvent,
   SessionSummary,
+  SpanError,
+  SpanFinishedEvent,
+  SpanKind,
+  SpanStartedEvent,
+  SpanStatus,
+  StepFinishedEvent,
+  StepStartedEvent,
+  StepStatus,
+  SystemNoticeEvent,
+  ReplySentEvent,
+  SessionTitledEvent,
   TaskBrief,
-  ThinkingEvent,
-  TitleEvent,
+  TaskSpanFinishedEvent,
+  TaskSpanMetrics,
+  TaskSpanRequest,
+  TaskSpanStartedEvent,
   TurnFinishedEvent,
   TurnInterruptedEvent,
+  TurnModel,
   TurnStartedEvent,
   TurnStatus,
+  WorkspaceChangedEvent,
   WorkspaceSnapshot,
-  WsUpdatedEvent,
-} from './ledger.ts';
-export { collectSessionFiles } from './ledger.ts';
+} from './ledger/store.ts';
+export { collectSessionFiles, stepId, turnId } from './ledger/store.ts';
+import { SpanRecorder } from './loop/span.ts';
 
 /** Create the session feature over a host. */
 export function createSession(host: SessionHost): Session {
   const ledger = new Ledger({ stateRoot: host.stateRoot, workspaceRoot: host.workspaceRoot, now: host.now });
 
-  // The call runner is session-scoped because its `append` sink is the only way
-  // a `call` event reaches the owning timeline. The gateway is resolved inside
+  // The request executor is session-scoped: it reports every request to the
+  // session's span recorder, the only way a span reaches the owning timeline. The gateway is resolved inside
   // the transport, so acquiring it is covered by the call timeout and its
   // outcome is recorded in the `call` event; a failed lookup is never cached.
-  const runners = new Map<string, CallRunner>();
+  const runners = new Map<string, CallsPort>();
   const calls = (sessionId: string): CallsPort => {
     let runner = runners.get(sessionId);
     if (!runner) {
-      runner = createCallRunner({
+      const recorder = new SpanRecorder((draft) => ledger.append(sessionId, draft).then(() => undefined));
+      const executor = createCallRunner({
         transport: createModelTransport({ gateway: () => host.gateway() }),
         selectAuxiliary: role => host.selectAuxiliary(role),
         ...(host.routeStatus === undefined ? {} : { routeStatus: (model: string) => host.routeStatus!(model) }),
         resolveProvider: (id) => host.resolveInferenceProvider(id),
         cacheKey: sessionId,
         sessionId,
-        append: async (event) => {
-          await ledger.append(sessionId, event);
-        },
+        append: recorder.report,
         ...(host.now === undefined ? {} : { now: () => host.now!() }),
       });
+      runner = {
+        run: (input) => executor.run(input),
+        holdSpan: (spanId) => recorder.hold(spanId),
+        releaseSpan: (spanId, status) => recorder.release(spanId, status),
+      };
       runners.set(sessionId, runner);
     }
     return runner;

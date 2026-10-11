@@ -1,5 +1,5 @@
 /**
- * The document secondary session.
+ * The document auxiliary task.
  *
  * It lists, reads, creates and revises Markdown documents under
  * `projects/<project>/docs` through the daemon-hosted document protocol
@@ -11,18 +11,18 @@
  * draft, exactly as the action layer defers drafts.
  */
 
-import { makeDocumentDraft, type DocContentDraft } from '../../documents.ts';
-import type { LedgerEvent, LedgerEventDraft } from '../../ledger.ts';
-import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../index.ts';
+import { makeDocumentDraft, type DocContentDraft } from '../documents.ts';
+import type { LedgerEvent, LedgerEventDraft } from '../ledger/store.ts';
+import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
 import {
-  buildSecondaryUser,
-  createSecondaryRecord,
+  buildAuxiliaryUser,
+  createLoopRecord,
   protocolTools,
-  runSecondary,
+  runAuxiliaryLoop,
   toActionOutcome,
   type MethodEffect,
-  type SecondaryRecord,
-} from './framework.ts';
+  type LoopRecord,
+} from '../loop/loop.ts';
 
 /** Rounds the document loop may run before it fails. */
 const DOCUMENT_MAX_ROUNDS = 24;
@@ -60,7 +60,7 @@ export async function runDocumentAction(
   action: ParsedAction,
   ctx: ActionRunContext,
 ): Promise<ActionExecutionOutcome> {
-  const record = createSecondaryRecord();
+  const record = createLoopRecord();
   const after = documentDraftHook(deps, ctx, record);
   const effects: Readonly<Record<string, MethodEffect>> = {
     'workspace.doc.create': { scope: 'document', change: 'created', target: documentTarget, after },
@@ -69,15 +69,15 @@ export async function runDocumentAction(
     // A delete has no after hook: there is no new content to load back.
     'workspace.doc.delete': { scope: 'document', change: 'deleted', target: documentTarget },
   };
-  const result = await runSecondary({
+  const result = await runAuxiliaryLoop({
     deps,
     ctx,
     role: 'document',
     system: documentSystemPrompt(deps),
-    user: buildSecondaryUser(ctx, action.intent),
+    user: buildAuxiliaryUser(ctx, action.intent),
     tools: await protocolTools(deps, ctx, record, METHODS, effects),
     maxRounds: DOCUMENT_MAX_ROUNDS,
-    callIdPrefix: 'doc',
+    spanIdPrefix: 'doc',
   });
   return toActionOutcome(result, record, record.documents);
 }
@@ -104,7 +104,7 @@ function documentTarget(args: Record<string, unknown>, result: unknown): string 
 function documentDraftHook(
   deps: ActionRunnerDeps,
   ctx: ActionRunContext,
-  record: SecondaryRecord,
+  record: LoopRecord,
 ): (args: Record<string, unknown>, result: unknown) => Promise<void> {
   return async (args, result) => {
     const project = readStringField(result, 'project') ?? readStringField(args, 'project');
@@ -121,7 +121,7 @@ function documentDraftHook(
     const draft = makeDocumentDraft(
       { path: documentKey(project, kind as keyof typeof KIND_DIRECTORIES, name), title, content },
       draftEvents(ctx, record.documents),
-      { turn: ctx.turn, cycle: ctx.cycle, actionId: ctx.actionId, source: 'write' },
+      { turn: ctx.turn, step: ctx.step, parent: ctx.actionId, source: 'write' },
     );
     if (draft !== undefined) record.documents.push(draft);
   };

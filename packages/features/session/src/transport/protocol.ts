@@ -71,10 +71,10 @@ export interface Message {
  * a missing value stays absent instead of being replaced by `0`.
  */
 export interface Usage {
-  input?: number;
-  cachedInput?: number;
-  output?: number;
-  reasoning?: number;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
 }
 
 /** How the caller wants tools used; defaults to `auto`. */
@@ -82,19 +82,6 @@ export type ToolChoice = 'auto' | 'none' | 'required' | { name: string };
 
 /** Normalized completion reason. */
 export type FinishReason = 'stop' | 'length' | 'tool_calls' | 'content_filter';
-
-/**
- * One tokenizer speed sample of a successful response. The count is the
- * shared core's approximate token count of the generation content that was
- * actually observed streaming, over that content's own first-to-last nonempty
- * delta window. It is never derived from official usage or first-token timing.
- */
-export interface TpsSample {
-  /** Approximate output tokens counted by the shared tokenizer core. */
-  outputTokens: number;
-  /** Total time visible content was streaming, in milliseconds. */
-  windowMs: number;
-}
 
 /* ── Protocol selection ───────────────────────────────────────────────────── */
 
@@ -180,12 +167,34 @@ export type ModelEvent =
   | { type: 'activity' }
   | { type: 'retry'; attempt: number; kind: ModelErrorKind; status?: number; delayMs: number; retryAfter?: RetryAfterHint };
 
-/** Attempt statistics carried on both the result and a terminal error. */
-export interface ModelAttempts {
-  /** Total requests issued, including the first. */
-  count: number;
-  /** Wall-clock duration of the whole call in milliseconds. */
-  totalMs: number;
+/** One request actually issued during a call, in order. */
+export interface ModelAttempt {
+  /** HTTP status of this request, when one was received. */
+  status?: number;
+  /** Failure kind of this request; absent on the successful one. */
+  error?: ModelErrorKind;
+  /** Duration of this request in milliseconds. */
+  ms: number;
+  /** Wait before this request, when it is a retry. */
+  waitedMs?: number;
+  /** Present only when an upstream retry hint was adopted for that wait. */
+  retryAfter?: RetryAfterHint;
+}
+
+/** Measured facts of one completed or failed call, produced by the transport. */
+export interface ModelMetrics {
+  /** Model id the upstream reported, when it differs or is known. */
+  responseModel?: string;
+  finishReason?: FinishReason;
+  usage?: Usage;
+  /** Milliseconds from the first request being sent to the first output (text, reasoning or tool-call argument). */
+  ttftMs?: number;
+  /** Total time visible content was streaming, from the shared sampler. */
+  streamMs?: number;
+  /** Sampler token count of that streamed content. */
+  streamTokens?: number;
+  /** Every request actually issued, in order. */
+  attempts: ModelAttempt[];
 }
 
 /** One unified completion result. */
@@ -197,13 +206,8 @@ export interface ModelResult {
   toolCalls: ModelToolCall[];
   usage?: Usage;
   finishReason?: FinishReason;
-  /**
-   * Tokenizer_v1 speed sample; present only when the shared sampler observed a
-   * measurable, successfully completed stream. Absent on failures, cancellations
-   * and non-stream responses.
-   */
-  tps?: TpsSample;
-  attempts: ModelAttempts;
+  /** Measured facts of the call, produced by the transport. */
+  metrics: ModelMetrics;
 }
 
 /** The one inference port over the Gateway that every role calls. */
@@ -249,8 +253,6 @@ export interface Completion {
   toolCalls: ModelToolCall[];
   usage?: Usage;
   finishReason?: FinishReason;
-  /** Tokenizer_v1 speed sample; present only when the shared core sampled the stream. */
-  tps?: TpsSample;
 }
 
 /**

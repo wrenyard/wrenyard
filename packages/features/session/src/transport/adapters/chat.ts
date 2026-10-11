@@ -309,10 +309,10 @@ function usageOf(root: Record<string, unknown>): Usage | undefined {
   const cachedInput = promptDetails ? numberField(promptDetails.cached_tokens) : undefined;
   const reasoning = completionDetails ? numberField(completionDetails.reasoning_tokens) : undefined;
   const usage: Usage = {
-    ...(input === undefined ? {} : { input }),
-    ...(output === undefined ? {} : { output }),
-    ...(cachedInput === undefined ? {} : { cachedInput }),
-    ...(reasoning === undefined ? {} : { reasoning }),
+    ...(input === undefined ? {} : { inputTokens: input }),
+    ...(output === undefined ? {} : { outputTokens: output }),
+    ...(cachedInput === undefined ? {} : { cachedInputTokens: cachedInput }),
+    ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }),
   };
   return Object.keys(usage).length === 0 ? undefined : usage;
 }

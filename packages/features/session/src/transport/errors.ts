@@ -9,7 +9,7 @@
  * shape, so classification reads only the protocol's own status codes and
  * official error codes.
  */
-import { record, stringField, type ModelAttempts, type RetryAfterHint } from './protocol.ts';
+import { record, stringField, type ModelMetrics, type RetryAfterHint } from './protocol.ts';
 
 /** Normalized failure class; overloads are folded into `server`. */
 export type ModelErrorKind =
@@ -40,7 +40,8 @@ export interface ModelErrorOptions {
   /** The adopted upstream hint, kept with its original header value. */
   retryAfter?: RetryAfterHint;
   upstream?: UpstreamErrorIdentity;
-  attempts?: ModelAttempts;
+  /** Measured facts of the failed call, when the transport produced them. */
+  metrics?: ModelMetrics;
   /** True when the failure happened after output had already started. */
   outputStarted?: boolean;
   /** Explicit retryability override from an upstream `x-should-retry` header. */
@@ -55,7 +56,7 @@ export class ModelError extends Error {
   readonly retryAfterMs?: number;
   readonly retryAfter?: RetryAfterHint;
   readonly upstream?: UpstreamErrorIdentity;
-  readonly attempts?: ModelAttempts;
+  readonly metrics?: ModelMetrics;
   readonly outputStarted: boolean;
   readonly shouldRetry?: boolean;
 
@@ -69,7 +70,7 @@ export class ModelError extends Error {
     if (options.upstream !== undefined && (options.upstream.type !== undefined || options.upstream.code !== undefined)) {
       this.upstream = options.upstream;
     }
-    if (options.attempts !== undefined) this.attempts = options.attempts;
+    if (options.metrics !== undefined) this.metrics = options.metrics;
     this.outputStarted = options.outputStarted ?? false;
     if (options.shouldRetry !== undefined) this.shouldRetry = options.shouldRetry;
     if (options.cause !== undefined) (this as { cause?: unknown }).cause = options.cause;

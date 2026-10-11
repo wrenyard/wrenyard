@@ -17,15 +17,15 @@
  * This module never calls a model and never mutates the ledger.
  */
 
-import { estimateTokens, IMAGE_INPUT_TOKEN_ESTIMATE, resolveModelMetadata } from './calls.ts';
+import { estimateTokens, IMAGE_INPUT_TOKEN_ESTIMATE, resolveModelMetadata } from '../model/request.ts';
 import {
   type LedgerEvent,
   type SessionCreatedEvent,
   type WorkspaceSnapshot,
-} from './ledger.ts';
+} from '../ledger/store.ts';
 import { renderEventText } from './render.ts';
-import { buildReason } from './actions/reason/prompt.ts';
-import type { LedgerPort, SessionViewInfo } from './ports.ts';
+import { buildReason } from '../reasoning/prompt.ts';
+import type { LedgerPort, SessionViewInfo } from '../ports.ts';
 
 /** Every layer of the main reasoning view except the transient `wy-user`. */
 export type ContextLayerId = 'wy-system' | 'wy-global' | 'wy-role' | 'wy-workspace' | 'wy-ctx' | 'wy-info';
@@ -60,7 +60,7 @@ export interface ContextLayerTokens {
 export interface ContextItem {
   seq: number;
   turn: number;
-  cycle?: number;
+  step?: number;
   kind: ContextItemKind;
   /** Document/memory path, search intent, file list, or the first line of a message. */
   label: string;
@@ -74,11 +74,11 @@ export interface ContextInspectModel {
 }
 
 export interface ContextInspectCalibration {
-  callId: string;
+  spanId: string;
   model: string;
-  /** The call's `estimatedInputTokens`. */
+  /** The reasoning span's `request.inputEstimate`. */
   estimated: number;
-  /** The call's `usage.input` (including cached input). */
+  /** The span's `metrics.usage.inputTokens` (including cached input). */
   actual: number;
 }
 
@@ -136,27 +136,27 @@ function itemKind(event: LedgerEvent): ContextItemKind | undefined {
   switch (event.type) {
     case 'turn.started':
       return 'user';
-    case 'reason.completed':
+    case 'reasoning.completed':
       return 'assistant';
-    case 'thinking':
+    case 'reasoning.thinking':
       return 'thinking';
-    case 'reply':
-      return 'reply';
-    case 'doc.content':
+    case 'document.content':
       return 'doc';
-    case 'doc.search':
+    case 'document.found':
       return 'search';
     case 'memory.recalled':
       return 'memory';
-    case 'files':
+    case 'files.attached':
       return 'files';
     case 'action.finished':
       return 'action-result';
-    case 'ws.updated':
+    case 'reply.sent':
+      return 'reply';
+    case 'workspace.changed':
       return 'ws-update';
     case 'turn.interrupted':
       return 'interrupt';
-    case 'error':
+    case 'system.error':
       return 'error';
     default:
       return undefined;
@@ -166,48 +166,55 @@ function itemKind(event: LedgerEvent): ContextItemKind | undefined {
 function itemLabel(event: LedgerEvent): string {
   switch (event.type) {
     case 'turn.started':
-    case 'reason.completed':
-    case 'reply':
-    case 'thinking':
+    case 'reasoning.completed':
+    case 'reasoning.thinking':
       return firstLine(event.text);
-    case 'doc.content':
+    case 'document.content':
     case 'memory.recalled':
       return event.path;
-    case 'ws.updated':
+    case 'workspace.changed':
       return event.target;
-    case 'doc.search':
+    case 'document.found':
       return firstLine(event.understanding);
-    case 'files':
+    case 'files.attached':
       return event.files.map((file) => file.path).join(', ');
     case 'turn.interrupted':
       return event.reason;
     case 'action.finished': {
       const result = firstLine(event.result);
-      return result === '' ? event.kind : result;
+      return result === '' ? event.action.type : result;
     }
-    case 'error':
+    case 'reply.sent':
+      return firstLine(event.text);
+    case 'system.error':
       return firstLine(event.message);
     default:
       return '';
   }
 }
 
-/** The most recent main-reasoning call that reported input usage. */
+/** The most recent reasoning span that reported input usage. */
 function calibrationOf(events: readonly LedgerEvent[]): ContextInspectCalibration | undefined {
+  const starts = new Map<string, { model: string; estimated: number }>();
+  for (const event of events) {
+    if (event.type === 'span.started' && event.kind === 'reasoning') {
+      starts.set(event.id, { model: event.request.model, estimated: event.request.inputEstimate });
+    }
+  }
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;
-    if (event.type !== 'call') continue;
-    if (event.role !== 'reason') continue;
-    const input = event.usage?.input;
+    if (event.type !== 'span.finished' || event.kind !== 'reasoning') continue;
+    const input = event.metrics?.usage?.inputTokens;
     if (input === undefined) continue;
-    return { callId: event.callId, model: event.model, estimated: event.estimatedInputTokens, actual: input };
+    const start = starts.get(event.id);
+    return { spanId: event.id, model: start?.model ?? '', estimated: start?.estimated ?? 0, actual: input };
   }
   return undefined;
 }
 
 /**
- * Persisted image counts: every image occurrence at every `files` event
- * position is carried when the inspected model accepts images and the
+ * Persisted image counts: every image occurrence at every `files.attached`
+ * event position is carried when the inspected model accepts images and the
  * occurrence has a prepared preview. Every other occurrence is reported as
  * omitted.
  */
@@ -218,7 +225,7 @@ function fileCountsOf(
   let images = 0;
   let omitted = 0;
   for (const event of events) {
-    if (event.type !== 'files') continue;
+    if (event.type !== 'files.attached') continue;
     for (const file of event.files) {
       if (file.kind !== 'image') continue;
       if (allowImages && file.processedPath !== undefined) images += 1;
@@ -263,7 +270,7 @@ export class ContextInspector {
       now: this.host.now().toISOString(),
       sessionId: sessionId ?? '',
       turn: nextTurn(events),
-      cycle: 1,
+      step: 1,
       model: request.model,
       deviceName: this.host.deviceName,
       ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
@@ -312,7 +319,7 @@ export class ContextInspector {
       items.push({
         seq: event.seq,
         turn: event.turn ?? 0,
-        ...(event.cycle === undefined ? {} : { cycle: event.cycle }),
+        ...(event.step === undefined ? {} : { step: event.step }),
         kind,
         label: itemLabel(event),
         tokens,
