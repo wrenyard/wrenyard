@@ -86,6 +86,31 @@ export async function readCodeBuddyInstall(options?: InspectOptions): Promise<Co
     };
 }
 /**
+ * The current signed-in account read straight from the CodeBuddy auth file for
+ * a resolved environment. Unlike readCodeBuddyInstall this reads ONLY the auth
+ * file — no product file, no cached server models — so a caller can refresh a
+ * rotated token cheaply on every credential use. A missing file (ENOENT) or an
+ * auth state without an access token yields undefined; any other read or JSON
+ * parse error propagates so the caller can tell a transient unreadable file
+ * from a signed-out account.
+ */
+export async function readCodeBuddyAccount(environment: CodeBuddyEnvironment, options?: InspectOptions): Promise<CodeBuddyAccountContext | undefined> {
+    const env = options?.env ?? process.env;
+    const platform = process.platform;
+    const home = codeBuddyHome(env);
+    let content: string;
+    try {
+        content = await readFile(codeBuddyAuthPath(platform, env, home), 'utf8');
+    }
+    catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+            return undefined;
+        throw error;
+    }
+    const parsed = parseCodeBuddyAuth(JSON.parse(content) as Record<string, unknown>);
+    return codeBuddyAccountContext(parsed, environment);
+}
+/**
  * The single `product.<environment>.json` overlay the installed CLI reads for a
  * resolved environment. `external` and `unknown` declare no overlay, so they
  * keep the base product file.
