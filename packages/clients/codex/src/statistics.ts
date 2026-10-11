@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { TokenizerGeneration, attachTpsSamples } from '@wrenyard/agent-client/statistics';
+import { TokenizerGeneration, attachTpsSamples, sampleTiming, type AggregatedResponseTpsSample, type ResponseTpsSample } from '@wrenyard/agent-client/statistics';
 
 type Row = Record<string, unknown>;
 const row = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
@@ -14,14 +14,14 @@ function usage(value: unknown): Usage | undefined {
     return input === undefined || output === undefined ? undefined : { input_tokens: input, output_tokens: output, cached_input_tokens: cached, total_tokens: total };
 }
 
-/** Native response boundaries pair streamed generation windows with tokenizer_v1. */
+/** Native response boundaries pair streamed generation windows with speed samples. */
 export class CodexStatistics {
     private readonly anchor = Date.now() - performance.now();
     private raw = new TokenizerGeneration();
     private summary = new TokenizerGeneration();
     private rawReasoning = false;
     private readonly seen = new Set<string>();
-    private readonly samples: Array<{ response_id: string; model: string; output_tokens: number; first_token_at_ms: number; completed_at_ms: number }> = [];
+    private readonly samples: Array<ResponseTpsSample | AggregatedResponseTpsSample> = [];
     private totals: Usage | undefined;
     private baseline: Usage | undefined;
     constructor(private readonly model: string, private readonly resumed: boolean) {}
@@ -74,7 +74,7 @@ export class CodexStatistics {
     }
     private complete(id: string): void {
         const measured = (this.rawReasoning ? this.raw : this.summary).measure();
-        if (measured) this.samples.push({ response_id: id, model: this.model, output_tokens: measured.tokens, first_token_at_ms: measured.first_token_at_ms, completed_at_ms: measured.completed_at_ms });
+        if (measured) this.samples.push({ response_id: id, model: this.model, output_tokens: measured.tokens, ...sampleTiming(measured) });
         this.reset();
     }
     private reset(): void {
