@@ -1,5 +1,5 @@
 /**
- * Shared tokenizer_v1 speed-sampling primitives.
+ * Shared tokenizer speed sample primitives.
  *
  * Every client decoder that can observe a client's own partial stream uses
  * these primitives so the persisted sample means exactly one thing: a fixed,
@@ -14,9 +14,6 @@
  */
 import { getEncoding } from 'js-tiktoken';
 import type { AgentEvent } from './index.ts';
-
-/** Labels every sample produced by the unified approximate contract. */
-export const TOKENIZER_TPS_SAMPLING_CONTRACT = 'tokenizer_v1';
 
 /** Minimum observable generation span for a trustworthy speed sample. */
 export const TOKENIZER_MINIMUM_WINDOW_MS = 100;
@@ -77,19 +74,29 @@ export function countTPSTokens(text: string): number | undefined {
     return tokenizer.encode(text, [], []).length;
 }
 
+/** One measured generation: its counted tokens and the windows they streamed in. */
+export interface MeasuredGeneration {
+    tokens: number;
+    /** Ordered, non-overlapping intervals during which visible content was streaming. */
+    windows: GenerationWindow[];
+}
+
 /**
  * Accumulates one generation's streamed content, one block per content
- * channel, with a monotonic arrival boundary. Each block is concatenated
- * before encoding so the count never depends on how a client splits its
- * deltas; the window is the first to last nonempty delta, so completion
- * latency is never part of the measurement.
+ * channel, each with its own first and last nonempty delta arrival. Each block
+ * is concatenated before encoding so the count never depends on how a client
+ * splits its deltas.
+ *
+ * The measured time is the union of the blocks' own streaming intervals, not
+ * one span from the first delta to the last: a stretch in which no visible
+ * content arrives — hidden reasoning, or tool arguments a client never
+ * surfaces — lies between blocks and is not counted as generation time for the
+ * visible tokens. Completion latency is never part of the measurement either.
  */
 export class TokenizerGeneration {
-    private readonly blocks = new Map<string, string>();
-    private firstMS = 0;
+    private readonly blocks = new Map<string, { text: string; firstMS: number; lastMS: number }>();
     private lastMS = 0;
     private invalid = false;
-
     /** Records a nonempty delta of one content block; an empty delta is not generation activity. */
     observe(key: string, text: string, at: number): void {
         if (text === '') return;
@@ -98,41 +105,79 @@ export class TokenizerGeneration {
             this.invalid = true;
             return;
         }
-        if (this.blocks.size === 0) this.firstMS = at;
-        this.blocks.set(key, (this.blocks.get(key) ?? '') + text);
+        const block = this.blocks.get(key);
+        if (block) {
+            block.text += text;
+            block.lastMS = at;
+        } else {
+            this.blocks.set(key, { text, firstMS: at, lastMS: at });
+        }
         this.lastMS = at;
     }
-
     /** True once any observed delta has poisoned the window. */
     get poisoned(): boolean {
         return this.invalid;
     }
-
     /**
-     * Closes the window: total approximate tokens over every concatenated
-     * block, plus its first and last nonempty delta boundaries. Undefined when
-     * the window is unmeasurable — poisoned, never started, shorter than the
-     * minimum observable span, uncountable, or zero tokens.
+     * Closes the measurement. A block that streamed for at least the minimum
+     * observable span contributes its interval; overlapping intervals merge
+     * into one window. A block delivered in a single burst has no interval of
+     * its own: its tokens count only when the burst falls inside a window
+     * another block opened, otherwise it is left out with no time attributed.
+     * Undefined when nothing is measurable — poisoned, never started, no block
+     * with an observable interval, uncountable, or zero tokens.
      */
-    measure(): { tokens: number; first_token_at_ms: number; completed_at_ms: number } | undefined {
+    measure(): MeasuredGeneration | undefined {
         if (this.invalid || this.blocks.size === 0) return undefined;
-        if (this.lastMS - this.firstMS < TOKENIZER_MINIMUM_WINDOW_MS) return undefined;
+        const blocks = [...this.blocks.values()];
+        const spans = blocks
+            .filter((block) => block.lastMS - block.firstMS >= TOKENIZER_MINIMUM_WINDOW_MS)
+            .map((block) => ({ first: block.firstMS, last: block.lastMS }))
+            .sort((a, b) => a.first - b.first);
+        const merged: { first: number; last: number }[] = [];
+        for (const span of spans) {
+            const current = merged.at(-1);
+            if (current && span.first <= current.last) current.last = Math.max(current.last, span.last);
+            else merged.push({ ...span });
+        }
+        if (merged.length === 0) return undefined;
+        const windows: GenerationWindow[] = merged.map((span) => ({ tokens: 0, first_token_at_ms: span.first, completed_at_ms: span.last }));
         let tokens = 0;
-        for (const text of this.blocks.values()) {
-            const count = countTPSTokens(text);
+        for (const block of blocks) {
+            const window = windows.find((entry) => block.firstMS >= entry.first_token_at_ms && block.lastMS <= entry.completed_at_ms);
+            if (!window) continue;
+            const count = countTPSTokens(block.text);
             if (count === undefined) return undefined;
+            window.tokens += count;
             tokens += count;
         }
         if (!Number.isSafeInteger(tokens) || tokens <= 0) return undefined;
-        return { tokens, first_token_at_ms: this.firstMS, completed_at_ms: this.lastMS };
+        return { tokens, windows };
     }
+}
+
+/**
+ * The timing fields of a response sample for one measurement: the scalar
+ * first/completed pair when the content streamed in one window, the
+ * `generation_windows` vector when visible streaming was interrupted.
+ */
+export function sampleTiming(measured: MeasuredGeneration):
+    | { first_token_at_ms: number; completed_at_ms: number }
+    | { generation_windows: GenerationWindow[] } {
+    const [only] = measured.windows;
+    if (measured.windows.length === 1 && only) {
+        return { first_token_at_ms: only.first_token_at_ms, completed_at_ms: only.completed_at_ms };
+    }
+    return { generation_windows: measured.windows.map((window) => ({ ...window })) };
 }
 
 /** The protocol-neutral TPS result of one successful streamed response. */
 export interface TpsGenerationSample {
     outputTokens: number;
-    /** First nonempty delta to last nonempty delta, in milliseconds. */
+    /** Total time visible content was streaming, in milliseconds. */
     windowMs: number;
+    /** The streaming windows `windowMs` sums. */
+    windows: GenerationWindow[];
 }
 
 /**
@@ -142,7 +187,7 @@ export interface TpsGenerationSample {
  * deltas plus one terminal signal: `complete` on the protocol's successful
  * completion, `fail` on any error, cancellation, or truncated stream. Each
  * channel's deltas are concatenated and tokenized once by the shared
- * tokenizer_v1 rule, and the window is the first to last nonempty delta. A
+ * tokenizer speed sample rule, and the window is the first to last nonempty delta. A
  * sample is produced only for a completed, non-failed response whose window
  * spans at least the minimum observable interval and counts at least one
  * token, so buffered or collapsed streams, single-timestamp windows, sub-100ms
@@ -188,7 +233,8 @@ export class TpsGenerationCollector {
         if (!this.completed || this.failed) return undefined;
         const measured = this.generation.measure();
         if (!measured) return undefined;
-        return { outputTokens: measured.tokens, windowMs: measured.completed_at_ms - measured.first_token_at_ms };
+        const windowMs = measured.windows.reduce((sum, window) => sum + (window.completed_at_ms - window.first_token_at_ms), 0);
+        return { outputTokens: measured.tokens, windowMs, windows: measured.windows };
     }
 }
 
@@ -287,7 +333,7 @@ export class ResponseTpsSampler {
     private anchored = false;
     private active: { id: string; model: string; gen: TokenizerGeneration; overlapped: boolean } | undefined;
     private readonly seen = new Set<string>();
-    private samples: ResponseTpsSample[] = [];
+    private samples: (ResponseTpsSample | AggregatedResponseTpsSample)[] = [];
     private terminalSeen = false;
     private terminalOK = false;
 
@@ -414,8 +460,7 @@ export class ResponseTpsSampler {
             response_id: active.id,
             model: active.model,
             output_tokens: measured.tokens,
-            first_token_at_ms: measured.first_token_at_ms,
-            completed_at_ms: measured.completed_at_ms,
+            ...sampleTiming(measured),
         });
     }
 
@@ -438,16 +483,15 @@ export class ResponseTpsSampler {
 }
 
 /**
- * Attaches tokenizer_v1 samples to a turn_usage record. Every sample is emitted
- * unchanged on the existing schema; the canonical official usage fields are
- * never modified.
+ * Attaches tokenizer speed samples to a turn_usage record. Every sample is
+ * emitted unchanged on the existing schema; the canonical official usage fields
+ * are never modified.
  */
 export function attachTpsSamples(
     data: Record<string, unknown>,
     samples: readonly (ResponseTpsSample | AggregatedResponseTpsSample)[],
 ): boolean {
     if (samples.length === 0) return false;
-    data.tps_sampling_contract = TOKENIZER_TPS_SAMPLING_CONTRACT;
     data.tps_samples = samples.map((sample) => ({ ...sample }));
     return true;
 }
@@ -830,7 +874,7 @@ export class CursorTpsSampler {
         this.generation = new TokenizerGeneration();
         const measured = generation.measure();
         if (!measured) return;
-        this.windows.push(measured);
+        this.windows.push(...measured.windows);
     }
 
     /**

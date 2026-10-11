@@ -279,7 +279,6 @@ function parseTaskRunUsage(value: unknown): TaskRunUsage | null {
     ...(readNumber(record.total_tokens) !== null ? { totalTokens: record.total_tokens as number } : {}),
     ...(readNumber(record.generation_ms) !== null ? { generationMs: record.generation_ms as number } : {}),
     ...(readNumber(record.output_tps) !== null ? { outputTps: record.output_tps as number } : {}),
-    ...(record.tps_contract === 'tokenizer_v1' ? { tpsContract: 'tokenizer_v1' as const } : {}),
     ...(referenceCostUsd !== null ? { referenceCostUsd } : {}),
     referenceCostComplete,
     ...(typeof record.reference_cost_basis === 'string' && record.reference_cost_basis.length > 0

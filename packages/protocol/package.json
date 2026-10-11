@@ -10,7 +10,8 @@
     "./common": "./src/common/index.ts",
     "./exec": "./src/exec/index.ts",
     "./provider": "./src/provider/index.ts",
-    "./update-feed": "./src/update-feed.ts"
+    "./update-feed": "./src/update-feed.ts",
+    "./tps": "./src/tps.ts"
   },
   "scripts": {
     "test": "tsx --test src/*.test.ts"

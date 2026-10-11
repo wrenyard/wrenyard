@@ -84,7 +84,7 @@ export type ToolChoice = 'auto' | 'none' | 'required' | { name: string };
 export type FinishReason = 'stop' | 'length' | 'tool_calls' | 'content_filter';
 
 /**
- * One tokenizer_v1 speed sample of a successful response. The count is the
+ * One tokenizer speed sample of a successful response. The count is the
  * shared core's approximate token count of the generation content that was
  * actually observed streaming, over that content's own first-to-last nonempty
  * delta window. It is never derived from official usage or first-token timing.
@@ -92,7 +92,7 @@ export type FinishReason = 'stop' | 'length' | 'tool_calls' | 'content_filter';
 export interface TpsSample {
   /** Approximate output tokens counted by the shared tokenizer core. */
   outputTokens: number;
-  /** First-to-last nonempty generation delta span in milliseconds. */
+  /** Total time visible content was streaming, in milliseconds. */
   windowMs: number;
 }
 
@@ -297,13 +297,4 @@ export function parseToolArguments(argumentsText: string): { parsed?: unknown; p
   } catch (error) {
     return { parseError: error instanceof Error ? error.message : String(error) };
   }
-}
-
-/**
- * Convert one shared tokenizer core measurement into a protocol sample. The
- * core already rejects an unmeasurable window, so this only renames the count
- * and derives the span; it never invents a token count or a window.
- */
-export function tpsSampleOf(measurement: { tokens: number; first_token_at_ms: number; completed_at_ms: number }): TpsSample {
-  return { outputTokens: measurement.tokens, windowMs: measurement.completed_at_ms - measurement.first_token_at_ms };
 }

@@ -372,7 +372,7 @@ function webSearchSummary(raw: unknown): string {
 }
 
 /**
- * Builds the terminal turn usage record. A bridge-supplied tokenizer_v1 sample
+ * Builds the terminal turn usage record. A bridge-supplied speed sample
  * set is forwarded unchanged, because those paired samples are the exact
  * evidence for that contract; they are never reconstructed from the whole-turn
  * timing. The turn duration is the client-reported end-to-end wall duration,
@@ -401,12 +401,9 @@ function turnUsage(params: Record<string, unknown>): Record<string, unknown> | u
     const cached = nonnegativeInt(source.cached_input_tokens);
     if (cached !== undefined)
         data.cached_input_tokens = cached;
-    const contract = stringOf(params, 'tps_sampling_contract').trim();
     const samples = params.tps_samples;
-    if (contract && Array.isArray(samples) && samples.length > 0) {
-        data.tps_sampling_contract = contract;
+    if (Array.isArray(samples) && samples.length > 0)
         data.tps_samples = samples;
-    }
     if (durationMS !== undefined && completeUsageTokens({ input_tokens: input, output_tokens: output }))
         applyTrustedAgentTurnContract(data);
     return turnUsageRecord(data);

@@ -1904,9 +1904,7 @@ export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] 
         cache_creation_input_tokens: numberProp(event, 'cache_creation_input_tokens'),
         total_tokens: numberProp(event, 'total_tokens'),
         duration_ms: numberProp(event, 'duration_ms'),
-        // Preserve normalized response sampling provenance only when supplied;
-        // the mapper never infers or upgrades provenance.
-        tps_sampling_contract: stringProp(event, 'tps_sampling_contract') ?? undefined,
+        // Preserve normalized response samples only when supplied.
         tps_samples: mapTpsSamples(event.tps_samples),
         token_scope: stringProp(event, 'token_scope') ?? undefined,
         duration_scope: stringProp(event, 'duration_scope') ?? undefined,

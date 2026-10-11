@@ -1,11 +1,12 @@
 import { getDb } from '../db/connection.mts'
+import { TPS_MIN_SAMPLE_WINDOW_MS, isUsableTpsSample } from '@wrenyard/protocol/tps'
 import type { ForemanDatabase } from '../db/types.mts'
 import type { LocalSpeedSample } from '@wrenyard/providers/catalog'
 import { canonicalizeObservedProviderModelId } from '@wrenyard/providers'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
 
 /**
- * Unified approximate TPS (`tokenizer_v1`).
+ * Unified approximate TPS.
  *
  * TPS means cl100k_base tokens counted over only the actually observed
  * generation content, divided by exactly the generation milliseconds that
@@ -14,13 +15,12 @@ import { migrateProviderId } from '../config/chatgpt-migration.mts'
  * speed estimate. Official usage/billing accounting is unchanged and never
  * influences speed.
  *
- * A `tokenizer_v1` sample pairs its observed-content token count with either
+ * A speed sample pairs its observed-content token count with either
  * one scalar generation interval or the exact ordered vector of serial
  * model-generation windows behind that content (for example one aggregate
  * Cursor turn). Both shapes normalize to the same interval vector and summed
  * duration, so the persisted-execution, gateway, and task/local estimate paths
- * all divide summed tokens by the summed generation time. Historical
- * `response_v1` samples are never relabeled and are never read.
+ * all divide summed tokens by the summed generation time.
  */
 
 export interface ExecutionTpsSample {
@@ -65,7 +65,7 @@ interface GatewayDataRow {
  *
  * Daemon events are stored as
  * `{schema_version, refs, data: {...}}`; the sampler fields (`provider`,
- * `publicModel`, `status`, `tps_sampling_contract`, `tps_samples`) live inside
+ * `publicModel`, `status`, `tps_samples`) live inside
  * `data`, never at the top level. Legacy flat rows are rejected rather than
  * silently mis-attributed.
  */
@@ -94,12 +94,8 @@ function normalizeSampleModel(provider: string | null, model: string): string {
 
 /** Trailing freshness window for local speed aggregation (31 days). */
 const LOCAL_SPEED_WINDOW_MS = 31 * 24 * 60 * 60 * 1000
-/** Minimum per-execution output tokens eligible for the speed estimate. */
-const MIN_SAMPLE_OUTPUT_TOKENS = 256
-/** Minimum per-execution paired generation milliseconds eligible for speed. */
-const MIN_SAMPLE_DURATION_MS = 5000
 /** Minimum observable generation window: first to last nonempty delta. */
-const MIN_WINDOW_MS = 100
+const MIN_WINDOW_MS = TPS_MIN_SAMPLE_WINDOW_MS
 /** Maximum newest executions considered for the speed estimate. */
 const MAX_SAMPLES = 50
 /** Minimum samples required to publish an aggregate estimate. */
@@ -112,12 +108,11 @@ export interface ReadExecutionTpsOptions {
 }
 
 /**
- * Reads completed, successful executions and their normalized tokenizer_v1
+ * Reads completed, successful executions and their normalized speed
  * samples, producing one sample per execution. An execution qualifies only
- * when it is a `done` run with at least one valid paired tokenizer_v1 sample;
+ * when it is a `done` run with at least one valid paired speed sample;
  * unobservable or buffered windows are skipped without poisoning the
- * execution's other complete valid samples. Historical `response_v1`
- * histories produce no sample and are never relabeled.
+ * execution's other complete valid samples.
  *
  * Legacy accounting scopes remain available for billing but never influence
  * speed. Tokens and generation time are summed from the same samples.
@@ -206,12 +201,11 @@ export function readExecutionTpsSamples(
     if (!attribution) continue
     const execution = executionById.get(attribution.executionId)
     if (!execution) continue
-    // A successful response is measurable only when it carries the
-    // tokenizer_v1 contract and a sample vector. Unobservable responses —
-    // failed requests, buffered streams, or legacy response_v1 histories —
+    // A successful response is measurable only when it carries a sample
+    // vector. Unobservable responses — failed requests or buffered streams —
     // contribute no sample and never poison the execution's other complete
     // valid measurements.
-    if (attribution.status !== 200 || attribution.contract !== 'tokenizer_v1' || !Array.isArray(attribution.tpsSamples)) continue
+    if (attribution.status !== 200 || !Array.isArray(attribution.tpsSamples)) continue
     const bucket = gatewayByExecution.get(attribution.executionId) ?? { samples: [], invalid: false }
     // A measurable gateway attribution must carry a provider/public model that
     // matches the dispatch identity; the paired samples come from the nested
@@ -301,7 +295,6 @@ interface GatewayAttribution {
   status: unknown
   provider: unknown
   publicModel: unknown
-  contract: unknown
   tpsSamples: unknown
   payload: Record<string, unknown>
 }
@@ -310,9 +303,8 @@ interface GatewayAttribution {
  * Classifies one persisted gateway completion envelope for attribution. The
  * nested `data.executionId` is only joined to known done executions by the
  * caller; every identity decision stays there. Only a status-200 response
- * carrying the `tokenizer_v1` contract and a sample vector is measurable —
- * failed, buffered, or legacy `response_v1` responses are unobservable and are
- * skipped by the caller rather than poisoning the execution. Wrong dispatch
+ * carrying a sample vector is measurable — failed or buffered responses are
+ * unobservable and are skipped by the caller rather than poisoning the execution. Wrong dispatch
  * identity and conflicting replay are still rejected by the caller.
  */
 function parseGatewayAttribution(value: string | null): GatewayAttribution | undefined {
@@ -325,7 +317,6 @@ function parseGatewayAttribution(value: string | null): GatewayAttribution | und
     status: data.status,
     provider: data.provider,
     publicModel: data.publicModel,
-    contract: data.tps_sampling_contract,
     tpsSamples: data.tps_samples,
     payload: data,
   }
@@ -354,8 +345,8 @@ function sumResponseSamples(samples: ResponseSample[]): { outputTokens: number; 
 /**
  * Median estimate of per-execution TPS over recent eligible samples.
  *
- * Only samples with >= 256 paired output tokens and >= 5000ms paired generation
- * time are considered;
+ * Only samples passing the shared usability rule (`isUsableTpsSample`: a few
+ * tokens, a measurable window and a plausible rate) are considered;
  * the newest 50 by `endedAt` are kept and at least 3 must remain. The estimate
  * is the median of per-execution TPS (the average of the central pair for an
  * even count). Fewer than 3 usable samples yield undefined so a small sample
@@ -363,8 +354,7 @@ function sumResponseSamples(samples: ResponseSample[]): { outputTokens: number; 
  */
 export function estimateTps(samples: readonly ExecutionTpsSample[]): TpsEstimate | undefined {
   const eligible = samples.filter((sample) =>
-    sample.outputTokens >= MIN_SAMPLE_OUTPUT_TOKENS
-    && sample.durationMs >= MIN_SAMPLE_DURATION_MS
+    isUsableTpsSample({ outputTokens: sample.outputTokens, windowMs: sample.durationMs })
     && Number.isFinite(sample.tps),
   )
   if (eligible.length < MIN_SAMPLES) return undefined
@@ -421,7 +411,7 @@ export interface TaskTps {
 
 /**
  * Task-level TPS. Every done attempt (execution) carrying a measurable
- * tokenizer_v1 sample contributes its paired tokens and generation time
+ * speed sample contributes its paired tokens and generation time
  * exactly once; a done attempt without observable timing contributes nothing
  * rather than hiding the measurable attempts. Failed attempts are never
  * included because they produce no sample at all.
@@ -468,7 +458,6 @@ function parseResponseSamplesRecord(
   dispatchModel: string | null,
   provider: string | null,
 ): { samples: ResponseSample[]; invalid: boolean } | undefined {
-  if (record.tps_sampling_contract !== 'tokenizer_v1') return undefined
   if (!Array.isArray(record.tps_samples)) return undefined
   const seen = new Map<string, ResponseSample>()
   let invalid = false

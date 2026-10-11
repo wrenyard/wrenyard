@@ -15,7 +15,7 @@ import {
  * emitted once per response boundary. The whole turn's structure is tracked by
  * the Cursor sampler: one successfully terminal turn with at least one
  * observable serial generation window yields exactly one aggregate
- * tokenizer_v1 sample, while any structural surprise yields none.
+ * speed sample, while any structural surprise yields none.
  */
 export async function* decodeCursor(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
     let sessionId: string | undefined;

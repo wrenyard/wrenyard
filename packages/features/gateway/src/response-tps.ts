@@ -1,16 +1,16 @@
 /**
  * Gateway bridge between a protocol module's translated generation signals and
- * the shared tokenizer_v1 sampling core in `@wrenyard/agent-client/statistics`.
+ * the shared tokenizer speed sample core in `@wrenyard/agent-client/statistics`.
  *
  * All wire recognition lives in the protocol modules; this bridge only accepts
  * protocol-neutral channel deltas and a successful-completion / failure signal,
  * counts each concatenated channel once through the shared core, and preserves
- * the Gateway's existing `tokenizer_v1` / `tps_samples` wire contract. It never
+ * the Gateway's existing `tps_samples` wire contract. It never
  * parses a protocol event.
  *
  * The clock is injected so sampling is deterministic under test.
  */
-import { TpsGenerationCollector } from '@wrenyard/agent-client/statistics';
+import { TpsGenerationCollector, sampleTiming, type AggregatedResponseTpsSample } from '@wrenyard/agent-client/statistics';
 import type { TpsSink } from './protocols/types.ts';
 
 export interface ResponseTpsSample {
@@ -23,8 +23,8 @@ export interface ResponseTpsSample {
 }
 
 export interface ResponseTpsContract {
-  tps_sampling_contract: 'tokenizer_v1';
-  tps_samples: ResponseTpsSample[];
+  /** One window as the scalar pair; interrupted visible streaming as a window vector. */
+  tps_samples: (ResponseTpsSample | AggregatedResponseTpsSample)[];
 }
 
 export interface ResponseSamplerOptions {
@@ -35,7 +35,7 @@ export interface ResponseSamplerOptions {
 
 /**
  * Consumes the protocol-neutral signals of one upstream response and emits the
- * Gateway's tokenizer_v1 sample. It is the sink a protocol module's
+ * Gateway's tokenizer speed sample. It is the sink a protocol module's
  * `TpsTranslator` writes into.
  */
 export class ResponseSampler implements TpsSink {
@@ -43,8 +43,6 @@ export class ResponseSampler implements TpsSink {
   private readonly model: string;
   private readonly collector = new TpsGenerationCollector();
   private responseId: string | undefined;
-  private firstTokenAtMs: number | undefined;
-  private completedAtMs: number | undefined;
 
   constructor(options: ResponseSamplerOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -54,10 +52,7 @@ export class ResponseSampler implements TpsSink {
   /** One nonempty generation delta on a stable, distinct channel. */
   delta(channel: string, text: string): void {
     if (text === '') return;
-    const at = this.now();
-    this.firstTokenAtMs ??= at;
-    this.completedAtMs = at;
-    this.collector.observe(channel, text, at);
+    this.collector.observe(channel, text, this.now());
   }
 
   /** The protocol's successful completion, carrying the upstream response id when observed. */
@@ -80,15 +75,12 @@ export class ResponseSampler implements TpsSink {
   sample(): ResponseTpsContract | undefined {
     const measured = this.collector.sample();
     if (!measured || this.responseId === undefined || this.model === '') return undefined;
-    if (this.firstTokenAtMs === undefined || this.completedAtMs === undefined) return undefined;
     return {
-      tps_sampling_contract: 'tokenizer_v1',
       tps_samples: [{
         response_id: this.responseId,
         model: this.model,
         output_tokens: measured.outputTokens,
-        first_token_at_ms: this.firstTokenAtMs,
-        completed_at_ms: this.completedAtMs,
+        ...sampleTiming({ tokens: measured.outputTokens, windows: measured.windows }),
       }],
     };
   }

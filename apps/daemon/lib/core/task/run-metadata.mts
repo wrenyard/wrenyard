@@ -201,14 +201,13 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
 
   // --- TPS projection ---------------------------------------------------
   // Shared approximate rate. `readTaskTps` aggregates every done attempt that
-  // carries a measurable tokenizer_v1 sample, so an attempt without observable
+  // carries a measurable speed sample, so an attempt without observable
   // timing omits only its own contribution instead of hiding the run's speed.
   // There is no second metric.
   const taskTps = readTaskTps(taskRunId)
   if (taskTps) {
     usage.generation_ms = taskTps.durationMs
     usage.output_tps = taskTps.tps
-    usage.tps_contract = 'tokenizer_v1'
   }
 
   // --- Cost projection --------------------------------------------------

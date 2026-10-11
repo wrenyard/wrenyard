@@ -181,7 +181,7 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
           // Only a successfully completed stream yields a sample; the sampler
           // produces nothing for a failed, cancelled or truncated attempt.
           const sample = tps.sample();
-          return sample === undefined ? completion : { ...completion, tps: sample };
+          return sample === undefined ? completion : { ...completion, tps: { outputTokens: sample.outputTokens, windowMs: sample.windowMs } };
         } catch (error) {
           throw normalizeStreamError(error, request.signal, outputStarted);
         }
@@ -204,7 +204,7 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
         });
         // Only the final successful attempt returns a completion; a failed
         // attempt throws above and its samples are never exposed. The optional
-        // tokenizer_v1 sample is carried onto the result unchanged.
+        // tokenizer speed sample is carried onto the result unchanged.
         return {
           ...completion,
           ...(completion.tps === undefined ? {} : { tps: completion.tps }),
