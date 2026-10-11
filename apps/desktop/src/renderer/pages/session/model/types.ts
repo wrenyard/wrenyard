@@ -4,8 +4,8 @@ import type {
   ProjectSnapshot,
   SessionFile,
   SessionSummary,
+  WorkspaceChangedEvent,
   WorkspaceSnapshot,
-  WsUpdatedEvent,
 } from '@wrenyard/session';
 import type {
   DraftAttachment,
@@ -130,7 +130,7 @@ export interface ActionModel {
   outputs: ContextItem[];
   writes: {
     path: string;
-    change: WsUpdatedEvent['change'];
+    change: WorkspaceChangedEvent['change'];
     worktreeId?: string;
   }[];
   afterInterrupt: boolean;
@@ -230,6 +230,16 @@ export interface CallModel {
   tps?: { outputTokens: number; windowMs: number };
   estimatedInputTokens?: number;
   layers?: Record<string, number>;
+  /** Public reasoning level actually sent for this span, when known. */
+  reasoningEffort?: string;
+  /** Reasoning level explicitly requested for this span, when known. */
+  requestedReasoningEffort?: string;
+  /** Ranked auxiliary routes kept for this span, copied from its request facts. */
+  routeCandidates?: readonly { model: string; reasoningEffort: string }[];
+  /** Rank of the route that served this span, when it came from a ranked list. */
+  selectedRank?: number;
+  /** Same-route retries the transport performed, oldest first. */
+  retries?: readonly { status?: number; kind: string; delayMs: number }[];
   output: string;
   reasoning?: string;
   error?: string;

@@ -1,32 +1,35 @@
 /**
- * session turn loop: the work-turn state machine and the cycle loop over the
+ * session turn loop: the work-turn state machine and the step loop over the
  * session runtime. `engine.ts` owns the session lifecycle and calls into this
  * runner for everything a turn does.
  */
 
 import {
   contextImageFiles,
+  stepId,
+  turnId,
   type LedgerEvent,
   type LedgerEventDraft,
-} from './ledger.ts';
-import { resolveModelMetadata } from './calls.ts';
-import { type ToolCall } from './transport/index.ts';
-import { ACTION_TOOL, parseActionCall } from './actions/reason/tool.ts';
-import { buildReason } from './actions/reason/prompt.ts';
+  type StepStatus,
+} from '../ledger/store.ts';
+import { resolveModelMetadata } from '../model/request.ts';
+import { type ToolCall } from '../transport/index.ts';
+import { ACTION_TOOL, parseActionCall } from '../reasoning/tool.ts';
+import { buildReason } from '../reasoning/prompt.ts';
 import {
   type ActionExecutionOutcome,
-  type ActionKind,
   type ActionRunContext,
   type ParsedAction,
-} from './actions/index.ts';
-import { runMemorySearch } from './actions/secondary/memory.ts';
-import type { ReplyWriter } from './actions/secondary/reply.ts';
-import { startInitialTitle } from './actions/secondary/title.ts';
-import type { ActionBaseContext, SessionCallHost, SessionViewInfo } from './ports.ts';
+  type ActionType,
+} from '../reasoning/actions.ts';
+import { runMemorySearch } from '../auxiliary/memory.ts';
+import type { ReplyWriter } from '../auxiliary/reply.ts';
+import { startInitialTitle } from '../auxiliary/title.ts';
+import type { CallFailureSummary, ActionBaseContext, SessionCallHost, SessionViewInfo } from '../ports.ts';
 import type { RuntimeAction, SessionRuntime, TurnRuntime } from './runtime.ts';
-import { messageOf } from './errors.ts';
+import { messageOf } from '../errors.ts';
 
-/** Run the turn and cycle loop over the session runtime. */
+/** Run the turn and step loop over the session runtime. */
 export class TurnRunner {
   constructor(
     private readonly engine: SessionCallHost,
@@ -35,90 +38,103 @@ export class TurnRunner {
 
   async runTurn(session: SessionRuntime, turn: TurnRuntime): Promise<void> {
     try {
-      for (let cycle = 1; ; cycle += 1) {
+      for (let step = 1; ; step += 1) {
         if (turn.finished || turn.abort.signal.aborted) return;
-        turn.cycle = cycle;
-        turn.actionsThisCycle = 0;
-        turn.toolCallsThisCycle = 0;
-        turn.asksThisCycle = [];
-        turn.actionSeq = 0;
+        turn.step = step;
+        turn.actionsThisStep = 0;
+        turn.toolCallsThisStep = 0;
+        turn.asksThisStep = [];
         turn.reasonCompleted = false;
         turn.correctionRequired = false;
-        turn.cycleText = '';
+        turn.stepText = '';
         turn.currentReasonText = '';
+        turn.currentStepId = undefined;
 
-        if (turn.turn === 1 && cycle === 1) startInitialTitle(this.engine, session, turn);
+        let stepStatus: StepStatus = 'done';
+        try {
+          if (turn.turn === 1 && step === 1) startInitialTitle(this.engine, session, turn);
 
-        // One memory-search call precedes every reason request, including the first.
-        turn.phase = 'preparing';
-        await runMemorySearch(this.engine, session, turn, cycle);
-        if (turn.finished) return;
+          // One memory-search call precedes every reason request, including the first.
+          turn.phase = 'preparing';
+          await runMemorySearch(this.engine, session, turn, step);
+          if (turn.finished) return;
 
-        turn.phase = 'reasoning';
-        const reasoned = await this.queueReason(session, () => this.runReason(session, turn, cycle));
-        if (turn.finished) return;
-        if (!reasoned.ok) {
-          // A failed reason call leaves no fresh output: one closing message
-          // ends the turn, with the structured failure facts when available.
-          await this.replies.close(session, turn, reasoned.error, reasoned.failure);
-          return;
-        }
-        // A cycle whose single communication invocation was classified as
-        // terminal already ends the turn; that invocation finalizes it, so no
-        // second finish call is made here.
-        if (reasoned.terminal) return;
-
-        turn.phase = 'acting';
-        await this.awaitCycleActions(turn);
-        if (turn.finished) return;
-
-        const asks = turn.asksThisCycle;
-        const actionRan = turn.actionsThisCycle > 0;
-
-        // More than one question in one cycle is invalid: no action runs and the
-        // cycle is corrected.
-        if (asks.length > 1) {
-          await this.engine.appendError(session.sessionId, 'reason', 'only one ask is allowed per output', turn, cycle);
-          turn.correctionRequired = true;
-          continue;
-        }
-
-        // A question may only be sent alone; when actions ran in the same cycle
-        // the question is ignored and the actions stand.
-        if (asks.length === 1 && actionRan) {
-          await this.engine.appendError(session.sessionId, 'reason', 'ask must be sent alone; it was ignored', turn, cycle);
-          continue;
-        }
-
-        if (turn.toolCallsThisCycle === 0) {
-          // A successful reason call with no tool call and no visible text gave
-          // the turn nothing to act on and triggered no communication. The error
-          // goes back to the model for one correction cycle; a second empty
-          // output in the same turn fails it with a closing message.
-          if (turn.currentReasonText.trim() === '') {
-            const reason = 'reason call returned no visible output';
-            await this.engine.appendError(session.sessionId, 'reason', reason, turn, cycle);
-            if (turn.emptyReasonRetried) {
-              await this.replies.close(session, turn, reason);
-              return;
-            }
-            turn.emptyReasonRetried = true;
-            continue;
+          turn.phase = 'reasoning';
+          const reasoned = await this.queueReason(session, () => this.runReason(session, turn, step));
+          if (turn.finished) return;
+          if (!reasoned.ok) {
+            // A failed reason call leaves no fresh output: one closing message
+            // ends the turn, with the structured failure facts when available.
+            stepStatus = 'failed';
+            await this.replies.close(session, turn, reasoned.error, reasoned.failure);
+            return;
           }
+          // A step whose single communication invocation was classified as
+          // terminal already ends the turn; that invocation finalizes it.
+          if (reasoned.terminal) return;
 
-          // Hand-written action markup is no longer a delivery channel; actions
-          // must be started through the wy_action tool. The cycle's one running
-          // communication was already triggered.
-          if (hasHandwrittenAction(turn.currentReasonText)) {
-            await this.engine.appendError(session.sessionId, 'reason', 'actions can only be started through the wy_action tool', turn, cycle);
+          turn.phase = 'acting';
+          await this.awaitStepActions(turn);
+          if (turn.finished) return;
+
+          const asks = turn.asksThisStep;
+          const actionRan = turn.actionsThisStep > 0;
+
+          // More than one question in one step is invalid: no action runs and
+          // the step is corrected.
+          if (asks.length > 1) {
+            await this.engine.appendError(session.sessionId, 'reason', 'only one ask is allowed per output', turn, step);
             turn.correctionRequired = true;
             continue;
           }
-        }
 
-        // Tool calls are present, or a correction was requested: the next cycle
-        // continues the turn. The cycle's one running communication was already
-        // triggered without waiting for its action executions.
+          // A question may only be sent alone; when actions ran in the same step
+          // the question is ignored and the actions stand.
+          if (asks.length === 1 && actionRan) {
+            await this.engine.appendError(session.sessionId, 'reason', 'ask must be sent alone; it was ignored', turn, step);
+            continue;
+          }
+
+          if (turn.toolCallsThisStep === 0) {
+            // A successful reason call with no tool call and no visible text gave
+            // the turn nothing to act on. The error goes back to the model for
+            // one correction step; a second empty output fails the turn.
+            if (turn.currentReasonText.trim() === '') {
+              const reason = 'reason call returned no visible output';
+              await this.engine.appendError(session.sessionId, 'reason', reason, turn, step);
+              if (turn.emptyReasonRetried) {
+                stepStatus = 'failed';
+                await this.replies.close(session, turn, reason);
+                return;
+              }
+              turn.emptyReasonRetried = true;
+              continue;
+            }
+
+            // Hand-written action markup is no longer a delivery channel;
+            // actions must be started through the wy_action tool.
+            if (hasHandwrittenAction(turn.currentReasonText)) {
+              await this.engine.appendError(session.sessionId, 'reason', 'actions can only be started through the wy_action tool', turn, step);
+              turn.correctionRequired = true;
+              continue;
+            }
+          }
+
+          // Tool calls are present, or a correction was requested: the next step
+          // continues the turn.
+        } catch (error) {
+          stepStatus = 'failed';
+          throw error;
+        } finally {
+          // A step always gets exactly one step.finished, even when it returns
+          // or throws from inside the loop.
+          if (turn.finished || turn.abort.signal.aborted) stepStatus = 'interrupted';
+          // The system reply is one of the step's actions, and its auxiliary
+          // span lands before it; step.finished must follow them, so the step's
+          // serialized reply chain is awaited before the closing marker.
+          await session.replyQueue;
+          await this.finishStep(session, turn, stepStatus);
+        }
       }
     } catch (error) {
       if (!turn.finished) {
@@ -127,12 +143,30 @@ export class TurnRunner {
         turn.abort.abort();
         await this.cancelRunningWork(turn);
         await this.awaitParses(turn);
-        await this.awaitCycleActions(turn);
+        await this.awaitStepActions(turn);
         await this.flushResults(session, turn);
         if (turn.finished) return;
         turn.abort = new AbortController();
         await this.replies.close(session, turn, messageOf(error));
       }
+    }
+  }
+
+  /** Append the step's single `step.finished` once, when a `step.started` exists. */
+  private async finishStep(session: SessionRuntime, turn: TurnRuntime, status: StepStatus): Promise<void> {
+    const id = turn.currentStepId;
+    if (id === undefined) return;
+    turn.currentStepId = undefined;
+    try {
+      await this.engine.ledger.append(session.sessionId, {
+        type: 'step.finished',
+        turn: turn.turn,
+        step: turn.step,
+        id,
+        status,
+      });
+    } catch {
+      // Step bookkeeping must never take the pipeline down.
     }
   }
 
@@ -154,26 +188,30 @@ export class TurnRunner {
   private async runReason(
     session: SessionRuntime,
     turn: TurnRuntime,
-    cycle: number,
-  ): Promise<{ ok: true; terminal: boolean } | { ok: false; error: string; failure?: import('./ports.ts').CallFailureSummary }> {
+    step: number,
+  ): Promise<{ ok: true; terminal: boolean } | { ok: false; error: string; failure?: CallFailureSummary }> {
     const metadata = resolveModelMetadata(turn.publicId);
     const allowImages = metadata.imageInput === true;
-    // The cycle marker is appended before the request is assembled: it renders
-    // as this cycle's `<wy-info>` line, so the request only ever grows at its end.
+    // The step marker is appended before the request is assembled: it renders
+    // as this step's `<wy-info>` line, so the request only ever grows at its end.
     const previous = this.engine.ledger.read(session.sessionId);
     const lastInputTokens = lastReasonInputTokens(previous);
+    const stepKey = stepId(turn.turn, step);
     await this.engine.ledger.append(session.sessionId, {
-      type: 'cycle.started',
+      type: 'step.started',
+      id: stepKey,
+      parent: turnId(turn.turn),
       turn: turn.turn,
-      cycle,
+      step,
       model: turn.publicId,
       ...(turn.contextWindow === undefined ? {} : { contextWindow: turn.contextWindow }),
       ...(lastInputTokens === undefined ? {} : { lastInputTokens }),
     });
+    turn.currentStepId = stepKey;
     const events = this.engine.ledger.read(session.sessionId);
 
-    // Images enter at their native `files` event position and stay in the
-    // context. A model that cannot see images disables them for this turn.
+    // Images enter at their native `files.attached` event position and stay in
+    // the context. A model that cannot see images disables them for this turn.
     if (!allowImages && contextImageFiles(events).size > 0) turn.imageUnsupported = true;
     const images: Record<string, { dataUrl: string; mime: string }> = allowImages
       ? await this.collectReasonImages(session, events)
@@ -193,9 +231,10 @@ export class TurnRunner {
     // The reason call declares the wy_action tool; completed calls are started
     // as they arrive, while the visible text keeps streaming to the UI. Their
     // raw intents/questions are captured in order for the worker output.
-    turn.cycleText = '';
+    turn.stepText = '';
     const workerLines: string[] = [];
     const outcome = await this.engine.invoke(session, turn, 'reason', view, {
+      parent: stepKey,
       reason: {
         provider: turn.model.provider,
         model: turn.model.model,
@@ -204,12 +243,12 @@ export class TurnRunner {
       ...(maxTokens === undefined ? {} : { maxTokens }),
       tools: [ACTION_TOOL],
       onText: (delta) => {
-        turn.cycleText += delta;
+        turn.stepText += delta;
       },
       onToolCall: (call) => {
         if (turn.finished || turn.abort.signal.aborted) return;
-        const promise = this.handleToolCall(session, turn, cycle, call, workerLines)
-          .catch((error) => this.engine.appendError(session.sessionId, 'action', messageOf(error), turn));
+        const promise = this.handleToolCall(session, turn, step, call, workerLines)
+          .catch((error) => this.engine.appendError(session.sessionId, 'action', messageOf(error), turn, step));
         turn.parsePromises.add(promise);
         void promise.then(
           () => turn.parsePromises.delete(promise),
@@ -218,18 +257,6 @@ export class TurnRunner {
         this.engine.track(promise);
       },
     });
-
-    // The reasoning trace is a context event; it is persisted before the visible
-    // message both on success and as the returned partial text on failure.
-    if (outcome.reasoning !== undefined && outcome.reasoning !== '') {
-      await this.engine.ledger.append(session.sessionId, {
-        type: 'thinking',
-        turn: turn.turn,
-        cycle,
-        callId: outcome.callId,
-        text: outcome.reasoning,
-      });
-    }
 
     if (turn.finished) return { ok: false, error: 'interrupted' };
 
@@ -242,27 +269,37 @@ export class TurnRunner {
       turn.abort.abort();
       await this.cancelRunningWork(turn);
       await this.awaitParses(turn);
-      await this.awaitCycleActions(turn);
+      await this.awaitStepActions(turn);
       await this.flushResults(session, turn);
       if (!turn.finished) turn.abort = new AbortController();
       return { ok: false, error: outcome.error ?? 'reason call failed', ...(outcome.failure === undefined ? {} : { failure: outcome.failure }) };
     }
 
-    // Reasoning succeeded; its message content is the visible text. Wait for
-    // every tool call to be parsed (its intent or question is captured in order)
-    // before persisting, so the worker output is complete; executions keep
-    // running and are awaited before the next cycle.
+    // Reasoning succeeded: its trace and message are content events parented by
+    // the reasoning span. Nothing is written for a failed request.
+    if (outcome.reasoning !== undefined && outcome.reasoning !== '') {
+      await this.engine.ledger.append(session.sessionId, {
+        type: 'reasoning.thinking',
+        turn: turn.turn,
+        step,
+        parent: outcome.spanId,
+        text: outcome.reasoning,
+      });
+    }
+
+    // The visible text is the message content; wait for every tool call to be
+    // parsed (its intent or question is captured in order) before persisting.
     turn.currentReasonText = outcome.text;
     await this.awaitParses(turn);
     if (turn.finished) return { ok: false, error: 'interrupted' };
 
     const workerOutput = buildWorkerOutput(outcome.text, workerLines);
-    const terminal = this.isTerminalCycle(turn, outcome.text);
+    const terminal = this.isTerminalStep(turn, outcome.text);
     await this.engine.ledger.append(session.sessionId, {
-      type: 'reason.completed',
+      type: 'reasoning.completed',
       turn: turn.turn,
-      cycle,
-      callId: outcome.callId,
+      step,
+      parent: outcome.spanId,
       text: outcome.text,
       workerOutput,
     });
@@ -271,10 +308,10 @@ export class TurnRunner {
 
     // Exactly one communication invocation per nonempty output, immediately
     // after persisting — the action executions are deliberately not awaited. A
-    // terminal cycle reuses this same invocation to end the turn.
+    // terminal step reuses this same invocation to end the turn.
     if (workerOutput.trim() !== '') {
       this.replies.request(session, turn, {
-        cycle,
+        step,
         status: terminal ? 'completed' : 'running',
         terminal,
       });
@@ -283,15 +320,15 @@ export class TurnRunner {
   }
 
   /**
-   * True when a successful reason cycle ends the turn: ordinary visible text
+   * True when a successful reason step ends the turn: ordinary visible text
    * with no tool call, or a single question sent alone. A correction, any
    * executed action, or extra questions keep the turn running.
    */
-  private isTerminalCycle(turn: TurnRuntime, prose: string): boolean {
+  private isTerminalStep(turn: TurnRuntime, prose: string): boolean {
     if (turn.correctionRequired) return false;
-    const hasActions = turn.actionsThisCycle > 0;
-    if (turn.asksThisCycle.length === 1 && !hasActions) return true;
-    return turn.toolCallsThisCycle === 0 && prose.trim() !== '' && !hasHandwrittenAction(prose);
+    const hasActions = turn.actionsThisStep > 0;
+    if (turn.asksThisStep.length === 1 && !hasActions) return true;
+    return turn.toolCallsThisStep === 0 && prose.trim() !== '' && !hasHandwrittenAction(prose);
   }
 
   /**
@@ -306,7 +343,7 @@ export class TurnRunner {
   ): Promise<Record<string, { dataUrl: string; mime: string }>> {
     const images: Record<string, { dataUrl: string; mime: string }> = {};
     for (const event of events) {
-      if (event.type !== 'files') continue;
+      if (event.type !== 'files.attached') continue;
       for (const file of event.files) {
         if (file.kind !== 'image' || file.processedPath === undefined) continue;
         if (images[file.processedPath] !== undefined) continue;
@@ -327,48 +364,48 @@ export class TurnRunner {
 
   /**
    * Apply one completed wy_action tool call: an invalid call forces a
-   * correction, a question is remembered for the cycle decision, and a valid
+   * correction, a question is remembered for the step decision, and a valid
    * action starts executing immediately. Each valid call appends its raw intent
-   * or question to the cycle's ordered worker output.
+   * or question to the step's ordered worker output.
    */
   private async handleToolCall(
     session: SessionRuntime,
     turn: TurnRuntime,
-    cycle: number,
+    step: number,
     call: ToolCall,
     workerLines: string[],
   ): Promise<void> {
-    turn.toolCallsThisCycle += 1;
+    turn.toolCallsThisStep += 1;
     const parsed = parseActionCall(call);
     if ('error' in parsed) {
       turn.correctionRequired = true;
-      await this.engine.appendError(session.sessionId, 'reason', `invalid action call: ${parsed.error}`, turn, cycle);
+      await this.engine.appendError(session.sessionId, 'reason', `invalid action call: ${parsed.error}`, turn, step);
       return;
     }
     if (parsed.type === 'ask') {
-      turn.asksThisCycle.push(parsed.intent);
+      turn.asksThisStep.push(parsed.intent);
       workerLines.push(`- ask: ${parsed.intent}`);
       return;
     }
     workerLines.push(`- ${parsed.type}: ${parsed.intent}`);
-    await this.startAction(session, turn, cycle, { kind: parsed.type as ActionKind, intent: parsed.intent });
+    await this.startAction(session, turn, step, { type: parsed.type as ActionType, intent: parsed.intent });
   }
 
   /** Start one parsed action, exactly as a valid block once did. */
   private async startAction(
     session: SessionRuntime,
     turn: TurnRuntime,
-    cycle: number,
+    step: number,
     action: ParsedAction,
   ): Promise<void> {
-    turn.actionsThisCycle += 1;
-    const actionId = `a${turn.turn}-${cycle}-${++turn.actionSeq}`;
+    turn.actionsThisStep += 1;
+    const actionId = this.engine.nextActionId(session);
 
     const runtimeAction: RuntimeAction = {
       actionId,
       turn: turn.turn,
-      cycle,
-      kind: action.kind,
+      step,
+      type: action.type,
       goal: describeAction(action),
       startedAt: this.engine.now().toISOString(),
     };
@@ -376,20 +413,20 @@ export class TurnRunner {
     await this.engine.ledger.append(session.sessionId, {
       type: 'action.started',
       turn: turn.turn,
-      cycle,
-      actionId,
-      kind: action.kind,
-      parsed: action,
+      step,
+      id: actionId,
+      parent: stepId(turn.turn, step),
+      action: { type: action.type, prompt: action.intent },
+      input: action,
     });
 
     const executeContext: ActionRunContext = {
       ...this.actionBaseContext(session, turn),
       actionId,
-      onTaskRun: (taskRunId: string) =>
-        this.recordTaskRun(session, turn, cycle, actionId, action, runtimeAction, taskRunId),
-      onTitle: (title: string) => this.recordActionTitle(session, turn, cycle, actionId, title),
+      onTaskRun: (taskRunId: string) => this.recordTaskRun(turn, runtimeAction, taskRunId),
+      onTitle: (title: string) => this.recordActionTitle(session, turn, step, actionId, title),
     };
-    const promise = this.runAction(session, turn, action, executeContext, actionId, cycle);
+    const promise = this.runAction(session, turn, action, executeContext, actionId, step);
     turn.actionPromises.add(promise);
     void promise.then(
       () => turn.actionPromises.delete(promise),
@@ -399,29 +436,17 @@ export class TurnRunner {
   }
 
   /**
-   * Record a dispatch's task run: a second `action.started` with the same
-   * id/parsed plus `taskRunId`, so a restart can find and cancel it.
+   * Remember a dispatch's task run in memory so an interrupt or a restart can
+   * cancel it. The run id is durable on the task span (`request.taskRunId`) and
+   * on `action.finished`; the action gets no second `action.started`.
    */
   private async recordTaskRun(
-    session: SessionRuntime,
     turn: TurnRuntime,
-    cycle: number,
-    actionId: string,
-    action: ParsedAction,
     runtimeAction: RuntimeAction,
     taskRunId: string,
   ): Promise<void> {
     runtimeAction.taskRunId = taskRunId;
     turn.taskRunIds.add(taskRunId);
-    await this.engine.ledger.append(session.sessionId, {
-      type: 'action.started',
-      turn: turn.turn,
-      cycle,
-      actionId,
-      kind: action.kind,
-      parsed: action,
-      taskRunId,
-    });
     if (turn.abort.signal.aborted) await this.engine.safeCancelTask(taskRunId);
   }
 
@@ -429,18 +454,18 @@ export class TurnRunner {
   private recordActionTitle(
     session: SessionRuntime,
     turn: TurnRuntime,
-    cycle: number,
+    step: number,
     actionId: string,
     title: string,
   ): void {
-    const promise = this.appendActionTitle(session, turn, cycle, actionId, title);
+    const promise = this.appendActionTitle(session, turn, step, actionId, title);
     this.engine.track(promise);
   }
 
   private async appendActionTitle(
     session: SessionRuntime,
     turn: TurnRuntime,
-    cycle: number,
+    step: number,
     actionId: string,
     title: string,
   ): Promise<void> {
@@ -448,8 +473,8 @@ export class TurnRunner {
       await this.engine.ledger.append(session.sessionId, {
         type: 'action.titled',
         turn: turn.turn,
-        cycle,
-        actionId,
+        step,
+        id: actionId,
         title,
       });
     } catch {
@@ -464,7 +489,7 @@ export class TurnRunner {
     action: ParsedAction,
     ctx: ActionRunContext,
     actionId: string,
-    cycle: number,
+    step: number,
   ): Promise<void> {
     let outcome: ActionExecutionOutcome;
     try {
@@ -481,9 +506,9 @@ export class TurnRunner {
       {
         type: 'action.finished',
         turn: turn.turn,
-        cycle,
-        actionId,
-        kind: action.kind,
+        step,
+        id: actionId,
+        action: { type: action.type },
         status: outcome.status,
         result: outcome.result,
         ...(outcome.task === undefined ? {} : { task: outcome.task }),
@@ -501,7 +526,7 @@ export class TurnRunner {
     }
   }
 
-  private async awaitCycleActions(turn: TurnRuntime): Promise<void> {
+  private async awaitStepActions(turn: TurnRuntime): Promise<void> {
     while (turn.actionPromises.size > 0) {
       await Promise.allSettled([...turn.actionPromises]);
     }
@@ -520,7 +545,7 @@ export class TurnRunner {
   }
 
   /**
-   * Append queued results, but only once the cycle's `reason.completed` is on
+   * Append queued results, but only once the step's `reasoning.completed` is on
    * the timeline so results always render after the request that produced them.
    * Reads are dropped from a failed/interrupted turn; write-sourced document and
    * workspace facts are always appended.
@@ -536,8 +561,8 @@ export class TurnRunner {
           if (isReadDraft(draft) && (turn.dropDeferred || turn.abort.signal.aborted)) continue;
           // Parallel reads snapshot the timeline before any of them lands, so the
           // same document version can be queued more than once; append it once.
-          if (draft.type === 'doc.content' && this.engine.ledger.read(session.sessionId).some((event) =>
-            event.type === 'doc.content' && event.path === draft.path && event.version === draft.version)) continue;
+          if (draft.type === 'document.content' && this.engine.ledger.read(session.sessionId).some((event) =>
+            event.type === 'document.content' && event.path === draft.path && event.version === draft.version)) continue;
           await this.engine.ledger.append(session.sessionId, draft);
         }
       }
@@ -553,7 +578,7 @@ export class TurnRunner {
       now: this.engine.now().toISOString(),
       sessionId: session.sessionId,
       turn: turn.turn,
-      cycle: turn.cycle,
+      step: turn.step,
       model: turn.publicId,
       deviceName: this.engine.host.deviceName,
       ...(turn.contextWindow === undefined ? {} : { contextWindow: turn.contextWindow }),
@@ -580,7 +605,7 @@ export class TurnRunner {
     return {
       sessionId: session.sessionId,
       turn: turn.turn,
-      cycle: turn.cycle,
+      step: turn.step,
       userText: turn.userText,
       workspaceRoot: session.workspaceRoot,
       snapshot,
@@ -599,11 +624,11 @@ export class TurnRunner {
 
 // ─── top-level helpers ──────────────────────────────────────────────────────
 
-/** Upstream-reported input tokens of the most recent finished reasoning call. */
+/** Upstream-reported input tokens of the most recent finished reasoning span. */
 function lastReasonInputTokens(events: readonly LedgerEvent[]): number | undefined {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;
-    if (event.type === 'call' && event.role === 'reason') return event.usage?.input;
+    if (event.type === 'span.finished' && event.kind === 'reasoning') return event.metrics?.usage?.inputTokens;
   }
   return undefined;
 }
@@ -611,9 +636,9 @@ function lastReasonInputTokens(events: readonly LedgerEvent[]): number | undefin
 /** A draft whose body is a read (dropped from a failed/interrupted turn). */
 function isReadDraft(draft: LedgerEventDraft): boolean {
   switch (draft.type) {
-    case 'doc.content':
+    case 'document.content':
       return draft.source === 'read' || draft.source === 'project-instructions';
-    case 'files':
+    case 'files.attached':
       return draft.source === 'read';
     case 'memory.recalled':
       return true;
@@ -624,7 +649,7 @@ function isReadDraft(draft: LedgerEventDraft): boolean {
 
 /** Intent-only description of one typed action, for the running-action table. */
 function describeAction(action: ParsedAction): string {
-  return `${action.kind}: ${oneLine(action.intent)}`;
+  return `${action.type}: ${oneLine(action.intent)}`;
 }
 
 function oneLine(text: string): string {
@@ -632,7 +657,7 @@ function oneLine(text: string): string {
 }
 
 /**
- * The complete worker output of one reason cycle: the visible prose followed by
+ * The complete worker output of one reason step: the visible prose followed by
  * the raw action intents and questions of its wy_action calls, in order. The
  * prose itself is never altered, so the event's `text` stays the main reasoning
  * rendering while `workerOutput` feeds the communication view.

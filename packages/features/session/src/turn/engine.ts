@@ -11,17 +11,19 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   collectSessionFiles,
+  stepId,
+  turnId,
   type LedgerEvent,
   type SessionSummary,
   type WorkspaceSnapshot,
-} from './ledger.ts';
-import { ModelCallError, resolveModelMetadata, type CallRole } from './calls.ts';
+} from '../ledger/store.ts';
+import { ModelCallError, resolveModelMetadata, type CallRole } from '../model/request.ts';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
-import { ContextInspector, findCreated, type ContextInspectRequest, type ContextInspection } from './context-inspect.ts';
-import { type ToolCall } from './transport/index.ts';
-import { isInside, type AttachmentInput, type FileStore } from './media.ts';
-import { messageOf } from './errors.ts';
-import { ActionRunner } from './actions/index.ts';
+import { ContextInspector, findCreated, type ContextInspectRequest, type ContextInspection } from '../context/inspect.ts';
+import { type ToolCall } from '../transport/index.ts';
+import { isInside, type AttachmentInput, type FileStore } from '../media.ts';
+import { messageOf } from '../errors.ts';
+import { ActionRunner } from '../reasoning/actions.ts';
 import { LiveCalls } from './live.ts';
 import type {
   BuiltView,
@@ -32,11 +34,11 @@ import type {
   Session,
   SessionCallHost,
   SessionHost,
-} from './ports.ts';
-import { ReplyWriter } from './actions/secondary/reply.ts';
+} from '../ports.ts';
+import { ReplyWriter } from '../auxiliary/reply.ts';
 import { TurnRunner } from './turn.ts';
 import type { SessionRuntime, TurnRuntime } from './runtime.ts';
-import { buildSnapshot } from './snapshot.ts';
+import { buildSnapshot } from '../snapshot.ts';
 
 // ─── Engine ────────────────────────────────────────────────────────────────
 
@@ -217,6 +219,7 @@ class Engine implements Session, SessionCallHost {
       await this.ports.ledger.append(sessionId, {
         type: 'turn.started',
         turn: turnNumber,
+        id: turnId(turnNumber),
         text: input.text,
         model: input.model,
       });
@@ -227,9 +230,29 @@ class Engine implements Session, SessionCallHost {
       throw error;
     }
 
+    // A model the user switched to is a fact the reasoning model should read.
+    const previousModel = lastTurnModel(this.ports.ledger.read(sessionId), turnNumber);
+    const currentModel = `${input.model.provider}/${input.model.model}`;
+    if (previousModel !== undefined && previousModel !== currentModel) {
+      await this.ports.ledger.append(sessionId, {
+        type: 'system.info',
+        turn: turnNumber,
+        parent: turnId(turnNumber),
+        source: 'user',
+        code: 'model.changed',
+        message: `The user switched the main model from ${previousModel} to ${currentModel}.`,
+      });
+    }
+
     // The imported files enter the context immediately before the turn runs.
     if (files.length > 0) {
-      await this.ports.ledger.append(sessionId, { type: 'files', turn: turnNumber, source: 'user', files });
+      await this.ports.ledger.append(sessionId, {
+        type: 'files.attached',
+        turn: turnNumber,
+        parent: turnId(turnNumber),
+        source: 'user',
+        files,
+      });
     }
 
     this.track(this.turnRunner.runTurn(session, turn));
@@ -334,13 +357,13 @@ class Engine implements Session, SessionCallHost {
     // Late action results are appended immediately, flagged as post-interrupt.
     runtime.reasonCompleted = true;
 
-    await this.ports.ledger.append(sessionId, { type: 'turn.interrupted', turn, reason });
+    await this.ports.ledger.append(sessionId, { type: 'turn.interrupted', turn, parent: turnId(turn), reason });
     runtime.abort.abort();
     // Queued and in-flight replies check this turn's terminal flag before
     // writing. Do not wait for communication belonging to other live turns.
     await Promise.allSettled([...runtime.taskRunIds].map((id) => this.safeCancelTask(id)));
     await this.turnRunner.flushResults(session, runtime);
-    await this.ports.ledger.append(sessionId, { type: 'turn.finished', turn, status: 'interrupted' });
+    await this.ports.ledger.append(sessionId, { type: 'turn.finished', turn, id: turnId(turn), status: 'interrupted' });
     runtime.durableTerminal = true;
   }
 
@@ -367,7 +390,7 @@ class Engine implements Session, SessionCallHost {
     return this.inspector.inspect(request);
   }
 
-  async previewRoutes(): Promise<{ roles: import('./role-requirements.ts').AuxiliaryRoutePreview[] }> {
+  async previewRoutes(): Promise<{ roles: import('../model/roles.ts').AuxiliaryRoutePreview[] }> {
     this.assertOpen();
     return { roles: [...await this.host.previewAuxiliaryRoutes()] };
   }
@@ -429,10 +452,14 @@ class Engine implements Session, SessionCallHost {
         files,
         calls,
         fileStore: this.ports.fileStore,
+        appendSpan: async (draft) => {
+          await this.ports.ledger.append(sessionId, draft);
+        },
         now: () => this.now(),
       }),
       calls,
-      callSeq: 0,
+      spanSeq: 0,
+      actionSeq: 0,
       reasonQueue: Promise.resolve(),
       replyQueue: Promise.resolve(),
       title: '新会话',
@@ -483,16 +510,20 @@ class Engine implements Session, SessionCallHost {
     for (const event of events) {
       if (typeof event.turn === 'number' && event.turn >= nextTurn) nextTurn = event.turn + 1;
       switch (event.type) {
-        case 'title':
-          session.title = event.text;
-          session.lastTitleVersion += 1;
-          session.titleVersion = session.lastTitleVersion;
+        case 'session.titled': {
+          const title = event.text.trim();
+          if (title !== '') {
+            session.title = title;
+            session.lastTitleVersion += 1;
+            session.titleVersion = session.lastTitleVersion;
+          }
+          break;
+        }
+        case 'reply.sent':
+          session.titleUpdatedWithReply = true;
           break;
         case 'turn.started':
           if (session.firstUserText === undefined) session.firstUserText = event.text;
-          break;
-        case 'reply':
-          session.titleUpdatedWithReply = true;
           break;
         default:
           break;
@@ -505,25 +536,95 @@ class Engine implements Session, SessionCallHost {
   private async recover(session: SessionRuntime, events: LedgerEvent[]): Promise<void> {
     const started = new Set<number>();
     const finished = new Set<number>();
+    const finishedSpans = new Set<string>();
     const liveTaskRuns = new Map<number, string[]>();
 
+    for (const event of events) {
+      if (event.type === 'span.finished') finishedSpans.add(event.id);
+    }
     for (const event of events) {
       if (typeof event.turn !== 'number') continue;
       if (event.type === 'turn.started') started.add(event.turn);
       if (event.type === 'turn.finished') finished.add(event.turn);
-      if (event.type === 'action.started' && event.taskRunId !== undefined) {
-        liveTaskRuns.set(event.turn, [...(liveTaskRuns.get(event.turn) ?? []), event.taskRunId]);
+      // A dispatch's run id is durable on its task span; a task span without a
+      // matching span.finished is the live run a restart must cancel.
+      if (event.type === 'span.started' && event.kind === 'task' && !finishedSpans.has(event.id)) {
+        liveTaskRuns.set(event.turn, [...(liveTaskRuns.get(event.turn) ?? []), event.request.taskRunId]);
       }
     }
 
     for (const turn of started) {
       if (finished.has(turn)) continue;
-      await this.ports.ledger.append(session.sessionId, { type: 'turn.interrupted', turn, reason: 'restart' });
+      // Close dangling children before the turn itself: spans, then actions,
+      // then steps, so no started id is left without its finish event.
+      await this.closeDanglingChildren(session, events, turn);
+      await this.ports.ledger.append(session.sessionId, { type: 'turn.interrupted', turn, parent: turnId(turn), reason: 'restart' });
       for (const taskRunId of liveTaskRuns.get(turn) ?? []) {
         await this.safeCancelTask(taskRunId);
       }
-      await this.ports.ledger.append(session.sessionId, { type: 'turn.finished', turn, status: 'interrupted' });
+      await this.ports.ledger.append(session.sessionId, { type: 'turn.finished', turn, id: turnId(turn), status: 'interrupted' });
       this.recoveringTurns.delete(`${session.sessionId}:${turn}`);
+    }
+  }
+
+  /**
+   * Close every dangling child of one crashed turn: an unfinished span, action
+   * or step gets its `*.finished` event with status `interrupted`, in the order
+   * spans, actions, steps. Ids repeated by more than one start event (a
+   * dispatch's second `action.started`) are finished once.
+   */
+  private async closeDanglingChildren(session: SessionRuntime, events: LedgerEvent[], turn: number): Promise<void> {
+    const turnEvents = events.filter((event) => event.turn === turn);
+    const finishedSpans = new Set<string>();
+    const finishedActions = new Set<string>();
+    const finishedSteps = new Set<string>();
+    for (const event of turnEvents) {
+      if (event.type === 'span.finished') finishedSpans.add(event.id);
+      else if (event.type === 'action.finished') finishedActions.add(event.id);
+      else if (event.type === 'step.finished') finishedSteps.add(event.id);
+    }
+
+    const seenSpans = new Set<string>();
+    for (const event of turnEvents) {
+      if (event.type !== 'span.started' || finishedSpans.has(event.id) || seenSpans.has(event.id)) continue;
+      seenSpans.add(event.id);
+      await this.ports.ledger.append(session.sessionId, {
+        type: 'span.finished',
+        id: event.id,
+        kind: event.kind,
+        turn: event.turn,
+        ...(event.step === undefined ? {} : { step: event.step }),
+        status: 'interrupted',
+      });
+    }
+
+    const seenActions = new Set<string>();
+    for (const event of turnEvents) {
+      if (event.type !== 'action.started' || finishedActions.has(event.id) || seenActions.has(event.id)) continue;
+      seenActions.add(event.id);
+      await this.ports.ledger.append(session.sessionId, {
+        type: 'action.finished',
+        id: event.id,
+        action: { type: event.action.type },
+        turn: event.turn,
+        ...(event.step === undefined ? {} : { step: event.step }),
+        status: 'interrupted',
+        result: '',
+        afterInterrupt: true,
+      });
+    }
+
+    const seenSteps = new Set<string>();
+    for (const event of turnEvents) {
+      if (event.type !== 'step.started' || finishedSteps.has(event.id) || seenSteps.has(event.id)) continue;
+      seenSteps.add(event.id);
+      await this.ports.ledger.append(session.sessionId, {
+        type: 'step.finished',
+        id: event.id,
+        turn: event.turn,
+        ...(event.step === undefined ? {} : { step: event.step }),
+        status: 'interrupted',
+      });
     }
   }
 
@@ -544,7 +645,7 @@ class Engine implements Session, SessionCallHost {
       ...(contextWindow === undefined ? {} : { contextWindow }),
       imageUnsupported: false,
       phase: 'preparing',
-      cycle: 0,
+      step: 0,
       abort: new AbortController(),
       actions: new Map(),
       finished: false,
@@ -553,13 +654,12 @@ class Engine implements Session, SessionCallHost {
       flushPromise: Promise.resolve(),
       dropDeferred: false,
       reasonCompleted: false,
-      actionsThisCycle: 0,
-      toolCallsThisCycle: 0,
-      asksThisCycle: [],
-      actionSeq: 0,
+      actionsThisStep: 0,
+      toolCallsThisStep: 0,
+      asksThisStep: [],
       parsePromises: new Set(),
       actionPromises: new Set(),
-      cycleText: '',
+      stepText: '',
       taskRunIds: new Set(),
       correctionRequired: false,
       emptyReasonRetried: false,
@@ -571,7 +671,7 @@ class Engine implements Session, SessionCallHost {
     if (isInside(path, join(this.host.stateRoot, 'sessions', sessionId, 'files'))) return true;
     const runIds = new Set<string>();
     for (const event of events) {
-      if ((event.type === 'action.started' || event.type === 'files') && event.taskRunId !== undefined) {
+      if ((event.type === 'action.started' || event.type === 'files.attached') && event.taskRunId !== undefined) {
         runIds.add(event.taskRunId);
       }
     }
@@ -586,28 +686,38 @@ class Engine implements Session, SessionCallHost {
     stage: string,
     message: string,
     turn: TurnRuntime,
-    cycle?: number,
+    step?: number,
   ): Promise<void> {
     try {
+      const stepNumber = step ?? turn.step;
+      // The owning step when one is in progress, else the turn.
+      const parent = turn.currentStepId ?? turnId(turn.turn);
       await this.ports.ledger.append(sessionId, {
-        type: 'error',
-        stage,
+        type: 'system.error',
+        source: 'system',
+        code: stage,
         message,
-        ...(turn.turn > 0 ? { turn: turn.turn, cycle: cycle ?? turn.cycle } : {}),
+        ...(turn.turn > 0 ? { turn: turn.turn, step: stepNumber, parent } : {}),
       });
     } catch {
       // Error reporting must never take the pipeline down.
     }
   }
 
-  /** Reserve the next call id for one turn. */
-  private nextCallId(session: SessionRuntime, turn: TurnRuntime): string {
-    return `c${turn.turn}.${++session.callSeq}`;
+  /** Reserve the next session-wide action id. */
+  nextActionId(session: SessionRuntime): string {
+    return `a${++session.actionSeq}`;
+  }
+
+  /** Reserve the next span id for one turn. */
+  private nextSpanId(session: SessionRuntime, turn: TurnRuntime): string {
+    return `s${turn.turn}.${++session.spanSeq}`;
   }
 
   /**
-   * Run one model call. `calls.ts` writes the `call` event and throws on
-   * failure, so every role's failure consequence is decided here.
+   * Run one model call. `calls.ts` writes the `span.started` / `span.finished`
+   * events and throws on failure, so every role's failure consequence is decided
+   * here.
    */
   async invoke(
     session: SessionRuntime,
@@ -615,23 +725,30 @@ class Engine implements Session, SessionCallHost {
     role: CallRole,
     view: BuiltView,
     extra: {
-      callId?: string;
+      spanId?: string;
+      parent?: string;
       reason?: { provider: string; model: string; reasoningEffort: ReasoningEffort };
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
-      tools?: readonly import('./transport/index.ts').ToolSpec[];
+      tools?: readonly import('../transport/index.ts').ToolSpec[];
       maxTokens?: number;
-      cycle?: number;
+      step?: number;
     } = {},
   ): Promise<InvokedCall> {
-    const callId = extra.callId ?? this.nextCallId(session, turn);
+    const spanId = extra.spanId ?? this.nextSpanId(session, turn);
+    const parent = extra.parent ?? (role === 'reason' ? stepId(turn.turn, turn.step) : turnId(turn.turn));
+    // The index a span carries matches the thing it serves: the step for a
+    // reasoning span, an explicit step for a step-scoped system call (a reply),
+    // and no step for a turn-level system action's own span (title, memory).
+    const step = extra.step ?? (role === 'reason' ? turn.step : undefined);
     try {
       const result = await session.calls.run({
-        callId,
+        spanId,
+        parent,
         role,
         turn: turn.turn,
-        cycle: extra.cycle ?? turn.cycle,
+        step,
         messages: view.messages,
         layers: view.layers,
         signal: turn.abort.signal,
@@ -644,32 +761,27 @@ class Engine implements Session, SessionCallHost {
       });
       return {
         ok: true,
-        callId,
+        spanId,
         text: result.text,
         toolCalls: result.toolCalls,
         ...(result.reasoning === undefined ? {} : { reasoning: result.reasoning }),
+        ...(result.metrics === undefined ? {} : { metrics: result.metrics }),
       };
     } catch (error) {
-      const reasoning = error instanceof ModelCallError ? error.detail.partialReasoning : undefined;
       const failure = error instanceof ModelCallError && error.detail.failure !== undefined
         ? {
             model: error.detail.model,
             kind: error.detail.failure.kind,
             ...(error.detail.failure.status === undefined ? {} : { status: error.detail.failure.status }),
             message: error.detail.failure.message,
-            // Keep the request count and the retry count as separate facts; do
-            // not derive one from the other.
-            ...(error.detail.attempts === undefined ? {} : { attempts: error.detail.attempts.count }),
-            retries: error.detail.attempts === undefined ? 0 : Math.max(0, error.detail.attempts.count - 1),
-            ...(error.detail.attempts === undefined ? {} : { durationMs: error.detail.attempts.totalMs }),
+            ...(error.detail.metrics === undefined ? {} : { metrics: error.detail.metrics }),
           }
         : undefined;
       return {
         ok: false,
-        callId,
+        spanId,
         text: '',
         error: messageOf(error),
-        ...(reasoning === undefined ? {} : { reasoning }),
         ...(failure === undefined ? {} : { failure }),
       };
     }
@@ -724,4 +836,13 @@ function assertStorageSegment(value: string): void {
   if (value === '.' || value === '..' || value === '' || /[/\\\u0000]/u.test(value)) {
     throw new Error(`invalid storage segment: ${value}`);
   }
+}
+
+/** The main model (`provider/model`) of the latest turn before `turn`, if any. */
+function lastTurnModel(events: readonly LedgerEvent[], turn: number): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type === 'turn.started' && event.turn !== turn) return `${event.model.provider}/${event.model.model}`;
+  }
+  return undefined;
 }

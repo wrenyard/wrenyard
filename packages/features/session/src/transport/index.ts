@@ -18,11 +18,15 @@ import {
   type AdapterEmit,
   type Completion,
   type GatewayEndpoints,
+  type ModelAttempt,
+  type ModelMetrics,
   type ModelRequest,
   type ModelResult,
   type ModelTransport,
   type ProtocolAdapter,
+  type RetryAfterHint,
   type SessionProtocol,
+  type Usage,
 } from './protocol.ts';
 import { ModelError, abortError, httpError, networkError, normalizeStreamError } from './errors.ts';
 import { runWithRetry } from './retry.ts';
@@ -36,9 +40,10 @@ export {
   type Message,
   type MessageToolCall,
   type ModelAttribution,
-  type ModelAttempts,
+  type ModelAttempt,
   type ModelContentPart,
   type ModelEvent,
+  type ModelMetrics,
   type ModelRequest,
   type ModelResult,
   type ModelToolCall,
@@ -49,7 +54,6 @@ export {
   type ToolCall,
   type ToolChoice,
   type ToolSpec,
-  type TpsSample,
   type Usage,
   parseToolArguments,
   record,
@@ -139,59 +143,84 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
       const url = adapter.url(endpoints);
 
       let outputStarted = false;
-      // One speed sampler per attempt: the transport owns TPS collection, so an
+      /** First time any content of this call was produced; shared with the metrics. */
+      let firstOutputMs: number | undefined;
+      /** Latest usage the stream actually reported, kept for a failed call. */
+      let lastUsage: Usage | undefined;
+      const markFirstOutput = (): void => { firstOutputMs ??= Date.now(); };
+      // One speed sampler per attempt: the transport owns speed collection, so an
       // adapter never references it. The adapter reports real streamed generation
       // deltas and the protocol's success/failure through `emit`.
       let tps = new TpsGenerationCollector();
       const emit: AdapterEmit = {
-        text: (delta) => { if (delta) outputStarted = true; request.onEvent?.({ type: 'text', delta }); },
-        reasoning: (delta) => { if (delta) outputStarted = true; request.onEvent?.({ type: 'reasoning', delta }); },
-        toolCall: (call) => { outputStarted = true; request.onEvent?.({ type: 'tool_call', call }); },
-        usage: (usage) => request.onEvent?.({ type: 'usage', usage }),
+        text: (delta) => { if (delta) { outputStarted = true; markFirstOutput(); } request.onEvent?.({ type: 'text', delta }); },
+        reasoning: (delta) => { if (delta) { outputStarted = true; markFirstOutput(); } request.onEvent?.({ type: 'reasoning', delta }); },
+        toolCall: (call) => { outputStarted = true; markFirstOutput(); request.onEvent?.({ type: 'tool_call', call }); },
+        usage: (usage) => { lastUsage = usage; request.onEvent?.({ type: 'usage', usage }); },
         activity: () => request.onEvent?.({ type: 'activity' }),
-        output: () => { outputStarted = true; },
+        output: () => { outputStarted = true; markFirstOutput(); },
         generation: (channel, delta) => tps.observe(channel, delta, Date.now()),
         complete: () => tps.complete(),
         fail: () => tps.fail(),
       };
 
-      // Count the requests actually issued, so a cancellation during a retry
-      // wait is never reported as another request.
-      let requests = 0;
+      // Every request actually issued, in order, with its own duration and wait.
+      const attempts: ModelAttempt[] = [];
+      /** The wait an `onRetry` decided for the next request, consumed by it. */
+      let pendingWait: { waitedMs?: number; retryAfter?: RetryAfterHint } = {};
       const startedMs = Date.now();
-      const attempt = async (): Promise<Completion> => {
+      const attempt = async (): Promise<{ completion: Completion; sample?: { outputTokens: number; windowMs: number } }> => {
         if (request.signal.aborted) throw abortError();
-        requests += 1;
+        const attemptStartMs = Date.now();
+        const wait = pendingWait;
+        pendingWait = {};
         tps = new TpsGenerationCollector();
-        let response: Response;
         try {
-          response = await fetchImpl(url, { method: 'POST', headers, body, signal: request.signal });
-        } catch (error) {
-          throw networkError(error, request.signal);
-        }
-        if (!response.ok) throw await httpError(response);
-        // The transport always requests a stream, so a successful response that
-        // is not an SSE stream is a protocol failure, never a JSON completion.
-        const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
-        if (!contentType.includes('text/event-stream')) {
-          throw new ModelError('Model gateway returned a non-streaming response where a text/event-stream stream was required', { kind: 'protocol' });
-        }
-        try {
-          const completion = await adapter.read(response, request, emit);
+          let response: Response;
+          try {
+            response = await fetchImpl(url, { method: 'POST', headers, body, signal: request.signal });
+          } catch (error) {
+            throw networkError(error, request.signal);
+          }
+          if (!response.ok) throw await httpError(response);
+          // The transport always requests a stream, so a successful response that
+          // is not an SSE stream is a protocol failure, never a JSON completion.
+          const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+          if (!contentType.includes('text/event-stream')) {
+            throw new ModelError('Model gateway returned a non-streaming response where a text/event-stream stream was required', { kind: 'protocol' });
+          }
+          let completion: Completion;
+          try {
+            completion = await adapter.read(response, request, emit);
+          } catch (error) {
+            throw normalizeStreamError(error, request.signal, outputStarted);
+          }
+          attempts.push({ status: 200, ms: Date.now() - attemptStartMs, ...wait });
           // Only a successfully completed stream yields a sample; the sampler
           // produces nothing for a failed, cancelled or truncated attempt.
           const sample = tps.sample();
-          return sample === undefined ? completion : { ...completion, tps: { outputTokens: sample.outputTokens, windowMs: sample.windowMs } };
+          return sample === undefined ? { completion } : { completion, sample: { outputTokens: sample.outputTokens, windowMs: sample.windowMs } };
         } catch (error) {
-          throw normalizeStreamError(error, request.signal, outputStarted);
+          if (!(error instanceof ModelError)) throw error;
+          attempts.push({
+            ...(error.status === undefined ? {} : { status: error.status }),
+            error: error.kind,
+            ms: Date.now() - attemptStartMs,
+            ...wait,
+          });
+          throw error;
         }
       };
 
       try {
-        const completion = await runWithRetry(attempt, {
+        const { completion, sample } = await runWithRetry(attempt, {
           signal: request.signal,
           outputStarted: () => outputStarted,
           onRetry: (decision) => {
+            pendingWait = {
+              waitedMs: decision.delayMs,
+              ...(decision.retryAfter === undefined ? {} : { retryAfter: decision.retryAfter }),
+            };
             request.onEvent?.({
               type: 'retry',
               attempt: decision.attempt,
@@ -203,16 +232,23 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
           },
         });
         // Only the final successful attempt returns a completion; a failed
-        // attempt throws above and its samples are never exposed. The optional
-        // tokenizer speed sample is carried onto the result unchanged.
+        // attempt throws above and its samples are never exposed.
         return {
           ...completion,
-          ...(completion.tps === undefined ? {} : { tps: completion.tps }),
-          attempts: { count: requests, totalMs: Date.now() - startedMs },
+          metrics: {
+            ...(completion.finishReason === undefined ? {} : { finishReason: completion.finishReason }),
+            ...(completion.usage === undefined ? {} : { usage: completion.usage }),
+            ...(firstOutputMs === undefined ? {} : { ttftMs: firstOutputMs - startedMs }),
+            ...(sample === undefined ? {} : { streamMs: sample.windowMs, streamTokens: sample.outputTokens }),
+            attempts,
+          },
         };
       } catch (error) {
-        const attempts = { count: requests, totalMs: Date.now() - startedMs };
         if (error instanceof ModelError) {
+          const metrics: ModelMetrics = {
+            ...(lastUsage === undefined ? {} : { usage: lastUsage }),
+            attempts,
+          };
           throw new ModelError(error.message, {
             kind: error.kind,
             ...(error.status === undefined ? {} : { status: error.status }),
@@ -221,7 +257,7 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
             ...(error.upstream === undefined ? {} : { upstream: error.upstream }),
             ...(error.shouldRetry === undefined ? {} : { shouldRetry: error.shouldRetry }),
             ...(error.outputStarted ? { outputStarted: true } : {}),
-            attempts,
+            metrics,
             cause: error,
           });
         }

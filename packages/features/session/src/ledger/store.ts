@@ -21,344 +21,18 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, truncateS
 import { open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SessionFile } from '@wrenyard/protocol';
-import type { ReasoningEffort } from '@wrenyard/models';
-import type { CallRole } from './calls.ts';
-import type { ActionKind } from './actions/index.ts';
-import { normalizeStoredEvent } from './event-compat.ts';
+import type { LedgerEvent, LedgerEventDraft } from './events.ts';
+import { normalizeStoredEvent } from './compat.ts';
 
 // ─── Event model ───────────────────────────────────────────────────────────
 
-/** The `type` discriminant of every ledger event. */
-export type LedgerEventType =
-  | 'session.created'
-  | 'turn.started'
-  | 'cycle.started'
-  | 'thinking'
-  | 'doc.search'
-  | 'doc.content'
-  | 'files'
-  | 'memory.recalled'
-  | 'reason.completed'
-  | 'action.started'
-  | 'action.titled'
-  | 'action.finished'
-  | 'reply'
-  | 'ws.updated'
-  | 'turn.interrupted'
-  | 'turn.finished'
-  | 'title'
-  | 'call.started'
-  | 'call'
-  | 'error';
-
-/** The terminal states of a work turn. */
-export type TurnStatus = 'completed' | 'failed' | 'interrupted';
-
-/** Mirrors the committed action statuses owned by `actions.ts`. */
-export type ActionStatus = 'done' | 'failed' | 'skipped' | 'cancelled';
-
-/** Provider usage as reported by the driver; absent fields stay absent. */
-export interface Usage {
-  input?: number;
-  cachedInput?: number;
-  output?: number;
-  reasoning?: number;
-}
-
-/** The expensive model a turn was started with. */
-export interface TurnModel {
-  provider: string;
-  model: string;
-  /** Explicit public reasoning level this turn runs at. */
-  reasoningEffort?: ReasoningEffort;
-}
-
-/** Fields common to every ledger event; `seq` and `at` are assigned on append. */
-export interface LedgerEventBase {
-  /** Global, strictly increasing sequence number within the session. */
-  seq: number;
-  /** ISO 8601 timestamp with timezone designator. */
-  at: string;
-  type: LedgerEventType;
-  turn?: number;
-  cycle?: number;
-}
-
-export interface TaskBrief {
-  id: string;
-  description: string;
-  inputSummary: string[];
-}
-
-export interface ProjectSnapshot {
-  /** Registered project id. */
-  id: string;
-  displayName?: string;
-  /** Workspace-relative project directory, e.g. `projects/saa/game`. */
-  workspaceDir: string;
-  checkoutPath?: string;
-  gitRemote?: string;
-  defaultBranch?: string;
-  /** Branch captured in the snapshot. */
-  branch?: string;
-  /** HEAD short hash captured in the snapshot. */
-  head?: string;
-  tasks: TaskBrief[];
-  recentDocs: { path: string; title: string }[];
-}
-
-/** Frozen workspace facts taken when the session is created. */
-export interface WorkspaceSnapshot {
-  takenAt: string;
-  deviceName: string;
-  /** Full text of the workspace root `AGENTS.md`. */
-  agents: string;
-  /** Full text of `memories/INDEX.md`. */
-  memoryIndex: string;
-  builtinTasks: TaskBrief[];
-  projects: ProjectSnapshot[];
-}
-
-export interface SessionCreatedEvent extends LedgerEventBase {
-  type: 'session.created';
-  workspaceRoot: string;
-  snapshot: WorkspaceSnapshot;
-}
-
-export interface TurnStartedEvent extends LedgerEventBase {
-  type: 'turn.started';
-  text: string;
-  model: TurnModel;
-}
-
 /**
- * Marks the start of one reasoning cycle. It is appended before the cycle's
- * request is assembled and rendered as that cycle's `<wy-info>` line, so the
- * per-request facts are part of the append-only context instead of a block
- * rewritten on every request.
+ * The append-only event model lives in `./ledger/events.ts`; the ledger
+ * re-exports it so every `./ledger.ts` consumer keeps importing the same names.
  */
-export interface CycleStartedEvent extends LedgerEventBase {
-  type: 'cycle.started';
-  /** Main model public id serving this cycle. */
-  model: string;
-  contextWindow?: number;
-  /** Upstream-reported input tokens of the previous reasoning request, when known. */
-  lastInputTokens?: number;
-}
+export * from './events.ts';
 
-export interface ThinkingEvent extends LedgerEventBase {
-  type: 'thinking';
-  callId: string;
-  text: string;
-}
-
-/** One document pick in a doc-search result. */
-export interface DocPick {
-  path: string;
-  title: string;
-  reason: string;
-}
-
-export interface DocSearchEvent extends LedgerEventBase {
-  type: 'doc.search';
-  actionId: string;
-  understanding: string;
-  picks: DocPick[];
-  near: DocPick[];
-  notes: string[];
-}
-
-export interface DocContentEvent extends LedgerEventBase {
-  type: 'doc.content';
-  path: string;
-  title: string;
-  updated: string;
-  version: string;
-  tokens: number;
-  content: string;
-  format: 'full' | 'diff';
-  base?: string;
-  source: 'read' | 'write' | 'project-instructions';
-  actionId?: string;
-}
-
-export interface FilesEvent extends LedgerEventBase {
-  type: 'files';
-  source: 'user' | 'task' | 'read';
-  files: SessionFile[];
-  actionId?: string;
-  taskRunId?: string;
-}
-
-export interface MemoryRecalledEvent extends LedgerEventBase {
-  type: 'memory.recalled';
-  version: string;
-  source: 'memory-search' | 'read';
-  actionId?: string;
-  path: string;
-  content: string;
-}
-
-export interface ReasonCompletedEvent extends LedgerEventBase {
-  type: 'reason.completed';
-  callId: string;
-  text: string;
-  /**
-   * The complete worker output of this cycle: the visible prose plus the
-   * ordered raw action intents and questions parsed from its wy_action tool
-   * calls. The communication view renders this; `text` stays the main reasoning
-   * prose so main reasoning rendering is unchanged.
-   */
-  workerOutput?: string;
-}
-
-export interface ActionStartedEvent extends LedgerEventBase {
-  type: 'action.started';
-  actionId: string;
-  kind: ActionKind;
-  /** The parsed action payload; opaque here because `actions.ts` owns its shape. */
-  parsed: unknown;
-  taskRunId?: string;
-}
-
-export interface ActionTitledEvent extends LedgerEventBase {
-  type: 'action.titled';
-  actionId: string;
-  title: string;
-}
-
-export interface ActionFinishedEvent extends LedgerEventBase {
-  task?: string;
-  taskStatus?: string;
-  type: 'action.finished';
-  actionId: string;
-  kind: ActionKind;
-  status: ActionStatus;
-  result: string;
-  taskRunId?: string;
-  afterInterrupt?: boolean;
-}
-
-export interface ReplyEvent extends LedgerEventBase {
-  type: 'reply';
-  text: string;
-  callId?: string;
-}
-
-export interface WsUpdatedEvent extends LedgerEventBase {
-  type: 'ws.updated';
-  actionId: string;
-  scope: 'document' | 'workspace' | 'project';
-  target: string;
-  change: 'created' | 'updated' | 'committed' | 'pushed' | 'pulled' | 'worktree-created' | 'worktree-removed' | 'worktree-merged' | 'registered' | 'deleted';
-  worktreeId?: string;
-  version?: string;
-  hash?: string;
-  files?: string[];
-}
-
-export interface TurnInterruptedEvent extends LedgerEventBase {
-  type: 'turn.interrupted';
-  reason: 'user' | 'shutdown' | 'restart';
-}
-
-export interface TurnFinishedEvent extends LedgerEventBase {
-  type: 'turn.finished';
-  status: TurnStatus;
-  error?: string;
-}
-
-export interface TitleEvent extends LedgerEventBase {
-  type: 'title';
-  text: string;
-  callId: string;
-}
-
-/**
- * Observational marker appended when a call is actually issued. It never enters
- * the rendered model context (it is not a context event), so appending it cannot
- * change any previously rendered result. The matching `call` event carries the
- * same `callId`.
- */
-export interface CallStartedEvent extends LedgerEventBase {
-  type: 'call.started';
-  callId: string;
-  role: CallRole;
-  /** Gateway public id, always exactly `provider/model`. */
-  model: string;
-}
-
-export interface CallEvent extends LedgerEventBase {
-  type: 'call';
-  callId: string;
-  role: CallRole;
-  /** Gateway public id, always exactly `provider/model`. */
-  model: string;
-  status: 'ok' | 'failed' | 'aborted';
-  startedAt: string;
-  endedAt: string;
-  /** When the driver first produced a nonempty delta (visible or reasoning). */
-  firstTokenAt?: string;
-  /** Character count per prompt layer, e.g. `{ 'wy-system': 1234 }`. */
-  layers: Record<string, number>;
-  estimatedInputTokens: number;
-  usage?: Usage;
-  /** Visible output; partial output when the call was aborted or interrupted. */
-  output: string;
-  reasoning?: string;
-  /** Public reasoning level actually sent for this attempt. */
-  reasoningEffort?: ReasoningEffort;
-  /** The explicitly requested level, or an auxiliary role's declared expectation. */
-  requestedReasoningEffort?: string;
-  /** Rank of the route that served (or last attempted) an auxiliary call. */
-  selectedRank?: number;
-  /** Ordered auxiliary routes retained for this invocation. */
-  routeCandidates?: readonly import('./calls.ts').AuxiliaryRoute[];
-  /** Structured failure fact; present only when the attempt failed. */
-  error?: import('./calls.ts').CallErrorFact;
-  /** Each same-route transport retry, in order. */
-  retries?: readonly import('./calls.ts').CallRetry[];
-  /**
-   * Tokenizer_v1 speed sample of the call; absent on historical records and on
-   * calls that produced no valid sample. The shape is shared with the transport
-   * result so no separate sample is ever fabricated here.
-   */
-  tps?: import('./transport/protocol.ts').TpsSample;
-}
-
-export interface ErrorEvent extends LedgerEventBase {
-  type: 'error';
-  stage: string;
-  message: string;
-}
-
-export type LedgerEvent =
-  | SessionCreatedEvent
-  | TurnStartedEvent
-  | CycleStartedEvent
-  | ThinkingEvent
-  | DocSearchEvent
-  | DocContentEvent
-  | FilesEvent
-  | MemoryRecalledEvent
-  | ReasonCompletedEvent
-  | ActionStartedEvent
-  | ActionTitledEvent
-  | ActionFinishedEvent
-  | ReplyEvent
-  | WsUpdatedEvent
-  | TurnInterruptedEvent
-  | TurnFinishedEvent
-  | TitleEvent
-  | CallStartedEvent
-  | CallEvent
-  | ErrorEvent;
-
-/** An event body without the `seq` / `at` the ledger assigns on append. */
-type WithoutSequence<T> = T extends LedgerEventBase ? Omit<T, 'seq' | 'at'> : never;
-
-/** Discriminated distributively, so each member narrows on `type`. */
-export type LedgerEventDraft = WithoutSequence<LedgerEvent>;
+// ─── Ledger ────────────────────────────────────────────────────────────────
 
 /** One row of `index.json`. */
 export interface SessionSummary {
@@ -372,8 +46,6 @@ export interface SessionSummary {
    */
   running?: boolean;
 }
-
-// ─── Ledger ────────────────────────────────────────────────────────────────
 
 const DEFAULT_TITLE = '新会话';
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -514,7 +186,8 @@ export class Ledger {
     const previous = this.summaries.get(sessionId);
     const createdAt = previous?.createdAt ?? event.at;
     let title = previous?.title ?? DEFAULT_TITLE;
-    if (event.type === 'title' && event.text.trim() !== '') title = event.text.trim();
+    const titled = titleOfEvent(event);
+    if (titled !== undefined) title = titled;
     this.summaries.set(sessionId, { sessionId, title, createdAt, updatedAt: event.at });
   }
 
@@ -610,14 +283,22 @@ export class Ledger {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
+/** The display title a `session.titled` event carries, when it is non-empty. */
+function titleOfEvent(event: LedgerEvent): string | undefined {
+  if (event.type !== 'session.titled') return undefined;
+  const title = event.text.trim();
+  return title === '' ? undefined : title;
+}
+
 /**
- * Every distinct session file a timeline records through `files` events, keyed
- * by path + hash, with the latest record kept and first-seen timeline order.
+ * Every distinct session file a timeline records through `files.attached`
+ * events, keyed by path + hash, with the latest record kept and first-seen
+ * timeline order.
  */
 export function collectSessionFiles(events: readonly LedgerEvent[]): SessionFile[] {
   const files = new Map<string, SessionFile>();
   for (const event of events) {
-    if (event.type !== 'files') continue;
+    if (event.type !== 'files.attached') continue;
     for (const file of event.files) files.set(`${file.path}\u0000${file.hash}`, { ...file });
   }
   return [...files.values()];
@@ -632,7 +313,7 @@ export function collectSessionFiles(events: readonly LedgerEvent[]): SessionFile
 export function contextImageFiles(events: readonly LedgerEvent[]): ReadonlySet<SessionFile> {
   const selected = new Set<SessionFile>();
   for (const event of events) {
-    if (event.type !== 'files') continue;
+    if (event.type !== 'files.attached') continue;
     for (const file of event.files) {
       if (file.kind === 'image') selected.add(file);
     }
@@ -650,7 +331,8 @@ function summarize(sessionId: string, events: readonly LedgerEvent[]): SessionSu
   let title = DEFAULT_TITLE;
   for (const event of events) {
     if (event.type === 'session.created') createdAt = event.at;
-    if (event.type === 'title' && event.text.trim() !== '') title = event.text.trim();
+    const titled = titleOfEvent(event);
+    if (titled !== undefined) title = titled;
     updatedAt = event.at;
   }
   const created = createdAt ?? updatedAt ?? '';

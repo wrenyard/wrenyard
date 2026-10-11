@@ -8,11 +8,11 @@
  * This module never calls a model and never touches the ledger.
  */
 
-import type { Message as ModelMessage, ModelContentPart } from '../../transport/index.ts';
+import type { Message as ModelMessage, ModelContentPart } from '../transport/index.ts';
 import {
   type LedgerEvent,
   type WorkspaceSnapshot,
-} from '../../ledger.ts';
+} from '../ledger/store.ts';
 import {
   ACTION_RUNNING,
   escapeBody,
@@ -20,8 +20,8 @@ import {
   renderEventsBlock,
   renderFiles,
   tag,
-} from '../../render.ts';
-import type { BuiltView } from '../../ports.ts';
+} from '../context/render.ts';
+import type { BuiltView } from '../ports.ts';
 
 const REASON_SYSTEM = `<wy-system>
 You are the conversation orchestrator of Wrenyard (啾啾工坊). You cannot read or write files or run commands. The only way to make the system do something is to call the wy_action tool.
@@ -81,50 +81,50 @@ Wrenyard orchestrator: understand the user's goal and direct the system to get t
  * messages, with images at their `files` event positions.
  *
  * The sequence only grows at its end as the ledger grows:
- * - a `user` message is closed right after each `cycle.started` marker, which
- *   is where that cycle's request ended;
- * - an action still running when a later cycle started keeps the
+ * - a `user` message is closed right after each `step.started` marker, which
+ *   is where that step's request ended;
+ * - an action still running when a later step started keeps the
  *   {@link ACTION_RUNNING} tool result for good, and its real result arrives as
  *   an `<action-result>` record at the position it finished.
  *
  * Thinking is not replayed. An action whose reasoning output never completed
- * has no assistant message to hang on and stays record text.
+ * has no assistant message to hang on and stays record text. System actions
+ * (reply, title, memory) are never tool calls here; the renderer decides them.
  */
 function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
   const images = input.allowImages === false ? {} : (input.images ?? {});
   const events = input.events;
 
-  // Index the ledger: where each action started and finished, which cycles
-  // produced a reasoning output, and where every cycle started.
-  const cycleKey = (turn: number | undefined, cycle: number | undefined): string => `${turn ?? 0}:${cycle ?? 0}`;
-  const started = new Map<string, { index: number; kind: string; intent: string; key: string }>();
+  // Index the ledger: where each reasoning action started and finished, which
+  // steps produced a reasoning output, and where every step started.
+  const stepKey = (turn: number | undefined, step: number | undefined): string => `${turn ?? 0}:${step ?? 0}`;
+  const started = new Map<string, { index: number; type: string; intent: string; key: string }>();
   const finished = new Map<string, { index: number; event: Extract<LedgerEvent, { type: 'action.finished' }> }>();
-  const completedCycles = new Set<string>();
-  const cycleStarts: number[] = [];
+  const completedSteps = new Set<string>();
+  const stepStarts: number[] = [];
   events.forEach((event, index) => {
-    if (event.type === 'action.started' && !started.has(event.actionId)) {
-      const parsed = event.parsed as { intent?: unknown } | undefined;
-      started.set(event.actionId, {
-        index, kind: event.kind, key: cycleKey(event.turn, event.cycle),
-        intent: typeof parsed?.intent === 'string' ? parsed.intent : '',
+    if (event.type === 'action.started' && !started.has(event.id)) {
+      started.set(event.id, {
+        index, type: event.action.type, key: stepKey(event.turn, event.step),
+        intent: event.action.prompt,
       });
-    } else if (event.type === 'action.finished' && event.afterInterrupt !== true && !finished.has(event.actionId)) {
-      finished.set(event.actionId, { index, event });
-    } else if (event.type === 'reason.completed') {
-      completedCycles.add(cycleKey(event.turn, event.cycle));
-    } else if (event.type === 'cycle.started') {
-      cycleStarts.push(index);
+    } else if (event.type === 'action.finished' && event.afterInterrupt !== true && !finished.has(event.id)) {
+      finished.set(event.id, { index, event });
+    } else if (event.type === 'reasoning.completed') {
+      completedSteps.add(stepKey(event.turn, event.step));
+    } else if (event.type === 'step.started') {
+      stepStarts.push(index);
     }
   });
   const isNative = (actionId: string): boolean => {
     const start = started.get(actionId);
-    return start !== undefined && completedCycles.has(start.key);
+    return start !== undefined && completedSteps.has(start.key);
   };
   /** The result was not yet available when some later request was assembled. */
   const arrivedLate = (actionId: string): boolean => {
     const start = started.get(actionId)!;
     const end = finished.get(actionId)?.index ?? Number.POSITIVE_INFINITY;
-    return cycleStarts.some((at) => at > start.index && at < end);
+    return stepStarts.some((at) => at > start.index && at < end);
   };
 
   const messages: ModelMessage[] = [];
@@ -145,7 +145,7 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
 
   for (const [index, event] of events.entries()) {
     switch (event.type) {
-      case 'files': {
+      case 'files.attached': {
         pushText(renderFiles(event));
         for (const file of event.files) {
           if (file.kind !== 'image' || file.processedPath === undefined) continue;
@@ -156,15 +156,15 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
         }
         break;
       }
-      case 'thinking':
+      case 'reasoning.thinking':
         break;
       case 'action.started':
-        if (!isNative(event.actionId) && started.get(event.actionId)?.index === index) {
+        if (!isNative(event.id) && started.get(event.id)?.index === index) {
           pushText(renderEventText(event)!);
         }
         break;
-      case 'reason.completed': {
-        const key = cycleKey(event.turn, event.cycle);
+      case 'reasoning.completed': {
+        const key = stepKey(event.turn, event.step);
         const calls = [...started.entries()].filter(([, start]) => start.key === key);
         if (event.text === '' && calls.length === 0) break;
         endUserMessage();
@@ -174,7 +174,7 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
           toolCalls: calls.map(([id, start]) => ({
             id,
             name: 'wy_action',
-            arguments: JSON.stringify({ type: start.kind, intent: start.intent }),
+            arguments: JSON.stringify({ type: start.type, intent: start.intent }),
           })),
         });
         for (const [id] of calls) {
@@ -189,11 +189,11 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
       case 'action.finished': {
         if (event.afterInterrupt === true) break;
         // Delivered as the action's tool result unless it arrived late.
-        if (isNative(event.actionId) && !arrivedLate(event.actionId)) break;
+        if (isNative(event.id) && !arrivedLate(event.id)) break;
         pushText(renderEventText(event)!);
         break;
       }
-      case 'cycle.started':
+      case 'step.started':
         pushText(renderEventText(event)!);
         endUserMessage();
         break;
@@ -256,8 +256,8 @@ function renderWorkspace(snapshot: WorkspaceSnapshot): string {
 
 /**
  * `<wy-info>`: the facts that hold for the whole session. Everything that
- * changes per request (time, turn, cycle, model, size) is the `<wy-info .../>`
- * line each `cycle.started` event renders inside the context.
+ * changes per request (time, turn, step, model, size) is the `<wy-info .../>`
+ * line each `step.started` event renders inside the context.
  */
 function renderInfo(input: {
   session: ReasonSessionInfo;
@@ -278,7 +278,7 @@ export interface ReasonSessionInfo {
   now?: string;
   sessionId: string;
   turn: number;
-  cycle: number;
+  step: number;
   model: string;
   contextWindow?: number;
 }

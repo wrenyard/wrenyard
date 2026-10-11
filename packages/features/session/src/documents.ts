@@ -16,11 +16,11 @@ import { createHash } from 'node:crypto';
 
 import { diffArrays } from 'diff';
 
-import { estimateTokens } from './calls.ts';
-import type { DocContentEvent, LedgerEvent } from './ledger.ts';
+import { estimateTokens } from './model/request.ts';
+import type { DocumentContentEvent, LedgerEvent } from './ledger/store.ts';
 
-/** One `doc.content` event body, without the `seq` / `at` the ledger assigns. */
-export type DocContentDraft = Omit<DocContentEvent, 'seq' | 'at'>;
+/** One `document.content` event body, without the `seq` / `at` the ledger assigns. */
+export type DocContentDraft = Omit<DocumentContentEvent, 'seq' | 'at'>;
 
 /** How much unchanged context surrounds each changed run of a diff hunk. */
 const CONTEXT_LINES = 3;
@@ -30,7 +30,7 @@ export function contentVersion(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex').slice(0, 8);
 }
 
-export type DocumentChange = Pick<DocContentEvent, 'content' | 'format' | 'base' | 'version'>;
+export type DocumentChange = Pick<DocumentContentEvent, 'content' | 'format' | 'base' | 'version'>;
 
 /**
  * Describe the change from `before` to `after`. A new document (`before`
@@ -253,7 +253,7 @@ export function currentDocument(
   let content: string | undefined;
   let version: string | undefined;
   for (const event of events) {
-    if (event.type !== 'doc.content' || event.path !== path) continue;
+    if (event.type !== 'document.content' || event.path !== path) continue;
     if (event.format === 'full') {
       if (contentVersion(event.content) !== event.version) {
         throw new Error(`document full content for ${path} has an inconsistent version`);
@@ -291,11 +291,11 @@ export function headerField(content: string, labels: readonly string[]): string 
   return '';
 }
 
-export type DocumentDraftMeta = Pick<DocContentEvent, 'turn' | 'cycle' | 'actionId' | 'source'>;
+export type DocumentDraftMeta = Pick<DocumentContentEvent, 'turn' | 'step' | 'parent' | 'source'>;
 
 /**
- * Build the `doc.content` draft for a document read or write. When the prior
- * content already entered the context the change is the diff against that
+ * Build the `document.content` draft for a document read or write. When the
+ * prior content already entered the context the change is the diff against that
  * content (never the disk copy); a document that never entered the context is
  * written once as `full`. Returns `undefined` when nothing changed.
  */
@@ -308,9 +308,9 @@ export function makeDocumentDraft(
   const change = documentChange(file.path, previous?.content, file.content);
   if (change === undefined) return undefined;
   return {
-    type: 'doc.content',
+    type: 'document.content',
     turn: meta.turn,
-    cycle: meta.cycle,
+    step: meta.step,
     path: file.path,
     title: file.title,
     updated: headerField(file.content, ['更新', '更新时间', 'updated', 'update']),
@@ -320,6 +320,6 @@ export function makeDocumentDraft(
     format: change.format,
     ...(change.base === undefined ? {} : { base: change.base }),
     source: meta.source,
-    ...(meta.actionId === undefined ? {} : { actionId: meta.actionId }),
+    ...(meta.parent === undefined ? {} : { parent: meta.parent }),
   };
 }

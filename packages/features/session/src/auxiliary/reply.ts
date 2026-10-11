@@ -5,12 +5,12 @@
  * plus one closing call when a turn ends without fresh output.
  */
 
-import type { LedgerEvent, TurnStatus } from '../../ledger.ts';
-import type { ToolCall, ToolSpec } from '../../transport/index.ts';
-import { escapeReplyBody, tag } from '../../render.ts';
-import { messageOf } from '../../errors.ts';
-import type { BuiltView, CallFailureSummary, SessionCallHost } from '../../ports.ts';
-import type { SessionRuntime, TurnRuntime } from '../../runtime.ts';
+import { stepId, turnId, type LedgerEvent, type TurnStatus } from '../ledger/store.ts';
+import type { ToolCall, ToolSpec } from '../transport/index.ts';
+import { escapeReplyBody, tag } from '../context/render.ts';
+import { messageOf } from '../errors.ts';
+import type { BuiltView, CallFailureSummary, SessionCallHost } from '../ports.ts';
+import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
 import { maybeUpdateTitle } from './title.ts';
 
 /** Output-token allowance for the single communication reply call. */
@@ -60,7 +60,7 @@ export type ReplyHost = Pick<SessionCallHost, 'ledger' | 'now' | 'track' | 'invo
 /** One queued communication invocation. */
 interface ReplyRequest {
   turn: number;
-  cycle: number;
+  step: number;
   status: ReplyViewInput['status'];
   /** True for the invocation that also finalizes the turn. */
   terminal: boolean;
@@ -87,11 +87,11 @@ export class ReplyWriter {
   request(
     session: SessionRuntime,
     turn: TurnRuntime,
-    options: { cycle: number; status: 'running' | 'completed'; terminal: boolean },
+    options: { step: number; status: 'running' | 'completed'; terminal: boolean },
   ): void {
     this.enqueue(session, {
       turn: turn.turn,
-      cycle: options.cycle,
+      step: options.step,
       status: options.status,
       terminal: options.terminal,
     });
@@ -105,7 +105,7 @@ export class ReplyWriter {
   close(session: SessionRuntime, turn: TurnRuntime, error: string | undefined, failure?: CallFailureSummary): Promise<void> {
     return this.enqueue(session, {
       turn: turn.turn,
-      cycle: turn.cycle,
+      step: turn.step,
       status: 'failed',
       terminal: true,
       ...(error === undefined ? {} : { error }),
@@ -137,7 +137,7 @@ export class ReplyWriter {
     const input: ReplyViewInput = {
       events: this.host.ledger.read(session.sessionId),
       turn: request.turn,
-      cycle: request.cycle,
+      step: request.step,
       status: request.status,
       now: this.host.now().toISOString(),
       deviceName: this.deviceName,
@@ -146,22 +146,21 @@ export class ReplyWriter {
       ...(turn.imageUnsupported ? { imageUnsupported: true } : {}),
     };
     const outcome = await this.host.invoke(session, turn, 'reply', buildReply(input), {
+      // The reply is a system auxiliary task owned by its step.
+      parent: stepId(request.turn, request.step),
+      step: request.step,
       maxTokens: REPLY_MAX_TOKENS,
-      cycle: request.cycle,
       tools: [REPLY_TOOL],
     });
     // An interrupt that landed while the call was in flight suppresses it.
     if (turn.finished || turn.abort.signal.aborted) return;
 
     let text: string | undefined;
-    let callId: string | undefined;
     let failure: string | undefined;
     if (outcome.ok) {
       try {
         const replyText = replyTextOfCalls(outcome.toolCalls ?? []);
-        callId = outcome.callId;
-        // A call that did not use the reply tool records the call only; a reply
-        // is stored unchanged.
+        // A request that did not use the reply tool sends no reply.
         if (replyText.trim() !== '') text = replyText;
       } catch (error) {
         failure = messageOf(error);
@@ -169,21 +168,21 @@ export class ReplyWriter {
     } else {
       failure = outcome.error ?? 'reply call failed';
     }
-    // Running failures stay in the call record only; they add no error to the
+    // Running failures stay in the span record only; they add no error to the
     // main reasoning context. Terminal failures retain the fixed fallback.
     if (failure !== undefined && request.terminal) {
-      await this.host.appendError(session.sessionId, 'reply', failure, turn, request.cycle);
+      await this.host.appendError(session.sessionId, 'reply', failure, turn, request.step);
       if (turn.finished || turn.abort.signal.aborted) return;
       text = fallbackReply(request.status as TerminalStatus, request.error);
     }
 
     if (text !== undefined) {
       await this.host.ledger.append(session.sessionId, {
-        type: 'reply',
+        type: 'reply.sent',
         turn: request.turn,
-        cycle: request.cycle,
+        step: request.step,
+        parent: outcome.spanId,
         text,
-        ...(callId === undefined ? {} : { callId }),
       });
     }
     if (turn.finished) return;
@@ -205,9 +204,22 @@ export class ReplyWriter {
     turn.status = status;
     turn.phase = 'terminal';
     turn.finished = true;
+    // The turn's last step closes before the turn does.
+    if (turn.currentStepId !== undefined) {
+      const stepId = turn.currentStepId;
+      turn.currentStepId = undefined;
+      await this.host.ledger.append(session.sessionId, {
+        type: 'step.finished',
+        turn: turn.turn,
+        step: turn.step,
+        id: stepId,
+        status: status === 'completed' ? 'done' : status,
+      });
+    }
     await this.host.ledger.append(session.sessionId, {
       type: 'turn.finished',
       turn: turn.turn,
+      id: turnId(turn.turn),
       status,
       ...(error === undefined ? {} : { error }),
     });
@@ -224,16 +236,16 @@ export class ReplyWriter {
 export function latestReasonText(events: readonly LedgerEvent[]): string {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;
-    if (event.type === 'reason.completed') return event.text;
+    if (event.type === 'reasoning.completed') return event.text;
   }
   return '';
 }
 
-/** The text of the latest visible reply on the timeline, if any. */
+/** The text of the latest visible system reply on the timeline, if any. */
 function latestReplyText(events: readonly LedgerEvent[]): string | undefined {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]!;
-    if (event.type === 'reply') return event.text;
+    if (event.type === 'reply.sent') return event.text;
   }
   return undefined;
 }
@@ -315,18 +327,21 @@ function failureInfo(failure: CallFailureSummary | undefined): string[] {
   const status = failure.status === undefined ? '' : ` (HTTP ${failure.status})`;
   // The request count is reported only when it is a real fact; it is never
   // inferred from the retry count.
-  const requests = failure.attempts === undefined ? '' : `, ${failure.attempts} requests`;
-  const seconds = failure.durationMs === undefined ? '' : `, ${Math.round(failure.durationMs / 1000)} s total`;
+  const attempts = failure.metrics?.attempts ?? [];
+  const requests = attempts.length === 0 ? '' : `, ${attempts.length} requests`;
+  const totalMs = attempts.reduce((sum, attempt) => sum + attempt.ms + (attempt.waitedMs ?? 0), 0);
+  const seconds = attempts.length === 0 ? '' : `, ${Math.round(totalMs / 1000)} s total`;
+  const retries = Math.max(0, attempts.length - 1);
   return [
-    `main reasoning failure (not a Task failure): ${failure.model} failed (${failure.kind}${status})${requests}; retried ${failure.retries} times${seconds}: ${failure.message}`,
+    `main reasoning failure (not a Task failure): ${failure.model} failed (${failure.kind}${status})${requests}; retried ${retries} times${seconds}: ${failure.message}`,
   ];
 }
 
 export interface ReplyViewInput {
   events: readonly LedgerEvent[];
   turn: number;
-  /** The reasoning cycle whose output triggered this call. */
-  cycle: number;
+  /** The reasoning step whose output triggered this call. */
+  step: number;
   status: 'running' | 'completed' | 'failed';
   /** ISO time of this call. */
   now: string;
@@ -342,32 +357,32 @@ export interface ReplyViewInput {
  * user message carries `<wy-ctx>`, the whole session conversation (every user
  * input and every visible reply, in timeline order), then `<wy-info>`: the
  * call's facts, the actions still running, and the worker output of the
- * triggering cycle. Earlier worker outputs, thinking, action results and call
+ * triggering step. Earlier worker outputs, thinking, action results and span
  * records are never rendered.
  */
 function buildReply(input: ReplyViewInput): BuiltView {
   const conversation: string[] = [];
   const running = new Map<string, string>();
-  let worker: Extract<LedgerEvent, { type: 'reason.completed' }> | undefined;
+  let worker: Extract<LedgerEvent, { type: 'reasoning.completed' }> | undefined;
   for (const event of input.events) {
     switch (event.type) {
       case 'turn.started':
         conversation.push(tag('message', [['role', 'user'], ['turn', event.turn]], escapeReplyBody(event.text)));
         break;
-      case 'reply':
-        conversation.push(tag('message', [['role', 'assistant'], ['turn', event.turn]], escapeReplyBody(event.text)));
-        break;
-      case 'reason.completed':
-        if (event.turn === input.turn && event.cycle === input.cycle) worker = event;
+      case 'reasoning.completed':
+        if (event.turn === input.turn && event.step === input.step) worker = event;
         break;
       case 'action.started':
-        running.set(event.actionId, event.kind);
+        running.set(event.id, event.action.type);
         break;
       case 'action.titled':
-        if (running.has(event.actionId)) running.set(event.actionId, event.title);
+        if (running.has(event.id)) running.set(event.id, event.title);
         break;
       case 'action.finished':
-        running.delete(event.actionId);
+        running.delete(event.id);
+        break;
+      case 'reply.sent':
+        conversation.push(tag('message', [['role', 'assistant'], ['turn', event.turn]], escapeReplyBody(event.text)));
         break;
       default:
         break;
