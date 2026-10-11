@@ -229,6 +229,17 @@ export interface AdapterEmit {
   activity(): void;
   /** A generated fragment not yet a complete event, such as a tool-call delta. */
   output(): void;
+  /**
+   * One real streamed generation delta on a stable, protocol-chosen channel:
+   * output text, thinking, or a tool-argument fragment. A `message` snapshot or
+   * a completed value is never reported. The transport feeds these to the
+   * shared speed sampler; a protocol adapter itself never samples.
+   */
+  generation(channel: string, delta: string): void;
+  /** The protocol's successful completion marker, for the speed sampler. */
+  complete(): void;
+  /** An error, cancellation or truncation: the speed sampler produces no sample. */
+  fail(): void;
 }
 
 /** The protocol-neutral result of one adapter read, before attempt statistics. */
