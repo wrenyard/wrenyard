@@ -33,6 +33,13 @@ export const definition = defineProvider({
     { ...model('nvidia/nemotron-3-super-120b-a12b:free', 262_144, 235_929, 'nemotron-3-super-120b-a12b'), free: true, reasoningEfforts: ['low', 'medium'] },
   ],
   protocols: [openAI('https://openrouter.ai/api/v1/chat/completions')],
+  // OpenRouter free requests must not carry a model fallback list or route
+  // object, which would let the client select a paid model. The exact free
+  // model id is preserved; no fallback, retry, or substitution is added.
+  beforeRequest: (context) => {
+    delete context.body.models;
+    delete context.body.route;
+  },
   convertReasoningEffort: (_modelId, effort, protocol) => {
     if (protocol !== 'openai_chat') throw new Error('OpenRouter only exposes Chat Completions');
     return { reasoning: { effort } };

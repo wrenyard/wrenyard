@@ -10,7 +10,7 @@ import {
   type LedgerEventDraft,
 } from './ledger.ts';
 import { resolveModelMetadata } from './calls.ts';
-import { type ToolCall } from './driver.ts';
+import { type ToolCall } from './transport/index.ts';
 import { ACTION_TOOL, parseActionCall } from './actions/reason/tool.ts';
 import { buildReason } from './actions/reason/prompt.ts';
 import {
@@ -59,8 +59,8 @@ export class TurnRunner {
         if (turn.finished) return;
         if (!reasoned.ok) {
           // A failed reason call leaves no fresh output: one closing message
-          // ends the turn.
-          await this.replies.close(session, turn, reasoned.error);
+          // ends the turn, with the structured failure facts when available.
+          await this.replies.close(session, turn, reasoned.error, reasoned.failure);
           return;
         }
         // A cycle whose single communication invocation was classified as
@@ -155,7 +155,7 @@ export class TurnRunner {
     session: SessionRuntime,
     turn: TurnRuntime,
     cycle: number,
-  ): Promise<{ ok: true; terminal: boolean } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; terminal: boolean } | { ok: false; error: string; failure?: import('./ports.ts').CallFailureSummary }> {
     const metadata = resolveModelMetadata(turn.publicId);
     const allowImages = metadata.imageInput === true;
     // The cycle marker is appended before the request is assembled: it renders
@@ -245,7 +245,7 @@ export class TurnRunner {
       await this.awaitCycleActions(turn);
       await this.flushResults(session, turn);
       if (!turn.finished) turn.abort = new AbortController();
-      return { ok: false, error: outcome.error ?? 'reason call failed' };
+      return { ok: false, error: outcome.error ?? 'reason call failed', ...(outcome.failure === undefined ? {} : { failure: outcome.failure }) };
     }
 
     // Reasoning succeeded; its message content is the visible text. Wait for

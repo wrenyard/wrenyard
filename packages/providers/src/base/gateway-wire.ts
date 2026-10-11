@@ -1,7 +1,8 @@
 /**
  * Local wire contract between the Model Gateway and its in-process callers.
  * Every `x-wrenyard-*` header is consumed by the Gateway and never forwarded
- * upstream; response headers are additive and safe for external clients to ignore.
+ * upstream. The Gateway owns no private response header: on the response side
+ * only the official entry-protocol shape and upstream values are exposed.
  */
 export const GATEWAY_HEADERS = {
   /** Request: unified public reasoning effort the Gateway translates per provider. */
@@ -10,18 +11,22 @@ export const GATEWAY_HEADERS = {
   callRole: 'x-wrenyard-call-role',
   /** Request: session id, recorded on the Gateway event for attribution. */
   sessionId: 'x-wrenyard-session-id',
-  /** Response: route state the Gateway recognized from the upstream failure. */
-  routeState: 'x-wrenyard-route-state',
-  /** Response: ISO instant the route is expected to recover. */
-  routeUntil: 'x-wrenyard-route-until',
-  /** Response: the Gateway itself rejected the request; retrying cannot help. */
-  requestError: 'x-wrenyard-request-error',
 } as const;
 
 export const GATEWAY_ROUTE_STATES = ['rate_limited', 'quota_exhausted', 'auth_failed', 'model_unavailable'] as const;
 export type GatewayRouteState = (typeof GATEWAY_ROUTE_STATES)[number];
 export interface GatewayRouteStatus { state: GatewayRouteState; until: string; }
 
-export function parseGatewayRouteState(value: string | null | undefined): GatewayRouteState | undefined {
-  return (GATEWAY_ROUTE_STATES as readonly (string | null | undefined)[]).includes(value) ? value as GatewayRouteState : undefined;
-}
+/**
+ * Upstream response headers the Gateway forwards to a client. Values are
+ * copied verbatim from the upstream response and are never synthesized: a
+ * header absent upstream stays absent, and `retry-after` / `retry-after-ms` /
+ * `x-should-retry` are reported exactly as the supplier sent them so a caller's
+ * own retry policy can read the protocol-defined hint.
+ */
+export const GATEWAY_UPSTREAM_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
+  'cache-control', 'content-type', 'openai-organization', 'openai-processing-ms',
+  'openai-version', 'request-id', 'x-request-id',
+  'retry-after', 'retry-after-ms', 'x-should-retry',
+  'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset',
+]);

@@ -1,22 +1,33 @@
 /** Projects current daemon route metadata; a defective row never breaks the list. */
 import { REASONING_EFFORTS } from '@wrenyard/models';
+import type { WrenyardGatewayModel } from '@wrenyard/control';
 import type { ProviderListResult } from '@wrenyard/protocol/provider';
-import { selectInferenceMode } from '@wrenyard/session/model-metadata';
+import { selectSessionProtocol } from '@wrenyard/session/model-metadata';
 import type { SessionBridgeModelEntry } from './preload.js';
 
 export function toModelEntries(
   result: ProviderListResult,
+  gatewayModels: readonly WrenyardGatewayModel[],
   warn: (message: string) => void = console.warn,
 ): SessionBridgeModelEntry[] {
+  // Index the Gateway directory by both the public id and `provider/model`, so
+  // the model's protocols come from the Gateway model row, never the Provider.
+  const gatewayByPublicId = new Map<string, WrenyardGatewayModel>();
+  for (const model of gatewayModels) {
+    gatewayByPublicId.set(model.publicId, model);
+    gatewayByPublicId.set(`${model.provider}/${model.id}`, model);
+  }
   const entries = new Map<string, SessionBridgeModelEntry>();
   for (const provider of result.providers) {
     if (!provider.configured) continue;
-    const runtime = selectInferenceMode(provider.protocols);
-    if (!runtime) continue;
     for (const model of provider.models) {
       const publicId = `${provider.id}/${model.id}`;
       if (model.available !== true || model.taskOnly === true
         || model.supportedClients !== undefined || entries.has(publicId)) continue;
+      const gatewayModel = gatewayByPublicId.get(publicId);
+      if (gatewayModel === undefined) continue;
+      const runtime = selectSessionProtocol(gatewayModel.protocols);
+      if (!runtime) continue;
       const efforts = model.reasoningEfforts;
       if (!Array.isArray(efforts) || efforts.length === 0
         || efforts.some(effort => !REASONING_EFFORTS.includes(effort))

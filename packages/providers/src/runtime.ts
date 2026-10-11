@@ -1,7 +1,7 @@
 import { kimiCodingUpstreamWireModel } from './kimi-coding/runtime.ts';
 import { resolveCodeBuddyProductModelId } from './codebuddy/models.ts';
 import { deepSeekEnvApiKey } from './deepseek/runtime.ts';
-import type { ProviderDefinition } from './base/index.ts';
+import type { ProviderDefinition, ProviderRequestHookContext, ProviderResponseHookContext, ProviderResponseHookResult } from './base/index.ts';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -9,7 +9,7 @@ import { resolveWrenyardConfigRoot } from '@wrenyard/paths';
 import type { Catalog, DispatchPlan } from './base/catalog.ts';
 import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans } from './catalog.ts';
 import { codeBuddy, providerImplementations, providerQuotas } from './builtins.ts';
-import type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity } from './codebuddy/index.ts';
+import type { CodeBuddyActiveSnapshot } from './codebuddy/index.ts';
 import type { Provider } from './base/index.ts';
 import {
   applyChatGptNativeHeaders,
@@ -35,6 +35,20 @@ export interface ProviderRuntime {
   credential(provider: ProviderDefinition): Promise<ProviderCredential | undefined>;
   resolveUpstreamModel(provider: ProviderDefinition, model: string, credential?: ProviderCredential): string;
   publicResponseModel(provider: ProviderDefinition, model: string, upstreamModel: string, publicModel: string): string;
+  /**
+   * Run the provider's declared request hook. Generic: the Gateway supplies the
+   * context and never knows which supplier (if any) handles it. A provider
+   * without a hook is a no-op.
+   */
+  beforeRequest?(provider: ProviderDefinition, context: ProviderRequestHookContext): Promise<void>;
+  /**
+   * Run the provider's declared response hook and return its correction, if
+   * any. Generic, like {@link beforeRequest}.
+   */
+  afterResponse?(
+    provider: ProviderDefinition,
+    context: ProviderResponseHookContext,
+  ): Promise<ProviderResponseHookResult | undefined>;
   configureApiKey(provider: ProviderDefinition, key: string): Promise<void>;
   /**
    * Optional one-shot credential refresh for the single ChatGPT/Codex gateway
@@ -57,14 +71,6 @@ export interface ProviderRuntime {
    */
   /** @deprecated Use the CodeBuddy instance snapshot() method. */
   codeBuddySnapshot?(provider: ProviderDefinition): Promise<CodeBuddyActiveSnapshot | undefined>;
-  /**
-   * Installed CodeBuddy client product identity, resolved from the same
-   * installed CLI package that already supplies the environment domain
-   * attributes. Non-CodeBuddy providers and an absent installation resolve to
-   * undefined. Carries no credential, account identity or domain.
-   */
-  /** @deprecated Use the CodeBuddy instance clientIdentity() method. */
-  codeBuddyClientIdentity?(provider: ProviderDefinition): Promise<CodeBuddyClientIdentity | undefined>;
 }
 
 export interface BuiltinProviderRuntimeOptions {
@@ -266,6 +272,13 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       await writeFile(temporary, `${JSON.stringify(entries, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
       await rename(temporary, path);
     },
+    async beforeRequest(provider, context) {
+      await provider.beforeRequest?.(context);
+    },
+    async afterResponse(provider, context) {
+      const result = await provider.afterResponse?.(context);
+      return result ? result : undefined;
+    },
     async refreshCredential(provider, credential, signal) {
       // Only the ChatGPT/Codex gateway credential is refreshable, and only
       // through the injected client adapter: no credential material or refresh
@@ -291,12 +304,6 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       const snapshot: CodeBuddyActiveSnapshot | undefined = await implementation.snapshot();
       if (snapshot) credentialProviders.set(snapshot.credential, implementation);
       return snapshot;
-    },
-    async codeBuddyClientIdentity(provider) {
-      if (provider.id !== activeCodeBuddy.id || provider.credentialResolver !== 'codebuddy') return undefined;
-      const implementation = implementations.get(provider.id);
-      if (!implementation || !('clientIdentity' in implementation) || typeof implementation.clientIdentity !== 'function') return undefined;
-      return implementation.clientIdentity();
     },
   };
 }

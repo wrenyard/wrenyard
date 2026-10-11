@@ -8,7 +8,7 @@
  * This module never calls a model and never touches the ledger.
  */
 
-import type { ModelContentPart, ModelMessage } from '../../driver.ts';
+import type { Message as ModelMessage, ModelContentPart } from '../../transport/index.ts';
 import {
   type LedgerEvent,
   type WorkspaceSnapshot,

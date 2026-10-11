@@ -24,7 +24,7 @@ export class CodeBuddyClient implements AgentClient {
     async readInstall(options?: InspectOptions) {
         return this.load(options);
     }
-    readAccount(environment: CodeBuddyEnvironment, options?: InspectOptions): Promise<CodeBuddyAccountContext | undefined> {
+    readAccountContext(environment: CodeBuddyEnvironment, options?: InspectOptions): Promise<CodeBuddyAccountContext | undefined> {
         return readCodeBuddyAccount(environment, options);
     }
     async readProduct(options?: InspectOptions): Promise<CodeBuddyProductSnapshot> {

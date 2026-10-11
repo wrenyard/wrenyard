@@ -4,9 +4,10 @@ import { QueryError } from '@/renderer/components/query-error';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { useQuotaQuery } from '@/renderer/lib/queries';
 import { contextQuery, useThrottledSeq } from '../../queries.js';
-import { contextBudget, countInputTokens, growthByTurn, recentCacheRatio, usageGroups } from '../../model/usage.js';
+import { contextBudget, countInputTokens, growthByTurn, usageGroups } from '../../model/usage.js';
 import type { SessionModel } from '../../model/types.js';
 import { useSessionUsage } from '../../state/session-usage.js';
+import { useSessionConsumption } from '../../state/use-session-consumption.js';
 import { Section } from './parts.js';
 import { OverviewCard } from './context/OverviewCard.js';
 import { ModelPreviewTable } from './context/ModelPreviewTable.js';
@@ -28,6 +29,7 @@ export interface ContextTabProps {
 
 export function ContextTab({ model }: ContextTabProps) {
   const { sessionKey, models, modelId, seq, inputText, requestModel, requestInspection } = useSessionUsage();
+  const consumption = useSessionConsumption();
   const inputTokens = useMemo(() => countInputTokens(inputText), [inputText]);
   const selected = models.find((entry) => entry.publicId === modelId);
   const throttledSeq = useThrottledSeq(seq);
@@ -41,7 +43,7 @@ export function ContextTab({ model }: ContextTabProps) {
     [data, selected, modelId, inputTokens]);
   const groups = useMemo(() => (data ? usageGroups(data, inputTokens) : []), [data, inputTokens]);
   const growth = useMemo(() => (data ? growthByTurn(data.items) : []), [data]);
-  const cacheRatio = useMemo(() => recentCacheRatio(model.calls), [model.calls]);
+  const cacheRatio = consumption.sum.cacheRatio;
 
   if (modelId === '') {
     return <p className="text-sm text-muted-foreground">请在输入框选择模型后查看上下文占用</p>;

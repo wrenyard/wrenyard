@@ -3,7 +3,7 @@
  * declares, plus the parser that turns one of its calls into the action type
  * and natural-language intent the engine executes.
  */
-import { record, stringField, type ToolCall, type ToolSpec } from '../../driver.ts';
+import { record, stringField, type ToolCall, type ToolSpec } from '../../transport/index.ts';
 
 /** The one native tool the main reasoning call declares. */
 export const ACTION_TOOL: ToolSpec = {

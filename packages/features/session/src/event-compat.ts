@@ -36,6 +36,7 @@ export function normalizeStoredEvent(event: LedgerEvent): LedgerEvent {
       return deepFreeze({ ...event, kind }) as LedgerEvent;
     }
     case 'call':
+      return normalizeCall(event);
     case 'call.started': {
       const role = CALL_ROLE_COMPAT[event.role];
       if (role === undefined) return event;
@@ -48,6 +49,36 @@ export function normalizeStoredEvent(event: LedgerEvent): LedgerEvent {
     default:
       return event;
   }
+}
+
+/**
+ * Normalize a stored `call` event to the current shape. The call role may be
+ * renamed, and a legacy plain-string `error` becomes the structured
+ * `{kind, message}` fact the current shape uses. A legacy `routeAttempts` array
+ * is left in place so the Desktop inspector can still read old records. The
+ * optional tokenizer_v1 `tps` sample is preserved when it is well formed; a
+ * historical call without one is never given a fabricated sample.
+ */
+function normalizeCall(event: Extract<LedgerEvent, { type: 'call' }>): LedgerEvent {
+  const record = event as unknown as Record<string, unknown>;
+  const role = CALL_ROLE_COMPAT[event.role] ?? event.role;
+  const fields: Record<string, unknown> = {};
+  if (role !== event.role) fields.role = role;
+  if (typeof record.error === 'string') fields.error = { kind: 'protocol', message: record.error };
+  const tps = readStoredTps(record.tps);
+  if (tps !== undefined) fields.tps = tps;
+  if (Object.keys(fields).length === 0) return event;
+  return deepFreeze({ ...record, ...fields }) as unknown as LedgerEvent;
+}
+
+/** A stored tokenizer_v1 sample, kept only when it is a well-formed pair. */
+function readStoredTps(value: unknown): { outputTokens: number; windowMs: number } | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const { outputTokens, windowMs } = record;
+  if (typeof outputTokens !== 'number' || typeof windowMs !== 'number') return undefined;
+  if (!Number.isFinite(outputTokens) || !Number.isFinite(windowMs)) return undefined;
+  return { outputTokens, windowMs };
 }
 
 /**
