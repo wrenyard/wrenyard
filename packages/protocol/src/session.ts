@@ -87,7 +87,7 @@ export interface ContextInspectFiles {
 export interface ContextInspection {
   /** Latest ledger `seq` at compute time. */
   computedAtSeq: number
-  estimator: 'cl100k_base'
+  estimator: 'o200k_base'
   model: ContextInspectModel
   layers: ContextLayerTokens[]
   items: ContextItem[]

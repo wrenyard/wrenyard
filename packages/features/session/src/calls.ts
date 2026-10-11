@@ -2,7 +2,7 @@
  * session model calls.
  *
  * One call is one stateless request: pick the role's model, resolve its model
- * metadata, estimate the input with `cl100k_base`, enforce the context budget,
+ * metadata, estimate the input with `o200k_base`, enforce the context budget,
  * run it through the {@link ModelTransport} under the role's timeout, and write
  * exactly one `call` ledger event for the attempt. The runner keeps no session
  * state, never parses JSON output and never repairs schemas — those belong to
@@ -227,10 +227,10 @@ let tokenizer: ReturnType<typeof getEncoding> | undefined;
 /** Fallback per-image input-token estimate when only a data URL is available. */
 export const IMAGE_INPUT_TOKEN_ESTIMATE = 1_200;
 
-/** `cl100k_base` token count estimate of one text. */
+/** `o200k_base` token count estimate of one text. */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
-  tokenizer ??= getEncoding('cl100k_base');
+  tokenizer ??= getEncoding('o200k_base');
   return tokenizer.encode(text).length;
 }
 
@@ -248,7 +248,7 @@ export function estimateContentTokens(content: string | readonly ModelContentPar
   return total;
 }
 
-/** `cl100k_base` token count estimate of a supplied message list. */
+/** `o200k_base` token count estimate of a supplied message list. */
 export function estimateInputTokens(messages: readonly import('./transport/index.ts').Message[]): number {
   let total = 0;
   for (const message of messages) total += estimateTokens(message.role) + estimateContentTokens(message.content);
