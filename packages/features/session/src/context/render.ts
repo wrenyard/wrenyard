@@ -7,14 +7,15 @@
  * ledger.
  */
 
-import type {
-  DocContentEvent,
-  DocSearchEvent,
-  FilesEvent,
-  LedgerEvent,
-} from './ledger.ts';
-import type { SessionFile } from './media.ts';
-import type { BuiltView } from './ports.ts';
+import {
+  CONTEXT_EVENT_TYPES,
+  type DocumentContentEvent,
+  type DocumentFoundEvent,
+  type FilesAttachedEvent,
+  type LedgerEvent,
+} from '../ledger/store.ts';
+import type { SessionFile } from '../media.ts';
+import type { BuiltView } from '../ports.ts';
 
 // ─── Escaping ──────────────────────────────────────────────────────────────
 
@@ -75,23 +76,23 @@ function formatFile(file: SessionFile): string {
   return `[file path=${file.path} name=${file.name} kind=${file.kind} mime=${file.mime} bytes=${file.bytes} source=${file.source}${role}${run}${dimensions}${tokens}${truncated}] ${file.description}`;
 }
 
-export function renderFiles(event: FilesEvent): string {
+export function renderFiles(event: FilesAttachedEvent): string {
   const files = event.files.flatMap((file) => [
     escapeBody(formatFile(file)),
     ...(typeof file.text === 'string' && file.text !== '' ? [escapeBody(file.text)] : []),
   ]);
   return [
-    tag('files', [['turn', event.turn], ['cycle', event.cycle], ['source', event.source]]),
+    tag('files', [['turn', event.turn], ['cycle', event.step], ['source', event.source]]),
     ...(event.files.length === 0 ? ['(none)'] : files),
     '</files>',
   ].join('\n');
 }
 
-export function renderDocContent(event: DocContentEvent): string {
+export function renderDocContent(event: DocumentContentEvent): string {
   return tag(
     'doc-content',
     [
-      ['turn', event.turn], ['cycle', event.cycle], ['path', event.path], ['title', event.title],
+      ['turn', event.turn], ['cycle', event.step], ['path', event.path], ['title', event.title],
       ['updated', event.updated], ['version', event.version], ['tokens', event.tokens],
       ['format', event.format], ['base', event.base], ['source', event.source],
     ],
@@ -99,9 +100,9 @@ export function renderDocContent(event: DocContentEvent): string {
   );
 }
 
-export function renderDocSearch(event: DocSearchEvent): string {
+export function renderDocSearch(event: DocumentFoundEvent): string {
   return [
-    tag('doc-search', [['turn', event.turn], ['cycle', event.cycle], ['id', event.actionId]]),
+    tag('doc-search', [['turn', event.turn], ['cycle', event.step], ['id', event.parent]]),
     escapeBody(event.understanding),
     ...event.picks.map((pick) => escapeBody(`- pick ${pick.path}: ${pick.reason}`)),
     ...event.near.map((near) => escapeBody(`- near ${near.path}: ${near.reason}`)),
@@ -112,63 +113,62 @@ export function renderDocSearch(event: DocSearchEvent): string {
 
 /**
  * Render one current context event as text, or `undefined` for observational
- * events (calls and `action.titled`) and post-interrupt results. Thinking is a
- * context event and renders before the message it precedes.
+ * events (spans, `step.finished`, `action.titled`), post-interrupt results and
+ * every event outside {@link CONTEXT_EVENT_TYPES}. Thinking is a context event
+ * and renders before the message it precedes.
  */
 export function renderEventText(event: LedgerEvent): string | undefined {
+  if (!CONTEXT_EVENT_TYPES.has(event.type)) return undefined;
   switch (event.type) {
     case 'turn.started':
       return tag('message', [['turn', event.turn], ['role', 'user'], ['at', event.at]], escapeBody(event.text));
-    case 'cycle.started':
-      // The per-request facts of one reasoning cycle, fixed once written.
+    case 'step.started':
+      // The per-request facts of one reasoning step, fixed once written.
       return tag('wy-info', [
-        ['turn', event.turn], ['cycle', event.cycle], ['at', event.at],
+        ['turn', event.turn], ['cycle', event.step], ['at', event.at],
         ['model', event.model], ['context-window', event.contextWindow], ['last-input-tokens', event.lastInputTokens],
       ]);
-    case 'thinking':
-      return tag('thinking', [['turn', event.turn], ['cycle', event.cycle]], escapeBody(event.text));
-    case 'reason.completed':
-      return tag('message', [['turn', event.turn], ['cycle', event.cycle], ['role', 'assistant']], escapeBody(event.text));
+    case 'reasoning.thinking':
+      return tag('thinking', [['turn', event.turn], ['cycle', event.step]], escapeBody(event.text));
+    case 'reasoning.completed':
+      return tag('message', [['turn', event.turn], ['cycle', event.step], ['role', 'assistant']], escapeBody(event.text));
     case 'memory.recalled':
-      return tag('memory-recall', [['turn', event.turn], ['cycle', event.cycle], ['path', event.path], ['source', event.source]], escapeBody(event.content));
-    case 'doc.search':
+      return tag('memory-recall', [['turn', event.turn], ['cycle', event.step], ['path', event.path], ['source', event.source]], escapeBody(event.content));
+    case 'document.found':
       return renderDocSearch(event);
-    case 'doc.content':
+    case 'document.content':
       return renderDocContent(event);
-    case 'files':
+    case 'files.attached':
       return renderFiles(event);
-    case 'action.started': {
-      const parsed = event.parsed as { intent?: unknown } | undefined;
-      const intent = typeof parsed?.intent === 'string' ? parsed.intent : '';
-      return tag('action', [['id', event.actionId], ['type', event.kind]], escapeBody(intent));
-    }
+    case 'action.started':
+      return tag('action', [['id', event.id], ['type', event.action.type]], escapeBody(event.action.prompt));
     case 'action.finished':
       if (event.afterInterrupt === true) return undefined;
       return tag(
         'action-result',
-        [['turn', event.turn], ['cycle', event.cycle], ['id', event.actionId], ['kind', event.kind], ['status', event.status], ['task', event.task], ['run', event.taskRunId]],
+        [['turn', event.turn], ['cycle', event.step], ['id', event.id], ['kind', event.action.type], ['status', event.status], ['task', event.task], ['run', event.taskRunId]],
         escapeBody(event.result),
       );
-    case 'reply':
-      return tag('reply', [['turn', event.turn]], escapeBody(event.text));
-    case 'ws.updated':
+    case 'workspace.changed':
       return tag('wy-info', [
-        ['type', 'ws.updated'], ['action', event.actionId], ['scope', event.scope], ['target', event.target],
+        ['type', 'ws.updated'], ['action', event.parent], ['scope', event.scope], ['target', event.target],
         ['change', event.change], ['worktreeId', event.worktreeId], ['version', event.version],
         ['hash', event.hash], ['files', event.files?.join(',')],
       ]);
     case 'turn.interrupted':
       return tag('interrupt', [['turn', event.turn], ['reason', event.reason]]);
-    case 'error':
-      return tag('error', [['turn', event.turn], ['stage', event.stage]], escapeBody(event.message));
-    // Observational only: never part of the rendered context.
-    case 'call.started':
-    case 'call':
-    case 'action.titled':
-    case 'session.created':
-    case 'turn.finished':
-    case 'title':
-      return undefined;
+    case 'reply.sent':
+      return tag('reply', [['turn', event.turn]], escapeBody(event.text));
+    case 'system.error':
+      // Kept as the original `<error>` record so existing sessions render unchanged.
+      return tag('error', [['turn', event.turn], ['stage', event.code]], escapeBody(event.message));
+    case 'system.warning':
+    case 'system.info':
+      return tag(
+        'wy-info',
+        [['type', event.type], ['turn', event.turn], ['source', event.source], ['code', event.code]],
+        escapeBody(event.message),
+      );
     default:
       return undefined;
   }

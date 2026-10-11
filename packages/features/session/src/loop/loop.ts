@@ -1,11 +1,11 @@
 /**
- * The shared multi-round tool loop used by every secondary session.
+ * The shared multi-round tool loop used by every auxiliary task.
  *
- * A secondary session is a cheap, tool-calling sub-conversation: a document
+ * An auxiliary task is a small tool-calling sub-conversation: a document
  * writer, a version-control operator or a project/worktree manager. Each session
  * runs the same loop here and only differs in its system prompt, its user
  * message and its tool set. The loop reuses the session's existing model call
- * runner ([`ActionRunnerDeps.calls`] via `runView`), the same call-id scheme and
+ * runner ([`ActionRunnerDeps.calls`] via `runView`), the same span-id scheme and
  * the same deferred-draft return shape the action layer already uses, so it
  * never introduces a second call path.
  *
@@ -15,21 +15,21 @@
  * loop.
  */
 
-import type { Message as ModelMessage, MessageToolCall as ModelToolCall, ToolCall, ToolSpec } from '../../transport/index.ts';
+import type { Message as ModelMessage, MessageToolCall as ModelToolCall, ToolCall, ToolSpec } from '../transport/index.ts';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,
   ActionRunnerDeps,
-} from '../index.ts';
-import type { LedgerEventDraft, WsUpdatedEvent } from '../../ledger.ts';
-import { escapeBody, renderEventsBlock } from '../../render.ts';
-import { messageOf } from '../../errors.ts';
+} from '../reasoning/actions.ts';
+import type { LedgerEventDraft, WorkspaceChangedEvent } from '../ledger/store.ts';
+import { escapeBody, renderEventsBlock } from '../context/render.ts';
+import { messageOf } from '../errors.ts';
 
-/** Which secondary session is running; used for ledger call attribution. */
-export type SecondaryRole = 'document' | 'vcs' | 'project';
+/** Which auxiliary task is running; used for ledger call attribution. */
+export type LoopRole = 'document' | 'vcs' | 'project';
 
 /**
- * The one tool every secondary session declares to finish. `status` is `done`
+ * The one tool every auxiliary task declares to finish. `status` is `done`
  * when the work succeeded and `failed` when it could not be completed; `summary`
  * is the one-to-three-sentence report the caller turns into the action result.
  */
@@ -55,41 +55,53 @@ export const DONE_TOOL: ToolSpec = {
   },
 };
 
-/** One tool a secondary session exposes to the model. */
-export interface SecondaryTool {
+/** One tool a auxiliary task exposes to the model. */
+export interface LoopTool {
   spec: ToolSpec;
   /** Run the tool with parsed JSON arguments; return a compact JSON result. */
   run(args: Record<string, unknown>, signal: AbortSignal): Promise<string>;
 }
 
-/** Everything one secondary loop run needs. */
-export interface SecondaryRunOptions {
+/** Everything one auxiliary loop run needs. */
+export interface AuxiliaryLoopOptions {
   deps: ActionRunnerDeps;
   ctx: ActionRunContext;
-  role: SecondaryRole;
+  role: LoopRole;
   /** Stable system prompt of this session. */
   system: string;
-  /** The user message, normally from {@link buildSecondaryUser}. */
+  /** The user message, normally from {@link buildAuxiliaryUser}. */
   user: string;
-  tools: readonly SecondaryTool[];
+  tools: readonly LoopTool[];
   maxRounds: number;
-  /** Prefix for every round's fresh call id. */
-  callIdPrefix: string;
+  /** Names this task's span within its action. */
+  spanIdPrefix: string;
 }
 
-/** The terminal outcome of a secondary loop. */
-export interface SecondaryResult {
+/** The terminal outcome of a auxiliary loop. */
+export interface AuxiliaryLoopResult {
   status: 'done' | 'failed';
   summary: string;
 }
 
 /**
- * Run one secondary session loop. Each round makes exactly one model call
+ * Run one auxiliary task loop. Each round makes exactly one model request
  * through the same runner the action layer uses, appends the assistant output
  * and one tool message per call, and repeats until the model calls `done`.
  */
-export async function runSecondary(options: SecondaryRunOptions): Promise<SecondaryResult> {
-  const { deps, ctx, role, system, user, tools, maxRounds, callIdPrefix } = options;
+export async function runAuxiliaryLoop(options: AuxiliaryLoopOptions): Promise<AuxiliaryLoopResult> {
+  // The whole loop is one auxiliary task and therefore one span: every round's
+  // request reports into it and it closes when the loop ends, however it ends.
+  const spanId = `${options.ctx.actionId}.${options.spanIdPrefix}`;
+  options.deps.calls.holdSpan(spanId);
+  try {
+    return await runRounds(options, spanId);
+  } finally {
+    await options.deps.calls.releaseSpan(spanId, options.ctx.signal.aborted ? 'aborted' : undefined);
+  }
+}
+
+async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise<AuxiliaryLoopResult> {
+  const { deps, ctx, role, system, user, tools, maxRounds } = options;
   const toolMap = new Map(tools.map((tool) => [tool.spec.name, tool]));
   const specs: ToolSpec[] = [...tools.map((tool) => tool.spec), DONE_TOOL];
   const layers = { 'wy-system': system.length, 'wy-ctx': user.length };
@@ -102,15 +114,15 @@ export async function runSecondary(options: SecondaryRunOptions): Promise<Second
   for (let round = 1; round <= maxRounds; round += 1) {
     if (ctx.signal.aborted) return abortedResult();
 
-    const callId = `${callIdPrefix}.${round}`;
     let text: string;
     let calls: readonly ToolCall[];
     try {
       const result = await deps.calls.run({
-        callId,
+        spanId,
+        parent: ctx.actionId,
         role,
         turn: ctx.turn,
-        cycle: ctx.cycle,
+        step: ctx.step,
         messages: [...messages],
         layers,
         signal: ctx.signal,
@@ -159,12 +171,12 @@ export async function runSecondary(options: SecondaryRunOptions): Promise<Second
   return { status: 'failed', summary: `The round limit of ${maxRounds} was reached.` };
 }
 
-function abortedResult(): SecondaryResult {
+function abortedResult(): AuxiliaryLoopResult {
   return { status: 'failed', summary: 'The session was interrupted.' };
 }
 
 /** Run one model tool call, converting every failure into a tool result. */
-async function runToolCall(tool: SecondaryTool | undefined, call: ToolCall, signal: AbortSignal): Promise<string> {
+async function runToolCall(tool: LoopTool | undefined, call: ToolCall, signal: AbortSignal): Promise<string> {
   if (tool === undefined) return errorResult('unknown_tool', `Unknown tool: ${call.name}`);
   const args = parseArguments(call.arguments);
   if (!args.ok) return errorResult('invalid_arguments', args.error);
@@ -230,11 +242,11 @@ export function errorResult(code: string, message: string): string {
 // ─── User message ───────────────────────────────────────────────────────────
 
 /**
- * Build the one user message of a secondary request: the whole conversation
+ * Build the one user message of an auxiliary request: the whole conversation
  * under `<wy-ctx><wy-conversation>`, the call's facts (time, device and the
  * registered projects) under `<wy-info>`, and the intent under `<wy-intent>`.
  */
-export function buildSecondaryUser(ctx: ActionRunContext, intent: string): string {
+export function buildAuxiliaryUser(ctx: ActionRunContext, intent: string): string {
   const conversation = renderEventsBlock(ctx.currentEvents());
   const projects = ctx.projects.length === 0
     ? '(none)'
@@ -266,19 +278,19 @@ export function buildSecondaryUser(ctx: ActionRunContext, intent: string): strin
 // ─── Recorded side effects and the action outcome ───────────────────────────
 
 /**
- * The side effects a secondary session performed, collected by its tools and
+ * The side effects a auxiliary task performed, collected by its tools and
  * turned into an {@link ActionExecutionOutcome} once the loop returns.
  */
-export interface SecondaryRecord {
+export interface LoopRecord {
   /** One human-readable line per recorded workspace change, in order. */
   changes: string[];
-  /** Deferred `ws.updated` drafts, in the order the changes happened. */
+  /** Deferred `workspace.changed` drafts, in the order the changes happened. */
   updates: LedgerEventDraft[];
-  /** Deferred `doc.content` drafts, in the order the writes happened. */
+  /** Deferred `document.content` drafts, in the order the writes happened. */
   documents: LedgerEventDraft[];
 }
 
-export function createSecondaryRecord(): SecondaryRecord {
+export function createLoopRecord(): LoopRecord {
   return { changes: [], updates: [], documents: [] };
 }
 
@@ -294,13 +306,13 @@ export interface WorkspaceUpdate {
   files?: readonly string[];
 }
 
-/** Append one `ws.updated` draft and its human-readable change line. */
-export function recordWorkspaceUpdate(record: SecondaryRecord, ctx: ActionRunContext, update: WorkspaceUpdate): void {
+/** Append one `workspace.changed` draft and its human-readable change line. */
+export function recordWorkspaceUpdate(record: LoopRecord, ctx: ActionRunContext, update: WorkspaceUpdate): void {
   record.updates.push({
-    type: 'ws.updated',
+    type: 'workspace.changed',
     turn: ctx.turn,
-    cycle: ctx.cycle,
-    actionId: ctx.actionId,
+    step: ctx.step,
+    parent: ctx.actionId,
     ...update,
   } as unknown as LedgerEventDraft);
   const suffix = update.worktreeId === undefined ? '' : ` (${update.worktreeId})`;
@@ -311,11 +323,12 @@ export function recordWorkspaceUpdate(record: SecondaryRecord, ctx: ActionRunCon
  * Turn a finished loop into the action outcome: `done` maps to a successful
  * action and `failed` to a failed one; the result text is the summary followed
  * by one line per recorded workspace change; the deferred drafts are the
- * recorded `ws.updated` drafts plus any `doc.content` drafts the caller passes.
+ * recorded `workspace.changed` drafts plus any `document.content` drafts the
+ * caller passes.
  */
 export function toActionOutcome(
-  result: SecondaryResult,
-  record: SecondaryRecord,
+  result: AuxiliaryLoopResult,
+  record: LoopRecord,
   extraDrafts: readonly LedgerEventDraft[] = [],
 ): ActionExecutionOutcome {
   const lines = [result.summary, ...record.changes].filter((line) => line.trim() !== '');
@@ -337,7 +350,7 @@ export function toActionOutcome(
  */
 export interface MethodEffect {
   scope: 'workspace' | 'project' | 'document';
-  change: WsUpdatedEvent['change'];
+  change: WorkspaceChangedEvent['change'];
   when?: string;
   /** When present, its return value is the recorded target; otherwise the fallback chain is used. */
   target?(args: Record<string, unknown>, result: unknown): string;
@@ -345,23 +358,24 @@ export interface MethodEffect {
 }
 
 /**
- * Build one {@link SecondaryTool} per requested protocol method. The host
+ * Build one {@link LoopTool} per requested protocol method. The host
  * describes the methods; every tool declares the method's params JSON Schema
  * with a strict top-level `additionalProperties: false`, forwards its parsed
  * arguments to `deps.host.call` and returns the compact JSON result. A
  * successful call whose method has an effect entry (and whose `when` guard, if
- * any, holds in the result) records exactly one `ws.updated` through the shared
- * helpers, then awaits the effect's optional `after` hook. A host error keeps
- * its string code and message as an error result and never aborts the caller's
- * loop; a throw from the `after` hook becomes the same tool's error result.
+ * any, holds in the result) records exactly one `workspace.changed` through the
+ * shared helpers, then awaits the effect's optional `after` hook. A host error
+ * keeps its string code and message as an error result and never aborts the
+ * caller's loop; a throw from the `after` hook becomes the same tool's error
+ * result.
  */
 export async function protocolTools(
   deps: ActionRunnerDeps,
   ctx: ActionRunContext,
-  record: SecondaryRecord,
+  record: LoopRecord,
   methods: readonly string[],
   effects: Readonly<Record<string, MethodEffect>>,
-): Promise<SecondaryTool[]> {
+): Promise<LoopTool[]> {
   const infos = await deps.host.methods(methods);
   return infos.map((info) => {
     const effect = effects[info.name];
@@ -409,7 +423,7 @@ function effectApplies(effect: MethodEffect, result: unknown): boolean {
  * from the call arguments and the result.
  */
 function recordMethodEffect(
-  record: SecondaryRecord,
+  record: LoopRecord,
   ctx: ActionRunContext,
   args: Record<string, unknown>,
   result: unknown,

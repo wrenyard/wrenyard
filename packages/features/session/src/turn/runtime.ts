@@ -4,15 +4,15 @@
  */
 
 import type { ReasoningEffort } from '@wrenyard/models';
-import type { LedgerEventDraft, TurnStatus, WorkspaceSnapshot } from './ledger.ts';
-import type { ActionKind, ActionRunner } from './actions/index.ts';
-import type { CallsPort, FilesPort, TurnPhase } from './ports.ts';
+import type { LedgerEventDraft, ActionType, TurnStatus, WorkspaceSnapshot } from '../ledger/store.ts';
+import type { ActionRunner } from '../reasoning/actions.ts';
+import type { CallsPort, FilesPort, TurnPhase } from '../ports.ts';
 
 export interface RuntimeAction {
   actionId: string;
   turn: number;
-  cycle: number;
-  kind: ActionKind;
+  step: number;
+  type: ActionType;
   goal: string;
   startedAt: string;
   taskRunId?: string;
@@ -33,7 +33,9 @@ export interface TurnRuntime {
   imageUnsupported: boolean;
   phase: TurnPhase;
   status?: TurnStatus;
-  cycle: number;
+  step: number;
+  /** The step id currently in progress, set once its `step.started` lands. */
+  currentStepId?: string;
   abort: AbortController;
   actions: Map<string, RuntimeAction>;
   finished: boolean;
@@ -44,18 +46,17 @@ export interface TurnRuntime {
   /** Set when reasoning failed: late results are still recorded, reads are not. */
   dropDeferred: boolean;
   reasonCompleted: boolean;
-  actionsThisCycle: number;
-  /** Completed wy_action tool calls seen this cycle. */
-  toolCallsThisCycle: number;
-  /** Natural-language questions collected from this cycle's tool calls. */
-  asksThisCycle: string[];
-  actionSeq: number;
+  actionsThisStep: number;
+  /** Completed wy_action tool calls seen this step. */
+  toolCallsThisStep: number;
+  /** Natural-language questions collected from this step's tool calls. */
+  asksThisStep: string[];
   /** Tool calls being parsed/started; separate from the executions they spawn. */
   parsePromises: Set<Promise<void>>;
   actionPromises: Set<Promise<void>>;
-  cycleText: string;
+  stepText: string;
   taskRunIds: Set<string>;
-  /** Set when the last reason cycle produced an invalid action call or question. */
+  /** Set when the last reason step produced an invalid action call or question. */
   correctionRequired: boolean;
   /** Set once an empty reason output has been sent back for correction. */
   emptyReasonRetried: boolean;
@@ -70,7 +71,10 @@ export interface SessionRuntime {
   files: FilesPort;
   actions: ActionRunner;
   calls: CallsPort;
-  callSeq: number;
+  /** Session-wide span id counter. */
+  spanSeq: number;
+  /** Session-wide action id counter, shared by reasoning and system actions. */
+  actionSeq: number;
   title: string;
   lastTitleVersion: number;
   titleVersion: number;

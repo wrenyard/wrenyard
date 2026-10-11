@@ -69,24 +69,19 @@ function failureLabel(kind: string, status: number | undefined): string {
 }
 
 /**
- * Inspector chips for a call's route selection and retry record: rank, retry
- * count and reason, and the terminal failure. Historical records written before
- * the transport refactor carry `routeAttempts` with a route state; those are
- * still shown so old sessions keep their labels.
+ * Inspector chips for a span's route selection and retry record: rank, retry
+ * count and reason, and the terminal failure. The rank and retry facts arrive
+ * on the span's request and transport metrics; the fold copies them onto the
+ * call model.
  */
-export function callRouteChips(event: Extract<LedgerEvent, { type: 'call' }>): string[] {
+export function callRouteChips(call: CallModel): string[] {
   const chips: string[] = [];
-  if (event.selectedRank !== undefined) chips.push(`排名 ${event.selectedRank}`);
-  const retries = event.retries ?? [];
+  if (call.selectedRank !== undefined) chips.push(`排名 ${call.selectedRank}`);
+  const retries = call.retries ?? [];
   if (retries.length > 0) chips.push(`重试 ${retries.length} 次`);
   const retry = retries.at(-1);
   if (retry !== undefined) chips.push(`重试原因：${failureLabel(retry.kind, retry.status)}`);
-  const error = event.error;
-  if (error !== undefined) chips.push(`失败：${failureLabel(error.kind, error.status)}`);
-  // Legacy records only: their per-attempt route state is no longer produced.
-  const attempts = (event as unknown as { routeAttempts?: readonly { routeState?: string }[] }).routeAttempts ?? [];
-  const state = [...attempts].reverse().find((attempt) => attempt.routeState !== undefined)?.routeState;
-  if (state !== undefined) chips.push(`线路状态：${ROUTE_STATE_LABEL[state] ?? state}`);
+  if (call.error !== undefined) chips.push(`失败：${call.error}`);
   return chips;
 }
 
@@ -207,26 +202,31 @@ function oneLine(value: string, max = 140): string {
 
 export function summarizeLedgerEvent(event: LedgerEvent): string {
   const record = event as unknown as Record<string, unknown>;
+  const action = record.action as { type?: unknown } | undefined;
   switch (ledgerEventType(event)) {
     case 'session.created': return String(record.workspaceRoot ?? '');
     case 'turn.started': return oneLine(String(record.text ?? ''));
-    case 'thinking': return oneLine(String(record.text ?? ''));
-    case 'doc.search': return oneLine(String(record.understanding ?? ''));
-    case 'doc.content': return `${record.format} · ${record.path}`;
-    case 'files': return `${record.source} · ${Array.isArray(record.files) ? record.files.length : 0} 个文件`;
+    case 'step.started': return String(record.model ?? '');
+    case 'step.finished': return String(record.status ?? '');
+    case 'reasoning.thinking': return oneLine(String(record.text ?? ''));
+    case 'reasoning.completed': return oneLine(String(record.text ?? ''));
+    case 'document.found': return oneLine(String(record.understanding ?? ''));
+    case 'document.content': return `${record.format} · ${record.path}`;
+    case 'files.attached': return `${record.source} · ${Array.isArray(record.files) ? record.files.length : 0} 个文件`;
     case 'memory.recalled': return String(record.path ?? '');
-    case 'reason.completed':
-    case 'title': return oneLine(String(record.text ?? ''));
-    case 'reply': return oneLine(String(record.text ?? ''));
-    case 'action.started': return String(record.kind ?? '');
+    case 'action.started': return String(action?.type ?? '');
     case 'action.titled': return oneLine(String(record.title ?? ''));
-    case 'action.finished': return oneLine(`${record.kind} · ${record.status}: ${record.result ?? ''}`);
-    case 'ws.updated': return `${record.change} ${record.target}${record.worktreeId ? ` ${record.worktreeId}` : ''}`;
+    case 'action.finished': return oneLine(`${action?.type} · ${record.status}: ${record.result ?? ''}`);
+    case 'span.started': return `${record.kind} · ${(record.request as { model?: unknown } | undefined)?.model ?? ''}`;
+    case 'span.finished': return `${record.kind} · ${record.status}`;
+    case 'workspace.changed': return `${record.change} ${record.target}${record.worktreeId ? ` ${record.worktreeId}` : ''}`;
     case 'turn.interrupted': return String(record.reason ?? '');
     case 'turn.finished': return String(record.status ?? '');
-    case 'call': return `${record.role} · ${record.model} · ${record.status}`;
-    case 'call.started': return `${record.role} · ${record.model}`;
-    case 'error': return oneLine(`${record.stage}: ${record.message}`);
+    case 'reply.sent':
+    case 'session.titled': return oneLine(String(record.text ?? ''));
+    case 'system.info':
+    case 'system.warning':
+    case 'system.error': return oneLine(`${record.code}: ${record.message}`);
     default: return '';
   }
 }

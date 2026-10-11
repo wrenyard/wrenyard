@@ -194,9 +194,9 @@ export const sessionContextInspectResultSchema = {
     },
     totalTokens: { type: 'integer', minimum: 0 },
     calibration: {
-      type: 'object', required: ['callId', 'model', 'estimated', 'actual'], additionalProperties: false,
+      type: 'object', required: ['spanId', 'model', 'estimated', 'actual'], additionalProperties: false,
       properties: {
-        callId: idSchema,
+        spanId: idSchema,
         model: idSchema,
         estimated: { type: 'integer', minimum: 0 },
         actual: { type: 'integer', minimum: 0 },

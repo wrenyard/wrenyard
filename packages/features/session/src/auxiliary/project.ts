@@ -1,5 +1,5 @@
 /**
- * The project secondary session.
+ * The project auxiliary task.
  *
  * It manages registered project checkouts and their worktrees through the
  * protocol tools built by `protocolTools`. The daemon reports an unregistered
@@ -8,15 +8,15 @@
  * the worktree id when the call names one.
  */
 
-import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../index.ts';
+import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
 import {
-  buildSecondaryUser,
-  createSecondaryRecord,
+  buildAuxiliaryUser,
+  createLoopRecord,
   protocolTools,
-  runSecondary,
+  runAuxiliaryLoop,
   toActionOutcome,
   type MethodEffect,
-} from './framework.ts';
+} from '../loop/loop.ts';
 
 /** Rounds the project loop may run before it fails. */
 const PROJECT_MAX_ROUNDS = 16;
@@ -52,16 +52,16 @@ export async function runProjectAction(
   action: ParsedAction,
   ctx: ActionRunContext,
 ): Promise<ActionExecutionOutcome> {
-  const record = createSecondaryRecord();
-  const result = await runSecondary({
+  const record = createLoopRecord();
+  const result = await runAuxiliaryLoop({
     deps,
     ctx,
     role: 'project',
     system: projectSystemPrompt(),
-    user: buildSecondaryUser(ctx, action.intent),
+    user: buildAuxiliaryUser(ctx, action.intent),
     tools: await protocolTools(deps, ctx, record, METHODS, EFFECTS),
     maxRounds: PROJECT_MAX_ROUNDS,
-    callIdPrefix: 'project',
+    spanIdPrefix: 'project',
   });
   return toActionOutcome(result, record);
 }

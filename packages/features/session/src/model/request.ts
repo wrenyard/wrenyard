@@ -4,9 +4,9 @@
  * One call is one stateless request: pick the role's model, resolve its model
  * metadata, estimate the input with `o200k_base`, enforce the context budget,
  * run it through the {@link ModelTransport} under the role's timeout, and write
- * exactly one `call` ledger event for the attempt. The runner keeps no session
- * state, never parses JSON output and never repairs schemas — those belong to
- * `actions.ts` / `engine.ts`.
+ * exactly one `span.started` and one `span.finished` ledger event for the
+ * invocation. The runner keeps no session state, never parses JSON output and
+ * never repairs schemas — those belong to `actions.ts` / `engine.ts`.
  *
  * The transport owns the only same-route retry and the protocol adapters. The
  * runner performs no failover: the main reasoning call keeps the user's model,
@@ -19,27 +19,26 @@ import type { ReasoningEffort } from '@wrenyard/models';
 import {
   abortError,
   isContextOverflowError,
-  type ModelAttempts,
   type ModelContentPart,
   type ModelErrorKind,
   type ModelEvent,
+  type ModelMetrics,
   type ModelResult,
   type ModelTransport,
-  type RetryAfterHint,
   type ToolCall,
   type ToolSpec,
-  type TpsSample,
   type Usage,
-} from './transport/index.ts';
-import { ROLE_REQUIREMENTS, type AuxiliaryCallRole } from './role-requirements.js';
-import { resolveModelMetadata, type ModelMetadata } from './model-metadata.ts';
+} from '../transport/index.ts';
+import type { ModelSpanFinishedEvent, ModelSpanStartedEvent } from '../ledger/events.ts';
+import { ROLE_REQUIREMENTS, type AuxiliaryCallRole } from './roles.ts';
+import { resolveModelMetadata, type ModelMetadata } from './metadata.ts';
 
 // The pure metadata helper now lives in the browser-safe model-metadata entry;
 // the call runner re-exports it so existing `./calls.ts` consumers are unchanged.
-export { resolveModelMetadata } from './model-metadata.ts';
-export type { ModelMetadata } from './model-metadata.ts';
+export { resolveModelMetadata } from './metadata.ts';
+export type { ModelMetadata } from './metadata.ts';
 
-export type { Message, ModelContentPart, ToolCall, ToolSpec, Usage } from './transport/index.ts';
+export type { Message, ModelContentPart, ToolCall, ToolSpec, Usage } from '../transport/index.ts';
 
 /** Every role that may issue a call. `reason` is the one expensive role. */
 export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'vcs', 'project'] as const;
@@ -47,8 +46,8 @@ export type CallRole = (typeof CALL_ROLES)[number];
 
 /** The expensive role streams with no total deadline; its idle stream is bounded. */
 export const REASON_IDLE_TIMEOUT_MS = 180_000;
-/** Every cheap call is bounded end to end. */
-export const CHEAP_TIMEOUT_MS = 60_000;
+/** Every auxiliary request is bounded end to end. */
+export const AUXILIARY_TIMEOUT_MS = 60_000;
 
 /** Caller-supplied expensive model for the `reason` role. */
 export interface ReasonSelection {
@@ -58,7 +57,7 @@ export interface ReasonSelection {
   reasoningEffort: ReasoningEffort;
 }
 
-/** Structured failure fact recorded on a `call` event and handed to reply. */
+/** Structured failure fact recorded on a failed span and handed to reply. */
 export interface CallErrorFact {
   kind: ModelErrorKind;
   status?: number;
@@ -66,90 +65,24 @@ export interface CallErrorFact {
   message: string;
 }
 
-/** One same-route transport retry, recorded in order. */
-export interface CallRetry {
-  status?: number;
-  kind: ModelErrorKind;
-  delayMs: number;
-  /** Present only when the upstream retry hint was actually adopted. */
-  retryAfter?: RetryAfterHint;
-}
-
 /**
- * The `call` ledger event body. `seq` and `at` are assigned by the ledger on
- * append, so the runner hands over everything else through a structural
- * callback and never imports the ledger module.
+ * Every span event draft the runner writes for one invocation. `seq` and `at`
+ * are assigned by the ledger on append, so the runner hands over everything
+ * else through a structural callback and never imports the ledger store.
  */
-export interface CallEventDraft {
-  type: 'call';
-  callId: string;
-  role: CallRole;
-  /** Gateway public id, always exactly `provider/model`. */
-  model: string;
-  status: 'ok' | 'failed' | 'aborted';
-  startedAt: string;
-  endedAt: string;
-  /** When the driver first produced a nonempty delta (visible or reasoning). */
-  firstTokenAt?: string;
-  /** Character count per prompt layer, e.g. `{ 'wy-system': 1234 }`. */
-  layers: Record<string, number>;
-  estimatedInputTokens: number;
-  usage?: Usage;
-  /** Visible output; partial output when the call was aborted or interrupted. */
-  output: string;
-  reasoning?: string;
-  /** Public reasoning level actually sent on the wire for this attempt. */
-  reasoningEffort?: ReasoningEffort;
-  /**
-   * The effort that was asked for: the explicit level on a `reason` call, or an
-   * auxiliary role's declared expectation. Recorded alongside the actual level
-   * so a nearest-supported adaptation is visible in the ledger.
-   */
-  requestedReasoningEffort?: string;
-  /** Rank of the route that served (or last attempted) an auxiliary call. */
-  selectedRank?: number;
-  /** Ordered auxiliary routes retained for this invocation. */
-  routeCandidates?: readonly AuxiliaryRoute[];
-  /** Structured failure fact; present only when the attempt failed. */
-  error?: CallErrorFact;
-  /** Each same-route transport retry, in order. */
-  retries?: readonly CallRetry[];
-  /**
-   * Tokenizer_v1 speed sample of this call. Present only when the successful
-   * transport result carried one; never derived from official usage or local
-   * first-token timing, and absent on failures and legacy records.
-   */
-  tps?: TpsSample;
-  turn?: number;
-  cycle?: number;
-}
-
-/**
- * The `call.started` event body, written as the call is actually issued. It is
- * observational: it never enters the rendered context, so appending it cannot
- * change any previously rendered result. Its `callId` matches the terminal
- * `call` event for the same attempt.
- */
-export interface CallStartedEventDraft {
-  type: 'call.started';
-  callId: string;
-  role: CallRole;
-  /** Gateway public id, always exactly `provider/model`. */
-  model: string;
-  turn?: number;
-  cycle?: number;
-}
-
-/** Every ledger draft the runner writes for one call. */
-export type CallLedgerEventDraft = CallStartedEventDraft | CallEventDraft;
+export type SpanEventDraft =
+  | Omit<ModelSpanStartedEvent, 'seq' | 'at'>
+  | Omit<ModelSpanFinishedEvent, 'seq' | 'at'>;
 
 export interface ModelCallInput {
-  callId: string;
+  spanId: string;
+  /** The owning step for a reasoning span, or the owning action for an auxiliary span. */
+  parent: string;
   role: CallRole;
   turn?: number;
-  cycle?: number;
+  step?: number;
   /** Fully assembled request messages, supplied by the caller's view. */
-  messages: readonly import('./transport/index.ts').Message[];
+  messages: readonly import('../transport/index.ts').Message[];
   /** Character count per assembled prompt layer. */
   layers: Record<string, number>;
   /** Required for `reason`; ignored for every other role. */
@@ -173,7 +106,9 @@ export interface ModelCallOutput {
   usage?: Usage;
   /** Native tool calls the model returned, in call order; empty when it returned none. */
   toolCalls: ToolCall[];
-  finishReason?: import('./transport/index.ts').FinishReason;
+  finishReason?: import('../transport/index.ts').FinishReason;
+  /** Measured facts of the call, produced by the transport. */
+  metrics: ModelMetrics;
 }
 
 /** One ranked auxiliary route and the level it is called at. */
@@ -189,8 +124,8 @@ export interface CallRunnerOptions {
   sessionId?: string;
   /** Fresh non-empty ranked routes for each auxiliary invocation. */
   selectAuxiliary: (role: AuxiliaryCallRole) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
-  /** Structural sink: exactly one terminal call event per attempted invocation. */
-  append: (event: CallLedgerEventDraft) => void | Promise<void>;
+  /** Structural sink: the span events of every attempted invocation, in order. */
+  append: (event: SpanEventDraft) => void | Promise<void>;
   /** Forwarded as the request cache key on every call of this runner. */
   cacheKey?: string;
   now?: () => Date;
@@ -200,21 +135,19 @@ export interface CallRunner {
   run(input: ModelCallInput): Promise<ModelCallOutput>;
 }
 
-/** Raised after the call event has been written; carries the partial output and failure facts. */
+/** Raised after the failure span has been written; carries the failure facts. */
 export class ModelCallError extends Error {
   constructor(
     message: string,
     readonly detail: {
-      callId: string;
+      spanId: string;
       role: CallRole;
       model: string;
       status: 'failed' | 'aborted';
-      partialText: string;
-      partialReasoning?: string;
       /** Structured failure fact for the reply view. */
       failure?: CallErrorFact;
-      /** Attempt statistics of the failed call. */
-      attempts?: ModelAttempts;
+      /** Measured facts of the failed call, produced by the transport. */
+      metrics?: ModelMetrics;
     },
   ) {
     super(message);
@@ -249,7 +182,7 @@ export function estimateContentTokens(content: string | readonly ModelContentPar
 }
 
 /** `o200k_base` token count estimate of a supplied message list. */
-export function estimateInputTokens(messages: readonly import('./transport/index.ts').Message[]): number {
+export function estimateInputTokens(messages: readonly import('../transport/index.ts').Message[]): number {
   let total = 0;
   for (const message of messages) total += estimateTokens(message.role) + estimateContentTokens(message.content);
   return total;
@@ -258,13 +191,13 @@ export function estimateInputTokens(messages: readonly import('./transport/index
 /**
  * Defense in depth: only the main reasoning role may carry image bytes. For any
  * other role every `image_url` part is replaced by a textual omitted descriptor
- * before the budget check and the driver, so a cheap call can never transmit
+ * before the budget check and the driver, so a auxiliary request can never transmit
  * image content.
  */
 export function sanitizeMessagesForRole(
   role: CallRole,
-  messages: readonly import('./transport/index.ts').Message[],
-): readonly import('./transport/index.ts').Message[] {
+  messages: readonly import('../transport/index.ts').Message[],
+): readonly import('../transport/index.ts').Message[] {
   if (role === 'reason') return messages;
   let replaced = false;
   const next = messages.map((message) => {
@@ -291,7 +224,7 @@ export interface ContextBudget {
  * extra soft budget — and a call is refused when the estimate plus the model's
  * output allowance would exceed its window.
  */
-export function checkContextBudget(publicId: string, messages: readonly import('./transport/index.ts').Message[], resolveProvider?: (providerId: string) => ProviderDefinition | undefined): ContextBudget {
+export function checkContextBudget(publicId: string, messages: readonly import('../transport/index.ts').Message[], resolveProvider?: (providerId: string) => ProviderDefinition | undefined): ContextBudget {
   const metadata = resolveModelMetadata(publicId, resolveProvider);
   const estimatedInputTokens = estimateInputTokens(messages);
   if (metadata.contextWindow === undefined || metadata.maxOutputTokens === undefined) {
@@ -368,97 +301,69 @@ function errorFactOf(error: unknown): CallErrorFact {
   return { kind: 'protocol', message: error instanceof Error ? error.message : String(error) };
 }
 
-/** Attempt statistics of a thrown transport error, when it carries them. */
-function attemptsOf(error: unknown): ModelAttempts | undefined {
-  return error instanceof Error && 'attempts' in error
-    ? (error as { attempts?: ModelAttempts }).attempts
+/** Measured facts of a thrown transport error, when it carries them. */
+function metricsOf(error: unknown): ModelMetrics | undefined {
+  return error instanceof Error && 'metrics' in error
+    ? (error as { metrics?: ModelMetrics }).metrics
     : undefined;
 }
 
 /** Create the role-aware call runner. */
 export function createCallRunner(options: CallRunnerOptions): CallRunner {
-  const now = options.now ?? ((): Date => new Date());
-
   return {
     async run(input: ModelCallInput): Promise<ModelCallOutput> {
-      const startedAt = now().toISOString();
       // Non-reasoning roles never transmit image bytes: image parts become a
       // textual omitted descriptor before the budget check and the driver.
       const messages = sanitizeMessagesForRole(input.role, input.messages);
+      const spanKind: 'reasoning' | 'auxiliary' = input.role === 'reason' ? 'reasoning' : 'auxiliary';
       let model = '';
       let estimatedInputTokens = 0;
       let actualReasoningEffort: ReasoningEffort | undefined;
       let requestedReasoningEffort: string | undefined;
+      let auxiliaryRole: AuxiliaryCallRole | undefined;
       let routes: readonly AuxiliaryRoute[] | undefined;
       let selectedRank: number | undefined;
-      const retries: CallRetry[] = [];
       let partialUsage: Usage | undefined;
       let emitted = false;
-      /** First nonempty delta time, shared by the terminal call event. */
-      let firstTokenAt: string | undefined;
 
-      const emit = async (
-        status: CallEventDraft['status'],
-        fields: { output: string; reasoning?: string; usage?: Usage; error?: CallErrorFact; firstTokenAt?: string; tps?: TpsSample },
+      /** Append the single `span.finished` event of this invocation. */
+      const finish = async (
+        status: 'ok' | 'failed' | 'aborted',
+        fields: { output?: string; reasoning?: string; error?: CallErrorFact; metrics?: ModelMetrics },
       ): Promise<void> => {
         if (emitted) return;
         emitted = true;
         await options.append({
-          type: 'call',
-          callId: input.callId,
-          role: input.role,
-          model,
-          status,
-          startedAt,
-          endedAt: now().toISOString(),
-          layers: input.layers,
-          estimatedInputTokens,
-          ...(fields.usage === undefined ? {} : { usage: fields.usage }),
-          ...(fields.firstTokenAt === undefined ? {} : { firstTokenAt: fields.firstTokenAt }),
-          output: fields.output,
-          ...(fields.reasoning === undefined ? {} : { reasoning: fields.reasoning }),
-          reasoningEffort: actualReasoningEffort,
-          ...(routes === undefined ? {} : { routeCandidates: routes }),
-          ...(selectedRank === undefined ? {} : { selectedRank }),
-          ...(retries.length ? { retries } : {}),
-          ...(requestedReasoningEffort === undefined ? {} : { requestedReasoningEffort }),
-          ...(fields.error === undefined ? {} : { error: fields.error }),
-          ...(fields.tps === undefined ? {} : { tps: fields.tps }),
+          type: 'span.finished',
+          id: input.spanId,
+          kind: spanKind,
           ...(input.turn === undefined ? {} : { turn: input.turn }),
-          ...(input.cycle === undefined ? {} : { cycle: input.cycle }),
+          ...(input.step === undefined ? {} : { step: input.step }),
+          status,
+          ...(fields.output === undefined ? {} : { output: fields.output }),
+          ...(fields.reasoning === undefined ? {} : { reasoning: fields.reasoning }),
+          ...(fields.error === undefined ? {} : { error: fields.error }),
+          ...(fields.metrics === undefined ? {} : { metrics: fields.metrics }),
         });
       };
-      /** Write the single `call` event for this attempt, then throw. */
+      /** Write the failure span event for this invocation, then throw. */
       const fail = async (
         message: string,
-        detail: {
-          status?: 'failed' | 'aborted';
-          partialText?: string;
-          partialReasoning?: string;
-          usage?: Usage;
-          error?: CallErrorFact;
-          attempts?: ModelAttempts;
-        } = {},
+        detail: { status?: 'failed' | 'aborted'; error?: CallErrorFact; metrics?: ModelMetrics } = {},
       ): Promise<never> => {
         const status = detail.status ?? 'failed';
-        const partialText = detail.partialText ?? '';
         const failure = detail.error ?? { kind: 'protocol' as ModelErrorKind, message };
-        await emit(status, {
-          output: partialText,
-          ...(detail.partialReasoning === undefined ? {} : { reasoning: detail.partialReasoning }),
-          ...(detail.usage === undefined ? {} : { usage: detail.usage }),
-          ...(firstTokenAt === undefined ? {} : { firstTokenAt }),
+        await finish(status, {
           error: failure,
+          ...(detail.metrics === undefined ? {} : { metrics: detail.metrics }),
         });
         throw new ModelCallError(message, {
-          callId: input.callId,
+          spanId: input.spanId,
           role: input.role,
           model,
           status,
-          partialText,
-          ...(detail.partialReasoning === undefined ? {} : { partialReasoning: detail.partialReasoning }),
           failure,
-          ...(detail.attempts === undefined ? {} : { attempts: detail.attempts }),
+          ...(detail.metrics === undefined ? {} : { metrics: detail.metrics }),
         });
       };
 
@@ -474,7 +379,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       if (input.signal.aborted) abort('signal');
       else input.signal.addEventListener('abort', onExternalAbort, { once: true });
 
-      const totalTimeoutMs = input.role === 'reason' ? undefined : CHEAP_TIMEOUT_MS;
+      const totalTimeoutMs = input.role === 'reason' ? undefined : AUXILIARY_TIMEOUT_MS;
       const totalTimer = totalTimeoutMs === undefined
         ? undefined
         : setTimeout(() => abort('timeout'), totalTimeoutMs);
@@ -487,20 +392,16 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       resetIdle();
 
       let outputStarted = false;
-      const onOutput = (): void => { outputStarted = true; firstTokenAt ??= now().toISOString(); resetIdle(); };
-      let text = '';
-      let reasoning = '';
+      const onOutput = (): void => { outputStarted = true; resetIdle(); };
       const onText = (delta: string): void => {
-        text += delta;
         if (delta !== '') onOutput();
         input.onText?.(delta);
       };
       const onReasoning = (delta: string): void => {
-        reasoning += delta;
         if (delta !== '') onOutput();
         input.onReasoning?.(delta);
       };
-      /** Map one transport event onto the runner's output and activity tracking. */
+      /** Map one transport event onto the runner's activity tracking. */
       const onEvent = (event: ModelEvent): void => {
         switch (event.type) {
           case 'text': onText(event.delta); return;
@@ -509,14 +410,6 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           case 'usage': partialUsage = event.usage; return;
           case 'activity': resetIdle(); return;
           case 'retry':
-            retries.push({
-              kind: event.kind,
-              delayMs: event.delayMs,
-              ...(event.status === undefined ? {} : { status: event.status }),
-              // Recorded only when the upstream hint was actually adopted; a pure
-              // exponential-backoff retry carries no retryAfter.
-              ...(event.retryAfter === undefined ? {} : { retryAfter: event.retryAfter }),
-            });
             // A retry wait is activity: it must not trip the idle timer.
             resetIdle();
             return;
@@ -531,6 +424,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           model = `${selection.provider}/${selection.model}`;
           requestedReasoningEffort = selection.reasoningEffort;
         } else {
+          auxiliaryRole = input.role;
           requestedReasoningEffort = ROLE_REQUIREMENTS[input.role].expectedReasoningEffort[0];
           routes = await settleWithAbort(options.selectAuxiliary(input.role), controller.signal);
           if (!routes.length) throw new Error(`Auxiliary role ${input.role}: no candidate qualified (empty route selection)`);
@@ -561,9 +455,27 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         }
         actualReasoningEffort = choice.reasoningEffort;
         if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
-        await options.append({ type: 'call.started', callId: input.callId, role: input.role, model,
+        await options.append({
+          type: 'span.started',
+          id: input.spanId,
+          parent: input.parent,
+          kind: spanKind,
           ...(input.turn === undefined ? {} : { turn: input.turn }),
-          ...(input.cycle === undefined ? {} : { cycle: input.cycle }) });
+          ...(input.step === undefined ? {} : { step: input.step }),
+          request: {
+            ...(auxiliaryRole === undefined ? {} : { role: auxiliaryRole }),
+            model,
+            effort: {
+              ...(requestedReasoningEffort === undefined ? {} : { requested: requestedReasoningEffort }),
+              ...(actualReasoningEffort === undefined ? {} : { sent: actualReasoningEffort }),
+            },
+            inputEstimate: estimatedInputTokens,
+            layers: input.layers,
+            ...(routes === undefined || selectedRank === undefined
+              ? {}
+              : { route: { candidates: routes, rank: selectedRank } }),
+          },
+        });
         result = await settleWithAbort(options.transport.complete({
           model,
           messages,
@@ -581,14 +493,12 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         const message = abortKind === undefined
           ? withOverflowPrefix(error)
           : abortMessage(abortKind, totalTimeoutMs);
-        const errorFact = abortKind === undefined ? errorFactOf(error) : { kind: 'aborted' as ModelErrorKind, message };
+        const failure = abortKind === undefined ? errorFactOf(error) : { kind: 'aborted' as ModelErrorKind, message };
+        const metrics = metricsOf(error);
         return await fail(message, {
           status,
-          partialText: text,
-          ...(reasoning === '' ? {} : { partialReasoning: reasoning }),
-          ...(partialUsage === undefined ? {} : { usage: partialUsage }),
-          error: errorFact,
-          ...(attemptsOf(error) === undefined ? {} : { attempts: attemptsOf(error)! }),
+          error: failure,
+          ...(metrics === undefined ? {} : { metrics }),
         });
       } finally {
         if (totalTimer !== undefined) clearTimeout(totalTimer);
@@ -596,19 +506,16 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         input.signal.removeEventListener('abort', onExternalAbort);
       }
 
+      const completed = result!;
       // Visible text only; native tool calls are returned separately.
-      const finalText = result ? result.text : text;
-      const finalReasoning = result?.reasoning ?? (reasoning || undefined);
-      const usage = result?.usage ?? partialUsage;
+      const finalText = completed.text;
+      const finalReasoning = completed.reasoning;
+      const usage = completed.usage ?? partialUsage;
 
-      await emit('ok', {
+      await finish('ok', {
         output: finalText,
         ...(finalReasoning === undefined ? {} : { reasoning: finalReasoning }),
-        ...(usage === undefined ? {} : { usage }),
-        ...(firstTokenAt === undefined ? {} : { firstTokenAt }),
-        // The successful result's optional sample is the only TPS recorded; a
-        // transport failure never produces one.
-        ...(result?.tps === undefined ? {} : { tps: result.tps }),
+        metrics: completed.metrics,
       });
 
       return {
@@ -616,8 +523,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         text: finalText,
         ...(finalReasoning === undefined ? {} : { reasoning: finalReasoning }),
         ...(usage === undefined ? {} : { usage }),
-        toolCalls: result?.toolCalls ?? [],
-        ...(result?.finishReason === undefined ? {} : { finishReason: result.finishReason }),
+        toolCalls: completed.toolCalls,
+        ...(completed.finishReason === undefined ? {} : { finishReason: completed.finishReason }),
+        metrics: completed.metrics,
       };
     },
   };

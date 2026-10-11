@@ -1,4 +1,4 @@
-import type { ActionExecutionOutcome } from './index.ts';
+import type { ActionExecutionOutcome } from '../reasoning/actions.ts';
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

@@ -1,16 +1,16 @@
 /**
- * The memory secondary session: one memory-search call before every reason
+ * The memory auxiliary task: one memory-search call before every reason
  * request. It selects at most three root memory files from the frozen index
  * and publishes each changed one as a `memory.recalled` event with source
  * `memory-search`.
  */
 
-import { contentVersion } from '../../documents.ts';
-import { messageOf } from '../../errors.ts';
-import type { LedgerEvent } from '../../ledger.ts';
-import { escapeBody, tag, twoPartView } from '../../render.ts';
-import type { BuiltView, SessionCallHost } from '../../ports.ts';
-import type { SessionRuntime, TurnRuntime } from '../../runtime.ts';
+import { contentVersion } from '../documents.ts';
+import { messageOf } from '../errors.ts';
+import { turnId, type LedgerEvent } from '../ledger/store.ts';
+import { escapeBody, tag, twoPartView } from '../context/render.ts';
+import type { BuiltView, SessionCallHost } from '../ports.ts';
+import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
 import { latestReasonText } from './reply.ts';
 
 /** How much of one action result the memory-search view carries. */
@@ -61,20 +61,22 @@ function buildMemorySearch(input: MemorySearchViewInput): BuiltView {
 
 // ─── Memory search ──────────────────────────────────────────────────────────
 
-/** The engine surface one memory-search call needs. */
-export type MemorySearchHost = Pick<SessionCallHost, 'ledger' | 'invoke' | 'appendError'>;
+/** The engine surface one memory search needs. */
+export type MemorySearchHost = Pick<SessionCallHost, 'ledger' | 'invoke'>;
 
 /**
- * One memory-search call before every reason request. It selects at most
- * three root memory files from the frozen index and publishes each changed
- * one as a `memory.recalled` event with source `memory-search`. A failed or
- * invalid call is reported and the reason request still runs.
+ * One memory search before every reasoning request: a system auxiliary task
+ * owned by the turn and indexed by the step it prepares. It selects at most
+ * three root memory files from the frozen index and publishes each changed one
+ * as a `memory.recalled` event whose parent is the search span. A failed or
+ * unparsable search is reported as a `system.warning` and the reasoning request
+ * still runs.
  */
 export async function runMemorySearch(
   host: MemorySearchHost,
   session: SessionRuntime,
   turn: TurnRuntime,
-  cycle: number,
+  step: number,
 ): Promise<void> {
   const events = host.ledger.read(session.sessionId);
   const view: BuiltView = buildMemorySearch({
@@ -84,18 +86,18 @@ export async function runMemorySearch(
     lastReasonText: latestReasonText(events),
     actionResults: turnActionResults(turn, events),
   });
-  const outcome = await host.invoke(session, turn, 'memory-search', view);
+  const outcome = await host.invoke(session, turn, 'memory-search', view, { parent: turnId(turn.turn), step });
   if (!outcome.ok) {
-    await host.appendError(session.sessionId, 'memory-search', outcome.error ?? 'memory-search call failed', turn);
+    await appendMemoryWarning(host, session, turn, step, outcome.spanId, outcome.error ?? 'memory-search call failed');
     return;
   }
   const parsed = parseMemoryPicks(outcome.text, session.snapshot.memoryIndex);
   if (!parsed.ok) {
-    await host.appendError(session.sessionId, 'memory-search', parsed.reason, turn);
+    await appendMemoryWarning(host, session, turn, step, outcome.spanId, parsed.reason);
     return;
   }
   for (const pick of parsed.picks) {
-    if (turn.finished || turn.abort.signal.aborted) return;
+    if (turn.finished || turn.abort.signal.aborted) break;
     const file = session.files.read(pick.path);
     if (!file) continue;
     const version = contentVersion(file.content);
@@ -103,12 +105,37 @@ export async function runMemorySearch(
     await host.ledger.append(session.sessionId, {
       type: 'memory.recalled',
       turn: turn.turn,
-      cycle,
+      step,
+      parent: outcome.spanId,
       path: pick.path,
       content: file.content,
       version,
       source: 'memory-search',
     });
+  }
+}
+
+/** Report a memory search that produced nothing usable; the step continues. */
+async function appendMemoryWarning(
+  host: MemorySearchHost,
+  session: SessionRuntime,
+  turn: TurnRuntime,
+  step: number,
+  spanId: string,
+  message: string,
+): Promise<void> {
+  try {
+    await host.ledger.append(session.sessionId, {
+      type: 'system.warning',
+      turn: turn.turn,
+      step,
+      parent: spanId,
+      source: 'system',
+      code: 'memory-search',
+      message,
+    });
+  } catch {
+    // Reporting must never take the pipeline down.
   }
 }
 
@@ -140,7 +167,7 @@ function turnActionResults(
   const results: { name: string; status: string; text: string }[] = [];
   for (const event of events) {
     if (event.type !== 'action.finished' || event.turn !== turn.turn) continue;
-    results.push({ name: event.kind, status: event.status, text: event.result.slice(0, ACTION_RESULT_EXCERPT) });
+    results.push({ name: event.action.type, status: event.status, text: event.result.slice(0, ACTION_RESULT_EXCERPT) });
   }
   return results;
 }
