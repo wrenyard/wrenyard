@@ -1,29 +1,36 @@
 /**
  * session action layer: the typed action model and the router that dispatches
- * one parsed action to its secondary runner.
+ * one parsed action to its auxiliary task.
  *
  * The reasoning model declares one native tool; the API returns parsed calls.
- * There is no hand-written text parsing layer. Each secondary runner returns
+ * There is no hand-written text parsing layer. Each auxiliary task returns
  * context events as deferred drafts so the engine keeps append ordering.
  */
 
-import type { LedgerEvent, TaskBrief, WorkspaceSnapshot } from '../ledger.ts';
+import type {
+  LedgerEvent,
+  LedgerEventDraft,
+  TaskBrief,
+  TaskSpanFinishedEvent,
+  TaskSpanStartedEvent,
+  WorkspaceSnapshot,
+} from '../ledger/store.ts';
+import type { ActionStatus, ActionType } from '../ledger/store.ts';
 import type { CallsPort, FilesPort, ProjectInfo, SessionHost } from '../ports.ts';
 import type { FileStore } from '../media.ts';
-import { runSearchAction } from './secondary/search.ts';
-import { runDispatchAction } from './dispatch/dispatch.ts';
-import { runDocumentAction } from './secondary/document.ts';
-import { runVcsAction } from './secondary/vcs.ts';
-import { runProjectAction } from './secondary/project.ts';
+import { runSearchAction } from '../auxiliary/search.ts';
+import { runDispatchAction } from '../auxiliary/dispatch.ts';
+import { runDocumentAction } from '../auxiliary/document.ts';
+import { runVcsAction } from '../auxiliary/vcs.ts';
+import { runProjectAction } from '../auxiliary/project.ts';
+
+export type { ActionStatus, ActionType } from '../ledger/store.ts';
 
 // ─── Typed action model ────────────────────────────────────────────────────
 
-export type ActionKind = 'search' | 'dispatch' | 'document' | 'vcs' | 'project';
-export type ActionStatus = 'done' | 'failed' | 'skipped' | 'cancelled';
-
-/** One typed action: its kind plus the natural-language intent body. */
+/** One reasoning action the model wrote: its type plus the natural-language intent. */
 export interface ParsedAction {
-  kind: ActionKind;
+  type: ActionType;
   intent: string;
 }
 
@@ -34,8 +41,8 @@ export interface ActionExecutionOutcome {
   result: string;
   taskStatus?: string;
   task?: string;
-  /** Drafts whose append is deferred until after the cycle's reasoning event. */
-  deferred: import('../ledger.ts').LedgerEventDraft[];
+  /** Drafts whose append is deferred until after the step's reasoning event. */
+  deferred: LedgerEventDraft[];
 }
 
 // ─── Ports ──────────────────────────────────────────────────────────────────
@@ -44,20 +51,30 @@ export type ActionProjectInfo = Pick<ProjectInfo, 'id' | 'displayName' | 'worksp
 
 export type ActionTaskInfo = Pick<TaskBrief, 'id' | 'description' | 'inputSummary'> & { project?: string };
 
+/** One observational task span body the dispatch runner appends immediately. */
+export type TaskSpanDraft =
+  | Omit<TaskSpanStartedEvent, 'seq' | 'at'>
+  | Omit<TaskSpanFinishedEvent, 'seq' | 'at'>;
+
 export interface ActionRunnerDeps {
   host: Pick<SessionHost, 'describeTask' | 'createTaskRun' | 'waitTaskRun' | 'cancelTaskRun' | 'methods' | 'call'>;
   files: Pick<FilesPort, 'checkPath' | 'exists' | 'read' | 'instructionChain' | 'listDocuments' | 'readDocumentRules'>;
-  calls: Pick<CallsPort, 'run'>;
+  calls: CallsPort;
   fileStore: FileStore;
+  /**
+   * Append one observational span draft immediately, before any deferred
+   * content draft. Used for the task span pair of a dispatch.
+   */
+  appendSpan(draft: TaskSpanDraft): void | Promise<void>;
   now(): Date;
 }
 
 /**
- * The deps one secondary runner receives: the shared action deps plus a fresh
- * call id from the owning runner, so every auxiliary call keeps one sequence.
+ * The deps one auxiliary task receives: the shared action deps plus a fresh
+ * span id from the owning runner, so every auxiliary call keeps one sequence.
  */
 export interface ActionWorkflowDeps extends ActionRunnerDeps {
-  nextCallId(): string;
+  nextSpanId(): string;
 }
 
 /**
@@ -67,7 +84,8 @@ export interface ActionWorkflowDeps extends ActionRunnerDeps {
 export interface ActionRunContext {
   sessionId: string;
   turn: number;
-  cycle: number;
+  step: number;
+  /** The owning action id; auxiliary spans use it as their `parent`. */
   actionId: string;
   userText: string;
   workspaceRoot: string;
@@ -84,13 +102,13 @@ export interface ActionRunContext {
 // ─── Action runner ──────────────────────────────────────────────────────────
 
 /**
- * Routes the typed actions to their secondary runner. The runner never appends
- * ledger events itself: every path that produces context events returns
+ * Routes the typed actions to their auxiliary task. The runner never appends
+ * context events itself: every path that produces context events returns
  * deferred drafts.
  */
 export class ActionRunner {
   private readonly deps: ActionRunnerDeps;
-  private callSeq = 0;
+  private spanSeq = 0;
 
   constructor(deps: ActionRunnerDeps) {
     this.deps = deps;
@@ -99,9 +117,9 @@ export class ActionRunner {
   async execute(action: ParsedAction, ctx: ActionRunContext): Promise<ActionExecutionOutcome> {
     const workflow: ActionWorkflowDeps = {
       ...this.deps,
-      nextCallId: () => `c${ctx.turn}.${ctx.cycle}.x${++this.callSeq}`,
+      nextSpanId: () => `s${ctx.turn}.${ctx.step}.x${++this.spanSeq}`,
     };
-    switch (action.kind) {
+    switch (action.type) {
       case 'search':
         return runSearchAction(workflow, action, ctx);
       case 'dispatch':

@@ -67,7 +67,7 @@ export interface ContextInspectModel {
 
 /** The most recent main-reasoning call that reported usage. */
 export interface ContextInspectCalibration {
-  callId: string
+  spanId: string
   model: string
   /** The call's `estimatedInputTokens`. */
   estimated: number

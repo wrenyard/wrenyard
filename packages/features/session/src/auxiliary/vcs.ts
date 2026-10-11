@@ -1,5 +1,5 @@
 /**
- * The version-control secondary session.
+ * The version-control auxiliary task.
  *
  * It operates the workspace repository itself — the agent-workspace root set by
  * `workspace.root` — through the protocol tools built by `protocolTools`. A
@@ -7,15 +7,15 @@
  * scope `workspace` and target `workspace`.
  */
 
-import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../index.ts';
+import type { ActionExecutionOutcome, ActionRunContext, ActionRunnerDeps, ParsedAction } from '../reasoning/actions.ts';
 import {
-  buildSecondaryUser,
-  createSecondaryRecord,
+  buildAuxiliaryUser,
+  createLoopRecord,
   protocolTools,
-  runSecondary,
+  runAuxiliaryLoop,
   toActionOutcome,
   type MethodEffect,
-} from './framework.ts';
+} from '../loop/loop.ts';
 
 /** Rounds the vcs loop may run before it fails. */
 const VCS_MAX_ROUNDS = 16;
@@ -42,16 +42,16 @@ export async function runVcsAction(
   action: ParsedAction,
   ctx: ActionRunContext,
 ): Promise<ActionExecutionOutcome> {
-  const record = createSecondaryRecord();
-  const result = await runSecondary({
+  const record = createLoopRecord();
+  const result = await runAuxiliaryLoop({
     deps,
     ctx,
     role: 'vcs',
     system: vcsSystemPrompt(),
-    user: buildSecondaryUser(ctx, action.intent),
+    user: buildAuxiliaryUser(ctx, action.intent),
     tools: await protocolTools(deps, ctx, record, METHODS, EFFECTS),
     maxRounds: VCS_MAX_ROUNDS,
-    callIdPrefix: 'vcs',
+    spanIdPrefix: 'vcs',
   });
   return toActionOutcome(result, record);
 }

@@ -1,4 +1,4 @@
-// Session producer: live turn.finished events after catch-up. Completed shows truncated reply text or a fallback title; failed shows an error summary; interrupted is ignored.
+// Session producer: live turn.finished events after catch-up. Completed shows truncated reply text (the committed system "reply" action result) or a fallback title; failed shows an error summary; interrupted is ignored.
 
 import type { LedgerEvent } from '@wrenyard/session';
 import type { AppNotification, Notifier } from './notifier.js';
@@ -28,7 +28,7 @@ export function createSessionNotifier(deps: SessionNotifierDeps): SessionNotifie
 
   return {
     observe(sessionId: string, event: LedgerEvent): void {
-      if (event.type === 'reply') {
+      if (event.type === 'reply.sent') {
         if (event.turn === undefined) return;
         lastReply.set(`${sessionId}:${event.turn}`, event.text);
         return;

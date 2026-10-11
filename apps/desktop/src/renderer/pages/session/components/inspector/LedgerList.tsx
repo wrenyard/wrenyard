@@ -20,7 +20,7 @@ export interface LedgerListProps {
 }
 
 /** Virtualised raw-ledger list with turn/type/keyword filters. */
-export function LedgerList({ events, focusSeq }: LedgerListProps) {
+export function LedgerList({ model, events, focusSeq }: LedgerListProps) {
   const [types, setTypes] = useState<string[]>([]);
   const [turn, setTurn] = useState('all');
   const [keyword, setKeyword] = useState('');
@@ -109,6 +109,9 @@ export function LedgerList({ events, focusSeq }: LedgerListProps) {
           {virtualizer.getVirtualItems().map((item) => {
             const event = rows[item.index]!;
             const open = expanded.has(event.seq);
+            const call = (event.type === 'span.started' || event.type === 'span.finished')
+              ? model.calls.find((entry) => entry.id === event.id)
+              : undefined;
             return (
               <div
                 key={event.seq}
@@ -126,14 +129,16 @@ export function LedgerList({ events, focusSeq }: LedgerListProps) {
                     <ItemDescription className="flex flex-wrap items-center gap-2">
                       <span className="tabular-nums">{event.seq}</span>
                       <Timestamp value={event.at} precision="second" />
-                      {event.type === 'call' && <>
-                        <span>{event.model}</span>
-                        {callRouteChips(event).map((chip) => <span key={chip}>{chip}</span>)}
-                        {event.requestedReasoningEffort !== undefined && <span>{'期望思考：' + (REASONING_EFFORT_NAMES[event.requestedReasoningEffort as ReasoningEffort] ?? event.requestedReasoningEffort)}</span>}
-                        {event.reasoningEffort !== undefined && <span>{'实际思考：' + REASONING_EFFORT_NAMES[event.reasoningEffort]}</span>}
+                      {call !== undefined && <>
+                        <span>{call.model}</span>
+                        <span>{call.id}</span>
+                        {callRouteChips(call).map((chip) => <span key={chip}>{chip}</span>)}
+                        {call.requestedReasoningEffort !== undefined && <span>{'期望思考：' + (REASONING_EFFORT_NAMES[call.requestedReasoningEffort as ReasoningEffort] ?? call.requestedReasoningEffort)}</span>}
+                        {call.reasoningEffort !== undefined && <span>{'实际思考：' + (REASONING_EFFORT_NAMES[call.reasoningEffort as ReasoningEffort] ?? call.reasoningEffort)}</span>}
                       </>}
+                      {'parent' in event ? <span>{`← ${String(event.parent)}`}</span> : null}
                       {event.turn !== undefined && (
-                        <span>{`T${event.turn}${event.cycle !== undefined && event.cycle > 0 ? ` · C${event.cycle}` : ''}`}</span>
+                        <span>{`T${event.turn}${event.step !== undefined && event.step > 0 ? ` · C${event.step}` : ''}`}</span>
                       )}
                     </ItemDescription>
                   </ItemContent>

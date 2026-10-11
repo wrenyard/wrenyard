@@ -326,8 +326,8 @@ function inputUsageOf(raw: Record<string, unknown> | undefined): Usage | undefin
   const cacheCreation = numberField(raw.cache_creation_input_tokens);
   if (inputTokens === undefined && cacheRead === undefined && cacheCreation === undefined) return undefined;
   return {
-    input: (inputTokens ?? 0) + (cacheRead ?? 0) + (cacheCreation ?? 0),
-    ...(cacheRead === undefined ? {} : { cachedInput: cacheRead }),
+    inputTokens: (inputTokens ?? 0) + (cacheRead ?? 0) + (cacheCreation ?? 0),
+    ...(cacheRead === undefined ? {} : { cachedInputTokens: cacheRead }),
   };
 }
 
@@ -351,7 +351,7 @@ function applyOutputUsage(raw: Record<string, unknown> | undefined, state: Messa
   if (!raw) return;
   const output = numberField(raw.output_tokens);
   if (output === undefined) return;
-  state.usage = { ...state.usage, output };
+  state.usage = { ...state.usage, outputTokens: output };
   emit.usage(state.usage);
 }
 

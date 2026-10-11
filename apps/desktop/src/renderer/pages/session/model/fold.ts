@@ -1,17 +1,27 @@
 import type {
-  DocContentEvent,
-  DocSearchEvent,
-  ErrorEvent,
-  FilesEvent,
+  ActionFinishedEvent,
+  ActionStartedEvent,
+  ActionStatus,
+  ActionTitledEvent,
+  DocumentContentEvent,
+  DocumentFoundEvent,
+  ReplySentEvent,
+  SystemNoticeEvent,
+  FilesAttachedEvent,
   LedgerEvent,
   MemoryRecalledEvent,
-  ReplyEvent,
-  ThinkingEvent,
+  ModelSpanFinishedEvent,
+  ModelSpanStartedEvent,
+  ReasoningCompletedEvent,
+  ReasoningThinkingEvent,
+  SpanError,
+  SpanFinishedEvent,
+  SpanStartedEvent,
   TurnFinishedEvent,
   TurnInterruptedEvent,
   TurnStartedEvent,
+  WorkspaceChangedEvent,
   WorkspaceSnapshot,
-  WsUpdatedEvent,
 } from '@wrenyard/session';
 import { actionLabel, CALL_ROLE_LABEL, shortName } from './describe.js';
 import type {
@@ -43,24 +53,85 @@ export interface FoldOptions {
   interrupting?: readonly number[];
 }
 
-type CallEvent = Extract<LedgerEvent, { type: 'call' }>;
-
-/** One-line failure text of a call's structured error fact (legacy string tolerated). */
-function callErrorText(error: NonNullable<CallEvent['error']> | string): string {
-  if (typeof error === 'string') return error;
+/** One-line failure text of a span's structured error fact. */
+function spanErrorText(error: SpanError): string {
   const status = error.status === undefined ? '' : ` (HTTP ${error.status})`;
   return `${error.message}${status}`;
 }
 
-/** Structural view of the P3 `call.started` event, kept independent of the union. */
-interface CallStartedLike {
-  seq: number;
-  at: string;
-  callId: string;
-  role: CallModel['role'];
-  model: string;
-  turn?: number;
-  cycle?: number;
+/** The attempt list of a finished model span, derived from its metrics. */
+type SpanAttempts = NonNullable<ModelSpanFinishedEvent['metrics']>['attempts'];
+
+/**
+ * Same-route retries the transport performed. Every failed attempt yields one
+ * retry whose delay is the wait before the next request.
+ */
+function retriesOf(attempts: SpanAttempts): { status?: number; kind: string; delayMs: number }[] {
+  const retries: { status?: number; kind: string; delayMs: number }[] = [];
+  attempts.forEach((attempt, index) => {
+    if (attempt.error === undefined) return;
+    retries.push({
+      ...(attempt.status === undefined ? {} : { status: attempt.status }),
+      kind: attempt.error,
+      delayMs: attempts[index + 1]?.waitedMs ?? 0,
+    });
+  });
+  return retries;
+}
+
+/** View-model role of a model span: `reason` for a reasoning span, else its auxiliary role. */
+function spanRole(start: ModelSpanStartedEvent | undefined, done: ModelSpanFinishedEvent | undefined): CallModel['role'] {
+  if (start !== undefined) return start.kind === 'reasoning' ? 'reason' : start.request.role ?? 'search';
+  return done?.kind === 'reasoning' ? 'reason' : 'search';
+}
+
+/** View-model call status of a finished span. */
+function spanStatus(status: SpanFinishedEvent['status']): CallModel['status'] {
+  if (status === 'ok') return 'ok';
+  if (status === 'failed') return 'failed';
+  return 'aborted';
+}
+
+/** View-model action status of a committed action event. */
+function toItemStatus(status: ActionStatus): ItemStatus {
+  return status === 'interrupted' ? 'aborted' : status;
+}
+
+/** View-model action kind of a reasoning action type. */
+function toActionKind(type: string | undefined): ActionModel['kind'] {
+  switch (type) {
+    case 'search':
+    case 'dispatch':
+    case 'document':
+    case 'vcs':
+    case 'project':
+      return type;
+    default:
+      return 'dispatch';
+  }
+}
+
+/** True for a reply shown to the user. */
+function isReplySent(event: LedgerEvent): event is ReplySentEvent {
+  return eventType(event) === 'reply.sent';
+}
+
+/** True for a system fault or warning; both surface as an error item. */
+function isFault(event: LedgerEvent): event is SystemNoticeEvent {
+  const type = eventType(event);
+  return type === 'system.error' || type === 'system.warning';
+}
+
+/** Usage of a finished model span, mapped onto the view-model field names. */
+function usageOf(metrics: ModelSpanFinishedEvent['metrics']): CallModel['usage'] | undefined {
+  const usage = metrics?.usage;
+  if (usage === undefined) return undefined;
+  return {
+    ...(usage.inputTokens === undefined ? {} : { input: usage.inputTokens }),
+    ...(usage.cachedInputTokens === undefined ? {} : { cachedInput: usage.cachedInputTokens }),
+    ...(usage.outputTokens === undefined ? {} : { output: usage.outputTokens }),
+    ...(usage.reasoningTokens === undefined ? {} : { reasoning: usage.reasoningTokens }),
+  };
 }
 
 function eventType(event: LedgerEvent): string {
@@ -77,18 +148,6 @@ function readString(value: unknown): string | undefined {
 
 function readNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-/**
- * Recorded TPS sample of a ledger call (`{ outputTokens, windowMs }`). Absent on
- * historical records written before the transport refactor, never synthesized.
- */
-function readTps(value: unknown): { outputTokens: number; windowMs: number } | undefined {
-  if (!isRecord(value)) return undefined;
-  const outputTokens = readNumber(value.outputTokens);
-  const windowMs = readNumber(value.windowMs);
-  if (outputTokens === undefined || windowMs === undefined) return undefined;
-  return { outputTokens, windowMs };
 }
 
 function readKind(value: unknown): SessionFile['kind'] | undefined {
@@ -157,8 +216,8 @@ function firstLine(text: string): string {
   return text.split('\n', 1)[0]?.trim() ?? '';
 }
 
-/** Human-readable rendering of a `doc.search` result for the context ledger. */
-function formatDocSearch(record: DocSearchEvent): string {
+/** Human-readable rendering of a `document.found` result for the context ledger. */
+function formatDocSearch(record: DocumentFoundEvent): string {
   const lines: string[] = [];
   if (record.understanding.trim() !== '') lines.push(record.understanding);
   if (record.picks.length > 0) {
@@ -242,16 +301,22 @@ function signatureOf(turnId: number, events: LedgerEvent[], live: readonly LiveC
   const callIds = new Set<string>();
   for (const event of events) {
     const type = eventType(event);
-    if (type === 'call' || type === 'call.started') {
-      const callId = (event as { callId?: string }).callId;
-      if (callId) callIds.add(callId);
+    if (type === 'span.started' || type === 'span.finished') {
+      const id = (event as { id?: string }).id;
+      if (id) callIds.add(id);
     }
   }
-  const liveSlice = live.filter((entry) => callIds.has(entry.callId)).map((entry) => [entry.callId, entry.text.length, entry.reasoning.length]);
+  const liveSlice = live.filter((entry) => callIds.has(entry.spanId)).map((entry) => [entry.spanId, entry.text.length, entry.reasoning.length]);
   const taskIds = new Set<string>();
   for (const event of events) {
     const taskRunId = (event as { taskRunId?: string }).taskRunId;
     if (taskRunId) taskIds.add(taskRunId);
+    // A dispatch's run id now arrives on its task span rather than a second
+    // action.started; include it so a later task brief refresh rebuilds the turn.
+    if (eventType(event) === 'span.started') {
+      const record = event as SpanStartedEvent;
+      if (record.kind === 'task') taskIds.add(record.request.taskRunId);
+    }
   }
   const taskSlice = [...taskIds].sort().map((id) => [id, tasks[id]?.status ?? '']);
   const lastSeq = events.reduce((max, event) => Math.max(max, event.seq), 0);
@@ -293,21 +358,21 @@ function buildTurn(
   const cycle = cycles.length > 0 ? cycles[cycles.length - 1]!.index : 0;
   const attachments = buildUserAttachments(events);
 
-  // Every committed reply event projects into `replies` in timeline order.
-  // `final` is the latest committed reply; a live reply call is never
-  // fabricated into a user-facing message before it commits.
+  // Every reply sent to the user projects into `replies` in timeline order. `final` is the latest committed reply; a
+  // live reply span is never fabricated into a user-facing message before it
+  // commits.
   const replies = events
-    .filter((event): event is ReplyEvent => eventType(event) === 'reply')
+    .filter(isReplySent)
     .map(replyModel);
   const committedFinal = replies.at(-1);
 
   const errors: ErrorItem[] = events
-    .filter((event): event is ErrorEvent => eventType(event) === 'error')
+    .filter(isFault)
     .map((event) => ({
       at: event.at,
-      stage: event.stage,
+      stage: event.code,
       message: event.message,
-      ...(event.cycle === undefined ? {} : { cycle: event.cycle }),
+      ...(event.step === undefined ? {} : { cycle: event.step }),
     }));
 
   const model: TurnModel = {
@@ -334,20 +399,20 @@ function buildTurn(
   return model;
 }
 
-function replyModel(event: ReplyEvent): ReplyModel {
+function replyModel(event: ReplySentEvent): ReplyModel {
   return {
     text: event.text,
     at: event.at,
-    ...(event.cycle === undefined ? {} : { cycle: event.cycle }),
+    ...(event.step === undefined ? {} : { cycle: event.step }),
   };
 }
 
-/** User attachments for a turn, from its `files` events with source `user`. */
+/** User attachments for a turn, from its `files.attached` events with source `user`. */
 function buildUserAttachments(events: LedgerEvent[]): SessionFile[] {
   const files: SessionFile[] = [];
   for (const event of events) {
-    if (eventType(event) !== 'files') continue;
-    const record = event as FilesEvent;
+    if (eventType(event) !== 'files.attached') continue;
+    const record = event as FilesAttachedEvent;
     if (record.source !== 'user') continue;
     files.push(...projectSessionFileList(record.files));
   }
@@ -355,58 +420,82 @@ function buildUserAttachments(events: LedgerEvent[]): SessionFile[] {
 }
 
 function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded: boolean): CallModel[] {
-  const startedEvents = new Map<string, CallStartedLike>();
-  const completed = new Map<string, CallEvent>();
+  const startedEvents = new Map<string, ModelSpanStartedEvent>();
+  const completed = new Map<string, ModelSpanFinishedEvent>();
   for (const event of events) {
     const type = eventType(event);
-    if (type === 'call.started') {
-      const record = event as unknown as CallStartedLike;
-      startedEvents.set(record.callId, record);
-    } else if (type === 'call') {
-      const record = event as CallEvent;
-      completed.set(record.callId, record);
+    if (type === 'span.started') {
+      const record = event as SpanStartedEvent;
+      if (record.kind === 'task') continue;
+      startedEvents.set(record.id, record);
+    } else if (type === 'span.finished') {
+      const record = event as SpanFinishedEvent;
+      if (record.kind === 'task') continue;
+      completed.set(record.id, record);
     }
   }
 
-  const liveById = new Map(live.map((entry) => [entry.callId, entry]));
+  const liveById = new Map(live.map((entry) => [entry.spanId, entry]));
   const ids = [...new Set([...startedEvents.keys(), ...completed.keys()])];
   const calls: CallModel[] = ids.map((id) => {
+    const start = startedEvents.get(id);
     const done = completed.get(id);
+    const role = spanRole(start, done);
     if (done) {
-      // The ledger `call` event carries an optional TPS sample; historical
-      // records lack it and stay without one.
-      const tps = readTps((done as { tps?: unknown }).tps);
+      // The transport records every measured fact in `metrics`; a historical
+      // span without one stays without usage, ttft or a speed sample.
+      const metrics = done.metrics;
+      const usage = usageOf(metrics);
+      const tps = metrics !== undefined && metrics.streamTokens !== undefined && metrics.streamMs !== undefined
+        ? { outputTokens: metrics.streamTokens, windowMs: metrics.streamMs }
+        : undefined;
+      const startedAt = start?.at ?? done.at;
+      const startMs = Date.parse(startedAt);
+      const firstTokenAt = metrics?.ttftMs !== undefined && Number.isFinite(startMs)
+        ? new Date(startMs + metrics.ttftMs).toISOString()
+        : undefined;
+      const retries = metrics === undefined ? [] : retriesOf(metrics.attempts);
+      const step = done.step ?? start?.step;
       return {
         id,
-        role: done.role,
-        model: done.model,
-        status: done.status,
-        turn: done.turn ?? 0,
-        ...(done.cycle === undefined ? {} : { cycle: done.cycle }),
-        startedAt: done.startedAt,
-        ...(typeof (done as { firstTokenAt?: unknown }).firstTokenAt === 'string'
-          ? { firstTokenAt: (done as { firstTokenAt: string }).firstTokenAt }
-          : {}),
-        endedAt: done.endedAt,
-        ...(done.usage === undefined ? {} : { usage: done.usage }),
+        role,
+        model: start?.request.model ?? '',
+        status: spanStatus(done.status),
+        turn: done.turn ?? start?.turn ?? 0,
+        ...(step === undefined ? {} : { cycle: step }),
+        startedAt,
+        ...(firstTokenAt === undefined ? {} : { firstTokenAt }),
+        endedAt: done.at,
+        ...(usage === undefined ? {} : { usage }),
         ...(tps === undefined ? {} : { tps }),
-        estimatedInputTokens: done.estimatedInputTokens,
-        layers: done.layers,
-        output: done.output,
+        ...(start?.request.inputEstimate === undefined ? {} : { estimatedInputTokens: start.request.inputEstimate }),
+        ...(start?.request.layers === undefined ? {} : { layers: start.request.layers }),
+        ...(start?.request.effort?.sent === undefined ? {} : { reasoningEffort: start.request.effort.sent }),
+        ...(start?.request.effort?.requested === undefined ? {} : { requestedReasoningEffort: start.request.effort.requested }),
+        ...(start?.request.route?.candidates === undefined ? {} : { routeCandidates: start.request.route.candidates }),
+        ...(start?.request.route?.rank === undefined ? {} : { selectedRank: start.request.route.rank }),
+        ...(retries.length === 0 ? {} : { retries }),
+        output: done.output ?? '',
         ...(done.reasoning === undefined ? {} : { reasoning: done.reasoning }),
-        ...(done.error === undefined ? {} : { error: callErrorText(done.error) }),
+        ...(done.error === undefined ? {} : { error: spanErrorText(done.error) }),
       };
     }
-    const startedEvent = startedEvents.get(id)!;
+    const request = start!.request;
     const snapshot = liveById.get(id);
     return {
       id,
-      role: startedEvent.role,
-      model: startedEvent.model,
+      role,
+      model: request.model,
       status: turnEnded ? 'aborted' : 'running',
-      turn: startedEvent.turn ?? 0,
-      ...(startedEvent.cycle === undefined ? {} : { cycle: startedEvent.cycle }),
-      startedAt: startedEvent.at,
+      turn: start!.turn ?? 0,
+      ...(start!.step === undefined ? {} : { cycle: start!.step }),
+      startedAt: start!.at,
+      estimatedInputTokens: request.inputEstimate,
+      layers: request.layers,
+      ...(request.effort?.sent === undefined ? {} : { reasoningEffort: request.effort.sent }),
+      ...(request.effort?.requested === undefined ? {} : { requestedReasoningEffort: request.effort.requested }),
+      ...(request.route?.candidates === undefined ? {} : { routeCandidates: request.route.candidates }),
+      ...(request.route?.rank === undefined ? {} : { selectedRank: request.route.rank }),
       output: snapshot?.text ?? '',
       ...(snapshot?.reasoning ? { reasoning: snapshot.reasoning } : {}),
     };
@@ -428,10 +517,10 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
         content: record.content,
         source: record.source,
         version: record.version,
-        ...(record.actionId === undefined ? {} : { actionId: record.actionId }),
+        ...(record.parent === undefined ? {} : { actionId: record.parent }),
       });
-    } else if (type === 'doc.content') {
-      const record = event as DocContentEvent;
+    } else if (type === 'document.content') {
+      const record = event as DocumentContentEvent;
       items.push({
         key: String(event.seq),
         kind: record.source === 'project-instructions' ? 'instructions' : 'doc',
@@ -443,10 +532,10 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
         version: record.version,
         updated: record.updated,
         ...(record.base === undefined ? {} : { base: record.base }),
-        ...(record.actionId === undefined ? {} : { actionId: record.actionId }),
+        ...(record.parent === undefined ? {} : { actionId: record.parent }),
       });
-    } else if (type === 'doc.search') {
-      const record = event as DocSearchEvent;
+    } else if (type === 'document.found') {
+      const record = event as DocumentFoundEvent;
       items.push({
         key: String(event.seq),
         kind: 'search',
@@ -454,20 +543,20 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
         title: firstLine(record.understanding),
         content: formatDocSearch(record),
         source: 'read',
-        actionId: record.actionId,
+        actionId: record.parent,
       });
-    } else if (type === 'thinking') {
-      const record = event as ThinkingEvent;
+    } else if (type === 'reasoning.thinking') {
+      const record = event as ReasoningThinkingEvent;
       items.push({
         key: String(event.seq),
         kind: 'thinking',
         path: '',
-        title: record.callId,
+        title: record.parent,
         content: record.text,
         source: 'read',
       });
-    } else if (type === 'files') {
-      const record = event as FilesEvent;
+    } else if (type === 'files.attached') {
+      const record = event as FilesAttachedEvent;
       if (record.source === 'user') continue;
       const files = projectSessionFileList(record.files);
       items.push({
@@ -477,15 +566,15 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
         title: `${files.length} 个文件`,
         content: files.map((file) => file.name).join('\n'),
         source: 'read',
-        ...(record.actionId === undefined ? {} : { actionId: record.actionId }),
+        ...(record.parent === undefined ? {} : { actionId: record.parent }),
       });
-    } else if (type === 'error') {
-      const record = event as ErrorEvent;
+    } else if (isFault(event)) {
+      const record = event;
       items.push({
         key: String(event.seq),
         kind: 'error',
         path: '',
-        title: record.stage,
+        title: record.code,
         content: record.message,
         source: 'read',
       });
@@ -494,35 +583,19 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
   return items;
 }
 
-/** Structural view of an `action.titled` event, kept independent of the union. */
-interface ActionTitledLike {
-  seq: number;
-  at: string;
-  actionId: string;
-  title: string;
-  turn?: number;
-  cycle?: number;
-}
-
-/** Nonempty first line of an action's parsed intent payload, when present. */
-function parsedIntent(parsed: unknown): string | undefined {
-  if (!isRecord(parsed)) return undefined;
-  const intent = parsed.intent;
-  return typeof intent === 'string' && intent.trim() !== '' ? firstLine(intent) : undefined;
-}
-
 function buildActions(
   events: LedgerEvent[],
   contextItems: ContextItem[],
   tasks: Record<string, SessionBridgeTaskBrief>,
   turnEnded: boolean,
 ): ActionModel[] {
-  const started = new Map<string, Extract<LedgerEvent, { type: 'action.started' }>>();
-  const finished = new Map<string, Extract<LedgerEvent, { type: 'action.finished' }>>();
+  const started = new Map<string, ActionStartedEvent>();
+  const finished = new Map<string, ActionFinishedEvent>();
   const titles = new Map<string, string>();
+  const taskSpans = new Map<string, { task: string; project?: string; taskRunId: string }>();
   const writes = new Map<string, {
     path: string;
-    change: WsUpdatedEvent['change'];
+    change: WorkspaceChangedEvent['change'];
     worktreeId?: string;
   }[]>();
   const filesByAction = new Map<string, SessionFile[]>();
@@ -531,33 +604,38 @@ function buildActions(
   for (const event of events) {
     const type = eventType(event);
     if (type === 'action.started') {
-      const record = event as Extract<LedgerEvent, { type: 'action.started' }>;
-      started.set(record.actionId, record);
+      const record = event as ActionStartedEvent;
+      started.set(record.id, record);
     } else if (type === 'action.finished') {
-      const record = event as Extract<LedgerEvent, { type: 'action.finished' }>;
-      finished.set(record.actionId, record);
+      const record = event as ActionFinishedEvent;
+      finished.set(record.id, record);
     } else if (type === 'action.titled') {
-      const record = event as unknown as ActionTitledLike;
-      titles.set(record.actionId, record.title);
-    } else if (type === 'ws.updated') {
-      const record = event as Extract<LedgerEvent, { type: 'ws.updated' }>;
-      const bucket = writes.get(record.actionId);
+      const record = event as ActionTitledEvent;
+      titles.set(record.id, record.title);
+    } else if (type === 'span.started') {
+      // A dispatch's task span is parented by its action and carries the run id
+      // (and task name) as soon as the run opens.
+      const record = event as SpanStartedEvent;
+      if (record.kind === 'task') taskSpans.set(record.parent, record.request);
+    } else if (type === 'workspace.changed') {
+      const record = event as WorkspaceChangedEvent;
+      const bucket = writes.get(record.parent);
       const entry = {
         path: record.target,
         change: record.change,
         ...(record.worktreeId === undefined ? {} : { worktreeId: record.worktreeId }),
       };
       if (bucket) bucket.push(entry);
-      else writes.set(record.actionId, [entry]);
-    } else if (type === 'files') {
-      const record = event as FilesEvent;
+      else writes.set(record.parent, [entry]);
+    } else if (type === 'files.attached') {
+      const record = event as FilesAttachedEvent;
       if (record.source !== 'task') continue;
       const files = projectSessionFileList(record.files);
       if (files.length === 0) continue;
-      if (record.actionId !== undefined) {
-        const bucket = filesByAction.get(record.actionId);
+      if (record.parent !== undefined) {
+        const bucket = filesByAction.get(record.parent);
         if (bucket) bucket.push(...files);
-        else filesByAction.set(record.actionId, [...files]);
+        else filesByAction.set(record.parent, [...files]);
       }
       if (record.taskRunId !== undefined) {
         const bucket = filesByTaskRun.get(record.taskRunId);
@@ -571,12 +649,15 @@ function buildActions(
   const actions: ActionModel[] = ids.map((actionId) => {
     const start = started.get(actionId);
     const end = finished.get(actionId);
-    const cycle = start?.cycle ?? end?.cycle ?? 0;
-    const kind = start?.kind ?? end?.kind ?? 'dispatch';
+    const cycle = start?.step ?? end?.step ?? 0;
+    const kind = toActionKind(start?.action.type ?? end?.action.type);
     const outputs = contextItems.filter((item) => item.actionId === actionId);
-    const taskRunId = end?.taskRunId ?? start?.taskRunId;
-    const status: ItemStatus = end?.status ?? (turnEnded ? 'cancelled' : 'running');
-    const intent = parsedIntent(start?.parsed) ?? '';
+    // The run id is durable on action.finished, on a legacy second
+    // action.started, and otherwise on the task span opened when the run began.
+    const taskSpan = taskSpans.get(actionId);
+    const taskRunId = end?.taskRunId ?? start?.taskRunId ?? taskSpan?.taskRunId;
+    const status: ItemStatus = end === undefined ? (turnEnded ? 'cancelled' : 'running') : toItemStatus(end.status);
+    const intent = start === undefined ? '' : firstLine(start.action.prompt);
     const title = titles.get(actionId) ?? actionLabel({ kind, intent });
     const files = filesByAction.get(actionId)
       ?? (taskRunId === undefined ? undefined : filesByTaskRun.get(taskRunId))
@@ -589,7 +670,7 @@ function buildActions(
       status,
       startedAt: start?.at ?? end?.at ?? '',
       ...(end?.at === undefined ? {} : { endedAt: end.at }),
-      ...(start?.parsed === undefined ? {} : { parsed: start.parsed }),
+      ...(start?.input === undefined ? {} : { parsed: start.input }),
       ...(end?.result === undefined ? {} : { result: end.result }),
       ...(taskRunId === undefined ? {} : { taskRunId }),
       ...(taskRunId === undefined || tasks[taskRunId] === undefined ? {} : { task: tasks[taskRunId] }),
@@ -611,7 +692,7 @@ function buildCycles(
   contextItems: ContextItem[],
 ): CycleModel[] {
   const numbers = new Set<number>();
-  for (const event of events) if (event.cycle !== undefined && event.cycle > 0) numbers.add(event.cycle);
+  for (const event of events) if (event.step !== undefined && event.step > 0) numbers.add(event.step);
   for (const call of calls) if (call.cycle !== undefined && call.cycle > 0) numbers.add(call.cycle);
   const indexes = [...numbers].sort((a, b) => a - b);
   if (indexes.length === 0) return [];
@@ -625,7 +706,7 @@ function buildCycles(
     if (position === 0) return turnStart;
     const previousIndex = indexes[position - 1]!;
     const finishedAt = events
-      .filter((event) => eventType(event) === 'action.finished' && event.cycle === previousIndex)
+      .filter((event) => eventType(event) === 'action.finished' && event.step === previousIndex)
       .map((event) => event.at)
       .sort();
     const lastFinished = finishedAt[finishedAt.length - 1];
@@ -638,16 +719,16 @@ function buildCycles(
     const cycleEnd = position + 1 < indexes.length ? starts[position + 1] : finished?.at;
 
     const cycleActions = actions.filter((action) => action.cycle === index);
-    const cycleEvents = events.filter((event) => event.cycle === index);
-    const reasonCompleted = lastOfType(cycleEvents, 'reason.completed') as
-      | Extract<LedgerEvent, { type: 'reason.completed' }>
+    const cycleEvents = events.filter((event) => event.step === index);
+    const reasonCompleted = lastOfType(cycleEvents, 'reasoning.completed') as
+      | ReasoningCompletedEvent
       | undefined;
     const reasonCalls = calls.filter((call) => call.role === 'reason' && call.cycle === index);
     const running = reasonCalls.find((call) => call.status === 'running');
     const committed = reasonCalls.find((call) => call.status !== 'running');
     const thinkingEvent = [...cycleEvents]
       .reverse()
-      .find((event): event is ThinkingEvent => eventType(event) === 'thinking');
+      .find((event): event is ReasoningThinkingEvent => eventType(event) === 'reasoning.thinking');
     const thinkingText = thinkingEvent?.text ?? running?.reasoning ?? committed?.reasoning;
     const reasoning = running
       ? { callId: running.id, text: running.output, ...(thinkingText ? { thinking: thinkingText } : {}), streaming: true }
@@ -660,7 +741,7 @@ function buildCycles(
           }
         : reasonCompleted
           ? {
-              callId: reasonCompleted.callId,
+              callId: reasonCompleted.parent,
               text: reasonCompleted.text,
               ...(thinkingText ? { thinking: thinkingText } : {}),
               streaming: false,
@@ -668,10 +749,9 @@ function buildCycles(
           : undefined;
 
     const errors = cycleEvents
-      .filter((event) => eventType(event) === 'error')
-      .map((event) => {
-        const record = event as ErrorEvent;
-        return { at: record.at, stage: record.stage, message: record.message, ...(record.cycle === undefined ? {} : { cycle: record.cycle }) };
+      .filter(isFault)
+      .map((record) => {
+        return { at: record.at, stage: record.code, message: record.message, ...(record.step === undefined ? {} : { cycle: record.step }) };
       });
 
     return {
@@ -690,7 +770,7 @@ function buildCycles(
 
 function cycleOfSeq(events: LedgerEvent[], seqKey: string): number {
   const seq = Number(seqKey);
-  return events.find((event) => event.seq === seq)?.cycle ?? 0;
+  return events.find((event) => event.seq === seq)?.step ?? 0;
 }
 
 function inferPhase(events: LedgerEvent[], calls: CallModel[], actions: ActionModel[]): Phase {
@@ -704,12 +784,14 @@ function inferPhase(events: LedgerEvent[], calls: CallModel[], actions: ActionMo
   let phase: Phase = 'preparing';
   for (const event of events) {
     const type = eventType(event);
-    const role = type === 'call' ? (event as CallEvent).role : undefined;
-    if (role === 'search' || role === 'memory-search') phase = 'preparing';
-    if (type === 'doc.search' || type === 'memory.recalled') phase = 'reasoning';
+    if (type === 'span.started') {
+      const record = event as SpanStartedEvent;
+      if (record.kind === 'auxiliary' && (record.request.role === 'search' || record.request.role === 'memory-search')) phase = 'preparing';
+    }
+    if (type === 'document.found' || type === 'memory.recalled') phase = 'reasoning';
     if (type === 'action.started') phase = 'acting';
-    if (type === 'reason.completed') {
-      const hasAction = events.some((other) => other.cycle === event.cycle && eventType(other) === 'action.started');
+    if (type === 'reasoning.completed') {
+      const hasAction = events.some((other) => other.step === event.step && eventType(other) === 'action.started');
       phase = hasAction ? 'acting' : 'replying';
     }
   }
@@ -763,8 +845,8 @@ function buildStats(
     dispatches: actions.filter((action) => action.kind === 'dispatch').length,
     docsLoaded: contextItems.length,
     docsWritten: events.filter((event) => {
-      if (eventType(event) !== 'ws.updated') return false;
-      const record = event as Extract<LedgerEvent, { type: 'ws.updated' }>;
+      if (eventType(event) !== 'workspace.changed') return false;
+      const record = event as WorkspaceChangedEvent;
       return record.scope === 'document' && (record.change === 'created' || record.change === 'updated' || record.change === 'deleted');
     }).length,
   };
@@ -772,7 +854,7 @@ function buildStats(
 
 // ─── Session tree projection ───────────────────────────────────────────────
 
-/** A `call.started`/`call` pair merged into one entry. */
+/** A `span.started`/`span.finished` pair merged into one entry. */
 interface IndexedCall {
   callId: string;
   role: string;
@@ -781,45 +863,16 @@ interface IndexedCall {
   at: string;
   turn?: number;
   cycle?: number;
-  /** Set when the call event carries an action id. */
+  /** The span's parent; the action id for an auxiliary span. */
   actionId?: string;
   startedAt?: string;
   endedAt?: string;
-  /** Terminal status; absent while the call is still running. */
+  /** Terminal status; absent while the span is still running. */
   status?: string;
   usage?: { input?: number; cachedInput?: number; output?: number; reasoning?: number };
   estimatedInputTokens?: number;
   output?: string;
   reasoning?: string;
-}
-
-/** Structural view of `action.started`, kept independent of the union. */
-interface ActionStartedLike {
-  seq: number;
-  at: string;
-  actionId: string;
-  kind: string;
-  parsed?: unknown;
-  turn?: number;
-  cycle?: number;
-  taskRunId?: string;
-  taskName?: string;
-  taskDisplayName?: string;
-  project?: string;
-}
-
-/** Structural view of `action.finished`, kept independent of the union. */
-interface ActionFinishedLike {
-  seq: number;
-  at: string;
-  actionId: string;
-  kind?: string;
-  status: string;
-  result?: string;
-  taskRunId?: string;
-  turn?: number;
-  cycle?: number;
-  afterInterrupt?: boolean;
 }
 
 function treeRoleLabel(role: string): string {
@@ -830,48 +883,37 @@ function indexCalls(events: readonly LedgerEvent[]): Map<string, IndexedCall> {
   const calls = new Map<string, IndexedCall>();
   for (const event of events) {
     const type = eventType(event);
-    if (type === 'call.started') {
-      const record = event as unknown as {
-        callId: string; role: string; model: string; at: string;
-        turn?: number; cycle?: number; actionId?: string;
-      };
-      calls.set(record.callId, {
-        callId: record.callId,
-        role: record.role,
-        model: record.model,
+    if (type === 'span.started') {
+      const record = event as SpanStartedEvent;
+      if (record.kind === 'task') continue;
+      const role = record.kind === 'reasoning' ? 'reason' : record.request.role ?? 'search';
+      calls.set(record.id, {
+        callId: record.id,
+        role,
+        model: record.request.model,
         at: record.at,
         ...(record.turn === undefined ? {} : { turn: record.turn }),
-        ...(record.cycle === undefined ? {} : { cycle: record.cycle }),
-        ...(record.actionId === undefined ? {} : { actionId: record.actionId }),
+        ...(record.step === undefined ? {} : { cycle: record.step }),
+        ...(record.parent === undefined ? {} : { actionId: record.parent }),
       });
-    } else if (type === 'call') {
-      const record = event as unknown as {
-        callId: string; role: string; model: string; at: string;
-        status: string; startedAt?: string; endedAt?: string;
-        turn?: number; cycle?: number; actionId?: string;
-        usage?: { input?: number; cachedInput?: number; output?: number; reasoning?: number };
-        estimatedInputTokens?: number; output?: string; reasoning?: string;
-      };
-      const base = calls.get(record.callId) ?? {
-        callId: record.callId,
-        role: record.role,
-        model: record.model,
+    } else if (type === 'span.finished') {
+      const record = event as SpanFinishedEvent;
+      if (record.kind === 'task') continue;
+      const base = calls.get(record.id) ?? {
+        callId: record.id,
+        role: record.kind === 'reasoning' ? 'reason' : 'search',
+        model: '',
         at: record.at,
         ...(record.turn === undefined ? {} : { turn: record.turn }),
-        ...(record.cycle === undefined ? {} : { cycle: record.cycle }),
+        ...(record.step === undefined ? {} : { cycle: record.step }),
       };
-      calls.set(record.callId, {
+      const usage = usageOf(record.metrics);
+      calls.set(record.id, {
         ...base,
-        role: record.role,
-        model: record.model,
         status: record.status,
-        ...(record.startedAt === undefined ? {} : { startedAt: record.startedAt }),
-        ...(record.endedAt === undefined ? {} : { endedAt: record.endedAt }),
-        ...(record.turn === undefined ? {} : { turn: record.turn }),
-        ...(record.cycle === undefined ? {} : { cycle: record.cycle }),
-        ...(record.actionId === undefined ? {} : { actionId: record.actionId }),
-        ...(record.usage === undefined ? {} : { usage: record.usage }),
-        ...(record.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: record.estimatedInputTokens }),
+        startedAt: base.at,
+        endedAt: record.at,
+        ...(usage === undefined ? {} : { usage }),
         ...(record.output === undefined ? {} : { output: record.output }),
         ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
       });
@@ -903,7 +945,7 @@ function callTreeEntry(call: IndexedCall): TreeEntry {
   };
 }
 
-function docTreeEntry(event: DocContentEvent): TreeEntry {
+function docTreeEntry(event: DocumentContentEvent): TreeEntry {
   const tokens = readNumber((event as unknown as { tokens?: unknown }).tokens);
   return {
     at: event.at,
@@ -928,12 +970,10 @@ function memoryTreeEntry(event: MemoryRecalledEvent): TreeEntry {
 function collectActionFiles(events: readonly LedgerEvent[], actionId: string, taskRunId: string | undefined): SessionFile[] {
   const files: SessionFile[] = [];
   for (const event of events) {
-    if (eventType(event) !== 'files') continue;
-    const record = event as FilesEvent;
+    if (eventType(event) !== 'files.attached') continue;
+    const record = event as FilesAttachedEvent;
     if (record.source !== 'task') continue;
-    const recordActionId = (record as unknown as { actionId?: string }).actionId;
-    const recordTaskRunId = (record as unknown as { taskRunId?: string }).taskRunId;
-    const matches = recordActionId === actionId || (taskRunId !== undefined && recordTaskRunId === taskRunId);
+    const matches = record.parent === actionId || (taskRunId !== undefined && record.taskRunId === taskRunId);
     if (!matches) continue;
     files.push(...projectSessionFileList(record.files));
   }
@@ -946,13 +986,19 @@ function buildActionNode(
   calls: Map<string, IndexedCall>,
   turnRunning: boolean,
 ): ActionNode {
-  const start = turnEvents.find((event) => eventType(event) === 'action.started' && (event as { actionId?: string }).actionId === actionId) as unknown as ActionStartedLike | undefined;
-  const end = turnEvents.find((event) => eventType(event) === 'action.finished' && (event as { actionId?: string }).actionId === actionId) as unknown as ActionFinishedLike | undefined;
-  const titled = turnEvents.find((event) => eventType(event) === 'action.titled' && (event as { actionId?: string }).actionId === actionId) as unknown as ActionTitledLike | undefined;
+  const start = turnEvents.find((event) => eventType(event) === 'action.started' && (event as ActionStartedEvent).id === actionId) as ActionStartedEvent | undefined;
+  const end = turnEvents.find((event) => eventType(event) === 'action.finished' && (event as ActionFinishedEvent).id === actionId) as ActionFinishedEvent | undefined;
+  const titled = turnEvents.find((event) => eventType(event) === 'action.titled' && (event as ActionTitledEvent).id === actionId) as ActionTitledEvent | undefined;
 
-  const intent = parsedIntent(start?.parsed) ?? '';
-  const kind = (start?.kind ?? end?.kind ?? 'search') as ActionNode['kind'];
-  const taskRunId = end?.taskRunId ?? start?.taskRunId;
+  const intent = start === undefined ? '' : firstLine(start.action.prompt);
+  const kind = (start?.action.type ?? end?.action.type ?? 'search') as ActionNode['kind'];
+  // The run id comes from the task span the action opened, or from a legacy
+  // second action.started / action.finished that carried it.
+  const taskStart = turnEvents.find((event): event is Extract<SpanStartedEvent, { kind: 'task' }> =>
+    eventType(event) === 'span.started'
+    && (event as SpanStartedEvent).kind === 'task'
+    && (event as SpanStartedEvent).parent === actionId);
+  const taskRunId = end?.taskRunId ?? start?.taskRunId ?? taskStart?.request.taskRunId;
 
   const entries: TreeEntry[] = [];
   let compile: TreeEntry | undefined;
@@ -965,19 +1011,17 @@ function buildActionNode(
     }
   }
   for (const event of turnEvents) {
-    if ((event as { actionId?: string }).actionId !== actionId) continue;
+    if ((event as { parent?: string }).parent !== actionId) continue;
     const type = eventType(event);
-    if (type === 'doc.content') entries.push(docTreeEntry(event as DocContentEvent));
+    if (type === 'document.content') entries.push(docTreeEntry(event as DocumentContentEvent));
     else if (type === 'memory.recalled') entries.push(memoryTreeEntry(event as MemoryRecalledEvent));
   }
   entries.sort((a, b) => a.at.localeCompare(b.at));
 
   const errors: string[] = [];
   for (const event of turnEvents) {
-    if (eventType(event) !== 'error') continue;
-    const record = event as ErrorEvent;
-    if ((record as unknown as { actionId?: string }).actionId !== actionId) continue;
-    errors.push(record.message);
+    if (!isFault(event) || event.parent !== actionId) continue;
+    errors.push(event.message);
   }
 
   const status: ActionNode['status'] = (end?.status as ActionNode['status'] | undefined)
@@ -988,9 +1032,6 @@ function buildActionNode(
     kind,
     ...(titled === undefined ? {} : { title: titled.title }),
     intent,
-    ...(start?.taskName === undefined ? {} : { task: start.taskName }),
-    ...(start?.taskDisplayName === undefined ? {} : { taskDisplayName: start.taskDisplayName }),
-    ...(start?.project === undefined ? {} : { project: start.project }),
     ...(taskRunId === undefined ? {} : { taskRunId }),
     status,
     startedAt: start?.at ?? end?.at ?? '',
@@ -1010,7 +1051,7 @@ function buildCycleNode(
   turnRunning: boolean,
   isLastCycle: boolean,
 ): CycleNode {
-  const cycleEvents = turnEvents.filter((event) => event.cycle === index);
+  const cycleEvents = turnEvents.filter((event) => event.step === index);
 
   const times = cycleEvents.map((event) => event.at).filter((at) => at !== '').sort();
   const startedAt = times[0];
@@ -1018,12 +1059,12 @@ function buildCycleNode(
 
   const reasonCalls = [...calls.values()].filter((call) => call.role === 'reason' && call.cycle === index);
   const reasonCall = reasonCalls.find((call) => call.status !== undefined) ?? reasonCalls[0];
-  const reasonCompleted = lastOfType(cycleEvents, 'reason.completed') as
-    | Extract<LedgerEvent, { type: 'reason.completed' }>
+  const reasonCompleted = lastOfType(cycleEvents, 'reasoning.completed') as
+    | ReasoningCompletedEvent
     | undefined;
   const thinkingEvent = [...cycleEvents]
     .reverse()
-    .find((event): event is ThinkingEvent => eventType(event) === 'thinking');
+    .find((event): event is ReasoningThinkingEvent => eventType(event) === 'reasoning.thinking');
   const thinking = thinkingEvent?.text !== undefined && thinkingEvent.text !== ''
     ? thinkingEvent.text
     : reasonCall?.reasoning;
@@ -1042,7 +1083,7 @@ function buildCycleNode(
       }
     : reasonCompleted !== undefined
       ? {
-          callId: reasonCompleted.callId,
+          callId: reasonCompleted.parent,
           model: '',
           text: reasonCompleted.text,
           startedAt: reasonCompleted.at,
@@ -1051,7 +1092,7 @@ function buildCycleNode(
 
   const reasonStart = reasonCall?.startedAt ?? reasonCall?.at;
 
-  // Prepare: memory-search calls and memory.recalled events before the reason call.
+  // Prepare: memory-search spans and memory.recalled events before the reason span.
   const prepare: TreeEntry[] = [];
   for (const call of calls.values()) {
     if (call.role !== 'memory-search' || call.cycle !== index) continue;
@@ -1069,7 +1110,8 @@ function buildCycleNode(
   for (const event of cycleEvents) {
     const type = eventType(event);
     if (type === 'action.started' || type === 'action.finished') {
-      actionIds.add((event as unknown as { actionId: string }).actionId);
+      const record = event as ActionStartedEvent | ActionFinishedEvent;
+      actionIds.add(record.id);
     }
   }
   const actions = [...actionIds]
@@ -1077,16 +1119,15 @@ function buildCycleNode(
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 
   const replies = cycleEvents
-    .filter((event): event is ReplyEvent => eventType(event) === 'reply')
+    .filter(isReplySent)
     .map((event) => ({ at: event.at, text: event.text }));
 
-  // Errors without an action id belong to the cycle.
+  // Faults that no action owns belong to the cycle.
   const errors: string[] = [];
   for (const event of cycleEvents) {
-    if (eventType(event) !== 'error') continue;
-    const record = event as ErrorEvent;
-    if ((record as unknown as { actionId?: string }).actionId !== undefined) continue;
-    errors.push(record.message);
+    if (!isFault(event)) continue;
+    if (event.parent !== undefined && actionIds.has(event.parent)) continue;
+    errors.push(event.message);
   }
 
   const running = turnRunning && isLastCycle && reasonCompleted === undefined && reasonCall !== undefined && reasonCall.status === undefined;
@@ -1106,9 +1147,9 @@ function buildCycleNode(
 
 /**
  * Projects the raw ledger into the session tree: turns sorted by start time,
- * each with its cycles, prepare entries, reason call, actions and replies.
- * Actions gather the calls, documents, memories, files, title and errors that
- * carry their action id; errors without one attach to the cycle.
+ * each with its cycles, prepare entries, reason span, actions and replies.
+ * Actions gather the spans, documents, memories, files, title and errors that
+ * carry their id; errors without one attach to the cycle.
  */
 export function buildSessionTree(events: readonly LedgerEvent[]): TurnNode[] {
   const byTurn = new Map<number, LedgerEvent[]>();
@@ -1135,7 +1176,7 @@ export function buildSessionTree(events: readonly LedgerEvent[]): TurnNode[] {
 
     const numbers = new Set<number>();
     for (const event of turnEvents) {
-      if (typeof event.cycle === 'number' && event.cycle > 0) numbers.add(event.cycle);
+      if (typeof event.step === 'number' && event.step > 0) numbers.add(event.step);
     }
     const indexes = [...numbers].sort((a, b) => a - b);
     const cycles: CycleNode[] = indexes.map((cycle, position) =>

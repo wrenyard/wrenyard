@@ -11,8 +11,8 @@ import { createBuiltinCatalog } from '@wrenyard/providers';
 import type { ModelDefinition, ProviderDefinition } from '@wrenyard/providers/base';
 import { models as registeredModels, type ReasoningEffort } from '@wrenyard/models';
 
-export { SESSION_PROTOCOLS, selectSessionProtocol, supportsSession } from './transport/protocol.ts';
-export type { SessionProtocol } from './transport/protocol.ts';
+export { SESSION_PROTOCOLS, selectSessionProtocol, supportsSession } from '../transport/protocol.ts';
+export type { SessionProtocol } from '../transport/protocol.ts';
 
 /** Model facts used by the budget check and by the `<wy-info>` view. */
 export interface ModelMetadata {

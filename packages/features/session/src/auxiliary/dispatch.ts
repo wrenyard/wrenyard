@@ -1,5 +1,5 @@
 /**
- * The dispatch secondary session: compile one dispatch intent into a task run.
+ * The dispatch auxiliary task: compile one dispatch intent into a task run.
  *
  * It validates the model's JSON against the chosen task's input schema, builds
  * and bounds the task `ctx` from the ledger (the conversation, documents,
@@ -11,20 +11,22 @@ import { existsSync } from 'node:fs';
 
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 
-import { renderTaskResult } from './result-text.ts';
-import { fail, isObject, renderRunFiles } from '../shared.ts';
-import { messageOf } from '../../errors.ts';
+import { renderTaskResult } from './dispatch-result.ts';
+import { fail, isObject, renderRunFiles } from './shared.ts';
+import { messageOf } from '../errors.ts';
 import {
   collectSessionFiles,
   type ActionFinishedEvent,
-  type DocContentEvent,
+  type DocumentContentEvent,
   type LedgerEvent,
   type LedgerEventDraft,
+  type SpanStatus,
+  type TaskSpanMetrics,
   type WorkspaceSnapshot,
-} from '../../ledger.ts';
-import { currentDocument } from '../../documents.ts';
-import { escapeAttr, escapeBody, renderEventText, renderEventsBlock, tag, twoPartView } from '../../render.ts';
-import type { BuiltView, ProjectInfo } from '../../ports.ts';
+} from '../ledger/store.ts';
+import { currentDocument } from '../documents.ts';
+import { escapeAttr, escapeBody, renderEventText, renderEventsBlock, tag, twoPartView } from '../context/render.ts';
+import type { BuiltView, ProjectInfo } from '../ports.ts';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,
@@ -32,7 +34,7 @@ import type {
   ActionTaskInfo,
   ActionWorkflowDeps,
   ParsedAction,
-} from '../index.ts';
+} from '../reasoning/actions.ts';
 
 // ─── JSON schema validation (AJV, draft-07) ────────────────────────────────
 
@@ -305,6 +307,19 @@ export async function runDispatchAction(
     return fail(`createTaskRun failed: ${messageOf(error)}`);
   }
 
+  // The task run is recorded as its own observational span, opened as soon as
+  // the run exists and closed when the wait ends.
+  const taskSpanId = deps.nextSpanId();
+  await deps.appendSpan({
+    type: 'span.started',
+    id: taskSpanId,
+    parent: ctx.actionId,
+    kind: 'task',
+    turn: ctx.turn,
+    step: ctx.step,
+    request: { task: taskId, project: project.id, taskRunId },
+  });
+
   await ctx.onTaskRun(taskRunId);
   if (ctx.signal.aborted) {
     // Cancelled just after the run opened: cancel, then still wait below so
@@ -331,9 +346,28 @@ export async function runDispatchAction(
   const deferred: LedgerEventDraft[] = [];
   let result = waited === undefined ? `waitTaskRun failed: ${messageOf(waitError)}` : renderTaskResult(waited.output);
 
+  // Close the task span: ok only when the task finished as done, aborted when
+  // an interrupt cancelled it, failed otherwise.
+  const spanStatus: SpanStatus = waited !== undefined && waited.status === 'done'
+    ? 'ok'
+    : aborted ? 'aborted' : 'failed';
+  const metrics = taskSpanMetrics(taskStatus, waited?.usage);
+  await deps.appendSpan({
+    type: 'span.finished',
+    id: taskSpanId,
+    kind: 'task',
+    turn: ctx.turn,
+    step: ctx.step,
+    status: spanStatus,
+    ...(spanStatus === 'failed'
+      ? { error: { kind: 'task' as const, message: waitError !== undefined ? messageOf(waitError) : `task ${taskStatus}` } }
+      : {}),
+    metrics,
+  });
+
   // Task artifacts and leftover files are recorded after the wait fence for
   // every outcome (done, failed, cancelled, thrown).
-  if (action.kind === 'dispatch' && (waited?.artifacts?.length ?? 0) > 0) {
+  if (action.type === 'dispatch' && (waited?.artifacts?.length ?? 0) > 0) {
     const described = await deps.fileStore.describeArtifacts({
       sessionId: ctx.sessionId,
       taskRunId,
@@ -342,19 +376,19 @@ export async function runDispatchAction(
     });
     if (described.files.length > 0) {
       deferred.push({
-        type: 'files',
+        type: 'files.attached',
         turn: ctx.turn,
-        cycle: ctx.cycle,
+        step: ctx.step,
         source: 'task',
         files: described.files,
         taskRunId,
-        actionId: ctx.actionId,
+        parent: ctx.actionId,
       });
     }
     result = appendDiagnostics(result, described.errors);
   }
   // An unfinished run reports what it left behind, so the work is not redone blind.
-  if (action.kind === 'dispatch' && status !== 'done') {
+  if (action.type === 'dispatch' && status !== 'done') {
     const left = await deps.fileStore.listRunFiles(taskRunId);
     if (left.length > 0) result = `${result}\n${renderRunFiles(left)}`;
   }
@@ -370,13 +404,14 @@ async function runCompileCall(
   view: BuiltView,
   ctx: ActionRunContext,
 ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
-  const callId = deps.nextCallId();
+  const spanId = deps.nextSpanId();
   try {
     const result = await deps.calls.run({
-      callId,
+      spanId,
+      parent: ctx.actionId,
       role: 'dispatch',
       turn: ctx.turn,
-      cycle: ctx.cycle,
+      step: ctx.step,
       messages: view.messages,
       layers: view.layers,
       signal: ctx.signal,
@@ -506,12 +541,12 @@ function trimConversation(ctx: Record<string, unknown>): void {
 /** Distinct documents already in context, in first-seen order, current text. */
 function collectCurrentDocuments(
   events: readonly LedgerEvent[],
-  include: (event: DocContentEvent) => boolean,
+  include: (event: DocumentContentEvent) => boolean,
 ): TaskDocument[] {
   const paths: string[] = [];
   const seen = new Set<string>();
   for (const event of events) {
-    if (event.type !== 'doc.content' || !include(event)) continue;
+    if (event.type !== 'document.content' || !include(event)) continue;
     if (seen.has(event.path)) continue;
     seen.add(event.path);
     paths.push(event.path);
@@ -548,20 +583,20 @@ function buildConversation(events: readonly LedgerEvent[], currentActionId: stri
   const finished = new Map<string, ActionFinishedEvent>();
   for (const event of events) {
     if (event.type !== 'action.finished') continue;
-    if (event.actionId === currentActionId || event.afterInterrupt === true) continue;
-    finished.set(event.actionId, event);
+    if (event.id === currentActionId || event.afterInterrupt === true) continue;
+    finished.set(event.id, event);
   }
   const lines: string[] = [];
   for (const event of events) {
-    if (event.type === 'turn.started' || event.type === 'reason.completed') {
+    if (event.type === 'turn.started' || event.type === 'reasoning.completed') {
       const text = renderEventText(event);
       if (text !== undefined) lines.push(text);
       continue;
     }
-    if (event.type !== 'action.started' || event.actionId === currentActionId) continue;
+    if (event.type !== 'action.started' || event.id === currentActionId) continue;
     const start = renderEventText(event);
     if (start === undefined) continue;
-    const done = finished.get(event.actionId);
+    const done = finished.get(event.id);
     lines.push(done === undefined ? start : `${start} ${renderActionResultStart(done)}`);
   }
   return lines.join('\n');
@@ -569,7 +604,7 @@ function buildConversation(events: readonly LedgerEvent[], currentActionId: stri
 
 /** One action result as a single line: its status and the start of its text. */
 function renderActionResultStart(event: ActionFinishedEvent): string {
-  return tag('action-result', [['id', event.actionId], ['status', event.status]], escapeBody(resultPreview(event.result)));
+  return tag('action-result', [['id', event.id], ['status', event.status]], escapeBody(resultPreview(event.result)));
 }
 
 function resultPreview(result: string): string {
@@ -631,4 +666,37 @@ function appendDiagnostics(output: string, notes: readonly string[]): string {
   if (notes.length === 0) return output;
   const section = ['artifacts dropped or unavailable:', ...notes.map((note) => `- ${note}`)].join('\n');
   return output === '' ? section : `${output}\n${section}`;
+}
+
+/**
+ * The span summary of a finished task run: its status plus the usage and
+ * reference cost the task system reported with the wait result.
+ */
+function taskSpanMetrics(taskStatus: string, usage: Record<string, unknown> | undefined): TaskSpanMetrics {
+  const metrics: TaskSpanMetrics = { taskStatus };
+  if (usage === undefined) return metrics;
+  const inputTokens = finiteNumber(usage.input_tokens);
+  const cachedInputTokens = finiteNumber(usage.cached_input_tokens);
+  const outputTokens = finiteNumber(usage.output_tokens);
+  const totalTokens = finiteNumber(usage.total_tokens);
+  if (inputTokens !== undefined || cachedInputTokens !== undefined || outputTokens !== undefined || totalTokens !== undefined) {
+    metrics.usage = {
+      ...(inputTokens === undefined ? {} : { inputTokens }),
+      ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+      ...(outputTokens === undefined ? {} : { outputTokens }),
+      ...(totalTokens === undefined ? {} : { totalTokens }),
+    };
+  }
+  const referenceCostUsd = finiteNumber(usage.reference_cost_usd);
+  const generationMs = finiteNumber(usage.generation_ms);
+  const outputTps = finiteNumber(usage.output_tps);
+  if (referenceCostUsd !== undefined) metrics.referenceCostUsd = referenceCostUsd;
+  if (generationMs !== undefined) metrics.generationMs = generationMs;
+  if (outputTps !== undefined) metrics.outputTps = outputTps;
+  return metrics;
+}
+
+/** One optional finite number from a raw protocol field, else undefined. */
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
