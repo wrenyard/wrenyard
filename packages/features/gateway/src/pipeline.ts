@@ -34,8 +34,6 @@ export interface GatewayRequestCompletedEvent {
   executionId?: string;
   /** Public reasoning effort this request was translated at, when it carried one. */
   reasoningEffort?: ReasoningEffort;
-  /** Response sampling contract used for this request, when sampled. */
-  tps_sampling_contract?: 'tokenizer_v1';
   /** Attributable paired response samples for this request, when sampled. */
   tps_samples?: ResponseTpsContract['tps_samples'];
   /**

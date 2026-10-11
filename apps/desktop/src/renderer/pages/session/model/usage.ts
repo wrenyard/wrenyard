@@ -1,3 +1,4 @@
+import { isUsableTpsSample, rollingTps, tpsOfSample as tpsOf, weightedTps } from '@wrenyard/protocol/tps';
 import { getEncoding, type Tiktoken } from 'js-tiktoken';
 import type {
   ContextInspection,
@@ -303,29 +304,8 @@ export interface TpsSample {
   windowMs: number;
 }
 
-/** True when a sample meets the sampler's minimum tokens and window. */
-function validTps(sample: TpsSample | undefined): sample is TpsSample {
-  return sample !== undefined
-    && Number.isFinite(sample.outputTokens) && sample.outputTokens > 0
-    && Number.isFinite(sample.windowMs) && sample.windowMs >= 100;
-}
-
-/** Tokens per second of one valid sample. */
-function tpsOf(sample: TpsSample): number {
-  return sample.outputTokens / (sample.windowMs / 1000);
-}
-
-/** Token-weighted speed of a sample list (`Σ tokens / Σ window`); undefined when empty. */
-function weightedTps(samples: readonly TpsSample[]): number | undefined {
-  let tokens = 0;
-  let windowMs = 0;
-  for (const sample of samples) {
-    if (!validTps(sample)) continue;
-    tokens += sample.outputTokens;
-    windowMs += sample.windowMs;
-  }
-  return tokens > 0 && windowMs > 0 ? tokens / (windowMs / 1000) : undefined;
-}
+/** The shared usability rule: enough tokens and window, and a plausible rate. */
+const validTps = isUsableTpsSample;
 
 /** A successful call's recorded TPS sample; undefined for historical records. */
 function callSample(call: CallModel): TpsSample | undefined {
@@ -352,7 +332,7 @@ export function mainSamples(calls: readonly CallModel[]): TpsSample[] {
  * usable, so the UI shows an em dash instead of a fabricated rate.
  */
 export function mainSpeed(calls: readonly CallModel[]): number | undefined {
-  return weightedTps(mainSamples(calls).slice(-5));
+  return rollingTps(mainSamples(calls), 5);
 }
 
 /** A dispatched task's usable usage, or undefined when it carries none. */
@@ -369,14 +349,14 @@ function taskUsageData(usage: TaskRunUsage | undefined): { input: number; output
 }
 
 /**
- * A `tokenizer_v1` task sample. The sampled token weight is reconstructed from
+ * A tokenizer speed sample. The sampled token weight is reconstructed from
  * the measured rate and window (`outputTps × generationMs / 1000`) and never
- * from the official `outputTokens`; other contracts and incomplete rows yield
+ * from the official `outputTokens`; incomplete rows yield
  * none. Requires a finite positive `outputTps` and a finite window of at least
  * 100 ms.
  */
 function taskSample(usage: TaskRunUsage | undefined): TpsSample | undefined {
-  if (usage === undefined || usage.tpsContract !== 'tokenizer_v1') return undefined;
+  if (usage === undefined) return undefined;
   const { outputTps, generationMs } = usage;
   if (outputTps === undefined || generationMs === undefined) return undefined;
   if (!Number.isFinite(outputTps) || outputTps <= 0) return undefined;
@@ -578,7 +558,7 @@ function roleConsumptionRow(role: CallModel['role'], calls: readonly CallModel[]
 
 /**
  * A dispatched task's row for the metrics panel. `sample`/`speed` are present
- * only for `tokenizer_v1` usage; `missing` marks a terminal task whose usage
+ * only for tokenizer speed samples; `missing` marks a terminal task whose usage
  * could not be read, while a running task simply has no usage yet.
  */
 export interface SessionTaskRow {
@@ -591,7 +571,7 @@ export interface SessionTaskRow {
   output: number;
   cached: number;
   total: number;
-  /** Recorded `tokenizer_v1` sample; absent while running or unavailable. */
+  /** Recorded tokenizer speed sample; absent while running or unavailable. */
   sample: TpsSample | undefined;
   /** Speed of {@link sample}; undefined when absent. */
   speed: number | undefined;

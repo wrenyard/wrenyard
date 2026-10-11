@@ -56,7 +56,7 @@ export function normalizeStoredEvent(event: LedgerEvent): LedgerEvent {
  * renamed, and a legacy plain-string `error` becomes the structured
  * `{kind, message}` fact the current shape uses. A legacy `routeAttempts` array
  * is left in place so the Desktop inspector can still read old records. The
- * optional tokenizer_v1 `tps` sample is preserved when it is well formed; a
+ * optional `tps` speed sample is preserved when it is well formed; a
  * historical call without one is never given a fabricated sample.
  */
 function normalizeCall(event: Extract<LedgerEvent, { type: 'call' }>): LedgerEvent {
@@ -71,7 +71,7 @@ function normalizeCall(event: Extract<LedgerEvent, { type: 'call' }>): LedgerEve
   return deepFreeze({ ...record, ...fields }) as unknown as LedgerEvent;
 }
 
-/** A stored tokenizer_v1 sample, kept only when it is a well-formed pair. */
+/** A stored tokenizer speed sample, kept only when it is a well-formed pair. */
 function readStoredTps(value: unknown): { outputTokens: number; windowMs: number } | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;

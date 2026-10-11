@@ -223,7 +223,7 @@ export interface CallModel {
   endedAt?: string;
   usage?: { input?: number; cachedInput?: number; output?: number; reasoning?: number };
   /**
-   * Recorded generation sample of a successful call (`tokenizer_v1`). Historical
+   * Recorded generation sample of a successful call (tokenizer speed sample). Historical
    * records written before the transport refactor have none and are never
    * back-filled from official usage and local timestamps.
    */
