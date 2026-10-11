@@ -36,6 +36,11 @@ export interface CodeBuddyProviderProduct {
   readonly environment: CodeBuddyEnvironment;
   readonly entries: readonly CodeBuddyProductModelEntry[];
   readonly identity?: CodeBuddyClientIdentity;
+  /**
+   * The startup account read once by the composition root. When a loadAccount
+   * loader is supplied to createCodeBuddyRuntime this is only the initial and
+   * fallback value; otherwise it is the account every read resolves to.
+   */
   readonly account?: {
     readonly accessToken: string;
     readonly domain?: string;
@@ -125,22 +130,65 @@ export function applyCodeBuddyNativeHeaders(
   }
 }
 
-export function createCodeBuddyRuntime(product: CodeBuddyProviderProduct | undefined, state: CodeBuddyModels) {
+type CodeBuddyProviderAccount = NonNullable<CodeBuddyProviderProduct['account']>;
+
+export function createCodeBuddyRuntime(
+  product: CodeBuddyProviderProduct | undefined,
+  state: CodeBuddyModels,
+  loadAccount?: () => Promise<CodeBuddyProviderProduct['account'] | undefined>,
+) {
   const routing = createModelRouting(state);
   const ready = product?.status === 'ready' ? product : undefined;
   const environment = ready?.environment ?? 'unknown';
-  const account = ready?.account;
-  const credential = account?.accessToken ? Object.freeze({ value: account.accessToken }) : undefined;
   const environments = new WeakMap<CodeBuddyCredential, CodeBuddyEnvironment>();
-  if (credential) {
+  // The last resolved credential/account pair. It starts from the product
+  // snapshot account and is refreshed by the loader; a loader failure keeps the
+  // last good pair so a transient unreadable auth file never drops a signed-in
+  // credential.
+  let last: { credential: CodeBuddyCredential; account: CodeBuddyProviderAccount } | undefined;
+  function bind(account: CodeBuddyProviderAccount): { credential: CodeBuddyCredential; account: CodeBuddyProviderAccount } {
+    // Credential object identity tracks the token value: an unchanged token
+    // reuses the exact frozen object (and its registered environment) while
+    // still rebinding account.headers onto it, a rotated token mints a new one.
+    if (last && last.credential.value === account.accessToken) {
+      if (account.headers) codeBuddyNativeHeaders.set(last.credential, account.headers);
+      return { credential: last.credential, account };
+    }
+    const credential = Object.freeze({ value: account.accessToken });
     environments.set(credential, environment);
-    if (account?.headers) codeBuddyNativeHeaders.set(credential, account.headers);
+    if (account.headers) codeBuddyNativeHeaders.set(credential, account.headers);
+    return { credential, account };
+  }
+  const startupAccount = ready?.account;
+  if (startupAccount?.accessToken) last = bind(startupAccount);
+  /**
+   * Resolve the current account on every call. With no loader the startup
+   * account is used; with a loader a rotated token is picked up immediately, a
+   * loader error keeps the last resolved pair, and an undefined/empty result
+   * clears the remembered pair so a later loader error cannot fall back to a
+   * signed-out account's old token.
+   */
+  async function current(): Promise<{ credential: CodeBuddyCredential; account: CodeBuddyProviderAccount } | undefined> {
+    if (!ready) return undefined;
+    if (!loadAccount) return last;
+    let account: CodeBuddyProviderProduct['account'];
+    try {
+      account = await loadAccount();
+    } catch {
+      return last;
+    }
+    if (!account?.accessToken) {
+      last = undefined;
+      return undefined;
+    }
+    last = bind(account);
+    return last;
   }
 
   return {
     canonicalizeModel: routing.canonicalizeCodeBuddyObservedModelId,
     async credential(): Promise<CodeBuddyCredential | undefined> {
-      return credential;
+      return (await current())?.credential;
     },
     /**
      * Canonical offering -> the exact product-file wire spelling. The mapping
@@ -155,8 +203,9 @@ export function createCodeBuddyRuntime(product: CodeBuddyProviderProduct | undef
       return routing.evaluateCodeBuddyFreeSupply(environments.get(bound), model);
     },
     async snapshot(): Promise<CodeBuddyActiveSnapshot | undefined> {
-      if (!credential) return undefined;
-      return freezeCodeBuddyActiveSnapshot(credential, environment, account?.stableScope, routing);
+      const resolved = await current();
+      if (!resolved) return undefined;
+      return freezeCodeBuddyActiveSnapshot(resolved.credential, environment, resolved.account.stableScope, routing);
     },
     async clientIdentity(): Promise<CodeBuddyClientIdentity | undefined> {
       return ready?.identity;

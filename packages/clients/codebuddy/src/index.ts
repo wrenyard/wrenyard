@@ -1,9 +1,9 @@
 import { openSession } from '@wrenyard/agent-client/session';
 import type { AgentClient, AgentRequest, AgentSession, ClientStatus, InspectOptions, OperationOptions } from '@wrenyard/agent-client';
-import type { CodeBuddyAccountContext } from './account.ts';
+import type { CodeBuddyAccountContext, CodeBuddyEnvironment } from './account.ts';
 import { decodeCodeBuddy } from './events.ts';
 import { launchCodeBuddy } from './launch.ts';
-import { readCodeBuddyInstall, type CodeBuddyProductSnapshot } from './product.ts';
+import { readCodeBuddyAccount, readCodeBuddyInstall, type CodeBuddyProductSnapshot } from './product.ts';
 export type { CodeBuddyAccountContext, CodeBuddyProductSnapshot };
 export class CodeBuddyClient implements AgentClient {
     readonly id = 'codebuddy';
@@ -23,6 +23,9 @@ export class CodeBuddyClient implements AgentClient {
     }
     async readInstall(options?: InspectOptions) {
         return this.load(options);
+    }
+    readAccount(environment: CodeBuddyEnvironment, options?: InspectOptions): Promise<CodeBuddyAccountContext | undefined> {
+        return readCodeBuddyAccount(environment, options);
     }
     async readProduct(options?: InspectOptions): Promise<CodeBuddyProductSnapshot> {
         return (await this.load(options)).product;

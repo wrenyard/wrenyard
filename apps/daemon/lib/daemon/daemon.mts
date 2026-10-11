@@ -1099,9 +1099,12 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   // CodeBuddy login/environment wire remap at startup — the current login is
   // bound afresh when a CodeBuddy dispatch plan is actually used.
   //
-  // One CodeBuddy install read supplies both the public product facts and the
-  // private account context the provider binds to its credential.
-  const install = await new CodeBuddyClient().readInstall()
+  // One CodeBuddy install read supplies the public product facts, and the
+  // private account context the provider binds to its credential is re-read
+  // from the CodeBuddy auth file on every credential use, so a rotated token is
+  // picked up without restarting the daemon.
+  const codeBuddyClient = new CodeBuddyClient()
+  const install = await codeBuddyClient.readInstall()
   const codeBuddy = createCodeBuddy({
     product: {
       status: install.product.status,
@@ -1110,6 +1113,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
       ...(install.product.identity ? { identity: install.product.identity } : {}),
       ...(install.account ? { account: install.account } : {}),
     },
+    account: () => codeBuddyClient.readAccount(install.product.environment),
   })
   const catalog = createBuiltinCatalog([codeBuddy])
   const providerRuntime = createBuiltinProviderRuntime({
