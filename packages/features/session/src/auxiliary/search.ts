@@ -138,7 +138,7 @@ export async function runSearchAction(
   const residual = residualText(action.intent, tokens);
   // A written path that resolves is read directly; the words around it are a
   // label, not a search request.
-  const needSearch = (exact.length === 0 && unsupported.length === 0 && !listed) || missing.length > 0 || loose;
+  const needSearch = tokens.length === 0 || loose || missing.some((path) => /\.md$/iu.test(path));
   if (!needSearch && residual !== '') notes.push('Only the stated paths were read. For other documents, send a separate read without paths.');
 
   let picks: { path: string; reason: string }[] = [];
@@ -300,7 +300,7 @@ function classifyPath(
   const prefix = `${resolve(ctx.workspaceRoot)}${sep}`;
   const absolute = isAbsolute(raw) ? resolve(raw) : undefined;
   const relative = absolute === undefined ? raw : absolute.startsWith(prefix) ? absolute.slice(prefix.length) : undefined;
-  const doc = relative === undefined ? undefined : catalog.find((entry) => entry.path === relative);
+  const doc = relative === undefined ? undefined : catalog.find((entry) => entry.path === relative.replace(/\\/gu, '/'));
   return doc ? { path: doc.path, kind: 'doc' } : undefined;
 }
 
