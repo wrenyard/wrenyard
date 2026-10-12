@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { ChevronRight, Coins, DatabaseZap, Zap } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/renderer/components/ui/popover';
 import { StatusBarButton, levelTone } from '@/renderer/components/status-bar-button';
@@ -39,7 +39,7 @@ import { ContextBreakdown } from '../usage/ContextBreakdown.js';
  */
 
 export function SessionStatusItems() {
-  const { sessionKey, models, turns, modelId, requestInspection, refreshContext, inputTokens } = useSessionUsage();
+  const { sessionKey, models, turns, modelId, refreshContext, inputTokens } = useSessionUsage();
   const { budget, groups, resolveModel, routesPreview } = useContextBudget(sessionKey, modelId, inputTokens);
   const consumption = useSessionConsumption();
 
@@ -78,8 +78,6 @@ export function SessionStatusItems() {
 
   const selected = models.find((entry) => entry.publicId === modelId);
 
-  const onAudit = useCallback((): void => requestInspection({ tab: 'context' }), [requestInspection]);
-
   useStatusBarItem({
     id: 'session.ctx',
     side: 'end',
@@ -90,7 +88,6 @@ export function SessionStatusItems() {
         groups={groups}
         roles={roles}
         modelName={selected?.displayName}
-        onAudit={onAudit}
         onRefresh={refreshContext}
       />
     ),
@@ -119,11 +116,10 @@ interface CtxStatusItemProps {
   groups: UsageGroupView[];
   roles: RoleContextEntry[];
   modelName: string | undefined;
-  onAudit: () => void;
   onRefresh: () => void;
 }
 
-function CtxStatusItem({ budget, groups, roles, modelName, onAudit, onRefresh }: CtxStatusItemProps) {
+function CtxStatusItem({ budget, groups, roles, modelName, onRefresh }: CtxStatusItemProps) {
   const [open, setOpen] = useState(false);
   const wasOpen = useRef(false);
   const ratio = budget?.ratio !== undefined && Number.isFinite(budget.ratio) ? budget.ratio : 0;
@@ -151,7 +147,6 @@ function CtxStatusItem({ budget, groups, roles, modelName, onAudit, onRefresh }:
           budget={budget}
           groups={groups}
           modelName={modelName}
-          onAudit={onAudit}
         />
       </div>
     </div>
