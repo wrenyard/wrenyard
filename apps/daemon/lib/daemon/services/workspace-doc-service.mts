@@ -1,10 +1,9 @@
 /**
  * Workspace doc service — daemon-owned document authority for workspace.doc.* methods.
  *
- * Documents are addressed by project, kind and name. The single private
- * resolver maps (project, kind, name) to the one Markdown document under
- * `projects/<project>/docs/<kind>/`; project registration is checked by exact
- * name and the resolved path must stay inside the kind directory.
+ * Documents are addressed by project, kind and name, or by the fixed
+ * project document ID `AGENTS.md`. The resolver confines both identities to
+ * their canonical workspace locations.
  */
 
 import { createHash } from 'node:crypto'
@@ -93,23 +92,15 @@ export class WorkspaceDocService {
   }
 
   async readDocument(params: WorkspaceDocReadParams): Promise<WorkspaceDocReadResult> {
-    const { project, kind, name } = params
-    const { absolute } = this.resolveDocument(project, kind, name)
+    const { absolute, name, identity } = this.resolveDocumentTarget(params)
     if (!existsSync(absolute)) {
-      throw new WorkspaceDocError('missing', `Document not found: ${project}/${kind}/${name}`)
+      throw new WorkspaceDocError('missing', `Document not found: ${identity.project}/${identity.id ?? `${identity.kind}/${identity.name}`}`)
     }
     if (!lstatSync(absolute).isFile()) {
       throw new WorkspaceDocError('not_a_file', `Document is not a regular document: ${name}`)
     }
     const content = readFileSync(absolute, 'utf-8')
-    return {
-      project,
-      kind,
-      name,
-      title: documentTitle(name, content),
-      content,
-      version: docVersion(content),
-    }
+    return { ...identity, title: documentTitle(name, content), content, version: docVersion(content) }
   }
 
   async createDocument(params: WorkspaceDocCreateParams): Promise<WorkspaceDocCreateResult> {
@@ -135,8 +126,8 @@ export class WorkspaceDocService {
   }
 
   async updateDocument(params: WorkspaceDocUpdateParams): Promise<WorkspaceDocUpdateResult> {
-    const { project, kind, name, content, base_version } = params
-    const { absolute } = this.resolveDocument(project, kind, name)
+    const { content, base_version } = params
+    const { absolute, name, identity } = this.resolveDocumentTarget(params)
     if (!existsSync(absolute)) {
       throw new WorkspaceDocError('missing', `Document not found: ${name}`)
     }
@@ -148,19 +139,15 @@ export class WorkspaceDocService {
       throw new WorkspaceDocError('conflict', `Document changed since it was read: ${name}`)
     }
     writeFileSync(absolute, content, 'utf-8')
-    return {
-      project,
-      kind,
-      name,
-      title: documentTitle(name, content),
-      change: 'updated',
-      version: docVersion(content),
-    }
+    return { ...identity, title: documentTitle(name, content), change: 'updated', version: docVersion(content) }
   }
 
   async editDocument(params: WorkspaceDocEditParams): Promise<WorkspaceDocUpdateResult> {
-    const { project, kind, name, edits, base_version } = params
-    const { absolute } = this.resolveDocument(project, kind, name)
+    const { edits, base_version } = params
+    const { absolute, name, identity } = this.resolveDocumentTarget(params)
+    if (identity.id !== undefined && (base_version === undefined || base_version === '' || edits.length === 0 || edits.some((edit) => edit.old === ''))) {
+      throw new WorkspaceDocError('bad_edit', 'AGENTS.md edits require nonempty edits, old text and base_version')
+    }
     if (!existsSync(absolute)) {
       throw new WorkspaceDocError('missing', `Document not found: ${name}`)
     }
@@ -168,7 +155,7 @@ export class WorkspaceDocService {
       throw new WorkspaceDocError('not_a_file', `Document is not a regular document: ${name}`)
     }
     const currentContent = readFileSync(absolute, 'utf-8')
-    if (base_version !== undefined && docVersion(currentContent) !== base_version) {
+    if ((identity.id !== undefined || base_version !== undefined) && docVersion(currentContent) !== base_version) {
       throw new WorkspaceDocError('conflict', `Document changed since it was read: ${name}`)
     }
     let content = currentContent
@@ -185,14 +172,50 @@ export class WorkspaceDocService {
       content = content.replace(edit.old, () => edit.new)
     })
     writeFileSync(absolute, content, 'utf-8')
-    return {
-      project,
-      kind,
-      name,
-      title: documentTitle(name, content),
-      change: 'updated',
-      version: docVersion(content),
+    return { ...identity, title: documentTitle(name, content), change: 'updated', version: docVersion(content) }
+  }
+
+  /**
+   * The single target resolver shared by read, update and edit. A target is
+   * either the ordinary { project, kind, name } identity or the fixed
+   * { project, id: 'AGENTS.md' } identity; the two shapes are exclusive and
+   * mixing them is refused. The fixed identity resolves only an existing
+   * registered project's canonical `projects/<project>/AGENTS.md`, never a
+   * checkout or workspace-root instruction file, and never creates it.
+   */
+  private resolveDocumentTarget(params: WorkspaceDocReadParams): { absolute: string; name: string; identity: WorkspaceDocReadParams } {
+    if (params.id !== undefined) {
+      if (params.id !== 'AGENTS.md' || params.kind !== undefined || params.name !== undefined) {
+        throw new WorkspaceDocError('bad_target', 'A document target must be either id AGENTS.md or kind and name')
+      }
+      const { project } = params
+      if (
+        typeof project !== 'string'
+        || project === ''
+        || project.split('/').some((part) => part === '' || part === '.' || part === '..')
+        || project.includes('\\')
+        || project.includes(':')
+        || project.includes('\0')
+      ) {
+        throw new WorkspaceDocError('bad_project', 'Project identity is not valid')
+      }
+      this.assertKnownProject(project)
+      const absolute = resolve(this.workspaceRoot, 'projects', ...project.split('/'), 'AGENTS.md')
+      try {
+        this.assertCanonicalLocation(absolute, project, undefined, 0)
+      } catch (error) {
+        // A filesystem failure while canonicalizing the fixed target is
+        // reported as a logical error; an existing WorkspaceDocError is kept.
+        if (error instanceof WorkspaceDocError) throw error
+        throw new WorkspaceDocError('file_error', 'Document target could not be resolved')
+      }
+      return { absolute, name: 'AGENTS.md', identity: { project, id: 'AGENTS.md' } }
     }
+    if (params.kind === undefined || params.name === undefined) {
+      throw new WorkspaceDocError('bad_target', 'A document target must be either id AGENTS.md or kind and name')
+    }
+    const resolved = this.resolveDocument(params.project, params.kind, params.name)
+    return { absolute: resolved.absolute, name: params.name, identity: { project: params.project, kind: params.kind, name: params.name } }
   }
 
   async deleteDocument(params: WorkspaceDocDeleteParams): Promise<WorkspaceDocDeleteResult> {
@@ -254,22 +277,26 @@ export class WorkspaceDocService {
   }
 
   /**
-   * Refuse a path whose real location escapes the canonical kind directory.
-   * `path` is canonicalized through its nearest existing ancestor (so a
-   * not-yet-created document is checked through its existing parent), then its
-   * location relative to the canonical workspace root must be exactly
-   * `projects/<project>/docs/<kindDir>` followed by `extra` segment(s). This
-   * catches ancestor symlink/junction escapes a lexical resolve() misses and
-   * never accepts an escaped real kind directory as an authorized root. Only a
-   * generic logical error is raised, never a physical path.
+   * Refuse a path whose real location escapes its canonical document
+   * location. `path` is canonicalized through its nearest existing ancestor
+   * (so a not-yet-created document is checked through its existing parent),
+   * then its location relative to the canonical workspace root must be exactly
+   * `projects/<project>/docs/<kindDir>` when `kindDir` is given, or
+   * `projects/<project>/AGENTS.md` for the fixed instruction document when it
+   * is undefined, followed by `extra` segment(s). This catches ancestor
+   * symlink/junction escapes a lexical resolve() misses and never accepts an
+   * escaped real directory as an authorized root. Only a generic logical error
+   * is raised, never a physical path.
    */
-  private assertCanonicalLocation(path: string, project: string, kindDir: string, extra: number): void {
+  private assertCanonicalLocation(path: string, project: string, kindDir: string | undefined, extra: number): void {
     const realPath = canonicalizeNearestExisting(path)
     const rel = relative(this.workspaceRoot, realPath)
     const segments = rel === '' ? [] : rel.split(sep)
     // A project may be nested (e.g. gol/arts), so its registered name can span
     // several path segments; expand it rather than treating it as one segment.
-    const expected = ['projects', ...project.split('/'), 'docs', kindDir]
+    const expected = kindDir === undefined
+      ? ['projects', ...project.split('/'), 'AGENTS.md']
+      : ['projects', ...project.split('/'), 'docs', kindDir]
     // Windows filesystems are case-insensitive, so compare segments
     // case-insensitively there; other platforms compare exactly.
     const caseInsensitive = process.platform === 'win32'

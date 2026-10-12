@@ -2,7 +2,7 @@
  * The document auxiliary task.
  *
  * It lists, reads, creates and revises Markdown documents under
- * `projects/<project>/docs` through the daemon-hosted document protocol
+ * `projects/<project>/docs`, plus the fixed registered-project AGENTS.md target, through the daemon-hosted document protocol
  * methods, exposed as tools by the shared protocol adapter. A document is
  * identified by its project, its kind (spec, report or handoff) and its name;
  * the file location is only the session internal ledger key and is never shown
@@ -90,6 +90,7 @@ export async function runDocumentAction(
  */
 function documentTarget(args: Record<string, unknown>, result: unknown): string {
   const project = readStringField(result, 'project') ?? readStringField(args, 'project') ?? '';
+  if (readStringField(result, 'id') === 'AGENTS.md' || readStringField(args, 'id') === 'AGENTS.md') return `${project}/AGENTS.md`;
   const kind = readStringField(result, 'kind') ?? readStringField(args, 'kind') ?? '';
   const name = readStringField(result, 'name') ?? readStringField(args, 'name') ?? '';
   return `${project}/${kind}/${name}`;
@@ -110,16 +111,19 @@ function documentDraftHook(
     const project = readStringField(result, 'project') ?? readStringField(args, 'project');
     const kind = readStringField(result, 'kind') ?? readStringField(args, 'kind');
     const name = readStringField(result, 'name') ?? readStringField(args, 'name');
-    if (project === undefined || kind === undefined || name === undefined) return;
-    if (!(kind in KIND_DIRECTORIES)) return;
-    const read = await deps.host.call('workspace.doc.read', { project, kind, name }) as {
+    const id = readStringField(result, 'id') ?? readStringField(args, 'id');
+    if (project === undefined || (id !== 'AGENTS.md' && (kind === undefined || name === undefined))) return;
+    if (id !== 'AGENTS.md' && !(kind! in KIND_DIRECTORIES)) return;
+    const target = id === 'AGENTS.md' ? { project, id } : { project, kind, name };
+    const read = await deps.host.call('workspace.doc.read', target) as {
       title?: unknown;
       content?: unknown;
     } | undefined;
     const content = typeof read?.content === 'string' ? read.content : '';
-    const title = typeof read?.title === 'string' ? read.title : name;
+    const fallbackTitle = id === 'AGENTS.md' ? 'AGENTS.md' : (name ?? '');
+    const title = typeof read?.title === 'string' ? read.title : fallbackTitle;
     const draft = makeDocumentDraft(
-      { path: documentKey(project, kind as keyof typeof KIND_DIRECTORIES, name), title, content },
+      { path: id === 'AGENTS.md' ? `projects/${project}/AGENTS.md` : documentKey(project, kind as keyof typeof KIND_DIRECTORIES, name!), title, content },
       draftEvents(ctx, record.documents),
       { turn: ctx.turn, step: ctx.step, parent: ctx.actionId, source: 'write' },
     );
@@ -164,10 +168,10 @@ function documentSystemPrompt(deps: ActionRunnerDeps): string {
     '',
     'Tools:',
     "- workspace_doc_list: list a project's documents to find a name.",
-    '- workspace_doc_read: read one document by project, kind and name; returns its content and version.',
+    '- workspace_doc_read: read a document by project, kind and name, or the existing registered project AGENTS.md with {project, id: "AGENTS.md"}; returns its content and version.',
     '- workspace_doc_create: create one new document; give a short lowercase slug and the full dated name is returned.',
-    '- workspace_doc_update: replace a document with new full content; pass base_version taken from workspace_doc_read.',
-    '- workspace_doc_edit: apply local edits to an existing document; each edit replaces one unique old text.',
+    '- workspace_doc_update: replace a document with new full content, or existing AGENTS.md with {project, id: "AGENTS.md", content, base_version}; pass base_version taken from workspace_doc_read.',
+    '- workspace_doc_edit: apply local edits to an existing document, or edit AGENTS.md with {project, id: "AGENTS.md", edits, base_version}; each edit replaces one unique old text and old text must be nonempty.',
     '',
     'Rules:',
     '- A document is identified by its project, its kind (spec, report or handoff) and its name.',
@@ -177,10 +181,14 @@ function documentSystemPrompt(deps: ActionRunnerDeps): string {
     '- Prefer workspace_doc_edit for local changes; give exact old text that occurs exactly once.',
     '- Use workspace_doc_update only for a full rewrite, and pass base_version taken from workspace_doc_read.',
     '- When a call returns conflict or missing, read the document again before retrying.',
+    '- For project AGENTS.md, read with workspace_doc_read using {project, id: "AGENTS.md"} before revision. It returns version; pass that value as base_version to workspace_doc_edit or workspace_doc_update.',
+    '- Prefer exact local edits and preserve unrelated instructions. Use full update only when the intent explicitly requests a full rewrite.',
+    '- After conflict or missing, read again before retrying. Never create or delete AGENTS.md.',
+    '- Never edit workspace-root or nested checkout instruction files, arbitrary paths, or any other workspace, configuration or source files.',
     '- Delete a document only when the intent explicitly asks to delete it.',
     '- Use only facts from the conversation and the documents you read.',
     "- The document language follows the project's document rules.",
-    '- Never mention files, paths or directories in the done summary; refer to documents by kind and name.',
+    '- Never mention physical paths in the done summary; refer to project AGENTS.md or an ordinary document by kind and name.',
     '- Finish with done and a summary of one to three sentences.',
   ].join('\n');
 }
