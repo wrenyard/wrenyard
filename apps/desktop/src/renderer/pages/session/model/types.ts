@@ -139,8 +139,9 @@ export interface ActionModel {
 
 /** One row in the session tree: a model call, memory, document, file or error. */
 export interface TreeEntry {
+  seq: number;
   at: string;
-  kind: 'call' | 'memory' | 'doc' | 'file' | 'error';
+  kind: 'call' | 'memory' | 'doc' | 'file' | 'task' | 'error' | 'notice';
   /** Short: role name, or file name without directory and extension. */
   label: string;
   /** Full path. */
@@ -150,6 +151,8 @@ export interface TreeEntry {
   outputTokens?: number;
   tokens?: number;
   durationMs?: number;
+  status?: string;
+  taskRunId?: string;
   callId?: string;
   unchanged?: boolean;
   body?: string;
@@ -157,6 +160,7 @@ export interface TreeEntry {
 
 export interface ActionNode {
   id: string;
+  seq: number;
   kind: 'search' | 'dispatch' | 'document' | 'vcs' | 'project';
   title?: string;
   intent: string;
@@ -177,6 +181,7 @@ export interface ActionNode {
 }
 
 export interface ReasonNode {
+  seq: number;
   callId: string;
   model: string;
   thinking?: string;
@@ -186,18 +191,22 @@ export interface ReasonNode {
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
+  actions: ActionNode[];
 }
+
+export type CycleItem =
+  | { kind: 'entry'; seq: number; entry: TreeEntry }
+  | { kind: 'reasoning'; seq: number; reason: ReasonNode }
+  | { kind: 'action'; seq: number; action: ActionNode }
+  | { kind: 'reply'; seq: number; at: string; text: string }
+  | { kind: 'error' | 'notice'; seq: number; at: string; text: string };
 
 export interface CycleNode {
   cycle: number;
   startedAt?: string;
   endedAt?: string;
   running: boolean;
-  prepare: TreeEntry[];
-  reason?: ReasonNode;
-  actions: ActionNode[];
-  replies: Array<{ at: string; text: string }>;
-  errors: string[];
+  items: CycleItem[];
 }
 
 export interface TurnNode {

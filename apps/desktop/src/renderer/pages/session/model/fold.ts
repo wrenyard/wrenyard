@@ -111,11 +111,6 @@ function toActionKind(type: string | undefined): ActionModel['kind'] {
   }
 }
 
-/** True for a reply shown to the user. */
-function isReplySent(event: LedgerEvent): event is ReplySentEvent {
-  return eventType(event) === 'reply.sent';
-}
-
 /** True for a system fault or warning; both surface as an error item. */
 function isFault(event: LedgerEvent): event is SystemNoticeEvent {
   const type = eventType(event);
@@ -857,6 +852,7 @@ function buildStats(
 /** A `span.started`/`span.finished` pair merged into one entry. */
 interface IndexedCall {
   callId: string;
+  seq: number;
   role: string;
   model: string;
   /** Start time. */
@@ -889,6 +885,7 @@ function indexCalls(events: readonly LedgerEvent[]): Map<string, IndexedCall> {
       const role = record.kind === 'reasoning' ? 'reason' : record.request.role ?? 'search';
       calls.set(record.id, {
         callId: record.id,
+        seq: record.seq,
         role,
         model: record.request.model,
         at: record.at,
@@ -901,6 +898,7 @@ function indexCalls(events: readonly LedgerEvent[]): Map<string, IndexedCall> {
       if (record.kind === 'task') continue;
       const base = calls.get(record.id) ?? {
         callId: record.id,
+        seq: record.seq,
         role: record.kind === 'reasoning' ? 'reason' : 'search',
         model: '',
         at: record.at,
@@ -933,6 +931,7 @@ function callTreeEntry(call: IndexedCall): TreeEntry {
     : undefined;
   const inputTokens = call.usage?.input ?? call.estimatedInputTokens;
   return {
+    seq: call.seq ?? 0,
     at: call.endedAt ?? call.at,
     kind: 'call',
     label: treeRoleLabel(call.role),
@@ -948,6 +947,7 @@ function callTreeEntry(call: IndexedCall): TreeEntry {
 function docTreeEntry(event: DocumentContentEvent): TreeEntry {
   const tokens = readNumber((event as unknown as { tokens?: unknown }).tokens);
   return {
+    seq: event.seq,
     at: event.at,
     kind: 'doc',
     label: shortName(event.path),
@@ -959,6 +959,7 @@ function docTreeEntry(event: DocumentContentEvent): TreeEntry {
 
 function memoryTreeEntry(event: MemoryRecalledEvent): TreeEntry {
   return {
+    seq: event.seq,
     at: event.at,
     kind: 'memory',
     label: shortName(event.path),
@@ -989,6 +990,9 @@ function buildActionNode(
   const start = turnEvents.find((event) => eventType(event) === 'action.started' && (event as ActionStartedEvent).id === actionId) as ActionStartedEvent | undefined;
   const end = turnEvents.find((event) => eventType(event) === 'action.finished' && (event as ActionFinishedEvent).id === actionId) as ActionFinishedEvent | undefined;
   const titled = turnEvents.find((event) => eventType(event) === 'action.titled' && (event as ActionTitledEvent).id === actionId) as ActionTitledEvent | undefined;
+  const errors = turnEvents
+    .filter((event) => isFault(event) && event.parent === actionId)
+    .map((event) => event.message);
 
   const intent = start === undefined ? '' : firstLine(start.action.prompt);
   const kind = (start?.action.type ?? end?.action.type ?? 'search') as ActionNode['kind'];
@@ -1016,19 +1020,32 @@ function buildActionNode(
     if (type === 'document.content') entries.push(docTreeEntry(event as DocumentContentEvent));
     else if (type === 'memory.recalled') entries.push(memoryTreeEntry(event as MemoryRecalledEvent));
   }
-  entries.sort((a, b) => a.at.localeCompare(b.at));
-
-  const errors: string[] = [];
+  const startSeq = start?.seq ?? end?.seq ?? 0;
   for (const event of turnEvents) {
-    if (!isFault(event) || event.parent !== actionId) continue;
-    errors.push(event.message);
+    if (eventType(event) !== 'span.started') continue;
+    const span = event as SpanStartedEvent;
+    if (span.kind !== 'task' || span.parent !== actionId) continue;
+    const done = turnEvents.find((candidate) => eventType(candidate) === 'span.finished' && (candidate as SpanFinishedEvent).id === span.id) as SpanFinishedEvent | undefined;
+    const metrics = done?.kind === 'task' ? done.metrics : undefined;
+    entries.push({
+      seq: span.seq,
+      at: done?.at ?? span.at,
+      kind: 'task',
+      label: span.request.task,
+      taskRunId: span.request.taskRunId,
+      status: metrics?.taskStatus ?? done?.status ?? 'running',
+      ...(metrics?.generationMs === undefined ? {} : { durationMs: metrics.generationMs }),
+      ...(metrics?.usage?.totalTokens === undefined ? {} : { tokens: metrics.usage.totalTokens }),
+    });
   }
+  entries.sort((a, b) => a.seq - b.seq);
 
   const status: ActionNode['status'] = (end?.status as ActionNode['status'] | undefined)
     ?? (turnRunning ? 'running' : 'cancelled');
 
   return {
     id: actionId,
+    seq: startSeq,
     kind,
     ...(titled === undefined ? {} : { title: titled.title }),
     intent,
@@ -1069,8 +1086,21 @@ function buildCycleNode(
     ? thinkingEvent.text
     : reasonCall?.reasoning;
 
+    const actionIds = new Set<string>();
+    for (const event of cycleEvents) {
+      const type = eventType(event);
+      if (type === 'action.started' || type === 'action.finished') {
+        const record = event as ActionStartedEvent | ActionFinishedEvent;
+        actionIds.add(record.id);
+      }
+    }
+    const actions = [...actionIds]
+      .map((actionId) => buildActionNode(actionId, turnEvents, calls, turnRunning))
+      .sort((a, b) => a.seq - b.seq);
+
   const reason: ReasonNode | undefined = reasonCall !== undefined
     ? {
+        seq: reasonCall.seq ?? reasonCompleted?.seq ?? 0,
         callId: reasonCall.callId,
         model: reasonCall.model,
         ...(thinking === undefined || thinking === '' ? {} : { thinking }),
@@ -1080,54 +1110,45 @@ function buildCycleNode(
         ...(reasonCall.usage?.input === undefined ? {} : { inputTokens: reasonCall.usage.input }),
         ...(reasonCall.usage?.output === undefined ? {} : { outputTokens: reasonCall.usage.output }),
         ...(reasonCall.usage?.cachedInput === undefined ? {} : { cachedInputTokens: reasonCall.usage.cachedInput }),
+          actions,
       }
     : reasonCompleted !== undefined
       ? {
+          seq: reasonCompleted.seq,
           callId: reasonCompleted.parent,
           model: '',
           text: reasonCompleted.text,
           startedAt: reasonCompleted.at,
+            actions,
         }
       : undefined;
 
-  const reasonStart = reasonCall?.startedAt ?? reasonCall?.at;
-
-  // Prepare: memory-search spans and memory.recalled events before the reason span.
-  const prepare: TreeEntry[] = [];
+  const items: CycleNode['items'] = [];
   for (const call of calls.values()) {
     if (call.role !== 'memory-search' || call.cycle !== index) continue;
-    if (reasonStart !== undefined && call.at > reasonStart) continue;
-    prepare.push(callTreeEntry(call));
+    items.push({ kind: 'entry', seq: call.seq ?? 0, entry: callTreeEntry(call) });
   }
   for (const event of cycleEvents) {
-    if (eventType(event) !== 'memory.recalled') continue;
-    if (reasonStart !== undefined && event.at > reasonStart) continue;
-    prepare.push(memoryTreeEntry(event as MemoryRecalledEvent));
-  }
-  prepare.sort((a, b) => a.at.localeCompare(b.at));
-
-  const actionIds = new Set<string>();
-  for (const event of cycleEvents) {
-    const type = eventType(event);
-    if (type === 'action.started' || type === 'action.finished') {
-      const record = event as ActionStartedEvent | ActionFinishedEvent;
-      actionIds.add(record.id);
+    if (eventType(event) === 'memory.recalled') {
+      const entry = memoryTreeEntry(event as MemoryRecalledEvent);
+      items.push({ kind: 'entry', seq: entry.seq, entry });
+    } else if (eventType(event) === 'reply.sent') {
+      const reply = event as ReplySentEvent;
+      items.push({ kind: 'reply', seq: reply.seq, at: reply.at, text: reply.text });
     }
   }
-  const actions = [...actionIds]
-    .map((actionId) => buildActionNode(actionId, turnEvents, calls, turnRunning))
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 
-  const replies = cycleEvents
-    .filter(isReplySent)
-    .map((event) => ({ at: event.at, text: event.text }));
+  if (reason !== undefined) {
+    items.push({ kind: 'reasoning', seq: reason.seq, reason });
+  } else {
+    for (const action of actions) items.push({ kind: 'action', seq: action.seq, action });
+  }
 
   // Faults that no action owns belong to the cycle.
-  const errors: string[] = [];
   for (const event of cycleEvents) {
     if (!isFault(event)) continue;
     if (event.parent !== undefined && actionIds.has(event.parent)) continue;
-    errors.push(event.message);
+    items.push({ kind: eventType(event) === 'system.error' ? 'error' : 'notice', seq: event.seq, at: event.at, text: event.message });
   }
 
   const running = turnRunning && isLastCycle && reasonCompleted === undefined && reasonCall !== undefined && reasonCall.status === undefined;
@@ -1137,19 +1158,15 @@ function buildCycleNode(
     ...(startedAt === undefined ? {} : { startedAt }),
     ...(endedAt === undefined ? {} : { endedAt }),
     running,
-    prepare,
-    ...(reason === undefined ? {} : { reason }),
-    actions,
-    replies,
-    errors,
+    items: items.sort((a, b) => a.seq - b.seq),
   };
 }
 
 /**
  * Projects the raw ledger into the session tree: turns sorted by start time,
- * each with its cycles, prepare entries, reason span, actions and replies.
- * Actions gather the spans, documents, memories, files, title and errors that
- * carry their id; errors without one attach to the cycle.
+ * each with steps whose transcript items follow their first ledger sequence.
+ * Actions gather their auxiliary spans, task span, documents, memories, files,
+ * title and errors by parent id.
  */
 export function buildSessionTree(events: readonly LedgerEvent[]): TurnNode[] {
   const byTurn = new Map<number, LedgerEvent[]>();
