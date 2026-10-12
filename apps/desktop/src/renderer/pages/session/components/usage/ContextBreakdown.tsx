@@ -1,8 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
-import { Separator } from '@/renderer/components/ui/separator';
-import { PanelFooterAction } from '@/renderer/components/panel-footer-action';
 import { TokenBar, type TokenBarSegment } from '@/renderer/components/usage/TokenBar';
 import { usageRingLevel, type UsageRingLevel } from '@/renderer/components/usage/UsageRing';
 import { formatTokenCount, formatRatio } from '@/renderer/lib/format';
@@ -35,11 +33,9 @@ export interface ContextBreakdownProps {
   groups: UsageGroupView[];
   /** Display name of the reason model, for the overflow alert. */
   modelName?: string;
-  /** Open the inspector context tab and close the panel. */
-  onAudit: () => void;
 }
 
-export function ContextBreakdown({ roles, budget, groups, modelName, onAudit }: ContextBreakdownProps) {
+export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBreakdownProps) {
   const [expanded, setExpanded] = useState(false);
   const segments: TokenBarSegment[] = groups.map((group) => ({
     id: group.id,
@@ -120,8 +116,6 @@ export function ContextBreakdown({ roles, budget, groups, modelName, onAudit }: 
         )}
       </div>
 
-      <Separator />
-      <PanelFooterAction label="在检查器中审计" onClick={onAudit} />
     </div>
   );
 }

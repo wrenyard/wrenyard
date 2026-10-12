@@ -69,7 +69,6 @@ export function SessionPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [target, setTarget] = useState<InspectorTarget | undefined>(undefined);
-  const [tab, setTab] = useState('detail');
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [retry, setRetry] = useState<{ text: string; attachments: DraftAttachment[]; nonce: number } | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | undefined>(undefined);
@@ -108,13 +107,11 @@ export function SessionPage() {
 
   const inspect = useCallback((next: InspectorTarget): void => {
     setTarget(next);
-    setTab('detail');
     setInspectorOpen(true);
   }, []);
 
   const inspectTimeline = useCallback((next: InspectorTarget): void => {
     setTarget(next);
-    setTab('timeline');
     setInspectorOpen(true);
   }, []);
 
@@ -181,19 +178,8 @@ export function SessionPage() {
     return true;
   });
 
-  // Open the inspector for a usage request, selecting the session first when
-  // the request targets a different one.
-  const inspectRequest = useCallback((request: { sessionKey: string; tab: 'context' | 'ledger'; seq?: number }): void => {
-    if (request.sessionKey !== sessionKey) {
-      if (!state.sessions.some((session) => session.sessionId === request.sessionKey)) return;
-      void selectSession(request.sessionKey).catch(() => undefined);
-    }
-    setTab(request.tab);
-    setInspectorOpen(true);
-  }, [sessionKey, state.sessions, selectSession]);
-
-  // Page commands: session.open (routed here by the command table),
-  // session.inspectContext and the inspector toggle used by the title bar.
+  // Page commands: session.open (routed here by the command table) and the
+  // inspector toggle used by the title bar.
   useEffect(() => registerPageCommands('session', [
     {
       id: 'session.open',
@@ -209,20 +195,6 @@ export function SessionPage() {
       },
     },
     {
-      id: 'session.inspectContext',
-      title: '查看上下文',
-      run: (args) => {
-        const options = args !== null && typeof args === 'object'
-          ? (args as { tab?: 'context' | 'ledger'; seq?: number })
-          : undefined;
-        inspectRequest({
-          sessionKey,
-          tab: options?.tab ?? 'context',
-          ...(options?.seq === undefined ? {} : { seq: options.seq }),
-        });
-      },
-    },
-    {
       id: 'session.toggleInspector',
       title: '切换检查器',
       run: () => setInspectorOpen((value) => !value),
@@ -235,7 +207,7 @@ export function SessionPage() {
         setComposerFocusRequest((value) => value + 1);
       },
     },
-  ]), [selectSession, sessionKey, inspectRequest, newDraft]);
+  ]), [selectSession, newDraft]);
 
   // Entry animation applies only to messages appended after the conversation
   // settles; history loads are absorbed into the baseline (foundation §2.3).
@@ -314,7 +286,6 @@ export function SessionPage() {
           events={state.events}
           turns={model.turns}
           ledgerReady={sessionKey === 'draft' || !state.loadingLedger}
-          onInspect={inspectRequest}
         >
           <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
           <SessionStatusItems />
@@ -410,8 +381,6 @@ export function SessionPage() {
               <Inspector
                 model={model}
                 events={state.events}
-                tab={tab}
-                onTabChange={setTab}
                 onClose={() => setInspectorOpen(false)}
               />
             </ResizablePanel>
