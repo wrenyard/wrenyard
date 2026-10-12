@@ -1,12 +1,13 @@
 /**
  * The search auxiliary task: read workspace material by intent or exact
- * path. It resolves the intent's path tokens against the session's document
- * catalog and files, asks the document retriever which documents to read, and
- * returns the reads as deferred drafts.
+ * path. It resolves the intent's path tokens against globally readable
+ * workspace documents/instructions and against the session's files, asks the
+ * document retriever which documents to read, and returns the reads as
+ * deferred drafts.
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { platform } from 'node:os';
 
 import { collectSessionFiles, type LedgerEvent, type LedgerEventDraft } from '../ledger/store.ts';
@@ -32,9 +33,9 @@ Output strict JSON only: {"understanding":"one-sentence understanding of the int
 Rules:
 - understanding is required. picks has at most 3 items and near at most 5 items.
 - path must come from the given catalog. Unknown paths are dropped.
-- Do not pick paths that are already in context.
 - near only gives paths as hints. Their bodies are not read.
-- Pick report or handoff documents only when the intent is about progress or results.
+- directory-hints name directories the intent points to; prefer documents inside them, but you may pick relevant documents elsewhere.
+- Pick report or handoff documents when explicitly requested or when the intent is about progress or results.
 - A recent spec that is not deprecated is an acceptable default pick.
 - Output only JSON, with no code fence or extra explanation.
 </wy-system>
@@ -46,6 +47,8 @@ export interface DocSearchViewInput {
   catalog: DocCatalogEntry[];
   loadedPaths: string[];
   intent: string;
+  /** Workspace-relative document directories the intent points to. */
+  directoryHints?: string[];
 }
 
 function docCategory(path: string): string {
@@ -83,8 +86,11 @@ export function buildDocSearch(input: DocSearchViewInput): BuiltView {
   const loaded = input.loadedPaths.length === 0
     ? '(none)'
     : input.loadedPaths.map((path) => `- ${escapeBody(path)}`).join('\n');
+  const hints = input.directoryHints ?? [];
+  const hintLines = hints.map((hint) => `- ${escapeBody(hint)}`).join('\n');
   const body = [
     tag('catalog', [], groups.size === 0 ? '(none)' : catalog),
+    ...(hints.length === 0 ? [] : [tag('directory-hints', [], hintLines)]),
     tag('loaded-paths', [], loaded),
     tag('intent', [], escapeBody(input.intent)),
   ].join('\n');
@@ -112,6 +118,7 @@ export async function runSearchAction(
   const unsupported: string[] = [];
   const notes: string[] = [];
   const claimed = new Set<string>();
+  const directoryHints: string[] = [];
 
   const runIds = sessionRunIds(events);
   let listed = false;
@@ -120,6 +127,13 @@ export async function runSearchAction(
   for (const token of tokens) {
     const hit = await classifyPath(deps, token, catalog, sessionFiles, runIds, ctx);
     if (hit === undefined) {
+      // A token that names a live document directory is a search hint, not an
+      // unsupported session file.
+      const hint = documentDirectoryHint(catalog, token, ctx.workspaceRoot);
+      if (hint !== undefined) {
+        directoryHints.push(hint);
+        continue;
+      }
       // Explicit filesystem paths fail as paths; they are never reinterpreted
       // as document-search intent just because they are not Markdown files.
       const absolute = isAbsolute(token) ? resolve(token) : resolve(ctx.workspaceRoot, token);
@@ -136,19 +150,19 @@ export async function runSearchAction(
 
   const residual = residualText(action.intent, tokens);
   // A written path that resolves is read directly; the words around it are a
-  // label, not a search request.
-  const needSearch = tokens.length === 0;
+  // label, not a search request. A document-directory hint is a search request.
+  const needSearch = tokens.length === 0 || directoryHints.length > 0;
   if (!needSearch && residual !== '') notes.push('Only the stated paths were read. For other documents, send a separate read without paths.');
 
   let picks: { path: string; reason: string }[] = [];
   if (needSearch) {
-    const view = buildDocSearch({ catalog, loadedPaths: [...loadedDocs], intent: action.intent });
+    const view = buildDocSearch({ catalog, loadedPaths: [...loadedDocs], intent: action.intent, directoryHints });
     const outcome = await runDocSearchCall(deps, view, ctx);
     if (!outcome.ok) return fail(withMissing(`doc-search call failed: ${outcome.error}`, missing));
     const parsed = parseDocSearch(outcome.text, catalog);
     if (!parsed.ok) return fail(withMissing(parsed.reason, missing));
     notes.push(...parsed.notes);
-    picks = parsed.picks.filter((pick) => !loadedDocs.has(pick.path));
+    picks = parsed.picks;
     const nearTitles = parsed.near.map((near) => `${near.path} (${near.title})`);
     if (nearTitles.length > 0) notes.push(`near: ${nearTitles.join(', ')}`);
     // First document-found draft, before any picked document content.
@@ -203,7 +217,7 @@ export async function runSearchAction(
   const sections: string[] = [];
   if (loaded.length > 0) sections.push(`loaded: ${loaded.join(', ')}`);
   if (already.length > 0) sections.push(`Already in context, unchanged: ${already.join(', ')}`);
-  if (unsupported.length > 0) sections.push(`Exists but is not a document or a file of this session, not read: ${unsupported.join(', ')}`);
+  if (unsupported.length > 0) sections.push(`Exists but is not a readable workspace document or a session attachment, not read: ${unsupported.join(', ')}`);
   if (missing.length > 0) sections.push(`missing: ${missing.join(', ')}`);
   if (notes.length > 0) sections.push(...notes);
   if (sections.length === 0) sections.push('no paths were processed');
@@ -280,8 +294,10 @@ async function readSessionFile(
 }
 
 /**
- * Resolve one intent token to an allowed, registered path: a session file, a
- * file one of this session's runs left, or a project document.
+ * Resolve one intent token to a readable path. A valid existing workspace
+ * document or instruction is globally readable and is not session-scoped, so it
+ * is classified first; a session file and a file one of this session's runs
+ * left keep their session or run ownership and stay scoped.
  */
 async function classifyPath(
   deps: ActionWorkflowDeps,
@@ -291,6 +307,11 @@ async function classifyPath(
   runIds: ReadonlySet<string>,
   ctx: ActionRunContext,
 ): Promise<{ path: string; kind: 'file' | 'doc'; taskRunId?: string } | undefined> {
+  const relative = workspaceRelative(ctx.workspaceRoot, raw);
+  if (relative !== undefined && relative !== '') {
+    const doc = resolveWorkspaceDocument(deps, relative, catalog);
+    if (doc !== undefined) return { path: doc, kind: 'doc' };
+  }
   const sessionFile = sessionFiles.find((file) => sessionFileMatches(file.path, raw, ctx.sessionId));
   if (sessionFile) return { path: sessionFile.path, kind: 'file' };
   if (isAbsolute(raw)) {
@@ -300,11 +321,63 @@ async function classifyPath(
       return { path: absolute, kind: 'file', taskRunId: run };
     }
   }
-  const prefix = `${resolve(ctx.workspaceRoot)}${sep}`;
-  const absolute = isAbsolute(raw) ? resolve(raw) : undefined;
-  const relative = absolute === undefined ? raw : absolute.startsWith(prefix) ? absolute.slice(prefix.length) : undefined;
-  const doc = relative === undefined ? undefined : catalog.find((entry) => entry.path === relative.replace(/\\/gu, '/'));
-  return doc ? { path: doc.path, kind: 'doc' } : undefined;
+  return undefined;
+}
+
+/**
+ * A validated workspace document or instruction path. The path must pass the
+ * files-port scope check as kind `doc` and exist on disk; catalog membership is
+ * not required, so a document is readable whether or not this session saw it
+ * before. On Windows a differently-cased spelling is resolved through the live
+ * catalog without making membership mandatory.
+ */
+function resolveWorkspaceDocument(
+  deps: ActionWorkflowDeps,
+  relative: string,
+  catalog: readonly DocCatalogEntry[],
+): string | undefined {
+  const normalized = relative.replace(/\\/gu, '/');
+  const checked = deps.files.checkPath(normalized);
+  if (checked.ok && checked.kind === 'doc' && deps.files.exists(normalized)) return normalized;
+  if (platform() === 'win32') {
+    const match = catalog.find((entry) => normalizePath(entry.path) === normalizePath(normalized));
+    if (match !== undefined && deps.files.exists(match.path)) return match.path;
+  }
+  return undefined;
+}
+
+/**
+ * The workspace-relative spelling of a token, or `undefined` when the token is
+ * an absolute path outside the workspace. Relative tokens and Windows
+ * separators are normalized; containment keeps traversal outside the workspace
+ * from resolving.
+ */
+function workspaceRelative(workspaceRoot: string, raw: string): string | undefined {
+  if (!isAbsolute(raw)) return raw.replace(/\\/gu, '/');
+  const root = resolve(workspaceRoot);
+  const absolute = resolve(raw);
+  const normalizedRoot = normalizePath(root);
+  const normalizedAbsolute = normalizePath(absolute);
+  if (normalizedAbsolute === normalizedRoot) return '';
+  if (!normalizedAbsolute.startsWith(`${normalizedRoot}/`)) return undefined;
+  return absolute.slice(root.length + 1).replace(/\\/gu, '/');
+}
+
+/**
+ * The normalized workspace-relative spelling when a token names a directory
+ * that owns live workspace documents: its path is a prefix of a catalogued
+ * path. Such a directory is a search hint, not an unsupported session file.
+ */
+function documentDirectoryHint(
+  catalog: readonly DocCatalogEntry[],
+  token: string,
+  workspaceRoot: string,
+): string | undefined {
+  const relative = workspaceRelative(workspaceRoot, token);
+  if (relative === undefined || relative === '') return undefined;
+  const hint = relative.replace(/\/+$/u, '');
+  const prefix = `${normalizePath(hint)}/`;
+  return catalog.some((entry) => normalizePath(entry.path).startsWith(prefix)) ? hint : undefined;
 }
 
 /** Queue the project instruction chain as full `doc.content` drafts. */
@@ -401,7 +474,7 @@ function sessionRunIds(events: readonly LedgerEvent[]): Set<string> {
 
 /** Path-like tokens in an intent, used for exact-path resolution. */
 function extractPathTokens(text: string): string[] {
-  const matches = text.match(/(?:[A-Za-z]:[\\/](?:[^\s"'<>|?*]+)|\\\\[^\\/\s]+\\[^\\/\s]+(?:[\\/][^\s"'<>|?*]+)*|\/[A-Za-z0-9_./-]+|[A-Za-z0-9_./-]+\.md|[A-Za-z0-9_./-]*\/[A-Za-z0-9_./-]+(?:\.[A-Za-z0-9_-]+)?)/gu) ?? [];
+  const matches = text.match(/(?:[A-Za-z]:[\\/](?:[^\s"'<>|?*]+)|\\\\[^\\/\s]+\\[^\\/\s]+(?:[\\/][^\s"'<>|?*]+)*|\/[A-Za-z0-9_./-]+|[A-Za-z0-9_.\\/-]+\.md|[A-Za-z0-9_.\\/-]*[\\/][A-Za-z0-9_.\\/-]+(?:\.[A-Za-z0-9_-]+)?)/gu) ?? [];
   const tokens = matches.map((token) => token.replace(/[),.;:!?]+$/u, '')).filter((token) => token !== '');
   return [...new Set(tokens)];
 }
