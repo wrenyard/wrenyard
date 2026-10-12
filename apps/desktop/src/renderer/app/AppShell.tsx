@@ -10,16 +10,18 @@ import { StatusBar } from '@/renderer/app/statusbar/StatusBar';
 import { TitleBarPageProvider } from '@/renderer/lib/titlebar';
 import { UpdateDialog } from '@/renderer/app/dialogs/UpdateDialog';
 import { SessionPage } from '@/renderer/pages/session';
+import { TracePage } from '@/renderer/pages/trace';
 import { StatsPage } from '@/renderer/pages/stats';
 import { QuotaPage } from '@/renderer/pages/quota';
 import { TasksPage } from '@/renderer/pages/tasks';
 import { SettingsPage } from '@/renderer/pages/settings';
 
 /** Dispatch order for the shell pages; also the first-visit mount order. */
-const PAGE_ORDER: readonly ShellPage[] = ['session', 'stats', 'quota', 'tasks', 'settings'];
+const PAGE_ORDER: readonly ShellPage[] = ['session', 'trace', 'stats', 'quota', 'tasks', 'settings'];
 
 const PAGES: Record<ShellPage, ComponentType> = {
   session: SessionPage,
+  trace: TracePage,
   stats: StatsPage,
   quota: QuotaPage,
   tasks: TasksPage,
