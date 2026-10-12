@@ -143,7 +143,7 @@ export function defaultAppearanceSettings(): AppearanceSettings {
 }
 
 export function defaultGeneralPreferences(): GeneralPreferences {
-  return { startupPage: 'last', confirmQuit: true };
+  return { startupPage: 'last' };
 }
 
 export function defaultSessionPreferences(): SessionPreferences {
@@ -360,7 +360,6 @@ function normalizeGeneralPreferences(value: unknown, fallback: GeneralPreference
   const obj = isRecord(value) ? value : {};
   return {
     startupPage: obj.startupPage === 'session' ? 'session' : fallback.startupPage,
-    confirmQuit: typeof obj.confirmQuit === 'boolean' ? obj.confirmQuit : fallback.confirmQuit,
   };
 }
 
