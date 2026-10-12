@@ -6,7 +6,7 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve, sep } from 'node:path';
 
 import { collectSessionFiles, type LedgerEvent, type LedgerEventDraft } from '../ledger/store.ts';
 import { makeDocumentDraft } from '../documents.ts';
@@ -120,16 +120,15 @@ export async function runSearchAction(
   for (const token of tokens) {
     const hit = classifyPath(deps, token, catalog, sessionFiles, runIds, ctx);
     if (hit === undefined) {
-      // An existing path that is not a document is reported, not searched for.
-      const absolute = resolve(ctx.workspaceRoot, token);
+      // Explicit filesystem paths fail as paths; they are never reinterpreted
+      // as document-search intent just because they are not Markdown files.
+      const absolute = isAbsolute(token) ? resolve(token) : resolve(ctx.workspaceRoot, token);
       const run = deps.fileStore.runOf(absolute, runIds);
       if (run !== undefined && statSync(absolute, { throwIfNoEntry: false })?.isDirectory() === true) {
         notes.push(renderRunFiles(await deps.fileStore.listRunFiles(run)));
         listed = true;
       } else if (existsSync(absolute)) unsupported.push(absolute);
-      // Only a Markdown or absolute path is a path the model meant to read;
-      // any other slash-separated word is ordinary intent text.
-      else if (token.endsWith('.md') || token.startsWith('/')) missing.push(token);
+      else if (isExplicitPathToken(token)) missing.push(token);
       else loose = true;
       continue;
     }
@@ -289,15 +288,18 @@ function classifyPath(
   runIds: ReadonlySet<string>,
   ctx: ActionRunContext,
 ): { path: string; kind: 'file' | 'doc'; taskRunId?: string } | undefined {
-  if (sessionFiles.some((file) => file.path === raw)) return { path: raw, kind: 'file' };
-  if (raw.startsWith('/')) {
-    const run = deps.fileStore.runOf(raw, runIds);
-    if (run !== undefined && statSync(raw, { throwIfNoEntry: false })?.isFile() === true) {
-      return { path: raw, kind: 'file', taskRunId: run };
+  const sessionFile = sessionFiles.find((file) => sessionFileMatches(file.path, raw, ctx.sessionId));
+  if (sessionFile) return { path: sessionFile.path, kind: 'file' };
+  if (isAbsolute(raw)) {
+    const absolute = resolve(raw);
+    const run = deps.fileStore.runOf(absolute, runIds);
+    if (run !== undefined && statSync(absolute, { throwIfNoEntry: false })?.isFile() === true) {
+      return { path: absolute, kind: 'file', taskRunId: run };
     }
   }
-  const prefix = `${ctx.workspaceRoot.replace(/\/$/u, '')}/`;
-  const relative = raw.startsWith('/') ? (raw.startsWith(prefix) ? raw.slice(prefix.length) : undefined) : raw;
+  const prefix = `${resolve(ctx.workspaceRoot)}${sep}`;
+  const absolute = isAbsolute(raw) ? resolve(raw) : undefined;
+  const relative = absolute === undefined ? raw : absolute.startsWith(prefix) ? absolute.slice(prefix.length) : undefined;
   const doc = relative === undefined ? undefined : catalog.find((entry) => entry.path === relative);
   return doc ? { path: doc.path, kind: 'doc' } : undefined;
 }
@@ -396,9 +398,30 @@ function sessionRunIds(events: readonly LedgerEvent[]): Set<string> {
 
 /** Path-like tokens in an intent, used for exact-path resolution. */
 function extractPathTokens(text: string): string[] {
-  const matches = text.match(/[A-Za-z0-9_./-]+\.md|[A-Za-z0-9_./-]*\/[A-Za-z0-9_./-]+/gu) ?? [];
+  const matches = text.match(/(?:[A-Za-z]:[\\/](?:[^\s"'<>|?*]+)|\\\\[^\\/\s]+\\[^\\/\s]+(?:[\\/][^\s"'<>|?*]+)*|\/[A-Za-z0-9_./-]+|[A-Za-z0-9_./-]+\.md|[A-Za-z0-9_./-]*\/[A-Za-z0-9_./-]+(?:\.[A-Za-z0-9_-]+)?)/gu) ?? [];
   const tokens = matches.map((token) => token.replace(/[),.;:!?]+$/u, '')).filter((token) => token !== '');
   return [...new Set(tokens)];
+}
+
+/** True for path-shaped references, including non-Markdown file extensions. */
+function isExplicitPathToken(token: string): boolean {
+  return isAbsolute(token) || token.includes('/') || token.includes('\\') || /\.[A-Za-z0-9]{1,12}$/u.test(token);
+}
+
+/** Match only a ledger-registered file, by its stored path or current-session alias. */
+function sessionFileMatches(registeredPath: string, token: string, sessionId: string): boolean {
+  if (normalizePath(registeredPath) === normalizePath(token)) return true;
+  const normalizedToken = normalizePath(token);
+  const alias = `sessions/${sessionId}/files/`;
+  if (!normalizedToken.startsWith(alias)) return false;
+  const relativeFile = normalizedToken.slice('sessions/'.length);
+  return normalizePath(registeredPath).endsWith(`/${relativeFile}`);
+}
+
+/** Compare path spellings independent of Windows separators and case. */
+function normalizePath(path: string): string {
+  const normalized = path.replace(/\\/gu, '/').replace(/\/+$/u, '');
+  return /^[A-Za-z]:\//u.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
 /** The intent text left once the path tokens, quotes and punctuation are removed. */
