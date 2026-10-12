@@ -1,4 +1,4 @@
-import { Brain, ChevronDown, ChevronRight, FileText, Paperclip, TriangleAlert, Zap } from 'lucide-react';
+import { Brain, ChevronDown, ChevronRight, FileText, Paperclip, TriangleAlert, Zap, ListTodo } from 'lucide-react';
 import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
@@ -13,6 +13,8 @@ const KIND_LABEL: Record<TreeEntry['kind'], string> = {
   doc: '文档',
   file: '文件',
   error: '错误',
+  notice: '通知',
+  task: '任务',
 };
 
 function KindIcon({ kind }: { kind: TreeEntry['kind'] }) {
@@ -20,6 +22,7 @@ function KindIcon({ kind }: { kind: TreeEntry['kind'] }) {
   if (kind === 'doc') return <FileText className="size-3.5 shrink-0 text-muted-foreground" />;
   if (kind === 'file') return <Paperclip className="size-3.5 shrink-0 text-muted-foreground" />;
   if (kind === 'error') return <TriangleAlert className="size-3.5 shrink-0 text-warning" />;
+  if (kind === 'task') return <ListTodo className="size-3.5 shrink-0 text-chart-2" />;
   return <Zap className="size-3.5 shrink-0 text-chart-2" />;
 }
 
@@ -92,6 +95,8 @@ export function EntryRow({ entry, nodeId, indent = 0 }: EntryRowProps) {
         <span className={cn('min-w-0 flex-1 truncate', warning && 'text-warning')}>{displayName(entry)}</span>
         {dim && <span className="shrink-0 text-xs text-muted-foreground">已在上下文中</span>}
         {metricText !== undefined && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{metricText}</span>}
+        {entry.tokens !== undefined && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatTokenCount(entry.tokens)} token</span>}
+        {entry.status !== undefined && <span className="shrink-0 text-xs text-muted-foreground">{entry.status}</span>}
         {entry.durationMs !== undefined && (
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatElapsedMs(entry.durationMs)}</span>
         )}
