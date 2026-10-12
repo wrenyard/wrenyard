@@ -1087,11 +1087,6 @@ async function bootstrap(): Promise<void> {
         app.quit();
         return;
       }
-      // `general.confirmQuit` off means a single accelerator quits directly.
-      if (!settingsStore.load().general.confirmQuit) {
-        app.quit();
-        return;
-      }
       if (macQuitGate('accelerator') === 'quit') {
         app.quit();
         return;

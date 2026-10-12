@@ -315,7 +315,6 @@ export interface NotificationPreferences {
 /** Persisted general partition fields. */
 export interface GeneralPreferences {
   startupPage: StartupPagePreference;
-  confirmQuit: boolean;
 }
 
 /**
@@ -401,7 +400,6 @@ const BUILTIN_THEME_IDS: ReadonlySet<string> = new Set(BUILTIN_THEMES.map((theme
  */
 export const PREFERENCES = {
   'general.startupPage': { path: ['general', 'startupPage'], validate: (value) => value === 'last' || value === 'session' },
-  'general.confirmQuit': { path: ['general', 'confirmQuit'], validate: (value) => typeof value === 'boolean' },
   'general.openAtLogin': { path: ['general', 'openAtLogin'], validate: (value) => typeof value === 'boolean' },
   'general.menuBarQuota': { path: ['general', 'menuBarQuota'], validate: (value) => typeof value === 'boolean' },
   'appearance.theme': { path: ['appearance', 'theme'], validate: (value) => typeof value === 'string' && BUILTIN_THEME_IDS.has(value) },
