@@ -115,16 +115,6 @@ const GENERAL_CATEGORY: SettingDefinition[] = [
     source: { kind: 'preference', preference: 'general.startupPage' },
   },
   {
-    id: 'general.confirmQuit',
-    category: 'general',
-    title: '退出前确认',
-    description: '按两次 Cmd/Ctrl+Q 才退出。',
-    keywords: ['退出', '确认', 'quit', 'confirm'],
-    control: { kind: 'boolean' },
-    default: true,
-    source: { kind: 'preference', preference: 'general.confirmQuit' },
-  },
-  {
     id: 'general.menuBarQuota',
     category: 'general',
     title: '在菜单栏显示额度',
