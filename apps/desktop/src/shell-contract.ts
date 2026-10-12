@@ -221,7 +221,7 @@ export const SHELL_CHANNELS = {
   revealWorkspace: 'wrenyard-shell:reveal-workspace',
 } as const;
 
-export type ShellPage = 'session' | 'stats' | 'quota' | 'settings' | 'tasks';
+export type ShellPage = 'session' | 'trace' | 'stats' | 'quota' | 'settings' | 'tasks';
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */
@@ -1238,7 +1238,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'session' || value === 'stats' || value === 'quota' || value === 'settings' || value === 'tasks';
+  return value === 'session' || value === 'trace' || value === 'stats' || value === 'quota' || value === 'settings' || value === 'tasks';
 }
 
 /**
