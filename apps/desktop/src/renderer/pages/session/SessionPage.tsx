@@ -393,7 +393,7 @@ export function SessionPage() {
               )}
             </ResizablePanel>
             <ResizableHandle
-              className={cn('w-1.5 bg-transparent after:w-px after:bg-transparent', !inspectorOpen && 'invisible pointer-events-none')}
+              className={cn('w-1.5 bg-transparent after:w-px after:bg-border', !inspectorOpen && 'invisible pointer-events-none')}
               onPointerDown={() => setResizing(true)}
             />
             <ResizablePanel
@@ -407,20 +407,13 @@ export function SessionPage() {
               className={cn('min-h-0', panelMotion)}
               onResize={(size) => setInspectorOpen(size.inPixels > 0)}
             >
-              {/* Floating card: inset from the window edge, own border and shadow. */}
-              <div className="h-full min-h-0 pr-2 pb-2">
-                <div className="h-full min-h-0 overflow-hidden rounded-xl border bg-card shadow-sm">
               <Inspector
                 model={model}
                 events={state.events}
-                target={target}
                 tab={tab}
                 onTabChange={setTab}
-                onSelect={inspect}
                 onClose={() => setInspectorOpen(false)}
               />
-                </div>
-              </div>
             </ResizablePanel>
           </ResizablePanelGroup>
         </SidebarProvider>
