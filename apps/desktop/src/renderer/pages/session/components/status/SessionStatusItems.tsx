@@ -17,7 +17,6 @@ import {
   metricClusters,
   roleContexts,
   taskModelGroups,
-  type ConsumptionRow,
   type MetricCluster,
   type SessionCostEstimate,
   type TaskModelGroup,
@@ -110,7 +109,6 @@ export function SessionStatusItems() {
     render: () => (
       <MetricsStatusItem
         speed={speed}
-        sum={consumption.sum}
         clusters={clusters}
         taskGroups={taskGroups}
         callGroups={callGroups}
@@ -179,7 +177,6 @@ function CtxStatusItem({ budget, groups, roles, inspection, modelName, status, o
 
 interface MetricsStatusItemProps {
   speed: number | undefined;
-  sum: ConsumptionRow;
   clusters: readonly MetricCluster[];
   taskGroups: readonly TaskModelGroup[];
   callGroups: { reason: readonly TaskModelGroup[]; aux: readonly TaskModelGroup[] };
@@ -195,7 +192,7 @@ interface MetricsStatusItemProps {
  * yellow above 100 t/s and blue above 200 t/s while the label text stays muted.
  * Only the segment values animate, through the shared {@link AnimatedNumber}.
  */
-function MetricsStatusItem({ speed, sum, clusters, taskGroups, callGroups, missingTasks, runningTasks }: MetricsStatusItemProps) {
+function MetricsStatusItem({ speed, clusters, taskGroups, callGroups, missingTasks, runningTasks }: MetricsStatusItemProps) {
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const speedIconClass = speed === undefined ? undefined : speed > 200 ? 'text-sky-500' : speed > 100 ? 'text-warning' : undefined;
@@ -242,7 +239,7 @@ function MetricsStatusItem({ speed, sum, clusters, taskGroups, callGroups, missi
     {
       key: 'stats',
       icon: Coins,
-      label: <AnimatedNumber value={sum.total} format={formatTokenCount} />,
+      label: <AnimatedNumber value={totals.total} format={formatTokenCount} />,
       ariaLabel: '会话用量',
       onClick: () => setOpen((value) => !value),
       tooltip: (
