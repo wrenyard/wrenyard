@@ -4,7 +4,7 @@ import type { LedgerEvent, TurnNode } from '../../../model/types.js';
 import { TreeExpansionContext, type TreeExpansion } from './expansion.js';
 import { QueuedTaskRunsContext } from './ActionRow.js';
 import { TurnRow } from './TurnRow.js';
-import { actionAnchorId, actionNodeId, cycleNodeId, phaseNodeId, turnNodeId } from './ids.js';
+import { cycleNodeId, turnNodeId } from './ids.js';
 
 function startOf(value: string): number {
   const parsed = Date.parse(value);
@@ -46,7 +46,6 @@ export interface SessionTreeProps {
 export function SessionTree({ events, queuedTaskRuns }: SessionTreeProps) {
   const turns = useMemo(() => buildSessionTree(events), [events]);
   const [open, setOpen] = useState<Set<string>>(() => new Set());
-  const [scrollTo, setScrollTo] = useState<string | undefined>(undefined);
   const seeded = useRef(false);
 
   // Open the newest turn and its newest cycle once, then never reseed while the
@@ -71,25 +70,7 @@ export function SessionTree({ events, queuedTaskRuns }: SessionTreeProps) {
     });
   }, []);
 
-  const jumpToAction = useCallback((turn: number, cycle: number, actionId: string) => {
-    setOpen((current) => {
-      const next = new Set(current);
-      next.add(turnNodeId(turn));
-      next.add(cycleNodeId(turn, cycle));
-      next.add(phaseNodeId(turn, cycle, 'act'));
-      next.add(actionNodeId(actionId));
-      return next;
-    });
-    setScrollTo(actionId);
-  }, []);
-
-  useEffect(() => {
-    if (scrollTo === undefined) return;
-    document.getElementById(actionAnchorId(scrollTo))?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    setScrollTo(undefined);
-  }, [scrollTo]);
-
-  const value = useMemo<TreeExpansion>(() => ({ isOpen, toggle, jumpToAction }), [isOpen, toggle, jumpToAction]);
+  const value = useMemo<TreeExpansion>(() => ({ isOpen, toggle }), [isOpen, toggle]);
 
   if (turns.length === 0) {
     return <p className="text-sm text-muted-foreground">还没有可用的轮次</p>;

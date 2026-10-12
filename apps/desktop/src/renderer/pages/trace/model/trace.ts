@@ -149,6 +149,10 @@ export function buildTrace(input: readonly LedgerEvent[]): TraceModel {
     const parent = nodes.get(parentKey) ?? root;
     if (node && node !== parent && !parent.children.includes(node)) parent.children.push(node);
   }
+  for (const node of nodes.values()) if (!node.endAt) {
+    node.running = sessionRunning;
+    node.status = sessionRunning ? '运行中' : '未结束';
+  }
   const sortTree = (node: MutableNode) => { node.children.sort((a, b) => a.seq - b.seq); for (const child of node.children as MutableNode[]) sortTree(child); };
   sortTree(root);
   const spanNodes = [...nodes.values()].filter((node) => node.kind === 'reasoning' || node.kind === 'auxiliary' || node.kind === 'task');

@@ -91,6 +91,7 @@ export type WorkspaceDocReadResult = WorkspaceDocReadParams & { title: string; c
 
 export const workspaceDocReadParamsSchema = {
   type: 'object',
+  properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1, description: DOC_NAME_DESCRIPTION }, id: { type: 'string', const: 'AGENTS.md' } },
   oneOf: [
     { type: 'object', description: 'Read an ordinary project document.', required: ['project', 'kind', 'name'], properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1, description: DOC_NAME_DESCRIPTION } }, additionalProperties: false },
     { type: 'object', description: 'Read the existing registered project AGENTS.md.', required: ['project', 'id'], properties: { project: { type: 'string', minLength: 1 }, id: { type: 'string', const: 'AGENTS.md' } }, additionalProperties: false },
@@ -166,6 +167,7 @@ export type WorkspaceDocUpdateResult = WorkspaceDocReadParams & { title: string;
 
 export const workspaceDocUpdateParamsSchema = {
   type: 'object',
+  properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1 }, id: { type: 'string', const: 'AGENTS.md' }, content: { type: 'string' }, base_version: { type: 'string', minLength: 1 } },
   oneOf: [
     { type: 'object', description: 'Update an ordinary document using its read version.', required: ['project', 'kind', 'name', 'content', 'base_version'], properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1 }, content: { type: 'string' }, base_version: { type: 'string', minLength: 1 } }, additionalProperties: false },
     { type: 'object', description: 'Replace the existing registered project AGENTS.md using its read version.', required: ['project', 'id', 'content', 'base_version'], properties: { project: { type: 'string', minLength: 1 }, id: { type: 'string', const: 'AGENTS.md' }, content: { type: 'string' }, base_version: { type: 'string', minLength: 1 } }, additionalProperties: false },
@@ -215,6 +217,7 @@ const workspaceDocEditEntrySchema = {
 
 export const workspaceDocEditParamsSchema = {
   type: 'object',
+  properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1 }, id: { type: 'string', const: 'AGENTS.md' }, edits: { type: 'array', minItems: 1, items: workspaceDocEditEntrySchema }, base_version: { type: 'string', minLength: 1 } },
   oneOf: [
   { type: 'object', description: 'Apply ordered literal edits to an ordinary document. Each old must occur exactly once. base_version from doc.read is optional.', required: ['project', 'kind', 'name', 'edits'], properties: {
     project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1 }, edits: {

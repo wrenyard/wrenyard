@@ -6,7 +6,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { getEncoding } from 'js-tiktoken';
 import sharp from 'sharp';
@@ -178,11 +178,31 @@ export class FileStore {
   }
 
   /** The run whose artifact directory holds `path`, among `runIds`. */
-  runOf(path: string, runIds: Iterable<string>): string | undefined {
+  async runOf(path: string, runIds: Iterable<string>): Promise<string | undefined> {
     const absolute = resolve(path);
+    let candidate: string;
+    let trustedRoot: string;
+    try {
+      [candidate, trustedRoot] = await Promise.all([realpath(absolute), realpath(this.stateRoot)]);
+    } catch {
+      return undefined;
+    }
+    const trustedArtifactsRoot = join(trustedRoot, 'artifacts');
+    const trustedSessionsRoot = join(trustedRoot, 'sessions');
+    const inTrustedStorage = (real: string): boolean =>
+      real === trustedArtifactsRoot || isInside(real, trustedArtifactsRoot)
+      || real === trustedSessionsRoot || isInside(real, trustedSessionsRoot);
+    if (!inTrustedStorage(candidate)) return undefined;
     for (const runId of runIds) {
-      const root = this.artifactsDir(runId);
-      if (absolute === root || isInside(absolute, root)) return runId;
+      try {
+        const runRoot = await realpath(this.artifactsDir(runId));
+        if (
+          (runRoot === trustedArtifactsRoot || isInside(runRoot, trustedArtifactsRoot))
+          && (candidate === runRoot || isInside(candidate, runRoot))
+        ) return runId;
+      } catch {
+        // A missing or unresolved run root cannot authorize a read.
+      }
     }
     return undefined;
   }
