@@ -139,9 +139,9 @@ function CtxStatusItem({ budget, groups, roles, inspection, modelName, status, o
   const pct = ratio === undefined || !Number.isFinite(ratio) ? '—' : `${Math.round(Math.min(ratio, 9.99) * 100)}%`;
 
   const button = (
-    <StatusBarButton ariaLabel="上下文占用" tone={tone} tooltip={ctxTooltip(budget, pct)} className="gap-1">
+    <StatusBarButton ariaLabel="上下文占用" tone={tone} tooltip={ctxTooltip(budget, pct)} className="w-[72px] justify-start gap-1">
       <UsageRing ratio={ratio} status={status} className="size-3.5 [&_svg]:size-3.5" />
-      <span className="tabular-nums">{pct}</span>
+      <span className="ml-auto tabular-nums">{pct}</span>
     </StatusBarButton>
   );
 
