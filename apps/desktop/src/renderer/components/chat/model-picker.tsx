@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { BatteryFull, Gauge, Gift, Zap } from 'lucide-react';
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import type { SessionInferenceMode } from '@wrenyard/protocol';
 import {
@@ -14,7 +15,6 @@ import {
   ComboboxTrigger,
   ComboboxValue,
 } from '@/renderer/components/ui/combobox';
-import { Badge } from '@/renderer/components/ui/badge';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,9 +27,17 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/u
 
 /** One catalog-derived supply badge. Runtime is never a badge. */
 export interface ModelBadge {
-  kind: 'fast' | 'very-fast' | 'quota' | 'free';
-  label: string;
+  kind: 'turbo' | 'fast' | 'quota' | 'free';
+  text: string;
+  tps?: number;
 }
+
+const MODEL_BADGE_ICONS = {
+  turbo: Zap,
+  fast: Gauge,
+  quota: BatteryFull,
+  free: Gift,
+} as const;
 
 /** The raw facts a badge is derived from; all are optional catalog flags. */
 export interface ModelBadgeFacts {
@@ -48,11 +56,11 @@ export function modelBadges(facts: ModelBadgeFacts): ModelBadge[] {
   const badges: ModelBadge[] = [];
   const tps = facts.effectiveTps;
   if (tps !== undefined && tps !== null) {
-    if (tps > 200) badges.push({ kind: 'very-fast', label: `极速 · ${tps} TPS` });
-    else if (tps > 100) badges.push({ kind: 'fast', label: `快速 · ${tps} TPS` });
+    if (tps > 200) badges.push({ kind: 'turbo', text: `极速 · ${Math.round(tps)} TPS`, tps: Math.round(tps) });
+    else if (tps > 100) badges.push({ kind: 'fast', text: `快速 · ${Math.round(tps)} TPS`, tps: Math.round(tps) });
   }
-  if (facts.quotaAbundant === true) badges.push({ kind: 'quota', label: '额度充足' });
-  if (facts.free === true) badges.push({ kind: 'free', label: '免费模型' });
+  if (facts.quotaAbundant === true) badges.push({ kind: 'quota', text: '额度充足' });
+  if (facts.free === true) badges.push({ kind: 'free', text: '免费模型' });
   return badges;
 }
 
@@ -86,17 +94,37 @@ export interface ModelPickerProps {
   className?: string;
 }
 
-/** One option's label followed by its supply badges. */
-function ModelOptionContent({ option }: { option: ModelOption }) {
+/** One option's truncating name and aligned supply indicators. */
+function ModelOptionContent({ option, compact = false }: { option: ModelOption; compact?: boolean }) {
+  const speed = option.badges?.find((badge) => badge.kind === 'turbo' || badge.kind === 'fast');
+  const free = option.badges?.find((badge) => badge.kind === 'free');
+  const quota = option.badges?.find((badge) => badge.kind === 'quota');
+
+  const slot = (badge: ModelBadge | undefined, kind: ModelBadge['kind'], className: string) => {
+    if (!badge) return <span className={className} aria-hidden="true" />;
+    const Icon = MODEL_BADGE_ICONS[kind];
+    return (
+      <span className={className} role="img" aria-label={badge.text}>
+        <Icon className={`size-3.5 ${kind === 'turbo' ? 'text-amber-500' : 'text-muted-foreground'}`} />
+        {kind === 'turbo' || kind === 'fast' ? (
+          !compact && <span className="text-xs tabular-nums text-muted-foreground">{badge.tps}</span>
+        ) : null}
+      </span>
+    );
+  };
+
   return (
-    <>
-      <span className="truncate">{option.label}</span>
-      {option.badges?.map((badge) => (
-        <Badge key={badge.kind} variant="secondary" className="shrink-0">
-          {badge.label}
-        </Badge>
-      ))}
-    </>
+    <span className="flex w-full min-w-0 items-center gap-2">
+      <span className="min-w-0 truncate">{option.label}</span>
+      {!compact && (
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          {slot(speed, speed?.kind ?? 'fast', 'flex w-12 shrink-0 items-center justify-end gap-1')}
+          {slot(free, 'free', 'flex w-3.5 shrink-0 items-center justify-center')}
+          {slot(quota, 'quota', 'flex w-3.5 shrink-0 items-center justify-center')}
+        </span>
+      )}
+      {compact && speed && slot(speed, speed.kind, 'flex shrink-0 items-center justify-center')}
+    </span>
   );
 }
 
@@ -132,7 +160,7 @@ export function ModelPicker({ models, value, onChange, disabled = false, placeho
           render={<ComboboxTrigger render={<InputGroupButton variant="ghost" className={className} />} />}
         >
           <ComboboxValue>
-            {(current: ModelOption | null) => (current ? <ModelOptionContent option={current} /> : placeholder)}
+            {(current: ModelOption | null) => (current ? <ModelOptionContent option={current} compact /> : placeholder)}
           </ComboboxValue>
         </TooltipTrigger>
         {selected?.description !== undefined && <TooltipContent>{selected.description}</TooltipContent>}
@@ -147,14 +175,16 @@ export function ModelPicker({ models, value, onChange, disabled = false, placeho
               <ComboboxCollection>
                 {(option: ModelOption) => (
                   <ComboboxItem key={option.value} value={option}>
-                    {option.description === undefined ? (
+                    {option.description === undefined && !option.badges?.length ? (
                       <ModelOptionContent option={option} />
                     ) : (
                       <Tooltip>
-                        <TooltipTrigger render={<span className="flex min-w-0 flex-1 items-center gap-1.5" />}>
+                        <TooltipTrigger render={<span className="flex w-full min-w-0 items-center gap-2" />}>
                           <ModelOptionContent option={option} />
                         </TooltipTrigger>
-                        <TooltipContent side="right">{option.description}</TooltipContent>
+                        <TooltipContent side="right">
+                          {[option.description, option.badges?.map((badge) => badge.text).join(' · ')].filter(Boolean).join(' · ')}
+                        </TooltipContent>
                       </Tooltip>
                     )}
                   </ComboboxItem>
