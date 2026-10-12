@@ -1,84 +1,60 @@
-import { useEffect, useRef, useState } from 'react';
-import { keepPreviousData, queryOptions } from '@tanstack/react-query';
+import { queryOptions } from '@tanstack/react-query';
 import type { ContextInspection } from '@/shell-contract';
 import type { SessionRoutesPreviewResult } from '@wrenyard/protocol';
 import { getSessionApi, routesPreview } from './api.js';
 
-/**
- * Session context-inspection query (usage spec 3.4). The key carries the
- * session, selected model and ledger `seq`, so switching session or model
- * fetches immediately while new ledger events are throttled to at most one
- * request per second by {@link useThrottledSeq}. `keepPreviousData` keeps the
- * last numbers on screen until the next result arrives, so the ring never
- * flashes back to zero.
- */
-
-/** New ledger events trigger at most one inspection request per second. */
-export const CONTEXT_REFETCH_THROTTLE_MS = 1_000;
-
-/** Draft sessions are inspected without a `sessionId` (resident layers + snapshot). */
+/** Draft sessions have no persisted ledger yet. */
 export function contextInspectSessionId(sessionKey: string): string | undefined {
   return sessionKey === '' || sessionKey === 'draft' ? undefined : sessionKey;
 }
 
-export function contextQuery(sessionKey: string, model: string, seq: number) {
+/** Refreshed explicitly by the session provider, never by ledger sequence changes. */
+export function contextQuery(sessionKey: string, model: string) {
   const sessionId = contextInspectSessionId(sessionKey);
   return queryOptions<ContextInspection>({
-    queryKey: ['session', 'context', sessionKey, model, seq] as const,
-    queryFn: () => getSessionApi().contextInspect({
+    queryKey: ['session', 'context', sessionKey, model] as const,
+    queryFn: async () => validateContextInspection(await getSessionApi().contextInspect({
       ...(sessionId === undefined ? {} : { sessionId }),
       model,
-    }),
-    enabled: model !== '',
-    placeholderData: keepPreviousData,
-    staleTime: CONTEXT_REFETCH_THROTTLE_MS,
+    }), model),
+    enabled: false,
+    retry: false,
+    staleTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 
-/** Route previews are cheap and change slowly; a modest window avoids churn. */
-export const ROUTES_PREVIEW_STALE_MS = 30_000;
+function validateContextInspection(value: unknown, modelId: string): ContextInspection {
+  const fail = (): never => { throw new Error('Context inspection returned invalid data.'); };
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return fail();
+  const result = value as Record<string, unknown>;
+  if (result.model === null || typeof result.model !== 'object' || Array.isArray(result.model)
+    || (result.model as Record<string, unknown>).publicId !== modelId) return fail();
+  if (typeof result.totalTokens !== 'number' || !Number.isFinite(result.totalTokens) || result.totalTokens < 0) return fail();
+  if (typeof result.computedAtSeq !== 'number' || !Number.isSafeInteger(result.computedAtSeq) || result.computedAtSeq < 0) return fail();
+  if (!Array.isArray(result.layers) || !Array.isArray(result.items)) return fail();
+  const validTokenEntries = (entries: unknown[]): boolean => entries.every((entry) => {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return false;
+    const tokens = (entry as Record<string, unknown>).tokens;
+    return typeof tokens === 'number' && Number.isFinite(tokens) && tokens >= 0;
+  });
+  if (!validTokenEntries(result.layers) || !validTokenEntries(result.items)) return fail();
+  return value as ContextInspection;
+}
 
-/**
- * Auxiliary route-preview query. The key carries the session and the throttled
- * ledger `seq`, so a finished call refetches the preview while focus refreshes
- * pick up a changed model pool. `keepPreviousData` keeps the last preview on
- * screen until the next result arrives.
- */
-export function routesPreviewQuery(sessionKey: string, seq: number) {
+/** Route previews share the provider's explicit refresh triggers. */
+export function routesPreviewQuery(sessionKey: string) {
   const sessionId = contextInspectSessionId(sessionKey);
   return queryOptions<SessionRoutesPreviewResult>({
-    queryKey: ['session', 'routes-preview', sessionKey, seq] as const,
+    queryKey: ['session', 'routes-preview', sessionKey] as const,
     queryFn: () => routesPreview({ ...(sessionId === undefined ? {} : { sessionId }) }),
-    staleTime: ROUTES_PREVIEW_STALE_MS,
-    refetchOnWindowFocus: true,
-    placeholderData: keepPreviousData,
+    enabled: false,
+    retry: false,
+    staleTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
-}
-
-/**
- * Trailing throttle for a rapidly changing value. Leading changes apply
- * immediately; a burst within the interval collapses to one trailing update, so
- * a streaming turn cannot issue an inspection request per ledger event.
- */
-export function useThrottledSeq(seq: number, intervalMs = CONTEXT_REFETCH_THROTTLE_MS): number {
-  const [throttled, setThrottled] = useState(seq);
-  const lastAppliedRef = useRef(0);
-
-  useEffect(() => {
-    if (seq === throttled) return;
-    const now = Date.now();
-    const elapsed = now - lastAppliedRef.current;
-    if (elapsed >= intervalMs) {
-      lastAppliedRef.current = now;
-      setThrottled(seq);
-      return;
-    }
-    const timer = setTimeout(() => {
-      lastAppliedRef.current = Date.now();
-      setThrottled(seq);
-    }, intervalMs - elapsed);
-    return () => clearTimeout(timer);
-  }, [seq, throttled, intervalMs]);
-
-  return throttled;
 }

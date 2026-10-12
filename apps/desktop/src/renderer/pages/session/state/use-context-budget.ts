@@ -1,5 +1,4 @@
 import { useCallback, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import type { ContextInspection, QuotaSnapshot } from '@/shell-contract';
 import type { SessionRoutesPreviewResult, SessionRoutesPreviewRole } from '@wrenyard/protocol';
 import {
@@ -8,18 +7,16 @@ import {
   type ContextBudgetView,
   type UsageGroupView,
 } from '../model/usage.js';
-import { contextQuery, routesPreviewQuery, useThrottledSeq } from '../queries.js';
 import { useQuotaQuery } from '@/renderer/lib/queries';
 import { useSessionUsage } from './session-usage.js';
 
 /**
  * Headless context-budget projection shared by the composer send-block and the
  * status-bar context item. It reads the shared session usage store for the model
- * list and the throttled ledger seq, queries `session.context.inspect` for the
- * selected model and derives the budget and the composition groups. It also
- * exposes a model resolver (display name and context window) so callers can
- * label each internal role's context without a second source of truth. No JSX
- * lives here.
+ * list and the provider-owned context inspection and route preview, and derives
+ * the budget and the composition groups. It also exposes a model resolver
+ * (display name and context window) so callers can label each internal role's
+ * context without a second source of truth. No JSX lives here.
  */
 
 /** Display facts a caller can show for a model public id; fields are omitted when unknown. */
@@ -32,8 +29,6 @@ export interface ContextBudgetState {
   inspection: ContextInspection | undefined;
   budget: ContextBudgetView | undefined;
   groups: UsageGroupView[];
-  /** True until the first inspection result for the current request arrives. */
-  loading: boolean;
   /**
    * Per-role auxiliary route preview from the daemon, including roles with no
    * call and roles with no usable route; undefined until the first result.
@@ -54,17 +49,12 @@ function catalogModelLabel(quota: QuotaSnapshot | undefined, publicId: string): 
 }
 
 export function useContextBudget(
-  sessionKey: string,
+  _sessionKey: string,
   modelId: string,
   inputTokens?: number,
 ): ContextBudgetState {
-  const { models, seq } = useSessionUsage();
+  const { models, contextInspection: inspection, contextRoutesPreview: routesPreview } = useSessionUsage();
   const quota = useQuotaQuery();
-  const throttledSeq = useThrottledSeq(seq);
-  const query = useQuery(contextQuery(sessionKey, modelId, throttledSeq));
-  const inspection = query.data;
-  const previewQuery = useQuery(routesPreviewQuery(sessionKey, throttledSeq));
-  const routesPreview = previewQuery.data;
   const input = inputTokens ?? 0;
 
   const selected = models.find((entry) => entry.publicId === modelId);
@@ -106,6 +96,6 @@ export function useContextBudget(
     };
   }, [inspection, models, quota.data, previewByModel]);
 
-  return { inspection, budget, groups, loading: inspection === undefined, routesPreview, resolveModel };
+  return { inspection, budget, groups, routesPreview, resolveModel };
 }
 

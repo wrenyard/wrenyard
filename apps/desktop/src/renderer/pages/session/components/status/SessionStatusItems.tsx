@@ -1,16 +1,15 @@
-import { useCallback, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { ChevronRight, Coins, DatabaseZap, Zap } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/renderer/components/ui/popover';
 import { StatusBarButton, levelTone } from '@/renderer/components/status-bar-button';
 import { StatusBarGroup, type StatusBarSegment } from '@/renderer/components/status-bar-group';
 import { Separator } from '@/renderer/components/ui/separator';
 import { TokenBar, type TokenBarSegment } from '@/renderer/components/usage/TokenBar';
-import { UsageRing, usageRingLevel, type UsageRingStatus } from '@/renderer/components/usage/UsageRing';
+import { UsageRing, usageRingLevel } from '@/renderer/components/usage/UsageRing';
 import { AnimatedNumber } from '@/renderer/components/AnimatedNumber';
 import { useStatusBarItem } from '@/renderer/lib/statusbar';
 import { formatCost, formatElapsedMs, formatRatio, formatTokenCount } from '@/renderer/lib/format';
 import { useQuotaQuery } from '@/renderer/lib/queries';
-import type { ContextInspection } from '@/shell-contract';
 import {
   mainSpeed,
   callModelGroups,
@@ -40,8 +39,8 @@ import { ContextBreakdown } from '../usage/ContextBreakdown.js';
  */
 
 export function SessionStatusItems() {
-  const { sessionKey, models, turns, modelId, requestInspection, inputTokens } = useSessionUsage();
-  const { inspection, budget, groups, loading, resolveModel, routesPreview } = useContextBudget(sessionKey, modelId, inputTokens);
+  const { sessionKey, models, turns, modelId, requestInspection, refreshContext, inputTokens } = useSessionUsage();
+  const { budget, groups, resolveModel, routesPreview } = useContextBudget(sessionKey, modelId, inputTokens);
   const consumption = useSessionConsumption();
 
   const calls = useMemo(() => turns.flatMap((turn) => turn.calls), [turns]);
@@ -78,11 +77,6 @@ export function SessionStatusItems() {
   );
 
   const selected = models.find((entry) => entry.publicId === modelId);
-  const status: UsageRingStatus = modelId === ''
-    ? 'unknown'
-    : inspection === undefined
-      ? (loading ? 'loading' : 'unknown')
-      : (budget?.available === undefined ? 'unknown' : 'ready');
 
   const onAudit = useCallback((): void => requestInspection({ tab: 'context' }), [requestInspection]);
 
@@ -95,10 +89,9 @@ export function SessionStatusItems() {
         budget={budget}
         groups={groups}
         roles={roles}
-        inspection={inspection}
         modelName={selected?.displayName}
-        status={status}
         onAudit={onAudit}
+        onRefresh={refreshContext}
       />
     ),
   });
@@ -125,41 +118,42 @@ interface CtxStatusItemProps {
   budget: ContextBudgetView | undefined;
   groups: UsageGroupView[];
   roles: RoleContextEntry[];
-  inspection: ContextInspection | undefined;
   modelName: string | undefined;
-  status: UsageRingStatus;
   onAudit: () => void;
+  onRefresh: () => void;
 }
 
-function CtxStatusItem({ budget, groups, roles, inspection, modelName, status, onAudit }: CtxStatusItemProps) {
+function CtxStatusItem({ budget, groups, roles, modelName, onAudit, onRefresh }: CtxStatusItemProps) {
   const [open, setOpen] = useState(false);
-  const ratio = budget?.ratio;
-  const level = ratio !== undefined && Number.isFinite(ratio) ? usageRingLevel(ratio) : 'normal';
+  const wasOpen = useRef(false);
+  const ratio = budget?.ratio !== undefined && Number.isFinite(budget.ratio) ? budget.ratio : 0;
+  const level = usageRingLevel(ratio);
   const tone = levelTone(level);
-  const pct = ratio === undefined || !Number.isFinite(ratio) ? '—' : `${Math.round(Math.min(ratio, 9.99) * 100)}%`;
+  const pct = `${Math.round(Math.min(ratio, 9.99) * 100)}%`;
+
+  useEffect(() => {
+    if (open && !wasOpen.current) onRefresh();
+    wasOpen.current = open;
+  }, [open, onRefresh]);
 
   const button = (
     <StatusBarButton ariaLabel="上下文占用" tone={tone} tooltip={ctxTooltip(budget, pct)} className="w-[72px] justify-start gap-1">
-      <UsageRing ratio={ratio} status={status} className="size-3.5 [&_svg]:size-3.5" />
+      <UsageRing ratio={ratio} status="ready" className="size-3.5 [&_svg]:size-3.5" />
       <span className="ml-auto tabular-nums">{pct}</span>
     </StatusBarButton>
   );
 
   const popover = (
     <div className="flex max-h-[560px] flex-col">
-      {inspection !== undefined ? (
-        <div className="min-h-0 overflow-y-auto">
-          <ContextBreakdown
-            roles={roles}
-            budget={budget}
-            groups={groups}
-            modelName={modelName}
-            onAudit={onAudit}
-          />
-        </div>
-      ) : (
-        <p className="p-4 text-xs text-muted-foreground">正在计算…</p>
-      )}
+      <div className="min-h-0 overflow-y-auto">
+        <ContextBreakdown
+          roles={roles}
+          budget={budget}
+          groups={groups}
+          modelName={modelName}
+          onAudit={onAudit}
+        />
+      </div>
     </div>
   );
 
@@ -475,7 +469,7 @@ function formatPercent(value: number): string {
  * keep the `窗口未知` note.
  */
 function ctxTooltip(budget: ContextBudgetView | undefined, pct: string): string {
-  if (budget === undefined) return '上下文 · 窗口未知';
+  if (budget === undefined) return '上下文 0%';
   const totalLabel = formatTokenCount(budget.total);
   if (budget.available === undefined) return `上下文 · 约 ${totalLabel} · 窗口未知`;
   return `上下文 ${pct} · 约 ${totalLabel} / ${formatTokenCount(budget.available)}`;
