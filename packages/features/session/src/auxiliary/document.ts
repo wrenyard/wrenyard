@@ -175,6 +175,7 @@ function documentSystemPrompt(deps: ActionRunnerDeps): string {
     '',
     'Rules:',
     '- A document is identified by its project, its kind (spec, report or handoff) and its name.',
+    '- Workspace documents are shared across sessions and are directly readable regardless of prior session presence; read fresh before a version-based write.',
     "- List a project's documents with workspace_doc_list to find a name.",
     '- To create a document give a short lowercase slug; the full dated name is returned.',
     '- Read a document before revising or deleting it, and pass base_version taken from workspace_doc_read.',
