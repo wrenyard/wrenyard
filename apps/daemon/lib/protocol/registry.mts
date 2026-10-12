@@ -873,7 +873,7 @@ export const methodRegistry: {
   'workspace.doc.read': {
     params: workspaceDocReadParamsSchema,
     result: workspaceDocReadResultSchema,
-    description: 'Read one document of one registered project together with its version token (the first 8 hex characters of the content sha256), which is passed back as base_version to workspace.doc.update, workspace.doc.edit or workspace.doc.delete. Read-only.',
+    description: 'Read one ordinary project document by project/kind/name, or the existing registered project AGENTS.md by project/id: "AGENTS.md". Returns a version token for update or edit. Read-only.',
   },
   'workspace.doc.create': {
     params: workspaceDocCreateParamsSchema,
@@ -883,12 +883,12 @@ export const methodRegistry: {
   'workspace.doc.update': {
     params: workspaceDocUpdateParamsSchema,
     result: workspaceDocUpdateResultSchema,
-    description: "Overwrite one existing document in a registered project. name is a full name returned by workspace.doc.list or workspace.doc.create and base_version comes from workspace.doc.read. Refuses with missing when the document does not exist and conflict when base_version does not match the current content.",
+    description: 'Overwrite an existing ordinary project document or the existing registered project AGENTS.md addressed by id: "AGENTS.md". base_version comes from doc.read; stale versions conflict.',
   },
   'workspace.doc.edit': {
     params: workspaceDocEditParamsSchema,
     result: workspaceDocUpdateResultSchema,
-    description: 'Apply ordered literal edits to one existing document in a registered project. name is a full name returned by workspace.doc.list or workspace.doc.create. Each old must occur exactly once; otherwise the edit is refused with not_found or not_unique naming the offending edit by index. An optional base_version mismatch is refused with conflict.',
+    description: 'Apply ordered unique literal edits to an existing ordinary project document or the existing registered project AGENTS.md addressed by id: "AGENTS.md". Ordinary base_version is optional; AGENTS.md requires it and nonempty edits/old text.',
   },
   'workspace.doc.delete': {
     params: workspaceDocDeleteParamsSchema,
