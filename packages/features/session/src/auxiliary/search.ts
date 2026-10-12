@@ -7,6 +7,7 @@
 
 import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, resolve, sep } from 'node:path';
+import { platform } from 'node:os';
 
 import { collectSessionFiles, type LedgerEvent, type LedgerEventDraft } from '../ledger/store.ts';
 import { makeDocumentDraft } from '../documents.ts';
@@ -114,22 +115,20 @@ export async function runSearchAction(
 
   const runIds = sessionRunIds(events);
   let listed = false;
-  let loose = false;
   const tokens = extractPathTokens(action.intent);
   const exact: { path: string; kind: 'file' | 'doc'; taskRunId?: string }[] = [];
   for (const token of tokens) {
-    const hit = classifyPath(deps, token, catalog, sessionFiles, runIds, ctx);
+    const hit = await classifyPath(deps, token, catalog, sessionFiles, runIds, ctx);
     if (hit === undefined) {
       // Explicit filesystem paths fail as paths; they are never reinterpreted
       // as document-search intent just because they are not Markdown files.
       const absolute = isAbsolute(token) ? resolve(token) : resolve(ctx.workspaceRoot, token);
-      const run = deps.fileStore.runOf(absolute, runIds);
+      const run = await deps.fileStore.runOf(absolute, runIds);
       if (run !== undefined && statSync(absolute, { throwIfNoEntry: false })?.isDirectory() === true) {
         notes.push(renderRunFiles(await deps.fileStore.listRunFiles(run)));
         listed = true;
       } else if (existsSync(absolute)) unsupported.push(absolute);
       else if (isExplicitPathToken(token)) missing.push(token);
-      else loose = true;
       continue;
     }
     if (!exact.some((item) => item.path === hit.path)) exact.push(hit);
@@ -138,16 +137,16 @@ export async function runSearchAction(
   const residual = residualText(action.intent, tokens);
   // A written path that resolves is read directly; the words around it are a
   // label, not a search request.
-  const needSearch = tokens.length === 0 || loose || missing.some((path) => /\.md$/iu.test(path));
+  const needSearch = tokens.length === 0;
   if (!needSearch && residual !== '') notes.push('Only the stated paths were read. For other documents, send a separate read without paths.');
 
   let picks: { path: string; reason: string }[] = [];
   if (needSearch) {
     const view = buildDocSearch({ catalog, loadedPaths: [...loadedDocs], intent: action.intent });
     const outcome = await runDocSearchCall(deps, view, ctx);
-    if (!outcome.ok) return fail(`doc-search call failed: ${outcome.error}`);
+    if (!outcome.ok) return fail(withMissing(`doc-search call failed: ${outcome.error}`, missing));
     const parsed = parseDocSearch(outcome.text, catalog);
-    if (!parsed.ok) return fail(parsed.reason);
+    if (!parsed.ok) return fail(withMissing(parsed.reason, missing));
     notes.push(...parsed.notes);
     picks = parsed.picks.filter((pick) => !loadedDocs.has(pick.path));
     const nearTitles = parsed.near.map((near) => `${near.path} (${near.title})`);
@@ -209,6 +208,10 @@ export async function runSearchAction(
   if (notes.length > 0) sections.push(...notes);
   if (sections.length === 0) sections.push('no paths were processed');
   return { status: failed ? 'failed' : 'done', result: sections.join('\n'), deferred };
+}
+
+function withMissing(message: string, missing: readonly string[]): string {
+  return missing.length === 0 ? message : `${message}\nmissing: ${missing.join(', ')}`;
 }
 
 /** One `doc-search` model call; a failure is returned, not thrown. */
@@ -280,19 +283,19 @@ async function readSessionFile(
  * Resolve one intent token to an allowed, registered path: a session file, a
  * file one of this session's runs left, or a project document.
  */
-function classifyPath(
+async function classifyPath(
   deps: ActionWorkflowDeps,
   raw: string,
   catalog: readonly DocCatalogEntry[],
   sessionFiles: readonly { path: string }[],
   runIds: ReadonlySet<string>,
   ctx: ActionRunContext,
-): { path: string; kind: 'file' | 'doc'; taskRunId?: string } | undefined {
+): Promise<{ path: string; kind: 'file' | 'doc'; taskRunId?: string } | undefined> {
   const sessionFile = sessionFiles.find((file) => sessionFileMatches(file.path, raw, ctx.sessionId));
   if (sessionFile) return { path: sessionFile.path, kind: 'file' };
   if (isAbsolute(raw)) {
     const absolute = resolve(raw);
-    const run = deps.fileStore.runOf(absolute, runIds);
+    const run = await deps.fileStore.runOf(absolute, runIds);
     if (run !== undefined && statSync(absolute, { throwIfNoEntry: false })?.isFile() === true) {
       return { path: absolute, kind: 'file', taskRunId: run };
     }
@@ -412,16 +415,17 @@ function isExplicitPathToken(token: string): boolean {
 function sessionFileMatches(registeredPath: string, token: string, sessionId: string): boolean {
   if (normalizePath(registeredPath) === normalizePath(token)) return true;
   const normalizedToken = normalizePath(token);
-  const alias = `sessions/${sessionId}/files/`;
+  const normalizedAlias = normalizePath(`sessions/${sessionId}/files/`);
+  const alias = `${normalizedAlias.replace(/\/+$/u, '')}/`;
   if (!normalizedToken.startsWith(alias)) return false;
-  const relativeFile = normalizedToken.slice('sessions/'.length);
+  const relativeFile = normalizedToken.slice(normalizedAlias.slice(0, 'sessions/'.length).length);
   return normalizePath(registeredPath).endsWith(`/${relativeFile}`);
 }
 
 /** Compare path spellings independent of Windows separators and case. */
 function normalizePath(path: string): string {
   const normalized = path.replace(/\\/gu, '/').replace(/\/+$/u, '');
-  return /^[A-Za-z]:\//u.test(normalized) ? normalized.toLowerCase() : normalized;
+  return platform() === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 /** The intent text left once the path tokens, quotes and punctuation are removed. */
