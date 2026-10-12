@@ -1,13 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
+import { useSessionUsage } from '../../state/session-usage.js';
 import { X } from 'lucide-react';
 import { Button } from '@/renderer/components/ui/button';
 import { Sidebar } from '@/renderer/components/ui/sidebar';
-import { ScrollArea } from '@/renderer/components/ui/scroll-area';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/renderer/components/ui/tabs';
 import type { InspectorTarget, LedgerEvent, SessionModel } from '../../model/types.js';
-import { useSessionUsage } from '../../state/session-usage.js';
-import { ContextTab } from './ContextTab.js';
-import { LedgerList } from './LedgerList.js';
 import { SessionTree } from './tree/SessionTree.js';
 
 export interface InspectorContextValue {
@@ -31,13 +27,12 @@ export function InspectorProvider({ children, target, inspect, inspectTimeline }
 export interface InspectorProps {
   model: SessionModel;
   events: readonly LedgerEvent[];
-  tab: string;
-  onTabChange(tab: string): void;
   onClose(): void;
 }
 
-/** Right-hand inspector: the session tree, the raw ledger and the context audit. */
-export function Inspector({ model, events, tab, onTabChange, onClose }: InspectorProps) {
+/** Right-hand inspector for session details. */
+export function Inspector({ model, events, onClose }: InspectorProps) {
+  const { sessionKey } = useSessionUsage();
   const queuedTaskRuns = useMemo(() => {
     const ids = new Set<string>();
     for (const turn of model.turns) {
@@ -47,11 +42,6 @@ export function Inspector({ model, events, tab, onTabChange, onClose }: Inspecto
     }
     return ids;
   }, [model]);
-  // A requested ledger jump (from the usage panel or the context tab) is
-  // preserved in the shared store; forward its seq so the ledger focuses it.
-  const { inspection, sessionKey } = useSessionUsage();
-  const focusSeq = inspection?.sessionKey === sessionKey && inspection.tab === 'ledger' ? inspection.seq : undefined;
-
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose();
@@ -62,36 +52,16 @@ export function Inspector({ model, events, tab, onTabChange, onClose }: Inspecto
 
   return (
     <Sidebar collapsible="none" className="min-h-0 w-full">
-      <Tabs value={tab} onValueChange={(value) => onTabChange(String(value))} className="flex h-full min-h-0 flex-col gap-0">
-        <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
-          <TabsList variant="line">
-            <TabsTrigger value="detail">详情</TabsTrigger>
-            <TabsTrigger value="ledger">账本</TabsTrigger>
-            <TabsTrigger value="context">上下文</TabsTrigger>
-          </TabsList>
+      <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
+          <span className="text-sm font-medium">详情</span>
           <Button variant="ghost" size="icon" aria-label="关闭检查器" onClick={onClose}><X /></Button>
+      </div>
+      {/* Plain scroller: the tree must be sized by the panel, never by its widest row. */}
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+        <div className="min-w-0 p-3 wrap-anywhere">
+          <SessionTree key={sessionKey} events={events} queuedTaskRuns={queuedTaskRuns} />
         </div>
-        <TabsContent value="detail" className="min-h-0 flex-1">
-          {/* Plain scroller: the tree must be sized by the panel, never by its widest row. */}
-          <div className="h-full overflow-x-hidden overflow-y-auto">
-            <div className="min-w-0 p-3 wrap-anywhere">
-              <SessionTree key={sessionKey} events={events} queuedTaskRuns={queuedTaskRuns} />
-            </div>
           </div>
-        </TabsContent>
-        <TabsContent value="ledger" className="min-h-0 flex-1">
-          <div className="flex h-full min-h-0 flex-col p-4">
-            <LedgerList key={focusSeq === undefined ? 'ledger' : inspection?.nonce} model={model} events={events} focusSeq={focusSeq} />
-          </div>
-        </TabsContent>
-        <TabsContent value="context" className="min-h-0 flex-1">
-          <ScrollArea className="h-full">
-            <div className="p-4">
-              <ContextTab model={model} />
-            </div>
-          </ScrollArea>
-        </TabsContent>
-      </Tabs>
     </Sidebar>
   );
 }

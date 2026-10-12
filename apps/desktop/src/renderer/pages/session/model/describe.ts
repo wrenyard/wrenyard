@@ -1,5 +1,5 @@
 import type { TimelineTone } from '@/renderer/components/timeline-bars';
-import type { ActionModel, CallModel, ContextItem, LedgerEvent, Phase, TurnModel } from './types.js';
+import type { ActionModel, CallModel, ContextItem, Phase, TurnModel } from './types.js';
 
 /* Central product copy and mappings for the session page. */
 
@@ -189,44 +189,4 @@ export function actionLabel(action: {
 
 export function materialTitle(item: ContextItem): string {
   return item.title && item.title.trim() !== '' ? item.title : basename(item.path);
-}
-
-export function ledgerEventType(event: LedgerEvent): string {
-  return (event as { type: string }).type;
-}
-
-function oneLine(value: string, max = 140): string {
-  const line = value.split('\n', 1)[0] ?? '';
-  return line.length > max ? `${line.slice(0, max)}…` : line;
-}
-
-export function summarizeLedgerEvent(event: LedgerEvent): string {
-  const record = event as unknown as Record<string, unknown>;
-  const action = record.action as { type?: unknown } | undefined;
-  switch (ledgerEventType(event)) {
-    case 'session.created': return String(record.workspaceRoot ?? '');
-    case 'turn.started': return oneLine(String(record.text ?? ''));
-    case 'step.started': return String(record.model ?? '');
-    case 'step.finished': return String(record.status ?? '');
-    case 'reasoning.thinking': return oneLine(String(record.text ?? ''));
-    case 'reasoning.completed': return oneLine(String(record.text ?? ''));
-    case 'document.found': return oneLine(String(record.understanding ?? ''));
-    case 'document.content': return `${record.format} · ${record.path}`;
-    case 'files.attached': return `${record.source} · ${Array.isArray(record.files) ? record.files.length : 0} 个文件`;
-    case 'memory.recalled': return String(record.path ?? '');
-    case 'action.started': return String(action?.type ?? '');
-    case 'action.titled': return oneLine(String(record.title ?? ''));
-    case 'action.finished': return oneLine(`${action?.type} · ${record.status}: ${record.result ?? ''}`);
-    case 'span.started': return `${record.kind} · ${(record.request as { model?: unknown } | undefined)?.model ?? ''}`;
-    case 'span.finished': return `${record.kind} · ${record.status}`;
-    case 'workspace.changed': return `${record.change} ${record.target}${record.worktreeId ? ` ${record.worktreeId}` : ''}`;
-    case 'turn.interrupted': return String(record.reason ?? '');
-    case 'turn.finished': return String(record.status ?? '');
-    case 'reply.sent':
-    case 'session.titled': return oneLine(String(record.text ?? ''));
-    case 'system.info':
-    case 'system.warning':
-    case 'system.error': return oneLine(`${record.code}: ${record.message}`);
-    default: return '';
-  }
 }
