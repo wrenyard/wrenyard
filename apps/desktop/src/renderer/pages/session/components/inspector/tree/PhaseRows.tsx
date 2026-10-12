@@ -1,4 +1,4 @@
-import { Brain, FileText, MessageCircle, TriangleAlert } from 'lucide-react';
+import { MessageCircle, TriangleAlert } from 'lucide-react';
 import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { Reasoning } from '@/renderer/components/chat/reasoning';
 import { formatTokenCount } from '@/renderer/lib/format';
@@ -19,7 +19,8 @@ function TranscriptItem({ turn, cycle, item, index }: { turn: number; cycle: Cyc
   if (item.kind === 'action') return <ActionRow action={item.action} />;
   if (item.kind === 'reply') return <div className="flex items-start gap-2 px-2 py-1 text-sm"><MessageCircle className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><Markdown>{item.text}</Markdown></div>;
   if (item.kind === 'error' || item.kind === 'notice') return <div className="flex items-start gap-2 px-2 py-1 text-xs text-warning"><TriangleAlert className="size-3.5 shrink-0" />{item.text}</div>;
-  const reason = item.reason;
+  if (item.kind !== 'reasoning') return null;
+  const { reason } = item;
   return (
     <div className="flex flex-col gap-1 px-2 py-1">
       {reason.thinking && <Reasoning streaming={false} defaultOpen={false} title={`思考过程 · ${formatTokenCount(Math.max(1, Math.round(reason.thinking.length / 4)))} token`}>{reason.thinking}</Reasoning>}

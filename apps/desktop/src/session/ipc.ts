@@ -17,6 +17,7 @@ import { describeFiles, discardStagedFiles, stageClipboardImage } from './media.
 
 export const SESSION_CHANNELS = {
   list: 'session:list', create: 'session:create', ledger: 'session:ledger',
+  ledgerSnapshot: 'session:ledger-snapshot',
   send: 'session:send', interrupt: 'session:interrupt', models: 'session:models',
   context: 'session:context', tasks: 'session:tasks',
   routesPreview: 'session:routes-preview',
@@ -325,6 +326,17 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
   handle(SESSION_CHANNELS.ledger, (event, value) => {
     if (typeof value !== 'string' || !value) throw new Error('Invalid sessionId');
     return openLedger(event.sender, value);
+  });
+  handle(SESSION_CHANNELS.ledgerSnapshot, async (_event, value) => {
+    if (typeof value !== 'string' || !value) throw new Error('Invalid sessionId');
+    const events: LedgerEvent[] = [];
+    let afterSeq = 0;
+    while (true) {
+      const page = await request<EventPage>('session.events', { sessionId: value, afterSeq, waitMs: 0 });
+      events.push(...page.events);
+      if (page.events.length) afterSeq = page.events[page.events.length - 1]!.seq;
+      if (afterSeq >= page.lastSeq) return events;
+    }
   });
   handle(SESSION_CHANNELS.tasks, async (_event, value) => {
     if (!Array.isArray(value) || !value.every(id => typeof id === 'string')) {
