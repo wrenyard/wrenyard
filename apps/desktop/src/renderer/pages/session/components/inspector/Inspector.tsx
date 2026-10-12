@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '@/renderer/components/ui/button';
+import { Sidebar } from '@/renderer/components/ui/sidebar';
 import { ScrollArea } from '@/renderer/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/renderer/components/ui/tabs';
 import type { InspectorTarget, LedgerEvent, SessionModel } from '../../model/types.js';
@@ -30,10 +31,8 @@ export function InspectorProvider({ children, target, inspect, inspectTimeline }
 export interface InspectorProps {
   model: SessionModel;
   events: readonly LedgerEvent[];
-  target?: InspectorTarget;
   tab: string;
   onTabChange(tab: string): void;
-  onSelect(target: InspectorTarget): void;
   onClose(): void;
 }
 
@@ -62,7 +61,7 @@ export function Inspector({ model, events, tab, onTabChange, onClose }: Inspecto
   }, [onClose]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <Sidebar collapsible="none" className="min-h-0 w-full">
       <Tabs value={tab} onValueChange={(value) => onTabChange(String(value))} className="flex h-full min-h-0 flex-col gap-0">
         <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
           <TabsList variant="line">
@@ -93,6 +92,6 @@ export function Inspector({ model, events, tab, onTabChange, onClose }: Inspecto
           </ScrollArea>
         </TabsContent>
       </Tabs>
-    </div>
+    </Sidebar>
   );
 }
