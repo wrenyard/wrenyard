@@ -17,7 +17,11 @@ import {
   type ReactNode,
   type SetStateAction,
 } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import type { ContextInspection } from '@/shell-contract';
+import type { SessionRoutesPreviewResult } from '@wrenyard/protocol';
 import type { DraftAttachment, LedgerEvent, ModelEntry, TurnModel } from '../model/types.js';
+import { contextQuery, routesPreviewQuery } from '../queries.js';
 import { retainReasoningEffort, type ReasoningEffort } from './reasoning-effort.js';
 import { setQuotaFocus } from '@/renderer/lib/statusbar';
 import {
@@ -50,6 +54,8 @@ export interface SessionUsage {
   events: readonly LedgerEvent[];
   turns: readonly TurnModel[];
   seq: number;
+  contextInspection: ContextInspection | undefined;
+  contextRoutesPreview: SessionRoutesPreviewResult | undefined;
   modelId: string;
   effort: ReasoningEffort;
   inputText: string;
@@ -58,6 +64,8 @@ export interface SessionUsage {
   inspection?: SessionUsageInspection;
   requestModel(modelId: string): void;
   requestInspection(options?: { tab?: 'context' | 'ledger'; seq?: number }): void;
+  /** Refresh the shared context inspection and route preview for the active session. */
+  refreshContext(): void;
   /** Publish the composer's debounced input token count (or 0 when empty). */
   setInputTokens(tokens: number): void;
 }
@@ -84,12 +92,13 @@ export interface SessionUsageProviderProps {
   models: readonly ModelEntry[];
   events: readonly LedgerEvent[];
   turns: readonly TurnModel[];
+  ledgerReady: boolean;
   onInspect(request: InspectionRequest): void;
   children: ReactNode;
 }
 
 /** Owns the session projection and composer selection for the active session. */
-export function SessionUsageProvider({ sessionKey, models, events, turns, onInspect, children }: SessionUsageProviderProps) {
+export function SessionUsageProvider({ sessionKey, models, events, turns, ledgerReady, onInspect, children }: SessionUsageProviderProps) {
   // The composer selection is keyed by the active session: switching sessions
   // resets the model/effort and reloads the destination draft during render.
   const [selectionKey, setSelectionKey] = useState(sessionKey);
@@ -130,6 +139,69 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     for (const event of events) if (event.seq > latest) latest = event.seq;
     return latest;
   }, [events]);
+
+  const contextQueryObserver = useQuery(contextQuery(sessionKey, modelId));
+  const routesQueryObserver = useQuery(routesPreviewQuery(sessionKey));
+  const identity = `${sessionKey}\u0000${modelId}`;
+  const contextInspection = contextQueryObserver.data?.model.publicId === modelId ? contextQueryObserver.data : undefined;
+  const contextRoutesPreview = routesQueryObserver.data;
+  const completionMarker = useMemo(() => events.reduce((latest, event) =>
+    (event.type === 'reasoning.completed' || event.type === 'turn.finished')
+      ? Math.max(latest, event.seq)
+      : latest, 0), [events]);
+  const latestCompletionMarker = useRef(completionMarker);
+  latestCompletionMarker.current = completionMarker;
+  const coordinator = useRef({ identity: '', active: false, busy: false, pending: false, marker: 0 });
+  const runRefresh = useCallback(async (): Promise<void> => {
+    const gate = coordinator.current;
+    if (!gate.active) return;
+    if (gate.busy) {
+      gate.pending = true;
+      return;
+    }
+    gate.busy = true;
+    try {
+      do {
+        gate.pending = false;
+        await Promise.allSettled([
+          Promise.resolve().then(() => contextQueryObserver.refetch({ cancelRefetch: false })),
+          Promise.resolve().then(() => routesQueryObserver.refetch({ cancelRefetch: false })),
+        ]);
+      } while (coordinator.current === gate && gate.active && gate.pending);
+    } finally {
+      gate.busy = false;
+    }
+  }, [contextQueryObserver.refetch, routesQueryObserver.refetch]);
+  const refreshContext = useCallback(() => {
+    void runRefresh();
+  }, [runRefresh]);
+  const refreshRef = useRef(refreshContext);
+  refreshRef.current = refreshContext;
+
+  // Only session/model activation owns the lifetime of a refresh gate.
+  useEffect(() => {
+    const gate = {
+      identity,
+      active: ledgerReady && modelId !== '',
+      busy: false,
+      pending: false,
+      marker: latestCompletionMarker.current,
+    };
+    coordinator.current = gate;
+    if (gate.active) void runRefresh();
+    return () => {
+      gate.active = false;
+      gate.pending = false;
+    };
+  }, [identity, ledgerReady, modelId, runRefresh]);
+
+  // Completed reasoning/turn markers refresh without tearing down the gate.
+  useEffect(() => {
+    const gate = coordinator.current;
+    if (!gate.active || gate.identity !== identity || completionMarker <= gate.marker) return;
+    gate.marker = completionMarker;
+    void runRefresh();
+  }, [completionMarker, identity, runRefresh]);
 
   const setText = useCallback((next: string) => {
     setTextState(next);
@@ -181,6 +253,7 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
       tab: request.tab,
       ...(request.seq === undefined ? {} : { seq: request.seq }),
     });
+    if (request.tab === 'context') refreshRef.current();
   }, [sessionKey, onInspect]);
 
   const value = useMemo<SessionUsageContextValue>(() => ({
@@ -189,6 +262,8 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     events,
     turns,
     seq,
+    contextInspection,
+    contextRoutesPreview,
     modelId,
     effort,
     inputText: text,
@@ -196,6 +271,7 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     inspection: inspections[sessionKey],
     requestModel,
     requestInspection,
+    refreshContext,
     setInputTokens,
     setModelId,
     setEffort,
@@ -206,8 +282,8 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, onInsp
     setAttachments,
     clearAttachments,
   }), [
-    sessionKey, models, events, turns, seq, modelId, effort, text, inputTokens, attachments,
-    inspections, requestModel, requestInspection, setInputTokens, setText, clearText, setAttachments, clearAttachments,
+    sessionKey, models, events, turns, seq, contextInspection, contextRoutesPreview, modelId, effort, text, inputTokens, attachments,
+    inspections, requestModel, requestInspection, refreshContext, setInputTokens, setText, clearText, setAttachments, clearAttachments,
   ]);
 
   return <SessionUsageContext.Provider value={value}>{children}</SessionUsageContext.Provider>;
@@ -222,10 +298,10 @@ function useSessionUsageContext(): SessionUsageContextValue {
 /** Read the loaded session projection and request model/inspection changes. */
 export function useSessionUsage(): SessionUsage {
   const {
-    sessionKey, models, events, turns, seq, modelId, effort, inputText, inputTokens,
-    inspection, requestModel, requestInspection, setInputTokens,
+    sessionKey, models, events, turns, seq, contextInspection, contextRoutesPreview, modelId, effort, inputText, inputTokens,
+    inspection, requestModel, requestInspection, refreshContext, setInputTokens,
   } = useSessionUsageContext();
-  return { sessionKey, models, events, turns, seq, modelId, effort, inputText, inputTokens, inspection, requestModel, requestInspection, setInputTokens };
+  return { sessionKey, models, events, turns, seq, contextInspection, contextRoutesPreview, modelId, effort, inputText, inputTokens, inspection, requestModel, requestInspection, refreshContext, setInputTokens };
 }
 
 /** Read and update the composer selection for the active session. */
