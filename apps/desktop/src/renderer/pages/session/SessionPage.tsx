@@ -313,6 +313,7 @@ export function SessionPage() {
           models={state.models}
           events={state.events}
           turns={model.turns}
+          ledgerReady={sessionKey === 'draft' || !state.loadingLedger}
           onInspect={inspectRequest}
         >
           <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
