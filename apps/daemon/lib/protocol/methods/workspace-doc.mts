@@ -1,8 +1,8 @@
 /**
  * Typed JSON-RPC params/results and JSON schemas for workspace.doc methods.
  *
- * Documents are addressed by project, kind and name only: every params and
- * result carries exactly those fields. No generic operations are exposed.
+ * Ordinary documents are addressed by project, kind and name. The fixed
+ * project instruction document uses project and id: 'AGENTS.md'.
  */
 
 import type { JsonSchema } from '../jsonrpc.mts'
@@ -83,48 +83,26 @@ export const workspaceDocListResultSchema = {
 
 // ─── workspace.doc.read ────────────────────────────────────────────
 
-export interface WorkspaceDocReadParams {
+export type WorkspaceDocReadParams = {
   project: string
-  kind: WorkspaceDocKind
-  name: string
-}
+} & ({ kind: WorkspaceDocKind; name: string; id?: never } | { id: 'AGENTS.md'; kind?: never; name?: never })
 
-export interface WorkspaceDocReadResult {
-  project: string
-  kind: WorkspaceDocKind
-  name: string
-  title: string
-  content: string
-  version: string
-}
+export type WorkspaceDocReadResult = WorkspaceDocReadParams & { title: string; content: string; version: string }
 
 export const workspaceDocReadParamsSchema = {
   type: 'object',
-  description: 'Read one document of one registered project and its current version token. Refuses a document that does not exist with missing.',
-  required: ['project', 'kind', 'name'],
-  properties: {
-    project: { type: 'string', minLength: 1, description: 'The registered project the document belongs to.' },
-    kind: docKindProperty,
-    name: { type: 'string', minLength: 1, description: DOC_NAME_DESCRIPTION },
-  },
-  additionalProperties: false,
+  oneOf: [
+    { type: 'object', description: 'Read an ordinary project document.', required: ['project', 'kind', 'name'], properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1, description: DOC_NAME_DESCRIPTION } }, additionalProperties: false },
+    { type: 'object', description: 'Read the existing registered project AGENTS.md.', required: ['project', 'id'], properties: { project: { type: 'string', minLength: 1 }, id: { type: 'string', const: 'AGENTS.md' } }, additionalProperties: false },
+  ],
 } as const satisfies JsonSchema
 
 export const workspaceDocReadResultSchema = {
   type: 'object',
-  required: ['project', 'kind', 'name', 'title', 'content', 'version'],
-  properties: {
-    project: { type: 'string', description: 'The registered project the document belongs to.' },
-    kind: docKindProperty,
-    name: { type: 'string', description: 'The full document name that was read.' },
-    title: { type: 'string', description: "The document title: its first '# ' heading, or the name when it has none." },
-    content: { type: 'string', description: 'Full UTF-8 content of the document.' },
-    version: {
-      type: 'string',
-      description: 'Version token of the content: the first 8 hex characters of its sha256. Pass it as base_version to workspace.doc.update, workspace.doc.edit or workspace.doc.delete.',
-    },
-  },
-  additionalProperties: false,
+  oneOf: [
+    { type: 'object', required: ['project', 'kind', 'name', 'title', 'content', 'version'], properties: { project: { type: 'string' }, kind: docKindProperty, name: { type: 'string' }, title: { type: 'string' }, content: { type: 'string' }, version: { type: 'string', description: 'First 8 hex characters of content SHA-256.' } }, additionalProperties: false },
+    { type: 'object', required: ['project', 'id', 'title', 'content', 'version'], properties: { project: { type: 'string' }, id: { type: 'string', const: 'AGENTS.md' }, title: { type: 'string' }, content: { type: 'string' }, version: { type: 'string', description: 'First 8 hex characters of content SHA-256.' } }, additionalProperties: false },
+  ],
 } as const satisfies JsonSchema
 
 // ─── workspace.doc.create ──────────────────────────────────────────
@@ -182,47 +160,22 @@ export const workspaceDocCreateResultSchema = {
 
 // ─── workspace.doc.update ──────────────────────────────────────────
 
-export interface WorkspaceDocUpdateParams {
-  project: string
-  kind: WorkspaceDocKind
-  name: string
-  content: string
-  /** Version token from workspace.doc.read; the optimistic concurrency token. */
-  base_version: string
-}
+export type WorkspaceDocUpdateParams = WorkspaceDocReadParams & { content: string; base_version: string }
 
-export interface WorkspaceDocUpdateResult {
-  project: string
-  kind: WorkspaceDocKind
-  name: string
-  title: string
-  change: 'updated'
-  version: string
-}
+export type WorkspaceDocUpdateResult = WorkspaceDocReadParams & { title: string; change: 'updated'; version: string }
 
 export const workspaceDocUpdateParamsSchema = {
   type: 'object',
-  description:
-    "Overwrite one existing document in a registered project. name is a full name returned by workspace.doc.list or workspace.doc.create and base_version comes from workspace.doc.read. Refuses with missing when the document does not exist and conflict when base_version does not match the current content.",
-  required: ['project', 'kind', 'name', 'content', 'base_version'],
-  properties: {
-    project: { type: 'string', minLength: 1, description: 'The registered project the document belongs to.' },
-    kind: docKindProperty,
-    name: { type: 'string', minLength: 1, description: DOC_NAME_DESCRIPTION },
-    content: { type: 'string', description: 'Full UTF-8 Markdown content to write.' },
-    base_version: {
-      type: 'string',
-      minLength: 1,
-      description: "Version token from workspace.doc.read. Refuses with conflict when it no longer matches the current content.",
-    },
-  },
-  additionalProperties: false,
+  oneOf: [
+    { type: 'object', description: 'Update an ordinary document using its read version.', required: ['project', 'kind', 'name', 'content', 'base_version'], properties: { project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1 }, content: { type: 'string' }, base_version: { type: 'string', minLength: 1 } }, additionalProperties: false },
+    { type: 'object', description: 'Replace the existing registered project AGENTS.md using its read version.', required: ['project', 'id', 'content', 'base_version'], properties: { project: { type: 'string', minLength: 1 }, id: { type: 'string', const: 'AGENTS.md' }, content: { type: 'string' }, base_version: { type: 'string', minLength: 1 } }, additionalProperties: false },
+  ],
 } as const satisfies JsonSchema
 
 export const workspaceDocUpdateResultSchema = {
   type: 'object',
-  required: ['project', 'kind', 'name', 'title', 'change', 'version'],
-  properties: {
+  oneOf: [
+  { type: 'object', required: ['project', 'kind', 'name', 'title', 'change', 'version'], properties: {
     project: { type: 'string', description: 'The registered project the document belongs to.' },
     kind: docKindProperty,
     name: { type: 'string', description: 'The full document name that was written.' },
@@ -232,8 +185,9 @@ export const workspaceDocUpdateResultSchema = {
       type: 'string',
       description: 'Version token of the written content: the first 8 hex characters of its sha256. Pass it as base_version to a later update, edit or delete.',
     },
-  },
-  additionalProperties: false,
+  }, additionalProperties: false },
+  { type: 'object', required: ['project', 'id', 'title', 'change', 'version'], properties: { project: { type: 'string' }, id: { type: 'string', const: 'AGENTS.md' }, title: { type: 'string' }, change: { type: 'string', const: 'updated' }, version: { type: 'string' } }, additionalProperties: false },
+  ],
 } as const satisfies JsonSchema
 
 // ─── workspace.doc.edit ────────────────────────────────────────────
@@ -243,13 +197,11 @@ export interface WorkspaceDocEdit {
   new: string
 }
 
-export interface WorkspaceDocEditParams {
+export type WorkspaceDocEditParams = {
   project: string
-  kind: WorkspaceDocKind
-  name: string
   edits: WorkspaceDocEdit[]
   base_version?: string
-}
+} & ({ kind: WorkspaceDocKind; name: string; id?: never } | { id: 'AGENTS.md'; kind?: never; name?: never; base_version: string })
 
 const workspaceDocEditEntrySchema = {
   type: 'object',
@@ -263,26 +215,17 @@ const workspaceDocEditEntrySchema = {
 
 export const workspaceDocEditParamsSchema = {
   type: 'object',
-  description:
-    "Apply ordered literal edits to one existing document in a registered project. name is a full name returned by workspace.doc.list or workspace.doc.create. Each old must occur exactly once; otherwise the edit is refused with not_found or not_unique naming the offending edit by index. When base_version, taken from workspace.doc.read, is given and does not match the current content, refuses with conflict.",
-  required: ['project', 'kind', 'name', 'edits'],
-  properties: {
-    project: { type: 'string', minLength: 1, description: 'The registered project the document belongs to.' },
-    kind: docKindProperty,
-    name: { type: 'string', minLength: 1, description: DOC_NAME_DESCRIPTION },
-    edits: {
+  oneOf: [
+  { type: 'object', description: 'Apply ordered literal edits to an ordinary document. Each old must occur exactly once. base_version from doc.read is optional.', required: ['project', 'kind', 'name', 'edits'], properties: {
+    project: { type: 'string', minLength: 1 }, kind: docKindProperty, name: { type: 'string', minLength: 1 }, edits: {
       type: 'array',
       minItems: 1,
       description: 'Ordered edits applied in sequence to the document content.',
       items: workspaceDocEditEntrySchema,
-    },
-    base_version: {
-      type: 'string',
-      minLength: 1,
-      description: "Optional version token from workspace.doc.read. Refuses with conflict when it no longer matches the current content.",
-    },
-  },
-  additionalProperties: false,
+    }, base_version: { type: 'string', minLength: 1 },
+  }, additionalProperties: false },
+  { type: 'object', description: 'Apply ordered literal edits to the existing registered project AGENTS.md. Each old must occur exactly once and base_version from doc.read is required.', required: ['project', 'id', 'edits', 'base_version'], properties: { project: { type: 'string', minLength: 1 }, id: { type: 'string', const: 'AGENTS.md' }, edits: { type: 'array', minItems: 1, items: { type: 'object', required: ['old', 'new'], properties: { old: { type: 'string', minLength: 1 }, new: { type: 'string' } }, additionalProperties: false } }, base_version: { type: 'string', minLength: 1 } }, additionalProperties: false },
+  ],
 } as const satisfies JsonSchema
 
 // ─── workspace.doc.delete ──────────────────────────────────────────
