@@ -78,7 +78,7 @@ function ActionBody({ action }: { action: ActionNode }) {
       )}
       {action.entries.length > 0 && (
         <div className="flex flex-col">
-          {action.entries.map((entry, index) => (
+          {[...action.entries].sort((a, b) => a.seq - b.seq).map((entry, index) => (
             <EntryRow key={`${entry.at}-${index}`} entry={entry} nodeId={actionPartId(action.id, `entry:${index}`)} />
           ))}
         </div>

@@ -39,7 +39,7 @@ export interface TurnRowProps {
   parallel: boolean;
 }
 
-/** One compact turn row; expands to its reasoning cycles. */
+/** One compact turn row; expands to its ordered reasoning steps. */
 export function TurnRow({ turn, parallel }: TurnRowProps) {
   const { isOpen, toggle } = useTreeExpansion();
   const nodeId = turnNodeId(turn.turn);
