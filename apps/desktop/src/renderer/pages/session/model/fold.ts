@@ -357,7 +357,7 @@ function buildTurn(
   // live reply span is never fabricated into a user-facing message before it
   // commits.
   const replies = events
-    .filter(isReplySent)
+    .filter((event): event is ReplySentEvent => eventType(event) === 'reply.sent')
     .map(replyModel);
   const committedFinal = replies.at(-1);
 
@@ -991,8 +991,7 @@ function buildActionNode(
   const end = turnEvents.find((event) => eventType(event) === 'action.finished' && (event as ActionFinishedEvent).id === actionId) as ActionFinishedEvent | undefined;
   const titled = turnEvents.find((event) => eventType(event) === 'action.titled' && (event as ActionTitledEvent).id === actionId) as ActionTitledEvent | undefined;
   const errors = turnEvents
-    .filter((event) => isFault(event) && event.parent === actionId)
-    .map((event) => event.message);
+    .flatMap((event) => isFault(event) && event.parent === actionId ? [event.message] : []);
 
   const intent = start === undefined ? '' : firstLine(start.action.prompt);
   const kind = (start?.action.type ?? end?.action.type ?? 'search') as ActionNode['kind'];
@@ -1130,7 +1129,9 @@ function buildCycleNode(
   }
   for (const event of cycleEvents) {
     if (eventType(event) === 'memory.recalled') {
-      const entry = memoryTreeEntry(event as MemoryRecalledEvent);
+      const memoryEvent = event as MemoryRecalledEvent;
+      if (actionIds.has(memoryEvent.parent ?? '')) continue;
+      const entry = memoryTreeEntry(memoryEvent);
       items.push({ kind: 'entry', seq: entry.seq, entry });
     } else if (eventType(event) === 'reply.sent') {
       const reply = event as ReplySentEvent;

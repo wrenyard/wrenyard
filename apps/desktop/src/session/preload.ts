@@ -37,6 +37,8 @@ export const SESSION_CHANNELS = {
   create: 'session:create',
   /** Renderer → main: read a session's full ledger (also subscribes the caller). */
   ledger: 'session:ledger',
+  /** Renderer → main: read a ledger snapshot without starting or replacing a live subscription. */
+  ledgerSnapshot: 'session:ledger-snapshot',
   /** Renderer → main: `{ sessionId, text, model }`. */
   send: 'session:send',
   /** Renderer → main: `{ sessionId, turn }`. */
@@ -164,6 +166,8 @@ export interface SessionBridge {
    * arrive through {@link SessionBridge.onEvent}.
    */
   ledger(sessionId: string): Promise<LedgerEvent[]>;
+  /** Read a complete ledger snapshot without changing the caller's live subscription. */
+  ledgerSnapshot(sessionId: string): Promise<LedgerEvent[]>;
   /** Send one user message; resolves with the allocated turn number. */
   send(request: SessionBridgeSendRequest): Promise<{ turn: number }>;
   /** Read one ledger-known media file (image data URL; nonimages authorize only). */
@@ -237,6 +241,9 @@ const bridge: SessionBridge = {
   },
   ledger(sessionId: string): Promise<LedgerEvent[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.ledger, sessionId) as Promise<LedgerEvent[]>;
+  },
+  ledgerSnapshot(sessionId: string): Promise<LedgerEvent[]> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.ledgerSnapshot, sessionId) as Promise<LedgerEvent[]>;
   },
   send(request: SessionBridgeSendRequest): Promise<{ turn: number }> {
     return ipcRenderer.invoke(SESSION_CHANNELS.send, request) as Promise<{ turn: number }>;

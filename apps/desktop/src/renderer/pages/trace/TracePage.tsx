@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Check, ChevronDown, ChevronRight, CircleAlert, Copy, FileText, Filter, GitBranch, Layers3, Network, RefreshCw, Search, Sparkles, Workflow } from 'lucide-react';
 import type { LedgerEvent, SessionSummary } from '@wrenyard/session';
 import { Elapsed } from '@/renderer/components/elapsed';
@@ -13,7 +13,6 @@ import { useNavLocation } from '@/renderer/lib/navigation';
 import { listSessions, readLedger, subscribeLedger } from './api.js';
 import { buildTrace, type TraceKind, type TraceModel, type TraceNode } from './model/trace.js';
 
-type SessionRow = SessionSummary & { running?: boolean; id: string };
 type FlatRow = { node: TraceNode; depth: number };
 const kindLabel: Record<TraceKind, string> = { session: '会话', turn: '轮次', step: '推理步骤', reasoning: '推理', auxiliary: '辅助任务', task: '智能体任务', action: '行动', content: '内容', notice: '通知' };
 const icons: Record<TraceKind, typeof Network> = { session: Network, turn: Layers3, step: Sparkles, reasoning: Sparkles, auxiliary: Workflow, task: GitBranch, action: Activity, content: FileText, notice: CircleAlert };
@@ -69,6 +68,9 @@ export function TracePage() {
   const [failedOnly, setFailedOnly] = useState(false);
   const [kindFilter, setKindFilter] = useState<Set<TraceKind>>(() => new Set());
   const [copied, setCopied] = useState(false);
+  const loadGeneration = useRef(0);
+  const eventsBySession = useRef(new Map<string, LedgerEvent[]>());
+  const selectedSession = useRef<string | null>(null);
 
   const refreshSessions = useCallback(async () => {
     setListLoading(true);
@@ -78,14 +80,27 @@ export function TracePage() {
   }, []);
   useEffect(() => { void refreshSessions(); }, [refreshSessions]);
   const loadSession = useCallback(async (sessionId: string) => {
-    setSelectedId(sessionId); setLoading(true); setEvents([]); setSelectedKey(null);
-    try { setEvents(await readLedger(sessionId)); setError(''); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : '无法读取会话账本'); }
-    finally { setLoading(false); }
+    const generation = ++loadGeneration.current;
+    selectedSession.current = sessionId;
+    setSelectedId(sessionId); setLoading(true); setEvents(eventsBySession.current.get(sessionId) ?? []); setSelectedKey(null); setError('');
+    try {
+      const snapshot = await readLedger(sessionId);
+      if (generation !== loadGeneration.current) return;
+      const merged = new Map((eventsBySession.current.get(sessionId) ?? []).map((event) => [event.seq, event]));
+      for (const event of snapshot) merged.set(event.seq, event);
+      const ordered = [...merged.values()].sort((a, b) => a.seq - b.seq);
+      eventsBySession.current.set(sessionId, ordered);
+      setEvents(ordered);
+      setError('');
+    } catch (cause) {
+      if (generation === loadGeneration.current) setError(cause instanceof Error ? cause.message : '无法读取会话账本');
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false);
+    }
   }, []);
   useNavLocation({ sessionId: selectedId ?? '' }, (location) => {
     const sessionId = location.sessionId;
-    if (!sessionId || !sessions.some((session) => session.sessionId === sessionId)) return false;
+    if (!sessionId) return false;
     if (sessionId !== selectedId) void loadSession(sessionId);
     return true;
   });
@@ -93,7 +108,12 @@ export function TracePage() {
     if (!selectedId) return;
     let active = true;
     const unsubscribe = subscribeLedger(({ sessionId, event }) => {
-      if (active && sessionId === selectedId) setEvents((previous) => previous.some((item) => item.seq >= event.seq) ? previous : [...previous, event].sort((a, b) => a.seq - b.seq));
+      if (!active || sessionId !== selectedSession.current) return;
+      const previous = eventsBySession.current.get(sessionId) ?? [];
+      if (previous.some((item) => item.seq === event.seq)) return;
+      const next = [...previous, event].sort((a, b) => a.seq - b.seq);
+      eventsBySession.current.set(sessionId, next);
+      setEvents(next);
     });
     return () => { active = false; unsubscribe(); };
   }, [selectedId]);

@@ -1,17 +1,11 @@
 /* Stable expansion ids for the session tree. */
 
-export type PhaseKey = 'prepare' | 'reason' | 'act';
-
 export function turnNodeId(turn: number): string {
   return `turn:${turn}`;
 }
 
 export function cycleNodeId(turn: number, cycle: number): string {
   return `turn:${turn}/cycle:${cycle}`;
-}
-
-export function phaseNodeId(turn: number, cycle: number, phase: PhaseKey): string {
-  return `turn:${turn}/cycle:${cycle}/phase:${phase}`;
 }
 
 export function entryNodeId(turn: number, cycle: number, section: string, index: number): string {
@@ -26,7 +20,7 @@ export function actionPartId(actionId: string, part: string): string {
   return `action:${actionId}/${part}`;
 }
 
-/** DOM id of one action in the 行动 phase, used for jump-and-scroll. */
+/** DOM id of one action in the session tree. */
 export function actionAnchorId(actionId: string): string {
   return `tree-action-${actionId}`;
 }
