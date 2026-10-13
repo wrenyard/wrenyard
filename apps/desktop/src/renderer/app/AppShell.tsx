@@ -55,7 +55,16 @@ export function AppShell() {
   }, [shown]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="flex h-full min-h-0 flex-col"
+      onMouseDown={(event) => {
+        // Keep mouse clicks from leaving keyboard focus on buttons.
+        const target = event.target;
+        if (target instanceof Element && target.closest('button, [role="button"]')) {
+          event.preventDefault();
+        }
+      }}
+    >
       <TitleBar />
       <div className="flex min-h-0 flex-1">
         <SidebarProvider
