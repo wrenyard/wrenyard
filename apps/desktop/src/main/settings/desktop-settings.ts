@@ -61,6 +61,7 @@ export interface WindowGeometry {
 export interface WindowSettings {
   /** Primary shell window geometry; absent until the user moves/resizes it. */
   shell?: WindowGeometry;
+  shellMaximized?: boolean;
   /** Shared TaskGraph detail / transcript geometry, by surface id. */
   graphSlip?: WindowGeometry;
   /** Last shell page, restored at launch when `general.startupPage` is 'last'. */
@@ -387,6 +388,7 @@ function normalizeWindowSettings(value: unknown): WindowSettings {
   const result: WindowSettings = {};
   const shell = normalizeGeometry(obj.shell);
   if (shell) result.shell = shell;
+  if (typeof obj.shellMaximized === 'boolean') result.shellMaximized = obj.shellMaximized;
   const graphSlip = normalizeGeometry(obj.graphSlip);
   if (graphSlip) result.graphSlip = graphSlip;
   if (isShellPage(obj.lastPage)) result.lastPage = obj.lastPage;

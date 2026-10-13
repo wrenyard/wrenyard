@@ -65,8 +65,9 @@ function RunningDispatchTasks({ api, turns, setTasks }: {
 export function SessionPage() {
   const api = getSessionApi();
   const { state, selectSession, newDraft, sendMessage, deleteSession, removePending, setTasks, clearError } = useSessionController(api);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: LAYOUT_ID, storage: localStorage });
+  const [inspectorOpen, setInspectorOpen] = useState(() => (defaultLayout?.inspector ?? 0) > 0);
+  const [sidebarOpen, setSidebarOpen] = useState(() => (defaultLayout?.sidebar ?? 1) > 0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [target, setTarget] = useState<InspectorTarget | undefined>(undefined);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
@@ -114,10 +115,6 @@ export function SessionPage() {
     setTarget(next);
     setInspectorOpen(true);
   }, []);
-
-  // The inspector is always mounted so the group keeps a single, stable
-  // layout; without `panelIds` one persisted layout is shared across toggles.
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: LAYOUT_ID, storage: localStorage });
 
   // Keep the controlled sidebar state and the collapsible panel in sync.
   useEffect(() => {
