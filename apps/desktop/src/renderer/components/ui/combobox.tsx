@@ -132,25 +132,32 @@ function ComboboxList({ className, ...props }: ComboboxPrimitive.List.Props) {
 function ComboboxItem({
   className,
   children,
+  showIndicator = true,
   ...props
-}: ComboboxPrimitive.Item.Props) {
+}: ComboboxPrimitive.Item.Props & {
+  /** Opt out of the trailing check indicator and its reserved column. */
+  showIndicator?: boolean
+}) {
   return (
     <ComboboxPrimitive.Item
       data-slot="combobox-item"
       className={cn(
-        "relative flex min-h-7 w-full cursor-default items-center gap-2 rounded-xl py-1.5 pr-8 pl-2 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground not-data-[variant=destructive]:data-highlighted:**:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "relative flex min-h-7 w-full cursor-default items-center gap-2 rounded-xl py-1.5 pl-2 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground not-data-[variant=destructive]:data-highlighted:**:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        showIndicator ? "pr-8" : "pr-2",
         className
       )}
       {...props}
     >
       {children}
-      <ComboboxPrimitive.ItemIndicator
-        render={
-          <span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center" />
-        }
-      >
-        <CheckIcon className="pointer-events-none" />
-      </ComboboxPrimitive.ItemIndicator>
+      {showIndicator && (
+        <ComboboxPrimitive.ItemIndicator
+          render={
+            <span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center" />
+          }
+        >
+          <CheckIcon className="pointer-events-none" />
+        </ComboboxPrimitive.ItemIndicator>
+      )}
     </ComboboxPrimitive.Item>
   )
 }

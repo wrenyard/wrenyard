@@ -23,7 +23,6 @@ import {
   DropdownMenuTrigger,
 } from '@/renderer/components/ui/dropdown-menu';
 import { InputGroupButton } from '@/renderer/components/ui/input-group';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 
 /** One catalog-derived supply badge. Runtime is never a badge. */
 export interface ModelBadge {
@@ -114,16 +113,11 @@ function ModelOptionContent({ option, compact = false }: { option: ModelOption; 
   };
 
   return (
-    <span className="flex w-full min-w-0 items-center gap-2">
+    <span className={compact ? 'flex w-full min-w-0 items-center gap-2' : 'flex w-full min-w-0 items-center gap-1.5'}>
       <span className="min-w-0 truncate">{option.label}</span>
-      {!compact && (
-        <span className="ml-auto flex shrink-0 items-center gap-2">
-          {slot(speed, speed?.kind ?? 'fast', 'flex w-12 shrink-0 items-center justify-end gap-1')}
-          {slot(free, 'free', 'flex w-3.5 shrink-0 items-center justify-center')}
-          {slot(quota, 'quota', 'flex w-3.5 shrink-0 items-center justify-center')}
-        </span>
-      )}
-      {compact && speed && slot(speed, speed.kind, 'flex shrink-0 items-center justify-center')}
+      {speed && slot(speed, speed.kind, 'flex shrink-0 items-center gap-1')}
+      {!compact && free && slot(free, 'free', 'flex w-3.5 shrink-0 items-center justify-center')}
+      {!compact && quota && slot(quota, 'quota', 'flex w-3.5 shrink-0 items-center justify-center')}
     </span>
   );
 }
@@ -145,6 +139,12 @@ export function ModelPicker({ models, value, onChange, disabled = false, placeho
     [models, value],
   );
 
+  const valueContent = (
+    <ComboboxValue>
+      {(current: ModelOption | null) => (current ? <ModelOptionContent option={current} compact /> : placeholder)}
+    </ComboboxValue>
+  );
+
   return (
     <Combobox
       items={groups}
@@ -155,16 +155,9 @@ export function ModelPicker({ models, value, onChange, disabled = false, placeho
       isItemEqualToValue={(a, b) => a.value === b.value}
       disabled={disabled}
     >
-      <Tooltip>
-        <TooltipTrigger
-          render={<ComboboxTrigger render={<InputGroupButton variant="ghost" className={className} />} />}
-        >
-          <ComboboxValue>
-            {(current: ModelOption | null) => (current ? <ModelOptionContent option={current} compact /> : placeholder)}
-          </ComboboxValue>
-        </TooltipTrigger>
-        {selected?.description !== undefined && <TooltipContent>{selected.description}</TooltipContent>}
-      </Tooltip>
+      <ComboboxTrigger render={<InputGroupButton variant="ghost" className={className} />}>
+        {valueContent}
+      </ComboboxTrigger>
       <ComboboxContent side="top" className="min-w-64">
         <ComboboxInput showTrigger={false} placeholder={placeholder} disabled={disabled} />
         <ComboboxEmpty>没有匹配的模型</ComboboxEmpty>
@@ -174,19 +167,13 @@ export function ModelPicker({ models, value, onChange, disabled = false, placeho
               <ComboboxLabel>{group.value}</ComboboxLabel>
               <ComboboxCollection>
                 {(option: ModelOption) => (
-                  <ComboboxItem key={option.value} value={option}>
-                    {option.description === undefined && !option.badges?.length ? (
-                      <ModelOptionContent option={option} />
-                    ) : (
-                      <Tooltip>
-                        <TooltipTrigger render={<span className="flex w-full min-w-0 items-center gap-2" />}>
-                          <ModelOptionContent option={option} />
-                        </TooltipTrigger>
-                        <TooltipContent side="right">
-                          {[option.description, option.badges?.map((badge) => badge.text).join(' · ')].filter(Boolean).join(' · ')}
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
+                  <ComboboxItem
+                    key={option.value}
+                    value={option}
+                    showIndicator={false}
+                    className="not-data-[highlighted]:data-[selected]:bg-accent/60 data-[selected]:font-medium"
+                  >
+                    <ModelOptionContent option={option} />
                   </ComboboxItem>
                 )}
               </ComboboxCollection>
@@ -229,7 +216,14 @@ export function EffortPicker({ levels, value, onChange }: EffortPickerProps) {
           }}
         >
           {levels.map((level) => (
-            <DropdownMenuRadioItem key={level} value={level}>{REASONING_EFFORT_NAMES[level]}</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem
+              key={level}
+              value={level}
+              showIndicator={false}
+              className="not-focus:data-[checked]:bg-accent/60 data-[checked]:font-medium"
+            >
+              {REASONING_EFFORT_NAMES[level]}
+            </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
