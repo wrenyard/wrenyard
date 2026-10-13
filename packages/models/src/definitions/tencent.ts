@@ -11,6 +11,7 @@ export const tencentModels = [
   defineModel('hunyuan-hy4-preview', 'HY4 Preview', {
     intelligence: 'mid',
     capabilities: ['text'],
+    contextWindow: 262_144,
     pricing: [0.042, 0.834, 2.501],
     speed: 38,
   }, { lab: 'tencent', family: 'hunyuan' }),

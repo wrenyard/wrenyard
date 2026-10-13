@@ -151,12 +151,12 @@ function claudeMetadataOverrides(modelId: string): CanonicalModelOverrides {
  */
 function productMetadataOverrides(
   entry: CodeBuddyProductModelEntry,
-  canonicalContextWindow: number | undefined,
+  canonicalContextWindow: number,
 ): CanonicalModelOverrides {
   const overrides: CanonicalModelOverrides = {};
   if (entry.maxOutputTokens) overrides.maxOutputTokens = entry.maxOutputTokens;
   if (entry.supportsImages === true) overrides.capabilities = ['text', 'image'];
-  if (canonicalContextWindow !== undefined && canonicalContextWindow >= ONE_MILLION_TOKENS) overrides.supports1MContext = true;
+  if (canonicalContextWindow >= ONE_MILLION_TOKENS) overrides.supports1MContext = true;
   return overrides;
 }
 
@@ -243,7 +243,7 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
   const upstreamByCanonical: Record<string, string> = {};
   for (const [modelId, entry] of selectedEntries) {
     const overrides: CanonicalModelOverrides = {
-      ...productMetadataOverrides(entry, models.get(modelId)?.defaults.contextWindow),
+      ...productMetadataOverrides(entry, models.require(modelId).defaults.contextWindow),
       ...claudeMetadataOverrides(modelId),
       reasoningEfforts: codeBuddyReasoningEfforts(modelId),
     };
