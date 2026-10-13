@@ -43,6 +43,13 @@ export interface RegisterSessionOptions {
   canConnect?: () => boolean;
   isShellSender(sender: WebContents): boolean;
   /**
+   * Other trusted windows (the shell and every open mini card) that also
+   * receive each polled live event, so a card sees live chat updates even when
+   * another window owns the session's poll. Duplicate deliveries are harmless:
+   * the renderer merges ledger events by `seq`.
+   */
+  additionalRecipients?(): WebContents[];
+  /**
    * Observes live ledger events as they are polled and forwarded to the
    * renderer — never the initial catch-up page, so history is not replayed.
    * Used by the main-process conversation notification producer.
@@ -217,6 +224,21 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     { sessionId: state.sessionId, afterSeq: state.afterSeq, waitMs, live: true },
     state.controller.signal,
   );
+  /**
+   * Every window a polled event is pushed to: the poll's own target plus the
+   * other trusted surfaces (the shell and any open mini card). Duplicates are
+   * de-duplicated by web contents id.
+   */
+  const eventRecipients = (state: PollState): WebContents[] => {
+    const recipients: WebContents[] = [];
+    const seen = new Set<number>();
+    for (const target of [state.target, ...(options.additionalRecipients?.() ?? [])]) {
+      if (target.isDestroyed() || seen.has(target.id)) continue;
+      seen.add(target.id);
+      recipients.push(target);
+    }
+    return recipients;
+  };
   const poll = async (state: PollState): Promise<void> => {
     const signal = state.controller.signal;
     let draining = false;
@@ -227,7 +249,7 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
           if (signal.aborted || state.target.isDestroyed()) break;
           for (const event of page.events) {
             const payload: SessionBridgeEventPayload = { sessionId: state.sessionId, event };
-            state.target.send(SESSION_CHANNELS.event, payload);
+            for (const recipient of eventRecipients(state)) recipient.send(SESSION_CHANNELS.event, payload);
             state.afterSeq = event.seq;
             options.onLiveEvent?.(state.sessionId, event);
           }
@@ -235,7 +257,7 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
           if (live !== undefined && (state.lastLive === undefined || !sameLive(state.lastLive, live))) {
             state.lastLive = live.map(call => ({ ...call }));
             const payload: SessionBridgeLivePayload = { sessionId: state.sessionId, live };
-            state.target.send(SESSION_CHANNELS.live, payload);
+            for (const recipient of eventRecipients(state)) recipient.send(SESSION_CHANNELS.live, payload);
           }
           if (draining) {
             const status = await request<{ shutting_down: boolean }>('daemon.status', {}, signal);

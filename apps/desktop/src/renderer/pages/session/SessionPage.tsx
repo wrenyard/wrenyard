@@ -17,6 +17,7 @@ import {
 } from '@/renderer/components/ui/message-scroller';
 import { Page, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
 import { registerPageCommands } from '@/renderer/lib/commands';
+import { openMiniCard, restoreMain, setCurrentSession, useMiniMode } from '@/renderer/lib/mini';
 import { useNewItemKeys } from '@/renderer/lib/motion';
 import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
 import { getSessionApi } from './api.js';
@@ -36,6 +37,8 @@ import { useSessionController } from './state/use-session-controller.js';
 import { useTaskStatus } from './state/use-task-status.js';
 
 const LAYOUT_ID = 'session-shell-v3';
+/** A card persists under its own id so it never overwrites the shell layout. */
+const CARD_LAYOUT_ID = 'session-card-v1';
 
 /** Sending a message resumes bottom following even while reading history. */
 function FollowSentMessage({ pendingId }: { pendingId: string | undefined }) {
@@ -64,8 +67,9 @@ function RunningDispatchTasks({ api, turns, setTasks }: {
 /** The session page: sidebar, conversation and inspector in one resizable shell. */
 export function SessionPage() {
   const api = getSessionApi();
+  const mini = useMiniMode();
   const { state, selectSession, newDraft, sendMessage, deleteSession, removePending, setTasks, clearError } = useSessionController(api);
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: LAYOUT_ID, storage: localStorage });
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: mini ? CARD_LAYOUT_ID : LAYOUT_ID, storage: localStorage });
   const [inspectorOpen, setInspectorOpen] = useState(() => (defaultLayout?.inspector ?? 0) > 0);
   const [sidebarOpen, setSidebarOpen] = useState(() => (defaultLayout?.sidebar ?? 1) > 0);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -137,6 +141,26 @@ export function SessionPage() {
   // title bar and the global Cmd/Ctrl+B command toggle it while this page is
   // the active Activity; hidden pages unregister on effect cleanup.
   useSecondarySidebar({ open: sidebarOpen, setOpen: setSidebarOpen });
+
+  // Publish the shown session so the title bar can open a card for it (shell)
+  // or return to it (card). No cleanup: the last value survives a page switch.
+  useEffect(() => {
+    setCurrentSession(state.selectedId);
+  }, [state.selectedId]);
+
+  // Cmd/Ctrl+Shift+M: the shell opens a card for the current session; a card
+  // returns to the main window on the same session (a draft when there is none).
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey) return;
+      if (event.key.toLowerCase() !== 'm') return;
+      event.preventDefault();
+      if (mini) restoreMain(state.selectedId);
+      else openMiniCard(state.selectedId);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mini, state.selectedId]);
 
   // Cmd/Ctrl+K opens search while this Activity is visible; hide closes it.
   useEffect(() => {
@@ -225,6 +249,8 @@ export function SessionPage() {
       turns={model.turns}
       sessionKey={sessionKey}
       disabled={state.loadingLedger}
+      compact={mini}
+      draft={draft}
       onSend={async (text, entry, effort, attachments) => {
         await sendMessage(reply === undefined ? text : withReplyQuote(reply, text), entry, effort, attachments);
         setReplyTo(undefined);
@@ -286,42 +312,46 @@ export function SessionPage() {
         >
           <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
           <SessionStatusItems />
-        <SidebarProvider open={sidebarOpen} onOpenChange={setSidebarOpen} className="h-full min-h-0">
+        <SidebarProvider open={mini ? false : sidebarOpen} onOpenChange={setSidebarOpen} className="h-full min-h-0">
           <ResizablePanelGroup
             orientation="horizontal"
-            defaultLayout={defaultLayout}
+            defaultLayout={mini ? undefined : defaultLayout}
             onLayoutChanged={onLayoutChanged}
             resizeTargetMinimumSize={{ fine: 6, coarse: 20 }}
             className="h-full min-h-0 min-w-0 overflow-hidden"
           >
-            <ResizablePanel
-              id="sidebar"
-              defaultSize={256}
-              minSize={200}
-              collapsible
-              collapsedSize={0}
-              groupResizeBehavior="preserve-pixel-size"
-              panelRef={sidebarPanel}
-              className={panelMotion}
-              onResize={(size) => setSidebarOpen(size.inPixels > 0)}
-            >
-              <SessionSidebar
-                sessions={state.sessions}
-                selectedId={state.selectedId}
-                loading={state.loadingList}
-                onSelect={(sessionId) => { void selectSession(sessionId).catch(() => undefined); }}
-                onNew={newDraft}
-                onSearch={() => setSearchOpen(true)}
-                onDelete={(sessionId) => { void deleteSession(sessionId).catch(() => undefined); }}
-              />
-            </ResizablePanel>
-            <ResizableHandle
-              className="w-1.5 bg-transparent after:w-px after:bg-border"
-              onPointerDown={() => setResizing(true)}
-            />
+            {!mini && (
+              <>
+                <ResizablePanel
+                  id="sidebar"
+                  defaultSize={256}
+                  minSize={200}
+                  collapsible
+                  collapsedSize={0}
+                  groupResizeBehavior="preserve-pixel-size"
+                  panelRef={sidebarPanel}
+                  className={panelMotion}
+                  onResize={(size) => setSidebarOpen(size.inPixels > 0)}
+                >
+                  <SessionSidebar
+                    sessions={state.sessions}
+                    selectedId={state.selectedId}
+                    loading={state.loadingList}
+                    onSelect={(sessionId) => { void selectSession(sessionId).catch(() => undefined); }}
+                    onNew={newDraft}
+                    onSearch={() => setSearchOpen(true)}
+                    onDelete={(sessionId) => { void deleteSession(sessionId).catch(() => undefined); }}
+                  />
+                </ResizablePanel>
+                <ResizableHandle
+                  className="w-1.5 bg-transparent after:w-px after:bg-border"
+                  onPointerDown={() => setResizing(true)}
+                />
+              </>
+            )}
             <ResizablePanel
               id="main"
-              minSize={340}
+              minSize={mini ? 0 : 340}
               className={cn('relative flex min-h-0 flex-col', panelMotion)}
             >
               {empty ? (
@@ -334,7 +364,7 @@ export function SessionPage() {
                   <MessageScrollerProvider key={sessionKey} autoScroll>
                     <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
                       <MessageScrollerViewport className="scroll-fade-t">
-                        <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-2 px-4 pt-(--header-height) pb-4">
+                        <MessageScrollerContent className={cn('w-full gap-2 pt-(--header-height) pb-4', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
                           <MessageTimeline
                             timeline={timeline}
                             turns={model.turns}
@@ -353,34 +383,38 @@ export function SessionPage() {
                       <MessageScrollerButton />
                     </MessageScroller>
                   </MessageScrollerProvider>
-                  <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+                  <div className={cn('w-full', mini ? 'px-4 pt-2 pb-5' : 'mx-auto max-w-3xl px-4 pb-4')}>
                     {errorAlert}
                     {composer}
                   </div>
                 </>
               )}
             </ResizablePanel>
-            <ResizableHandle
-              className={cn('w-1.5 bg-transparent after:w-px after:bg-border', !inspectorOpen && 'invisible pointer-events-none')}
-              onPointerDown={() => setResizing(true)}
-            />
-            <ResizablePanel
-              id="inspector"
-              defaultSize="45%"
-              minSize={280}
-              collapsible
-              collapsedSize={0}
-              groupResizeBehavior="preserve-pixel-size"
-              panelRef={inspectorPanel}
-              className={cn('min-h-0', panelMotion)}
-              onResize={(size) => setInspectorOpen(size.inPixels > 0)}
-            >
-              <Inspector
-                model={model}
-                events={state.events}
-                onClose={() => setInspectorOpen(false)}
-              />
-            </ResizablePanel>
+            {!mini && (
+              <>
+                <ResizableHandle
+                  className={cn('w-1.5 bg-transparent after:w-px after:bg-border', !inspectorOpen && 'invisible pointer-events-none')}
+                  onPointerDown={() => setResizing(true)}
+                />
+                <ResizablePanel
+                  id="inspector"
+                  defaultSize="45%"
+                  minSize={280}
+                  collapsible
+                  collapsedSize={0}
+                  groupResizeBehavior="preserve-pixel-size"
+                  panelRef={inspectorPanel}
+                  className={cn('min-h-0', panelMotion)}
+                  onResize={(size) => setInspectorOpen(size.inPixels > 0)}
+                >
+                  <Inspector
+                    model={model}
+                    events={state.events}
+                    onClose={() => setInspectorOpen(false)}
+                  />
+                </ResizablePanel>
+              </>
+            )}
           </ResizablePanelGroup>
         </SidebarProvider>
         <SessionSearch

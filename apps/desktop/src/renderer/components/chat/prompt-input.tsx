@@ -35,6 +35,17 @@ export interface PromptInputProps {
   onPaste?: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
   className?: string;
+  /**
+   * Mini/compact layout (opt-in): one fixed single-line row with the send
+   * button inline at the trailing edge instead of a bottom toolbar row.
+   */
+  compact?: boolean;
+  /**
+   * Optional node rendered at the inline-start edge inside the rounded bar,
+   * before the textarea (e.g. the compact attachment button). Nothing renders
+   * when it is `undefined`.
+   */
+  leading?: ReactNode;
 }
 
 /**
@@ -59,6 +70,8 @@ export function PromptInput({
   onPaste,
   textareaRef,
   className,
+  compact = false,
+  leading,
 }: PromptInputProps) {
   const composing = useRef(false);
   const canSubmit = !disabled && !submitDisabled && (value.trim() !== '' || hasAttachments);
@@ -81,17 +94,29 @@ export function PromptInput({
         submit();
       }}
     >
-      <InputGroup>
-        {attachments !== undefined && attachments !== null && (
+      {compact && attachments !== undefined && attachments !== null && (
+        <div className="mb-1 w-full px-1">{attachments}</div>
+      )}
+      <InputGroup className={compact ? (leading === undefined ? 'rounded-full pl-1' : 'rounded-full') : undefined}>
+        {compact && leading !== undefined && (
+          <InputGroupAddon align="inline-start" className="py-0">
+            {leading}
+          </InputGroupAddon>
+        )}
+        {!compact && attachments !== undefined && attachments !== null && (
           <div className="w-full px-2.5 pt-2">{attachments}</div>
         )}
+        {/* The compact card viewport stays below the `md` breakpoint, so the
+            textarea keeps the primitive's `text-base` 16px for typed text. The
+            placeholder is 1px smaller and uses an arbitrary size (no line-height
+            override) so it keeps `leading-8` and stays aligned with typed text. */}
         <InputGroupTextarea
           ref={textareaRef}
           value={value}
           placeholder={placeholder}
           disabled={disabled}
           rows={1}
-          className="max-h-60"
+          className={compact ? 'h-8 max-h-8 min-h-0 overflow-y-auto py-0 leading-8 field-sizing-fixed placeholder:text-[15px]' : 'max-h-60'}
           onChange={(event) => onValueChange(event.target.value)}
           onPaste={onPaste}
           onKeyDown={(event) => {
@@ -103,15 +128,25 @@ export function PromptInput({
           onCompositionStart={() => { composing.current = true; }}
           onCompositionEnd={() => { composing.current = false; }}
         />
-        <InputGroupAddon align="block-end">
-          <div className="flex min-w-0 items-center gap-1.5">{toolbar}</div>
-          <div className="ml-auto flex items-center gap-1.5">
+        {compact ? (
+          <InputGroupAddon align="inline-end" className="gap-1 py-0">
+            {toolbar}
             {toolbarTrailing}
-            <InputGroupButton type="submit" variant="default" size="icon-sm" disabled={!canSubmit} aria-label="发送" title="发送">
+            <InputGroupButton type="submit" variant="default" size="icon-xs" disabled={!canSubmit} aria-label="发送" title="发送">
               <ArrowUp />
             </InputGroupButton>
-          </div>
-        </InputGroupAddon>
+          </InputGroupAddon>
+        ) : (
+          <InputGroupAddon align="block-end">
+            <div className="flex min-w-0 items-center gap-1.5">{toolbar}</div>
+            <div className="ml-auto flex items-center gap-1.5">
+              {toolbarTrailing}
+              <InputGroupButton type="submit" variant="default" size="icon-sm" disabled={!canSubmit} aria-label="发送" title="发送">
+                <ArrowUp />
+              </InputGroupButton>
+            </div>
+          </InputGroupAddon>
+        )}
       </InputGroup>
     </form>
   );

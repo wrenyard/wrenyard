@@ -99,6 +99,18 @@ const api: WrenyardShellApi = {
   showAppMenu(position?: AppMenuPosition): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.showAppMenu, position) as Promise<void>;
   },
+  openMiniCard(sessionId: string): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.openMiniCard, sessionId) as Promise<void>;
+  },
+  restoreMain(sessionId: string): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.restoreMain, sessionId) as Promise<void>;
+  },
+  setAlwaysOnTop(enabled: boolean): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.alwaysOnTop, enabled) as Promise<void>;
+  },
+  closeWindow(): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.closeWindow) as Promise<void>;
+  },
   onWindowStateChanged(listener: (state: WindowStateSnapshot) => void): () => void {
     const handler = (_event: Electron.IpcRendererEvent, state: unknown): void => {
       if (isWindowStateSnapshot(state)) listener(state);

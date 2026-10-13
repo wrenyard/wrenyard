@@ -6,6 +6,7 @@ import {
   type BrowserWindowConstructorOptions,
   type Input,
   type WebContents,
+  type WebPreferences,
 } from 'electron';
 import type { PageLoader } from './pages.js';
 import type { WindowGeometry } from './main/settings/desktop-settings.js';
@@ -68,6 +69,25 @@ function navCommandForInput(input: Input, platform: NodeJS.Platform): 'nav.back'
   return null;
 }
 
+const NORMAL_MIN_WIDTH = 760;
+const NORMAL_MIN_HEIGHT = 520;
+
+/**
+ * Sandboxed renderer preferences shared by the shell window and every mini
+ * card, so both surfaces load the same isolated preload with the same
+ * appearance arguments.
+ */
+export function shellWebPreferences(preloadPath: string, additionalArguments: string[]): WebPreferences {
+  return {
+    preload: preloadPath,
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    spellcheck: true,
+    additionalArguments,
+  };
+}
+
 export interface ShellWindowOptions {
   pageLoader: PageLoader;
   preloadPath: string;
@@ -79,6 +99,11 @@ export interface ShellWindowOptions {
   backgroundColor: string;
   titleBarOverlay: { color: string; symbolColor: string };
   additionalArguments: string[];
+  /**
+   * The single shared trust predicate for shell IPC: the shell window plus every
+   * currently open mini card, and nothing else. Used by `assertShellSender`.
+   */
+  isTrustedSender(sender: WebContents): boolean;
   /** Initial shell page; `general.startupPage` resolves it from the last page. */
   initialPage?: ShellPage;
   initialGeometry?: WindowGeometry;
@@ -160,21 +185,14 @@ export class ShellWindowController {
       width: 1280,
       height: 800,
       ...options.initialGeometry,
-      minWidth: 760,
-      minHeight: 520,
+      minWidth: NORMAL_MIN_WIDTH,
+      minHeight: NORMAL_MIN_HEIGHT,
       show: false,
       title: formatShellWindowTitle(initialPage, options.appVersion, !app.isPackaged),
       backgroundColor: options.backgroundColor,
       ...platformWindowChrome(process.platform, options.titleBarOverlay),
       ...(options.icon ? { icon: options.icon } : {}),
-      webPreferences: {
-        preload: options.preloadPath,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        spellcheck: true,
-        additionalArguments: options.additionalArguments,
-      },
+      webPreferences: shellWebPreferences(options.preloadPath, options.additionalArguments),
     };
     const win = new BrowserWindow(windowOptions);
     if (options.initiallyMaximized) win.maximize();
@@ -321,13 +339,21 @@ export class ShellWindowController {
   }
 
   private installIpc(options: ShellWindowOptions): void {
+    // General shell channels admit every trusted shell surface: the shell window
+    // or an open mini card, resolved by the one shared predicate.
     const assertShellSender = (sender: WebContents): void => {
+      if (!options.isTrustedSender(sender)) throw new Error('Untrusted shell IPC sender');
+    };
+    // Shell-scoped channels (page navigation, native menu) admit the shell window
+    // only, so a card can never drive the main window's chrome.
+    const assertShellWindowSender = (sender: WebContents): void => {
       if (sender.id !== this.window.webContents.id) throw new Error('Untrusted shell IPC sender');
     };
     this.removeIpcHandlers();
     const deps: ShellIpcDeps = {
       options,
       assertShellSender,
+      assertShellWindowSender,
       setPage: (page, focus) => this.setPage(page, focus),
       showAppMenu: (position) => this.popupAppMenu(position),
     };

@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/renderer/components/ui/empty';
+import { useMiniMode } from '@/renderer/lib/mini';
 import { useThemeIcon } from '@/renderer/lib/theme';
 
 /** Welcome shown for the draft state and for sessions without turns. */
 export function EmptySession({ children }: { children?: ReactNode }) {
   const themeIcon = useThemeIcon();
+  const mini = useMiniMode();
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6">
       <Empty>
@@ -16,7 +18,12 @@ export function EmptySession({ children }: { children?: ReactNode }) {
           <EmptyDescription>可以随时发送多条消息，并行推进多个轮次。</EmptyDescription>
         </EmptyHeader>
       </Empty>
-      {children && <div className="mx-auto w-full max-w-3xl px-4 pb-4">{children}</div>}
+      {/* A draft card renders its composer here, not through the page's mini
+          wrapper, so the mini edge gap (16px sides, 20px bottom) has to sit on
+          this element. The shell keeps the literal classes unchanged. */}
+      {children && (
+        <div className={mini ? 'w-full px-4 pt-2 pb-5' : 'mx-auto w-full max-w-3xl px-4 pb-4'}>{children}</div>
+      )}
     </div>
   );
 }
