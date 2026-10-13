@@ -8,6 +8,7 @@ import {
   type WebContents,
 } from 'electron';
 import type { PageLoader } from './pages.js';
+import type { WindowGeometry } from './main/settings/desktop-settings.js';
 import {
   SHELL_CHANNELS,
   acceleratorPage,
@@ -80,6 +81,9 @@ export interface ShellWindowOptions {
   additionalArguments: string[];
   /** Initial shell page; `general.startupPage` resolves it from the last page. */
   initialPage?: ShellPage;
+  initialGeometry?: WindowGeometry;
+  initiallyMaximized?: boolean;
+  onGeometryChanged?(geometry: WindowGeometry, maximized: boolean): void;
   /**
    * Register the shell window with the appearance controller so later theme
    * changes re-apply in place. Transparent windows never pass this.
@@ -155,6 +159,7 @@ export class ShellWindowController {
     const windowOptions: BrowserWindowConstructorOptions = {
       width: 1280,
       height: 800,
+      ...options.initialGeometry,
       minWidth: 760,
       minHeight: 520,
       show: false,
@@ -172,6 +177,24 @@ export class ShellWindowController {
       },
     };
     const win = new BrowserWindow(windowOptions);
+    if (options.initiallyMaximized) win.maximize();
+    let geometryTimer: ReturnType<typeof setTimeout> | undefined;
+    const saveGeometry = (): void => {
+      clearTimeout(geometryTimer);
+      if (!win.isDestroyed() && !win.isMinimized() && !win.isFullScreen()) {
+        options.onGeometryChanged?.(win.getNormalBounds(), win.isMaximized());
+      }
+    };
+    const scheduleGeometrySave = (): void => {
+      clearTimeout(geometryTimer);
+      geometryTimer = setTimeout(saveGeometry, 250);
+    };
+    win.on('resize', scheduleGeometrySave);
+    win.on('move', scheduleGeometrySave);
+    win.on('maximize', scheduleGeometrySave);
+    win.on('unmaximize', scheduleGeometrySave);
+    win.on('close', saveGeometry);
+    win.on('closed', () => clearTimeout(geometryTimer));
     options.attachAppearance?.(win);
     if (process.platform === 'win32') {
       // Hide the native menu bar but keep the application menu so its

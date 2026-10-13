@@ -991,6 +991,12 @@ async function bootstrap(): Promise<void> {
     titleBarOverlay: appearanceController.titleBarOverlay(),
     additionalArguments: appearanceController.arguments(),
     initialPage: initialShellPage,
+    initialGeometry: loadedSettings?.window.shell,
+    initiallyMaximized: loadedSettings?.window.shellMaximized,
+    onGeometryChanged: (shell, shellMaximized) => {
+      if (SMOKE) return;
+      settingsStore.patch('window', { ...settingsStore.load().window, shell, shellMaximized });
+    },
     onPageChanged: (page) => {
       if (SMOKE) return;
       const windowSettings = settingsStore.load().window;
