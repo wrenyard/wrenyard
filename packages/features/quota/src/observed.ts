@@ -23,18 +23,19 @@ export async function readCodeBuddyObservation(context?: CodeBuddyQueryContext, 
     const active = await readActiveCodeBuddyScope(options);
     if (!active || active.stableScope !== context.expectedScope || active.environment !== context.expectedEnvironment)
         return empty;
+    const current = { ...empty, data: { environment: active.environment } };
     const file = join(resolveWrenyardStateRoot(env), 'quota', 'codebuddy.json');
     try {
         if ((await stat(file)).size > 65536)
-            return empty;
+            return current;
         const row = JSON.parse(await readFile(file, 'utf8'));
         const observed = Date.parse(row.observed_at), reset = Date.parse(row.resets_at);
         if (row.schema_version !== 2 || row.provider !== 'codebuddy' || row.scope !== active.stableScope || row.exhausted !== true || row.reason_code !== 'quota_exhausted' || !Number.isFinite(observed) || !Number.isFinite(reset) || reset <= observed || reset <= Date.now())
-            return empty;
-        return { ...empty, data: { exhausted: true, resets_at: row.resets_at, reason_code: row.reason_code } };
+            return current;
+        return { ...current, data: { ...current.data, exhausted: true, resets_at: row.resets_at, reason_code: row.reason_code } };
     }
     catch {
-        return empty;
+        return current;
     }
 }
 export async function currentCodeBuddyContext(options?: ClientOptions): Promise<CodeBuddyQueryContext | undefined> {
