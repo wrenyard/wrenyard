@@ -34,6 +34,7 @@ export function createInterfaceZoom(deps: InterfaceZoomDeps): InterfaceZoom {
     if (shell === null || shell.window.isDestroyed()) return;
     try {
       shell.window.webContents.setZoomFactor(deps.getAppearanceController()?.zoomFactor() ?? 1);
+      deps.getAppearanceController()?.applyToWindow(shell.window);
     } catch {
       // Zoom is best-effort; the window keeps its current factor.
     }
