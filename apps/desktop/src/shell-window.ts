@@ -310,14 +310,14 @@ export class ShellWindowController {
 
   /**
    * Pop the application menu as a native menu (Windows). The anchor is the
-   * button's bottom-left in renderer coordinates; the lone-Alt fallback uses
-   * the button's fixed position.
+   * button's bottom-left in renderer coordinates.
    */
   private popupAppMenu(position?: { x: number; y: number }): void {
     const menu = Menu.getApplicationMenu();
     if (!menu || this.window.isDestroyed()) return;
     const anchor = position ?? { x: 8, y: TITLE_BAR_HEIGHT };
-    menu.popup({ window: this.window, x: Math.round(anchor.x), y: Math.round(anchor.y) });
+    const zoom = this.window.webContents.getZoomFactor();
+    menu.popup({ window: this.window, x: Math.round(anchor.x * zoom), y: Math.round(anchor.y * zoom) });
   }
 
   private installIpc(options: ShellWindowOptions): void {
@@ -329,6 +329,7 @@ export class ShellWindowController {
       options,
       assertShellSender,
       setPage: (page, focus) => this.setPage(page, focus),
+      showAppMenu: (position) => this.popupAppMenu(position),
     };
     this.ipcCleanups = [
       registerAppearancePreferencesIpc(ipcMain, deps),
@@ -347,28 +348,12 @@ export class ShellWindowController {
   }
 
   private installShortcuts(contents: WebContents): void {
-    // Windows keeps the Alt-tap menu habit: a lone Alt press/release pops the
-    // application menu, while Alt combined with any other key is left alone.
-    let altDown = false;
-    let altUsed = false;
     contents.on('before-input-event', (event, input: Input) => {
       if (process.platform === 'win32' && input.key === 'Alt') {
-        if (input.type === 'keyDown') {
-          if (!altDown) {
-            altDown = true;
-            altUsed = false;
-          }
-        } else {
-          if (altDown && !altUsed) {
-            event.preventDefault();
-            this.popupAppMenu();
-          }
-          altDown = false;
-        }
+        event.preventDefault();
         return;
       }
       if (input.type === 'keyUp') return;
-      if (altDown) altUsed = true;
       const primary = process.platform === 'darwin' ? input.meta === true && input.control !== true : input.control === true && input.meta !== true;
       if (primary && input.alt !== true && input.shift !== true && input.key.toLowerCase() === 'n') {
         event.preventDefault();
