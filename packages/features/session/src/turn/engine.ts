@@ -732,6 +732,7 @@ class Engine implements Session, SessionCallHost {
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
       tools?: readonly import('../transport/index.ts').ToolSpec[];
+      toolChoice?: import('../transport/index.ts').ToolChoice;
       maxTokens?: number;
       step?: number;
     } = {},
@@ -757,6 +758,7 @@ class Engine implements Session, SessionCallHost {
         ...(extra.onReasoning === undefined ? {} : { onReasoning: extra.onReasoning }),
         ...(extra.onToolCall === undefined ? {} : { onToolCall: extra.onToolCall }),
         ...(extra.tools === undefined ? {} : { tools: extra.tools }),
+        ...(extra.toolChoice === undefined ? {} : { toolChoice: extra.toolChoice }),
         ...(extra.maxTokens === undefined ? {} : { maxTokens: extra.maxTokens }),
       });
       return {
