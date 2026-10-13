@@ -45,6 +45,10 @@ export interface ComposerProps {
   /** Changes on session switch (or `'draft'`), resetting the model and focus. */
   sessionKey: string;
   disabled?: boolean;
+  /** Mini mode: keep only the input and send button, hiding secondary controls. */
+  compact?: boolean;
+  /** Mini mode draft: show the model and effort pickers above the input bar. */
+  draft?: boolean;
   onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): void | Promise<void>;
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
   /** Bumped to request an explicit input focus (e.g. the new-conversation shortcut). */
@@ -55,7 +59,7 @@ export interface ComposerProps {
 }
 
 /** Bottom composer with model and effort pickers, attachments and a send button. */
-export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, reply, onCancelReply }: ComposerProps) {
+export function Composer({ models, turns, sessionKey, disabled = false, compact = false, draft = false, onSend, injectedText, focusRequest = 0, reply, onCancelReply }: ComposerProps) {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
@@ -320,6 +324,24 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
           松开以添加文件
         </div>
       )}
+      {/* Compact draft row: both pickers stay content-width and the pair is
+          centered, with no trigger tooltip. The model trigger is capped so two
+          pickers still fit inside a 300px-wide card. The trigger buttons are
+          forced to the textarea primitive's `text-base md:text-sm` pair: their
+          own `text-sm` from Button/InputGroupButton wins on inheritance, so the
+          descendant rule targets the buttons directly. */}
+      {compact && draft && (
+        <div className="mb-2 flex justify-center gap-2 [&_button]:text-base md:[&_button]:text-sm">
+          <ModelPicker
+            models={options}
+            value={modelId}
+            onChange={selectModel}
+            disabled={models.length === 0}
+            className="max-w-40"
+          />
+          <EffortPicker levels={selected?.reasoningEfforts ?? []} value={effort} onChange={setEffort} />
+        </div>
+      )}
       <PromptInput
         value={text}
         onValueChange={handleChange}
@@ -328,15 +350,13 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         submitDisabled={sending || exceeded}
         sendKey={preferences.data?.session.sendKey ?? 'enter'}
         textareaRef={textareaRef}
-        placeholder="输入消息，可随时发起新的并行轮次"
-        attachments={attachmentStrip}
-        hasAttachments={attachments.length > 0}
-        onPaste={handlePaste}
-        toolbar={
-          <>
+        placeholder={compact ? '和工坊一起工作' : '输入消息，可随时发起新的并行轮次'}
+        compact={compact}
+        leading={
+          compact ? (
             <InputGroupButton
               type="button"
-              size="icon-sm"
+              size="icon-xs"
               aria-label="添加附件"
               title="添加附件"
               disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
@@ -344,8 +364,29 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
             >
               <Plus />
             </InputGroupButton>
-            <ModelPicker models={options} value={modelId} onChange={selectModel} disabled={models.length === 0} />
-            <EffortPicker levels={selected?.reasoningEfforts ?? []} value={effort} onChange={setEffort} />
+          ) : undefined
+        }
+        attachments={attachmentStrip}
+        hasAttachments={attachments.length > 0}
+        onPaste={handlePaste}
+        toolbar={
+          <>
+            {!compact && (
+              <>
+                <InputGroupButton
+                  type="button"
+                  size="icon-sm"
+                  aria-label="添加附件"
+                  title="添加附件"
+                  disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
+                  onClick={() => { void chooseFiles(); }}
+                >
+                  <Plus />
+                </InputGroupButton>
+                <ModelPicker models={options} value={modelId} onChange={selectModel} disabled={models.length === 0} />
+                <EffortPicker levels={selected?.reasoningEfforts ?? []} value={effort} onChange={setEffort} />
+              </>
+            )}
             {exceeded && (
               <span className="flex items-center gap-1 text-xs text-destructive" role="status">
                 <AlertTriangle className="size-3.5 shrink-0" />
