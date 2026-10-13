@@ -11,7 +11,7 @@ import {
   ContextMenuTrigger,
 } from '@/renderer/components/ui/context-menu';
 import { executeCommand } from '@/renderer/lib/commands';
-import { shell } from '@/renderer/lib/desktop';
+import { shell, useShellPage } from '@/renderer/lib/desktop';
 import { daemonQuery, preferencesQuery } from '@/renderer/lib/queries';
 import {
   STATUS_BAR_CONFIGURABLE_ITEMS,
@@ -104,6 +104,7 @@ function EntrySlot({
 }
 
 export function StatusBar({ onOpenUpdate }: { onOpenUpdate: () => void }) {
+  const page = useShellPage();
   const containerRef = useRef<HTMLDivElement>(null);
   const widthsRef = useRef<Map<string, number>>(new Map());
   const [containerWidth, setContainerWidth] = useState(0);
@@ -216,8 +217,9 @@ export function StatusBar({ onOpenUpdate }: { onOpenUpdate: () => void }) {
     return () => observer.disconnect();
   }, []);
 
-  const isPrefHidden = (entry: BarEntry): boolean =>
-    prefHidden.has(entry.id) && !(entry.id === 'quota' && quotaForcedVisible);
+  const isHiddenBeforeLayout = (entry: BarEntry): boolean =>
+    (prefHidden.has(entry.id) || (entry.id === 'quota' && page !== 'session'))
+    && !(entry.id === 'quota' && quotaForcedVisible);
 
   // Drop the lowest-priority non-mandatory items until the kept widths fit the
   // budget; mandatory items are never dropped and overflow is clipped. The
@@ -227,7 +229,7 @@ export function StatusBar({ onOpenUpdate }: { onOpenUpdate: () => void }) {
   useLayoutEffect(() => {
     if (containerWidth <= 0) return;
     const budget = containerWidth - BAR_RESERVE;
-    const candidates = entries.filter((entry) => entry.mandatory || !isPrefHidden(entry));
+    const candidates = entries.filter((entry) => entry.mandatory || !isHiddenBeforeLayout(entry));
     const gaps = Math.max(0, candidates.length - 1) * ENTRY_GAP;
     let total = gaps + candidates.reduce((sum, entry) => sum + widthOf(entry.id), 0);
     const hideOrder = candidates.filter((entry) => !entry.mandatory && !(entry.id === 'quota' && quotaForcedVisible)).sort(byPriority);
@@ -238,12 +240,12 @@ export function StatusBar({ onOpenUpdate }: { onOpenUpdate: () => void }) {
       total -= widthOf(entry.id) + ENTRY_GAP;
     }
     setHiddenByWidth((previous) => (sameSet(previous, next) ? previous : next));
-  }, [entries, prefHidden, containerWidth, measureVersion, widthOf, quotaForcedVisible]);
+  }, [entries, prefHidden, containerWidth, measureVersion, widthOf, quotaForcedVisible, page]);
 
   const isHidden = (entry: BarEntry): boolean => {
     if (isMandatoryStatusBarItem(entry.id)) return false;
     if (entry.id === 'quota' && quotaForcedVisible) return false;
-    return prefHidden.has(entry.id) || hiddenByWidth.has(entry.id);
+    return isHiddenBeforeLayout(entry) || hiddenByWidth.has(entry.id);
   };
 
   const start = entries.filter((entry) => entry.side === 'start');
