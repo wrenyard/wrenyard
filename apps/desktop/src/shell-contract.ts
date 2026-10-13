@@ -1285,9 +1285,10 @@ export function acceleratorPage(input: AcceleratorInput, platform: NodeJS.Platfo
   if (!command) return null;
   if (input.key === ',') return 'settings';
   if (input.key === '1') return 'session';
-  if (input.key === '2') return 'stats';
-  if (input.key === '3') return 'quota';
-  if (input.key === '4') return 'tasks';
+  if (input.key === '2') return 'trace';
+  if (input.key === '3') return 'stats';
+  if (input.key === '4') return 'quota';
+  if (input.key === '5') return 'tasks';
   return null;
 }
 
@@ -1324,9 +1325,10 @@ export interface KnownShortcut {
  */
 export const KNOWN_SHORTCUTS: readonly KnownShortcut[] = [
   { category: '导航', title: '会话', mac: '⌘1', other: 'Ctrl+1', scope: '全局', page: 'session' },
-  { category: '导航', title: '台账', mac: '⌘2', other: 'Ctrl+2', scope: '全局', page: 'stats' },
-  { category: '导航', title: '模型供应', mac: '⌘3', other: 'Ctrl+3', scope: '全局', page: 'quota' },
-  { category: '导航', title: '任务', mac: '⌘4', other: 'Ctrl+4', scope: '全局', page: 'tasks' },
+  { category: '导航', title: '追踪', mac: '⌘2', other: 'Ctrl+2', scope: '全局', page: 'trace' },
+  { category: '导航', title: '工房台账', mac: '⌘3', other: 'Ctrl+3', scope: '全局', page: 'stats' },
+  { category: '导航', title: '模型供应', mac: '⌘4', other: 'Ctrl+4', scope: '全局', page: 'quota' },
+  { category: '导航', title: '任务', mac: '⌘5', other: 'Ctrl+5', scope: '全局', page: 'tasks' },
   { category: '导航', title: '设置', mac: '⌘,', other: 'Ctrl+,', scope: '全局', page: 'settings' },
   { category: '导航', title: '后退', mac: '⌘[', other: 'Alt+←', scope: '全局', command: 'nav.back' },
   { category: '导航', title: '前进', mac: '⌘]', other: 'Alt+→', scope: '全局', command: 'nav.forward' },
