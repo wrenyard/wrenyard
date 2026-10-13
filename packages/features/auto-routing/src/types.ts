@@ -254,6 +254,8 @@ export interface AutoRoutingResult {
   excluded: ExcludedCandidate[];
 }
 export interface TaskDispatchRequirements {
+  /** Estimated rendered prompt tokens; runtime-only, never a user setting. */
+  inputTokens?: number;
   expectedTps?: number;
   minimumTps?: number;
   intelligenceMin?: IntelligenceTier;

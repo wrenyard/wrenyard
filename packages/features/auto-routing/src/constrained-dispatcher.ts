@@ -57,6 +57,9 @@ export class ConstrainedDispatcher {
       // its own id, never by a glm-5.3 exclusion.
       if (excludedModels.has(plan.model))
         continue;
+      if (requirements.inputTokens !== undefined &&
+        (!Number.isFinite(modelDef.contextWindow) || requirements.inputTokens + (modelDef.maxOutputTokens ?? 0) > modelDef.contextWindow!))
+        continue;
       // Hard constraint: required capabilities. Fail closed when missing or insufficient.
       if (requiredCaps.length > 0) {
         const caps = modelDef.capabilities ?? [];

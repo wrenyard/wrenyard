@@ -737,6 +737,7 @@ export type TaskResolutionFailureCode =
   | 'speed_requirement'
   | 'quota_unavailable'
   | 'quota_insufficient'
+  | 'context_window'
 
 /** Wire-owned closed resolution-failure detail carried on a validation issue. */
 export interface TaskResolutionFailure {
@@ -1320,6 +1321,7 @@ const taskSettingsResolutionFailureSchema = {
         'speed_requirement',
         'quota_unavailable',
         'quota_insufficient',
+        'context_window',
       ],
     },
     message: { type: 'string', minLength: 1 },
