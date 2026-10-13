@@ -46,15 +46,6 @@ export const SPEED_SATURATION_BASE_TPS = 100;
  * trusted headroom, never a neutral (or positive) quota quality.
  */
 export const ZERO_QUOTA_HEADROOM = 0;
-/**
- * Quota headroom credited to an aggregate that carries no trusted headroom
- * while a provider-verified unknown-quota floor applies. The value is owned by
- * the policy, never supplied by the caller, so evidence can only switch the
- * floor on - it can never inject an arbitrary quota boost. It feeds the quota
- * factor Q only: H, the tier, coverage and every eligibility gate are
- * untouched, exactly like verified quota-burn efficiency.
- */
-export const UNKNOWN_QUOTA_FLOOR_HEADROOM = 0.5;
 /** Full-cycle replenishment assessment constants. */
 export const FULL_CYCLE_MIN_REMAINING = 0.05;
 export const FULL_CYCLE_RESET_PACE = 0.8;
@@ -63,6 +54,3 @@ export const FULL_CYCLE_RESET_WEIGHT = 0.5;
 /** Rolling-partial replenishment bands. */
 export const HEALTHY_ROLLING_REMAINING = 0.8;
 export const STRAINED_ROLLING_REMAINING = 0.05;
-/** Verified quota-burn efficiency blend. Applies to Q only, never to H/tier/eligibility. */
-export const EFFICIENCY_HEADROOM_WEIGHT = 0.85;
-export const EFFICIENCY_EVIDENCE_WEIGHT = 0.15;
