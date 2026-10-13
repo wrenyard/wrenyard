@@ -57,7 +57,7 @@ export function desktopMenuTemplate(
             submenu: [{ role: 'close' as const, label: '关闭窗口', accelerator: 'CmdOrCtrl+W' }],
           },
         ]
-      : [{ role: 'fileMenu' as const }]),
+      : [{ label: 'File', submenu: [quitItem] }]),
     { role: 'editMenu' },
     {
       label: 'View',
@@ -67,7 +67,14 @@ export function desktopMenuTemplate(
         { role: 'togglefullscreen' },
       ],
     },
-    { role: 'windowMenu' },
+    ...(platform === 'darwin'
+      ? [{ role: 'windowMenu' as const }]
+      : [
+          {
+            label: 'Window',
+            submenu: [{ role: 'minimize' as const }, { role: 'zoom' as const }],
+          },
+        ]),
     {
       role: 'help',
       submenu: [
