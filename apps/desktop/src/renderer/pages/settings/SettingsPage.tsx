@@ -64,7 +64,10 @@ export function SettingsPage() {
 
   const [searchInput, setSearchInput] = useState('');
   const [activeCategory, setActiveCategory] = useState<SettingsCategoryId | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem('settings-sidebar-open') !== 'false');
+  useEffect(() => {
+    localStorage.setItem('settings-sidebar-open', String(sidebarOpen));
+  }, [sidebarOpen]);
   const [pendingScroll, setPendingScroll] = useState<
     { kind: 'category'; id: SettingsCategoryId } | { kind: 'setting'; id: string } | null
   >(null);
