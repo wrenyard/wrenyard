@@ -40,7 +40,9 @@ export class NoEligiblePlanError extends Error {
      *  to no_available_provider so legacy/test callers keep the historic error. */
     readonly resolutionFailureCode: TaskResolutionFailureCode = 'no_available_provider',
   ) {
-    super(`no eligible dispatch plan for task '${taskName}'`)
+    super(resolutionFailureCode === 'context_window'
+      ? `No available model can fit task '${taskName}': estimated ${requirements.inputTokens} input tokens plus model output allowance exceeds the context window`
+      : `no eligible dispatch plan for task '${taskName}'`)
     this.name = 'NoEligiblePlanError'
   }
 }
@@ -147,6 +149,7 @@ export type TaskDispatchDiagnosticResult =
  * intelligence remain hard eligibility constraints.
  */
 export interface ResolveExplicitDispatchInput {
+  inputTokens?: number
   taskName: string
   /** Exact canonical dynamic target, e.g. `codebuddy/deepseek-v4.1-flash:cb`.
    *  Never a policy alias. */
@@ -399,6 +402,11 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       return atGate('no_available_provider', 'model_excluded')
     }
 
+    if (requirements.inputTokens !== undefined &&
+      (!Number.isFinite(modelDef.contextWindow) || requirements.inputTokens + (modelDef.maxOutputTokens ?? 0) > modelDef.contextWindow!)) {
+      return atGate('context_window')
+    }
+
     const requiredCapabilities = requirements.requiredCapabilities ?? []
     if (requiredCapabilities.length > 0) {
       const capabilities = modelDef.capabilities ?? []
@@ -543,6 +551,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     requiresWebSearch?: boolean,
     intelligenceMin?: TaskDispatchRequirements['intelligenceMin'],
     expectedReasoningEffort?: TaskDispatchRequirements['expectedReasoningEffort'],
+    inputTokens?: number,
   ): TaskDispatchExplicitResolution => {
     const canonicalTarget = canonicalTargetOf(candidate)
     if (canonicalTarget !== exactAgentRuntime) {
@@ -630,14 +639,16 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // has no usable level), never an eligibility constraint. It is forwarded only to adapt the
     // selected plan parameters. Admission means the target can
     // produce a truthful resolved snapshot — never a fabricated one.
-    const availability = probe({ expectedReasoningEffort })
+    const availability = probe({ expectedReasoningEffort, inputTokens })
     if (!availability.ok) {
       return {
         ok: false,
         error: new ExplicitRuntimeUnavailableError(
           taskName,
           exactAgentRuntime,
-          `target '${canonicalTarget}' cannot produce truthful resolved dispatch metadata (speed/intelligence/reference-pricing evidence)`,
+          availability.error.resolutionFailureCode === 'context_window'
+            ? `target '${canonicalTarget}' cannot fit the estimated ${inputTokens} input tokens plus output allowance`
+            : `target '${canonicalTarget}' cannot produce truthful resolved dispatch metadata (speed/intelligence/reference-pricing evidence)`,
         ),
       }
     }
@@ -787,7 +798,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       if (!candidate) {
         return unavailable(`canonical target '${canonicalTarget}' is not a task-capable candidate or runtime plan`)
       }
-      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort)
+      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort, input.inputTokens)
     },
 
     listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult {

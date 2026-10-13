@@ -547,10 +547,11 @@ function buildRoutingFormRows(
           : code === 'price_limit'
             ? `输出单价上限：$${requirements.maxOutputUsdPerMillion ?? 0}/Mtok`
             : ({
+              context_window: '上下文窗口不足',
               quota_unavailable: '额度不足',
               quota_insufficient: '额度不足',
               no_available_provider: '不满足任务要求',
-            } as Record<'quota_unavailable' | 'quota_insufficient' | 'no_available_provider', string>)[code]
+            } as Record<'context_window' | 'quota_unavailable' | 'quota_insufficient' | 'no_available_provider', string>)[code]
     rows.push({
       provider: pair.provider,
       provider_name: providerName,
@@ -867,6 +868,7 @@ export class TaskSettingsService {
       const explicitResolution = this.resolver.resolveExplicit({
         taskName: params.taskName,
         exactRuntime: target,
+        inputTokens: params.inputTokens,
         ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
         ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
         ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
@@ -910,7 +912,7 @@ export class TaskSettingsService {
     // runtimeAvailability call and no fallback after selection.
     const selection = await this.resolveAutomaticSelection({
       taskName: params.taskName,
-      requirements: effective.dispatch,
+      requirements: { ...effective.dispatch, inputTokens: params.inputTokens },
       timeoutMs: effective.timeoutMs,
       maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
       routingWeights: effective.routingWeights,

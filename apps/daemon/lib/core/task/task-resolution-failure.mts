@@ -2,9 +2,10 @@
  * Closed, pure task-resolution failure contract for automatic dispatch.
  *
  * Every automatic-mode failure surfaces exactly one machine code plus one
- * safe closed Chinese message. The six public codes are fixed:
+ * safe closed Chinese message. The public codes are:
  *
  * - no_available_provider     no provider/model remains available at all
+ * - context_window            no model window fits the rendered task input
  * - price_limit               nothing fits inside the allowed price
  * - intelligence_requirement  nothing satisfies the intelligence bounds
  * - speed_requirement         nothing satisfies the minimum/expected speed
@@ -24,6 +25,7 @@
 
 export const TASK_RESOLUTION_FAILURE_CODES = [
   'no_available_provider',
+  'context_window',
   'price_limit',
   'intelligence_requirement',
   'speed_requirement',
@@ -73,6 +75,7 @@ export const TASK_RESOLUTION_FAILURE_CODE_ORDER: readonly TaskResolutionFailureC
 
 export const TASK_RESOLUTION_FAILURE_MESSAGES: Readonly<Record<TaskResolutionFailureCode, string>> = {
   no_available_provider: '没有可用的服务商，请检查登录或凭据',
+  context_window: '任务输入超出可用模型的上下文窗口，请减少输入或选择更大窗口的模型',
   price_limit: '允许价格内没有可用模型，请调整价格上限',
   intelligence_requirement: '没有模型满足智能要求，请调整智能要求',
   speed_requirement: '没有模型满足速度要求，请调整速度要求',

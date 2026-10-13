@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { estimateTokens } from '@wrenyard/session'
 import { getDb } from '../../db/connection.mts'
 import { ExecutionEventStore } from '../../db/stores/execution-event-store.mts'
 import {
@@ -31,7 +32,7 @@ import {
   V2SchemaValidationError,
   validateAgainstSchema,
 } from '../../workspace/schema-loader.mts'
-import { collectStructuredOutput, type StructuredOutputAgent } from '../../core/task/structured-output.mts'
+import { collectStructuredOutput, firstPrompt, type StructuredOutputAgent } from '../../core/task/structured-output.mts'
 import { requireClient } from '@wrenyard/clients'
 import {
   createTaskArtifactDirectory,
@@ -325,7 +326,6 @@ export async function runTaskOutputInDaemon(name: string, input: unknown, opts: 
 
 export async function executeTaskInDaemon(name: string, input: unknown, opts: ExecutionOptions | string): Promise<TaskExecutionResult> {
   const options = normalizeExecutionOptions(opts)
-  const taskInputContext = splitTaskInputContext(input, options.taskContext)
   const taskId = options.taskId ?? createKernelTaskRunId()
   const record: TaskRecord = {
     task_id: taskId,
@@ -342,6 +342,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
   let config: import('../../types.mts').TaskConfig | undefined
   let taskRowPersisted = false
   try {
+    const taskInputContext = splitTaskInputContext(input, options.taskContext)
     await ensureDiscovered(options.workspaceRoot)
     const target = resolveTaskTarget(name, options.workspaceRoot, options.currentProject)
     if (!target) throw new Error(`Task not found: ${name}`)
@@ -362,40 +363,6 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     let dispatchSnapshot: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null = null
     let codeBuddyExecution: import('../../core/operations/types.mts').CodeBuddyExecutionBinding | undefined
     let resolvedTimeoutMs: number | undefined
-    if (!options.taskSettingsResolver) {
-      // Pin-free legacy recovery boundary: a scheduling:'legacy' definition is
-      // never auto/alias-resolved here. Recovery reattaches an already persisted
-      // task_run_id/exact execution and does not invoke this kernel, so a legacy
-      // launch reaching automatic dispatch is always refused with a precise
-      // error instead of re-resolving a runtime from the current definition.
-      if (config.scheduling === 'legacy') {
-        throw new Error(
-          `Legacy task '${target.name}' cannot be auto-dispatched: legacy recovery must reattach an already persisted task_run_id/exact execution and cannot re-resolve a current definition.`,
-        )
-      }
-      // Resolve the deterministic automatic dispatch plan before the first agent
-      // attempt. Active tasks MUST resolve through a resolver: either this
-      // constrained path or the daemon settings service.
-      if (config.dispatch) {
-        if (!options.taskDispatchResolver) {
-          throw new Error(
-            `Task '${target.name}' declares a constrained dispatch but no taskDispatchResolver was supplied to the daemon execution kernel.`,
-          )
-        }
-        const resolution = options.taskDispatchResolver.resolve({
-          taskName: target.name,
-          requirements: config.dispatch,
-        })
-        if (!resolution.ok) throw resolution.error
-        exactAgentRuntime = resolution.exactAgentRuntime
-        requestedAgentRuntime = exactAgentRuntime
-        dispatchSnapshot = resolution.resolved
-      } else {
-        throw new Error(
-          `Active task '${target.name}' cannot run without a resolver: automatic selection requires a taskSettingsResolver or dispatch requirements with a taskDispatchResolver.`,
-        )
-      }
-    }
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)
     const executionOptions = options
     // Resolve selected features from config before launching an agent.
@@ -458,8 +425,54 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       await recordProgressEvent(`Pre-gates passed for ${target.name}`, { taskId, project: record.project }, options)
     }
 
+    const artifactDirectory = await createTaskArtifactDirectory(taskId)
+    let prompt = await buildTaskPrompt(
+      definition,
+      effectiveInput,
+      taskInputContext.ctx,
+    )
+    if (outputSchemaDeclaresArtifacts(outputSchema)) {
+      prompt = `${prompt}\n\n${taskArtifactPromptParagraph(artifactDirectory)}`
+    }
+    const inputTokens = estimateTokens(firstPrompt(prompt, compileSchema(outputSchema)))
+
+    if (!options.taskSettingsResolver) {
+      // Pin-free legacy recovery boundary: a scheduling:'legacy' definition is
+      // never auto/alias-resolved here. Recovery reattaches an already persisted
+      // task_run_id/exact execution and does not invoke this kernel, so a legacy
+      // launch reaching automatic dispatch is always refused with a precise
+      // error instead of re-resolving a runtime from the current definition.
+      if (config.scheduling === 'legacy') {
+        throw new Error(
+          `Legacy task '${target.name}' cannot be auto-dispatched: legacy recovery must reattach an already persisted task_run_id/exact execution and cannot re-resolve a current definition.`,
+        )
+      }
+      // Resolve the deterministic automatic dispatch plan before the first agent
+      // attempt. Active tasks MUST resolve through a resolver: either this
+      // constrained path or the daemon settings service.
+      if (config.dispatch) {
+        if (!options.taskDispatchResolver) {
+          throw new Error(
+            `Task '${target.name}' declares a constrained dispatch but no taskDispatchResolver was supplied to the daemon execution kernel.`,
+          )
+        }
+        const resolution = options.taskDispatchResolver.resolve({
+          taskName: target.name,
+          requirements: { ...config.dispatch, inputTokens },
+        })
+        if (!resolution.ok) throw resolution.error
+        exactAgentRuntime = resolution.exactAgentRuntime
+        requestedAgentRuntime = exactAgentRuntime
+        dispatchSnapshot = resolution.resolved
+      } else {
+        throw new Error(
+          `Active task '${target.name}' cannot run without a resolver: automatic selection requires a taskSettingsResolver or dispatch requirements with a taskDispatchResolver.`,
+        )
+      }
+    }
+
     // Resolve task settings exactly once, after pre-gates and before the
-    // prompt/first agent attempt. The daemon TaskSettingsService owns field
+    // first agent attempt. The daemon TaskSettingsService owns field
     // merging and readiness; its result is authoritative: the canonical exact
     // target (automatic or explicit) is the only launched runtime, the
     // dispatch snapshot feeds telemetry, and the effective timeout is the
@@ -477,6 +490,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       }
       const settingsResolution = await options.taskSettingsResolver({
         taskName: target.name,
+        inputTokens,
         kind: target.source,
         project: target.project,
         defaults: {
@@ -502,15 +516,6 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       }
     }
 
-    const artifactDirectory = await createTaskArtifactDirectory(taskId)
-    let prompt = await buildTaskPrompt(
-      definition,
-      effectiveInput,
-      taskInputContext.ctx,
-    )
-    if (outputSchemaDeclaresArtifacts(outputSchema)) {
-      prompt = `${prompt}\n\n${taskArtifactPromptParagraph(artifactDirectory)}`
-    }
     assertTaskStillActive(taskId)
     let structuredSummary: string | undefined
     let truncatedByTimeLimit = false
