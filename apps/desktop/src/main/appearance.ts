@@ -167,7 +167,10 @@ export class DesktopAppearanceController {
     }
     if (process.platform !== 'win32') return;
     try {
-      window.setTitleBarOverlay({ ...this.titleBarOverlay(), height: TITLE_BAR_HEIGHT });
+      window.setTitleBarOverlay({
+        ...this.titleBarOverlay(),
+        height: Math.round(TITLE_BAR_HEIGHT * window.webContents.getZoomFactor()),
+      });
     } catch {
       // Frames without an overlay (e.g. a dialog) reject the call.
     }
