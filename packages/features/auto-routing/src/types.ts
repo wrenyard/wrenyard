@@ -71,8 +71,6 @@ export interface BalanceEvidence {
 }
 /** Canonical conservative marker required on every routed evidence object. */
 export type WorstApplicableMarker = "worst_applicable";
-/** Domain accepted for verified quota-burn efficiency evidence. */
-export type QuotaBurnEfficiencyDomain = "quota_burn_efficiency";
 /**
  * Optional worst-applicable marginal price (USD per M output tokens) carrying
  * verification provenance. The marginal value is only used for
@@ -93,23 +91,6 @@ export interface MarginalPriceEvidence {
   worst_applicable: WorstApplicableMarker;
 }
 /**
- * Verified quota-burn efficiency evidence, time-scoped and provenance-bearing.
- * A raw numeric efficiency (e.g. an unverifiable credit reward) is never
- * accepted as evidence: the score only blends into Q while every field is
- * valid/nonempty and the interval covers [now, now + timeoutMs].
- */
-export interface QuotaBurnEfficiencyEvidence {
-  /** Normalized verified quota-burn efficiency in [0, 1]. */
-  efficiencyScore: number;
-  appliesFromMs: number;
-  appliesUntilMs: number;
-  source: string;
-  ruleId: string;
-  domain: QuotaBurnEfficiencyDomain;
-  /** Conservative literal: only worst-applicable evidence is accepted. */
-  worst_applicable: WorstApplicableMarker;
-}
-/**
  * Provider-verified free-supply fact for the exact account/environment snapshot.
  * It is independent from reference pricing and only affects outer ordering
  * after every hard gate has passed.
@@ -120,21 +101,6 @@ export interface ConfirmedFreeSupplyEvidence {
   appliesUntilMs: number;
   source: string;
   ruleId: string;
-}
-/**
- * Provider-verified evidence that a login's quota genuinely cannot be observed
- * rather than being exhausted, so an otherwise unknown aggregate still carries
- * a conservative routable floor. It is a marker with provenance and an
- * applicability interval; it carries no headroom value of its own.
- */
-export interface UnknownQuotaFloorEvidence {
-  kind: "unknown_quota_floor";
-  appliesFromMs: number;
-  appliesUntilMs: number;
-  source: string;
-  ruleId: string;
-  /** Conservative literal: only worst-applicable evidence is accepted. */
-  worst_applicable: WorstApplicableMarker;
 }
 /** Caller-supplied inputs for one candidate snapshot. */
 export interface CandidateInput {
@@ -173,19 +139,7 @@ export interface CandidateInput {
   /** Required quota constraints; missing/invalid evidence leaves coverage incomplete. */
   requiredQuota: readonly RequiredQuotaConstraint[];
   marginalPrice?: MarginalPriceEvidence | null;
-  /**
-   * Optional verified quota-burn efficiency evidence. A bare numeric credit is
-   * never accepted; the Q blend applies only while every field is valid/
-   * nonempty and the interval covers [now, now + timeoutMs].
-   */
-  verifiedEfficiency?: QuotaBurnEfficiencyEvidence | null;
   confirmedFreeSupply?: ConfirmedFreeSupplyEvidence | null;
-  /**
-   * Optional provider-verified unknown-quota floor. It raises Q only while the
-   * aggregate quota carries no trusted headroom and the interval covers
-   * [now, now + timeoutMs].
-   */
-  unknownQuotaFloor?: UnknownQuotaFloorEvidence | null;
 }
 export type ConstraintState = "blocked" | "strained" | "unknown" | "healthy" | "missing" | "rejected";
 export type ConstraintRejectCode = "invalid_now" | "remaining_percent_not_finite" | "remaining_percent_out_of_range" | "observation_time_not_finite" | "future_observation" | "invalid_freshness_window" | "stale_observation" | "invalid_replenishment_kind" | "invalid_reset_time" | "invalid_cycle_duration" | "reset_horizon_beyond_duration" | "invalid_balance_amount";
@@ -227,11 +181,9 @@ export interface CandidateAssessment {
     source: string;
     ruleId: string;
   } | null;
-  /** Marks a Q floor credited to an unknown aggregate. */
-  unknownQuotaFloorApplied: boolean;
   /** Raw headroom H feeding the quota headroom factor Q. */
   headroom: number;
-  /** Quota headroom factor Q used in the score (may blend verified efficiency). */
+  /** Mean quota-pool factor Q used in the score. */
   quotaQuality: number;
   /** Diagnostic price factor; kept as a public field but no longer ranked. */
   priceFactor: number;
@@ -253,7 +205,6 @@ export interface CandidateAssessment {
   score: number;
   /** Exact weight set used for this assessment's score. */
   weights: ScoreWeights;
-  verifiedEfficiency: number | null;
   coverageComplete: boolean;
   headroomTrusted: boolean;
   quota: QuotaAssessment;
@@ -285,8 +236,6 @@ export interface RankedCandidate {
     source: string;
     ruleId: string;
   } | null;
-  /** Marks a Q floor credited to an unknown aggregate. */
-  unknownQuotaFloorApplied: boolean;
   headroom: number;
   quotaQuality: number;
   priceFactor: number;
@@ -295,7 +244,6 @@ export interface RankedCandidate {
   intelligenceShortfall: number;
   /** Exact weight set used for this candidate's score. */
   weights: ScoreWeights;
-  verifiedEfficiency: number | null;
   coverageComplete: boolean;
   headroomTrusted: boolean;
   quota: QuotaAssessment;
@@ -346,5 +294,5 @@ export type ConstrainedDispatch = {
   considered: number;
 };
 /** Validated supply evidence passed from admission to scoring. */
-export type SupplyAssessment = Pick<CandidateAssessment, 'notes' | 'supplyClass' | 'confirmedFreeSupplyApplied' | 'confirmedFreeSupplyEvidence' | 'routingPriceUsdPerM' | 'marginalApplied' | 'verifiedEfficiency' | 'headroom' | 'unknownQuotaFloorApplied'>;
+export type SupplyAssessment = Pick<CandidateAssessment, 'notes' | 'supplyClass' | 'confirmedFreeSupplyApplied' | 'confirmedFreeSupplyEvidence' | 'routingPriceUsdPerM' | 'marginalApplied' | 'headroom'>;
 export type CandidateScore = Pick<CandidateAssessment, 'quotaQuality' | 'priceFactor' | 'speedFactor' | 'intelligenceFactor' | 'intelligenceShortfall' | 'score'>;

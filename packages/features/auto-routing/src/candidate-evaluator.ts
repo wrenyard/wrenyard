@@ -97,7 +97,7 @@ export class CandidateEvaluator {
     const tier: QuotaTier = quota.state;
     const supply = this.supply.assess(candidate, quota);
     if ("kind" in supply) return supply;
-    const { notes, supplyClass, confirmedFreeSupplyApplied, confirmedFreeSupplyEvidence, routingPriceUsdPerM, marginalApplied, verifiedEfficiency, headroom, unknownQuotaFloorApplied } = supply;
+    const { notes, supplyClass, confirmedFreeSupplyApplied, confirmedFreeSupplyEvidence, routingPriceUsdPerM, marginalApplied, headroom } = supply;
     const { quotaQuality, priceFactor, speedFactor, intelligenceFactor, intelligenceShortfall, score } = this.scorer.score(candidate, supply, effectiveWeights);
     const assessment: CandidateAssessment = {
       snapshotId,
@@ -109,7 +109,6 @@ export class CandidateEvaluator {
       supplyClass,
       confirmedFreeSupplyApplied,
       confirmedFreeSupplyEvidence,
-      unknownQuotaFloorApplied,
       headroom,
       quotaQuality,
       priceFactor,
@@ -118,7 +117,6 @@ export class CandidateEvaluator {
       intelligenceShortfall,
       score,
       weights: effectiveWeights,
-      verifiedEfficiency,
       coverageComplete: quota.coverageComplete,
       headroomTrusted: quota.headroomTrusted,
       quota,
