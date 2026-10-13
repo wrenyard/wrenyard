@@ -175,17 +175,8 @@ export interface TaskSettingsProviderAvailability {
    *  credential (current CodeBuddy internal/ioa environments only). Never
    *  carries a token, domain, or internal upstream suffix. Absent means the
    *  account/environment is not confirmed free (external/cloudhosted/unknown/
-   *  missing credential/other providers). This CodeBuddy-scoped fact is
-   *  independent from the provenance-bearing verifiedEfficiency signal resolved
-   *  separately for domestic providers; neither rewrites the listed reference
-   *  price or any marginal USD price. */
+   *  missing credential/other providers). */
   freeSupply?: { confirmedFree: true; source: string; ruleId: string }
-  /** Privacy-safe provider-verified unknown-quota floor fact for the already-read
-   *  credential (currently the CodeBuddy iOA login only). It states that quota is
-   *  unobservable rather than exhausted, and never carries a token, domain,
-   *  account identity, or the environment string itself. Absent means the generic
-   *  unknown-quota outcome applies. */
-  quotaFloor?: { source: string; ruleId: string }
   /** Private execution admission tuple derived from the same current
    * CodeBuddy snapshot as readiness/free supply. Never serialized into task
    * settings previews, routing decisions, or persisted dispatch metadata. */

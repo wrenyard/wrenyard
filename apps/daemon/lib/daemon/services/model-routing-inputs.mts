@@ -1,6 +1,6 @@
 import type { CandidateInput, RequiredQuotaConstraint } from '@wrenyard/auto-routing';
 import { INTELLIGENCE_ORDER } from '@wrenyard/providers/catalog';
-import { findProviderQuotaBinding, resolveDeepSeekReferencePricing, resolveSubscriptionEconomics, type DeepSeekPricingModel, type DeepSeekReferencePricing } from '@wrenyard/providers';
+import { findProviderQuotaBinding, resolveDeepSeekReferencePricing, type DeepSeekPricingModel, type DeepSeekReferencePricing } from '@wrenyard/providers';
 import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts';
 import type { AutoRoutingQuotaSnapshot } from './auto-routing-snapshot-service.mts';
 
@@ -15,7 +15,6 @@ export interface ModelRoutingEntry {
   availability?: {
     providerCredential: string; available: boolean;
     freeSupply?: { confirmedFree: true; source: string; ruleId: string };
-    quotaFloor?: { source: string; ruleId: string };
   };
 }
 
@@ -156,35 +155,6 @@ export function toAutomaticCandidateInput(
     ? quotaEntry.requiredQuota
     : missingEntryRequiredQuota(choice.provider, choice.model)
   const freeFact = entry.availability?.freeSupply
-  // Verified quota-burn efficiency is a separate, provenance-bearing signal from
-  // the pure subscription-economics resolver. It is consulted ONLY when the live
-  // readiness probe reported an available provider credential for this exact
-  // runtime triple — unknown or missing credentials never produce efficiency.
-  // The resolver owns every provider/client/model rule and horizon check; this
-  // code never rewrites the listed reference price or the DeepSeek marginal USD
-  // price, and never amortizes any estimate into a monetary route price.
-  const availability = entry.availability
-  const economics = availability?.providerCredential === 'available' && availability?.available === true
-    ? resolveSubscriptionEconomics({
-        provider: choice.provider,
-        model: choice.model,
-        client: choice.client,
-        atMs: context.nowMs,
-        throughMs: context.nowMs + context.timeoutMs,
-        authenticated: true,
-      })
-    : undefined
-  const verifiedEfficiency = economics === undefined
-    ? null
-    : {
-        efficiencyScore: economics.efficiencyScore,
-        appliesFromMs: economics.atMs,
-        appliesUntilMs: economics.throughMs,
-        source: economics.source,
-        ruleId: economics.ruleId,
-        domain: 'quota_burn_efficiency' as const,
-        worst_applicable: 'worst_applicable' as const,
-      }
   // Fixed base-pool automatic-routing discount, resolved from the bound pools.
   // The conservative rate is the maximum across pools and is applied ONCE, never
   // multiplied/compounded across multiple 5h/7d pools. A balance pool is always
@@ -209,7 +179,6 @@ export function toAutomaticCandidateInput(
     intelligenceExpectedRank: context.intelligenceExpectedRank,
     requiredQuota,
     ...(deepSeekPricing !== undefined ? { marginalPrice: deepSeekPricing.marginalPrice } : {}),
-    verifiedEfficiency,
     confirmedFreeSupply: freeFact
       ? {
           kind: 'confirmed_free',
@@ -217,16 +186,6 @@ export function toAutomaticCandidateInput(
           appliesUntilMs: context.nowMs + context.timeoutMs,
           source: freeFact.source,
           ruleId: freeFact.ruleId,
-        }
-      : null,
-    unknownQuotaFloor: entry.availability?.quotaFloor
-      ? {
-          kind: 'unknown_quota_floor' as const,
-          appliesFromMs: context.nowMs,
-          appliesUntilMs: context.nowMs + context.timeoutMs,
-          source: entry.availability.quotaFloor.source,
-          ruleId: entry.availability.quotaFloor.ruleId,
-          worst_applicable: 'worst_applicable' as const,
         }
       : null,
   }
