@@ -179,7 +179,7 @@ export const sessionContextInspectResultSchema = {
         properties: {
           seq: seqSchema,
           turn: seqSchema,
-          cycle: { type: 'integer', minimum: 0 },
+          step: { type: 'integer', minimum: 0 },
           kind: {
             type: 'string',
             enum: [
