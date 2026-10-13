@@ -71,7 +71,6 @@ test('built-in display names are hyphen-free, sourced from the SSOT, and canonic
     assert.equal(route.displayName, builtinModelDisplayName(canonical));
   }
   assert.equal(catalog.provider('kimi-coding')!.modelAliases?.['kimi-for-coding'], 'kimi-k2.8');
-  assert.equal(catalog.provider('cursor')!.modelAliases?.['cursor-grok-4.6-high'], 'grok-4.6');
   assert.equal(catalog.provider('cursor')!.modelAliases?.['grok-4.7-high'], 'grok-4.7');
 });
 

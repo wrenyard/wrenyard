@@ -379,7 +379,7 @@ const CATALOG: ProviderCatalogSnapshot[] = [
     quota: QUOTA_BY_ID.get('cursor'),
     models: [
       catalogModel('composer-2', 'Composer 2', [0.5, 5, 20], 'high', 60),
-      catalogModel('grok-4.6', 'Grok 4.6', [1, 10, 40], 'premium', 50),
+      catalogModel('grok-4.7', 'Grok 4.7', [0.5, 2, 6], 'high', 59),
     ],
   },
   {

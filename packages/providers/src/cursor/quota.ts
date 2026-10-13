@@ -18,7 +18,6 @@ const CURSOR_POOL = quotaPool('cursor/cursor', [
 export const quota = {
   read: async (source: QuotaSource) => normalizeCursorQuota(await source.read()),
   bindings: [
-    binding('cursor', 'grok-4.6', [CURSOR_POOL]),
     binding('cursor', 'grok-4.7', [CURSOR_POOL]),
     binding('cursor', 'composer-2.5', [CURSOR_POOL]),
     // Third-party Cursor models consume the Other allowance, not the Cursor pool.
