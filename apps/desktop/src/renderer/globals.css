@@ -726,11 +726,6 @@ html[data-platform="win32"] {
   --titlebar-inset-end: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
 
-/* Native controls do not follow page zoom; use their CSS-pixel geometry. */
-html[data-platform="win32"]:not([data-fullscreen="true"]) {
-  --titlebar-height: env(titlebar-area-height, var(--header-height));
-}
-
 /* Keep shell actions aligned with the native window controls. */
 [data-titlebar] [data-slot="button"] {
   border-radius: 4px;
