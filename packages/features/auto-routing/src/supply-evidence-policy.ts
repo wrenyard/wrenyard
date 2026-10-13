@@ -104,89 +104,9 @@ export class SupplyEvidencePolicy {
     if (!confirmedFreeSupplyApplied && candidate.referenceUsdPerM * quotaPoolDiscountRate > candidate.effectiveCapUsdPerM) {
       return { kind: "rejected", snapshotId: candidate.snapshotId, canonicalId: candidate.canonicalId, reason: "reference_above_cap", detail: "effective routing price exceeds the effective cap" };
     }
-    // Verified quota-burn efficiency adjusts Q only; it never changes H, tier,
-    // or any eligibility gate. It is applied only while every field is valid and
-    // nonempty, the interval covers [now, now + timeout], and the aggregate quota
-    // carries a trusted positive headroom; with no required quota constraint — or
-    // with an unknown/balance-only aggregate headroom — there is no trusted quota
-    // to blend against, so Q keeps the raw zero headroom and no bonus is granted.
-    // A bare numeric credit is never accepted as evidence.
-    let verifiedEfficiency: number | null = null;
-    const efficiencyEvidence = candidate.verifiedEfficiency;
-    if (efficiencyEvidence !== null &&
-      efficiencyEvidence !== undefined &&
-      typeof efficiencyEvidence === "object") {
-      const efficiencyScore = efficiencyEvidence.efficiencyScore;
-      const appliesFromMs = efficiencyEvidence.appliesFromMs;
-      const appliesUntilMs = efficiencyEvidence.appliesUntilMs;
-      const source = efficiencyEvidence.source;
-      const ruleId = efficiencyEvidence.ruleId;
-      const evidenceWellFormed = isFiniteNumber(efficiencyScore) &&
-        efficiencyScore >= 0 &&
-        efficiencyScore <= 1 &&
-        isFiniteNumber(appliesFromMs) &&
-        isFiniteNumber(appliesUntilMs) &&
-        appliesFromMs <= appliesUntilMs &&
-        typeof source === "string" &&
-        source.length > 0 &&
-        typeof ruleId === "string" &&
-        ruleId.length > 0 &&
-        efficiencyEvidence.domain === "quota_burn_efficiency" &&
-        efficiencyEvidence.worst_applicable === "worst_applicable";
-      if (!evidenceWellFormed) {
-        notes.push("quota_burn_efficiency_evidence_invalid_ignored");
-      }
-      else if (appliesFromMs > candidate.nowMs ||
-        appliesUntilMs < candidate.nowMs + candidate.timeoutMs) {
-        notes.push("quota_burn_efficiency_evidence_stale_ignored");
-      }
-      else if (candidate.requiredQuota.length === 0) {
-        notes.push("quota_burn_efficiency_evidence_without_required_quota_ignored");
-      }
-      else if (!quota.headroomTrusted || quota.headroom === null || quota.headroom <= 0) {
-        // Efficiency may only modulate a trusted, positive headroom: an aggregate
-        // unknown quota or balance-only quota (headroom 0) must never receive
-        // an efficiency bonus.
-        notes.push("quota_burn_efficiency_evidence_without_trusted_headroom_ignored");
-      }
-      else {
-        verifiedEfficiency = efficiencyScore;
-        notes.push("quota_burn_efficiency_evidence_applied");
-      }
-    }
-    const headroom = quota.headroom === null ? ZERO_QUOTA_HEADROOM : quota.headroom;
-    // A provider-verified unknown-quota floor credits Q when the aggregate
-    // carries no trusted headroom, so a login whose quota simply cannot be
-    // observed is not ranked as if it were exhausted. It never raises a trusted
-    // headroom, never rescues a blocked candidate, and never changes H, the tier,
-    // coverage or any eligibility gate.
-    let unknownQuotaFloorApplied = false;
-    const quotaFloor = candidate.unknownQuotaFloor;
-    if (quotaFloor !== null && quotaFloor !== undefined) {
-      const floorEvidenceWellFormed = quotaFloor.kind === "unknown_quota_floor" &&
-        isFiniteNumber(quotaFloor.appliesFromMs) &&
-        isFiniteNumber(quotaFloor.appliesUntilMs) &&
-        quotaFloor.appliesFromMs <= quotaFloor.appliesUntilMs &&
-        typeof quotaFloor.source === "string" &&
-        quotaFloor.source.length > 0 &&
-        typeof quotaFloor.ruleId === "string" &&
-        quotaFloor.ruleId.length > 0 &&
-        quotaFloor.worst_applicable === "worst_applicable";
-      if (!floorEvidenceWellFormed) {
-        notes.push("unknown_quota_floor_evidence_invalid_ignored");
-      }
-      else if (quotaFloor.appliesFromMs > candidate.nowMs ||
-        quotaFloor.appliesUntilMs < candidate.nowMs + candidate.timeoutMs) {
-        notes.push("unknown_quota_floor_interval_does_not_cover_timeout_horizon");
-      }
-      else if (quota.headroomTrusted) {
-        notes.push("unknown_quota_floor_with_trusted_headroom_ignored");
-      }
-      else {
-        unknownQuotaFloorApplied = true;
-        notes.push("unknown_quota_floor_applied");
-      }
-    }
+    const headroom = quota.headroom ?? ZERO_QUOTA_HEADROOM;
+    const verifiedEfficiency = null;
+    const unknownQuotaFloorApplied = false;
     return { notes, supplyClass, confirmedFreeSupplyApplied, confirmedFreeSupplyEvidence, routingPriceUsdPerM, marginalApplied, verifiedEfficiency, headroom, unknownQuotaFloorApplied };
   }
 }

@@ -58,8 +58,8 @@ export const UNKNOWN_QUOTA_FLOOR_HEADROOM = 0.5;
 /** Full-cycle replenishment assessment constants. */
 export const FULL_CYCLE_MIN_REMAINING = 0.05;
 export const FULL_CYCLE_RESET_PACE = 0.8;
-export const FULL_CYCLE_HEADROOM_WEIGHT = 0.75;
-export const FULL_CYCLE_RESET_WEIGHT = 0.25;
+export const FULL_CYCLE_HEADROOM_WEIGHT = 0.5;
+export const FULL_CYCLE_RESET_WEIGHT = 0.5;
 /** Rolling-partial replenishment bands. */
 export const HEALTHY_ROLLING_REMAINING = 0.8;
 export const STRAINED_ROLLING_REMAINING = 0.05;
