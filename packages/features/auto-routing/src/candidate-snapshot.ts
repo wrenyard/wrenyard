@@ -1,4 +1,4 @@
-import { type CandidateInput, type RequiredQuotaConstraint, type QuotaEvidence, type MarginalPriceEvidence, type QuotaBurnEfficiencyEvidence, type ConfirmedFreeSupplyEvidence, type UnknownQuotaFloorEvidence } from './types.ts';
+import { type CandidateInput, type RequiredQuotaConstraint, type QuotaEvidence, type MarginalPriceEvidence, type ConfirmedFreeSupplyEvidence } from './types.ts';
 // ---------------------------------------------------------------------------
 // Candidate evaluation
 // ---------------------------------------------------------------------------
@@ -59,21 +59,6 @@ export function snapshotCandidate(input: CandidateInput): CandidateInput {
       worst_applicable: marginal.worst_applicable,
     };
   }
-  // A raw numeric efficiency ("credit") is not evidence: only an object is
-  // snapshotted, so a bare number can never drive the Q blend.
-  let verifiedEfficiency: QuotaBurnEfficiencyEvidence | null = null;
-  const efficiency = input.verifiedEfficiency ?? null;
-  if (efficiency !== null && typeof efficiency === "object") {
-    verifiedEfficiency = {
-      efficiencyScore: efficiency.efficiencyScore,
-      appliesFromMs: efficiency.appliesFromMs,
-      appliesUntilMs: efficiency.appliesUntilMs,
-      source: efficiency.source,
-      ruleId: efficiency.ruleId,
-      domain: efficiency.domain,
-      worst_applicable: efficiency.worst_applicable,
-    };
-  }
   let confirmedFreeSupply: ConfirmedFreeSupplyEvidence | null = null;
   const freeSupply = input.confirmedFreeSupply ?? null;
   if (freeSupply !== null && typeof freeSupply === "object") {
@@ -83,18 +68,6 @@ export function snapshotCandidate(input: CandidateInput): CandidateInput {
       appliesUntilMs: freeSupply.appliesUntilMs,
       source: freeSupply.source,
       ruleId: freeSupply.ruleId,
-    };
-  }
-  let unknownQuotaFloor: UnknownQuotaFloorEvidence | null = null;
-  const quotaFloor = input.unknownQuotaFloor ?? null;
-  if (quotaFloor !== null && typeof quotaFloor === "object") {
-    unknownQuotaFloor = {
-      kind: quotaFloor.kind,
-      appliesFromMs: quotaFloor.appliesFromMs,
-      appliesUntilMs: quotaFloor.appliesUntilMs,
-      source: quotaFloor.source,
-      ruleId: quotaFloor.ruleId,
-      worst_applicable: quotaFloor.worst_applicable,
     };
   }
   const snapshot: CandidateInput = {
@@ -113,9 +86,7 @@ export function snapshotCandidate(input: CandidateInput): CandidateInput {
     intelligenceExpectedRank: input.intelligenceExpectedRank,
     requiredQuota,
     marginalPrice,
-    verifiedEfficiency,
     confirmedFreeSupply,
-    unknownQuotaFloor,
   };
   return snapshot;
 }
