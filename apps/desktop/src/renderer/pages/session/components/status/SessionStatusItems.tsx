@@ -125,7 +125,7 @@ function CtxStatusItem({ budget, groups, roles, modelName, onRefresh }: CtxStatu
   const ratio = budget?.ratio !== undefined && Number.isFinite(budget.ratio) ? budget.ratio : 0;
   const level = usageRingLevel(ratio);
   const tone = levelTone(level);
-  const pct = `${Math.round(Math.min(ratio, 9.99) * 100)}%`;
+  const pct = budget?.ratio === undefined ? '—' : `${Math.round(Math.min(ratio, 9.99) * 100)}%`;
 
   useEffect(() => {
     if (open && !wasOpen.current) onRefresh();
@@ -133,9 +133,9 @@ function CtxStatusItem({ budget, groups, roles, modelName, onRefresh }: CtxStatu
   }, [open, onRefresh]);
 
   const button = (
-    <StatusBarButton ariaLabel="上下文占用" tone={tone} tooltip={ctxTooltip(budget, pct)} className="w-[72px] justify-start gap-1">
+    <StatusBarButton ariaLabel="上下文占用" tone={tone} tooltip={ctxTooltip(budget, pct)}>
       <UsageRing ratio={ratio} status="ready" className="size-3.5 [&_svg]:size-3.5" />
-      <span className="ml-auto tabular-nums">{pct}</span>
+      <span className="min-w-[3ch] text-right tabular-nums">{pct}</span>
     </StatusBarButton>
   );
 
@@ -464,7 +464,7 @@ function formatPercent(value: number): string {
  * keep the `窗口未知` note.
  */
 function ctxTooltip(budget: ContextBudgetView | undefined, pct: string): string {
-  if (budget === undefined) return '上下文 0%';
+  if (budget === undefined) return '上下文数据暂不可用';
   const totalLabel = formatTokenCount(budget.total);
   if (budget.available === undefined) return `上下文 · 约 ${totalLabel} · 窗口未知`;
   return `上下文 ${pct} · 约 ${totalLabel} / ${formatTokenCount(budget.available)}`;
