@@ -168,6 +168,10 @@ export const ACTIVITY_BAR_WIDTH = 48;
 export const SHELL_CHANNELS = {
   navigate: 'wrenyard-shell:navigate',
   showAppMenu: 'wrenyard-shell:show-app-menu',
+  openMiniCard: 'wrenyard-shell:open-mini-card',
+  restoreMain: 'wrenyard-shell:restore-main',
+  alwaysOnTop: 'wrenyard-shell:always-on-top',
+  closeWindow: 'wrenyard-shell:close-window',
   windowStateChanged: 'wrenyard-shell:window-state-changed',
   appearanceSnapshot: 'wrenyard-shell:appearance-snapshot',
   appearanceChanged: 'wrenyard-shell:appearance-changed',
@@ -1170,6 +1174,14 @@ export interface WrenyardShellApi {
   navigate(page: ShellPage): Promise<void>;
   /** Pop the native application menu at a renderer anchor (Windows only). */
   showAppMenu(position?: AppMenuPosition): Promise<void>;
+  /** Open a frameless mini card for a session id; '' opens a new draft chat. */
+  openMiniCard(sessionId: string): Promise<void>;
+  /** Close the sender card and bring the shell back, opened to `sessionId`. */
+  restoreMain(sessionId: string): Promise<void>;
+  /** Toggle always-on-top for the sender mini card (the 置顶 switch). */
+  setAlwaysOnTop(enabled: boolean): Promise<void>;
+  /** Close the sender mini card through the native close flow. */
+  closeWindow(): Promise<void>;
   onWindowStateChanged(listener: (state: WindowStateSnapshot) => void): () => void;
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;

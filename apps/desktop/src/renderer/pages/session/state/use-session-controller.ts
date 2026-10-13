@@ -3,6 +3,7 @@ import { initialSessionPageState, sessionReducer, type SessionPageState } from '
 import type { AttachmentInput, DraftAttachment, ModelEntry, SessionApi, SessionBridgeTaskBrief } from '../model/types.js';
 import type { ReasoningEffort } from './reasoning-effort.js';
 import { clearDraft, clearDraftAttachments } from './drafts.js';
+import { mini, miniSession } from '@/renderer/lib/mini';
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 let localSeq = 0;
@@ -202,9 +203,14 @@ export function useSessionController(api: SessionApi) {
     }).catch((error: unknown) => { if (!cancelled) reportError(error); });
     const timer = setInterval(() => { void refreshList(); }, 3000);
     void refreshList().then(async (sessions) => {
-      if (!cancelled && !selected.current && !creation.current && sessions[0]) {
-        await selectSession(sessions[0].sessionId);
+      if (cancelled || selected.current || creation.current) return;
+      // A card opens on its query session, or stays an empty draft when the
+      // query carries none; only the shell auto-selects the newest session.
+      if (mini) {
+        if (miniSession !== '') await selectSession(miniSession);
+        return;
       }
+      if (sessions[0]) await selectSession(sessions[0].sessionId);
     }).catch((error: unknown) => { if (!cancelled) reportError(error); });
     return () => {
       cancelled = true;
