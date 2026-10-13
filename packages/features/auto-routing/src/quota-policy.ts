@@ -107,7 +107,8 @@ export class QuotaPolicy {
       }
       const expectedRemaining = resetHorizonMs / windowMs;
       const healthyThreshold = Math.max(FULL_CYCLE_MIN_REMAINING, FULL_CYCLE_RESET_PACE * expectedRemaining);
-      const paceTerm = Math.min(1, remainingRatio / Math.max(expectedRemaining, FULL_CYCLE_MIN_REMAINING));
+      // Ten percentage points saved against the cycle pace earns full credit.
+      const paceTerm = Math.min(1, Math.max(0, (remainingRatio - expectedRemaining) / 0.1));
       const headroom = FULL_CYCLE_HEADROOM_WEIGHT * remainingRatio +
         FULL_CYCLE_RESET_WEIGHT * paceTerm;
       const state: ConstraintState = remainingRatio >= healthyThreshold ? "healthy" : "strained";
@@ -115,10 +116,10 @@ export class QuotaPolicy {
     }
     if (replenishmentKind === "rolling_partial") {
       if (remainingRatio >= HEALTHY_ROLLING_REMAINING) {
-        return { id, state: "healthy", headroom: remainingRatio, rejectCode: null };
+        return { id, state: "healthy", headroom: FULL_CYCLE_HEADROOM_WEIGHT * remainingRatio, rejectCode: null };
       }
       if (remainingRatio > 0 && remainingRatio < STRAINED_ROLLING_REMAINING) {
-        return { id, state: "strained", headroom: remainingRatio, rejectCode: null };
+        return { id, state: "strained", headroom: FULL_CYCLE_HEADROOM_WEIGHT * remainingRatio, rejectCode: null };
       }
       // Middle band [0.05, 0.80): genuinely unknown headroom contributes zero.
       return { id, state: "unknown", headroom: null, rejectCode: null };
