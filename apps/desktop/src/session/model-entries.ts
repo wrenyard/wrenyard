@@ -22,7 +22,8 @@ export function toModelEntries(
     if (!provider.configured) continue;
     for (const model of provider.models) {
       const publicId = `${provider.id}/${model.id}`;
-      if (model.available !== true || model.taskOnly === true
+      // Session inference uses the credential-backed Gateway, not Task client admission.
+      if (model.taskOnly === true
         || model.supportedClients !== undefined || entries.has(publicId)) continue;
       const gatewayModel = gatewayByPublicId.get(publicId);
       if (gatewayModel === undefined) continue;
