@@ -78,6 +78,7 @@ class Engine implements Session, SessionCallHost {
       workspaceRoot: host.workspaceRoot,
       deviceName: host.deviceName,
       ledger: ports.ledger,
+      resolveInferenceProvider: (id) => host.resolveInferenceProvider(id),
       now: () => this.now(),
       createSnapshot: () => buildSnapshot(this.host),
     });
@@ -178,7 +179,7 @@ class Engine implements Session, SessionCallHost {
     const session = await this.ensureSession(sessionId);
     const publicId = `${input.model.provider}/${input.model.model}`;
     this.assertOpen();
-    const metadata = resolveModelMetadata(publicId);
+    const metadata = resolveModelMetadata(publicId, (id) => this.host.resolveInferenceProvider(id));
     const effort = input.model.reasoningEffort;
     if (effort === undefined || !REASONING_EFFORTS.includes(effort)) {
       throw new Error(`reasoningEffort '${effort ?? ''}' is not a valid reasoning effort`);
