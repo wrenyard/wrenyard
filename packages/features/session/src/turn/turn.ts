@@ -190,7 +190,7 @@ export class TurnRunner {
     turn: TurnRuntime,
     step: number,
   ): Promise<{ ok: true; terminal: boolean } | { ok: false; error: string; failure?: CallFailureSummary }> {
-    const metadata = resolveModelMetadata(turn.publicId);
+    const metadata = resolveModelMetadata(turn.publicId, (id) => this.engine.host.resolveInferenceProvider(id));
     const allowImages = metadata.imageInput === true;
     // The step marker is appended before the request is assembled: it renders
     // as this step's `<wy-info>` line, so the request only ever grows at its end.

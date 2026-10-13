@@ -25,7 +25,7 @@ import {
 } from '../ledger/store.ts';
 import { renderEventText } from './render.ts';
 import { buildReason } from '../reasoning/prompt.ts';
-import type { LedgerPort, SessionViewInfo } from '../ports.ts';
+import type { LedgerPort, SessionHost, SessionViewInfo } from '../ports.ts';
 
 /** Every layer of the main reasoning view except the transient `wy-user`. */
 export type ContextLayerId = 'wy-system' | 'wy-global' | 'wy-role' | 'wy-workspace' | 'wy-ctx' | 'wy-info';
@@ -110,6 +110,7 @@ export interface ContextInspectHost {
   workspaceRoot: string;
   deviceName: string;
   ledger: LedgerPort;
+  resolveInferenceProvider: SessionHost['resolveInferenceProvider'];
   now(): Date;
   /** Build the workspace snapshot a new session would freeze right now. */
   createSnapshot(): Promise<WorkspaceSnapshot>;
@@ -263,7 +264,7 @@ export class ContextInspector {
       ? await this.host.createSnapshot()
       : this.snapshotOf(sessionId, events);
 
-    const metadata = resolveModelMetadata(request.model);
+    const metadata = resolveModelMetadata(request.model, (id) => this.host.resolveInferenceProvider(id));
     const allowImages = metadata.imageInput === true;
     const fileCounts = fileCountsOf(events, allowImages);
     const session: SessionViewInfo = {
