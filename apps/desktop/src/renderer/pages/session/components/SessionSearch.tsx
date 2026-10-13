@@ -7,6 +7,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/renderer/components/ui/command';
+import { Spinner } from '@/renderer/components/ui/spinner';
 import { DIALOG_SIZES } from '@/renderer/components/dialog-size';
 import { dateGroupOf, type DateGroup } from '@/renderer/lib/format';
 import type { SessionSummary } from '../model/types.js';
@@ -58,7 +59,8 @@ export function SessionSearch({ open, onOpenChange, sessions, onSelect }: Sessio
                     onOpenChange(false);
                   }}
                 >
-                  {session.title}
+                  {session.running === true && <Spinner className="size-4 shrink-0" aria-label="运行中" />}
+                  <span className="min-w-0 truncate">{session.title}</span>
                 </CommandItem>
               ))}
             </CommandGroup>
