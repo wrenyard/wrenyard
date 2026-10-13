@@ -65,7 +65,7 @@ export interface ModelNativeAttributes {
 export interface ModelDefaults {
   intelligence: IntelligenceTier;
   capabilities: readonly ModelCapability[];
-  contextWindow?: number;
+  contextWindow: number;
   maxOutputTokens?: number;
   pricing: ModelPricing;
   speed: number;
