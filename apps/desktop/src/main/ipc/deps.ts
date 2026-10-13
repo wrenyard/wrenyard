@@ -12,4 +12,5 @@ export interface ShellIpcDeps {
   options: ShellWindowOptions;
   assertShellSender(sender: WebContents): void;
   setPage(page: ShellPage, focus?: boolean): void;
+  showAppMenu(position?: { x: number; y: number }): void;
 }
