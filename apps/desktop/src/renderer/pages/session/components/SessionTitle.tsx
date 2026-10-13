@@ -3,6 +3,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/renderer/compon
 import { Separator } from '@/renderer/components/ui/separator';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { formatCount, formatSnapshotStamp } from '@/renderer/lib/format';
+import { useMiniMode } from '@/renderer/lib/mini';
 import type { SessionModel, SessionSummary } from '../model/types.js';
 
 export interface SessionTitleProps {
@@ -15,7 +16,12 @@ export interface SessionTitleProps {
 
 /** Title-bar session title; a hover card carries the session and snapshot facts. */
 export function SessionTitle({ title, session, snapshot, turnCount, draft }: SessionTitleProps) {
+  const mini = useMiniMode();
   const label = draft ? '新对话' : title;
+  // Mini card: plain, non-interactive text inside the drag region (no tooltip).
+  if (mini) {
+    return <span className="min-w-0 truncate text-sm text-muted-foreground">{label}</span>;
+  }
   if (draft) {
     return <Button variant="ghost" className="max-w-80 truncate text-base font-medium">{label}</Button>;
   }

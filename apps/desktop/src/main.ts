@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification as ElectronNotification, powerMonitor, screen, session, shell, type MessageBoxOptions } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification as ElectronNotification, powerMonitor, screen, session, shell, type MessageBoxOptions, type WebContents } from 'electron';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
@@ -26,6 +26,7 @@ import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.
 import { readStatsSnapshot } from './stats-snapshot.js';
 import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
+import { MiniCardManager } from './mini-cards.js';
 import { Notifier } from './main/notifications/notifier.js';
 import { createInAppChannel } from './main/notifications/channels/in-app.js';
 import { createPetChannel } from './main/notifications/channels/pet.js';
@@ -255,6 +256,8 @@ async function refreshQuotaProjectionAfterGatewayRestart(): Promise<void> {
 /** Session IPC relay; null until bootstrap registers it. */
 let sessionRegistration: SessionRegistration | null = null;
 let shellWindow: ShellWindowController | null = null;
+/** Mini-card window owner; null until bootstrap creates it. */
+let miniCards: MiniCardManager | null = null;
 /** Live settings store, read by the notifier's `notifications.enabled` gate. */
 let desktopSettingsStore: DesktopSettingsStore | null = null;
 let desktopTray: DesktopTrayHandle | null = null;
@@ -348,6 +351,22 @@ async function finalizeQuit(): Promise<void> {
     // app.quit(); teardown is already done, so exit if still alive.
     setTimeout(() => app.exit(0), 1_000);
   }
+}
+
+/**
+ * The trusted shell surfaces: the shell window plus every open mini card, in
+ * that order. This single predicate backs both the shell IPC assertion and the
+ * session relay's sender check, so trust cannot drift between them.
+ */
+function trustedShellSurfaces(): WebContents[] {
+  const surfaces: WebContents[] = [];
+  if (shellWindow && !shellWindow.window.isDestroyed()) surfaces.push(shellWindow.window.webContents);
+  surfaces.push(...(miniCards?.cardWebContents() ?? []));
+  return surfaces;
+}
+
+function isTrustedShellSender(sender: WebContents): boolean {
+  return trustedShellSurfaces().some((surface) => surface.id === sender.id);
 }
 
 function showDesktop(page: ShellPage = 'session'): void {
@@ -796,10 +815,12 @@ async function bootstrap(): Promise<void> {
   sessionRegistration = registerSession({
     ipcPath,
     canConnect: canConnectDaemon,
-    // The shell window is created after this registration, so read the live
-    // pointer on each call instead of capturing it.
-    isShellSender: (sender) =>
-      Boolean(shellWindow && !shellWindow.window.isDestroyed() && sender.id === shellWindow.window.webContents.id),
+    // The shell window and the mini-card owner are created after this
+    // registration, so resolve both live on each call instead of capturing them.
+    isShellSender: (sender) => isTrustedShellSender(sender),
+    // Every trusted surface also receives each polled live event, so a card sees
+    // live chat updates even while another window owns the session's poll.
+    additionalRecipients: () => trustedShellSurfaces(),
     // Live ledger events feed the conversation notification producer; the
     // initial catch-up page is never replayed.
     onLiveEvent: (sessionId, event) => sessionNotifier.observe(sessionId, event),
@@ -855,6 +876,23 @@ async function bootstrap(): Promise<void> {
       app.setLoginItemSettings({ openAtLogin: value });
     },
     onMenuBarQuotaChanged: () => { desktopTray?.rebuild(); },
+  });
+  // Mini-card mode: the shell's multi-window surface. Each card loads the shell
+  // page with `?mini=1`; the shell hides while cards are open and returns when
+  // the last one closes. This manager is the single source of card trust.
+  miniCards = new MiniCardManager({
+    pageLoader,
+    preloadPath: preloadPath(app.getAppPath(), 'shell'),
+    backgroundColor: appearanceController.backgroundColor(),
+    additionalArguments: appearanceController.arguments(),
+    getShellWindow: () => (shellWindow && !shellWindow.window.isDestroyed() ? shellWindow.window : null),
+    hideShell: () => { shellWindow?.window.hide(); },
+    showShell: () => showDesktop('session'),
+    selectShellSession: (sessionId) => {
+      shellWindow?.deliverCommandAction(
+        sessionId ? { id: 'session.open', args: sessionId } : { id: 'session.newDraft' },
+      );
+    },
   });
   // One shared daemon transport and subscription set for the whole Desktop
   // process. The shell window, tray and Pet all consume the same rounds; the
@@ -972,6 +1010,30 @@ async function bootstrap(): Promise<void> {
     return daemonSnapshot();
   });
 
+  // Mini cards: the shell opens a frameless card (hiding itself); a card opens
+  // another card (offset from itself) or returns to the shell. Only trusted
+  // shell surfaces may drive these; every other sender is a no-op.
+  ipcMain.handle(SHELL_CHANNELS.openMiniCard, (event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') throw new Error('Invalid session id');
+    if (!isTrustedShellSender(event.sender)) return;
+    miniCards?.openCard(sessionId, event.sender);
+  });
+  ipcMain.handle(SHELL_CHANNELS.restoreMain, (event, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') throw new Error('Invalid session id');
+    if (!miniCards?.isCardSender(event.sender)) return;
+    miniCards.restoreMain(event.sender, sessionId);
+  });
+  // 置顶 and 关闭 are card-scoped: they act on the sender card only.
+  ipcMain.handle(SHELL_CHANNELS.alwaysOnTop, (event, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid always-on-top flag');
+    if (!miniCards?.isCardSender(event.sender)) return;
+    miniCards.setAlwaysOnTop(event.sender, enabled);
+  });
+  ipcMain.handle(SHELL_CHANNELS.closeWindow, (event) => {
+    if (!miniCards?.isCardSender(event.sender)) return;
+    miniCards.closeCard(event.sender);
+  });
+
   // `general.startupPage` controls the first page: 'session' always, or 'last'
   // restores the page the shell was on when it last ran. Explicit second-instance
   // navigation (`--settings`) still overrides it below.
@@ -990,6 +1052,7 @@ async function bootstrap(): Promise<void> {
     attachAppearance: (window) => appearanceController?.attach(window),
     titleBarOverlay: appearanceController.titleBarOverlay(),
     additionalArguments: appearanceController.arguments(),
+    isTrustedSender: (sender) => isTrustedShellSender(sender),
     initialPage: initialShellPage,
     initialGeometry: loadedSettings?.window.shell,
     initiallyMaximized: loadedSettings?.window.shellMaximized,

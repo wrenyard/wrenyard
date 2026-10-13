@@ -755,6 +755,20 @@ html[data-platform="win32"] {
   height: 18px;
 }
 
+/* Mini card: the title bar collapses to a compact 36px strip. Cards are
+   frameless on every platform, so both platform inset reserves are released and
+   our own buttons sit flush right. The window stays opaque; only the inner
+   session surface takes a soft card edge. */
+[data-mini] {
+  --titlebar-height: 36px;
+  --titlebar-inset-start: 0px;
+  --titlebar-inset-end: 0px;
+}
+
+[data-mini] [data-page="session"] {
+  border-radius: var(--radius-lg);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

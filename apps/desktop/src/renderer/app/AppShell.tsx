@@ -2,6 +2,7 @@ import { Activity, useEffect, useState } from 'react';
 import type { ComponentType } from 'react';
 import type { ShellPage } from '@/shell-contract';
 import { useShellPage } from '@/renderer/lib/desktop';
+import { useMiniMode } from '@/renderer/lib/mini';
 import { startViewTransition } from '@/renderer/lib/motion';
 import { SidebarInset, SidebarProvider } from '@/renderer/components/ui/sidebar';
 import { AppSidebar } from '@/renderer/app/AppSidebar';
@@ -38,6 +39,7 @@ const PAGES: Record<ShellPage, ComponentType> = {
  */
 export function AppShell() {
   const page = useShellPage();
+  const mini = useMiniMode();
   // The rendered page lags the store by one view transition so the page swap
   // runs inside `document.startViewTransition`; without a transition it follows
   // the store directly.
@@ -54,11 +56,19 @@ export function AppShell() {
     setVisited((previous) => (previous.has(shown) ? previous : new Set(previous).add(shown)));
   }, [shown]);
 
+  // Mini always shows the session page; other visited pages stay mounted but
+  // hidden, so switching back keeps their state.
+  const active = mini ? 'session' : shown;
+  const mounted = mini && !visited.has('session') ? new Set(visited).add('session') : visited;
+
   return (
     <div
       className="flex h-full min-h-0 flex-col"
+      data-mini={mini ? 'true' : undefined}
       onMouseDown={(event) => {
-        // Keep mouse clicks from leaving keyboard focus on buttons.
+        // Do not let a mouse click move keyboard focus onto a button: a lingering
+        // :focus-visible would show a focus ring, and a later Space press would
+        // re-activate the button. Inputs stay untouched so they still focus.
         const target = event.target;
         if (target instanceof Element && target.closest('button, [role="button"]')) {
           event.preventDefault();
@@ -73,13 +83,13 @@ export function AppShell() {
           // The outer rail is fixed; Cmd+B must only toggle a page's inner sidebar.
           onOpenChange={() => {}}
         >
-          <AppSidebar page={shown} />
+          {!mini && <AppSidebar page={shown} />}
           <SidebarInset className="motion-surface-page flex min-h-0 min-w-0 flex-col">
             {PAGE_ORDER.map((id) => {
-              if (!visited.has(id)) return null;
+              if (!mounted.has(id)) return null;
               const PageComponent = PAGES[id];
               return (
-                <Activity key={id} mode={id === shown ? 'visible' : 'hidden'}>
+                <Activity key={id} mode={id === active ? 'visible' : 'hidden'}>
                   <TitleBarPageProvider page={id}>
                     <div className="flex min-h-0 flex-1 flex-col">
                       <PageComponent />
@@ -92,7 +102,7 @@ export function AppShell() {
           <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />
         </SidebarProvider>
       </div>
-      <StatusBar onOpenUpdate={() => setUpdateOpen(true)} />
+      {!mini && <StatusBar onOpenUpdate={() => setUpdateOpen(true)} />}
     </div>
   );
 }

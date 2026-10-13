@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Menu, PanelLeftClose, PanelLeftOpen, PictureInPicture2, Pin, PinOff, Plus, X } from 'lucide-react';
 import type { ShellPage } from '@/shell-contract';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { shell, useShellPage } from '@/renderer/lib/desktop';
+import { closeCard, getCurrentSession, openMiniCard, restoreMain, setMiniPinned, useMiniMode, useMiniPinned } from '@/renderer/lib/mini';
 import { back, forward, toggleSecondarySidebar, useNavigation, useSecondarySidebarToggle } from '@/renderer/lib/navigation';
 import { registerTitleBarSlot } from '@/renderer/lib/titlebar';
 
@@ -57,6 +58,87 @@ export function TitleBar() {
   const modifier = isMac ? '⌘' : 'Ctrl+';
   const backShortcut = isMac ? '⌘[' : 'Alt+←';
   const forwardShortcut = isMac ? '⌘]' : 'Alt+→';
+  const mini = useMiniMode();
+  const pinned = useMiniPinned();
+
+  // Mini card: a compact 36px drag strip. 置顶 sits at the far left; the middle
+  // is a plain, non-interactive session title inside the drag region; the right
+  // holds three buttons flush right (cards are frameless on every platform).
+  if (mini) {
+    return (
+      <header
+        data-titlebar
+        className={cn('flex h-(--titlebar-height) shrink-0 items-center gap-1 border-b bg-sidebar pr-1.5 pl-1.5', DRAG)}
+      >
+        <div className={cn('flex shrink-0 items-center', NO_DRAG)}>
+          <Tooltip>
+            <TooltipTrigger
+              render={(
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={pinned ? '取消置顶' : '置顶'}
+                  aria-pressed={pinned}
+                  onClick={() => setMiniPinned(!pinned)}
+                />
+              )}
+            >
+              {pinned ? <Pin className="fill-current" /> : <PinOff />}
+            </TooltipTrigger>
+            <TooltipContent>{pinned ? '取消置顶' : '置顶'}</TooltipContent>
+          </Tooltip>
+        </div>
+        <div
+          data-titlebar-slot="session"
+          className={cn('flex min-w-0 flex-1 items-center gap-2', DRAG)}
+          ref={(element) => registerTitleBarSlot('session', 'title', element)}
+        />
+        <div className={cn('flex shrink-0 items-center gap-1', NO_DRAG)}>
+          <Tooltip>
+            <TooltipTrigger
+              render={(
+                <Button variant="ghost" size="icon-sm" aria-label="新建卡片" onClick={() => openMiniCard('')} />
+              )}
+            >
+              <Plus />
+            </TooltipTrigger>
+            <TooltipContent>新建卡片</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={(
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="回到主窗口"
+                  onClick={() => restoreMain(getCurrentSession())}
+                />
+              )}
+            >
+              <Maximize2 />
+            </TooltipTrigger>
+            <TooltipContent>回到主窗口</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={(
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="关闭"
+                  className="hover:text-destructive"
+                  onClick={closeCard}
+                />
+              )}
+            >
+              <X />
+            </TooltipTrigger>
+            <TooltipContent>关闭</TooltipContent>
+          </Tooltip>
+        </div>
+      </header>
+    );
+  }
 
   return (
     <header
@@ -115,6 +197,9 @@ export function TitleBar() {
       </div>
 
       <div className={cn('flex shrink-0 items-center gap-1 px-2', DRAG, SLOT_NO_DRAG)}>
+        <TitleBarButton label="迷你模式" tooltip="迷你模式" onClick={() => openMiniCard(getCurrentSession())}>
+          <PictureInPicture2 />
+        </TitleBarButton>
         {TITLE_BAR_PAGES.map((id) => (
           <div
             key={id}
