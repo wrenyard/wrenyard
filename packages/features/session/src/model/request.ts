@@ -27,6 +27,7 @@ import {
   type ModelTransport,
   type ToolCall,
   type ToolSpec,
+  type ToolChoice,
   type Usage,
 } from '../transport/index.ts';
 import type { ModelSpanFinishedEvent, ModelSpanStartedEvent } from '../ledger/events.ts';
@@ -96,6 +97,7 @@ export interface ModelCallInput {
   onToolCall?: (call: ToolCall) => void;
   /** Tools declared on this call; forwarded to the driver for every role. */
   tools?: readonly ToolSpec[];
+  toolChoice?: ToolChoice;
 }
 
 export interface ModelCallOutput {
@@ -484,6 +486,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
           ...(input.maxTokens === undefined ? {} : { maxOutputTokens: input.maxTokens }),
           ...(input.tools === undefined ? {} : { tools: input.tools }),
+          ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
           signal: controller.signal,
           onEvent,
         }), controller.signal);
