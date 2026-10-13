@@ -52,6 +52,9 @@ function validateModel(model: RegisteredModel, seen: Set<string>): void {
   if (!Number.isInteger(model.defaults.speed) || model.defaults.speed <= 0) {
     throw new Error(`registered model ${model.id} speed must be a positive integer`);
   }
+  if (!Number.isSafeInteger(model.defaults.contextWindow) || model.defaults.contextWindow <= 0) {
+    throw new Error(`registered model ${model.id} context window must be a positive integer`);
+  }
   const pricing = model.defaults.pricing;
   if (pricing.length !== 3) {
     throw new Error(`registered model ${model.id} pricing must be [cached, input, output]`);
