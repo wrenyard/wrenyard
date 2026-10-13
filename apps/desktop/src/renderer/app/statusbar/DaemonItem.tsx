@@ -17,7 +17,7 @@ import { cn } from 'cn';
 
 /**
  * Status-bar daemon item (window-chrome spec 4.2). An icon shows connection
- * health, with the full state in its tooltip. The popover adds
+ * health, with a short environment label in its tooltip. The popover adds
  * version, uptime, IPC endpoint and lifecycle ownership, plus a restart action
  * when the daemon is Desktop-supervised.
  */
@@ -53,11 +53,7 @@ function connectionLabel(
   if (snapshot?.state !== 'running') {
     return snapshot?.state === 'starting' ? '连接中' : '离线';
   }
-  if (runtimeMode === 'source') return '在线（本地 · 开发）';
-  if (runtimeMode === 'installed') {
-    return snapshot.mode === 'connected' ? '在线（本地 · CLI）' : '在线（本地）';
-  }
-  return snapshot.mode === 'supervised' ? '在线（本地）' : '在线';
+  return runtimeMode === 'source' ? '开发模式' : '本地';
 }
 
 function lifecycleLabel(snapshot: DaemonLifecycleSnapshot | undefined): string {
@@ -105,8 +101,6 @@ export function DaemonItem() {
   const disconnected = isDaemonDisconnected(snapshot);
 
   const status = starting ? '连接中' : connectionLabel(snapshot, settings.data?.service.runtimeMode);
-  const detail = disconnected ? (snapshot?.message ?? 'Daemon 已断开') : lifecycleLabel(snapshot);
-  const tooltip = `${status} · ${detail}`;
 
   const handleRestart = async (): Promise<void> => {
     const confirmed = await confirm({ title: '重启 Daemon？', confirmLabel: '重启', destructive: true });
@@ -118,7 +112,7 @@ export function DaemonItem() {
       <PopoverTrigger nativeButton={false} render={<span className="inline-flex" />}>
         <StatusBarButton
           icon={starting ? undefined : snapshot?.state === 'running' ? Plug : Unplug}
-          tooltip={tooltip}
+          tooltip={status}
           ariaLabel="连接状态"
           tone={disconnected ? 'destructive' : 'default'}
         >
