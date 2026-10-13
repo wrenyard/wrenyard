@@ -75,6 +75,10 @@ import {
 } from '../model/routing.js';
 import { useRoutingTestRun, useRoutingTestTasksQuery } from '../queries.js';
 
+function resultColumnClass(id: string): string {
+  return cn('whitespace-nowrap', !['provider', 'model', 'reason'].includes(id) && 'text-right tabular-nums');
+}
+
 export interface RoutingTestProps {
   /** Latest quota snapshot, used only for exclusion candidate options. */
   snapshot: QuotaSnapshot | null;
@@ -356,7 +360,7 @@ export function RoutingTest({ snapshot, active }: RoutingTestProps) {
           <TableHeader>
             <TableRow>
               {ROUTING_RESULT_COLUMNS.map((column) => (
-                <TableHead key={column.id} className="whitespace-nowrap">{column.label}</TableHead>
+                <TableHead key={column.id} className={resultColumnClass(column.id)}>{column.label}</TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -376,10 +380,7 @@ export function RoutingTest({ snapshot, active }: RoutingTestProps) {
                   {ROUTING_RESULT_COLUMNS.map((column) => (
                     <TableCell
                       key={column.id}
-                      className={cn(
-                        'whitespace-nowrap',
-                        column.id !== 'provider' && column.id !== 'model' && column.id !== 'reason' && 'text-right tabular-nums',
-                      )}
+                      className={resultColumnClass(column.id)}
                     >
                       {routingTestRowCell(row, column.id)}
                     </TableCell>
