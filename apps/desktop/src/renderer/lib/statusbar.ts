@@ -39,7 +39,7 @@ export const STATUS_BAR_MANDATORY_IDS: readonly string[] = ['daemon', 'notificat
  * one list so they can never drift.
  */
 export const STATUS_BAR_CONFIGURABLE_ITEMS: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'activity.tasks', label: '任务' },
+  { id: 'activity.tasks', label: '活动' },
   { id: 'activity.taskgraphs', label: '任务图' },
   { id: 'session.ctx', label: '上下文占用' },
   { id: 'session.metrics', label: '会话指标' },

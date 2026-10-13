@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Network, Play } from 'lucide-react';
+import { Activity, Bot, MessageSquare, Network, Zap, type LucideIcon } from 'lucide-react';
 import { Button } from '@/renderer/components/ui/button';
 import { Item } from '@/renderer/components/ui/item';
 import { Popover, PopoverContent, PopoverTrigger } from '@/renderer/components/ui/popover';
@@ -8,134 +8,129 @@ import { StatusBarButton } from '@/renderer/components/status-bar-button';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { executeCommand } from '@/renderer/lib/commands';
 import { shell, useActivityStatus } from '@/renderer/lib/desktop';
+import { PHASE_LABEL } from '@/renderer/pages/session/model/describe';
+import type { ActionKindModel } from '@/renderer/pages/session/model/types';
 import type { ActivityStatusTask, ActivityStatusTaskGraph } from '@/shell-contract';
-import { cn } from 'cn';
+import { useActivityTaskDetails, useSessionActivity } from './use-activity';
 
-/**
- * Status-bar activity items (window-chrome spec 4.3, 4.4): one for queued and
- * running task runs, one for active task graphs. Both read the shared activity
- * projection and open the owning surface on click: a task row opens that run's
- * transcript, and a graph title/row opens the native Graph Slip window.
- */
+const ACTION_LABEL: Record<ActionKindModel, string> = {
+  dispatch: '编译任务输入',
+  document: '文档管理',
+  search: '检索资料',
+  vcs: '工作区版本',
+  project: '项目管理',
+  'parse-failed': '解析行动',
+};
 
-function byStartedAt(a: ActivityStatusTask, b: ActivityStatusTask): number {
-  return Date.parse(a.startedAt) - Date.parse(b.startedAt);
+function ActivityRow({ icon: Icon, title, detail, startedAt, onClick }: {
+  icon: LucideIcon;
+  title: string;
+  detail?: string;
+  startedAt: string;
+  onClick: () => void;
+}) {
+  return (
+    <Item render={<button type="button" onClick={onClick} />} size="xs" className="w-full flex-nowrap text-left">
+      <Icon className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate" title={title}>{title}</span>
+        {detail ? <span className="block truncate text-xs text-muted-foreground" title={detail}>{detail}</span> : null}
+      </span>
+      <Elapsed start={startedAt} className="shrink-0 tabular-nums text-xs text-muted-foreground" />
+    </Item>
+  );
 }
-
-const ACTIVITY_ROW_CLASS =
-  'min-w-0 flex-1';
 
 export function ActivityItem() {
   const snapshot = useActivityStatus();
+  const sessions = useSessionActivity();
   const [open, setOpen] = useState(false);
-  const runningTasks = snapshot.tasks.filter((task) => task.status === 'running').sort(byStartedAt);
-  const queuedTasks = snapshot.tasks.filter((task) => task.status === 'queued').sort(byStartedAt);
-  const running = runningTasks.length;
-  const queued = queuedTasks.length;
-  const active = running + queued > 0;
-
-  const parts: string[] = [];
-  if (running > 0) parts.push(`${running} 运行`);
-  if (queued > 0) parts.push(`${queued} 排队`);
-  const base = parts.length > 0 ? parts.join(' · ') : '空闲';
-  const label = snapshot.stale ? `${base}（数据过期）` : base;
-
-  const openTask = (task: ActivityStatusTask): void => {
-    executeCommand('tasks.open', {
-      taskRunId: task.taskRunId,
-      ...(task.taskId !== undefined ? { taskId: task.taskId } : {}),
-      ...(task.project !== undefined ? { project: task.project } : {}),
-    });
+  const tasks = snapshot.tasks.filter((task) => task.status === 'running' || task.status === 'queued')
+    .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+  const details = useActivityTaskDetails(tasks.map((task) => task.taskRunId).sort());
+  const groups = sessions.data ?? [];
+  const turns = groups.flatMap((session) => session.turns);
+  const linkedTasks = new Set(turns.flatMap((turn) => turn.actions.flatMap((action) => action.taskRunId ? [action.taskRunId] : [])));
+  const standaloneTasks = tasks.filter((task) => !linkedTasks.has(task.taskRunId));
+  const stale = snapshot.stale || sessions.isError || details.isError;
+  const counts = [turns.length ? turns.length + ' 轮' : '', tasks.length ? tasks.length + ' 任务' : ''].filter(Boolean).join(' · ');
+  const label = counts || (sessions.isPending ? '加载中' : stale ? '暂不可用' : '空闲');
+  const openSession = (sessionId: string) => {
+    executeCommand('session.open', { sessionId });
     setOpen(false);
   };
-
-  const openTaskGraph = (taskgraphId: string): void => {
-    void shell.openTaskGraph(taskgraphId);
-    setOpen(false);
-  };
-
   const renderTask = (task: ActivityStatusTask) => {
-    const taskgraphId = task.taskgraphId;
-    // A task that belongs to a graph shows the graph title as a separate
-    // sibling button (never nested inside the row button) that opens the
-    // native Graph Slip window.
-    const graph = taskgraphId === undefined
-      ? undefined
-      : snapshot.taskgraphs.find((candidate) => candidate.taskgraphId === taskgraphId);
-    return (
-      <div key={task.taskRunId} className="flex w-full items-center gap-1">
-        <Item
-          render={<button type="button" onClick={() => openTask(task)} />}
-          size="xs"
-          className={ACTIVITY_ROW_CLASS}
-        >
-          <span
-            className={cn(
-              'size-2 shrink-0 rounded-full',
-              task.status === 'running' ? 'bg-success' : 'bg-muted-foreground',
-            )}
-          />
-          <span className="truncate">{task.taskLabel ?? task.taskId ?? task.taskRunId}</span>
-          {task.project ? <span className="truncate text-muted-foreground">{task.project}</span> : null}
-          <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
-            {task.status === 'running' ? <Elapsed start={task.startedAt} /> : '排队中'}
-          </span>
-        </Item>
-        {taskgraphId !== undefined && graph !== undefined ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="max-w-24 shrink-0 text-muted-foreground"
-            onClick={() => openTaskGraph(taskgraphId)}
-          >
-            <span className="truncate">{graph.title ?? graph.taskgraphId}</span>
-          </Button>
-        ) : null}
-      </div>
-    );
+    const brief = details.data?.find((item) => item.taskRunId === task.taskRunId);
+    const graph = snapshot.taskgraphs.find((item) => item.taskgraphId === task.taskgraphId);
+    return <div key={task.taskRunId} className="flex items-center">
+      <div className="min-w-0 flex-1"><ActivityRow icon={Bot}
+      title={task.taskLabel ?? brief?.taskName ?? task.taskId ?? task.taskRunId}
+      detail={[task.status === 'queued' ? '排队中' : '运行中', brief?.taskName ?? task.taskId, brief?.runtime].filter(Boolean).join(' · ')}
+      startedAt={task.startedAt}
+      onClick={() => {
+        executeCommand('tasks.open', { taskRunId: task.taskRunId, taskId: task.taskId, project: task.project });
+        setOpen(false);
+      }} /></div>
+      {graph ? <Button variant="ghost" size="xs" className="max-w-24 shrink-0 text-muted-foreground" onClick={() => {
+        void shell.openTaskGraph(graph.taskgraphId);
+        setOpen(false);
+      }}><span className="truncate">{graph.title ?? graph.taskgraphId}</span></Button> : null}
+    </div>;
   };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger nativeButton={false} render={<span className="inline-flex" />}>
-        <StatusBarButton
-          icon={active ? Play : undefined}
-          label={label}
-          tone={snapshot.stale ? 'warning' : 'default'}
-          tooltip={snapshot.stale ? '任务活动数据已过期' : '查看运行中的任务'}
-          ariaLabel="任务活动"
-        />
+        <StatusBarButton icon={Activity} label={label} tone={stale ? 'warning' : 'default'}
+          tooltip={stale ? '活动数据暂未更新' : '查看会话与任务活动'} ariaLabel="活动" />
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className="w-[420px] p-0">
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
-          <span className="text-sm font-medium">运行中的任务</span>
-          <span className="text-xs text-muted-foreground">{`${running} 运行 · ${queued} 排队`}</span>
+          <span className="text-sm font-medium">活动</span>
+          <span className="text-xs text-muted-foreground">{label}</span>
         </div>
         <div className="max-h-80 overflow-auto px-2 pb-2">
-          {active ? (
-            <>
-              {runningTasks.map(renderTask)}
-              {queuedTasks.map(renderTask)}
-            </>
-          ) : (
-            <p className="px-2 py-6 text-center text-xs text-muted-foreground">暂无运行中的任务</p>
-          )}
+          {stale ? <p className="px-2 py-1 text-xs text-warning">活动数据暂未更新</p> : null}
+          {groups.map((session) => session.turns.length > 0 ? (
+            <section key={session.sessionId} className="mb-2">
+              <Button variant="ghost" size="sm" className="max-w-full justify-start gap-2" onClick={() => openSession(session.sessionId)}>
+                <MessageSquare className="size-3.5 shrink-0" />
+                <span className="truncate">{session.title || '新会话'}</span>
+              </Button>
+              {session.turns.map((turn) => {
+                const turnTaskIds = new Set(turn.actions.map((action) => action.taskRunId));
+                const turnTasks = tasks.filter((task) => turnTaskIds.has(task.taskRunId));
+                const actions = turn.actions.filter((action) => action.status === 'running' && !action.taskRunId);
+                return <div key={turn.id} className="ml-3 border-l border-border pl-2">
+                  <ActivityRow icon={Activity} title={'第 ' + turn.id + ' 轮 · ' + PHASE_LABEL[turn.phase ?? 'preparing'] + '中'}
+                    detail={turn.user.text} startedAt={turn.startedAt} onClick={() => openSession(session.sessionId)} />
+                  {actions.length > 0 ? <>
+                    <p className="px-2.5 pt-1 text-xs text-muted-foreground">行动</p>
+                    {actions.map((action) => <ActivityRow key={action.id} icon={Zap} title={ACTION_LABEL[action.kind]}
+                      detail={action.subtitle || action.title} startedAt={action.startedAt} onClick={() => openSession(session.sessionId)} />)}
+                  </> : null}
+                  {turnTasks.length > 0 ? <>
+                    <p className="px-2.5 pt-1 text-xs text-muted-foreground">智能体任务</p>
+                    {turnTasks.map(renderTask)}
+                  </> : null}
+                </div>;
+              })}
+            </section>
+          ) : null)}
+          {standaloneTasks.length > 0 ? <>
+            <p className="px-2.5 pt-1 text-xs text-muted-foreground">智能体任务</p>
+            {standaloneTasks.map(renderTask)}
+          </> : null}
+          {!counts ? <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+            {sessions.isPending ? '正在读取活动…' : stale ? '暂时无法读取活动' : '暂无进行中的会话或任务'}
+          </p> : null}
         </div>
         <Separator />
         <div className="p-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="w-full"
-            onClick={() => {
-              executeCommand('tasks.open');
-              setOpen(false);
-            }}
-          >
-            打开任务页
-          </Button>
+          <Button type="button" variant="ghost" size="sm" className="w-full" onClick={() => {
+            executeCommand('tasks.open');
+            setOpen(false);
+          }}>打开任务页</Button>
         </div>
       </PopoverContent>
     </Popover>
