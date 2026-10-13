@@ -18,6 +18,7 @@ export const spacexaiModels = [
   defineModel('grok-4.6', 'Grok 4.6', {
     intelligence: 'high',
     capabilities: ['text', 'image'],
+    contextWindow: 256_000,
     pricing: [0.5, 2, 6],
     speed: 59,
   }, { lab: 'spacexai', family: 'grok' }),
