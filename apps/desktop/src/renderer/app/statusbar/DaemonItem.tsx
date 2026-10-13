@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Plug, Unplug } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/renderer/components/ui/button';
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/renderer/components/ui/popover';
@@ -16,9 +16,8 @@ import type {
 import { cn } from 'cn';
 
 /**
- * Status-bar daemon item (window-chrome spec 4.2). Its dot is always the single
- * source of daemon health: green while running, a spinner while starting, and
- * red whenever the process is stopped, failed, or unreachable. The popover adds
+ * Status-bar daemon item (window-chrome spec 4.2). An icon shows connection
+ * health, with the full state in its tooltip. The popover adds
  * version, uptime, IPC endpoint and lifecycle ownership, plus a restart action
  * when the daemon is Desktop-supervised.
  */
@@ -105,22 +104,9 @@ export function DaemonItem() {
   const starting = snapshot?.state === 'starting' || (snapshot === undefined && daemon.isPending);
   const disconnected = isDaemonDisconnected(snapshot);
 
-  let indicator: ReactNode;
-  if (starting) {
-    indicator = <Spinner className="size-3.5" />;
-  } else if (snapshot?.state === 'running') {
-    indicator = <span className="size-2 shrink-0 rounded-full bg-success" />;
-  } else {
-    indicator = <span className="size-2 shrink-0 rounded-full bg-current" />;
-  }
-
-  const label = (
-    <span className="flex items-center gap-1">
-      {indicator}
-      {starting ? '连接中' : connectionLabel(snapshot, settings.data?.service.runtimeMode)}
-    </span>
-  );
-  const tooltip = disconnected ? (snapshot?.message ?? 'Daemon 已断开') : lifecycleLabel(snapshot);
+  const status = starting ? '连接中' : connectionLabel(snapshot, settings.data?.service.runtimeMode);
+  const detail = disconnected ? (snapshot?.message ?? 'Daemon 已断开') : lifecycleLabel(snapshot);
+  const tooltip = `${status} · ${detail}`;
 
   const handleRestart = async (): Promise<void> => {
     const confirmed = await confirm({ title: '重启 Daemon？', confirmLabel: '重启', destructive: true });
@@ -130,7 +116,14 @@ export function DaemonItem() {
   return (
     <Popover>
       <PopoverTrigger nativeButton={false} render={<span className="inline-flex" />}>
-        <StatusBarButton label={label} tooltip={tooltip} ariaLabel="连接状态" />
+        <StatusBarButton
+          icon={starting ? undefined : snapshot?.state === 'running' ? Plug : Unplug}
+          tooltip={tooltip}
+          ariaLabel="连接状态"
+          tone={disconnected ? 'destructive' : 'default'}
+        >
+          {starting ? <Spinner className="size-3.5" /> : null}
+        </StatusBarButton>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className="w-72">
         <PopoverTitle>连接状态</PopoverTitle>
