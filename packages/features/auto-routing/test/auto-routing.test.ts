@@ -2,8 +2,8 @@
  * Focused node:test coverage for packages/features/auto-routing/src/index.ts.
  *
  * Covers the pure two-file (source + test) contract: quota evidence
- * semantics, full-cycle/rolling aggregation, hard guards, marginal price and
- * verified quota-burn efficiency economic evidence, and the approved normalized
+ * semantics, full-cycle/rolling aggregation, hard guards, marginal price,
+ * and the approved normalized
  * ranking score:
  *   score = .40*P + .30*S + .20*Q + .10*I
  * where P is the continuous price-factor from fixed anchors,
@@ -23,9 +23,6 @@ import {
   SCORE_WEIGHTS,
   SPEED_SATURATION_BASE_TPS,
   ZERO_QUOTA_HEADROOM,
-  UNKNOWN_QUOTA_FLOOR_HEADROOM,
-  EFFICIENCY_HEADROOM_WEIGHT,
-  EFFICIENCY_EVIDENCE_WEIGHT,
   assessRequiredQuota,
   evaluateCandidate,
   rankAutoRoutingCandidates,
@@ -103,7 +100,6 @@ function cand(over: Partial<CandidateInput> = {}): CandidateInput {
     intelligenceMinRank: 0,
     requiredQuota: [q("monthly", fullCycleEv(60, 0.5))],
     marginalPrice: null,
-    verifiedEfficiency: null,
   };
   return { ...base, ...over };
 }
@@ -795,7 +791,6 @@ test("healthy tiers compute quota metrics and normalized score exactly", () => {
   assert.equal(a!.quotaQuality, a!.headroom);
   close(a!.headroom, 0.7, 1e-9, "healthy H");
   close(a!.quotaQuality, 0.7, 1e-9, "Q without efficiency");
-  assert.equal(a!.verifiedEfficiency, null);
   assert.equal(a!.marginalApplied, false);
   assert.equal(a!.routingPriceUsdPerM, 2);
   close(a!.speedFactor, clamp01(25 / SPEED_SATURATION_BASE_TPS), 1e-12, "diagnostic S saturated at the bare base with no expectation");
@@ -935,24 +930,6 @@ test("candidates differing only in effectiveTps keep their relative order", () =
   const faster = cand({ canonicalId: "faster", effectiveTps: 240, expectedTps: 200 });
   const result = rankAutoRoutingCandidates([slower, faster]);
   assert.deepEqual(rankedIds(result), ["faster", "slower"]);
-});
-
-test("unknown tier uses zero headroom for Q; verified efficiency is ignored without trusted headroom", () => {
-  const unknown = expectAccepted(cand({ requiredQuota: [q("u", rollingEv(50))] }));
-  assert.equal(unknown!.tier, "unknown");
-  close(unknown!.headroom, ZERO_QUOTA_HEADROOM, 1e-12, "zero H");
-  close(unknown!.quotaQuality, ZERO_QUOTA_HEADROOM, 1e-12, "Q=zero");
-  // An aggregate unknown quota carries no trusted headroom, so efficiency can
-  // never lift Q: it is ignored outright.
-  const blended = expectAccepted(
-    cand({ requiredQuota: [q("u", rollingEv(50))], verifiedEfficiency: coveredEfficiency(0.9) })
-  );
-  assert.equal(blended!.verifiedEfficiency, null);
-  close(blended!.quotaQuality, ZERO_QUOTA_HEADROOM, 1e-12, "Q stays zero");
-  assert.ok(
-    blended!.notes.includes("quota_burn_efficiency_evidence_without_trusted_headroom_ignored")
-  );
-  assert.equal(blended!.tier, "unknown");
 });
 
 test("intelligence factor I rewards exact expected, tiers above/below, and absent ranks 0..1/3..1", () => {
@@ -1203,117 +1180,6 @@ test("bare numeric marginal is not evidence", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Verified quota-burn efficiency evidence
-// ---------------------------------------------------------------------------
-
-function coveredEfficiency(efficiencyScore: number) {
-  return {
-    efficiencyScore,
-    appliesFromMs: NOW - MINUTE_MS,
-    appliesUntilMs: NOW + MINUTE_MS,
-    source: "quota-ledger",
-    ruleId: "rule-eff-1",
-    domain: "quota_burn_efficiency" as const,
-    worst_applicable: "worst_applicable" as const,
-  };
-}
-
-test("valid efficiency changes Q only; H/tier/diagnostics unchanged", () => {
-  const base = cand({
-    canonicalId: "eff-a",
-    referenceUsdPerM: 2,
-    effectiveCapUsdPerM: 20,
-    requiredQuota: [q("q", fullCycleEv(80, 1))], // H 0.80
-  });
-  const plain = expectAccepted(base);
-  assert.equal(plain!.tier, "healthy");
-  assert.equal(plain!.headroomTrusted, true);
-  close(plain!.headroom, 0.8, 1e-9, "H");
-  close(plain!.quotaQuality, 0.8, 1e-9, "Q without efficiency");
-  assert.equal(plain!.verifiedEfficiency, null);
-
-  const blended = expectAccepted(
-    cand({
-      ...base,
-      verifiedEfficiency: coveredEfficiency(0.5),
-    })
-  );
-  assert.equal(blended!.tier, "healthy");
-  assert.equal(blended!.verifiedEfficiency, 0.5);
-  close(blended!.headroom, 0.8, 1e-9, "H untouched by efficiency");
-  // 0.85 * H + 0.15 * evidence
-  close(blended!.quotaQuality, 0.85 * 0.8 + 0.15 * 0.5, 1e-12, "blended Q");
-  close(blended!.priceFactor, plain!.priceFactor, 1e-12, "P unchanged");
-  close(blended!.speedFactor, plain!.speedFactor, 1e-12, "S unchanged");
-  close(blended!.intelligenceFactor, plain!.intelligenceFactor, 1e-12, "I unchanged");
-  assert.ok(blended!.notes.includes("quota_burn_efficiency_evidence_applied"));
-});
-
-test("verified efficiency lifts Q only; its score contribution can outweigh an economic gap", () => {
-  const baseline = cand({
-    canonicalId: "cheap-eff",
-    referenceUsdPerM: 2,
-    effectiveCapUsdPerM: 10,
-    requiredQuota: [q("q", fullCycleEv(5, 1 / 17))], // H ~0.25
-  });
-  const highEff = cand({
-    canonicalId: "eff-strong",
-    referenceUsdPerM: 4,
-    effectiveCapUsdPerM: 10,
-    requiredQuota: [q("q", fullCycleEv(60, 0.3))], // H 0.70
-    verifiedEfficiency: coveredEfficiency(0.9), // Q -> 0.73
-  });
-  const h = expectAccepted(highEff);
-  close(h!.quotaQuality, 0.85 * 0.7 + 0.15 * 0.9, 1e-12, "boosted Q");
-  // The Q boost (0.73 vs 0.25, weighted 0.2 => +0.096) outweighs the P gap
-  // (P(4)=0.475 vs P(2)=0.6, weighted 0.4 => -0.05), so the higher-efficiency
-  // candidate leads on the normalized score.
-  const result = rankAutoRoutingCandidates([baseline, highEff]);
-  assert.deepEqual(rankedIds(result), ["eff-strong", "cheap-eff"]);
-});
-
-test("invalid or stale efficiency evidence is ignored; bare numbers never apply", () => {
-  const outOfRange = expectAccepted(
-    cand({
-      verifiedEfficiency: { ...coveredEfficiency(1.5) },
-    })
-  );
-  assert.equal(outOfRange!.verifiedEfficiency, null);
-  assert.ok(outOfRange!.notes.includes("quota_burn_efficiency_evidence_invalid_ignored"));
-  close(outOfRange!.quotaQuality, outOfRange!.headroom, 1e-12, "fallback Q=H");
-
-  const staleWindow = expectAccepted(
-    cand({
-      verifiedEfficiency: {
-        ...coveredEfficiency(0.8),
-        appliesUntilMs: NOW + MINUTE_MS - 1,
-      },
-    })
-  );
-  assert.equal(staleWindow!.verifiedEfficiency, null);
-  assert.ok(staleWindow!.notes.includes("quota_burn_efficiency_evidence_stale_ignored"));
-
-  const bare = expectAccepted(
-    cand({
-      verifiedEfficiency: 0.9 as unknown as CandidateInput["verifiedEfficiency"],
-    })
-  );
-  assert.equal(bare!.verifiedEfficiency, null);
-  close(bare!.quotaQuality, bare!.headroom, 1e-12, "bare number ignored");
-
-  const noQuota = expectAccepted(
-    cand({
-      requiredQuota: [],
-      verifiedEfficiency: coveredEfficiency(0.8),
-    })
-  );
-  assert.equal(noQuota!.verifiedEfficiency, null);
-  assert.ok(
-    noQuota!.notes.includes("quota_burn_efficiency_evidence_without_required_quota_ignored")
-  );
-});
-
-// ---------------------------------------------------------------------------
 // Approved normalized ranking: single global deterministic score order
 // ---------------------------------------------------------------------------
 
@@ -1362,51 +1228,6 @@ test("quota tiers can cross by score while blocked remains rejected", () => {
     result.excluded.map((entry) => [entry.canonicalId, entry.reason]),
     [["blocked-x", "quota_blocked"]]
   );
-});
-
-test("balance-only quota keeps zero headroom and stays efficiency-ineligible", () => {
-  // A pay-as-you-go balance is available (healthy, not blocked) but grants no
-  // quota headroom, so Q remains 0 and verified efficiency cannot add a bonus.
-  const input = cand({
-    canonicalId: "balance-only",
-    referenceUsdPerM: 2,
-    effectiveCapUsdPerM: 20,
-    requiredQuota: [
-      {
-        id: "deepseek-balance",
-        evidence: null,
-        kind: "balance",
-        balance: { amount: "12.50", observedAtMs: NOW - 1_000, validForMs: HOUR_MS },
-      },
-    ],
-    verifiedEfficiency: coveredEfficiency(0.9),
-  });
-  const assessment = expectAccepted(input)!;
-  assert.equal(assessment.tier, "healthy");
-  assert.equal(assessment.coverageComplete, true);
-  assert.equal(assessment.headroom, ZERO_QUOTA_HEADROOM);
-  close(assessment.quotaQuality, ZERO_QUOTA_HEADROOM, 1e-12, "balance-only Q is zero");
-  assert.equal(assessment.verifiedEfficiency, null);
-  assert.ok(
-    assessment.notes.includes("quota_burn_efficiency_evidence_without_trusted_headroom_ignored")
-  );
-  // The scored candidate loses exactly the Q term when the balance replaces the
-  // default healthy subscription constraint.
-});
-
-test("aggregate unknown quota stays eligible with zero headroom and no efficiency bonus", () => {
-  const assessment = expectAccepted(
-    cand({
-      canonicalId: "unknown-eff",
-      requiredQuota: [q("u", rollingEv(50))],
-      verifiedEfficiency: coveredEfficiency(0.9),
-    })
-  )!;
-  // Unknown headroom never rejects: the candidate remains eligible.
-  assert.equal(assessment.tier, "unknown");
-  assert.equal(assessment.headroom, ZERO_QUOTA_HEADROOM);
-  close(assessment.quotaQuality, ZERO_QUOTA_HEADROOM, 1e-12, "unknown Q stays zero");
-  assert.equal(assessment.verifiedEfficiency, null);
 });
 
 test("verified-free changes routing price/P only and has no priority bucket", () => {
@@ -1888,161 +1709,5 @@ test("confirmed-free uses zero routing price while preserving list price and oth
       confirmedFreeSupply: free,
     }),
     "invalid_reference_price"
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Provider-verified unknown-quota floor
-// ---------------------------------------------------------------------------
-
-function unknownQuotaFloor() {
-  return {
-    kind: "unknown_quota_floor" as const,
-    appliesFromMs: NOW - MINUTE_MS,
-    appliesUntilMs: NOW + HOUR_MS,
-    source: "codebuddy.credential_environment",
-    ruleId: "codebuddy.ioa_unknown_quota_floor",
-    worst_applicable: "worst_applicable" as const,
-  };
-}
-
-/** A candidate whose aggregate quota is genuinely unobservable. */
-function unknownQuotaCandidate(over: Partial<CandidateInput> = {}): CandidateInput {
-  return cand({
-    canonicalId: "unknown-quota",
-    requiredQuota: [q("monthly", rollingEv(50))],
-    ...over,
-  });
-}
-
-test("unknown-quota floor raises Q to the floor while the aggregate stays unknown", () => {
-  const without = expectAccepted(unknownQuotaCandidate({ canonicalId: "no-floor" }))!;
-  assert.equal(without.headroom, ZERO_QUOTA_HEADROOM);
-  assert.equal(without.quotaQuality, ZERO_QUOTA_HEADROOM);
-  assert.equal(without.unknownQuotaFloorApplied, false);
-
-  const input = unknownQuotaCandidate({ unknownQuotaFloor: unknownQuotaFloor() });
-  const applied = expectAccepted(input)!;
-  assert.equal(applied.unknownQuotaFloorApplied, true);
-  close(applied.quotaQuality, UNKNOWN_QUOTA_FLOOR_HEADROOM, 1e-12, "floored Q");
-  assert.ok(applied.notes.includes("unknown_quota_floor_applied"));
-
-  // The floor touches Q only: H, the tier, coverage and headroom trust are
-  // unchanged, and the score moves by exactly weights.Q * floor over the same
-  // candidate without the evidence.
-  assert.equal(applied.headroom, ZERO_QUOTA_HEADROOM);
-  assert.equal(applied.tier, "unknown");
-  assert.equal(applied.tier, without.tier);
-  assert.equal(applied.coverageComplete, without.coverageComplete);
-  assert.equal(applied.headroomTrusted, without.headroomTrusted);
-  close(
-    applied.score - without.score,
-    SCORE_WEIGHTS.Q * UNKNOWN_QUOTA_FLOOR_HEADROOM,
-    1e-12,
-    "floored score delta"
-  );
-});
-
-test("trusted healthy headroom ignores the floor", () => {
-  const input = cand({
-    canonicalId: "trusted-headroom",
-    requiredQuota: [q("monthly", hQ(0.9))],
-    unknownQuotaFloor: unknownQuotaFloor(),
-  });
-  const assessed = expectAccepted(input)!;
-  assert.equal(assessed.unknownQuotaFloorApplied, false);
-  assert.equal(assessed.headroomTrusted, true);
-  assert.equal(assessed.tier, "healthy");
-  close(assessed.quotaQuality, assessed.headroom, 1e-12, "raw trusted Q");
-  assert.ok(
-    assessed.notes.includes("unknown_quota_floor_with_trusted_headroom_ignored")
-  );
-  assert.equal(assessed.notes.includes("unknown_quota_floor_applied"), false);
-});
-
-test("a blocked quota still rejects with quota_blocked under floor evidence", () => {
-  const result = rankAutoRoutingCandidates([
-    unknownQuotaCandidate({
-      canonicalId: "floor-blocked",
-      requiredQuota: [q("rolling", rollingEv(0))],
-      unknownQuotaFloor: unknownQuotaFloor(),
-    }),
-  ]);
-  assert.deepEqual(rankedIds(result), []);
-  assert.deepEqual(
-    result.excluded.map((entry) => [entry.canonicalId, entry.reason]),
-    [["floor-blocked", "quota_blocked"]]
-  );
-});
-
-test("malformed or stale floor evidence is ignored", () => {
-  const wrongKind = expectAccepted(
-    unknownQuotaCandidate({
-      unknownQuotaFloor: { ...unknownQuotaFloor(), kind: "confirmed_free" as never },
-    })
-  )!;
-  assert.equal(wrongKind.unknownQuotaFloorApplied, false);
-  assert.equal(wrongKind.quotaQuality, ZERO_QUOTA_HEADROOM);
-  assert.ok(wrongKind.notes.includes("unknown_quota_floor_evidence_invalid_ignored"));
-
-  const missingSource = expectAccepted(
-    unknownQuotaCandidate({
-      unknownQuotaFloor: { ...unknownQuotaFloor(), source: "" },
-    })
-  )!;
-  assert.equal(missingSource.unknownQuotaFloorApplied, false);
-  assert.ok(missingSource.notes.includes("unknown_quota_floor_evidence_invalid_ignored"));
-
-  const missingRule = expectAccepted(
-    unknownQuotaCandidate({
-      unknownQuotaFloor: { ...unknownQuotaFloor(), ruleId: "" },
-    })
-  )!;
-  assert.equal(missingRule.unknownQuotaFloorApplied, false);
-  assert.ok(missingRule.notes.includes("unknown_quota_floor_evidence_invalid_ignored"));
-
-  const missingMarker = expectAccepted(
-    unknownQuotaCandidate({
-      unknownQuotaFloor: { ...unknownQuotaFloor(), worst_applicable: "best" as never },
-    })
-  )!;
-  assert.equal(missingMarker.unknownQuotaFloorApplied, false);
-  assert.ok(missingMarker.notes.includes("unknown_quota_floor_evidence_invalid_ignored"));
-
-  const stale = expectAccepted(
-    unknownQuotaCandidate({
-      unknownQuotaFloor: { ...unknownQuotaFloor(), appliesUntilMs: NOW + 1 },
-    })
-  )!;
-  assert.equal(stale.unknownQuotaFloorApplied, false);
-  assert.equal(stale.quotaQuality, ZERO_QUOTA_HEADROOM);
-  assert.ok(
-    stale.notes.includes("unknown_quota_floor_interval_does_not_cover_timeout_horizon")
-  );
-});
-
-test("verified quota-burn efficiency and the floor never both apply", () => {
-  // Efficiency requires a trusted positive headroom, so a floor-applicable
-  // unknown aggregate can never carry the blend: the floor alone sets Q.
-  const efficiency = {
-    efficiencyScore: 0.5,
-    appliesFromMs: NOW - MINUTE_MS,
-    appliesUntilMs: NOW + HOUR_MS,
-    source: "quota-burn",
-    ruleId: "efficiency-fixture",
-    domain: "quota_burn_efficiency" as const,
-    worst_applicable: "worst_applicable" as const,
-  };
-  const input = unknownQuotaCandidate({
-    canonicalId: "floor-and-efficiency",
-    verifiedEfficiency: efficiency,
-    unknownQuotaFloor: unknownQuotaFloor(),
-  });
-  const assessed = expectAccepted(input)!;
-  assert.equal(assessed.verifiedEfficiency, null);
-  assert.equal(assessed.unknownQuotaFloorApplied, true);
-  close(assessed.quotaQuality, UNKNOWN_QUOTA_FLOOR_HEADROOM, 1e-12, "floor-only Q");
-  assert.ok(
-    assessed.notes.includes("quota_burn_efficiency_evidence_without_trusted_headroom_ignored")
   );
 });

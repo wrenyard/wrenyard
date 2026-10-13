@@ -2,7 +2,7 @@ import type { SupplyAssessment, CandidateEvaluation } from './types.ts';
 import { type CandidateInput, type QuotaAssessment, type SupplyClass } from './types.ts';
 import { isFiniteNumber } from './numeric.ts';
 import { ZERO_QUOTA_HEADROOM } from './constants.ts';
-/** Interprets time-bounded free supply, marginal pricing and efficiency evidence. */
+/** Interprets time-bounded free supply and marginal pricing evidence. */
 export class SupplyEvidencePolicy {
   assess(candidate: CandidateInput, quota: QuotaAssessment): SupplyAssessment | Extract<CandidateEvaluation, { kind: 'rejected' }> {
     const notes: string[] = [];
@@ -105,8 +105,6 @@ export class SupplyEvidencePolicy {
       return { kind: "rejected", snapshotId: candidate.snapshotId, canonicalId: candidate.canonicalId, reason: "reference_above_cap", detail: "effective routing price exceeds the effective cap" };
     }
     const headroom = quota.headroom ?? ZERO_QUOTA_HEADROOM;
-    const verifiedEfficiency = null;
-    const unknownQuotaFloorApplied = false;
-    return { notes, supplyClass, confirmedFreeSupplyApplied, confirmedFreeSupplyEvidence, routingPriceUsdPerM, marginalApplied, verifiedEfficiency, headroom, unknownQuotaFloorApplied };
+    return { notes, supplyClass, confirmedFreeSupplyApplied, confirmedFreeSupplyEvidence, routingPriceUsdPerM, marginalApplied, headroom };
   }
 }
