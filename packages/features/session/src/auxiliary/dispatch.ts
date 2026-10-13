@@ -2,7 +2,7 @@
  * The dispatch auxiliary task: compile one dispatch intent into a task run.
  *
  * It validates the model's JSON against the chosen task's input schema, builds
- * and bounds the task `ctx` from the ledger (the conversation, documents,
+ * the task `ctx` from the ledger (the conversation, documents,
  * memories and session files already in context), opens the run, records its
  * artifacts and returns the rendered result as a deferred draft set.
  */
@@ -73,12 +73,8 @@ export function validateJsonSchema(schema: unknown, value: unknown): SchemaValid
   return { ok: false, errors: describeErrors(validate.errors ?? []) };
 }
 
-// ─── Task context normalizer (256KB task-system limit) ─────────────────────
+// ─── Task context normalizer ─────────────────────
 
-export const TASK_CONTEXT_MAX_BYTES = 262144;
-const TASK_CONTEXT_MAX_KEYS = 64;
-const TASK_CONTEXT_MAX_KEY_LENGTH = 128;
-const TASK_CONTEXT_MAX_DEPTH = 8;
 const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 export class TaskContextError extends Error {
@@ -94,10 +90,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function assertContextValue(value: unknown, path: string, depth: number, ancestors: Set<object>): void {
-  if (depth > TASK_CONTEXT_MAX_DEPTH) {
-    throw new TaskContextError(`${path} exceeds the maximum nesting depth of ${TASK_CONTEXT_MAX_DEPTH}`);
-  }
+function assertContextValue(value: unknown, path: string, ancestors: Set<object>): void {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new TaskContextError(`${path} must contain only finite numbers`);
@@ -109,40 +102,37 @@ function assertContextValue(value: unknown, path: string, depth: number, ancesto
   if (ancestors.has(value)) throw new TaskContextError(`${path} must not contain cycles`);
   ancestors.add(value);
   if (Array.isArray(value)) {
-    value.forEach((item, index) => assertContextValue(item, `${path}[${index}]`, depth + 1, ancestors));
+    value.forEach((item, index) => assertContextValue(item, `${path}[${index}]`, ancestors));
   } else {
     if (!isPlainObject(value)) {
       throw new TaskContextError(`${path} must contain only plain JSON objects`);
     }
     for (const [key, child] of Object.entries(value)) {
-      if (key.length < 1 || key.length > TASK_CONTEXT_MAX_KEY_LENGTH) {
-        throw new TaskContextError(`${path} keys must contain 1-${TASK_CONTEXT_MAX_KEY_LENGTH} characters`);
+      if (key.length < 1) {
+        throw new TaskContextError(`${path} keys must not be empty`);
       }
       if (FORBIDDEN_KEYS.has(key) || /[\u0000-\u001f\u007f]/u.test(key)) {
         throw new TaskContextError(`${path} contains an unsafe key '${key}'`);
       }
-      assertContextValue(child, `${path}.${key}`, depth + 1, ancestors);
+      assertContextValue(child, `${path}.${key}`, ancestors);
     }
   }
   ancestors.delete(value);
 }
 
 /**
- * Validate and detach a bounded JSON-safe task context. The serialized-size
- * limit matches the task system's own `TASK_CONTEXT_MAX_BYTES` authority.
+ * Validate and detach a JSON-safe task context.
  */
 export function normalizeTaskContext(value: unknown): Record<string, unknown> {
   if (!isPlainObject(value)) throw new TaskContextError('ctx must be a JSON object');
-  const keys = Object.keys(value);
-  if (keys.length > TASK_CONTEXT_MAX_KEYS) {
-    throw new TaskContextError(`ctx must contain at most ${TASK_CONTEXT_MAX_KEYS} top-level keys`);
+  try {
+    assertContextValue(value, 'ctx', new Set<object>());
+    const serialized = JSON.stringify(value);
+    return JSON.parse(serialized) as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof TaskContextError) throw error;
+    throw new TaskContextError(`Cannot serialize task context: ${error instanceof Error ? error.message : String(error)}`);
   }
-  assertContextValue(value, 'ctx', 1, new Set<object>());
-  const serialized = JSON.stringify(value);
-  if (Buffer.byteLength(serialized, 'utf8') > TASK_CONTEXT_MAX_BYTES) {
-    throw new TaskContextError(`ctx exceeds the ${TASK_CONTEXT_MAX_BYTES}-byte serialized limit`);
-  }
-  return JSON.parse(serialized) as Record<string, unknown>;
 }
 
 // ─── Compile view ───────────────────────────────────────────────────────────
@@ -473,8 +463,7 @@ const CONVERSATION_RESULT_PREVIEW = 200;
  * Build the shared task context from the ledger alone: no model call and no
  * disk read. The compile model only compiles the call; the program attaches
  * the conversation the reasoning model saw, the documents and memories already
- * in context, and metadata for the session files. Bounded to
- * `TASK_CONTEXT_MAX_BYTES` and passed through `normalizeTaskContext`.
+ * in context, and metadata for the session files.
  */
 function buildTaskContext(
   events: readonly LedgerEvent[],
@@ -495,47 +484,7 @@ function buildTaskContext(
       ...(typeof file.description === 'string' && file.description !== '' ? { description: file.description } : {}),
     })),
   };
-  enforceTaskContextBudget(ctx, documents);
   return normalizeTaskContext(ctx);
-}
-
-/** Drop documents, then trim the conversation, until the ctx meets the limit. */
-function enforceTaskContextBudget(ctx: Record<string, unknown>, documents: TaskDocument[]): void {
-  if (serializedSize(ctx) <= TASK_CONTEXT_MAX_BYTES) return;
-  const dropped: string[] = [];
-  const measure = (): number => {
-    if (dropped.length === 0) delete ctx.context_omitted;
-    else ctx.context_omitted = [...dropped];
-    return serializedSize(ctx);
-  };
-  // Documents are in first-appearance order, so the least recent appearance is
-  // dropped first. The chosen project's instructions are never dropped.
-  while (documents.length > 0 && measure() > TASK_CONTEXT_MAX_BYTES) {
-    dropped.push(documents.shift()!.path);
-  }
-  measure();
-  if (serializedSize(ctx) <= TASK_CONTEXT_MAX_BYTES) return;
-  trimConversation(ctx);
-}
-
-function serializedSize(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), 'utf8');
-}
-
-/** Keep the most recent part of the conversation, prefixed with a marker. */
-function trimConversation(ctx: Record<string, unknown>): void {
-  const full = typeof ctx.conversation === 'string' ? ctx.conversation : '';
-  if (full === '') return;
-  const prefix = '[earlier conversation omitted]\n';
-  let low = 0;
-  let high = full.length;
-  while (low < high) {
-    const mid = Math.floor((low + high) / 2);
-    const candidate = { ...ctx, conversation: prefix + full.slice(mid) };
-    if (serializedSize(candidate) <= TASK_CONTEXT_MAX_BYTES) high = mid;
-    else low = mid + 1;
-  }
-  ctx.conversation = prefix + full.slice(low);
 }
 
 /** Distinct documents already in context, in first-seen order, current text. */

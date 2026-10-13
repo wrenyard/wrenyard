@@ -903,7 +903,7 @@ export interface TaskSettingsEffective {
 
 /** Structured automatic-resolution failure detail the daemon attaches to an issue. */
 export interface TaskSettingsResolutionFailure {
-  code: 'no_available_provider' | 'price_limit' | 'intelligence_requirement' | 'speed_requirement' | 'quota_unavailable' | 'quota_insufficient';
+  code: 'no_available_provider' | 'price_limit' | 'intelligence_requirement' | 'speed_requirement' | 'quota_unavailable' | 'quota_insufficient' | 'context_window';
   message: string;
 }
 

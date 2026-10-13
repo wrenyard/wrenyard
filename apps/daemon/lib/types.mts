@@ -122,6 +122,8 @@ export interface ExecutionOptions {
 export type TaskRunSettingsLayerName = 'system' | 'builtin' | 'user_global' | 'user_task' | 'invocation'
 
 export interface TaskRunSettingsParams {
+  /** Estimated rendered input, calculated by the execution kernel. */
+  inputTokens?: number
   taskName: string
   /** Builtin/project identity of the task being run. */
   kind?: 'builtin' | 'project'
