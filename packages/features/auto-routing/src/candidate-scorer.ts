@@ -1,22 +1,15 @@
 import type { SupplyAssessment, CandidateScore } from './types.ts';
 import { type CandidateInput, type ScoreWeights } from './types.ts';
-import { UNKNOWN_QUOTA_FLOOR_HEADROOM, EFFICIENCY_HEADROOM_WEIGHT, EFFICIENCY_EVIDENCE_WEIGHT, SPEED_SATURATION_BASE_TPS } from './constants.ts';
+import { SPEED_SATURATION_BASE_TPS } from './constants.ts';
 import { clamp01, interpolatePriceFactor, isFiniteNumber } from './numeric.ts';
 /** Computes normalized factors from an admitted candidate and validated evidence. */
 export class CandidateScorer {
   score(candidate: CandidateInput, supply: SupplyAssessment, effectiveWeights: ScoreWeights): CandidateScore {
-    const { routingPriceUsdPerM, headroom, verifiedEfficiency, unknownQuotaFloorApplied } = supply;
+    const { routingPriceUsdPerM, headroom } = supply;
     const expectedTps = candidate.expectedTps;
     const expectedRank = candidate.intelligenceExpectedRank;
-    const quotaHeadroomForQuality = unknownQuotaFloorApplied
-      ? Math.max(headroom, UNKNOWN_QUOTA_FLOOR_HEADROOM)
-      : headroom;
-    // Quota headroom factor Q in [0, 1]: raw trust headroom, or a blend with
-    // verified quota-burn efficiency when present. Q never depends on price/speed.
-    const quotaQuality = verifiedEfficiency === null
-      ? clamp01(quotaHeadroomForQuality)
-      : clamp01(EFFICIENCY_HEADROOM_WEIGHT * quotaHeadroomForQuality +
-        EFFICIENCY_EVIDENCE_WEIGHT * verifiedEfficiency);
+    // Equal mean of pool scores, without efficiency bonuses or unknown floors.
+    const quotaQuality = clamp01(headroom);
     // Normalized price factor P in [0, 1] from the fixed continuous price anchors
     // (interpolatePriceFactor): cheaper per-M output price scores higher; price
     // >= 50 scores 0. Confirmed-free routing already zeroed routingPriceUsdPerM.
