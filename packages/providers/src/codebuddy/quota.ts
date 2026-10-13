@@ -2,12 +2,13 @@ import type { ProviderQuota } from '../base/provider-quota.ts';
 import type { ProviderDefinition } from '../base/index.ts';
 import { object, observation, time } from '../base/quota-parsing.ts';
 import type { QuotaSnapshot } from '../base/quota-snapshot.ts';
+import { quotaWindow } from '../base/quota-helpers.ts';
 
 function quotaPool(quotaPoolId: string) {
   return Object.freeze({
     quotaPoolId,
     kind: 'quota' as const,
-    windows: Object.freeze([]),
+    windows: Object.freeze([quotaWindow(quotaPoolId.split('/')[1], 'full_cycle', 'provider_parser', 'packages/providers/src/codebuddy/quota.ts', '2026-10-13')]),
     routingDiscountRate: 1,
   });
 }
@@ -28,7 +29,7 @@ function isHyFamilyModel(modelId: string): boolean {
 /**
  * Exact CodeBuddy quota applicability. HY models draw jointly on the family
  * allowance and the account monthly allowance; remaining models use monthly
- * only. No raw window evidence has been reviewed, so every pool stays empty.
+ * only. IOA reports the monthly window and excludes the family allowance.
  */
 export function codeBuddyQuotaBindings(definition: ProviderDefinition) {
   return definition.models.map((model) => (
@@ -50,7 +51,24 @@ export function createCodeBuddyQuota(definition: ProviderDefinition): ProviderQu
 
 /** The quota feature validates the active account scope before exposing this observation. */
 function normalizeCodeBuddyQuota(raw: unknown, now = Date.now()): QuotaSnapshot | undefined {
-    const row = object(observation(raw).data), reset = time(row.resets_at);
+    const sample = observation(raw);
+    const row = object(sample.data), reset = time(row.resets_at);
+    if (row.environment === 'ioa') {
+        const offset = 8 * 60 * 60 * 1000;
+        const date = new Date(now + offset);
+        const start = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1) - offset;
+        const end = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) - offset;
+        const exhausted = row.exhausted === true && row.reason_code === 'quota_exhausted'
+            && reset !== undefined && Date.parse(reset) > now;
+        return {
+            provider: 'codebuddy', status: 'ok', stale: false,
+            source: sample.source, fetched_at: sample.fetched_at,
+            windows: [{ name: 'monthly', pct: exhausted ? 100 : 0,
+                window_minutes: (end - start) / 60000,
+                resets_at: exhausted ? reset : new Date(end).toISOString() }],
+            not_applicable_windows: ['hy-family'],
+        };
+    }
     if (row.exhausted !== true || row.reason_code !== 'quota_exhausted' || !reset || Date.parse(reset) <= now)
         return undefined;
     return { provider: 'codebuddy', status: 'ok', stale: false, source: 'observed', windows: [{ name: 'observed', pct: 100, window_minutes: 0, resets_at: reset }], message: 'CodeBuddy 额度已耗尽，重置后将自动恢复。' };
