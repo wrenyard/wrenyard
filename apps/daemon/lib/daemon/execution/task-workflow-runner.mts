@@ -81,10 +81,10 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       taskDispatchResolver: this.taskDispatchResolver,
       taskSettingsResolver: this.taskSettingsResolver,
       ...(opts.invocationSettings !== undefined ? { invocationSettings: opts.invocationSettings } : {}),
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
       const message = errorMessage(error)
       this.log('error', `[foreman] task ${taskRunId} unhandled error: ${message}`, error)
-      this.markTaskPlaceholderFailed(
+      await this.markTaskPlaceholderFailed(
         taskRunId,
         message,
         taskErrorField(error, 'failure_category'),
@@ -221,13 +221,13 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
     return now
   }
 
-  private markTaskPlaceholderFailed(
+  private async markTaskPlaceholderFailed(
     taskRunId: string,
     message: string,
     failureCategory?: string,
     suggestion?: string,
     detailMessage?: string,
-  ): void {
+  ): Promise<void> {
     const now = new Date().toISOString()
     this.taskRuns().markTerminal({
       taskRunId,
@@ -237,6 +237,23 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       failureCategory,
       suggestion,
       errorMessage: detailMessage,
+    })
+    const row = this.get<{ status: string; project: string | null; error: string | null }>(
+      'SELECT status, project, error FROM tasks WHERE id = ?', taskRunId,
+    )
+    // Startup failures may already be terminalized by the supervisor, before
+    // the kernel can publish the event that releases task waiters.
+    if (row?.status !== 'failed' || this.get(
+      "SELECT id FROM events WHERE task_id = ? AND type = 'task.run.failed' LIMIT 1", taskRunId,
+    )) return
+    await appendForemanEvent({
+      id: `foreman:${taskRunId}:failed`,
+      kind: 'task.run.failed',
+      source: 'daemon.execution.runner',
+      severity: 'error',
+      refs: { taskId: taskRunId, ...(row.project ? { project: row.project } : {}) },
+      data: { status: 'failed', error: row.error ?? message },
+      occurredAt: now,
     })
   }
 
