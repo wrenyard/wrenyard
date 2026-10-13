@@ -15,7 +15,7 @@ import type {
 } from './ledger/store.ts';
 import type { CallRole } from './model/request.ts';
 import type { ContextInspectRequest, ContextInspection } from './context/inspect.ts';
-import type { Message as ModelMessage, ModelContentPart, ToolCall, ToolSpec, Usage, ModelMetrics } from './transport/index.ts';
+import type { Message as ModelMessage, ModelContentPart, ToolCall, ToolSpec, ToolChoice, Usage, ModelMetrics } from './transport/index.ts';
 import type { AttachmentInput, FileStore, TaskArtifact } from './media.ts';
 import type { DocCatalogEntry } from './workspace.ts';
 import type { ActionRunContext } from './reasoning/actions.ts';
@@ -231,6 +231,7 @@ export interface CallRunRequest {
   maxTokens?: number;
   /** Tools declared on this call; forwarded to the driver for every role. */
   tools?: readonly ToolSpec[];
+  toolChoice?: ToolChoice;
   signal: AbortSignal;
   onText?: (delta: string) => void;
   onReasoning?: (delta: string) => void;
@@ -329,6 +330,7 @@ export interface SessionCallHost {
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
       tools?: readonly ToolSpec[];
+      toolChoice?: ToolChoice;
       maxTokens?: number;
       step?: number;
     },
