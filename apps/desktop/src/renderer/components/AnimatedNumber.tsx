@@ -73,7 +73,6 @@ export function AnimatedNumber({ value, format, className }: AnimatedNumberProps
 
   useEffect(() => {
     const from = displayRef.current;
-    if (value === from) return;
     if (frameRef.current !== undefined) {
       cancelAnimationFrame(frameRef.current);
       frameRef.current = undefined;
@@ -81,6 +80,10 @@ export function AnimatedNumber({ value, format, className }: AnimatedNumberProps
 
     const fromText = from === undefined ? '—' : format(from);
     const targetText = value === undefined ? '—' : format(value);
+    if (value === from) {
+      setReserve([targetText]);
+      return;
+    }
     const kindChanged = (value === undefined) !== (from === undefined);
     // Reserve both endpoints so the box width stays put for the whole tween.
     setReserve(fromText === targetText ? [targetText] : [fromText, targetText]);
@@ -92,6 +95,7 @@ export function AnimatedNumber({ value, format, className }: AnimatedNumberProps
     if (value === undefined || from === undefined || reduced) {
       displayRef.current = value;
       setDisplay(value);
+      setReserve([targetText]);
       return;
     }
 
@@ -101,6 +105,7 @@ export function AnimatedNumber({ value, format, className }: AnimatedNumberProps
       if (prefersReducedMotion()) {
         displayRef.current = value;
         setDisplay(value);
+        setReserve([targetText]);
         frameRef.current = undefined;
         return;
       }
@@ -108,6 +113,7 @@ export function AnimatedNumber({ value, format, className }: AnimatedNumberProps
       const next = progress < 1 ? from + (value - from) * easeOut(progress) : value;
       displayRef.current = next;
       setDisplay(next);
+      if (progress === 1) setReserve([targetText]);
       frameRef.current = progress < 1 ? requestAnimationFrame(step) : undefined;
     };
     frameRef.current = requestAnimationFrame(step);
