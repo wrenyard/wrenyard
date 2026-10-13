@@ -291,6 +291,10 @@ export function createCodeBuddyRuntime(
      */
     async beforeRequest(context: ProviderRequestHookContext): Promise<void> {
       if (context.protocol !== 'openai_chat') return;
+      // The /v2/chat/completions upstream accepts only a string tool_choice and rejects the object form.
+      if (context.body.tool_choice !== null && typeof context.body.tool_choice === 'object') {
+        context.body.tool_choice = 'required';
+      }
       if (ready?.identity) {
         const identity = ready.identity;
         const incomingAgent = context.headers.get('user-agent');
