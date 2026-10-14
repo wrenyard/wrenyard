@@ -130,7 +130,7 @@ export function createDarwinApplier(options: DarwinApplierOptions): PlatformAppl
         throw error;
       }
       // Detached waiter: wait for this process to exit, then reopen the app.
-      const script = `while kill -0 ${pid} 2>/dev/null; do sleep 1; done; /usr/bin/open ${shQuote(appPath)}`;
+      const script = `while /bin/kill -0 ${pid} 2>/dev/null; do /bin/sleep 1; done; /usr/bin/open ${shQuote(appPath)}`;
       options.spawnDetached('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore' });
     },
 

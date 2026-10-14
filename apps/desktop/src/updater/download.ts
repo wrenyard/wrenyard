@@ -176,7 +176,7 @@ export async function verifyCodesign(
   const args = ['--verify'];
   if (deep) args.push('--deep');
   args.push('--strict', target);
-  const result = await runner('codesign', args);
+  const result = await runner('/usr/bin/codesign', args);
   if (result.error !== undefined || result.status !== 0) {
     const detail = result.error?.message ?? result.stderr.trim() ?? `exit ${result.status}`;
     throw new Error(`codesign verification failed for ${target}: ${detail}`);
