@@ -117,6 +117,10 @@ export function createOverlayWindow(options: OverlayWindowOptions): BrowserWindo
     backgroundColor: '#00000000',
     skipTaskbar: options.skipTaskbar ?? overlaySkipsTaskbar(),
     alwaysOnTop: true,
+    // On macOS a nonactivating panel window may join other apps' full-screen
+    // Spaces without transforming this process into a Dock-less accessory or
+    // hiding the Dock icon; other platforms keep their previous options.
+    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
     focusable: options.focusable ?? true,
     resizable: options.resizable ?? false,
     show: false,
