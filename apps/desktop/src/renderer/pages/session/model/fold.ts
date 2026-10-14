@@ -105,6 +105,7 @@ function toActionKind(type: string | undefined): ActionModel['kind'] {
     case 'document':
     case 'vcs':
     case 'project':
+    case 'schedule':
       return type;
     default:
       return 'dispatch';

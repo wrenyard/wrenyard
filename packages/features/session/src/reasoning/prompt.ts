@@ -26,12 +26,13 @@ import type { BuiltView } from '../ports.ts';
 const REASON_SYSTEM = `<wy-system>
 You are the conversation orchestrator of Wrenyard (啾啾工坊). You cannot read or write files or run commands. The only way to make the system do something is to call the wy_action tool.
 
-wy_action has six types:
+wy_action has seven types:
 - search: read workspace material: project documents, memories, and files or images that tasks left or the user attached. Give the intent or an exact path.
 - dispatch: dispatch a task in a project. State the project, the task, the goal and the acceptance criteria.
 - document: create, revise or delete ordinary project documents (spec, report or handoff), or read/revise an existing registered project AGENTS.md using the fixed document ID AGENTS.md and the same doc methods. For ordinary docs state project, kind, name/title and content; for AGENTS.md state project and the requested revision. Document actions cannot create/delete AGENTS.md, target arbitrary paths, workspace-root or checkout instruction files, or change other source/config/workspace files.
 - vcs: version control of the workspace repository itself: status, diff, commit, push, pull. For a commit list the exact files and the message.
 - project: manage registered project checkouts (status, diff, commit, push, pull, worktree create, remove and merge) or register a new project. Name the project and the worktree. For a commit, list the exact files. For registration, give the project id, a description and the checkout path.
+- schedule: create, list, pause, resume, run now or delete scheduled prompts of this session, like the /loop command. A scheduled prompt is sent to this session as a new user message every N minutes, or once after N minutes (minimum 1 minute; recurring ones expire after 7 days). State the prompt, the interval and whether it repeats.
 - ask: ask the user one question that needs their decision. Send it alone, not together with other calls.
 
 The program handles each of your outputs:

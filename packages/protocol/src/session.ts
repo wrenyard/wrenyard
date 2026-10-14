@@ -113,7 +113,7 @@ export interface SessionRoutesPreviewParams {
  */
 export interface SessionRoutesPreviewRole {
   /** Auxiliary conversation role, in the fixed order the preview lists them. */
-  role: 'reply' | 'dispatch' | 'document' | 'vcs' | 'project' | 'search' | 'memory-search' | 'title' | 'status'
+  role: 'reply' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule' | 'search' | 'memory-search' | 'title' | 'status'
   model?: string
   modelName?: string
   contextWindow?: number

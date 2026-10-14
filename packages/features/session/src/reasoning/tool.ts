@@ -9,14 +9,14 @@ import { record, stringField, type ToolCall, type ToolSpec } from '../transport/
 export const ACTION_TOOL: ToolSpec = {
   name: 'wy_action',
   description:
-    'Use search to read workspace material, dispatch to dispatch a task, document to create or revise ordinary spec/report/handoff documents under existing rules or read/revise the existing registered project AGENTS.md through doc.* using fixed id AGENTS.md, vcs to manage version control of the workspace repository, project to manage a registered project checkout, and ask to ask the user one question that needs their decision. Document actions cannot create or delete AGENTS.md or other instruction files, edit workspace-root or nested checkout instruction files, target arbitrary paths, or change other workspace, configuration or source files. You can call it several times at once. Each call expresses one thing, with intent in natural language.',
+    'Use search to read workspace material, dispatch to dispatch a task, document to create or revise ordinary spec/report/handoff documents under existing rules or read/revise the existing registered project AGENTS.md through doc.* using fixed id AGENTS.md, vcs to manage version control of the workspace repository, project to manage a registered project checkout, schedule to create, list, pause, resume, run or delete scheduled prompts of this session, and ask to ask the user one question that needs their decision. Document actions cannot create or delete AGENTS.md or other instruction files, edit workspace-root or nested checkout instruction files, target arbitrary paths, or change other workspace, configuration or source files. You can call it several times at once. Each call expresses one thing, with intent in natural language.',
   parameters: {
     type: 'object',
     properties: {
       type: {
         type: 'string',
-        enum: ['search', 'dispatch', 'document', 'vcs', 'project', 'ask'],
-        description: 'search = read workspace material by intent or exact path, dispatch = dispatch a task in a project, document = ordinary spec/report/handoff documents under existing rules plus read/revise existing registered project AGENTS.md through doc.* with fixed id AGENTS.md; document actions cannot create/delete AGENTS.md or other instruction files, target workspace-root or nested checkout instruction files, arbitrary paths, or other workspace/config/source files, vcs = version control of the workspace repository itself, project = manage a registered project checkout including worktrees, ask = ask the user one question that needs their decision.',
+        enum: ['search', 'dispatch', 'document', 'vcs', 'project', 'schedule', 'ask'],
+        description: 'search = read workspace material by intent or exact path, dispatch = dispatch a task in a project, document = ordinary spec/report/handoff documents under existing rules plus read/revise existing registered project AGENTS.md through doc.* with fixed id AGENTS.md; document actions cannot create/delete AGENTS.md or other instruction files, target workspace-root or nested checkout instruction files, arbitrary paths, or other workspace/config/source files, vcs = version control of the workspace repository itself, project = manage a registered project checkout including worktrees, schedule = create, list, pause, resume, run or delete scheduled prompts of this session, ask = ask the user one question that needs their decision.',
       },
       intent: { type: 'string', description: 'The intent of this action, in natural language.' },
     },
@@ -48,6 +48,7 @@ export function parseActionCall(call: ToolCall): { type: string; intent: string 
     && type !== 'document'
     && type !== 'vcs'
     && type !== 'project'
+    && type !== 'schedule'
     && type !== 'ask'
   ) {
     return { error: `unknown action type: ${type}` };

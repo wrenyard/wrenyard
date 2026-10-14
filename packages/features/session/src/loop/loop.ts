@@ -25,8 +25,11 @@ import type { LedgerEventDraft, WorkspaceChangedEvent } from '../ledger/store.ts
 import { escapeBody, renderEventsBlock } from '../context/render.ts';
 import { messageOf } from '../errors.ts';
 
+/** Re-exported so auxiliary tasks (e.g. schedule) reuse the shared error text. */
+export { messageOf };
+
 /** Which auxiliary task is running; used for ledger call attribution. */
-export type LoopRole = 'document' | 'vcs' | 'project';
+export type LoopRole = 'document' | 'vcs' | 'project' | 'schedule';
 
 /**
  * The one tool every auxiliary task declares to finish. `status` is `done`

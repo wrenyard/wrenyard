@@ -216,7 +216,7 @@ export interface StepFinishedEvent extends LedgerEventBase {
 // ─── Action ────────────────────────────────────────────────────────────────
 
 /** The action types: the tools the reasoning model may write. */
-export type ActionType = 'search' | 'dispatch' | 'document' | 'vcs' | 'project';
+export type ActionType = 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule';
 export type ActionStatus = 'done' | 'failed' | 'skipped' | 'cancelled' | 'interrupted';
 
 export interface ActionStartedEvent extends LedgerEventBase {
