@@ -13,6 +13,7 @@ import { handleProject } from './commands/project.mts'
 import { handleWorkspace } from './commands/workspace.mts'
 import { handleStatus } from './commands/status.mts'
 import { handleTask } from './commands/task.mts'
+import { handleSession } from './commands/session.mts'
 import { handleExec } from './commands/exec.mts'
 import { handleTaskgraph } from './commands/taskgraph.mts'
 import { launchTui } from './tui-launcher.mts'
@@ -63,6 +64,8 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return 1
       case 'task':
         return handleTask(args.slice(1))
+      case 'session':
+        return handleSession(args.slice(1))
       case 'exec':
         return handleExec(args.slice(1))
       case 'project':
@@ -104,6 +107,12 @@ Usage:
   wrenyard task output <task_run_id> [--config path] [--json]
   wrenyard task runtimes <task_id> [-p project] [--config path] [--json]
   wrenyard task doctor [--config path] [--json]
+  wrenyard session list [--config path] [--json]
+  wrenyard session create [--config path] [--json]
+  wrenyard session send <sessionId> [text] --model <provider/model> --reasoning-effort <level> [--config path] [--json]
+  wrenyard session events <sessionId> [--after <seq>] [--follow] [--config path] [--json]
+  wrenyard session interrupt <sessionId> [--config path] [--json]
+  wrenyard session delete <sessionId> [--config path] [--json]
   wrenyard exec <prompt> --target <provider/model:client> --reasoning-effort <level> [--cwd path] [--resume <session-id>] [--features a,b] [--config path] [--json] [--no-stream]
   wrenyard daemon <run|stop|status> [--config path] [--force] [--json]
   wrenyard -v | --version
