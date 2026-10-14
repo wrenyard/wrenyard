@@ -17,6 +17,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@/renderer/components/ui/dialog';
+import { ImageViewer } from '@/renderer/components/image-viewer';
 import { getSessionBridge } from '@/renderer/lib/session';
 import type { DraftAttachment, SessionFile } from '../model/types.js';
 
@@ -219,9 +220,7 @@ export function MediaAttachments({ items, sessionId, onRemove, align = 'start', 
         <DialogContent className="max-w-[min(90vw,64rem)]">
           <DialogTitle className="truncate">{zoom?.name ?? '图片'}</DialogTitle>
           <DialogDescription className="sr-only">附件图片预览</DialogDescription>
-          {zoom !== undefined && (
-            <img src={zoom.src} alt={zoom.name} className="max-h-[75vh] w-full object-contain" />
-          )}
+          {zoom !== undefined && <ImageViewer src={zoom.src} alt={zoom.name} />}
         </DialogContent>
       </Dialog>
     </>

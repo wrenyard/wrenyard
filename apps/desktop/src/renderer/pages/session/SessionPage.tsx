@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { PanelRight, X } from 'lucide-react';
 import { cn } from 'cn';
 import { useQueryClient } from '@tanstack/react-query';
-import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
+import { useDefaultLayout, useGroupRef, usePanelRef } from 'react-resizable-panels';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
@@ -88,6 +88,7 @@ export function SessionPage() {
   const [retry, setRetry] = useState<{ text: string; attachments: DraftAttachment[]; nonce: number } | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | undefined>(undefined);
   const inspectorPanel = usePanelRef();
+  const panelGroup = useGroupRef();
 
   // Panel collapse animates at `slow`; while a resize handle is dragged the
   // transition is suspended so dragging stays instant (foundation §2.3).
@@ -97,12 +98,21 @@ export function SessionPage() {
     const stop = (): void => setResizing(false);
     window.addEventListener('pointerup', stop);
     window.addEventListener('pointercancel', stop);
+    window.addEventListener('blur', stop);
     return () => {
       window.removeEventListener('pointerup', stop);
       window.removeEventListener('pointercancel', stop);
+      window.removeEventListener('blur', stop);
     };
   }, [resizing]);
   const panelMotion = resizing ? undefined : 'motion-panel';
+
+  // Double-clicking the divider restores an even split. The default v4 behavior
+  // (restore the panel's default size) is disabled on the handle below; the
+  // library validates the requested layout against the panels' minimum sizes.
+  const resetSplit = useCallback((): void => {
+    panelGroup.current?.setLayout({ main: 50, inspector: 50 });
+  }, [panelGroup]);
 
   // The conversation fades in on a session switch; the first appearance is not
   // animated. The message scroller remounts per session, so the class replays.
@@ -364,6 +374,7 @@ export function SessionPage() {
             orientation="horizontal"
             defaultLayout={mini ? undefined : defaultLayout}
             onLayoutChanged={onLayoutChanged}
+            groupRef={panelGroup}
             resizeTargetMinimumSize={{ fine: 6, coarse: 20 }}
             className="h-full min-h-0 min-w-0 overflow-hidden"
           >
@@ -381,7 +392,7 @@ export function SessionPage() {
                 <>
                   <MessageScrollerProvider key={sessionKey} autoScroll>
                     <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
-                      <MessageScrollerViewport className="scroll-fade-t">
+                      <MessageScrollerViewport className="scroll-fade-y">
                         <MessageScrollerContent className={cn('w-full gap-2 pt-(--header-height) pb-4', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
                           <MessageTimeline
                             timeline={timeline}
@@ -412,6 +423,9 @@ export function SessionPage() {
               <>
                 <ResizableHandle
                   className={cn('w-1.5 bg-transparent after:w-px after:bg-border', !inspectorOpen && 'invisible pointer-events-none')}
+                  disableDoubleClick
+                  title="双击恢复均分"
+                  onDoubleClick={resetSplit}
                   onPointerDown={() => setResizing(true)}
                 />
                 <ResizablePanel

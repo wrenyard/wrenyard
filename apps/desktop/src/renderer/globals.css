@@ -181,8 +181,12 @@
   --scroll-fade-block: linear-gradient(
     to bottom,
     transparent 0,
+    rgb(0 0 0 / 0.26) calc(var(--scroll-fade-t, 0px) * 0.33),
+    rgb(0 0 0 / 0.74) calc(var(--scroll-fade-t, 0px) * 0.67),
     #000 var(--scroll-fade-t, 0px),
     #000 calc(100% - var(--scroll-fade-b, 0px)),
+    rgb(0 0 0 / 0.74) calc(100% - var(--scroll-fade-b, 0px) * 0.67),
+    rgb(0 0 0 / 0.26) calc(100% - var(--scroll-fade-b, 0px) * 0.33),
     transparent 100%
   );
   -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
@@ -221,8 +225,12 @@
   --scroll-fade-block: linear-gradient(
     to bottom,
     transparent 0,
+    rgb(0 0 0 / 0.26) calc(var(--scroll-fade-t, 0px) * 0.33),
+    rgb(0 0 0 / 0.74) calc(var(--scroll-fade-t, 0px) * 0.67),
     #000 var(--scroll-fade-t, 0px),
     #000 calc(100% - var(--scroll-fade-b, 0px)),
+    rgb(0 0 0 / 0.74) calc(100% - var(--scroll-fade-b, 0px) * 0.67),
+    rgb(0 0 0 / 0.26) calc(100% - var(--scroll-fade-b, 0px) * 0.33),
     transparent 100%
   );
   -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
@@ -246,6 +254,28 @@
   @supports not (animation-timeline: scroll()) {
     --scroll-fade-t: var(--_scroll-fade-size-t);
     --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+
+  /* The conversation viewport carries the generated `.scroll-fade-b` class as
+     well as this one. Both are single-class utilities in the same layer and the
+     generated `.scroll-fade-b` is emitted later, so on its own it would win both
+     the mask and the animation. This higher-specificity pairing reasserts the
+     two-edge mask (reusing the block gradient above) and both reveal animations
+     when the two classes are combined. */
+  &.scroll-fade-b {
+    --scroll-fade-mask: var(--scroll-fade-block);
+
+    @supports (animation-timeline: scroll()) {
+      animation:
+        scroll-fade-reveal-t 1ms ease-in-out,
+        scroll-fade-reveal-b 1ms ease-in-out;
+      animation-timeline: scroll(self y), scroll(self y);
+      animation-range:
+        0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+        calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24)))
+          100%;
+      animation-fill-mode: both;
+    }
   }
 }
 
@@ -306,6 +336,8 @@
   --scroll-fade-mask: linear-gradient(
     to bottom,
     transparent 0,
+    rgb(0 0 0 / 0.26) calc(var(--scroll-fade-t, 0px) * 0.33),
+    rgb(0 0 0 / 0.74) calc(var(--scroll-fade-t, 0px) * 0.67),
     #000 var(--scroll-fade-t, 0px),
     #000 100%
   );
@@ -337,6 +369,8 @@
     to bottom,
     #000 0,
     #000 calc(100% - var(--scroll-fade-b, 0px)),
+    rgb(0 0 0 / 0.74) calc(100% - var(--scroll-fade-b, 0px) * 0.67),
+    rgb(0 0 0 / 0.26) calc(100% - var(--scroll-fade-b, 0px) * 0.33),
     transparent 100%
   );
   -webkit-mask-image: var(--scroll-fade-mask);
@@ -748,8 +782,8 @@ html[data-platform="win32"] {
 }
 
 [data-titlebar] [data-slot="button"]:active {
-  transform: none;
   translate: none;
+  scale: none;
 }
 
 [data-titlebar] [data-slot="button"]:hover {
@@ -975,6 +1009,118 @@ html[data-platform="win32"] {
   transition: stroke-dashoffset var(--duration-base) var(--ease-out);
 }
 
+/* ------------------------------------------------------------------ */
+/* Interaction polish: hairline, dark inset, differentiated motion     */
+/* ------------------------------------------------------------------ */
+
+/* High-DPI hairline: half a device pixel once the display is 2x or more.
+   Applied to decorative separators and the resizer's visual line only — never
+   to focus rings or interactive hit-area borders. */
+:root {
+  --hairline: 1px;
+}
+
+@media (min-resolution: 2dppx) {
+  :root {
+    --hairline: 0.5px;
+  }
+}
+
+:where([data-slot="separator"][data-orientation="horizontal"]),
+:where([data-slot="sidebar-separator"]),
+:where([data-slot="dropdown-menu-separator"]),
+:where([data-slot="select-separator"]),
+:where([data-slot="command-separator"]) {
+  height: var(--hairline);
+}
+
+:where([data-slot="separator"][data-orientation="vertical"]) {
+  width: var(--hairline);
+}
+
+/* On the session page the resizer handle is the (6px) transparent hit area and
+   its `::after` is the visible line, so only the pseudo-element gets the
+   hairline. Handles that instead paint the line on the element itself and keep
+   `::after` as the hit-area extension are left untouched, so no hit target
+   shrinks. */
+:where([data-page="session"] [data-slot="resizable-handle"]:not([aria-orientation="horizontal"]))::after {
+  width: var(--hairline);
+}
+
+:where([data-page="session"] [data-slot="resizable-handle"][aria-orientation="horizontal"])::after {
+  height: var(--hairline);
+}
+
+/* Dark inset: a soft inner top light plus an inner hairline for the
+   card/popover surfaces. Written into Tailwind's inset-shadow slot so it
+   composes with the existing outer `ring-1` instead of replacing it. */
+.dark :where(
+    [data-slot="card"],
+    [data-slot="popover-content"],
+    [data-slot="hover-card-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="combobox-content"],
+    [data-slot="context-menu-content"],
+    [data-slot="dialog-content"],
+    [data-slot="alert-dialog-content"]
+  ) {
+  --tw-inset-shadow: inset 0 1px 0 0 oklch(1 0 0 / 0.06),
+    inset 0 0 0 1px oklch(0 0 0 / 0.25);
+}
+
+/* Buttons: one short transition for colour and the press geometry. The press
+   is skipped for popup triggers, disabled buttons and the titlebar (whose own
+   override is more specific and keeps winning). */
+:where([data-slot="button"]) {
+  transition-property: translate, scale, background-color, border-color, color,
+    box-shadow, opacity;
+  transition-duration: var(--duration-fast);
+  transition-timing-function: var(--ease-out);
+}
+
+:where([data-slot="button"]):where(:not([aria-haspopup]):not(:disabled):not([data-disabled])):active {
+  translate: 0 0.5px;
+  scale: 0.99;
+}
+
+/* Cards: colour and shadow feedback only; static cards never lift or move. */
+:where([data-slot="card"]) {
+  transition-property: background-color, border-color, box-shadow;
+  transition-duration: var(--duration-base);
+  transition-timing-function: var(--ease-out);
+}
+
+/* Check indicator: a short, restrained confirmation with no bounce. */
+@keyframes wy-check-in {
+  from {
+    opacity: 0;
+    scale: 0.85;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+:where([data-slot="checkbox-indicator"]) {
+  animation: wy-check-in var(--duration-fast) var(--ease-out);
+}
+
+/* Sidebar: width and margin move monotonically, with no overshoot. The page
+   drops these transitions while a handle is dragged, so dragging stays
+   instant; `.motion-panel` above remains the collapse/expand transition. */
+:where(
+  [data-slot="sidebar-gap"],
+  [data-slot="sidebar-container"],
+  [data-sidebar="menu-button"],
+  [data-sidebar="group-label"]
+) {
+  transition-duration: var(--duration-base);
+  transition-timing-function: var(--ease-in-out);
+}
+
 /* Theme switch suppresses every transition for the swap frame. */
 html[data-theme-switching] *,
 html[data-theme-switching] *::before,
@@ -1028,6 +1174,24 @@ html[data-theme-switching] *::after {
   ::view-transition-new(app-page) {
     animation-name: wy-fade-in;
   }
+  .motion-panel {
+    transition-property: none;
+  }
+  [data-slot="button"]:active {
+    translate: none;
+    scale: none;
+  }
+  :where([data-slot="checkbox-indicator"]) {
+    animation: none;
+  }
+  :where(
+    [data-slot="sidebar-gap"],
+    [data-slot="sidebar-container"],
+    [data-sidebar="menu-button"],
+    [data-sidebar="group-label"]
+  ) {
+    transition-property: none;
+  }
 }
 
 html[data-motion="reduce"] {
@@ -1076,4 +1240,26 @@ html[data-motion="reduce"] .shimmer {
 }
 html[data-motion="reduce"]::view-transition-new(app-page) {
   animation-name: wy-fade-in;
+}
+
+html[data-motion="reduce"] .motion-panel {
+  transition-property: none;
+}
+
+html[data-motion="reduce"] [data-slot="button"]:active {
+  translate: none;
+  scale: none;
+}
+
+html[data-motion="reduce"] :where([data-slot="checkbox-indicator"]) {
+  animation: none;
+}
+
+html[data-motion="reduce"] :where(
+  [data-slot="sidebar-gap"],
+  [data-slot="sidebar-container"],
+  [data-sidebar="menu-button"],
+  [data-sidebar="group-label"]
+) {
+  transition-property: none;
 }
