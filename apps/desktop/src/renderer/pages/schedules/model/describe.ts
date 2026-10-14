@@ -1,3 +1,4 @@
+import type { StatusTone } from '@/renderer/components/status-badge';
 import type { ScheduleState } from '@/shell-contract';
 
 /* Pure view model for the schedules page: page copy, state labels and the
@@ -5,15 +6,12 @@ import type { ScheduleState } from '@/shell-contract';
 
 export const PAGE_TITLE = '定时任务';
 
-/** Badge variant union accepted by the shared `Badge`. */
-type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline';
-
-/** Display label and badge variant of every schedule state. */
-export const STATE_VIEW: Record<ScheduleState, { label: string; variant: BadgeVariant }> = {
-  active: { label: '运行中', variant: 'default' },
-  paused: { label: '已暂停', variant: 'secondary' },
-  finished: { label: '已完成', variant: 'outline' },
-  failed: { label: '失败', variant: 'destructive' },
+/** Display label and shared status tone of every schedule state. */
+export const STATE_VIEW: Record<ScheduleState, { label: string; tone: StatusTone }> = {
+  active: { label: '运行中', tone: 'success' },
+  paused: { label: '已暂停', tone: 'muted' },
+  finished: { label: '已完成', tone: 'muted' },
+  failed: { label: '失败', tone: 'danger' },
 };
 
 /** Largest unit that divides the interval in whole: days, then hours, else minutes. */
