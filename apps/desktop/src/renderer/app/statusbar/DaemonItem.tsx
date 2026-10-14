@@ -25,7 +25,8 @@ import { cn } from 'cn';
  * small connectivity dot, and opens a menu with the daemon version, uptime, IPC
  * endpoint and lifecycle ownership, a restart action when the daemon is
  * Desktop-supervised, the usage and about destinations, and the update entry.
- * Update availability is also surfaced on the trigger so it stays discoverable.
+ * While an update is actionable, a compact direct-dialog 更新 button renders
+ * beside the trigger so it stays discoverable without opening the menu.
  */
 
 const DISCONNECTED_STATES: ReadonlySet<DaemonProcessState> = new Set<DaemonProcessState>([
@@ -180,17 +181,23 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
             <Unplug className="size-4 shrink-0" />
           )}
           <span className="min-w-0 flex-1 truncate text-left">{status}</span>
-          {updateVisible ? (
-            <ArrowUp
-              className="size-3.5 shrink-0 text-warning"
-              role="img"
-              aria-label={updateStatus ?? '有可用更新'}
-            />
-          ) : null}
           <span aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT_CLASS[tone])} />
           <ChevronUp className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         </Button>
       </PopoverTrigger>
+      {updateVisible ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 shrink-0 rounded-full px-2 text-xs text-warning hover:bg-sidebar-accent"
+          title={updateStatus ?? '有可用更新'}
+          aria-label={updateStatus ?? '有可用更新'}
+          onClick={openUpdate}
+        >
+          更新
+        </Button>
+      ) : null}
       <PopoverContent
         side="top"
         align="start"
