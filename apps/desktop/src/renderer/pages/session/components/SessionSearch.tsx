@@ -7,9 +7,9 @@ import {
   CommandItem,
   CommandList,
 } from '@/renderer/components/ui/command';
-import { Spinner } from '@/renderer/components/ui/spinner';
 import { DIALOG_SIZES } from '@/renderer/components/dialog-size';
 import { dateGroupOf, type DateGroup } from '@/renderer/lib/format';
+import { SessionDot } from './SessionDot';
 import type { SessionSummary } from '../model/types.js';
 
 const GROUPS: DateGroup[] = ['今天', '昨天', '7 天内', '更早'];
@@ -59,7 +59,7 @@ export function SessionSearch({ open, onOpenChange, sessions, onSelect }: Sessio
                     onOpenChange(false);
                   }}
                 >
-                  {session.running === true && <Spinner className="size-4 shrink-0" aria-label="运行中" />}
+                  {session.running === true && <SessionDot running />}
                   <span className="min-w-0 truncate">{session.title}</span>
                 </CommandItem>
               ))}

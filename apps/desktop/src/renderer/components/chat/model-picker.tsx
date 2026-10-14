@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import { BatteryFull, Gauge, Gift, Zap } from 'lucide-react';
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
-import type { SessionInferenceMode } from '@wrenyard/protocol';
 import {
   Combobox,
   ComboboxCollection,
@@ -63,24 +62,10 @@ export function modelBadges(facts: ModelBadgeFacts): ModelBadge[] {
   return badges;
 }
 
-/**
- * Hover copy for a main-model row's runtime. The runtime is never rendered as
- * an icon or badge. Shared by the composer and the settings model pickers.
- */
-export function modelRuntimeDescription(runtime: SessionInferenceMode): string {
-  switch (runtime) {
-    case 'openai_responses': return '经网关的推理接口运行（Responses 协议）';
-    case 'anthropic_messages': return '经网关的推理接口运行（Messages 协议）';
-    default: return '经网关的推理接口运行（Chat 协议）';
-  }
-}
-
 export interface ModelOption {
   value: string;
   label: string;
   group: string;
-  /** Hover tooltip copy shown on the row and the selected trigger. */
-  description?: string;
   badges?: ModelBadge[];
 }
 
@@ -190,7 +175,6 @@ export interface EffortPickerProps {
   levels: readonly ReasoningEffort[];
   value: ReasoningEffort;
   onChange: (value: ReasoningEffort) => void;
-  className?: string;
 }
 
 /**

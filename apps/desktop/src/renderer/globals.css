@@ -924,6 +924,24 @@ html[data-platform="win32"] {
   animation: wy-typing-dot 1.3s ease-in-out infinite;
 }
 
+/* Session dot: an 8px currentColor ring that alternates between hollow (empty
+   fill) and filled, with a slight scale change. Dot geometry and the
+   currentColor tone come from the element. */
+@keyframes wy-session-dot {
+  0%,
+  100% {
+    background-color: transparent;
+    transform: scale(0.85);
+  }
+  50% {
+    background-color: currentColor;
+    transform: scale(1);
+  }
+}
+.motion-session-dot {
+  animation: wy-session-dot 1.4s var(--ease-in-out) infinite;
+}
+
 /* One-shot accent flash for a changed number. */
 @keyframes wy-number-flash {
   from {
@@ -988,6 +1006,10 @@ html[data-theme-switching] *::after {
     opacity: 0.6;
     transform: none;
   }
+  .motion-session-dot {
+    animation: none;
+    background-color: currentColor;
+  }
   ::view-transition-new(app-page) {
     animation-name: wy-fade-in;
   }
@@ -1027,6 +1049,10 @@ html[data-motion="reduce"] .motion-typing-dot {
   animation: none;
   opacity: 0.6;
   transform: none;
+}
+html[data-motion="reduce"] .motion-session-dot {
+  animation: none;
+  background-color: currentColor;
 }
 html[data-motion="reduce"] .shimmer {
   animation: none;
