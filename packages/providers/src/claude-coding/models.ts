@@ -7,11 +7,13 @@ export const definition = defineProvider({
   models: [
     { canonical: 'claude-opus-5-5', overrides: { reasoningEfforts: REASONING_FULL.filter(e => e !== 'none') } },
     { canonical: 'claude-sonnet-5-5', overrides: { reasoningEfforts: REASONING_FULL.filter(e => e !== 'none') } },
+    { canonical: 'claude-haiku-5-5', overrides: { reasoningEfforts: REASONING_FULL.filter(e => e !== 'none') } },
     { canonical: 'claude-haiku-4-5', overrides: { reasoningEfforts: ['none', 'medium'] } },
   ],
   reasoningEffortMappings: {
     'claude-opus-5-5': { claude: Object.fromEntries(REASONING_FULL.filter(e => e !== 'none').map(e => [e, {effort:e}])) },
     'claude-sonnet-5-5': { claude: Object.fromEntries(REASONING_FULL.filter(e => e !== 'none').map(e => [e, {effort:e}])) },
+    'claude-haiku-5-5': { claude: Object.fromEntries(REASONING_FULL.filter(e => e !== 'none').map(e => [e, {effort:e}])) },
     'claude-haiku-4-5': { claude: { none: {environment:{MAX_THINKING_TOKENS:'0'}}, medium:{environment:{MAX_THINKING_TOKENS:'8192'}} } },
   },
   quotaProvider: 'claude-coding', useClientBinary: true,
