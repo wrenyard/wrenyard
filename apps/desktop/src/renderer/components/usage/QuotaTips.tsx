@@ -30,6 +30,12 @@ export interface QuotaTipsProps {
    * status-bar tooltip, which supplies its own width and padding.
    */
   surface?: 'card' | 'inverse';
+  /**
+   * Layout density. `default` is the standalone card (`w-80`, own padding);
+   * `embedded` fills its host and drops the fixed width and padding so a caller
+   * like the Pet house card can own the frame. Only the card surface uses it.
+   */
+  density?: 'default' | 'embedded';
   className?: string;
 }
 
@@ -99,6 +105,7 @@ export function QuotaTips({
   focusedProvider = null,
   now,
   surface = 'card',
+  density = 'default',
   className,
 }: QuotaTipsProps) {
   const inverse = surface === 'inverse';
@@ -112,7 +119,11 @@ export function QuotaTips({
   if (provider === null) {
     return (
       <p
-        className={cn('text-xs', inverse ? 'text-background/60' : 'p-3 text-muted-foreground', className)}
+        className={cn(
+          'text-xs',
+          inverse ? 'text-background/60' : cn('text-muted-foreground', density !== 'embedded' && 'p-3'),
+          className,
+        )}
         data-slot="quota-tips"
       >
         {NO_DATA_LABEL}
@@ -128,7 +139,11 @@ export function QuotaTips({
     <div
       className={cn(
         'flex flex-col text-xs tabular-nums',
-        inverse ? 'gap-1.5' : 'w-80 gap-2 p-3',
+        inverse
+          ? 'gap-1.5'
+          : density === 'embedded'
+            ? 'w-full min-w-0 gap-2 p-0'
+            : 'w-80 gap-2 p-3',
         className,
       )}
       data-slot="quota-tips"

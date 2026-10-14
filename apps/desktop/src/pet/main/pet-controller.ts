@@ -26,6 +26,8 @@ export interface DesktopPetRuntimeHandle {
   stop(): Promise<void>;
   setVisible(visible: boolean): void;
   setQuotaProviders(providers: QuotaProviderState[]): void;
+  /** Passive focus on the composer model's quota provider; `null` clears it. */
+  setQuotaFocus(focus: { id: string; label?: string } | null): void;
   /** Show one transient Pet bubble through the mounted runtime. */
   showBroadcast(broadcast: BroadcastInput): void;
   /** House window, used by the shared window owner to place task entities. */
@@ -56,6 +58,7 @@ export class DesktopPetController {
   private runtime: DesktopPetRuntimeHandle | null = null;
   private runtimeConfig: AppConfig | null = null;
   private quotaProviders: QuotaProviderState[] = [];
+  private quotaFocus: { id: string; label?: string } | null = null;
   private transition: Promise<void> = Promise.resolve();
 
   constructor(options: DesktopPetControllerOptions) {
@@ -172,6 +175,12 @@ export class DesktopPetController {
     this.runtime?.setQuotaProviders(this.quotaProviders);
   }
 
+  /** Passive pass-through of the composer model's quota focus; `null` clears it. */
+  setQuotaFocus(focus: { id: string; label?: string } | null): void {
+    this.quotaFocus = focus ? { ...focus } : null;
+    this.runtime?.setQuotaFocus(this.quotaFocus);
+  }
+
   /** Show one transient bubble through the mounted runtime, if any. */
   showBroadcast(broadcast: BroadcastInput): void {
     this.runtime?.showBroadcast(broadcast);
@@ -189,6 +198,7 @@ export class DesktopPetController {
     await runtime.start();
     runtime.setVisible(true);
     runtime.setQuotaProviders(this.quotaProviders);
+    runtime.setQuotaFocus(this.quotaFocus);
   }
 
   private async stopRuntime(): Promise<void> {

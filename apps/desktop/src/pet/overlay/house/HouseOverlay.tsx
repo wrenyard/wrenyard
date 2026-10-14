@@ -44,6 +44,7 @@ export function HouseOverlay({ appearance, api }: HouseOverlayProps): ReactEleme
   const petApi = api ?? (typeof window !== 'undefined' ? window.petApi : undefined);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const presenterRef = useRef<HousePresenter | null>(null);
+  const chromeRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<BrowserDragController | undefined>(undefined);
   const pointerRef = useRef<PointerState>({ x: -1, y: -1, inside: false });
   const pointerPassthroughRef = useRef(true);
@@ -244,9 +245,12 @@ export function HouseOverlay({ appearance, api }: HouseOverlayProps): ReactEleme
   const broadcastVisible = broadcast !== undefined && broadcastAlpha(broadcast, now) > 0;
 
   const overHouse = pointer.inside && (presenterRef.current?.hitTest(pointer.x, pointer.y) ?? false);
+  // The hit wrapper spans the cards plus the 4px gap to the sprite, so the card
+  // stays open while the pointer travels from the sprite onto it.
+  const overCard = pointer.inside && isPointInRect(chromeRef.current, pointer.x, pointer.y);
   const tipsAvailable = (house?.quotaTips?.length ?? 0) > 0;
-  const statsAvailable = house?.dailyStats?.source === 'sqlite' && !tipsAvailable;
-  const tipsVisible = overHouse && !dragging && (tipsAvailable || statsAvailable);
+  // The status card renders whenever a house state exists, even without quota.
+  const tipsVisible = (overHouse || overCard) && !dragging && house !== undefined;
 
   const summaryLines = useMemo(() => (house ? buildSummaryLines({
     runningWorkerCount: house.workers.filter((worker) => worker.phase === 'working').length,
@@ -265,6 +269,9 @@ export function HouseOverlay({ appearance, api }: HouseOverlayProps): ReactEleme
   const houseRect = art?.houseRect;
   const anchorLeft = houseRect ? houseRect.x + houseRect.width / 2 : windowSize.width / 2;
   const anchorBottom = houseRect ? windowSize.height - houseRect.y + 4 : 4;
+  // The wrapper's bottom padding (`pb-1` = 4px) fills the gap to the sprite, so
+  // the whole sprite→card path is one hit region.
+  const wrapperBottom = anchorBottom - 4;
   const chromeVisible = broadcastVisible || tipsVisible;
 
   return (
@@ -276,8 +283,10 @@ export function HouseOverlay({ appearance, api }: HouseOverlayProps): ReactEleme
     >
       {chromeVisible ? (
         <div
-          className="pointer-events-none absolute flex flex-col items-center gap-1 overflow-y-auto"
-          style={{ left: anchorLeft, bottom: anchorBottom, maxHeight: Math.max(80, windowSize.height - anchorBottom - 8), transform: 'translateX(-50%)' }}
+          ref={chromeRef}
+          data-hit
+          className="pointer-events-auto absolute flex flex-col items-center gap-1 overflow-y-auto pb-1"
+          style={{ left: anchorLeft, bottom: wrapperBottom, maxHeight: Math.max(80, windowSize.height - wrapperBottom - 8), transform: 'translateX(-50%)' }}
         >
           {broadcastVisible && broadcast ? (
             <Card
@@ -313,22 +322,36 @@ export function HouseOverlay({ appearance, api }: HouseOverlayProps): ReactEleme
             <Card
               data-hit
               data-preview="house-tips"
-              className="pointer-events-auto w-80 rounded-lg border-border bg-popover/95 p-2 text-xs text-popover-foreground shadow"
+              className="sticky-hit pointer-events-auto w-[320px] max-w-full gap-2 rounded-lg border-border bg-popover/95 p-3 text-xs text-popover-foreground shadow"
             >
               {summaryLines.length > 0 ? (
-                <div className="flex flex-col gap-0.5 text-muted-foreground">
+                <div className="flex flex-col gap-0.5 text-muted-foreground" data-slot="house-status">
                   {summaryLines.map((line) => (
                     <span key={line}>{line}</span>
                   ))}
                 </div>
               ) : null}
-              {tipsAvailable ? <QuotaTips providers={quotaProviders} now={now} /> : null}
+              {tipsAvailable ? (
+                <QuotaTips
+                  providers={quotaProviders}
+                  focusedProvider={house?.quotaFocus?.id ?? null}
+                  now={now}
+                  density="embedded"
+                />
+              ) : null}
             </Card>
           ) : null}
         </div>
       ) : null}
     </OverlayRoot>
   );
+}
+
+/** Whether a viewport point lies inside an element's box (null element: never). */
+function isPointInRect(element: HTMLElement | null, x: number, y: number): boolean {
+  if (!element) return false;
+  const rect = element.getBoundingClientRect();
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
 /** Map the Pet quota tip DTOs onto the shared `QuotaTips` provider snapshots. */

@@ -91,6 +91,7 @@ export class EntityManager {
   private lastActivityStale = false;
   private lastTaskgraphCount = 0;
   private lastQuotaTips?: QuotaTipLine[];
+  private lastQuotaFocus?: { id: string; label?: string };
   private suppressHouseMove = false;
   private dragGrabOffset: { x: number; y: number } | null = null;
   private workerDragGrab: { key: string; x: number; y: number } | null = null;
@@ -354,6 +355,16 @@ export class EntityManager {
 
   setQuotaTips(tips: QuotaTipLine[]): void {
     this.lastQuotaTips = tips;
+    this.sendHouseUpdate();
+  }
+
+  /**
+   * Display-only focus on the quota provider of the model selected in the
+   * composer. Stored next to the tips and pushed on every house update; `null`
+   * clears it.
+   */
+  setQuotaFocus(focus: { id: string; label?: string } | null): void {
+    this.lastQuotaFocus = focus ?? undefined;
     this.sendHouseUpdate();
   }
 
@@ -654,6 +665,7 @@ export class EntityManager {
       ...(this.lastActivityStale ? { activityStale: true } : {}),
       ...(this.lastTaskgraphCount > 0 ? { taskgraphCount: this.lastTaskgraphCount } : {}),
       ...(this.lastQuotaTips && this.lastQuotaTips.length > 0 ? { quotaTips: [...this.lastQuotaTips] } : {}),
+      ...(this.lastQuotaFocus ? { quotaFocus: { ...this.lastQuotaFocus } } : {}),
     };
     this.house.webContents.send('house:update', state);
   }

@@ -179,6 +179,7 @@ export const SHELL_CHANNELS = {
   statsSnapshot: 'wrenyard-shell:stats-snapshot',
   quotaSnapshot: 'wrenyard-shell:quota-snapshot',
   saveProviderOrder: 'wrenyard-shell:save-provider-order',
+  quotaFocus: 'wrenyard-shell:quota-focus',
   savePetSettings: 'wrenyard-shell:save-pet-settings',
   saveWorkspace: 'wrenyard-shell:save-workspace',
   taskTranscript: 'wrenyard-shell:task-transcript',
@@ -729,6 +730,18 @@ export interface QuotaProviderSnapshot {
   code?: string;
 }
 
+/**
+ * Display-only quota focus: the quota provider of the model currently selected
+ * in the composer, published by the renderer so Desktop main can forward it to
+ * the Pet house card. `id` is the provider identity; `label` is an optional
+ * display name when the renderer can supply one. It is never a routing or
+ * storage key.
+ */
+export interface QuotaFocus {
+  id: string;
+  label?: string;
+}
+
 export type ProviderAuthMode = 'api-key' | 'environment' | 'native' | 'none';
 
 /** USD per million tokens: [cached, input, output]. */
@@ -1238,6 +1251,12 @@ export interface WrenyardShellApi {
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
   saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot>;
+  /**
+   * Publish the quota provider of the model currently selected in the composer
+   * so Pet can focus it; `null` clears the focus (session unmounted). Optional
+   * on the facade so a preload without the handler stays type-compatible.
+   */
+  setQuotaFocus?(focus: QuotaFocus | null): Promise<void>;
   configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot>;
   openProviderKeyPage(providerId: string): Promise<void>;
   getUpdate(): Promise<UpdateSnapshot>;

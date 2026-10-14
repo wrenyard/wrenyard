@@ -372,6 +372,20 @@ function isTrustedShellSender(sender: WebContents): boolean {
   return trustedShellSurfaces().some((surface) => surface.id === sender.id);
 }
 
+/**
+ * Validate a renderer-supplied quota focus at the IPC boundary. `null`/absent
+ * clears the focus; an id-less or oversized payload is rejected as no focus.
+ */
+function normalizeQuotaFocus(value: unknown): { id: string; label?: string } | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const id = record.id;
+  if (typeof id !== 'string' || id.length === 0 || id.length > 256) return null;
+  const label = record.label;
+  return typeof label === 'string' && label.length > 0 && label.length <= 256 ? { id, label } : { id };
+}
+
 function showDesktop(page: ShellPage = 'session'): void {
   // Every surface is inert for the whole pending quit, not only the modal.
   if (quitController?.isQuitting()) return;
@@ -1008,6 +1022,13 @@ async function bootstrap(): Promise<void> {
   // Provider discovery may wait on native clients; it must not delay the window.
   void quotaController.start().catch((error: unknown) => {
     console.warn('[wrenyard-desktop] initial quota refresh failed:', error);
+  });
+
+  // The renderer publishes the quota provider of the composer's selected model
+  // so Pet can focus it; a null focus clears it when the session unmounts.
+  ipcMain.handle(SHELL_CHANNELS.quotaFocus, (event, focus: unknown) => {
+    if (!isTrustedShellSender(event.sender)) return;
+    petController?.setQuotaFocus(normalizeQuotaFocus(focus));
   });
 
   /**

@@ -44,6 +44,7 @@ export class DesktopPetRuntime {
   private animationTickTimer: ReturnType<typeof setInterval> | null = null;
   private entityManager: EntityManager | null = null;
   private quotaProviders: QuotaProviderState[] = [];
+  private quotaFocus: { id: string; label?: string } | null = null;
   private unsubscribe: (() => void) | null = null;
   private ipcHandlersRegistered = false;
 
@@ -103,6 +104,16 @@ export class DesktopPetRuntime {
   /** Desktop owns quota refreshes and pushes the latest bounded projection in. */
   setQuotaProviders(providers: QuotaProviderState[]): void {
     this.quotaProviders = providers.map((provider) => ({ ...provider }));
+    this.applyProvidersToHouseTips(this.quotaProviders);
+  }
+
+  /**
+   * Passive focus on the quota provider of the model selected in the composer.
+   * It only stores the value and re-projects the last provider list; it never
+   * starts a refresh, a poller or a timer.
+   */
+  setQuotaFocus(focus: { id: string; label?: string } | null): void {
+    this.quotaFocus = focus ? { ...focus } : null;
     this.applyProvidersToHouseTips(this.quotaProviders);
   }
 
@@ -189,8 +200,23 @@ export class DesktopPetRuntime {
 
   private applyProvidersToHouseTips(providers: QuotaProviderState[]): void {
     if (!this.entityManager) return;
-    const order = providers.map((provider) => provider.id);
-    this.entityManager.setQuotaTips(buildQuotaTips(providers, order));
+    const focus = this.quotaFocus;
+    let list = providers;
+    if (focus && !providers.some((provider) => provider.id === focus.id)) {
+      // The focused provider is not in the latest projection: synthesize an
+      // unavailable entry so the house tips show the focus as unknown instead
+      // of falling back to another provider.
+      list = [...providers, {
+        id: focus.id,
+        label: focus.label ?? focus.id,
+        displayLine: null,
+        error: null,
+        status: 'unavailable',
+        stale: false,
+      }];
+    }
+    const order = list.map((provider) => provider.id);
+    this.entityManager.setQuotaTips(buildQuotaTips(list, order, focus ?? undefined));
   }
 
   private readonly handleHouseMousePassthrough = (event: Electron.IpcMainEvent, passthrough: unknown): void => {

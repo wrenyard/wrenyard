@@ -6,15 +6,41 @@ function truncateMessage(message: string, maxLength: number): string {
   return message.slice(0, maxLength) + '…';
 }
 
-/** Build passive house Tips in the Desktop-owned provider order. */
-export function buildQuotaTips(providers: QuotaProviderState[], order: string[]): QuotaTipLine[] {
+/**
+ * Build passive house Tips in the Desktop-owned provider order. When `focus` is
+ * given (the quota provider of the model selected in the composer) only that
+ * provider is projected — even when it is not first in `order` — so every pool
+ * of the selected provider stays visible. A focused provider missing from
+ * `providers` is projected as an honest unknown line (error row plus a
+ * status-bearing bar) instead of another provider's quota. Without `focus` the
+ * order-based output is unchanged.
+ */
+export function buildQuotaTips(
+  providers: QuotaProviderState[],
+  order: string[],
+  focus?: { id: string; label?: string },
+): QuotaTipLine[] {
   const byId = new Map<string, QuotaProviderState>();
   for (const provider of providers) byId.set(provider.id, provider);
 
+  const ids = focus ? [focus.id] : order;
   const tips: QuotaTipLine[] = [];
-  for (const id of order) {
-    const provider = byId.get(id);
-    if (!provider) continue;
+  for (const id of ids) {
+    let provider = byId.get(id);
+    if (!provider) {
+      if (!focus) continue;
+      // The focused provider is not in the incoming list; project it as an
+      // unknown entry rather than silently dropping the focus or showing
+      // another provider's quota.
+      provider = {
+        id: focus.id,
+        label: focus.label ?? focus.id,
+        displayLine: null,
+        error: null,
+        status: 'unavailable',
+        stale: false,
+      };
+    }
     const nonOk = provider.status !== 'ok';
 
     let bar: QuotaBarRow | undefined;

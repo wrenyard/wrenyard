@@ -64,6 +64,18 @@ Desktop renderer + preload + Electron main
   columns; it is not replaced by native text labels or SVG menu images.
   LaunchServices startup resolves the Runtime from the active installed
   Wrenyard suite instead of relying on an inherited shell `PATH`.
+- **Pet house tips** — the hover card is passive display only. It follows the
+  current session model: the renderer publishes the composer model's quota
+  provider and the passive Pet controller forwards it to the house card, which
+  then shows that provider's quota (even when it is not first in the configured
+  order). The card separates a Chinese task-status line
+  (`N 个任务运行中 · N 个排队 · N 张图纸`) and a daily token summary — which
+  honestly reports 信号暂失 or an unavailable state rather than implying session
+  tokens — from the quota section, and it still renders the status block when no
+  quota is available. With no model focused it falls back to the configured
+  provider order (the first provider). Pet owns no quota or statistics poller:
+  Desktop owns both and pushes the provider projection in as passive display
+  data.
 - **Desktop-owned product settings** — the settings page reports public
   Wrenyard health, uptime, workspace root and IPC endpoint;
   model credential presence moved to the Providers page. Workspace is a

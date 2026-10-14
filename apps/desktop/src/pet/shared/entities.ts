@@ -18,6 +18,12 @@ export interface HouseRendererState {
   dailyStats?: SiteSnapshot['dailyStats'];
   dailyStatsUnavailable?: boolean;
   quotaTips?: QuotaTipLine[];
+  /**
+   * Display-only focus on the quota provider of the model currently selected in
+   * the composer, carried from main to the overlay so the house card can surface
+   * that provider. It is never a routing or storage key.
+   */
+  quotaFocus?: { id: string; label?: string };
   /** Last activity snapshot round failed; keep counts, show signal-lost. */
   activityStale?: boolean;
   /** Non-terminal TaskGraph drawing count from the same activity snapshot. */

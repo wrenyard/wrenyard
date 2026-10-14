@@ -217,25 +217,47 @@ export function QuotaBar({
   const markerLeft = expectedRemainingPct !== null
     ? `${Math.max(0, Math.min(100, 100 - expectedRemainingPct))}%`
     : null;
+  const usedLabel = `已用 ${Math.floor(used)}%`;
 
   return (
     <div className={cn('flex flex-col gap-1.5', stale && 'opacity-60', className)} data-slot="quota-bar">
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className={cn('flex min-w-0 items-center gap-1', mutedClass)}>
-          <span className="truncate">{label}</span>
-          {reset !== null && (
-            <Tooltip>
-              <TooltipTrigger render={<span className="shrink-0 cursor-default">· {reset.label}</span>} />
-              <TooltipContent>{reset.exact}</TooltipContent>
-            </Tooltip>
-          )}
-          {exhausted
-            ? <span className="shrink-0 text-destructive">· 已耗尽</span>
-            : pace !== null && <span className={cn('shrink-0', pace.warn && 'text-warning')}>· {pace.word}</span>}
-          {stale && <span className="shrink-0 text-warning">· 数据过期</span>}
-        </span>
-        <span className="shrink-0 tabular-nums">{`已用 ${Math.floor(used)}%`}</span>
-      </div>
+      {inverse ? (
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className={cn('flex min-w-0 items-center gap-1', mutedClass)}>
+            <span className="truncate">{label}</span>
+            {reset !== null && (
+              <Tooltip>
+                <TooltipTrigger render={<span className="shrink-0 cursor-default">· {reset.label}</span>} />
+                <TooltipContent>{reset.exact}</TooltipContent>
+              </Tooltip>
+            )}
+            {exhausted
+              ? <span className="shrink-0 text-destructive">· 已耗尽</span>
+              : pace !== null && <span className={cn('shrink-0', pace.warn && 'text-warning')}>· {pace.word}</span>}
+            {stale && <span className="shrink-0 text-warning">· 数据过期</span>}
+          </span>
+          <span className="shrink-0 tabular-nums">{usedLabel}</span>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-baseline justify-between gap-2 text-xs">
+            <span className={cn('min-w-0 truncate', mutedClass)}>{label}</span>
+            <span className="shrink-0 tabular-nums">{usedLabel}</span>
+          </div>
+          <div className={cn('flex flex-wrap items-center gap-x-1 gap-y-0.5 text-xs tabular-nums', mutedClass)}>
+            {reset !== null && (
+              <Tooltip>
+                <TooltipTrigger render={<span className="cursor-default">· {reset.label}</span>} />
+                <TooltipContent>{reset.exact}</TooltipContent>
+              </Tooltip>
+            )}
+            {exhausted
+              ? <span className="text-destructive">· 已耗尽</span>
+              : pace !== null && <span className={pace.warn ? 'text-warning' : undefined}>· {pace.word}</span>}
+            {stale && <span className="text-warning">· 数据过期</span>}
+          </div>
+        </>
+      )}
       <div className="relative flex h-1.5 items-center">
         <ProgressPrimitive.Root
           value={used}

@@ -16,6 +16,7 @@
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
+import { shell } from './desktop';
 
 /** Which edge of the status bar an item belongs to. */
 export type StatusBarSide = 'start' | 'end';
@@ -188,11 +189,22 @@ export function onQuotaPanelOpen(listener: () => void): () => void {
 let quotaFocus: string | null = null;
 const quotaFocusListeners = new Set<() => void>();
 
-/** Focus the given quota provider, or clear the focus with null. */
-export function setQuotaFocus(providerId: string | null): void {
-  if (quotaFocus === providerId) return;
-  quotaFocus = providerId;
-  for (const listener of quotaFocusListeners) listener();
+/**
+ * Focus the given quota provider, or clear the focus with null. The focus is
+ * also published to the Desktop main process (the id, plus a label when the
+ * caller has one) so the Pet house card follows the composer's current model;
+ * the module-level store keeps the status-bar item's read path unchanged.
+ */
+export function setQuotaFocus(providerId: string | null, label?: string): void {
+  if (quotaFocus !== providerId) {
+    quotaFocus = providerId;
+    for (const listener of quotaFocusListeners) listener();
+  }
+  if (providerId === null) {
+    void shell.setQuotaFocus?.(null);
+  } else {
+    void shell.setQuotaFocus?.(label !== undefined ? { id: providerId, label } : { id: providerId });
+  }
 }
 
 function subscribeQuotaFocus(listener: () => void): () => void {
