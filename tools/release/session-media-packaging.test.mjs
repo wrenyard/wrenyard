@@ -23,7 +23,7 @@ const RELEASE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(RELEASE_DIR, '..', '..');
 const SESSION_DIR = path.join(ROOT, 'packages', 'features', 'session');
 const DESKTOP_DIR = path.join(ROOT, 'apps', 'desktop');
-const SHARP_VERSION = '0.35.4';
+const SHARP_VERSION = '0.35.5';
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 
@@ -48,7 +48,7 @@ function walkFiles(dir, visit) {
   }
 }
 
-test('session production pins sharp@0.35.4 and it is installed', () => {
+test('session production pins sharp@0.35.5 and it is installed', () => {
   const manifest = readJson(path.join(SESSION_DIR, 'package.json'));
   assert.equal(manifest.dependencies.sharp, SHARP_VERSION, 'sharp is a production dependency');
   assert.equal(manifest.devDependencies?.sharp, undefined, 'sharp must not be a dev-only dependency');
