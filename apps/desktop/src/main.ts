@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import { registerSession, type SessionRegistration } from './session/ipc.js';
+import { SessionSeenStore } from './session/seen-store.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
 import { ensureDesktopActivationPolicy } from './desktop-activation-policy.js';
 import {
@@ -811,10 +812,16 @@ async function bootstrap(): Promise<void> {
 
   console.info('[wrenyard-desktop] initializing shell');
 
+  // Shared "seen" state for the 新结果 dot, stored next to the Desktop settings
+  // file in the same state/config directory (resolved as `settings.json` below).
+  const sessionSeenStore = new SessionSeenStore(join(app.getPath('userData'), 'session-seen.json'));
+
   // Relay session IPC over the same owner-only daemon control socket.
   sessionRegistration = registerSession({
     ipcPath,
     canConnect: canConnectDaemon,
+    // Shared seen state behind the 新结果 dot; every trusted window reads it.
+    seenStore: sessionSeenStore,
     // The shell window and the mini-card owner are created after this
     // registration, so resolve both live on each call instead of capturing them.
     isShellSender: (sender) => isTrustedShellSender(sender),

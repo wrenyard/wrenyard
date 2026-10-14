@@ -14,6 +14,7 @@ import type {
   SessionBridgeTaskBrief,
 } from './preload.js';
 import { describeFiles, discardStagedFiles, stageClipboardImage } from './media.js';
+import type { SessionSeenStore } from './seen-store.js';
 
 export const SESSION_CHANNELS = {
   list: 'session:list', create: 'session:create', ledger: 'session:ledger',
@@ -25,6 +26,8 @@ export const SESSION_CHANNELS = {
   delete: 'session:delete', mediaPick: 'session:media-pick',
   mediaDescribe: 'session:media-describe', mediaStageClipboard: 'session:media-stage-clipboard',
   mediaDiscard: 'session:media-discard',
+  seen: 'session:seen', seenState: 'session:seen-state',
+  seenChanged: 'session:seen-changed',
   event: 'session:event', live: 'session:live',
 } as const;
 export type {
@@ -42,6 +45,11 @@ export interface RegisterSessionOptions {
   ipcPath: string;
   canConnect?: () => boolean;
   isShellSender(sender: WebContents): boolean;
+  /**
+   * Shared "seen" state behind the 新结果 dot. Every trusted window reads the
+   * same snapshot, so a session marked seen in one window clears everywhere.
+   */
+  seenStore: SessionSeenStore;
   /**
    * Other trusted windows (the shell and every open mini card) that also
    * receive each polled live event, so a card sees live chat updates even when
@@ -239,6 +247,16 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     }
     return recipients;
   };
+  /**
+   * Push the shared seen snapshot to every trusted surface — the shell and all
+   * open mini cards — so a session seen in one window clears in the others.
+   */
+  const broadcastSeen = (): void => {
+    const payload = options.seenStore.snapshot();
+    for (const recipient of options.additionalRecipients?.() ?? []) {
+      if (!recipient.isDestroyed()) recipient.send(SESSION_CHANNELS.seenChanged, payload);
+    }
+  };
   const poll = async (state: PollState): Promise<void> => {
     const signal = state.controller.signal;
     let draining = false;
@@ -421,6 +439,13 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
       .filter((path) => path !== '');
     await discardStagedFiles(staged);
   });
+  handle(SESSION_CHANNELS.seen, (_event, value) => {
+    const sessionId = readString(value);
+    if (sessionId === undefined) throw new Error('会话 id 无效');
+    options.seenStore.markSeen(sessionId);
+    broadcastSeen();
+  });
+  handle(SESSION_CHANNELS.seenState, () => options.seenStore.snapshot());
 
   return {
     disconnect(): void { for (const client of clients) client.close(); },

@@ -14,7 +14,9 @@ import {
 } from '@/renderer/components/ui/sidebar';
 import { useNow } from '@/renderer/hooks/use-now';
 import { dateGroupOf, type DateGroup } from '@/renderer/lib/format';
+import { useSessionSeen } from '@/renderer/lib/session-seen';
 import { SessionDot } from './SessionDot';
+import { sessionStatusOf } from '../model/session-status.js';
 import type { SessionSummary } from '../model/types.js';
 
 const GROUPS: DateGroup[] = ['今天', '昨天', '7 天内', '更早'];
@@ -36,6 +38,7 @@ export interface SessionSidebarProps {
  */
 export function SessionSidebar({ sessions, selectedId, loading, onSelect, onNew, onSearch, onDelete }: SessionSidebarProps) {
   const now = useNow();
+  const seen = useSessionSeen();
   const grouped = new Map<DateGroup, SessionSummary[]>();
   const sorted = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   for (const session of sorted) {
@@ -101,7 +104,7 @@ export function SessionSidebar({ sessions, selectedId, loading, onSelect, onNew,
                         onClick={() => onSelect(session.sessionId)}
                         className="group-has-data-[sidebar=menu-action]/menu-item:pr-3 group-has-data-[sidebar=menu-action]/menu-item:group-hover/menu-item:pr-8 group-has-data-[sidebar=menu-action]/menu-item:group-focus-within/menu-item:pr-8"
                       >
-                        <SessionDot running={session.running === true} />
+                        <SessionDot status={sessionStatusOf(session, seen)} />
                         <span className="min-w-0 flex-1 [text-overflow:clip]! [mask-image:linear-gradient(to_right,#000_calc(100%_-_2rem),transparent)]">{session.title}</span>
                       </SidebarMenuButton>
                       <SidebarMenuAction
