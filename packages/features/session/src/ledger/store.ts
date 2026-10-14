@@ -41,6 +41,30 @@ export interface SessionSummary {
   createdAt: string;
   updatedAt: string;
   /**
+   * Derived from the ledger: the outcome of the session's most recent turn.
+   * Cleared when the next turn starts. Maintained exactly like `title`: updated
+   * on append and rebuilt when the index is recomputed from the timelines.
+   */
+  lastTurn?: {
+    status: 'completed' | 'failed' | 'interrupted';
+    finishedAt: string;
+    /**
+     * The owning turn's index. `turn.attention` only annotates the turn that
+     * owns `lastTurn`, so a marker from any other turn leaves it unchanged.
+     */
+    turn: number;
+    /** From `turn.attention`: whether the finished turn waits on the user. */
+    needsUser?: boolean;
+    /** Short label from `turn.attention`, when one was provided. */
+    label?: string;
+    /** Failure category of a failed turn, from its failed model span. */
+    errorKind?: string;
+    /** Failure text of a failed turn. */
+    errorMessage?: string;
+    /** When a failed route is expected to recover, when the events carry it. */
+    retryAt?: string;
+  };
+  /**
    * Runtime-derived: whether the session has an in-flight turn right now. Never
    * persisted to `index.json`; only the session engine populates it in memory.
    */
@@ -176,19 +200,26 @@ export class Ledger {
 
     await appendLine(this.sessionFile(sessionId), `${JSON.stringify(event)}\n`);
     events.push(event);
-    this.applySummary(sessionId, event);
+    this.applySummary(sessionId, event, events);
     await this.writeIndexAtomic();
     this.emit(sessionId, event);
     return event;
   }
 
-  private applySummary(sessionId: string, event: LedgerEvent): void {
+  private applySummary(sessionId: string, event: LedgerEvent, events: readonly LedgerEvent[]): void {
     const previous = this.summaries.get(sessionId);
     const createdAt = previous?.createdAt ?? event.at;
     let title = previous?.title ?? DEFAULT_TITLE;
     const titled = titleOfEvent(event);
     if (titled !== undefined) title = titled;
-    this.summaries.set(sessionId, { sessionId, title, createdAt, updatedAt: event.at });
+    const lastTurn = lastTurnAfter(previous?.lastTurn, event, events, events.length);
+    this.summaries.set(sessionId, {
+      sessionId,
+      title,
+      createdAt,
+      updatedAt: event.at,
+      ...(lastTurn === undefined ? {} : { lastTurn }),
+    });
   }
 
   private emit(sessionId: string, event: LedgerEvent): void {
@@ -290,6 +321,117 @@ function titleOfEvent(event: LedgerEvent): string | undefined {
   return title === '' ? undefined : title;
 }
 
+/** Failure facts of a failed model span in a turn, for `SessionSummary.lastTurn`. */
+interface FailedSpanFacts {
+  errorKind: string;
+  errorMessage: string;
+  retryAt?: string;
+}
+
+/**
+ * The newest turn number that has started within the applied prefix, if any.
+ * Turn numbers increase with start order, but taking the maximum is immune to
+ * any out-of-order arrival, so an older started turn can never look newest.
+ */
+function newestStartedTurn(events: readonly LedgerEvent[], bound: number): number | undefined {
+  let newest: number | undefined;
+  for (let index = 0; index < bound; index += 1) {
+    const event = events[index]!;
+    if (event.type !== 'turn.started') continue;
+    if (event.turn === undefined) continue;
+    if (newest === undefined || event.turn > newest) newest = event.turn;
+  }
+  return newest;
+}
+
+/**
+ * The last failed model span of a turn among the applied prefix, if any: its
+ * structured error kind and message, plus the latest retry-after hint on its
+ * attempts. It scans only `events[0..bound)` — the prefix up to and including
+ * the `turn.finished` being applied — so a `span.finished` appended after that
+ * turn cannot change the turn's error facts when the index is recomputed from
+ * the timeline on the next load. No new ledger read is added.
+ */
+function failedSpanFacts(events: readonly LedgerEvent[], bound: number, turn: number): FailedSpanFacts | undefined {
+  let found: FailedSpanFacts | undefined;
+  for (let index = 0; index < bound; index += 1) {
+    const event = events[index]!;
+    if (event.type !== 'span.finished') continue;
+    if (event.turn !== turn) continue;
+    if (event.kind === 'task') continue;
+    if (event.status !== 'failed' || event.error === undefined) continue;
+    const facts: FailedSpanFacts = {
+      errorKind: event.error.kind,
+      errorMessage: event.error.message,
+    };
+    for (const attempt of event.metrics?.attempts ?? []) {
+      const routeUntil = (attempt as { routeUntil?: unknown }).routeUntil;
+      if (typeof routeUntil === 'string' && routeUntil !== '') facts.retryAt = routeUntil;
+    }
+    found = facts;
+  }
+  return found;
+}
+
+/**
+ * Advance the derived last-turn fact for one event, exactly like the `title`
+ * derivation: `turn.started` clears it, `turn.finished` records the outcome
+ * (with a failed span's error and retry hint when present), and
+ * `turn.attention` adds the user-attention flag and label. Every other event
+ * leaves it unchanged.
+ *
+ * `bound` is the length of the applied prefix including `event` itself. Both
+ * the failed-span scan and the newest-turn check stay inside it, so the append
+ * path and the recompute path derive an identical `lastTurn`.
+ */
+function lastTurnAfter(
+  previous: SessionSummary['lastTurn'],
+  event: LedgerEvent,
+  events: readonly LedgerEvent[],
+  bound: number,
+): SessionSummary['lastTurn'] {
+  switch (event.type) {
+    case 'turn.started':
+      return undefined;
+    case 'turn.finished': {
+      // Only the newest started turn owns `lastTurn`. An older turn finishing
+      // later must not overwrite the newer outcome, and a turn that started but
+      // has not finished leaves `lastTurn` cleared.
+      const turn = event.turn;
+      if (turn === undefined) return previous;
+      const newest = newestStartedTurn(events, bound);
+      if (newest !== undefined && turn !== newest) return previous;
+      const failed = event.status === 'failed' ? failedSpanFacts(events, bound, turn) : undefined;
+      return {
+        status: event.status,
+        finishedAt: event.at,
+        turn,
+        ...(failed === undefined ? {} : {
+          errorKind: failed.errorKind,
+          errorMessage: failed.errorMessage,
+          ...(failed.retryAt === undefined ? {} : { retryAt: failed.retryAt }),
+        }),
+        // A failed turn with no failed span keeps its own error text.
+        ...(event.status === 'failed' && failed === undefined && event.error !== undefined
+          ? { errorMessage: event.error }
+          : {}),
+      };
+    }
+    case 'turn.attention':
+      // Nothing to annotate when no finished turn was recorded, and only the
+      // turn that owns `lastTurn` may set needsUser/label. A marker from any
+      // other turn leaves it unchanged.
+      if (previous === undefined || previous.turn !== event.turn) return previous;
+      return {
+        ...previous,
+        needsUser: event.needsUser,
+        ...(event.label === undefined ? {} : { label: event.label }),
+      };
+    default:
+      return previous;
+  }
+}
+
 /**
  * Every distinct session file a timeline records through `files.attached`
  * events, keyed by path + hash, with the latest record kept and first-seen
@@ -329,14 +471,25 @@ function summarize(sessionId: string, events: readonly LedgerEvent[]): SessionSu
   let createdAt: string | undefined;
   let updatedAt: string | undefined;
   let title = DEFAULT_TITLE;
-  for (const event of events) {
+  let lastTurn: SessionSummary['lastTurn'];
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]!;
     if (event.type === 'session.created') createdAt = event.at;
     const titled = titleOfEvent(event);
     if (titled !== undefined) title = titled;
+    // The recompute path passes the prefix ending at this event, exactly like
+    // the append path, so a later append cannot change an earlier turn.
+    lastTurn = lastTurnAfter(lastTurn, event, events, index + 1);
     updatedAt = event.at;
   }
   const created = createdAt ?? updatedAt ?? '';
-  return { sessionId, title, createdAt: created, updatedAt: updatedAt ?? created };
+  return {
+    sessionId,
+    title,
+    createdAt: created,
+    updatedAt: updatedAt ?? created,
+    ...(lastTurn === undefined ? {} : { lastTurn }),
+  };
 }
 
 function readSummary(value: unknown): SessionSummary | undefined {

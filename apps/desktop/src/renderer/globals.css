@@ -714,6 +714,19 @@ html[data-theme-switching] *::after {
   --titlebar-inset-end: 0px;
 }
 
+/* Session status dots (session-status-dots spec): amber for 等你, blue for
+   新结果. The base theme tokens live in @wrenyard/themes; this file is later in
+   the cascade, so the two status colours are defined here for both modes. */
+:root {
+  --status-attention: oklch(0.75 0.15 75);
+  --status-unread: oklch(0.62 0.17 250);
+}
+
+.dark {
+  --status-attention: oklch(0.8 0.14 80);
+  --status-unread: oklch(0.72 0.14 250);
+}
+
 html[data-platform="darwin"] {
   --titlebar-inset-start: 80px;
 }

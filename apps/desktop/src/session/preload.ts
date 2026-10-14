@@ -24,10 +24,12 @@ import type {
   SessionSummary,
 } from '@wrenyard/session';
 import type { DesktopTaskBrief } from '../shell-contract.js';
+import type { SessionSeenState } from './seen-store.js';
 
 export type { ContextInspection, LiveCall };
 export type { AttachmentInput, SessionFile };
 export type { SessionRoutesPreviewParams, SessionRoutesPreviewRole, SessionRoutesPreviewResult };
+export type { SessionSeenState };
 
 /** Exact main↔renderer channels of the session surface. */
 export const SESSION_CHANNELS = {
@@ -65,6 +67,12 @@ export const SESSION_CHANNELS = {
   mediaStageClipboard: 'session:media-stage-clipboard',
   /** Renderer → main: clean up only the staged clipboard drafts passed in. */
   mediaDiscard: 'session:media-discard',
+  /** Renderer → main: `sessionId` to mark seen; the caller is trusted-gated. */
+  seen: 'session:seen',
+  /** Renderer → main: read the shared seen snapshot. */
+  seenState: 'session:seen-state',
+  /** Main → renderer: the updated seen snapshot, broadcast to every trusted window. */
+  seenChanged: 'session:seen-changed',
   /** Main → renderer: `{ sessionId, event }` for the subscribed session. */
   event: 'session:event',
   /** Main → renderer: `{ sessionId, live }` streaming snapshot changes. */
@@ -206,6 +214,12 @@ export interface SessionBridge {
   onEvent(listener: (payload: SessionBridgeEventPayload) => void): () => void;
   /** Subscribe to live streaming snapshots; the returned function unsubscribes. */
   onLive(listener: (payload: SessionBridgeLivePayload) => void): () => void;
+  /** Mark one session as seen now; the shared snapshot is pushed to every window. */
+  markSeen(sessionId: string): Promise<void>;
+  /** Read the shared seen snapshot (baseline plus per-session last-seen times). */
+  getSeen(): Promise<SessionSeenState>;
+  /** Subscribe to the shared seen snapshot; the returned function unsubscribes. */
+  onSeenChanged(listener: (state: SessionSeenState) => void): () => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -230,6 +244,12 @@ function isLivePayload(value: unknown): value is SessionBridgeLivePayload {
     && typeof value.sessionId === 'string'
     && Array.isArray(value.live)
     && value.live.every(isLiveCall);
+}
+
+function isSeenState(value: unknown): value is SessionSeenState {
+  return isRecord(value)
+    && typeof value.baselineAt === 'string'
+    && isRecord(value.seen);
 }
 
 const bridge: SessionBridge = {
@@ -303,6 +323,21 @@ const bridge: SessionBridge = {
     ipcRenderer.on(SESSION_CHANNELS.live, handler);
     return () => {
       ipcRenderer.removeListener(SESSION_CHANNELS.live, handler);
+    };
+  },
+  markSeen(sessionId: string): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.seen, sessionId) as Promise<void>;
+  },
+  getSeen(): Promise<SessionSeenState> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.seenState) as Promise<SessionSeenState>;
+  },
+  onSeenChanged(listener: (state: SessionSeenState) => void): () => void {
+    const handler = (_event: IpcRendererEvent, state: unknown): void => {
+      if (isSeenState(state)) listener(state);
+    };
+    ipcRenderer.on(SESSION_CHANNELS.seenChanged, handler);
+    return () => {
+      ipcRenderer.removeListener(SESSION_CHANNELS.seenChanged, handler);
     };
   },
 };

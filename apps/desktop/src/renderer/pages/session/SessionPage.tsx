@@ -18,6 +18,7 @@ import {
 import { Page, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
 import { registerPageCommands } from '@/renderer/lib/commands';
 import { openMiniCard, restoreMain, setCurrentSession, useMiniMode } from '@/renderer/lib/mini';
+import { markSessionSeen } from '@/renderer/lib/session-seen';
 import { useNewItemKeys } from '@/renderer/lib/motion';
 import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
 import { getSessionApi } from './api.js';
@@ -185,6 +186,25 @@ export function SessionPage() {
   const draft = state.selectedId === '';
   const empty = draft || (!state.loadingLedger && model.turns.length === 0 && state.pending.length === 0);
   const sessionKey = state.selectedId === '' ? 'draft' : state.selectedId;
+
+  // Mark the shown session as seen while this window is visible and focused.
+  // Re-runs on selection, on that session's new result, and on focus changes,
+  // in both the main window and a mini card. A draft (empty id) is never marked.
+  const selectedFinishedAt = selectedSession?.lastTurn?.finishedAt;
+  useEffect(() => {
+    const mark = (): void => {
+      if (state.selectedId === '') return;
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
+      markSessionSeen(state.selectedId);
+    };
+    mark();
+    window.addEventListener('focus', mark);
+    document.addEventListener('visibilitychange', mark);
+    return () => {
+      window.removeEventListener('focus', mark);
+      document.removeEventListener('visibilitychange', mark);
+    };
+  }, [state.selectedId, selectedFinishedAt]);
 
   // Record the selected session in the shell history. Restoring a session that
   // is no longer in the loaded list returns false so the history skips it.

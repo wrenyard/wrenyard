@@ -223,6 +223,19 @@ export class ReplyWriter {
       status,
       ...(error === undefined ? {} : { error }),
     });
+    // A completed turn that ended on a single standalone ask needs the user's
+    // reply. `asksThisStep` still holds the terminal step's asks: the step loop
+    // stops on a terminal step without starting a new one. Record the attention
+    // marker right after the turn so the session list can show it.
+    if (status === 'completed' && turn.asksThisStep.length === 1 && turn.actionsThisStep === 0) {
+      await this.host.ledger.append(session.sessionId, {
+        type: 'turn.attention',
+        turn: turn.turn,
+        turnId: turnId(turn.turn),
+        needsUser: true,
+        source: 'ask',
+      });
+    }
     turn.durableTerminal = true;
 
     // A terminal call without a reply leaves no new reply; the title still uses

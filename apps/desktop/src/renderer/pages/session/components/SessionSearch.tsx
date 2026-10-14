@@ -9,7 +9,9 @@ import {
 } from '@/renderer/components/ui/command';
 import { DIALOG_SIZES } from '@/renderer/components/dialog-size';
 import { dateGroupOf, type DateGroup } from '@/renderer/lib/format';
+import { useSessionSeen } from '@/renderer/lib/session-seen';
 import { SessionDot } from './SessionDot';
+import { sessionStatusOf } from '../model/session-status.js';
 import type { SessionSummary } from '../model/types.js';
 
 const GROUPS: DateGroup[] = ['今天', '昨天', '7 天内', '更早'];
@@ -24,6 +26,7 @@ export interface SessionSearchProps {
 /** `Cmd/Ctrl+K` dialog: search every conversation, grouped by date. */
 export function SessionSearch({ open, onOpenChange, sessions, onSelect }: SessionSearchProps) {
   const now = Date.now();
+  const seen = useSessionSeen();
   const grouped = new Map<DateGroup, SessionSummary[]>();
   const sorted = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   for (const session of sorted) {
@@ -50,19 +53,22 @@ export function SessionSearch({ open, onOpenChange, sessions, onSelect }: Sessio
           if (!list || list.length === 0) return null;
           return (
             <CommandGroup key={group} heading={group}>
-              {list.map((session) => (
-                <CommandItem
-                  key={session.sessionId}
-                  value={session.title}
-                  onSelect={() => {
-                    onSelect(session.sessionId);
-                    onOpenChange(false);
-                  }}
-                >
-                  {session.running === true && <SessionDot running />}
-                  <span className="min-w-0 truncate">{session.title}</span>
-                </CommandItem>
-              ))}
+              {list.map((session) => {
+                const status = sessionStatusOf(session, seen);
+                return (
+                  <CommandItem
+                    key={session.sessionId}
+                    value={session.title}
+                    onSelect={() => {
+                      onSelect(session.sessionId);
+                      onOpenChange(false);
+                    }}
+                  >
+                    {status.kind !== 'idle' && <SessionDot status={status} />}
+                    <span className="min-w-0 truncate">{session.title}</span>
+                  </CommandItem>
+                );
+              })}
             </CommandGroup>
           );
         })}
