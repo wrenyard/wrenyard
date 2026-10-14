@@ -98,6 +98,8 @@ import type {
   SessionContextInspectResult,
   SessionRoutesPreviewParams,
   SessionRoutesPreviewResult,
+  SessionDeleteParams,
+  SessionDeleteResult,
   WorkspaceVcsStatusParams,
   WorkspaceVcsStatusResult,
   WorkspaceVcsDiffParams,
@@ -308,6 +310,9 @@ export class ForemanClient {
     },
     events: (params: SessionEventsParams): Promise<SessionEventsResult> => {
       return this.rpc.request<SessionEventsResult>('session.events', params)
+    },
+    delete: (params: SessionDeleteParams): Promise<SessionDeleteResult> => {
+      return this.rpc.request<SessionDeleteResult>('session.delete', params)
     },
     context: {
       inspect: (params: SessionContextInspectParams): Promise<SessionContextInspectResult> => {
