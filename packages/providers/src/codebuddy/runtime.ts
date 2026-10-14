@@ -57,27 +57,35 @@ export interface CodeBuddyProviderProduct {
 }
 
 function createModelRouting(state: CodeBuddyModels) {
+  // The offered endpoint ids. The endpoint's own row id is the offering id, so
+  // an observed id equal to one of them needs no mapping at all.
+  const offeringIds: ReadonlySet<string> = new Set(state.definition.models.map((entry) => entry.id));
+
   /**
-   * The exact spelling the installed product file declares for a canonical
-   * offering. The mapping is fixed by the selected product entries, never by
-   * the active environment or credential: a real product row is by itself
-   * evidence for the wire spelling, so it applies to native dispatch, gateway
-   * dispatch and observed-id normalization alike, and an unlisted id is
-   * identity.
+   * The exact spelling the endpoint declares for an offered row. The mapping is
+   * fixed by the selected endpoint entries, never by the active environment or
+   * credential: a real endpoint row is by itself evidence for the wire spelling,
+   * so it applies to native dispatch, gateway dispatch and observed-id
+   * normalization alike, and an unlisted id is identity.
    */
   function codeBuddyUpstreamWireModel(model: string): string {
     return state.upstreamModels[model] ?? model;
   }
 
   /**
-   * Reverse an observed wire spelling onto the offering it names. The
-   * provider's published alias map is consulted first (current wire ids plus
-   * historical spellings); when it does not cover the id, the product-id
-   * resolver maps retired Claude generation-5 spellings onto their historical
-   * identity without ever making them routable again.
+   * Reverse an observed wire spelling onto the offering it names. An observed
+   * endpoint id is already the offering id; otherwise the provider's published
+   * alias map (current wire ids plus historical spellings) is consulted, and a
+   * product-id resolution is used only when it lands on an actually offered row.
+   * Any other observed id stays itself, so an unregistered endpoint model is
+   * never renamed onto something the account cannot run.
    */
   function canonicalizeCodeBuddyObservedModelId(model: string): string {
-    return state.definition.modelAliases?.[model] ?? resolveCodeBuddyProductModelId(model) ?? model;
+    if (offeringIds.has(model)) return model;
+    const aliased = state.definition.modelAliases?.[model];
+    if (aliased !== undefined) return aliased;
+    const canonical = resolveCodeBuddyProductModelId(model);
+    return canonical !== undefined && offeringIds.has(canonical) ? canonical : model;
   }
 
   function evaluateCodeBuddyFreeSupply(

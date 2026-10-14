@@ -66,15 +66,17 @@ export interface WrenyardGatewayModel {
   family?: 'claude';
   claudeTier?: 'haiku' | 'sonnet' | 'opus';
   supports1MContext?: boolean;
-  intelligence: 'low' | 'mid' | 'high' | 'premium';
+  /** Catalog intelligence tier; absent when genuinely unknown (a route naming
+   * no registered canonical model). */
+  intelligence?: 'low' | 'mid' | 'high' | 'premium';
   maxOutputTokens?: number;
   capabilities?: readonly ('text' | 'image')[];
   /**
    * The legal reasoning efforts this model accepts, in ascending intensity.
    * Replaces the legacy fixed `reasoningEffort` field on the public gateway
-   * contract; every route declares a non-empty ladder.
+   * contract; absent when the model's ladder is unknown.
    */
-  reasoningEfforts: ProviderListModel['reasoningEfforts'];
+  reasoningEfforts?: ProviderListModel['reasoningEfforts'];
   routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'model_unavailable';
   routeUntil?: string;
   speed?: number;
@@ -154,7 +156,7 @@ export interface WrenyardTaskResolvedDispatch {
   intelligence: string;
   reference_pricing: WrenyardTaskReferencePricing;
   /** Actual reasoning effort emitted by the resolved dispatch DTO. */
-  reasoningEffort?: ProviderListModel['reasoningEfforts'][number];
+  reasoningEffort?: NonNullable<ProviderListModel['reasoningEfforts']>[number];
   protocol?: string;
 }
 

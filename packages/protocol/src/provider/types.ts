@@ -17,7 +17,9 @@ export type ProviderListModelPricing = readonly [number, number, number]
 
 /** One model advertised by a configured provider. */
 export interface ProviderListModel {
-  reasoningEfforts: readonly ReasoningEffort[]
+  /** Route-owned reasoning levels; absent when the ladder is unknown (a route
+   * naming no registered canonical model materializes no level). */
+  reasoningEfforts?: readonly ReasoningEffort[]
   supportedClients?: readonly string[]
   id: string
   displayName: string
@@ -29,10 +31,11 @@ export interface ProviderListModel {
   taskOnly?: boolean
   /** Provider-independent canonical model id; falls back to the model id. */
   canonicalId?: string
-  /** Catalog intelligence tier for the model. */
+  /** Catalog intelligence tier for the model; absent when genuinely unknown. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium'
-  /** Catalog list price as [cached, input, output] USD per million tokens. */
-  pricing: ProviderListModelPricing
+  /** Catalog list price as [cached, input, output] USD per million tokens;
+   * absent when the price is genuinely unknown (never defaulted to zero). */
+  pricing?: ProviderListModelPricing
   /** Which evidence tier produced `effectiveTps`. */
   speedSource?: 'local_31d' | 'provider_override' | 'catalog_default'
   /** True when a credential is configured AND the resolver admits provider/model. */

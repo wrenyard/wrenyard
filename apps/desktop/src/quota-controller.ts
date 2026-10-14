@@ -283,9 +283,9 @@ function projectCatalog(
         ...Object.fromEntries(['contextWindow', 'maxTokens', 'taskOnly', 'effectiveTps', 'quotaAbundant', 'free', 'canonicalId', 'intelligence', 'speedSource', 'available']
           .filter((key) => model[key as keyof typeof model] !== undefined)
           .map((key) => [key, model[key as keyof typeof model]])),
-        // Pricing is projected explicitly from the required catalog value:
+        // Pricing is projected explicitly from the catalog value when present:
         // only the three USD-per-million numbers, never a default.
-        pricing: model.pricing,
+        ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
       })),
     };
   });

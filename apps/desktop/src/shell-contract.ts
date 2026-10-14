@@ -763,8 +763,9 @@ export interface ProviderModelSnapshot {
   canonicalId?: string;
   /** Catalog intelligence tier for the model. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium';
-  /** Catalog list price as [cached, input, output] USD per million tokens. */
-  pricing: ProviderModelPricingSnapshot;
+  /** Catalog list price as [cached, input, output] USD per million tokens;
+   * absent when the price is genuinely unknown (never defaulted to zero). */
+  pricing?: ProviderModelPricingSnapshot;
   /** Which evidence tier produced `effectiveTps`. */
   speedSource?: 'local_31d' | 'provider_override' | 'catalog_default';
   /** True when a credential is configured AND the resolver admits provider/model. */

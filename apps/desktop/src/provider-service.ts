@@ -49,7 +49,8 @@ export class ProviderService {
           ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
           ...(model.speedSource === undefined ? {} : { speedSource: model.speedSource }),
           ...(model.available === undefined ? {} : { available: model.available }),
-          pricing: model.pricing,
+          // Omitted when the catalog declares no price rather than defaulted.
+          ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
         })),
       }));
     } finally {

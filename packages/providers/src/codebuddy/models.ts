@@ -1,10 +1,9 @@
 import { codeBuddyRouteFailure } from './route-errors.ts';
 import type { ClientDefinition, ModelDefinition, ProviderDefinition, ReasoningEffort } from '../base/index.ts';
 import { resolveProviderModel, REASONING_LOW_HIGH_MAX, type CanonicalModelOverrides } from '../base/model-defaults.ts';
-import { MAINSTREAM_MODEL_IDS, isMainstreamModelId, models } from '@wrenyard/models';
+import { models } from '@wrenyard/models';
 import {
   codeBuddyCanonicalModelId,
-  codeBuddyHasLongContextVariant,
   productCreditsAreFree,
   type CodeBuddyProductModelEntry,
 } from './product.ts';
@@ -37,13 +36,13 @@ const CLAUDE_TIERS = ['haiku', 'sonnet', 'opus'] as const;
 const normalizeNumericSeparators = (id: string): string => id.replace(/(?<=\d)\.(?=\d)/gu, '-');
 
 /**
- * Normalized spelling of every mainstream canonical id. A product id matches a
- * canonical model through numeric-separator equivalence alone (`claude-opus-5.5`
- * equals `claude-opus-5-5`), while the canonical spelling is what comes back, so
- * dotted `gpt-5.6` and `deepseek-v4.1` canonical ids stay intact.
+ * Normalized spelling of every registered canonical id. A product id matches a
+ * registered model through numeric-separator equivalence alone (`claude-opus-5.5`
+ * equals `claude-opus-5-5`), while the registered spelling is what comes back, so
+ * dotted registered ids stay intact.
  */
-const MAINSTREAM_BY_NORMALIZED_ID: ReadonlyMap<string, string> = new Map(
-  MAINSTREAM_MODEL_IDS.map((id): [string, string] => [normalizeNumericSeparators(id), id]),
+const REGISTERED_BY_NORMALIZED_ID: ReadonlyMap<string, string> = new Map(
+  models.list().map((entry): [string, string] => [normalizeNumericSeparators(entry.id), entry.id]),
 );
 
 /**
@@ -62,21 +61,10 @@ const CODEBUDDY_HISTORICAL_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Claude generation-5 identities retired from the selectable catalog. The
- * installed product file may still list these rows, but they are withheld from
- * the offerings; their observed spellings keep this exact identity rather than
- * being aliased forward onto the 5.5 generation.
- */
-const RETIRED_CLAUDE_FIVE_MODEL_IDS: ReadonlySet<string> = new Set([
-  'claude-opus-5',
-  'claude-sonnet-5',
-]);
-
-/**
  * Listed CodeBuddy routes accept the disable switch, even where the upstream
- * still thinks. Other strengths retain their documented/probed ladders. Every possible
- * offering is a mainstream registry model, whose registered identity is the
- * canonical id used here.
+ * still thinks. Other strengths retain their documented/probed ladders. Only a
+ * row matching a registered model uses this map; an unregistered endpoint row
+ * declares no ladder at all.
  */
 const CODEBUDDY_REASONING_EFFORTS: Readonly<Record<string, readonly ReasoningEffort[]>> = {
   'claude-opus-5-5': ['none', ...REASONING_LOW_HIGH_MAX],
@@ -106,30 +94,29 @@ export const codeBuddyClient: ClientDefinition = {
 
 /**
  * Exact canonical ids and genuine aliases precede normalized matching; the
- * result is always an existing mainstream registry model. Product ids are
- * canonicalized by stripping the `-ioa` and `-1m` wire suffixes (in either
- * order) before the numeric-separator comparison.
+ * result is always an existing registered model, so its registry metadata and
+ * aliases stay intact. Membership is therefore the full registry, not only the
+ * mainstream list: a model the endpoint offers may be registered without being
+ * mainstream. Product ids are canonicalized by stripping the `-ioa` and `-1m`
+ * wire suffixes (in either order) before the numeric-separator comparison.
  */
 function lookupUnifiedModelId(productId: string): string | undefined {
-  if (isMainstreamModelId(productId)) return productId;
+  if (models.get(productId)) return productId;
   const stripped = codeBuddyCanonicalModelId(productId);
   const aliased = CODEBUDDY_PRODUCT_MODEL_IDS[productId] ?? CODEBUDDY_PRODUCT_MODEL_IDS[stripped];
-  if (aliased !== undefined && isMainstreamModelId(aliased)) return aliased;
-  if (isMainstreamModelId(stripped)) return stripped;
-  return MAINSTREAM_BY_NORMALIZED_ID.get(normalizeNumericSeparators(stripped));
+  if (aliased !== undefined && models.get(aliased)) return aliased;
+  if (models.get(stripped)) return stripped;
+  return REGISTERED_BY_NORMALIZED_ID.get(normalizeNumericSeparators(stripped));
 }
 
 /**
- * Map a product-file id onto a mainstream unified model, or ignore it. A
- * retired Claude generation-5 row still resolves to its own historical
- * identity so observed-id normalization stays stable, but the offering builder
- * withholds that identity from the selectable catalog.
+ * Map a product id onto the registered model it names, or ignore it. A
+ * `/v3/config` cli row that resolves adopts that model's registered identity,
+ * so its registry metadata and aliases are retained; a row that names no
+ * registered model is not offered.
  */
 export function resolveCodeBuddyProductModelId(productId: string): string | undefined {
-  const modelId = lookupUnifiedModelId(productId);
-  if (modelId && isMainstreamModelId(modelId)) return modelId;
-  const stripped = codeBuddyCanonicalModelId(productId);
-  return RETIRED_CLAUDE_FIVE_MODEL_IDS.has(stripped) ? stripped : undefined;
+  return lookupUnifiedModelId(productId);
 }
 
 /**
@@ -161,19 +148,41 @@ function productMetadataOverrides(
 }
 
 /**
- * Historical upstream spellings canonicalize onto the offering they name, so
- * model-only statistics keep attributing an observed id after the product file
- * has moved on to a new wire id. Only a spelling whose target offering is
- * actually offered becomes an alias, so a retired identity is never resurrected
- * by the alias map alone.
+ * Canonical registry ids and historical upstream spellings resolve onto the
+ * endpoint row that publishes the model they name, so a stored default selection
+ * (the registered `defaultModel`) and model-only statistics keep resolving after
+ * the public offering id became the endpoint's raw id. The target of a canonical
+ * identity is deterministic: the exact offered canonical row when one exists,
+ * otherwise the first endpoint row in endpoint order. An alias is emitted only
+ * when its key is not itself an offered id (an offered endpoint id is never
+ * rewritten) and its target is an offered id (an alias never points at a model
+ * the account does not offer), so a retired identity is never resurrected.
  */
 function historicalAliasesFor(offerings: readonly ModelDefinition[]): Record<string, string> {
   const offeringIds = new Set(offerings.map((entry) => entry.id));
+  // Canonical registry identity -> the offered endpoint row that publishes it.
+  const offeredByCanonical = new Map<string, string>();
+  for (const entry of offerings) {
+    const canonicalId = entry.canonicalModel?.id;
+    if (canonicalId === undefined) continue;
+    // An exact offered canonical row wins; otherwise the first row in endpoint
+    // order keeps the mapping.
+    if (entry.id === canonicalId || !offeredByCanonical.has(canonicalId)) {
+      offeredByCanonical.set(canonicalId, entry.id);
+    }
+  }
   const aliases: Record<string, string> = {};
+  const addAlias = (key: string, canonicalId: string): void => {
+    if (offeringIds.has(key)) return;
+    const target = offeredByCanonical.get(canonicalId);
+    if (target === undefined || target === key) return;
+    aliases[key] = target;
+  };
+  // The registered canonical id itself resolves onto its offered endpoint row.
+  for (const canonicalId of offeredByCanonical.keys()) addAlias(canonicalId, canonicalId);
+  // Product-file rewrites and historical wire spellings keep canonicalizing.
   for (const [observed, canonicalId] of Object.entries({ ...CODEBUDDY_PRODUCT_MODEL_IDS, ...CODEBUDDY_HISTORICAL_ALIASES })) {
-    if (observed === canonicalId) continue;
-    if (!offeringIds.has(canonicalId) || offeringIds.has(observed)) continue;
-    aliases[observed] = canonicalId;
+    addAlias(observed, canonicalId);
   }
   return aliases;
 }
@@ -181,89 +190,78 @@ function historicalAliasesFor(offerings: readonly ModelDefinition[]): Record<str
 function reasoningEffortMappingsFor(offerings: readonly ModelDefinition[]): NonNullable<ProviderDefinition['reasoningEffortMappings']> {
   const mappings: Record<string, { codebuddy: ReturnType<typeof effortLadder> }> = {};
   for (const entry of offerings) {
+    // A route with no ladder — an endpoint row naming no registered model —
+    // materializes no effort level; no ladder is inferred for it.
+    const ladder = entry.reasoningEfforts;
+    if (ladder.length === 0) continue;
     // Native settings serialize effort, not the Gateway's verified disable switch.
-    const nativeEfforts = codeBuddyReasoningEfforts(entry.id).filter(effort => effort !== 'none');
+    const nativeEfforts = ladder.filter(effort => effort !== 'none');
     mappings[entry.id] = { codebuddy: effortLadder(nativeEfforts) };
   }
   return mappings;
 }
 
-/**
- * Every discovered wire spelling of an offered canonical model becomes an
- * inbound alias, including the variants the selected product row did not supply
- * (the selected wire id stays the outbound spelling in `upstreamByCanonical`).
- */
-function discoveredAliasesFor(
-  variantsByCanonical: ReadonlyMap<string, ReadonlySet<string>>,
-  offeringIds: ReadonlySet<string>,
-): Record<string, string> {
-  const aliases: Record<string, string> = {};
-  for (const [canonicalId, variants] of variantsByCanonical) {
-    if (!offeringIds.has(canonicalId)) continue;
-    for (const observed of variants) {
-      if (observed === canonicalId || offeringIds.has(observed)) continue;
-      aliases[observed] = canonicalId;
-    }
-  }
-  return aliases;
-}
-
 function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelEntry[]): {
   models: ModelDefinition[];
   upstreamByCanonical: Record<string, string>;
-  variantsByCanonical: ReadonlyMap<string, ReadonlySet<string>>;
 } {
-  // Membership is product-driven: an entry exists only when a product-file row
-  // resolves onto the unified registry. Retired Claude generation-5 rows are
-  // withheld even when the product file still lists them. When a canonical
-  // model is named by both an ordinary row and an explicit long-context (`-1m`)
-  // variant, the actually discovered variant supplies the outbound wire
-  // spelling and the ordinary row is the fallback; every discovered variant is
-  // kept as an inbound alias.
-  const selectedEntries = new Map<string, CodeBuddyProductModelEntry>();
-  const variantsByCanonical = new Map<string, Set<string>>();
-  for (const entry of productEntries) {
-    const modelId = resolveCodeBuddyProductModelId(entry.id);
-    if (!modelId || RETIRED_CLAUDE_FIVE_MODEL_IDS.has(modelId)) continue;
-    const variants = variantsByCanonical.get(modelId) ?? new Set<string>();
-    variants.add(entry.id);
-    variantsByCanonical.set(modelId, variants);
-    const current = selectedEntries.get(modelId);
-    if (current === undefined || (codeBuddyHasLongContextVariant(entry.id) && !codeBuddyHasLongContextVariant(current.id))) {
-      selectedEntries.set(modelId, entry);
-    }
-  }
-
-  const byOfferingId = new Map<string, ModelDefinition>();
-  // Outbound wire ids come from the selected product entries alone — a mapping
-  // exists exactly when the current product file names the row, including rows
-  // whose id already is the offering id. Nothing is seeded, so no channel
-  // spelling survives the product that declared it and no environment can be
-  // routed to another environment's spelling.
+  // Membership is endpoint-driven: exactly one offering per `/v3/config` cli
+  // row, in the endpoint's own order. The row supplies the public id and display
+  // name; a row that names a registered model additionally adopts that model's
+  // canonical identity and complete registry metadata, still published under the
+  // endpoint's own name. A row that names no registered model is offered too,
+  // carrying only what the endpoint declares — its intelligence, price, speed
+  // and reasoning ladder stay unknown rather than being invented. No row is
+  // dropped and no rows are merged.
+  const offerings: ModelDefinition[] = [];
   const upstreamByCanonical: Record<string, string> = {};
-  for (const [modelId, entry] of selectedEntries) {
-    const overrides: CanonicalModelOverrides = {
-      ...productMetadataOverrides(entry, models.require(modelId).defaults.contextWindow),
-      ...claudeMetadataOverrides(modelId),
-      reasoningEfforts: codeBuddyReasoningEfforts(modelId),
-    };
-    const resolved = resolveProviderModel({ canonical: modelId, overrides });
-    byOfferingId.set(
-      modelId,
-      productCreditsAreFree(entry.credits) ? { ...resolved, free: true } : resolved,
-    );
-    // The product-file id is the wire spelling — including the identity rows,
-    // where the offering is already spelled the way the product names it.
-    upstreamByCanonical[modelId] = entry.id;
+  const seen = new Set<string>();
+  for (const entry of productEntries) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    const canonicalId = resolveCodeBuddyProductModelId(entry.id);
+    const registered = canonicalId === undefined ? undefined : models.get(canonicalId);
+    const displayName = entry.name ?? registered?.displayName ?? entry.id;
+    let definition: ModelDefinition;
+    if (canonicalId !== undefined && registered !== undefined) {
+      definition = {
+        ...resolveProviderModel({
+          canonical: canonicalId,
+          overrides: {
+            ...productMetadataOverrides(entry, registered.defaults.contextWindow),
+            ...claudeMetadataOverrides(canonicalId),
+            reasoningEfforts: codeBuddyReasoningEfforts(canonicalId),
+          },
+        }),
+        // The displayed identity is the endpoint's own id and name; the
+        // registered identity stays available as `canonicalModel`.
+        id: entry.id,
+        displayName,
+      };
+    } else {
+      definition = resolveProviderModel({
+        id: entry.id,
+        displayName,
+        ...(entry.maxOutputTokens === undefined ? {} : { maxOutputTokens: entry.maxOutputTokens }),
+        ...(entry.supportsImages === true ? { capabilities: ['text', 'image'] } : {}),
+      });
+    }
+    offerings.push(productCreditsAreFree(entry.credits) ? { ...definition, free: true } : definition);
+    // The endpoint row's id is the outbound wire spelling, so wire dispatch stays
+    // exact even when the public offering adopts a registered identity.
+    upstreamByCanonical[entry.id] = entry.id;
   }
-
-  return { models: [...byOfferingId.values()], upstreamByCanonical, variantsByCanonical };
+  return { models: offerings, upstreamByCanonical };
 }
 
 export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEntry[]) {
   const built = buildCodeBuddyOfferings(entries);
   const upstreamModels: Readonly<Record<string, string>> = Object.freeze(built.upstreamByCanonical);
-  const offeringIds: ReadonlySet<string> = new Set(built.models.map((entry) => entry.id));
+  // The declared ladder of each offering that has one, keyed by the offering's
+  // own id. A route with no ladder has no level to materialize.
+  const effortLadders: Readonly<Record<string, readonly ReasoningEffort[]>> = Object.fromEntries(
+    built.models.flatMap((entry) => entry.reasoningEfforts.length === 0 ? [] : [[entry.id, entry.reasoningEfforts] as const]),
+  );
   const definition: Omit<ProviderDefinition, 'models'> & { models: readonly ModelDefinition[] } = {
     id: 'codebuddy',
     displayName: 'CodeBuddy',
@@ -275,17 +273,16 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     defaultModel: 'hunyuan-hy4-preview',
     useClientBinary: true,
     models: built.models,
-    // Aliases only target currently offered models, including when the product
-    // snapshot is absent. Outbound wire ids come from the selected product.
-    modelAliases: {
-      ...historicalAliasesFor(built.models),
-      ...discoveredAliasesFor(built.variantsByCanonical, offeringIds),
-    },
+    // Aliases only target currently offered models, and only where they do not
+    // collide with an exact offered endpoint id. Outbound wire ids are the
+    // endpoint row ids themselves.
+    modelAliases: historicalAliasesFor(built.models),
     reasoningEffortMappings: reasoningEffortMappingsFor(built.models),
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://copilot.tencent.com/v2/chat/completions', authScheme: 'bearer' }],
     convertReasoningEffort: (modelId, effort, protocol) => {
       if (effort === 'none') {
-        if (!codeBuddyReasoningEfforts(modelId).includes('none')) {
+        const ladder = effortLadders[modelId];
+        if (ladder === undefined || !ladder.includes('none')) {
           throw new Error(`CodeBuddy model ${modelId} cannot disable thinking`);
         }
         return { thinking: { type: 'disabled' } };

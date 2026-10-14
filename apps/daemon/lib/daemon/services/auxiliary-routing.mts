@@ -71,9 +71,17 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
       if (!availability[index]!.available || availability[index]!.providerCredential !== 'available') return reject('provider not configured/available');
       if (snapshot.hardBlockedProviderIds.includes(provider.id)) return reject('quota blocked');
       if (!requirements.requiredCapabilities.every(capability => model.capabilities?.includes(capability))) return reject('text capability missing');
+      // A model with no declared metadata cannot be ranked truthfully. Unknown
+      // intelligence, price, speed or an empty effort ladder excludes it here
+      // rather than being substituted with a zero, so the existing ranking is
+      // kept unchanged for every metadata-complete model.
+      if (model.intelligence === undefined) return reject('intelligence unknown');
       if (INTELLIGENCE_ORDER[model.intelligence] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) return reject('intelligence below minimum');
+      if (model.reasoningEfforts.length === 0) return reject('no reasoning-effort ladder');
+      if (model.pricing === undefined) return reject('pricing unknown');
       if ((model.contextWindow ?? 0) < requirements.minimumContextWindow) return reject('context below minimum');
       const speed = resolveModelSpeed(provider, model, localSpeed, new Date(nowMs));
+      if (speed === undefined) return reject('speed unknown');
       entries.push({
         levels: model.reasoningEfforts,
         entry: {

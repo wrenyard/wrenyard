@@ -28,6 +28,9 @@ export type SpeedSource = 'local_31d' | 'provider_override' | 'catalog_default';
 
 export interface SpeedEvidence {
   source: SpeedSource;
+  /** TPS of the authoritative evidence tier. Required whenever evidence exists:
+   * a genuinely unknown speed omits the whole evidence object instead of
+   * reporting a fabricated 0. */
   tps: number;
   provider?: string;
   model?: string;
@@ -55,10 +58,15 @@ export interface ModelDefinition {
   family?: 'claude';
   claudeTier?: 'haiku' | 'sonnet' | 'opus';
   supports1MContext?: boolean;
-  intelligence: IntelligenceTier;
-  /** Route-owned reasoning efforts this model can materialize. Required and
-   * non-empty: every registered route must declare its effort ladder. An empty
-   * array is rejected at registration. */
+  /** Catalog intelligence tier. Required and complete for a registered canonical
+   * model. A route whose model names no registered canonical model leaves this
+   * absent: the tier is genuinely unknown and is never defaulted or invented. */
+  intelligence?: IntelligenceTier;
+  /** Route-owned reasoning efforts this model can materialize. Required array:
+   * every registered route declares its own ladder, and a route whose model
+   * names no registered canonical model declares an EMPTY array, meaning
+   * "unknown / no selectable ladder" — an absent ladder is never inferred from
+   * the registry or a model id. */
   reasoningEfforts: readonly ReasoningEffort[];
   maxOutputTokens?: number;
   /** Supported input types, including image content returned by tools; not output generation. */
@@ -69,8 +77,14 @@ export interface ModelDefinition {
    * OpenCode Zen tiers); restricted models are never published through the
    * public gateway model directory. */
   supportedClients?: readonly string[];
-  speed: number;
-  pricing: ModelPricing;
+  /** Catalog default TPS. Required for a registered canonical model. A route
+   * whose model names no registered canonical model leaves this absent: the
+   * speed is genuinely unknown and is never reported as 0. */
+  speed?: number;
+  /** Catalog list price. Required for a registered canonical model. A route
+   * whose model names no registered canonical model leaves this absent: the
+   * price is genuinely unknown and is never defaulted to zero. */
+  pricing?: ModelPricing;
   /** Provider/account-scoped free entitlement; list pricing remains unchanged. */
   free?: boolean;
 }

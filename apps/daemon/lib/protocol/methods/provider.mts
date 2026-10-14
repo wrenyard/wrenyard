@@ -45,8 +45,8 @@ export const providerListResultSchema = {
           type: 'string', enum: ['openai_chat', 'openai_responses', 'anthropic_messages'],
         } },
         models: { type: 'array', maxItems: 128, items: {
-          type: 'object', required: ['id', 'displayName', 'reasoningEfforts'], properties: {
-            reasoningEfforts: { type: 'array', minItems: 1, uniqueItems: true, items: { enum: REASONING_EFFORTS } },
+          type: 'object', required: ['id', 'displayName'], properties: {
+            reasoningEfforts: { type: 'array', uniqueItems: true, items: { enum: REASONING_EFFORTS } },
             supportedClients: { type: 'array', items: { type: 'string' } },
             id: { type: 'string', minLength: 1, maxLength: 200 },
             displayName: { type: 'string', minLength: 1, maxLength: 200 },

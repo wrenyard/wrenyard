@@ -180,9 +180,11 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
       providers: group.providers,
       active,
       tps: averageMeasuredTps(preferred),
-      inputLabel: formatPriceRange(group.models.map((model) => model.pricing[1])),
-      outputLabel: formatPriceRange(group.models.map((model) => model.pricing[2])),
-      cacheLabel: formatPriceRange(group.models.map((model) => model.pricing[0])),
+      // A model with no declared price contributes no price point at all; the
+      // range falls back to the em dash instead of a fabricated zero.
+      inputLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[1]])),
+      outputLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[2]])),
+      cacheLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[0]])),
     });
   }
 

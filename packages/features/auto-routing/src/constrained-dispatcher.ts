@@ -74,15 +74,18 @@ export class ConstrainedDispatcher {
           continue;
       }
       // Hard constraint: intelligence minimum. The configured intelligence tier
-      // is the sole admission fact.
+      // is the sole admission fact; a model declaring no tier cannot satisfy a
+      // minimum, so unknown is ineligible rather than treated as zero.
       if (requirements.intelligenceMin) {
         const intel = modelDef.intelligence;
-        if (INTELLIGENCE_ORDER[intel] < INTELLIGENCE_ORDER[requirements.intelligenceMin])
+        if (intel === undefined || INTELLIGENCE_ORDER[intel] < INTELLIGENCE_ORDER[requirements.intelligenceMin])
           continue;
       }
       // List-price constraint; account-specific free routing is evaluated by the routing policy.
       if (requirements.maxOutputUsdPerMillion !== undefined) {
-        if (modelDef.pricing[2] > requirements.maxOutputUsdPerMillion)
+        // No declared price means the ceiling cannot be checked: the candidate is
+        // ineligible for this constraint, never admitted as if priced at zero.
+        if (modelDef.pricing === undefined || modelDef.pricing[2] > requirements.maxOutputUsdPerMillion)
           continue;
       }
       // Speed evidence tiers in exact precedence order via the shared resolver:
@@ -90,6 +93,10 @@ export class ConstrainedDispatcher {
       // then the canonical provider modelSpeedOverride, then the model default
       // speed. Matching is by exact provider.id/modelDef.id — no alias or client remap.
       const speed = resolveModelSpeed(provider, modelDef, localSpeed);
+      // A candidate with NO speed evidence cannot be ranked or dispatched: a
+      // genuinely unknown speed is excluded rather than substituted with a zero.
+      if (speed === undefined)
+        continue;
       // Hard constraint: minimum TPS against the resolved evidence tier.
       if (requirements.minimumTps !== undefined && speed.tps < requirements.minimumTps)
         continue;
@@ -143,10 +150,18 @@ export class ConstrainedDispatcher {
       const bMeets = expected !== undefined && expected > 0 && b.speed.tps >= expected;
       if (aMeets !== bMeets)
         return aMeets ? -1 : 1;
-      const pa = a.model.pricing[2];
-      const pb = b.model.pricing[2];
-      if (pa !== pb)
+      // Lower reference output price first. A model with no declared price has no
+      // comparable price, so it orders after every priced model instead of being
+      // treated as the cheapest (zero).
+      const pa = a.model.pricing?.[2];
+      const pb = b.model.pricing?.[2];
+      if (pa !== pb) {
+        if (pa === undefined)
+          return 1;
+        if (pb === undefined)
+          return -1;
         return pa - pb;
+      }
       const idA = `${a.plan.provider}/${a.plan.model}`;
       const idB = `${b.plan.provider}/${b.plan.model}`;
       return idA.localeCompare(idB);

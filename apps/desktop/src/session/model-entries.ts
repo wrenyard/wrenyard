@@ -29,11 +29,14 @@ export function toModelEntries(
       if (gatewayModel === undefined) continue;
       const runtime = selectSessionProtocol(gatewayModel.protocols);
       if (!runtime) continue;
-      const efforts = model.reasoningEfforts;
-      if (!Array.isArray(efforts) || efforts.length === 0
-        || efforts.some(effort => !REASONING_EFFORTS.includes(effort))
+      // A route that declares no ladder — a CodeBuddy endpoint row naming no
+      // registered model — has UNKNOWN efforts, not invalid ones, so it is still
+      // selectable and is emitted with no effort levels. Only a ladder that is
+      // present but malformed is treated as a defect and dropped.
+      const efforts = Array.isArray(model.reasoningEfforts) ? model.reasoningEfforts : [];
+      if (efforts.some(effort => !REASONING_EFFORTS.includes(effort))
         || new Set(efforts).size !== efforts.length) {
-        warn(`Catalog model has missing or invalid reasoning efforts: ${publicId}`);
+        warn(`Catalog model has invalid reasoning efforts: ${publicId}`);
         continue;
       }
       entries.set(publicId, {

@@ -14,8 +14,10 @@ export function normalizeReasoningEffort(effort: string | undefined): ReasoningE
 
 function validateReasoningEfforts(providerID: string, model: ModelDefinition): void {
   const efforts = model.reasoningEfforts;
-  if (!Array.isArray(efforts) || efforts.length === 0) {
-    throw new Error(`provider ${providerID} model ${model.id} reasoningEfforts must be a non-empty array`);
+  // An empty array is a valid declaration: the route materializes no effort
+  // level (a model whose ladder is genuinely unknown). It is never rejected.
+  if (!Array.isArray(efforts)) {
+    throw new Error(`provider ${providerID} model ${model.id} reasoningEfforts must be an array`);
   }
   const seen = new Set<string>();
   for (const effort of efforts) {
@@ -140,17 +142,20 @@ function isFreshLocalSample(sample: LocalSpeedSample, now: Date): boolean {
  * Resolves the single authoritative speed evidence for an exact model in
  * exact precedence order: the first usable exact-provider/model local 31-day
  * TPS sample, then the canonical provider modelSpeedOverride, then the
- * model's required default speed. Matching is by exact provider.id/modelDef.id
+ * model's catalog default speed. Matching is by exact provider.id/modelDef.id
  * only — no alias, client, or profile remap — and any sample missing, malformed,
- * future, or older than 31 days is skipped. Used by resolveConstrainedDispatch
- * and the Foreman failure diagnostics so the precedence logic is never duplicated.
+ * future, or older than 31 days is skipped. Returns undefined when NO evidence
+ * tier exists (the model declares no catalog default speed and has no sample or
+ * override): a genuinely unknown speed omits the evidence object entirely rather
+ * than fabricating a 0. Used by resolveConstrainedDispatch and the Foreman
+ * failure diagnostics so the precedence logic is never duplicated.
  */
 export function resolveModelSpeed(
   provider: ProviderDefinition,
   modelDef: ModelDefinition,
   localSpeed?: readonly LocalSpeedSample[],
   now: Date = new Date(),
-): SpeedEvidence {
+): SpeedEvidence | undefined {
   const local = localSpeed?.find(
     (sample) => sample.provider === provider.id && sample.model === modelDef.id && isFreshLocalSample(sample, now),
   )
@@ -171,6 +176,7 @@ export function resolveModelSpeed(
       tps: override,
     }
   }
+  if (modelDef.speed === undefined) return undefined
   return {
     source: 'catalog_default',
     tps: modelDef.speed,
@@ -193,15 +199,16 @@ export class Catalog {
     for (const model of provider.models) {
       if (!model.id.trim()) throw new Error(`provider ${provider.id} has an empty model id`);
       if (modelIDs.has(model.id)) throw new Error(`provider ${provider.id} has duplicate model ${model.id}`);
-      if (!CURRENT_INTELLIGENCE_TIERS.has(model.intelligence)) {
+      if (model.intelligence !== undefined && !CURRENT_INTELLIGENCE_TIERS.has(model.intelligence)) {
         throw new Error(
           `provider ${provider.id} model ${model.id} has invalid intelligence tier: ${JSON.stringify(model.intelligence)}`,
         );
       }
-      // A model's default speed is required: a registration without one is
-      // rejected up front, before any further validation.
-      validateSpeed(model.speed, `provider ${provider.id} model ${model.id}`);
-      validateModelPricing(model.pricing, `provider ${provider.id} model ${model.id}`);
+      // Catalog metadata is validated ONLY when it is actually supplied: a route
+      // naming no registered canonical model may leave speed/pricing genuinely
+      // unknown, so a missing value is never rejected nor defaulted here.
+      if (model.speed !== undefined) validateSpeed(model.speed, `provider ${provider.id} model ${model.id}`);
+      if (model.pricing !== undefined) validateModelPricing(model.pricing, `provider ${provider.id} model ${model.id}`);
       if (model.free !== undefined && typeof model.free !== 'boolean') {
         throw new Error(`provider ${provider.id} model ${model.id} free must be a boolean`);
       }
@@ -369,17 +376,20 @@ export class Catalog {
             provider: provider.id,
             publicId: `${provider.id}/${model.id}`,
             protocols: [...protocols],
-            speed: model.speed,
+            // Absent catalog metadata is carried through as genuinely absent: the
+            // directory never substitutes a zero price, a zero speed or a made-up
+            // intelligence tier for a route that does not declare one.
+            ...(model.speed === undefined ? {} : { speed: model.speed }),
             ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
             ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
             ...(model.family === undefined ? {} : { family: model.family }),
             ...(model.claudeTier === undefined ? {} : { claudeTier: model.claudeTier }),
             ...(model.supports1MContext === undefined ? {} : { supports1MContext: model.supports1MContext }),
-            intelligence: model.intelligence,
+            ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
             reasoningEfforts: model.reasoningEfforts,
             ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
             ...(model.capabilities === undefined ? {} : { capabilities: model.capabilities }),
-            pricing: model.pricing,
+            ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
           }));
       });
   }

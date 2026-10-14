@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
 import type { ClientStatus, InspectOptions } from '@wrenyard/agent-client';
 import { findExecutable } from '@wrenyard/agent-client';
-import { codeBuddyAccountContext, codeBuddyAccountUserId, codeBuddyAuthPath, codeBuddyHome, parseCodeBuddyAuth, type CodeBuddyAccountContext, type CodeBuddyEnvironment } from './account.ts';
+import { codeBuddyAccountContext, codeBuddyAuthPath, codeBuddyHome, parseCodeBuddyAuth, type CodeBuddyAccountContext, type CodeBuddyEnvironment } from './account.ts';
 export interface CodeBuddyProductModelEntry {
     readonly id: string;
     readonly name?: string;
@@ -55,6 +54,7 @@ export async function readCodeBuddyInstall(options?: InspectOptions): Promise<Co
     const auth = await readAuth(platform, env, home);
     const environment = classify(authenticationAttributes(productJson.value), auth.parsed?.domain);
     const identity = await readIdentity(productJson.path, productJson.value);
+    const account = auth.parsed && auth.parsed.accessToken ? codeBuddyAccountContext(auth.parsed, environment) : undefined;
     const base = {
         environment,
         ...(executable ? { executable } : {}),
@@ -62,37 +62,42 @@ export async function readCodeBuddyInstall(options?: InspectOptions): Promise<Co
     };
     // The installed client loads exactly ONE environment overlay beside
     // product.json (`product.<environment>.json`, lower-cased). Only that
-    // overlay supplies the environment's models — overlays of other
+    // overlay supplies the environment's own endpoint; overlays of other
     // environments are never merged in, and an environment without an overlay
-    // (external/unknown) keeps the base product file.
+    // (external/unknown) keeps the base product file. Neither file supplies the
+    // model list any more.
     const overlay = environmentOverlay(environment);
-    let modelsJson = productJson.value;
+    let endpointJson = productJson.value;
     if (overlay) {
         const overlayJson = await readJson(join(dirname(productJson.path), overlay));
         if (!overlayJson)
-            return { product: { status: 'unavailable', reason: `${overlay} is missing or unreadable`, ...base, entries: [] }, account: auth.account ? codeBuddyAccountContext(auth.parsed!, environment) : undefined, authentication: auth.authentication };
-        modelsJson = overlayJson;
+            return { product: { status: 'unavailable', reason: `${overlay} is missing or unreadable`, ...base, entries: [] }, ...(account ? { account } : {}), authentication: auth.authentication };
+        endpointJson = overlayJson;
     }
-    // The selected overlay is the environment's own installed model list and the
-    // fallback. The account's cached server product configuration — what the CLI
-    // itself fetched and offers for the signed-in account — is newer than the
-    // shipped overlay, so when it is selectable its rows replace the overlay's
-    // entirely; the two lists are never merged.
-    const cached = await readCachedServerModels(env, home, auth.parsed ? codeBuddyAccountUserId(auth.parsed) : undefined);
+    // The offerable models are the signed-in account's live `/v3/config` result
+    // for the selected environment's endpoint — the same endpoint and request
+    // the installed client itself uses. The product files contribute only the
+    // endpoint (overlay first, base file as fallback) plus the installation,
+    // auth, environment and version metadata. A failed request never falls back
+    // to a bundled or cached model list; it reports an unavailable snapshot.
+    const models = await readConfigModels(productEndpoint(endpointJson) ?? productEndpoint(productJson.value), account, identity, options);
+    if ('reason' in models)
+        return { product: { status: 'unavailable', reason: models.reason, ...base, entries: [] }, ...(account ? { account } : {}), authentication: auth.authentication };
     return {
-        product: { status: 'ready', ...base, entries: cached ?? parseModels(modelsJson) },
-        ...(auth.parsed && auth.parsed.accessToken ? { account: codeBuddyAccountContext(auth.parsed, environment) } : {}),
+        product: { status: 'ready', ...base, entries: models.entries },
+        ...(account ? { account } : {}),
         authentication: auth.authentication,
     };
 }
 /**
  * The current signed-in account read straight from the CodeBuddy auth file for
  * a resolved environment. Unlike readCodeBuddyInstall this reads ONLY the auth
- * file — no product file, no cached server models — so a caller can refresh a
- * rotated token cheaply on every credential use. A missing file (ENOENT) or an
- * auth state without an access token yields undefined; any other read or JSON
- * parse error propagates so the caller can tell a transient unreadable file
- * from a signed-out account.
+ * file — no product file, no `/v3/config` request — so a caller can refresh a
+ * rotated token cheaply on every credential use, and a quota-only caller never
+ * triggers a model discovery request. A missing file (ENOENT) or an auth state
+ * without an access token yields undefined; any other read or JSON parse error
+ * propagates so the caller can tell a transient unreadable file from a
+ * signed-out account.
  */
 export async function readCodeBuddyAccount(environment: CodeBuddyEnvironment, options?: InspectOptions): Promise<CodeBuddyAccountContext | undefined> {
     const env = options?.env ?? process.env;
@@ -204,54 +209,106 @@ async function readJson(path: string): Promise<Record<string, unknown> | undefin
         return undefined;
     }
 }
+/** The installed client's own deadline for one `/v3/config` request. */
+const CODEBUDDY_CONFIG_TIMEOUT_MS = 5000;
 /**
- * The cache key and entry layout of the installed CLI's cloud product
- * configuration, persisted by `CloudProductManagerImpl` through the CLI's file
- * local storage: `<configDir>/local_storage/entry_<md5(key)>.info` holds an
- * array of `{ userId, data, ts }` records (oldest first, capped at 20). The
- * record belonging to the signed-in account is the one whose `userId` equals
- * `account.uid`.
+ * The service origin declared by an installed product file. The environment
+ * overlay wins over the base file; the origin is used so a declared trailing
+ * slash never doubles up with the request path, and a value that is not an
+ * absolute HTTP(S) URL is rejected rather than sent a credential.
  */
-const CODEBUDDY_CLOUD_PRODUCT_CACHE_KEY = 'cloud_product_config_cache';
-function codeBuddyCloudProductCachePath(env: NodeJS.ProcessEnv, home: string): string {
-    const configDir = env.CODEBUDDY_CONFIG_DIR?.trim() || join(home, '.codebuddy');
-    const digest = createHash('md5').update(CODEBUDDY_CLOUD_PRODUCT_CACHE_KEY).digest('hex');
-    return join(configDir, 'local_storage', `entry_${digest}.info`);
-}
-/**
- * The model rows of the signed-in account's cached server product
- * configuration, or undefined when none is selectable (absent file, unreadable
- * or corrupt payload, no record for this account, or no model rows) so the
- * caller keeps the installed overlay.
- *
- * The CLI resolves the models it offers from the product's `cli` agent: every
- * row of that agent's `models` list is looked up by id in the configuration's
- * model metadata, and an unresolvable row is dropped. The rows carry the same
- * fields the installed overlay does, so they are normalized by the same parser.
- */
-async function readCachedServerModels(env: NodeJS.ProcessEnv, home: string, userId: string | undefined): Promise<CodeBuddyProductModelEntry[] | undefined> {
-    if (!userId)
+function productEndpoint(product: Record<string, unknown>): string | undefined {
+    const endpoint = nonEmpty(product.endpoint);
+    if (!endpoint)
         return undefined;
-    let parsed: unknown;
     try {
-        parsed = JSON.parse(await readFile(codeBuddyCloudProductCachePath(env, home), 'utf8'));
+        const url = new URL(endpoint);
+        return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : undefined;
     }
     catch {
         return undefined;
     }
-    if (!Array.isArray(parsed))
-        return undefined;
-    const record = parsed.find((item) => isRecord(item) && item.userId === userId);
-    const data = record && isRecord(record.data) ? record.data : undefined;
-    if (!data)
-        return undefined;
-    const entries = parseModels({ models: cachedAgentRows(data) });
-    return entries.length ? entries : undefined;
 }
-function cachedAgentRows(data: Record<string, unknown>): unknown[] {
+type CodeBuddyConfigModels = { readonly entries: CodeBuddyProductModelEntry[] } | { readonly reason: string };
+/**
+ * Fetch the account's offerable models from the effective endpoint. Every
+ * failure — a signed-out account, a missing endpoint or version, a timeout, an
+ * HTTP or transport error, a rejected response, or an unusable shape — becomes
+ * a safe reason with NO model rows: the caller must never fall back to a
+ * bundled or cached list. No response body, token, cookie or auth header value
+ * is ever surfaced.
+ */
+async function readConfigModels(
+    endpoint: string | undefined,
+    account: CodeBuddyAccountContext | undefined,
+    identity: CodeBuddyProductIdentity | undefined,
+    options: InspectOptions | undefined,
+): Promise<CodeBuddyConfigModels> {
+    if (!account)
+        return { reason: 'not signed in' };
+    if (!endpoint)
+        return { reason: 'product endpoint is missing' };
+    const version = identity?.version;
+    if (!version)
+        return { reason: 'product version is unavailable' };
+    const headers = new Headers({
+        authorization: `Bearer ${account.accessToken}`,
+        accept: 'application/json',
+        'x-product': identity?.deploymentType ?? 'SaaS',
+        // This endpoint rejects a request whose User-Agent omits the versioned
+        // product tokens; the installed CLI sends exactly this pair.
+        'user-agent': `CLI/${version} CodeBuddy/${version}`,
+    });
+    for (const [name, value] of Object.entries(account.headers ?? {}))
+        headers.set(name, value);
+    const timeout = AbortSignal.timeout(options?.timeoutMs ?? CODEBUDDY_CONFIG_TIMEOUT_MS);
+    const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+    let response: Response;
+    try {
+        response = await fetch(`${endpoint}/v3/config`, { method: 'GET', headers, signal, redirect: 'error' });
+    }
+    catch (error) {
+        return { reason: (error as Error)?.name === 'TimeoutError' ? 'configuration request timed out' : 'configuration request failed' };
+    }
+    if (!response.ok) {
+        await response.body?.cancel();
+        return { reason: response.status === 401 || response.status === 403 ? 'authentication required' : 'configuration request failed' };
+    }
+    let payload: unknown;
+    try {
+        payload = await response.json();
+    }
+    catch {
+        return { reason: 'configuration response was malformed' };
+    }
+    const entries = configModelEntries(payload);
+    if (!entries)
+        return { reason: 'configuration response was rejected' };
+    return entries.length ? { entries } : { reason: 'configuration offered no models' };
+}
+/**
+ * The offerable model rows of a `/v3/config` envelope. The configuration's
+ * `cli` agent names, in the endpoint's own order, the models the signed-in
+ * account may run; every named row is resolved against the configuration's
+ * model metadata. A missing, non-numeric or non-zero business code, a missing
+ * `data`/`models` shape, or any other unexpected payload yields undefined so the
+ * caller reports an unavailable snapshot instead of silently showing an empty
+ * catalog.
+ */
+function configModelEntries(payload: unknown): CodeBuddyProductModelEntry[] | undefined {
+    if (!isRecord(payload))
+        return undefined;
+    if (payload.code !== 0)
+        return undefined;
+    const data = isRecord(payload.data) ? payload.data : undefined;
+    if (!data || !Array.isArray(data.models))
+        return undefined;
+    return parseModels({ models: cliAgentRows(data) });
+}
+function cliAgentRows(data: Record<string, unknown>): unknown[] {
     const agents = (Array.isArray(data.agents) ? data.agents : []).filter(isRecord);
-    // The CLI session's models come from the agent that product identifies as
-    // its CLI agent; the default-tagged agent is the same one it falls back to.
+    // The session's models come from the agent the product identifies as its CLI
+    // agent; the default-tagged agent is the same one it falls back to.
     const agent = agents.find((entry) => entry.name === 'cli') ?? agents.find((entry) => Array.isArray(entry.tags) && entry.tags.includes('default'));
     if (!agent || !Array.isArray(agent.models))
         return [];

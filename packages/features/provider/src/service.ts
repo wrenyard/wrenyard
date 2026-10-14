@@ -165,7 +165,10 @@ export class ProviderService {
     const speed = resolveModelSpeed(provider, model, localSpeed)
     return {
       id: model.id,
-      reasoningEfforts: [...model.reasoningEfforts],
+      // A route with no ladder — a model naming no registered canonical model —
+      // has UNKNOWN efforts, so the DTO omits them rather than fabricating a
+      // level; the row still lists. A registered route always carries its ladder.
+      ...(model.reasoningEfforts.length === 0 ? {} : { reasoningEfforts: [...model.reasoningEfforts] }),
       ...(model.supportedClients === undefined ? {} : { supportedClients: model.supportedClients }),
       displayName: model.displayName,
       ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
@@ -173,11 +176,12 @@ export class ProviderService {
       ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
       ...(model.free === undefined ? {} : { free: model.free }),
       ...(status === undefined ? {} : status),
-      effectiveTps: speed.tps,
-      speedSource: speed.source,
+      // A genuinely unknown speed has no evidence at all: both facts are omitted
+      // together rather than reported as a zero or a dangling catalog_default source.
+      ...(speed === undefined ? {} : { effectiveTps: speed.tps, speedSource: speed.source }),
       canonicalId: model.canonicalModel?.id ?? model.id,
-      intelligence: model.intelligence,
-      pricing: model.pricing,
+      ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
+      ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
       // Availability is a fact about the current credential AND the resolver's
       // admitted provider/model set; no model is hardcoded.
       available: configured && modelStatus.has(key),

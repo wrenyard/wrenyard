@@ -21,13 +21,15 @@ export interface GatewayConnectionResult {
     family?: 'claude'
     claudeTier?: 'haiku' | 'sonnet' | 'opus'
     supports1MContext?: boolean
-    intelligence: 'low' | 'mid' | 'high' | 'premium'
+    /** Catalog intelligence tier; absent when genuinely unknown (a route naming
+     * no registered canonical model). */
+    intelligence?: 'low' | 'mid' | 'high' | 'premium'
     maxOutputTokens?: number
     capabilities?: readonly ('text' | 'image')[]
     /**
      * The legal reasoning-effort levels this model accepts, in ascending
      * intensity. A per-run reasoning-effort choice is validated against this
-     * exact ladder.
+     * exact ladder; an EMPTY ladder means no selectable level.
      */
     reasoningEfforts: readonly ReasoningEffort[]
     speed?: number
@@ -52,7 +54,7 @@ export const gatewayConnectionResultSchema = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['id', 'publicId', 'provider', 'protocols', 'displayName', 'intelligence', 'reasoningEfforts'],
+        required: ['id', 'publicId', 'provider', 'protocols', 'displayName', 'reasoningEfforts'],
         properties: {
           id: { type: 'string' }, publicId: { type: 'string' }, provider: { type: 'string' },
           protocols: { type: 'array', minItems: 1, uniqueItems: true, items: { enum: ['openai_chat', 'openai_responses', 'anthropic_messages'] } },
@@ -63,7 +65,7 @@ export const gatewayConnectionResultSchema = {
           maxOutputTokens: { type: 'integer', minimum: 1 },
           capabilities: { type: 'array', items: { enum: ['text', 'image'] } },
           reasoningEfforts: {
-            type: 'array', minItems: 1, uniqueItems: true,
+            type: 'array', uniqueItems: true,
             items: { enum: REASONING_EFFORTS },
           },
           speed: { type: 'number', exclusiveMinimum: 0 },

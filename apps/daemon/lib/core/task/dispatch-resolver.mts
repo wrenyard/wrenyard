@@ -390,7 +390,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!provider) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
     const modelDef = provider.models.find((entry) => entry.id === plan.model)
     if (!modelDef) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
-    const priceUsdPerMillion = modelDef.pricing[2]
+    const priceUsdPerMillion = modelDef.pricing?.[2]
     const atGate = (
       code: TaskResolutionFailureCode,
       detail?: TaskResolutionFailureDetail,
@@ -434,13 +434,17 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
 
     if (requirements.maxOutputUsdPerMillion !== undefined) {
-      if (priceUsdPerMillion > requirements.maxOutputUsdPerMillion) {
+      // No declared price means the ceiling cannot be checked: the candidate is
+      // ineligible for this constraint, never admitted as if priced at zero.
+      if (priceUsdPerMillion === undefined || priceUsdPerMillion > requirements.maxOutputUsdPerMillion) {
         return atGate('price_limit')
       }
     }
 
     const speed = resolveModelSpeed(provider, modelDef, localSpeed)
-    if (requirements.minimumTps !== undefined && speed.tps < requirements.minimumTps) {
+    // A candidate with no speed evidence cannot satisfy a minimum TPS: unknown is
+    // not zero and is never substituted.
+    if (requirements.minimumTps !== undefined && (speed === undefined || speed.tps < requirements.minimumTps)) {
       return atGate('speed_requirement')
     }
     return undefined
@@ -452,7 +456,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   const referenceOutputPriceOf = (candidate: DispatchCandidate): number | undefined => {
     const provider = catalog.provider(candidate.provider)
     const modelDef = provider?.models.find((entry) => entry.id === candidate.model)
-    return modelDef?.pricing[2]
+    return modelDef?.pricing?.[2]
   }
 
   // Single authoritative evaluation. `resolve` selection and the `eligible`
@@ -507,9 +511,10 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
 
     // Fail-closed. Constrained tasks always set speed, intelligence, and
-    // max-price, so a selected result must carry a finite positive TPS.
-    // Fabricating a speed is never allowed. Catalog defaults and provider
-    // overrides are TPS-only; checkedAt is required only for local samples.
+    // max-price, so a selected result must carry a finite positive TPS, a
+    // declared intelligence tier and a declared reference price. Fabricating any
+    // of them is never allowed. Catalog defaults and provider overrides are
+    // TPS-only; checkedAt is required only for local samples.
     const speed = selected.speed
     if (!Number.isFinite(speed.tps) || speed.tps <= 0) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'speed_requirement') }
@@ -520,6 +525,9 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'intelligence_requirement') }
     }
     const pricing = model.pricing
+    if (pricing === undefined) {
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'price_limit') }
+    }
 
     const resolved = toResolvedDispatch(
       input.target ?? '',

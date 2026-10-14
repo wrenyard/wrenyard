@@ -32,11 +32,14 @@ export interface CanonicalModelSelection {
  *   every field comes from the registry.
  * - `{ canonical, overrides }`: that same registry-backed offering plus only the
  *   differences this provider actually has.
- * - a raw definition: a model with no registered canonical model. It must carry
- *   its own complete metadata, because no default is invented for it.
+ * - a raw definition: a model with no registered canonical model. It carries
+ *   only what the route actually knows; metadata it cannot supply stays
+ *   genuinely absent, because no default is invented for it.
  *
- * Every declaration must carry a route-owned `reasoningEfforts` ladder: it is
- * never inferred from the registry or a model id.
+ * A route that declares a `reasoningEfforts` ladder owns it: it is never
+ * inferred from the registry or a model id. A route whose model names no
+ * registered canonical model may declare none, and its capabilities then stay
+ * unknown rather than fabricated.
  */
 export type ProviderModel = string | CanonicalModelSelection | RawModelDefinition;
 
@@ -94,7 +97,10 @@ function isCanonicalSelection(declaration: ProviderModel): declaration is Canoni
 
 /** Resolve canonical defaults first; provider fields are explicit overrides. */
 function resolveModelDefaults(def: RawModelDefinition): ModelDefinition {
-  const reasoningEfforts = requireReasoningEfforts(def);
+  // A route that declares its own effort ladder owns it; a route that declares
+  // none resolves to an EMPTY ladder (unknown / no selectable level) rather than
+  // inheriting one from the registry or a model id.
+  const reasoningEfforts = def.reasoningEfforts ?? [];
   const registered = models.get(def.canonicalModel?.id ?? def.id);
   if (!registered) return completeDefinition(def, reasoningEfforts);
   const { defaults } = registered;
@@ -111,8 +117,10 @@ function resolveModelDefaults(def: RawModelDefinition): ModelDefinition {
   };
 }
 
-/** A definition with no registered canonical model must already be complete: a
- * genuinely custom model never inherits an invented default. */
+/** A definition with no registered canonical model keeps exactly the metadata
+ * the route declares. Whatever the route cannot supply stays genuinely
+ * absent/unknown; it is never defaulted to a placeholder or invented. The
+ * effort ladder is always present, empty when the route declares none. */
 function completeDefinition(
   def: RawModelDefinition,
   reasoningEfforts: readonly ReasoningEffort[],
@@ -120,28 +128,7 @@ function completeDefinition(
   // An explicitly declared canonical identity is a reference, never a custom
   // model: an unknown canonical id is a broken reference and stays an error.
   if (def.canonicalModel) throw new Error(`model ${def.id} references unknown canonical model ${def.canonicalModel.id}`);
-  if (def.intelligence === undefined) throw new Error(`custom model ${def.id} declares no intelligence tier`);
-  if (def.capabilities === undefined) throw new Error(`custom model ${def.id} declares no capabilities`);
-  if (def.pricing === undefined) throw new Error(`custom model ${def.id} declares no pricing`);
-  if (def.speed === undefined) throw new Error(`custom model ${def.id} declares no speed`);
-  return {
-    ...def,
-    reasoningEfforts,
-    intelligence: def.intelligence,
-    capabilities: def.capabilities,
-    pricing: def.pricing,
-    speed: def.speed,
-  };
-}
-
-// Every route owns its effort ladder; a missing or empty ladder is rejected at
-// definition time so no route can fall back to a default/dont-send path.
-function requireReasoningEfforts(def: RawModelDefinition): readonly ReasoningEffort[] {
-  const efforts = def.reasoningEfforts;
-  if (efforts === undefined || efforts.length === 0) {
-    throw new Error(`model ${def.id} declares no reasoningEfforts`);
-  }
-  return efforts;
+  return { ...def, reasoningEfforts };
 }
 
 /** Resolve one provider model declaration into a complete definition. */
