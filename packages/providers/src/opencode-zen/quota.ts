@@ -19,6 +19,7 @@ export const quota = {
     binding('opencode-zen', 'glm-5.3', [ZEN_BALANCE_POOL]),
     binding('opencode-zen', 'kimi-k3', [ZEN_BALANCE_POOL]),
     binding('opencode-zen', 'gpt-6.1-sol', [ZEN_BALANCE_POOL]),
+    binding('opencode-zen', 'gemini-4-argon', [ZEN_BALANCE_POOL]),
   ],
   defaultPools: [ZEN_FREE_POOL],
 } satisfies Provider['quota'];

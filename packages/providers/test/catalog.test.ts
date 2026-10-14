@@ -5,6 +5,7 @@ import {
   BUILTIN_PROVIDERS,
   createBuiltinCatalog,
   deriveTaskDispatchPlans,
+  findProviderQuotaBinding,
   isBuiltinClientGatewayProviderSupported,
 } from '../src/index.ts';
 import { builtinModelDisplayName, models, resolveReasoningEffort } from '@wrenyard/models';
@@ -115,4 +116,18 @@ test('convertReasoningEffort is declared per provider module and is protocol-awa
     anthropicProvider.convertReasoningEffort('claude-opus-5-5', 'high', 'anthropic_messages'),
     { thinking: { type: 'adaptive' }, output_config: { effort: 'high' } },
   );
+});
+
+test('every non-free openrouter and opencode-zen model binds its provider balance pool', () => {
+  for (const provider of BUILTIN_PROVIDERS) {
+    if (provider.id !== 'openrouter' && provider.id !== 'opencode-zen') continue;
+    for (const model of provider.models) {
+      if (model.free) continue;
+      assert.deepEqual(
+        findProviderQuotaBinding(provider.id, model.id)?.pools.map((pool) => pool.quotaPoolId),
+        [`${provider.id}/balance`],
+        `${provider.id}/${model.id} must bind its provider balance pool`,
+      );
+    }
+  }
 });
