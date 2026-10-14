@@ -82,7 +82,17 @@ export function Markdown({
       plugins={PLUGINS}
       shikiTheme={shikiTheme}
       components={components}
-      className={cn('text-sm', className)}
+      className={cn(
+        'text-sm',
+        // Orphan control: prose paragraphs avoid a lone trailing word and
+        // headings balance their lines. The utilities target the elements
+        // themselves (p/h1-h6), so inherited text-wrap never reaches code,
+        // pre or table content.
+        '[&_p]:text-pretty',
+        '[&_h1]:text-balance [&_h2]:text-balance [&_h3]:text-balance',
+        '[&_h4]:text-balance [&_h5]:text-balance [&_h6]:text-balance',
+        className,
+      )}
     >
       {children}
     </Streamdown>

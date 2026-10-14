@@ -78,6 +78,8 @@ export const REQUIRED_TOKENS = [
   '--scrollbar-track',
   '--app-font-sans',
   '--app-font-mono',
+  '--app-font-weight-medium',
+  '--app-font-weight-semibold',
   '--overlay',
 ] as const;
 

@@ -41,6 +41,8 @@
     --overlay: oklch(0 0 0 / 10%);
     --app-font-sans: "Geist Variable", ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
     --app-font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", Consolas, monospace;
+    --app-font-weight-medium: 500;
+    --app-font-weight-semibold: 600;
 }
 
 /* Standard shadcn neutral dark tokens, taken verbatim from
@@ -89,4 +91,6 @@
     --overlay: oklch(0 0 0 / 50%);
     --app-font-sans: "Geist Variable", ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
     --app-font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", Consolas, monospace;
+    --app-font-weight-medium: 480;
+    --app-font-weight-semibold: 580;
 }

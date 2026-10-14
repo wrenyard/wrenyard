@@ -66,7 +66,7 @@ export function UserMessage({ text, at, attachments, sessionId, pending, onRetry
                   {quote !== undefined && (
                     <div className="mb-1 line-clamp-2 rounded-lg bg-primary-foreground/15 px-2 py-1 text-xs opacity-80">{quote}</div>
                   )}
-                  <span className="whitespace-pre-wrap">{body}</span>
+                  <span className="block whitespace-pre-wrap text-pretty">{body}</span>
                 </BubbleContent>
               </Bubble>
             </ReplyMenu>

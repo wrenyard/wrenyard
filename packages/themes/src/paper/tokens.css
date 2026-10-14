@@ -56,6 +56,8 @@
     --overlay: oklch(0 0 0 / 10%);
     --app-font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
     --app-font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    --app-font-weight-medium: 500;
+    --app-font-weight-semibold: 600;
 }
 
 /* Dark "reading paper under a lamp": warm brown base instead of pure black.
@@ -118,4 +120,6 @@
   --overlay: oklch(0 0 0 / 50%);
   --app-font-sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --app-font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --app-font-weight-medium: 480;
+  --app-font-weight-semibold: 580;
 }
