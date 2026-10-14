@@ -381,7 +381,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       if (input.signal.aborted) abort('signal');
       else input.signal.addEventListener('abort', onExternalAbort, { once: true });
 
-      const totalTimeoutMs = input.role === 'reason' ? undefined : AUXILIARY_TIMEOUT_MS;
+      // Document generation is bounded by caller cancellation, not elapsed time.
+      const totalTimeoutMs = input.role === 'reason' || input.role === 'document'
+        ? undefined
+        : AUXILIARY_TIMEOUT_MS;
       const totalTimer = totalTimeoutMs === undefined
         ? undefined
         : setTimeout(() => abort('timeout'), totalTimeoutMs);
