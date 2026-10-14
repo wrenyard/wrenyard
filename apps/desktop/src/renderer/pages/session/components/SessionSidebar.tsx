@@ -1,6 +1,5 @@
 import { ChevronRight, Search, SquarePen, Trash2 } from 'lucide-react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/components/ui/collapsible';
-import { Spinner } from '@/renderer/components/ui/spinner';
 import {
   Sidebar,
   SidebarContent,
@@ -15,6 +14,7 @@ import {
 } from '@/renderer/components/ui/sidebar';
 import { useNow } from '@/renderer/hooks/use-now';
 import { dateGroupOf, type DateGroup } from '@/renderer/lib/format';
+import { SessionDot } from './SessionDot';
 import type { SessionSummary } from '../model/types.js';
 
 const GROUPS: DateGroup[] = ['今天', '昨天', '7 天内', '更早'];
@@ -101,16 +101,8 @@ export function SessionSidebar({ sessions, selectedId, loading, onSelect, onNew,
                         onClick={() => onSelect(session.sessionId)}
                         className="group-has-data-[sidebar=menu-action]/menu-item:pr-3 group-has-data-[sidebar=menu-action]/menu-item:group-hover/menu-item:pr-8 group-has-data-[sidebar=menu-action]/menu-item:group-focus-within/menu-item:pr-8"
                       >
-                        {session.running === true ? (
-                          <>
-                            <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                              <Spinner className="size-4" />
-                            </span>
-                            <span className="min-w-0 flex-1 [text-overflow:clip]! [mask-image:linear-gradient(to_right,#000_calc(100%_-_2rem),transparent)]">{session.title}</span>
-                          </>
-                        ) : (
-                          <span className="min-w-0 flex-1 [text-overflow:clip]! [mask-image:linear-gradient(to_right,#000_calc(100%_-_2rem),transparent)]">{session.title}</span>
-                        )}
+                        <SessionDot running={session.running === true} />
+                        <span className="min-w-0 flex-1 [text-overflow:clip]! [mask-image:linear-gradient(to_right,#000_calc(100%_-_2rem),transparent)]">{session.title}</span>
                       </SidebarMenuButton>
                       <SidebarMenuAction
                         showOnHover

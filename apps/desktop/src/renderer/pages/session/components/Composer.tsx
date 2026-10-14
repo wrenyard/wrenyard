@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Plus, X } from 'lucide-react';
 import { countInputTokens } from '../model/usage.js';
-import { EffortPicker, ModelPicker, modelBadges, modelRuntimeDescription, type ModelOption } from '@/renderer/components/chat/model-picker';
+import { EffortPicker, ModelPicker, modelBadges, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
 import { InputGroupButton } from '@/renderer/components/ui/input-group';
 import { getSessionBridge } from '@/renderer/lib/session';
@@ -230,7 +230,6 @@ export function Composer({ models, turns, sessionKey, disabled = false, compact 
     value: entry.publicId,
     label: entry.displayName,
     group: entry.providerDisplayName,
-    description: modelRuntimeDescription(entry.runtime),
     badges: modelBadges(entry),
   }));
 
