@@ -4,6 +4,9 @@ import { Separator } from '@/renderer/components/ui/separator';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { formatCount, formatSnapshotStamp } from '@/renderer/lib/format';
 import { useMiniMode } from '@/renderer/lib/mini';
+import { useSessionSeen } from '@/renderer/lib/session-seen';
+import { SessionDot } from './SessionDot';
+import { sessionStatusOf } from '../model/session-status.js';
 import type { SessionModel, SessionSummary } from '../model/types.js';
 
 export interface SessionTitleProps {
@@ -17,10 +20,17 @@ export interface SessionTitleProps {
 /** Title-bar session title; a hover card carries the session and snapshot facts. */
 export function SessionTitle({ title, session, snapshot, turnCount, draft }: SessionTitleProps) {
   const mini = useMiniMode();
+  const seen = useSessionSeen();
   const label = draft ? '新对话' : title;
-  // Mini card: plain, non-interactive text inside the drag region (no tooltip).
+  // Mini card: the session status dot, then plain text inside the drag region.
   if (mini) {
-    return <span className="min-w-0 truncate text-sm text-muted-foreground">{label}</span>;
+    const status = session === undefined ? undefined : sessionStatusOf(session, seen);
+    return (
+      <span className="flex min-w-0 items-center gap-1.5">
+        {status !== undefined && <SessionDot status={status} />}
+        <span className="min-w-0 truncate text-sm text-muted-foreground">{label}</span>
+      </span>
+    );
   }
   if (draft) {
     return <Button variant="ghost" className="max-w-80 truncate text-base font-medium">{label}</Button>;

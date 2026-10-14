@@ -29,6 +29,7 @@ export type LedgerEventType =
   | 'turn.started'
   | 'turn.finished'
   | 'turn.interrupted'
+  | 'turn.attention'
   | 'step.started'
   | 'step.finished'
   | 'action.started'
@@ -167,6 +168,22 @@ export interface TurnInterruptedEvent extends LedgerEventBase {
   type: 'turn.interrupted';
   parent: string;
   reason: 'user' | 'shutdown' | 'restart';
+}
+
+/**
+ * That a finished turn needs the user's attention: it ended on a single
+ * standalone question (`source: 'ask'`), or the post-turn status judgement
+ * marked it as needing the user (`source: 'model'`). Observational, like
+ * `turn.finished`; written after it. Never enters the model context.
+ */
+export interface TurnAttentionEvent extends LedgerEventBase {
+  type: 'turn.attention';
+  /** Id of the turn that needs attention: `t<turn>`. */
+  turnId: string;
+  needsUser: boolean;
+  /** Short label for the user, e.g. 「等你确认提交」. */
+  label?: string;
+  source: 'ask' | 'model';
 }
 
 // ─── Step ──────────────────────────────────────────────────────────────────
@@ -472,6 +489,7 @@ export type LedgerEvent =
   | TurnStartedEvent
   | TurnFinishedEvent
   | TurnInterruptedEvent
+  | TurnAttentionEvent
   | StepStartedEvent
   | StepFinishedEvent
   | ActionStartedEvent
