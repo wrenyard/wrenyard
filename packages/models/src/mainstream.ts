@@ -26,6 +26,7 @@ export const MAINSTREAM_MODEL_IDS = [
   'composer-2.5',
   'muse-spark-1.3',
   'gemini-3.8-flash',
+  'gemini-4-argon',
   'doubao-seed-2-0-lite',
   'qwen3.8-max',
   'mimo-v2.6-pro',
