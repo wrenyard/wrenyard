@@ -86,7 +86,6 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
               remainingPct={window.remainingPct}
               expectedRemainingPct={window.expectedRemainingPct}
               resetsAt={window.resetsAt}
-              windowMinutes={window.windowMinutes}
               stale={provider.stale}
             />
           ))}

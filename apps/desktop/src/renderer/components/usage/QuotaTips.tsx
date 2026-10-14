@@ -77,7 +77,6 @@ function ProviderTips({ provider, now, inverse }: {
               remainingPct={window.remainingPct}
               expectedRemainingPct={window.expectedRemainingPct}
               resetsAt={window.resetsAt}
-              windowMinutes={window.windowMinutes}
               stale={provider.stale}
               now={now}
               surface={inverse ? 'inverse' : 'card'}

@@ -31,20 +31,6 @@ const FILL_CLASS: Record<QuotaLevel, string> = {
 /** Reset-pending copy shown on a quota bar while a refresh has not arrived. */
 export const RESET_PENDING_LABEL = '等待刷新';
 
-/** Descriptive window-name overrides keyed by the provider window length in minutes. */
-const WINDOW_MINUTE_LABELS: Readonly<Record<number, string>> = {
-  300: '5 小时',
-  10080: '7 天',
-  43200: '30 天',
-};
-
-/** Compact window-name overrides for the status-bar label. */
-const SHORT_WINDOW_MINUTE_LABELS: Readonly<Record<number, string>> = {
-  300: '5h',
-  10080: '7d',
-  43200: '30d',
-};
-
 /** Severity ordering for alert levels. */
 const SEVERITY: Readonly<Record<QuotaLevel, number>> = { normal: 0, warning: 1, destructive: 2 };
 
@@ -57,24 +43,6 @@ export function quotaLevel(remainingPct: number): QuotaLevel {
   if (value <= 5) return 'destructive';
   if (value <= 20) return 'warning';
   return 'normal';
-}
-
-/** Descriptive window label (`5 小时`) from the provider window length, else the raw name. */
-function formatWindowName(name: string, windowMinutes?: number): string {
-  if (windowMinutes !== undefined && WINDOW_MINUTE_LABELS[windowMinutes] !== undefined) {
-    return WINDOW_MINUTE_LABELS[windowMinutes];
-  }
-  if (name === '1mo') return '30 天';
-  return name;
-}
-
-/** Compact window label (`5h` / `7d` / `30d`) for the status-bar item. */
-export function shortWindowName(name: string, windowMinutes?: number): string {
-  if (windowMinutes !== undefined && SHORT_WINDOW_MINUTE_LABELS[windowMinutes] !== undefined) {
-    return SHORT_WINDOW_MINUTE_LABELS[windowMinutes];
-  }
-  if (name === '1mo') return '30d';
-  return name;
 }
 
 export interface QuotaPaceView {
@@ -117,11 +85,10 @@ export function quotaPoolLevel(window: {
 
 export interface QuotaVerdictWindow {
   name: string;
-  /** Display-only pool label; preferred over the duration label when present. */
+  /** Display-only pool label; preferred over the raw window name when present. */
   poolLabel?: string;
   remainingPct: number;
   expectedRemainingPct: number | null;
-  windowMinutes?: number;
 }
 
 export interface QuotaVerdict {
@@ -153,7 +120,7 @@ export function quotaVerdict(windows: readonly QuotaVerdictWindow[]): QuotaVerdi
   if (worst === null || worst.level === 'normal') {
     return { label: '额度充足', level: 'sufficient', reason: undefined };
   }
-  const name = worst.window.poolLabel ?? shortWindowName(worst.window.name, worst.window.windowMinutes);
+  const name = worst.window.poolLabel ?? worst.window.name;
   const exhausted = worst.window.remainingPct <= 0;
   return worst.level === 'destructive'
     ? { label: '额度不足', level: 'insufficient', reason: exhausted ? `${name} 已耗尽` : `${name} 将在重置前用尽` }
@@ -193,12 +160,11 @@ export function resetView(resetsAt: string | undefined, nowMs: number): QuotaRes
 export interface QuotaBarProps {
   /** Raw provider window name (used verbatim when no label override applies). */
   name: string;
-  /** Display-only pool label; preferred over the duration label when present. */
+  /** Display-only pool label; preferred over the raw window name when present. */
   poolLabel?: string;
   remainingPct: number;
   expectedRemainingPct: number | null;
   resetsAt?: string;
-  windowMinutes?: number;
   /** When true the whole row is dimmed and the name is marked stale. */
   stale?: boolean;
   /**
@@ -225,7 +191,6 @@ export function QuotaBar({
   remainingPct,
   expectedRemainingPct,
   resetsAt,
-  windowMinutes,
   stale = false,
   now: injectedNow,
   surface = 'card',
@@ -235,7 +200,7 @@ export function QuotaBar({
   const now = injectedNow ?? minuteNow;
   const inverse = surface === 'inverse';
   const bounded = Math.max(0, Math.min(100, Number.isFinite(remainingPct) ? remainingPct : 0));
-  const label = poolLabel ?? formatWindowName(name, windowMinutes);
+  const label = poolLabel ?? name;
   const level = quotaLevel(bounded);
   const used = 100 - bounded;
   const pace = paceView(bounded, expectedRemainingPct);

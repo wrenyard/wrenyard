@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Popover, PopoverContent, PopoverTrigger } from '@/renderer/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { StatusBarButton, levelTone } from '@/renderer/components/status-bar-button';
-import { quotaPoolLevel, shortWindowName } from '@/renderer/components/usage/QuotaBar';
+import { quotaPoolLevel } from '@/renderer/components/usage/QuotaBar';
 import type { QuotaLevel } from '@/renderer/components/usage/QuotaBar';
 import { QuotaTips } from '@/renderer/components/usage/QuotaTips';
 import { onQuotaPanelOpen, useQuotaFocus } from '@/renderer/lib/statusbar';
@@ -146,7 +146,7 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
       : windows
           .map((window) => {
             const used = Math.max(0, Math.min(100, 100 - window.remainingPct));
-            return `${window.poolLabel ?? shortWindowName(window.name, window.windowMinutes)} ${Math.floor(used)}%`;
+            return `${window.poolLabel ?? window.name} ${Math.floor(used)}%`;
           })
           .join(' · ');
   const tone = unavailable ? 'default' : levelTone(poolLevel);

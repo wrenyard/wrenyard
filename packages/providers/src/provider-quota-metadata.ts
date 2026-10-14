@@ -89,7 +89,11 @@ export function findProviderQuotaPool(
   return match;
 }
 
-/** The central pool label policy: the declared display name, else the pool id. */
+/**
+ * The central pool label policy: the declared display name, else the pool id
+ * with its leading provider segment removed (e.g. `chatgpt/5h` -> `5h`). An
+ * already-unprefixed id is returned intact.
+ */
 export function providerQuotaPoolLabel(pool: ProviderQuotaPool): string {
-  return pool.displayName ?? pool.quotaPoolId;
+  return pool.displayName ?? pool.quotaPoolId.slice(pool.quotaPoolId.indexOf('/') + 1);
 }
