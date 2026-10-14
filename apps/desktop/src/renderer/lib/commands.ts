@@ -56,6 +56,8 @@ function runTaskOpen(args: unknown): void {
 const ROUTED_PAGES: Readonly<Record<string, ShellPage>> = {
   'session.open': 'session',
   'session.newDraft': 'session',
+  'session.search': 'session',
+  'session.delete': 'session',
   'settings.open': 'settings',
   'tasks.open': 'tasks',
 };

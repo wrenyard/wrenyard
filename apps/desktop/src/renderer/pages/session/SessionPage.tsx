@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PanelRight, X } from 'lucide-react';
 import { cn } from 'cn';
+import { useQueryClient } from '@tanstack/react-query';
 import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/renderer/components/ui/resizable';
-import { SidebarProvider } from '@/renderer/components/ui/sidebar';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -20,12 +20,12 @@ import { registerPageCommands } from '@/renderer/lib/commands';
 import { openMiniCard, restoreMain, setCurrentSession, useMiniMode } from '@/renderer/lib/mini';
 import { markSessionSeen } from '@/renderer/lib/session-seen';
 import { useNewItemKeys } from '@/renderer/lib/motion';
-import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
+import { setActiveSession, useNavLocation } from '@/renderer/lib/navigation';
+import { sessionListQueryKey } from '@/renderer/lib/queries';
 import { getSessionApi } from './api.js';
 import { Composer } from './components/Composer.js';
 import { EmptySession } from './components/EmptySession.js';
 import { SessionSearch } from './components/SessionSearch.js';
-import { SessionSidebar } from './components/SessionSidebar.js';
 import { SessionTitle } from './components/SessionTitle.js';
 import { SessionStatusItems } from './components/status/SessionStatusItems.js';
 import { MessageTimeline, buildMessageTimeline } from './components/conversation/MessageTimeline.js';
@@ -40,6 +40,15 @@ import { useTaskStatus } from './state/use-task-status.js';
 const LAYOUT_ID = 'session-shell-v3';
 /** A card persists under its own id so it never overwrites the shell layout. */
 const CARD_LAYOUT_ID = 'session-card-v1';
+
+/** Accept the `{ sessionId }` object form or a bare id from a routed command. */
+function sessionIdFromArgs(args: unknown): string | undefined {
+  if (typeof args === 'string') return args;
+  if (args !== null && typeof args === 'object' && typeof (args as { sessionId?: unknown }).sessionId === 'string') {
+    return (args as { sessionId: string }).sessionId;
+  }
+  return undefined;
+}
 
 /** Sending a message resumes bottom following even while reading history. */
 function FollowSentMessage({ pendingId }: { pendingId: string | undefined }) {
@@ -65,20 +74,19 @@ function RunningDispatchTasks({ api, turns, setTasks }: {
   return null;
 }
 
-/** The session page: sidebar, conversation and inspector in one resizable shell. */
+/** The session page: conversation and inspector in one resizable shell. */
 export function SessionPage() {
   const api = getSessionApi();
   const mini = useMiniMode();
+  const queryClient = useQueryClient();
   const { state, selectSession, newDraft, sendMessage, deleteSession, removePending, setTasks, clearError } = useSessionController(api);
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: mini ? CARD_LAYOUT_ID : LAYOUT_ID, storage: localStorage });
   const [inspectorOpen, setInspectorOpen] = useState(() => (defaultLayout?.inspector ?? 0) > 0);
-  const [sidebarOpen, setSidebarOpen] = useState(() => (defaultLayout?.sidebar ?? 1) > 0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [target, setTarget] = useState<InspectorTarget | undefined>(undefined);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [retry, setRetry] = useState<{ text: string; attachments: DraftAttachment[]; nonce: number } | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | undefined>(undefined);
-  const sidebarPanel = usePanelRef();
   const inspectorPanel = usePanelRef();
 
   // Panel collapse animates at `slow`; while a resize handle is dragged the
@@ -121,16 +129,8 @@ export function SessionPage() {
     setInspectorOpen(true);
   }, []);
 
-  // Keep the controlled sidebar state and the collapsible panel in sync.
-  useEffect(() => {
-    const panel = sidebarPanel.current;
-    if (!panel) return;
-    if (sidebarOpen) panel.expand();
-    else panel.collapse();
-  }, [sidebarOpen, sidebarPanel]);
-
   // Keep the controlled inspector state and its always-mounted collapsible
-  // panel in sync, mirroring the sidebar above.
+  // panel in sync.
   useEffect(() => {
     const panel = inspectorPanel.current;
     if (!panel) return;
@@ -138,15 +138,12 @@ export function SessionPage() {
     else panel.collapse();
   }, [inspectorOpen, inspectorPanel]);
 
-  // Register the session list as this page's secondary sidebar. The shell
-  // title bar and the global Cmd/Ctrl+B command toggle it while this page is
-  // the active Activity; hidden pages unregister on effect cleanup.
-  useSecondarySidebar({ open: sidebarOpen, setOpen: setSidebarOpen });
-
   // Publish the shown session so the title bar can open a card for it (shell)
-  // or return to it (card). No cleanup: the last value survives a page switch.
+  // or return to it (card), and so the shell sidebar highlights it. No cleanup:
+  // the last value survives a page switch.
   useEffect(() => {
     setCurrentSession(state.selectedId);
+    setActiveSession(state.selectedId);
   }, [state.selectedId]);
 
   // Cmd/Ctrl+Shift+M: the shell opens a card for the current session; a card
@@ -219,19 +216,15 @@ export function SessionPage() {
     return true;
   });
 
-  // Page commands: session.open (routed here by the command table) and the
-  // inspector toggle used by the title bar.
+  // Page commands: session.open (routed here by the command table), the
+  // inspector toggle used by the title bar, and the shell sidebar's search and
+  // delete rows, which reuse this page's search state and delete workflow.
   useEffect(() => registerPageCommands('session', [
     {
       id: 'session.open',
       title: '打开会话',
       run: (args) => {
-        const sessionId = typeof args === 'string'
-          ? args
-          : args !== null && typeof args === 'object'
-            && typeof (args as { sessionId?: unknown }).sessionId === 'string'
-            ? (args as { sessionId: string }).sessionId
-            : undefined;
+        const sessionId = sessionIdFromArgs(args);
         if (sessionId) void selectSession(sessionId).catch(() => undefined);
       },
     },
@@ -248,7 +241,26 @@ export function SessionPage() {
         setComposerFocusRequest((value) => value + 1);
       },
     },
-  ]), [selectSession, newDraft]);
+    {
+      id: 'session.search',
+      title: '搜索对话',
+      run: () => setSearchOpen(true),
+    },
+    {
+      id: 'session.delete',
+      title: '删除对话',
+      run: (args) => {
+        const sessionId = sessionIdFromArgs(args);
+        if (!sessionId) return;
+        // The sidebar list cannot see the running flag on its own, so guard the
+        // running-session protection here as well as in the row's disabled state.
+        if (state.sessions.some((session) => session.sessionId === sessionId && session.running === true)) return;
+        void deleteSession(sessionId)
+          .then(() => queryClient.invalidateQueries({ queryKey: sessionListQueryKey }))
+          .catch(() => undefined);
+      },
+    },
+  ]), [selectSession, newDraft, deleteSession, state.sessions, queryClient]);
 
   // Entry animation applies only to messages appended after the conversation
   // settles; history loads are absorbed into the baseline (foundation §2.3).
@@ -332,7 +344,6 @@ export function SessionPage() {
         >
           <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
           <SessionStatusItems />
-        <SidebarProvider open={mini ? false : sidebarOpen} onOpenChange={setSidebarOpen} className="h-full min-h-0">
           <ResizablePanelGroup
             orientation="horizontal"
             defaultLayout={mini ? undefined : defaultLayout}
@@ -340,35 +351,6 @@ export function SessionPage() {
             resizeTargetMinimumSize={{ fine: 6, coarse: 20 }}
             className="h-full min-h-0 min-w-0 overflow-hidden"
           >
-            {!mini && (
-              <>
-                <ResizablePanel
-                  id="sidebar"
-                  defaultSize={256}
-                  minSize={200}
-                  collapsible
-                  collapsedSize={0}
-                  groupResizeBehavior="preserve-pixel-size"
-                  panelRef={sidebarPanel}
-                  className={panelMotion}
-                  onResize={(size) => setSidebarOpen(size.inPixels > 0)}
-                >
-                  <SessionSidebar
-                    sessions={state.sessions}
-                    selectedId={state.selectedId}
-                    loading={state.loadingList}
-                    onSelect={(sessionId) => { void selectSession(sessionId).catch(() => undefined); }}
-                    onNew={newDraft}
-                    onSearch={() => setSearchOpen(true)}
-                    onDelete={(sessionId) => { void deleteSession(sessionId).catch(() => undefined); }}
-                  />
-                </ResizablePanel>
-                <ResizableHandle
-                  className="w-1.5 bg-transparent after:w-px after:bg-border"
-                  onPointerDown={() => setResizing(true)}
-                />
-              </>
-            )}
             <ResizablePanel
               id="main"
               minSize={mini ? 0 : 340}
@@ -436,7 +418,6 @@ export function SessionPage() {
               </>
             )}
           </ResizablePanelGroup>
-        </SidebarProvider>
         <SessionSearch
           open={searchOpen}
           onOpenChange={setSearchOpen}

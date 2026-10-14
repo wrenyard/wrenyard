@@ -1,8 +1,10 @@
 import { ChevronRight, Search, SquarePen, Trash2 } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/components/ui/collapsible';
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,
@@ -29,14 +31,20 @@ export interface SessionSidebarProps {
   onNew(): void;
   onSearch(): void;
   onDelete(sessionId: string): void;
+  /** Replaces the default new/search header when composed into a host sidebar. */
+  header?: ReactNode;
+  /** Extra rows rendered below the scrolling list, pinned to the bottom. */
+  footer?: ReactNode;
 }
 
 /**
  * The session list: new/search actions plus collapsible date groups. It renders
- * a bare `Sidebar` (collapsible none); the page owns the surrounding
- * `SidebarProvider` and the panel it collapses.
+ * a bare `Sidebar` (collapsible none); it is composed into the shell's global
+ * sidebar, which supplies the `header`/`footer` slots and owns the
+ * `SidebarProvider`. The grouped list keeps its own scrolling without a second
+ * implementation.
  */
-export function SessionSidebar({ sessions, selectedId, loading, onSelect, onNew, onSearch, onDelete }: SessionSidebarProps) {
+export function SessionSidebar({ sessions, selectedId, loading, onSelect, onNew, onSearch, onDelete, header, footer }: SessionSidebarProps) {
   const now = useNow();
   const seen = useSessionSeen();
   const grouped = new Map<DateGroup, SessionSummary[]>();
@@ -49,23 +57,25 @@ export function SessionSidebar({ sessions, selectedId, loading, onSelect, onNew,
   }
 
   return (
-    <Sidebar collapsible="none" className="w-full">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={onNew} aria-label="新建对话">
-              <SquarePen />
-              <span>新建对话</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={onSearch} aria-label="搜索对话">
-              <Search />
-              <span>搜索</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
+    <Sidebar collapsible="none" className="min-h-0 w-full">
+      {header ?? (
+        <SidebarHeader>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton onClick={onNew} aria-label="新建对话">
+                <SquarePen />
+                <span>新建对话</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton onClick={onSearch} aria-label="搜索对话">
+                <Search />
+                <span>搜索</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarHeader>
+      )}
       <SidebarContent>
         {loading && sessions.length === 0 && (
           <SidebarGroup>
@@ -124,6 +134,7 @@ export function SessionSidebar({ sessions, selectedId, loading, onSelect, onNew,
           );
         })}
       </SidebarContent>
+      {footer !== undefined && <SidebarFooter>{footer}</SidebarFooter>}
     </Sidebar>
   );
 }

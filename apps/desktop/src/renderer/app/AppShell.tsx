@@ -9,6 +9,7 @@ import { AppSidebar } from '@/renderer/app/AppSidebar';
 import { TitleBar } from '@/renderer/app/TitleBar';
 import { StatusBar } from '@/renderer/app/statusbar/StatusBar';
 import { TitleBarPageProvider } from '@/renderer/lib/titlebar';
+import { useShellSidebarFallback } from '@/renderer/lib/navigation';
 import { UpdateDialog } from '@/renderer/app/dialogs/UpdateDialog';
 import { SessionPage } from '@/renderer/pages/session';
 import { WorkspaceGate } from '@/renderer/app/WorkspaceGate';
@@ -42,7 +43,7 @@ const PAGES: Record<ShellPage, ComponentType> = {
 };
 
 /**
- * Shell frame: a full-width title bar, the fixed activity rail beside the
+ * Shell frame: a full-width title bar, the single global sidebar beside the
  * active page, and the full-width status bar, per the window-chrome spec. Each page
  * mounts on first visit and is then kept alive inside an `Activity` boundary,
  * so switching pages preserves state and pauses hidden effects. The title bar
@@ -58,6 +59,11 @@ export function AppShell() {
   const [shown, setShown] = useState<ShellPage>(page);
   const [visited, setVisited] = useState<ReadonlySet<ShellPage>>(() => new Set([page]));
   const [updateOpen, setUpdateOpen] = useState(false);
+  // The global sidebar is the shell's own secondary sidebar. It is registered
+  // as the Cmd/Ctrl+B fallback target so the title bar can toggle it on pages
+  // that own no local sidebar (mini cards have no sidebar to toggle).
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  useShellSidebarFallback({ open: sidebarOpen, setOpen: setSidebarOpen, enabled: !mini });
 
   useEffect(() => {
     if (page === shown) return;
@@ -91,11 +97,10 @@ export function AppShell() {
       <div className="flex min-h-0 flex-1">
         <SidebarProvider
           className="h-full min-h-0"
-          open={false}
-          // The outer rail is fixed; Cmd+B must only toggle a page's inner sidebar.
-          onOpenChange={() => {}}
+          open={sidebarOpen}
+          onOpenChange={setSidebarOpen}
         >
-          {!mini && <AppSidebar page={shown} />}
+          {!mini && <AppSidebar page={shown} onOpenUpdate={() => setUpdateOpen(true)} />}
           <SidebarInset className="motion-surface-page flex min-h-0 min-w-0 flex-col">
             {PAGE_ORDER.map((id) => {
               if (!mounted.has(id)) return null;
@@ -114,7 +119,7 @@ export function AppShell() {
           <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />
         </SidebarProvider>
       </div>
-      {!mini && <StatusBar onOpenUpdate={() => setUpdateOpen(true)} />}
+      {!mini && <StatusBar />}
     </div>
   );
 }

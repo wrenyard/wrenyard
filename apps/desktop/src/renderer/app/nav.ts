@@ -1,4 +1,4 @@
-import { ChartColumn, Download, ListChecks, MessagesSquare, Network, Settings, Timer, WalletCards } from 'lucide-react';
+import { ChartColumn, ListChecks, MessagesSquare, Network, Settings, Timer, WalletCards } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ShellPage } from '@/shell-contract';
 
@@ -26,12 +26,5 @@ export const SETTINGS_NAV: ShellNavItem = {
   icon: Settings,
 };
 
-/** The update entry appears in the footer only while an update is actionable. */
-export const UPDATE_NAV = {
-  id: 'update',
-  label: '软件更新',
-  icon: Download,
-} as const;
-
-/** Update states that keep the footer entry and dialog reachable. */
+/** The update entry appears in the global sidebar footer only while actionable. */
 export const UPDATE_VISIBLE_STATES = ['available', 'waiting', 'installing', 'error'] as const;

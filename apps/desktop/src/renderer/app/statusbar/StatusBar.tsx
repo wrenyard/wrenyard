@@ -23,7 +23,6 @@ import type { StatusBarItemDefinition, StatusBarSide } from '@/renderer/app/stat
 import { DaemonItem, isDaemonDisconnected } from '@/renderer/app/statusbar/DaemonItem';
 import { ActivityItem, TaskGraphItem } from '@/renderer/app/statusbar/ActivityItem';
 import { QuotaItem } from '@/renderer/app/statusbar/QuotaItem';
-import { UpdateItem } from '@/renderer/app/statusbar/UpdateItem';
 import { NotificationItem } from '@/renderer/app/statusbar/NotificationItem';
 import { cn } from 'cn';
 
@@ -43,7 +42,6 @@ const BAR_RESERVE = 16;
 const ENTRY_GAP = 4;
 /** Fixed priorities for the directly-rendered items; lower hides first. */
 const FIXED_PRIORITY = {
-  update: 10,
   'activity.taskgraphs': 20,
   'activity.tasks': 30,
   quota: 40,
@@ -103,7 +101,7 @@ function EntrySlot({
   );
 }
 
-export function StatusBar({ onOpenUpdate }: { onOpenUpdate: () => void }) {
+export function StatusBar() {
   const page = useShellPage();
   const containerRef = useRef<HTMLDivElement>(null);
   const widthsRef = useRef<Map<string, number>>(new Map());
@@ -177,13 +175,6 @@ export function StatusBar({ onOpenUpdate }: { onOpenUpdate: () => void }) {
         render: () => <QuotaItem onOpenChange={releaseQuotaForce} />,
       },
       {
-        id: 'update',
-        side: 'end',
-        priority: FIXED_PRIORITY.update,
-        mandatory: false,
-        render: () => <UpdateItem onOpenUpdate={onOpenUpdate} />,
-      },
-      {
         id: 'notifications',
         side: 'end',
         priority: 0,
@@ -191,7 +182,7 @@ export function StatusBar({ onOpenUpdate }: { onOpenUpdate: () => void }) {
         render: () => <NotificationItem />,
       },
     ];
-  }, [registryItems, onOpenUpdate, releaseQuotaForce]);
+  }, [registryItems, releaseQuotaForce]);
 
   const widthOf = useCallback(
     (id: string): number => widthsRef.current.get(id) ?? UNMEASURED_WIDTH,

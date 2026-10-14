@@ -1,15 +1,15 @@
 import { ArrowUp } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { StatusBarButton } from '@/renderer/components/status-bar-button';
+import { SidebarMenuButton, SidebarMenuItem } from '@/renderer/components/ui/sidebar';
 import { UPDATE_VISIBLE_STATES } from '@/renderer/app/nav';
 import { updateQuery } from '@/renderer/lib/queries';
 import { updateView } from '@/renderer/lib/update';
 
 /**
- * Status-bar update item (window-chrome spec 4.7). It appears only while an
- * update is actionable and delegates opening the update dialog to the shell.
- * The label/tooltip reuse the shared presentation mapping, adding the download
- * percentage when it is known.
+ * Global-sidebar update row. It appears only while an update is actionable and
+ * delegates opening the update dialog to the shell. The label/tooltip reuse the
+ * shared presentation mapping, adding the download percentage when it is known.
+ * States without a snapshot, `checking` and `up-to-date` stay hidden.
  */
 export function UpdateItem({ onOpenUpdate }: { onOpenUpdate: () => void }) {
   const update = useQuery(updateQuery);
@@ -20,5 +20,12 @@ export function UpdateItem({ onOpenUpdate }: { onOpenUpdate: () => void }) {
   const label = progress?.phase === 'downloading' && progress.percent !== undefined
     ? `${view.label} ${progress.percent}%`
     : view.label;
-  return <StatusBarButton icon={ArrowUp} label={label} tooltip={view.description} onClick={onOpenUpdate} />;
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton tooltip={view.description} onClick={onOpenUpdate}>
+        <ArrowUp />
+        <span>{label}</span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
 }

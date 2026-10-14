@@ -1,5 +1,7 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { SessionSummary } from '@wrenyard/session';
 import { shell } from '@/renderer/lib/desktop';
+import { getSessionBridge } from '@/renderer/lib/session';
 import type { QuotaSnapshot } from '@/shell-contract';
 
 /**
@@ -25,6 +27,25 @@ export const runtimeAliasesQuery = queryOptions({
   queryFn: () => shell.runtimeAliasSnapshot(),
   staleTime: 60_000,
 });
+
+/**
+ * Conversation list for the shell sidebar. It shares one cache entry and keeps
+ * the 3000ms refresh cadence the session page used, so the sidebar shows the
+ * same list without mounting a second session controller. A successful delete
+ * invalidates this key (see the session page's `session.delete` command).
+ */
+export const sessionListQueryKey = ['sessionList'] as const;
+const SESSION_LIST_REFETCH_INTERVAL_MS = 3_000;
+
+export const sessionListQuery = queryOptions<SessionSummary[]>({
+  queryKey: sessionListQueryKey,
+  queryFn: () => getSessionBridge().list(),
+  refetchInterval: SESSION_LIST_REFETCH_INTERVAL_MS,
+});
+
+export function useSessionListQuery() {
+  return useQuery(sessionListQuery);
+}
 
 /**
  * Full shell settings snapshot. Shared because both the settings page and the

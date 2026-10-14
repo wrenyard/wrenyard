@@ -44,7 +44,6 @@ export const STATUS_BAR_CONFIGURABLE_ITEMS: ReadonlyArray<{ id: string; label: s
   { id: 'session.ctx', label: '上下文占用' },
   { id: 'session.metrics', label: '会话指标' },
   { id: 'quota', label: '额度' },
-  { id: 'update', label: '更新' },
 ];
 
 const CONFIGURABLE_IDS: ReadonlySet<string> = new Set(STATUS_BAR_CONFIGURABLE_ITEMS.map((item) => item.id));

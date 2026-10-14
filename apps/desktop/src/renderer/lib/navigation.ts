@@ -212,15 +212,33 @@ interface SecondarySidebarRegistration {
   setOpen: (open: boolean) => void;
 }
 
+/**
+ * Shell-sidebar fallback target. The shell publishes its global sidebar here so
+ * the title bar, `view.toggleSidebar` and Cmd/Ctrl+B can still toggle something
+ * on pages that own no local secondary sidebar. Unlike a page registration it
+ * lives for as long as the shell is mounted, so it survives Activity cleanups.
+ */
+interface ShellSidebarRegistration {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}
+
 let secondary: SecondarySidebarRegistration | null = null;
+let shellSidebar: ShellSidebarRegistration | null = null;
 const secondaryListeners = new Set<() => void>();
 let secondarySnapshot = { available: false, open: false };
 
+/** A local page sidebar wins; otherwise the shell's global sidebar is the target. */
+function resolveSidebarTarget(): { available: boolean; open: boolean } {
+  if (secondary) return { available: true, open: secondary.open };
+  if (shellSidebar) return { available: true, open: shellSidebar.open };
+  return { available: false, open: false };
+}
+
 function emitSecondary(): void {
-  const available = secondary !== null;
-  const open = secondary?.open ?? false;
-  if (secondarySnapshot.available !== available || secondarySnapshot.open !== open) {
-    secondarySnapshot = { available, open };
+  const next = resolveSidebarTarget();
+  if (secondarySnapshot.available !== next.available || secondarySnapshot.open !== next.open) {
+    secondarySnapshot = next;
   }
   for (const listener of secondaryListeners) listener();
 }
@@ -254,29 +272,92 @@ export function useSecondarySidebar({ open, setOpen }: { open: boolean; setOpen:
   }, [page, open, setOpen]);
 }
 
-/** Whether the active page has a secondary sidebar, and whether it is open. */
+/**
+ * Publish the shell's global sidebar as the fallback toggle target. `enabled`
+ * keeps it unregistered in mini cards, where the sidebar is not rendered.
+ */
+export function useShellSidebarFallback({
+  open,
+  setOpen,
+  enabled = true,
+}: {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  enabled?: boolean;
+}): void {
+  useEffect(() => {
+    if (!enabled) return;
+    const registration: ShellSidebarRegistration = { open, setOpen };
+    shellSidebar = registration;
+    emitSecondary();
+    return () => {
+      if (shellSidebar === registration) {
+        shellSidebar = null;
+        emitSecondary();
+      }
+    };
+  }, [open, setOpen, enabled]);
+}
+
+/** Whether the active target has a sidebar (local page or shell fallback), and its open state. */
 export function useSecondarySidebarToggle(): { available: boolean; open: boolean } {
   return useSyncExternalStore(subscribeSecondary, getSecondary, getSecondary);
 }
 
 export function toggleSecondarySidebar(): void {
-  if (!secondary) return;
-  secondary.setOpen(!secondary.open);
+  if (secondary) {
+    secondary.setOpen(!secondary.open);
+    return;
+  }
+  if (shellSidebar) shellSidebar.setOpen(!shellSidebar.open);
 }
 
-// Cmd/Ctrl+B toggles only the active page's secondary sidebar. Capture phase
-// with `stopPropagation` keeps the shadcn `SidebarProvider` shortcut (which
-// would toggle its own provider) from firing as well.
+// Cmd/Ctrl+B toggles the active page's secondary sidebar, or the shell's global
+// sidebar on pages without one. Capture phase with `stopPropagation` keeps the
+// shadcn `SidebarProvider` shortcut (which would toggle its own provider) from
+// firing as well.
 if (typeof window !== 'undefined') {
   window.addEventListener(
     'keydown',
     (event) => {
       if (event.key.toLowerCase() !== 'b' || !(event.metaKey || event.ctrlKey)) return;
-      if (document.visibilityState !== 'visible' || secondary === null) return;
+      if (document.visibilityState !== 'visible' || (secondary === null && shellSidebar === null)) return;
       event.preventDefault();
       event.stopPropagation();
       toggleSecondarySidebar();
     },
     { capture: true },
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Active conversation coordination                                    */
+/* ------------------------------------------------------------------ */
+
+// The shell sidebar highlights the conversation the session page shows. The
+// page publishes it here because the value is not derivable from the route.
+let activeSession = '';
+const activeSessionListeners = new Set<() => void>();
+
+/** Publish the session currently shown by the session page (`''` for a draft). */
+export function setActiveSession(sessionId: string): void {
+  if (sessionId === activeSession) return;
+  activeSession = sessionId;
+  for (const listener of activeSessionListeners) listener();
+}
+
+function subscribeActiveSession(listener: () => void): () => void {
+  activeSessionListeners.add(listener);
+  return () => {
+    activeSessionListeners.delete(listener);
+  };
+}
+
+function getActiveSession(): string {
+  return activeSession;
+}
+
+/** Session id the shell sidebar highlights; `''` for a draft. */
+export function useActiveSession(): string {
+  return useSyncExternalStore(subscribeActiveSession, getActiveSession, getActiveSession);
 }
