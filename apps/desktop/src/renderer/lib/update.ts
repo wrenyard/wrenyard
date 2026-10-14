@@ -105,7 +105,50 @@ export function updateView(snapshot: UpdateSnapshot | undefined, busy: boolean):
         primary: true,
         disabled: busy,
       };
-    case 'installing':
+    case 'installing': {
+      const progress = snapshot.progress;
+      if (progress !== undefined) {
+        switch (progress.phase) {
+          case 'downloading': {
+            const percent = progress.percent;
+            return {
+              label: '正在下载',
+              tone: 'running',
+              description: percent !== undefined ? `正在下载更新… ${percent}%` : '正在下载更新…',
+              action: percent !== undefined ? `正在下载… ${percent}%` : '正在下载…',
+              primary: false,
+              disabled: true,
+            };
+          }
+          case 'verifying':
+            return {
+              label: '正在校验',
+              tone: 'running',
+              description: snapshot.message ?? '正在校验更新文件完整性…',
+              action: '正在校验…',
+              primary: false,
+              disabled: true,
+            };
+          case 'extracting':
+            return {
+              label: '正在解压',
+              tone: 'running',
+              description: snapshot.message ?? '正在解压并准备更新…',
+              action: '正在解压…',
+              primary: false,
+              disabled: true,
+            };
+          case 'applying':
+            return {
+              label: '正在安装',
+              tone: 'running',
+              description: snapshot.message ?? '正在安装更新，完成后会自动重启。',
+              action: '正在安装…',
+              primary: false,
+              disabled: true,
+            };
+        }
+      }
       return {
         label: '正在安装',
         tone: 'running',
@@ -114,6 +157,7 @@ export function updateView(snapshot: UpdateSnapshot | undefined, busy: boolean):
         primary: false,
         disabled: true,
       };
+    }
     case 'error':
       return {
         label: '更新未完成',

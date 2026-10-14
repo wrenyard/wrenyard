@@ -14,7 +14,7 @@ import {
   channelDocumentUrl, channelForVersion, compareVersions, parseUpdateFeedJson,
   resolveUpdateBaseUrl, type PlatformTriplet,
 } from '@wrenyard/protocol/update-feed';
-import type { UpdateInstallReason, UpdateSnapshot } from '../shell-contract.js';
+import type { UpdateInstallReason, UpdateProgress, UpdateSnapshot } from '../shell-contract.js';
 import { createDarwinApplier } from './apply-darwin.js';
 import { createWin32Applier } from './apply-win32.js';
 import { DigestMismatchError, DownloadTimeoutError, downloadFile, type FetchLike } from './download.js';
@@ -415,10 +415,30 @@ export class DesktopUpdateController {
     this.installing = true;
     let prepared: PreparedUpdate;
     try {
-      this.setSnapshot({ ...this.snapshotValue, state: 'installing', message: '正在下载更新…' });
-      const assetPath = await this.downloadUpdate(version, signal);
-      this.setSnapshot({ ...this.snapshotValue, state: 'installing', message: '正在准备更新…' });
-      prepared = await applier.prepare(assetPath, version);
+      // A new attempt never carries progress from a previous run.
+      const start: UpdateSnapshot = { ...this.snapshotValue, state: 'installing', message: '正在下载更新…' };
+      delete start.progress;
+      this.setSnapshot(start);
+      const assetPath = await this.downloadUpdate(version, signal, (progress) => {
+        this.setSnapshot({
+          ...this.snapshotValue,
+          state: 'installing',
+          message: progress.phase === 'verifying' ? '正在校验更新文件完整性…' : '正在下载更新…',
+          progress,
+        });
+      });
+      // Leave the download phase behind; prepare reports its own phases.
+      const preparing: UpdateSnapshot = { ...this.snapshotValue, state: 'installing', message: '正在准备更新…' };
+      delete preparing.progress;
+      this.setSnapshot(preparing);
+      prepared = await applier.prepare(assetPath, version, (phase) => {
+        this.setSnapshot({
+          ...this.snapshotValue,
+          state: 'installing',
+          message: phase === 'verifying' ? '正在校验应用签名和版本…' : '正在解压更新…',
+          progress: { phase },
+        });
+      });
     } catch (error) {
       this.installing = false;
       if (signal.aborted) return this.snapshot();
@@ -434,6 +454,19 @@ export class DesktopUpdateController {
       this.installing = false;
       return this.enterWaiting();
     }
+    // The real apply/handoff begins here: report the applying phase with an
+    // accurate label (Windows hands off to the NSIS installer, macOS swaps in
+    // the staged bundle) before the daemon is stopped, so the stop wait already
+    // shows the handoff rather than the preparing phase.
+    const applyingMessage = this.platform === 'win32'
+      ? '正在交给安装程序完成安装，完成后会自动重启。'
+      : '正在安装更新，完成后会自动重启。';
+    this.setSnapshot({
+      ...this.snapshotValue,
+      state: 'installing',
+      message: applyingMessage,
+      progress: { phase: 'applying' },
+    });
     // Capture the mode before stopping the owned daemon: a stop must not flip
     // this into a connected-mode refusal.
     const daemonMode = this.daemonMode();
@@ -465,7 +498,7 @@ export class DesktopUpdateController {
       return this.fail(error instanceof Error ? error.message : '暂时无法应用更新，请重试。');
     }
     this.clearWaitTimer();
-    this.setSnapshot({ ...this.snapshotValue, state: 'installing', message: '正在安装更新，完成后会自动重启。' });
+    this.setSnapshot({ ...this.snapshotValue, state: 'installing', message: applyingMessage });
     this.installCallback();
     return this.snapshot();
   }
@@ -475,7 +508,11 @@ export class DesktopUpdateController {
     if (mode === 'supervised') await this.stopDaemon();
   }
 
-  private async downloadUpdate(version: string, signal: AbortSignal): Promise<string> {
+  private async downloadUpdate(
+    version: string,
+    signal: AbortSignal,
+    onProgress: (progress: UpdateProgress) => void,
+  ): Promise<string> {
     const asset = this.updateAsset;
     if (asset === undefined) throw new Error('没有可用的更新文件，请重新检查更新。');
     const dest = join(this.userDataPath, 'updates', version, asset.name);
@@ -487,6 +524,7 @@ export class DesktopUpdateController {
         fetchImpl: this.fetcher,
         idleTimeoutMs: DOWNLOAD_IDLE_TIMEOUT_MS,
         signal,
+        onProgress,
       });
       return dest;
     } catch (error) {
@@ -570,7 +608,11 @@ export class DesktopUpdateController {
   }
 
   private setSnapshot(snapshot: UpdateSnapshot): void {
-    this.snapshotValue = { ...snapshot };
+    const next: UpdateSnapshot = { ...snapshot };
+    // Progress belongs to an in-flight install only: leaving 'installing'
+    // (error/waiting/retry/new attempt) must never show stale progress.
+    if (next.state !== 'installing') delete next.progress;
+    this.snapshotValue = next;
     this.onChanged(this.snapshot());
   }
 }

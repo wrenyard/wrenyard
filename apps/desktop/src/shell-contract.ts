@@ -512,6 +512,22 @@ export type UpdateInstallReason =
   | 'missing-runtime'
   | 'source-development';
 
+/**
+ * Structured progress for an in-flight update, shared by the updater and every
+ * renderer surface. One definition crosses the bridge: the main process reports
+ * it on the installing snapshot and the UI reads it back. A phase without a
+ * known total size is indeterminate and never faked as a percentage.
+ */
+export interface UpdateProgress {
+  phase: 'downloading' | 'verifying' | 'extracting' | 'applying';
+  /** Bytes received so far; present only during `downloading`. */
+  receivedBytes?: number;
+  /** Total expected bytes; present only when Content-Length is known. */
+  totalBytes?: number;
+  /** Completion percentage 0–100; present only when the total size is known. */
+  percent?: number;
+}
+
 export interface UpdateSnapshot {
   state: UpdateState;
   currentVersion: string;
@@ -521,6 +537,8 @@ export interface UpdateSnapshot {
   /** Present only while `installSupported` is false. */
   installReason?: UpdateInstallReason;
   message?: string;
+  /** Structured install progress; absent unless an install attempt is running. */
+  progress?: UpdateProgress;
 }
 
 /**

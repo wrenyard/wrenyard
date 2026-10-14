@@ -44,8 +44,16 @@ export interface PreparedUpdate {
 export interface PlatformApplier {
   /** Startup and pre-update blocking checks; null when nothing blocks. */
   preflight(stage: 'startup' | 'update'): Promise<UpdateBlocker | null>;
-  /** Turns the verified asset into a state that can be switched in directly. */
-  prepare(assetPath: string, version: string): Promise<PreparedUpdate>;
+  /**
+   * Turns the verified asset into a state that can be switched in directly.
+   * The optional `onPhase` callback lets a platform report its own preparation
+   * steps (e.g. extraction) without changing the returned {@link PreparedUpdate}.
+   */
+  prepare(
+    assetPath: string,
+    version: string,
+    onPhase?: (phase: 'extracting' | 'verifying') => void,
+  ): Promise<PreparedUpdate>;
   /** Starts the detached follow-up; the caller then quits Desktop. */
   apply(prepared: PreparedUpdate): void;
   /** Cleanup performed after the new version started healthy. */

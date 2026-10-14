@@ -19,7 +19,17 @@ export function createWin32Applier(options: Win32ApplierOptions): PlatformApplie
       return null;
     },
 
-    async prepare(assetPath: string, version: string): Promise<PreparedUpdate> {
+    async prepare(
+      assetPath: string,
+      version: string,
+      // Accepted for interface parity. NSIS extracts and installs in one
+      // assisted handoff that Desktop cannot observe, so Windows never reports
+      // a separate extraction step or a percentage: the callback is
+      // intentionally not invoked and the handoff is labeled as an installer
+      // run, not as observed extraction. Progress is limited to the shared
+      // download/checksum reporting.
+      _onPhase?: (phase: 'extracting' | 'verifying') => void,
+    ): Promise<PreparedUpdate> {
       return { assetPath, version };
     },
 
