@@ -19,6 +19,9 @@ import type { Message as ModelMessage, ModelContentPart, ToolCall, ToolSpec, Too
 import type { AttachmentInput, FileStore, TaskArtifact } from './media.ts';
 import type { DocCatalogEntry } from './workspace.ts';
 import type { ActionRunContext } from './reasoning/actions.ts';
+import type { WorkspaceMemoryPort } from './memory-write.ts';
+
+export type { WorkspaceMemoryPort };
 
 // ─── Public host and session surface ───────────────────────────────────────
 
@@ -347,6 +350,8 @@ export type ActionBaseContext = Omit<ActionRunContext, 'actionId' | 'onTaskRun'>
 
 export interface EnginePorts {
   ledger: LedgerPort;
+  /** Restricted workspace memory upserts, used only after a final reply. */
+  memory?: WorkspaceMemoryPort;
   files(snapshot: WorkspaceSnapshot, workspaceRoot: string): FilesPort;
   /** Session-scoped so a `call` event lands on the right timeline. */
   calls(sessionId: string): CallsPort;

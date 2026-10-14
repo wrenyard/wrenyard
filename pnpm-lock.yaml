@@ -750,6 +750,9 @@ importers:
       sharp:
         specifier: 0.35.4
         version: 0.35.4(@types/node@22.20.1)
+      yaml:
+        specifier: ^2.7.0
+        version: 2.9.0
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
