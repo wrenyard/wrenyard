@@ -134,11 +134,11 @@ export function PromptInput({
               : leading === undefined
                 ? 'rounded-full pl-1'
                 : 'rounded-full'
-            : undefined
+            : 'grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-1.5 gap-y-1'
         }
       >
         {!compact && attachments !== undefined && attachments !== null && (
-          <div className="w-full px-2.5 pt-2">{attachments}</div>
+          <div className="col-span-2 w-full min-w-0 px-2.5 pt-2">{attachments}</div>
         )}
         {/* The compact card stays below the `md` breakpoint, so typed text keeps
             the primitive's 16px and the normal `leading-6`. The placeholder is
@@ -159,7 +159,7 @@ export function PromptInput({
                     ? 'field-sizing-content max-h-36 overflow-y-auto'
                     : 'field-sizing-fixed overflow-hidden'
                 }`
-              : 'max-h-60'
+              : 'min-h-10 min-w-0 leading-6 max-h-60'
           }
           onChange={(event) => onValueChange(event.target.value)}
           onPaste={onPaste}
@@ -206,15 +206,17 @@ export function PromptInput({
             </>
           )
         ) : (
-          <InputGroupAddon align="block-end">
+          /* Standard layout: a single grid row. The textarea owns the shrinkable
+             text column; the attach (`+`), model picker, `toolbarTrailing` and
+             send controls sit inline at the end, bottom-aligned (`items-end` on
+             the group) so they track the last text line as the field grows. */
+          <div className="flex min-w-0 items-center justify-end gap-1.5 pr-1.5">
             <div className="flex min-w-0 items-center gap-1.5">{toolbar}</div>
-            <div className="ml-auto flex items-center gap-1.5">
-              {toolbarTrailing}
-              <InputGroupButton type="submit" variant="default" size="icon-sm" disabled={!canSubmit} aria-label="发送" title="发送">
-                <ArrowUp />
-              </InputGroupButton>
-            </div>
-          </InputGroupAddon>
+            {toolbarTrailing}
+            <InputGroupButton type="submit" variant="default" size="icon-sm" disabled={!canSubmit} aria-label="发送" title="发送">
+              <ArrowUp />
+            </InputGroupButton>
+          </div>
         )}
       </InputGroup>
     </form>
