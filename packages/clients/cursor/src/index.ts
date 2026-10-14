@@ -15,7 +15,7 @@ export class CursorClient implements AgentClient {
     }
     async start(request: AgentRequest, options?: OperationOptions): Promise<AgentSession> {
         const env = options?.env ?? process.env;
-        return await openSession(await launchCursor(request, env), decodeCursor, options);
+        return await openSession(await launchCursor(request, env), (events) => decodeCursor(events, request.canonicalModel ?? request.model), options);
     }
     readAccount(options?: AccountOptions): Promise<AccountSnapshot> {
         return readCursorAccount(this.execution, options);

@@ -17,7 +17,7 @@ import {
  * observable serial generation window yields exactly one aggregate
  * speed sample, while any structural surprise yields none.
  */
-export async function* decodeCursor(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
+export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: string): AsyncGenerator<AgentEvent> {
     let sessionId: string | undefined;
     let output = '';
     let finished = false;
@@ -51,7 +51,7 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>): AsyncGe
                 if (flushed)
                     yield flushed;
                 if (usage)
-                    yield { type: 'output', record: turnUsageRecord(withSample(usage, sampler)) };
+                    yield { type: 'output', record: turnUsageRecord(withSample(usage, sampler, model)) };
                 yield finishedEvent('cursor', sessionId, output, endReason !== '' || !terminal || terminal.failed);
             }
             yield item.event;
@@ -100,10 +100,10 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>): AsyncGe
 }
 
 /** Attaches the aggregate sample only when the terminal usage is itself complete. */
-function withSample(usage: Record<string, unknown>, sampler: CursorTpsSampler): Record<string, unknown> {
+function withSample(usage: Record<string, unknown>, sampler: CursorTpsSampler, model: string): Record<string, unknown> {
     const data = { ...usage };
     if (completeUsageTokens(data)) {
-        const sample = sampler.finalize(data, '');
+        const sample = sampler.finalize(data, model);
         if (sample)
             attachTpsSamples(data, [sample]);
     }
