@@ -64,7 +64,7 @@ export function SessionSearch({ open, onOpenChange, sessions, onSelect }: Sessio
                       onOpenChange(false);
                     }}
                   >
-                    {status.kind !== 'idle' && <SessionDot status={status} />}
+                    <SessionDot status={status} />
                     <span className="min-w-0 truncate">{session.title}</span>
                   </CommandItem>
                 );
