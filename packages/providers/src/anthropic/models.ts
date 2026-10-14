@@ -6,11 +6,13 @@ export const definition = defineProvider({
   models: [
     { canonical: 'claude-opus-5-5', overrides: { family: 'claude', claudeTier: 'opus', supports1MContext: true, reasoningEfforts: REASONING_FULL.filter(e => e !== 'none') } },
     { canonical: 'claude-sonnet-5-5', overrides: { family: 'claude', claudeTier: 'sonnet', supports1MContext: true, reasoningEfforts: REASONING_FULL.filter(e => e !== 'none') } },
+    { canonical: 'claude-haiku-5-5', overrides: { family: 'claude', claudeTier: 'haiku', supports1MContext: true, reasoningEfforts: REASONING_FULL.filter(e => e !== 'none') } },
     { ...model('claude-haiku-4-5-20251001', 200_000, 64_000, 'claude-haiku-4-5', ['none', 'medium']), family: 'claude', claudeTier: 'haiku' },
   ],
   reasoningEffortMappings: {
     'claude-opus-5-5': { claude: Object.fromEntries(REASONING_FULL.filter(e => e !== 'none').map(e => [e,{effort:e}])) },
     'claude-sonnet-5-5': { claude: Object.fromEntries(REASONING_FULL.filter(e => e !== 'none').map(e => [e,{effort:e}])) },
+    'claude-haiku-5-5': { claude: Object.fromEntries(REASONING_FULL.filter(e => e !== 'none').map(e => [e,{effort:e}])) },
     'claude-haiku-4-5-20251001': { claude: { none:{environment:{MAX_THINKING_TOKENS:'0'}}, medium:{environment:{MAX_THINKING_TOKENS:'8192'}} } },
   },
   protocols: [anthropic('https://api.anthropic.com/v1/messages', 'x-api-key')],

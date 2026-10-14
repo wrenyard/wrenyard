@@ -55,4 +55,15 @@ export const anthropicModels = [
     pricing: [0.1, 1, 5],
     speed: 81,
   }, { lab: 'anthropic', family: 'claude' }),
+  // https://docs.anthropic.com/en/docs/about-claude/models/overview
+  // Haiku 5.5 documented facts: 1M context window, 128K max output, adaptive thinking.
+  // Pricing [0.1, 1, 5] and speed 81 are inherited Haiku 4.5 catalog defaults, not independently confirmed Haiku 5.5 facts.
+  defineModel('claude-haiku-5-5', 'Claude Haiku 5.5', {
+    intelligence: 'low',
+    capabilities: ['text'],
+    contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
+    pricing: [0.1, 1, 5],
+    speed: 81,
+  }, { lab: 'anthropic', family: 'claude' }),
 ];
