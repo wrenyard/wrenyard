@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Plus, X } from 'lucide-react';
 import { countInputTokens } from '../model/usage.js';
-import { EffortPicker, ModelPicker, modelBadges, type ModelOption } from '@/renderer/components/chat/model-picker';
+import { ModelPicker, modelBadges, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
 import { InputGroupButton } from '@/renderer/components/ui/input-group';
 import { getSessionBridge } from '@/renderer/lib/session';
@@ -47,7 +47,7 @@ export interface ComposerProps {
   disabled?: boolean;
   /** Mini mode: keep only the input and send button, hiding secondary controls. */
   compact?: boolean;
-  /** Mini mode draft: show the model and effort pickers above the input bar. */
+  /** Mini mode draft: show the unified model picker above the input bar. */
   draft?: boolean;
   onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): void | Promise<void>;
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
@@ -58,7 +58,7 @@ export interface ComposerProps {
   onCancelReply?: () => void;
 }
 
-/** Bottom composer with model and effort pickers, attachments and a send button. */
+/** Bottom composer with a unified model/effort picker, attachments and a send button. */
 export function Composer({ models, turns, sessionKey, disabled = false, compact = false, draft = false, onSend, injectedText, focusRequest = 0, reply, onCancelReply }: ComposerProps) {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
@@ -231,18 +231,17 @@ export function Composer({ models, turns, sessionKey, disabled = false, compact 
     label: entry.displayName,
     group: entry.providerDisplayName,
     badges: modelBadges(entry),
+    efforts: entry.reasoningEfforts,
+    defaultEffort: entry.reasoningEfforts.length === 0 ? effort : retainReasoningEffort(effort, entry.reasoningEfforts),
   }));
 
   const handleChange = (value: string): void => {
     setText(value);
   };
 
-  const selectModel = (value: string): void => {
-    const target = models.find((entry) => entry.publicId === value);
-    setModelId(value);
-    const supported = target?.reasoningEfforts ?? [];
-    if (supported.length === 0) return;
-    setEffort((current) => retainReasoningEffort(current, supported));
+  const selectModel = (nextModelId: string, nextEffort: ReasoningEffort): void => {
+    setModelId(nextModelId);
+    setEffort(nextEffort);
   };
 
   const submit = (): void => {
@@ -323,22 +322,22 @@ export function Composer({ models, turns, sessionKey, disabled = false, compact 
           松开以添加文件
         </div>
       )}
-      {/* Compact draft row: both pickers stay content-width and the pair is
-          centered, with no trigger tooltip. The model trigger is capped so two
-          pickers still fit inside a 300px-wide card. The trigger buttons are
-          forced to the textarea primitive's `text-base md:text-sm` pair: their
-          own `text-sm` from Button/InputGroupButton wins on inheritance, so the
-          descendant rule targets the buttons directly. */}
+      {/* Compact draft row: the unified picker stays content-width and is
+          centered, with no trigger tooltip. The trigger is capped so the model
+          name and its effort indicator still fit inside a 300px-wide card. The
+          trigger button is forced to the textarea primitive's `text-base
+          md:text-sm` pair: its own `text-sm` from Button/InputGroupButton wins
+          on inheritance, so the descendant rule targets the button directly. */}
       {compact && draft && (
         <div className="mb-2 flex justify-center gap-2 [&_button]:text-base md:[&_button]:text-sm">
           <ModelPicker
             models={options}
             value={modelId}
+            effort={effort}
             onChange={selectModel}
             disabled={models.length === 0}
             className="max-w-40"
           />
-          <EffortPicker levels={selected?.reasoningEfforts ?? []} value={effort} onChange={setEffort} />
         </div>
       )}
       <PromptInput
@@ -382,8 +381,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, compact 
                 >
                   <Plus />
                 </InputGroupButton>
-                <ModelPicker models={options} value={modelId} onChange={selectModel} disabled={models.length === 0} />
-                <EffortPicker levels={selected?.reasoningEfforts ?? []} value={effort} onChange={setEffort} />
+                <ModelPicker models={options} value={modelId} effort={effort} onChange={selectModel} disabled={models.length === 0} />
               </>
             )}
             {exceeded && (

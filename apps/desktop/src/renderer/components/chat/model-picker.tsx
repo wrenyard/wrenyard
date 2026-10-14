@@ -2,23 +2,16 @@ import { useMemo } from 'react';
 import { BatteryFull, Gauge, Gift, Zap } from 'lucide-react';
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import {
-  Combobox,
-  ComboboxCollection,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxGroup,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxLabel,
-  ComboboxList,
-  ComboboxTrigger,
-  ComboboxValue,
-} from '@/renderer/components/ui/combobox';
-import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/renderer/components/ui/dropdown-menu';
 import { InputGroupButton } from '@/renderer/components/ui/input-group';
@@ -66,12 +59,19 @@ export interface ModelOption {
   label: string;
   group: string;
   badges?: ModelBadge[];
+  /** Route-owned supported efforts in ladder order; empty means no effort submenu. */
+  efforts: readonly ReasoningEffort[];
+  /** Effort applied when this model is picked: the current one when supported, else the nearest default. */
+  defaultEffort: ReasoningEffort;
 }
 
 export interface ModelPickerProps {
   models: ModelOption[];
   value: string;
-  onChange: (value: string) => void;
+  /** The current route's reasoning effort, shown on the trigger and checked for its own model. */
+  effort: ReasoningEffort;
+  /** Selecting an effort atomically selects that model and that exact supported level. */
+  onChange: (modelId: string, effort: ReasoningEffort) => void;
   disabled?: boolean;
   placeholder?: string;
   className?: string;
@@ -99,7 +99,7 @@ function ModelOptionContent({ option, compact = false }: { option: ModelOption; 
   };
 
   return (
-    <span className={compact ? 'flex w-full min-w-0 items-center gap-2' : 'flex w-full min-w-0 items-center gap-1.5'}>
+    <span className={compact ? 'flex min-w-0 flex-1 items-center gap-2' : 'flex min-w-0 flex-1 items-center gap-1.5'}>
       <span className="min-w-0 truncate">{option.label}</span>
       {speed && slot(speed, speed.kind, 'flex shrink-0 items-center gap-1')}
       {!compact && free && slot(free, 'free', 'flex w-3.5 shrink-0 items-center justify-center')}
@@ -108,8 +108,28 @@ function ModelOptionContent({ option, compact = false }: { option: ModelOption; 
   );
 }
 
-/** Searchable model picker grouped by provider. Values are opaque to the page. */
-export function ModelPicker({ models, value, onChange, disabled = false, placeholder = '选择模型', className }: ModelPickerProps) {
+/**
+ * A dot that marks the currently selected model. It is deliberately different
+ * from the per-model radio check so the applied model and the checked effort
+ * are never read as the same thing.
+ */
+function SelectedModelIndicator() {
+  return (
+    <span
+      aria-hidden="true"
+      data-slot="model-picker-selected-indicator"
+      className="size-1.5 shrink-0 rounded-full bg-primary"
+    />
+  );
+}
+
+/**
+ * One unified model picker: providers are labelled menu groups, each model is a
+ * submenu trigger (with a distinct selected-model mark) whose content is a radio
+ * group of that model's supported reasoning efforts. Choosing an effort selects
+ * that model and that exact level in one action. Values are opaque to the page.
+ */
+export function ModelPicker({ models, value, effort, onChange, disabled = false, placeholder = '选择模型', className }: ModelPickerProps) {
   const groups = useMemo(() => {
     const map = new Map<string, ModelOption[]>();
     for (const model of models) {
@@ -125,92 +145,79 @@ export function ModelPicker({ models, value, onChange, disabled = false, placeho
     [models, value],
   );
 
-  const valueContent = (
-    <ComboboxValue>
-      {(current: ModelOption | null) => (current ? <ModelOptionContent option={current} compact /> : placeholder)}
-    </ComboboxValue>
-  );
-
-  return (
-    <Combobox
-      items={groups}
-      value={selected}
-      onValueChange={(next) => onChange(next ? next.value : '')}
-      itemToStringLabel={(option) => option.label}
-      itemToStringValue={(option) => option.value}
-      isItemEqualToValue={(a, b) => a.value === b.value}
-      disabled={disabled}
-    >
-      <ComboboxTrigger render={<InputGroupButton variant="ghost" className={className} />}>
-        {valueContent}
-      </ComboboxTrigger>
-      <ComboboxContent side="top" className="min-w-64">
-        <ComboboxInput showTrigger={false} placeholder={placeholder} disabled={disabled} />
-        <ComboboxEmpty>没有匹配的模型</ComboboxEmpty>
-        <ComboboxList>
-          {(group: { value: string; items: ModelOption[] }) => (
-            <ComboboxGroup key={group.value} items={group.items}>
-              <ComboboxLabel>{group.value}</ComboboxLabel>
-              <ComboboxCollection>
-                {(option: ModelOption) => (
-                  <ComboboxItem
-                    key={option.value}
-                    value={option}
-                    showIndicator={false}
-                    className="not-data-[highlighted]:data-[selected]:bg-accent/60 data-[selected]:font-medium"
-                  >
-                    <ModelOptionContent option={option} />
-                  </ComboboxItem>
-                )}
-              </ComboboxCollection>
-            </ComboboxGroup>
-          )}
-        </ComboboxList>
-      </ComboboxContent>
-    </Combobox>
-  );
-}
-
-export interface EffortPickerProps {
-  /** The current route's supported efforts, in ladder order (non-empty by contract). */
-  levels: readonly ReasoningEffort[];
-  value: ReasoningEffort;
-  onChange: (value: ReasoningEffort) => void;
-}
-
-/**
- * Reasoning-effort picker. Offers only the current route's supported levels,
- * labelled with the shared Chinese names, with no unset/default option, so a
- * level is always selected. Renders nothing only when the route declares none.
- */
-export function EffortPicker({ levels, value, onChange }: EffortPickerProps) {
-  if (levels.length === 0) return null;
+  const effortLabel = REASONING_EFFORT_NAMES[effort];
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<InputGroupButton variant="ghost" />}>
-        {REASONING_EFFORT_NAMES[value]}
+      <DropdownMenuTrigger
+        render={
+          <InputGroupButton
+            variant="ghost"
+            className={className}
+            disabled={disabled}
+            aria-label={selected === null ? placeholder : `${selected.label}，思考强度：${effortLabel}`}
+          />
+        }
+      >
+        {selected === null ? (
+          placeholder
+        ) : (
+          <span className="flex min-w-0 items-center gap-2">
+            <ModelOptionContent option={selected} compact />
+            <span className="shrink-0 text-xs text-muted-foreground" aria-hidden="true">{effortLabel}</span>
+          </span>
+        )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top">
-        <DropdownMenuRadioGroup
-          value={value}
-          onValueChange={(next) => {
-            if (typeof next === 'string' && (levels as readonly string[]).includes(next)) {
-              onChange(next as ReasoningEffort);
-            }
-          }}
-        >
-          {levels.map((level) => (
-            <DropdownMenuRadioItem
-              key={level}
-              value={level}
-              showIndicator={false}
-              className="not-focus:data-[checked]:bg-accent/60 data-[checked]:font-medium"
-            >
-              {REASONING_EFFORT_NAMES[level]}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
+      <DropdownMenuContent side="top" className="min-w-64">
+        {groups.map((group) => (
+          <DropdownMenuGroup key={group.value}>
+            <DropdownMenuLabel>{group.value}</DropdownMenuLabel>
+            {group.items.map((option) => {
+              const isCurrent = option.value === value;
+              const checked = isCurrent ? effort : option.defaultEffort;
+              if (option.efforts.length === 0) {
+                return (
+                  <DropdownMenuItem
+                    key={option.value}
+                    onClick={() => onChange(option.value, checked)}
+                    className={isCurrent ? 'bg-accent/60 font-medium' : undefined}
+                  >
+                    <ModelOptionContent option={option} />
+                    {isCurrent && <SelectedModelIndicator />}
+                  </DropdownMenuItem>
+                );
+              }
+              return (
+                <DropdownMenuSub key={option.value}>
+                  <DropdownMenuSubTrigger className={isCurrent ? 'bg-accent/60 font-medium' : undefined}>
+                    <ModelOptionContent option={option} />
+                    {isCurrent && <SelectedModelIndicator />}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuRadioGroup
+                      value={checked}
+                      onValueChange={(next) => {
+                        if (typeof next === 'string' && (option.efforts as readonly string[]).includes(next)) {
+                          onChange(option.value, next as ReasoningEffort);
+                        }
+                      }}
+                    >
+                      {option.efforts.map((level) => (
+                        <DropdownMenuRadioItem
+                          key={level}
+                          value={level}
+                          className="not-focus:data-[checked]:bg-accent/60 data-[checked]:font-medium"
+                        >
+                          {REASONING_EFFORT_NAMES[level]}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              );
+            })}
+          </DropdownMenuGroup>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
