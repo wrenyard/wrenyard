@@ -3,9 +3,9 @@
 Electron product shell for Wrenyard daemon features.
 
 > **Status: public development preview.** Target-qualified Desktop archives
-> ship with Wrenyard development prereleases. They are suitable for testing,
-> but remain preview artifacts: macOS builds are ad-hoc signed and Windows
-> builds are unsigned until trusted platform signing is configured.
+> ship with Wrenyard's rolling plain-version releases. They are suitable for
+> testing, but remain preview artifacts: macOS builds are ad-hoc signed and
+> Windows builds are unsigned until trusted platform signing is configured.
 
 ## Architecture
 

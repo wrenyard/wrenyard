@@ -5,9 +5,12 @@ Wrenyard repository and to all code and artifacts produced from it.
 
 ## Supported versions
 
-Wrenyard is in rolling `1.0.0-dev.N` development preview; only the latest
-prerelease receives fixes. There are no supported stable release versions yet,
-and preview builds should not be used for sensitive production workloads.
+Security fixes target the latest published Wrenyard release. Older versions,
+including legacy `dev.N` previews, should upgrade to it. There are no separately
+maintained dev/stable channels and no backport promise. A plain version number,
+or a normal GitHub release classification, does not by itself guarantee
+production suitability, trusted signing or security, and preview builds should
+not be used for sensitive production workloads.
 
 ## Reporting a vulnerability
 

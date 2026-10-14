@@ -8,15 +8,15 @@
  * Feed layout (base URL defaults to {@link DEFAULT_UPDATE_BASE_URL}):
  *
  *   <base>/latest.json         canonical feed head read by every current client
- *   <base>/dev.json            byte-identical legacy compatibility alias
- *   <base>/stable.json         retired channel head, kept only for compatibility
+ *   <base>/dev.json            byte-identical compatibility alias the server
+ *                              publishes for installs that predate the
+ *                              single-feed scheme
  *   <base>/versions/<v>.json   immutable per-version snapshot
  *
  * `latest.json` is the single canonical head; the version-independent
- * {@link latestDocumentUrl} returns it. The `dev`/`stable` channel helpers,
- * {@link channelForVersion} and {@link channelDocumentUrl}, and the parsed
- * `channel` field remain only as legacy compatibility APIs for installs and
- * manifests that predate the single-feed scheme.
+ * {@link latestDocumentUrl} returns it. `dev.json` is only a server-published
+ * byte-identical alias so installs that predate the single-feed scheme can
+ * still upgrade.
  *
  * Document schema `wrenyard.update.v1`:
  *
@@ -45,9 +45,6 @@ export const UPDATE_FEED_SCHEMA_VERSION = 'wrenyard.update.v1';
 /** Default feed location: the root of the `updates` branch. */
 const DEFAULT_UPDATE_BASE_URL =
   'https://raw.githubusercontent.com/wrenyard/wrenyard/updates';
-
-/** Legacy release channels kept only for compatibility. A prerelease version resolves to `dev`, a plain release to `stable`. */
-type UpdateChannel = 'dev' | 'stable';
 
 /** Host triplets that publish Desktop installer and update assets. */
 export type PlatformTriplet = 'darwin-arm64' | 'win32-x64';
@@ -80,25 +77,13 @@ interface ParseUpdateFeedOptions {
   readonly triplet: PlatformTriplet;
   /** When set, the document version must equal this value (a leading `v` is accepted). */
   readonly expectedVersion?: string;
-  /** Overrides the channel inferred from the document version. */
-  readonly channel?: UpdateChannel;
 }
 
 /** A validated feed document plus the host triplet's installer and update assets. */
 interface ParsedUpdateFeed extends PlatformAssets {
   readonly document: UpdateFeedDocument;
   readonly version: string;
-  /** Legacy compatibility field; current clients read the single latest feed. */
-  readonly channel: UpdateChannel;
   readonly triplet: PlatformTriplet;
-}
-
-/** Selects the document a client should read. */
-interface UpdateDocumentTarget {
-  /** Explicit version: read `versions/<v>.json`. */
-  readonly version?: string;
-  /** Channel head to read when no version is given. Defaults to `dev`. */
-  readonly channel?: UpdateChannel;
 }
 
 /** Environment slice consulted by {@link resolveUpdateBaseUrl}. */
@@ -137,7 +122,7 @@ export function normalizeVersion(version: string): string {
 /**
  * Numeric SemVer ordering. Never compare version strings lexicographically:
  * `dev.9` sorts after `dev.10` as strings, which would let a stale release roll
- * the channel backwards. Build metadata is ignored, per the SemVer spec.
+ * the feed head backwards. Build metadata is ignored, per the SemVer spec.
  */
 export function compareVersions(a: string, b: string): number {
   if (!isSemver(a) || !isSemver(b)) {
@@ -206,28 +191,6 @@ export function latestDocumentUrl(baseUrl: string): string {
   return `${trimTrailingSlash(baseUrl)}/latest.json`;
 }
 
-/** Legacy: derives the release channel from a version (prereleases read `dev`). */
-export function channelForVersion(version: string): UpdateChannel {
-  if (!isSemver(version)) throw new Error(`invalid version: ${version}`);
-  return version.includes('-') ? 'dev' : 'stable';
-}
-
-/** Legacy: URL of a channel head document (`dev.json` / `stable.json`). */
-export function channelDocumentUrl(baseUrl: string, channel: UpdateChannel): string {
-  return `${trimTrailingSlash(baseUrl)}/${channel}.json`;
-}
-
-/**
- * URL of the document a client should read: the immutable version document
- * when a version is given, otherwise the channel head (default `dev`).
- */
-export function updateDocumentUrl(baseUrl: string, target: UpdateDocumentTarget = {}): string {
-  if (target.version !== undefined && target.version !== '') {
-    return `${trimTrailingSlash(baseUrl)}/versions/${normalizeVersion(target.version)}.json`;
-  }
-  return channelDocumentUrl(baseUrl, target.channel ?? 'dev');
-}
-
 /** Resolves the feed base URL from `WRENYARD_UPDATE_BASE_URL`, else the default. */
 export function resolveUpdateBaseUrl(env: UpdateBaseUrlEnvironment = {}): string {
   const override = env.WRENYARD_UPDATE_BASE_URL;
@@ -259,7 +222,7 @@ function readAsset(record: unknown, index: number): UpdateFeedAsset {
  * violation; never touches the network or the filesystem.
  */
 function parseUpdateFeed(input: unknown, options: ParseUpdateFeedOptions): ParsedUpdateFeed {
-  const { triplet, expectedVersion, channel: requestedChannel } = options;
+  const { triplet, expectedVersion } = options;
   if (!isRecord(input)) {
     throw new Error('update feed is not a JSON object');
   }
@@ -307,7 +270,6 @@ function parseUpdateFeed(input: unknown, options: ParseUpdateFeedOptions): Parse
       assets,
     },
     version,
-    channel: requestedChannel ?? channelForVersion(version),
     triplet,
     installer,
     update,

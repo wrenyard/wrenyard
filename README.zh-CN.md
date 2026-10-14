@@ -9,7 +9,7 @@
 一次对话专注推理目标；探索、编辑、测试、提交以并行任务在你已经付费的模型上运行，
 每一个 token、每一个额度窗口、每一个任务都看得见。
 
-[![Release](https://img.shields.io/github/v/release/wrenyard/wrenyard?include_prereleases&label=latest-dev)](https://github.com/wrenyard/wrenyard/releases)
+[![Release](https://img.shields.io/github/v/release/wrenyard/wrenyard?label=latest)](https://github.com/wrenyard/wrenyard/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [English](README.md) · [下载](https://github.com/wrenyard/wrenyard/releases)
@@ -18,8 +18,9 @@
 
 ![啾啾工坊](docs/images/hero.png)
 
-> **开发预览版。** 以 `1.0.0-dev.N` 滚动发布预览版本，作者日常在用，但尚不是稳定版，
-> 见[状态](#状态)。
+> **开发预览版。** 以普通 `x.y.z` 补丁版本滚动发布（如 `1.0.57`、`1.0.58`），每次都是
+> 常规的非预发布 GitHub Release，更新入口为 `latest.json`，并保留字节一致的 `dev.json`
+> 兼容别名；作者日常在用，但尚未达到生产可用，见[状态](#状态)。
 
 ## 为什么是啾啾工坊
 
@@ -90,8 +91,9 @@
 
 ## 状态
 
-目前为 macOS（Apple 芯片）与 Windows（x64）滚动发布 `1.0.0-dev.N` 预览版。稳定版之前还需要可信代码签名、
-更广泛的干净环境测试与兼容性策略。
+目前为 macOS（Apple 芯片）与 Windows（x64）滚动发布普通 `x.y.z` 补丁版本（如 `1.0.57`、`1.0.58`），
+每次都是常规的非预发布 GitHub Release，更新入口为 `latest.json`，并保留字节一致的 `dev.json`
+兼容别名，供旧版已安装客户端升级。达到生产可用之前还需要可信代码签名、更广泛的干净环境测试与兼容性策略。
 
 ## 许可
 

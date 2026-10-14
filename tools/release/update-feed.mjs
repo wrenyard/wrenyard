@@ -7,7 +7,6 @@ import { requirePlainVersion } from './release-context.mjs';
 
 import {
   UPDATE_FEED_SCHEMA_VERSION as SCHEMA_VERSION,
-  channelForVersion,
   compareVersions,
   installerAssetName,
   isSemver,
@@ -252,4 +251,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   }
 }
 
-export { SCHEMA_VERSION, isSemver, compareVersions, channelForVersion };
+export { SCHEMA_VERSION, isSemver, compareVersions };

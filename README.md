@@ -22,7 +22,7 @@ quota window and task visible.
 
 > **Development preview.** Wrenyard ships rolling plain patch releases
 > (`1.0.57`, then `1.0.58`, `1.0.59`, …). It is used daily by its authors, but
-> it is not a stable release yet — see [Status](#status).
+> it is not production-ready yet — see [Status](#status).
 
 ## Why Wrenyard
 
@@ -187,8 +187,8 @@ Read more in [docs/architecture.md](docs/architecture.md).
 Wrenyard publishes rolling plain patch releases (`1.0.57`, then `1.0.58`, …)
 for macOS (Apple Silicon) and Windows (x64). Each release is a normal,
 non-prerelease GitHub release, and the update feed head is `latest.json` on the
-`updates` branch, with a continuing `dev.json` compatibility alias. Before a
-stable release it still needs trusted code signing
+`updates` branch, with a continuing `dev.json` compatibility alias. Before it is
+production-ready it still needs trusted code signing
 ([signing notes](docs/release/signing.md)), wider clean-machine testing and a
 documented compatibility policy. Nothing is published to npm.
 

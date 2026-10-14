@@ -68,8 +68,8 @@ src/
   examples/
     exec.ts             static typed example data (satisfies, no casts)
   update-feed.ts        pure static update-feed contract: schema/asset/digest
-                        validation, canonical asset names, SemVer ordering,
-                        canonical/legacy document URL construction
+                        validation, canonical asset names, SemVer ordering and
+                        the canonical head URL
 README.md
 package.json
 tsconfig.json
@@ -277,8 +277,8 @@ with `WRENYARD_UPDATE_BASE_URL`):
 
 ```
 <base>/latest.json         canonical feed head (all current clients)
-<base>/dev.json            byte-identical legacy compatibility alias
-<base>/stable.json         retired channel head, kept for compatibility
+<base>/dev.json            byte-identical alias the server publishes for old
+                           installed clients that predate the single feed
 <base>/versions/<v>.json   immutable per-version snapshot
 ```
 
@@ -294,18 +294,19 @@ Exports:
 | `isSemver`, `compareVersions`, `normalizeVersion` | SemVer validation and numeric ordering |
 | `desktopAssetStem`, `installerAssetName`, `updateAssetName` | canonical Desktop asset names per version and triplet |
 | `latestDocumentUrl`, `resolveUpdateBaseUrl` | canonical `latest.json` head URL and base-URL resolution |
-| `channelForVersion`, `channelDocumentUrl`, `updateDocumentUrl` | legacy channel helpers, kept only for compatibility |
 | `parseUpdateFeedJson` | validation and host-asset resolution |
 
-`parseUpdateFeedJson(text, { triplet, expectedVersion?, channel? })` validates the
+`parseUpdateFeedJson(text, { triplet, expectedVersion? })` validates the
 schema, that `version` is valid SemVer (and matches `expectedVersion` when
 given), that both the installer and update assets for the host triplet exist,
-and that every digest is 64 hex. It returns the document and the two assets;
-the returned `channel` field is a legacy compatibility value rather than feed
-routing. Asset URLs are deliberately **not** required to be canonical GitHub
-download URLs: the URL and digest come from the same document, so the check adds
-no integrity guarantee while it would prevent local end-to-end tests from
-serving the feed over a local HTTP server. Integrity is the sha256.
+and that every digest is 64 hex. It returns the document and the two assets.
+Older manifests stay parseable: a legacy prerelease document still validates as
+long as its version is valid SemVer and it carries both host assets, so the
+server-published `dev.json` alias keeps old installed clients upgrading. Asset
+URLs are deliberately **not** required to be canonical GitHub download URLs:
+the URL and digest come from the same document, so the check adds no integrity
+guarantee while it would prevent local end-to-end tests from serving the feed
+over a local HTTP server. Integrity is the sha256.
 
 ## Implementation status
 

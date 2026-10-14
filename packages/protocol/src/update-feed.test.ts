@@ -4,13 +4,10 @@ import { test } from 'node:test';
 
 import {
   UPDATE_FEED_SCHEMA_VERSION,
-  channelDocumentUrl,
-  channelForVersion,
   compareVersions,
   installerAssetName,
   parseUpdateFeedJson,
   updateAssetName,
-  updateDocumentUrl,
 } from './update-feed.ts';
 
 const VERSION = '1.0.0-dev.41';
@@ -52,7 +49,6 @@ function feed({ version = VERSION, assets, schema = UPDATE_FEED_SCHEMA_VERSION }
 test('accepts a canonical document and resolves both host assets', () => {
   const parsed = parseUpdateFeedJson(feed(), { triplet: TRIPLET });
   assert.equal(parsed.version, VERSION);
-  assert.equal(parsed.channel, 'dev');
   assert.equal(parsed.triplet, TRIPLET);
   assert.equal(parsed.installer.name, installerAssetName(VERSION, TRIPLET));
   assert.equal(parsed.installer.sha256, INSTALLER_SHA);
@@ -100,20 +96,6 @@ test('derives canonical asset names and normalizes a leading v', () => {
   assert.equal(updateAssetName(VERSION, TRIPLET), `wrenyard-desktop-${VERSION}-darwin-arm64.zip`);
   assert.equal(installerAssetName(`v${VERSION}`, 'win32-x64'), `wrenyard-desktop-${VERSION}-win32-x64-setup.exe`);
   assert.equal(updateAssetName(VERSION, 'win32-x64'), installerAssetName(VERSION, 'win32-x64'));
-});
-
-test('infers the channel from the version', () => {
-  assert.equal(channelForVersion('1.0.0-dev.10'), 'dev');
-  assert.equal(channelForVersion('1.0.0'), 'stable');
-  assert.throws(() => channelForVersion('nope'), /invalid version/);
-});
-
-test('constructs channel, version and generic document URLs', () => {
-  assert.equal(channelDocumentUrl('https://feed.test/base/', 'dev'), 'https://feed.test/base/dev.json');
-  assert.equal(channelDocumentUrl('https://feed.test/base', 'stable'), 'https://feed.test/base/stable.json');
-  assert.equal(updateDocumentUrl('https://feed.test/base', { version: VERSION }), `https://feed.test/base/versions/${VERSION}.json`);
-  assert.equal(updateDocumentUrl('https://feed.test/base', { channel: 'stable' }), 'https://feed.test/base/stable.json');
-  assert.equal(updateDocumentUrl('https://feed.test/base'), 'https://feed.test/base/dev.json');
 });
 
 test('orders prereleases numerically: dev.9 is older than dev.10', () => {
