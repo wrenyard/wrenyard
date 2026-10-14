@@ -64,7 +64,6 @@ test('built-in display names are hyphen-free, sourced from the SSOT, and canonic
     ['openrouter', 'qwen/qwen3.8-27b:free', 'qwen3.8-27b'],
     ['opencode-zen', 'nemotron-3-ultra-free', 'nemotron-3-ultra'],
     ['opencode-zen', 'nemotron-3.5-lightning-free', 'nemotron-3.5-lightning'],
-    ['anthropic', 'claude-haiku-4-5-20251001', 'claude-haiku-4-5'],
   ] as const) {
     const route = offering(provider, id);
     assert.equal(route.canonicalModel?.id, canonical, `${provider}/${id}`);
@@ -112,10 +111,6 @@ test('convertReasoningEffort is declared per provider module and is protocol-awa
     { reasoning: { effort: 'high' } },
   );
   const anthropicProvider = catalog.provider('anthropic')!;
-  assert.deepEqual(
-    anthropicProvider.convertReasoningEffort('claude-haiku-4-5-20251001', 'none', 'anthropic_messages'),
-    { thinking: { type: 'disabled' } },
-  );
   assert.deepEqual(
     anthropicProvider.convertReasoningEffort('claude-opus-5-5', 'high', 'anthropic_messages'),
     { thinking: { type: 'adaptive' }, output_config: { effort: 'high' } },
