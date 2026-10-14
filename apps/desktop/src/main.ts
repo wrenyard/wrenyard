@@ -396,21 +396,18 @@ let quitSurfacesBlocked = false;
 let preQuitMenu: Menu | null = null;
 
 /**
- * Make every window and menu surface inert for the *entire* pending quit, not
- * only while the drain dialog is open: the application menu is removed, the
- * shell is disabled, and the Pet/graph entity windows are hidden. The
- * stored menu and geometry are restored only if the quit never happens.
+ * Make the menu and Pet/graph entity surfaces inert for the *entire* pending
+ * quit, not only while the drain dialog is open: the application menu is
+ * removed and the Pet/graph entity windows are hidden. Native window disabling
+ * is deferred until a drain dialog is actually needed (see
+ * createQuitDialogPresenter). The stored menu and geometry are restored only if
+ * the quit never happens.
  */
 function blockQuitSurfaces(): void {
   if (quitSurfacesBlocked) return;
   quitSurfacesBlocked = true;
   preQuitMenu = Menu.getApplicationMenu();
   Menu.setApplicationMenu(null);
-  // Every existing window (shell, Pet house, Wren/graph entities) is disabled;
-  // the drain dialog is created afterwards and stays interactive.
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) window.setEnabled(false);
-  }
   taskgraphWindowOwner?.setEntitiesVisible(false);
 }
 
@@ -458,6 +455,14 @@ function createQuitDialogPresenter() {
       // The app menu is another quit entry point; remove it while blocking.
       const previousMenu = Menu.getApplicationMenu();
       Menu.setApplicationMenu(null);
+      // Native window disabling is deferred until a drain dialog is actually
+      // needed: `setEnabled(false)` blocks the main thread for ~270ms per window
+      // on macOS, so doing it on the idle quit path stalled the quit for no
+      // benefit. Disable the pre-existing windows before creating the dialog so
+      // the dialog itself stays enabled.
+      for (const existing of BrowserWindow.getAllWindows()) {
+        if (!existing.isDestroyed()) existing.setEnabled(false);
+      }
       const window = new BrowserWindow({
         width: 420,
         height: 220,
