@@ -93,32 +93,34 @@ export function TitleBar() {
           className={cn('flex min-w-0 flex-1 items-center gap-2', DRAG)}
           ref={(element) => registerTitleBarSlot('session', 'title', element)}
         />
-        <div className={cn('flex shrink-0 items-center gap-1', NO_DRAG)}>
-          <Tooltip>
-            <TooltipTrigger
-              render={(
-                <Button variant="ghost" size="icon-sm" aria-label="新建卡片" onClick={() => openMiniCard('')} />
-              )}
-            >
-              <Plus />
-            </TooltipTrigger>
-            <TooltipContent>新建卡片</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={(
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="回到主窗口"
-                  onClick={() => restoreMain(getCurrentSession())}
-                />
-              )}
-            >
-              <Maximize2 />
-            </TooltipTrigger>
-            <TooltipContent>回到主窗口</TooltipContent>
-          </Tooltip>
+        <div className={cn('group/mini-actions flex shrink-0 items-center gap-1', NO_DRAG)}>
+          <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/mini-actions:opacity-100 has-[:focus-visible]:opacity-100 motion-reduce:transition-none [[data-motion=reduce]_&]:transition-none">
+            <Tooltip>
+              <TooltipTrigger
+                render={(
+                  <Button variant="ghost" size="icon-sm" aria-label="新建卡片" onClick={() => openMiniCard('')} />
+                )}
+              >
+                <Plus />
+              </TooltipTrigger>
+              <TooltipContent>新建卡片</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={(
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="回到主窗口"
+                    onClick={() => restoreMain(getCurrentSession())}
+                  />
+                )}
+              >
+                <Maximize2 />
+              </TooltipTrigger>
+              <TooltipContent>回到主窗口</TooltipContent>
+            </Tooltip>
+          </div>
           <Tooltip>
             <TooltipTrigger
               render={(
