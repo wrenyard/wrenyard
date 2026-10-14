@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/renderer/components/ui/empty';
 import { useMiniMode } from '@/renderer/lib/mini';
 import { useThemeIcon } from '@/renderer/lib/theme';
+import { EmptyActivity } from './EmptyActivity.js';
 
 /** Welcome shown for the draft state and for sessions without turns. */
 export function EmptySession({ children }: { children?: ReactNode }) {
@@ -18,6 +19,7 @@ export function EmptySession({ children }: { children?: ReactNode }) {
           <EmptyDescription>可以随时发送多条消息，并行推进多个轮次。</EmptyDescription>
         </EmptyHeader>
       </Empty>
+      {!mini && <EmptyActivity />}
       {/* A draft card renders its composer here, not through the page's mini
           wrapper, so the mini edge gap (16px sides, 20px bottom) has to sit on
           this element. The shell keeps the literal classes unchanged. */}
