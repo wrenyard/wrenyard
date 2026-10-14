@@ -63,9 +63,12 @@ function countBadge(count: number) {
 }
 
 /**
- * The settings category directory. Flat categories are menu buttons; a
- * category with sub-groups is a Collapsible whose trigger also scrolls to the
- * category heading.
+ * The settings category directory. It switches pages instead of scrolling:
+ * every category in `categories` (all nine, including 快捷键) is a page entry
+ * and `onSelectCategory` opens it, with `activeCategory` marking the open page.
+ * The count badges keep their search semantics. A category with in-page
+ * sub-groups (桌宠) is a Collapsible whose trigger opens the category page, and
+ * whose sub-buttons open it too and scroll to the group card.
  */
 export function SettingsToc({
   categories,

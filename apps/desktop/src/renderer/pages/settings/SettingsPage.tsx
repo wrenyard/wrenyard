@@ -26,6 +26,7 @@ import {
 import {
   SETTINGS_CATEGORIES,
   isSettingsCategoryId,
+  settingsCategoryDescription,
   settingsCategoryLabel,
   type SettingsCategoryId,
 } from './model/categories.js';
@@ -36,57 +37,62 @@ import {
   settingsForCategory,
   type SettingDefinition,
 } from './model/registry.js';
-import { parseSearchQuery, settingMatches, shortcutMatches, isEmptyQuery, type SearchQuery } from './model/search.js';
+import { parseSearchQuery, settingMatches, shortcutMatches, isEmptyQuery, highlightText } from './model/search.js';
 import { registerPageCommands } from '@/renderer/lib/commands';
 import { applyLocalPreference, errorMessage, preferenceValuesEqual, readPreference } from './model/settings.js';
 import { SETTINGS_QUERY_KEYS, usePreferencesQuery } from './queries.js';
 
-interface CategoryMatch {
-  id: SettingsCategoryId;
-  label: string;
-  definitions: SettingDefinition[];
-  groups: Array<{ key: string; label: string; definitions: SettingDefinition[] }>;
-}
+/**
+ * A queued in-page target applied after the owning category page renders: the
+ * deep-link / cross-group search jump scrolls to (and flashes) one setting, or
+ * scrolls to one in-page group card. A `setting` target marked `focus` also
+ * moves keyboard focus onto the row, so activating a search result does not
+ * lose focus when the result list unmounts.
+ */
+type PendingTarget =
+  | { kind: 'setting'; id: string; focus?: boolean }
+  | { kind: 'group'; group: string };
 
-function isSettingIdMatch(query: SearchQuery, ...ids: string[]): boolean {
-  return query.id !== null && ids.includes(query.id);
+function HighlightedText({ text, terms }: { text: string; terms: readonly string[] }): ReactNode {
+  return highlightText(text, terms).map((segment, index) =>
+    segment.match
+      ? <mark key={index} className="rounded-sm bg-primary/15 px-0.5 text-foreground">{segment.text}</mark>
+      : <span key={index}>{segment.text}</span>,
+  );
 }
 
 /**
- * The Settings Activity: a 220px secondary sidebar directory, a fixed search
- * row, and a scrolling list of setting rows. Reads come from the shared
- * Desktop preference and daemon queries; the page owns only the search, active
- * category and deep-link state.
+ * The Settings Activity: a 220px secondary sidebar that switches between one
+ * page per category, a fixed search row, and a scrolling body. Every category
+ * page stays mounted but hidden, so only the selected one is visible and a
+ * category switch never unmounts a custom control's draft. The navigation state
+ * records the category, so back/forward and `settings.open` deep links land on
+ * the right page; a queued target scrolls (and flashes/focuses) the exact row
+ * after that page renders. Search remains a cross-category result list.
  */
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const platform = shell.platform;
 
   const [searchInput, setSearchInput] = useState('');
-  const [activeCategory, setActiveCategory] = useState<SettingsCategoryId | null>(null);
+  const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>('general');
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem('settings-sidebar-open') !== 'false');
   useEffect(() => {
     localStorage.setItem('settings-sidebar-open', String(sidebarOpen));
   }, [sidebarOpen]);
-  const [pendingScroll, setPendingScroll] = useState<
-    { kind: 'category'; id: SettingsCategoryId } | { kind: 'setting'; id: string } | null
-  >(null);
+  const [pendingTarget, setPendingTarget] = useState<PendingTarget | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useSecondarySidebar({ open: sidebarOpen, setOpen: setSidebarOpen });
 
-  const navState = useMemo<Record<string, string>>(() => {
-    const next: Record<string, string> = {};
-    if (activeCategory !== null) next.category = activeCategory;
-    return next;
-  }, [activeCategory]);
+  const navState = useMemo<Record<string, string>>(() => ({ category: activeCategory }), [activeCategory]);
   const restoreLocation = useCallback((state: Record<string, string>) => {
     const category = state.category;
     if (category !== undefined && isSettingsCategoryId(category)) {
       setSearchInput('');
-      setPendingScroll({ kind: 'category', id: category });
+      setActiveCategory(category);
       return true;
     }
     return false;
@@ -94,6 +100,13 @@ export function SettingsPage() {
   useNavLocation(navState, restoreLocation);
 
   const query = useMemo(() => parseSearchQuery(searchInput), [searchInput]);
+  const searchActive = !isEmptyQuery(query);
+
+  // What the scroll container currently shows: the search results, or the one
+  // selected category page. A change of this value resets the scroll to the top
+  // unless a pending target scrolls somewhere specific instead.
+  const visiblePage = searchActive ? '__search__' : activeCategory;
+  const visiblePageRef = useRef(visiblePage);
 
   const preferences = usePreferencesQuery();
 
@@ -143,16 +156,20 @@ export function SettingsPage() {
     return map;
   }, [preferences.data, savePreference.isPending, savePreference.isError, savePreference.variables, savePreference.error, savePreference]);
 
-  const shortcutCount = useMemo(() => {
+  const matchingShortcuts = useMemo(() => {
     return KNOWN_SHORTCUTS.filter((shortcut) => {
       const keys = knownShortcutKeys(shortcut, platform);
       if (keys === null) return false;
       return shortcutMatches({ title: shortcut.title, category: shortcut.category, scope: shortcut.scope, keys }, query);
-    }).length;
+    });
   }, [platform, query]);
+  const shortcutCount = matchingShortcuts.length;
 
-  const matches = useMemo(() => {
-    const result: CategoryMatch[] = [];
+  // Every registry setting that matches the active search, grouped by category.
+  // An empty query matches everything, so this also backs the full category
+  // counts shown in the directory.
+  const categoryMatches = useMemo(() => {
+    const map = new Map<SettingsCategoryId, SettingDefinition[]>();
     for (const category of SETTINGS_CATEGORIES) {
       const definitions = settingsForCategory(category.id)
         .filter((definition) => definition.platform === undefined || definition.platform.includes(platform))
@@ -167,48 +184,51 @@ export function SettingsPage() {
             query,
           );
         });
-      const groupLabels = SETTINGS_GROUP_LABELS[category.id] ?? [];
-      const groups = groupLabels
-        .map((group) => ({
-          key: group.key,
-          label: group.label,
-          definitions: definitions.filter((definition) => definition.group === group.key),
-        }))
-        .filter((group) => group.definitions.length > 0);
-      if (definitions.length > 0 || isSettingIdMatch(query, category.id)) {
-        result.push({ id: category.id, label: category.label, definitions, groups });
-      }
+      map.set(category.id, definitions);
     }
-    return result;
-  }, [query, preferenceBindings]);
+    return map;
+  }, [platform, query, preferenceBindings]);
 
-  const shortcutsVisible = shortcutCount > 0 || isSettingIdMatch(query, 'shortcuts');
-  const totalResults = matches.reduce((sum, category) => sum + category.definitions.length, 0)
-    + (shortcutsVisible ? shortcutCount : 0);
-  const showEmpty = isEmptyQuery(query) ? false : totalResults === 0;
-
-  const visibleKey = `${matches.map((category) => `${category.id}:${category.definitions.length}`).join(',')}|${shortcutsVisible ? shortcutCount : 0}`;
+  const totalResults = useMemo(() => {
+    let count = shortcutCount;
+    for (const definitions of categoryMatches.values()) count += definitions.length;
+    return count;
+  }, [categoryMatches, shortcutCount]);
+  const showEmpty = searchActive && totalResults === 0;
 
   const scrollTo = useCallback((selector: string, block: ScrollLogicalPosition) => {
     scrollRef.current?.querySelector<HTMLElement>(selector)?.scrollIntoView({ block });
   }, []);
 
-  // Apply a queued deep-link / history-restore scroll once the target renders.
+  const focusSetting = useCallback((id: string) => {
+    scrollRef.current?.querySelector<HTMLElement>(`#setting-${CSS.escape(id)}`)?.focus({ preventScroll: true });
+  }, []);
+
+  // Apply a queued deep-link / search jump once the owning page has rendered.
+  // A pending target always wins over the page-change scroll reset, so it works
+  // the same when the category changes (nav restore, `settings.open`, a search
+  // result) and when it only scrolls within the current page. Otherwise, any
+  // change of the visible page (category switch, entering or leaving search)
+  // resets the scroll container to the top.
   useEffect(() => {
-    if (pendingScroll === null) return;
-    const request = pendingScroll;
-    setPendingScroll(null);
-    if (request.kind === 'category') {
-      setActiveCategory(request.id);
-      scrollTo(`[data-category="${request.id}"]`, 'start');
+    const pageChanged = visiblePageRef.current !== visiblePage;
+    visiblePageRef.current = visiblePage;
+    if (pendingTarget === null) {
+      if (pageChanged) scrollRef.current?.scrollTo({ top: 0 });
       return;
     }
-    setActiveCategory(null);
+    const request = pendingTarget;
+    setPendingTarget(null);
+    if (request.kind === 'group') {
+      requestAnimationFrame(() => scrollTo(`[data-group="${CSS.escape(request.group)}"]`, 'start'));
+      return;
+    }
     setFlashId(request.id);
     requestAnimationFrame(() => {
       scrollTo(`#setting-${CSS.escape(request.id)}`, 'center');
+      if (request.focus === true) focusSetting(request.id);
     });
-  }, [pendingScroll, scrollTo]);
+  }, [pendingTarget, visiblePage, scrollTo, focusSetting]);
 
   // Clear the deep-link flash after one pulse.
   useEffect(() => {
@@ -216,30 +236,6 @@ export function SettingsPage() {
     const timer = window.setTimeout(() => setFlashId(null), 1_200);
     return () => window.clearTimeout(timer);
   }, [flashId]);
-
-  // Scroll-linked directory highlight: the topmost category in view wins.
-  useEffect(() => {
-    const root = scrollRef.current;
-    if (root === null) return;
-    const sections = Array.from(root.querySelectorAll<HTMLElement>('[data-category]'));
-    if (sections.length === 0) return;
-    const visible = new Map<string, number>();
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const id = entry.target.getAttribute('data-category');
-          if (id === null) continue;
-          if (entry.isIntersecting) visible.set(id, entry.boundingClientRect.top);
-          else visible.delete(id);
-        }
-        const top = [...visible.entries()].sort((a, b) => a[1] - b[1])[0];
-        if (top !== undefined && isSettingsCategoryId(top[0])) setActiveCategory(top[0]);
-      },
-      { root, rootMargin: '0px 0px -70% 0px', threshold: 0 },
-    );
-    for (const section of sections) observer.observe(section);
-    return () => observer.disconnect();
-  }, [visibleKey]);
 
   // `settings.open` deep links land here after the command router navigates.
   useEffect(() => registerPageCommands('settings', [{
@@ -253,9 +249,15 @@ export function SettingsPage() {
           : null;
       if (typeof target !== 'string') return;
       setSearchInput('');
-      if (isSettingsCategoryId(target)) setPendingScroll({ kind: 'category', id: target });
-      else if (SETTINGS_REGISTRY.some((definition) => definition.id === target)) {
-        setPendingScroll({ kind: 'setting', id: target });
+      setPendingTarget(null);
+      if (isSettingsCategoryId(target)) {
+        setActiveCategory(target);
+        return;
+      }
+      const definition = SETTINGS_REGISTRY.find((candidate) => candidate.id === target);
+      if (definition !== undefined) {
+        setActiveCategory(definition.category);
+        setPendingTarget({ kind: 'setting', id: target });
       }
     },
   }]), []);
@@ -266,36 +268,68 @@ export function SettingsPage() {
     }
   };
 
+  // Sidebar category click: switch pages, leaving search and any stale target.
   const selectCategory = useCallback((id: SettingsCategoryId) => {
+    setSearchInput('');
+    setPendingTarget(null);
     setActiveCategory(id);
-    scrollTo(`[data-category="${id}"]`, 'start');
-  }, [scrollTo]);
+  }, []);
 
+  // Sidebar group click: open the owning page, then scroll to that group card.
   const selectGroup = useCallback((categoryId: SettingsCategoryId, group: string) => {
+    setSearchInput('');
     setActiveCategory(categoryId);
-    scrollTo(`[data-category="${categoryId}"] [data-group="${group}"]`, 'start');
-  }, [scrollTo]);
+    setPendingTarget({ kind: 'group', group });
+  }, []);
 
+  // Search result activation: open the category page, then focus and flash the
+  // setting. The focus lands after the result list unmounts, so it is not lost.
+  const activateResult = useCallback((categoryId: SettingsCategoryId, settingId?: string) => {
+    setSearchInput('');
+    setActiveCategory(categoryId);
+    setPendingTarget(settingId !== undefined ? { kind: 'setting', id: settingId, focus: true } : null);
+  }, []);
+
+  // The directory always lists all nine categories; counts reflect the search.
   const tocCategories = useMemo<TocCategory[]>(() => {
-    return matches.map((category) => ({
-      id: category.id,
-      label: category.label,
-      count: category.definitions.length,
-      groups: category.groups.map((group) => ({ key: group.key, label: group.label, count: group.definitions.length })),
-    }));
-  }, [matches]);
+    return SETTINGS_CATEGORIES.map((category) => {
+      const definitions = categoryMatches.get(category.id) ?? [];
+      const groupLabels = SETTINGS_GROUP_LABELS[category.id] ?? [];
+      return {
+        id: category.id,
+        label: category.label,
+        count: category.id === 'shortcuts' ? shortcutCount : definitions.length,
+        groups: groupLabels.map((group) => ({
+          key: group.key,
+          label: group.label,
+          count: definitions.filter((definition) => definition.group === group.key).length,
+        })),
+      };
+    });
+  }, [categoryMatches, shortcutCount]);
 
-  const renderCategoryBody = (category: CategoryMatch): ReactNode => {
-    if (category.groups.length > 0) {
-      return category.groups.map((group) => (
-        <div key={group.key} data-group={group.key} className="flex flex-col gap-2 scroll-mt-4">
-          <h3 className="text-sm font-medium">{group.label}</h3>
-          {group.definitions.map(renderRow)}
-        </div>
-      ));
-    }
-    return category.definitions.map(renderRow);
-  };
+  // Each category page's group cards. Every category page stays mounted (just
+  // hidden when it is not the visible page), so groups are computed for all of
+  // them and a category switch never discards a custom control's draft.
+  const categoryGroups = useMemo(() => {
+    return new Map(
+      SETTINGS_CATEGORIES.map((category) => {
+        const definitions = settingsForCategory(category.id)
+          .filter((definition) => definition.platform === undefined || definition.platform.includes(platform));
+        const groupLabels = SETTINGS_GROUP_LABELS[category.id] ?? [];
+        const groups = groupLabels.length === 0
+          ? [{ key: '', label: '', definitions }]
+          : groupLabels
+              .map((group) => ({
+                key: group.key,
+                label: group.label,
+                definitions: definitions.filter((definition) => definition.group === group.key),
+              }))
+              .filter((group) => group.definitions.length > 0);
+        return [category.id, groups] as const;
+      }),
+    );
+  }, [platform]);
 
   function renderRow(definition: SettingDefinition): ReactNode {
     return (
@@ -349,38 +383,109 @@ export function SettingsPage() {
               <SettingsSearch value={searchInput} resultCount={totalResults} onChange={setSearchInput} />
             </div>
             <div ref={scrollRef} className="@container/main min-h-0 flex-1 overflow-auto">
-              <div className="flex w-full max-w-3xl flex-col gap-6 p-4">
+              <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-6">
                 <PetSettingsProvider>
-                  {showEmpty ? (
-                    <Empty>
-                      <EmptyHeader>
-                        <EmptyTitle>{SEARCH_EMPTY_TITLE}</EmptyTitle>
-                        <EmptyDescription>{SEARCH_EMPTY_DESCRIPTION}</EmptyDescription>
-                      </EmptyHeader>
-                    </Empty>
-                  ) : (
-                    <>
-                      {matches.map((category) => (
-                        <section
-                          key={category.id}
-                          data-category={category.id}
-                          className="flex flex-col gap-3 scroll-mt-4"
-                        >
-                          <h2 className="flex items-center gap-3 text-lg font-medium">
-                            {category.label}
-                            {category.id === 'pet' && <PetStatusBadge />}
-                          </h2>
-                          {renderCategoryBody(category)}
-                        </section>
-                      ))}
-                      {shortcutsVisible && !matches.some((category) => category.id === 'shortcuts') && (
-                        <section data-category="shortcuts" className="flex flex-col gap-3 scroll-mt-4">
-                          <h2 className="text-lg font-medium">{settingsCategoryLabel('shortcuts')}</h2>
-                          <ShortcutsTable platform={platform} query={query} />
-                        </section>
-                      )}
-                    </>
+                  {searchActive && (
+                    showEmpty ? (
+                      <Empty>
+                        <EmptyHeader>
+                          <EmptyTitle>{SEARCH_EMPTY_TITLE}</EmptyTitle>
+                          <EmptyDescription>{SEARCH_EMPTY_DESCRIPTION}</EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
+                    ) : (
+                      <>
+                        {SETTINGS_CATEGORIES.map((category) => {
+                          const definitions = categoryMatches.get(category.id) ?? [];
+                          if (definitions.length === 0) return null;
+                          return (
+                            <section key={category.id} className="flex flex-col gap-1">
+                              <h3 className="px-3 text-xs font-medium tracking-wide text-muted-foreground">
+                                {category.label}
+                              </h3>
+                              {definitions.map((definition) => (
+                                <button
+                                  key={definition.id}
+                                  type="button"
+                                  onClick={() => activateResult(category.id, definition.id)}
+                                  className="flex flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
+                                >
+                                  <span className="text-sm font-medium">
+                                    <HighlightedText text={definition.title} terms={query.terms} />
+                                  </span>
+                                  {definition.description !== undefined && (
+                                    <span className="text-xs text-muted-foreground">
+                                      <HighlightedText text={definition.description} terms={query.terms} />
+                                    </span>
+                                  )}
+                                </button>
+                              ))}
+                            </section>
+                          );
+                        })}
+                        {shortcutCount > 0 && (
+                          <section className="flex flex-col gap-1">
+                            <h3 className="px-3 text-xs font-medium tracking-wide text-muted-foreground">
+                              {settingsCategoryLabel('shortcuts')}
+                            </h3>
+                            {matchingShortcuts.map((shortcut) => (
+                              <button
+                                key={`${shortcut.category}-${shortcut.title}`}
+                                type="button"
+                                onClick={() => activateResult('shortcuts')}
+                                className="flex flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
+                              >
+                                <span className="text-sm font-medium">
+                                  <HighlightedText text={shortcut.title} terms={query.terms} />
+                                </span>
+                                <span className="text-xs text-muted-foreground">{shortcut.scope}</span>
+                              </button>
+                            ))}
+                          </section>
+                        )}
+                      </>
+                    )
                   )}
+                  {SETTINGS_CATEGORIES.map((category) => {
+                    const visible = !searchActive && category.id === activeCategory;
+                    const groups = categoryGroups.get(category.id) ?? [];
+                    return (
+                      <section
+                        key={category.id}
+                        className={visible ? 'flex flex-col gap-6' : 'hidden'}
+                      >
+                        <header className="flex flex-col gap-1">
+                          <h1 className="flex items-center gap-3 text-xl font-semibold">
+                            {settingsCategoryLabel(category.id)}
+                            {category.id === 'pet' && <PetStatusBadge />}
+                          </h1>
+                          <p className="text-sm text-muted-foreground">
+                            {settingsCategoryDescription(category.id)}
+                          </p>
+                        </header>
+                        {category.id === 'shortcuts' ? (
+                          <ShortcutsTable platform={platform} query={query} />
+                        ) : (
+                          groups.map((group) => (
+                            <section
+                              key={group.key || 'all'}
+                              data-group={group.key === '' ? undefined : group.key}
+                              className="flex scroll-mt-4 flex-col gap-2"
+                            >
+                              {group.label !== '' && (
+                                <h3 className="text-sm font-medium text-muted-foreground">{group.label}</h3>
+                              )}
+                              <div className="overflow-hidden rounded-xl border bg-card">
+                                <div className="@container/field-group flex w-full flex-col divide-y">
+                                  {group.definitions.map(renderRow)}
+                                </div>
+                              </div>
+                            </section>
+                          ))
+                        )}
+                      </section>
+                    );
+                  })}
                 </PetSettingsProvider>
               </div>
             </div>

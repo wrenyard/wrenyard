@@ -10,12 +10,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/renderer/components/ui/dropdown-menu';
-import { Field, FieldDescription, FieldError, FieldLabel } from '@/renderer/components/ui/field';
+import { Field, FieldContent, FieldDescription, FieldError, FieldLabel } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import { copyText } from '@/renderer/lib/desktop';
-import { settingsCategoryLabel } from '../model/categories.js';
 import {
   GEAR_COPY_ID_LABEL,
   GEAR_COPY_JSON_LABEL,
@@ -23,7 +22,7 @@ import {
   SETTING_INVALID_NUMBER,
   SETTING_NUMBER_RANGE,
 } from '../model/describe.js';
-import type { SettingControl, SettingDefinition } from '../model/registry.js';
+import type { CustomControlKey, SettingControl, SettingDefinition } from '../model/registry.js';
 import { highlightText } from '../model/search.js';
 import { CUSTOM_CONTROLS } from './custom-controls.js';
 
@@ -59,12 +58,27 @@ function HighlightedText({ text, terms }: { text: string; terms: readonly string
   ));
 }
 
+/**
+ * Custom controls that need the whole card width: pickers and forms built from
+ * several elements (theme cards, workspace, routing weights, the update panel
+ * and runtime aliases). Every other custom control is a single widget and keeps
+ * the standard label-left / control-right row.
+ */
+const STACKED_CUSTOM_CONTROLS: ReadonlySet<CustomControlKey> = new Set([
+  'themeCards',
+  'workspace',
+  'routingWeights',
+  'runtimeAliases',
+  'updateStatus',
+]);
+
 function BooleanControl({ value, disabled, onChange }: {
   value: unknown;
   disabled: boolean;
   onChange: (value: unknown) => void;
 }) {
-  // VS Code-style boolean: the official Checkbox, with its description to the right.
+  // VS Code-style boolean: just the official Checkbox; the label and description
+  // stay together on the left of the row.
   return (
     <Checkbox
       checked={value === true}
@@ -227,15 +241,20 @@ function GearMenu({ definition, binding, canReset }: {
 }
 
 /**
- * One settings row: category-prefixed label, description, control, the
- * modified marker and gear menu. Standard controls write through the binding;
- * custom controls own their own persistence.
+ * One settings row. Inside a single category page the category prefix on the
+ * label would only repeat the page heading, so it is dropped; the label and
+ * description sit on the left and the control on the right on wide layouts,
+ * stacking in narrow ones. A genuinely complex custom control takes the full
+ * row width and owns its own persistence.
  */
 export function SettingRow({ definition, binding, highlightTerms = [], flashed = false }: SettingRowProps) {
   const readonly = definition.readonly === true || binding?.readonly === true;
   const modified = binding !== undefined && binding.modified && !readonly;
   const canReset = !readonly && definition.default !== undefined && binding?.onReset !== undefined && modified === true;
   const isCustom = definition.control.kind === 'custom';
+  // Only a genuinely complex custom control stacks full-width; a simple one
+  // keeps the responsive label-left / control-right layout.
+  const stackControl = definition.control.kind === 'custom' && STACKED_CUSTOM_CONTROLS.has(definition.control.render);
   const disabled = readonly || binding?.pending === true;
 
   const control = (() => {
@@ -270,45 +289,39 @@ export function SettingRow({ definition, binding, highlightTerms = [], flashed =
     }
   })();
 
-  // A boolean's description sits to the right of the checkbox, like VS Code.
-  const booleanControl = definition.control.kind === 'boolean';
-
   return (
     <div
       id={`setting-${definition.id}`}
       data-setting-id={definition.id}
       data-flash={flashed ? 'true' : undefined}
-      className="group/setting relative flex gap-2 rounded-2xl px-3 py-2 transition-colors hover:bg-muted/50 focus-within:bg-muted/50 data-[flash=true]:bg-primary/10"
+      tabIndex={-1}
+      className="group/setting relative flex gap-3 px-4 py-3 outline-none transition-colors hover:bg-muted/40 focus-within:bg-muted/40 data-[flash=true]:bg-primary/10"
     >
       <div className="relative flex w-5 shrink-0 justify-center self-stretch">
         {modified && <span aria-hidden="true" className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />}
         {!isCustom && <GearMenu definition={definition} binding={binding} canReset={canReset} />}
       </div>
       <Field
-        orientation="vertical"
-        className="gap-1.5"
+        orientation={stackControl ? 'vertical' : 'responsive'}
+        className="min-w-0"
         data-invalid={binding?.error !== undefined && binding.error !== '' ? true : undefined}
       >
-        <FieldLabel>
-          <span className="text-muted-foreground">{settingsCategoryLabel(definition.category)}: </span>
-          <span className="font-medium">
-            <HighlightedText text={definition.title} terms={highlightTerms} />
-          </span>
-        </FieldLabel>
-        {definition.description !== undefined && !booleanControl && (
-          <FieldDescription>
-            <HighlightedText text={definition.description} terms={highlightTerms} />
-          </FieldDescription>
-        )}
-        <div className="flex items-center gap-2">
-          {control}
-          {booleanControl && definition.description !== undefined && (
-            <span className="text-sm text-muted-foreground">
-              <HighlightedText text={definition.description} terms={highlightTerms} />
+        <FieldContent>
+          <FieldLabel>
+            <span className="font-medium">
+              <HighlightedText text={definition.title} terms={highlightTerms} />
             </span>
+          </FieldLabel>
+          {definition.description !== undefined && (
+            <FieldDescription>
+              <HighlightedText text={definition.description} terms={highlightTerms} />
+            </FieldDescription>
           )}
+          {binding?.error !== undefined && binding.error !== '' && <FieldError>{binding.error}</FieldError>}
+        </FieldContent>
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+          {control}
         </div>
-        {binding?.error !== undefined && binding.error !== '' && <FieldError>{binding.error}</FieldError>}
       </Field>
     </div>
   );
