@@ -1400,7 +1400,7 @@ export const KNOWN_SHORTCUTS: readonly KnownShortcut[] = [
   { category: '编辑', title: '粘贴', mac: '⌘V', other: 'Ctrl+V', scope: '全局' },
   { category: '编辑', title: '全选', mac: '⌘A', other: 'Ctrl+A', scope: '全局' },
   { category: '窗口', title: '最小化', mac: '⌘M', scope: '全局' },
-  { category: '窗口', title: '关闭窗口', mac: '⌘W', scope: '全局' },
+  { category: '窗口', title: '关闭窗口', mac: '⌘W / ⌃W', other: 'Ctrl+W', scope: '全局' },
   { category: '应用', title: '隐藏啾啾工坊', mac: '⌘H', scope: '全局' },
   { category: '应用', title: '隐藏其他', mac: '⌥⌘H', scope: '全局' },
   { category: '应用', title: '检查更新', mac: '⇧⌘U', other: 'Ctrl+Shift+U', scope: '全局' },
