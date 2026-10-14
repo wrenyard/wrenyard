@@ -110,10 +110,11 @@ function lookupUnifiedModelId(productId: string): string | undefined {
 }
 
 /**
- * Map a product id onto the registered model it names, or ignore it. A
- * `/v3/config` cli row that resolves adopts that model's registered identity,
- * so its registry metadata and aliases are retained; a row that names no
- * registered model is not offered.
+ * Map a product id onto the registered model it names, or return undefined for
+ * an unknown registry identity. A `/v3/config` cli row that resolves adopts that
+ * model's registered identity, so its registry metadata and aliases are
+ * retained; a row that resolves to no registered identity is still offered, just
+ * without registry metadata.
  */
 export function resolveCodeBuddyProductModelId(productId: string): string | undefined {
   return lookupUnifiedModelId(productId);
@@ -205,14 +206,13 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
   models: ModelDefinition[];
   upstreamByCanonical: Record<string, string>;
 } {
-  // Membership is endpoint-driven: exactly one offering per `/v3/config` cli
-  // row, in the endpoint's own order. The row supplies the public id and display
-  // name; a row that names a registered model additionally adopts that model's
-  // canonical identity and complete registry metadata, still published under the
-  // endpoint's own name. A row that names no registered model is offered too,
-  // carrying only what the endpoint declares — its intelligence, price, speed
-  // and reasoning ladder stay unknown rather than being invented. No row is
-  // dropped and no rows are merged.
+  // Membership is endpoint-driven: the endpoint supplies membership, order and
+  // the raw public ids — exactly one offering per `/v3/config` cli row, in the
+  // endpoint's own order. The registry supplies display names and metadata for
+  // the models it knows, published under the endpoint's own id. A row naming no
+  // registered model is still offered, using the endpoint name — or the raw id
+  // when the endpoint gives no name — with hyphens replaced by spaces; no
+  // metadata is fabricated for it. No row is dropped and no rows are merged.
   const offerings: ModelDefinition[] = [];
   const upstreamByCanonical: Record<string, string> = {};
   const seen = new Set<string>();
@@ -221,7 +221,6 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
     seen.add(entry.id);
     const canonicalId = resolveCodeBuddyProductModelId(entry.id);
     const registered = canonicalId === undefined ? undefined : models.get(canonicalId);
-    const displayName = entry.name ?? registered?.displayName ?? entry.id;
     let definition: ModelDefinition;
     if (canonicalId !== undefined && registered !== undefined) {
       definition = {
@@ -233,15 +232,15 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
             reasoningEfforts: codeBuddyReasoningEfforts(canonicalId),
           },
         }),
-        // The displayed identity is the endpoint's own id and name; the
+        // The endpoint supplies the raw public id; the registry supplies the
+        // display name and metadata, published under the endpoint's own id. The
         // registered identity stays available as `canonicalModel`.
         id: entry.id,
-        displayName,
       };
     } else {
       definition = resolveProviderModel({
         id: entry.id,
-        displayName,
+        displayName: (entry.name ?? entry.id).replace(/-/gu, ' '),
         ...(entry.maxOutputTokens === undefined ? {} : { maxOutputTokens: entry.maxOutputTokens }),
         ...(entry.supportsImages === true ? { capabilities: ['text', 'image'] } : {}),
       });
