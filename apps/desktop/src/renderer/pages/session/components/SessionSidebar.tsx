@@ -18,6 +18,7 @@ import {
   SESSION_SORT_BY_DEFAULT,
   SESSION_STATUS_FILTER_DEFAULT,
 } from '@/shell-contract';
+import { Button } from '@/renderer/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/components/ui/collapsible';
 import {
   DropdownMenu,
@@ -333,50 +334,48 @@ export function SessionSidebar({
         </SidebarHeader>
       )}
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <DropdownMenu>
-                <DropdownMenuTrigger render={<SidebarMenuButton aria-label="列表选项" />}>
-                  <SlidersHorizontal />
-                  <span>列表选项</span>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-48">
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>分组</DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      <DropdownMenuRadioGroup value={groupBy} onValueChange={(value) => setOption('session.groupBy', value)}>
-                        {GROUP_BY_OPTIONS.map((option) => (
-                          <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
-                        ))}
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>排序</DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      <DropdownMenuRadioGroup value={sortBy} onValueChange={(value) => setOption('session.sortBy', value)}>
-                        {SORT_BY_OPTIONS.map((option) => (
-                          <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
-                        ))}
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                  <DropdownMenuSub>
-                    <DropdownMenuSubTrigger>状态</DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      <DropdownMenuRadioGroup value={statusFilter} onValueChange={(value) => setOption('session.statusFilter', value)}>
-                        {STATUS_FILTER_OPTIONS.map((option) => (
-                          <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
-                        ))}
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroup>
+        <div className="flex h-8 shrink-0 items-center justify-between gap-2 px-3">
+          <span className="text-xs font-medium text-sidebar-foreground/70">对话</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="ghost" size="icon-sm" aria-label="列表选项" title="列表选项" />}
+            >
+              <SlidersHorizontal />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>分组</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DropdownMenuRadioGroup value={groupBy} onValueChange={(value) => setOption('session.groupBy', value)}>
+                    {GROUP_BY_OPTIONS.map((option) => (
+                      <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>排序</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DropdownMenuRadioGroup value={sortBy} onValueChange={(value) => setOption('session.sortBy', value)}>
+                    {SORT_BY_OPTIONS.map((option) => (
+                      <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>状态</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DropdownMenuRadioGroup value={statusFilter} onValueChange={(value) => setOption('session.statusFilter', value)}>
+                    {STATUS_FILTER_OPTIONS.map((option) => (
+                      <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
 
         {loading && sessions.length === 0 && (
           <SidebarGroup>

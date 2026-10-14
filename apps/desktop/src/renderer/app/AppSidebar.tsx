@@ -1,4 +1,4 @@
-import { Search, SquarePen } from 'lucide-react';
+import { MoreHorizontal, Search, SquarePen } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { SESSION_STATUS_FILTER_DEFAULT, type ShellPage, type SessionStatusFilter } from '@/shell-contract';
 import { shell } from '@/renderer/lib/desktop';
@@ -13,6 +13,12 @@ import { SessionSidebar } from '@/renderer/pages/session/components/SessionSideb
 import { DaemonItem } from '@/renderer/app/statusbar/DaemonItem';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/renderer/components/ui/dropdown-menu';
 import { usePreferencesQuery } from '@/renderer/pages/settings/queries';
 import {
   Sidebar,
@@ -40,11 +46,15 @@ function matchesStatusFilter(session: { archived?: boolean }, filter: SessionSta
   return session.archived !== true;
 }
 
+/** Route rows kept full-width in the header; the rest fold into the 更多 menu. */
+const VISIBLE_NAV_IDS: ReadonlySet<ShellPage> = new Set(['session', 'tasks']);
+
 /**
  * The shell's single global sidebar (`offcanvas`, no icon rail): a top group of
- * full-width route rows (new conversation plus the feature pages), the shared
- * conversation list with its own scrolling, and a bottom bar pinned at the
- * bottom. The bottom bar holds the long Daemon button (environment label and
+ * full-width rows (new conversation, search, and the most-used pages 会话 and
+ * 任务) alongside a 更多 menu that folds in the remaining feature pages, the
+ * shared conversation list with its own scrolling, and a bottom bar pinned at
+ * the bottom. The bottom bar holds the long Daemon button (environment label and
  * connectivity, opening the daemon menu) on the left and a compact settings icon
  * button on the right. The list is composed through `SessionSidebar`'s header
  * and footer slots so there is only one conversation-list implementation.
@@ -62,6 +72,9 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
   const preferences = usePreferencesQuery();
   const list = sessions.data ?? [];
   const statusFilter = preferences.data?.session.statusFilter ?? SESSION_STATUS_FILTER_DEFAULT;
+  const visibleNav = PRIMARY_NAV.filter((item) => VISIBLE_NAV_IDS.has(item.id));
+  const secondaryNav = PRIMARY_NAV.filter((item) => !VISIBLE_NAV_IDS.has(item.id));
+  const secondaryActive = secondaryNav.some((item) => item.id === page);
 
   const invalidateList = (): Promise<void> =>
     queryClient.invalidateQueries({ queryKey: sessionListQueryKey });
@@ -137,7 +150,7 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
             <span>搜索</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
-        {PRIMARY_NAV.map((item) => (
+        {visibleNav.map((item) => (
           <SidebarMenuItem key={item.id}>
             <SidebarMenuButton
               tooltip={item.label}
@@ -150,6 +163,29 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
             </SidebarMenuButton>
           </SidebarMenuItem>
         ))}
+        <SidebarMenuItem>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<SidebarMenuButton isActive={secondaryActive} aria-label="更多" />}
+            >
+              <MoreHorizontal />
+              <span>更多</span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48">
+              {secondaryNav.map((item) => (
+                <DropdownMenuItem
+                  key={item.id}
+                  aria-current={page === item.id ? 'page' : undefined}
+                  className={cn(page === item.id && 'bg-accent text-accent-foreground')}
+                  onClick={() => void shell.navigate(item.id)}
+                >
+                  <item.icon />
+                  <span>{item.label}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </SidebarMenuItem>
       </SidebarMenu>
     </SidebarHeader>
   );
