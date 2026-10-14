@@ -11,8 +11,8 @@
  *
  * {@link STATUS_BAR_CONFIGURABLE_ITEMS} is the exact metadata consumed by both
  * the status-bar context menu and the Settings "外观 › 状态栏" controls; the
- * mandatory ids (`daemon`, `notifications`) are never part of it and can never
- * be hidden. Hidden ids persist in the `statusBar.hidden` preference.
+ * mandatory id (`notifications`) is never part of it and can never be hidden.
+ * Hidden ids persist in the `statusBar.hidden` preference.
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
@@ -32,7 +32,7 @@ export interface StatusBarItemDefinition {
 }
 
 /** Always-present items; excluded from {@link STATUS_BAR_CONFIGURABLE_ITEMS}. */
-export const STATUS_BAR_MANDATORY_IDS: readonly string[] = ['daemon', 'notifications'];
+export const STATUS_BAR_MANDATORY_IDS: readonly string[] = ['notifications'];
 
 /**
  * The items a user may hide from the status-bar context menu or Settings. Ids

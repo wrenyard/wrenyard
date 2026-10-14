@@ -1,12 +1,16 @@
-import { Plug, Unplug } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowUp, ChevronUp, Gauge, Info, Plug, Unplug } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/renderer/components/ui/button';
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/renderer/components/ui/popover';
+import { Separator } from '@/renderer/components/ui/separator';
 import { Spinner } from '@/renderer/components/ui/spinner';
-import { StatusBarButton } from '@/renderer/components/status-bar-button';
 import { useConfirm } from '@/renderer/hooks/use-confirm';
+import { UPDATE_VISIBLE_STATES } from '@/renderer/app/nav';
+import { executeCommand } from '@/renderer/lib/commands';
 import { shell } from '@/renderer/lib/desktop';
-import { daemonQuery, settingsQuery } from '@/renderer/lib/queries';
+import { daemonQuery, settingsQuery, updateQuery } from '@/renderer/lib/queries';
+import { updateView } from '@/renderer/lib/update';
 import type {
   DaemonConnectionMode,
   DaemonLifecycleSnapshot,
@@ -16,10 +20,12 @@ import type {
 import { cn } from 'cn';
 
 /**
- * Status-bar daemon item (window-chrome spec 4.2). An icon shows connection
- * health, with a short environment label in its tooltip. The popover adds
- * version, uptime, IPC endpoint and lifecycle ownership, plus a restart action
- * when the daemon is Desktop-supervised.
+ * Sidebar Daemon button (window-chrome spec 4.2, moved out of the status bar). A
+ * long button shows the connection icon, the truthful environment label and a
+ * small connectivity dot, and opens a menu with the daemon version, uptime, IPC
+ * endpoint and lifecycle ownership, a restart action when the daemon is
+ * Desktop-supervised, the usage and about destinations, and the update entry.
+ * Update availability is also surfaced on the trigger so it stays discoverable.
  */
 
 const DISCONNECTED_STATES: ReadonlySet<DaemonProcessState> = new Set<DaemonProcessState>([
@@ -61,6 +67,16 @@ function lifecycleLabel(snapshot: DaemonLifecycleSnapshot | undefined): string {
   return `${MODE_LABEL[snapshot.mode]} · ${STATE_LABEL[snapshot.state]}`;
 }
 
+/** Connectivity dot tone, derived from the same state as the environment label. */
+type ConnectivityTone = 'online' | 'starting' | 'offline' | 'unknown';
+
+const DOT_CLASS: Readonly<Record<ConnectivityTone, string>> = {
+  online: 'bg-success',
+  starting: 'bg-warning',
+  offline: 'bg-destructive',
+  unknown: 'bg-muted-foreground',
+};
+
 /** Chinese uptime such as `2 小时 5 分`; em dash when unknown. */
 function formatUptime(ms: number | undefined): string {
   if (ms === undefined || !Number.isFinite(ms) || ms <= 0) return '—';
@@ -92,35 +108,96 @@ function LifecycleRow({
   );
 }
 
-export function DaemonItem() {
+export interface DaemonItemProps {
+  /** Opens the shared update dialog (the status-bar update entry's old action). */
+  onOpenUpdate: () => void;
+}
+
+export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
   const daemon = useQuery(daemonQuery);
   const settings = useQuery(settingsQuery);
+  const update = useQuery(updateQuery);
   const confirm = useConfirm();
+  const [open, setOpen] = useState(false);
   const snapshot = daemon.data;
   const starting = snapshot?.state === 'starting' || (snapshot === undefined && daemon.isPending);
   const disconnected = isDaemonDisconnected(snapshot);
 
   const status = starting ? '连接中' : connectionLabel(snapshot, settings.data?.service.runtimeMode);
+  const tone: ConnectivityTone = starting
+    ? 'starting'
+    : disconnected
+      ? 'offline'
+      : snapshot?.state === 'running'
+        ? 'online'
+        : 'unknown';
+
+  const updateState = update.data?.state;
+  const updateVisible =
+    updateState !== undefined && UPDATE_VISIBLE_STATES.some((visible) => visible === updateState);
+  const updateStatus = update.data === undefined ? undefined : updateView(update.data, update.isPending).label;
+  const currentVersion = update.data?.currentVersion ?? settings.data?.about.wrenyardVersion;
+  const updateSummary = [currentVersion === undefined ? undefined : `v${currentVersion}`, updateStatus]
+    .filter((part): part is string => part !== undefined)
+    .join(' · ');
 
   const handleRestart = async (): Promise<void> => {
     const confirmed = await confirm({ title: '重启 Daemon？', confirmLabel: '重启', destructive: true });
     if (confirmed) void shell.restartDaemon();
   };
 
+  const openUsage = (): void => {
+    setOpen(false);
+    void shell.navigate('quota');
+  };
+
+  const openAbout = (): void => {
+    setOpen(false);
+    executeCommand('settings.open', 'about');
+  };
+
+  const openUpdate = (): void => {
+    setOpen(false);
+    onOpenUpdate();
+  };
+
   return (
-    <Popover>
-      <PopoverTrigger nativeButton={false} render={<span className="inline-flex" />}>
-        <StatusBarButton
-          icon={starting ? undefined : snapshot?.state === 'running' ? Plug : Unplug}
-          tooltip={status}
-          ariaLabel="连接状态"
-          tone={disconnected ? 'destructive' : 'default'}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger nativeButton={false} render={<span className="inline-flex min-w-0 flex-1" />}>
+        <Button
+          type="button"
+          variant="ghost"
+          title={status}
+          aria-label={`Daemon 连接状态：${status}`}
+          aria-haspopup="dialog"
+          className="h-8 w-full min-w-0 justify-start gap-2 rounded-xl px-2.5 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
         >
-          {starting ? <Spinner className="size-3.5" /> : null}
-        </StatusBarButton>
+          {starting ? (
+            <Spinner className="size-4 shrink-0" />
+          ) : snapshot?.state === 'running' ? (
+            <Plug className="size-4 shrink-0" />
+          ) : (
+            <Unplug className="size-4 shrink-0" />
+          )}
+          <span className="min-w-0 flex-1 truncate text-left">{status}</span>
+          {updateVisible ? (
+            <ArrowUp
+              className="size-3.5 shrink-0 text-warning"
+              role="img"
+              aria-label={updateStatus ?? '有可用更新'}
+            />
+          ) : null}
+          <span aria-hidden className={cn('size-2 shrink-0 rounded-full', DOT_CLASS[tone])} />
+          <ChevronUp className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        </Button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="start" className="w-72">
-        <PopoverTitle>连接状态</PopoverTitle>
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="w-80 max-w-[calc(100vw-2rem)] max-h-[min(70vh,36rem)] overflow-y-auto"
+      >
+        <PopoverTitle>Daemon</PopoverTitle>
         <dl className="flex flex-col gap-1.5 text-xs">
           <LifecycleRow label="版本" value={settings.data?.about.wrenyardVersion ?? '—'} />
           <LifecycleRow label="运行时长" value={formatUptime(settings.data?.service.uptimeMs)} />
@@ -136,6 +213,42 @@ export function DaemonItem() {
             重启
           </Button>
         ) : null}
+        <Separator />
+        <div className="flex flex-col gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="justify-start gap-2"
+            onClick={openUsage}
+          >
+            <Gauge />
+            <span>用量</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="justify-start gap-2"
+            onClick={openAbout}
+          >
+            <Info />
+            <span>关于</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="justify-start gap-2"
+            onClick={openUpdate}
+          >
+            <ArrowUp className={cn(updateVisible && 'text-warning')} />
+            <span>软件更新</span>
+            {updateSummary !== '' ? (
+              <span className="ml-auto truncate text-xs text-muted-foreground">{updateSummary}</span>
+            ) : null}
+          </Button>
+        </div>
       </PopoverContent>
     </Popover>
   );

@@ -22,7 +22,8 @@ Desktop renderer + preload + Electron main
 - **Product navigation** — a 48px Wrenyard Activity Bar keeps a fixed,
   non-interactive Wrenyard brand mark at the top, exposes the session page as
   its own navigation item, adds “工房台账” and “模型供应”
-  as top-level child functions and places “啾啾工坊设置” at the bottom. The single
+  as top-level child functions and places a Daemon button (environment label and
+  connectivity) beside a settings icon at the bottom. The single
   local renderer owns every page; no embedded web UI or `WebContentsView` is
   used. `Cmd+,` / `Ctrl+,` opens settings; `Cmd+1` /
   `Ctrl+1` opens the session; `Cmd+2` / `Ctrl+2` opens statistics; `Cmd+3` /
@@ -164,8 +165,7 @@ Desktop is one Electron window with a persistent frame:
   is rejected. The mini-window title stays plain text and is not editable.
 - **Activity rail** — a fixed vertical rail with the primary pages
   (会话, 工房台账, 模型供应, 任务) and settings in its footer.
-- **Status bar** — a compact bar that projects live daemon, activity and quota
-  state.
+- **Status bar** — a compact bar that projects live activity and quota state.
 - **Themes** — the built-in paper and neutral themes, each with light and dark
   modes.
 - **Pet** — an in-process companion rendered in the same Electron main process;

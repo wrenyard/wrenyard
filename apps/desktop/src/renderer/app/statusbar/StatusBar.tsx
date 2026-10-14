@@ -20,7 +20,7 @@ import {
 } from '@/renderer/app/statusbar/registry';
 import { onQuotaPanelOpen } from '@/renderer/lib/statusbar';
 import type { StatusBarItemDefinition, StatusBarSide } from '@/renderer/app/statusbar/registry';
-import { DaemonItem, isDaemonDisconnected } from '@/renderer/app/statusbar/DaemonItem';
+import { isDaemonDisconnected } from '@/renderer/app/statusbar/DaemonItem';
 import { ActivityItem, TaskGraphItem } from '@/renderer/app/statusbar/ActivityItem';
 import { QuotaItem } from '@/renderer/app/statusbar/QuotaItem';
 import { NotificationItem } from '@/renderer/app/statusbar/NotificationItem';
@@ -150,7 +150,6 @@ export function StatusBar() {
       .sort(byPriority)
       .map(toEntry);
     return [
-      { id: 'daemon', side: 'start', priority: 0, mandatory: true, render: () => <DaemonItem /> },
       {
         id: 'activity.tasks',
         side: 'start',

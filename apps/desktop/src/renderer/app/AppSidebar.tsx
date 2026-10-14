@@ -6,7 +6,9 @@ import { executeCommand } from '@/renderer/lib/commands';
 import { useSessionListQuery } from '@/renderer/lib/queries';
 import { useActiveSession } from '@/renderer/lib/navigation';
 import { SessionSidebar } from '@/renderer/pages/session/components/SessionSidebar';
-import { UpdateItem } from '@/renderer/app/statusbar/UpdateItem';
+import { DaemonItem } from '@/renderer/app/statusbar/DaemonItem';
+import { Button } from '@/renderer/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import {
   Sidebar,
   SidebarHeader,
@@ -14,17 +16,21 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/renderer/components/ui/sidebar';
+import { cn } from 'cn';
 
 export interface AppSidebarProps {
   page: ShellPage;
+  /** Opens the shared update dialog, forwarded to the Daemon menu's update entry. */
   onOpenUpdate: () => void;
 }
 
 /**
  * The shell's single global sidebar (`offcanvas`, no icon rail): a top group of
  * full-width route rows (new conversation plus the feature pages), the shared
- * conversation list with its own scrolling, and the update and settings rows
- * pinned at the bottom. The list is composed through `SessionSidebar`'s header
+ * conversation list with its own scrolling, and a bottom bar pinned at the
+ * bottom. The bottom bar holds the long Daemon button (environment label and
+ * connectivity, opening the daemon menu) on the left and a compact settings icon
+ * button on the right. The list is composed through `SessionSidebar`'s header
  * and footer slots so there is only one conversation-list implementation.
  */
 export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
@@ -64,20 +70,30 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
   );
 
   const footer = (
-    <SidebarMenu>
-      <UpdateItem onOpenUpdate={onOpenUpdate} />
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          tooltip={SETTINGS_NAV.label}
-          isActive={page === SETTINGS_NAV.id}
-          aria-current={page === SETTINGS_NAV.id ? 'page' : undefined}
-          onClick={() => void shell.navigate(SETTINGS_NAV.id)}
+    <div className="flex w-full items-center gap-1">
+      <DaemonItem onOpenUpdate={onOpenUpdate} />
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={SETTINGS_NAV.label}
+              aria-current={page === SETTINGS_NAV.id ? 'page' : undefined}
+              className={cn(
+                'shrink-0 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                page === SETTINGS_NAV.id && 'bg-sidebar-accent text-sidebar-accent-foreground',
+              )}
+              onClick={() => void shell.navigate(SETTINGS_NAV.id)}
+            />
+          }
         >
           <SETTINGS_NAV.icon />
-          <span>{SETTINGS_NAV.label}</span>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
-    </SidebarMenu>
+        </TooltipTrigger>
+        <TooltipContent side="top">{SETTINGS_NAV.label}</TooltipContent>
+      </Tooltip>
+    </div>
   );
 
   return (
