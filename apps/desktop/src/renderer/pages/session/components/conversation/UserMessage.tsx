@@ -60,7 +60,7 @@ export function UserMessage({ text, at, attachments, sessionId, pending, onRetry
         {(body !== '' || quote !== undefined) && (
           <div className="flex items-end justify-end gap-2">
             <HoverTime value={at} />
-            <ReplyMenu onReply={onReply}>
+            <ReplyMenu text={text} onReply={onReply}>
               <Bubble variant="default" align="end">
                 <BubbleContent className="rounded-2xl px-3 py-1.5">
                   {quote !== undefined && (

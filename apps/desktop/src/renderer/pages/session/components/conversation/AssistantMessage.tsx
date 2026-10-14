@@ -32,7 +32,7 @@ export function AssistantMessage({ turn, reply, reference, enter, onReply }: Ass
     <Message className={cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}>
       <MessageContent>
         <div className="flex items-end gap-2">
-          <ReplyMenu onReply={onReply}>
+          <ReplyMenu text={reply?.text ?? fallback!.text} onReply={onReply}>
             <Bubble variant={fallback === undefined ? 'muted' : fallback.variant === 'destructive' ? 'destructive' : 'outline'}>
               <BubbleContent className="rounded-2xl px-3 py-1.5">
                 {reference !== undefined && (
