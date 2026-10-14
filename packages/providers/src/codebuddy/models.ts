@@ -4,6 +4,7 @@ import { resolveProviderModel, REASONING_LOW_HIGH_MAX, type CanonicalModelOverri
 import { models } from '@wrenyard/models';
 import {
   codeBuddyCanonicalModelId,
+  codeBuddyHasLongContextVariant,
   productCreditsAreFree,
   type CodeBuddyProductModelEntry,
 } from './product.ts';
@@ -208,8 +209,11 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
 } {
   // Membership is endpoint-driven: the endpoint supplies membership, order and
   // the raw public ids — exactly one offering per `/v3/config` cli row, in the
-  // endpoint's own order. The registry supplies display names and metadata for
-  // the models it knows, published under the endpoint's own id. A row naming no
+  // endpoint's own order. The registry supplies the base name and metadata for
+  // the models it knows: the offered name is that registry base name, plus a
+  // generic ` 1M` label when the endpoint row is a long-context variant, so
+  // variants sharing one registry identity stay distinguishable. The registry
+  // name is never published unchanged for a long-context row. A row naming no
   // registered model is still offered, using the endpoint name — or the raw id
   // when the endpoint gives no name — with hyphens replaced by spaces; no
   // metadata is fabricated for it. No row is dropped and no rows are merged.
@@ -233,9 +237,13 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
           },
         }),
         // The endpoint supplies the raw public id; the registry supplies the
-        // display name and metadata, published under the endpoint's own id. The
-        // registered identity stays available as `canonicalModel`.
+        // metadata and the base name. The offered name is that base name with a
+        // ` 1M` suffix for a long-context endpoint row, so two rows sharing one
+        // registry identity are not published under the same name. The
+        // registered identity and its untouched name stay available as
+        // `canonicalModel`.
         id: entry.id,
+        displayName: codeBuddyHasLongContextVariant(entry.id) ? `${registered.displayName} 1M` : registered.displayName,
       };
     } else {
       definition = resolveProviderModel({
