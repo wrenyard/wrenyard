@@ -54,10 +54,29 @@ export function desktopMenuTemplate(
           },
           {
             label: '文件',
-            submenu: [{ role: 'close' as const, label: '关闭窗口', accelerator: 'CmdOrCtrl+W' }],
+            submenu: [
+              { role: 'close' as const, label: '关闭窗口', accelerator: 'CmdOrCtrl+W' },
+              // macOS also closes the focused window with the literal Ctrl+W;
+              // kept hidden so the File menu still shows only one 关闭窗口 item.
+              {
+                role: 'close' as const,
+                label: '关闭窗口',
+                accelerator: 'Ctrl+W',
+                visible: false,
+                acceleratorWorksWhenHidden: true,
+              },
+            ],
           },
         ]
-      : [{ label: 'File', submenu: [quitItem] }]),
+      : [
+          {
+            label: 'File',
+            submenu: [
+              { role: 'close' as const, label: '关闭窗口', accelerator: 'CmdOrCtrl+W' },
+              quitItem,
+            ],
+          },
+        ]),
     { role: 'editMenu' },
     {
       label: 'View',
