@@ -32,6 +32,8 @@ export interface WorkerRendererState {
 
 export interface QuotaWindowRow {
   name: string;
+  /** Declared pool label (display name or pool id); display-only, never a key. */
+  poolLabel?: string;
   usedPct: number;
   remainingPct: number;
   expectedRemainingPct: number | null;

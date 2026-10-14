@@ -43,7 +43,7 @@ function quotaThresholdNotification(
     id: `quota:${provider.id}:${window.name}:${threshold}:${stamp}`,
     level: thresholdLevel(threshold),
     title: threshold === 30 ? '额度告警' : '额度不足',
-    body: `${providerLabel} ${window.name} 剩余 ${Math.floor(remainingPct)}%`,
+    body: `${providerLabel} ${window.poolLabel ?? window.name} 剩余 ${Math.floor(remainingPct)}%`,
     action: { label: '查看额度', command: { id: 'quota.showPanel' } },
   };
 }
@@ -59,7 +59,7 @@ function quotaPaceNotification(
     id: `quota:${provider.id}:${window.name}:pace:${stamp}`,
     level: 'warning',
     title: '剩余额度超出配速',
-    body: `${providerLabel} ${window.name} 剩余 ${Math.floor(remainingPct)}%`,
+    body: `${providerLabel} ${window.poolLabel ?? window.name} 剩余 ${Math.floor(remainingPct)}%`,
     action: { label: '查看额度', command: { id: 'quota.showPanel' } },
   };
 }

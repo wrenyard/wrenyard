@@ -110,7 +110,10 @@ export interface QuotaMenuProviderGroup {
 export function buildQuotaMenuProviderGroup(provider: QuotaProviderSnapshot): QuotaMenuProviderGroup {
   const lines: QuotaMenuLine[] = provider.windows.map((window, index) => ({
     provider: index === 0 ? provider.label : '',
-    window: window.name,
+    // Pools with a display label get a blank bitmap caption: the native
+    // displayLine is the sole label there and the ASCII-only 5x7 atlas cannot
+    // draw a CJK label. Unlabeled windows keep their raw ASCII name.
+    window: window.poolLabel === undefined ? window.name : '',
     remainingPct: window.remainingPct,
     expectedRemainingPct: window.expectedRemainingPct,
   }));

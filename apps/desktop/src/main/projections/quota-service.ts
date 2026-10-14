@@ -1,4 +1,5 @@
 import type { QuotaProviderState, QuotaProviderStatus, QuotaWindowRow } from '../../shell-contract.js';
+import { findProviderQuotaPool, providerQuotaPoolLabel } from '@wrenyard/providers';
 import { floorQuotaPercentage } from '../../pet/main/controller.js';
 
 interface RawQuotaWindow {
@@ -44,6 +45,17 @@ interface RawQuotaEntry {
 
 function isFiniteZeroToOneHundred(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
+}
+
+/**
+ * The declared pool label for one provider observation window, or undefined.
+ * Resolved from shared provider metadata so the raw window name keeps driving
+ * keys and pace while the display label prefers the pool's name.
+ */
+function poolLabelFor(providerId: string | undefined, windowName: string): string | undefined {
+  if (typeof providerId !== 'string' || providerId.length === 0) return undefined;
+  const pool = findProviderQuotaPool(providerId, windowName);
+  return pool ? providerQuotaPoolLabel(pool) : undefined;
 }
 
 /**
@@ -95,11 +107,13 @@ function parseWindowBars(e: RawQuotaEntry, nowMs: number): QuotaProviderState['b
           && Number.isFinite(w.window_minutes) && w.window_minutes > 0
           ? w.window_minutes
           : undefined;
+        const poolLabel = poolLabelFor(e.provider, w.name);
         return {
           name: w.name,
           usedPct,
           remainingPct,
           expectedRemainingPct,
+          ...(poolLabel !== undefined ? { poolLabel } : {}),
           ...(resetsAt ? { resetsAt } : {}),
           ...(windowMinutes !== undefined ? { windowMinutes } : {}),
         };
@@ -232,7 +246,7 @@ function synthesizeDisplayLine(
   if (windows.length > 0) {
     let anchor = windows.findIndex((window) => window.name.toLowerCase() === '7d');
     if (anchor < 0) anchor = windows.length - 1;
-    const parts = windows.map((window) => `${window.name} ${floorQuotaPercentage(window.remainingPct)}%`);
+    const parts = windows.map((window) => `${window.poolLabel ?? window.name} ${floorQuotaPercentage(window.remainingPct)}%`);
     const pace = paceLabel(windows[anchor]);
     if (pace) parts[anchor] += ` ${pace}`;
     // Prefer the anchor window's reset; fall back to the first window that

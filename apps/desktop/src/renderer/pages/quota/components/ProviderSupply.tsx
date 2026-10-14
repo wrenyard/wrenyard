@@ -413,6 +413,7 @@ function QuotaContent({ entry, onRetry }: { entry: ProviderCatalogSnapshot; onRe
         <QuotaBar
           key={window.name}
           name={window.name}
+          poolLabel={window.poolLabel}
           remainingPct={window.remainingPct}
           expectedRemainingPct={window.expectedRemainingPct}
           resetsAt={window.resetsAt}

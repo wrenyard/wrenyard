@@ -683,6 +683,8 @@ export interface StatsSnapshot {
 
 export interface QuotaWindowSnapshot {
   name: string;
+  /** Display-only pool label (declared display name or pool id); `name` stays the key. */
+  poolLabel?: string;
   remainingPct: number;
   expectedRemainingPct: number | null;
   /** ISO 8601 reset time; omitted when invalid or already past. */

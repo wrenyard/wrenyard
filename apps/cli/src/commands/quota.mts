@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util'
+import { findProviderQuotaPool, providerQuotaPoolLabel } from '@wrenyard/providers'
 import { connectConfiguredForemanClient, errorMessage } from '../shared.mts'
 
 const USAGE = 'Usage: wrenyard quota [provider] [--json] [--refresh] [--config path]'
@@ -29,7 +30,11 @@ export async function handleQuota(args: string[]): Promise<number> {
     }
     if (values.json) console.log(JSON.stringify(rows, null, 2))
     else for (const row of rows) {
-      const detail = row.windows?.map(window => `${window.name}: ${window.pct.toFixed(1)}% used`).join(', ')
+      const detail = row.windows?.map(window => {
+        const pool = findProviderQuotaPool(row.provider, window.name)
+        const label = pool ? providerQuotaPoolLabel(pool) : window.name
+        return `${label}: ${window.pct.toFixed(1)}% used`
+      }).join(', ')
         || row.balances?.map(balance => `${balance.amount} ${balance.currency}`).join(', ')
         || row.message || row.error || 'No observable quota'
       console.log(`${row.provider} [${row.status}] ${detail}`)

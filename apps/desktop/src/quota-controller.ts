@@ -175,6 +175,7 @@ function projectProvider(id: string, provider: QuotaProviderState): QuotaProvide
     expectedRemainingPct: window.expectedRemainingPct === null
       ? null
       : clampPercentage(window.expectedRemainingPct),
+    ...(window.poolLabel !== undefined ? { poolLabel: sanitizeQuotaText(window.poolLabel) } : {}),
     ...windowTiming(window.resetsAt, window.windowMinutes),
   }));
   if (windows.length === 0 && provider.bars?.remainingPct !== null && provider.bars?.remainingPct !== undefined) {

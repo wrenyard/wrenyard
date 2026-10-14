@@ -117,6 +117,8 @@ export function quotaPoolLevel(window: {
 
 export interface QuotaVerdictWindow {
   name: string;
+  /** Display-only pool label; preferred over the duration label when present. */
+  poolLabel?: string;
   remainingPct: number;
   expectedRemainingPct: number | null;
   windowMinutes?: number;
@@ -151,7 +153,7 @@ export function quotaVerdict(windows: readonly QuotaVerdictWindow[]): QuotaVerdi
   if (worst === null || worst.level === 'normal') {
     return { label: '额度充足', level: 'sufficient', reason: undefined };
   }
-  const name = shortWindowName(worst.window.name, worst.window.windowMinutes);
+  const name = worst.window.poolLabel ?? shortWindowName(worst.window.name, worst.window.windowMinutes);
   const exhausted = worst.window.remainingPct <= 0;
   return worst.level === 'destructive'
     ? { label: '额度不足', level: 'insufficient', reason: exhausted ? `${name} 已耗尽` : `${name} 将在重置前用尽` }
@@ -191,6 +193,8 @@ export function resetView(resetsAt: string | undefined, nowMs: number): QuotaRes
 export interface QuotaBarProps {
   /** Raw provider window name (used verbatim when no label override applies). */
   name: string;
+  /** Display-only pool label; preferred over the duration label when present. */
+  poolLabel?: string;
   remainingPct: number;
   expectedRemainingPct: number | null;
   resetsAt?: string;
@@ -217,6 +221,7 @@ export interface QuotaBarProps {
  */
 export function QuotaBar({
   name,
+  poolLabel,
   remainingPct,
   expectedRemainingPct,
   resetsAt,
@@ -230,7 +235,7 @@ export function QuotaBar({
   const now = injectedNow ?? minuteNow;
   const inverse = surface === 'inverse';
   const bounded = Math.max(0, Math.min(100, Number.isFinite(remainingPct) ? remainingPct : 0));
-  const label = formatWindowName(name, windowMinutes);
+  const label = poolLabel ?? formatWindowName(name, windowMinutes);
   const level = quotaLevel(bounded);
   const used = 100 - bounded;
   const pace = paceView(bounded, expectedRemainingPct);

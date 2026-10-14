@@ -17,6 +17,8 @@ export interface ProviderQuotaPoolWindow {
 /** One quota resource (usage window set or monetary balance) a model draws from. */
 export interface ProviderQuotaPool {
   readonly quotaPoolId: string;
+  /** Optional human-readable pool name; the pool id stays the routing/storage identity. */
+  readonly displayName?: string;
   readonly kind: QuotaPoolKind;
   /** Raw usage windows for a `quota` pool; empty when no evidence exists yet. */
   readonly windows: readonly ProviderQuotaPoolWindow[];

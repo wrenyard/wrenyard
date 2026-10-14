@@ -83,7 +83,7 @@ export function formatRemainQuotaLine(
   const reset = source.match(/·\s*([^·]*\breset)\s*$/)?.[1]?.trim();
   const has7d = windows.some((window) => window.name.toLowerCase() === '7d');
   const parts = windows.map((window, index) => {
-    let part = `${window.name} ${floorQuotaPercentage(window.remainingPct)}%`;
+    let part = `${window.poolLabel ?? window.name} ${floorQuotaPercentage(window.remainingPct)}%`;
     const isAnchor = has7d ? window.name.toLowerCase() === '7d' : index === windows.length - 1;
     if (isAnchor && pace) part += ` ${pace}`;
     return part;
