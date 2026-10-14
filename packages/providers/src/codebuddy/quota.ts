@@ -18,7 +18,7 @@ function binding(providerId: string, modelId: string, pools: readonly ReturnType
 }
 
 const HY_FAMILY_POOL = quotaPool('codebuddy/hy-family');
-const MONTHLY_POOL = quotaPool('codebuddy/monthly');
+const MONTHLY_POOL = { ...quotaPool('codebuddy/monthly'), displayName: '1mo' };
 
 /** HY3 and HY4 Preview draw jointly on the family allowance. Offerings carry the
  * canonical registry ids, never the product-file wire spellings. */
