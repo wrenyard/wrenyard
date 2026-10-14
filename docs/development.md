@@ -68,9 +68,12 @@ the recordings are not kept in the repository.
 ## Releases
 
 Versions live in the root `package.json` (mirrored in
-`apps/desktop/package.json`). `pnpm release <x.y.z>` writes the version, packs
-and smoke-tests this platform's installer, and commits `release: <x.y.z>`.
-Pushing a `v*-dev.*` tag runs `.github/workflows/release.yml`, which lints,
-builds macOS and Windows installers and publishes a prerelease together with
-the update feed on the `updates` branch. See
-[release/signing.md](release/signing.md) for the signing status.
+`apps/desktop/package.json`). `pnpm release <x.y.z>` accepts a plain version
+(no prerelease), writes it, packs and smoke-tests this platform's installer, and
+commits `release: <x.y.z>`. Pushing a `v*.*.*` tag runs
+`.github/workflows/release.yml`, which lints, builds macOS and Windows
+installers and publishes a normal release together with the update feed on the
+`updates` branch. The feed head is `latest.json`; a byte-identical `dev.json`
+compatibility alias and the immutable `versions/<v>.json` snapshots are
+published alongside it. See [release/signing.md](release/signing.md) for the
+signing status.

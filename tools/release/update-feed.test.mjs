@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
-  channelForVersion,
   prepareMetadata,
   renderDocument,
 } from './update-feed.mjs';
@@ -44,9 +43,9 @@ function expectedSha(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-test('generates a channel head and immutable snapshot for the three assets', () => {
+test('generates a latest head, dev alias and immutable snapshot for the three assets', () => {
   withTempDir((dir) => {
-    const version = '1.0.0-dev.10';
+    const version = '1.2.10';
     const assetsDir = writeAssets(dir, version);
     const metadataDir = join(dir, 'updates');
     const result = prepareMetadata({
@@ -57,23 +56,25 @@ test('generates a channel head and immutable snapshot for the three assets', () 
       metadataDir,
     });
 
-    const channel = JSON.parse(readFileSync(join(metadataDir, 'dev.json'), 'utf8'));
+    const head = JSON.parse(readFileSync(join(metadataDir, 'latest.json'), 'utf8'));
+    const alias = JSON.parse(readFileSync(join(metadataDir, 'dev.json'), 'utf8'));
     const snapshot = JSON.parse(readFileSync(join(metadataDir, 'versions', `${version}.json`), 'utf8'));
-    assert.equal(result.channel, 'dev');
-    assert.deepEqual(channel, snapshot);
-    assert.equal(channel.schema_version, 'wrenyard.update.v1');
-    assert.equal(channel.version, version);
-    assert.equal(channel.published_at, PUBLISHED_AT);
-    assert.equal(channel.assets.length, 3);
+    assert.equal(result.updatedHead, true);
+    assert.deepEqual(head, snapshot);
+    assert.deepEqual(alias, head);
+    assert.equal(head.schema_version, 'wrenyard.update.v1');
+    assert.equal(head.version, version);
+    assert.equal(head.published_at, PUBLISHED_AT);
+    assert.equal(head.assets.length, 3);
     for (const name of assetNames(version)) {
-      assert.ok(channel.assets.some((asset) => asset.name === name), `missing ${name}`);
+      assert.ok(head.assets.some((asset) => asset.name === name), `missing ${name}`);
     }
   });
 });
 
 test('stores an accurate sha256 and canonical release download url per asset', () => {
   withTempDir((dir) => {
-    const version = '1.0.0-dev.10';
+    const version = '1.2.10';
     const assetsDir = writeAssets(dir, version);
     const metadataDir = join(dir, 'updates');
     prepareMetadata({
@@ -83,7 +84,7 @@ test('stores an accurate sha256 and canonical release download url per asset', (
       publishedAt: PUBLISHED_AT,
       metadataDir,
     });
-    const { assets } = JSON.parse(readFileSync(join(metadataDir, 'dev.json'), 'utf8'));
+    const { assets } = JSON.parse(readFileSync(join(metadataDir, 'latest.json'), 'utf8'));
     for (const asset of assets) {
       assert.match(asset.sha256, /^[0-9a-f]{64}$/);
       assert.equal(asset.sha256, expectedSha(join(assetsDir, asset.name)));
@@ -97,7 +98,7 @@ test('stores an accurate sha256 and canonical release download url per asset', (
 
 test('rejects missing, extra and malformed asset names and versions', () => {
   withTempDir((dir) => {
-    const version = '1.0.0-dev.10';
+    const version = '1.2.10';
     const metadataDir = join(dir, 'updates');
 
     const missingDir = writeAssets(join(dir, 'missing'), version);
@@ -124,7 +125,7 @@ test('rejects missing, extra and malformed asset names and versions', () => {
     const goodDir = writeAssets(join(dir, 'good'), version);
     assert.throws(
       () => prepareMetadata({ assetsDir: goodDir, version: 'not-a-version', repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir }),
-      /invalid version/,
+      /not a plain x\.y\.z release version/,
     );
     assert.throws(
       () => prepareMetadata({ assetsDir: goodDir, version, repository: 'not a repo', publishedAt: PUBLISHED_AT, metadataDir }),
@@ -139,7 +140,7 @@ test('rejects missing, extra and malformed asset names and versions', () => {
 
 test('rejects a conflicting document for an already published version', () => {
   withTempDir((dir) => {
-    const version = '1.0.0-dev.10';
+    const version = '1.2.10';
     const assetsDir = writeAssets(dir, version);
     const metadataDir = join(dir, 'updates');
     prepareMetadata({ assetsDir, version, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir });
@@ -159,56 +160,72 @@ test('rejects a conflicting document for an already published version', () => {
 
 test('is idempotent across retries with the same caller-supplied timestamp', () => {
   withTempDir((dir) => {
-    const version = '1.0.0-dev.10';
+    const version = '1.2.10';
     const assetsDir = writeAssets(dir, version);
     const metadataDir = join(dir, 'updates');
     const options = { assetsDir, version, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir };
     const first = prepareMetadata(options);
-    const before = renderDocument(JSON.parse(readFileSync(join(metadataDir, 'dev.json'), 'utf8')));
+    const before = renderDocument(JSON.parse(readFileSync(join(metadataDir, 'latest.json'), 'utf8')));
     const second = prepareMetadata(options);
-    const after = renderDocument(JSON.parse(readFileSync(join(metadataDir, 'dev.json'), 'utf8')));
+    const after = renderDocument(JSON.parse(readFileSync(join(metadataDir, 'latest.json'), 'utf8')));
     assert.equal(before, after);
-    assert.equal(first.updatedChannel, true);
-    assert.equal(second.updatedChannel, false);
+    assert.equal(first.updatedHead, true);
+    assert.equal(second.updatedHead, false);
   });
 });
 
-test('an older release never regresses the channel head', () => {
+test('an older release never regresses the latest.json or dev.json head', () => {
   withTempDir((dir) => {
     const metadataDir = join(dir, 'updates');
-    const newer = '1.0.0-dev.10';
-    const older = '1.0.0-dev.9';
+    const newer = '1.2.10';
+    const older = '1.2.9';
 
     const newerAssets = writeAssets(join(dir, 'newer'), newer);
     prepareMetadata({ assetsDir: newerAssets, version: newer, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir });
-    const head = readFileSync(join(metadataDir, 'dev.json'), 'utf8');
+    const head = readFileSync(join(metadataDir, 'latest.json'), 'utf8');
+    assert.equal(readFileSync(join(metadataDir, 'dev.json'), 'utf8'), head);
 
     const olderAssets = writeAssets(join(dir, 'older'), older);
     const result = prepareMetadata({ assetsDir: olderAssets, version: older, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir });
 
-    assert.equal(result.updatedChannel, false);
+    assert.equal(result.updatedHead, false);
+    assert.equal(readFileSync(join(metadataDir, 'latest.json'), 'utf8'), head);
     assert.equal(readFileSync(join(metadataDir, 'dev.json'), 'utf8'), head);
     // The immutable snapshot for the older version is still recorded.
     const snapshot = JSON.parse(readFileSync(join(metadataDir, 'versions', `${older}.json`), 'utf8'));
     assert.equal(snapshot.version, older);
 
-    const laterVersion = '1.0.0-dev.11';
+    const laterVersion = '1.2.11';
     const laterAssets = writeAssets(join(dir, 'later'), laterVersion);
     const later = prepareMetadata({ assetsDir: laterAssets, version: laterVersion, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir });
-    assert.equal(later.updatedChannel, true);
-    assert.equal(JSON.parse(readFileSync(join(metadataDir, 'dev.json'), 'utf8')).version, laterVersion);
+    assert.equal(later.updatedHead, true);
+    assert.equal(JSON.parse(readFileSync(join(metadataDir, 'latest.json'), 'utf8')).version, laterVersion);
+
+    // First plain release after the dev scheme: latest.json is still absent but
+    // dev.json already holds a newer legacy head. Publishing an older version
+    // records its snapshot without creating or regressing either head.
+    const migrationDir = join(dir, 'migration');
+    mkdirSync(migrationDir, { recursive: true });
+    const legacyHead = renderDocument({ schema_version: 'wrenyard.update.v1', version: '1.2.12', published_at: PUBLISHED_AT, assets: [] });
+    writeFileSync(join(migrationDir, 'dev.json'), legacyHead);
+    const migrationAssets = writeAssets(join(dir, 'migration-assets'), newer);
+    const migration = prepareMetadata({ assetsDir: migrationAssets, version: newer, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir: migrationDir });
+    assert.equal(migration.updatedHead, false);
+    assert.equal(readFileSync(join(migrationDir, 'dev.json'), 'utf8'), legacyHead);
+    assert.ok(!existsSync(join(migrationDir, 'latest.json')));
+    assert.ok(existsSync(join(migrationDir, 'versions', `${newer}.json`)));
   });
 });
 
-test('routes stable versions to stable.json and dev prereleases to dev.json', () => {
-  assert.equal(channelForVersion('1.0.0'), 'stable');
-  assert.equal(channelForVersion('1.0.0-dev.10'), 'dev');
+test('writes the latest head and its byte-identical dev.json compatibility alias', () => {
   withTempDir((dir) => {
-    const version = '1.0.0';
+    const version = '1.2.10';
     const assetsDir = writeAssets(dir, version);
     const metadataDir = join(dir, 'updates');
     const result = prepareMetadata({ assetsDir, version, repository: REPOSITORY, publishedAt: PUBLISHED_AT, metadataDir });
-    assert.equal(result.channel, 'stable');
-    assert.equal(JSON.parse(readFileSync(join(metadataDir, 'stable.json'), 'utf8')).version, version);
+    assert.equal(result.updatedHead, true);
+    const latest = readFileSync(join(metadataDir, 'latest.json'), 'utf8');
+    assert.equal(JSON.parse(latest).version, version);
+    assert.equal(readFileSync(join(metadataDir, 'dev.json'), 'utf8'), latest);
   });
 });

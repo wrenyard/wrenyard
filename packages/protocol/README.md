@@ -69,7 +69,7 @@ src/
     exec.ts             static typed example data (satisfies, no casts)
   update-feed.ts        pure static update-feed contract: schema/asset/digest
                         validation, canonical asset names, SemVer ordering,
-                        channel inference and document URL construction
+                        canonical/legacy document URL construction
 README.md
 package.json
 tsconfig.json
@@ -276,9 +276,10 @@ Feed layout (the base URL defaults to the `updates` branch and is overridable
 with `WRENYARD_UPDATE_BASE_URL`):
 
 ```
-<base>/dev.json             channel head for prereleases
-<base>/stable.json          channel head for stable releases
-<base>/versions/<v>.json    immutable per-version snapshot
+<base>/latest.json         canonical feed head (all current clients)
+<base>/dev.json            byte-identical legacy compatibility alias
+<base>/stable.json         retired channel head, kept for compatibility
+<base>/versions/<v>.json   immutable per-version snapshot
 ```
 
 Document schema `wrenyard.update.v1`:
@@ -292,17 +293,19 @@ Exports:
 | `PlatformTriplet` | host triplets that publish Desktop assets (`darwin-arm64`, `win32-x64`) |
 | `isSemver`, `compareVersions`, `normalizeVersion` | SemVer validation and numeric ordering |
 | `desktopAssetStem`, `installerAssetName`, `updateAssetName` | canonical Desktop asset names per version and triplet |
-| `channelForVersion`, `channelDocumentUrl`, `updateDocumentUrl`, `resolveUpdateBaseUrl` | channel inference and URL construction |
+| `latestDocumentUrl`, `resolveUpdateBaseUrl` | canonical `latest.json` head URL and base-URL resolution |
+| `channelForVersion`, `channelDocumentUrl`, `updateDocumentUrl` | legacy channel helpers, kept only for compatibility |
 | `parseUpdateFeedJson` | validation and host-asset resolution |
 
 `parseUpdateFeedJson(text, { triplet, expectedVersion?, channel? })` validates the
 schema, that `version` is valid SemVer (and matches `expectedVersion` when
 given), that both the installer and update assets for the host triplet exist,
-and that every digest is 64 hex. It returns the document, the resolved channel
-and the two assets. Asset URLs are deliberately **not** required to be canonical
-GitHub download URLs: the URL and digest come from the same document, so the
-check adds no integrity guarantee while it would prevent local end-to-end tests
-from serving the feed over a local HTTP server. Integrity is the sha256.
+and that every digest is 64 hex. It returns the document and the two assets;
+the returned `channel` field is a legacy compatibility value rather than feed
+routing. Asset URLs are deliberately **not** required to be canonical GitHub
+download URLs: the URL and digest come from the same document, so the check adds
+no integrity guarantee while it would prevent local end-to-end tests from
+serving the feed over a local HTTP server. Integrity is the sha256.
 
 ## Implementation status
 

@@ -98,8 +98,9 @@ install) and a macOS `.zip` (in-app update). The packaged app carries the
 single-file CLI, a Node runtime and the daemon bundle (`daemon/daemon.mjs` plus
 only its native runtime dependencies) under its Resources, so
 no system Node or pnpm is needed. Desktop itself performs updates: it reads the
-channel feed on the `updates` branch, verifies the artifact SHA-256 and applies
-it (`setup.exe /S` on Windows, a verified zip swap on macOS). There is no SEA
+canonical `latest.json` feed on the `updates` branch (`dev.json` is kept as a
+legacy compatibility alias), verifies the artifact SHA-256 and applies it
+(`setup.exe /S` on Windows, a verified zip swap on macOS). There is no SEA
 install engine, no one-click bootstrap script and no rollback in the first
 updater version. The root `package.json` is the single version source, synced
 only to the Desktop package. Signing details remain in

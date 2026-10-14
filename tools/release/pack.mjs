@@ -12,7 +12,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { entryFor } from './platform.mjs';
-import { packageVersion, releaseTagFromEnv, validateDevTag, validateNativeTarget } from './release-context.mjs';
+import { packageVersion, releaseTagFromEnv, validateNativeTarget, validateReleaseTag } from './release-context.mjs';
 import { scanText } from '../check-secrets.mjs';
 
 const RELEASE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -61,7 +61,7 @@ function validateHeadTag(version) {
     let committed;
     try { committed = JSON.parse(manifest).version; } catch { continue; }
     if (committed !== version) continue;
-    validateDevTag(name, version);
+    validateReleaseTag(name, version);
   }
 }
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -485,7 +485,7 @@ export async function smokeAssembledApp(seaPath, version, homeDir) {
 async function main() {
   const version = packageVersion();
   const tag = releaseTagFromEnv();
-  if (tag) validateDevTag(tag, version);
+  if (tag) validateReleaseTag(tag, version);
   validateHeadTag(version);
   validateNativeTarget(target.triplet);
   fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });

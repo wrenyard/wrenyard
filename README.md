@@ -10,7 +10,7 @@ One conversation reasons about the goal; exploration, edits, tests and commits
 run as parallel tasks on the models you already pay for — with every token,
 quota window and task visible.
 
-[![Release](https://img.shields.io/github/v/release/wrenyard/wrenyard?include_prereleases&label=latest-dev)](https://github.com/wrenyard/wrenyard/releases)
+[![Release](https://img.shields.io/github/v/release/wrenyard/wrenyard?label=latest)](https://github.com/wrenyard/wrenyard/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20arm64%20%7C%20Windows%20x64-lightgrey)
 
@@ -20,9 +20,9 @@ quota window and task visible.
 
 ![Wrenyard Desktop](docs/images/hero.png)
 
-> **Development preview.** Wrenyard ships rolling `1.0.0-dev.N` prereleases.
-> It is used daily by its authors, but it is not a stable release yet — see
-> [Status](#status).
+> **Development preview.** Wrenyard ships rolling plain patch releases
+> (`1.0.57`, then `1.0.58`, `1.0.59`, …). It is used daily by its authors, but
+> it is not a stable release yet — see [Status](#status).
 
 ## Why Wrenyard
 
@@ -184,8 +184,11 @@ Read more in [docs/architecture.md](docs/architecture.md).
 
 ## Status
 
-Wrenyard publishes rolling `1.0.0-dev.N` prereleases for macOS (Apple Silicon)
-and Windows (x64). Before a stable release it still needs trusted code signing
+Wrenyard publishes rolling plain patch releases (`1.0.57`, then `1.0.58`, …)
+for macOS (Apple Silicon) and Windows (x64). Each release is a normal,
+non-prerelease GitHub release, and the update feed head is `latest.json` on the
+`updates` branch, with a continuing `dev.json` compatibility alias. Before a
+stable release it still needs trusted code signing
 ([signing notes](docs/release/signing.md)), wider clean-machine testing and a
 documented compatibility policy. Nothing is published to npm.
 

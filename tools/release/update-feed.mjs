@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { requirePlainVersion } from './release-context.mjs';
+
 import {
   UPDATE_FEED_SCHEMA_VERSION as SCHEMA_VERSION,
   channelForVersion,
@@ -13,11 +16,14 @@ import {
 
 // Static update feed generator.
 //
-// The public client contract is a single metadata document per channel plus an
-// immutable snapshot per published version:
+// The public client contract is one canonical metadata document plus an
+// immutable snapshot per published version. Every release writes the same
+// document to three paths on the `updates` branch:
 //
-//   updates/<channel>.json          stable.json or dev.json (mutable channel head)
-//   updates/versions/<version>.json immutable snapshot for one release
+//   updates/latest.json         canonical feed head (all current clients)
+//   updates/dev.json            byte-identical compatibility alias, read by
+//                               installs that predate the single-feed scheme
+//   updates/versions/<v>.json   immutable snapshot for one release
 //
 // Shape (schema_version "wrenyard.update.v1"):
 //
@@ -103,7 +109,9 @@ export function assertAssetNames(names, version) {
 // disagree with what was uploaded, and every asset URL is derived from the
 // validated version/repository rather than being accepted from the caller.
 export function buildVersionDocument({ version, repository, publishedAt, assetsDir }) {
-  if (!isSemver(version)) throw new Error(`invalid version: ${version}`);
+  // Fail closed on prerelease or build-metadata versions before any feed file
+  // is created or written; prepareMetadata and the CLI both funnel through here.
+  requirePlainVersion(version);
   const repo = assertRepository(repository);
   const published = assertTimestamp(publishedAt);
   const names = readdirSync(assetsDir, { withFileTypes: true })
@@ -143,19 +151,39 @@ function readExisting(path) {
   }
 }
 
+// The feed head is the newest version carried by any head document. Validating
+// each present head keeps a malformed legacy dev.json from being silently
+// overwritten during the single-feed migration.
+function newestHeadVersion(heads) {
+  let newest;
+  for (const [label, document] of heads) {
+    if (document === null) continue;
+    const version = document.version;
+    if (version === undefined) continue;
+    if (!isSemver(version)) {
+      throw new Error(`${label} metadata has an invalid version: ${version}`);
+    }
+    if (newest === undefined || compareVersions(version, newest) > 0) newest = version;
+  }
+  return newest;
+}
+
 // Prepare the metadata directory without publishing anything.
 //
 // Returns the list of files that changed so the caller can stage exactly those:
-// the immutable versions/<version>.json and the mutable channel head. Repeat
-// runs with identical content are no-ops; a conflicting snapshot for an already
-// published version is rejected instead of overwritten, and an older release
-// never regresses the channel head.
+// the immutable versions/<version>.json snapshot, the canonical latest.json head
+// and its byte-identical dev.json compatibility alias. Repeat runs with
+// identical content are no-ops; a conflicting snapshot for an already published
+// version is rejected instead of overwritten, and an older release never
+// regresses the feed head — including the first plain release, when dev.json
+// (the legacy head) already carries a newer version than latest.json, which must
+// not be rolled back.
 export function prepareMetadata({ assetsDir, version, repository, publishedAt, metadataDir }) {
   const document = buildVersionDocument({ version, repository, publishedAt, assetsDir });
-  const channel = channelForVersion(version);
   const versionsDir = resolve(metadataDir, 'versions');
   const versionPath = resolve(versionsDir, `${version}.json`);
-  const channelPath = resolve(metadataDir, `${channel}.json`);
+  const latestPath = resolve(metadataDir, 'latest.json');
+  const devPath = resolve(metadataDir, 'dev.json');
   const rendered = renderDocument(document);
 
   const existingVersion = readExisting(versionPath);
@@ -163,32 +191,32 @@ export function prepareMetadata({ assetsDir, version, repository, publishedAt, m
     throw new Error(`immutable version metadata already exists with different content: ${version}`);
   }
 
-  const existingChannel = readExisting(channelPath);
-  const currentVersion = existingChannel?.version;
-  if (existingChannel !== null && currentVersion !== undefined) {
-    if (!isSemver(currentVersion)) {
-      throw new Error(`channel metadata has an invalid version: ${currentVersion}`);
-    }
-    if (compareVersions(version, currentVersion) < 0) {
-      // An older concurrent release finished late: keep the newer channel head
-      // but still record the immutable snapshot for this version.
-      mkdirSync(versionsDir, { recursive: true });
-      writeFileSync(versionPath, rendered);
-      return { channel, files: [versionPath], updatedChannel: false, document };
-    }
+  // The canonical head is latest.json; dev.json is a byte-identical alias. Both
+  // heads are compared together so a late older release never regresses either.
+  const existingLatest = readExisting(latestPath);
+  const existingDev = readExisting(devPath);
+  const headVersion = newestHeadVersion([['latest', existingLatest], ['dev', existingDev]]);
+  if (headVersion !== undefined && compareVersions(version, headVersion) < 0) {
+    // An older concurrent release finished late: keep the newer feed head but
+    // still record the immutable snapshot for this version.
+    mkdirSync(versionsDir, { recursive: true });
+    writeFileSync(versionPath, rendered);
+    return { files: [versionPath], updatedHead: false, document };
   }
 
-  const channelChanged =
-    existingChannel === null || renderDocument(existingChannel) !== rendered;
+  const headChanged =
+    existingLatest === null || existingDev === null
+    || renderDocument(existingLatest) !== rendered || renderDocument(existingDev) !== rendered;
   const files = [versionPath];
   mkdirSync(versionsDir, { recursive: true });
   writeFileSync(versionPath, rendered);
-  if (channelChanged) {
+  if (headChanged) {
     mkdirSync(metadataDir, { recursive: true });
-    writeFileSync(channelPath, rendered);
-    files.unshift(channelPath);
+    writeFileSync(latestPath, rendered);
+    writeFileSync(devPath, rendered);
+    files.unshift(latestPath, devPath);
   }
-  return { channel, files, updatedChannel: channelChanged, document };
+  return { files, updatedHead: headChanged, document };
 }
 
 function main(argv) {

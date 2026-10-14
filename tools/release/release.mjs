@@ -12,8 +12,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { packageVersion, REPO_ROOT } from './release-context.mjs';
-import { compareVersions, isSemver } from './update-feed.mjs';
+import { packageVersion, REPO_ROOT, requirePlainVersion } from './release-context.mjs';
+import { compareVersions } from './update-feed.mjs';
 
 const RELEASE_DIR = path.dirname(fileURLToPath(import.meta.url));
 // The root manifest is the single version source; Desktop carries the one
@@ -77,10 +77,11 @@ function commitVersion(version) {
 
 function main(argv) {
   const positionals = argv.filter((arg) => arg !== '--');
-  if (positionals.length !== 1 || !isSemver(positionals[0])) {
+  if (positionals.length !== 1) {
     throw new Error('usage: pnpm release <x.y.z>');
   }
-  const requested = positionals[0];
+  // Plain x.y.z only: a prerelease (e.g. 1.0.0-dev.57) is rejected here.
+  const requested = requirePlainVersion(positionals[0]);
   const current = packageVersion();
   if (compareVersions(requested, current) < 0) {
     throw new Error(`refusing to release ${requested}: it is older than the current version ${current}`);
