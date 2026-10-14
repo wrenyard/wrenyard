@@ -54,14 +54,37 @@ export function mergeEvents(current: LedgerEvent[], incoming: LedgerEvent[]): Le
 }
 
 function withLedgerTitle(sessions: SessionSummary[], events: LedgerEvent[], sessionId: string): SessionSummary[] {
-  // A session title is the text of the last `session.titled` event.
+  // A session title is the text of the last `session.titled` event, except that
+  // an explicit manual title is never overwritten by a generated one — even a
+  // stale pushed event that arrives after the rename. The event timestamp is
+  // kept so a fetched authoritative list can win when it already carries a
+  // newer manual title than the local events.
   let title: string | undefined;
+  let manual = false;
+  let at = '';
   for (const event of events) {
-    const record = event as { type?: string; text?: string };
-    if (record.type === 'session.titled') title = record.text;
+    const record = event as { type?: string; at?: string; text?: string; manual?: boolean };
+    if (record.type !== 'session.titled' || typeof record.at !== 'string') continue;
+    const text = record.text?.trim();
+    if (text === undefined || text === '') continue;
+    const isManual = record.manual === true;
+    if (title !== undefined && manual && !isManual) continue;
+    title = text;
+    manual = isManual;
+    at = record.at;
   }
-  if (!title) return sessions;
-  return sessions.map((session) => (session.sessionId === sessionId ? { ...session, title: title! } : session));
+  if (title === undefined) return sessions;
+  const localTitle = title;
+  const localManual = manual;
+  const localAt = at;
+  return sessions.map((session) => {
+    if (session.sessionId !== sessionId) return session;
+    // A manual title is never replaced by a generated one, and a fetched title
+    // that is at least as new as the local manual event wins — so an older
+    // local manual event cannot indefinitely overwrite a newer list title.
+    if (session.manualTitle === true && (!localManual || session.updatedAt >= localAt)) return session;
+    return { ...session, title: localTitle, ...(localManual ? { manualTitle: true } : {}) };
+  });
 }
 
 export type SessionAction =

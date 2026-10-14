@@ -463,6 +463,12 @@ export interface SessionTitledEvent extends LedgerEventBase {
   /** The title span; absent on records that predate spans. */
   parent?: string;
   text: string;
+  /**
+   * True when the title was set by an explicit user rename rather than by
+   * automatic generation. Absent on generated titles and on records written
+   * before the marker existed, so old ledger lines still parse as generated.
+   */
+  manual?: boolean;
 }
 
 /**

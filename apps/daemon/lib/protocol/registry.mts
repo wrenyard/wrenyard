@@ -9,6 +9,7 @@ import {
   sessionRoutesPreviewParamsSchema, sessionRoutesPreviewResultSchema,
   sessionMediaReadParamsSchema, sessionMediaReadResultSchema,
   sessionDeleteParamsSchema, sessionDeleteResultSchema,
+  sessionRenameParamsSchema, sessionRenameResultSchema,
   type SessionListParams, type SessionListResult,
   type SessionCreateParams, type SessionCreateResult,
   type SessionSendParams, type SessionSendResult,
@@ -18,6 +19,7 @@ import {
   type SessionRoutesPreviewParams, type SessionRoutesPreviewResult,
   type SessionMediaReadParams, type SessionMediaReadResult,
   type SessionDeleteParams, type SessionDeleteResult,
+  type SessionRenameParams, type SessionRenameResult,
 } from './methods/session.mts'
 export type {
   SessionListParams, SessionListResult,
@@ -29,6 +31,7 @@ export type {
   SessionRoutesPreviewParams, SessionRoutesPreviewResult,
   SessionMediaReadParams, SessionMediaReadResult,
   SessionDeleteParams, SessionDeleteResult,
+  SessionRenameParams, SessionRenameResult,
 } from './methods/session.mts'
 import {
   scheduleListParamsSchema, scheduleListResultSchema,
@@ -596,6 +599,7 @@ export interface ForemanMethodParams {
   'session.routes.preview': SessionRoutesPreviewParams
   'session.media.read': SessionMediaReadParams
   'session.delete': SessionDeleteParams
+  'session.rename': SessionRenameParams
   'schedule.list': ScheduleListParams
   'schedule.create': ScheduleCreateParams
   'schedule.update': ScheduleUpdateParams
@@ -679,6 +683,7 @@ export interface ForemanMethodResults {
   'session.routes.preview': SessionRoutesPreviewResult
   'session.media.read': SessionMediaReadResult
   'session.delete': SessionDeleteResult
+  'session.rename': SessionRenameResult
   'schedule.list': ScheduleListResult
   'schedule.create': ScheduleCreateResult
   'schedule.update': ScheduleUpdateResult
@@ -998,6 +1003,10 @@ export const methodRegistry: {
   'session.delete': {
     params: sessionDeleteParamsSchema,
     result: sessionDeleteResultSchema,
+  },
+  'session.rename': {
+    params: sessionRenameParamsSchema,
+    result: sessionRenameResultSchema,
   },
   'schedule.list': { params: scheduleListParamsSchema, result: scheduleListResultSchema },
   'schedule.create': { params: scheduleCreateParamsSchema, result: scheduleCreateResultSchema },

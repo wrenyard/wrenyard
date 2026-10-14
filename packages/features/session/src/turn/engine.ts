@@ -341,6 +341,27 @@ class Engine implements Session, SessionCallHost {
     this.live.drop(sessionId);
   }
 
+  /**
+   * Rename one session with an explicit user title. Appends one manual
+   * `session.titled` event through the normal ledger append path, so
+   * `index.json`, `listSessions` and every subscriber see the new title. An
+   * empty or whitespace-only title and an unknown session are rejected before
+   * anything is persisted.
+   */
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    const trimmed = title.trim();
+    if (trimmed === '') throw new Error('Session title must not be empty');
+    this.assertOpen();
+    await this.ready;
+    // Resolving the session rejects an unknown id before any append.
+    await this.ensureSession(sessionId);
+    await this.ports.ledger.append(sessionId, {
+      type: 'session.titled',
+      text: trimmed,
+      manual: true,
+    });
+  }
+
   private async interruptTurn(
     sessionId: string,
     turn: number,

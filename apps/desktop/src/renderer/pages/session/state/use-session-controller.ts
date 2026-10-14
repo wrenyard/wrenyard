@@ -31,6 +31,7 @@ export interface SessionController {
   sendMessage(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): Promise<void>;
   interruptTurn(turn: number): Promise<void>;
   deleteSession(sessionId: string): Promise<void>;
+  renameSession(sessionId: string, title: string): Promise<void>;
   removePending(localId: string): void;
   setTasks(tasks: Record<string, SessionBridgeTaskBrief>): void;
   clearError(): void;
@@ -185,6 +186,19 @@ export function useSessionController(api: SessionApi) {
     dispatch({ type: 'tasks', tasks });
   }, []);
 
+  const renameSession = useCallback(async (sessionId: string, title: string): Promise<void> => {
+    dispatch({ type: 'clear-error' });
+    try {
+      await api.renameSession(sessionId, title);
+    } catch (error) {
+      reportError(error, sessionId);
+      throw error;
+    }
+    // The pushed `session.titled` event updates the title in place; the list
+    // refresh keeps the sidebar and the summary in sync.
+    await refreshList().catch((error: unknown) => { reportError(error, sessionId); });
+  }, [api, refreshList, reportError]);
+
   const clearError = useCallback((): void => {
     dispatch({ type: 'clear-error' });
   }, []);
@@ -223,5 +237,5 @@ export function useSessionController(api: SessionApi) {
     };
   }, [api, refreshList, reportError, selectSession]);
 
-  return { state, selectSession, newDraft, sendMessage, interruptTurn, deleteSession, removePending, setTasks, clearError };
+  return { state, selectSession, newDraft, sendMessage, interruptTurn, deleteSession, renameSession, removePending, setTasks, clearError };
 }

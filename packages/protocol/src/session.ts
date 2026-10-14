@@ -202,6 +202,15 @@ export interface SessionDeleteParams {
 /** Result of `session.delete`: empty on success. */
 export type SessionDeleteResult = Record<string, never>
 
+/** Params of `session.rename`: one session and its new manual title. */
+export interface SessionRenameParams {
+  sessionId: string
+  title: string
+}
+
+/** Result of `session.rename`: empty on success. */
+export type SessionRenameResult = Record<string, never>
+
 /** The gateway protocol a selectable main reasoning model runs through. */
 export type SessionInferenceMode = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
 
@@ -235,4 +244,5 @@ export interface SessionMethods {
   'session.routes.preview': RpcMethod<SessionRoutesPreviewParams, SessionRoutesPreviewResult>
   'session.media.read': RpcMethod<SessionMediaReadParams, SessionMediaReadResult>
   'session.delete': RpcMethod<SessionDeleteParams, SessionDeleteResult>
+  'session.rename': RpcMethod<SessionRenameParams, SessionRenameResult>
 }

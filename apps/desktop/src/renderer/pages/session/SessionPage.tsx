@@ -79,7 +79,7 @@ export function SessionPage() {
   const api = getSessionApi();
   const mini = useMiniMode();
   const queryClient = useQueryClient();
-  const { state, selectSession, newDraft, sendMessage, deleteSession, removePending, setTasks, clearError } = useSessionController(api);
+  const { state, selectSession, newDraft, sendMessage, deleteSession, renameSession, removePending, setTasks, clearError } = useSessionController(api);
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: mini ? CARD_LAYOUT_ID : LAYOUT_ID, storage: localStorage });
   const [inspectorOpen, setInspectorOpen] = useState(() => (defaultLayout?.inspector ?? 0) > 0);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -203,6 +203,21 @@ export function SessionPage() {
     };
   }, [state.selectedId, selectedFinishedAt]);
 
+  // The shell sidebar reads its own query cache, so a pushed `session.titled`
+  // (automatic title generation or another client) must invalidate it. Tracking
+  // the newest titled seq fires once per new event instead of every render.
+  const titledSeq = useMemo(() => {
+    let newest = 0;
+    for (const event of state.events) {
+      if (event.type === 'session.titled' && event.seq > newest) newest = event.seq;
+    }
+    return newest;
+  }, [state.events]);
+  useEffect(() => {
+    if (titledSeq === 0) return;
+    void queryClient.invalidateQueries({ queryKey: sessionListQueryKey });
+  }, [titledSeq, queryClient]);
+
   // Record the selected session in the shell history. Restoring a session that
   // is no longer in the loaded list returns false so the history skips it.
   useNavLocation({ sessionId: state.selectedId }, (restored) => {
@@ -308,11 +323,14 @@ export function SessionPage() {
       <PageHeader>
         <PageTitle>
           <SessionTitle
+            key={sessionKey}
             title={selectedTitle}
             session={selectedSession}
-            snapshot={model.snapshot}
-            turnCount={model.turns.length}
             draft={draft}
+            onRename={selectedSession === undefined
+              ? undefined
+              : (title) => renameSession(selectedSession.sessionId, title)
+                .then(() => queryClient.invalidateQueries({ queryKey: sessionListQueryKey }))}
           />
         </PageTitle>
       </PageHeader>

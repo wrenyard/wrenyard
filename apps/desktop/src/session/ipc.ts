@@ -24,6 +24,7 @@ export const SESSION_CHANNELS = {
   routesPreview: 'session:routes-preview',
   mediaRead: 'session:media-read', mediaReveal: 'session:media-reveal',
   delete: 'session:delete', mediaPick: 'session:media-pick',
+  rename: 'session:rename',
   mediaDescribe: 'session:media-describe', mediaStageClipboard: 'session:media-stage-clipboard',
   mediaDiscard: 'session:media-discard',
   seen: 'session:seen', seenState: 'session:seen-state',
@@ -409,6 +410,14 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     const sessionId = readString(value);
     if (sessionId === undefined) throw new Error('会话 id 无效');
     await request('session.delete', { sessionId });
+  });
+  handle(SESSION_CHANNELS.rename, async (_event, value) => {
+    if (typeof value !== 'object' || value === null) throw new Error('会话标题无效');
+    const record = value as Record<string, unknown>;
+    const sessionId = readString(record.sessionId);
+    const title = readString(record.title);
+    if (sessionId === undefined || title === undefined) throw new Error('会话标题无效');
+    await request('session.rename', { sessionId, title });
   });
   handle(SESSION_CHANNELS.mediaPick, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] });

@@ -134,4 +134,9 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
       await session.deleteSession(params.sessionId)
       return {}
     }))
+  router.register('session.rename', (params, _message, context) =>
+    call(context, 'session.rename', async () => {
+      await session.renameSession(params.sessionId, params.title)
+      return {}
+    }))
 }

@@ -59,6 +59,8 @@ export const SESSION_CHANNELS = {
   mediaReveal: 'session:media-reveal',
   /** Renderer → main: `sessionId`, forwarded to `session.delete`. */
   delete: 'session:delete',
+  /** Renderer → main: `{ sessionId, title }`, forwarded to `session.rename`. */
+  rename: 'session:rename',
   /** Renderer → main: open the native multi-file picker, returning drafts. */
   mediaPick: 'session:media-pick',
   /** Renderer → main: describe dropped filesystem paths as drafts. */
@@ -184,6 +186,8 @@ export interface SessionBridge {
   revealMedia(request: SessionBridgeMediaRequest): Promise<void>;
   /** Delete one session, clearing it from the daemon list. */
   deleteSession(sessionId: string): Promise<void>;
+  /** Rename one session with a manual title; the new title is persisted. */
+  renameSession(sessionId: string, title: string): Promise<void>;
   /** Open the native multi-file picker; returns the selected files as drafts. */
   selectAttachments(): Promise<DraftAttachment[]>;
   /** Describe already-known filesystem paths (drag-and-drop) as drafts. */
@@ -276,6 +280,9 @@ const bridge: SessionBridge = {
   },
   deleteSession(sessionId: string): Promise<void> {
     return ipcRenderer.invoke(SESSION_CHANNELS.delete, sessionId) as Promise<void>;
+  },
+  renameSession(sessionId: string, title: string): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.rename, { sessionId, title }) as Promise<void>;
   },
   selectAttachments(): Promise<DraftAttachment[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.mediaPick) as Promise<DraftAttachment[]>;

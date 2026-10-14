@@ -38,6 +38,14 @@ export * from './events.ts';
 export interface SessionSummary {
   sessionId: string;
   title: string;
+  /**
+   * True when `title` came from an explicit user rename (the `manual` marker on
+   * the latest applicable `session.titled` event) rather than generation.
+   * Derived and maintained exactly like `title`: updated on append and rebuilt
+   * when the index is recomputed from the timelines. A manual title is never
+   * overwritten by a generated one.
+   */
+  manualTitle?: boolean;
   createdAt: string;
   updatedAt: string;
   /**
@@ -210,12 +218,19 @@ export class Ledger {
     const previous = this.summaries.get(sessionId);
     const createdAt = previous?.createdAt ?? event.at;
     let title = previous?.title ?? DEFAULT_TITLE;
+    let manualTitle = previous?.manualTitle === true;
     const titled = titleOfEvent(event);
-    if (titled !== undefined) title = titled;
+    // A generated title may not overwrite a manual one; a later manual title
+    // always wins.
+    if (titled !== undefined && (!manualTitle || titled.manual)) {
+      title = titled.title;
+      manualTitle = titled.manual;
+    }
     const lastTurn = lastTurnAfter(previous?.lastTurn, event, events, events.length);
     this.summaries.set(sessionId, {
       sessionId,
       title,
+      ...(manualTitle ? { manualTitle } : {}),
       createdAt,
       updatedAt: event.at,
       ...(lastTurn === undefined ? {} : { lastTurn }),
@@ -315,10 +330,10 @@ export class Ledger {
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 /** The display title a `session.titled` event carries, when it is non-empty. */
-function titleOfEvent(event: LedgerEvent): string | undefined {
+function titleOfEvent(event: LedgerEvent): { title: string; manual: boolean } | undefined {
   if (event.type !== 'session.titled') return undefined;
   const title = event.text.trim();
-  return title === '' ? undefined : title;
+  return title === '' ? undefined : { title, manual: event.manual === true };
 }
 
 /** Failure facts of a failed model span in a turn, for `SessionSummary.lastTurn`. */
@@ -471,12 +486,16 @@ function summarize(sessionId: string, events: readonly LedgerEvent[]): SessionSu
   let createdAt: string | undefined;
   let updatedAt: string | undefined;
   let title = DEFAULT_TITLE;
+  let manualTitle = false;
   let lastTurn: SessionSummary['lastTurn'];
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index]!;
     if (event.type === 'session.created') createdAt = event.at;
     const titled = titleOfEvent(event);
-    if (titled !== undefined) title = titled;
+    if (titled !== undefined && (!manualTitle || titled.manual)) {
+      title = titled.title;
+      manualTitle = titled.manual;
+    }
     // The recompute path passes the prefix ending at this event, exactly like
     // the append path, so a later append cannot change an earlier turn.
     lastTurn = lastTurnAfter(lastTurn, event, events, index + 1);
@@ -486,6 +505,7 @@ function summarize(sessionId: string, events: readonly LedgerEvent[]): SessionSu
   return {
     sessionId,
     title,
+    ...(manualTitle ? { manualTitle } : {}),
     createdAt: created,
     updatedAt: updatedAt ?? created,
     ...(lastTurn === undefined ? {} : { lastTurn }),
@@ -504,7 +524,13 @@ function readSummary(value: unknown): SessionSummary | undefined {
   ) {
     return undefined;
   }
-  return { sessionId, title, createdAt, updatedAt };
+  return {
+    sessionId,
+    title,
+    ...(record.manualTitle === true ? { manualTitle: true } : {}),
+    createdAt,
+    updatedAt,
+  };
 }
 
 /** Parse a JSONL buffer, dropping only a torn (newline-less) final fragment. */

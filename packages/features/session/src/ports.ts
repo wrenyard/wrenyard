@@ -132,6 +132,13 @@ export interface Session {
    * session has a running or recovering turn.
    */
   deleteSession(sessionId: string): Promise<void>;
+  /**
+   * Rename one session with an explicit user title. Appends one manual
+   * `session.titled` event so the list, index and subscribers all see it.
+   * Rejects an unknown session and a title that is empty or only whitespace;
+   * both are refused before anything is persisted.
+   */
+  renameSession(sessionId: string, title: string): Promise<void>;
   /** Admitted turns whose terminal `turn.finished` is not yet durable. */
   activeTurnCount(): number;
   /** True while any admitted turn has not reached its durable terminal append. */

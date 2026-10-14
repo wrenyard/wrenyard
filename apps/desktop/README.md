@@ -158,7 +158,10 @@ Desktop renderer + preload + Electron main
 Desktop is one Electron window with a persistent frame:
 
 - **Title bar** — back/forward navigation, the current page title and the
-  window controls.
+  window controls. Clicking the session title in the main window enters inline
+  rename: Enter or blur saves the trimmed, non-empty title through
+  `session.rename`, Escape cancels without saving, and an all-whitespace title
+  is rejected. The mini-window title stays plain text and is not editable.
 - **Activity rail** — a fixed vertical rail with the primary pages
   (会话, 工房台账, 模型供应, 任务) and settings in its footer.
 - **Status bar** — a compact bar that projects live daemon, activity and quota

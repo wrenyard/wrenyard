@@ -28,8 +28,22 @@ function buildTitle(input: TitleViewInput): BuiltView {
 /** The engine surface one title task needs. */
 export type TitleHost = Pick<SessionCallHost, 'ledger' | 'invoke' | 'track' | 'now'>;
 
+/**
+ * Whether the session carries an explicit manual title. The marker lives on the
+ * `session.titled` event, so the ledger is the source of truth: once a manual
+ * rename is recorded, automatic title generation stops for good.
+ */
+function hasManualTitle(host: TitleHost, session: SessionRuntime): boolean {
+  for (const event of host.ledger.read(session.sessionId)) {
+    if (event.type === 'session.titled' && event.manual === true) return true;
+  }
+  return false;
+}
+
 /** Start the initial title task for a turn's opening message. */
 export function startInitialTitle(host: TitleHost, session: SessionRuntime, turn: TurnRuntime): void {
+  // A manually renamed session never receives an automatic title.
+  if (hasManualTitle(host, session)) return;
   const version = ++session.titleVersion;
   const userText = session.firstUserText ?? turn.userText;
   host.track(runTitle(host, session, turn, version, buildTitle({ userText })));
@@ -42,7 +56,7 @@ export async function maybeUpdateTitle(
   turn: TurnRuntime,
   finalReply: string | undefined,
 ): Promise<void> {
-  if (session.titleUpdatedWithReply) return;
+  if (session.titleUpdatedWithReply || hasManualTitle(host, session)) return;
   session.titleUpdatedWithReply = true;
   const version = ++session.titleVersion;
   const userText = session.firstUserText ?? turn.userText;
@@ -67,6 +81,8 @@ async function runTitle(
   try {
     const outcome = await host.invoke(session, turn, 'title', view, { parent: turnId(turn.turn) });
     if (!outcome.ok) return;
+    // The user renamed the session while this call was in flight.
+    if (hasManualTitle(host, session)) return;
     const applied = applyTitle(session, version, outcome.text);
     if (applied === undefined) return;
     await host.ledger.append(session.sessionId, {
@@ -83,7 +99,8 @@ async function runTitle(
 /**
  * Apply a generated title. Later title generations always win, so an older
  * slow call cannot overwrite one; returns the applied title, or `undefined`
- * when this generation lost or produced nothing.
+ * when this generation lost or produced nothing. A recorded manual title is
+ * the caller's guard (`hasManualTitle`), so this stays a pure version check.
  */
 export function applyTitle(session: SessionRuntime, version: number, text: string): string | undefined {
   const title = text.trim().split('\n')[0]!.trim();

@@ -41,6 +41,9 @@ export interface SessionMediaReadParams { sessionId: string; path: string }
 export interface SessionMediaReadResult { path: string; mime: string; dataUrl?: string }
 export interface SessionDeleteParams { sessionId: string }
 export type SessionDeleteResult = Record<string, never>
+/** Rename one session with an explicit user title. */
+export interface SessionRenameParams { sessionId: string; title: string }
+export type SessionRenameResult = Record<string, never>
 export interface SessionEventsParams {
   sessionId: string
   afterSeq: number
@@ -126,6 +129,11 @@ export const sessionDeleteParamsSchema = {
   properties: { sessionId: idSchema },
 } as const satisfies JsonSchema
 export const sessionDeleteResultSchema = emptySchema
+export const sessionRenameParamsSchema = {
+  type: 'object', required: ['sessionId', 'title'], additionalProperties: false,
+  properties: { sessionId: idSchema, title: { type: 'string', minLength: 1 } },
+} as const satisfies JsonSchema
+export const sessionRenameResultSchema = emptySchema
 export const sessionEventsParamsSchema = {
   type: 'object', required: ['sessionId', 'afterSeq'], additionalProperties: false,
   properties: {
