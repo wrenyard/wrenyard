@@ -44,9 +44,19 @@ export async function runForemanService(args = process.argv.slice(2)): Promise<n
   const { config, resolvedConfigPath } = loadServiceConfigForDaemon(values.config, values)
   if (!config.service.enabled) throw new Error('Wrenyard daemon service is disabled by config')
 
+  // A supplied --work-dir always pins the workspace root to whoever launched the
+  // daemon, even when its value equals the config-declared root. Reporting the
+  // pin explicitly from the bootstrap (rather than inferring it by comparing the
+  // effective root against the config) makes workspace.switch refuse a
+  // CLI-pinned root with the CLI reason in that case too. With no --work-dir the
+  // field is left undefined so the constructor keeps its environment inference
+  // (WRENYARD_WORKSPACE) unchanged.
+  const workspacePinSource = typeof values['work-dir'] === 'string' ? 'cli' as const : undefined
+
   const daemon = new ForemanDaemon({
     config,
     configPath: resolvedConfigPath,
+    workspacePinSource,
     // Ready logs and the parent-process notification are the named startup
     // notification; run() does not call start() a second time to learn about it.
     onStarted: ({ ipcPath }) => {

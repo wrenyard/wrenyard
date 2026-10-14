@@ -66,7 +66,17 @@ export interface RegisterSessionOptions {
    */
   onLiveEvent?(sessionId: string, event: LedgerEvent): void;
 }
-export interface SessionRegistration { disconnect(): void; close(): Promise<void> }
+export interface SessionRegistration {
+  disconnect(): void;
+  /**
+   * Retire every per-window `session.events` poll and its in-flight client
+   * without removing the registered IPC handlers, so a workspace switch stops
+   * delivering the previous workspace's ledger events while later selections can
+   * still subscribe. Late poll responses are dropped instead of forwarded.
+   */
+  reset(): void;
+  close(): Promise<void>;
+}
 interface EventPage { events: LedgerEvent[]; lastSeq: number; live?: LiveCall[] }
 interface PollState {
   ownerId: number;
@@ -476,6 +486,15 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
 
   return {
     disconnect(): void { for (const client of clients) client.close(); },
+    // Retires the previous workspace's polls only: each stopPoll aborts the poll
+    // controller (closing its in-flight request, so a late page is dropped) and
+    // removes the ledger-event listeners, then the owner map is cleared so no
+    // stale subscription survives. The IPC handlers stay registered for later
+    // session selections.
+    reset(): void {
+      for (const state of polls.values()) stopPoll(state);
+      polls.clear();
+    },
     close(): Promise<void> {
       closePromise ??= (async () => {
         closed = true;

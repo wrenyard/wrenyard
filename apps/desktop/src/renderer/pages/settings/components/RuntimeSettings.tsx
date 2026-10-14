@@ -30,12 +30,18 @@ import {
   daemonLifecycleDescription,
   daemonStateTone,
   errorMessage,
+  isWorkspaceReadOnly,
   serviceDescription,
   serviceTone,
   workspaceNote,
+  workspaceSwitchErrorMessage,
+  WORKSPACE_SAVE_LABEL,
+  WORKSPACE_SAVING_LABEL,
+  WORKSPACE_SWITCHING_NOTE,
   type DaemonLifecycleAction,
 } from '../model/settings.js';
-import { daemonQueryKey, useDaemonQuery, useSettingsQuery } from '../queries.js';
+import { daemonQueryKey, settingsQueryKey, useDaemonQuery, useSettingsQuery } from '../queries.js';
+import type { SettingsSnapshot } from '@/shell-contract';
 
 /** Local service connection state. */
 export function ServiceControl() {
@@ -107,23 +113,67 @@ export function DaemonControl() {
   );
 }
 
-/** Fixed workspace binding: read-only path plus a reveal action. */
+/**
+ * Workspace binding: an editable path for a user-managed root plus a reveal
+ * action. Saving applies the change through the daemon's idle-only
+ * `workspace.switch` method — the daemon stays running — and a busy or invalid
+ * switch shows the daemon's own reason instead of leaving a dead control. A root
+ * pinned by WRENYARD_WORKSPACE stays read-only with its explanation.
+ */
 export function WorkspaceControl() {
+  const queryClient = useQueryClient();
   const settings = useSettingsQuery();
   const workspace = settings.data?.service.workspace;
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState('');
+
+  const mutation = useMutation({
+    mutationFn: (nextPath: string) => shell.saveWorkspace(nextPath, false),
+    onMutate: () => setError(''),
+    onSuccess: (saved) => {
+      setDraft(null);
+      queryClient.setQueryData<SettingsSnapshot>(settingsQueryKey, (current) => (
+        current === undefined
+          ? current
+          : { ...current, service: { ...current.service, workspace: saved } }
+      ));
+      if (saved.status !== 'configured') setError(`工作区仍未就绪：${workspaceNote(saved)}`);
+    },
+    onError: (cause) => setError(workspaceSwitchErrorMessage(cause)),
+  });
+
   if (settings.isPending || workspace === undefined) return <Skeleton className="h-8 w-full max-w-80" />;
+
   const path = workspace.path ?? '';
+  const readOnly = isWorkspaceReadOnly(workspace);
+  const value = draft ?? path;
+  const pending = mutation.isPending;
+  const canSave = !readOnly && !pending && value.trim() !== '' && value.trim() !== path;
+
+  const save = (): void => {
+    if (!canSave) return;
+    mutation.mutate(value.trim());
+  };
+
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
         <Input
-          value={path}
-          readOnly
+          value={value}
+          readOnly={readOnly}
+          disabled={pending}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter') save(); }}
           spellCheck={false}
           placeholder="/path/to/wrenyard-workspace"
           aria-label="工作区路径"
           className="max-w-80"
         />
+        {!readOnly && (
+          <Button disabled={!canSave} onClick={save}>
+            {pending ? WORKSPACE_SAVING_LABEL : WORKSPACE_SAVE_LABEL}
+          </Button>
+        )}
         <Button
           variant="outline"
           disabled={path === ''}
@@ -134,6 +184,8 @@ export function WorkspaceControl() {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground">{path === '' ? SESSION_WORKSPACE_UNAVAILABLE : workspaceNote(workspace)}</p>
+      {pending && <p className="text-sm text-muted-foreground">{WORKSPACE_SWITCHING_NOTE}</p>}
+      {error !== '' && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </div>
   );
 }

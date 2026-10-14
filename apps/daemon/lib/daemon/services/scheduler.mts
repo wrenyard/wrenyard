@@ -27,14 +27,37 @@ export interface CreateSchedulerOptions {
   statePath: string
   /** The session feature the scheduler sends prompts through. */
   session: Pick<Session, 'send' | 'listSessions'>
+  /**
+   * Workspace root this scheduler instance serves. Every schedule is associated
+   * with the workspace that owned it; a scheduler never lists or fires a
+   * schedule belonging to any other workspace, so a hot switch cannot make one
+   * workspace's scheduled prompt fire into another workspace's sessions.
+   */
+  workspaceRoot: string
   log?: SchedulerLog
+  /**
+   * Admission gate checked at tick entry and again immediately before every
+   * send. The daemon returns false while a hot switch or shutdown is staging,
+   * so a suppressed scheduler cannot start a prompt after isIdle was observed.
+   */
+  canRun?: () => boolean
 }
 
 export interface Scheduler {
-  /** Load persisted schedules, fire any that are due, then poll every 5s. */
+  /**
+   * Load persisted schedules and prepare the workspace association without
+   * firing any schedule or arming the poll timer, so a hot switch can stage
+   * this before it publishes.
+   */
+  prepare(): Promise<void>
+  /** Fire any due schedules once, then poll every 5s. Prepare must precede it. */
   start(): Promise<void>
   /** Stop polling and make later ticks no-ops. */
   stop(): void
+  /** True while a tick is firing due schedules; the daemon treats it as in-flight work. */
+  readonly ticking: boolean
+  /** Await every queued write; rejects when the latest write failed. */
+  flush(): Promise<void>
   list(sessionId?: string): ScheduleListResult
   create(input: ScheduleCreateParams): ScheduleRecord
   update(id: string, state: 'active' | 'paused', sessionId?: string): ScheduleRecord
@@ -45,6 +68,14 @@ export interface Scheduler {
 interface SchedulerStateFile {
   version: 1
   schedules: ScheduleRecord[]
+  /**
+   * Original workspace root per schedule id. A store written before workspace
+   * switching existed has no map; every record in it is associated with the
+   * workspace active at its first load and persisted there, so a later switch
+   * can never re-home a legacy schedule. Entries for removed schedules are
+   * dropped on the next write.
+   */
+  workspaces?: Record<string, string>
 }
 
 function copyRecord(record: ScheduleRecord): ScheduleRecord {
@@ -99,18 +130,34 @@ function readRecord(value: unknown): ScheduleRecord | undefined {
  * into their owning session on a 5 second timer.
  */
 export function createScheduler(options: CreateSchedulerOptions): Scheduler {
-  const { statePath, session, log } = options
+  const { statePath, session, log, workspaceRoot, canRun } = options
   let schedules: ScheduleRecord[] = []
+  /** Original workspace root per schedule id (see SchedulerStateFile.workspaces). */
+  const scheduleWorkspaces = new Map<string, string>()
+  /** Set when load() had to associate at least one record with this workspace. */
+  let associationDirty = false
   let timer: ReturnType<typeof setInterval> | undefined
   let stopped = false
   let ticking = false
+  /** Set once the state file was loaded and its association prepared. */
+  let prepared = false
   let persistChain: Promise<void> = Promise.resolve()
 
+  /** The workspace that owns one stored record; an unassociated record belongs here. */
+  function recordWorkspace(record: ScheduleRecord): string {
+    return scheduleWorkspaces.get(record.id) ?? workspaceRoot
+  }
+
   /** Atomically write the state file: temp file plus rename, temp removed on failure. */
-  async function writeState(records: ScheduleRecord[]): Promise<void> {
+  async function writeState(records: ScheduleRecord[], associations: Map<string, string>): Promise<void> {
     await mkdir(dirname(statePath), { recursive: true })
     const tempPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`
-    const payload = JSON.stringify({ version: 1, schedules: records } satisfies SchedulerStateFile)
+    const known = new Set(records.map(record => record.id))
+    const workspaces: Record<string, string> = {}
+    for (const [id, root] of associations) {
+      if (known.has(id)) workspaces[id] = root
+    }
+    const payload = JSON.stringify({ version: 1, schedules: records, workspaces } satisfies SchedulerStateFile)
     try {
       await writeFile(tempPath, payload, 'utf-8')
       await rename(tempPath, statePath)
@@ -120,14 +167,24 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     }
   }
 
-  /** Serialize every mutation's write so two persists never interleave. */
+  /**
+   * Serialize every mutation's write so two persists never interleave. A normal
+   * mutation's failed write is logged, never thrown; flush() observes the same
+   * chain's rejection for the workspace-switch path.
+   */
   function persist(): void {
     const snapshot = schedules.map(copyRecord)
+    const associations = new Map(scheduleWorkspaces)
     persistChain = persistChain
-      .then(() => writeState(snapshot), () => writeState(snapshot))
-      .catch((error: unknown) => {
-        log?.('warn', 'scheduler failed to persist schedules', error)
-      })
+      .then(() => writeState(snapshot, associations), () => writeState(snapshot, associations))
+    void persistChain.catch((error: unknown) => {
+      log?.('warn', 'scheduler failed to persist schedules', error)
+    })
+  }
+
+  /** Await every queued write; rejects when the latest write failed. */
+  async function flush(): Promise<void> {
+    await persistChain
   }
 
   /** Load the state file; a missing file is empty, unreadable or invalid logs. */
@@ -146,11 +203,31 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         ? (parsed as { schedules?: unknown }).schedules
         : undefined
       if (!Array.isArray(list)) throw new Error('invalid schedule store')
+      // Read the persisted original-workspace association. A store written
+      // before workspace switching existed has none; each of its records is
+      // associated with THIS workspace — the one active at its first load after
+      // the upgrade — and the association is persisted so a later switch can no
+      // longer re-home a legacy schedule.
+      const storedWorkspaces = new Map<string, string>()
+      const rawWorkspaces = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as { workspaces?: unknown }).workspaces
+        : undefined
+      if (rawWorkspaces && typeof rawWorkspaces === 'object' && !Array.isArray(rawWorkspaces)) {
+        for (const [id, root] of Object.entries(rawWorkspaces as Record<string, unknown>)) {
+          if (typeof root === 'string' && root !== '') storedWorkspaces.set(id, root)
+        }
+      }
       const records: ScheduleRecord[] = []
       for (const entry of list) {
         const record = readRecord(entry)
-        if (record) records.push(record)
+        if (!record) continue
+        records.push(record)
+        const assigned = storedWorkspaces.get(record.id) ?? workspaceRoot
+        if (storedWorkspaces.get(record.id) !== assigned) associationDirty = true
+        storedWorkspaces.set(record.id, assigned)
       }
+      scheduleWorkspaces.clear()
+      for (const [id, root] of storedWorkspaces) scheduleWorkspaces.set(id, root)
       return records
     } catch (error) {
       log?.('warn', `scheduler found invalid content in ${statePath}; starting with an empty schedule list`, error)
@@ -158,10 +235,15 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     }
   }
 
-  /** Resolve one stored record by id, rejecting an unknown id or a session mismatch. */
+  /**
+   * Resolve one stored record by id, rejecting an unknown id, a session mismatch
+   * or a record owned by another workspace. A scheduler never mutates a
+   * schedule that does not belong to the workspace it serves.
+   */
   function findRecord(id: string, sessionId?: string): ScheduleRecord {
     const record = schedules.find(candidate => candidate.id === id)
-    if (!record || (sessionId !== undefined && record.sessionId !== sessionId)) {
+    if (!record || recordWorkspace(record) !== workspaceRoot
+      || (sessionId !== undefined && record.sessionId !== sessionId)) {
       throw new Error(`unknown schedule: ${id}`)
     }
     return record
@@ -176,16 +258,21 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
 
   /** One polling pass: fire every active record whose nextRunAt has passed. */
   async function tick(): Promise<void> {
-    if (stopped || ticking) return
+    // Admission gate at tick entry: while a hot switch or shutdown is staging,
+    // the daemon suppresses the whole pass so no send can start after isIdle.
+    if (stopped || ticking || canRun?.() === false) return
     ticking = true
     try {
       const now = Date.now()
       // Snapshot the ids that are due now. Each live record is re-read before
       // its send, because an earlier awaited send in this same tick may have
-      // left the store paused, resumed or deleted.
+      // left the store paused, resumed or deleted. A record owned by another
+      // workspace is never due here: its scheduled prompt must not fire into
+      // this workspace's sessions.
       const dueIds = schedules
         .filter(record =>
-          record.state === 'active'
+          recordWorkspace(record) === workspaceRoot
+          && record.state === 'active'
           && record.nextRunAt !== undefined
           && Date.parse(record.nextRunAt) <= now)
         .map(record => record.id)
@@ -221,6 +308,10 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         const fireAt = new Date()
         let turn: number | undefined
         let fireError: unknown
+        // Admission gate re-checked immediately before the send: a scheduler
+        // suppressed by an in-progress switch or shutdown must not start a
+        // prompt after the daemon was observed idle.
+        if (canRun?.() === false) break
         try {
           const result = await session.send(record.sessionId, { text: record.prompt, model: record.model })
           turn = result.turn
@@ -275,18 +366,43 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     }
   }
 
+  /**
+   * Load the state file and prepare the workspace association without firing
+   * anything or arming the poll timer, so a hot switch can stage this before it
+   * publishes. A prepare after stop() is a no-op.
+   */
+  async function prepareStore(): Promise<void> {
+    if (stopped || prepared) return
+    schedules = await load()
+    prepared = true
+    // Persist the first-load workspace association of any legacy schedule, so a
+    // later switch reads it back instead of re-homing the record into the
+    // switched-to workspace.
+    if (associationDirty) {
+      associationDirty = false
+      persist()
+    }
+  }
+
+  /** Fire due schedules once, then poll every 5s. A run after stop() is a no-op. */
+  async function beginTicking(): Promise<void> {
+    if (stopped) return
+    await tick()
+    if (stopped) return
+    timer = setInterval(() => { void tick() }, TICK_MS)
+    timer.unref()
+  }
+
   return {
+    get ticking(): boolean { return ticking },
+    prepare: prepareStore,
+    // A start after stop() does nothing: no store load, no initial tick and no
+    // interval, so a late start cannot revive a stopped scheduler.
     async start(): Promise<void> {
-      // A start after stop() does nothing: no store load, no initial tick and
-      // no interval, so a late start cannot revive a stopped scheduler.
-      if (stopped) return
-      schedules = await load()
-      if (stopped) return
-      await tick()
-      if (stopped) return
-      timer = setInterval(() => { void tick() }, TICK_MS)
-      timer.unref()
+      await prepareStore()
+      await beginTicking()
     },
+    flush,
     stop(): void {
       stopped = true
       if (timer) {
@@ -296,9 +412,11 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     },
     list(sessionId?: string): ScheduleListResult {
       const titles = new Map(session.listSessions().map(summary => [summary.sessionId, summary.title]))
-      const filtered = sessionId === undefined
-        ? schedules
-        : schedules.filter(record => record.sessionId === sessionId)
+      // Only this workspace's schedules are ever listed; another workspace's
+      // schedules stay owned by that workspace and its sessions.
+      const filtered = schedules.filter(record =>
+        recordWorkspace(record) === workspaceRoot
+        && (sessionId === undefined || record.sessionId === sessionId))
       const sorted = [...filtered].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       return {
         schedules: sorted.map(record => {
@@ -337,6 +455,8 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         runCount: 0,
       }
       schedules.push(record)
+      // The record belongs to this scheduler's workspace for its whole life.
+      scheduleWorkspaces.set(record.id, workspaceRoot)
       persist()
       return copyRecord(record)
     },
@@ -367,6 +487,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     remove(id: string, sessionId?: string): void {
       const record = findRecord(id, sessionId)
       schedules = schedules.filter(candidate => candidate.id !== record.id)
+      scheduleWorkspaces.delete(record.id)
       persist()
     },
   }

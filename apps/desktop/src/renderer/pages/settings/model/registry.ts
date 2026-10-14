@@ -226,11 +226,13 @@ const SESSION_CATEGORY: SettingDefinition[] = [
     id: 'session.workspace',
     category: 'session',
     title: '工作区',
-    description: '会话固定绑定此目录，不在聊天界面提供临时切换。',
+    description: '会话绑定此目录；由 daemon 在空闲时切换，无需重启。',
     keywords: ['工作区', 'workspace', '目录', '路径'],
     control: custom('workspace'),
-    readonly: true,
-    source: { kind: 'readonly' },
+    // The workspace control is no longer unconditionally read-only: it owns its
+    // own draft/save/pending state and only becomes read-only when the snapshot
+    // reports the environment as the source.
+    source: { kind: 'custom' },
   },
 ];
 

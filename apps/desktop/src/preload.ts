@@ -168,6 +168,13 @@ const api: WrenyardShellApi = {
   savePetSettings(settings): Promise<SettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.savePetSettings, settings) as Promise<SettingsSnapshot>;
   },
+  /**
+   * Apply a workspace change through the daemon's `workspace.switch` method. The
+   * main process resolves the daemon's structured outcome: a successful switch
+   * resolves with the refreshed workspace snapshot, and a refused one
+   * (busy/invalid/shutting-down/pinned) rejects with the daemon's own message, so
+   * the renderer shows an actionable reason instead of a dead control.
+   */
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.saveWorkspace, path, create) as Promise<WorkspaceConfigurationSnapshot>;
   },

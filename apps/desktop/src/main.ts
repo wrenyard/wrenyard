@@ -25,7 +25,7 @@ import { ActivityStatusProjector, TaskRunLifecycleTracker } from './main/activit
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ScheduleItem, type ScheduleState, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ScheduleItem, type ScheduleState, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { MiniCardManager } from './mini-cards.js';
 import { Notifier } from './main/notifications/notifier.js';
@@ -53,11 +53,10 @@ import {
   type QuitOrigin,
 } from './desktop-interaction-policy.js';
 import {
-  createProductWorkspace,
+  initializeProductWorkspace,
   inspectProductWorkspace,
-  saveProductWorkspace,
 } from './workspace.js';
-import { assertDaemonIdle, restartOwnedDaemon } from './workspace-activation.js';
+import { assertDaemonIdle } from './workspace-activation.js';
 
 // Isolate Electron's data directories before any session/BrowserWindow or the
 // single-instance lock is created when a private state root is requested.
@@ -92,6 +91,19 @@ const SMOKE_TIMEOUT_MS = 90_000;
 /** Bounded settle budget: React mounts/activates the target page asynchronously after `setPage`. */
 const SMOKE_PAGE_VISIBILITY_TIMEOUT_MS = 10_000;
 
+/**
+ * Structured outcome of the daemon's `workspace.switch` method. Desktop applies
+ * a workspace change through that method while the daemon keeps running, and
+ * surfaces the daemon's refusal reason verbatim; the daemon owns the
+ * authoritative `workspace.root` write.
+ */
+interface DaemonWorkspaceSwitchResult {
+  ok: boolean;
+  outcome: WorkspaceSwitchOutcome;
+  workspace_root?: string;
+  message?: string;
+}
+
 /** Read the bounded public health projection from the given IPC socket. */
 async function readWrenyardHealth(path: string): Promise<HealthSnapshot> {
   let client: WrenyardIpcClient | null = null;
@@ -117,19 +129,6 @@ async function readWrenyardHealth(path: string): Promise<HealthSnapshot> {
 }
 
 const probeWrenyard = (path: string) => probeDaemon(path, app.getVersion());
-
-/** Waits until a shut-down source daemon went away and a compatible one answers again. */
-async function waitForSourceDaemonRestart(path: string): Promise<void> {
-  const deadline = Date.now() + 120_000;
-  let wentAway = false;
-  while (Date.now() < deadline) {
-    const probe = await probeWrenyard(path);
-    if (!probe.connected) wentAway = true;
-    else if (wentAway && probe.compatible) return;
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
-  }
-  throw new Error('daemon 未在工作区切换后重新启动，请检查 daemon 的 dev 终端');
-}
 
 async function readGatewayConnection(path: string): Promise<WrenyardGatewayConnection> {
   const client = new WrenyardIpcClient({ path, requestTimeoutMs: FOREMAN_HEALTH_TIMEOUT_MS });
@@ -1162,26 +1161,32 @@ async function bootstrap(): Promise<void> {
       return getSettings();
     },
     saveWorkspace: async (path: string, create = false) => {
-      // From source, the daemon's own dev script relaunches it after a clean shutdown.
-      const sourceDaemon = !app.isPackaged;
-      if (!sourceDaemon && daemonSupervisor?.mode !== 'supervised') {
-        throw new Error('daemon 由终端管理，请先停止它，再由啾啾工坊启动后切换工作区。');
+      if (quitController?.isQuitting()) throw new Error('正在退出，无法切换工作区');
+      requireDaemonRunning();
+      // Directory initialization stays in Desktop: onboarding may create a new
+      // empty workspace. The daemon owns the authoritative config write, so
+      // Desktop never persists workspace.root itself.
+      const root = create ? await initializeProductWorkspace(path) : path.trim();
+      if (root === '') throw new Error('请输入 workspace 路径');
+      // The daemon applies the change in place: it rebinds every workspace-scoped
+      // service and persists the root while the same process, lock, database and
+      // IPC endpoint stay alive. A busy or shutting-down daemon refuses with an
+      // actionable reason instead of the old config-then-restart dance.
+      const result = await requestForeman('workspace.switch', { root }) as DaemonWorkspaceSwitchResult;
+      if (result.ok !== true) {
+        throw new Error(result.message ?? '切换工作区失败，请重试。');
       }
-      const idle = assertDaemonIdle(await requestForeman('daemon.status', {}));
-      if (!idle.idle) throw new Error(idle.reason);
-      const saved = create ? await createProductWorkspace(path) : await saveProductWorkspace(path);
-      if (sourceDaemon) {
-        await requestForeman('daemon.shutdown', { reason: 'source-development workspace activation' });
-        await waitForSourceDaemonRestart(ipcPath);
-        await daemonSupervisor!.start();
-      } else {
-        await restartOwnedDaemon(daemonSupervisor!);
-      }
-      // The daemon reads the workspace from config at startup, so the restarted
-      // daemon is already bound to it; Desktop only republishes the new root.
-      workspaceConfiguration = saved;
+      // Re-read the daemon-owned config, then rebuild the Desktop session
+      // surface so the previous workspace's session ids cannot silently carry
+      // over into the switched-to workspace. Retire the old workspace's live
+      // session.events polls first; the session IPC handlers stay registered.
+      sessionRegistration?.reset();
+      const refreshed = await inspectProductWorkspace();
+      workspaceConfiguration = refreshed;
+      desktopSubscriptions?.reconnect();
       notifyDaemonChanged();
-      return saved;
+      shellWindow?.deliverCommandAction({ id: 'session.newDraft' });
+      return refreshed;
     },
     // Task detail/transcript windows are general Desktop windows, owned by the
     // window owner and reachable even when Pet is hidden.

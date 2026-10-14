@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, readdir, rmdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rmdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { resolveDefaultWrenyardConfigPath } from '@wrenyard/paths';
@@ -106,61 +105,25 @@ export async function inspectProductWorkspace(
   }
 }
 
-export async function saveProductWorkspace(
-  requestedPath: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<WorkspaceConfiguration> {
-  if (env.WRENYARD_WORKSPACE?.trim()) {
-    throw new Error('当前工作区由 WRENYARD_WORKSPACE 环境变量管理，无法在 App 内修改');
-  }
-  if (!requestedPath.trim()) throw new Error('请输入 workspace 路径');
-  const canonicalPath = await assertDirectory(requestedPath.trim(), 'Workspace');
-  const configPath = resolveWrenyardConfigPath(env);
-  let config: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(configPath, 'utf8'));
-    } catch (error) {
-      throw new Error(`Wrenyard config is not valid JSON: ${configPath}`, { cause: error });
-    }
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`Wrenyard config is not an object: ${configPath}`);
-    }
-    config = parsed as Record<string, unknown>;
-  }
-  const currentWorkspace = config.workspace;
-  const workspace = currentWorkspace !== null
-    && typeof currentWorkspace === 'object'
-    && !Array.isArray(currentWorkspace)
-    ? currentWorkspace as Record<string, unknown>
-    : {};
-  await atomicWriteJson(configPath, {
-    ...config,
-    workspace: { ...workspace, root: canonicalPath },
-  });
-  return {
-    status: 'configured',
-    source: 'user-config',
-    configPath,
-    path: canonicalPath,
-    readOnly: false,
-  };
-}
-
 /**
- * Create a new Wrenyard product workspace directory and register it.
+ * Initialize a new Wrenyard product workspace directory and return its
+ * canonical path.
  *
  * Only a new (or existing empty) directory may be created. A nonempty
  * destination is refused so an existing workspace is selected instead of being
  * overwritten. Template files are written exclusively (never overwriting), and
  * on any failure only the exact files and empty directories created by this
  * invocation are removed.
+ *
+ * This function only initializes the directory. The daemon owns the
+ * authoritative `workspace.root` write (through its idle-only
+ * `workspace.switch` method), so Desktop never writes the config itself — not
+ * on a refused switch and not on a failure.
  */
-export async function createProductWorkspace(
+export async function initializeProductWorkspace(
   requestedPath: string,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<WorkspaceConfiguration> {
+): Promise<string> {
   if (env.WRENYARD_WORKSPACE?.trim()) {
     throw new Error('当前工作区由 WRENYARD_WORKSPACE 环境变量管理，无法在 App 内修改');
   }
@@ -192,7 +155,7 @@ export async function createProductWorkspace(
       await writeFile(filePath, contents, { encoding: 'utf8', flag: 'wx' });
       createdFiles.push(filePath);
     }
-    return await saveProductWorkspace(target, env);
+    return await assertDirectory(target, 'Workspace');
   } catch (error) {
     for (const filePath of createdFiles.reverse()) {
       await rm(filePath, { force: true });
@@ -214,7 +177,6 @@ export async function createProductWorkspace(
     }
     throw error;
   }
-
 }
 
 async function assertDirectory(path: string, label: string): Promise<string> {
@@ -242,11 +204,4 @@ export async function resolveProductWorkspace(
   if (configuration.status === 'configured' && configuration.path) return configuration.path;
   throw new Error(configuration.message
     ?? `Wrenyard workspace.root is missing in ${configuration.configPath}; set workspace.root or WRENYARD_WORKSPACE`);
-}
-
-async function atomicWriteJson(target: string, value: unknown): Promise<void> {
-  await mkdir(dirname(target), { recursive: true });
-  const tmp = `${target}.tmp-${randomUUID()}`;
-  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await rename(tmp, target);
 }

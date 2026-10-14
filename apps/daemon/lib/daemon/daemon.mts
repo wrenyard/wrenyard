@@ -2,20 +2,23 @@ import { createRoutingAvailability, createAuxiliaryAvailability } from './servic
 import { createAuxiliarySelector, readAuxiliaryRoutingSettings } from './services/auxiliary-routing.mts'
 import { timingSafeEqual, randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync } from 'node:fs'
+import { realpath, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { closeDb, getDb, initDb, query as dbQuery } from '../db/connection.mts'
 import { dropTaskRunTelemetryRetiredColumns } from '../db/schema.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { WorkflowRunStore } from '../db/stores/workflow-run-store.mts'
 import type { OperationHost } from '../core/operations/types.mts'
 import type { ForemanServiceConfig } from '../config/index.mts'
+import { updateForemanConfigData } from '../config/writer.mts'
 import { RpcRouter } from '../server/rpc-router.mts'
-import { registerCoreHandlers, readProcessIdentity } from '../server/handlers/core.mts'
+import { registerCoreHandlers, readProcessIdentity, type CoreRpcHandlerOptions } from '../server/handlers/core.mts'
 import { createIpcServer, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
 import { registerScheduleHandlers } from '../server/handlers/schedule.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
+import type { WorkspaceSwitchResult } from '../protocol/registry.mts'
 import { TaskService } from '../core/task/service.mts'
 import { createSession, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
@@ -70,6 +73,14 @@ export interface RunningForemanDaemon {
   taskService: TaskService
   /** Daemon-owned taskgraph service; a forced shutdown cancels its active graphs. */
   taskgraphService: TaskGraphService
+  /**
+   * Idle-only workspace hot switch. Rebinds every workspace-scoped service to the
+   * requested root and persists workspace.root while this process, its instance
+   * lock, database, execution runtime and IPC endpoint stay alive. Never throws
+   * for an expected refusal: the structured result carries the outcome and the
+   * daemon's reason verbatim.
+   */
+  switchWorkspace(root: string): Promise<WorkspaceSwitchResult>
   /** Records the request, closes admission, and resolves shutdownRequested. Never drains or stops. */
   requestShutdown(reason: string, force?: boolean): void
   /** Resolves once any exit entry (RPC, signal, parent message) requested shutdown. */
@@ -92,6 +103,13 @@ export interface ForemanDaemonOptions {
   config: ForemanServiceConfig
   configPath?: string
   deps?: ForemanDaemonDeps
+  /**
+   * Set when the effective workspace root is pinned outside the config by
+   * `WRENYARD_WORKSPACE` or the daemon's `--work-dir` CLI flag. A pinned root is
+   * owned by whoever launched the process, so the in-process switch refuses with
+   * an explicit `pinned` outcome instead of silently fighting the pin.
+   */
+  workspacePinSource?: 'environment' | 'cli'
   /**
    * Named startup notification invoked once after a successful start, before
    * run() awaits the shutdown request. The bootstrap uses it for the ready logs
@@ -123,6 +141,26 @@ interface ForemanDaemonResources {
    *  every active graph through its existing signal API. */
   taskgraphService: TaskGraphService
   restoreGatewayEnvironment: () => void
+  /**
+   * Rebind every workspace-scoped resource to a new root and persist the
+   * authoritative `workspace.root`. `session`, `scheduler`, `taskService` and
+   * `taskgraphService` on this object are replaced by the current bindings, so
+   * close() always tears down the live workspace. Created by
+   * createForemanDaemonResources, where every shared dependency already lives;
+   * it reuses the same assembly code as startup instead of duplicating it.
+   */
+  rebindWorkspace: (requestedRoot: string) => Promise<WorkspaceSwitchResult>
+}
+
+/** The workspace-scoped services one root owns; replaced whole on a switch. */
+interface WorkspaceScopedResources {
+  workspaceRoot: string
+  taskService: TaskService
+  taskgraphService: TaskGraphService
+  taskSettingsService: TaskSettingsService
+  workspaceDocService: WorkspaceDocService
+  session: Session
+  scheduler: Scheduler
 }
 
 /**
@@ -137,6 +175,14 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private readonly configPath: string | undefined
   private readonly deps: ForemanDaemonDeps
   private readonly onStarted: ((info: ForemanDaemonStartedInfo) => void) | undefined
+  /** Non-undefined when WRENYARD_WORKSPACE / --work-dir pins the workspace root. */
+  private readonly workspacePinSource: 'environment' | 'cli' | undefined
+  /**
+   * The workspace-switch gate. Entered synchronously before any await, so a
+   * second switch and every new admitting/workspace-mutating request is refused
+   * for the whole switch instead of racing the state swap.
+   */
+  private switching = false
 
   private resources: ForemanDaemonResources | undefined
   /** Held outside resources so a shutdown requested during startup still stops it. */
@@ -154,6 +200,11 @@ export class ForemanDaemon implements RunningForemanDaemon {
     this.configPath = options.configPath
     this.deps = options.deps ?? {}
     this.onStarted = options.onStarted
+    // An explicit pin wins; otherwise the pin is detected from the launch
+    // environment so a daemon started with WRENYARD_WORKSPACE or --work-dir
+    // refuses the hot switch even when the bootstrap did not say so.
+    this.workspacePinSource = options.workspacePinSource
+      ?? detectWorkspacePinSource(this.configPath, this.config)
     this.lockPath = join(foremanStateRoot(), 'daemon.lock')
     this.shutdownRequestedPromise = new Promise<void>((resolve) => {
       this.shutdownRequestedResolve = resolve
@@ -216,6 +267,8 @@ export class ForemanDaemon implements RunningForemanDaemon {
         requestShutdown: this.requestShutdown,
         isIdle: () => this.isIdle(),
         isShuttingDown: () => this.shutdownRequestedFlag,
+        isSwitching: () => this.switching,
+        workspaceSwitch: (root) => this.switchWorkspace(root),
         onScheduler: (scheduler) => { this.scheduler = scheduler },
       })
     } catch (error) {
@@ -285,8 +338,67 @@ export class ForemanDaemon implements RunningForemanDaemon {
       && counts.activeExecutionCount === 0
       && activeGraphs.length === 0
       && !resources.session.hasRunningTurns()
+      // An in-flight scheduler tick is work in progress: a switch must not stage
+      // over a schedule that is mid-fire.
+      && !resources.scheduler.ticking
       && resources.rpcRouter.activeWorkRequestCount === 0
   }
+  /**
+   * Idle-only workspace hot switch. The gate is entered synchronously before
+   * any await so a second switch and every new admitting/workspace-mutating
+   * request is refused for the whole operation, then the daemon is required to
+   * be idle — no queued/running task, workflow, execution, taskgraph, session
+   * turn or in-flight workspace operation — before any state is touched.
+   *
+   * Never throws for an expected refusal; the structured result reports busy,
+   * shutting_down, pinned, invalid or unavailable with an actionable message.
+   * The gate is released on every path, including a failed rebind.
+   */
+  async switchWorkspace(root: string): Promise<WorkspaceSwitchResult> {
+    if (this.shutdownRequestedFlag) {
+      return { ok: false, outcome: 'shutting_down', message: 'Daemon 正在关闭，无法切换工作区' }
+    }
+    if (this.workspacePinSource !== undefined) {
+      return {
+        ok: false,
+        outcome: 'pinned',
+        message: this.workspacePinSource === 'environment'
+          ? '当前工作区由 WRENYARD_WORKSPACE 环境变量管理，无法在运行中切换；请调整启动环境后重启 daemon'
+          : '当前工作区由 daemon 的 --work-dir 启动参数管理，无法在运行中切换；请去掉该参数后重启 daemon',
+      }
+    }
+    if (this.switching) {
+      return { ok: false, outcome: 'busy', message: '另一个工作区切换正在进行，请稍后重试' }
+    }
+    this.switching = true
+    try {
+      const resources = this.resources
+      if (!resources) return { ok: false, outcome: 'unavailable', message: 'daemon 尚未启动' }
+      if (!(await this.isIdle())) {
+        return { ok: false, outcome: 'busy', message: '后台仍有任务或正在维护，请完成后再切换工作区' }
+      }
+      if (this.shutdownRequestedFlag) {
+        return { ok: false, outcome: 'shutting_down', message: 'Daemon 正在关闭，无法切换工作区' }
+      }
+      try {
+        return await resources.rebindWorkspace(root)
+      } catch (error) {
+        // The rebind stages before publishing, so an unexpected failure leaves
+        // the previous root and config in place; report it as a structured
+        // outcome rather than a protocol error.
+        return {
+          ok: false,
+          outcome: 'error',
+          message: `切换工作区失败，已保留原工作区：${error instanceof Error ? error.message : String(error)}`,
+        }
+      }
+    } finally {
+      // Released on every path: a refused switch, a failed rebind and a thrown
+      // persistence error all leave the daemon able to serve and switch again.
+      this.switching = false
+    }
+  }
+
   /**
    * Waits for admitted work to finish by polling isIdle() every 200ms until the
    * daemon is idle, or an explicit force skips the wait entirely. Never closes
@@ -423,6 +535,10 @@ async function createForemanDaemonResources(
     requestShutdown: (reason: string, force: boolean) => void
     isIdle?: () => Promise<boolean>
     isShuttingDown: () => boolean
+    /** True while a workspace hot switch holds the gate; refuses new work. */
+    isSwitching?: () => boolean
+    /** Daemon-owned workspace hot switch backing the workspace.switch RPC. */
+    workspaceSwitch?: (root: string) => Promise<WorkspaceSwitchResult>
     /** Receives the scheduler as soon as it exists, before the IPC server. */
     onScheduler?: (scheduler: Scheduler) => void
   },
@@ -431,45 +547,6 @@ async function createForemanDaemonResources(
     agent: runtime.supervisor,
     runner: runtime.runner,
   }
-
-  // One daemon-owned TaskService backs both the task.run.* RPC surface and the
-  // session feature's in-process wait/cancel. A session wait therefore observes
-  // exactly the runs this daemon accepted, with no second registry.
-  const taskService = new TaskService({ workspaceRoot: config.workspaceRoot, operations })
-
-  // Single shared TaskGraphService used by all RPC transports.
-  const taskgraphWorkspaceRoot = config.workspaceRoot
-  const taskgraphService = createTaskGraphService({
-    workspaceRoot: taskgraphWorkspaceRoot,
-    operations,
-    eventSink: (event) => {
-      const severity: ForemanEventSeverity = event.type === 'taskgraph.node.failed'
-        ? 'error'
-        : event.type === 'taskgraph.done'
-          ? 'success'
-          : event.type === 'taskgraph.paused'
-            ? 'warning'
-            : 'info'
-      const foremanEvent: ForemanEvent = {
-        id: event.event_id,
-        kind: event.type as ForemanEventKind,
-        source: 'foreman.taskgraph',
-        severity,
-        refs: {
-          taskgraphId: event.taskgraph_id,
-          ...(event.refs?.task_run_id ? { taskRunId: event.refs.task_run_id } : {}),
-        },
-        data: {
-          seq: event.seq,
-          structure_revision: event.structure_revision,
-          ...(event.refs ? { refs: event.refs } : {}),
-          ...event.data,
-        },
-        occurredAt: event.occurred_at,
-      }
-      return getForemanEventBus().publish(foremanEvent)
-    },
-  })
 
   const startedAt = Date.now()
   // The gateway listens on a random loopback port assigned at bind time; the URL
@@ -556,35 +633,6 @@ async function createForemanDaemonResources(
   // constructed.
   const authoritativeConfigPath = new ForemanConfigManager().resolvePath(options.configPath)
   const runtimeAvailability = createRoutingAvailability({ catalog, providerRuntime, loadNativeProviderReadiness, loadCurrentCodeBuddySnapshot })
-  const taskSettingsService = new TaskSettingsService({
-    workspaceRoot: config.workspaceRoot,
-    configPath: authoritativeConfigPath,
-    resolver: taskDispatchResolver,
-    aliases: runtimeAliasService,
-    quotaSnapshots: autoRoutingQuotaSnapshots,
-    nativeProviderReadiness: loadNativeProviderReadiness,
-    // The production gate uses each registered client's own inspect state for
-    // ALL clients; a client must be enabled AND installed to be admitted.
-    clientReadiness: loadClientReadiness,
-    // Non-billable readiness: real daemon admission status (never a paid probe)
-    // plus the current provider credential/route availability. Unknown quota is
-    // surfaced as `unknown` — never fabricated as available or zero. Exact
-    // CodeBuddy readiness is bound to one fresh current CodeBuddyActiveSnapshot
-    // (see runtimeAvailability), and every other provider keeps the existing
-    // credential/route path. The privacy-safe confirmed-free supply fact for an
-    // already-read credential plus the exact selected runtime model is included
-    // without any token/scope/environment/domain/upstream suffix; no paid/model
-    // probes are ever issued.
-    daemonAvailability: () => ({
-      accepting: !options.isShuttingDown(),
-      known: true,
-    }),
-    runtimeAvailability,
-  })
-  // The running task runner resolves execution-time settings through this same
-  // service instance (no duplicate service/resolver/provider objects, no paid
-  // probes): daemon bootstrap attaches resolveForRun as the runner's resolver.
-  runtime.runner.setTaskSettingsResolver((params) => taskSettingsService.resolveForRun(params))
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
     catalog,
@@ -613,31 +661,151 @@ async function createForemanDaemonResources(
       await getForemanEventBus().publish(foremanEvent)
     },
   })
-  const workspaceDocService = new WorkspaceDocService(config.workspaceRoot)
+  // The session feature invokes allowlisted workspace methods through this one
+  // router, so the router exists before the workspace bindings are assembled.
+  const rpcRouter = new RpcRouter()
+  const sessionStateRoot = foremanStateRoot()
+  const ipcPath = resolveWrenyardIpcPath(process.env, { config })
+  // The single shared gateway connection snapshot, used by the session gateway,
+  // the IPC gateway.connection surface and the environment injection below.
+  const gatewayConnectionSnapshot = async (): Promise<DaemonGatewayConnection> => ({
+    ...await gateway.connection(gatewayOrigin(boundPort)),
+    token: gatewayToken,
+  })
+
+  /**
+   * One workspace-scoped binding set: the task, taskgraph, task-settings,
+   * document and session services plus the scheduler for one root. Startup and
+   * every hot switch assemble their bindings through this exact helper, so a
+   * switched-to workspace is wired identically to a freshly started daemon and
+   * no construction is duplicated.
+   */
+  const createBindings = async (workspaceRoot: string): Promise<WorkspaceScopedResources> => {
+    // One daemon-owned TaskService backs both the task.run.* RPC surface and the
+    // session feature's in-process wait/cancel. A session wait therefore observes
+    // exactly the runs this daemon accepted, with no second registry.
+    const taskService = new TaskService({ workspaceRoot, operations })
+    // Single shared TaskGraphService used by all RPC transports.
+    const taskgraphService = createTaskGraphService({
+      workspaceRoot,
+      operations,
+      eventSink: projectTaskGraphForemanEvent,
+    })
+    const taskSettingsService = new TaskSettingsService({
+      workspaceRoot,
+      configPath: authoritativeConfigPath,
+      resolver: taskDispatchResolver,
+      aliases: runtimeAliasService,
+      quotaSnapshots: autoRoutingQuotaSnapshots,
+      nativeProviderReadiness: loadNativeProviderReadiness,
+      // The production gate uses each registered client's own inspect state for
+      // ALL clients; a client must be enabled AND installed to be admitted.
+      clientReadiness: loadClientReadiness,
+      // Non-billable readiness: real daemon admission status (never a paid probe)
+      // plus the current provider credential/route availability. Unknown quota is
+      // surfaced as `unknown` — never fabricated as available or zero. Exact
+      // CodeBuddy readiness is bound to one fresh current CodeBuddyActiveSnapshot
+      // (see runtimeAvailability), and every other provider keeps the existing
+      // credential/route path. The privacy-safe confirmed-free supply fact for an
+      // already-read credential plus the exact selected runtime model is included
+      // without any token/scope/environment/domain/upstream suffix; no paid/model
+      // probes are ever issued.
+      daemonAvailability: () => ({
+        accepting: !options.isShuttingDown(),
+        known: true,
+      }),
+      runtimeAvailability,
+    })
+    const workspaceDocService = new WorkspaceDocService(workspaceRoot)
+    // The session feature owns the append-only ledger, the workspace document
+    // surface and per-role automatic auxiliary selection. Its gateway connection and task
+    // wait/cancel are injected in-process, and DSH MCP tools reach the daemon over
+    // this same IPC path like every other client. The ledger is stored under a
+    // workspace-hashed directory, so a new root opens a new ledger and the old
+    // workspace's history stays intact on disk.
+    const session = createSession(createDaemonSessionHost({
+      workspaceRoot,
+      stateRoot: sessionStateRoot,
+      gateway: gatewayConnectionSnapshot,
+      taskService,
+      router: rpcRouter,
+      routeStatus: model => gateway.routeStatus(model),
+      selectAuxiliary: createAuxiliarySelector({ catalog, quotaSnapshots: autoRoutingQuotaSnapshots,
+        // The Gateway model directory is the only source of per-model protocols.
+        gatewayModels: async () => (await gateway.connection(gatewayOrigin(boundPort))).models,
+        routeStatus: model => gateway.routeStatus(model),
+        runtimeAvailability: createAuxiliaryAvailability(runtimeAvailability, catalog, providerRuntime),
+        localSpeed: readLocalSpeedSamples, readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath) }),
+      // The session's main inference validates against the same product-wired
+      // catalog already injected into the gateway/provider.list surface, so a
+      // CodeBuddy model is only offered after the daemon read the real install.
+      resolveInferenceProvider: id => catalog.provider(id),
+    }))
+    // The daemon-owned scheduler persists to the same state root as the session
+    // ledger and fires due schedules into that session through its in-process
+    // `send`. It is workspace-scoped, so no scheduled prompt can fire into
+    // another workspace's sessions. It shares the daemon's single diagnostic sink.
+    const scheduler = createScheduler({
+      statePath: join(sessionStateRoot, 'schedules.json'),
+      session,
+      workspaceRoot,
+      log: writeDaemonLog,
+      // Admission gate: the daemon suppresses scheduler fires while a hot switch
+      // or shutdown is staging, so a suppressed scheduler cannot start a prompt
+      // after isIdle was observed.
+      canRun: () => !options.isShuttingDown() && options.isSwitching?.() !== true,
+    })
+    return { workspaceRoot, taskService, taskgraphService, taskSettingsService, workspaceDocService, session, scheduler }
+  }
+
+  /** Point the core RPC options at one binding set, before re-registering routes. */
+  const applyBindings = (bindings: WorkspaceScopedResources): void => {
+    coreOptions.workspaceRoot = bindings.workspaceRoot
+    coreOptions.taskService = bindings.taskService
+    coreOptions.taskgraphService = bindings.taskgraphService
+    coreOptions.taskSettings = bindings.taskSettingsService
+    coreOptions.workspaceDocService = bindings.workspaceDocService
+  }
+
+  /**
+   * (Re)register every workspace-scoped route against the current options and
+   * bindings. `registerCoreHandlers` overwrites the task/taskgraph/task.settings/
+   * project/workspace.vcs/workspace.doc/workspace.switch handlers in place, so a
+   * switch rebinds the routes without a second router or a second construction.
+   */
+  const registerWorkspaceRoutes = (bindings: WorkspaceScopedResources): void => {
+    registerCoreHandlers(rpcRouter, coreOptions)
+    registerSessionHandlers(rpcRouter, { session: bindings.session })
+    registerScheduleHandlers(rpcRouter, { scheduler: bindings.scheduler })
+  }
+
+  let coreOptions: CoreRpcHandlerOptions
+  let workspaceScoped = await createBindings(config.workspaceRoot)
   const providerService = new ProviderService({
     catalog, runtime: providerRuntime,
-    modelStatus: () => taskSettingsService.modelStatus(),
+    // Live indirection: provider.list always reports the CURRENT workspace's
+    // task settings, so a switch is visible without rebuilding the service.
+    modelStatus: () => workspaceScoped.taskSettingsService.modelStatus(),
     localSpeed: readLocalSpeedSamples,
   })
-  const rpcRouter = createDaemonRpcRouter({
+  coreOptions = {
     startedAt,
     workspaceRoot: config.workspaceRoot,
     operations,
     isShuttingDown: options.isShuttingDown,
+    isSwitching: options.isSwitching,
+    workspaceSwitch: options.workspaceSwitch,
     daemonActiveWork: readDaemonActiveCounts,
-    taskgraphService,
-    workspaceDocService,
-    gatewayConnection: async () => ({
-      ...await gateway.connection(gatewayOrigin(boundPort)),
-      token: gatewayToken,
-    }),
+    taskgraphService: workspaceScoped.taskgraphService,
+    workspaceDocService: workspaceScoped.workspaceDocService,
+    gatewayConnection: gatewayConnectionSnapshot,
     providerList: () => providerService.list(),
     providerConfigure: (params) => providerService.configure(params),
     providerQuota: (params) => providerService.quotaSnapshot(params),
-    taskSettings: taskSettingsService,
+    taskSettings: workspaceScoped.taskSettingsService,
     runtimeAlias: runtimeAliasService,
     execService: runtime.execService,
-    taskService,
+    taskService: workspaceScoped.taskService,
     resolveExecRequest: (params) => {
       const provider = params.provider ?? catalog.clients().find(client => client.id === params.client)?.nativeProvider
       if (!provider) throw new Error('Execution requires a provider')
@@ -721,7 +889,16 @@ async function createForemanDaemonResources(
     // requestShutdown; no local request cache or forwarding indirection.
     shutdown: options.requestShutdown,
     isIdle: options.isIdle,
-  })
+  }
+  // Bind every workspace-scoped route before anything can reach them, and hand
+  // the initial scheduler to the daemon instance before the IPC server exists so
+  // a shutdown that arrives during startup can still stop it. The running task
+  // runner resolves execution-time settings through the current task settings
+  // service (no duplicate service/resolver/provider objects, no paid probes);
+  // the switch re-points the same resolver at the new workspace.
+  registerWorkspaceRoutes(workspaceScoped)
+  runtime.runner.setTaskSettingsResolver((params) => workspaceScoped.taskSettingsService.resolveForRun(params))
+  options.onScheduler?.(workspaceScoped.scheduler)
 
   // During drain, preserve status/cancel/signals and the calls required by
   // admitted work. New top-level dispatch and long polling cannot hold the
@@ -729,6 +906,37 @@ async function createForemanDaemonResources(
   const blockedDuringShutdown = new Set([
     'taskgraph.create', 'task.run.create', 'exec.start', 'session.send',
   ])
+  // The same rule while a workspace hot switch holds the gate: no new admitting
+  // work and no new workspace-mutating request may start, so the state swap
+  // cannot be raced by an operation that captured the previous root. The switch
+  // method itself is deliberately absent: a concurrent switch is refused by the
+  // gate's owner with an actionable `busy` result instead of a protocol error.
+  const blockedDuringSwitch = new Set([
+    'taskgraph.create', 'taskgraph.patch', 'taskgraph.signal',
+    'task.run.create', 'exec.start', 'session.send',
+    'session.create', 'session.interrupt', 'session.delete', 'session.rename',
+    'project.register', 'project.pull', 'project.push', 'project.commit',
+    'project.worktree.create', 'project.worktree.remove', 'project.worktree.merge',
+    'workspace.vcs.commit', 'workspace.vcs.push', 'workspace.vcs.pull',
+    'workspace.doc.create', 'workspace.doc.update', 'workspace.doc.edit', 'workspace.doc.delete',
+    'schedule.create', 'schedule.update', 'schedule.run', 'schedule.delete',
+    'runtime.alias.put', 'runtime.alias.remove',
+  ])
+  // In-flight requests that mutate workspace-scoped state or admit work count
+  // against idleness, so a switch also waits for / refuses while a project,
+  // document, VCS, session or scheduler mutation is still running. Long polling
+  // (session.events with a wait) is never tracked: it would hold drain open.
+  const trackedWorkMethods = [
+    'taskgraph.create', 'taskgraph.patch', 'taskgraph.signal',
+    'task.run.create', 'exec.start', 'session.send',
+    'session.create', 'session.interrupt', 'session.delete', 'session.rename',
+    'project.register', 'project.pull', 'project.push', 'project.commit',
+    'project.worktree.create', 'project.worktree.remove', 'project.worktree.merge',
+    'workspace.vcs.commit', 'workspace.vcs.push', 'workspace.vcs.pull',
+    'workspace.doc.create', 'workspace.doc.update', 'workspace.doc.edit', 'workspace.doc.delete',
+    'schedule.create', 'schedule.update', 'schedule.run', 'schedule.delete',
+    'runtime.alias.put', 'runtime.alias.remove',
+  ]
   rpcRouter.setAdmissionGate((method, params) => {
     const longSessionPoll = method === 'session.events'
       && typeof params === 'object' && params !== null
@@ -739,10 +947,13 @@ async function createForemanDaemonResources(
         { code: 'daemon_shutting_down', method },
       )
     }
-  }, [
-    'taskgraph.create', 'taskgraph.patch', 'taskgraph.signal',
-    'task.run.create', 'exec.start', 'session.send',
-  ])
+    if (options.isSwitching?.() === true && (blockedDuringSwitch.has(method) || longSessionPoll)) {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'Daemon is switching workspace and does not accept this request; retry once the switch finishes.' },
+        { code: 'workspace_switch_in_progress', method },
+      )
+    }
+  }, trackedWorkMethods)
 
   const httpServer = createServer((request, response) => {
     const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
@@ -790,7 +1001,7 @@ async function createForemanDaemonResources(
   // Install the canonical task plans and the loopback gateway connection before
   // startup reconciliation so a recovered task never resolves provider/model or
   // protocol data itself.
-  let restoreGatewayEnvironment = installGatewayEnvironment(gatewayConnection, dispatchPlans)
+  const restoreGatewayEnvironment = installGatewayEnvironment(gatewayConnection, dispatchPlans)
 
   // Begin idempotent taskgraph startup reconciliation exactly once before any
   // IPC handler or transport is exposed. Every persisted actionable graph
@@ -798,49 +1009,8 @@ async function createForemanDaemonResources(
   // cancel-policy failure) recovers here instead of lazily on a later graph RPC.
   // Recovery errors stay isolated per graph and never create a second service
   // instance or a background timer.
-  await taskgraphService.reconcileStartup()
+  await workspaceScoped.taskgraphService.reconcileStartup()
 
-  const ipcPath = resolveWrenyardIpcPath(process.env, { config })
-  const sessionStateRoot = foremanStateRoot()
-  const sessionGateway = async () => ({
-    ...await gateway.connection(gatewayOrigin(boundPort)),
-    token: gatewayToken,
-  })
-  // The session feature owns the append-only ledger, the workspace document
-  // surface and per-role automatic auxiliary selection. Its gateway connection and task
-  // wait/cancel are injected in-process, and DSH MCP tools reach the daemon over
-  // this same IPC path like every other client.
-  const session = createSession(createDaemonSessionHost({
-    workspaceRoot: config.workspaceRoot,
-    stateRoot: sessionStateRoot,
-    gateway: sessionGateway,
-    taskService,
-    router: rpcRouter,
-    routeStatus: model => gateway.routeStatus(model),
-    selectAuxiliary: createAuxiliarySelector({ catalog, quotaSnapshots: autoRoutingQuotaSnapshots,
-      // The Gateway model directory is the only source of per-model protocols.
-      gatewayModels: async () => (await gateway.connection(gatewayOrigin(boundPort))).models,
-      routeStatus: model => gateway.routeStatus(model),
-      runtimeAvailability: createAuxiliaryAvailability(runtimeAvailability, catalog, providerRuntime),
-      localSpeed: readLocalSpeedSamples, readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath) }),
-    // The session's main inference validates against the same product-wired
-    // catalog already injected into the gateway/provider.list surface, so a
-    // CodeBuddy model is only offered after the daemon read the real install.
-    resolveInferenceProvider: id => catalog.provider(id),
-  }))
-  // The daemon-owned scheduler persists to the same state root as the session
-  // ledger and fires due schedules into that session through its in-process
-  // `send`. It shares the daemon's single diagnostic sink.
-  const scheduler = createScheduler({
-    statePath: join(sessionStateRoot, 'schedules.json'),
-    session,
-    log: writeDaemonLog,
-  })
-  // Hand the scheduler to the daemon instance before the IPC server exists, so
-  // a shutdown that arrives during startup can still stop it.
-  options.onScheduler?.(scheduler)
-  registerSessionHandlers(rpcRouter, { session })
-  registerScheduleHandlers(rpcRouter, { scheduler })
   let ipcServer: IpcServer | undefined
   try {
     ipcServer = await createIpcServer({
@@ -856,7 +1026,7 @@ async function createForemanDaemonResources(
     // startup error the caller sees.
     await teardownDaemonResources({
       httpServer,
-      session,
+      session: workspaceScoped.session,
       gateway,
       restoreGatewayEnvironment,
       ipcServer,
@@ -869,22 +1039,254 @@ async function createForemanDaemonResources(
   // the scheduler never fires into a session whose clients cannot reach it yet.
   // A shutdown requested during startup skips start entirely: no interval is
   // armed and the stopped scheduler stays stopped.
-  if (!options.isShuttingDown()) await scheduler.start()
+  if (!options.isShuttingDown()) await workspaceScoped.scheduler.start()
+
+  /**
+   * Rebind every workspace-scoped resource to a new root and persist the
+   * authoritative workspace.root. Ordering is staging-first: the complete new
+   * binding set is built, the previous scheduler is flushed and the new snapshot
+   * prepared (no schedule fires), shutdown/idleness are rechecked, then the config
+   * is written, the live handles and routes are swapped, the previous workspace
+   * is retired, and only then does the new scheduler tick. A failure before the
+   * swap discards the staged bindings and leaves the previous root and config
+   * usable. Staging the target session may begin (or resume interrupting) stale
+   * ledger recovery for the target workspace, so the pre-publish guard also
+   * refuses while a target turn is running or recovering — that recovery work
+   * never crosses the publish boundary. The process, instance lock, DB,
+   * execution runtime, gateway and IPC endpoint are never touched.
+   */
+  async function rebindWorkspace(requestedRoot: string): Promise<WorkspaceSwitchResult> {
+    let targetRoot: string
+    try {
+      targetRoot = await resolveWorkspaceSwitchTarget(requestedRoot)
+    } catch (error) {
+      return { ok: false, outcome: 'invalid', message: error instanceof Error ? error.message : String(error) }
+    }
+    const previous = workspaceScoped
+    if (previous.workspaceRoot === targetRoot) {
+      return { ok: true, outcome: 'switched', workspace_root: targetRoot }
+    }
+    // Stage the new bindings without publishing them: routes and admission still
+    // point at the live set, so this admits no work and fires no schedule.
+    const staged = await createBindings(targetRoot)
+    try {
+      // Flush the previous scheduler before the staged one reads the shared state
+      // file, so no recent mutation or legacy association is lost or misassigned,
+      // then load the new snapshot without firing any schedule.
+      await previous.scheduler.flush()
+      await staged.scheduler.prepare()
+    } catch (error) {
+      await teardownWorkspaceBindings(staged)
+      return {
+        ok: false,
+        outcome: 'error',
+        message: `工作区切换准备失败，已保留原工作区：${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+    // Recheck after every await: a shutdown or newly admitted work that appeared
+    // during staging must refuse the switch instead of being published over.
+    if (options.isShuttingDown()) {
+      await teardownWorkspaceBindings(staged)
+      return { ok: false, outcome: 'shutting_down', message: 'Daemon 正在关闭，无法切换工作区' }
+    }
+    if (options.isIdle && !(await options.isIdle())) {
+      await teardownWorkspaceBindings(staged)
+      return { ok: false, outcome: 'busy', message: '后台仍有任务或正在维护，请完成后再切换工作区' }
+    }
+    // The staged target session may itself be running stale-ledger recovery: a
+    // target turn in flight must not be cancelled across the publish, so refuse
+    // before the config write. Recheck shutdown synchronously one last time now
+    // that the final await has returned, so nothing new is admitted here.
+    if (options.isShuttingDown()) {
+      await teardownWorkspaceBindings(staged)
+      return { ok: false, outcome: 'shutting_down', message: 'Daemon 正在关闭，无法切换工作区' }
+    }
+    if (staged.session.hasRunningTurns()) {
+      await teardownWorkspaceBindings(staged)
+      return { ok: false, outcome: 'busy', message: '目标工作区仍有正在运行的会话，请完成后再切换工作区' }
+    }
+    try {
+      // Publish only the authoritative root, and only once staging succeeded: a
+      // failed write leaves the previous config untouched.
+      persistWorkspaceRoot(authoritativeConfigPath, targetRoot)
+    } catch (error) {
+      await teardownWorkspaceBindings(staged)
+      return {
+        ok: false,
+        outcome: 'error',
+        message: `工作区配置写入失败，已保留原工作区：${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+    // Publish synchronously — no await between here and the swap, so no request
+    // observes a half-switched daemon. The previous scheduler is still alive but
+    // its admission callback suppresses ticks while the switch gate is held.
+    workspaceScoped = staged
+    applyBindings(staged)
+    registerWorkspaceRoutes(staged)
+    // The running task runner resolves execution-time settings through the
+    // current task settings service, exactly like bootstrap wires it.
+    runtime.runner.setTaskSettingsResolver((params) => staged.taskSettingsService.resolveForRun(params))
+    resources.session = staged.session
+    resources.scheduler = staged.scheduler
+    resources.taskService = staged.taskService
+    resources.taskgraphService = staged.taskgraphService
+    options.onScheduler?.(staged.scheduler)
+    // Retire the previous workspace before enabling new ticks: its scheduler
+    // stops and its workspace-hashed session ledger is closed (history stays on
+    // disk), so the old and new writers never overlap.
+    await teardownWorkspaceBindings(previous)
+    // Enable the staged scheduler's polling only now that the old writer is gone.
+    // The switch has already published, so a start failure is logged and never
+    // reported as a retained old workspace.
+    if (!options.isShuttingDown()) {
+      try {
+        await staged.scheduler.start()
+      } catch (error) {
+        writeDaemonLog('warn', 'scheduler failed to start after workspace switch', error)
+      }
+    }
+    return { ok: true, outcome: 'switched', workspace_root: targetRoot }
+  }
+
   // Lifecycle (shutdown latch, drain waits, close) lives on the ForemanDaemon
-  // instance; this helper only returns the assembled resources.
-  return {
+  // instance; this helper only returns the assembled resources. session /
+  // scheduler / taskService / taskgraphService are replaced by rebindWorkspace,
+  // so close() and the resource getters always observe the current workspace.
+  const resources: ForemanDaemonResources = {
     runtime,
     httpServer,
     ipcPath,
     ipcServer: runningIpcServer,
     gateway,
-    session,
-    scheduler,
+    session: workspaceScoped.session,
+    scheduler: workspaceScoped.scheduler,
     rpcRouter,
-    taskService,
-    taskgraphService,
+    taskService: workspaceScoped.taskService,
+    taskgraphService: workspaceScoped.taskgraphService,
     restoreGatewayEnvironment,
+    rebindWorkspace,
   }
+  return resources
+}
+
+/**
+ * Detect whether the daemon's effective workspace root is pinned outside the
+ * config by the launch environment: an explicit `WRENYARD_WORKSPACE`, or the
+ * `--work-dir` CLI flag (which the bootstrap applies on top of the loaded
+ * config, so the effective root no longer matches the root the config alone
+ * declares). A pinned root is owned by whoever launched the process, so the
+ * in-process switch refuses with an explicit reason instead of fighting the pin.
+ */
+function detectWorkspacePinSource(
+  configPath: string | undefined,
+  config: ForemanServiceConfig,
+): 'environment' | 'cli' | undefined {
+  if (process.env.WRENYARD_WORKSPACE?.trim()) return 'environment'
+  try {
+    const manager = new ForemanConfigManager()
+    const resolvedPath = manager.resolvePath(configPath)
+    const declared = manager.loadUserData(configPath).data.workspace?.root
+    const declaredRoot = typeof declared === 'string' && declared.trim()
+      ? (isAbsolute(declared.trim()) ? resolve(declared.trim()) : resolve(dirname(resolvedPath), declared.trim()))
+      // No config-declared root: the config alone resolves the root to the
+      // config directory (normalizeForemanServiceConfig's fallback).
+      : resolve(dirname(resolvedPath))
+    return resolve(config.workspaceRoot) === declaredRoot ? undefined : 'cli'
+  } catch {
+    // An unreadable config cannot prove the root is unpinned; leave it
+    // unpinned so a read hiccup does not disable the switch on a live daemon.
+    return undefined
+  }
+}
+
+/**
+ * Resolve and validate a requested workspace root for the hot switch.
+ *
+ * The workspace identity is the *lexical* absolute path (`resolve`), exactly
+ * the identity the boot config root already has (`normalizeForemanServiceConfig`
+ * resolves `workspace.root` with `resolve`) and the identity the session-ledger
+ * and scheduler keys are hashed from. `realpath` is used only to prove the
+ * target exists and is a directory; it must never become the persisted or
+ * ledger key. Canonicalizing a symlink would give one workspace two identities:
+ * on macOS `/tmp` is a symlink to `/private/tmp`, so realpathing a re-selected
+ * `/tmp/... ` root would rewrite `workspace.root` to `/private/tmp/...`, open a
+ * second, empty ledger directory under that hash, and hide the workspace's
+ * existing session history and schedules still stored under the lexical key.
+ */
+async function resolveWorkspaceSwitchTarget(requested: string): Promise<string> {
+  const trimmed = typeof requested === 'string' ? requested.trim() : ''
+  if (!trimmed) throw new Error('请输入 workspace 路径')
+  // Lexical absolute form: normalize `.`/`..` against the cwd without following
+  // symlinks, so it stays identical to the boot binding and the ledger key.
+  const lexical = resolve(trimmed)
+  let real: string
+  try {
+    real = await realpath(lexical)
+  } catch {
+    throw new Error(`工作区目录不存在：${trimmed}`)
+  }
+  if (!(await stat(real)).isDirectory()) {
+    throw new Error(`工作区路径不是目录：${lexical}`)
+  }
+  return lexical
+}
+
+/**
+ * Persist the authoritative `workspace.root` through the one config writer,
+ * which writes atomically (temp file plus rename), so a failure never leaves a
+ * partially written config behind.
+ */
+function persistWorkspaceRoot(configPath: string, root: string): void {
+  updateForemanConfigData(configPath, (data) => {
+    data.workspace = { ...(data.workspace ?? {}), root }
+  })
+}
+
+/**
+ * Retire one workspace's session and scheduler. The scheduler stops first so no
+ * late fire starts a turn in the session being closed; both failures are logged
+ * rather than thrown, because the switch has already published its new state.
+ */
+async function teardownWorkspaceBindings(bindings: WorkspaceScopedResources): Promise<void> {
+  try {
+    bindings.scheduler.stop()
+  } catch (error) {
+    writeDaemonLog('warn', 'workspace scheduler shutdown failed', error)
+  }
+  try {
+    await bindings.session.close()
+  } catch (error) {
+    writeDaemonLog('warn', 'workspace session shutdown failed', error)
+  }
+}
+
+/** Project one taskgraph event onto the shared Foreman event bus. */
+function projectTaskGraphForemanEvent(event: import('../core/taskgraph/index.mts').TaskGraphEvent): Promise<void> {
+  const severity: ForemanEventSeverity = event.type === 'taskgraph.node.failed'
+    ? 'error'
+    : event.type === 'taskgraph.done'
+      ? 'success'
+      : event.type === 'taskgraph.paused'
+        ? 'warning'
+        : 'info'
+  const foremanEvent: ForemanEvent = {
+    id: event.event_id,
+    kind: event.type as ForemanEventKind,
+    source: 'foreman.taskgraph',
+    severity,
+    refs: {
+      taskgraphId: event.taskgraph_id,
+      ...(event.refs?.task_run_id ? { taskRunId: event.refs.task_run_id } : {}),
+    },
+    data: {
+      seq: event.seq,
+      structure_revision: event.structure_revision,
+      ...(event.refs ? { refs: event.refs } : {}),
+      ...event.data,
+    },
+    occurredAt: event.occurred_at,
+  }
+  return getForemanEventBus().publish(foremanEvent)
 }
 
 /**
@@ -1082,34 +1484,6 @@ async function readClientReadiness(client: AgentClient | undefined): Promise<Nat
   } catch {
     return undefined
   }
-}
-
-interface DaemonRpcRouterOptions {
-  startedAt: number
-  workspaceRoot: string
-  operations?: OperationHost
-  shutdown?: (reason: string, force: boolean) => void
-  isShuttingDown?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['isShuttingDown']
-  daemonActiveWork?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['daemonActiveWork']
-  taskgraphService?: TaskGraphService
-  workspaceDocService?: WorkspaceDocService
-  gatewayConnection?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['gatewayConnection']
-  providerList?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerList']
-  providerConfigure?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerConfigure']
-  providerQuota?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['providerQuota']
-  taskSettings?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['taskSettings']
-  runtimeAlias?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['runtimeAlias']
-  execService?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['execService']
-  taskService?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['taskService']
-  resolveExecRequest?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['resolveExecRequest']
-  resolveTaskRunDisplayNames?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['resolveTaskRunDisplayNames']
-  isIdle?: import('../server/handlers/core.mts').CoreRpcHandlerOptions['isIdle']
-}
-
-function createDaemonRpcRouter(options: DaemonRpcRouterOptions): RpcRouter {
-  const router = new RpcRouter()
-  registerCoreHandlers(router, { ...options, workspaceDocService: options.workspaceDocService })
-  return router
 }
 
 interface ForemanDaemonRuntime {

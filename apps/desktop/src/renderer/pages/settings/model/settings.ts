@@ -154,6 +154,27 @@ export function workspaceModeHint(create: boolean): string {
     : '选择模式只会绑定已存在的 workspace 目录。';
 }
 
+/** Save action for an editable (non-environment) workspace root. */
+export const WORKSPACE_SAVE_LABEL = '保存并切换';
+
+/** Button label while the daemon applies an idle-only workspace switch. */
+export const WORKSPACE_SAVING_LABEL = '正在切换…';
+
+/** Inline note shown while a workspace switch is in flight. */
+export const WORKSPACE_SWITCHING_NOTE = '正在让 daemon 切换工作区，完成后会话会重新绑定…';
+
+/** Fallback error when a workspace switch fails for a reason without a message. */
+export const WORKSPACE_SWITCH_FAILED_MESSAGE = '切换工作区失败，请重试';
+
+/**
+ * Error text for a refused or failed workspace switch. The daemon reports a
+ * busy/invalid/shutting-down/pinned reason verbatim, so it is shown as-is; the
+ * fallback only covers a failure without a message.
+ */
+export function workspaceSwitchErrorMessage(cause: unknown): string {
+  return errorMessage(cause) || WORKSPACE_SWITCH_FAILED_MESSAGE;
+}
+
 /* ------------------------------------------------------------------ */
 /* Global auto output cap                                              */
 /* ------------------------------------------------------------------ */

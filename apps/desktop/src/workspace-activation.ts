@@ -1,8 +1,11 @@
 /**
- * Electron-free workspace activation helpers. Desktop binds a workspace and
- * restarts the daemon it owns through the shared supervisor. The restart is
- * only safe when the daemon has no queued or running work, so activation first
- * asserts an idle daemon and never interrupts in-flight tasks.
+ * Electron-free workspace activation helpers. A workspace change is applied by
+ * the daemon's own idle-only `workspace.switch` method, which rebinds every
+ * workspace-scoped service while the same daemon process keeps running. The
+ * switch is only safe when the daemon has no queued or running work, so
+ * activation first asserts an idle daemon and never interrupts in-flight tasks.
+ * The daemon is the authority on the outcome: Desktop surfaces its busy or
+ * shutting-down reason verbatim instead of restarting anything itself.
  */
 
 export interface ProductDaemonIdleResult {
@@ -23,28 +26,11 @@ export function assertDaemonIdle(rawStatus: unknown): ProductDaemonIdleResult {
     || counts.some((key) => !Number.isSafeInteger(state[key]) || (state[key] as number) < 0)) {
     return { idle: false, reason: '无法确认后台状态，请刷新后重试' };
   }
-  if (state.idle !== true || state.shutting_down === true || counts.some((key) => (state[key] as number) > 0)) {
+  if (state.shutting_down === true) {
+    return { idle: false, reason: 'Daemon 正在重启，请稍后再切换工作区' };
+  }
+  if (state.idle !== true || counts.some((key) => (state[key] as number) > 0)) {
     return { idle: false, reason: '后台仍有任务或正在维护，请完成后再切换工作区' };
   }
   return { idle: true };
-}
-
-/**
- * The owner that restarts the daemon after a workspace change. Desktop passes
- * its `DesktopDaemonSupervisor`, but the module stays Electron-free: it only
- * needs the `restart` behaviour.
- */
-export interface OwnedDaemonRestart {
-  restart(): Promise<{ state: string }>;
-}
-
-/**
- * Reactivate the daemon after a workspace change by calling the injected
- * owner's restart. The daemon is always restarted by whoever owns it (Desktop
- * or the source supervisor); activation never shells out to the removed
- * `wrenyard daemon restart` CLI command.
- */
-export async function restartOwnedDaemon(owner: OwnedDaemonRestart): Promise<void> {
-  const result = await owner.restart();
-  if (result.state !== 'running') throw new Error('daemon 未能完成重启，请检查后台状态。');
 }

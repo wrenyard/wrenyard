@@ -79,6 +79,24 @@ export interface WorkspaceConfigurationSnapshot {
 }
 
 /**
+ * Closed outcome of the daemon's `workspace.switch` method, mirrored into the
+ * shell contract so the renderer can tell a busy daemon from an invalid target
+ * or a pinned root. The `saveWorkspace` bridge applies a workspace change
+ * through that daemon method — the daemon stays running and owns the
+ * authoritative `workspace.root` — and rejects with the daemon's own message
+ * when the outcome is not `switched`; the resolved value is the refreshed
+ * workspace snapshot read back from the daemon-owned config.
+ */
+export type WorkspaceSwitchOutcome =
+  | 'switched'
+  | 'busy'
+  | 'invalid'
+  | 'shutting_down'
+  | 'pinned'
+  | 'unavailable'
+  | 'error';
+
+/**
  * Selection-time speed evidence from the resolved speed contract. This is the
  * estimate chosen before the run started; it is distinct from the actual
  * measured `usage.outputTps` captured after the run completed.
@@ -1309,6 +1327,15 @@ export interface WrenyardShellApi {
   /** Pushed only when the projected activity content changes. */
   onActivityChanged(listener: (snapshot: ActivityStatusSnapshot) => void): () => void;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
+  /**
+   * Apply a workspace change through the daemon's `workspace.switch` method
+   * while the daemon keeps running. `create` initializes a new (or empty)
+   * directory first; the daemon then rebinds every workspace-scoped service,
+   * persists `workspace.root` and returns its structured outcome. Resolves with
+   * the refreshed workspace snapshot when the switch succeeded, and rejects with
+   * the daemon's own busy/invalid/shutting-down/pinned reason otherwise — Desktop
+   * never prewrites config on a refused or failed switch.
+   */
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
   openTaskTranscript(taskRunId: string): Promise<void>;
   /** Open the native Graph Slip window for a live task graph (never a transcript). */

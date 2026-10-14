@@ -33,6 +33,9 @@ onDaemonChanged(() => {
   void queryClient.invalidateQueries({ queryKey: ['daemon'] });
   // Settings are daemon-owned, so a daemon change also refreshes them.
   void queryClient.invalidateQueries({ queryKey: ['shell', 'settings'] });
+  // A successful workspace switch rebinds the daemon's session ledger, so the
+  // sidebar must refresh now instead of waiting for its 3-second poll.
+  void queryClient.invalidateQueries({ queryKey: ['sessionList'] });
 });
 
 onPreferencesChanged(() => {

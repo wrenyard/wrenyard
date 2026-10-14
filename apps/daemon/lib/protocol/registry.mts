@@ -517,6 +517,66 @@ export type {
   TaskGraphSlipResult,
 } from './methods/taskgraph.mts'
 
+// ── workspace.switch ──────────────────────────────────────────────────
+// The daemon-owned idle-only workspace hot switch. Declared inline next to the
+// workspace.doc.* / workspace.vcs.* entries because it is the one protocol
+// method whose authority lives entirely in the daemon's own lifecycle.
+
+export interface WorkspaceSwitchParams {
+  /** Path of the workspace root to bind. Resolved and validated by the daemon. */
+  root: string
+}
+
+/** Closed outcome of one workspace.switch call. */
+export type WorkspaceSwitchOutcome =
+  /** The daemon rebound every workspace-scoped service to the new root. */
+  | 'switched'
+  /** Refused: the daemon still has admitted work or an in-flight workspace operation. */
+  | 'busy'
+  /** Refused: the requested root is not an existing, resolvable directory. */
+  | 'invalid'
+  /** Refused: a shutdown was already requested. */
+  | 'shutting_down'
+  /** Refused: WRENYARD_WORKSPACE or --work-dir pins the root outside the config. */
+  | 'pinned'
+  /** Refused: this daemon exposes no switch implementation. */
+  | 'unavailable'
+  /** Failed unexpectedly; the previous root and config were kept. */
+  | 'error'
+
+export interface WorkspaceSwitchResult {
+  ok: boolean
+  outcome: WorkspaceSwitchOutcome
+  /** Canonical workspace root now in effect; present only on a successful switch. */
+  workspace_root?: string
+  /** Human-readable reason for a non-success outcome. Never a credential or path leak beyond the requested root. */
+  message?: string
+}
+
+export const workspaceSwitchParamsSchema = {
+  type: 'object',
+  required: ['root'],
+  properties: {
+    root: { type: 'string', minLength: 1, description: 'Workspace root to switch the daemon to.' },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
+export const workspaceSwitchResultSchema = {
+  type: 'object',
+  required: ['ok', 'outcome'],
+  properties: {
+    ok: { type: 'boolean' },
+    outcome: {
+      enum: ['switched', 'busy', 'invalid', 'shutting_down', 'pinned', 'unavailable', 'error'],
+      description: 'Closed outcome of the switch request.',
+    },
+    workspace_root: { type: 'string', description: 'Canonical workspace root in effect after a successful switch.' },
+    message: { type: 'string', description: 'Reason a switch was refused.' },
+  },
+  additionalProperties: false,
+} as const satisfies JsonSchema
+
 export interface MethodSchema<TParams = unknown, TResult = unknown> {
   params: JsonSchema
   result: JsonSchema
@@ -586,6 +646,7 @@ export interface ForemanMethodParams {
   'workspace.vcs.commit': WorkspaceVcsCommitParams
   'workspace.vcs.push': WorkspaceVcsPushParams
   'workspace.vcs.pull': WorkspaceVcsPullParams
+  'workspace.switch': WorkspaceSwitchParams
   'runtime.alias.snapshot': RuntimeAliasSnapshotParams
   'runtime.alias.put': RuntimeAliasPutParams
   'runtime.alias.remove': RuntimeAliasRemoveParams
@@ -671,6 +732,7 @@ export interface ForemanMethodResults {
   'workspace.vcs.commit': WorkspaceVcsCommitResult
   'workspace.vcs.push': WorkspaceVcsPushResult
   'workspace.vcs.pull': WorkspaceVcsPullResult
+  'workspace.switch': WorkspaceSwitchResult
   'runtime.alias.snapshot': RuntimeAliasSnapshotResult
   'runtime.alias.put': RuntimeAliasSnapshotResult
   'runtime.alias.remove': RuntimeAliasSnapshotResult
@@ -959,6 +1021,11 @@ export const methodRegistry: {
     params: workspaceVcsPullParamsSchema,
     result: workspaceVcsPullResultSchema,
     description: "Fast-forward only pull of the current branch from origin in the workspace's own git repository. The pull requires a clean tree and never merges or rebases. Operates only on the workspace's own git repository and refuses with workspace_not_repository otherwise.",
+  },
+  'workspace.switch': {
+    params: workspaceSwitchParamsSchema,
+    result: workspaceSwitchResultSchema,
+    description: 'Idle-only workspace hot switch. Rebinds every daemon workspace-scoped service (tasks, taskgraphs, task settings, workspace documents, rpc routes, session host and scheduler) to the requested root and persists workspace.root, keeping the daemon process, instance lock, database, execution runtime and IPC endpoint alive. Refuses with busy while any task, workflow, execution, taskgraph, session turn or in-flight workspace operation remains, and never mutates config on a refused or failed switch.',
   },
   'runtime.alias.snapshot': {
     params: runtimeAliasSnapshotParamsSchema,

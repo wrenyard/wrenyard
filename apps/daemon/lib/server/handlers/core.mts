@@ -49,6 +49,7 @@ import type {
   ExecEventsResult,
   ExecGetResult,
   ExecStartResult,
+  WorkspaceSwitchResult,
 } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../rpc-router.mts'
 import { registerProjectHandlers } from './project.mts'
@@ -103,6 +104,18 @@ export interface CoreRpcHandlerOptions {
    * stopping. Optional so a context without a live daemon never claims one.
    */
   isShuttingDown?: () => boolean
+  /**
+   * Reports whether a workspace hot switch is currently in progress. Optional so
+   * a context without a live daemon never claims one.
+   */
+  isSwitching?: () => boolean
+  /**
+   * Daemon-owned workspace hot switch. It rebinds every workspace-scoped service
+   * and persists workspace.root while the process, lock, database and IPC
+   * endpoint stay alive. Optional: when absent `workspace.switch` still answers,
+   * reporting `unavailable` instead of being silently dropped.
+   */
+  workspaceSwitch?: (root: string) => Promise<WorkspaceSwitchResult>
   /**
    * Authoritative active-work counts for `daemon.status`. Optional so a context
    * without a live daemon reports zeros rather than fabricating counts.
@@ -311,6 +324,30 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       shutting_down: true,
       reason,
     } satisfies DaemonShutdownResult
+  })
+  // workspace.switch is registered unconditionally: it is the workspace
+  // lifecycle surface and must not disappear with any optional dependency. It is
+  // IPC-only (an administrative owner action, like daemon.shutdown) and always
+  // answers with a structured result — a refused switch is a fact, not a
+  // protocol error, so the caller can show the daemon's reason verbatim. The
+  // daemon is the only authority for the outcome; this surface never mutates
+  // config itself.
+  router.register('workspace.switch', async (params, _message, context) => {
+    const rpcContext = coreRpcContextFromUnknown(context)
+    if (rpcContext.transport !== 'ipc') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'workspace.switch is only available over IPC' },
+        { code: 'workspace_switch_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+      )
+    }
+    if (!options.workspaceSwitch) {
+      return {
+        ok: false,
+        outcome: 'unavailable',
+        message: 'workspace.switch is not available in this runtime',
+      } satisfies WorkspaceSwitchResult
+    }
+    return options.workspaceSwitch(params.root)
   })
   // daemon.status is registered unconditionally: it is the lifecycle surface
   // (shutdown + idle + active counts) and must not disappear with any optional
