@@ -5,16 +5,18 @@ import { SHELL_CHANNELS, isShellPage } from '../../shell-contract.js';
 import type { ShellIpcDeps } from './deps.js';
 
 export function registerNavigationChromeIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () => void {
-  const { assertShellSender, setPage } = deps;
+  // Shell-scoped: only the shell window may switch the shared page or pop the
+  // menu, so an open mini card can never alter the main window's chrome.
+  const { assertShellWindowSender, setPage } = deps;
 
   ipcMain.handle(SHELL_CHANNELS.navigate, async (event, page: unknown) => {
-    assertShellSender(event.sender);
+    assertShellWindowSender(event.sender);
     if (!isShellPage(page)) throw new Error('Unsupported shell page');
     setPage(page);
   });
 
   ipcMain.handle(SHELL_CHANNELS.showAppMenu, (event, position: unknown) => {
-    assertShellSender(event.sender);
+    assertShellWindowSender(event.sender);
     if (position === undefined) return deps.showAppMenu();
     if (typeof position !== 'object' || position === null
       || !('x' in position) || typeof position.x !== 'number' || !Number.isFinite(position.x)

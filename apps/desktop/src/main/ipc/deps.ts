@@ -10,7 +10,10 @@ import type { ShellWindowOptions } from '../../shell-window.js';
 
 export interface ShellIpcDeps {
   options: ShellWindowOptions;
+  /** Accepts the shell window or an open mini card (the shared trust predicate). */
   assertShellSender(sender: WebContents): void;
+  /** Accepts the shell window only; for shell-scoped channels a card must not drive. */
+  assertShellWindowSender(sender: WebContents): void;
   setPage(page: ShellPage, focus?: boolean): void;
   showAppMenu(position?: { x: number; y: number }): void;
 }
