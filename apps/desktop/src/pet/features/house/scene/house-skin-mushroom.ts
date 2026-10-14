@@ -105,13 +105,6 @@ const HOUSE_COLORS: Record<string, string | undefined> = {
   S: plasterShade,
 };
 
-// Three restrained 2x2 plaster spots across the cap (y=1..2, spaced across x)
-const CAP_SPOTS: readonly [x: number, y: number][] = [
-  [6, 1],
-  [20, 1],
-  [34, 1],
-];
-
 export function buildMushroomPixelProgram(): PixelProgram {
   const builder = new PixelBuilder(HOUSE_PX_W, HOUSE_PX_H);
   for (let y = 0; y < HOUSE_DATA.length; y++) {
@@ -122,10 +115,6 @@ export function buildMushroomPixelProgram(): PixelProgram {
     }
   }
   drawMushroomPixelDetails(builder);
-  // Add restrained plaster spots across the cap
-  for (const [sx, sy] of CAP_SPOTS) {
-    builder.rect(sx, sy, 2, 2, plaster);
-  }
   return builder.build();
 }
 
