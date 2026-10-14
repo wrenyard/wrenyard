@@ -838,6 +838,8 @@ async function bootstrap(): Promise<void> {
       desktopTray?.rebuild();
       shellWindow?.notifyPreferencesChanged();
       interfaceZoom.applyShellZoom();
+      // Open cards follow the same persisted zoom as the shell.
+      miniCards?.applyZoomToCards(appearanceController?.zoomFactor() ?? 1);
       // `update.autoCheck` gates the periodic schedule; manual checks always work.
       if (!SMOKE && app.isPackaged) updateController?.setAutoCheck(settingsStore.load().update.autoCheck);
     },
@@ -893,6 +895,9 @@ async function bootstrap(): Promise<void> {
         sessionId ? { id: 'session.open', args: sessionId } : { id: 'session.newDraft' },
       );
     },
+    // Cards reuse the shell's single zoom source of truth (`appearance.zoom`)
+    // through the appearance controller, exactly like applyShellZoom does.
+    getZoomFactor: () => appearanceController?.zoomFactor() ?? 1,
   });
   // One shared daemon transport and subscription set for the whole Desktop
   // process. The shell window, tray and Pet all consume the same rounds; the
@@ -1146,6 +1151,8 @@ async function bootstrap(): Promise<void> {
     revealWorkspace: async (path: string) => { shell.showItemInFolder(path); },
   });
   interfaceZoom.applyShellZoom();
+  // Keep any already-open cards on the same zoom as the shell at startup.
+  miniCards?.applyZoomToCards(appearanceController?.zoomFactor() ?? 1);
   Menu.setApplicationMenu(Menu.buildFromTemplate(desktopMenuTemplate(
     process.platform,
     () => { void requestInstallFromMenu(); },
