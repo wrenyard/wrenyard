@@ -1,5 +1,8 @@
 import {
+  useCallback,
+  useEffect,
   useRef,
+  useState,
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -74,7 +77,33 @@ export function PromptInput({
   leading,
 }: PromptInputProps) {
   const composing = useRef(false);
+  // Compact layout hysteresis: the single-line bar grows into the wrapped layout
+  // as soon as the text needs a second line, and stays expanded until the field
+  // is cleared again, so it never flickers between the two layouts.
+  const [compactExpanded, setCompactExpanded] = useState(false);
+  const compactTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const canSubmit = !disabled && !submitDisabled && (value.trim() !== '' || hasAttachments);
+
+  // Keep the caller's textarea ref working while also tracking the node locally
+  // so the compact layout can measure whether the text needs a second line.
+  const setTextareaNode = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      compactTextareaRef.current = node;
+      if (textareaRef !== undefined) textareaRef.current = node;
+    },
+    [textareaRef],
+  );
+
+  useEffect(() => {
+    if (compact && value === '') setCompactExpanded(false);
+  }, [compact, value]);
+
+  useEffect(() => {
+    if (!compact || compactExpanded) return;
+    const node = compactTextareaRef.current;
+    if (node === null) return;
+    if (value.includes('\n') || node.scrollHeight > node.clientHeight + 1) setCompactExpanded(true);
+  }, [compact, compactExpanded, value]);
 
   const submit = (): void => {
     if (canSubmit) onSubmit();
@@ -97,26 +126,41 @@ export function PromptInput({
       {compact && attachments !== undefined && attachments !== null && (
         <div className="mb-1 w-full px-1">{attachments}</div>
       )}
-      <InputGroup className={compact ? (leading === undefined ? 'rounded-2xl pl-1' : 'rounded-2xl') : undefined}>
-        {compact && leading !== undefined && (
-          <InputGroupAddon align="inline-start" className="h-8 self-end py-0">
-            {leading}
-          </InputGroupAddon>
-        )}
+      <InputGroup
+        className={
+          compact
+            ? compactExpanded
+              ? 'rounded-2xl'
+              : leading === undefined
+                ? 'rounded-full pl-1'
+                : 'rounded-full'
+            : undefined
+        }
+      >
         {!compact && attachments !== undefined && attachments !== null && (
           <div className="w-full px-2.5 pt-2">{attachments}</div>
         )}
-        {/* The compact card viewport stays below the `md` breakpoint, so the
-            textarea keeps the primitive's `text-base` 16px for typed text. The
-            placeholder is 1px smaller and uses an arbitrary size (no line-height
-            override) so it keeps `leading-8` and stays aligned with typed text. */}
+        {/* The compact card stays below the `md` breakpoint, so typed text keeps
+            the primitive's 16px and the normal `leading-6`. The placeholder is
+            1px smaller and uses an arbitrary size (no line-height override) so it
+            keeps `leading-6` and stays aligned with typed text. Collapsed keeps a
+            fixed one-line height; expanded grows with `field-sizing-content` and
+            scrolls once it reaches `max-h-36` (about six lines). */}
         <InputGroupTextarea
-          ref={textareaRef}
+          ref={setTextareaNode}
           value={value}
           placeholder={placeholder}
           disabled={disabled}
           rows={1}
-          className={compact ? 'min-h-8 min-w-0 max-h-[min(10rem,35dvh)] overflow-y-auto py-0 leading-8 placeholder:text-[15px]' : 'max-h-60'}
+          className={
+            compact
+              ? `min-h-8 min-w-0 py-1 leading-6 placeholder:text-[15px] ${
+                  compactExpanded
+                    ? 'field-sizing-content max-h-36 overflow-y-auto'
+                    : 'field-sizing-fixed overflow-hidden'
+                }`
+              : 'max-h-60'
+          }
           onChange={(event) => onValueChange(event.target.value)}
           onPaste={onPaste}
           onKeyDown={(event) => {
@@ -129,13 +173,38 @@ export function PromptInput({
           onCompositionEnd={() => { composing.current = false; }}
         />
         {compact ? (
-          <InputGroupAddon align="inline-end" className="h-8 self-end gap-1 py-0">
-            {toolbar}
-            {toolbarTrailing}
-            <InputGroupButton type="submit" variant="default" size="icon-xs" disabled={!canSubmit} aria-label="发送" title="发送">
-              <ArrowUp />
-            </InputGroupButton>
-          </InputGroupAddon>
+          compactExpanded ? (
+            /* Wrapped layout: the textarea owns the row and the leading `+` and
+               the send button move to their own row below (Cursor-style). */
+            <InputGroupAddon align="block-end" className="gap-1 pb-1.5 pt-0.5">
+              {leading}
+              <div className="ml-auto flex items-center gap-1">
+                {toolbar}
+                {toolbarTrailing}
+                <InputGroupButton type="submit" variant="default" size="icon-xs" disabled={!canSubmit} aria-label="发送" title="发送">
+                  <ArrowUp />
+                </InputGroupButton>
+              </div>
+            </InputGroupAddon>
+          ) : (
+            <>
+              {/* `order-first` places the `+` ahead of the textarea visually
+                  while the textarea stays the first DOM child, so switching
+                  layouts never remounts it or drops focus. */}
+              {leading !== undefined && (
+                <InputGroupAddon align="inline-start" className="h-8 py-0">
+                  {leading}
+                </InputGroupAddon>
+              )}
+              <InputGroupAddon align="inline-end" className="h-8 gap-1 py-0">
+                {toolbar}
+                {toolbarTrailing}
+                <InputGroupButton type="submit" variant="default" size="icon-xs" disabled={!canSubmit} aria-label="发送" title="发送">
+                  <ArrowUp />
+                </InputGroupButton>
+              </InputGroupAddon>
+            </>
+          )
         ) : (
           <InputGroupAddon align="block-end">
             <div className="flex min-w-0 items-center gap-1.5">{toolbar}</div>
