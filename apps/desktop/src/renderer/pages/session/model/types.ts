@@ -218,7 +218,7 @@ export interface TurnNode {
   cycles: CycleNode[];
 }
 
-export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project';
+export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project' | 'status';
 
 export interface CallModel {
   id: string;

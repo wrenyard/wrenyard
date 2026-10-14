@@ -39,6 +39,7 @@ export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   document: '文档',
   vcs: '工作区版本',
   project: '项目',
+  status: '状态',
 };
 
 const ROUTE_STATE_LABEL: Record<string, string> = {

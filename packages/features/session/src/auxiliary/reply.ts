@@ -12,6 +12,7 @@ import { messageOf } from '../errors.ts';
 import type { BuiltView, CallFailureSummary, SessionCallHost } from '../ports.ts';
 import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
 import { maybeUpdateTitle } from './title.ts';
+import { maybeClassifyStatus } from './status.ts';
 
 /** Output-token allowance for the single communication reply call. */
 const REPLY_MAX_TOKENS = 800;
@@ -227,7 +228,8 @@ export class ReplyWriter {
     // reply. `asksThisStep` still holds the terminal step's asks: the step loop
     // stops on a terminal step without starting a new one. Record the attention
     // marker right after the turn so the session list can show it.
-    if (status === 'completed' && turn.asksThisStep.length === 1 && turn.actionsThisStep === 0) {
+    const endedWithAsk = status === 'completed' && turn.asksThisStep.length === 1 && turn.actionsThisStep === 0;
+    if (endedWithAsk) {
       await this.host.ledger.append(session.sessionId, {
         type: 'turn.attention',
         turn: turn.turn,
@@ -242,6 +244,9 @@ export class ReplyWriter {
     // the latest real reply already on the timeline.
     const titleReply = replyText ?? latestReplyText(this.host.ledger.read(session.sessionId));
     await maybeUpdateTitle(this.host, session, turn, titleReply);
+    // The turn is durable; the status judgement runs fire-and-forget and never
+    // delays turn end or fails loudly.
+    this.host.track(maybeClassifyStatus(this.host, session, turn, endedWithAsk));
   }
 }
 
