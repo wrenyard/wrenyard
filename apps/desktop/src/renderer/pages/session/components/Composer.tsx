@@ -45,10 +45,6 @@ export interface ComposerProps {
   /** Changes on session switch (or `'draft'`), resetting the model and focus. */
   sessionKey: string;
   disabled?: boolean;
-  /** Mini mode: keep only the input and send button, hiding secondary controls. */
-  compact?: boolean;
-  /** Mini mode draft: show the unified model picker above the input bar. */
-  draft?: boolean;
   onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): void | Promise<void>;
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
   /** Bumped to request an explicit input focus (e.g. the new-conversation shortcut). */
@@ -59,7 +55,7 @@ export interface ComposerProps {
 }
 
 /** Bottom composer with a unified model/effort picker, attachments and a send button. */
-export function Composer({ models, turns, sessionKey, disabled = false, compact = false, draft = false, onSend, injectedText, focusRequest = 0, reply, onCancelReply }: ComposerProps) {
+export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, reply, onCancelReply }: ComposerProps) {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
@@ -322,24 +318,6 @@ export function Composer({ models, turns, sessionKey, disabled = false, compact 
           松开以添加文件
         </div>
       )}
-      {/* Compact draft row: the unified picker stays content-width and is
-          centered, with no trigger tooltip. The trigger is capped so the model
-          name and its effort indicator still fit inside a 300px-wide card. The
-          trigger button is forced to the textarea primitive's `text-base
-          md:text-sm` pair: its own `text-sm` from Button/InputGroupButton wins
-          on inheritance, so the descendant rule targets the button directly. */}
-      {compact && draft && (
-        <div className="mb-2 flex justify-center gap-2 [&_button]:text-base md:[&_button]:text-sm">
-          <ModelPicker
-            models={options}
-            value={modelId}
-            effort={effort}
-            onChange={selectModel}
-            disabled={models.length === 0}
-            className="max-w-40"
-          />
-        </div>
-      )}
       <PromptInput
         value={text}
         onValueChange={handleChange}
@@ -348,13 +326,15 @@ export function Composer({ models, turns, sessionKey, disabled = false, compact 
         submitDisabled={sending || exceeded}
         sendKey={preferences.data?.session.sendKey ?? 'enter'}
         textareaRef={textareaRef}
-        placeholder={compact ? '和工坊一起工作' : '输入消息，可随时发起新的并行轮次'}
-        compact={compact}
-        leading={
-          compact ? (
+        placeholder="输入消息，可随时发起新的并行轮次"
+        attachments={attachmentStrip}
+        hasAttachments={attachments.length > 0}
+        onPaste={handlePaste}
+        toolbar={
+          <>
             <InputGroupButton
               type="button"
-              size="icon-xs"
+              size="icon-sm"
               aria-label="添加附件"
               title="添加附件"
               disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
@@ -362,28 +342,16 @@ export function Composer({ models, turns, sessionKey, disabled = false, compact 
             >
               <Plus />
             </InputGroupButton>
-          ) : undefined
-        }
-        attachments={attachmentStrip}
-        hasAttachments={attachments.length > 0}
-        onPaste={handlePaste}
-        toolbar={
-          <>
-            {!compact && (
-              <>
-                <InputGroupButton
-                  type="button"
-                  size="icon-sm"
-                  aria-label="添加附件"
-                  title="添加附件"
-                  disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
-                  onClick={() => { void chooseFiles(); }}
-                >
-                  <Plus />
-                </InputGroupButton>
-                <ModelPicker models={options} value={modelId} effort={effort} onChange={selectModel} disabled={models.length === 0} />
-              </>
-            )}
+            {/* Capped so the model name and its effort indicator still fit beside
+                the send button inside a 300px-wide mini card. */}
+            <ModelPicker
+              models={options}
+              value={modelId}
+              effort={effort}
+              onChange={selectModel}
+              disabled={models.length === 0}
+              className="min-w-0 max-w-28 sm:max-w-40"
+            />
             {exceeded && (
               <span className="flex items-center gap-1 text-xs text-destructive" role="status">
                 <AlertTriangle className="size-3.5 shrink-0" />

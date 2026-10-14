@@ -296,8 +296,6 @@ export function SessionPage() {
       turns={model.turns}
       sessionKey={sessionKey}
       disabled={state.loadingLedger}
-      compact={mini}
-      draft={draft}
       onSend={async (text, entry, effort, attachments) => {
         await sendMessage(reply === undefined ? text : withReplyQuote(reply, text), entry, effort, attachments);
         setReplyTo(undefined);
