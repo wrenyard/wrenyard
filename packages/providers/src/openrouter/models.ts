@@ -12,6 +12,7 @@ export const definition = defineProvider({
   models: [
     model('anthropic/claude-sonnet-5.5', undefined, undefined, 'claude-sonnet-5-5', REASONING_WITHOUT_NONE),
     model('openai/gpt-6.1-sol', undefined, undefined, 'gpt-6.1-sol', REASONING_WITHOUT_NONE),
+    model('google/gemini-4-argon', undefined, undefined, 'gemini-4-argon', ['low', 'medium', 'high']),
     { ...model('nex-agi/nex-n2.5-mini:free', 262_144, 235_929, 'nex-n2.5-mini'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
     { ...model('nex-agi/nex-n2.5-pro:free', 262_144, 235_929, 'nex-n2.5-pro'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
     { ...model('cohere/north-mini-code:free', 256_000, 64_000, 'north-mini-code'), free: true, reasoningEfforts: REASONING_BASIC },

@@ -19,6 +19,7 @@ export const definition = defineProvider({
     { canonical: 'claude-sonnet-5-5', overrides: { contextWindow: 200_000, supports1MContext: true, reasoningEfforts: FIVE_LEVELS } },
     model('muse-spark-1.3', 300_000, undefined, undefined, FIVE_LEVELS),
     model('gemini-3.8-flash', 1_000_000, undefined, undefined, ['low', 'medium', 'high']),
+    model('gemini-4-argon', undefined, undefined, undefined, ['medium']),
     model('claude-fable-5-1', 300_000, undefined, undefined, FIVE_LEVELS),
   ],
   modelAliases: {
@@ -33,6 +34,7 @@ export const definition = defineProvider({
     'claude-sonnet-5-5': { cursor: suffixMappings('claude-sonnet-5-5', FIVE_LEVELS) },
     'muse-spark-1.3': { cursor: suffixMappings('muse-spark-1.3', FIVE_LEVELS) },
     'gemini-3.8-flash': { cursor: suffixMappings('gemini-3.8-flash', ['low', 'medium', 'high']) },
+    'gemini-4-argon': { cursor: { medium: { model: 'gemini-4-argon' } } },
     'claude-fable-5-1': { cursor: suffixMappings('claude-fable-5-1-thinking', FIVE_LEVELS) },
     'grok-4.7': { cursor: suffixMappings('grok-4.7', REASONING_UP_TO_XHIGH) },
   },

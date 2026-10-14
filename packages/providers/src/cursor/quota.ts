@@ -28,6 +28,7 @@ export const quota = {
     binding('cursor', 'claude-sonnet-5-5', [CURSOR_OTHER_POOL]),
     binding('cursor', 'muse-spark-1.3', [CURSOR_OTHER_POOL]),
     binding('cursor', 'gemini-3.8-flash', [CURSOR_OTHER_POOL]),
+    binding('cursor', 'gemini-4-argon', [CURSOR_OTHER_POOL]),
     binding('cursor', 'claude-fable-5-1', [CURSOR_OTHER_POOL]),
   ],
   defaultPools: [quotaPool('cursor/usage', [], 0.4)],

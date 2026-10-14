@@ -36,8 +36,12 @@ export const definition = defineProvider({
     // Zen serves Sol through Responses. The native OpenCode client owns that
     // transport; the existing Chat Completions gateway cannot serve this model.
     { canonical: 'gpt-6.1-sol', overrides: { supportedClients: ['opencode'], reasoningEfforts: ['high'] } },
+    // The official Zen Argon endpoint uses @ai-sdk/google, so this model is
+    // reachable only through the native OpenCode client and is never published
+    // through the OpenAI or Anthropic gateway.
+    { canonical: 'gemini-4-argon', overrides: { supportedClients: ['opencode'], reasoningEfforts: ['low', 'medium', 'high'] } },
   ],
-  reasoningEffortMappings: Object.fromEntries(['mimo-v2.5-free','ling-3.0-flash-fin-free','big-pickle','union-alpha','nemotron-3-ultra-free','nemotron-3.5-lightning-free','glm-5.3','kimi-k3','gpt-6.1-sol'].map(id=>[id,{opencode:Object.fromEntries((id === 'glm-5.3' || id === 'kimi-k3' ? REASONING_LOW_HIGH_MAX : ['high']).map(e=>[e,{effort:e}]))}])),
+  reasoningEffortMappings: Object.fromEntries(['mimo-v2.5-free','ling-3.0-flash-fin-free','big-pickle','union-alpha','nemotron-3-ultra-free','nemotron-3.5-lightning-free','glm-5.3','kimi-k3','gemini-4-argon','gpt-6.1-sol'].map(id=>[id,{opencode:Object.fromEntries((id === 'glm-5.3' || id === 'kimi-k3' ? REASONING_LOW_HIGH_MAX : id === 'gemini-4-argon' ? ['low','medium','high'] : ['high']).map(e=>[e,{effort:e}]))}])),
   protocols: [
     openAI('https://opencode.ai/zen/v1/chat/completions'),
     anthropic('https://opencode.ai/zen/v1/messages'),
