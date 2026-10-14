@@ -7,19 +7,23 @@ export const DSH_BRIDGE_ROW_ID = 'wrenyard-dsh-bridge';
 export const DSH_BRIDGE_PLUGIN_FILENAME = 'wrenyard-dsh-bridge.mjs';
 
 /**
- * The transcript bridge plugin source, copied verbatim from the retired Go
- * adapter's embedded `PluginSource` string (dsh/bridge.go). It is a faithful
- * one-to-one port: the JSONL protocol name, the subagent filter, the model
- * route evidence sources, the usage partitions, and the generation sampling
- * window all keep their original semantics.
+ * The transcript bridge plugin source, copied from the retired Go adapter's
+ * embedded `PluginSource` string (dsh/bridge.go). It keeps the JSONL protocol
+ * name, the subagent filter, the model route evidence sources, the usage
+ * partitions, and the generation sampling window.
  *
  * The bridge exports name/apply(ctx), subscribes to session/event, ignores
  * child (subagent) session streams, and emits one-line wrenyard.dsh.stream.v1
- * JSON for the root session: real first tokens from assistant/chunk deltas,
- * the final answer from assistant/message type=text content blocks, parent
- * tool calls/results, transient per-response generation blocks forwarded at
- * turn/end, and usage partitions summed once per response at turn/end.
- * Secrets are scrubbed and never emitted; hidden reasoning is never forwarded.
+ * JSON for the root session. It understands both upstream event shapes: the
+ * legacy 0.1.x live assistant/chunk deltas, and the 0.2.0 compact stream
+ * records carried on assistant/message data.stream (expanded locally with
+ * their original millisecond timestamps). Real first tokens, the final answer
+ * from assistant/message type=text content blocks, parent tool calls/results,
+ * transient per-response generation blocks forwarded at turn/end, and usage
+ * partitions summed once per response at turn/end are all retained. A 0.2.0
+ * assistant/attempt is a settled unsuccessful attempt: it emits no text,
+ * records no usage and produces no generation sample. Secrets are scrubbed and
+ * never emitted; hidden reasoning is never forwarded as visible text.
  *
  * This is a raw JavaScript asset written to disk for the native DSH loader, not
  * Wrenyard TypeScript. It is embedded with String.raw so the literal is stored
@@ -165,6 +169,7 @@ function responseFor(turn, response, sessionId) {
       usageCounted: false,
       invalidSample: false,
       messageSeen: false,
+      chunkStreamSeen: false,
       gen: new Map(),
       genFirstAt: null,
       genLastAt: null,
@@ -231,6 +236,88 @@ function assistantMessageText(data) {
     if (typeof block.text === 'string') out += block.text;
   }
   return out;
+}
+
+// finiteNumber accepts only a finite numeric timestamp or gap; anything else is
+// treated as absent so no timestamp is ever fabricated.
+function finiteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+// memberChunks expands one packed stream record's members into legacy-shape
+// deltas carrying their own reconstructed timestamp. Member k's time is time0
+// plus the sum of the preceding gap entries; if time0 is absent or a gap is
+// missing/non-numeric the later members are dropped rather than guessed.
+function memberChunks(record, values, build) {
+  const out = [];
+  if (!Array.isArray(values)) return out;
+  const time0 = finiteNumber(record.time0);
+  if (time0 === null) return out;
+  const dt = Array.isArray(record.dt) ? record.dt : [];
+  let at = time0;
+  for (let k = 0; k < values.length; k += 1) {
+    if (at === null) break;
+    out.push({ at: at, chunk: build(values[k]) });
+    const gap = k < dt.length ? finiteNumber(dt[k]) : null;
+    at = gap === null ? null : at + gap;
+  }
+  return out;
+}
+
+// streamChunks expands the compact 0.2.0 stream records into the legacy
+// StreamChunk delta shapes the first-token and generation helpers already
+// understand, preserving each member's original millisecond timestamp. Unknown
+// or malformed records are skipped.
+function streamChunks(stream) {
+  const out = [];
+  if (!Array.isArray(stream)) return out;
+  for (const record of stream) {
+    if (!record || typeof record !== 'object') continue;
+    const type = typeof record.type === 'string' ? record.type : '';
+    if (type === 'chunk') {
+      const at = finiteNumber(record.time);
+      if (at !== null && record.chunk && typeof record.chunk === 'object') out.push({ at: at, chunk: record.chunk });
+      continue;
+    }
+    if (type === 'text-chunks') {
+      const index = record.index;
+      out.push.apply(out, memberChunks(record, record.texts, (value) => ({ type: 'text-delta', index: index, text: value })));
+      continue;
+    }
+    if (type === 'reasoning-chunks') {
+      const index = record.index;
+      out.push.apply(out, memberChunks(record, record.texts, (value) => ({ type: 'reasoning-delta', index: index, text: value })));
+      continue;
+    }
+    if (type === 'tool-call-chunks') {
+      const index = record.index;
+      const id = record.id;
+      const name = record.name;
+      out.push.apply(out, memberChunks(record, record.args, (value) => ({ type: 'tool-call-delta', index: index, id: id, name: name, argumentsDelta: value })));
+      continue;
+    }
+  }
+  return out;
+}
+
+// applyStream feeds reconstructed stream deltas through the same first-token
+// and generation bookkeeping as the legacy assistant/chunk path, emitting text
+// deltas as assistant/chunk records. Reasoning deltas feed accounting only and
+// are never surfaced as visible text.
+function applyStream(s, item, base, stream) {
+  const deltas = streamChunks(stream);
+  for (const delta of deltas) {
+    const data = { chunk: delta.chunk };
+    const first = firstTokenOf(data);
+    if (first && item) {
+      if (delta.at !== null && (item.firstTokenAt === null || delta.at < item.firstTokenAt)) item.firstTokenAt = delta.at;
+      applyPendingModel(s, item);
+      observeGeneration(item, generationDeltaOf(data), delta.at);
+    }
+    if (first && first.kind !== 'reasoning' && first.text) {
+      emit(Object.assign({}, base, { event: 'assistant/chunk', kind: 'text', text: first.text }));
+    }
+  }
 }
 
 // blockKeyOf names one content channel so deltas concatenate per block and
@@ -311,7 +398,7 @@ export function apply(ctx) {
 
   ctx.on('session/event', (session, event) => {
     if (!session || !session.header || !event) return;
-    if (session.header.origin === 'subagent' || session.header.parentSessionId) return;
+    if (session.header.origin === 'subagent' || session.header.parentSessionId || session.header.parentSession) return;
 
     const sessionId = session.id || session.sessionId || 'root';
     const s = stateFor(sessions, sessionId);
@@ -406,6 +493,9 @@ export function apply(ctx) {
         if (at !== null && (item.firstTokenAt === null || at < item.firstTokenAt)) item.firstTokenAt = at;
         applyPendingModel(s, item);
         observeGeneration(item, generationDeltaOf(data), at);
+        // Mark the response so a 0.2.0 assistant/message stream is not also
+        // accumulated for the same deltas.
+        item.chunkStreamSeen = true;
       }
     }
 
@@ -415,6 +505,13 @@ export function apply(ctx) {
         emit(Object.assign({}, base, { event: 'assistant/chunk', kind: 'text', text: first.text }));
       }
       // Reasoning deltas remain reasoning and are never surfaced as text.
+      return;
+    }
+    if (type === 'assistant/attempt') {
+      // A settled unsuccessful attempt: it emits no final text, records no
+      // usage and yields no generation sample. Its stream is deliberately not
+      // accumulated so it cannot contaminate a later successful
+      // assistant/message for the same turn/step.
       return;
     }
     if (type === 'assistant/message') {
@@ -430,6 +527,11 @@ export function apply(ctx) {
         item.completed = true;
         item.completedAt = timeMs(event);
         applyPendingModel(s, item);
+        // 0.2.0 carries the response stream here instead of live
+        // assistant/chunk events. Reconstruct it only when the same response
+        // was not already accumulated from legacy deltas, so a delta is never
+        // counted twice.
+        if (!item.chunkStreamSeen) applyStream(s, item, base, data.stream);
       }
       rememberUsage(turn, item || { usageCounted: false }, tokenUsageOf(data));
       const text = assistantMessageText(data);

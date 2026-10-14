@@ -4,5 +4,5 @@
   "agent_stream": "wrenyard.agent.stream.v1",
   "activity_snapshot": "foreman.activity.snapshot.v1",
   "taskgraph_slip": "foreman.taskgraph.slip.v1",
-  "dsh": "0.1.1-rc.2"
+  "dsh": "0.2.0-rc.2"
 }

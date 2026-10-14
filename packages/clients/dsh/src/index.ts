@@ -7,8 +7,10 @@ import { prepareDshLaunch } from './launch.ts';
 export class DshClient implements AgentClient {
     readonly id = 'dsh';
     /**
-     * The installed `headless` DSH profile creates one fresh persisted session
-     * per invocation and exposes no resume flag, so resume is not advertised.
+     * Resume stays disabled because this adapter launches every run against a
+     * disposable per-run DSH_HOME and keeps no persistent session store, so
+     * there is never a session to resume. It is not an upstream limitation:
+     * 0.2.0-rc.2's headless profile does accept `--session-id`.
      */
     readonly capabilities = { run: true, account: false, resume: false };
     inspect(options?: InspectOptions): Promise<ClientStatus> {

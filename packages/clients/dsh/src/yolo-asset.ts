@@ -7,8 +7,11 @@ export const DSH_YOLO_ROW_ID = 'wrenyard-dsh-yolo';
 export const DSH_YOLO_PLUGIN_FILENAME = 'wrenyard-dsh-yolo.mjs';
 
 /**
- * The persisted-session normalizer plugin source, copied verbatim from the
- * retired Go adapter's embedded `YoloPluginSource` string (dsh/yolo.go).
+ * The persisted-session normalizer plugin source. It began as a verbatim copy
+ * of the retired Go adapter's embedded `YoloPluginSource` string (dsh/yolo.go)
+ * and now tracks the DSH 0.2.0 session snapshot API: the seed log is read from
+ * the synchronous `session.snapshotEvents()` snapshot, falling back to the
+ * legacy `session.events` array for older shapes.
  *
  * It forces Wrenyard's one execution mode on both fresh and restored sessions
  * after their complete seed log is available. A session/created hook alone is
@@ -79,13 +82,15 @@ export function wrapSessionAppend(session) {
 }
 
 export function normalizeSession(session) {
-  if (!session || !Array.isArray(session.events) || typeof session.append !== 'function') {
+  const snapshot =
+    typeof session?.snapshotEvents === 'function' ? session.snapshotEvents() : session?.events;
+  if (!Array.isArray(snapshot) || typeof session.append !== 'function') {
     throw new Error('wrenyard dsh: session append surface is unavailable');
   }
-  if (effective(session.events, SANDBOX_MODE_TYPE, 'mode') !== SANDBOX_MODE) {
+  if (effective(snapshot, SANDBOX_MODE_TYPE, 'mode') !== SANDBOX_MODE) {
     session.append(SANDBOX_MODE_TYPE, { mode: SANDBOX_MODE });
   }
-  if (effective(session.events, APPROVAL_POLICY_TYPE, 'policy') !== APPROVAL_POLICY) {
+  if (effective(snapshot, APPROVAL_POLICY_TYPE, 'policy') !== APPROVAL_POLICY) {
     session.append(APPROVAL_POLICY_TYPE, { policy: APPROVAL_POLICY });
   }
   return wrapSessionAppend(session);

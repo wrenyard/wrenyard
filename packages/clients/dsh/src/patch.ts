@@ -149,22 +149,22 @@ export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath:
   if (yoloPluginPath)
     lines.push(
       '- insert:',
-      `    id: ${yamlStr(DSH_YOLO_ROW_ID)}`,
-      `    name: ${yamlStr(yoloPluginPath)}`,
+      `    - id: ${yamlStr(DSH_YOLO_ROW_ID)}`,
+      `      name: ${yamlStr(yoloPluginPath)}`,
     );
   if (bridgePluginPath)
     lines.push(
       '- insert:',
-      `    id: ${yamlStr(DSH_BRIDGE_ROW_ID)}`,
-      `    name: ${yamlStr(bridgePluginPath)}`,
+      `    - id: ${yamlStr(DSH_BRIDGE_ROW_ID)}`,
+      `      name: ${yamlStr(bridgePluginPath)}`,
     );
   // The effort forwarder mounts only for a Gateway route that declares the
   // public effort; a native route never reaches Wrenyard's Gateway.
   if (route?.baseUrl && route.reasoningEffort && reasoningPluginPath)
     lines.push(
       '- insert:',
-      `    id: ${yamlStr(DSH_REASONING_EFFORT_ROW_ID)}`,
-      `    name: ${yamlStr(reasoningPluginPath)}`,
+      `    - id: ${yamlStr(DSH_REASONING_EFFORT_ROW_ID)}`,
+      `      name: ${yamlStr(reasoningPluginPath)}`,
     );
 
   // MCP servers are inserted after the plugins, sorted by name. A transport the
@@ -174,38 +174,38 @@ export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath:
       throw new Error(`dsh: unsupported mcp transport ${JSON.stringify(server.transport)}`);
     lines.push(
       '- insert:',
-      `    id: ${yamlStr('wrenyard-mcp-' + server.name)}`,
-      `    name: ${yamlStr(DSH_MCP_CLIENT_ROW_ID)}`,
-      '    config:',
-      `      serverName: ${yamlStr(server.name)}`,
-      `      transport: ${yamlStr(server.transport)}`,
-      '      failOnStartupError: true',
+      `    - id: ${yamlStr('wrenyard-mcp-' + server.name)}`,
+      `      name: ${yamlStr(DSH_MCP_CLIENT_ROW_ID)}`,
+      '      config:',
+      `        serverName: ${yamlStr(server.name)}`,
+      `        transport: ${yamlStr(server.transport)}`,
+      '        failOnStartupError: true',
     );
     if (server.transport === 'stdio') {
-      lines.push(`      command: ${yamlStr(server.command ?? '')}`);
-      if (server.cwd) lines.push(`      cwd: ${yamlStr(server.cwd)}`);
+      lines.push(`        command: ${yamlStr(server.command ?? '')}`);
+      if (server.cwd) lines.push(`        cwd: ${yamlStr(server.cwd)}`);
       if (server.args && server.args.length > 0) {
-        lines.push('      args:');
+        lines.push('        args:');
         for (const arg of server.args)
-          lines.push(`        - ${yamlStr(arg)}`);
+          lines.push(`          - ${yamlStr(arg)}`);
       }
     }
     if (server.transport === 'streamable-http') {
       if (!server.url) throw new Error('DSH HTTP MCP server requires a URL');
-      lines.push(`      url: ${yamlStr(server.url)}`);
+      lines.push(`        url: ${yamlStr(server.url)}`);
       if (server.headers && Object.keys(server.headers).length > 0) {
-        lines.push('      headers:');
+        lines.push('        headers:');
         for (const [key, value] of Object.entries(server.headers))
-          lines.push(`        ${yamlStr(key)}: ${yamlStr(value)}`);
+          lines.push(`          ${yamlStr(key)}: ${yamlStr(value)}`);
       }
     }
     if (server.env && server.env.length > 0) {
-      lines.push('      env:');
+      lines.push('        env:');
       for (const entry of [...server.env].sort()) {
         const separator = entry.indexOf('=');
         if (separator === -1)
           continue;
-        lines.push(`        ${yamlStr(entry.slice(0, separator))}: ${yamlStr(entry.slice(separator + 1))}`);
+        lines.push(`          ${yamlStr(entry.slice(0, separator))}: ${yamlStr(entry.slice(separator + 1))}`);
       }
     }
   }

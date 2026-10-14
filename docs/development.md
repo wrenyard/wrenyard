@@ -51,6 +51,26 @@ pnpm test    # tool tests + package tests
 pnpm check   # public identifiers, secrets, legal, version consistency
 ```
 
+## DSH compatibility
+
+The DSH client adapter (`packages/clients/dsh`) drives an externally installed
+`@deepseek-ai/dsh`; the harness is not bundled with the suite. The adapter
+enforces a minimum supported executable version of `0.2.0-rc.2` and refuses to
+launch anything older, so a legacy `0.1.x` runtime is no longer supported. The
+legacy stream parser still decodes old event shapes cheaply, but it does not
+make an old DSH runtime runnable. Upgrade a global install with:
+
+```sh
+npm install -g @deepseek-ai/dsh@0.2.0-rc.2
+```
+
+Set `WRENYARD_DSH_BIN` to point the adapter at a local or prefix install
+instead of the `dsh` found on `PATH`. Native session resume stays disabled:
+every run uses a disposable per-run `DSH_HOME` and keeps no persistent session
+store. On the native route the canonical `deepseek` provider maps to upstream
+`deepseek-official`, and the flash aliases `deepseek-v4-flash` and
+`deepseek-v4.1-flash` resolve to upstream `deepseek-flash`.
+
 ## Screenshots and the product tour
 
 `apps/desktop/tools/showcase/` renders the built Desktop renderer against

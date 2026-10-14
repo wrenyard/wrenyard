@@ -1,10 +1,11 @@
+import type { ChildProcess } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
 import { assertLaunch, stringEnv } from '@wrenyard/agent-client/native';
-import type { ProcessSpec } from '@wrenyard/execution';
+import { spawnProcess, type ProcessSpec } from '@wrenyard/execution';
 import { writeLoaderPatch, type DshMcpServer, type DshModelRoute } from './patch.ts';
 import { DSH_REASONING_EFFORT_ENV, DSH_REASONING_EFFORT_URL_ENV } from './reasoning-effort-asset.ts';
 
@@ -36,6 +37,21 @@ const GATEWAY_CHAT_URL_ENV = 'WRENYARD_GATEWAY_OPENAI_CHAT_URL';
 /** The single credential name a gateway launch forwards to the child. */
 const GATEWAY_TOKEN_ENV = 'WRENYARD_GATEWAY_TOKEN';
 
+/**
+ * Minimum supported external DSH executable version. Upstream `0.2.0-rc.2`
+ * changed the session event stream and the native model ids, so an older
+ * runtime cannot be driven correctly; the launch probes `--version` and fails
+ * fast below this.
+ */
+const DSH_MINIMUM_VERSION = '0.2.0-rc.2';
+
+/** The one upgrade command named in the minimum-version error. */
+const DSH_UPGRADE_COMMAND = 'npm install -g @deepseek-ai/dsh@0.2.0-rc.2';
+
+/** Bound the version probe: a short wall-clock budget and a small output cap. */
+const DSH_VERSION_TIMEOUT_MS = 5_000;
+const DSH_VERSION_MAX_BYTES = 4_096;
+
 export interface DshLaunch {
   /** Fully resolved process spec for @wrenyard/execution. */
   readonly spec: ProcessSpec;
@@ -44,6 +60,25 @@ export interface DshLaunch {
    * failure, and cancellation; never throws.
    */
   cleanup(): Promise<void>;
+}
+
+/**
+ * Canonical Wrenyard DeepSeek flash selections mapped to their upstream native
+ * model id. Only the native route consults this table; a `deepseek-flash`
+ * selection stays `deepseek-flash`.
+ */
+const DSH_NATIVE_FLASH_ALIASES: Record<string, string> = {
+  'deepseek-v4-flash': 'deepseek-flash',
+  'deepseek-v4.1-flash': 'deepseek-flash',
+  'deepseek-flash': 'deepseek-flash',
+};
+
+/**
+ * Map a canonical Wrenyard DeepSeek model id onto the upstream native id.
+ * Every other model id, including `deepseek-v4-pro`, is returned unchanged.
+ */
+function nativeDeepseekModel(model: string): string {
+  return DSH_NATIVE_FLASH_ALIASES[model] ?? model;
 }
 
 /**
@@ -68,11 +103,12 @@ export interface DshLaunch {
  * as a streamable-http row. Both are represented natively by the loader, so no
  * requested server is silently dropped.
  *
- * Native resume is unavailable: the installed headless profile creates one
- * fresh persisted session per invocation and exposes no resume flag, and the
- * Wrenyard daemon rejects a product handle that is not a native session id, so
- * a resume request is rejected loudly before any side effect instead of
- * silently losing continuity.
+ * Native resume is unavailable: this adapter launches every run against a
+ * disposable per-run DSH_HOME and keeps no persistent session store, so there
+ * is never a session to resume, and the Wrenyard daemon rejects a product
+ * handle that is not a native session id. Upstream 0.2.0-rc.2's headless
+ * profile does accept `--session-id`, but a resume request is still rejected
+ * loudly before any side effect instead of silently losing continuity.
  */
 export async function prepareDshLaunch(
   request: AgentRequest,
@@ -81,7 +117,7 @@ export async function prepareDshLaunch(
 ): Promise<DshLaunch> {
   assertLaunch(request);
   if (request.resumeSessionId)
-    throw new Error('dsh: native resume is unsupported by the headless profile');
+    throw new Error('dsh: native resume is unsupported: this adapter uses a disposable per-run DSH_HOME and persists no session');
   const mcpServers = projectDshMcpServers(resolveMcpServers(request.mcpServers));
   if (request.mode === 'gateway' && !request.provider)
     throw new Error('dsh: a gateway launch requires a resolved provider');
@@ -92,6 +128,12 @@ export async function prepareDshLaunch(
   const status = await findExecutable(['dsh'], configured ? { env, executable: configured } : { env });
   if (status.installation.state !== 'installed')
     throw new Error('dsh is not installed');
+
+  // Enforce the minimum external DSH version before any side effect. The probe
+  // reuses the scrubbed environment the child will inherit, so the resolved
+  // executable is measured exactly as it will be launched.
+  const scrubbed = scrubInheritedEnv(env);
+  await assertDshVersion(status.installation.executable, scrubbed);
 
   const home = await mkdtemp(join(tmpdir(), 'wrenyard-dsh-agent-'));
   const cleanup = async (): Promise<void> => {
@@ -120,13 +162,17 @@ export async function prepareDshLaunch(
         throw new Error(`dsh: a gateway launch requires ${GATEWAY_TOKEN_ENV}`);
     }
     else {
-      // A native request keeps the selected provider/model exactly as asked and
-      // declares NO endpoint of our own: no Gateway route is invented, and the
-      // native provider the request already resolved to owns the transport.
+      // A native request declares NO endpoint of our own: no Gateway route is
+      // invented, and the native provider the request already resolved to owns
+      // the transport. Only here do the canonical Wrenyard DeepSeek provider
+      // and its flash model aliases map onto the upstream native ids; the
+      // Gateway route and every other provider/model are left as asked.
       if (!request.provider)
         throw new Error('dsh: a native launch requires a resolved provider');
       const model = (request.canonicalModel?.trim() || request.model.trim());
-      route = { publicModelId: `${request.provider}/${model}` };
+      const nativeProvider = request.provider === 'deepseek' ? 'deepseek-official' : request.provider;
+      const nativeModel = request.provider === 'deepseek' ? nativeDeepseekModel(model) : model;
+      route = { publicModelId: `${nativeProvider}/${nativeModel}` };
     }
 
     let patchPath: string;
@@ -143,7 +189,6 @@ export async function prepareDshLaunch(
       request.prompt,
     ];
 
-    const scrubbed = scrubInheritedEnv(env);
     // The exact Gateway chat-completions endpoint and the public effort are
     // handed to the generated forwarder plugin through this run's environment;
     // the scrub above removed any inherited effort values, so only these fresh
@@ -209,6 +254,125 @@ function chatBaseUrl(env: NodeJS.ProcessEnv): string {
   if (!configured)
     throw new Error(`dsh: a gateway launch requires ${GATEWAY_CHAT_URL_ENV}`);
   return configured.replace(/\/chat\/completions$/u, '').replace(/\/+$/u, '');
+}
+
+/** A parsed DSH `--version` value; build metadata is dropped. */
+interface DshSemver {
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+  readonly prerelease: readonly string[];
+}
+
+/** First strict SemVer token, including prerelease identifiers. */
+const DSH_SEMVER_PATTERN = /(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?/;
+
+/**
+ * Probe the resolved DSH executable and reject any version below the supported
+ * minimum. One bounded `--version` subprocess runs with no shell, under the
+ * same scrubbed environment the child will inherit. Raw output is never
+ * surfaced: an old, unparseable or unprobeable version becomes a single
+ * sanitized error naming the minimum version and the upgrade command.
+ */
+async function assertDshVersion(executable: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const minimum = parseDshSemver(DSH_MINIMUM_VERSION);
+  const reported = await probeDshVersion(executable, env);
+  const found = reported === undefined ? undefined : parseDshSemver(reported);
+  if (minimum === undefined || found === undefined || compareDshSemver(found, minimum) < 0) {
+    const seen = found === undefined ? 'unknown' : formatDshSemver(found);
+    throw new Error(`dsh: unsupported DSH version (${seen}); Wrenyard requires @deepseek-ai/dsh >= ${DSH_MINIMUM_VERSION}. Upgrade with: ${DSH_UPGRADE_COMMAND}`);
+  }
+}
+
+/** Run one bounded `--version` probe; resolve with stdout, or undefined on any failure. */
+async function probeDshVersion(executable: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  return await new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawnProcess(executable, ['--version'], { env, stdio: ['ignore', 'pipe', 'ignore'] });
+    }
+    catch {
+      resolve(undefined);
+      return;
+    }
+    let output = '';
+    let done = false;
+    const finish = (value: string | undefined): void => {
+      if (done)
+        return;
+      done = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(undefined);
+    }, DSH_VERSION_TIMEOUT_MS);
+    child.stdout?.on('data', (chunk: Buffer) => {
+      if (output.length >= DSH_VERSION_MAX_BYTES)
+        return;
+      output += chunk.toString('utf8').slice(0, DSH_VERSION_MAX_BYTES - output.length);
+    });
+    child.on('error', () => finish(undefined));
+    child.on('close', (code) => finish(code === 0 ? output : undefined));
+  });
+}
+
+/** Parse the first SemVer token in a `--version` banner, or undefined. */
+function parseDshSemver(output: string): DshSemver | undefined {
+  const match = DSH_SEMVER_PATTERN.exec(output.trim());
+  if (!match)
+    return undefined;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ? match[4].split('.') : [],
+  };
+}
+
+/** Render a parsed DSH version back to its canonical string. */
+function formatDshSemver(version: DshSemver): string {
+  const core = `${version.major}.${version.minor}.${version.patch}`;
+  return version.prerelease.length > 0 ? `${core}-${version.prerelease.join('.')}` : core;
+}
+
+/** Strict SemVer ordering (prerelease-aware); build metadata never participates. */
+function compareDshSemver(a: DshSemver, b: DshSemver): number {
+  if (a.major !== b.major)
+    return a.major < b.major ? -1 : 1;
+  if (a.minor !== b.minor)
+    return a.minor < b.minor ? -1 : 1;
+  if (a.patch !== b.patch)
+    return a.patch < b.patch ? -1 : 1;
+  if (a.prerelease.length === 0 && b.prerelease.length === 0)
+    return 0;
+  if (a.prerelease.length === 0)
+    return 1;
+  if (b.prerelease.length === 0)
+    return -1;
+  const length = Math.max(a.prerelease.length, b.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const left = a.prerelease[index];
+    const right = b.prerelease[index];
+    if (left === undefined)
+      return -1;
+    if (right === undefined)
+      return 1;
+    const leftNumeric = /^\d+$/.test(left);
+    const rightNumeric = /^\d+$/.test(right);
+    if (leftNumeric && rightNumeric) {
+      const delta = Number(left) - Number(right);
+      if (delta !== 0)
+        return delta < 0 ? -1 : 1;
+      continue;
+    }
+    if (leftNumeric !== rightNumeric)
+      return leftNumeric ? -1 : 1;
+    if (left !== right)
+      return left < right ? -1 : 1;
+  }
+  return 0;
 }
 
 /**
