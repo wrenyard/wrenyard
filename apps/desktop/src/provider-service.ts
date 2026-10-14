@@ -45,6 +45,9 @@ export class ProviderService {
           ...(model.effectiveTps === undefined ? {} : { effectiveTps: model.effectiveTps }),
           ...(model.quotaAbundant === undefined ? {} : { quotaAbundant: model.quotaAbundant }),
           ...(model.free === undefined ? {} : { free: model.free }),
+          // The CodeBuddy credit multiplier copied through verbatim; omitted when
+          // the catalog declares none rather than defaulted.
+          ...(model.credits === undefined ? {} : { credits: model.credits }),
           ...(model.canonicalId === undefined ? {} : { canonicalId: model.canonicalId }),
           ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
           ...(model.speedSource === undefined ? {} : { speedSource: model.speedSource }),

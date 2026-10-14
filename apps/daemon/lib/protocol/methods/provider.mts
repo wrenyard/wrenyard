@@ -56,6 +56,7 @@ export const providerListResultSchema = {
             effectiveTps: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] },
             quotaAbundant: { type: 'boolean' },
             free: { type: 'boolean' },
+            credits: { type: 'string' },
             canonicalId: { type: 'string', minLength: 1, maxLength: 200 },
             intelligence: { type: 'string', enum: ['low', 'mid', 'high', 'premium'] },
             pricing: {

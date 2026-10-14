@@ -246,7 +246,13 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
         ...(entry.supportsImages === true ? { capabilities: ['text', 'image'] } : {}),
       });
     }
-    offerings.push(productCreditsAreFree(entry.credits) ? { ...definition, free: true } : definition);
+    // The endpoint's per-model credit multiplier is carried verbatim onto the
+    // offering; a row that declares none (e.g. echo) omits the field entirely.
+    // It is a display-only multiplier, never a balance or USD price.
+    const offering: ModelDefinition = entry.credits === undefined
+      ? definition
+      : { ...definition, credits: entry.credits };
+    offerings.push(productCreditsAreFree(entry.credits) ? { ...offering, free: true } : offering);
     // The endpoint row's id is the outbound wire spelling, so wire dispatch stays
     // exact even when the public offering adopts a registered identity.
     upstreamByCanonical[entry.id] = entry.id;

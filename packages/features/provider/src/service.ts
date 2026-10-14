@@ -175,6 +175,9 @@ export class ProviderService {
       ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
       ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
       ...(model.free === undefined ? {} : { free: model.free }),
+      // The CodeBuddy per-model credit multiplier crosses verbatim when the
+      // definition carries one; a model without it omits the field entirely.
+      ...(model.credits === undefined ? {} : { credits: model.credits }),
       ...(status === undefined ? {} : status),
       // A genuinely unknown speed has no evidence at all: both facts are omitted
       // together rather than reported as a zero or a dangling catalog_default source.

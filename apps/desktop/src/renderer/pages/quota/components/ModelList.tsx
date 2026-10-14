@@ -130,16 +130,29 @@ function ModelRow({ row }: { row: ModelListRow }) {
       <TableCell className="text-right tabular-nums">{row.outputLabel}</TableCell>
       <TableCell className="text-right tabular-nums">{formatTps(row.tps)}</TableCell>
       <TableCell>
-        <span className="flex flex-wrap gap-1">
+        <span className="flex flex-wrap items-center gap-1">
           {row.providers.map((provider) => (
-            <Badge
-              key={provider.id}
-              variant="outline"
-              className={cn('gap-1', !provider.available && 'text-muted-foreground')}
-            >
-              <BrandIcon brand={providerBrand(provider.id)} />
-              {provider.label}
-            </Badge>
+            <span key={provider.id} className="inline-flex flex-wrap items-center gap-1">
+              <Badge
+                variant="outline"
+                className={cn('gap-1', !provider.available && 'text-muted-foreground')}
+              >
+                <BrandIcon brand={providerBrand(provider.id)} />
+                {provider.label}
+              </Badge>
+              {/* Secondary cost text beside the provider badge: the exact
+                  upstream credit multiplier, labelled with its offering name
+                  only when the provider declares several distinct ones. */}
+              {provider.credits?.map((credit) => (
+                <span
+                  key={credit.value}
+                  title="点数倍率"
+                  className="text-xs tabular-nums text-muted-foreground"
+                >
+                  {credit.label === undefined ? credit.value : `${credit.label} ${credit.value}`}
+                </span>
+              ))}
+            </span>
           ))}
         </span>
       </TableCell>

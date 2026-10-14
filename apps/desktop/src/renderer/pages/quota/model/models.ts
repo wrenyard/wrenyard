@@ -18,11 +18,24 @@ const SPEED_SOURCE_RANK: Record<string, number> = {
   catalog_default: 2,
 };
 
+/** One provider-attributed credit multiplier declared for a unified model row. */
+export interface ModelListCredit {
+  /** Verbatim multiplier string from the provider offering (e.g. `x1.33 credits`). */
+  value: string;
+  /** Offering display name; present only when this provider declares more than
+   * one distinct multiplier for the row, so each value stays attributable. */
+  label?: string;
+}
+
 /** One provider backing a unified model row. */
 export interface ModelListProvider {
   id: string;
   label: string;
   available: boolean;
+  /** Distinct credit multipliers this provider declares for the row, in
+   * encounter order; absent when the provider declares none. Never combined
+   * across providers. */
+  credits?: ModelListCredit[];
 }
 
 /** One unified model row: all providers that supply the same exact catalog model. */
@@ -127,6 +140,8 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
     models: ProviderModelSnapshot[];
     providers: ModelListProvider[];
     seenProviders: Set<string>;
+    /** Provider id -> (distinct credit value -> the offering display name that declared it). */
+    credits: Map<string, Map<string, string>>;
   }
   const groups = new Map<string, Accumulator>();
 
@@ -141,8 +156,21 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
           models: [],
           providers: [],
           seenProviders: new Set<string>(),
+          credits: new Map<string, Map<string, string>>(),
         };
         groups.set(key, group);
+      }
+      // The credit multiplier is recorded per provider even when the provider is
+      // already present, so every distinct value on a grouped row survives and
+      // stays attributable to the offering that declared it. It is never a
+      // missing multiplier and is never combined across providers.
+      if (model.credits !== undefined) {
+        let byValue = group.credits.get(entry.id);
+        if (!byValue) {
+          byValue = new Map<string, string>();
+          group.credits.set(entry.id, byValue);
+        }
+        if (!byValue.has(model.credits)) byValue.set(model.credits, model.displayName || model.id);
       }
       // One provider entry per provider; a provider supplying the model twice is not double-counted.
       if (!group.seenProviders.has(entry.id)) {
@@ -172,12 +200,22 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
       return (SPEED_SOURCE_RANK[model.speedSource ?? 'catalog_default'] ?? SPEED_SOURCE_RANK.catalog_default) === rank;
     });
     const intelligence = group.models.find((model) => model.intelligence !== undefined)?.intelligence;
+    const providers = group.providers.map((provider): ModelListProvider => {
+      const byValue = group.credits.get(provider.id);
+      if (!byValue || byValue.size === 0) return provider;
+      // A single distinct multiplier is unambiguous; several are each labelled
+      // with their offering display name so none is misattributed.
+      const credits: ModelListCredit[] = byValue.size === 1
+        ? [...byValue.keys()].map((value) => ({ value }))
+        : [...byValue.entries()].map(([value, label]) => ({ value, label }));
+      return { ...provider, credits };
+    });
     rows.push({
       key: group.key,
       name: group.name,
       family,
       intelligence,
-      providers: group.providers,
+      providers,
       active,
       tps: averageMeasuredTps(preferred),
       // A model with no declared price contributes no price point at all; the

@@ -87,6 +87,10 @@ export interface ModelDefinition {
   pricing?: ModelPricing;
   /** Provider/account-scoped free entitlement; list pricing remains unchanged. */
   free?: boolean;
+  /** CodeBuddy per-model credit multiplier string carried verbatim from the live
+   * `/v3/config` offering (e.g. `x1.33 credits`). A display-only cost
+   * multiplier, never a balance, USD price or percentage. */
+  readonly credits?: string;
 }
 
 export interface DispatchCandidate {

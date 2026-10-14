@@ -759,6 +759,10 @@ export interface ProviderModelSnapshot {
    * from a missing or zero price.
    */
   free?: boolean;
+  /** CodeBuddy per-model credit multiplier string carried verbatim from the live
+   * `/v3/config` offering (e.g. `x1.33 credits`); absent when the provider
+   * declares none. A display-only multiplier, never a balance or USD price. */
+  credits?: string;
   /** Provider-independent canonical model id; falls back to the model id. */
   canonicalId?: string;
   /** Catalog intelligence tier for the model. */
