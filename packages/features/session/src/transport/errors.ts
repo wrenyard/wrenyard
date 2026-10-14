@@ -105,6 +105,7 @@ export function isQuotaCode(code: string | undefined): boolean {
 /** Official error `type`/`code` spellings mapped to the equivalent status semantics. */
 const OFFICIAL_ERROR_KINDS: Readonly<Record<string, ModelErrorKind>> = {
   overloaded_error: 'server',
+  engine_overloaded_error: 'server',
   server_error: 'server',
   api_error: 'server',
   rate_limit_error: 'rate_limited',
