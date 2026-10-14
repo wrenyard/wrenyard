@@ -2,6 +2,7 @@ import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/r
 import { shell } from '@/renderer/lib/desktop';
 import { quotaQuery } from '@/renderer/lib/queries';
 import type { TaskRoutingTestParams } from '@/shell-contract';
+import { KEY_SAVE_TIMEOUT_ERROR } from './model/describe.js';
 
 /**
  * Typed quota queries/actions for the Model Supply page. Every bridge call goes
@@ -28,12 +29,35 @@ export function useSaveProviderOrder() {
   });
 }
 
+/** Bound one key save: the 30 s handshake plus the 30 s request, with slack. */
+const CONFIGURE_PROVIDER_KEY_TIMEOUT_MS = 65_000;
+
 /** Write one provider API key; the daemon returns the refreshed snapshot. */
 export function useConfigureProviderKey() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (input: { providerId: string; key: string }) =>
-      shell.configureProviderKey(input.providerId, input.key),
+    mutationFn: async (input: { providerId: string; key: string }) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_resolve, reject) => {
+        // A timeout does not cancel the write, so the copy must not imply the
+        // save failed — only that its result is unconfirmed.
+        timer = setTimeout(
+          () => reject(new Error(KEY_SAVE_TIMEOUT_ERROR)),
+          CONFIGURE_PROVIDER_KEY_TIMEOUT_MS,
+        );
+      });
+      try {
+        // `Promise.resolve().then` turns a synchronous bridge throw into a
+        // rejection so it still surfaces as a mutation error.
+        return await Promise.race([
+          Promise.resolve().then(() => shell.configureProviderKey(input.providerId, input.key)),
+          timeout,
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    retry: false,
     onSuccess: (snapshot) => {
       client.setQueryData(quotaQuery.queryKey, snapshot);
     },

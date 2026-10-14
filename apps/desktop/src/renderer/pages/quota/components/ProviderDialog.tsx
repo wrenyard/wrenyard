@@ -26,6 +26,8 @@ import {
   KEY_PAGE_ERROR,
   KEY_REQUIRED_ERROR,
   KEY_SAVE_ERROR,
+  KEY_SAVE_PENDING,
+  KEY_SAVING_LABEL,
   OPEN_KEY_PAGE_LABEL,
   PROVIDER_DIALOG_EYEBROW,
   PROVIDER_KEY_LABEL,
@@ -112,6 +114,10 @@ export function ProviderDialog({ entry, onClose, onSaved }: ProviderDialogProps)
   };
 
   const requestClose = (): void => {
+    // A live credential write owns the dialog until it settles: closing now
+    // would hide an in-flight save (and its eventual result) behind the closed
+    // dialog, and must skip the discard-confirmation path too.
+    if (configure.isPending) return;
     if (confirmDiscard) {
       setConfirmDiscard(false);
       return;
@@ -131,7 +137,10 @@ export function ProviderDialog({ entry, onClose, onSaved }: ProviderDialogProps)
       }}
       disablePointerDismissal
     >
-      <DialogContent className={cn(DIALOG_SIZES.md, DIALOG_CONTENT_CLASS)}>
+      <DialogContent
+        className={cn(DIALOG_SIZES.md, DIALOG_CONTENT_CLASS)}
+        showCloseButton={!configure.isPending}
+      >
         <DialogHeader>
           <p className="text-muted-foreground">{PROVIDER_DIALOG_EYEBROW}</p>
           <DialogTitle>{providerDialogTitle(entry.authMode, entry.configured)}</DialogTitle>
@@ -176,6 +185,12 @@ export function ProviderDialog({ entry, onClose, onSaved }: ProviderDialogProps)
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
+
+          {configure.isPending && (
+            <p role="status" aria-live="polite" className="text-muted-foreground">
+              {KEY_SAVE_PENDING}
+            </p>
+          )}
         </div>
 
         <DialogFooter>
@@ -194,7 +209,9 @@ export function ProviderDialog({ entry, onClose, onSaved }: ProviderDialogProps)
               <Button type="button" variant="outline" onClick={requestClose}>{DIALOG_CANCEL_LABEL}</Button>
               {apiKeyMode && (
                 <Button type="button" disabled={pending} onClick={handleSave}>
-                  {entry.configured ? DIALOG_UPDATE_LABEL : DIALOG_SAVE_LABEL}
+                  {configure.isPending
+                    ? KEY_SAVING_LABEL
+                    : entry.configured ? DIALOG_UPDATE_LABEL : DIALOG_SAVE_LABEL}
                 </Button>
               )}
             </>
