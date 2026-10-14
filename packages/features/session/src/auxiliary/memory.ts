@@ -1,6 +1,6 @@
 /**
  * The memory auxiliary task: one memory-search call before every reason
- * request. It selects at most three root memory files from the frozen index
+ * request. It selects at most three root memory files from the current index
  * and publishes each changed one as a `memory.recalled` event with source
  * `memory-search`.
  */
@@ -63,12 +63,12 @@ function buildMemorySearch(input: MemorySearchViewInput): BuiltView {
 // ─── Memory search ──────────────────────────────────────────────────────────
 
 /** The engine surface one memory search needs. */
-export type MemorySearchHost = Pick<SessionCallHost, 'ledger' | 'invoke'>;
+export type MemorySearchHost = Pick<SessionCallHost, 'ledger' | 'invoke' | 'ports'>;
 
 /**
  * One memory search before every reasoning request: a system auxiliary task
  * owned by the turn and indexed by the step it prepares. It selects at most
- * three root memory files from the frozen index and publishes each changed one
+ * three root memory files from the current index and publishes each changed one
  * as a `memory.recalled` event whose parent is the search span. A failed or
  * unparsable search is reported as a `system.warning` and the reasoning request
  * still runs.
@@ -79,11 +79,14 @@ export async function runMemorySearch(
   turn: TurnRuntime,
   step: number,
 ): Promise<void> {
-  const targets = [...canonicalMemoryTargets(session.snapshot.memoryIndex)];
+  // Read the live index so a memory saved earlier in this session is visible
+  // to the next search; fall back to the frozen snapshot when there is no port.
+  const memoryIndex = host.ports.memory?.index() ?? session.snapshot.memoryIndex;
+  const targets = [...canonicalMemoryTargets(memoryIndex)];
   if (targets.length === 0) return;
   const events = host.ledger.read(session.sessionId);
   const view: BuiltView = buildMemorySearch({
-    memoryIndex: session.snapshot.memoryIndex,
+    memoryIndex,
     loadedPaths: memoryPathsInContext(events),
     userText: turn.userText,
     lastReasonText: latestReasonText(events),
@@ -120,7 +123,7 @@ export async function runMemorySearch(
     await appendMemoryWarning(host, session, turn, step, outcome.spanId, 'memory-search must call select_memories exactly once');
     return;
   }
-  const parsed = parseMemoryPicks(selections[0]!.arguments, session.snapshot.memoryIndex);
+  const parsed = parseMemoryPicks(selections[0]!.arguments, memoryIndex);
   if (!parsed.ok) {
     await appendMemoryWarning(host, session, turn, step, outcome.spanId, parsed.reason);
     return;

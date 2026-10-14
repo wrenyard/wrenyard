@@ -79,6 +79,28 @@ is corruption and throws instead of being silently dropped.
 Dependencies point `engine → actions / calls / views / workspace / ledger`, and
 `calls → driver`. `ledger` replay and `views` are pure functions.
 
+## Durable workspace memories
+
+The existing terminal reply call may carry optional durable memory candidates.
+The candidates are saved only after a nonempty `reply.sent` is durable and
+before the `turn.finished` row, and only for a successful final reply that is
+not a standalone question. Progress, failed, interrupted, empty and ask replies
+save nothing. No extra model call is made.
+
+Save only user-stated preferences or corrections, confirmed project decisions
+and verified facts useful in later sessions; never transcripts, task status,
+secrets or guesses. Each `memories/*.md` file has YAML frontmatter with `name`,
+`description` and `metadata.type` (`user`, `feedback`, `project` or
+`reference`), then the fact as Markdown. An upsert matches the frontmatter
+`name`, keeps the existing filename, requires the exact previous body to change
+an existing fact, and skips logically unchanged content. No existing memory is
+deleted or renamed, and unrelated names or filenames are never overwritten.
+`memories/INDEX.md` keeps one link line per memory, with unrelated entries left
+alone. Retrieval reads the current index, so a save is visible to the next
+search. Every real file or index write appends a visible `system.info` /
+`memory.saved` record; a failure appends a `system.warning` / `memory.write`
+without discarding the accepted reply.
+
 ## Actions
 
 The main model declares actions through the single native `wy_action` tool;

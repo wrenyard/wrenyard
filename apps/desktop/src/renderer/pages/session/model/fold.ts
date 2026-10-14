@@ -564,6 +564,18 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
         source: 'read',
         ...(record.parent === undefined ? {} : { actionId: record.parent }),
       });
+    } else if (type === 'system.info' && (event as SystemNoticeEvent).code === 'memory.saved') {
+      // A memory the session wrote to the workspace. It is a write, explicitly
+      // not a `memory.recalled` read.
+      const record = event as SystemNoticeEvent;
+      items.push({
+        key: String(event.seq),
+        kind: 'memory',
+        path: '',
+        title: 'Saved memory',
+        content: record.message,
+        source: 'write',
+      });
     } else if (isFault(event)) {
       const record = event;
       items.push({
@@ -1137,6 +1149,14 @@ function buildCycleNode(
     } else if (eventType(event) === 'reply.sent') {
       const reply = event as ReplySentEvent;
       items.push({ kind: 'reply', seq: reply.seq, at: reply.at, text: reply.text });
+    } else if (eventType(event) === 'system.info' && (event as SystemNoticeEvent).code === 'memory.saved') {
+      // Label the write as a saved memory, never as a `memory.recalled` read.
+      const notice = event as SystemNoticeEvent;
+      items.push({
+        kind: 'entry',
+        seq: notice.seq,
+        entry: { seq: notice.seq, at: notice.at, kind: 'memory', label: 'Saved memory', body: notice.message },
+      });
     }
   }
 

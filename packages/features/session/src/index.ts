@@ -20,6 +20,7 @@
 
 import { Ledger } from './ledger/store.ts';
 import { WorkspaceFileSource } from './workspace.ts';
+import { createWorkspaceMemory } from './memory-write.ts';
 import { createCallRunner, type CallRunner } from './model/request.ts';
 import { createModelTransport } from './transport/index.ts';
 import { FileStore } from './media.ts';
@@ -51,6 +52,7 @@ export type {
   SnapshotProjectInput,
   TurnPhase,
   ViewMessage,
+  WorkspaceMemoryPort,
 } from './ports.ts';
 export type { CompileViewInput } from './auxiliary/dispatch.ts';
 export type { DocSearchViewInput } from './auxiliary/search.ts';
@@ -229,6 +231,7 @@ export function createSession(host: SessionHost): Session {
 
   const ports: EnginePorts = {
     ledger,
+    memory: createWorkspaceMemory(host.workspaceRoot),
     files: (_snapshot, workspaceRoot) => new WorkspaceFileSource({ workspaceRoot }),
     calls,
     fileStore: new FileStore({ stateRoot: host.stateRoot }),
