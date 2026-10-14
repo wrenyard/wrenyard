@@ -103,7 +103,7 @@ export function SessionSidebar({ sessions, selectedId, loading, onSelect, onNew,
                 render={<CollapsibleTrigger />}
               >
                 {group}
-                <ChevronRight className="ml-auto transition-transform group-data-[panel-open]/label:rotate-90" />
+                <ChevronRight className="ml-auto opacity-0 transition-transform group-hover/label:opacity-100 group-focus-visible/label:opacity-100 group-not-data-[panel-open]/label:opacity-100 group-data-[panel-open]/label:rotate-90" />
               </SidebarGroupLabel>
               <CollapsibleContent>
                 <SidebarMenu>
