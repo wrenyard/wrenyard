@@ -62,3 +62,34 @@ export function findProviderQuotaBinding(
 ): ProviderQuotaBinding | undefined {
   return exactBinding(providerId, modelId) ?? defaultBinding(providerId);
 }
+
+/**
+ * The declared pool that owns an observation window id for one provider, or
+ * undefined. Pools are resolved by identity so the same pool reached through
+ * several model bindings resolves once; an ambiguous match (two distinct pools
+ * sharing the window id) or no match returns undefined rather than guessing.
+ */
+export function findProviderQuotaPool(
+  providerId: string,
+  windowId: string,
+): ProviderQuotaPool | undefined {
+  if (typeof providerId !== 'string' || typeof windowId !== 'string') return undefined;
+  let match: ProviderQuotaPool | undefined;
+  for (const entry of PROVIDER_QUOTA_BINDINGS) {
+    if (entry.providerId !== providerId) continue;
+    for (const pool of entry.pools) {
+      if (!pool.windows.some((window) => window.windowId === windowId)) continue;
+      if (match === undefined) {
+        match = pool;
+      } else if (match.quotaPoolId !== pool.quotaPoolId) {
+        return undefined;
+      }
+    }
+  }
+  return match;
+}
+
+/** The central pool label policy: the declared display name, else the pool id. */
+export function providerQuotaPoolLabel(pool: ProviderQuotaPool): string {
+  return pool.displayName ?? pool.quotaPoolId;
+}

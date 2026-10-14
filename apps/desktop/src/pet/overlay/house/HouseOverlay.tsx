@@ -375,6 +375,7 @@ export function adaptQuotaTips(tips: readonly QuotaTipLine[] | undefined): Quota
             name: window.name,
             remainingPct: window.remainingPct,
             expectedRemainingPct: window.expectedRemainingPct,
+            ...(window.poolLabel !== undefined ? { poolLabel: window.poolLabel } : {}),
             ...(window.resetsAt !== undefined ? { resetsAt: window.resetsAt } : {}),
             ...(window.windowMinutes !== undefined ? { windowMinutes: window.windowMinutes } : {}),
           })),

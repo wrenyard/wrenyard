@@ -9,11 +9,11 @@ const CURSOR_DOCS = 'https://cursor.com/docs/models-and-pricing';
 
 const CURSOR_OTHER_POOL = quotaPool('cursor/other', [
   quotaWindow('Other', 'full_cycle', 'provider_parser', CURSOR_PARSER, '2026-09-10'),
-], 0.4);
+], 0.4, '外部');
 
 const CURSOR_POOL = quotaPool('cursor/cursor', [
   quotaWindow('Cursor', 'full_cycle', 'official_docs', CURSOR_DOCS),
-], 0.15);
+], 0.15, '官方');
 
 export const quota = {
   read: async (source: QuotaSource) => normalizeCursorQuota(await source.read()),

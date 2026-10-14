@@ -146,7 +146,7 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
       : windows
           .map((window) => {
             const used = Math.max(0, Math.min(100, 100 - window.remainingPct));
-            return `${shortWindowName(window.name, window.windowMinutes)} ${Math.floor(used)}%`;
+            return `${window.poolLabel ?? shortWindowName(window.name, window.windowMinutes)} ${Math.floor(used)}%`;
           })
           .join(' · ');
   const tone = unavailable ? 'default' : levelTone(poolLevel);

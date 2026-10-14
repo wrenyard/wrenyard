@@ -65,9 +65,18 @@ export function createDesktopTray(
       : quota.providers.length > 0
         ? quota.providers.map((provider) => {
             const icon = createQuotaMenuProviderIcon(provider);
-            return icon.isEmpty()
-              ? { label: provider.displayLine ?? `${provider.id} · ${provider.message ?? provider.status}`, enabled: false }
-              : { label: '\u200B', icon, enabled: false };
+            if (icon.isEmpty()) {
+              return { label: provider.displayLine ?? `${provider.id} · ${provider.message ?? provider.status}`, enabled: false };
+            }
+            // The bitmap atlas is ASCII-only, so a declared pool label (e.g.
+            // 官方/外部) cannot be drawn and would render as dashes. When any
+            // window carries such a label, reuse the provider's synthesized
+            // display line as the native label beside the unchanged bar image.
+            const hasPoolLabel = provider.windows.some((window) => window.poolLabel !== undefined);
+            if (hasPoolLabel && provider.displayLine) {
+              return { label: provider.displayLine, icon, enabled: false };
+            }
+            return { label: '\u200B', icon, enabled: false };
           })
         : [{ label: quota.status === 'available' ? '暂无可展示额度' : '额度暂不可用', enabled: false }];
 
