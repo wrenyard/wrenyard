@@ -24,7 +24,7 @@ import { ActivityStatusProjector, TaskRunLifecycleTracker } from './main/activit
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ScheduleItem, type ScheduleState, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { MiniCardManager } from './mini-cards.js';
 import { Notifier } from './main/notifications/notifier.js';
@@ -227,11 +227,13 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     const quotaVisible = await waitForVisiblePageRoot(shell, 'quota');
     shell.setPage('tasks', false);
     const tasksVisible = await waitForVisiblePageRoot(shell, 'tasks');
+    shell.setPage('schedules', false);
+    const schedulesVisible = await waitForVisiblePageRoot(shell, 'schedules');
     shell.setPage('session', false);
     const sessionVisible = await waitForVisiblePageRoot(shell, 'session');
-    if (!shellOk || !snapshotOk || !quotaOk || !tasksOk || !routingOk || !statsOk || !settingsVisible || !statsVisible || !quotaVisible || !tasksVisible || !sessionVisible) {
+    if (!shellOk || !snapshotOk || !quotaOk || !tasksOk || !routingOk || !statsOk || !settingsVisible || !statsVisible || !quotaVisible || !tasksVisible || !schedulesVisible || !sessionVisible) {
       throw new Error(
-        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, quota=${quotaOk}, tasks=${tasksOk}, routing=${routingOk}, stats=${statsOk}, settings=${settingsVisible}, statsPage=${statsVisible}, quotaPage=${quotaVisible}, tasksPage=${tasksVisible}, session=${sessionVisible})`,
+        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, quota=${quotaOk}, tasks=${tasksOk}, routing=${routingOk}, stats=${statsOk}, settings=${settingsVisible}, statsPage=${statsVisible}, quotaPage=${quotaVisible}, tasksPage=${tasksVisible}, schedulesPage=${schedulesVisible}, session=${sessionVisible})`,
       );
     }
   };
@@ -683,6 +685,21 @@ async function bootstrap(): Promise<void> {
   const execCancel = async (id: string): Promise<{ id: string; status: ExecSnapshotDto['status'] }> => {
     return (await requestForeman('exec.cancel', { id })) as { id: string; status: ExecSnapshotDto['status'] };
   };
+  // Scheduled-prompt transport. Desktop forwards the four schedule.* calls to
+  // the daemon and returns their bounded results unchanged; it never schedules
+  // or fires a prompt itself.
+  const listSchedules = async (): Promise<{ schedules: ScheduleItem[] }> => {
+    return (await requestForeman('schedule.list', {})) as { schedules: ScheduleItem[] };
+  };
+  const updateSchedule = async (id: string, state: ScheduleState): Promise<{ schedule: ScheduleItem }> => {
+    return (await requestForeman('schedule.update', { id, state })) as { schedule: ScheduleItem };
+  };
+  const runSchedule = async (id: string): Promise<{ schedule: ScheduleItem }> => {
+    return (await requestForeman('schedule.run', { id })) as { schedule: ScheduleItem };
+  };
+  const deleteSchedule = async (id: string): Promise<{ deleted: true }> => {
+    return (await requestForeman('schedule.delete', { id })) as { deleted: true };
+  };
 
   // The updater is constructed and preflighted *before* the daemon is started
   // or contacted: a startup blocker (DMG-in-place, translocation) must end
@@ -1130,6 +1147,10 @@ async function bootstrap(): Promise<void> {
     runtimeAliasRemove: (request: RuntimeAliasRemoveRequest) => removeRuntimeAlias(request),
     requestTaskRoutingTest: (params: TaskRoutingTestParams) => requestTaskRoutingTest(params),
     requestRoutingTestTasks: () => requestRoutingTestTasks(),
+    listSchedules: () => listSchedules(),
+    updateSchedule: (id: string, state: ScheduleState) => updateSchedule(id, state),
+    runSchedule: (id: string) => runSchedule(id),
+    deleteSchedule: (id: string) => deleteSchedule(id),
     execStart: (request: ExecStartRequest) => execStart(request),
     execGet: (id: string) => execGet(id),
     execEvents: (request: ExecEventsRequest) => execEvents(request),

@@ -23,6 +23,7 @@ import { runDispatchAction } from '../auxiliary/dispatch.ts';
 import { runDocumentAction } from '../auxiliary/document.ts';
 import { runVcsAction } from '../auxiliary/vcs.ts';
 import { runProjectAction } from '../auxiliary/project.ts';
+import { runScheduleAction } from '../auxiliary/schedule.ts';
 
 export type { ActionStatus, ActionType } from '../ledger/store.ts';
 
@@ -130,6 +131,8 @@ export class ActionRunner {
         return runVcsAction(this.deps, action, ctx);
       case 'project':
         return runProjectAction(this.deps, action, ctx);
+      case 'schedule':
+        return runScheduleAction(this.deps, action, ctx);
     }
   }
 }

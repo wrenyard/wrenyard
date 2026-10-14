@@ -26,7 +26,7 @@ export type { LedgerEvent, SessionSummary, WorkspaceSnapshot, ProjectSnapshot };
 export type TurnStatus = 'running' | 'completed' | 'failed' | 'interrupted';
 export type Phase = 'preparing' | 'reasoning' | 'acting' | 'replying';
 export type ItemStatus = 'running' | 'done' | 'failed' | 'skipped' | 'cancelled' | 'aborted';
-export type ActionKindModel = 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'parse-failed';
+export type ActionKindModel = 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule' | 'parse-failed';
 
 export interface SessionModel {
   snapshot?: { takenAt: string; deviceName: string; projects: ProjectBrief[] };
@@ -161,7 +161,7 @@ export interface TreeEntry {
 export interface ActionNode {
   id: string;
   seq: number;
-  kind: 'search' | 'dispatch' | 'document' | 'vcs' | 'project';
+  kind: 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule';
   title?: string;
   intent: string;
   task?: string;
@@ -218,7 +218,7 @@ export interface TurnNode {
   cycles: CycleNode[];
 }
 
-export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project';
+export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project' | 'schedule';
 
 export interface CallModel {
   id: string;

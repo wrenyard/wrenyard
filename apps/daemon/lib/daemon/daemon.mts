@@ -14,11 +14,13 @@ import { RpcRouter } from '../server/rpc-router.mts'
 import { registerCoreHandlers, readProcessIdentity } from '../server/handlers/core.mts'
 import { createIpcServer, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
+import { registerScheduleHandlers } from '../server/handlers/schedule.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
 import { TaskService } from '../core/task/service.mts'
 import { createSession, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
+import { createScheduler, type Scheduler } from './services/scheduler.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
@@ -110,6 +112,9 @@ interface ForemanDaemonResources {
   ipcServer: IpcServer
   gateway: ModelGateway
   session: Session
+  /** Daemon-owned scheduled-prompt service; stopped first on shutdown so it
+   *  starts no new turns during drain. */
+  scheduler: Scheduler
   rpcRouter: RpcRouter
   /** Daemon-owned task service, retained so a forced shutdown can cancel every
    *  admitted task run through the same service the RPC surface uses. */
@@ -134,6 +139,8 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private readonly onStarted: ((info: ForemanDaemonStartedInfo) => void) | undefined
 
   private resources: ForemanDaemonResources | undefined
+  /** Held outside resources so a shutdown requested during startup still stops it. */
+  private scheduler: Scheduler | undefined
   private readonly lockPath: string
   private lockHeld = false
 
@@ -209,6 +216,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
         requestShutdown: this.requestShutdown,
         isIdle: () => this.isIdle(),
         isShuttingDown: () => this.shutdownRequestedFlag,
+        onScheduler: (scheduler) => { this.scheduler = scheduler },
       })
     } catch (error) {
       if (runtime) {
@@ -234,6 +242,11 @@ export class ForemanDaemon implements RunningForemanDaemon {
    * RPC, signals and the parent message all bind straight to it.
    */
   readonly requestShutdown = (reason: string, force = false): void => {
+    // Stop the scheduler first: no scheduled fire may start a new turn once a
+    // shutdown is requested, and drain only waits for admitted work. This runs
+    // even before resources exist, so a request during startup stops the
+    // scheduler the instance was handed.
+    this.scheduler?.stop()
     this.shutdownForce ||= force
     this.shutdownRequestedFlag = true
     this.resolveShutdownRequested()
@@ -328,6 +341,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
         await teardownDaemonResources({
           httpServer: resources.httpServer,
           session: resources.session,
+          scheduler: resources.scheduler,
           gateway: resources.gateway,
           restoreGatewayEnvironment: resources.restoreGatewayEnvironment,
           ipcServer: resources.ipcServer,
@@ -409,6 +423,8 @@ async function createForemanDaemonResources(
     requestShutdown: (reason: string, force: boolean) => void
     isIdle?: () => Promise<boolean>
     isShuttingDown: () => boolean
+    /** Receives the scheduler as soon as it exists, before the IPC server. */
+    onScheduler?: (scheduler: Scheduler) => void
   },
 ): Promise<ForemanDaemonResources> {
   const operations: OperationHost = {
@@ -812,7 +828,19 @@ async function createForemanDaemonResources(
     // CodeBuddy model is only offered after the daemon read the real install.
     resolveInferenceProvider: id => catalog.provider(id),
   }))
+  // The daemon-owned scheduler persists to the same state root as the session
+  // ledger and fires due schedules into that session through its in-process
+  // `send`. It shares the daemon's single diagnostic sink.
+  const scheduler = createScheduler({
+    statePath: join(sessionStateRoot, 'schedules.json'),
+    session,
+    log: writeDaemonLog,
+  })
+  // Hand the scheduler to the daemon instance before the IPC server exists, so
+  // a shutdown that arrives during startup can still stop it.
+  options.onScheduler?.(scheduler)
   registerSessionHandlers(rpcRouter, { session })
+  registerScheduleHandlers(rpcRouter, { scheduler })
   let ipcServer: IpcServer | undefined
   try {
     ipcServer = await createIpcServer({
@@ -837,6 +865,11 @@ async function createForemanDaemonResources(
   }
   if (!ipcServer) throw new Error('failed to start IPC server')
   const runningIpcServer = ipcServer
+  // Begin scheduled-prompt polling only after the IPC server is listening, so
+  // the scheduler never fires into a session whose clients cannot reach it yet.
+  // A shutdown requested during startup skips start entirely: no interval is
+  // armed and the stopped scheduler stays stopped.
+  if (!options.isShuttingDown()) await scheduler.start()
   // Lifecycle (shutdown latch, drain waits, close) lives on the ForemanDaemon
   // instance; this helper only returns the assembled resources.
   return {
@@ -846,6 +879,7 @@ async function createForemanDaemonResources(
     ipcServer: runningIpcServer,
     gateway,
     session,
+    scheduler,
     rpcRouter,
     taskService,
     taskgraphService,
@@ -863,6 +897,8 @@ interface DaemonResourceTeardownHandles {
   /** Started first, awaited last: its async handle teardown overlaps the rest. */
   httpServer?: Server
   session?: Session
+  /** Stopped before the session so no scheduled fire starts a new turn during teardown. */
+  scheduler?: Scheduler
   gateway?: ModelGateway
   restoreGatewayEnvironment?: () => void
   ipcServer?: IpcServer
@@ -875,8 +911,8 @@ interface DaemonResourceTeardownHandles {
 /**
  * The single resource teardown shared by normal close and both partial-start
  * failure paths. Every supplied handle is attempted exactly once in the one
- * canonical order (HTTP close start, session, gateway + environment restore,
- * IPC, supervisor, exec, await HTTP, DB release). Each failure is logged;
+ * canonical order (HTTP close start, scheduler, session, gateway + environment
+ * restore, IPC, supervisor, exec, await HTTP, DB release). Each failure is logged;
  * every remaining handle still runs, and the first failure is thrown once all handles
  * were attempted so the normal path can surface it.
  */
@@ -897,6 +933,15 @@ async function teardownDaemonResources(handles: DaemonResourceTeardownHandles): 
         recordFailure('HTTP server shutdown failed', error)
       })
     : Promise.resolve()
+  // Stop the scheduler before the session closes: a late fire must not start a
+  // new turn while the ledger and providers are being torn down.
+  if (handles.scheduler) {
+    try {
+      handles.scheduler.stop()
+    } catch (error) {
+      recordFailure('scheduler shutdown failed', error)
+    }
+  }
   // Stop the session backend immediately after: it owns the append-only ledger
   // and the workspace documents it writes, and must not observe a closed
   // gateway or a torn-down supervisor.

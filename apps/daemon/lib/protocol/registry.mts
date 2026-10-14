@@ -31,6 +31,26 @@ export type {
   SessionDeleteParams, SessionDeleteResult,
 } from './methods/session.mts'
 import {
+  scheduleListParamsSchema, scheduleListResultSchema,
+  scheduleCreateParamsSchema, scheduleCreateResultSchema,
+  scheduleUpdateParamsSchema, scheduleUpdateResultSchema,
+  scheduleRunParamsSchema, scheduleRunResultSchema,
+  scheduleDeleteParamsSchema, scheduleDeleteResultSchema,
+  type ScheduleListParams, type ScheduleListResult,
+  type ScheduleCreateParams, type ScheduleCreateResult,
+  type ScheduleUpdateParams, type ScheduleUpdateResult,
+  type ScheduleRunParams, type ScheduleRunResult,
+  type ScheduleDeleteParams, type ScheduleDeleteResult,
+} from './methods/schedule.mts'
+export type {
+  ScheduleState, ScheduleModel, ScheduleRecord,
+  ScheduleListParams, ScheduleListResult,
+  ScheduleCreateParams, ScheduleCreateResult,
+  ScheduleUpdateParams, ScheduleUpdateResult,
+  ScheduleRunParams, ScheduleRunResult,
+  ScheduleDeleteParams, ScheduleDeleteResult,
+} from './methods/schedule.mts'
+import {
   activitySnapshotParamsSchema,
   activitySnapshotResultSchema,
   type ActivitySnapshotParams,
@@ -576,6 +596,11 @@ export interface ForemanMethodParams {
   'session.routes.preview': SessionRoutesPreviewParams
   'session.media.read': SessionMediaReadParams
   'session.delete': SessionDeleteParams
+  'schedule.list': ScheduleListParams
+  'schedule.create': ScheduleCreateParams
+  'schedule.update': ScheduleUpdateParams
+  'schedule.run': ScheduleRunParams
+  'schedule.delete': ScheduleDeleteParams
 }
 
 export interface ForemanMethodResults {
@@ -654,6 +679,11 @@ export interface ForemanMethodResults {
   'session.routes.preview': SessionRoutesPreviewResult
   'session.media.read': SessionMediaReadResult
   'session.delete': SessionDeleteResult
+  'schedule.list': ScheduleListResult
+  'schedule.create': ScheduleCreateResult
+  'schedule.update': ScheduleUpdateResult
+  'schedule.run': ScheduleRunResult
+  'schedule.delete': ScheduleDeleteResult
 }
 
 export type ForemanMethod = keyof ForemanMethodParams & keyof ForemanMethodResults
@@ -969,6 +999,11 @@ export const methodRegistry: {
     params: sessionDeleteParamsSchema,
     result: sessionDeleteResultSchema,
   },
+  'schedule.list': { params: scheduleListParamsSchema, result: scheduleListResultSchema },
+  'schedule.create': { params: scheduleCreateParamsSchema, result: scheduleCreateResultSchema },
+  'schedule.update': { params: scheduleUpdateParamsSchema, result: scheduleUpdateResultSchema },
+  'schedule.run': { params: scheduleRunParamsSchema, result: scheduleRunResultSchema },
+  'schedule.delete': { params: scheduleDeleteParamsSchema, result: scheduleDeleteResultSchema },
 }
 
 export function isForemanMethod(method: string): method is ForemanMethod {

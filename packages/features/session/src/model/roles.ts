@@ -1,7 +1,7 @@
 /** Auxiliary selection tuning data; no IO or selection logic. */
 import type { IntelligenceTier, ModelCapability, ReasoningEffort } from '@wrenyard/models';
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
-export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'reply';
+export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule' | 'reply';
 export interface RoleReasoningRequirement {
   intelligenceMin: IntelligenceTier;
   intelligenceExpected: IntelligenceTier;
@@ -18,6 +18,7 @@ export const AUXILIARY_ROLE_ORDER: readonly AuxiliaryCallRole[] = [
   'document',
   'vcs',
   'project',
+  'schedule',
   'search',
   'memory-search',
   'title',
@@ -40,5 +41,6 @@ export const ROLE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleReasoning
   document: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['low', 'medium'] },
   vcs: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['none', 'low'] },
   project: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['none', 'low'] },
+  schedule: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['none', 'low'] },
   reply: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
 };

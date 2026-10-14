@@ -1,4 +1,4 @@
-import { ChartColumn, Download, ListChecks, MessagesSquare, Network, Settings, WalletCards } from 'lucide-react';
+import { ChartColumn, Download, ListChecks, MessagesSquare, Network, Settings, Timer, WalletCards } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ShellPage } from '@/shell-contract';
 
@@ -16,6 +16,7 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
   { id: 'stats', label: '工房台账', icon: ChartColumn },
   { id: 'quota', label: '模型供应', icon: WalletCards },
   { id: 'tasks', label: '任务', icon: ListChecks },
+  { id: 'schedules', label: '定时任务', icon: Timer },
 ];
 
 /** Settings lives in the rail footer, not the primary content list. */
