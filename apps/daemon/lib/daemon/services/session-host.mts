@@ -39,6 +39,11 @@ const SESSION_CALLABLE_METHODS = new Set([
   'workspace.doc.update',
   'workspace.doc.edit',
   'workspace.doc.delete',
+  'schedule.list',
+  'schedule.create',
+  'schedule.update',
+  'schedule.run',
+  'schedule.delete',
 ])
 
 export interface DaemonSessionHostOptions {

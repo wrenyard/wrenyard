@@ -213,6 +213,10 @@ export const SHELL_CHANNELS = {
   runtimeAliasRemove: 'wrenyard-shell:runtime-alias-remove',
   taskRoutingTest: 'wrenyard-shell:task-routing-test',
   taskRoutingTestTasks: 'wrenyard-shell:task-routing-test-tasks',
+  scheduleList: 'wrenyard-shell:schedule-list',
+  scheduleUpdate: 'wrenyard-shell:schedule-update',
+  scheduleRun: 'wrenyard-shell:schedule-run',
+  scheduleDelete: 'wrenyard-shell:schedule-delete',
   execStart: 'wrenyard-shell:exec-start',
   execGet: 'wrenyard-shell:exec-get',
   execEvents: 'wrenyard-shell:exec-events',
@@ -225,7 +229,7 @@ export const SHELL_CHANNELS = {
   revealWorkspace: 'wrenyard-shell:reveal-workspace',
 } as const;
 
-export type ShellPage = 'session' | 'trace' | 'stats' | 'quota' | 'settings' | 'tasks';
+export type ShellPage = 'session' | 'trace' | 'stats' | 'quota' | 'settings' | 'tasks' | 'schedules';
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */
@@ -1161,6 +1165,33 @@ export type {
   ExecStatus, ExecSnapshotDto, ExecStartRequest, ExecEventEnvelopeDto,
   ExecEventsRequest, ExecEventsResult, ExecCancelResult,
 };
+/**
+ * A scheduled prompt of a session (/loop-style scheduled task). The daemon owns
+ * persistence and firing; Desktop only reads the list and pauses/resumes, runs
+ * now or deletes one through the shell bridge.
+ */
+export type ScheduleState = 'active' | 'paused' | 'finished' | 'failed';
+
+export interface ScheduleItem {
+  /** 8 lowercase hex characters. */
+  id: string;
+  sessionId: string;
+  /** Display title of the owning session; present when the daemon resolves it. */
+  sessionTitle?: string;
+  prompt: string;
+  intervalMinutes: number;
+  recurring: boolean;
+  model: { provider: string; model: string; reasoningEffort: string };
+  state: ScheduleState;
+  createdAt: string;
+  expiresAt?: string;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  lastTurn?: number;
+  lastError?: string;
+  runCount: number;
+}
+
 export interface WrenyardShellApi {
   platform: NodeJS.Platform;
   /**
@@ -1213,6 +1244,10 @@ export interface WrenyardShellApi {
   onViewChanged(listener: (page: ShellPage) => void): () => void;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
+  listSchedules(): Promise<{ schedules: ScheduleItem[] }>;
+  updateSchedule(id: string, state: ScheduleState): Promise<{ schedule: ScheduleItem }>;
+  runSchedule(id: string): Promise<{ schedule: ScheduleItem }>;
+  deleteSchedule(id: string): Promise<{ deleted: true }>;
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
   runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
@@ -1250,7 +1285,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'session' || value === 'trace' || value === 'stats' || value === 'quota' || value === 'settings' || value === 'tasks';
+  return value === 'session' || value === 'trace' || value === 'stats' || value === 'quota' || value === 'settings' || value === 'tasks' || value === 'schedules';
 }
 
 /**
@@ -1301,6 +1336,7 @@ export function acceleratorPage(input: AcceleratorInput, platform: NodeJS.Platfo
   if (input.key === '3') return 'stats';
   if (input.key === '4') return 'quota';
   if (input.key === '5') return 'tasks';
+  if (input.key === '6') return 'schedules';
   return null;
 }
 
@@ -1341,6 +1377,7 @@ export const KNOWN_SHORTCUTS: readonly KnownShortcut[] = [
   { category: '导航', title: '工房台账', mac: '⌘3', other: 'Ctrl+3', scope: '全局', page: 'stats' },
   { category: '导航', title: '模型供应', mac: '⌘4', other: 'Ctrl+4', scope: '全局', page: 'quota' },
   { category: '导航', title: '任务', mac: '⌘5', other: 'Ctrl+5', scope: '全局', page: 'tasks' },
+  { category: '导航', title: '定时任务', mac: '⌘6', other: 'Ctrl+6', scope: '全局', page: 'schedules' },
   { category: '导航', title: '设置', mac: '⌘,', other: 'Ctrl+,', scope: '全局', page: 'settings' },
   { category: '导航', title: '后退', mac: '⌘[', other: 'Alt+←', scope: '全局', command: 'nav.back' },
   { category: '导航', title: '前进', mac: '⌘]', other: 'Alt+→', scope: '全局', command: 'nav.forward' },

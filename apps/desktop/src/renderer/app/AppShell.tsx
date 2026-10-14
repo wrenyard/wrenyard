@@ -15,10 +15,11 @@ import { TracePage } from '@/renderer/pages/trace';
 import { StatsPage } from '@/renderer/pages/stats';
 import { QuotaPage } from '@/renderer/pages/quota';
 import { TasksPage } from '@/renderer/pages/tasks';
+import { SchedulesPage } from '@/renderer/pages/schedules';
 import { SettingsPage } from '@/renderer/pages/settings';
 
 /** Dispatch order for the shell pages; also the first-visit mount order. */
-const PAGE_ORDER: readonly ShellPage[] = ['session', 'trace', 'stats', 'quota', 'tasks', 'settings'];
+const PAGE_ORDER: readonly ShellPage[] = ['session', 'trace', 'stats', 'quota', 'tasks', 'schedules', 'settings'];
 
 const PAGES: Record<ShellPage, ComponentType> = {
   session: SessionPage,
@@ -26,6 +27,7 @@ const PAGES: Record<ShellPage, ComponentType> = {
   stats: StatsPage,
   quota: QuotaPage,
   tasks: TasksPage,
+  schedules: SchedulesPage,
   settings: SettingsPage,
 };
 
