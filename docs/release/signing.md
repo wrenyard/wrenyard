@@ -54,8 +54,10 @@ artifacts:
 - `wrenyard-desktop-<v>-darwin-arm64.zip` — macOS in-app update
 
 The CLI, Node runtime and daemon bundle ship inside the Desktop app resources,
-so there is no suite archive, install engine or bootstrap script. The `updates`
-branch carries `dev.json` and `versions/<v>.json` only. Legacy release/state
+so there is no suite archive, install engine or bootstrap script. Releases are
+normal, non-prerelease GitHub releases. The `updates` branch carries
+`latest.json` (the canonical feed head), a byte-identical `dev.json`
+compatibility alias and the `versions/<v>.json` snapshots. Legacy release/state
 paths and legacy compatibility commands are not part of the public contract and
 are not documented for consumers.
 

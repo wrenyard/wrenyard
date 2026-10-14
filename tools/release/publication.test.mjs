@@ -11,10 +11,10 @@ import {
   publishRelease,
   publishUpdateFeed,
 } from './publish.mjs';
-import { validateDevTag, validateNativeTarget } from './release-context.mjs';
+import { validateNativeTarget, validateReleaseTag } from './release-context.mjs';
 import { canonicalAssetNames } from './update-feed.mjs';
 
-const VERSION = '1.2.3-dev.4';
+const VERSION = '1.2.3';
 const TAG = `v${VERSION}`;
 const REPOSITORY = 'wrenyard/wrenyard';
 
@@ -47,9 +47,10 @@ function createFlatAssets(root) {
 }
 
 test('tag and native platform validation fail closed', () => {
-  assert.equal(validateDevTag(TAG, VERSION), TAG);
-  assert.throws(() => validateDevTag('v1.2.3-dev.3', VERSION), /explicit development tag/);
-  assert.throws(() => validateDevTag('v1.2.3', '1.2.3'), /explicit development tag/);
+  assert.equal(validateReleaseTag(TAG, VERSION), TAG);
+  assert.throws(() => validateReleaseTag('v1.2.3-dev.4', VERSION), /not the plain release tag/);
+  assert.throws(() => validateReleaseTag(VERSION, VERSION), /not the plain release tag/);
+  assert.throws(() => validateReleaseTag('v1.2.3-dev.4', '1.2.3-dev.4'), /not a plain x\.y\.z release version/);
   assert.equal(validateNativeTarget('darwin-arm64', 'darwin', 'arm64'), 'darwin-arm64');
   assert.equal(validateNativeTarget('win32-x64', 'win32', 'x64'), 'win32-x64');
   assert.throws(() => validateNativeTarget('win32-x64', 'darwin', 'arm64'), /got darwin-arm64/);
@@ -95,7 +96,10 @@ test('GitHub publication creates a draft, uploads three assets, then publishes',
       'gh release edit',
     ]);
     assert.ok(calls[1].includes('--draft'));
+    assert.ok(!calls[1].includes('--prerelease'));
     assert.ok(calls.at(-1).includes('--draft=false'));
+    assert.ok(calls.at(-1).includes('--prerelease=false'));
+    assert.ok(!calls.flat().some((arg) => arg === '--prerelease'));
     assert.ok(calls.flat().some((arg) => String(arg).includes('Signing status: macOS ad-hoc; Windows unsigned.')));
     assert.ok(!calls.flat().some((arg) => String(arg).includes('--clobber')));
   });
@@ -116,7 +120,7 @@ test('invalid tags and existing releases stop before any mutation', () => {
         version: VERSION,
         run: (...args) => invalidCalls.push(args),
       }),
-      /explicit development tag/,
+      /not the plain release tag/,
     );
     assert.equal(invalidCalls.length, 0);
 
@@ -173,14 +177,20 @@ test('feed publication pushes the feed documents in one commit', () => {
     assert.equal(flat.filter((call) => call.startsWith('git push')).length, 2);
 
     const staged = calls.filter((call) => call[0] === 'git' && call[1] === 'add')[0].slice(2);
+    assert.ok(staged.includes('latest.json'));
     assert.ok(staged.includes('dev.json'));
     assert.ok(staged.some((file) => file.startsWith('versions/')));
     assert.ok(!staged.includes('install.sh'));
     assert.ok(!staged.includes('install.ps1'));
 
-    const feed = JSON.parse(readFileSync(join(dir, 'updates-publication', 'dev.json'), 'utf8'));
+    const feed = JSON.parse(readFileSync(join(dir, 'updates-publication', 'latest.json'), 'utf8'));
     assert.equal(feed.assets.length, 3);
     assert.ok(feed.assets.every((asset) => /^[0-9a-f]{64}$/.test(asset.sha256)));
+    // The dev.json compatibility alias is byte-identical to the latest.json head.
+    assert.equal(
+      readFileSync(join(dir, 'updates-publication', 'dev.json'), 'utf8'),
+      readFileSync(join(dir, 'updates-publication', 'latest.json'), 'utf8'),
+    );
   });
 });
 

@@ -11,7 +11,7 @@ import { spawn, type SpawnOptions } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  channelDocumentUrl, channelForVersion, compareVersions, parseUpdateFeedJson,
+  compareVersions, latestDocumentUrl, parseUpdateFeedJson,
   resolveUpdateBaseUrl, type PlatformTriplet,
 } from '@wrenyard/protocol/update-feed';
 import type { UpdateInstallReason, UpdateProgress, UpdateSnapshot } from '../shell-contract.js';
@@ -334,7 +334,7 @@ export class DesktopUpdateController {
       const target = this.target;
       if (target === null) throw new Error('unsupported target');
       const response = await this.fetcher(
-        channelDocumentUrl(this.updateBaseUrl, channelForVersion(this.currentVersion)),
+        latestDocumentUrl(this.updateBaseUrl),
         { headers: { 'User-Agent': 'wrenyard-desktop-updater' }, signal: controller.signal },
       );
       if (!response.ok) throw new Error('update feed request failed');

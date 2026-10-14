@@ -1,8 +1,8 @@
 # Contributing to Wrenyard
 
 Thanks for helping improve Wrenyard, a local-first TypeScript monorepo. This
-repository publishes rolling `1.0.0-dev.N` development prereleases. Contributions
-are accepted under the [Code of Conduct](CODE_OF_CONDUCT.md), and
+repository publishes rolling plain patch releases (`1.0.57`, then `1.0.58`, …).
+Contributions are accepted under the [Code of Conduct](CODE_OF_CONDUCT.md), and
 security-relevant reports follow [SECURITY.md](SECURITY.md).
 
 ## Prerequisites
@@ -56,5 +56,7 @@ package or app you changed.
 
 ## Releases
 
-Maintainers cut the development prereleases; contributors do not tag or publish
-releases.
+Maintainers cut plain patch releases (`1.0.57`, then `1.0.58`, …) as normal,
+non-prerelease GitHub releases. Each release publishes the `latest.json` update
+feed on the `updates` branch, with a continuing `dev.json` compatibility alias.
+Contributors do not tag or publish releases.

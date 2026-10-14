@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Single publish entry point. It validates the tag, confirms the three canonical
-// installers, publishes them as a prerelease, commits the update feed to the
+// installers, publishes them as a normal release, commits the update feed to the
 // `updates` branch, then removes this run's transient workflow artifacts. Every
 // external command goes through the injectable `run` seam so the fixture tests
 // never touch a real remote.
@@ -9,7 +9,7 @@ import { copyFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { packageVersion, REPO_ROOT, signingSummary, validateDevTag } from './release-context.mjs';
+import { packageVersion, REPO_ROOT, signingSummary, validateReleaseTag } from './release-context.mjs';
 import { runCommand } from './run-command.mjs';
 import { assertAssetNames, canonicalAssetNames, prepareMetadata } from './update-feed.mjs';
 
@@ -35,11 +35,11 @@ export function confirmCanonicalAssets({ artifactsDir, version = packageVersion(
   return assertAssetNames([...found.keys()].sort(), version).map((name) => ({ name, path: found.get(name) }));
 }
 
-// Create a draft release, upload the three installers, then publish as
-// prerelease. An existing release is refused outright and assets are never
-// clobbered.
+// Create a draft release, upload the three installers, then publish it as a
+// normal (non-prerelease) release. An existing release is refused outright and
+// assets are never clobbered.
 export function publishGitHubRelease({ assets, repository, tag, sha, version = packageVersion(), run = runCommand }) {
-  validateDevTag(tag, version);
+  validateReleaseTag(tag, version);
   if (!repository) throw new Error('repository is required');
   if (!sha) throw new Error('commit sha is required');
   const names = assertAssetNames(assets.map((asset) => basename(asset)), version);
@@ -50,15 +50,15 @@ export function publishGitHubRelease({ assets, repository, tag, sha, version = p
   }
 
   const notes = [
-    `Public Wrenyard ${version} development prerelease.`,
+    `Public Wrenyard ${version} release.`,
     `Built from commit ${sha}.`,
     `Signing status: ${signingSummary()}.`,
   ].join('\n');
-  run('gh', ['release', 'create', tag, '-R', repository, '--title', `Wrenyard ${version}`, '--notes', notes, '--prerelease', '--draft']);
+  run('gh', ['release', 'create', tag, '-R', repository, '--title', `Wrenyard ${version}`, '--notes', notes, '--draft']);
   for (const asset of assets) {
     run('gh', ['release', 'upload', tag, asset, '-R', repository]);
   }
-  run('gh', ['release', 'edit', tag, '-R', repository, '--draft=false', '--prerelease']);
+  run('gh', ['release', 'edit', tag, '-R', repository, '--draft=false', '--prerelease=false']);
   return names;
 }
 
@@ -81,9 +81,10 @@ function assertSafePublicationDir(publicationDir, workspace) {
   return target;
 }
 
-// Push the immutable version document and the channel head in one commit.
-// Retries a rejected push without force, never rewrites a published version and
-// never regresses the channel head.
+// Push the canonical latest.json head, its byte-identical dev.json compatibility
+// alias and the immutable version document in one commit. Retries a rejected
+// push without force, never rewrites a published version and never regresses the
+// feed head.
 export function publishUpdateFeed({
   assetsDir,
   publicationDir,
@@ -93,7 +94,7 @@ export function publishUpdateFeed({
   version = packageVersion(),
   run = runCommand,
 }) {
-  validateDevTag(tag, version);
+  validateReleaseTag(tag, version);
   if (!repository) throw new Error('repository is required');
 
   publicationDir = assertSafePublicationDir(publicationDir, workspace);
@@ -162,7 +163,7 @@ export function publishRelease({
   runId,
   run = runCommand,
 }) {
-  validateDevTag(tag, version);
+  validateReleaseTag(tag, version);
   const confirmed = confirmCanonicalAssets({ artifactsDir, version });
   rmSync(stagingDir, { recursive: true, force: true });
   mkdirSync(stagingDir, { recursive: true });

@@ -7,9 +7,16 @@
  *
  * Feed layout (base URL defaults to {@link DEFAULT_UPDATE_BASE_URL}):
  *
- *   <base>/dev.json             channel head for prereleases
- *   <base>/stable.json          channel head for stable releases
- *   <base>/versions/<v>.json    immutable per-version snapshot
+ *   <base>/latest.json         canonical feed head read by every current client
+ *   <base>/dev.json            byte-identical legacy compatibility alias
+ *   <base>/stable.json         retired channel head, kept only for compatibility
+ *   <base>/versions/<v>.json   immutable per-version snapshot
+ *
+ * `latest.json` is the single canonical head; the version-independent
+ * {@link latestDocumentUrl} returns it. The `dev`/`stable` channel helpers,
+ * {@link channelForVersion} and {@link channelDocumentUrl}, and the parsed
+ * `channel` field remain only as legacy compatibility APIs for installs and
+ * manifests that predate the single-feed scheme.
  *
  * Document schema `wrenyard.update.v1`:
  *
@@ -17,10 +24,8 @@
  *
  * Client parsing rules, shared by Desktop and the release tooling:
  *
- *   - read the channel head when no version is requested, otherwise the
- *     immutable `versions/<v>.json` document;
- *   - derive the channel from the running version: a prerelease reads
- *     `dev.json`, a plain release reads `stable.json`;
+ *   - read the canonical `latest.json` head when no version is requested,
+ *     otherwise the immutable `versions/<v>.json` document;
  *   - validate the schema, that the version is valid SemVer, that both assets
  *     for the host triplet are present, and that every digest is 64 hex.
  *
@@ -41,7 +46,7 @@ export const UPDATE_FEED_SCHEMA_VERSION = 'wrenyard.update.v1';
 const DEFAULT_UPDATE_BASE_URL =
   'https://raw.githubusercontent.com/wrenyard/wrenyard/updates';
 
-/** Release channels. A prerelease version resolves to `dev`, a plain release to `stable`. */
+/** Legacy release channels kept only for compatibility. A prerelease version resolves to `dev`, a plain release to `stable`. */
 type UpdateChannel = 'dev' | 'stable';
 
 /** Host triplets that publish Desktop installer and update assets. */
@@ -83,6 +88,7 @@ interface ParseUpdateFeedOptions {
 interface ParsedUpdateFeed extends PlatformAssets {
   readonly document: UpdateFeedDocument;
   readonly version: string;
+  /** Legacy compatibility field; current clients read the single latest feed. */
   readonly channel: UpdateChannel;
   readonly triplet: PlatformTriplet;
 }
@@ -195,13 +201,18 @@ export function updateAssetName(version: string, triplet: PlatformTriplet): stri
   return triplet === 'win32-x64' ? `${stem}-setup.exe` : `${stem}.zip`;
 }
 
-/** Derives the release channel from a version: prereleases read `dev`. */
+/** URL of the canonical `latest.json` feed head, independent of the running version. */
+export function latestDocumentUrl(baseUrl: string): string {
+  return `${trimTrailingSlash(baseUrl)}/latest.json`;
+}
+
+/** Legacy: derives the release channel from a version (prereleases read `dev`). */
 export function channelForVersion(version: string): UpdateChannel {
   if (!isSemver(version)) throw new Error(`invalid version: ${version}`);
   return version.includes('-') ? 'dev' : 'stable';
 }
 
-/** URL of a channel head document (`dev.json` / `stable.json`). */
+/** Legacy: URL of a channel head document (`dev.json` / `stable.json`). */
 export function channelDocumentUrl(baseUrl: string, channel: UpdateChannel): string {
   return `${trimTrailingSlash(baseUrl)}/${channel}.json`;
 }
