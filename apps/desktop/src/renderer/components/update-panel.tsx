@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
 import { CardDescription } from '@/renderer/components/ui/card';
+import { Progress } from '@/renderer/components/ui/progress';
 import { Separator } from '@/renderer/components/ui/separator';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { QueryError } from '@/renderer/components/query-error';
@@ -40,6 +41,9 @@ export function UpdatePanel() {
   const snapshot = update.data;
   const busy = update.isPending || action.isPending;
   const view = updateView(snapshot, busy);
+  // Structured progress comes from the shared update query; no local copy.
+  const progress = snapshot?.state === 'installing' ? snapshot.progress : undefined;
+  const downloadPercent = progress?.phase === 'downloading' ? progress.percent : undefined;
   const installable = snapshot !== undefined
     && snapshot.installSupported
     && (snapshot.state === 'available' || snapshot.state === 'waiting');
@@ -77,7 +81,13 @@ export function UpdatePanel() {
           : <StatusBadge tone={view.tone} label={view.label} />}
       </div>
 
-      {busy && <Skeleton className="h-1 w-full" />}
+      {progress !== undefined && (
+        <Progress
+          className="w-full"
+          value={downloadPercent ?? null}
+          aria-label={view.description}
+        />
+      )}
 
       <div className="flex items-center justify-between gap-3">
         <span className="text-muted-foreground">{UPDATE_FOOTNOTE}</span>

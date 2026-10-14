@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
+import type { UpdateProgress } from '../shell-contract.js';
 import type { CommandResult, CommandRunner } from './types.js';
 
 /** Minimal `fetch` surface so callers can inject a fake without a network. */
@@ -19,6 +20,14 @@ export type FetchLike = typeof fetch;
 
 /** Default idle timeout between received chunks; there is no total cap. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
+
+/** Minimum spacing between two intermediate byte-progress reports. */
+export const PROGRESS_THROTTLE_MS = 200;
+
+/** Clamps a byte ratio to an integer 0–100 percentage. */
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
 
 /** macOS extraction tool; a same-volume `ditto` keeps the swap atomic. */
 export const MACOS_DITTO = '/usr/bin/ditto';
@@ -77,6 +86,13 @@ export const defaultCommandRunner: CommandRunner = (command, args, options = {})
  * throws {@link DigestMismatchError}; the caller deletes the file. An optional
  * `signal` (and the internal idle timer) aborts the stream and closes the file
  * before the caller removes it.
+ *
+ * An optional `onProgress` reports byte progress and the verifying phase. The
+ * total size comes from Content-Length; when it is absent, invalid or zero the
+ * progress stays indeterminate and no percentage is fabricated. Intermediate
+ * byte reports are throttled to {@link PROGRESS_THROTTLE_MS}; the initial byte
+ * state, the final byte state and the verifying phase are always emitted. No
+ * timer is left behind on success, error or abort.
  */
 export async function downloadFile(options: {
   url: string;
@@ -85,9 +101,11 @@ export async function downloadFile(options: {
   fetchImpl?: FetchLike;
   idleTimeoutMs?: number;
   signal?: AbortSignal;
+  onProgress?: (progress: UpdateProgress) => void;
 }): Promise<string> {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const onProgress = options.onProgress;
 
   const controller = new AbortController();
   const external = options.signal;
@@ -107,6 +125,25 @@ export async function downloadFile(options: {
     }, idleTimeoutMs);
   };
 
+  let receivedBytes = 0;
+  let totalBytes: number | undefined;
+  let lastEmitAt = 0;
+
+  // Throttled byte-progress probe. `force` bypasses the throttle for the
+  // initial and final states; no timer is scheduled, so nothing is left behind.
+  const emitDownload = (force: boolean): void => {
+    if (onProgress === undefined) return;
+    const now = Date.now();
+    if (!force && now - lastEmitAt < PROGRESS_THROTTLE_MS) return;
+    lastEmitAt = now;
+    const progress: UpdateProgress = { phase: 'downloading', receivedBytes };
+    if (totalBytes !== undefined) {
+      progress.totalBytes = totalBytes;
+      progress.percent = clampPercent((receivedBytes / totalBytes) * 100);
+    }
+    onProgress(progress);
+  };
+
   mkdirSync(dirname(options.dest), { recursive: true });
   const hash = createHash('sha256');
   const hashAndTime = new Transform({
@@ -114,6 +151,8 @@ export async function downloadFile(options: {
       if (chunk.length > 0) {
         arm();
         hash.update(chunk);
+        receivedBytes += chunk.length;
+        emitDownload(false);
       }
       callback(null, chunk);
     },
@@ -128,12 +167,25 @@ export async function downloadFile(options: {
     if (response.body === null) {
       throw new Error(`download failed: empty body for ${options.url}`);
     }
+    // Content-Length is authoritative only when the header is strictly all
+    // digits and parses to a positive safe integer; anything else (missing,
+    // empty, fractional, signed, '12junk', overflow) stays unknown so no
+    // percentage is faked.
+    const header = response.headers.get('content-length');
+    const declared = header !== null && /^[0-9]+$/.test(header) ? Number(header) : Number.NaN;
+    totalBytes = Number.isSafeInteger(declared) && declared > 0 ? declared : undefined;
+    // Initial byte state (forced).
+    emitDownload(true);
     await pipeline(
       Readable.fromWeb(response.body as unknown as NodeWebReadableStream),
       hashAndTime,
       createWriteStream(options.dest),
       { signal: controller.signal },
     );
+    // Final byte state (forced).
+    emitDownload(true);
+    // Digest verification is the moment the verifying phase starts.
+    onProgress?.({ phase: 'verifying' });
     const actual = hash.digest('hex');
     if (options.sha256 !== undefined && options.sha256 !== actual) {
       throw new DigestMismatchError(options.sha256, actual);

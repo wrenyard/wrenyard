@@ -91,16 +91,22 @@ export function createDarwinApplier(options: DarwinApplierOptions): PlatformAppl
       return null;
     },
 
-    async prepare(assetPath: string, version: string): Promise<PreparedUpdate> {
+    async prepare(
+      assetPath: string,
+      version: string,
+      onPhase?: (phase: 'extracting' | 'verifying') => void,
+    ): Promise<PreparedUpdate> {
       // Extract beside the running app so the later rename stays on one volume
       // and is atomic.
       const stageDir = join(parentDir, stageRoot);
       rmSync(stageDir, { recursive: true, force: true });
+      onPhase?.('extracting');
       await extractZip(assetPath, stageDir, runner);
       const stagedAppPath = join(stageDir, appName);
       if (!existsSync(stagedAppPath)) {
         throw new Error(`更新包中未找到 ${appName}`);
       }
+      onPhase?.('verifying');
       await verifyCodesign(stagedAppPath, runner, true);
       const found = await readBundleVersion(stagedAppPath, runner);
       if (found !== version) {
