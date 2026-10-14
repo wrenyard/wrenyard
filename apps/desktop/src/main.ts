@@ -1108,9 +1108,18 @@ async function bootstrap(): Promise<void> {
     },
     configureProviderKey: async (providerId: string, key: string) => {
       // The daemon owns the gateway routes and the session backend picks up
-      // changed credentials itself; Desktop only refreshes the quota surface.
+      // changed credentials itself. The credential write alone gates success:
+      // the forced quota refresh runs in the background so the save is
+      // acknowledged immediately, and the returned catalog may stay stale until
+      // that refresh notifies. The key is never logged.
       await providerService.configureApiKey(providerId, key);
-      return quotaController!.getSnapshot(true);
+      void quotaController!.getSnapshot(true).catch((error: unknown) => {
+        console.warn(
+          '[wrenyard-desktop] quota refresh after provider key update failed:',
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+      return quotaController!.snapshot();
     },
     getUpdate: async () => updateController!.snapshot(),
     checkUpdate: () => updateController!.checkForUpdates(),

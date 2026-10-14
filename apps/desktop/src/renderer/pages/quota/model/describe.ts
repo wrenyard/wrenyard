@@ -118,6 +118,10 @@ export const DIALOG_UPDATE_LABEL = '更新';
 export const KEY_REQUIRED_ERROR = '请输入 API Key。';
 export const KEY_SAVE_ERROR = '密钥保存失败，请重试。';
 export const KEY_PAGE_ERROR = '打开密钥页面失败，请重试。';
+export const KEY_SAVING_LABEL = '保存中…';
+export const KEY_SAVE_PENDING = '正在保存密钥，请勿关闭窗口。';
+/** A timed-out save is unconfirmed: the write may still have landed. */
+export const KEY_SAVE_TIMEOUT_ERROR = '保存结果未确认：请求超时，密钥可能已经写入。请先刷新或检查配置，确认后再决定是否重试。';
 
 export function providerDialogTitle(mode: ProviderAuthMode, configured: boolean): string {
   if (mode !== 'api-key') return '提供方配置指引';
