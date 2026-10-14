@@ -1,22 +1,22 @@
 {
   "schema_version": "wrenyard.update.v1",
-  "version": "1.0.58",
-  "published_at": "2026-10-14T11:52:49.000Z",
+  "version": "1.0.59",
+  "published_at": "2026-10-14T14:19:59.000Z",
   "assets": [
     {
-      "name": "wrenyard-desktop-1.0.58-darwin-arm64.dmg",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.58/wrenyard-desktop-1.0.58-darwin-arm64.dmg",
-      "sha256": "39b206a81c40992664b2d4f945ac1122741971b45dbbb81bef57180ab9747848"
+      "name": "wrenyard-desktop-1.0.59-darwin-arm64.dmg",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.59/wrenyard-desktop-1.0.59-darwin-arm64.dmg",
+      "sha256": "f10d22a219ca5b49bea6e0112f353e3f8a489842eefbce98431388c8bcf73905"
     },
     {
-      "name": "wrenyard-desktop-1.0.58-darwin-arm64.zip",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.58/wrenyard-desktop-1.0.58-darwin-arm64.zip",
-      "sha256": "b7e8dc0b02c79b9e2e1151e2987d0bda40489f211bf93f045087cfa7a283deb1"
+      "name": "wrenyard-desktop-1.0.59-darwin-arm64.zip",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.59/wrenyard-desktop-1.0.59-darwin-arm64.zip",
+      "sha256": "93c437e7b35806c02a5003c87e5ed5c30b276ceab26ceab012ceda16930b79e6"
     },
     {
-      "name": "wrenyard-desktop-1.0.58-win32-x64-setup.exe",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.58/wrenyard-desktop-1.0.58-win32-x64-setup.exe",
-      "sha256": "4eb1548423b04d79c0b3c6b6cbaf0836414b52c36d1494226647c042c464e471"
+      "name": "wrenyard-desktop-1.0.59-win32-x64-setup.exe",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.59/wrenyard-desktop-1.0.59-win32-x64-setup.exe",
+      "sha256": "4fde2ad5d02a2c2933f53b157954d722ed1e6c387cf6eebb91bba6a5d0490def"
     }
   ]
 }
