@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import { BookOpen, ChevronDown, ChevronRight, ExternalLink, FilePenLine, Send } from 'lucide-react';
+import { BookOpen, ChevronDown, ChevronRight, ExternalLink, FilePenLine, Send, Timer } from 'lucide-react';
 import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { StatusBadge, type StatusTone } from '@/renderer/components/status-badge';
@@ -18,6 +18,7 @@ function KindIcon({ kind }: { kind: ActionNode['kind'] }) {
   if (kind === 'document') return <FilePenLine className="size-3.5 shrink-0 text-muted-foreground" />;
   if (kind === 'dispatch') return <Send className="size-3.5 shrink-0 text-muted-foreground" />;
   if (kind === 'vcs') return <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />;
+  if (kind === 'schedule') return <Timer className="size-3.5 shrink-0 text-muted-foreground" />;
   return <span className="w-3.5 shrink-0 text-center text-[10px] text-muted-foreground">项</span>;
 }
 

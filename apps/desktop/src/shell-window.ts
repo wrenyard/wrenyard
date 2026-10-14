@@ -31,6 +31,8 @@ import {
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
+  type ScheduleItem,
+  type ScheduleState,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -47,6 +49,7 @@ import { registerNotificationsIpc } from './main/ipc/notifications.js';
 import { registerQuotaProvidersIpc } from './main/ipc/quota-providers.js';
 import { registerSessionExecIpc } from './main/ipc/session-exec.js';
 import { registerTasksStatsIpc } from './main/ipc/tasks-stats.js';
+import { registerSchedulesIpc } from './main/ipc/schedules.js';
 import { registerUpdateDaemonIpc } from './main/ipc/update-daemon.js';
 import { formatShellWindowTitle } from './shell-window-title.js';
 import { TITLE_BAR_HEIGHT, platformWindowChrome } from './window-chrome.js';
@@ -137,6 +140,10 @@ export interface ShellWindowOptions {
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
+  listSchedules(): Promise<{ schedules: ScheduleItem[] }>;
+  updateSchedule(id: string, state: ScheduleState): Promise<{ schedule: ScheduleItem }>;
+  runSchedule(id: string): Promise<{ schedule: ScheduleItem }>;
+  deleteSchedule(id: string): Promise<{ deleted: true }>;
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
@@ -364,6 +371,7 @@ export class ShellWindowController {
       registerQuotaProvidersIpc(ipcMain, deps),
       registerSessionExecIpc(ipcMain, deps),
       registerTasksStatsIpc(ipcMain, deps),
+      registerSchedulesIpc(ipcMain, deps),
       registerUpdateDaemonIpc(ipcMain, deps),
     ];
   }

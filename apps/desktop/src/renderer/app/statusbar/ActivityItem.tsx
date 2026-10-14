@@ -19,6 +19,7 @@ const ACTION_LABEL: Record<ActionKindModel, string> = {
   search: '检索资料',
   vcs: '工作区版本',
   project: '项目管理',
+  schedule: '定时任务',
   'parse-failed': '解析行动',
 };
 
