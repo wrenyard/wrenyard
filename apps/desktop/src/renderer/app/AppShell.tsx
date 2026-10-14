@@ -11,6 +11,7 @@ import { StatusBar } from '@/renderer/app/statusbar/StatusBar';
 import { TitleBarPageProvider } from '@/renderer/lib/titlebar';
 import { UpdateDialog } from '@/renderer/app/dialogs/UpdateDialog';
 import { SessionPage } from '@/renderer/pages/session';
+import { WorkspaceGate } from '@/renderer/app/WorkspaceGate';
 import { TracePage } from '@/renderer/pages/trace';
 import { StatsPage } from '@/renderer/pages/stats';
 import { QuotaPage } from '@/renderer/pages/quota';
@@ -21,8 +22,17 @@ import { SettingsPage } from '@/renderer/pages/settings';
 /** Dispatch order for the shell pages; also the first-visit mount order. */
 const PAGE_ORDER: readonly ShellPage[] = ['session', 'trace', 'stats', 'quota', 'tasks', 'schedules', 'settings'];
 
+/** The session page is the only page gated on a usable workspace. */
+function WorkspaceGatedSessionPage() {
+  return (
+    <WorkspaceGate>
+      <SessionPage />
+    </WorkspaceGate>
+  );
+}
+
 const PAGES: Record<ShellPage, ComponentType> = {
-  session: SessionPage,
+  session: WorkspaceGatedSessionPage,
   trace: TracePage,
   stats: StatsPage,
   quota: QuotaPage,

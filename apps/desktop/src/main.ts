@@ -1020,7 +1020,7 @@ async function bootstrap(): Promise<void> {
     wrenyardVersion: version,
     buildTime,
     readHealth: () => canConnectDaemon() ? readWrenyardHealth(ipcPath) : Promise.resolve({ connected: false }),
-    readGatewayModels: () => { requireDaemonRunning(); return readGatewayConnection(ipcPath).then((connection) => connection.models); },
+    readGatewayModels: async () => { requireDaemonRunning(); return readGatewayConnection(ipcPath).then((connection) => connection.models); },
     readPet: async () => petController!.snapshot(),
     readUpdate: () => updateController!.snapshot(),
   });
