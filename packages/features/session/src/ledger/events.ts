@@ -46,6 +46,7 @@ export type LedgerEventType =
   | 'workspace.changed'
   | 'reply.sent'
   | 'session.titled'
+  | 'session.metadata'
   | 'system.info'
   | 'system.warning'
   | 'system.error';
@@ -472,6 +473,19 @@ export interface SessionTitledEvent extends LedgerEventBase {
 }
 
 /**
+ * Session list metadata set by explicit user actions: whether the session is
+ * archived and whether it is pinned. Never part of the model context. Both
+ * fields are optional so an event that only changes one flag leaves the other
+ * untouched, and old ledger lines still parse unchanged.
+ */
+export interface SessionMetadataEvent extends LedgerEventBase {
+  type: 'session.metadata';
+  parent?: string;
+  archived?: boolean;
+  pinned?: boolean;
+}
+
+/**
  * An out-of-band notice the model should read: a system fault that no content
  * event already reports (`system.error`), a degraded but continuing condition
  * (`system.warning`), or a state change (`system.info`). A failed action that
@@ -512,6 +526,7 @@ export type LedgerEvent =
   | WorkspaceChangedEvent
   | ReplySentEvent
   | SessionTitledEvent
+  | SessionMetadataEvent
   | SystemNoticeEvent;
 
 /** An event body without the `seq` / `at` the ledger assigns on append. */

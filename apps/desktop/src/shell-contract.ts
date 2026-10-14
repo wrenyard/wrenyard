@@ -336,14 +336,35 @@ export interface GeneralPreferenceView extends GeneralPreferences {
   menuBarQuota: boolean;
 }
 
+/** How the sidebar conversation list groups sessions. */
+export type SessionGroupBy = 'date' | 'status' | 'none';
+
+/** How the sidebar conversation list orders sessions. */
+export type SessionSortBy = 'updated' | 'created' | 'title';
+
+/** Which sessions the sidebar conversation list shows. */
+export type SessionStatusFilter = 'active' | 'archived' | 'all';
+
+/** Sidebar grouping default: the date buckets the list has always used. */
+export const SESSION_GROUP_BY_DEFAULT: SessionGroupBy = 'date';
+/** Sidebar sort default: newest last-updated first, as before. */
+export const SESSION_SORT_BY_DEFAULT: SessionSortBy = 'updated';
+/** Sidebar status-filter default: active sessions only, as before. */
+export const SESSION_STATUS_FILTER_DEFAULT: SessionStatusFilter = 'active';
+
 /**
  * Renderer-visible session preferences. The retired model-default and
  * last-sent memory keys are no longer part of the product surface: a new
  * session inherits the model and effort from the client-local first-request
- * record, so only the message-submit key remains here.
+ * record, so only the message-submit key remains here. The sidebar list
+ * controls (grouping, sorting, status filter) join it; an absent field
+ * resolves to its default above.
  */
 export interface SessionPreferences {
   sendKey: SessionSendKey;
+  groupBy?: SessionGroupBy;
+  sortBy?: SessionSortBy;
+  statusFilter?: SessionStatusFilter;
 }
 
 export interface StatusBarPreferences {
@@ -419,6 +440,18 @@ export const PREFERENCES = {
     validate: (value) => typeof value === 'number' && APPEARANCE_ZOOM_OPTIONS.some((option) => option.value === value),
   },
   'session.sendKey': { path: ['session', 'sendKey'], validate: (value) => value === 'enter' || value === 'mod-enter' },
+  'session.groupBy': {
+    path: ['session', 'groupBy'],
+    validate: (value) => value === 'date' || value === 'status' || value === 'none',
+  },
+  'session.sortBy': {
+    path: ['session', 'sortBy'],
+    validate: (value) => value === 'updated' || value === 'created' || value === 'title',
+  },
+  'session.statusFilter': {
+    path: ['session', 'statusFilter'],
+    validate: (value) => value === 'active' || value === 'archived' || value === 'all',
+  },
   'notifications.enabled': { path: ['notifications', 'enabled'], validate: (value) => typeof value === 'boolean' },
   'statusBar.hidden': {
     path: ['statusBar', 'hidden'],

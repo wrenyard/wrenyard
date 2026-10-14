@@ -46,6 +46,15 @@ export interface SessionSummary {
    * overwritten by a generated one.
    */
   manualTitle?: boolean;
+  /**
+   * True when the latest `session.metadata` event marked the session archived.
+   * Derived exactly like `manualTitle`: updated on append and rebuilt from the
+   * timelines. Absent means not archived; an event that omits the field leaves
+   * it unchanged.
+   */
+  archived?: boolean;
+  /** True when the latest `session.metadata` event pinned the session. */
+  pinned?: boolean;
   createdAt: string;
   updatedAt: string;
   /**
@@ -226,11 +235,21 @@ export class Ledger {
       title = titled.title;
       manualTitle = titled.manual;
     }
+    // Only the fields a `session.metadata` event carries change; the other flag
+    // keeps its prior value and title/manualTitle are never touched.
+    let archived = previous?.archived === true;
+    let pinned = previous?.pinned === true;
+    if (event.type === 'session.metadata') {
+      if (event.archived !== undefined) archived = event.archived;
+      if (event.pinned !== undefined) pinned = event.pinned;
+    }
     const lastTurn = lastTurnAfter(previous?.lastTurn, event, events, events.length);
     this.summaries.set(sessionId, {
       sessionId,
       title,
       ...(manualTitle ? { manualTitle } : {}),
+      ...(archived ? { archived } : {}),
+      ...(pinned ? { pinned } : {}),
       createdAt,
       updatedAt: event.at,
       ...(lastTurn === undefined ? {} : { lastTurn }),
@@ -487,6 +506,8 @@ function summarize(sessionId: string, events: readonly LedgerEvent[]): SessionSu
   let updatedAt: string | undefined;
   let title = DEFAULT_TITLE;
   let manualTitle = false;
+  let archived = false;
+  let pinned = false;
   let lastTurn: SessionSummary['lastTurn'];
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index]!;
@@ -495,6 +516,11 @@ function summarize(sessionId: string, events: readonly LedgerEvent[]): SessionSu
     if (titled !== undefined && (!manualTitle || titled.manual)) {
       title = titled.title;
       manualTitle = titled.manual;
+    }
+    // The latest metadata event wins; a field it omits keeps the prior value.
+    if (event.type === 'session.metadata') {
+      if (event.archived !== undefined) archived = event.archived;
+      if (event.pinned !== undefined) pinned = event.pinned;
     }
     // The recompute path passes the prefix ending at this event, exactly like
     // the append path, so a later append cannot change an earlier turn.
@@ -506,6 +532,8 @@ function summarize(sessionId: string, events: readonly LedgerEvent[]): SessionSu
     sessionId,
     title,
     ...(manualTitle ? { manualTitle } : {}),
+    ...(archived ? { archived } : {}),
+    ...(pinned ? { pinned } : {}),
     createdAt: created,
     updatedAt: updatedAt ?? created,
     ...(lastTurn === undefined ? {} : { lastTurn }),
@@ -528,6 +556,8 @@ function readSummary(value: unknown): SessionSummary | undefined {
     sessionId,
     title,
     ...(record.manualTitle === true ? { manualTitle: true } : {}),
+    ...(record.archived === true ? { archived: true } : {}),
+    ...(record.pinned === true ? { pinned: true } : {}),
     createdAt,
     updatedAt,
   };

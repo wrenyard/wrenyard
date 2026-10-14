@@ -10,6 +10,7 @@ import {
   sessionMediaReadParamsSchema, sessionMediaReadResultSchema,
   sessionDeleteParamsSchema, sessionDeleteResultSchema,
   sessionRenameParamsSchema, sessionRenameResultSchema,
+  sessionUpdateMetadataParamsSchema, sessionUpdateMetadataResultSchema,
   type SessionListParams, type SessionListResult,
   type SessionCreateParams, type SessionCreateResult,
   type SessionSendParams, type SessionSendResult,
@@ -20,6 +21,7 @@ import {
   type SessionMediaReadParams, type SessionMediaReadResult,
   type SessionDeleteParams, type SessionDeleteResult,
   type SessionRenameParams, type SessionRenameResult,
+  type SessionUpdateMetadataParams, type SessionUpdateMetadataResult,
 } from './methods/session.mts'
 export type {
   SessionListParams, SessionListResult,
@@ -32,6 +34,7 @@ export type {
   SessionMediaReadParams, SessionMediaReadResult,
   SessionDeleteParams, SessionDeleteResult,
   SessionRenameParams, SessionRenameResult,
+  SessionUpdateMetadataParams, SessionUpdateMetadataResult,
 } from './methods/session.mts'
 import {
   scheduleListParamsSchema, scheduleListResultSchema,
@@ -600,6 +603,7 @@ export interface ForemanMethodParams {
   'session.media.read': SessionMediaReadParams
   'session.delete': SessionDeleteParams
   'session.rename': SessionRenameParams
+  'session.updateMetadata': SessionUpdateMetadataParams
   'schedule.list': ScheduleListParams
   'schedule.create': ScheduleCreateParams
   'schedule.update': ScheduleUpdateParams
@@ -684,6 +688,7 @@ export interface ForemanMethodResults {
   'session.media.read': SessionMediaReadResult
   'session.delete': SessionDeleteResult
   'session.rename': SessionRenameResult
+  'session.updateMetadata': SessionUpdateMetadataResult
   'schedule.list': ScheduleListResult
   'schedule.create': ScheduleCreateResult
   'schedule.update': ScheduleUpdateResult
@@ -1007,6 +1012,10 @@ export const methodRegistry: {
   'session.rename': {
     params: sessionRenameParamsSchema,
     result: sessionRenameResultSchema,
+  },
+  'session.updateMetadata': {
+    params: sessionUpdateMetadataParamsSchema,
+    result: sessionUpdateMetadataResultSchema,
   },
   'schedule.list': { params: scheduleListParamsSchema, result: scheduleListResultSchema },
   'schedule.create': { params: scheduleCreateParamsSchema, result: scheduleCreateResultSchema },

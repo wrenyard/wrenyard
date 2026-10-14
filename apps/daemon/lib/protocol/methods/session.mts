@@ -44,6 +44,9 @@ export type SessionDeleteResult = Record<string, never>
 /** Rename one session with an explicit user title. */
 export interface SessionRenameParams { sessionId: string; title: string }
 export type SessionRenameResult = Record<string, never>
+/** Change one session's archived / pinned list flags. */
+export interface SessionUpdateMetadataParams { sessionId: string; archived?: boolean; pinned?: boolean }
+export type SessionUpdateMetadataResult = Record<string, never>
 export interface SessionEventsParams {
   sessionId: string
   afterSeq: number
@@ -134,6 +137,12 @@ export const sessionRenameParamsSchema = {
   properties: { sessionId: idSchema, title: { type: 'string', minLength: 1 } },
 } as const satisfies JsonSchema
 export const sessionRenameResultSchema = emptySchema
+export const sessionUpdateMetadataParamsSchema = {
+  type: 'object', required: ['sessionId'], additionalProperties: false,
+  anyOf: [{ required: ['archived'] }, { required: ['pinned'] }],
+  properties: { sessionId: idSchema, archived: { type: 'boolean' }, pinned: { type: 'boolean' } },
+} as const satisfies JsonSchema
+export const sessionUpdateMetadataResultSchema = emptySchema
 export const sessionEventsParamsSchema = {
   type: 'object', required: ['sessionId', 'afterSeq'], additionalProperties: false,
   properties: {

@@ -61,6 +61,8 @@ export const SESSION_CHANNELS = {
   delete: 'session:delete',
   /** Renderer → main: `{ sessionId, title }`, forwarded to `session.rename`. */
   rename: 'session:rename',
+  /** Renderer → main: `{ sessionId, archived?, pinned? }`, forwarded to `session.updateMetadata`. */
+  updateMetadata: 'session:update-metadata',
   /** Renderer → main: open the native multi-file picker, returning drafts. */
   mediaPick: 'session:media-pick',
   /** Renderer → main: describe dropped filesystem paths as drafts. */
@@ -188,6 +190,11 @@ export interface SessionBridge {
   deleteSession(sessionId: string): Promise<void>;
   /** Rename one session with a manual title; the new title is persisted. */
   renameSession(sessionId: string, title: string): Promise<void>;
+  /**
+   * Change one session's archived / pinned list flags; an omitted field keeps
+   * its prior value.
+   */
+  updateMetadata(sessionId: string, patch: { archived?: boolean; pinned?: boolean }): Promise<void>;
   /** Open the native multi-file picker; returns the selected files as drafts. */
   selectAttachments(): Promise<DraftAttachment[]>;
   /** Describe already-known filesystem paths (drag-and-drop) as drafts. */
@@ -283,6 +290,9 @@ const bridge: SessionBridge = {
   },
   renameSession(sessionId: string, title: string): Promise<void> {
     return ipcRenderer.invoke(SESSION_CHANNELS.rename, { sessionId, title }) as Promise<void>;
+  },
+  updateMetadata(sessionId: string, patch: { archived?: boolean; pinned?: boolean }): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.updateMetadata, { sessionId, ...patch }) as Promise<void>;
   },
   selectAttachments(): Promise<DraftAttachment[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.mediaPick) as Promise<DraftAttachment[]>;

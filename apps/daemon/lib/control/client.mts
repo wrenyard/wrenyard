@@ -102,6 +102,8 @@ import type {
   SessionDeleteResult,
   SessionRenameParams,
   SessionRenameResult,
+  SessionUpdateMetadataParams,
+  SessionUpdateMetadataResult,
   WorkspaceVcsStatusParams,
   WorkspaceVcsStatusResult,
   WorkspaceVcsDiffParams,
@@ -318,6 +320,9 @@ export class ForemanClient {
     },
     rename: (params: SessionRenameParams): Promise<SessionRenameResult> => {
       return this.rpc.request<SessionRenameResult>('session.rename', params)
+    },
+    updateMetadata: (params: SessionUpdateMetadataParams): Promise<SessionUpdateMetadataResult> => {
+      return this.rpc.request<SessionUpdateMetadataResult>('session.updateMetadata', params)
     },
     context: {
       inspect: (params: SessionContextInspectParams): Promise<SessionContextInspectResult> => {

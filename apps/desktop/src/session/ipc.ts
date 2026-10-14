@@ -25,6 +25,7 @@ export const SESSION_CHANNELS = {
   mediaRead: 'session:media-read', mediaReveal: 'session:media-reveal',
   delete: 'session:delete', mediaPick: 'session:media-pick',
   rename: 'session:rename',
+  updateMetadata: 'session:update-metadata',
   mediaDescribe: 'session:media-describe', mediaStageClipboard: 'session:media-stage-clipboard',
   mediaDiscard: 'session:media-discard',
   seen: 'session:seen', seenState: 'session:seen-state',
@@ -418,6 +419,23 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     const title = readString(record.title);
     if (sessionId === undefined || title === undefined) throw new Error('会话标题无效');
     await request('session.rename', { sessionId, title });
+  });
+  handle(SESSION_CHANNELS.updateMetadata, async (_event, value) => {
+    if (typeof value !== 'object' || value === null) throw new Error('会话元数据无效');
+    const record = value as Record<string, unknown>;
+    const sessionId = readString(record.sessionId);
+    const archived = record.archived;
+    const pinned = record.pinned;
+    if (sessionId === undefined || (archived !== undefined && typeof archived !== 'boolean')
+      || (pinned !== undefined && typeof pinned !== 'boolean')) {
+      throw new Error('会话元数据无效');
+    }
+    if (archived === undefined && pinned === undefined) throw new Error('会话元数据无效');
+    await request('session.updateMetadata', {
+      sessionId,
+      ...(archived === undefined ? {} : { archived }),
+      ...(pinned === undefined ? {} : { pinned }),
+    });
   });
   handle(SESSION_CHANNELS.mediaPick, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] });

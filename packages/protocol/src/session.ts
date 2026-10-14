@@ -211,6 +211,19 @@ export interface SessionRenameParams {
 /** Result of `session.rename`: empty on success. */
 export type SessionRenameResult = Record<string, never>
 
+/**
+ * Params of `session.updateMetadata`: one session and the list flags to change.
+ * A field that is omitted keeps its prior value; at least one must be present.
+ */
+export interface SessionUpdateMetadataParams {
+  sessionId: string
+  archived?: boolean
+  pinned?: boolean
+}
+
+/** Result of `session.updateMetadata`: empty on success. */
+export type SessionUpdateMetadataResult = Record<string, never>
+
 /** The gateway protocol a selectable main reasoning model runs through. */
 export type SessionInferenceMode = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
 
@@ -245,4 +258,5 @@ export interface SessionMethods {
   'session.media.read': RpcMethod<SessionMediaReadParams, SessionMediaReadResult>
   'session.delete': RpcMethod<SessionDeleteParams, SessionDeleteResult>
   'session.rename': RpcMethod<SessionRenameParams, SessionRenameResult>
+  'session.updateMetadata': RpcMethod<SessionUpdateMetadataParams, SessionUpdateMetadataResult>
 }

@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { initialSessionPageState, sessionReducer, type SessionPageState } from './session-reducer.js';
 import type { AttachmentInput, DraftAttachment, ModelEntry, SessionApi, SessionBridgeTaskBrief } from '../model/types.js';
 import type { ReasoningEffort } from './reasoning-effort.js';
 import { clearDraft, clearDraftAttachments } from './drafts.js';
 import { mini, miniSession } from '@/renderer/lib/mini';
+import { preferencesQuery } from '@/renderer/lib/queries';
+import { SESSION_STATUS_FILTER_DEFAULT, type SessionStatusFilter } from '@/shell-contract';
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 let localSeq = 0;
+
+/** Whether a session survives under the persisted Status filter. */
+function matchesStatusFilter(session: { archived?: boolean }, filter: SessionStatusFilter): boolean {
+  if (filter === 'archived') return session.archived === true;
+  if (filter === 'all') return true;
+  return session.archived !== true;
+}
 
 /**
  * Strips renderer-only fields (`id`, `bytes`, `preview`, `staged`) before a
@@ -45,6 +55,8 @@ export function useSessionController(api: SessionApi) {
   const selectionVersion = useRef(0);
   const listVersion = useRef(0);
   const creation = useRef<Promise<string> | null>(null);
+  const preferences = useQuery(preferencesQuery);
+  const statusFilter = preferences.data?.session.statusFilter ?? SESSION_STATUS_FILTER_DEFAULT;
 
   const reportError = useCallback((error: unknown, sessionId?: string, loading?: 'list' | 'ledger') => {
     if (alive.current) dispatch({ type: 'error', message: messageOf(error), sessionId, loading });
@@ -176,11 +188,13 @@ export function useSessionController(api: SessionApi) {
     const sessions = await refreshList();
     if (!alive.current) return;
     if (selected.current === sessionId) {
-      const next = sessions.find((session) => session.sessionId !== sessionId);
+      const next = sessions.find(
+        (session) => session.sessionId !== sessionId && matchesStatusFilter(session, statusFilter),
+      );
       if (next) await selectSession(next.sessionId);
       else newDraft();
     }
-  }, [api, refreshList, reportError, selectSession, newDraft]);
+  }, [api, refreshList, reportError, selectSession, newDraft, statusFilter]);
 
   const setTasks = useCallback((tasks: Record<string, SessionBridgeTaskBrief>): void => {
     dispatch({ type: 'tasks', tasks });
@@ -217,13 +231,28 @@ export function useSessionController(api: SessionApi) {
     }).catch((error: unknown) => { if (!cancelled) reportError(error); });
     const timer = setInterval(() => { void refreshList(); }, 3000);
     void refreshList().then(async (sessions) => {
-      if (cancelled || selected.current || creation.current) return;
+      if (cancelled || creation.current) return;
       // A card opens on its query session, or stays an empty draft when the
-      // query carries none; only the shell auto-selects the newest session.
+      // query carries none; the mini window never auto-opens an unrelated one.
       if (mini) {
-        if (miniSession !== '') await selectSession(miniSession);
+        if (!selected.current && miniSession !== '') await selectSession(miniSession);
         return;
       }
+      // A selected session that still exists is left untouched, so a status
+      // filter or archive change alone never reselects. Only a selected id that
+      // vanished (deleted from another page or shell) recovers here: drop its
+      // stale drafts and open the first session still visible under the
+      // persisted Status filter, or an empty draft when none match.
+      if (selected.current) {
+        if (sessions.some((session) => session.sessionId === selected.current)) return;
+        clearDraft(selected.current);
+        clearDraftAttachments(selected.current);
+        const next = sessions.find((session) => matchesStatusFilter(session, statusFilter));
+        if (next) await selectSession(next.sessionId);
+        else newDraft();
+        return;
+      }
+      // No selection: the shell auto-selects the newest session.
       if (sessions[0]) await selectSession(sessions[0].sessionId);
     }).catch((error: unknown) => { if (!cancelled) reportError(error); });
     return () => {

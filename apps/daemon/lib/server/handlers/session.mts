@@ -139,4 +139,12 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
       await session.renameSession(params.sessionId, params.title)
       return {}
     }))
+  router.register('session.updateMetadata', (params, _message, context) =>
+    call(context, 'session.updateMetadata', async () => {
+      await session.updateMetadata(params.sessionId, {
+        ...(params.archived === undefined ? {} : { archived: params.archived }),
+        ...(params.pinned === undefined ? {} : { pinned: params.pinned }),
+      })
+      return {}
+    }))
 }

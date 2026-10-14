@@ -15,6 +15,9 @@ import {
 } from '../../shell-contract.js';
 import {
   APPEARANCE_ZOOM_OPTIONS,
+  SESSION_GROUP_BY_DEFAULT,
+  SESSION_SORT_BY_DEFAULT,
+  SESSION_STATUS_FILTER_DEFAULT,
   isShellPage,
   validatePreferenceValue,
   writePreferenceValue,
@@ -148,7 +151,12 @@ export function defaultGeneralPreferences(): GeneralPreferences {
 }
 
 export function defaultSessionPreferences(): SessionPreferences {
-  return { sendKey: 'enter' };
+  return {
+    sendKey: 'enter',
+    groupBy: SESSION_GROUP_BY_DEFAULT,
+    sortBy: SESSION_SORT_BY_DEFAULT,
+    statusFilter: SESSION_STATUS_FILTER_DEFAULT,
+  };
 }
 
 export function defaultNotificationPreferences(): NotificationPreferences {
@@ -366,12 +374,20 @@ function normalizeGeneralPreferences(value: unknown, fallback: GeneralPreference
 
 function normalizeSessionPreferences(value: unknown, fallback: SessionPreferences): SessionPreferences {
   const obj = isRecord(value) ? value : {};
-  // Only the submit key is a live preference. The retired model-default and
-  // last-sent keys are neither read nor rewritten as defaults: unknown keys are
-  // left untouched in the raw partition so an unrelated settings write preserves
-  // them on disk.
+  // Only the submit key and the sidebar list controls are live preferences. The
+  // retired model-default and last-sent keys are neither read nor rewritten as
+  // defaults: unknown keys are left untouched in the raw partition so an
+  // unrelated settings write preserves them on disk.
+  const groupBy = obj.groupBy;
+  const sortBy = obj.sortBy;
+  const statusFilter = obj.statusFilter;
   return {
     sendKey: obj.sendKey === 'mod-enter' ? 'mod-enter' : fallback.sendKey,
+    groupBy: groupBy === 'date' || groupBy === 'status' || groupBy === 'none' ? groupBy : fallback.groupBy,
+    sortBy: sortBy === 'updated' || sortBy === 'created' || sortBy === 'title' ? sortBy : fallback.sortBy,
+    statusFilter: statusFilter === 'active' || statusFilter === 'archived' || statusFilter === 'all'
+      ? statusFilter
+      : fallback.statusFilter,
   };
 }
 

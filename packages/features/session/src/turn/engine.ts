@@ -362,6 +362,28 @@ class Engine implements Session, SessionCallHost {
     });
   }
 
+  /**
+   * Update one session's list metadata (archived / pinned). Appends one
+   * `session.metadata` event carrying only the provided fields through the
+   * normal ledger append path, so `index.json`, `listSessions` and every
+   * subscriber see the change. A patch that provides neither field and an
+   * unknown session are rejected before anything is persisted.
+   */
+  async updateMetadata(sessionId: string, patch: { archived?: boolean; pinned?: boolean }): Promise<void> {
+    if (patch.archived === undefined && patch.pinned === undefined) {
+      throw new Error('Session metadata patch must set archived or pinned');
+    }
+    this.assertOpen();
+    await this.ready;
+    // Resolving the session rejects an unknown id before any append.
+    await this.ensureSession(sessionId);
+    await this.ports.ledger.append(sessionId, {
+      type: 'session.metadata',
+      ...(patch.archived === undefined ? {} : { archived: patch.archived }),
+      ...(patch.pinned === undefined ? {} : { pinned: patch.pinned }),
+    });
+  }
+
   private async interruptTurn(
     sessionId: string,
     turn: number,

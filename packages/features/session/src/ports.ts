@@ -139,6 +139,13 @@ export interface Session {
    * both are refused before anything is persisted.
    */
   renameSession(sessionId: string, title: string): Promise<void>;
+  /**
+   * Update one session's list metadata (archived / pinned). Appends one
+   * `session.metadata` event carrying only the provided fields, so an absent
+   * field keeps its prior value. Rejects an unknown session and a patch that
+   * provides neither field.
+   */
+  updateMetadata(sessionId: string, patch: { archived?: boolean; pinned?: boolean }): Promise<void>;
   /** Admitted turns whose terminal `turn.finished` is not yet durable. */
   activeTurnCount(): number;
   /** True while any admitted turn has not reached its durable terminal append. */

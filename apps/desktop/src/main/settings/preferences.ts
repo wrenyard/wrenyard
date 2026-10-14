@@ -1,5 +1,8 @@
 import {
   PREFERENCES,
+  SESSION_GROUP_BY_DEFAULT,
+  SESSION_SORT_BY_DEFAULT,
+  SESSION_STATUS_FILTER_DEFAULT,
   isPreferenceId,
   validatePreferenceValue,
   writePreferenceValue,
@@ -29,7 +32,16 @@ export function preferencesFromDocument(
       menuBarQuota: settings.tray.showQuota ?? DEFAULT_MENU_BAR_QUOTA,
     },
     appearance: { ...settings.appearance },
-    session: { ...settings.session },
+    // The sidebar list controls resolve their backwards-compatible defaults in
+    // the projection so an unset (older) document still reads concrete values
+    // through the generic get path; set writes go through the generic document
+    // write like every other preference.
+    session: {
+      ...settings.session,
+      groupBy: settings.session.groupBy ?? SESSION_GROUP_BY_DEFAULT,
+      sortBy: settings.session.sortBy ?? SESSION_SORT_BY_DEFAULT,
+      statusFilter: settings.session.statusFilter ?? SESSION_STATUS_FILTER_DEFAULT,
+    },
     notifications: { ...settings.notifications },
     statusBar: { hidden: [...settings.statusBar.hidden] },
     update: { ...settings.update },
