@@ -27,7 +27,6 @@ import { InputGroupButton } from '@/renderer/components/ui/input-group';
 export interface ModelBadge {
   kind: 'turbo' | 'fast' | 'quota' | 'free';
   text: string;
-  tps?: number;
 }
 
 const MODEL_BADGE_ICONS = {
@@ -54,8 +53,8 @@ export function modelBadges(facts: ModelBadgeFacts): ModelBadge[] {
   const badges: ModelBadge[] = [];
   const tps = facts.effectiveTps;
   if (tps !== undefined && tps !== null) {
-    if (tps > 200) badges.push({ kind: 'turbo', text: `极速 · ${Math.round(tps)} TPS`, tps: Math.round(tps) });
-    else if (tps > 100) badges.push({ kind: 'fast', text: `快速 · ${Math.round(tps)} TPS`, tps: Math.round(tps) });
+    if (tps > 200) badges.push({ kind: 'turbo', text: `极速 · ${Math.round(tps)} TPS` });
+    else if (tps > 100) badges.push({ kind: 'fast', text: `快速 · ${Math.round(tps)} TPS` });
   }
   if (facts.quotaAbundant === true) badges.push({ kind: 'quota', text: '额度充足' });
   if (facts.free === true) badges.push({ kind: 'free', text: '免费模型' });
@@ -88,11 +87,13 @@ function ModelOptionContent({ option, compact = false }: { option: ModelOption; 
     if (!badge) return <span className={className} aria-hidden="true" />;
     const Icon = MODEL_BADGE_ICONS[kind];
     return (
-      <span className={className} role="img" aria-label={badge.text}>
+      <span
+        className={className}
+        role="img"
+        aria-label={badge.text}
+        title={kind === 'turbo' || kind === 'fast' ? badge.text : undefined}
+      >
         <Icon className={`size-3.5 ${kind === 'turbo' ? 'text-amber-500' : 'text-muted-foreground'}`} />
-        {kind === 'turbo' || kind === 'fast' ? (
-          !compact && <span className="text-xs tabular-nums text-muted-foreground">{badge.tps}</span>
-        ) : null}
       </span>
     );
   };
