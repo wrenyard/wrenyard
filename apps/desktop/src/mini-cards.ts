@@ -122,6 +122,13 @@ export class MiniCardManager {
     win.webContents.on('will-navigate', (event, targetUrl) => {
       if (targetUrl.split('#', 1)[0] !== this.options.pageLoader.url('shell')) event.preventDefault();
     });
+    // Chromium resets a webContents' zoom factor on navigation, and a same-URL
+    // reload is allowed above, so re-apply the shell's current zoom whenever a
+    // load finishes. This also covers the initial load.
+    win.webContents.on('did-finish-load', () => {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+      this.applyCardZoom(win, this.options.getZoomFactor());
+    });
     // Re-assert the pinned z-order only when focus leaves the app entirely
     // (e.g. a running game), never when focus moves between our own windows
     // (another card or the shell). Never steals focus back (no focus()/show()).
@@ -134,9 +141,6 @@ export class MiniCardManager {
     win.on('closed', () => this.handleClosed(id));
     void this.options.pageLoader
       .load(win, 'shell', { mini: '1', session: sessionId })
-      // Apply the shell's zoom once the page is loaded: Chromium resets a
-      // webContents' zoom on navigation, so setting it before load is lost.
-      .then(() => { this.applyCardZoom(win, zoom); })
       .catch((error: unknown) => {
         this.log.warn('[wrenyard-desktop] mini card failed to load:', error);
         if (!win.isDestroyed()) win.close();
