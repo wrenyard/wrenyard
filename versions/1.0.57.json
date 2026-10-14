@@ -1,0 +1,22 @@
+{
+  "schema_version": "wrenyard.update.v1",
+  "version": "1.0.57",
+  "published_at": "2026-10-14T10:29:15.000Z",
+  "assets": [
+    {
+      "name": "wrenyard-desktop-1.0.57-darwin-arm64.dmg",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.57/wrenyard-desktop-1.0.57-darwin-arm64.dmg",
+      "sha256": "157741f8a53ff5246d4f6ed0b2fab977aebee136f35edf0bbe068156218324fd"
+    },
+    {
+      "name": "wrenyard-desktop-1.0.57-darwin-arm64.zip",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.57/wrenyard-desktop-1.0.57-darwin-arm64.zip",
+      "sha256": "e5683d7daf1a907600ca73fe32bda9b9b14ffd25e1eb3ebc445987e325c3e0b4"
+    },
+    {
+      "name": "wrenyard-desktop-1.0.57-win32-x64-setup.exe",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.57/wrenyard-desktop-1.0.57-win32-x64-setup.exe",
+      "sha256": "0a4ad34ece06609e8a27430f29153998e4f8e552756ff1e2f9265c306a3fe192"
+    }
+  ]
+}
