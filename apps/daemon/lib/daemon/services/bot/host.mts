@@ -92,6 +92,11 @@ const ESCALATION_MIN_INTERVAL_MS = 10 * 60_000
  * session is noticed instead of waiting forever for new events.
  */
 const REVIEW_IDLE_MS = 10 * 60_000
+/**
+ * Reason an item is parked because its session finished a turn without
+ * `BOT-READY` or `BOT-BLOCKED` and its correction budget is exhausted.
+ */
+const STALLED_REASON = 'session stalled'
 /** Worktree diff sent to `bot-review`; the caller truncates to this. */
 const MAX_DIFF_CHARS = 60_000
 /** Recent replies sent to `bot-review`; the caller truncates to this. */
@@ -656,6 +661,31 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     return events.length === 0 ? undefined : events[events.length - 1]?.at
   }
 
+  /**
+   * The number of the latest `turn.started` of one session, or 0 when it never
+   * started a turn. A nudge is keyed on this number, so one nudge is sent per
+   * finished turn and never twice for the same one.
+   */
+  function latestTurnNumber(sessionId: string): number {
+    let turn = 0
+    for (const event of session.readLedger(sessionId)) {
+      if (event.type !== 'turn.started') continue
+      turn = Math.max(turn, event.turn ?? turn + 1)
+    }
+    return turn
+  }
+
+  /**
+   * Milliseconds since one item's session last appended a ledger event, or
+   * undefined when neither the ledger nor the item row carries a usable time.
+   */
+  function sessionIdleMs(item: BotItemRecord): number | undefined {
+    if (item.sessionId === undefined) return undefined
+    const at = latestEventAt(item.sessionId)
+    const since = at === undefined ? Date.parse(item.updatedAt) : Date.parse(at)
+    return Number.isNaN(since) ? undefined : Date.now() - since
+  }
+
   // ── step lookups ─────────────────────────────────────────────────────────
 
   /** Parse one step's stored JSON output, or undefined when it is absent or invalid. */
@@ -856,6 +886,99 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     if (model === undefined) throw new Error('no routed model is available for the follow-up')
     await session.send(item.sessionId, { text, model })
     store.patchItem(item.id, { sessionModel: model })
+  }
+
+  /**
+   * What one stalled-session check decided: nothing to do, send the single
+   * nudge for the finished turn, or park the item because the nudge would
+   * exceed the correction budget.
+   */
+  type StalledNudgeDecision =
+    | { kind: 'none' }
+    | { kind: 'nudge'; turn: number; counters: Record<string, number> }
+    | { kind: 'park'; counters: Record<string, number>; question: string }
+
+  /** The one nudge sent to a session whose turn ended without a closing marker. */
+  function stalledNudgeText(item: BotItemRecord): string {
+    const worktree = item.worktreeId ?? '(unnamed)'
+    return `Your last turn ended without BOT-READY or BOT-BLOCKED. Continue the task in worktree ${worktree}: make the change, commit it locally with the Refs trailer, and end with BOT-READY <head sha>, or reply BOT-BLOCKED <question> if you need a decision.`
+  }
+
+  /**
+   * Decide whether one session needs the stalled-session nudge. A session that
+   * is running a turn, or whose latest reply already carries `BOT-READY` or
+   * `BOT-BLOCKED`, is making progress and is left alone. Otherwise the item is
+   * nudged once per finished turn; the incremented correction count parks it
+   * instead of sending once the budget is exceeded. `base` lets a caller pass
+   * counters it has already advanced for this tick.
+   */
+  function decideStalledNudge(
+    item: BotItemRecord,
+    config: BotConfig | undefined,
+    base?: Record<string, number>,
+  ): StalledNudgeDecision {
+    if (item.sessionId === undefined) return { kind: 'none' }
+    if (sessionRunning(item.sessionId)) return { kind: 'none' }
+    const reply = latestReply(item.sessionId)
+    if (reply !== undefined && (BOT_READY_PATTERN.test(reply) || BOT_BLOCKED_PATTERN.test(reply))) {
+      return { kind: 'none' }
+    }
+    const turn = latestTurnNumber(item.sessionId)
+    if (turn === 0) return { kind: 'none' }
+    const counters = base ?? item.counters ?? {}
+    if ((counters.nudgedTurn ?? 0) >= turn) return { kind: 'none' }
+    const corrections = counters.corrections ?? 0
+    const max = config?.budgets.maxCorrections ?? 0
+    const next = { ...counters, corrections: corrections + 1, nudgedTurn: turn }
+    if (corrections + 1 > max) {
+      return {
+        kind: 'park',
+        counters: next,
+        question: `${STALLED_REASON}: turn ${turn} ended without \`BOT-READY\` or \`BOT-BLOCKED\` and the correction budget is exhausted (${corrections + 1}/${max})`,
+      }
+    }
+    return { kind: 'nudge', turn, counters: next }
+  }
+
+  /**
+   * Apply one stalled-session decision: a nudge goes out through the regular
+   * follow-up path (full session id, the session's own latest `turn.started`
+   * model) and is logged as `review.nudge`; an exhausted budget parks the item
+   * from its current state instead. The nudged turn number is persisted so no
+   * second nudge is sent until the session produces a new turn.
+   */
+  async function applyStalledNudge(
+    bot: BotRecord,
+    item: BotItemRecord,
+    decision: StalledNudgeDecision,
+    config?: BotConfig,
+  ): Promise<void> {
+    if (decision.kind === 'none') return
+    if (decision.kind === 'park') {
+      store.transitionItem(item.id, 'parked', {
+        parkedFrom: item.state,
+        counters: decision.counters,
+        question: decision.question,
+        error: STALLED_REASON,
+      })
+      store.appendLog({
+        botId: bot.id,
+        itemId: item.id,
+        level: 'warn',
+        code: 'review.nudge_parked',
+        message: decision.question,
+      })
+      return
+    }
+    await sendSessionFollowUp(bot, item, stalledNudgeText(item), config)
+    store.patchItem(item.id, { counters: decision.counters })
+    store.appendLog({
+      botId: bot.id,
+      itemId: item.id,
+      level: 'info',
+      code: 'review.nudge',
+      message: `nudged the stalled session at turn ${decision.turn}`,
+    })
   }
 
   /**
@@ -1530,7 +1653,15 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           patch: { parkedFrom: 'in_progress', question: verdict.question ?? verdict.reason, error: 'review_parked' },
         }
       }
-      if (verdict.verdict === 'continue') return { output: verdict, patch: { counters: reviewed } }
+      if (verdict.verdict === 'continue') {
+        // A session that finished its turn without `BOT-READY` or `BOT-BLOCKED`
+        // would wait here forever, so a continuing verdict nudges it once per
+        // finished turn; the counters are built on `reviewed` so the review
+        // point and the nudge bookkeeping persist together.
+        const nudge = decideStalledNudge(item, config, reviewed)
+        await applyStalledNudge(bot, item, nudge, config)
+        return { output: verdict, patch: { counters: nudge.kind === 'none' ? reviewed : nudge.counters } }
+      }
       if (verdict.verdict === 'correct') {
         if (corrections + 1 > config.budgets.maxCorrections) {
           return {
@@ -2084,7 +2215,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    * after acceptance, push after merge, then inbox.complete and notify in
    * `completing`, so a pushed item always reaches `completed`.
    */
-  function advanceItem(bot: BotRecord, item: BotItemRecord): void {
+  async function advanceItem(bot: BotRecord, item: BotItemRecord, config?: BotConfig): Promise<void> {
     if (isTerminalItemState(item.state)) return
     if (item.state === 'discovered') {
       // The deterministic discovered -> verifying write happens with the step.
@@ -2108,7 +2239,16 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       const { step, attempt } = latestStep(item, 'review')
       if (step?.status === 'pending') return
       if (item.sessionId === undefined || sessionRunning(item.sessionId)) return
-      if (!reviewDue(item)) return
+      if (!reviewDue(item)) {
+        // Nothing changed, so no review runs. A session that has been idle past
+        // the idle window and still carries no closing marker will never move on
+        // its own, so it is nudged once per finished turn.
+        const idle = sessionIdleMs(item)
+        if (idle !== undefined && idle > REVIEW_IDLE_MS) {
+          await applyStalledNudge(bot, item, decideStalledNudge(item, config), config)
+        }
+        return
+      }
       enqueueStep(item, 'review', undefined, attempt + 1)
       return
     }
@@ -2506,7 +2646,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       if (stopped) return
       for (const item of store.listItems(bot.id)) {
         if (stopped) return
-        advanceItem(bot, item)
+        await advanceItem(bot, item, config)
       }
       for (const step of store.listPendingSteps(bot.id)) {
         if (stopped) return

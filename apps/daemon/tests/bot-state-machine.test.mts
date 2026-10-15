@@ -15,6 +15,7 @@ import {
 import { createBotStore } from '../lib/daemon/services/bot/store.mts'
 import { createBotHost } from '../lib/daemon/services/bot/host.mts'
 import { itemFingerprint } from '../lib/daemon/services/bot/adapters.mts'
+import type { ProjectManager } from '../lib/core/project/manager.mts'
 
 const WORKSPACE = '/tmp/wrenyard-bot-test-workspace'
 
@@ -749,6 +750,91 @@ test('a dispatched item with an empty ledger sends the routed default model', as
       assert.equal(after.state, 'in_progress')
       assert.deepEqual(after.sessionModel, ADAPTER_ROUTING.default)
       assert.equal(store.findStepByIdemKey(`${item.id}:1:session.send:1`)?.status, 'done')
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('a stalled session is nudged once per finished turn', async () => {
+  const root = `${WORKSPACE}-nudge`
+  const fixture = await writeBotFixture({
+    name: 'nudger',
+    mode: 'live',
+    // The source is still listed, so the in-flight item is not withdrawn.
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'nudger', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'in_progress', project: 'alpha' })
+      store.patchItem(item.id, { sessionId: 'session-1', worktreeId: 'wt-nudge' })
+
+      // An idle session whose only turn has finished on a plain reply: neither
+      // `BOT-READY` nor `BOT-BLOCKED`, so it will never move on its own. Its
+      // `turn.started` model is the one a follow-up must reuse.
+      const at = new Date().toISOString()
+      const ledger: ReturnType<BotTestSession['readLedger']> = [
+        {
+          seq: 1,
+          at,
+          type: 'turn.started',
+          turn: 1,
+          id: 't1',
+          text: 'the dispatch brief',
+          model: { provider: 'ledger', model: 'ledger-model', reasoningEffort: 'high' },
+        },
+        { seq: 2, at, type: 'reply.sent', turn: 1, text: 'I read the file but did not change it.' },
+        { seq: 3, at, type: 'turn.finished', turn: 1, id: 't1', status: 'completed' },
+      ]
+
+      const sent: { sessionId: string; text: string; model: unknown }[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(
+          async (sessionId, input) => {
+            sent.push({ sessionId, text: input.text, model: input.model })
+            return { turn: 2 }
+          },
+          () => ledger,
+        ),
+        // The review reads the worktree diff; a stub keeps this case off git.
+        projectManager: { diff: async () => '' } as unknown as ProjectManager,
+        log: () => {},
+        taskRunner: {
+          async startTask() { return { runId: 'run-review' } },
+          async getTask() {
+            return { status: 'done' as const, output: { verdict: 'continue', reason: 'still working on it' } }
+          },
+        },
+      })
+
+      // The first tick starts the detached review; the second applies its
+      // `continue` verdict, and that is where the stalled session is nudged.
+      await host.tick(bot.id)
+      await host.tick(bot.id)
+
+      assert.equal(sent.length, 1)
+      assert.equal(sent[0]?.sessionId, 'session-1')
+      assert.deepEqual(sent[0]?.model, { provider: 'ledger', model: 'ledger-model', reasoningEffort: 'high' })
+      assert.match(sent[0]?.text ?? '', /wt-nudge/)
+      assert.match(sent[0]?.text ?? '', /BOT-READY <head sha>/)
+      assert.match(sent[0]?.text ?? '', /BOT-BLOCKED <question>/)
+      assert.match(sent[0]?.text ?? '', /Refs trailer/)
+
+      const nudged = store.getItem(bot.id, item.id)
+      assert.equal(nudged.state, 'in_progress')
+      assert.equal(nudged.counters?.corrections, 1)
+      assert.equal(nudged.counters?.nudgedTurn, 1)
+      assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'review.nudge').length, 1)
+
+      // A later tick with no new session turn sends no second nudge.
+      await host.tick(bot.id)
+      assert.equal(sent.length, 1)
+      assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'review.nudge').length, 1)
     })
   } finally {
     await removeFixture(fixture)
