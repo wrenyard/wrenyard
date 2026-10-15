@@ -7,6 +7,7 @@
 
 import { BrowserWindow, screen, type WebContents } from 'electron';
 import type { PageLoader } from './pages.js';
+import { SHELL_CHANNELS, type ResolvedAppearance } from './shell-contract.js';
 import { shellWebPreferences } from './shell-window.js';
 
 /** Card geometry: a small desktop conversation card. */
@@ -20,8 +21,12 @@ const CARD_OFFSET = 24;
 export interface MiniCardManagerOptions {
   pageLoader: PageLoader;
   preloadPath: string;
-  backgroundColor: string;
-  additionalArguments: string[];
+  /** Native card background, resolved when each card is created. */
+  backgroundColor(): string;
+  /** Preload `additionalArguments`, resolved when each card is created. */
+  additionalArguments(): string[];
+  /** The current resolved appearance (theme, dark, reduceMotion). */
+  getAppearance(): ResolvedAppearance;
   /** The live shell window, or null when it is gone. */
   getShellWindow(): BrowserWindow | null;
   /** Hide the shell when a card is opened from it. */
@@ -87,6 +92,13 @@ export class MiniCardManager {
     }
   }
 
+  /** Re-apply the current appearance to every open card (on appearance change). */
+  notifyAppearanceChanged(appearance: ResolvedAppearance): void {
+    for (const card of this.cards.values()) {
+      this.applyCardAppearance(card.window, appearance);
+    }
+  }
+
   /**
    * Open a card for a session ('' means a new draft). Opened from the shell it
    * sits at the shell's top-right corner and hides the shell; opened from a card
@@ -110,8 +122,8 @@ export class MiniCardManager {
       frame: false,
       resizable: true,
       show: false,
-      backgroundColor: this.options.backgroundColor,
-      webPreferences: shellWebPreferences(this.options.preloadPath, this.options.additionalArguments),
+      backgroundColor: this.options.backgroundColor(),
+      webPreferences: shellWebPreferences(this.options.preloadPath, this.options.additionalArguments()),
     });
     win.setAlwaysOnTop(true, 'screen-saver');
     const id = win.webContents.id;
@@ -128,6 +140,10 @@ export class MiniCardManager {
     win.webContents.on('did-finish-load', () => {
       if (win.isDestroyed() || win.webContents.isDestroyed()) return;
       this.applyCardZoom(win, this.options.getZoomFactor());
+      // A theme change that landed while this renderer was loading predates the
+      // broadcast above, so sync this card — and only this card — with the
+      // appearance resolved now.
+      this.applyCardAppearance(win, this.options.getAppearance());
     });
     // Re-assert the pinned z-order only when focus leaves the app entirely
     // (e.g. a running game), never when focus moves between our own windows
@@ -203,6 +219,21 @@ export class MiniCardManager {
     if (index !== -1) this.focusOrder.splice(index, 1);
     this.focusOrder.push(id);
     card.window.moveTop();
+  }
+
+  /**
+   * Push the appearance to one card and re-apply its native background. The
+   * background is read from the live getter, so a card created before a change
+   * and one created after agree instead of pinning their own default palette.
+   */
+  private applyCardAppearance(win: BrowserWindow, appearance: ResolvedAppearance): void {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+    try {
+      win.setBackgroundColor(this.options.backgroundColor());
+    } catch {
+      // A card can vanish between the checks; appearance is best-effort.
+    }
+    win.webContents.send(SHELL_CHANNELS.appearanceChanged, appearance);
   }
 
   /** Apply an interface zoom factor to one card (best-effort). */

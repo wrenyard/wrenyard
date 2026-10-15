@@ -903,6 +903,9 @@ async function bootstrap(): Promise<void> {
       shellWindow?.notifyAppearanceChanged(appearance);
       // Pet overlays and the themed transcript mirror the same resolved value.
       broadcastPetAppearance(appearance);
+      // Open Mini cards follow the same appearance; they never fall back to a
+      // separate default palette.
+      miniCards?.notifyAppearanceChanged(appearance);
     },
   });
   appearanceController.init();
@@ -927,8 +930,11 @@ async function bootstrap(): Promise<void> {
   miniCards = new MiniCardManager({
     pageLoader,
     preloadPath: preloadPath(app.getAppPath(), 'shell'),
-    backgroundColor: appearanceController.backgroundColor(),
-    additionalArguments: appearanceController.arguments(),
+    // Resolve the background and preload arguments when each card opens, not
+    // once at startup, so a new or reopened card uses the current appearance.
+    backgroundColor: () => appearanceController!.backgroundColor(),
+    additionalArguments: () => appearanceController!.arguments(),
+    getAppearance: () => appearanceController!.resolve(),
     getShellWindow: () => (shellWindow && !shellWindow.window.isDestroyed() ? shellWindow.window : null),
     hideShell: () => { shellWindow?.window.hide(); },
     showShell: () => showDesktop('session'),
