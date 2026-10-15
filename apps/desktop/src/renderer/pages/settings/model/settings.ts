@@ -8,9 +8,11 @@ import type {
   PreferenceId,
   ServiceSnapshot,
   SettingsSnapshot,
+  TaskSettingsRoutingWeights,
   WorkspaceConfigurationSnapshot,
 } from '@/shell-contract';
 import { readPreferenceValue, writePreferenceValue } from '@/shell-contract';
+import { defaultRoutingWeightsPercent, routingWeightsFromPercent } from './routing-weights.js';
 
 /**
  * Pure model for the Settings page. Every helper here is framework-free: no
@@ -197,6 +199,63 @@ export function parseAutoCapInput(raw: string): AutoCapParseResult {
   if (!Number.isFinite(parsed)) return { ok: false, reason: 'not-number' };
   if (parsed < 0) return { ok: false, reason: 'negative' };
   return { ok: true, value: parsed };
+}
+
+/* ------------------------------------------------------------------ */
+/* Global task-setting semantic equality                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Semantic equality for the global auto cap. `null` and `undefined` are the
+ * same unset value, finite numbers compare numerically so `0.5`, `0.50` and
+ * `5e-1` are equal, and a set `0` stays distinct from an unset cap. Only a real
+ * difference returns false, which lets an untouched control skip its write.
+ */
+export function autoCapValuesEqual(
+  current: number | null | undefined,
+  next: number | null | undefined,
+): boolean {
+  const left = current ?? null;
+  const right = next ?? null;
+  if (left === null || right === null) return left === right;
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+  return left === right;
+}
+
+/** The default global routing weights as the fraction wire shape. */
+const DEFAULT_ROUTING_WEIGHTS: TaskSettingsRoutingWeights = routingWeightsFromPercent(defaultRoutingWeightsPercent());
+
+/**
+ * Semantic equality for the four routing weights: a missing override is its
+ * default, and the fields compare numerically rather than by object identity or
+ * input-string format, so an unchanged control never produces a write.
+ */
+export function routingWeightsEqual(
+  current: TaskSettingsRoutingWeights | null | undefined,
+  next: TaskSettingsRoutingWeights | null | undefined,
+): boolean {
+  const left = current ?? DEFAULT_ROUTING_WEIGHTS;
+  const right = next ?? DEFAULT_ROUTING_WEIGHTS;
+  return (
+    left.price === right.price &&
+    left.speed === right.speed &&
+    left.quota === right.quota &&
+    left.intelligence === right.intelligence
+  );
+}
+
+/**
+ * True when a freshly parsed draft is semantically the same as the pinned
+ * baseline, so an unchanged control is a no-op. An unset baseline cannot be
+ * compared and never short-circuits.
+ */
+export function draftMatchesBaseline<T>(
+  equals: (current: T, next: T) => boolean,
+  baseline: T | undefined,
+  next: T,
+): boolean {
+  if (baseline === undefined) return false;
+  return equals(baseline, next);
 }
 
 /* ------------------------------------------------------------------ */

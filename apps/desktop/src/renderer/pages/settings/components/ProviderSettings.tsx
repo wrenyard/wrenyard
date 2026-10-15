@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { QueryError } from '@/renderer/components/query-error';
 import { Button } from '@/renderer/components/ui/button';
 import { Input } from '@/renderer/components/ui/input';
@@ -8,7 +8,6 @@ import { Label } from '@/renderer/components/ui/label';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { useConfirm } from '@/renderer/hooks/use-confirm';
 import { shell } from '@/renderer/lib/desktop';
-import { taskSettingsQuery } from '@/renderer/lib/queries';
 import {
   ALIAS_DELETE_LABEL,
   ALIAS_EMPTY,
@@ -29,51 +28,33 @@ import {
   autoCapEffectiveText,
   autoCapErrorMessage,
 } from '../model/describe.js';
-import { autoCapDisplayValue, errorMessage, parseAutoCapInput, validateAlias } from '../model/settings.js';
-import { runtimeAliasesQueryKey, useRuntimeAliasesQuery } from '../queries.js';
+import {
+  autoCapDisplayValue,
+  autoCapValuesEqual,
+  errorMessage,
+  parseAutoCapInput,
+  validateAlias,
+} from '../model/settings.js';
+import { runtimeAliasesQueryKey, useGlobalTaskSettingSave, useRuntimeAliasesQuery } from '../queries.js';
 
 /**
  * The global auto-dispatch reference output cap. Committing on blur writes only
  * the `max_auto_output_usd_per_million` field at global scope; empty clears it.
  */
 export function AutoPriceCapControl() {
-  const queryClient = useQueryClient();
-  const settings = useQuery(taskSettingsQuery());
-  const revision = settings.data?.revision ?? '';
-  const capValue = settings.data?.user_global.max_auto_output_usd_per_million;
+  const cap = useGlobalTaskSettingSave<number | null>({
+    select: (snapshot) => snapshot.user_global.max_auto_output_usd_per_million ?? null,
+    equals: autoCapValuesEqual,
+    patch: (value) => ({ max_auto_output_usd_per_million: value }),
+  });
 
   const [input, setInput] = useState('');
-  const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState('');
   const [isError, setIsError] = useState(false);
 
   useEffect(() => {
-    if (settings.data && !dirty) setInput(autoCapDisplayValue(capValue));
-  }, [settings.data, dirty, capValue]);
-
-  const invalidate = (): void => {
-    void queryClient.invalidateQueries({ queryKey: ['taskSettings'] });
-  };
-
-  const save = useMutation({
-    mutationFn: (value: number | null) => shell.saveTaskSettings({
-      scope: 'global',
-      expected_revision: revision,
-      patch: { max_auto_output_usd_per_million: value },
-    }),
-    onSuccess: () => {
-      setDirty(false);
-      setStatus('已保存');
-      setIsError(false);
-      invalidate();
-    },
-    onError: (error) => {
-      const message = errorMessage(error);
-      setStatus(message.includes('冲突') ? CONFLICT_MESSAGE : `保存失败：${message}`);
-      setIsError(true);
-      invalidate();
-    },
-  });
+    if (!cap.dirty) setInput(autoCapDisplayValue(cap.value));
+  }, [cap.dirty, cap.value]);
 
   const commit = (): void => {
     const parsed = parseAutoCapInput(input);
@@ -84,7 +65,18 @@ export function AutoPriceCapControl() {
     }
     setIsError(false);
     setStatus('');
-    save.mutate(parsed.value);
+    void cap.commit(parsed.value).then((result) => {
+      if (result.status === 'saved') {
+        setStatus('已保存');
+        setIsError(false);
+      } else if (result.status === 'conflict') {
+        setStatus(CONFLICT_MESSAGE);
+        setIsError(true);
+      } else if (result.status === 'failed') {
+        setStatus(`保存失败：${result.message}`);
+        setIsError(true);
+      }
+    });
   };
 
   return (
@@ -99,9 +91,9 @@ export function AutoPriceCapControl() {
           aria-label={AUTO_CAP_FIELD_LABEL}
           aria-invalid={isError}
           value={input}
-          disabled={settings.isPending || save.isPending}
+          disabled={cap.isPending || cap.saving}
           onChange={(event) => {
-            setDirty(true);
+            cap.markDirty();
             setStatus('');
             setIsError(false);
             setInput(event.target.value);
@@ -112,11 +104,11 @@ export function AutoPriceCapControl() {
         <span className="whitespace-nowrap text-sm text-muted-foreground">{AUTO_CAP_UNIT}</span>
       </div>
       <p className="text-sm text-muted-foreground">
-        {settings.isPending
+        {cap.isPending
           ? AUTO_CAP_LOADING
-          : settings.isError
+          : cap.isError
             ? AUTO_CAP_UNAVAILABLE
-            : autoCapEffectiveText(capValue)}
+            : autoCapEffectiveText(cap.value)}
       </p>
       {status !== '' && (
         <p className={isError ? 'text-sm text-destructive' : 'text-sm text-muted-foreground'} role="status">

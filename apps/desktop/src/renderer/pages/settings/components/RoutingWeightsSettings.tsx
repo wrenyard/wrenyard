@@ -1,17 +1,15 @@
 import { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FieldError } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
 import { Label } from '@/renderer/components/ui/label';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
-import { shell } from '@/renderer/lib/desktop';
-import { taskSettingsQuery } from '@/renderer/lib/queries';
 import type { TaskSettingsRoutingWeights } from '@/shell-contract';
 import {
   CONFLICT_MESSAGE,
   ROUTING_SAVED_LABEL,
   ROUTING_SAVING_LABEL,
   ROUTING_TOTAL_PREFIX,
+  SETTING_SAVE_FAILED_PREFIX,
 } from '../model/describe.js';
 import {
   ROUTING_WEIGHT_KEYS,
@@ -22,7 +20,8 @@ import {
   routingWeightsToPercent,
   type RoutingWeightKey,
 } from '../model/routing-weights.js';
-import { errorMessage } from '../model/settings.js';
+import { errorMessage, routingWeightsEqual } from '../model/settings.js';
+import { useGlobalTaskSettingSave } from '../queries.js';
 
 type WeightInputs = Record<RoutingWeightKey, string>;
 
@@ -38,66 +37,58 @@ function totalOf(inputs: WeightInputs): number {
  * factors total 100; any other total shows a `FieldError` and is not saved.
  */
 export function RoutingWeightsControl() {
-  const queryClient = useQueryClient();
-  const settings = useQuery(taskSettingsQuery());
-  const revision = settings.data?.revision ?? '';
+  const weights = useGlobalTaskSettingSave<TaskSettingsRoutingWeights | null>({
+    select: (snapshot) => snapshot.user_global.routing_weights ?? null,
+    equals: routingWeightsEqual,
+    patch: (value) => ({ routing_weights: value }),
+  });
 
   const [inputs, setInputs] = useState<WeightInputs | null>(null);
-  const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState('');
   const [isError, setIsError] = useState(false);
 
   useEffect(() => {
-    if (settings.data && !dirty) {
-      setInputs(routingWeightsToInput(routingWeightsToPercent(settings.data.user_global.routing_weights)));
-    }
-  }, [settings.data, dirty]);
-
-  const invalidate = (): void => {
-    void queryClient.invalidateQueries({ queryKey: ['taskSettings'] });
-  };
-
-  const save = useMutation({
-    mutationFn: (patch: TaskSettingsRoutingWeights) => shell.saveTaskSettings({
-      scope: 'global',
-      expected_revision: revision,
-      patch: { routing_weights: patch },
-    }),
-    onSuccess: () => {
-      setDirty(false);
-      setStatus(ROUTING_SAVED_LABEL);
-      setIsError(false);
-      invalidate();
-    },
-    onError: (error) => {
-      setStatus(`${CONFLICT_MESSAGE}${errorMessage(error)}`);
-      setIsError(true);
-      invalidate();
-    },
-  });
+    if (!weights.dirty) setInputs(routingWeightsToInput(routingWeightsToPercent(weights.value)));
+  }, [weights.dirty, weights.value]);
 
   const total = inputs === null ? 0 : totalOf(inputs);
   const totalRounded = Math.round(total);
   const totalInvalid = totalRounded !== 100;
 
-  // Autosave only a valid total; an invalid total stays local and unsaved.
+  // Autosave only a valid total; an invalid total stays local and unsaved. The
+  // hook makes equivalent weights a no-op and a conflict never auto-retries, so
+  // the effect settles after a failure instead of looping.
   useEffect(() => {
-    if (inputs === null || !dirty || totalInvalid || save.isPending) return;
+    if (inputs === null || !weights.dirty || totalInvalid) return;
     let patch: TaskSettingsRoutingWeights;
     try {
       patch = routingWeightsFromPercent(parseRoutingWeightsInput(inputs));
     } catch {
       return;
     }
-    save.mutate(patch);
-    // `save` is stable enough here; the guard on inputs/dirty drives the run.
+    void weights.commit(patch).then((result) => {
+      if (result.status === 'saved') {
+        setStatus(ROUTING_SAVED_LABEL);
+        setIsError(false);
+      } else if (result.status === 'conflict') {
+        setStatus(CONFLICT_MESSAGE);
+        setIsError(true);
+      } else if (result.status === 'failed') {
+        setStatus(`${SETTING_SAVE_FAILED_PREFIX}${result.message}`);
+        setIsError(true);
+      }
+    });
+    // The guard on inputs/dirty/totalInvalid drives the run; `weights.commit` is stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inputs, dirty, totalInvalid]);
+  }, [inputs, weights.dirty, totalInvalid]);
 
-  if (settings.isError) {
-    return <p className="text-destructive" role="alert">{`读取失败：${errorMessage(settings.error)}`}</p>;
+  // A fatal read error only replaces the control before any snapshot (cached or
+  // initial) has loaded; a background refetch that fails while a value exists
+  // keeps the control and any draft visible.
+  if (weights.isError && weights.value === undefined) {
+    return <p className="text-destructive" role="alert">{`读取失败：${errorMessage(weights.error)}`}</p>;
   }
-  if (settings.isPending || inputs === null) {
+  if (weights.isPending || inputs === null) {
     return <Skeleton className="h-16 w-full" />;
   }
 
@@ -116,10 +107,11 @@ export function RoutingWeightsControl() {
                 step={1}
                 className="w-24"
                 value={inputs[key]}
+                disabled={weights.saving}
                 aria-describedby="routing-weights-total"
                 aria-invalid={totalInvalid}
                 onChange={(event) => {
-                  setDirty(true);
+                  weights.markDirty();
                   setStatus('');
                   setIsError(false);
                   setInputs({ ...inputs, [key]: event.target.value });
@@ -139,8 +131,8 @@ export function RoutingWeightsControl() {
         {`${ROUTING_TOTAL_PREFIX} ${totalRounded}%`}
       </p>
       {totalInvalid && <FieldError>{`四项权重之和必须为 100（当前 ${totalRounded}）`}</FieldError>}
-      {save.isPending && <p className="text-sm text-muted-foreground" role="status">{ROUTING_SAVING_LABEL}</p>}
-      {status !== '' && !save.isPending && (
+      {weights.saving && <p className="text-sm text-muted-foreground" role="status">{ROUTING_SAVING_LABEL}</p>}
+      {status !== '' && !weights.saving && (
         <p className={isError ? 'text-sm text-destructive' : 'text-sm text-muted-foreground'} role="status">
           {status}
         </p>

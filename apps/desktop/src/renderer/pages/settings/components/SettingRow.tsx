@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Copy, RotateCcw, Settings2 } from 'lucide-react';
 import { cn } from 'cn';
 import { Button } from '@/renderer/components/ui/button';
@@ -140,18 +140,47 @@ function TextControl({ control, value, disabled, onCommit }: {
 }) {
   const [text, setText] = useState(() => (value === undefined || value === null ? '' : String(value)));
   const [focused, setFocused] = useState(false);
+  const [edited, setEdited] = useState(false);
   const [error, setError] = useState('');
+  // The last value this control served or committed. An untouched blur is
+  // compared against it so the same value never re-fires a commit.
+  const servedRef = useRef(value === undefined || value === null ? '' : String(value));
+  // Synchronous twin of `edited`: a same-tick Enter followed by blur reads the
+  // state from the same render, so the state alone would double-commit. The ref
+  // is flipped before React re-renders, so the second commit early-returns.
+  const editedRef = useRef(false);
+
+  const markEdited = (next: boolean): void => {
+    editedRef.current = next;
+    setEdited(next);
+  };
 
   useEffect(() => {
+    if (edited) return;
+    // Follow the authoritative value into the baseline. A background change on
+    // an untouched focused field only refreshes the baseline, so its blur
+    // cannot push a stale value back; the text is re-seeded only while
+    // unfocused and unedited.
+    const served = value === undefined || value === null ? '' : String(value);
+    servedRef.current = served;
     if (!focused) {
-      setText(value === undefined || value === null ? '' : String(value));
+      setText(served);
       setError('');
     }
-  }, [value, focused]);
+  }, [value, focused, edited]);
 
   const commit = (): void => {
+    if (!editedRef.current) return;
     if (control.kind === 'string') {
+      if (text === servedRef.current) {
+        // Semantically reverted to the served value: clear any error, no write.
+        setError('');
+        markEdited(false);
+        return;
+      }
       setError('');
+      servedRef.current = text;
+      markEdited(false);
       onCommit(text);
       return;
     }
@@ -166,6 +195,15 @@ function TextControl({ control, value, disabled, onCommit }: {
       return;
     }
     setError('');
+    // Compare numerically against the served baseline so `0.50` equals a served
+    // `0.5` instead of failing a non-canonical string comparison.
+    const servedNumber = servedRef.current.trim() === '' ? null : Number(servedRef.current);
+    if (servedNumber !== null && Number.isFinite(servedNumber) && servedNumber === parsed) {
+      markEdited(false);
+      return;
+    }
+    servedRef.current = String(parsed);
+    markEdited(false);
     onCommit(parsed);
   };
 
@@ -186,7 +224,7 @@ function TextControl({ control, value, disabled, onCommit }: {
         aria-invalid={error !== ''}
         onFocus={() => setFocused(true)}
         onBlur={() => { setFocused(false); commit(); }}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => { markEdited(true); setText(event.target.value); }}
         onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit(); } }}
       />
       {error !== '' && <FieldError>{error}</FieldError>}
