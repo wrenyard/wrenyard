@@ -22,16 +22,16 @@ export const definition = defineProvider({
     { ...model('qwen/qwen3.8-27b:free', 262_144, 235_929, 'qwen3.8-27b'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
     { ...model('dots-studio/dots-3-note-preview:free', 512_000, 460_800, 'dots-3-note-preview'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
     { ...model('liquid/lfm-2.5-2.6b:free', 65_536, 8_192, 'lfm-2.5-2.6b'), free: true, reasoningEfforts: REASONING_BASIC },
-    { ...model('nvidia/nemotron-3.5-lightning:free', 1_000_000, 65_536, 'nemotron-3.5-lightning'), free: true, reasoningEfforts: REASONING_BASIC },
+    { ...model('nvidia/nemotron-3.5-lightning:free', 1_000_000, 65_536, 'nemotron-3.5-lightning'), free: true, reasoningEfforts: ['default'] },
     { ...model('thinkingmachines/inkling-small:free', 1_048_576, 262_144, 'inkling-small'), free: true, capabilities: ['text', 'image'], reasoningEfforts: ['low', 'medium', 'high', 'max'] },
     { ...model('thinkingmachines/inkling:free', 1_048_576, 262_144, 'inkling'), free: true, capabilities: ['text', 'image'], reasoningEfforts: ['low', 'medium', 'high', 'max'] },
     { ...model('poolside/laguna-s-2.1:free', 262_144, 32_768, 'laguna-s-2.1'), free: true, reasoningEfforts: REASONING_BASIC },
     { ...model('poolside/laguna-xs-2.1:free', 262_144, 32_768, 'laguna-xs-2.1'), free: true, reasoningEfforts: REASONING_BASIC },
-    { ...model('nvidia/nemotron-3-ultra-550b-a55b:free', 1_000_000, 65_536, 'nemotron-3-ultra'), free: true, reasoningEfforts: ['medium', 'high'] },
+    { ...model('nvidia/nemotron-3-ultra-550b-a55b:free', 1_000_000, 65_536, 'nemotron-3-ultra'), free: true, reasoningEfforts: ['default'] },
     { ...model('nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 256_000, 65_536, 'nemotron-3-nano-omni-30b-a3b-reasoning'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
     { ...model('google/gemma-4-26b-a4b-it:free', 262_144, 32_768, 'gemma-4-26b-a4b-it'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
     { ...model('google/gemma-4-31b-it:free', 262_144, 32_768, 'gemma-4-31b-it'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
-    { ...model('nvidia/nemotron-3-super-120b-a12b:free', 262_144, 235_929, 'nemotron-3-super-120b-a12b'), free: true, reasoningEfforts: ['low', 'medium'] },
+    { ...model('nvidia/nemotron-3-super-120b-a12b:free', 262_144, 235_929, 'nemotron-3-super-120b-a12b'), free: true, reasoningEfforts: ['default'] },
   ],
   protocols: [openAI('https://openrouter.ai/api/v1/chat/completions')],
   // OpenRouter free requests must not carry a model fallback list or route
@@ -43,6 +43,10 @@ export const definition = defineProvider({
   },
   convertReasoningEffort: (_modelId, effort, protocol) => {
     if (protocol !== 'openai_chat') throw new Error('OpenRouter only exposes Chat Completions');
+    // The provider-default sentinel keeps upstream behavior for rows whose
+    // source confirms reasoning support without a specific effort ladder, so
+    // no fabricated effort should be serialized.
+    if (effort === 'default') return {};
     return { reasoning: { effort } };
   },
   description: 'OpenRouter 免费与付费模型。',
