@@ -172,7 +172,7 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
           title={status}
           aria-label={`Daemon 连接状态：${status}`}
           aria-haspopup="dialog"
-          className="h-8 w-full min-w-0 justify-start gap-2 rounded-xl px-2.5 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          className="h-7 w-full min-w-0 justify-start gap-1.5 rounded-xl px-2 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
         >
           {starting ? (
             <Spinner className="size-4 shrink-0" />

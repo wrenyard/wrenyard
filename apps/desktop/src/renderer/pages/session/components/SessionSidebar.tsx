@@ -425,7 +425,7 @@ export function SessionSidebar({
           </SidebarGroup>
         )}
       </SidebarContent>
-      {footer !== undefined && <SidebarFooter className="mt-2 shrink-0 border-t border-sidebar-border bg-sidebar pt-3">{footer}</SidebarFooter>}
+      {footer !== undefined && <SidebarFooter className="shrink-0 border-t border-sidebar-border bg-sidebar py-1">{footer}</SidebarFooter>}
     </Sidebar>
   );
 }
