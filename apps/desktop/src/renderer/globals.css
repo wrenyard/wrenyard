@@ -821,7 +821,8 @@ html[data-platform="win32"] {
 /* While the shell sidebar separator is being dragged, the shell sidebar's gap
    and fixed container must follow the pointer with no width transition. The
    rule targets only the shell's own sidebar (a direct child of the shell
-   provider), so the nested Settings sidebar keeps its transition. */
+   provider); the settings column is a shell-level `collapsible="none"` sidebar
+   with no gap or fixed container, so it has nothing to transition here. */
 [data-shell-resizing="true"] > [data-slot="sidebar"] [data-slot="sidebar-gap"],
 [data-shell-resizing="true"] > [data-slot="sidebar"] [data-slot="sidebar-container"] {
   transition: none;

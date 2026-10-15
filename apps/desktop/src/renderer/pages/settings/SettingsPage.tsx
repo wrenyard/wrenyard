@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Braces, RefreshCw } from 'lucide-react';
 import { Page, PageActions, PageHeader, PageTitle } from '@/renderer/components/page';
@@ -6,13 +7,11 @@ import { Button } from '@/renderer/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { QueryError } from '@/renderer/components/query-error';
 import {
-  Sidebar,
   SidebarContent,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarProvider,
 } from '@/renderer/components/ui/sidebar';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { toast } from '@/renderer/lib/notify';
@@ -86,31 +85,43 @@ const QUOTA_REFRESH_CATEGORIES: ReadonlySet<SettingsCategoryId> = new Set<Settin
   'catalog',
 ]);
 
+export interface SettingsPageProps {
+  /** Shell element the left-column directory is portaled into; null until mounted. */
+  sidebarHost: HTMLDivElement | null;
+  /** Whether the shell's settings column is open. */
+  settingsSidebarOpen: boolean;
+  /** Toggles the shell's settings column (`Cmd/Ctrl+B`, title bar). */
+  onSettingsSidebarOpenChange: (open: boolean) => void;
+}
+
 /**
- * The Settings Activity: a 220px secondary sidebar that switches between one
- * page per category, a fixed search row, and a scrolling body. Every category
- * page stays mounted but hidden, so only the selected one is visible and a
- * category switch never unmounts a custom control's draft. The navigation state
- * records the category, so back/forward and `settings.open` deep links land on
- * the right page; a queued target scrolls (and flashes/focuses) the exact row
- * after that page renders. Search remains a cross-category result list.
+ * The Settings Activity: a per-category page, a fixed search row, and a
+ * scrolling body. Its category directory and back button are portaled into the
+ * shell's left column (`sidebarHost`), so Settings reuses the shell's own
+ * sidebar geometry instead of opening a second window. Every category page
+ * stays mounted but hidden, so only the selected one is visible and a category
+ * switch never unmounts a custom control's draft. The navigation state records
+ * the category, so back/forward and `settings.open` deep links land on the right
+ * page; a queued target scrolls (and flashes/focuses) the exact row after that
+ * page renders. Search remains a cross-category result list. The shell owns the
+ * settings sidebar's open state; this page only registers it as the toggle
+ * target and restores it to open on every (re-)entry.
  */
-export function SettingsPage() {
+export function SettingsPage({
+  sidebarHost,
+  settingsSidebarOpen: sidebarOpen,
+  onSettingsSidebarOpenChange: setSidebarOpen,
+}: SettingsPageProps) {
   const queryClient = useQueryClient();
   const platform = shell.platform;
 
   const [searchInput, setSearchInput] = useState('');
   const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>('general');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  // The shell keeps the Settings page mounted inside an `Activity` boundary that
-  // pauses effects while the page is hidden and re-runs them when it becomes
-  // visible again, so reopening the group sidebar here restores the open default
-  // on every re-entry. It runs on mount/resume only — never on each render — so
-  // the title-bar / Cmd-or-Ctrl+B toggle still controls the sidebar while the
-  // user stays on the page.
-  useEffect(() => {
+  // Reopen the shell's settings column on every (re-)entry; runs on
+  // mount/resume only, so the title-bar / Cmd-or-Ctrl+B toggle still controls it.
+  useLayoutEffect(() => {
     setSidebarOpen(true);
-  }, []);
+  }, [setSidebarOpen]);
   const [pendingTarget, setPendingTarget] = useState<PendingTarget | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   // The shared provider dialog entry: 用量 and 供应商 both open this one instance.
@@ -453,9 +464,43 @@ export function SettingsPage() {
 
   return (
     <Page data-page="settings">
+      {/* The directory and back button live in the shell's left column, not in
+          this page's own box, so this portal is the only part of the settings
+          sidebar that renders there. */}
+      {sidebarHost !== null &&
+        createPortal(
+          <>
+            <SidebarHeader>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton tooltip="返回首页" onClick={() => void shell.navigate('session')}>
+                    <ArrowLeft />
+                    <span>返回首页</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarHeader>
+            <SidebarContent>
+              <SettingsToc
+                categories={tocCategories}
+                activeCategory={activeCategory}
+                activeGroup={null}
+                onSelectCategory={selectCategory}
+                onSelectGroup={selectGroup}
+              />
+            </SidebarContent>
+          </>,
+          sidebarHost,
+        )}
       <PageHeader>
         <PageTitle>{PAGE_TITLE}</PageTitle>
         <PageActions>
+          {/* Always visible, so leaving Settings never depends on the settings
+              column being open. */}
+          <Button variant="outline" onClick={() => { void shell.navigate('session'); }}>
+            <ArrowLeft />
+            返回首页
+          </Button>
           <Button variant="outline" onClick={() => { void shell.openSettingsFile(); }}>
             <Braces />
             {OPEN_SETTINGS_FILE_LABEL}
@@ -466,143 +511,111 @@ export function SettingsPage() {
           </Button>
         </PageActions>
       </PageHeader>
-      <SidebarProvider
-        open={sidebarOpen}
-        onOpenChange={setSidebarOpen}
-        className="min-h-0 flex-1"
-        style={{ '--sidebar-width': '220px' } as CSSProperties}
-      >
-        <div className="flex min-h-0 w-full flex-1">
-          {sidebarOpen && (
-            <Sidebar collapsible="none" className="border-r">
-              <SidebarHeader>
-                <SidebarMenu>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton tooltip="返回首页" onClick={() => void shell.navigate('session')}>
-                      <ArrowLeft />
-                      <span>返回首页</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarHeader>
-              <SidebarContent>
-                <SettingsToc
-                  categories={tocCategories}
-                  activeCategory={activeCategory}
-                  activeGroup={null}
-                  onSelectCategory={selectCategory}
-                  onSelectGroup={selectGroup}
-                />
-              </SidebarContent>
-            </Sidebar>
-          )}
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="shrink-0 px-4 py-3">
-              <SettingsSearch value={searchInput} resultCount={totalResults} onChange={setSearchInput} />
-            </div>
-            <div ref={scrollRef} className="@container/main min-h-0 flex-1 overflow-auto">
-              <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-6">
-                <PetSettingsProvider>
-                  {searchActive && (
-                    showEmpty ? (
-                      <Empty>
-                        <EmptyHeader>
-                          <EmptyTitle>{SEARCH_EMPTY_TITLE}</EmptyTitle>
-                          <EmptyDescription>{SEARCH_EMPTY_DESCRIPTION}</EmptyDescription>
-                        </EmptyHeader>
-                      </Empty>
-                    ) : (
-                      <>
-                        {SETTINGS_CATEGORIES.map((category) => {
-                          const definitions = categoryMatches.get(category.id) ?? [];
-                          if (definitions.length === 0) return null;
-                          return (
-                            <section key={category.id} className="flex flex-col gap-1">
-                              <h3 className="px-3 text-xs font-medium tracking-wide text-muted-foreground">
-                                {category.label}
-                              </h3>
-                              {definitions.map((definition) => (
-                                <button
-                                  key={definition.id}
-                                  type="button"
-                                  onClick={() => activateResult(category.id, definition.id)}
-                                  className="flex flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
-                                >
-                                  <span className="text-sm font-medium">
-                                    <HighlightedText text={definition.title} terms={query.terms} />
-                                  </span>
-                                  {definition.description !== undefined && (
-                                    <span className="text-xs text-muted-foreground">
-                                      <HighlightedText text={definition.description} terms={query.terms} />
-                                    </span>
-                                  )}
-                                </button>
-                              ))}
-                            </section>
-                          );
-                        })}
-                        {shortcutCount > 0 && (
-                          <section className="flex flex-col gap-1">
-                            <h3 className="px-3 text-xs font-medium tracking-wide text-muted-foreground">
-                              {settingsCategoryLabel('shortcuts')}
-                            </h3>
-                            {matchingShortcuts.map((shortcut) => (
-                              <button
-                                key={`${shortcut.category}-${shortcut.title}`}
-                                type="button"
-                                onClick={() => activateResult('shortcuts')}
-                                className="flex flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
-                              >
-                                <span className="text-sm font-medium">
-                                  <HighlightedText text={shortcut.title} terms={query.terms} />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="shrink-0 px-4 py-3">
+          <SettingsSearch value={searchInput} resultCount={totalResults} onChange={setSearchInput} />
+        </div>
+        <div ref={scrollRef} className="@container/main min-h-0 flex-1 overflow-auto">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-6">
+            <PetSettingsProvider>
+              {searchActive && (
+                showEmpty ? (
+                  <Empty>
+                    <EmptyHeader>
+                      <EmptyTitle>{SEARCH_EMPTY_TITLE}</EmptyTitle>
+                      <EmptyDescription>{SEARCH_EMPTY_DESCRIPTION}</EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : (
+                  <>
+                    {SETTINGS_CATEGORIES.map((category) => {
+                      const definitions = categoryMatches.get(category.id) ?? [];
+                      if (definitions.length === 0) return null;
+                      return (
+                        <section key={category.id} className="flex flex-col gap-1">
+                          <h3 className="px-3 text-xs font-medium tracking-wide text-muted-foreground">
+                            {category.label}
+                          </h3>
+                          {definitions.map((definition) => (
+                            <button
+                              key={definition.id}
+                              type="button"
+                              onClick={() => activateResult(category.id, definition.id)}
+                              className="flex flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
+                            >
+                              <span className="text-sm font-medium">
+                                <HighlightedText text={definition.title} terms={query.terms} />
+                              </span>
+                              {definition.description !== undefined && (
+                                <span className="text-xs text-muted-foreground">
+                                  <HighlightedText text={definition.description} terms={query.terms} />
                                 </span>
-                                <span className="text-xs text-muted-foreground">{shortcut.scope}</span>
-                              </button>
-                            ))}
-                          </section>
-                        )}
-                      </>
-                    )
-                  )}
-                  {SETTINGS_CATEGORIES.map((category) => {
-                    const visible = !searchActive && category.id === activeCategory;
-                    return (
-                      <section
-                        key={category.id}
-                        className={visible ? 'flex flex-col gap-6' : 'hidden'}
-                      >
-                        <header className="flex flex-col gap-1">
-                          <h1 className="flex items-center gap-3 text-xl font-semibold">
-                            {settingsCategoryLabel(category.id)}
-                            {category.id === 'pet' && <PetStatusBadge />}
-                            {QUOTA_REFRESH_CATEGORIES.has(category.id) && (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-sm"
-                                className="ml-auto"
-                                aria-label="刷新"
-                                disabled={quotaRefresh.isPending}
-                                onClick={() => quotaRefresh.mutate()}
-                              >
-                                <RefreshCw />
-                              </Button>
-                            )}
-                          </h1>
-                          <p className="text-sm text-muted-foreground">
-                            {settingsCategoryDescription(category.id)}
-                          </p>
-                        </header>
-                        {renderCategoryBody(category.id)}
+                              )}
+                            </button>
+                          ))}
+                        </section>
+                      );
+                    })}
+                    {shortcutCount > 0 && (
+                      <section className="flex flex-col gap-1">
+                        <h3 className="px-3 text-xs font-medium tracking-wide text-muted-foreground">
+                          {settingsCategoryLabel('shortcuts')}
+                        </h3>
+                        {matchingShortcuts.map((shortcut) => (
+                          <button
+                            key={`${shortcut.category}-${shortcut.title}`}
+                            type="button"
+                            onClick={() => activateResult('shortcuts')}
+                            className="flex flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
+                          >
+                            <span className="text-sm font-medium">
+                              <HighlightedText text={shortcut.title} terms={query.terms} />
+                            </span>
+                            <span className="text-xs text-muted-foreground">{shortcut.scope}</span>
+                          </button>
+                        ))}
                       </section>
-                    );
-                  })}
-                </PetSettingsProvider>
-              </div>
-            </div>
+                    )}
+                  </>
+                )
+              )}
+              {SETTINGS_CATEGORIES.map((category) => {
+                const visible = !searchActive && category.id === activeCategory;
+                return (
+                  <section
+                    key={category.id}
+                    className={visible ? 'flex flex-col gap-6' : 'hidden'}
+                  >
+                    <header className="flex flex-col gap-1">
+                      <h1 className="flex items-center gap-3 text-xl font-semibold">
+                        {settingsCategoryLabel(category.id)}
+                        {category.id === 'pet' && <PetStatusBadge />}
+                        {QUOTA_REFRESH_CATEGORIES.has(category.id) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="ml-auto"
+                            aria-label="刷新"
+                            disabled={quotaRefresh.isPending}
+                            onClick={() => quotaRefresh.mutate()}
+                          >
+                            <RefreshCw />
+                          </Button>
+                        )}
+                      </h1>
+                      <p className="text-sm text-muted-foreground">
+                        {settingsCategoryDescription(category.id)}
+                      </p>
+                    </header>
+                    {renderCategoryBody(category.id)}
+                  </section>
+                );
+              })}
+            </PetSettingsProvider>
           </div>
         </div>
-      </SidebarProvider>
+      </div>
       <ProviderDialog
         entry={dialogEntry}
         onClose={() => setDialogEntry(null)}
