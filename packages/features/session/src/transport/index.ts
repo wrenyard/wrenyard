@@ -43,11 +43,13 @@ export {
   type ModelAttempt,
   type ModelContentPart,
   type ModelEvent,
+  type ModelFailureSource,
   type ModelMetrics,
   type ModelRequest,
   type ModelResult,
   type ModelToolCall,
   type ModelTransport,
+  type ModelWaitReason,
   type RetryAfterHint,
   type RetryAfterSource,
   type SessionProtocol,
@@ -78,7 +80,7 @@ export {
   retryAfterMsFromHeaders,
   shouldRetryFromHeaders,
 } from './errors.ts';
-export { MAX_RETRIES, BASE_DELAY_MS, isRetryable, retryDelayMs, runWithRetry, type RetryDecision, type RetryContext } from './retry.ts';
+export { MAX_RETRIES, BASE_DELAY_MS, MAX_RECOVERY_WAIT_MS, MIN_RECOVERY_DELAY_MS, isRetryable, retryDelayMs, runWithRetry, type RetryDecision, type RetryContext } from './retry.ts';
 
 const ADAPTERS: Readonly<Record<SessionProtocol, ProtocolAdapter>> = {
   openai_chat: chatAdapter,
@@ -182,6 +184,12 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
         const attemptStartMs = Date.now();
         const wait = pendingWait;
         pendingWait = {};
+        // The wait (a backoff retry or a bounded recovery wait) is over and a
+        // real upstream request is about to start. Reporting it as `activity`
+        // re-arms the caller's idle deadline for this attempt and lets it clear
+        // its live waiting state right before the attempt, with no timer. The
+        // auxiliary noRetry path never sets `pendingWait`, so it is unchanged.
+        if (wait.waitedMs !== undefined) request.onEvent?.({ type: 'activity' });
         tps = new TpsGenerationCollector();
         try {
           let response: Response;
@@ -234,11 +242,30 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
         const { completion, sample } = noSameRouteRetry ? await attempt() : await runWithRetry(attempt, {
           signal: request.signal,
           outputStarted: () => outputStarted,
+          // A main-reasoning route-health wait is owned by this same loop, so a
+          // blocked route is waited out here rather than probed early.
+          ...(request.preflight === undefined ? {} : { preflight: request.preflight }),
           onRetry: (decision) => {
             pendingWait = {
               waitedMs: decision.delayMs,
               ...(decision.retryAfter === undefined ? {} : { retryAfter: decision.retryAfter }),
             };
+            // A bounded recovery wait is its own event: it says whether the
+            // call is waiting for permission to probe or for a guaranteed
+            // recovery, and carries the absolute instant the next attempt is due.
+            if (decision.wait !== undefined) {
+              request.onEvent?.({
+                type: 'wait',
+                attempt: decision.attempt,
+                kind: decision.kind,
+                ...(decision.status === undefined ? {} : { status: decision.status }),
+                delayMs: decision.delayMs,
+                reason: decision.wait.reason,
+                retryAt: decision.wait.retryAt,
+                ...(decision.retryAfter === undefined ? {} : { retryAfter: decision.retryAfter }),
+              });
+              return;
+            }
             request.onEvent?.({
               type: 'retry',
               attempt: decision.attempt,
@@ -272,6 +299,11 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
             ...(error.status === undefined ? {} : { status: error.status }),
             ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
             ...(error.retryAfter === undefined ? {} : { retryAfter: error.retryAfter }),
+            // The local admission distinction and its not-before instant travel
+            // with the final failure so the caller reports `retryAt` and never
+            // counts a refusal as an upstream retry.
+            ...(error.source === undefined ? {} : { source: error.source }),
+            ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
             ...(error.upstream === undefined ? {} : { upstream: error.upstream }),
             ...(error.shouldRetry === undefined ? {} : { shouldRetry: error.shouldRetry }),
             ...(error.outputStarted ? { outputStarted: true } : {}),

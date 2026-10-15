@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { MessageCircle, ScrollText, X } from 'lucide-react';
 import { cn } from 'cn';
 import { useQueryClient } from '@tanstack/react-query';
+import type { LedgerEvent } from '@wrenyard/session';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
@@ -29,9 +30,11 @@ import { SessionSearch } from './components/SessionSearch.js';
 import { SessionTitle } from './components/SessionTitle.js';
 import { SessionStatusItems } from './components/status/SessionStatusItems.js';
 import { MessageTimeline, buildMessageTimeline } from './components/conversation/MessageTimeline.js';
+import { TurnActivity } from './components/conversation/TurnActivity.js';
 import { withReplyQuote } from './components/conversation/UserMessage.js';
 import { TranscriptView } from './components/transcript/TranscriptView.js';
 import { fold } from './model/fold.js';
+import type { TurnWaitingState } from './model/describe.js';
 import type { ActionModel, DraftAttachment, SessionBridgeTaskBrief } from './model/types.js';
 import { SessionUsageProvider } from './state/session-usage.js';
 import { useSessionController } from './state/use-session-controller.js';
@@ -49,6 +52,28 @@ function sessionIdFromArgs(args: unknown): string | undefined {
     return (args as { sessionId: string }).sessionId;
   }
   return undefined;
+}
+
+/**
+ * The active turn's live bounded-recovery waiting state, derived from the
+ * session feed: the newest `turn.waiting` event of a turn. A pending wait is
+ * cleared only by the same turn's explicit `turn.waiting.cleared` event or its
+ * terminal event (`turn.finished` / `turn.interrupted`); any other same-turn
+ * event is ignored, and events of other turns are skipped. No local timer is
+ * involved.
+ */
+function waitingStateOf(turn: number, events: readonly LedgerEvent[]): TurnWaitingState | undefined {
+  let waiting: Extract<LedgerEvent, { type: 'turn.waiting' }> | undefined;
+  for (const event of events) {
+    if (event.turn !== turn) continue;
+    if (event.type === 'turn.waiting') waiting = event;
+    else if (
+      event.type === 'turn.waiting.cleared'
+      || event.type === 'turn.finished'
+      || event.type === 'turn.interrupted'
+    ) waiting = undefined;
+  }
+  return waiting === undefined ? undefined : { reason: waiting.reason, retryAt: waiting.retryAt };
 }
 
 /** Sending a message resumes bottom following even while reading history. */
@@ -116,6 +141,21 @@ export function SessionPage() {
   const retryLedger = useCallback((): void => {
     void selectSession(state.selectedId).catch(() => undefined);
   }, [selectSession, state.selectedId]);
+
+  // The running turns' live activity lines, including the bounded-recovery
+  // waiting chip, supplied from the session feed. `TurnActivity` renders the
+  // Chinese waiting label with the next local probe time and keeps the
+  // interrupt control available.
+  const runningActivity = model.turns
+    .filter((turn) => turn.status === 'running')
+    .map((turn) => (
+      <TurnActivity
+        key={`activity:${turn.id}`}
+        turn={turn}
+        onInterrupt={onInterrupt}
+        waiting={waitingStateOf(turn.id, state.events)}
+      />
+    ));
 
   // Publish the shown session so the title bar can open a card for it (shell)
   // or return to it (card), and so the shell sidebar highlights it. No cleanup:
@@ -386,6 +426,7 @@ export function SessionPage() {
                           onCancelTask={cancelTask}
                         />
                       ) : (
+                        <>
                         <MessageTimeline
                           timeline={timeline}
                           turns={model.turns}
@@ -398,6 +439,8 @@ export function SessionPage() {
                             setComposerFocusRequest((value) => value + 1);
                           }}
                         />
+                        {runningActivity}
+                        </>
                       )}
                     </MessageScrollerContent>
                   </MessageScrollerViewport>

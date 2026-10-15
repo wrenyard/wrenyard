@@ -28,6 +28,7 @@ import {
   type ModelRequest,
   type ModelResult,
   type ModelTransport,
+  type ModelWaitReason,
   type ToolCall,
   type ToolSpec,
   type ToolChoice,
@@ -122,6 +123,13 @@ export interface ModelCallInput {
   onReasoning?: (delta: string) => void;
   /** Forwarded to the driver for every role. */
   onToolCall?: (call: ToolCall) => void;
+  /**
+   * The bounded-recovery wait lifecycle for the `reason` role: the absolute
+   * next probe/recovery instant and the wait reason when a wait begins, `null`
+   * when it is cleared — on the next actual upstream attempt, on completion and
+   * on cancel. Ignored for every other role.
+   */
+  onWait?: (state: { reason: ModelWaitReason; retryAt: string } | null) => void;
   /** Tools declared on this call; forwarded to the driver for every role. */
   tools?: readonly ToolSpec[];
   toolChoice?: ToolChoice;
@@ -420,8 +428,16 @@ function withOverflowPrefix(error: unknown): string {
 /** Build the structured failure fact of a thrown transport error. */
 function errorFactOf(error: unknown): CallErrorFact {
   if (error instanceof Error && 'kind' in error && typeof (error as { kind?: unknown }).kind === 'string') {
-    const typed = error as { kind: ModelErrorKind; status?: number; message: string };
-    return { kind: typed.kind, ...(typed.status === undefined ? {} : { status: typed.status }), message: typed.message };
+    const typed = error as { kind: ModelErrorKind; status?: number; retryAt?: string; message: string };
+    return {
+      kind: typed.kind,
+      ...(typed.status === undefined ? {} : { status: typed.status }),
+      // A terminal bounded-wait failure carries the absolute instant its route
+      // may recover, so the ledger and the reply view report `retryAt` for main
+      // reasoning exactly as an auxiliary exhaustion already does.
+      ...(typed.retryAt === undefined ? {} : { retryAt: typed.retryAt }),
+      message: typed.message,
+    };
   }
   return { kind: 'protocol', message: error instanceof Error ? error.message : String(error) };
 }
@@ -463,6 +479,21 @@ function isCallableNow(health: RouteHealth | undefined, nowMs: number): boolean 
   if (health.phase === 'open') return false;
   if (health.nextProbeAt !== undefined) return Date.parse(health.nextProbeAt) <= nowMs;
   return true;
+}
+
+/**
+ * The absolute instant (epoch ms) the route may next be probed, or `undefined`
+ * when it is callable now. The main reasoning call hands this to the transport
+ * as its pre-admission check, so a route already known to be cooling down is
+ * waited out inside the one retry budget instead of being probed early and
+ * rejected by the Gateway.
+ */
+function routeNotBeforeMs(health: RouteHealth | undefined, nowMs: number): number | undefined {
+  if (health === undefined) return undefined;
+  const candidate = health.nextProbeAt ?? (health.phase === 'open' ? health.until : undefined);
+  if (candidate === undefined) return undefined;
+  const parsed = Date.parse(candidate);
+  return Number.isFinite(parsed) && parsed > nowMs ? parsed : undefined;
 }
 
 /** The earlier of two optional ISO instants. */
@@ -575,6 +606,18 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         if (idleTimer !== undefined) clearTimeout(idleTimer);
         idleTimer = setTimeout(() => abort('idle'), REASON_IDLE_TIMEOUT_MS);
       };
+      /**
+       * Suspend the reason idle deadline across a bounded intentional wait, then
+       * re-arm it so a genuinely stalled attempt after the wait is still
+       * detected. A scheduled recovery wait is activity, not upstream
+       * inactivity, so it must not trip the idle timer; no periodic fake
+       * activity is emitted that could mask a real upstream hang.
+       */
+      const waitThroughIdle = (delayMs: number): void => {
+        if (input.role !== 'reason') return;
+        if (idleTimer !== undefined) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => abort('idle'), delayMs + REASON_IDLE_TIMEOUT_MS);
+      };
       resetIdle();
 
       let outputStarted = false;
@@ -587,17 +630,46 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         if (delta !== '') onOutput();
         input.onReasoning?.(delta);
       };
+      /**
+       * The main reasoning call's bounded-recovery wait lifecycle. A wait start
+       * reports the absolute next probe/recovery instant and the reason; every
+       * other event — including the transport's attempt-start `activity` — ends
+       * the wait, so the live waiting state is cleared right before the next
+       * actual upstream attempt, and the call's own settle clears it on
+       * completion or cancel. No timer approximates the clear.
+       */
+      let waiting = false;
+      const reportWait = (state: { reason: ModelWaitReason; retryAt: string } | null): void => {
+        if (input.role !== 'reason') return;
+        if (state === null) {
+          if (!waiting) return;
+          waiting = false;
+        } else {
+          waiting = true;
+        }
+        input.onWait?.(state);
+      };
       /** Map one transport event onto the runner's activity tracking. */
       const onEvent = (event: ModelEvent): void => {
         switch (event.type) {
-          case 'text': onText(event.delta); return;
-          case 'reasoning': onReasoning(event.delta); return;
-          case 'tool_call': onOutput(); input.onToolCall?.(event.call); return;
-          case 'usage': partialUsage = event.usage; return;
-          case 'activity': resetIdle(); return;
+          case 'text': reportWait(null); onText(event.delta); return;
+          case 'reasoning': reportWait(null); onReasoning(event.delta); return;
+          case 'tool_call': reportWait(null); onOutput(); input.onToolCall?.(event.call); return;
+          case 'usage': reportWait(null); partialUsage = event.usage; return;
+          // The transport emits `activity` at the start of an attempt that
+          // follows a wait, so this is the precise pre-attempt clear.
+          case 'activity': reportWait(null); resetIdle(); return;
           case 'retry':
-            // A retry wait is activity: it must not trip the idle timer.
+            // A plain backoff retry is not a bounded recovery wait: clear any
+            // waiting state and treat the wait as activity.
+            reportWait(null);
             resetIdle();
+            return;
+          case 'wait':
+            // A bounded recovery wait is scheduled, not upstream inactivity:
+            // suspend the idle deadline across it and re-arm afterwards.
+            reportWait({ reason: event.reason, retryAt: event.retryAt });
+            waitThroughIdle(event.delayMs);
             return;
         }
       };
@@ -902,6 +974,14 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
             ...(input.tools === undefined ? {} : { tools: input.tools }),
             ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
+            // The main reasoning route is the user's explicit selection and is
+            // never substituted. Its known route health is handed to the
+            // transport so a cooling-down route is waited out inside the one
+            // retry budget rather than probed early; the Gateway stays the
+            // atomic admission authority for races.
+            ...(options.routeStatus === undefined
+              ? {}
+              : { preflight: () => routeNotBeforeMs(options.routeStatus!(model), Date.now()) }),
             signal: controller.signal,
             onEvent,
           }), controller.signal);
@@ -925,6 +1005,8 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           ...(metrics === undefined ? {} : { metrics }),
         });
       } finally {
+        // Completion or cancel ends any bounded-recovery wait.
+        reportWait(null);
         if (totalTimer !== undefined) clearTimeout(totalTimer);
         if (idleTimer !== undefined) clearTimeout(idleTimer);
         input.signal.removeEventListener('abort', onExternalAbort);

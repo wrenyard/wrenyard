@@ -68,7 +68,10 @@ function errorTooltip(lastTurn: NonNullable<SessionSummary['lastTurn']>): string
  * > error > unread > idle. `seen` null means the snapshot is not loaded yet, so
  * nothing is unread.
  */
-export function sessionStatusOf(summary: SessionSummary, seen: SessionSeenState | null): SessionStatus {
+export function sessionStatusOf(
+  summary: SessionSummary,
+  seen: SessionSeenState | null,
+): SessionStatus {
   if (summary.running === true) return { kind: 'working', tooltip: '运行中' };
   const lastTurn = summary.lastTurn;
   if (lastTurn?.needsUser === true) {

@@ -140,6 +140,13 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const sessionKeyRef = useRef(sessionKey);
   sessionKeyRef.current = sessionKey;
   const dragDepth = useRef(0);
+  /**
+   * A synchronous latch around one submit. The `sending` state only updates on
+   * the next render, so two clicks (or key repeats) in the same tick could both
+   * pass the guard and start two turns during an active recovery. The ref flips
+   * before any async send work and is released when the send settles.
+   */
+  const submitLatch = useRef(false);
 
   // Publish the debounced input count so the status-bar context item counts the
   // draft text too; reset to zero when the composer unmounts.
@@ -374,9 +381,17 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   };
 
   const submit = (): void => {
+    if (submitLatch.current) return;
+    // Latch synchronously at the very start, before any async work, so a second
+    // click or key repeat in the same tick cannot start a second turn while a
+    // turn is recovering. Every early exit and throw path releases it.
+    submitLatch.current = true;
     const body = text.trim();
     const submitted = attachmentsRef.current;
-    if ((body === '' && submitted.length === 0) || !selected || sending || disabled || exceeded || selectionUnusable) return;
+    if ((body === '' && submitted.length === 0) || !selected || sending || disabled || exceeded || selectionUnusable) {
+      submitLatch.current = false;
+      return;
+    }
     // A send discards the suggestion and cancels any in-flight request.
     dismissSuggestion();
     const originKey = sessionKey;
@@ -387,7 +402,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     // request even though the model list has already changed by then.
     const firstInSession = turnsRef.current.length === 0;
     setSending(true);
-    void Promise.resolve(onSend(body, selected, effort, submitted))
+    // Call `onSend` inside the chain so a synchronous throw becomes a
+    // rejection and the latch is always released.
+    void Promise.resolve()
+      .then(() => onSend(body, selected, effort, submitted))
       .then(
         () => {
           // Clear the sent draft (and only the sent one) independently for text
@@ -422,6 +440,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         },
       )
       .finally(() => {
+        submitLatch.current = false;
         setSending(false);
       });
   };

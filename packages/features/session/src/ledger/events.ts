@@ -30,6 +30,8 @@ export type LedgerEventType =
   | 'turn.finished'
   | 'turn.interrupted'
   | 'turn.attention'
+  | 'turn.waiting'
+  | 'turn.waiting.cleared'
   | 'step.started'
   | 'step.finished'
   | 'action.started'
@@ -186,6 +188,39 @@ export interface TurnAttentionEvent extends LedgerEventBase {
   /** Short label for the user, e.g. 「等你确认提交」. */
   label?: string;
   source: 'ask' | 'model';
+}
+
+/**
+ * Live waiting status of the active turn: the turn is not calling upstream
+ * right now but is waiting, inside the one bounded recovery loop, for its route
+ * to be admitted. `retryAt` is the absolute instant the next probe/recovery is
+ * due and `reason` distinguishes waiting for permission to probe a locally
+ * blocked route (`admission`) from a guaranteed recovery after an adopted hint.
+ * Observational, like `turn.finished`. It is cleared only by an explicit
+ * `turn.waiting.cleared` event or the turn's own terminal event; an unrelated
+ * later same-turn event never clears it. Never enters the model context.
+ */
+export interface TurnWaitingEvent extends LedgerEventBase {
+  type: 'turn.waiting';
+  /** The waiting turn: `t<turn>`. */
+  parent: string;
+  /** Why the turn is waiting. */
+  reason: 'admission' | 'recovery';
+  /** Absolute instant the next probe/recovery is due (ISO 8601). */
+  retryAt: string;
+}
+
+/**
+ * Ends the live waiting status of `turn.waiting` for its turn: the previous
+ * wait is over because the next actual upstream attempt is starting, or the
+ * turn completed or was cancelled. Additive and observational, like
+ * `turn.waiting`; it never enters the model context and is emitted from the
+ * same wait lifecycle that emitted the matching `turn.waiting`.
+ */
+export interface TurnWaitingClearedEvent extends LedgerEventBase {
+  type: 'turn.waiting.cleared';
+  /** The turn whose wait ended: `t<turn>`. */
+  parent: string;
 }
 
 // ─── Step ──────────────────────────────────────────────────────────────────
@@ -556,6 +591,8 @@ export type LedgerEvent =
   | TurnFinishedEvent
   | TurnInterruptedEvent
   | TurnAttentionEvent
+  | TurnWaitingEvent
+  | TurnWaitingClearedEvent
   | StepStartedEvent
   | StepFinishedEvent
   | ActionStartedEvent

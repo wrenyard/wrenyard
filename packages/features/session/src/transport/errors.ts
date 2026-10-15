@@ -9,7 +9,9 @@
  * shape, so classification reads only the protocol's own status codes and
  * official error codes.
  */
-import { record, stringField, type ModelMetrics, type RetryAfterHint } from './protocol.ts';
+import { GATEWAY_HEADERS, parseAdmissionRefusal } from '@wrenyard/providers/base';
+
+import { record, stringField, type ModelFailureSource, type ModelMetrics, type RetryAfterHint } from './protocol.ts';
 
 /** Normalized failure class; overloads are folded into `server`. */
 export type ModelErrorKind =
@@ -35,10 +37,22 @@ export interface UpstreamErrorIdentity {
 export interface ModelErrorOptions {
   kind: ModelErrorKind;
   status?: number;
-  /** Supplied only when the upstream gave a usable hint (≤ 60 s). */
+  /** Supplied only when the upstream gave a usable hint (any length). */
   retryAfterMs?: number;
   /** The adopted upstream hint, kept with its original header value. */
   retryAfter?: RetryAfterHint;
+  /**
+   * Where the failure originated. Absent means an upstream fault; `admission`
+   * means the local Gateway circuit refused the request without calling
+   * upstream, so the upstream retry count must not be consumed.
+   */
+  source?: ModelFailureSource;
+  /**
+   * The absolute earliest instant (ISO 8601) the failed call may be retried:
+   * the local admission refusal's probe time, or an adopted recoverable wait.
+   * Set on a terminal bounded-wait failure so the caller reports `retryAt`.
+   */
+  retryAt?: string;
   upstream?: UpstreamErrorIdentity;
   /** Measured facts of the failed call, when the transport produced them. */
   metrics?: ModelMetrics;
@@ -55,6 +69,8 @@ export class ModelError extends Error {
   readonly status?: number;
   readonly retryAfterMs?: number;
   readonly retryAfter?: RetryAfterHint;
+  readonly source?: ModelFailureSource;
+  readonly retryAt?: string;
   readonly upstream?: UpstreamErrorIdentity;
   readonly metrics?: ModelMetrics;
   readonly outputStarted: boolean;
@@ -67,6 +83,8 @@ export class ModelError extends Error {
     if (options.status !== undefined) this.status = options.status;
     if (options.retryAfterMs !== undefined) this.retryAfterMs = options.retryAfterMs;
     if (options.retryAfter !== undefined) this.retryAfter = options.retryAfter;
+    if (options.source !== undefined) this.source = options.source;
+    if (options.retryAt !== undefined) this.retryAt = options.retryAt;
     if (options.upstream !== undefined && (options.upstream.type !== undefined || options.upstream.code !== undefined)) {
       this.upstream = options.upstream;
     }
@@ -159,10 +177,18 @@ export function describeFailure(failure: unknown, fallback: string): string {
 }
 
 /**
- * Parse `retry-after-ms` and `retry-after` from response headers, keeping only
- * a value at or below the transport's 60 s ceiling. Returns the adopted hint
- * with its original header value, or `undefined` when neither header gives a
- * usable hint.
+ * Parse `retry-after-ms` and `retry-after` from response headers. A valid hint
+ * is adopted at any length, including values above a minute: seconds, an HTTP
+ * date, or milliseconds are all accepted and kept as an absolute not-before
+ * instant, so the caller never retries before the advertised time. A missing or
+ * invalid header yields no hint; a hint that resolves to a past or zero instant
+ * is floored to a bounded minimum delay so the caller never spins.
+ *
+ * A syntactically numeric value that overflows to positive infinity is kept as
+ * a conservatively beyond-budget delay rather than treated as a 1-second hint or
+ * dropped to the exponential-backoff path, and no adopted instant may exceed the
+ * representable `Date` range, so an extreme hint can never produce an invalid
+ * `Date` or a `RangeError`.
  */
 export function retryAfterHintFromHeaders(headers: Headers): RetryAfterHint | undefined {
   const rawMs = headers.get('retry-after-ms');
@@ -170,25 +196,23 @@ export function retryAfterHintFromHeaders(headers: Headers): RetryAfterHint | un
   // the empty string as a zero delay.
   if (rawMs !== null && rawMs.trim() !== '') {
     const ms = Number(rawMs.trim());
-    if (Number.isFinite(ms) && ms >= 0) {
-      const delayMs = clampRetryAfter(ms);
-      if (delayMs !== undefined) return { source: 'retry-after-ms', value: rawMs, delayMs };
-    }
+    if (Number.isFinite(ms) && ms >= 0) return hint('retry-after-ms', rawMs, ms);
+    // A syntactically numeric value that overflowed to positive infinity is a
+    // conservatively beyond-budget delay, never a 1-second one.
+    if (ms === Number.POSITIVE_INFINITY) return hint('retry-after-ms', rawMs, ms);
   }
   const raw = headers.get('retry-after');
   if (raw === null) return undefined;
   const trimmed = raw.trim();
   if (trimmed === '') return undefined;
   const seconds = Number(trimmed);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    const delayMs = clampRetryAfter(seconds * 1_000);
-    return delayMs === undefined ? undefined : { source: 'retry-after', value: raw, delayMs };
-  }
+  if (Number.isFinite(seconds) && seconds >= 0) return hint('retry-after', raw, seconds * 1_000);
+  // The same for a seconds value whose own string overflowed to infinity; a
+  // finite seconds value whose millisecond product overflows is normalized by
+  // `hint` below.
+  if (seconds === Number.POSITIVE_INFINITY) return hint('retry-after', raw, seconds);
   const date = Date.parse(trimmed);
-  if (!Number.isNaN(date)) {
-    const delayMs = clampRetryAfter(date - Date.now());
-    return delayMs === undefined ? undefined : { source: 'retry-after', value: raw, delayMs };
-  }
+  if (!Number.isNaN(date)) return hint('retry-after', raw, date - Date.now());
   return undefined;
 }
 
@@ -197,11 +221,40 @@ export function retryAfterMsFromHeaders(headers: Headers): number | undefined {
   return retryAfterHintFromHeaders(headers)?.delayMs;
 }
 
-/** The transport honours an upstream retry hint only within its 60 s ceiling. */
-export const RETRY_AFTER_MAX_MS = 60_000;
+/** Bounded floor for an adopted hint so a past or missing instant never spins. */
+export const RETRY_AFTER_MIN_MS = 1_000;
 
-function clampRetryAfter(ms: number): number | undefined {
-  return ms <= RETRY_AFTER_MAX_MS ? Math.max(0, ms) : undefined;
+/** The largest instant a `Date` can represent (epoch ms). */
+const MAX_TIME_MS = 8_640_000_000_000_000;
+
+/**
+ * Headroom kept below {@link MAX_TIME_MS} when clamping an adopted hint's
+ * absolute instant, so a later `epoch + delayMs` read (the attempt record's
+ * `routeUntil`) still lands on a valid `Date`. One day is far more than any read
+ * needs and still leaves the instant astronomically beyond any recovery budget,
+ * so a conservatively beyond-budget hint stays beyond budget.
+ */
+const HINT_CEILING_HEADROOM_MS = 86_400_000;
+
+function hint(source: RetryAfterHint['source'], value: string, requestedMs: number): RetryAfterHint {
+  const now = Date.now();
+  const ceiling = MAX_TIME_MS - HINT_CEILING_HEADROOM_MS;
+  const capped = Math.min(now + normalizedHintDelay(requestedMs), ceiling);
+  const delayMs = Math.max(RETRY_AFTER_MIN_MS, Math.round(capped) - now);
+  return { source, value, delayMs, retryAt: now + delayMs };
+}
+
+/**
+ * Turn a parsed hint value into a finite, non-negative millisecond delay. A
+ * positive overflow — a syntactically numeric value too large for a finite
+ * number, or an infinity — stays at infinity so `hint` caps the instant at the
+ * representable ceiling instead of collapsing it to a 1-second hint. A `NaN` or
+ * negative overflow yields zero, so the caller's bounded minimum floor still
+ * applies and the wait never spins.
+ */
+function normalizedHintDelay(requestedMs: number): number {
+  if (!Number.isFinite(requestedMs)) return requestedMs > 0 ? Number.POSITIVE_INFINITY : 0;
+  return Math.max(0, requestedMs);
 }
 
 /** Read the `x-should-retry` hint, when the upstream supplied it. */
@@ -216,6 +269,10 @@ export function shouldRetryFromHeaders(headers: Headers): boolean | undefined {
  * Build a {@link ModelError} for a non-2xx response. The message keeps the
  * supplier's wording; the status, official identity and retry hints are kept
  * for classification and for the `gateway.request.completed` event.
+ *
+ * Only the Gateway's own `x-wrenyard-admission` header is read to mark a local
+ * admission refusal: it is a structured, Gateway-local marker, never an echoed
+ * upstream header, so a real upstream 503 stays an ordinary `upstream` failure.
  */
 export async function httpError(response: Response): Promise<ModelError> {
   const text = (await response.text().catch(() => '')).trim();
@@ -233,6 +290,16 @@ export async function httpError(response: Response): Promise<ModelError> {
   const message = excerpt !== '' ? excerpt : `Model request failed (HTTP ${response.status})`;
   const retryAfter = retryAfterHintFromHeaders(response.headers);
   const shouldRetry = shouldRetryFromHeaders(response.headers);
+  const admission = parseAdmissionRefusal(response.headers.get(GATEWAY_HEADERS.admission));
+  // A local admission refusal carries the absolute probe instant and takes
+  // precedence over any upstream hint. Without a refusal, a genuine upstream
+  // hint still supplies the absolute `retryAt`, so an exhausted upstream retry
+  // budget keeps the recovery instant for the caller instead of dropping it.
+  const retryAt = admission !== undefined
+    ? admission.retryAt
+    : retryAfter === undefined
+      ? undefined
+      : new Date(retryAfter.retryAt).toISOString();
   return new ModelError(message, {
     // An official context-overflow code decides before the status, so a 400
     // carrying `context_length_exceeded` still classifies as context overflow.
@@ -240,6 +307,10 @@ export async function httpError(response: Response): Promise<ModelError> {
       ? 'context_overflow'
       : classifyStatus(response.status, identity.code),
     status: response.status,
+    // A local admission refusal is marked as such, so the retry loop never
+    // spends an upstream retry on it.
+    ...(admission === undefined ? {} : { source: 'admission' as const }),
+    ...(retryAt === undefined ? {} : { retryAt }),
     ...(retryAfter === undefined ? {} : { retryAfterMs: retryAfter.delayMs, retryAfter }),
     upstream: identity,
     ...(shouldRetry === undefined ? {} : { shouldRetry }),
@@ -285,6 +356,10 @@ export function normalizeStreamError(error: unknown, signal: AbortSignal, output
       return new ModelError(error.message, {
         kind: 'interrupted', ...(error.status === undefined ? {} : { status: error.status }),
         ...(error.upstream === undefined ? {} : { upstream: error.upstream }), outputStarted: true,
+        // The origin and not-before instant survive the rewrite whether the
+        // failure stays an upstream one or is a local admission refusal.
+        ...(error.source === undefined ? {} : { source: error.source }),
+        ...(error.retryAt === undefined ? {} : { retryAt: error.retryAt }),
       });
     }
     return error;

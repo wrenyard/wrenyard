@@ -116,13 +116,33 @@ export type RetryAfterSource = 'retry-after' | 'retry-after-ms';
 /**
  * An upstream retry hint the transport actually adopted. The original header
  * value is kept verbatim so a caller can record the supplier's own wording in
- * the ledger; `delayMs` is the wait that was applied.
+ * the ledger; `delayMs` is the wait that was applied and `retryAt` is that wait
+ * expressed as an absolute not-before instant (epoch ms), so a hint longer than
+ * a minute is honoured exactly instead of being re-clamped relative to a later
+ * clock read.
  */
 export interface RetryAfterHint {
   source: RetryAfterSource;
   value: string;
   delayMs: number;
+  /** Absolute instant (epoch ms) before which no retry may start. */
+  retryAt: number;
 }
+
+/**
+ * Where a normalized failure originated. `upstream` is a real supplier
+ * response, connection failure or stream fault; `admission` is the local
+ * Gateway circuit refusing to admit the request, which never reached upstream,
+ * so it must never consume the upstream retry count or extend a cooldown.
+ */
+export type ModelFailureSource = 'upstream' | 'admission';
+
+/**
+ * Why the transport is waiting before its next attempt. `admission` is waiting
+ * for permission to probe a locally blocked route; `recovery` is a guaranteed
+ * wait until an adopted not-before instant.
+ */
+export type ModelWaitReason = 'admission' | 'recovery';
 
 /** Request attribution metadata; never sent to the supplier. */
 export interface ModelAttribution {
@@ -166,6 +186,15 @@ export interface ModelRequest {
    * attempt it already knows about, so one attempt is never double-counted.
    */
   attemptId?: string;
+  /**
+   * Optional main-reasoning route-health pre-check. When supplied, the
+   * transport runs it inside its own bounded retry loop, before the first
+   * attempt: it returns the absolute instant (epoch ms) the route may next be
+   * probed, or `undefined` when the route is callable now. This keeps a
+   * route-health wait in the one retry budget instead of a second nested one,
+   * so a route known to be cooling down is not probed early.
+   */
+  preflight?: () => number | undefined;
   signal: AbortSignal;
   /** Called for every event of the call, in arrival order. */
   onEvent?: (event: ModelEvent) => void;
@@ -177,6 +206,13 @@ export interface ModelRequest {
  * retry so a caller can treat the wait as activity. `retry.retryAfter` is present
  * only when an upstream hint was actually adopted for that retry; an ordinary
  * exponential-backoff retry never carries it.
+ *
+ * `wait` is the bounded recovery wait: the transport is not retrying an
+ * upstream failure but waiting until an absolute not-before instant — a local
+ * Gateway admission refusal (never counted as an upstream retry) or a guaranteed
+ * recovery after an adopted hint. `wait.reason` distinguishes waiting for
+ * permission to probe from a granted recovery and `wait.retryAt` is the exact
+ * instant the next probe/recovery is due.
  */
 export type ModelEvent =
   | { type: 'text'; delta: string }
@@ -184,7 +220,8 @@ export type ModelEvent =
   | { type: 'tool_call'; call: ModelToolCall }
   | { type: 'usage'; usage: Usage }
   | { type: 'activity' }
-  | { type: 'retry'; attempt: number; kind: ModelErrorKind; status?: number; delayMs: number; retryAfter?: RetryAfterHint };
+  | { type: 'retry'; attempt: number; kind: ModelErrorKind; status?: number; delayMs: number; retryAfter?: RetryAfterHint }
+  | { type: 'wait'; attempt: number; kind: ModelErrorKind; status?: number; delayMs: number; reason: ModelWaitReason; retryAt: string; retryAfter?: RetryAfterHint };
 
 /** One request actually issued during a call, in order. */
 export interface ModelAttempt {

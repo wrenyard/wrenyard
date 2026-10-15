@@ -1,3 +1,4 @@
+import type { LedgerEvent } from '@wrenyard/session';
 import type { TimelineTone } from '@/renderer/components/timeline-bars';
 import type { ActionModel, CallModel, ContextItem, Phase, TurnModel } from './types.js';
 
@@ -131,6 +132,36 @@ export function turnStatusText(turn: TurnModel): string {
     default:
       return '准备上下文…';
   }
+}
+
+/** The live bounded-recovery waiting state of one turn, projected from its `turn.waiting` event. */
+export type TurnWaitingState = Pick<Extract<LedgerEvent, { type: 'turn.waiting' }>, 'reason' | 'retryAt'>;
+
+/** Short phase name for the waiting lane, alongside the existing phase labels. */
+export const WAITING_PHASE_LABEL = '等待恢复';
+
+/** Chinese label for why the active turn is waiting in bounded recovery. */
+export const WAITING_REASON_LABEL: Record<TurnWaitingState['reason'], string> = {
+  admission: '等待线路允许探测',
+  recovery: '等待线路恢复',
+};
+
+function pad2(value: number): string {
+  return value.toString().padStart(2, '0');
+}
+
+/**
+ * Chinese status for a turn waiting in bounded recovery: whether it is waiting
+ * for permission to probe a locally blocked route or for a guaranteed
+ * recovery, the exact local-time next probe instant, and that the turn can
+ * still be interrupted.
+ */
+export function waitingStatusText(state: TurnWaitingState): string {
+  const parsed = Date.parse(state.retryAt);
+  const time = Number.isFinite(parsed)
+    ? `，约 ${pad2(new Date(parsed).getHours())}:${pad2(new Date(parsed).getMinutes())}:${pad2(new Date(parsed).getSeconds())} 可重试`
+    : '';
+  return `${WAITING_REASON_LABEL[state.reason]}${time}（可中断）`;
 }
 
 export interface NoFinalReply {

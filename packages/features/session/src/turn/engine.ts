@@ -6,7 +6,7 @@
  * is the only composition root: it builds the ports and hands them to
  * {@link createEngine}. There is no compatibility mechanism and no legacy role.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -31,6 +31,7 @@ import type {
   InvokedCall,
   LedgerPort,
   LiveCall,
+  RecoveryWait,
   Session,
   SessionCallHost,
   SessionHost,
@@ -73,6 +74,29 @@ class Engine implements Session, SessionCallHost {
    * suggestion calls riding the same completed turn at once.
    */
   private readonly suggestionRequests = new Map<string, { requestId: string; controller: AbortController }>();
+  /**
+   * Sessions whose active turn is currently waiting in bounded recovery, mapped
+   * to that turn's number plus its selected model, effort and attachment
+   * identity. A repeated 'continue' of the same selected model and effort while
+   * a turn is waiting must not create a second turn or dispatch, so this is read
+   * synchronously before any async send work. Independent concurrent turns, an
+   * explicit model or effort change and an unrelated message stay unaffected.
+   */
+  private readonly recoveryWaits = new Map<string, RecoveryWait>();
+  /**
+   * The narrow pending-send latch: the identity and result of a `send` whose
+   * admission is still in flight. Two rapid identical sends in the same tick —
+   * before any recovery marker exists — share one turn instead of creating two.
+   * It is set synchronously at the start of `send` and cleared once the send
+   * settles (on failure, cancel or admission).
+   */
+  private readonly pendingSends = new Map<string, {
+    model: string;
+    effort: ReasoningEffort;
+    text: string;
+    attachmentsKey: string;
+    result: Promise<{ turn: number }>;
+  }>();
   private ready: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
@@ -182,9 +206,82 @@ class Engine implements Session, SessionCallHost {
     },
   ): Promise<{ turn: number }> {
     this.assertOpen();
+    const model = `${input.model.provider}/${input.model.model}`;
+    const effort = input.model.reasoningEffort;
+    const attachmentsKey = attachmentKey(input.attachments);
+
+    // A turn already waiting in bounded recovery owns the exchange: a repeated
+    // continue of the same selected model and effort — or a double click — must
+    // not create a second turn or dispatch. Decided synchronously, before any
+    // await, so two continuations in the same tick cannot both admit a turn. A
+    // continue after a prior terminal failure still creates exactly one waiting
+    // turn; an explicit model or effort change, an unrelated message or a
+    // different attachment set is always admitted.
+    const waiting = this.recoveryWaits.get(sessionId);
+    if (waiting !== undefined
+      && waiting.model === model
+      && waiting.effort === effort
+      && this.isWaitingResubmission(sessionId, waiting, input.text, attachmentsKey)) {
+      return { turn: waiting.turn };
+    }
+
+    // Two rapid identical sends before any recovery marker exists share one
+    // turn: the narrow latch is set before any async send work. The fingerprint
+    // includes the effort and the stable attachment identity, so a changed
+    // level or attachment is never swallowed.
+    const pending = this.pendingSends.get(sessionId);
+    if (pending !== undefined
+      && pending.model === model
+      && pending.effort === effort
+      && pending.text === input.text
+      && pending.attachmentsKey === attachmentsKey) {
+      return pending.result;
+    }
+
+    const result = this.admitTurn(sessionId, input, model);
+    this.pendingSends.set(sessionId, { model, effort, text: input.text, attachmentsKey, result });
+    try {
+      return await result;
+    } finally {
+      if (this.pendingSends.get(sessionId)?.result === result) this.pendingSends.delete(sessionId);
+    }
+  }
+
+  /**
+   * Whether a new send is the same continuation of a turn already waiting in
+   * bounded recovery: the exact original text with an identical attachment set,
+   * or a plain attachment-free manual continue (`继续` / `continue`) on the same
+   * selected model. Anything else — different text, a different attachment set
+   * — is a genuinely new message and must not be swallowed.
+   */
+  private isWaitingResubmission(
+    sessionId: string,
+    waiting: RecoveryWait,
+    text: string,
+    attachmentsKey: string,
+  ): boolean {
+    const ongoing = this.sessions.get(sessionId)?.turns.get(waiting.turn);
+    if (ongoing === undefined) return false;
+    if (text === ongoing.userText && attachmentsKey === waiting.attachmentsKey) return true;
+    return attachmentsKey === '' && isPlainContinue(text);
+  }
+
+  /**
+   * Admit one turn: resolve the session, import attachments, assign the turn
+   * number and start the runner. Split out of {@link send} so the synchronous
+   * send guard and latch always run before this async work.
+   */
+  private async admitTurn(
+    sessionId: string,
+    input: {
+      text: string;
+      model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+      attachments?: AttachmentInput[];
+    },
+    publicId: string,
+  ): Promise<{ turn: number }> {
     // Resolve (recovering if needed) the session before any import, copy or append.
     const session = await this.ensureSession(sessionId);
-    const publicId = `${input.model.provider}/${input.model.model}`;
     this.assertOpen();
     const metadata = resolveModelMetadata(publicId, (id) => this.host.resolveInferenceProvider(id));
     const effort = input.model.reasoningEffort;
@@ -218,7 +315,14 @@ class Engine implements Session, SessionCallHost {
     // their numbers in invocation order rather than in resolution order.
     const turnNumber = session.nextTurn;
     session.nextTurn += 1;
-    const turn = this.createTurn(turnNumber, input.text, input.model, publicId, metadata.contextWindow);
+    const turn = this.createTurn(
+      turnNumber,
+      input.text,
+      attachmentKey(input.attachments),
+      input.model,
+      publicId,
+      metadata.contextWindow,
+    );
     session.turns.set(turnNumber, turn);
     // A new user turn ends the exchange a suggestion described; abort any
     // pending suggestion, including one started by another client.
@@ -268,6 +372,23 @@ class Engine implements Session, SessionCallHost {
 
     this.track(this.turnRunner.runTurn(session, turn));
     return { turn: turnNumber };
+  }
+
+  /**
+   * Record that a session's active turn is waiting in bounded recovery. The
+   * turn/call path calls this when a wait starts; the value only gates duplicate
+   * continuations of the same selected model and effort in {@link send}.
+   */
+  setRecoveryWait(sessionId: string, waiting: RecoveryWait): void {
+    this.recoveryWaits.set(sessionId, waiting);
+  }
+
+  /**
+   * Clear a session's recovery marker, but only for the turn that set it: the
+   * completion or cancel of a different turn must never clear an active wait.
+   */
+  clearRecoveryWait(sessionId: string, turn: number): void {
+    if (this.recoveryWaits.get(sessionId)?.turn === turn) this.recoveryWaits.delete(sessionId);
   }
 
   async interrupt(sessionId: string, turn: number): Promise<void> {
@@ -350,6 +471,8 @@ class Engine implements Session, SessionCallHost {
     }
     this.sessions.delete(sessionId);
     this.ensuring.delete(sessionId);
+    this.recoveryWaits.delete(sessionId);
+    this.pendingSends.delete(sessionId);
     this.live.drop(sessionId);
   }
 
@@ -421,6 +544,9 @@ class Engine implements Session, SessionCallHost {
     await this.turnRunner.flushResults(session, runtime);
     await this.ports.ledger.append(sessionId, { type: 'turn.finished', turn, id: turnId(turn), status: 'interrupted' });
     runtime.durableTerminal = true;
+    // An interrupted turn is no longer waiting: drop its recovery marker, fenced
+    // by turn number so it never clears another active turn's wait.
+    this.clearRecoveryWait(sessionId, turn);
   }
 
   activeTurnCount(): number {
@@ -771,6 +897,7 @@ class Engine implements Session, SessionCallHost {
   private createTurn(
     turn: number,
     userText: string,
+    attachmentsKey: string,
     model: { provider: string; model: string; reasoningEffort: ReasoningEffort },
     publicId: string,
     contextWindow: number | undefined,
@@ -778,6 +905,7 @@ class Engine implements Session, SessionCallHost {
     return {
       turn,
       userText,
+      attachmentsKey,
       model,
       publicId,
       ...(contextWindow === undefined ? {} : { contextWindow }),
@@ -869,6 +997,8 @@ class Engine implements Session, SessionCallHost {
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
+      /** Forwarded for the `reason` role's bounded-recovery wait lifecycle. */
+      onWait?: (state: { reason: import('../transport/index.ts').ModelWaitReason; retryAt: string } | null) => void;
       tools?: readonly import('../transport/index.ts').ToolSpec[];
       toolChoice?: import('../transport/index.ts').ToolChoice;
       maxTokens?: number;
@@ -897,6 +1027,7 @@ class Engine implements Session, SessionCallHost {
         ...(extra.onText === undefined ? {} : { onText: extra.onText }),
         ...(extra.onReasoning === undefined ? {} : { onReasoning: extra.onReasoning }),
         ...(extra.onToolCall === undefined ? {} : { onToolCall: extra.onToolCall }),
+        ...(extra.onWait === undefined ? {} : { onWait: extra.onWait }),
         ...(extra.tools === undefined ? {} : { tools: extra.tools }),
         ...(extra.toolChoice === undefined ? {} : { toolChoice: extra.toolChoice }),
         ...(extra.maxTokens === undefined ? {} : { maxTokens: extra.maxTokens }),
@@ -987,4 +1118,31 @@ function lastTurnModel(events: readonly LedgerEvent[], turn: number): string | u
     if (event.type === 'turn.started' && event.turn !== turn) return `${event.model.provider}/${event.model.model}`;
   }
   return undefined;
+}
+
+/**
+ * Stable identity of one send's attachment list, for the narrow send latch and
+ * the recovery-resubmission comparison.
+ */
+function attachmentKey(attachments: readonly AttachmentInput[] | undefined): string {
+  if (attachments === undefined || attachments.length === 0) return '';
+  // Hash every identity field, so an attachment set with only a data URL (no
+  // path) still has a distinct, stable key rather than collapsing to the empty
+  // string and being mistaken for an attachment-free send.
+  const hash = createHash('sha256');
+  for (const item of attachments) {
+    hash.update(item.path ?? '');
+    hash.update('\u0000');
+    hash.update(item.name ?? '');
+    hash.update('\u0000');
+    hash.update(item.dataUrl ?? '');
+    hash.update('\u0001');
+  }
+  return hash.digest('hex');
+}
+
+/** A plain, attachment-free manual continue: trimmed `继续` or `continue`. */
+function isPlainContinue(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === '继续' || trimmed.toLowerCase() === 'continue';
 }

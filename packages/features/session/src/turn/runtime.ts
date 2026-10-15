@@ -26,6 +26,8 @@ export interface ResultBundle {
 export interface TurnRuntime {
   turn: number;
   userText: string;
+  /** Stable identity of this turn's attachment inputs, for the recovery dedup. */
+  attachmentsKey: string;
   model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
   publicId: string;
   contextWindow?: number;

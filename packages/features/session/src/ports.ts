@@ -15,7 +15,7 @@ import type {
 } from './ledger/store.ts';
 import type { CallRole } from './model/request.ts';
 import type { ContextInspectRequest, ContextInspection } from './context/inspect.ts';
-import type { Message as ModelMessage, ModelContentPart, ToolCall, ToolSpec, ToolChoice, Usage, ModelMetrics } from './transport/index.ts';
+import type { Message as ModelMessage, ModelContentPart, ModelWaitReason, ToolCall, ToolSpec, ToolChoice, Usage, ModelMetrics } from './transport/index.ts';
 import type { AttachmentInput, FileStore, TaskArtifact } from './media.ts';
 import type { DocCatalogEntry } from './workspace.ts';
 import type { ActionRunContext } from './reasoning/actions.ts';
@@ -285,6 +285,12 @@ export interface CallRunRequest {
   onReasoning?: (delta: string) => void;
   /** Completed native wy_action tool calls, delivered as each one is parsed. */
   onToolCall?: (call: ToolCall) => void;
+  /**
+   * The `reason` role's bounded-recovery wait lifecycle: the absolute next
+   * probe/recovery instant and the wait reason when a wait begins, `null` when
+   * it is cleared. Ignored for other roles.
+   */
+  onWait?: (state: { reason: ModelWaitReason; retryAt: string } | null) => void;
 }
 
 export interface CallRunResult {
@@ -377,6 +383,8 @@ export interface SessionCallHost {
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
+      /** Forwarded to the call runner for the `reason` role's wait lifecycle. */
+      onWait?: (state: { reason: ModelWaitReason; retryAt: string } | null) => void;
       tools?: readonly ToolSpec[];
       toolChoice?: ToolChoice;
       maxTokens?: number;
@@ -390,6 +398,26 @@ export interface SessionCallHost {
     },
   ): Promise<InvokedCall>;
   safeCancelTask(taskRunId: string): Promise<void>;
+  /**
+   * Mark the session's active turn as waiting in bounded recovery: the one live
+   * waiting state the engine exposes and the send guard reads, so a repeated
+   * continue while a turn waits starts no extra turn. It carries the selected
+   * model, effort and attachment identity a resubmission must match.
+   */
+  setRecoveryWait(sessionId: string, waiting: RecoveryWait): void;
+  /**
+   * Clear a session's recovery marker, fenced by turn number so the completion
+   * or cancel of a different turn can never clear an active wait.
+   */
+  clearRecoveryWait(sessionId: string, turn: number): void;
+}
+
+/** One session's live recovery marker, as exposed by {@link SessionCallHost}. */
+export interface RecoveryWait {
+  turn: number;
+  model: string;
+  effort: ReasoningEffort;
+  attachmentsKey: string;
 }
 
 /**

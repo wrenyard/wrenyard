@@ -1,6 +1,8 @@
 import {
+  GATEWAY_ADMISSION_REFUSED,
   GATEWAY_HEADERS,
   GATEWAY_UPSTREAM_RESPONSE_HEADERS,
+  type GatewayAdmissionRefusal,
 } from '@wrenyard/providers/base';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import {
@@ -336,7 +338,21 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         const retryAt = admission.status.nextProbeAt ?? admission.status.until;
         const message = `Route ${publicModel} is unavailable (fault ${admission.status.faultKind ?? admission.status.state}, circuit ${admission.status.phase}); retry after ${retryAt}`;
         const retrySeconds = Math.max(0, Math.ceil((Date.parse(retryAt) - options.now()) / 1000));
-        response.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'retry-after': String(retrySeconds) });
+        // The admission refusal carries a structured, Gateway-local marker so a
+        // caller can distinguish the local circuit refusing the request from a
+        // real upstream fault. The protocol error body and the `retry-after`
+        // hint keep their existing shape and values.
+        const refusal: GatewayAdmissionRefusal = {
+          kind: GATEWAY_ADMISSION_REFUSED,
+          retryAt,
+          phase: admission.status.phase,
+          ...(admission.status.faultKind === undefined ? {} : { faultKind: admission.status.faultKind }),
+        };
+        response.writeHead(503, {
+          'content-type': 'application/json; charset=utf-8',
+          'retry-after': String(retrySeconds),
+          [GATEWAY_HEADERS.admission]: JSON.stringify(refusal),
+        });
         response.end(JSON.stringify(gatewayErrorBody(module, 503, message)));
         await finish({
           ...target, status: 503, routeState: admission.status.state, routeUntil: retryAt,

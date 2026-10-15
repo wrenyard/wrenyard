@@ -241,6 +241,35 @@ export class TurnRunner {
         reasoningEffort: turn.model.reasoningEffort,
       },
       ...(maxTokens === undefined ? {} : { maxTokens }),
+      // The bounded-recovery wait lifecycle: record the observational waiting
+      // events (never model context) and expose/clear the engine's live waiting
+      // marker, which gates a repeated continue of the same selected model. A
+      // later attempt, completion or cancel appends the matching clear and drops
+      // the marker (fenced by turn number).
+      onWait: (state) => {
+        if (state === null) {
+          this.engine.clearRecoveryWait(session.sessionId, turn.turn);
+          this.engine.track(this.engine.ledger.append(session.sessionId, {
+            type: 'turn.waiting.cleared',
+            turn: turn.turn,
+            parent: turnId(turn.turn),
+          }));
+          return;
+        }
+        this.engine.setRecoveryWait(session.sessionId, {
+          turn: turn.turn,
+          model: turn.publicId,
+          effort: turn.model.reasoningEffort,
+          attachmentsKey: turn.attachmentsKey,
+        });
+        this.engine.track(this.engine.ledger.append(session.sessionId, {
+          type: 'turn.waiting',
+          turn: turn.turn,
+          parent: turnId(turn.turn),
+          reason: state.reason,
+          retryAt: state.retryAt,
+        }));
+      },
       tools: [ACTION_TOOL],
       onText: (delta) => {
         turn.stepText += delta;
