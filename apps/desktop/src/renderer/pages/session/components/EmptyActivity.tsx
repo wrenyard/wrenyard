@@ -5,9 +5,6 @@ import { buildActivityHeatmap } from '@/renderer/pages/stats/model/heatmap';
 import { useStatsQuery } from '@/renderer/pages/stats/queries';
 import { cn } from 'cn';
 
-/** Last 26 weeks of daily days feed the strip; anything older is dropped. */
-const RANGE_DAYS = 26 * 7;
-
 type RelativeLevel = 0 | 1 | 2 | 3 | 4;
 
 /** Intensity ramp relative to the user's own usage, not the ledger's fixed steps. */
@@ -40,11 +37,13 @@ function levelFor(tokens: number, [q1, q2, q3]: [number, number, number]): Relat
  * formatter, shows the last 26 weeks as dots on a relative scale, and hides
  * itself while the stats load, are unavailable or hold no activity.
  */
-export function EmptyActivity() {
+export function EmptyActivity({ weeks = 26 }: { weeks?: number }) {
   const query = useStatsQuery();
   const snapshot = query.data;
   if (query.isPending || query.isError || !snapshot || snapshot.status !== 'available') return null;
 
+  // How many weeks of daily days feed the strip; anything older is dropped.
+  const RANGE_DAYS = weeks * 7;
   const days = snapshot.daily.slice(-RANGE_DAYS);
   const lastRealDay = days.at(-1);
   if (!lastRealDay || days.every((day) => day.totalTokens === 0)) return null;
@@ -68,7 +67,7 @@ export function EmptyActivity() {
   if (streak > 0) parts.push(`连续 ${streak} 天`);
 
   return (
-    <div className="mx-auto flex w-fit flex-col items-center gap-2">
+    <div className="flex flex-col items-start gap-2">
       <div className="grid grid-flow-col grid-rows-7 gap-1" role="list">
         {model.slots.map((slot, index) => {
           const day = slot.day;
@@ -101,7 +100,7 @@ export function EmptyActivity() {
           );
         })}
       </div>
-      <span className="text-center text-xs text-muted-foreground">{parts.join(' · ')}</span>
+      <span className="text-xs text-muted-foreground">{parts.join(' · ')}</span>
     </div>
   );
 }
