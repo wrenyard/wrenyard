@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Plus, X } from 'lucide-react';
 import { countInputTokens } from '../model/usage.js';
@@ -57,20 +57,22 @@ function useSurfaceVisible(): boolean {
 export interface ComposerProps {
   models: ModelEntry[];
   turns: TurnModel[];
-  /** Changes on session switch (or `'draft'`), resetting the model and focus. */
+  /** Changes on session switch (or `'draft'`), resetting the model. */
   sessionKey: string;
   disabled?: boolean;
   onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): void | Promise<void>;
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
   /** Bumped to request an explicit input focus (e.g. the new-conversation shortcut). */
   focusRequest?: number;
+  /** Invoked after an explicit focus request has been consumed. */
+  onFocusRequestHandled?: () => void;
   /** Quote of the message being replied to. */
   reply?: string | undefined;
   onCancelReply?: () => void;
 }
 
 /** Bottom composer with a unified model/effort picker, attachments and a send button. */
-export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, reply, onCancelReply }: ComposerProps) {
+export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, onFocusRequestHandled, reply, onCancelReply }: ComposerProps) {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
@@ -231,7 +233,6 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       setModelId(match?.publicId ?? '');
       const supported = match?.reasoningEfforts ?? [];
       if (supported.length > 0) setEffort(retainReasoningEffort(last.model.reasoningEffort, supported));
-      textareaRef.current?.focus();
       return;
     }
     // A brand-new session inherits the previous session's FIRST request model
@@ -242,7 +243,6 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     setModelId(match?.publicId ?? '');
     const supported = match?.reasoningEfforts ?? [];
     if (supported.length > 0) setEffort(retainReasoningEffort(inherited === undefined ? undefined : first?.effort, supported));
-    textareaRef.current?.focus();
   }, [sessionKey, models, turns.at(-1)?.id]);
 
   useEffect(() => {
@@ -252,11 +252,18 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     textareaRef.current?.focus();
   }, [injectedText?.nonce]);
 
-  useEffect(() => {
-    if (focusRequest > 0 && !disabled) textareaRef.current?.focus();
-  }, [focusRequest, disabled]);
-
   const selected = models.find((entry) => entry.publicId === modelId);
+
+  // An explicit focus request is one-shot: it is served only once the textarea
+  // is actually ready (mounted, enabled and carrying a selected model), then
+  // consumed so later disabled/model refreshes cannot reuse it. A layout effect
+  // commits the focus before paint once the input mounts.
+  useLayoutEffect(() => {
+    if (focusRequest <= 0) return;
+    if (disabled || !selected) return;
+    textareaRef.current?.focus({ preventScroll: true });
+    onFocusRequestHandled?.();
+  }, [focusRequest, disabled, selected, onFocusRequestHandled]);
   const options: ModelOption[] = models.map((entry) => ({
     value: entry.publicId,
     label: entry.displayName,

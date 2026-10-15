@@ -273,6 +273,7 @@ export function SessionPage() {
       }}
       injectedText={retry}
       focusRequest={composerFocusRequest}
+      onFocusRequestHandled={() => setComposerFocusRequest(0)}
       reply={reply}
       onCancelReply={() => setReplyTo(undefined)}
     />
