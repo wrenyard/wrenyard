@@ -6,7 +6,7 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/rendere
 import { Separator } from '@/renderer/components/ui/separator';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { useConfirm } from '@/renderer/hooks/use-confirm';
-import { UPDATE_VISIBLE_STATES } from '@/renderer/app/nav';
+import { PRIMARY_NAV, UPDATE_VISIBLE_STATES } from '@/renderer/app/nav';
 import { executeCommand } from '@/renderer/lib/commands';
 import { shell } from '@/renderer/lib/desktop';
 import { daemonQuery, settingsQuery, updateQuery } from '@/renderer/lib/queries';
@@ -24,7 +24,8 @@ import { cn } from 'cn';
  * long button shows the connection icon, the truthful environment label and a
  * small connectivity dot, and opens a menu with the daemon version, uptime, IPC
  * endpoint and lifecycle ownership, a restart action when the daemon is
- * Desktop-supervised, the usage and about destinations, and the update entry.
+ * Desktop-supervised, the usage, trace, ledger and about destinations, and the
+ * update entry.
  * While an update is actionable, a compact direct-dialog 更新 button renders
  * beside the trigger so it stays discoverable without opening the menu.
  */
@@ -232,6 +233,23 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
             <Gauge />
             <span>用量</span>
           </Button>
+          {/* Destinations the sidebar header no longer exposes stay reachable here. */}
+          {PRIMARY_NAV.filter((item) => item.id === 'trace' || item.id === 'stats').map((item) => (
+            <Button
+              key={item.id}
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="justify-start gap-2"
+              onClick={() => {
+                setOpen(false);
+                void shell.navigate(item.id);
+              }}
+            >
+              <item.icon />
+              <span>{item.label}</span>
+            </Button>
+          ))}
           <Button
             type="button"
             variant="ghost"

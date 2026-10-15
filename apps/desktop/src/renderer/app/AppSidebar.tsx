@@ -1,4 +1,4 @@
-import { MoreHorizontal, Search, SquarePen } from 'lucide-react';
+import { Search, SquarePen } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { SESSION_STATUS_FILTER_DEFAULT, type ShellPage, type SessionStatusFilter } from '@/shell-contract';
 import { shell } from '@/renderer/lib/desktop';
@@ -13,12 +13,6 @@ import { SessionSidebar } from '@/renderer/pages/session/components/SessionSideb
 import { DaemonItem } from '@/renderer/app/statusbar/DaemonItem';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/renderer/components/ui/dropdown-menu';
 import { usePreferencesQuery } from '@/renderer/pages/settings/queries';
 import {
   Sidebar,
@@ -46,18 +40,20 @@ function matchesStatusFilter(session: { archived?: boolean }, filter: SessionSta
   return session.archived !== true;
 }
 
-/** Route rows kept full-width in the header; the rest fold into the 更多 menu. */
-const VISIBLE_NAV_IDS: ReadonlySet<ShellPage> = new Set(['session', 'tasks']);
+/** Full-width page rows rendered directly below the header's action buttons. */
+const VISIBLE_NAV_IDS: ReadonlySet<ShellPage> = new Set(['tasks', 'schedules']);
 
 /**
  * The shell's single global sidebar (`offcanvas`, no icon rail): a top group of
- * full-width rows (new conversation, search, and the most-used pages 会话 and
- * 任务) alongside a 更多 menu that folds in the remaining feature pages, the
- * shared conversation list with its own scrolling, and a bottom bar pinned at
- * the bottom. The bottom bar holds the long Daemon button (environment label and
- * connectivity, opening the daemon menu) on the left and a compact settings icon
- * button on the right. The list is composed through `SessionSidebar`'s header
- * and footer slots so there is only one conversation-list implementation.
+ * full-width rows — the 新建对话 and 搜索 action buttons followed by the 任务 and
+ * 定时任务 pages — the shared conversation list with its own scrolling, and a
+ * bottom bar pinned at the bottom. The bottom bar holds the long Daemon button
+ * (environment label and connectivity, opening the daemon menu) on the left and a
+ * compact settings icon button on the right. The other feature pages stay
+ * reachable outside this header (追踪 and 工房台账 from the Daemon menu, 模型供应
+ * from Settings), so the header only carries the four primary entries. The list
+ * is composed through `SessionSidebar`'s header and footer slots so there is only
+ * one conversation-list implementation.
  *
  * The list's row actions are wired here directly against the session bridge
  * (never through a session-page-only command), so grouping, sorting, filtering,
@@ -73,8 +69,6 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
   const list = sessions.data ?? [];
   const statusFilter = preferences.data?.session.statusFilter ?? SESSION_STATUS_FILTER_DEFAULT;
   const visibleNav = PRIMARY_NAV.filter((item) => VISIBLE_NAV_IDS.has(item.id));
-  const secondaryNav = PRIMARY_NAV.filter((item) => !VISIBLE_NAV_IDS.has(item.id));
-  const secondaryActive = secondaryNav.some((item) => item.id === page);
 
   const invalidateList = (): Promise<void> =>
     queryClient.invalidateQueries({ queryKey: sessionListQueryKey });
@@ -163,29 +157,6 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
             </SidebarMenuButton>
           </SidebarMenuItem>
         ))}
-        <SidebarMenuItem>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<SidebarMenuButton isActive={secondaryActive} aria-label="更多" />}
-            >
-              <MoreHorizontal />
-              <span>更多</span>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-48">
-              {secondaryNav.map((item) => (
-                <DropdownMenuItem
-                  key={item.id}
-                  aria-current={page === item.id ? 'page' : undefined}
-                  className={cn(page === item.id && 'bg-accent text-accent-foreground')}
-                  onClick={() => void shell.navigate(item.id)}
-                >
-                  <item.icon />
-                  <span>{item.label}</span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </SidebarMenuItem>
       </SidebarMenu>
     </SidebarHeader>
   );
@@ -224,7 +195,9 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
     >
       <SessionSidebar
         sessions={list}
-        selectedId={selectedId}
+        // Only the session page may highlight a conversation; every other page
+        // clears the selection while the shared active session is remembered.
+        selectedId={page === 'session' ? selectedId : ''}
         loading={sessions.isPending}
         onSelect={(sessionId) => { executeCommand('session.open', sessionId); }}
         onNew={() => { executeCommand('session.newDraft'); }}
