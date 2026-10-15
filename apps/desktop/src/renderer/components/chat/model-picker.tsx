@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { BatteryFull, Gauge, Gift, Zap } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { BatteryFull, Gauge, Gift, Search, Zap } from 'lucide-react';
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import {
   DropdownMenu,
@@ -14,7 +14,12 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/renderer/components/ui/dropdown-menu';
-import { InputGroupButton } from '@/renderer/components/ui/input-group';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/renderer/components/ui/input-group';
 
 /** One catalog-derived supply badge. Runtime is never a badge. */
 export interface ModelBadge {
@@ -128,8 +133,18 @@ function SelectedModelIndicator() {
  * submenu trigger (with a distinct selected-model mark) whose content is a radio
  * group of that model's supported reasoning efforts. Choosing an effort selects
  * that model and that exact level in one action. Values are opaque to the page.
+ *
+ * The popup is capped at `min(24rem, available viewport space)` with a fixed
+ * search header; only the result list scrolls (scrollbars hidden). The search
+ * field filters by model name/id and provider group name, and takes over the
+ * keyboard so its text editing never reaches the menu's typeahead.
  */
 export function ModelPicker({ models, value, effort, onChange, disabled = false, placeholder = '选择模型', className }: ModelPickerProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+
   const groups = useMemo(() => {
     const map = new Map<string, ModelOption[]>();
     for (const model of models) {
@@ -147,8 +162,79 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
 
   const effortLabel = REASONING_EFFORT_NAMES[effort];
 
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleGroups = useMemo(() => {
+    if (normalizedQuery === '') return groups;
+    return groups
+      .map((group) => {
+        // A matching provider name keeps that provider's whole list.
+        if (group.value.toLowerCase().includes(normalizedQuery)) return group;
+        return {
+          value: group.value,
+          items: group.items.filter(
+            (item) =>
+              item.label.toLowerCase().includes(normalizedQuery) ||
+              item.value.toLowerCase().includes(normalizedQuery),
+          ),
+        };
+      })
+      .filter((group) => group.items.length > 0);
+  }, [groups, normalizedQuery]);
+
+  // The open popup moves focus onto its menu items; hand focus to the search
+  // field instead, and re-assert it on the next frame in case the menu's own
+  // initial-focus pass lands after this effect.
+  useEffect(() => {
+    if (!open) return;
+    searchRef.current?.focus();
+    const frame = requestAnimationFrame(() => searchRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+
+  /** Result rows in visual order; disabled rows are never a focus target. */
+  function modelRows(): HTMLElement[] {
+    const container = resultsRef.current;
+    if (container === null) return [];
+    return Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '[data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-sub-trigger"]',
+      ),
+    ).filter((row) => row.getAttribute('aria-disabled') !== 'true');
+  }
+
+  function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    // While the IME is composing, ArrowUp/ArrowDown and Escape belong to the
+    // candidate window, not to us; keep the key in the field and never move
+    // focus or prevent the IME's default handling.
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) {
+      event.stopPropagation();
+      return;
+    }
+    // Escape closes the menu and Tab leaves it; both stay with the menu.
+    if (event.key === 'Escape' || event.key === 'Tab') return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const rows = modelRows();
+      const target = event.key === 'ArrowDown' ? rows[0] : rows[rows.length - 1];
+      event.preventDefault();
+      event.stopPropagation();
+      target?.focus();
+      return;
+    }
+    // Text editing (including IME composition) must not reach the menu's
+    // typeahead or list navigation; stopping propagation keeps the keystroke in
+    // the field without preventing its default behaviour.
+    event.stopPropagation();
+  }
+
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) => {
+        // A reopened menu always starts from an unfiltered list.
+        if (next) setQuery('');
+        setOpen(next);
+      }}
+    >
       <DropdownMenuTrigger
         render={
           <InputGroupButton
@@ -168,56 +254,85 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
           </span>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" className="min-w-64">
-        {groups.map((group) => (
-          <DropdownMenuGroup key={group.value}>
-            <DropdownMenuLabel>{group.value}</DropdownMenuLabel>
-            {group.items.map((option) => {
-              const isCurrent = option.value === value;
-              const checked = isCurrent ? effort : option.defaultEffort;
-              if (option.efforts.length === 0) {
-                return (
-                  <DropdownMenuItem
-                    key={option.value}
-                    onClick={() => onChange(option.value, checked)}
-                    className={isCurrent ? 'bg-accent/60 font-medium' : undefined}
-                  >
-                    <ModelOptionContent option={option} />
-                    {isCurrent && <SelectedModelIndicator />}
-                  </DropdownMenuItem>
-                );
-              }
-              return (
-                <DropdownMenuSub key={option.value}>
-                  <DropdownMenuSubTrigger className={isCurrent ? 'bg-accent/60 font-medium' : undefined}>
-                    <ModelOptionContent option={option} />
-                    {isCurrent && <SelectedModelIndicator />}
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuRadioGroup
-                      value={checked}
-                      onValueChange={(next) => {
-                        if (typeof next === 'string' && (option.efforts as readonly string[]).includes(next)) {
-                          onChange(option.value, next as ReasoningEffort);
-                        }
-                      }}
-                    >
-                      {option.efforts.map((level) => (
-                        <DropdownMenuRadioItem
-                          key={level}
-                          value={level}
-                          className="not-focus:data-[checked]:bg-accent/60 data-[checked]:font-medium"
+      <DropdownMenuContent
+        side="top"
+        className="flex max-h-[min(24rem,var(--available-height))] min-h-0 min-w-64 flex-col overflow-hidden"
+      >
+        <div className="shrink-0 pb-1">
+          <InputGroup>
+            <InputGroupAddon align="inline-start">
+              <Search />
+            </InputGroupAddon>
+            <InputGroupInput
+              ref={searchRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={onSearchKeyDown}
+              placeholder="Search models"
+              aria-label="Search models"
+              spellCheck={false}
+              autoComplete="off"
+            />
+          </InputGroup>
+        </div>
+        <div
+          ref={resultsRef}
+          className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        >
+          {visibleGroups.length === 0 ? (
+            <p className="px-2 py-6 text-center text-sm text-muted-foreground">No models found</p>
+          ) : (
+            visibleGroups.map((group) => (
+              <DropdownMenuGroup key={group.value}>
+                <DropdownMenuLabel>{group.value}</DropdownMenuLabel>
+                {group.items.map((option) => {
+                  const isCurrent = option.value === value;
+                  const checked = isCurrent ? effort : option.defaultEffort;
+                  if (option.efforts.length === 0) {
+                    return (
+                      <DropdownMenuItem
+                        key={option.value}
+                        onClick={() => onChange(option.value, checked)}
+                        className={isCurrent ? 'bg-accent/60 font-medium' : undefined}
+                      >
+                        <ModelOptionContent option={option} />
+                        {isCurrent && <SelectedModelIndicator />}
+                      </DropdownMenuItem>
+                    );
+                  }
+                  return (
+                    <DropdownMenuSub key={option.value}>
+                      <DropdownMenuSubTrigger className={isCurrent ? 'bg-accent/60 font-medium' : undefined}>
+                        <ModelOptionContent option={option} />
+                        {isCurrent && <SelectedModelIndicator />}
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="no-scrollbar">
+                        <DropdownMenuRadioGroup
+                          value={checked}
+                          onValueChange={(next) => {
+                            if (typeof next === 'string' && (option.efforts as readonly string[]).includes(next)) {
+                              onChange(option.value, next as ReasoningEffort);
+                            }
+                          }}
                         >
-                          {REASONING_EFFORT_NAMES[level]}
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              );
-            })}
-          </DropdownMenuGroup>
-        ))}
+                          {option.efforts.map((level) => (
+                            <DropdownMenuRadioItem
+                              key={level}
+                              value={level}
+                              className="not-focus:data-[checked]:bg-accent/60 data-[checked]:font-medium"
+                            >
+                              {REASONING_EFFORT_NAMES[level]}
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  );
+                })}
+              </DropdownMenuGroup>
+            ))
+          )}
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );
