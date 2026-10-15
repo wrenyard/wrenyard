@@ -1,11 +1,13 @@
 import { Activity, useEffect, useState } from 'react';
-import type { ComponentType } from 'react';
+import type { ComponentType, CSSProperties } from 'react';
 import type { ShellPage } from '@/shell-contract';
 import { useShellPage } from '@/renderer/lib/desktop';
 import { useMiniMode } from '@/renderer/lib/mini';
 import { startViewTransition } from '@/renderer/lib/motion';
+import { useIsMobile } from '@/renderer/hooks/use-mobile';
 import { SidebarInset, SidebarProvider } from '@/renderer/components/ui/sidebar';
 import { AppSidebar } from '@/renderer/app/AppSidebar';
+import { useShellSidebarResize } from '@/renderer/app/useShellSidebarResize';
 import { TitleBar } from '@/renderer/app/TitleBar';
 import { StatusBar } from '@/renderer/app/statusbar/StatusBar';
 import { TitleBarPageProvider } from '@/renderer/lib/titlebar';
@@ -64,6 +66,12 @@ export function AppShell() {
   // that own no local sidebar (mini cards have no sidebar to toggle).
   const [sidebarOpen, setSidebarOpen] = useState(true);
   useShellSidebarFallback({ open: sidebarOpen, setOpen: setSidebarOpen, enabled: !mini });
+  // The shell sidebar can be dragged wider or narrower. Resizing applies to the
+  // expanded desktop shell only; a collapsed or mobile (sheet) sidebar has no
+  // boundary to drag. The width is fed to `SidebarProvider` so the desktop gap
+  // and the fixed container move together.
+  const isMobile = useIsMobile();
+  const sidebarResize = useShellSidebarResize(!mini && sidebarOpen && !isMobile);
 
   useEffect(() => {
     if (page === shown) return;
@@ -99,12 +107,15 @@ export function AppShell() {
           className="h-full min-h-0"
           open={sidebarOpen}
           onOpenChange={setSidebarOpen}
+          data-shell-resizing={sidebarResize.resizing ? 'true' : undefined}
+          style={{ '--sidebar-width': `${sidebarResize.width}px` } as CSSProperties}
         >
           {!mini && (
             <Activity mode={active === 'settings' ? 'hidden' : 'visible'}>
               <AppSidebar page={shown} onOpenUpdate={() => setUpdateOpen(true)} />
             </Activity>
           )}
+          {!mini && sidebarOpen && !isMobile && <div {...sidebarResize.handleProps} />}
           <SidebarInset className="motion-surface-page flex min-h-0 min-w-0 flex-col">
             {PAGE_ORDER.map((id) => {
               if (!mounted.has(id)) return null;
