@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Streamdown, defaultRehypePlugins, type Components, type ExtraProps } from 'streamdown';
+import { Streamdown, defaultRehypePlugins, type Components, type ExtraProps, type PluginConfig } from 'streamdown';
 import { code } from '@streamdown/code';
 import { cjk } from '@streamdown/cjk';
 import { FileText } from 'lucide-react';
@@ -26,8 +26,20 @@ import {
   DialogTitle,
 } from '@/renderer/components/ui/dialog';
 import { ImageViewer } from '@/renderer/components/image-viewer';
+import {
+  MermaidBlock,
+  MermaidDarkContext,
+} from '@/renderer/components/mermaid-renderer';
 
-const PLUGINS = { code, cjk };
+const PLUGINS: PluginConfig = {
+  code,
+  cjk,
+  // Custom fenced renderers are consulted before Shiki and before Streamdown's
+  // built-in Mermaid branch, so only a `mermaid` fence leaves Shiki untouched.
+  // The component reference is module-level and stable, so streaming re-renders
+  // never remount it.
+  renderers: [{ language: 'mermaid', component: MermaidBlock }],
+};
 
 /** Shiki theme per appearance mode; `github-dark-default` matches the dark tokens. */
 const SHIKI_THEME = { light: 'github-light', dark: 'github-dark-default' } as const;
@@ -354,8 +366,9 @@ export interface MarkdownProps {
 }
 
 /**
- * Streamdown configured for the conversation surface: code + CJK plugins only,
- * no math or mermaid. Fenced code is highlighted with the JavaScript Shiki engine.
+ * Streamdown configured for the conversation surface: code + CJK plugins, with
+ * Mermaid fences routed to a lazily loaded diagram component. Other fenced code
+ * is highlighted with the JavaScript Shiki engine.
  */
 export function Markdown({
   children,
@@ -397,29 +410,31 @@ export function Markdown({
     : [SHIKI_THEME.light, SHIKI_THEME.light];
 
   return (
-    <AttachmentDirectory.Provider value={context}>
-      <Streamdown
-        mode={attachmentStatic ? 'static' : streaming ? 'streaming' : 'static'}
-        isAnimating={attachmentStatic ? false : streaming}
-        caret={attachmentStatic ? undefined : 'block'}
-        plugins={PLUGINS}
-        {...(rehypePlugins === undefined ? {} : { rehypePlugins })}
-        shikiTheme={shikiTheme}
-        components={components}
-        className={cn(
-          'text-sm',
-          // Orphan control: prose paragraphs avoid a lone trailing word and
-          // headings balance their lines. The utilities target the elements
-          // themselves (p/h1-h6), so inherited text-wrap never reaches code,
-          // pre or table content.
-          '[&_p]:text-pretty',
-          '[&_h1]:text-balance [&_h2]:text-balance [&_h3]:text-balance',
-          '[&_h4]:text-balance [&_h5]:text-balance [&_h6]:text-balance',
-          className,
-        )}
-      >
-        {children}
-      </Streamdown>
-    </AttachmentDirectory.Provider>
+    <MermaidDarkContext.Provider value={dark}>
+      <AttachmentDirectory.Provider value={context}>
+        <Streamdown
+          mode={attachmentStatic ? 'static' : streaming ? 'streaming' : 'static'}
+          isAnimating={attachmentStatic ? false : streaming}
+          caret={attachmentStatic ? undefined : 'block'}
+          plugins={PLUGINS}
+          {...(rehypePlugins === undefined ? {} : { rehypePlugins })}
+          shikiTheme={shikiTheme}
+          components={components}
+          className={cn(
+            'text-sm',
+            // Orphan control: prose paragraphs avoid a lone trailing word and
+            // headings balance their lines. The utilities target the elements
+            // themselves (p/h1-h6), so inherited text-wrap never reaches code,
+            // pre or table content.
+            '[&_p]:text-pretty',
+            '[&_h1]:text-balance [&_h2]:text-balance [&_h3]:text-balance',
+            '[&_h4]:text-balance [&_h5]:text-balance [&_h6]:text-balance',
+            className,
+          )}
+        >
+          {children}
+        </Streamdown>
+      </AttachmentDirectory.Provider>
+    </MermaidDarkContext.Provider>
   );
 }
