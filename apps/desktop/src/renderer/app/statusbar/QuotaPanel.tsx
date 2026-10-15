@@ -60,7 +60,7 @@ export function QuotaPanel() {
   );
 
   return (
-    <div className="flex max-h-[560px] w-[400px] flex-col">
+    <div className="flex max-h-[560px] w-full min-w-0 flex-col">
       <div className="flex items-center gap-2 px-4 py-3">
         <span className="text-sm font-medium">额度</span>
         <span className="text-xs text-muted-foreground">{updatedAgo(data?.refreshedAt, now)}</span>

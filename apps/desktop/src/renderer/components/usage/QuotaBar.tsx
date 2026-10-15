@@ -7,9 +7,9 @@ import { cn } from 'cn';
 
 /**
  * Shared quota-window bar for the usage panel, status-bar quota panel and Model
- * Supply page. It renders one inline compact row: a text line with the window
- * name, the truncated reset countdown and pace word on the left and `已用 N%`
- * on the right, then the 6px `ProgressTrack`/`ProgressIndicator` bar with a
+ * Supply page. It renders one inline compact row: a single text line with the
+ * window name, reset countdown and pace word on the left and `已用 N%` on the
+ * right, then the 6px `ProgressTrack`/`ProgressIndicator` bar with a
  * visible pace marker. It renders structured pace and reset from the projected
  * snapshot fields; it never parses `displayLine`.
  *
@@ -239,24 +239,22 @@ export function QuotaBar({
           <span className="shrink-0 tabular-nums">{usedLabel}</span>
         </div>
       ) : (
-        <>
-          <div className="flex items-baseline justify-between gap-2 text-xs">
-            <span className={cn('min-w-0 truncate', mutedClass)}>{label}</span>
-            <span className="shrink-0 tabular-nums">{usedLabel}</span>
-          </div>
-          <div className={cn('flex flex-wrap items-center gap-x-1 gap-y-0.5 text-xs tabular-nums', mutedClass)}>
+        <div className="flex items-baseline justify-between gap-2 overflow-x-auto text-xs whitespace-nowrap">
+          <span className={cn('inline-flex shrink-0 items-baseline gap-1 tabular-nums', mutedClass)}>
+            <span>{label}</span>
             {reset !== null && (
               <Tooltip>
-                <TooltipTrigger render={<span className="cursor-default">· {reset.label}</span>} />
+                <TooltipTrigger render={<span className="shrink-0 cursor-default">· {reset.label}</span>} />
                 <TooltipContent>{reset.exact}</TooltipContent>
               </Tooltip>
             )}
             {exhausted
-              ? <span className="text-destructive">· 已耗尽</span>
-              : pace !== null && <span className={pace.warn ? 'text-warning' : undefined}>· {pace.word}</span>}
-            {stale && <span className="text-warning">· 数据过期</span>}
-          </div>
-        </>
+              ? <span className="shrink-0 text-destructive">· 已耗尽</span>
+              : pace !== null && <span className={cn('shrink-0', pace.warn && 'text-warning')}>· {pace.word}</span>}
+            {stale && <span className="shrink-0 text-warning">· 数据过期</span>}
+          </span>
+          <span className="shrink-0 tabular-nums">{usedLabel}</span>
+        </div>
       )}
       <div className="relative flex h-1.5 items-center">
         <ProgressPrimitive.Root

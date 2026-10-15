@@ -166,7 +166,7 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
           </TooltipContent>
         </Tooltip>
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" className="w-[400px] p-0">
+      <PopoverContent side="top" align="end" className="w-[480px] max-w-[calc(100vw-1rem)] p-0">
         <QuotaPanel />
       </PopoverContent>
     </Popover>
