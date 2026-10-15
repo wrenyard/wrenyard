@@ -369,18 +369,23 @@ test('repeated inbox polls admit one item per source', async () => {
       const db = initDb(':memory:')
       const store = createBotStore({ db, workspaceRoot: root })
       const bot = store.createBot({ name: 'poller', state: 'running', mode: 'live', configPath: fixture.configPath })
-      // The first tick also runs the verify step this stage wires in, so a stub
-      // parks the item deterministically instead of failing the step.
+      // The first tick also starts the verify step this stage wires in, so a
+      // stubbed detached run parks the item deterministically instead of failing
+      // the step: the first tick records the run id, the second polls it.
       const host = createBotHost({
         db,
         workspaceRoot: root,
         session: botSession(),
         log: () => {},
-        taskRunner: async () => ({
-          status: 'done',
-          runId: 'run-verify',
-          output: { decision: 'park', reason: 'needs a decision', question: 'which project?' },
-        }),
+        taskRunner: {
+          async startTask() { return { runId: 'run-verify' } },
+          async getTask() {
+            return {
+              status: 'done' as const,
+              output: { decision: 'park', reason: 'needs a decision', question: 'which project?' },
+            }
+          },
+        },
       })
 
       await host.tick(bot.id)
@@ -457,18 +462,28 @@ test('a bot-verify not_real decision dismisses the item and queues its notificat
         workspaceRoot: root,
         session: botSession(),
         log: () => {},
-        taskRunner: async ({ task }) => {
-          calls.push(task)
-          return task === 'bot-verify'
-            ? { status: 'done', runId: 'run-verify', output: { decision: 'not_real', reason: 'already implemented' } }
-            : { status: 'failed', runId: 'run-other', error: `unexpected task ${task}` }
+        taskRunner: {
+          // Exactly one judgment run is started, and it is the verify task.
+          async startTask({ task }) {
+            calls.push(task)
+            return task === 'bot-verify' ? { runId: 'run-verify' } : { rejected: `unexpected task ${task}` }
+          },
+          async getTask() {
+            return { status: 'done' as const, output: { decision: 'not_real', reason: 'already implemented' } }
+          },
         },
       })
 
+      // The first tick only starts the detached run: the item waits in verifying.
       await host.tick(bot.id)
-
-      // Exactly one judgment run happened, and it was the verify task.
       assert.deepEqual(calls, ['bot-verify'])
+      assert.equal(store.getItem(bot.id, item.id).state, 'verifying')
+      const startedVerify = store.findStepByIdemKey(`${item.id}:1:verify:1`)
+      assert.equal(startedVerify?.status, 'pending')
+      assert.match(String(startedVerify?.output ?? ''), /run-verify/)
+
+      // The second tick polls the finished run and applies the verify handling.
+      await host.tick(bot.id)
       const after = store.getItem(bot.id, item.id)
       assert.equal(after.state, 'dismissed')
       assert.equal(after.error, 'already implemented')
@@ -482,6 +497,79 @@ test('a bot-verify not_real decision dismisses the item and queues its notificat
       assert.equal(store.findStepByIdemKey(`${item.id}:1:notify:1`)?.status, 'done')
       assert.equal(existsSync(fixture.notifyFile), true)
       assert.match(readFileSync(fixture.notifyFile, 'utf-8'), /Not dispatched: Ship the thing/)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('a detached verify run keeps the item verifying until its task run finishes', async () => {
+  const root = `${WORKSPACE}-detached`
+  const fixture = await writeBotFixture({
+    name: 'detached',
+    mode: 'live',
+    inboxBehavior: { list: { items: [] }, get: { item: null } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'detached', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({
+        botId: bot.id,
+        sourceId: 'source-d',
+        state: 'discovered',
+        title: 'Ship the thing',
+        project: 'alpha',
+      })
+
+      let started = 0
+      let runStatus: 'running' | 'done' = 'running'
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(),
+        log: () => {},
+        taskRunner: {
+          async startTask() { started += 1; return { runId: 'run-detached' } },
+          async getTask() {
+            if (runStatus === 'running') return { status: 'running' as const }
+            return {
+              status: 'done' as const,
+              output: {
+                decision: 'real',
+                reason: 'reproduced on main',
+                project: 'alpha',
+                class: 'default',
+                brief: 'Change greeting.txt to hello, bot.',
+                acceptance: { checks: [{ id: 'c1', claim: 'greeting.txt reads hello, bot', surface: 'daemon', recipe: 'cat greeting.txt' }] },
+              },
+            }
+          },
+        },
+      })
+      const verifyKey = `${item.id}:1:verify:1`
+
+      // Two ticks while the run is still going: the item stays verifying, the
+      // run is polled (not restarted) and no tick waited for the model to finish.
+      await host.tick(bot.id)
+      await host.tick(bot.id)
+
+      assert.equal(started, 1)
+      assert.equal(store.getItem(bot.id, item.id).state, 'verifying')
+      const polling = store.findStepByIdemKey(verifyKey)
+      assert.equal(polling?.status, 'pending')
+      assert.notEqual(polling?.startedAt, undefined)
+      assert.match(String(polling?.output ?? ''), /run-detached/)
+
+      // Once the run finishes, the same verify handling advances the item.
+      runStatus = 'done'
+      await host.tick(bot.id)
+
+      const verified = store.getItem(bot.id, item.id)
+      assert.equal(verified.state, 'verified')
+      assert.equal(store.findStepByIdemKey(verifyKey)?.status, 'done')
+      assert.equal(store.listLog(bot.id, 0).some(entry => entry.code === 'verify.real'), true)
     })
   } finally {
     await removeFixture(fixture)

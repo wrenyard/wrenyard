@@ -165,6 +165,7 @@ export interface BotStore {
     patch?: BotItemPatch
   }): BotItemRecord
   markStepStarted(stepId: string): void
+  recordStepOutput(stepId: string, output: unknown): void
   markStepStatus(stepId: string, status: BotStepStatus, patch?: { output?: unknown; error?: string }): void
   findStepByIdemKey(idemKey: string): BotStepRecord | undefined
   listPendingSteps(botId: string): BotStepRecord[]
@@ -721,6 +722,17 @@ export function createBotStore(options: CreateBotStoreOptions): BotStore {
           'UPDATE bot_step SET started_at = COALESCE(started_at, ?) WHERE id = ?',
         ).run(timestamp(), stepId)
       })()
+    },
+
+    recordStepOutput(stepId: string, output: unknown): void {
+      const step = db.prepare<[string], BotStepRow>('SELECT * FROM bot_step WHERE id = ?').get(stepId)
+      if (!step) throw new Error(`unknown bot step: ${stepId}`)
+      // The status is deliberately untouched: recording what a detached task
+      // step started must never finish it, so a later tick keeps polling the run
+      // instead of starting a second one.
+      db.prepare<[string | null, string], unknown>(
+        'UPDATE bot_step SET output = ? WHERE id = ?',
+      ).run(output === undefined ? null : JSON.stringify(output), stepId)
     },
 
     markStepStatus(stepId, status, patch = {}): void {

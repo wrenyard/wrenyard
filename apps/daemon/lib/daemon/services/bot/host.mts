@@ -97,6 +97,18 @@ const MAX_DIFF_CHARS = 60_000
 const MAX_TURNS_CHARS = 20_000
 /** Upper bound when scanning prior attempts of a repeatable step kind. */
 const MAX_STEP_ATTEMPTS = 500
+/**
+ * Step kinds whose effect is a detached task run, and the builtin task each one
+ * uses. A tick starts the run and records its id; later ticks poll that run, so
+ * no tick ever waits for a model run.
+ */
+const DETACHED_TASK_KIND: Partial<Record<BotStepKind, string>> = {
+  verify: 'bot-verify',
+  review: 'bot-review',
+  accept: 'test',
+}
+/** The failure recorded when a detached run cannot be found any more. */
+const TASK_RUN_MISSING = 'task run missing'
 /** A session's closing markers: a blocker question, or a finished-work head sha. */
 const BOT_BLOCKED_PATTERN = /BOT-BLOCKED\s+(.+)/u
 const BOT_READY_PATTERN = /BOT-READY\s+[0-9a-f]{7,40}/iu
@@ -141,7 +153,18 @@ export interface BotStepResult {
   /** Item state to move to when the step succeeds. */
   to?: BotItemState
   patch?: BotItemPatch
+  /**
+   * A detached task step that has only started its run: this is recorded on the
+   * still-pending step (leaving its status alone) so a later tick polls the run
+   * id instead of starting a second run.
+   */
+  pendingRun?: { runId: string }
 }
+
+/** What preparing a detached task step produced. */
+export type BotStepPrepare =
+  | { input: BotTaskRunInput }
+  | { result: BotStepResult }
 
 /** Outcome of one restart probe. */
 export type BotStepProbe = 'done' | 'not-done' | 'unavailable'
@@ -163,7 +186,20 @@ export interface BotStepHandler {
   probe?: (context: BotStepContext) => Promise<BotStepProbe>
   /** Item state a proven-done step moves the item to during reconciliation. */
   doneState?: BotItemState
-  run: (context: BotStepContext) => Promise<BotStepResult>
+  /**
+   * The whole effect of a non-detached step. A detached task step provides
+   * {@link BotStepHandler.prepareTask} and {@link BotStepHandler.applyTaskResult}
+   * instead.
+   */
+  run?: (context: BotStepContext) => Promise<BotStepResult>
+  /**
+   * Detached task steps (`verify`, `review`, `accept`): build the run input, or
+   * short-circuit with a result that finishes the step without starting a task.
+   * Called only on the tick that starts the run; later ticks poll it.
+   */
+  prepareTask?: (context: BotStepContext) => Promise<BotStepPrepare>
+  /** Detached task steps: map a finished run's structured output onto the step. */
+  applyTaskResult?: (context: BotStepContext, output: unknown) => Promise<BotStepResult>
 }
 
 export interface CreateBotHostOptions {
@@ -275,15 +311,24 @@ export interface BotTaskRunInput {
   target?: string
 }
 
-/** Terminal outcome of one task run the host started. */
-export interface BotTaskRunResult {
-  status: 'done' | 'failed' | 'cancelled' | 'timeout' | 'unknown'
+/** Terminal or still-in-flight outcome of one task run the host started. */
+export interface BotTaskRunStatus {
+  status: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'unknown'
   output?: unknown
-  runId: string
   error?: string
 }
 
-export type BotTaskRunner = (input: BotTaskRunInput) => Promise<BotTaskRunResult>
+/**
+ * Task runner port, split so a tick never waits for a model run: `startTask`
+ * begins one builtin task run bound to a project (and optionally a managed
+ * worktree) and returns its run id, and `getTask` reads that run's status
+ * without blocking. Injected by the daemon; without it, judgment and acceptance
+ * steps fail their step rather than guessing a result.
+ */
+export interface BotTaskRunner {
+  startTask(input: BotTaskRunInput): Promise<{ runId: string } | { rejected: string }>
+  getTask(runId: string): Promise<BotTaskRunStatus>
+}
 
 /** Deterministic worktree id for one item: bot id + item id, 8 URL-safe chars. */
 export function deterministicWorktreeId(botId: string, itemId: string): string {
@@ -398,20 +443,87 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
-   * Start one task run and resolve with its structured output. A failed,
-   * cancelled or timed-out run throws, so the caller's step fails through the
-   * existing failure and escalation path instead of guessing a result.
+   * Start one task run and return its run id. A rejection is a real error, so
+   * the caller's step fails through the existing failure and escalation path
+   * instead of guessing a result.
    */
-  async function runBotTask(input: BotTaskRunInput): Promise<unknown> {
+  async function startBotTask(input: BotTaskRunInput): Promise<string> {
     const runner = options.taskRunner
     if (runner === undefined) throw new Error(`bot task runner is unavailable for ${input.task}`)
-    const result = await runner(input)
+    const started = await runner.startTask(input)
+    if ('rejected' in started) throw new Error(`${input.task} run was rejected: ${started.rejected}`)
+    return started.runId
+  }
+
+  /** The outcome of one poll of a detached task run. */
+  type DetachedPoll =
+    | { kind: 'running' }
+    | { kind: 'done'; output: unknown }
+    | { kind: 'failed'; message: string }
+
+  /**
+   * Read one task run's status without waiting for it. A run that no longer
+   * exists fails its step with {@link TASK_RUN_MISSING}, because nothing can
+   * prove what it produced.
+   */
+  async function pollDetachedRun(runId: string, task: string): Promise<DetachedPoll> {
+    const runner = options.taskRunner
+    if (runner === undefined) return { kind: 'failed', message: `bot task runner is unavailable for ${task}` }
+    const result = await runner.getTask(runId)
+    if (result.status === 'running') return { kind: 'running' }
+    if (result.status === 'unknown') return { kind: 'failed', message: TASK_RUN_MISSING }
     if (result.status !== 'done') {
-      const run = result.runId === '' ? '(no run id)' : result.runId
-      throw new Error(`${input.task} run ${run} ${result.status}${result.error === undefined ? '' : `: ${result.error}`}`)
+      const detail = result.error === undefined || result.error === '' ? '' : `: ${result.error}`
+      return { kind: 'failed', message: `${task} run ${runId} ${result.status}${detail}` }
     }
-    if (result.output === undefined) throw new Error(`${input.task} returned no structured output`)
-    return result.output
+    if (result.output === undefined) return { kind: 'failed', message: `${task} returned no structured output` }
+    return { kind: 'done', output: result.output }
+  }
+
+  /** The run id one detached task step recorded before its effect ran, if any. */
+  function detachedRunId(step: BotStepRecord): string | undefined {
+    const stored = stepOutput<{ runId?: unknown }>(step)?.runId
+    return typeof stored === 'string' && stored !== '' ? stored : undefined
+  }
+
+  /**
+   * Run one detached task step. The first tick starts the run and records its id
+   * on the still-pending step; later ticks poll that run and only map its
+   * terminal output once it finished. The tick never waits for the run itself,
+   * so a long model run in one project does not stall the others.
+   */
+  async function runDetachedTask(
+    step: BotStepRecord,
+    context: BotStepContext,
+    handler: BotStepHandler,
+  ): Promise<BotStepResult> {
+    const prepare = handler.prepareTask
+    const apply = handler.applyTaskResult
+    if (prepare === undefined || apply === undefined) {
+      throw new Error(`step ${step.kind} is detached but has no task handlers`)
+    }
+    const task = DETACHED_TASK_KIND[step.kind] ?? step.kind
+    const existing = detachedRunId(step)
+    if (existing !== undefined) {
+      const outcome = await pollDetachedRun(existing, task)
+      if (outcome.kind === 'running') throw new BotStepRunning()
+      if (outcome.kind === 'failed') throw new Error(outcome.message)
+      return await apply(context, outcome.output)
+    }
+    const prepared = await prepare(context)
+    if ('result' in prepared) return prepared.result
+    // The started marker is written in its own transaction before the run is
+    // created, so a restart can tell a step that never ran from one in flight.
+    store.markStepStarted(step.id)
+    const runId = await startBotTask(prepared.input)
+    store.appendLog({
+      botId: context.bot.id,
+      itemId: context.item.id,
+      level: 'info',
+      code: 'task.started',
+      message: `${task} run ${runId} started; the item waits for it across ticks`,
+    })
+    return { pendingRun: { runId } }
   }
 
   /** Trim to the last `max` characters, marking that the head was dropped. */
@@ -1173,35 +1285,44 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    * project checkout on the current default branch. `real` records the project,
    * class, brief and acceptance plan so dispatch can proceed; `not_real`
    * dismisses the item and queues its notification; `park` parks it with the
-   * task's question. The task is read-only, so a restart may safely retry it.
+   * task's question. The run is detached: the tick that starts it records the
+   * run id and returns, and a later tick maps the finished verdict. The task is
+   * read-only, so a restart may safely retry it.
    */
   const verifyStep: BotStepHandler = {
     async probe({ item }) {
       return item.state === 'discovered' || item.state === 'verifying' ? 'not-done' : 'done'
     },
-    async run({ bot, item, config }) {
+    async prepareTask({ bot, item, config }) {
       if (config === undefined) throw new Error('bot config is unavailable for verification')
       const runProject = item.project ?? config.projects[0]?.id
       if (runProject === undefined) {
         return {
-          to: 'parked',
-          patch: { parkedFrom: item.state, question: 'no project is configured to verify this request against', error: 'no_project' },
+          result: {
+            to: 'parked',
+            patch: { parkedFrom: item.state, question: 'no project is configured to verify this request against', error: 'no_project' },
+          },
         }
       }
       const routed = routedModelFor(config, 'judgment')
       if (routed.target === undefined) noteAutomaticRouting(bot)
-      const output = await runBotTask({
-        task: 'bot-verify',
-        project: runProject,
+      return {
         input: {
-          request: { title: item.title ?? '', ...(item.body === undefined ? {} : { body: item.body }) },
-          ...(item.project === undefined ? {} : { project: item.project }),
-          projects: config.projects.map(policy => ({ id: policy.id })),
-          classes: Object.keys(config.routing),
+          task: 'bot-verify',
+          project: runProject,
+          input: {
+            request: { title: item.title ?? '', ...(item.body === undefined ? {} : { body: item.body }) },
+            ...(item.project === undefined ? {} : { project: item.project }),
+            projects: config.projects.map(policy => ({ id: policy.id })),
+            classes: Object.keys(config.routing),
+          },
+          model: routed,
+          ...(routed.target === undefined ? {} : { target: routed.target }),
         },
-        model: routed,
-        ...(routed.target === undefined ? {} : { target: routed.target }),
-      })
+      }
+    },
+    async applyTaskResult({ bot, item, config }, output) {
+      if (config === undefined) throw new Error('bot config is unavailable for verification')
       const verdict = asVerifyEnvelope(output)
       if (verdict === undefined) throw new Error('bot-verify returned an unrecognised decision')
       if (verdict.decision === 'park') {
@@ -1253,12 +1374,14 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    * Review one `in_progress` item with the `bot-review` judgment task, on new
    * ledger activity or after an idle timeout, and never while the session is
    * running a turn. The correction and ready follow-ups reuse the session's own
-   * latest model, and corrections are capped by the bot budget.
+   * latest model, and corrections are capped by the bot budget. The run is
+   * detached, and its verdict is applied on the tick that observes it finished.
    */
   const reviewStep: BotStepHandler = {
-    // No probe on purpose: a started review may already have sent a correction,
-    // so a restart marks it unknown and never sends it a second time.
-    async run({ bot, item, config }) {
+    // No probe on purpose: a started review whose run id was never recorded may
+    // already have been started, so a restart marks it unknown rather than
+    // re-running the judgment.
+    async prepareTask({ bot, item, config }) {
       if (config === undefined) throw new Error('bot config is unavailable for review')
       if (item.sessionId === undefined) throw new Error('item has no session to review')
       if (item.project === undefined) throw new Error('item has no project to review')
@@ -1271,37 +1394,44 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           code: 'review.skipped',
           message: 'session is running a turn; review deferred',
         })
-        return {}
+        return { result: {} }
       }
       const blocked = latestReply(item.sessionId)?.match(BOT_BLOCKED_PATTERN)
       if (blocked !== null && blocked !== undefined) {
         const question = blocked[1]?.trim() ?? 'the session is blocked'
         store.appendLog({ botId: bot.id, itemId: item.id, level: 'warn', code: 'review.blocked', message: question })
-        return { to: 'parked', patch: { parkedFrom: 'in_progress', question, error: 'session_blocked' } }
+        return { result: { to: 'parked', patch: { parkedFrom: 'in_progress', question, error: 'session_blocked' } } }
       }
       const counters = item.counters ?? {}
-      const corrections = counters.corrections ?? 0
       const envelope = verifyEnvelope(item)
       const diff = item.worktreeId === undefined
         ? ''
         : truncateHead(await projectManager.diff({ project: item.project, worktree_id: item.worktreeId }), MAX_DIFF_CHARS)
       const routed = routedModelFor(config, 'judgment')
       if (routed.target === undefined) noteAutomaticRouting(bot)
-      const output = await runBotTask({
-        task: 'bot-review',
-        project: item.project,
-        ...(item.worktreeId === undefined ? {} : { worktree: item.worktreeId }),
+      return {
         input: {
-          request: { title: item.title ?? '', ...(item.body === undefined ? {} : { body: item.body }) },
-          brief: envelope?.brief ?? '',
-          worktree: item.worktreeId ?? '',
-          diff,
-          recentTurns: recentReplies(item.sessionId, MAX_TURNS_CHARS),
-          corrections,
+          task: 'bot-review',
+          project: item.project,
+          ...(item.worktreeId === undefined ? {} : { worktree: item.worktreeId }),
+          input: {
+            request: { title: item.title ?? '', ...(item.body === undefined ? {} : { body: item.body }) },
+            brief: envelope?.brief ?? '',
+            worktree: item.worktreeId ?? '',
+            diff,
+            recentTurns: recentReplies(item.sessionId, MAX_TURNS_CHARS),
+            corrections: counters.corrections ?? 0,
+          },
+          model: routed,
+          ...(routed.target === undefined ? {} : { target: routed.target }),
         },
-        model: routed,
-        ...(routed.target === undefined ? {} : { target: routed.target }),
-      })
+      }
+    },
+    async applyTaskResult({ bot, item, config }, output) {
+      if (config === undefined) throw new Error('bot config is unavailable for review')
+      if (item.sessionId === undefined) throw new Error('item has no session to review')
+      const counters = item.counters ?? {}
+      const corrections = counters.corrections ?? 0
       const verdict = asReviewEnvelope(output)
       if (verdict === undefined) throw new Error('bot-review returned an unrecognised verdict')
       // Mark the review point so the next review waits for new activity (or the
@@ -1374,7 +1504,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    * operation components the plan requires, run the builtin `test` task bound to
    * the item's worktree, map its assessments back onto the plan's checks and
    * gate the item on them. A required component that is not ready parks the
-   * item; a busy desktop component leaves the step pending for a later tick.
+   * item; a busy desktop component leaves the step pending for a later tick. The
+   * run is detached, so an acceptance that takes minutes blocks no other item.
    */
   const acceptStep: BotStepHandler = {
     // The effect is a local task run, so a started-but-unfinished acceptance is
@@ -1382,24 +1513,30 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     async probe({ item }) {
       return item.acceptance !== undefined && item.acceptance.length > 0 ? 'done' : 'not-done'
     },
-    async run({ bot, item, config }) {
+    // Component readiness and the desktop-busy deferral run before the task is
+    // started, so a run that needs a busy single-owner component never starts.
+    async prepareTask({ bot, item, config }) {
       if (config === undefined) throw new Error('bot config is unavailable for acceptance')
       if (!item.project || !item.worktreeId) throw new Error('item has no project worktree to accept')
       const plan = acceptancePlan(item)
       if (plan.length === 0) {
         return {
-          to: 'parked',
-          patch: { parkedFrom: item.state, question: 'the item has no acceptance plan', error: 'no_acceptance_plan' },
+          result: {
+            to: 'parked',
+            patch: { parkedFrom: item.state, question: 'the item has no acceptance plan', error: 'no_acceptance_plan' },
+          },
         }
       }
       const runtimeChecks = plan.filter(check => check.surface !== 'static')
       if (runtimeChecks.length === 0) {
         return {
-          to: 'parked',
-          patch: {
-            parkedFrom: item.state,
-            question: 'the acceptance plan has no runtime check; a static check cannot verify the change',
-            error: 'no_runtime_check',
+          result: {
+            to: 'parked',
+            patch: {
+              parkedFrom: item.state,
+              question: 'the acceptance plan has no runtime check; a static check cannot verify the change',
+              error: 'no_runtime_check',
+            },
           },
         }
       }
@@ -1409,12 +1546,14 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         store.appendLog({ botId: bot.id, itemId: item.id, level: 'warn', code: 'acceptance.component', message: detail })
         await escalate(bot, config, `component:${notReady.id}:${notReady.state}`, `acceptance blocked: ${detail}`)
         return {
-          output: { component: notReady },
-          to: 'parked',
-          patch: {
-            parkedFrom: item.state,
-            question: `acceptance needs a ready operation component: ${detail}`,
-            error: 'component_not_ready',
+          result: {
+            output: { component: notReady },
+            to: 'parked',
+            patch: {
+              parkedFrom: item.state,
+              question: `acceptance needs a ready operation component: ${detail}`,
+              error: 'component_not_ready',
+            },
           },
         }
       }
@@ -1423,9 +1562,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         : runtimeChecks.some(check => check.surface === 'renderer') ? 'browser-use' as const : undefined
       const routed = routedModelFor(config, 'acceptance')
       if (routed.target === undefined) noteAutomaticRouting(bot)
-      let output: unknown
-      try {
-        output = await runBotTask({
+      return {
+        input: {
           task: 'test',
           project: item.project,
           worktree: item.worktreeId,
@@ -1440,17 +1578,12 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           },
           model: routed,
           ...(routed.target === undefined ? {} : { target: routed.target }),
-        })
-      } catch (error) {
-        const message = errorMessage(error)
-        // The desktop component is single-owner: while another run holds it, the
-        // test cannot start. Leave the step pending and retry on a later tick.
-        if (/desktop/i.test(message) && /busy|not ready|owner|held/i.test(message)) {
-          throw new BotStepPending('desktop.busy', `desktop acceptance deferred: ${message}`)
-        }
-        throw error
+        },
       }
-      const checks = mapAcceptanceChecks(plan, output)
+    },
+    async applyTaskResult({ bot, item, config }, output) {
+      if (config === undefined) throw new Error('bot config is unavailable for acceptance')
+      const checks = mapAcceptanceChecks(acceptancePlan(item), output)
       const acceptanceAttempts = (item.counters?.acceptanceAttempts ?? 0) + 1
       const maxAttempts = config.budgets.maxAcceptanceAttempts
       const failed = checks.filter(check => check.status === 'failed')
@@ -2015,8 +2148,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    * ran from one that may already be in flight.
    */
   async function runEffect(step: BotStepRecord, context: BotStepContext, handler: BotStepHandler): Promise<BotStepResult> {
+    const run = handler.run
+    if (run === undefined) throw new Error(`step ${step.kind} has no run handler`)
     store.markStepStarted(step.id)
-    return await handler.run(context)
+    return await run(context)
   }
 
   async function runStep(bot: BotRecord, step: BotStepRecord, config: BotConfig | undefined): Promise<void> {
@@ -2094,11 +2229,24 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       dryRun: bot.mode === 'dryRun' || config?.mode === 'dryRun' || item.dryRun,
     }
     try {
-      const result = handler.sideEffect === true && context.dryRun
-        ? (handler.dryRun?.(context) ?? { output: { dryRun: true, wouldRun: step.kind } })
-        : await runEffect(step, context, handler)
-      commitStep(item, step, await result)
+      const result = await (handler.prepareTask !== undefined
+        ? runDetachedTask(step, context, handler)
+        : handler.sideEffect === true && context.dryRun
+          ? (handler.dryRun?.(context) ?? { output: { dryRun: true, wouldRun: step.kind } })
+          : runEffect(step, context, handler))
+      if (result.pendingRun !== undefined) {
+        // Only the run was started: record its id on the still-pending step so
+        // the next tick polls it instead of starting a second run.
+        store.recordStepOutput(step.id, result.pendingRun)
+        return
+      }
+      commitStep(item, step, result)
     } catch (error) {
+      if (error instanceof BotStepRunning) {
+        // The detached run is still in flight; the step stays pending and is
+        // polled again on a later tick, with no tick blocked on the model.
+        return
+      }
       if (error instanceof BotLaneBusyError) {
         // The lane is busy: leave the step pending so the next tick retries it.
         store.appendLog({
@@ -2131,6 +2279,17 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         continue
       }
       const context: BotStepContext = { bot, item, step, dryRun: bot.mode === 'dryRun' || item.dryRun }
+      // A detached task step that already started keeps being polled: its run is
+      // durable, so a restart never marks it unknown mid-flight, and a run that
+      // cannot be found any more fails its step (`task run missing`) so the
+      // normal retry or park path applies. These steps have no outward effect.
+      const runId = detachedRunId(step)
+      if (runId !== undefined) {
+        const outcome = await pollDetachedRun(runId, DETACHED_TASK_KIND[step.kind] ?? step.kind)
+        if (outcome.kind === 'failed') await failStep(bot, item, step, new Error(outcome.message), undefined)
+        // `running` keeps polling; a finished run is applied by the next tick.
+        continue
+      }
       // Only a step whose effect may already be in flight is probed. A pending
       // step that never started is still queued and is run normally by the tick.
       if (step.startedAt === undefined) continue
@@ -2575,6 +2734,18 @@ class BotStepPending extends Error {
   constructor(readonly code: string, message: string) {
     super(message)
     this.name = 'BotStepPending'
+  }
+}
+
+/**
+ * Thrown while a detached task run is still in flight: the step keeps its
+ * pending status and a later tick polls the run again. It is never a failure and
+ * is never logged per tick.
+ */
+class BotStepRunning extends Error {
+  constructor() {
+    super('the task run is still in flight')
+    this.name = 'BotStepRunning'
   }
 }
 

@@ -859,7 +859,9 @@ async function createForemanDaemonResources(
     // daemon database, so a stopped bot stays stopped across a restart.
     // The bot host runs its judgment and acceptance tasks through the same
     // in-process TaskService the session host uses: one run per decision, with
-    // the project (and the item's managed worktree) bound explicitly.
+    // the project (and the item's managed worktree) bound explicitly. Runs are
+    // started detached: the host records each run id and polls it, so no bot
+    // tick ever waits for a model run.
     //
     // A routing entry may carry an explicit `target` (a canonical
     // `provider/model:client` run target). When it does, the run selects that
@@ -867,39 +869,53 @@ async function createForemanDaemonResources(
     // use. An unknown or unavailable target fails the run; it never falls back
     // silently to automatic routing. An entry without a target leaves the run
     // on automatic routing, and the host records `routing.auto` once per bot.
-    const botTaskRunner: BotTaskRunner = async ({ task, project, worktree, input, model, target }) => {
-      try {
-        const invocationSettings: TaskSettingsLayer | undefined = target === undefined
-          ? undefined
-          : {
-              mode: 'explicit',
-              explicit_runtime: { kind: 'target', target },
-              ...(model === undefined ? {} : { automatic: { expected_reasoning_effort: model.reasoningEffort } }),
-            }
-        const accepted = await taskService.run({
-          taskId: task,
-          project,
-          input,
-          ...(worktree === undefined ? {} : { worktree }),
-          ...(invocationSettings === undefined ? {} : { invocationSettings }),
-        })
-        if (isTaskRunRejection(accepted)) {
-          return { status: 'failed', runId: '', error: `run rejected: ${accepted.error_type}` }
+    const botTaskRunner: BotTaskRunner = {
+      // Start one task run and hand its run id back at once: the bot host keeps
+      // the step pending and polls the run on later ticks, so a long model run
+      // never blocks a tick or another item.
+      async startTask({ task, project, worktree, input, model, target }) {
+        try {
+          const invocationSettings: TaskSettingsLayer | undefined = target === undefined
+            ? undefined
+            : {
+                mode: 'explicit',
+                explicit_runtime: { kind: 'target', target },
+                ...(model === undefined ? {} : { automatic: { expected_reasoning_effort: model.reasoningEffort } }),
+              }
+          const accepted = await taskService.run({
+            taskId: task,
+            project,
+            input,
+            ...(worktree === undefined ? {} : { worktree }),
+            ...(invocationSettings === undefined ? {} : { invocationSettings }),
+          })
+          if (isTaskRunRejection(accepted)) return { rejected: accepted.error_type }
+          return { runId: accepted.task_run_id }
+        } catch (error) {
+          return { rejected: error instanceof Error ? error.message : String(error) }
         }
-        const finished = await taskService.wait(accepted.task_run_id)
-        const status = typeof finished.status === 'string' ? finished.status : 'unknown'
-        return {
-          status: status === 'done' ? 'done'
-            : status === 'failed' ? 'failed'
-              : status === 'cancelled' ? 'cancelled'
-                : status === 'timeout' ? 'timeout' : 'unknown',
-          ...(finished.output === undefined ? {} : { output: finished.output }),
-          runId: accepted.task_run_id,
-          ...(typeof finished.error === 'string' && finished.error !== '' ? { error: finished.error } : {}),
+      },
+      // Read one run's status without waiting for it. `status` is the
+      // non-blocking read; a missing run is `unknown`, which the host fails as
+      // `task run missing` rather than retrying an effect that may have happened.
+      async getTask(runId) {
+        const record = taskService.status(runId)
+        if (record === null) return { status: 'unknown' }
+        const raw = typeof record.status === 'string' ? record.status : 'unknown'
+        if (raw === 'queued' || raw === 'running') return { status: 'running' }
+        if (raw === 'done') {
+          const finished = taskService.output(runId)
+          return {
+            status: 'done',
+            ...(finished === null || finished.output === undefined ? {} : { output: finished.output }),
+          }
         }
-      } catch (error) {
-        return { status: 'failed', runId: '', error: error instanceof Error ? error.message : String(error) }
-      }
+        const status = raw === 'failed' ? 'failed' as const
+          : raw === 'cancelled' ? 'cancelled' as const
+            : raw === 'timeout' ? 'timeout' as const : 'unknown' as const
+        const error = typeof record.error === 'string' && record.error !== '' ? record.error : undefined
+        return { status, ...(error === undefined ? {} : { error }) }
+      },
     }
     const botHost = createBotHost({
       db: runtime.db,
