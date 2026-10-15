@@ -182,6 +182,16 @@ export interface Session {
   previewRoutes(): Promise<{ roles: import('./model/roles.ts').AuxiliaryRoutePreview[] }>;
   /** Current in-memory streaming snapshots for the session's live calls. */
   readLive(sessionId: string): LiveCall[];
+  /**
+   * Generate one next-input suggestion for a session's latest completed turn.
+   * `requestId` correlates the request with its cancel and lets a caller drop a
+   * stale result. Resolves with the suggestion text, or with nothing when there
+   * is no useful follow-up. A model, timeout or abort failure resolves empty
+   * rather than rejecting; the suggestion is never written to the session.
+   */
+  suggestPrompt(sessionId: string, requestId: string): Promise<{ suggestion?: string }>;
+  /** Cancel one in-flight suggestion request; a no-op once it has settled. */
+  cancelPromptSuggest(sessionId: string, requestId: string): Promise<void>;
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void;
   /** Subscribe to live-snapshot changes; the returned function unsubscribes. */
   subscribeLive(sessionId: string, listener: (live: LiveCall[]) => void): () => void;
@@ -369,6 +379,12 @@ export interface SessionCallHost {
       toolChoice?: ToolChoice;
       maxTokens?: number;
       step?: number;
+      /**
+       * Overrides the turn's abort signal. A caller-owned signal (a suggestion
+       * request) that fires really aborts the upstream request; omitted means
+       * the owning turn's signal.
+       */
+      signal?: AbortSignal;
     },
   ): Promise<InvokedCall>;
   safeCancelTask(taskRunId: string): Promise<void>;

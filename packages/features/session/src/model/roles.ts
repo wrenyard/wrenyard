@@ -1,7 +1,7 @@
 /** Auxiliary selection tuning data; no IO or selection logic. */
 import type { IntelligenceTier, ModelCapability, ReasoningEffort } from '@wrenyard/models';
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
-export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule' | 'reply' | 'status';
+export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule' | 'reply' | 'status' | 'suggestion';
 export interface RoleReasoningRequirement {
   intelligenceMin: IntelligenceTier;
   intelligenceExpected: IntelligenceTier;
@@ -23,6 +23,7 @@ export const AUXILIARY_ROLE_ORDER: readonly AuxiliaryCallRole[] = [
   'memory-search',
   'title',
   'status',
+  'suggestion',
 ];
 
 /**
@@ -37,6 +38,7 @@ const NO_THINKING: readonly ReasoningEffort[] = ['none', 'low'];
 export const ROLE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleReasoningRequirement>> = {
   title: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
   status: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
+  suggestion: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
   'memory-search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
   'search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
   dispatch: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['high'] },

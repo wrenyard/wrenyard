@@ -11,6 +11,9 @@ import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'ele
 import type { ReasoningEffort } from '@wrenyard/models';
 import type {
   SessionModelEntry,
+  SessionPromptCancelParams,
+  SessionPromptSuggestParams,
+  SessionPromptSuggestResult,
   SessionRoutesPreviewParams,
   SessionRoutesPreviewRole,
   SessionRoutesPreviewResult,
@@ -29,6 +32,7 @@ import type { SessionSeenState } from './seen-store.js';
 export type { ContextInspection, LiveCall };
 export type { AttachmentInput, SessionFile };
 export type { SessionRoutesPreviewParams, SessionRoutesPreviewRole, SessionRoutesPreviewResult };
+export type { SessionPromptSuggestParams, SessionPromptSuggestResult, SessionPromptCancelParams };
 export type { SessionSeenState };
 
 /** Exact main↔renderer channels of the session surface. */
@@ -53,6 +57,10 @@ export const SESSION_CHANNELS = {
   context: 'session:context',
   /** Renderer → main: `{ sessionId? }`, forwarded to `session.routes.preview`. */
   routesPreview: 'session:routes-preview',
+  /** Renderer → main: `{ sessionId, requestId }`, forwarded to `session.prompt.suggest`. */
+  promptSuggest: 'session:prompt-suggest',
+  /** Renderer → main: `{ sessionId, requestId }`, forwarded to `session.prompt.cancel`. */
+  promptCancel: 'session:prompt-cancel',
   /** Renderer → main: `string[]` of task run ids, resolved to briefs. */
   tasks: 'session:tasks',
   /** Renderer → main: `{ sessionId, path }`, forwarded to `session.media.read`. */
@@ -223,6 +231,14 @@ export interface SessionBridge {
    * display name and window). Never calls a model.
    */
   routesPreview(request?: SessionBridgeRoutesPreviewRequest): Promise<SessionRoutesPreviewResult>;
+  /**
+   * Request one next-input suggestion for a session. The daemon reads the
+   * conversation from the session itself; only the request id crosses the wire,
+   * so a late result can be matched to its request and dropped.
+   */
+  promptSuggest(request: SessionPromptSuggestParams): Promise<SessionPromptSuggestResult>;
+  /** Cancel one in-flight suggestion request by the id it was requested with. */
+  promptCancel(request: SessionPromptCancelParams): Promise<void>;
   /** Resolve task-run briefs for the given run ids (per-id failures are `unavailable`). */
   tasks(taskRunIds: string[]): Promise<SessionBridgeTaskBrief[]>;
   /** Subscribe to pushed ledger events; the returned function unsubscribes. */
@@ -327,6 +343,12 @@ const bridge: SessionBridge = {
   },
   routesPreview(request: SessionBridgeRoutesPreviewRequest = {}): Promise<SessionRoutesPreviewResult> {
     return ipcRenderer.invoke(SESSION_CHANNELS.routesPreview, request) as Promise<SessionRoutesPreviewResult>;
+  },
+  promptSuggest(request: SessionPromptSuggestParams): Promise<SessionPromptSuggestResult> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.promptSuggest, request) as Promise<SessionPromptSuggestResult>;
+  },
+  promptCancel(request: SessionPromptCancelParams): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.promptCancel, request) as Promise<void>;
   },
   tasks(taskRunIds: string[]): Promise<SessionBridgeTaskBrief[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.tasks, taskRunIds) as Promise<SessionBridgeTaskBrief[]>;

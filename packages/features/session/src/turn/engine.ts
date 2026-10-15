@@ -36,6 +36,7 @@ import type {
   SessionHost,
 } from '../ports.ts';
 import { ReplyWriter } from '../auxiliary/reply.ts';
+import { suggestNextInput } from '../auxiliary/prompt-suggestion.ts';
 import { TurnRunner } from './turn.ts';
 import type { SessionRuntime, TurnRuntime } from './runtime.ts';
 import { buildSnapshot } from '../snapshot.ts';
@@ -66,6 +67,12 @@ class Engine implements Session, SessionCallHost {
   /** Sessions deleted in this process; a stale send must not resurrect one. */
   private readonly deletedSessions = new Set<string>();
   private readonly pipeline = new Set<Promise<unknown>>();
+  /**
+   * The one in-flight next-input suggestion per session. A newer request
+   * replaces (and aborts) the previous one, so a session never has two
+   * suggestion calls riding the same completed turn at once.
+   */
+  private readonly suggestionRequests = new Map<string, { requestId: string; controller: AbortController }>();
   private ready: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
@@ -213,6 +220,9 @@ class Engine implements Session, SessionCallHost {
     session.nextTurn += 1;
     const turn = this.createTurn(turnNumber, input.text, input.model, publicId, metadata.contextWindow);
     session.turns.set(turnNumber, turn);
+    // A new user turn ends the exchange a suggestion described; abort any
+    // pending suggestion, including one started by another client.
+    this.abortSuggestion(sessionId);
     if (session.firstUserText === undefined) session.firstUserText = input.text;
 
     // Durable start: the user event is on disk before `send` returns.
@@ -312,6 +322,8 @@ class Engine implements Session, SessionCallHost {
     // Mark synchronously, before any await, so a send that already passed its
     // admission check cannot append a turn after the timeline is removed.
     this.deletedSessions.add(sessionId);
+    // A suggestion describes a session that no longer exists: stop it now.
+    this.abortSuggestion(sessionId);
 
     const taskRunIds = new Set<string>();
     for (const event of events) {
@@ -443,6 +455,76 @@ class Engine implements Session, SessionCallHost {
     return this.live.read(sessionId);
   }
 
+  async suggestPrompt(sessionId: string, requestId: string): Promise<{ suggestion?: string }> {
+    this.assertOpen();
+    // Register synchronously, before the first await, so a cancel that arrives
+    // while the session is still being resolved is not lost. A newer request
+    // replaces (and aborts) the previous one for this session.
+    this.suggestionRequests.get(sessionId)?.controller.abort();
+    const controller = new AbortController();
+    this.suggestionRequests.set(sessionId, { requestId, controller });
+    try {
+      const session = await this.ensureSession(sessionId);
+      this.assertNotDeleted(sessionId);
+      // A cancel or a newer request during ensureSession wins: nothing runs.
+      if (this.suggestionSuperseded(sessionId, controller)) return {};
+      const turn = this.latestCompletedTurn(session);
+      if (turn === undefined) return {};
+      let suggestion: string;
+      try {
+        suggestion = await suggestNextInput(this, session, turn, controller.signal);
+      } catch {
+        // Defense in depth: generation is best-effort, so no abort or model
+        // error may escape this path and take the daemon down. Session and
+        // schema validation above already ran and still surface as before.
+        return {};
+      }
+      // Re-verify the request is still live and still describes this very turn:
+      // a cancel, a newer request or a newer turn invalidates the result.
+      if (this.suggestionSuperseded(sessionId, controller)) return {};
+      if (this.latestCompletedTurn(session) !== turn) return {};
+      return suggestion === '' ? {} : { suggestion };
+    } finally {
+      const current = this.suggestionRequests.get(sessionId);
+      if (current?.controller === controller) this.suggestionRequests.delete(sessionId);
+    }
+  }
+
+  async cancelPromptSuggest(sessionId: string, requestId: string): Promise<void> {
+    const current = this.suggestionRequests.get(sessionId);
+    // A stale or unknown request id is a no-op: never abort a newer request.
+    if (current === undefined || current.requestId !== requestId) return;
+    this.abortSuggestion(sessionId);
+  }
+
+  /** Whether a registered suggestion request was aborted or superseded. */
+  private suggestionSuperseded(sessionId: string, controller: AbortController): boolean {
+    return controller.signal.aborted || this.suggestionRequests.get(sessionId)?.controller !== controller;
+  }
+
+  /** Abort and forget the in-flight suggestion request for one session, if any. */
+  private abortSuggestion(sessionId: string): void {
+    const current = this.suggestionRequests.get(sessionId);
+    if (current === undefined) return;
+    this.suggestionRequests.delete(sessionId);
+    current.controller.abort();
+  }
+
+  /**
+   * The newest turn, returned only when it is the durable completion with status
+   * `completed`. A newer running, failed or interrupted turn yields nothing: a
+   * suggestion describes the latest exchange, so an older completion is never
+   * surfaced past newer work.
+   */
+  private latestCompletedTurn(session: SessionRuntime): TurnRuntime | undefined {
+    let latest: TurnRuntime | undefined;
+    for (const turn of session.turns.values()) {
+      if (latest === undefined || turn.turn > latest.turn) latest = turn;
+    }
+    if (latest === undefined || !latest.durableTerminal || latest.status !== 'completed') return undefined;
+    return latest;
+  }
+
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void {
     return this.ports.ledger.subscribe(sessionId, listener);
   }
@@ -458,6 +540,8 @@ class Engine implements Session, SessionCallHost {
 
   private async doClose(): Promise<void> {
     this.closed = true;
+    for (const request of this.suggestionRequests.values()) request.controller.abort();
+    this.suggestionRequests.clear();
     await this.ready.catch(() => undefined);
     for (const sessionId of [...this.sessions.keys()]) {
       const session = this.sessions.get(sessionId);
@@ -779,6 +863,8 @@ class Engine implements Session, SessionCallHost {
       toolChoice?: import('../transport/index.ts').ToolChoice;
       maxTokens?: number;
       step?: number;
+      /** Overrides the owning turn's abort signal (see `SessionCallHost.invoke`). */
+      signal?: AbortSignal;
     } = {},
   ): Promise<InvokedCall> {
     const spanId = extra.spanId ?? this.nextSpanId(session, turn);
@@ -796,7 +882,7 @@ class Engine implements Session, SessionCallHost {
         step,
         messages: view.messages,
         layers: view.layers,
-        signal: turn.abort.signal,
+        signal: extra.signal ?? turn.abort.signal,
         ...(extra.reason === undefined ? {} : { reason: extra.reason }),
         ...(extra.onText === undefined ? {} : { onText: extra.onText }),
         ...(extra.onReasoning === undefined ? {} : { onReasoning: extra.onReasoning }),

@@ -223,6 +223,16 @@ const SESSION_CATEGORY: SettingDefinition[] = [
     source: { kind: 'preference', preference: 'session.sendKey' },
   },
   {
+    id: 'session.promptCompletion',
+    category: 'session',
+    title: '提示词补全',
+    description: '回复结束后在输入框内以浅色文字给出下一步输入建议。仅使用当前会话的对话内容，建议不会自动发送。',
+    keywords: ['补全', '建议', '提示词', 'suggestion', 'completion'],
+    control: { kind: 'boolean' },
+    default: true,
+    source: { kind: 'preference', preference: 'session.promptCompletion' },
+  },
+  {
     id: 'session.workspace',
     category: 'session',
     title: '工作区',

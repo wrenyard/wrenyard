@@ -113,7 +113,7 @@ export interface SessionRoutesPreviewParams {
  */
 export interface SessionRoutesPreviewRole {
   /** Auxiliary conversation role, in the fixed order the preview lists them. */
-  role: 'reply' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule' | 'search' | 'memory-search' | 'title' | 'status'
+  role: 'reply' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule' | 'search' | 'memory-search' | 'title' | 'status' | 'suggestion'
   model?: string
   modelName?: string
   contextWindow?: number
@@ -224,6 +224,31 @@ export interface SessionUpdateMetadataParams {
 /** Result of `session.updateMetadata`: empty on success. */
 export type SessionUpdateMetadataResult = Record<string, never>
 
+/**
+ * Params of `session.prompt.suggest`: one session and the caller-owned request
+ * id that correlates its cancel and lets a late result be dropped. The context
+ * is read from the session itself — the renderer never supplies conversation
+ * text.
+ */
+export interface SessionPromptSuggestParams {
+  sessionId: string
+  requestId: string
+}
+
+/** Result of `session.prompt.suggest`: one short suggestion, when there is one. */
+export interface SessionPromptSuggestResult {
+  suggestion?: string
+}
+
+/** Params of `session.prompt.cancel`: the request to abort. */
+export interface SessionPromptCancelParams {
+  sessionId: string
+  requestId: string
+}
+
+/** Result of `session.prompt.cancel`: empty on success. */
+export type SessionPromptCancelResult = Record<string, never>
+
 /** The gateway protocol a selectable main reasoning model runs through. */
 export type SessionInferenceMode = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
 
@@ -259,4 +284,6 @@ export interface SessionMethods {
   'session.delete': RpcMethod<SessionDeleteParams, SessionDeleteResult>
   'session.rename': RpcMethod<SessionRenameParams, SessionRenameResult>
   'session.updateMetadata': RpcMethod<SessionUpdateMetadataParams, SessionUpdateMetadataResult>
+  'session.prompt.suggest': RpcMethod<SessionPromptSuggestParams, SessionPromptSuggestResult>
+  'session.prompt.cancel': RpcMethod<SessionPromptCancelParams, SessionPromptCancelResult>
 }

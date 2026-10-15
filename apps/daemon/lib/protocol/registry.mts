@@ -11,6 +11,8 @@ import {
   sessionDeleteParamsSchema, sessionDeleteResultSchema,
   sessionRenameParamsSchema, sessionRenameResultSchema,
   sessionUpdateMetadataParamsSchema, sessionUpdateMetadataResultSchema,
+  sessionPromptSuggestParamsSchema, sessionPromptSuggestResultSchema,
+  sessionPromptCancelParamsSchema, sessionPromptCancelResultSchema,
   type SessionListParams, type SessionListResult,
   type SessionCreateParams, type SessionCreateResult,
   type SessionSendParams, type SessionSendResult,
@@ -22,6 +24,8 @@ import {
   type SessionDeleteParams, type SessionDeleteResult,
   type SessionRenameParams, type SessionRenameResult,
   type SessionUpdateMetadataParams, type SessionUpdateMetadataResult,
+  type SessionPromptSuggestParams, type SessionPromptSuggestResult,
+  type SessionPromptCancelParams, type SessionPromptCancelResult,
 } from './methods/session.mts'
 export type {
   SessionListParams, SessionListResult,
@@ -35,6 +39,8 @@ export type {
   SessionDeleteParams, SessionDeleteResult,
   SessionRenameParams, SessionRenameResult,
   SessionUpdateMetadataParams, SessionUpdateMetadataResult,
+  SessionPromptSuggestParams, SessionPromptSuggestResult,
+  SessionPromptCancelParams, SessionPromptCancelResult,
 } from './methods/session.mts'
 import {
   scheduleListParamsSchema, scheduleListResultSchema,
@@ -665,6 +671,8 @@ export interface ForemanMethodParams {
   'session.delete': SessionDeleteParams
   'session.rename': SessionRenameParams
   'session.updateMetadata': SessionUpdateMetadataParams
+  'session.prompt.suggest': SessionPromptSuggestParams
+  'session.prompt.cancel': SessionPromptCancelParams
   'schedule.list': ScheduleListParams
   'schedule.create': ScheduleCreateParams
   'schedule.update': ScheduleUpdateParams
@@ -751,6 +759,8 @@ export interface ForemanMethodResults {
   'session.delete': SessionDeleteResult
   'session.rename': SessionRenameResult
   'session.updateMetadata': SessionUpdateMetadataResult
+  'session.prompt.suggest': SessionPromptSuggestResult
+  'session.prompt.cancel': SessionPromptCancelResult
   'schedule.list': ScheduleListResult
   'schedule.create': ScheduleCreateResult
   'schedule.update': ScheduleUpdateResult
@@ -1083,6 +1093,14 @@ export const methodRegistry: {
   'session.updateMetadata': {
     params: sessionUpdateMetadataParamsSchema,
     result: sessionUpdateMetadataResultSchema,
+  },
+  'session.prompt.suggest': {
+    params: sessionPromptSuggestParamsSchema,
+    result: sessionPromptSuggestResultSchema,
+  },
+  'session.prompt.cancel': {
+    params: sessionPromptCancelParamsSchema,
+    result: sessionPromptCancelResultSchema,
   },
   'schedule.list': { params: scheduleListParamsSchema, result: scheduleListResultSchema },
   'schedule.create': { params: scheduleCreateParamsSchema, result: scheduleCreateResultSchema },

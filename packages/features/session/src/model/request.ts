@@ -45,7 +45,7 @@ export type { ModelMetadata } from './metadata.ts';
 export type { Message, ModelContentPart, ToolCall, ToolSpec, Usage } from '../transport/index.ts';
 
 /** Every role that may issue a call. `reason` is the one expensive role. */
-export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'vcs', 'project', 'schedule', 'status'] as const;
+export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'vcs', 'project', 'schedule', 'status', 'suggestion'] as const;
 export type CallRole = (typeof CALL_ROLES)[number];
 
 /** The expensive role streams with no total deadline; its idle stream is bounded. */
@@ -65,6 +65,11 @@ export const AUXILIARY_MAX_ROUTES = 3;
  * may be tried now.
  */
 export type RouteHealth = GatewayRouteStatus;
+
+/** Output-token allowance for the one next-input suggestion call (384 tokens). */
+export const SUGGESTION_MAX_TOKENS = 384;
+/** Total deadline for the suggestion role, including auxiliary route selection (15 s). */
+export const SUGGESTION_TIMEOUT_MS = 15_000;
 
 /** Caller-supplied expensive model for the `reason` role. */
 export interface ReasonSelection {
@@ -365,14 +370,21 @@ export function isProviderDefaultReasoningOnly(metadata: ModelMetadata): boolean
 
 /** Reject promptly when the signal aborts, even while awaiting a plain promise. */
 function settleWithAbort<T>(value: T | Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(abortError());
+  const settled = Promise.resolve(value);
+  if (signal.aborted) {
+    // The caller has already created `value` (e.g. a transport request). We stop
+    // waiting on it, but we must still observe it: its rejection would otherwise
+    // be an unhandled rejection.
+    void settled.catch(() => undefined);
+    return Promise.reject(abortError());
+  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = (): void => {
       signal.removeEventListener('abort', onAbort);
       reject(abortError());
     };
     signal.addEventListener('abort', onAbort, { once: true });
-    Promise.resolve(value).then(
+    settled.then(
       (resolved) => {
         signal.removeEventListener('abort', onAbort);
         resolve(resolved);
@@ -467,6 +479,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       // Non-reasoning roles never transmit image bytes: image parts become a
       // textual omitted descriptor before the budget check and the driver.
       const messages = sanitizeMessagesForRole(input.role, input.messages);
+      // The suggestion role always carries its own tiny output allowance, so a
+      // caller cannot spend more than a short hint's worth of tokens on it.
+      const maxTokens = input.role === 'suggestion' ? SUGGESTION_MAX_TOKENS : input.maxTokens;
       const spanKind: 'reasoning' | 'auxiliary' = input.role === 'reason' ? 'reasoning' : 'auxiliary';
       let model = '';
       let estimatedInputTokens = 0;
@@ -535,8 +550,15 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
 
       // Every auxiliary role, including document, shares one finite total budget
       // that also covers route selection; only the reasoning role streams with
-      // no total deadline.
-      const totalTimeoutMs = input.role === 'reason' ? undefined : AUXILIARY_TOTAL_BUDGET_MS;
+      // no total deadline. The suggestion role is a cheap, fire-and-wait hint
+      // whose own short deadline also covers route selection, so a slow or
+      // stalled route resolves as no suggestion rather than delaying the
+      // composer.
+      const totalTimeoutMs = input.role === 'reason'
+        ? undefined
+        : input.role === 'suggestion'
+          ? SUGGESTION_TIMEOUT_MS
+          : AUXILIARY_TOTAL_BUDGET_MS;
       const totalTimer = totalTimeoutMs === undefined
         ? undefined
         : setTimeout(() => abort('timeout'), totalTimeoutMs);
@@ -634,7 +656,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         // replaces it.
         const callable = candidates.find((candidate) => isCallableNow(options.routeStatus?.(candidate.model), startedAtMs));
         const primary = callable ?? candidates[0]!;
-        const primaryBudget = checkContextBudget(primary.model, messages, options.resolveProvider, input.maxTokens);
+        const primaryBudget = checkContextBudget(primary.model, messages, options.resolveProvider, maxTokens);
         estimatedInputTokens = primaryBudget.estimatedInputTokens;
         model = primary.model;
         selectedRank = all.indexOf(primary) + 1;
@@ -670,6 +692,14 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           },
         });
 
+        // A cancel can land while the started span is appended; never start a
+        // transport request for a call that is already cancelled.
+        if (controller.signal.aborted) {
+          return await fail(abortMessage(abortKind, totalTimeoutMs), {
+            status: abortKind === 'signal' ? 'aborted' : 'failed',
+          });
+        }
+
         let attempted = 0;
         let lastMessage = `Auxiliary role ${input.role}: no candidate route succeeded`;
         let earliestRetry: string | undefined;
@@ -693,7 +723,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             earliestRetry = earliest(earliestRetry, health?.nextProbeAt ?? health?.until);
             continue;
           }
-          const budget = checkContextBudget(candidate.model, messages, options.resolveProvider, input.maxTokens);
+          const budget = checkContextBudget(candidate.model, messages, options.resolveProvider, maxTokens);
           const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
           if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, candidate.reasoningEffort)) {
             lastMessage = `Model ${candidate.model} does not support reasoning effort "${candidate.reasoningEffort}"`;
@@ -704,7 +734,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             return await fail(message, auxiliaryFailure(message, earliestRetry, 'context_overflow'));
           }
           const effort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : candidate.reasoningEffort;
-          const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? input.maxTokens;
+          const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
           model = candidate.model;
           selectedRank = all.indexOf(candidate) + 1;
           actualReasoningEffort = effort;
@@ -736,8 +766,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
               // failover cannot multiply attempts on one route.
               noRetry: true,
               // The Gateway records this deadline so a client-observed timeout is
-              // accounted to the route even though it only sees a disconnect.
-              deadlineAtMs: Date.now() + perRouteMs,
+              // accounted to the route even though it only sees a disconnect. The
+              // suggestion role's own short deadline is local, not the route's
+              // fault, so it omits the header and never faults the route it used.
+              ...(input.role === 'suggestion' ? {} : { deadlineAtMs: Date.now() + perRouteMs }),
               attemptId,
             };
             const completed = await settleWithAbort(options.transport.complete(request), attemptController.signal);
@@ -753,8 +785,11 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             // Report the real fault before reading the route's retry instant, so
             // the attempt record carries the `until` this report just wrote, and
             // before stopping failover, so a timeout or transport failure after
-            // visible output still reaches the route-health authority.
-            if (!cancelled) {
+            // visible output still reaches the route-health authority. The
+            // suggestion role's own deadline is a local abort, not the route's
+            // fault, so a suggestion timeout never marks the route unhealthy.
+            const localSuggestionTimeout = input.role === 'suggestion' && timedOut;
+            if (!cancelled && !localSuggestionTimeout) {
               if (timedOut) options.reportRouteFault?.(candidate.model, attemptId, 'timeout');
               else if (fact.kind === 'network') options.reportRouteFault?.(candidate.model, attemptId, 'transport');
             }
@@ -822,9 +857,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         if (input.role === 'reason') {
           // The main reasoning call is explicit and never switches routes.
           const selection = input.reason!;
-          const budget = checkContextBudget(model, messages, options.resolveProvider, input.maxTokens);
+          const budget = checkContextBudget(model, messages, options.resolveProvider, maxTokens);
           estimatedInputTokens = budget.estimatedInputTokens;
-          const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? input.maxTokens;
+          const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
           // A route whose whole ladder is the provider-default sentinel has no
           // selectable level: it accepts any requested effort and is sent at its
           // own default. Every other route keeps the exact support check.

@@ -14,6 +14,10 @@ export type {
   SessionRoutesPreviewParams,
   SessionRoutesPreviewRole,
   SessionRoutesPreviewResult,
+  SessionPromptSuggestParams,
+  SessionPromptSuggestResult,
+  SessionPromptCancelParams,
+  SessionPromptCancelResult,
   AttachmentInput,
   SessionFile,
 } from '@wrenyard/protocol'
@@ -231,7 +235,7 @@ export const sessionContextInspectResultSchema = {
 
 const auxiliaryRouteRoleSchema = {
   type: 'string',
-  enum: ['reply', 'dispatch', 'document', 'vcs', 'project', 'schedule', 'search', 'memory-search', 'title', 'status'],
+  enum: ['reply', 'dispatch', 'document', 'vcs', 'project', 'schedule', 'search', 'memory-search', 'title', 'status', 'suggestion'],
 } as const
 
 export const sessionRoutesPreviewParamsSchema = {
@@ -256,3 +260,17 @@ export const sessionRoutesPreviewResultSchema = {
     },
   },
 } as const satisfies JsonSchema
+
+export const sessionPromptSuggestParamsSchema = {
+  type: 'object', required: ['sessionId', 'requestId'], additionalProperties: false,
+  properties: { sessionId: idSchema, requestId: idSchema },
+} as const satisfies JsonSchema
+export const sessionPromptSuggestResultSchema = {
+  type: 'object', additionalProperties: false,
+  properties: { suggestion: { type: 'string', minLength: 1 } },
+} as const satisfies JsonSchema
+export const sessionPromptCancelParamsSchema = {
+  type: 'object', required: ['sessionId', 'requestId'], additionalProperties: false,
+  properties: { sessionId: idSchema, requestId: idSchema },
+} as const satisfies JsonSchema
+export const sessionPromptCancelResultSchema = emptySchema

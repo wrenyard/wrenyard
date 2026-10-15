@@ -23,6 +23,7 @@ export const SESSION_CHANNELS = {
   cancelTask: 'session:cancel-task',
   context: 'session:context', tasks: 'session:tasks',
   routesPreview: 'session:routes-preview',
+  promptSuggest: 'session:prompt-suggest', promptCancel: 'session:prompt-cancel',
   mediaRead: 'session:media-read', mediaReveal: 'session:media-reveal',
   delete: 'session:delete', mediaPick: 'session:media-pick',
   rename: 'session:rename',
@@ -38,6 +39,7 @@ export type {
   SessionBridgeInterruptRequest, SessionBridgeLivePayload, SessionBridgeMediaRequest,
   SessionBridgeModelEntry, SessionBridgeSendRequest, SessionBridgeTaskBrief,
   SessionBridgeRoutesPreviewRequest,
+  SessionPromptSuggestParams, SessionPromptSuggestResult, SessionPromptCancelParams,
   SessionMediaReadResult, SessionFile, DraftAttachment,
 } from './preload.js';
 export type {
@@ -381,6 +383,13 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     request('session.context.inspect', value));
   handle(SESSION_CHANNELS.routesPreview, (_event, value) =>
     request('session.routes.preview', value ?? {}));
+  // Forwarded verbatim: the daemon owns the session context and the cancel
+  // semantics; the main process never reads or caches conversation text.
+  handle(SESSION_CHANNELS.promptSuggest, (_event, value) =>
+    request('session.prompt.suggest', value));
+  handle(SESSION_CHANNELS.promptCancel, async (_event, value) => {
+    await request('session.prompt.cancel', value);
+  });
   handle(SESSION_CHANNELS.ledger, (event, value) => {
     if (typeof value !== 'string' || !value) throw new Error('Invalid sessionId');
     return openLedger(event.sender, value);

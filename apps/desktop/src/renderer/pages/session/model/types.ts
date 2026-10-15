@@ -137,7 +137,7 @@ export interface ActionModel {
   cycle: number;
 }
 
-export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project' | 'schedule' | 'status';
+export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project' | 'schedule' | 'status' | 'suggestion';
 
 export interface CallModel {
   id: string;

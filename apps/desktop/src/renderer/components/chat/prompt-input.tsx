@@ -36,6 +36,17 @@ export interface PromptInputProps {
   onPaste?: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
   className?: string;
+  /**
+   * Ghost next-input suggestion. While the value is empty it reads as the
+   * field's muted placeholder; Tab accepts it into the draft, and Escape or any
+   * other key dismisses it. No suggestion leaves every existing key behaviour
+   * untouched.
+   */
+  suggestion?: string;
+  /** Accept the shown suggestion into the draft (never submits). */
+  onAcceptSuggestion?: () => void;
+  /** Dismiss the shown suggestion and cancel its in-flight request. */
+  onDismissSuggestion?: () => void;
 }
 
 /**
@@ -61,10 +72,17 @@ export function PromptInput({
   onPaste,
   textareaRef,
   className,
+  suggestion,
+  onAcceptSuggestion,
+  onDismissSuggestion,
 }: PromptInputProps) {
   const composing = useRef(false);
   const canSubmit = !disabled && !submitDisabled && (value.trim() !== '' || hasAttachments);
   const hasLeading = toolbarLeading !== undefined && toolbarLeading !== null;
+  // The suggestion reads as the field's placeholder while the value is empty: it
+  // is muted, never part of the value, and a "Tab 补全" hint names the accept key.
+  const ghost = !disabled && value === '' && suggestion !== undefined ? suggestion : '';
+  const placeholderText = ghost === '' ? placeholder : `${ghost}\u2003Tab 补全`;
 
   const submit = (): void => {
     if (canSubmit) onSubmit();
@@ -100,19 +118,36 @@ export function PromptInput({
         <InputGroupTextarea
           ref={textareaRef}
           value={value}
-          placeholder={placeholder}
+          placeholder={placeholderText}
           disabled={disabled}
           rows={1}
           className="min-h-10 min-w-0 basis-48 grow leading-6 max-h-60"
           onChange={(event) => onValueChange(event.target.value)}
           onPaste={onPaste}
           onKeyDown={(event) => {
-            if (isSubmitKey(event) && !composing.current && !event.nativeEvent.isComposing) {
+            const inComposition = composing.current || event.nativeEvent.isComposing;
+            if (isSubmitKey(event) && !inComposition) {
               event.preventDefault();
               submit();
+              return;
+            }
+            // A bare Tab accepts the suggestion into the draft and never submits.
+            if (event.key === 'Tab' && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
+              && !inComposition && ghost !== '') {
+              event.preventDefault();
+              onAcceptSuggestion?.();
+              return;
+            }
+            if (event.key === 'Escape') {
+              if (value === '') onDismissSuggestion?.();
+              return;
+            }
+            // Any other key dismisses the suggestion; modifiers alone do not.
+            if (ghost !== '' && event.key !== 'Shift' && event.key !== 'Control' && event.key !== 'Alt' && event.key !== 'Meta') {
+              onDismissSuggestion?.();
             }
           }}
-          onCompositionStart={() => { composing.current = true; }}
+          onCompositionStart={() => { composing.current = true; onDismissSuggestion?.(); }}
           onCompositionEnd={() => { composing.current = false; }}
         />
         <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1 pr-1 sm:gap-1.5 sm:pr-1.5">

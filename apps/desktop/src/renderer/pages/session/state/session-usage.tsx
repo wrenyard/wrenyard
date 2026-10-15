@@ -10,6 +10,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -21,7 +22,8 @@ import { useQuery } from '@tanstack/react-query';
 import type { ContextInspection } from '@/shell-contract';
 import type { SessionRoutesPreviewResult } from '@wrenyard/protocol';
 import type { DraftAttachment, LedgerEvent, ModelEntry, TurnModel } from '../model/types.js';
-import { contextQuery, routesPreviewQuery } from '../queries.js';
+import { contextInspectSessionId, contextQuery, routesPreviewQuery } from '../queries.js';
+import { promptCancel, promptSuggest } from '../api.js';
 import { retainReasoningEffort, type ReasoningEffort } from './reasoning-effort.js';
 import { setQuotaFocus } from '@/renderer/lib/statusbar';
 import {
@@ -66,6 +68,27 @@ export interface ComposerSelection {
   attachments: DraftAttachment[];
   setAttachments(attachments: DraftAttachment[]): void;
   clearAttachments(): void;
+  /** Ghost next-input suggestion for the active session; `''` when there is none. */
+  suggestion: string;
+  /**
+   * Record whether the composer may receive a suggestion right now. Called while
+   * the composer renders, so a turn completing in the same commit is judged on
+   * the current value; the composer drops the suggestion itself when ineligible.
+   */
+  setSuggestionEligible(eligible: boolean): void;
+  /** Accept the suggestion into the draft (never sends it). */
+  acceptSuggestion(): void;
+  /** Drop the suggestion and cancel any in-flight request. */
+  dismissSuggestion(): void;
+}
+
+/**
+ * A request id that is unique across renderer processes. The standard window and
+ * a mini window run in separate processes, so a per-process counter can mint the
+ * same id twice and let one surface cancel the other's request.
+ */
+function newSuggestionRequestId(): string {
+  return crypto.randomUUID();
 }
 
 interface SessionUsageContextValue extends SessionUsage, ComposerSelection {}
@@ -92,6 +115,22 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
   const [text, setTextState] = useState(() => readDraft(sessionKey));
   const [attachments, setAttachmentsState] = useState<DraftAttachment[]>(() => readDraftAttachments(sessionKey));
   const [inputTokens, setInputTokensState] = useState(0);
+  // Ghost next-input suggestion: only the active session's latest completed
+  // turn triggers a request, and only while the composer is empty and idle.
+  // Keyed by its session so a switch masks the previous session's text during
+  // render, before paint.
+  const [suggestion, setSuggestionState] = useState<{ sessionKey: string; text: string }>({ sessionKey: '', text: '' });
+  const activeSuggestion = suggestion.sessionKey === sessionKey ? suggestion.text : '';
+  // The composer's current-render eligibility; a ref, not state, so a completion
+  // read in the same commit sees the current value instead of one render behind.
+  const suggestionEligibleRef = useRef(false);
+  // The request id + draft session key currently awaiting a result. Both are
+  // re-checked before a result is shown, so a stale response can never leak into
+  // another draft or revive a dismissed suggestion.
+  const suggestionPendingRef = useRef<{ id: string; sessionKey: string }>({ id: '', sessionKey: '' });
+  // The session + completed-turn marker already requested for; a new session
+  // baseline absorbs loaded history so a switch never requests a suggestion.
+  const suggestionRequestedRef = useRef<{ identity: string; marker: number }>({ identity: '', marker: 0 });
 
   if (selectionKey !== sessionKey) {
     setSelectionKey(sessionKey);
@@ -131,6 +170,14 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
     (event.type === 'reasoning.completed' || event.type === 'turn.finished')
       ? Math.max(latest, event.seq)
       : latest, 0), [events]);
+  // The newest durable completion of a completed turn; a suggestion is requested
+  // once per new value of this marker.
+  const completedTurnMarker = useMemo(() => events.reduce((latest, event) =>
+    (event.type === 'turn.finished' && event.status === 'completed')
+      ? Math.max(latest, event.seq)
+      : latest, 0), [events]);
+  // A draft has no persisted ledger, so it can never receive a suggestion.
+  const suggestionSessionId = contextInspectSessionId(sessionKey);
   const latestCompletionMarker = useRef(completionMarker);
   latestCompletionMarker.current = completionMarker;
   const coordinator = useRef({ identity: '', active: false, busy: false, pending: false, marker: 0 });
@@ -208,6 +255,91 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
     setInputTokensState(next);
   }, []);
 
+  // ── ghost next-input suggestion ─────────────────────────────────────────
+  /** Drop the current suggestion and cancel its in-flight request, if any. */
+  const dismissSuggestion = useCallback((): void => {
+    const pending = suggestionPendingRef.current;
+    suggestionPendingRef.current = { id: '', sessionKey: '' };
+    setSuggestionState({ sessionKey: '', text: '' });
+    if (pending.id !== '' && pending.sessionKey !== '') {
+      void promptCancel({ sessionId: pending.sessionKey, requestId: pending.id }).catch(() => undefined);
+    }
+  }, []);
+
+  /**
+   * Hiding this surface (the standard window sitting behind a mini card) releases
+   * the suggestion at once: the pending request is cancelled, the ghost text is
+   * cleared, and no request may be issued until this surface is visible again.
+   * Completed-turn markers observed while hidden are still consumed by the
+   * request effect below, so showing the surface again never asks for a past turn.
+   */
+  useEffect(() => {
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') return;
+      suggestionEligibleRef.current = false;
+      dismissSuggestion();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [dismissSuggestion]);
+
+  /** Ask the daemon for one suggestion; the result is validated before it shows. */
+  const requestSuggestion = useCallback((targetSessionKey: string): void => {
+    const requestId = newSuggestionRequestId();
+    suggestionPendingRef.current = { id: requestId, sessionKey: targetSessionKey };
+    setSuggestionState({ sessionKey: targetSessionKey, text: '' });
+    void promptSuggest({ sessionId: targetSessionKey, requestId })
+      .then((result) => {
+        const pending = suggestionPendingRef.current;
+        // A cancelled, replaced or differently-keyed result must never revive a
+        // suggestion or leak into another draft.
+        if (pending.id !== requestId || pending.sessionKey !== targetSessionKey) return;
+        setSuggestionState({ sessionKey: targetSessionKey, text: result.suggestion ?? '' });
+      })
+      .catch(() => {
+        const pending = suggestionPendingRef.current;
+        if (pending.id === requestId) suggestionPendingRef.current = { id: '', sessionKey: '' };
+      });
+  }, []);
+
+  // Record the composer's eligibility only; the composer drops the suggestion
+  // itself, so this stays a pure ref write safe to call during render.
+  const setSuggestionEligible = useCallback((eligible: boolean): void => {
+    suggestionEligibleRef.current = eligible;
+  }, []);
+
+  const acceptSuggestion = useCallback((): void => {
+    const next = activeSuggestion;
+    if (next === '') return;
+    setSuggestionState({ sessionKey: '', text: '' });
+    // Accepting writes an editable draft; it is never sent automatically.
+    setTextState(next);
+    writeDraft(sessionKey, next);
+  }, [activeSuggestion, sessionKey]);
+
+  // Request at most once per new completed turn of the active session, and only
+  // when the composer reported eligibility during the completing render. The
+  // marker is consumed whether or not a request is issued, so clearing a draft or
+  // re-enabling the setting can never summon a suggestion for a past turn. The
+  // first ready render of a session absorbs its loaded history as the baseline,
+  // so history and session switches never request.
+  useEffect(() => {
+    if (!ledgerReady) return;
+    const previous = suggestionRequestedRef.current;
+    if (previous.identity !== sessionKey) {
+      suggestionRequestedRef.current = { identity: sessionKey, marker: completedTurnMarker };
+      return;
+    }
+    if (completedTurnMarker <= previous.marker) return;
+    suggestionRequestedRef.current = { identity: sessionKey, marker: completedTurnMarker };
+    if (!suggestionEligibleRef.current || suggestionSessionId === undefined) return;
+    requestSuggestion(sessionKey);
+  }, [ledgerReady, completedTurnMarker, sessionKey, suggestionSessionId, requestSuggestion]);
+
+  // Cancel the outgoing session's in-flight request before paint (and on
+  // unmount), so a result from a session we just left can never surface.
+  useLayoutEffect(() => () => dismissSuggestion(), [sessionKey, dismissSuggestion]);
+
   // Retain the reasoning effort when the target route still supports it;
   // otherwise fall back to the nearest-supported rule (shared with Composer).
   const requestModel = useCallback((nextModelId: string) => {
@@ -241,9 +373,15 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
     attachments,
     setAttachments,
     clearAttachments,
+    suggestion: activeSuggestion,
+    setSuggestionEligible,
+    acceptSuggestion,
+    dismissSuggestion,
   }), [
     sessionKey, models, events, turns, seq, contextInspection, contextRoutesPreview, modelId, effort, text, inputTokens, attachments,
+    activeSuggestion,
     requestModel, refreshContext, setInputTokens, setText, clearText, setAttachments, clearAttachments,
+    setSuggestionEligible, acceptSuggestion, dismissSuggestion,
   ]);
 
   return <SessionUsageContext.Provider value={value}>{children}</SessionUsageContext.Provider>;
@@ -269,9 +407,11 @@ export function useComposerSelection(): ComposerSelection {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
+    suggestion, setSuggestionEligible, acceptSuggestion, dismissSuggestion,
   } = useSessionUsageContext();
   return {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
+    suggestion, setSuggestionEligible, acceptSuggestion, dismissSuggestion,
   };
 }

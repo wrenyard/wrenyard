@@ -39,6 +39,21 @@ function useInputTokenCount(text: string): number | undefined {
 /** Upper bound on attachments held by the composer in one draft. */
 const MAX_ATTACHMENTS = 32;
 
+/**
+ * Whether this renderer's document is currently visible. A standard window
+ * hidden behind a mini card reports `hidden`; only the surface the user is
+ * actually looking at may request or hold a suggestion.
+ */
+function useSurfaceVisible(): boolean {
+  const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
+  useEffect(() => {
+    const onVisibility = (): void => setVisible(document.visibilityState === 'visible');
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+  return visible;
+}
+
 export interface ComposerProps {
   models: ModelEntry[];
   turns: TurnModel[];
@@ -59,6 +74,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
+    suggestion, setSuggestionEligible, acceptSuggestion, dismissSuggestion,
   } = useComposerSelection();
   const [sending, setSending] = useState(false);
   const [attachmentError, setAttachmentError] = useState('');
@@ -187,6 +203,25 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // and effort of a new session come from the client-local first-request record.
   const preferences = useQuery(preferencesQuery);
 
+  // The composer owns the local eligibility rule (empty, no attachments, no
+  // reply, not sending, feature on, this surface visible); the state layer owns
+  // when a request is made. Focus is deliberately not part of the rule: a
+  // completed turn still shows the ghost text without re-focusing the field.
+  const surfaceVisible = useSurfaceVisible();
+  const promptCompletionEnabled = preferences.data?.session.promptCompletion === true;
+  const suggestionEligible = promptCompletionEnabled && !disabled && !sending && surfaceVisible
+    && reply === undefined && text === '' && attachments.length === 0
+    && !turns.some((turn) => turn.status === 'running');
+  // Publish the current render's eligibility synchronously, so a turn that
+  // completes in this very commit is judged on today's value rather than the
+  // one captured while it was still running.
+  setSuggestionEligible(suggestionEligible);
+  // Becoming ineligible (typing, attaching, replying, a disabled field or a new
+  // running turn) drops the shown suggestion and cancels any in-flight request.
+  useEffect(() => {
+    if (!suggestionEligible) dismissSuggestion();
+  }, [suggestionEligible, dismissSuggestion]);
+
   useEffect(() => {
     const last = turnsRef.current[turnsRef.current.length - 1];
     // An existing session's model is authoritative; its effort is kept when the
@@ -232,6 +267,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   }));
 
   const handleChange = (value: string): void => {
+    // Typing or pasting text replaces and discards any suggestion.
+    if (value !== '') dismissSuggestion();
     setText(value);
   };
 
@@ -244,6 +281,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     const body = text.trim();
     const submitted = attachmentsRef.current;
     if ((body === '' && submitted.length === 0) || !selected || sending || disabled || exceeded) return;
+    // A send discards the suggestion and cancels any in-flight request.
+    dismissSuggestion();
     const originKey = sessionKey;
     const bodyText = text;
     const submittedIds = submitted.map((item) => item.id);
@@ -330,6 +369,9 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         attachments={attachmentStrip}
         hasAttachments={attachments.length > 0}
         onPaste={handlePaste}
+        suggestion={suggestion}
+        onAcceptSuggestion={acceptSuggestion}
+        onDismissSuggestion={dismissSuggestion}
         toolbar={
           <>
             {/* Bounded only by the row width so a long model name can use it and

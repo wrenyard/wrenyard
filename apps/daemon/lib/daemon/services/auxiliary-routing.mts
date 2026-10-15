@@ -126,9 +126,21 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
     const ranked = rankAutoRoutingCandidates(inputs, scoreWeights);
     for (const excluded of ranked.excluded) reject(excluded.reason);
     const levelsOf = new Map(entries.map(({ entry, levels }) => [entry.choice.exactAgentRuntime, levels]));
-    const admitted = ranked.ranked.map(candidate => ({ model: candidate.canonicalId, levels: levelsOf.get(candidate.canonicalId)! }));
+    const speedsOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.speed.effective_tps]));
+    const admitted = ranked.ranked.map(candidate => ({ model: candidate.canonicalId, levels: levelsOf.get(candidate.canonicalId)!, speedTps: speedsOf.get(candidate.canonicalId)! }));
     const preferred = requirements.expectedReasoningEffort;
-    const pool = preferred.map(effort => admitted.filter(({ levels }) => levels.includes(effort))).find(layer => layer.length > 0) ?? admitted;
+    const selected = preferred.map(effort => admitted.filter(({ levels }) => levels.includes(effort))).find(layer => layer.length > 0) ?? admitted;
+    // The suggestion role wants a hint back quickly, so when the selected pool
+    // admits routes that can actually disable reasoning it favors those, ordered
+    // by the candidate's own effective TPS. Other roles, and the case where no
+    // explicit-`none` route is admitted, keep the existing ranked order.
+    const explicitNone = role === 'suggestion' ? selected.filter(({ levels }) => levels.includes('none')) : [];
+    const pool = explicitNone.length > 0
+      ? explicitNone
+          .map((candidate, index) => ({ candidate, index }))
+          .sort((a, b) => b.candidate.speedTps - a.candidate.speedTps || a.index - b.index)
+          .map(({ candidate }) => candidate)
+      : selected;
     if (!pool.length) throw new Error(`Auxiliary role ${role}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
     return pool.map(({ model, levels }) => ({
       model,

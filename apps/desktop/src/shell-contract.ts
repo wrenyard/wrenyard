@@ -380,6 +380,12 @@ export const SESSION_STATUS_FILTER_DEFAULT: SessionStatusFilter = 'active';
  */
 export interface SessionPreferences {
   sendKey: SessionSendKey;
+  /**
+   * Whether the composer may show a next-input suggestion. Suggestions use only
+   * the current conversation's own user and assistant text; nothing else leaves
+   * the session.
+   */
+  promptCompletion: boolean;
   groupBy?: SessionGroupBy;
   sortBy?: SessionSortBy;
   statusFilter?: SessionStatusFilter;
@@ -458,6 +464,7 @@ export const PREFERENCES = {
     validate: (value) => typeof value === 'number' && APPEARANCE_ZOOM_OPTIONS.some((option) => option.value === value),
   },
   'session.sendKey': { path: ['session', 'sendKey'], validate: (value) => value === 'enter' || value === 'mod-enter' },
+  'session.promptCompletion': { path: ['session', 'promptCompletion'], validate: (value) => typeof value === 'boolean' },
   'session.groupBy': {
     path: ['session', 'groupBy'],
     validate: (value) => value === 'date' || value === 'status' || value === 'none',

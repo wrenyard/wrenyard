@@ -1,5 +1,8 @@
 import { getSessionBridge } from '@/renderer/lib/session';
 import type {
+  SessionPromptCancelParams,
+  SessionPromptSuggestParams,
+  SessionPromptSuggestResult,
   SessionRoutesPreviewParams,
   SessionRoutesPreviewResult,
 } from '@wrenyard/protocol';
@@ -19,4 +22,16 @@ export function routesPreview(
   request: SessionRoutesPreviewParams = {},
 ): Promise<SessionRoutesPreviewResult> {
   return getSessionApi().routesPreview(request);
+}
+
+/** Request one next-input suggestion; the daemon reads the session itself. */
+export function promptSuggest(
+  request: SessionPromptSuggestParams,
+): Promise<SessionPromptSuggestResult> {
+  return getSessionApi().promptSuggest(request);
+}
+
+/** Cancel one in-flight suggestion request by its own request id. */
+export function promptCancel(request: SessionPromptCancelParams): Promise<void> {
+  return getSessionApi().promptCancel(request);
 }

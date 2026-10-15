@@ -147,4 +147,13 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
       })
       return {}
     }))
+  // The suggestion context is read server-side from the session's own timeline;
+  // the renderer only carries the request id that ties a cancel to its call.
+  router.register('session.prompt.suggest', (params, _message, context) =>
+    call(context, 'session.prompt.suggest', () => session.suggestPrompt(params.sessionId, params.requestId)))
+  router.register('session.prompt.cancel', (params, _message, context) =>
+    call(context, 'session.prompt.cancel', async () => {
+      await session.cancelPromptSuggest(params.sessionId, params.requestId)
+      return {}
+    }))
 }

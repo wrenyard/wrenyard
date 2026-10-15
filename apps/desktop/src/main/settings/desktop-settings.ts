@@ -153,6 +153,7 @@ export function defaultGeneralPreferences(): GeneralPreferences {
 export function defaultSessionPreferences(): SessionPreferences {
   return {
     sendKey: 'enter',
+    promptCompletion: true,
     groupBy: SESSION_GROUP_BY_DEFAULT,
     sortBy: SESSION_SORT_BY_DEFAULT,
     statusFilter: SESSION_STATUS_FILTER_DEFAULT,
@@ -383,6 +384,8 @@ function normalizeSessionPreferences(value: unknown, fallback: SessionPreference
   const statusFilter = obj.statusFilter;
   return {
     sendKey: obj.sendKey === 'mod-enter' ? 'mod-enter' : fallback.sendKey,
+    // An older document has no key; it defaults on rather than being dropped.
+    promptCompletion: typeof obj.promptCompletion === 'boolean' ? obj.promptCompletion : fallback.promptCompletion,
     groupBy: groupBy === 'date' || groupBy === 'status' || groupBy === 'none' ? groupBy : fallback.groupBy,
     sortBy: sortBy === 'updated' || sortBy === 'created' || sortBy === 'title' ? sortBy : fallback.sortBy,
     statusFilter: statusFilter === 'active' || statusFilter === 'archived' || statusFilter === 'all'
