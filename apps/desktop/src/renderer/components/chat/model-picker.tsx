@@ -302,7 +302,13 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
                   }
                   return (
                     <DropdownMenuSub key={option.value}>
-                      <DropdownMenuSubTrigger className={isCurrent ? 'bg-accent/60 font-medium' : undefined}>
+                      <DropdownMenuSubTrigger
+                        className={
+                          isCurrent
+                            ? 'bg-accent/60 font-medium [&>svg:last-child]:hidden'
+                            : '[&>svg:last-child]:hidden'
+                        }
+                      >
                         <ModelOptionContent option={option} />
                         {isCurrent && <SelectedModelIndicator />}
                       </DropdownMenuSubTrigger>
