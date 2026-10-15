@@ -55,6 +55,13 @@ export function toModelEntries(
         ...(model.free === undefined ? {} : { free: model.free }),
         ...(model.effectiveTps === undefined ? {} : { effectiveTps: model.effectiveTps }),
         ...(model.quotaAbundant === undefined ? {} : { quotaAbundant: model.quotaAbundant }),
+        // Route health comes from the Gateway row, which already scopes a fault
+        // to its own route/provider/pool — a zero paid balance never marks a free
+        // pool. The row is still emitted while faulted so a selected model that
+        // became unavailable can still be named and explained.
+        ...(gatewayModel.routeState === undefined ? {} : { routeState: gatewayModel.routeState }),
+        ...(gatewayModel.routePhase === undefined ? {} : { routePhase: gatewayModel.routePhase }),
+        ...(gatewayModel.routeNextProbeAt === undefined ? {} : { routeNextProbeAt: gatewayModel.routeNextProbeAt }),
       });
     }
   }

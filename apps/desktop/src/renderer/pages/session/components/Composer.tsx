@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { REASONING_EFFORTS } from '@wrenyard/models';
 import { AlertTriangle, Plus, X } from 'lucide-react';
 import { countInputTokens } from '../model/usage.js';
 import { ModelPicker, modelBadges, type ModelOption } from '@/renderer/components/chat/model-picker';
@@ -38,6 +39,50 @@ function useInputTokenCount(text: string): number | undefined {
 
 /** Upper bound on attachments held by the composer in one draft. */
 const MAX_ATTACHMENTS = 32;
+
+/** Providers whose route health is pool-scoped and therefore gate selection. */
+const ROUTE_GATED_PROVIDERS = new Set(['openrouter', 'opencode-zen', 'opencode-go']);
+
+/** Marker appended to a probe-eligible option: a retry, never confirmed health. */
+const RETRY_MARKER = '（可重试，待确认恢复）';
+
+/**
+ * The session request runner's `isCallableNow` rule for one picker row: unknown,
+ * healthy and non-gated routes are callable; an open route is not; a half-open
+ * route only once its bounded recovery probe is due — a not-yet-due probe, or an
+ * active probe lease, keeps it blocked. This predicate is independent of the
+ * model-list/mainstream filter and composes with it by simple conjunction. It
+ * takes one argument and reads the clock itself, so it is never handed an array
+ * index as a timestamp by an accidental direct `filter`/`find` reference.
+ */
+function isRouteCallable(entry: ModelEntry): boolean {
+  if (!ROUTE_GATED_PROVIDERS.has(entry.provider) || entry.routeState === undefined) return true;
+  if (entry.routePhase === 'open') return false;
+  if (entry.routeNextProbeAt === undefined) return true;
+  return Date.parse(entry.routeNextProbeAt) <= Date.now();
+}
+
+/** A gated route with a known fault whose probe is due: offered only as an explicit retry. */
+function isProbeEligible(entry: ModelEntry): boolean {
+  return ROUTE_GATED_PROVIDERS.has(entry.provider)
+    && entry.routeState !== undefined
+    && isRouteCallable(entry);
+}
+
+/** Blocked-route label in the shared session-status vocabulary; free quota, paid balance and OpenCode Go plans differ. */
+function routeUnavailableLabel(entry: ModelEntry): string {
+  switch (entry.routeState) {
+    case 'rate_limited': return '限流';
+    case 'quota_exhausted':
+      if (entry.free === true) return '免费额度耗尽';
+      if (entry.provider === 'opencode-go') return '套餐额度耗尽';
+      if (entry.provider === 'openrouter' || entry.provider === 'opencode-zen') return '付费余额耗尽';
+      return '额度耗尽';
+    case 'auth_failed': return '认证失败';
+    case 'model_unavailable': return '模型不可用';
+    default: return '不可用';
+  }
+}
 
 /**
  * Whether this renderer's document is currently visible. A standard window
@@ -224,26 +269,51 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     if (!suggestionEligible) dismissSuggestion();
   }, [suggestionEligible, dismissSuggestion]);
 
+  // Seed the model/effort once per session (or per new turn). A nonempty
+  // remembered or explicit pick is never overwritten by an availability
+  // refresh; an as-yet UNSELECTED draft keeps re-seeding until a selectable
+  // model appears.
+  const seedKey = `${sessionKey}\u0000${turns.at(-1)?.id ?? ''}`;
+  const seeded = useRef('');
   useEffect(() => {
+    const modelsLoaded = models.length > 0;
+    if (seeded.current === seedKey && (!modelsLoaded || modelId !== '')) return;
+    seeded.current = seedKey;
     const last = turnsRef.current[turnsRef.current.length - 1];
-    // An existing session's model is authoritative; its effort is kept when the
-    // route still supports it, else resolved by the shared nearest rule.
+    // An existing session's model is authoritative; it is kept even when its
+    // route is blocked or a filter dropped it, never silently replaced. Its
+    // effort is kept when the route still supports it, else resolved by the
+    // shared nearest rule.
     if (last !== undefined) {
-      const match = models.find((entry) => entry.publicId === `${last.model.provider}/${last.model.model}`) ?? models[0];
-      setModelId(match?.publicId ?? '');
-      const supported = match?.reasoningEfforts ?? [];
-      if (supported.length > 0) setEffort(retainReasoningEffort(last.model.reasoningEffort, supported));
+      const publicId = `${last.model.provider}/${last.model.model}`;
+      const supported = models.find((entry) => entry.publicId === publicId)?.reasoningEfforts ?? [];
+      setModelId(publicId);
+      // Normalize the stored effort to a valid level: kept when valid, else the
+      // default. A missing catalog row falls back to the full effort ladder.
+      setEffort(retainReasoningEffort(last.model.reasoningEffort, supported.length > 0 ? supported : REASONING_EFFORTS));
       return;
     }
     // A brand-new session inherits the previous session's FIRST request model
-    // and effort (Desktop local state only); absent a match it starts at medium.
+    // and effort verbatim, even when the catalog dropped it or its route is
+    // blocked — it is never replaced by another model. Missing a catalog row,
+    // the remembered effort is kept as recorded.
     const first = readFirstRequest();
-    const inherited = first === undefined ? undefined : models.find((entry) => entry.publicId === first.model);
-    const match = inherited ?? models[0];
-    setModelId(match?.publicId ?? '');
-    const supported = match?.reasoningEfforts ?? [];
-    if (supported.length > 0) setEffort(retainReasoningEffort(inherited === undefined ? undefined : first?.effort, supported));
-  }, [sessionKey, models, turns.at(-1)?.id]);
+    if (first !== undefined) {
+      const supported = models.find((entry) => entry.publicId === first.model)?.reasoningEfforts ?? [];
+      setModelId(first.model);
+      setEffort(supported.length > 0 ? retainReasoningEffort(first.effort, supported) : first.effort);
+      return;
+    }
+    // No remembered selection: start at the first selectable model, which may
+    // only appear after a later availability refresh.
+    const fallback = models.find((entry) => isRouteCallable(entry));
+    if (fallback === undefined) {
+      setModelId('');
+      return;
+    }
+    setModelId(fallback.publicId);
+    if (fallback.reasoningEfforts.length > 0) setEffort(retainReasoningEffort(undefined, fallback.reasoningEfforts));
+  }, [seedKey, models, modelId]);
 
   useEffect(() => {
     if (!injectedText) return;
@@ -252,7 +322,11 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     textareaRef.current?.focus();
   }, [injectedText?.nonce]);
 
+  // The catalog entry behind the current selection, when a filter has not
+  // removed it, and whether that selection is usable right now.
   const selected = models.find((entry) => entry.publicId === modelId);
+  const selectionUsable = selected !== undefined && isRouteCallable(selected);
+  const selectionUnusable = modelId !== '' && !selectionUsable;
 
   // An explicit focus request is one-shot: it is served only once the textarea
   // is actually ready (mounted, enabled and carrying a selected model), then
@@ -270,14 +344,26 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // takes the freed width. Clearing the draft or a successful send restores it;
   // a failed send keeps the text, so the entry stays hidden until then.
   const showInlineModelPicker = text.length === 0;
-  const options: ModelOption[] = models.map((entry) => ({
-    value: entry.publicId,
-    label: entry.displayName,
-    group: entry.providerDisplayName,
-    badges: modelBadges(entry),
-    efforts: entry.reasoningEfforts,
-    defaultEffort: entry.reasoningEfforts.length === 0 ? effort : retainReasoningEffort(effort, entry.reasoningEfforts),
-  }));
+  // Callable routes are offered; a probe-eligible route is labelled as a retry.
+  const options: ModelOption[] = models
+    .filter((entry) => isRouteCallable(entry))
+    .map((entry) => ({
+      value: entry.publicId,
+      label: isProbeEligible(entry) ? entry.displayName + RETRY_MARKER : entry.displayName,
+      group: entry.providerDisplayName,
+      badges: modelBadges(entry),
+      efforts: entry.reasoningEfforts,
+      defaultEffort: entry.reasoningEfforts.length === 0 ? effort : retainReasoningEffort(effort, entry.reasoningEfforts),
+    }));
+  // An unusable selection is named on the trigger (never silently becoming
+  // another model) and blocks sending; a probe-eligible one is informational.
+  const selectionPlaceholder = selectionUnusable ? (selected?.displayName ?? modelId) : '选择模型';
+  const selectionWarning = selected === undefined
+    ? '所选模型已不在可用列表'
+    : `所选模型不可用：${routeUnavailableLabel(selected)}`;
+  const selectionRetry = selected !== undefined && isProbeEligible(selected)
+    ? `所选模型${routeUnavailableLabel(selected)}，发送将以重试确认恢复`
+    : '';
 
   const handleChange = (value: string): void => {
     // Typing or pasting text replaces and discards any suggestion.
@@ -293,7 +379,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const submit = (): void => {
     const body = text.trim();
     const submitted = attachmentsRef.current;
-    if ((body === '' && submitted.length === 0) || !selected || sending || disabled || exceeded) return;
+    if ((body === '' && submitted.length === 0) || !selected || sending || disabled || exceeded || selectionUnusable) return;
     // A send discards the suggestion and cancels any in-flight request.
     dismissSuggestion();
     const originKey = sessionKey;
@@ -375,7 +461,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         onValueChange={handleChange}
         onSubmit={submit}
         disabled={disabled || !selected}
-        submitDisabled={sending || exceeded}
+        submitDisabled={sending || exceeded || selectionUnusable}
         sendKey={preferences.data?.session.sendKey ?? 'enter'}
         textareaRef={textareaRef}
         placeholder="输入消息…"
@@ -398,10 +484,23 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
                 value={modelId}
                 effort={effort}
                 onChange={selectModel}
-                disabled={models.length === 0}
+                disabled={options.length === 0}
+                placeholder={selectionPlaceholder}
                 className="min-w-0 max-w-full"
                 compactTrigger
               />
+            )}
+            {selectionUnusable && (
+              <span className="flex items-center gap-1 text-xs text-destructive" role="status">
+                <AlertTriangle className="size-3.5 shrink-0" />
+                {selectionWarning}
+              </span>
+            )}
+            {selectionRetry !== '' && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground" role="status">
+                <AlertTriangle className="size-3.5 shrink-0" />
+                {selectionRetry}
+              </span>
             )}
             {exceeded && (
               <span className="flex items-center gap-1 text-xs text-destructive" role="status">

@@ -10,6 +10,8 @@ import { SESSION_STATUS_FILTER_DEFAULT, type SessionStatusFilter } from '@/shell
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 let localSeq = 0;
+/** Model availability is re-read on this interval while a session is mounted. */
+const MODELS_REFRESH_MS = 15_000;
 
 /** Whether a session survives under the persisted Status filter. */
 function matchesStatusFilter(session: { archived?: boolean }, filter: SessionStatusFilter): boolean {
@@ -230,16 +232,33 @@ export function useSessionController(api: SessionApi) {
   useEffect(() => {
     alive.current = true;
     let cancelled = false;
+    // Availability is re-read on a bounded interval and whenever the window
+    // regains focus, so a recovered route reappears and a newly blocked one is
+    // hidden without a manual reload. Refreshes never overlap, and a response
+    // landing after teardown dispatches nothing.
+    let modelsInFlight = false;
+    const refreshModels = async (): Promise<void> => {
+      if (modelsInFlight) return;
+      modelsInFlight = true;
+      try {
+        const models = await api.models();
+        if (!cancelled) dispatch({ type: 'models', models });
+      } catch (error) {
+        if (!cancelled) reportError(error);
+      } finally {
+        modelsInFlight = false;
+      }
+    };
     const offEvent = api.onEvent(({ sessionId, event }) => {
       if (!cancelled) dispatch({ type: 'events', sessionId, events: [event] });
     });
     const offLive = api.onLive(({ sessionId, live }) => {
       if (!cancelled) dispatch({ type: 'live', sessionId, live });
     });
-    void api.models().then((models) => {
-      if (!cancelled) dispatch({ type: 'models', models });
-    }).catch((error: unknown) => { if (!cancelled) reportError(error); });
+    void refreshModels();
     const timer = setInterval(() => { void refreshList(); }, 3000);
+    const modelsTimer = setInterval(() => { void refreshModels(); }, MODELS_REFRESH_MS);
+    window.addEventListener('focus', refreshModels);
     void refreshList().then(async (sessions) => {
       if (cancelled || creation.current) return;
       // A card opens on its query session, or stays an empty draft when the
@@ -271,6 +290,8 @@ export function useSessionController(api: SessionApi) {
       selectionVersion.current++;
       listVersion.current++;
       clearInterval(timer);
+      clearInterval(modelsTimer);
+      window.removeEventListener('focus', refreshModels);
       offEvent();
       offLive();
     };
