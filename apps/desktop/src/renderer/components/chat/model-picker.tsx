@@ -314,7 +314,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
                       </DropdownMenuSubTrigger>
                       <DropdownMenuSubContent className="no-scrollbar">
                         <DropdownMenuRadioGroup
-                          value={checked}
+                          value={isCurrent ? effort : ''}
                           onValueChange={(next) => {
                             if (typeof next === 'string' && (option.efforts as readonly string[]).includes(next)) {
                               onChange(option.value, next as ReasoningEffort);
@@ -328,6 +328,9 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
                               className="not-focus:data-[checked]:bg-accent/60 data-[checked]:font-medium"
                             >
                               {REASONING_EFFORT_NAMES[level]}
+                              {!isCurrent && level === option.defaultEffort && (
+                                <span className="ml-auto text-xs text-muted-foreground">预设</span>
+                              )}
                             </DropdownMenuRadioItem>
                           ))}
                         </DropdownMenuRadioGroup>
