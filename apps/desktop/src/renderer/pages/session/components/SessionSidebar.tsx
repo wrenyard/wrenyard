@@ -298,13 +298,58 @@ export function SessionSidebar({
     />
   );
 
-  const section = (key: string, label: string, list: SessionSummary[]): ReactNode => {
+  const listOptions = (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={<Button variant="ghost" size="icon-sm" aria-label="列表选项" title="列表选项" />}
+      >
+        <SlidersHorizontal />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>分组</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuRadioGroup value={groupBy} onValueChange={(value) => setOption('session.groupBy', value)}>
+              {GROUP_BY_OPTIONS.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>排序</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuRadioGroup value={sortBy} onValueChange={(value) => setOption('session.sortBy', value)}>
+              {SORT_BY_OPTIONS.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>状态</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuRadioGroup value={statusFilter} onValueChange={(value) => setOption('session.statusFilter', value)}>
+              {STATUS_FILTER_OPTIONS.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  const section = (key: string, label: string, list: SessionSummary[], trailing?: ReactNode): ReactNode => {
     if (list.length === 0) return null;
     return (
       <Collapsible key={key} defaultOpen render={<SidebarGroup />}>
-        <SidebarGroupLabel className="group/label cursor-pointer" render={<CollapsibleTrigger />}>
-          {label}
-          <ChevronRight className="ml-auto opacity-0 transition-transform group-hover/label:opacity-100 group-focus-visible/label:opacity-100 group-not-data-[panel-open]/label:opacity-100 group-data-[panel-open]/label:rotate-90" />
+        <SidebarGroupLabel>
+          <CollapsibleTrigger className="group/label flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-xl outline-hidden ring-sidebar-ring focus-visible:ring-3">
+            <span className="truncate">{label}</span>
+            <ChevronRight className="size-4 shrink-0 opacity-0 transition-transform group-hover/label:opacity-100 group-focus-visible/label:opacity-100 group-not-data-[panel-open]/label:opacity-100 group-data-[panel-open]/label:rotate-90" />
+          </CollapsibleTrigger>
+          {trailing}
         </SidebarGroupLabel>
         <CollapsibleContent>
           <SidebarMenu>{list.map(row)}</SidebarMenu>
@@ -312,6 +357,20 @@ export function SessionSidebar({
       </Collapsible>
     );
   };
+
+  const sections: Array<{ key: string; label: string; list: SessionSummary[] }> = [];
+  if (pinned.length > 0) sections.push({ key: 'pinned', label: '置顶', list: pinned });
+  if (groupBy === 'date') {
+    for (const group of GROUPS) {
+      const list = dateBuckets.get(group) ?? [];
+      if (list.length > 0) sections.push({ key: `date:${group}`, label: group, list });
+    }
+  } else if (groupBy === 'status') {
+    const active = rest.filter((session) => session.archived !== true);
+    const archived = rest.filter((session) => session.archived === true);
+    if (active.length > 0) sections.push({ key: 'status:active', label: '进行中', list: active });
+    if (archived.length > 0) sections.push({ key: 'status:archived', label: '已归档', list: archived });
+  }
 
   return (
     <Sidebar collapsible="none" className="min-h-0 w-full">
@@ -334,49 +393,6 @@ export function SessionSidebar({
         </SidebarHeader>
       )}
       <SidebarContent>
-        <div className="flex h-8 shrink-0 items-center justify-between gap-2 px-3">
-          <span className="text-xs font-medium text-sidebar-foreground/70">对话</span>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<Button variant="ghost" size="icon-sm" aria-label="列表选项" title="列表选项" />}
-            >
-              <SlidersHorizontal />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>分组</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuRadioGroup value={groupBy} onValueChange={(value) => setOption('session.groupBy', value)}>
-                    {GROUP_BY_OPTIONS.map((option) => (
-                      <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>排序</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuRadioGroup value={sortBy} onValueChange={(value) => setOption('session.sortBy', value)}>
-                    {SORT_BY_OPTIONS.map((option) => (
-                      <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>状态</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuRadioGroup value={statusFilter} onValueChange={(value) => setOption('session.statusFilter', value)}>
-                    {STATUS_FILTER_OPTIONS.map((option) => (
-                      <DropdownMenuRadioItem key={option.value} value={option.value}>{option.label}</DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
         {loading && sessions.length === 0 && (
           <SidebarGroup>
             <SidebarMenu>
@@ -394,14 +410,10 @@ export function SessionSidebar({
           </SidebarGroup>
         )}
 
-        {section('pinned', '置顶', pinned)}
-        {groupBy === 'date' && GROUPS.map((group) => section(`date:${group}`, group, dateBuckets.get(group) ?? []))}
-        {groupBy === 'status' && (
-          <>
-            {section('status:active', '进行中', rest.filter((session) => session.archived !== true))}
-            {section('status:archived', '已归档', rest.filter((session) => session.archived === true))}
-          </>
+        {sections.length === 0 && (
+          <div className="flex h-8 shrink-0 items-center justify-end px-3">{listOptions}</div>
         )}
+        {sections.map((item, index) => section(item.key, item.label, item.list, index === 0 ? listOptions : undefined))}
         {groupBy === 'none' && rest.length > 0 && (
           <SidebarGroup>
             <SidebarMenu>{rest.map(row)}</SidebarMenu>
