@@ -6,6 +6,7 @@
 // SafeTranscriptEventData allowlist crosses the preload boundary.
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -27,6 +28,7 @@ import { Markdown } from '@/renderer/components/markdown';
 import { formatClockSeconds, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
 import { petAppearanceBridge, type PetAppearanceApi } from '../shared/appearance';
 import type { SafeTaskRunEventsResult, SafeTranscriptEventData, TranscriptRunInfo } from '../shared/taskgraph';
+import { labelForField, parseTaskResult, statusLabel, type ParsedTaskResult } from './task-result';
 
 interface TranscriptWindowApi {
   onData: (taskRunId: string, cb: (data: SafeTaskRunEventsResult) => void) => () => void;
@@ -245,25 +247,142 @@ interface RowAppearance {
   onOpenExternal: (href: string) => void;
 }
 
+// ── Structured task results ──────────────────────────────────────────
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function TaskResultPrimitive({ value, appearance }: { value: unknown; appearance: RowAppearance }): ReactElement {
+  if (value === null) return <span className="text-muted-foreground">—</span>;
+  if (typeof value === 'string') {
+    return (
+      <Markdown
+        className="text-sm [&_p]:whitespace-pre-wrap"
+        dark={appearance.dark}
+        onOpenExternal={appearance.onOpenExternal}
+      >
+        {value}
+      </Markdown>
+    );
+  }
+  return <span className="tabular-nums">{String(value)}</span>;
+}
+
+interface TaskResultValueProps {
+  value: unknown;
+  appearance: RowAppearance;
+  omitStatus?: boolean;
+}
+
+/**
+ * Render every field of a parsed result in its original order: known keys get
+ * their Chinese label, unknown keys keep their own name, and nested objects and
+ * arrays recurse without deepening the indentation. Empty arrays and objects say
+ * so explicitly, and no field is ever discarded.
+ */
+function TaskResultValue({ value, appearance, omitStatus = false }: TaskResultValueProps): ReactElement | null {
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span className="text-[11px] text-muted-foreground">空列表</span>;
+    }
+    return (
+      <ol className="flex min-w-0 flex-col gap-1">
+        {value.map((item, index) => (
+          <li key={index} className="min-w-0 break-words">
+            <TaskResultValue value={item} appearance={appearance} />
+          </li>
+        ))}
+      </ol>
+    );
+  }
+
+  if (isRecord(value)) {
+    const keys = Object.keys(value);
+    const entries = Object.entries(value).filter(([key]) => !(omitStatus && key === 'status'));
+    if (entries.length === 0) {
+      // A record left empty only by the status already shown as the header badge
+      // is not an empty object.
+      if (omitStatus && keys.length > 0) return null;
+      return <span className="text-[11px] text-muted-foreground">空对象</span>;
+    }
+    return (
+      <div className="flex min-w-0 flex-col gap-1 break-words">
+        {entries.map(([key, entry]) => (
+          <Fragment key={key}>
+            <span className="text-[11px] text-muted-foreground">{labelForField(key)}</span>
+            <TaskResultValue value={entry} appearance={appearance} />
+          </Fragment>
+        ))}
+      </div>
+    );
+  }
+
+  return <TaskResultPrimitive value={value} appearance={appearance} />;
+}
+
+/** Readable body of a structured result with the untouched original text below. */
+function TaskResultMessage(
+  { parsed, text, appearance }: { parsed: ParsedTaskResult; text: string; appearance: RowAppearance },
+): ReactElement {
+  const answer = parsed.answer !== undefined && parsed.answer.trim() !== '' ? parsed.answer : null;
+  return (
+    <div className="flex min-w-0 flex-col gap-1 break-words">
+      {answer !== null && (
+        <Markdown className="text-sm [&_p]:whitespace-pre-wrap" dark={appearance.dark} onOpenExternal={appearance.onOpenExternal}>
+          {answer}
+        </Markdown>
+      )}
+      {parsed.value !== undefined && (
+        <TaskResultValue
+          value={parsed.value}
+          appearance={appearance}
+          omitStatus={parsed.status !== undefined}
+        />
+      )}
+      {parsed.truncated && (
+        <span className="text-[11px] text-muted-foreground">
+          {answer !== null ? '内容已截断' : '结构化结果预览已截断，请展开原始内容查看。'}
+        </span>
+      )}
+      <details className="mt-1 min-w-0">
+        <summary className="cursor-pointer text-[11px] text-muted-foreground">原始内容</summary>
+        <pre className="mt-1 max-h-64 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed">{text}</pre>
+      </details>
+    </div>
+  );
+}
+
 function MessageRow({ event, appearance }: { event: SafeMessageEvent; appearance: RowAppearance }): ReactElement {
   const role = event.role === 'user' ? '用户' : event.role === 'system' ? '系统' : '助手';
   const align = event.role === 'user' ? 'end' : 'start';
+  const assistant = event.role !== 'user' && event.role !== 'system';
+  const parsed = assistant ? parseTaskResult(event.message_summary) : null;
   return (
     <Message align={align}>
       <MessageContent>
         <MessageHeader className="gap-2 px-0 text-xs">
           <span className="font-medium text-foreground">{role}</span>
           <time className="tabular-nums text-muted-foreground">{formatClockSeconds(event.timestamp)}</time>
+          {parsed !== null && parsed.status !== undefined && (
+            <Badge variant="secondary" className="ml-1 shrink-0 text-[10px] font-normal">
+              {statusLabel(parsed.status)}
+            </Badge>
+          )}
         </MessageHeader>
         <Bubble variant={event.role === 'user' ? 'default' : 'muted'} align={align}>
           <BubbleContent>
-            <Markdown
-              className="text-sm"
-              dark={appearance.dark}
-              onOpenExternal={appearance.onOpenExternal}
-            >
-              {event.message_summary}
-            </Markdown>
+            {parsed === null ? (
+              <Markdown
+                className="text-sm"
+                dark={appearance.dark}
+                onOpenExternal={appearance.onOpenExternal}
+              >
+                {event.message_summary}
+              </Markdown>
+            ) : (
+              <TaskResultMessage parsed={parsed} text={event.message_summary} appearance={appearance} />
+            )}
           </BubbleContent>
         </Bubble>
       </MessageContent>
