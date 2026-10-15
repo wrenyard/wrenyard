@@ -1,5 +1,5 @@
 import type { Catalog } from '@wrenyard/providers/catalog';
-import type { ProviderRuntime } from '@wrenyard/providers';
+import { isCredentialFreeNativeRoute, type ProviderRuntime } from '@wrenyard/providers';
 import type { TaskSettingsRuntimeAvailabilityCallback } from './task-settings-service.mts';
 import type { CodeBuddyActiveSnapshotView } from './auto-routing-snapshot-service.mts';
 import { evaluateNativeRouteReadiness, type NativeProviderReadinessSnapshot } from '../execution/native-provider-readiness.mts';
@@ -117,6 +117,29 @@ export function createRoutingAvailability(options: {
             expectedScope: activeSnapshot.stableScope,
             expectedEnvironment: activeSnapshot.environment,
             expectedWireModel: wireModel,
+          },
+        }
+      }
+      // An explicitly free native OpenCode route requires no credential at all.
+      // This branch runs BEFORE any credential lookup: the shared predicate
+      // classifies exactly the declared free model on the native opencode route
+      // (never from a zero price or a `-free` id), so the managed-key lookup
+      // below is skipped only for that route. The credential state is reported
+      // as the existing 'available' value with the semantics "no credential is
+      // required"; providerLive and quota stay unknown because live upstream
+      // health and any numeric quota are genuinely unmeasured here. Every paid
+      // Zen/Go model and every gateway-mode route keeps the credential path
+      // below byte-for-byte and still fails closed without a credential.
+      if (isCredentialFreeNativeRoute(providerDef, model, { client, mode })) {
+        return {
+          providerCredential: 'available',
+          providerLive: 'unknown',
+          quota: 'unknown',
+          available: true,
+          freeSupply: {
+            confirmedFree: true,
+            source: `${providerDef.id}.catalog`,
+            ruleId: `${providerDef.id}.free_native_route`,
           },
         }
       }

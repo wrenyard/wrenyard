@@ -281,6 +281,13 @@ function toReferencePricing(pricing: ModelPricing): TaskResolvedDispatch['refere
   }
 }
 
+/**
+ * Reference pricing projected for an explicitly free model: a genuinely free
+ * entitlement has no reference cost. This is a branch on the explicit free flag,
+ * never an inference from a declared price of 0.
+ */
+const FREE_REFERENCE_PRICING: ModelPricing = [0, 0, 0]
+
 function toResolvedDispatch(
   requestedAgentRuntime: string,
   profileId: string,
@@ -390,7 +397,11 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!provider) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
     const modelDef = provider.models.find((entry) => entry.id === plan.model)
     if (!modelDef) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
-    const priceUsdPerMillion = modelDef.pricing?.[2]
+    // Reference output price used for both the submitted price ceiling and the
+    // price diagnostic: an explicitly free model resolves to zero (branched on
+    // the explicit free flag), otherwise its declared output price. It is never
+    // inferred from a price of 0, and an unknown non-free price stays undefined.
+    const priceUsdPerMillion = modelDef.free === true ? 0 : modelDef.pricing?.[2]
     const atGate = (
       code: TaskResolutionFailureCode,
       detail?: TaskResolutionFailureDetail,
@@ -456,6 +467,9 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   const referenceOutputPriceOf = (candidate: DispatchCandidate): number | undefined => {
     const provider = catalog.provider(candidate.provider)
     const modelDef = provider?.models.find((entry) => entry.id === candidate.model)
+    // Explicitly free → zero reference output price; otherwise the declared
+    // output price (unknown stays undefined). Never inferred from price === 0.
+    if (modelDef?.free === true) return 0
     return modelDef?.pricing?.[2]
   }
 
@@ -524,7 +538,11 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!model.intelligence) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'intelligence_requirement') }
     }
-    const pricing = model.pricing
+    // Reference-pricing projection. An explicitly free model projects a zero
+    // reference price (branched on the explicit free flag, never inferred from a
+    // price of 0); every non-free model must still declare its pricing, and an
+    // unknown non-free price stays rejected.
+    const pricing = model.free === true ? FREE_REFERENCE_PRICING : model.pricing
     if (pricing === undefined) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'price_limit') }
     }

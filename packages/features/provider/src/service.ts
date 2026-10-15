@@ -1,4 +1,4 @@
-import { resolveModelSpeed } from '@wrenyard/providers'
+import { isCredentialFreeNativeRoute, resolveModelSpeed } from '@wrenyard/providers'
 import type { Catalog, ProviderDefinition, ModelDefinition, LocalSpeedSample } from '@wrenyard/providers/catalog'
 import type { ProviderRuntime } from '@wrenyard/providers'
 import { QuotaService, currentCodeBuddyContext } from '@wrenyard/quota'
@@ -99,7 +99,15 @@ export class ProviderService {
       const nativeConfigured = provider.credentialResolver !== 'managed'
         && provider.credentialResolver !== 'codebuddy'
         && provider.models.some((model) => modelStatus.has(`${provider.id}/${model.id}`))
-      const configured = credential !== undefined || nativeConfigured
+      // A credential-free native route is genuinely usable with no credential of
+      // any kind, but only for the exact model the shared predicate classifies
+      // as explicitly free on its native client route — never from a zero price
+      // or a `-free` id suffix — and only once the resolver actually admitted
+      // that exact provider/model pair.
+      const credentialFreeNativeConfigured = provider.models.some((model) =>
+        modelStatus.has(`${provider.id}/${model.id}`)
+        && isCredentialFreeNativeRoute(provider, model.id, { client: 'opencode', mode: 'native' }))
+      const configured = credential !== undefined || nativeConfigured || credentialFreeNativeConfigured
       return {
         id: provider.id,
         displayName: provider.displayName,

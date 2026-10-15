@@ -123,6 +123,14 @@ export interface ModelDefaults {
   maxOutputTokens?: number;
   pricing?: ModelPricing;
   speed?: number;
+  /**
+   * Explicit free-status classification: the identity is genuinely free to
+   * use, independent of any list price. Free status is authoritative in its own
+   * right and is NEVER inferred from a price of zero — a priced-at-zero row is
+   * not automatically free, and a free row keeps whatever pricing it declares.
+   * Every consumer that treats a model as free must branch on this flag.
+   */
+  free?: boolean;
 }
 
 export interface RegisteredModel {

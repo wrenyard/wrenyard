@@ -18,7 +18,12 @@ import { addUsageTokens, nonnegativeInt } from '@wrenyard/agent-client/statistic
 export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): AsyncGenerator<AgentEvent> {
     let sessionId: string | undefined;
     let output = '';
-    let ended = false;
+    // Completion/error bookkeeping. A healthy invocation must end its last model
+    // step with a `stop` reason and must not have emitted a native error. The two
+    // flags are independent and latch only the observed failure, so a later exit
+    // can never turn a failed run into a success.
+    let sawError = false;
+    let completedStep = false;
     const usage = {
         input: 0, output: 0, reasoning: 0, total: 0,
         seen: false, invalid: false,
@@ -45,7 +50,7 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
                 const terminal = flushUsage();
                 if (terminal)
                     yield terminal;
-                yield finishedEvent('opencode', sessionId, output, !ended || item.event.exitCode !== 0 && item.event.exitCode !== null);
+                yield finishedEvent('opencode', sessionId, output, sawError || !completedStep || item.event.exitCode !== 0 || item.event.signal !== null);
             }
             yield item.event;
             continue;
@@ -63,7 +68,13 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
             }
             continue;
         }
+        if (type === 'step_start') {
+            completedStep = false;
+            continue;
+        }
         if (type === 'step_finish') {
+            const part = recordOf(record, 'part');
+            completedStep = part !== undefined && stringOf(part, 'reason') === 'stop';
             observeStepUsage(usage, record);
             continue;
         }
@@ -73,7 +84,7 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
             continue;
         }
         if (type === 'error') {
-            ended = true;
+            sawError = true;
             yield finishedEvent('opencode', sessionId, output, true);
         }
     }

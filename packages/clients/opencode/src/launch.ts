@@ -109,6 +109,10 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
     return {
         executable: status.installation.executable,
         args,
+        // The prompt travels in argv above; stdin is deliberately an empty
+        // string so the execution engine writes and immediately closes the
+        // unused pipe, sending EOF instead of leaving OpenCode waiting on it.
+        stdin: '',
         cwd: request.cwd,
         env: stringEnv(env, {
             // OpenCode's child configuration interface; `home` is already

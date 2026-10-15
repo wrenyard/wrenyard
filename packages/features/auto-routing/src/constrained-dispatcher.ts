@@ -83,9 +83,13 @@ export class ConstrainedDispatcher {
       }
       // List-price constraint; account-specific free routing is evaluated by the routing policy.
       if (requirements.maxOutputUsdPerMillion !== undefined) {
-        // No declared price means the ceiling cannot be checked: the candidate is
-        // ineligible for this constraint, never admitted as if priced at zero.
-        if (modelDef.pricing === undefined || modelDef.pricing[2] > requirements.maxOutputUsdPerMillion)
+        // Reference output price: an explicitly free model has a zero reference
+        // output price (branched on the explicit free flag, never inferred from
+        // a price of 0). No declared price on a non-free model means the ceiling
+        // cannot be checked: the candidate is ineligible for this constraint,
+        // never admitted as if priced at zero.
+        const outputPrice = modelDef.free === true ? 0 : modelDef.pricing?.[2];
+        if (outputPrice === undefined || outputPrice > requirements.maxOutputUsdPerMillion)
           continue;
       }
       // Speed evidence tiers in exact precedence order via the shared resolver:
@@ -150,11 +154,12 @@ export class ConstrainedDispatcher {
       const bMeets = expected !== undefined && expected > 0 && b.speed.tps >= expected;
       if (aMeets !== bMeets)
         return aMeets ? -1 : 1;
-      // Lower reference output price first. A model with no declared price has no
-      // comparable price, so it orders after every priced model instead of being
-      // treated as the cheapest (zero).
-      const pa = a.model.pricing?.[2];
-      const pb = b.model.pricing?.[2];
+      // Lower reference output price first. An explicitly free model has a zero
+      // reference output price (branched on the explicit free flag). A non-free
+      // model with no declared price has no comparable price, so it orders after
+      // every priced model instead of being treated as the cheapest (zero).
+      const pa = a.model.free === true ? 0 : a.model.pricing?.[2];
+      const pb = b.model.free === true ? 0 : b.model.pricing?.[2];
       if (pa !== pb) {
         if (pa === undefined)
           return 1;

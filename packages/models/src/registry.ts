@@ -54,6 +54,11 @@ function validateModel(model: RegisteredModel, seen: Set<string>): void {
     && (!Number.isInteger(model.defaults.speed) || model.defaults.speed <= 0)) {
     throw new Error(`registered model ${model.id} speed must be a positive integer`);
   }
+  // Free status is an explicit classification, never derived from pricing: it
+  // is validated as a plain boolean and nothing about `pricing` is consulted.
+  if (model.defaults.free !== undefined && typeof model.defaults.free !== 'boolean') {
+    throw new Error(`registered model ${model.id} free must be a boolean`);
+  }
   if (!Number.isSafeInteger(model.defaults.contextWindow) || model.defaults.contextWindow <= 0) {
     throw new Error(`registered model ${model.id} context window must be a positive integer`);
   }

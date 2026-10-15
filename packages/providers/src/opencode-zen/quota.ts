@@ -16,6 +16,8 @@ export const quota = {
     binding('opencode-zen', 'union-alpha', [ZEN_FREE_POOL]),
     binding('opencode-zen', 'nemotron-3-ultra-free', [ZEN_FREE_POOL]),
     binding('opencode-zen', 'nemotron-3.5-lightning-free', [ZEN_FREE_POOL]),
+    // The free DeepSeek route belongs to the free pool only, never the balance pool.
+    binding('opencode-zen', 'deepseek-v4.1-flash-free', [ZEN_FREE_POOL]),
     binding('opencode-zen', 'glm-5.3', [ZEN_BALANCE_POOL]),
     binding('opencode-zen', 'kimi-k3', [ZEN_BALANCE_POOL]),
     binding('opencode-zen', 'gpt-6.1-sol', [ZEN_BALANCE_POOL]),

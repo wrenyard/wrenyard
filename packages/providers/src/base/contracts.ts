@@ -85,7 +85,10 @@ export interface ModelDefinition {
    * whose model names no registered canonical model leaves this absent: the
    * price is genuinely unknown and is never defaulted to zero. */
   pricing?: ModelPricing;
-  /** Provider/account-scoped free entitlement; list pricing remains unchanged. */
+  /** Explicit free/entitlement classification: the route is genuinely free to
+   * use. It is never inferred from list pricing — a `pricing` of zero does not
+   * make a model free, and a free model keeps its declared `pricing` unchanged.
+   * Every consumer that treats a model as free must branch on this flag. */
   free?: boolean;
   /** CodeBuddy per-model credit multiplier string carried verbatim from the live
    * `/v3/config` offering (e.g. `x1.33 credits`). A display-only cost

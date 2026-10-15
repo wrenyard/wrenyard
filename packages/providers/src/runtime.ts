@@ -134,6 +134,38 @@ function evaluateManagedFreeSupply(
 }
 
 /**
+ * Credential-free native route classification, shared by every surface that
+ * must branch explicitly on a model being free.
+ *
+ * True ONLY when every one of these facts holds: the provider is
+ * `opencode-zen`, that provider declares the `opencode` native client, the
+ * exact model exists on it with `free === true`, the route client is
+ * `opencode`, the route mode is `native`, and — when the model declares
+ * `supportedClients` — that list contains `opencode`.
+ *
+ * Free status is an explicit classification carried by the model: a zero
+ * `pricing` value, a `-free` id suffix, or any other name heuristic NEVER
+ * qualifies. Paid OpenCode Zen/Go models, non-free models, other clients and
+ * every gateway-mode route are rejected.
+ *
+ * Only the admission decision is expressed here. Live upstream health and any
+ * numeric quota are unknown at this point and are never fabricated.
+ */
+export function isCredentialFreeNativeRoute(
+  provider: ProviderDefinition,
+  model: string,
+  route: { readonly client: string; readonly mode: string },
+): boolean {
+  if (provider.id !== 'opencode-zen') return false;
+  if (!(provider.nativeClients ?? []).includes('opencode')) return false;
+  if (route.client !== 'opencode' || route.mode !== 'native') return false;
+  const definition = provider.models.find((entry) => entry.id === model);
+  if (!definition || definition.free !== true) return false;
+  if (definition.supportedClients !== undefined && !definition.supportedClients.includes('opencode')) return false;
+  return true;
+}
+
+/**
  * Canonical managed-provider credential store:
  * `<WRENYARD_CONFIG_HOME or ~/.config/wrenyard>/providers/auth.json`.
  */

@@ -135,6 +135,10 @@ function resolveModelDefaults(
     maxOutputTokens: def.maxOutputTokens ?? def.maxTokens ?? defaults.maxOutputTokens,
     speed: def.speed ?? defaults.speed,
     pricing: def.pricing ?? defaults.pricing,
+    // Free status is an explicit classification carried from the provider
+    // override or, failing that, the canonical registry default. It is never
+    // derived from `pricing`.
+    free: def.free ?? defaults.free,
   };
 }
 
