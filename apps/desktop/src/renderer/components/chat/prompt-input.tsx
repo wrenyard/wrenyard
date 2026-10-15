@@ -24,6 +24,8 @@ export interface PromptInputProps {
   /** Which key submits: plain Enter, or Cmd/Ctrl+Enter. */
   sendKey?: PromptSendKey;
   toolbar?: ReactNode;
+  /** Rendered at the leading edge, just before the textarea. */
+  toolbarLeading?: ReactNode;
   /** Rendered at the trailing edge, just before the send button. */
   toolbarTrailing?: ReactNode;
   /** Rendered above the textarea; the composer puts attachment previews here. */
@@ -52,6 +54,7 @@ export function PromptInput({
   submitDisabled = false,
   sendKey = 'enter',
   toolbar,
+  toolbarLeading,
   toolbarTrailing,
   attachments,
   hasAttachments = false,
@@ -61,6 +64,7 @@ export function PromptInput({
 }: PromptInputProps) {
   const composing = useRef(false);
   const canSubmit = !disabled && !submitDisabled && (value.trim() !== '' || hasAttachments);
+  const hasLeading = toolbarLeading !== undefined && toolbarLeading !== null;
 
   const submit = (): void => {
     if (canSubmit) onSubmit();
@@ -84,9 +88,16 @@ export function PromptInput({
           owns the shrinkable text column and the controls sit inline at the end,
           bottom-aligned so they track the last text line. Narrow cards (down to
           the 300px mini minimum) only tighten the control gap and inset. */}
-      <InputGroup className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-1 gap-y-1 sm:gap-x-1.5">
+      <InputGroup
+        className={`grid ${
+          hasLeading ? 'grid-cols-[auto_minmax(0,1fr)_auto]' : 'grid-cols-[minmax(0,1fr)_auto]'
+        } items-end gap-x-1 gap-y-1 sm:gap-x-1.5`}
+      >
         {attachments !== undefined && attachments !== null && (
-          <div className="col-span-2 w-full min-w-0 px-2.5 pt-2">{attachments}</div>
+          <div className="col-span-full w-full min-w-0 px-2.5 pt-2">{attachments}</div>
+        )}
+        {hasLeading && (
+          <div className="flex min-w-0 items-center gap-1 pl-1 sm:gap-1.5 sm:pl-1.5">{toolbarLeading}</div>
         )}
         {/* The textarea keeps the primitive's `field-sizing-content`, so it grows
             with the text and scrolls once it reaches `max-h-60`. */}

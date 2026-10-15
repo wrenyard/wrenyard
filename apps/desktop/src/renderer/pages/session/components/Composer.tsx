@@ -332,16 +332,6 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         onPaste={handlePaste}
         toolbar={
           <>
-            <InputGroupButton
-              type="button"
-              size="icon-sm"
-              aria-label="添加附件"
-              title="添加附件"
-              disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
-              onClick={() => { void chooseFiles(); }}
-            >
-              <Plus />
-            </InputGroupButton>
             {/* Capped so the model name and its effort indicator still fit beside
                 the send button inside a 300px-wide mini card. */}
             <ModelPicker
@@ -359,6 +349,18 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
               </span>
             )}
           </>
+        }
+        toolbarLeading={
+          <InputGroupButton
+            type="button"
+            size="icon-sm"
+            aria-label="添加附件"
+            title="添加附件"
+            disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
+            onClick={() => { void chooseFiles(); }}
+          >
+            <Plus />
+          </InputGroupButton>
         }
       />
     </div>
