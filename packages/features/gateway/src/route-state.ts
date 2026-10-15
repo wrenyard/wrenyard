@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { GatewayRouteState, GatewayRouteStatus, UpstreamRouteFailure } from '@wrenyard/providers/base';
-import { clientTimeoutFailure, resetInstant, transportFailure, type RouteFaultKind } from './route-failure.ts';
+import { clientTimeoutFailure, resetInstant, structuredOutputFailure, transportFailure, type RouteFaultKind } from './route-failure.ts';
 
 type Scope = 'provider' | 'pool' | 'route';
 
@@ -110,6 +110,14 @@ export type MarkableFailure = UpstreamRouteFailure & { faultKind?: RouteFaultKin
 /** The client-observed fault kinds the attempt-correlated feedback API accepts. */
 export type ClientFaultKind = 'timeout' | 'transport';
 
+/**
+ * The route-local fault kinds a native task attempt may report for its own
+ * route. Only the delivery/protocol failure of an attempt that produced no
+ * usable output is reported: it maps to an exact route-scoped fault and never
+ * claims a provider or a shared pool.
+ */
+export type NativeRouteFaultKind = 'structured_output';
+
 /** One in-flight attempt, correlated by the client so a duplicate report is dropped. */
 interface Attempt {
   readonly generations: Map<string, number>;
@@ -143,13 +151,21 @@ const fingerprint = (value: string): string => createHash('sha256').update(value
 /** The initial cooldown of a fresh fault, before any probe backoff. */
 function initialCooldownMs(faultKind: RouteFaultKind): number {
   if (faultKind === 'rate_limited') return RATE_LIMIT_FALLBACK_MS;
-  if (faultKind === 'timeout' || faultKind === 'transport' || faultKind === 'server_error') return ROUTE_FAULT_COOLDOWN_MS;
+  if (faultKind === 'timeout' || faultKind === 'transport' || faultKind === 'server_error' || faultKind === 'structured_output') return ROUTE_FAULT_COOLDOWN_MS;
   return FAILURE_FALLBACK_MS;
 }
 
 /** The fault a client-observed kind maps to: the exact route that observed it. */
 function clientFailure(kind: ClientFaultKind): MarkableFailure {
   return kind === 'timeout' ? clientTimeoutFailure() : transportFailure();
+}
+
+/** The exact route fault a native task attempt's fault kind maps to. */
+function nativeRouteFailure(kind: NativeRouteFaultKind): MarkableFailure {
+  switch (kind) {
+    case 'structured_output':
+      return structuredOutputFailure();
+  }
 }
 
 /**
@@ -231,6 +247,33 @@ export class RouteStateStore {
     const result = this.mark(provider, model, failure, status, '', guard);
     if (attempt !== undefined) attempt.settled = true;
     return result;
+  }
+
+  /**
+   * Record a route-local fault a native task attempt observed on its own route.
+   * A held half-open probe lease is settled with the classified fault so the
+   * probe backoff is preserved; without one the fault goes through the
+   * generation-fenced `mark`, so a stale in-flight report can never rebuild a
+   * cleared fault. The fault is route-scoped only: it never claims a provider
+   * or a shared pool.
+   */
+  reportNativeRouteFault(provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease): RouteStatus | undefined {
+    const failure = nativeRouteFailure(kind);
+    const status = 502;
+    if (lease !== undefined) {
+      this.releaseProbe(lease, 'failure', failure, status);
+      return this.status(provider, model);
+    }
+    return this.mark(provider, model, failure, status, '', guard);
+  }
+
+  /**
+   * Release a held native-task probe lease without an outcome, leaving every
+   * covered scope half-open for a later bounded trial. A throw or a cancelled
+   * task settles its probe here so a held lease never silently expires.
+   */
+  releaseNativeProbe(lease: ProbeLease): void {
+    this.releaseProbe(lease, 'cancelled');
   }
 
   /** Begin one attempt, capturing the fault generations it observes. */

@@ -270,13 +270,14 @@ export interface TaskSettingsServiceOptions {
    *  preview takes one immutable snapshot per request; every other selection
    *  call takes its own. */
   quotaSnapshots?: AutoRoutingQuotaSnapshotService
-  /** Optional in-memory Gateway route circuit status keyed by public
-   *  `provider/model`, using the shared Gateway instance and callable semantics
-   *  already consumed by session and auxiliary routing. Only Gateway-backed
-   *  candidates consult it: an open route, or a half-open route whose next
-   *  recovery probe is still in the future, is not admitted, while a due
-   *  half-open route is (the Gateway owns the bounded probe/lease). Native
-   *  (non-Gateway) routes are never gated on Gateway faults. */
+  /** Optional in-memory Gateway route circuit status keyed by a route key:
+   *  `provider/model` for the shared free-supply gate, plus the client-qualified
+   *  `provider/model:client` task target for the additional exact task-client
+   *  gate. It is the same shared Gateway instance and callable semantics already
+   *  consumed by session and auxiliary routing, so no second circuit exists. An
+   *  open route, or a half-open route whose next recovery probe is still in the
+   *  future, is not admitted, while a due half-open route is (the Gateway owns
+   *  the bounded probe/lease). */
   routeStatus?: (model: string) => GatewayRouteStatus | undefined
   /** Injectable request clock for deterministic pricing snapshots. */
   now?: () => number
@@ -488,6 +489,7 @@ function buildRoutingFormRows(
   const collapsedByRuntime = new Map(trace.collapsedChoices.map((choice) => [choice.exactAgentRuntime, choice]))
   const readinessRejected = new Set(trace.readinessRejectedIds)
   const quotaBlocked = new Set(trace.quotaBlockedIds)
+  const circuitBlocked = new Set(trace.circuitBlockedIds)
   const unscorable = new Map(trace.unscorable.map((entry) => [entry.id, entry.code]))
   const catalogExcluded = new Map(trace.catalogExcluded.map((entry) => [entry.id, entry.reason]))
 
@@ -539,28 +541,33 @@ function buildRoutingFormRows(
     // the submitted gate (a quota/unscorable/catalog reason has no detail).
     const detail: TaskResolutionFailureDetail | undefined =
       quotaBlocked.has(runtime) ? undefined : pair.rejectionDetail
-    const reason = detail !== undefined
-      ? detail === 'model_excluded'
-        ? `排除模型：${modelName}`
-        : detail === 'provider_excluded'
-          ? `排除供应商：${providerName}`
-          : detail === 'profile_excluded'
-            ? '排除运行配置'
-            : detail === 'client_excluded'
-              ? '排除客户端'
-              : taskResolutionFailureDetailMessage(detail)
-      : code === 'intelligence_requirement'
-        ? `最低智能：${requirements.intelligenceMin ?? requirements.intelligenceExpected ?? 'mid'}`
-        : code === 'speed_requirement'
-          ? `最低速度：${requirements.minimumTps ?? requirements.expectedTps ?? 0} TPS`
-          : code === 'price_limit'
-            ? `输出单价上限：$${requirements.maxOutputUsdPerMillion ?? 0}/Mtok`
-            : ({
-              context_window: '上下文窗口不足',
-              quota_unavailable: '额度不足',
-              quota_insufficient: '额度不足',
-              no_available_provider: '不满足任务要求',
-            } as Record<'context_window' | 'quota_unavailable' | 'quota_insufficient' | 'no_available_provider', string>)[code]
+    // A route the exact task-client circuit refuses is reported as exactly
+    // that, before any other closed reason, so the elimination is never misread
+    // as a submitted gate failure.
+    const reason = circuitBlocked.has(runtime)
+      ? '路由熔断，暂不可用'
+      : detail !== undefined
+        ? detail === 'model_excluded'
+          ? `排除模型：${modelName}`
+          : detail === 'provider_excluded'
+            ? `排除供应商：${providerName}`
+            : detail === 'profile_excluded'
+              ? '排除运行配置'
+              : detail === 'client_excluded'
+                ? '排除客户端'
+                : taskResolutionFailureDetailMessage(detail)
+        : code === 'intelligence_requirement'
+          ? `最低智能：${requirements.intelligenceMin ?? requirements.intelligenceExpected ?? 'mid'}`
+          : code === 'speed_requirement'
+            ? `最低速度：${requirements.minimumTps ?? requirements.expectedTps ?? 0} TPS`
+            : code === 'price_limit'
+              ? `输出单价上限：$${requirements.maxOutputUsdPerMillion ?? 0}/Mtok`
+              : ({
+                context_window: '上下文窗口不足',
+                quota_unavailable: '额度不足',
+                quota_insufficient: '额度不足',
+                no_available_provider: '不满足任务要求',
+              } as Record<'context_window' | 'quota_unavailable' | 'quota_insufficient' | 'no_available_provider', string>)[code]
     rows.push({
       provider: pair.provider,
       provider_name: providerName,
@@ -1120,6 +1127,7 @@ export class TaskSettingsService {
       eligibleIds: [],
       quotaBlockedIds: [],
       readinessRejectedIds: [],
+      circuitBlockedIds: [],
       collapsedChoices: [],
       unscorable: [],
       catalogExcluded: [],
@@ -1876,14 +1884,18 @@ export class TaskSettingsService {
     return state.enabled && state.installed
   }
 
-  /** Gateway route circuit admission for one public `provider/model`. An open
-   *  route is rejected, and a half-open route is admitted only once its next
-   *  recovery probe is due; the Gateway itself owns the bounded probe lease and
-   *  any recovery, so no state, timer, or second circuit store is created here.
-   *  A route with no status, or a healthy/closed one, is admitted unchanged.
+  /** Gateway route circuit admission for one public shared `provider/model`.
    *  Only Gateway-backed candidates consult this; native routes never do. */
   private gatewayRouteAdmitted(provider: string, model: string, nowMs: number): boolean {
-    const status = this.routeStatus?.(`${provider}/${model}`)
+    return this.taskRouteAdmitted(this.routeStatus?.(`${provider}/${model}`), nowMs)
+  }
+
+  /** Circuit admission for one route status: an open route is rejected, and a
+   *  half-open route is admitted only once its next recovery probe is due; the
+   *  Gateway itself owns the bounded probe lease and any recovery, so no state,
+   *  timer, or second circuit store is created here. A route with no status, or
+   *  a healthy/closed one, is admitted unchanged. */
+  private taskRouteAdmitted(status: GatewayRouteStatus | undefined, nowMs: number): boolean {
     if (status === undefined) return true
     if (status.phase === 'open') return false
     if (status.phase !== 'half_open') return true
@@ -2015,7 +2027,7 @@ export class TaskSettingsService {
     // order below.
     type ProbePlanEntry =
       | { choice: TaskDispatchChoice; availability: Promise<TaskSettingsProviderAvailability | undefined> }
-      | { choice: TaskDispatchChoice; eliminated: 'client' | 'blocked' | 'route' }
+      | { choice: TaskDispatchChoice; eliminated: 'client' | 'blocked' | 'route' | 'circuit' }
     const probePlan: ProbePlanEntry[] = []
     for (const choice of eligible.choices) {
       // Authoritative client gate: disabled or not-installed clients are
@@ -2039,6 +2051,13 @@ export class TaskSettingsService {
         probePlan.push({ choice, eliminated: 'route' })
         continue
       }
+      // Additional exact task-client gate: the canonical target's own
+      // client-qualified route key, which is the circuit a launched task
+      // attempt faults, so a target that keeps failing is not auto-selected.
+      if (!this.taskRouteAdmitted(this.routeStatus?.(choice.exactAgentRuntime), nowMs)) {
+        probePlan.push({ choice, eliminated: 'circuit' })
+        continue
+      }
       const availability = this.previewRuntimeAvailability(
         TaskSettingsService.tripleOf(choice),
         previewMemo,
@@ -2055,6 +2074,11 @@ export class TaskSettingsService {
         if (entry.eliminated === 'client' || entry.eliminated === 'route') {
           eliminations.push({ code: 'no_available_provider' })
           if (trace !== undefined) trace.readinessRejectedIds.push(entry.choice.exactAgentRuntime)
+        } else if (entry.eliminated === 'circuit') {
+          // The exact task-client circuit refuses this route: no available
+          // provider here.
+          eliminations.push({ code: 'no_available_provider' })
+          if (trace !== undefined) trace.circuitBlockedIds.push(entry.choice.exactAgentRuntime)
         } else {
           eliminations.push(eliminationOf('quota_unavailable', boundedReferenceOutputUsdPerM(entry.choice)))
           if (trace !== undefined) trace.quotaBlockedIds.push(entry.choice.exactAgentRuntime)
@@ -2382,6 +2406,10 @@ interface AutomaticSelectionTrace {
   eligibleIds: string[]
   quotaBlockedIds: string[]
   readinessRejectedIds: string[]
+  /** Choices eliminated because their exact task-client circuit is open, or
+   *  half-open with its recovery probe not yet due. A due probe route is never
+   *  listed here. */
+  circuitBlockedIds: string[]
   collapsedChoices: TaskDispatchChoice[]
   /** Collapsed candidates that could not build a truthful scored input. */
   unscorable: Array<{ id: string; code: TaskResolutionFailureCode }>

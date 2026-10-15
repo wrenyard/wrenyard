@@ -6,9 +6,11 @@ const MAX_TIME_MS = 8.64e15;
  * Route-scoped fault kinds: the four legacy states plus the transport classes
  * that a route-scoped (provider/model) fault can carry. A transport fault is
  * isolated to the exact model that observed it; a rate limit or quota fault
- * keeps its shared pool scope.
+ * keeps its shared pool scope. `structured_output` is the delivery/protocol
+ * failure of a model attempt: like the transport classes it is isolated to the
+ * exact route that observed it and never claims a provider or shared pool.
  */
-export type RouteFaultKind = GatewayRouteState | 'timeout' | 'transport' | 'server_error';
+export type RouteFaultKind = GatewayRouteState | 'timeout' | 'transport' | 'server_error' | 'structured_output';
 
 /**
  * A poisoning outcome: it is allowed to mark a route (or its provider/pool)
@@ -152,6 +154,15 @@ export function clientTimeoutFailure(): ClassifiedRouteFailure {
 /** The exact route a client-observed transport/fetch failure must be isolated to. */
 export function transportFailure(): ClassifiedRouteFailure {
   return { state: 'model_unavailable', scope: 'route', faultKind: 'transport' };
+}
+
+/**
+ * The exact route a structured-output/protocol delivery failure must be
+ * isolated to. It is route-scoped, so a delivery failure on one model never
+ * poisons an unrelated model, its provider or a shared pool.
+ */
+export function structuredOutputFailure(): ClassifiedRouteFailure {
+  return { state: 'model_unavailable', scope: 'route', faultKind: 'structured_output' };
 }
 
 /**

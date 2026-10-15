@@ -1,5 +1,35 @@
 import type { ZodTypeAny } from 'zod'
 import type { TaskSettingsLayer } from './protocol/methods/task.mts'
+import type {
+  Admission as GatewayRouteAdmission,
+  NativeRouteFaultKind as TaskRouteFaultKind,
+  ProbeLease as GatewayProbeLease,
+  RouteGuard as GatewayRouteGuard,
+} from '@wrenyard/gateway'
+
+export type { TaskRouteFaultKind }
+
+/**
+ * Optional daemon-owned native-task route-state port. The daemon binds it to
+ * the single shared Gateway circuit; isolated/legacy callers omit it and then
+ * never touch route health. Identities are the route's provider on its own plus
+ * its model key — the canonical target's client-qualified model, so the client
+ * suffix scopes health to that exact route and is never an upstream model id.
+ */
+export interface TaskRouteStateHooks {
+  /** Admit/check one exact route before launching a model attempt. The
+   *  dispatch mode distinguishes a gateway client, which can rely on the shared
+   *  HTTP recovery probe, from a native one that cannot. */
+  admit: (provider: string, model: string, mode?: 'native' | 'gateway') => GatewayRouteAdmission
+  /** Report a schema-validated delivery; settles a due half-open probe as success. */
+  success: (provider: string, model: string, guard?: GatewayRouteGuard, lease?: GatewayProbeLease) => void
+  /** Report a route-local fault for a launched attempt that failed terminally,
+   *  settling a held probe lease with the classified fault. */
+  fault: (provider: string, model: string, guard: GatewayRouteGuard | undefined, kind: TaskRouteFaultKind, lease: GatewayProbeLease | undefined) => void
+  /** Release a held probe lease as cancelled, so a throw or cancel never lets
+   *  the lease silently expire. */
+  cancel: (lease: GatewayProbeLease) => void
+}
 
 export type JsonSchema = boolean | Record<string, unknown>
 
@@ -107,6 +137,10 @@ export interface ExecutionOptions {
    *  for isolated legacy tests; daemon bootstrap attaches the single
    *  TaskSettingsService resolver after constructing the workflow runner. */
   taskSettingsResolver?: TaskRunSettingsResolver
+  /** Optional daemon-owned native-task route-state port bound to the shared
+   *  Gateway circuit. Absent for isolated legacy tests, which then launch
+   *  without touching circuit health. */
+  taskRouteState?: TaskRouteStateHooks
   /** Non-persistent invocation-layer settings carried to execution-time
    *  settings resolution. Never persisted by the daemon. */
   invocationSettings?: TaskSettingsLayer

@@ -28,6 +28,7 @@ import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
 import { TaskWorkflowRunner } from './execution/task-workflow-runner.mts'
+import type { TaskRouteStateHooks } from '../types.mts'
 import { RepoWriteLocks } from './execution/repo-write-locks.mts'
 import { acquireInstanceLock, releaseInstanceLock } from './instance-lock.mts'
 import { createTaskGraphService } from './services/taskgraph-service.mts'
@@ -53,9 +54,9 @@ import { getForemanEventBus } from '../events/event-bus.mts'
 import { readLocalSpeedSamples } from '../events/tps.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
-import { createModelGateway, type ModelGateway } from '@wrenyard/gateway'
+import { createModelGateway, type ModelGateway, type RouteStatus } from '@wrenyard/gateway'
 import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy } from '@wrenyard/providers'
-import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
+import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
@@ -721,6 +722,29 @@ async function createForemanDaemonResources(
     token: gatewayToken,
   })
 
+  // The task path reuses this same gateway/circuit (no second circuit and no
+  // new persistence): a native task attempt admits its exact route once before
+  // launch, reports success after a schema-validated delivery (settling a due
+  // half-open probe), a route-local fault after a terminal structured-output
+  // failure (settling the held probe with its backoff), and a cancelled release
+  // for any other exit.
+  //
+  // The task route key is client-qualified (`provider/model:client`), so it is
+  // its own circuit route and would not otherwise see a fault recorded on the
+  // shared `provider/model` route a session call uses. Admission therefore also
+  // checks the shared route first, so a pinned task or a selection-to-launch
+  // race can never launch while that shared circuit still refuses the route.
+  const taskRouteState: TaskRouteStateHooks = {
+    admit: (provider, model, mode) => {
+      const shared = blockedSharedTaskRoute(gateway, provider, model, mode)
+      if (shared !== undefined) return { kind: 'blocked', status: shared }
+      return gateway.admitRoute(provider, model)
+    },
+    success: (provider, model, guard, lease) => gateway.completeRouteSuccess(provider, model, guard, lease),
+    fault: (provider, model, guard, kind, lease) => gateway.reportNativeRouteFault(provider, model, kind, guard, lease),
+    cancel: (lease) => gateway.releaseNativeProbe(lease),
+  }
+
   /**
    * One workspace-scoped binding set: the task, taskgraph, task-settings,
    * document and session services plus the scheduler for one root. Startup and
@@ -973,6 +997,7 @@ async function createForemanDaemonResources(
   // the switch re-points the same resolver at the new workspace.
   registerWorkspaceRoutes(workspaceScoped)
   runtime.runner.setTaskSettingsResolver((params) => workspaceScoped.taskSettingsService.resolveForRun(params))
+  runtime.runner.setTaskRouteState(taskRouteState)
   options.onScheduler?.(workspaceScoped.scheduler)
 
   // During drain, preserve status/cancel/signals and the calls required by
@@ -1201,6 +1226,7 @@ async function createForemanDaemonResources(
     // The running task runner resolves execution-time settings through the
     // current task settings service, exactly like bootstrap wires it.
     runtime.runner.setTaskSettingsResolver((params) => staged.taskSettingsService.resolveForRun(params))
+    runtime.runner.setTaskRouteState(taskRouteState)
     resources.session = staged.session
     resources.scheduler = staged.scheduler
     resources.taskService = staged.taskService
@@ -1503,6 +1529,42 @@ function gatewayOrigin(port: number): string {
   // The gateway only ever listens on loopback; the URL is built from the actual
   // bound port so injected env and IPC connections never guess a fixed port.
   return `http://127.0.0.1:${port}`
+}
+
+/**
+ * The shared `provider/model` route health a task's client-qualified route key
+ * must also clear before it launches, or undefined when that shared route is
+ * healthy (or the key is not canonical run syntax, leaving only the exact task
+ * circuit). The client suffix is stripped through the same parser that produced
+ * the key, never by re-splitting the public string.
+ *
+ * An open shared route blocks admission with its own status before the attempt
+ * launches. A half-open shared route blocks a native attempt regardless of due
+ * time, because a native task cannot run the Gateway's HTTP recovery probe; a
+ * Gateway-mode attempt keeps the due half-open behavior so the actual HTTP
+ * pipeline can lease and recover that shared health. This guard only refuses:
+ * it never acquires a probe lease, and the shared route-scoped fault is never
+ * cleared by the exact-route settlement the task performs below.
+ */
+function blockedSharedTaskRoute(
+  gateway: ModelGateway,
+  provider: string,
+  model: string,
+  mode: 'native' | 'gateway' | undefined,
+): RouteStatus | undefined {
+  let parsed: ReturnType<typeof parseRunSyntax>
+  try {
+    parsed = parseRunSyntax(`${provider}/${model}`)
+  } catch {
+    return undefined
+  }
+  const shared = gateway.routeStatus(`${provider}/${parsed.model}`)
+  if (shared === undefined || shared.phase === 'closed') return undefined
+  if (shared.phase === 'open') return shared
+  // Half-open: only a Gateway-mode attempt may rely on the bounded HTTP probe.
+  if (mode !== 'gateway') return shared
+  const probeMs = Date.parse(shared.nextProbeAt ?? shared.until)
+  return Number.isFinite(probeMs) && probeMs > Date.now() ? shared : undefined
 }
 
 type DaemonGatewayConnection = import('@wrenyard/gateway').GatewayConnection & { token: string }

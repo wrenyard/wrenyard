@@ -128,9 +128,25 @@ export interface StructuredOutputOptions {
   dispatchSnapshot?: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null
   /** Private CodeBuddy admission binding, forwarded unchanged to every attempt. */
   codeBuddyExecution?: import('../operations/types.mts').CodeBuddyExecutionBinding
+  /** Optional shared-circuit accounting for this structured run. Only the
+   *  terminal delivery outcome of actually launched attempts is reported:
+   *  `onRouteSuccess` after a schema-validated delivery, `onRouteFault` after
+   *  the terminal structured-output/protocol delivery failure. Cancellation,
+   *  time budget, functional and post-gate failures never fault the route. */
+  onRouteSuccess?: () => void
+  onRouteFault?: () => void
 }
 
 export type StructuredOutputAgentStatus = 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
+
+/**
+ * The client-observed failure class of a CodeBuddy process that exited without
+ * its terminal result record. It is a protocol/delivery failure of the exact
+ * route — not a functional agent failure — so it faults route health instead of
+ * being folded into the generic `agent_failed` bucket. The CodeBuddy decoder
+ * emits the same identifier from `packages/clients/codebuddy/src/events.ts`.
+ */
+const MISSING_TERMINAL_RESULT_FAILURE_CLASS = 'protocol_missing_terminal_result'
 
 export interface StructuredOutputAgentOptions {
   workingDirectory?: string
@@ -230,17 +246,43 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
         lastActivity ?? 'no model execution started after the shared task execution deadline',
       )
     }
-    // A correction is only ever a continuation of the original native session,
-    // on the same resolved model/profile. Without a concrete resumable session
-    // there is nothing safe to correct: fail with a precise diagnostic instead
-    // of replaying the original task as a fresh run. The session check runs
-    // before profile resolution so the missing-session diagnostic is always the
-    // one reported.
+    // A correction only ever continues the original native session on the same
+    // resolved model/profile; without a resumable session there is nothing safe
+    // to correct, so the unattempted correction fails the task as a typed
+    // output-schema gate failure instead of replaying it as a fresh run. The
+    // check runs before profile resolution so its diagnostic is always the one
+    // reported.
     if (attempt > 0 && !resume) {
-      throw new Error(
-        `Cannot correct invalid structured output (attempt ${attempt + 1}): the previous turn returned no resumable native session id. ` +
-          'A correction continues the original native session only; replaying the original task as a fresh run is refused. ' +
-          `Previous diagnostics: ${describeCorrectionErrors(lastValidationErrors)}`,
+      opts.onRouteFault?.()
+      const validationErrors = lastValidationErrors ?? []
+      const rawExcerpt = lastOutputExcerpt ?? ''
+      const hasPlaceholderErrors = validationErrors.some((e) => e.includes('placeholder'))
+      const remediationBase = validationErrors.length > 0
+        ? `Agent must return exactly one ${DELIVERY_START} block with ${SUMMARY_START} and ${RESULT_START}; ${RESULT_START} must contain one JSON value matching the schema. Fix protocol, JSON, or schema errors and retry.`
+        : `Agent must return exactly one ${DELIVERY_START} block with ${SUMMARY_START} and ${RESULT_START}; ${RESULT_START} must contain one JSON value matching the schema.`
+      const remediation = mutationCapable
+        ? `${remediationBase} The in-session output correction could not continue the original native session. The action outcome is UNVERIFIED and side effects may have occurred: inspect the exact task targets and the captured evidence before any explicit task replay, and never auto-replay. Do not infer success from a clean working tree or a stable HEAD.`
+        : `${remediationBase} The in-session output correction could not continue the original native session.`
+      throw new GateFailureError('post', 'output-schema',
+        'valid Foreman structured output delivery block matching schema',
+        [
+          'the previous turn returned no resumable native session id',
+          ...(rawExcerpt ? ['raw output excerpt captured'] : []),
+          ...(hasPlaceholderErrors ? ['placeholder result rejected'] : []),
+          ...(validationErrors.length > 0 ? [`${validationErrors.length} structured output errors`] : []),
+          ...(mutationCapable ? ['mutation-capable run cannot replay the original task as a fresh run'] : []),
+        ].join('; '),
+        {
+          evidence: {
+            schema: schema.schema,
+            validation_errors: validationErrors,
+            raw_excerpt: rawExcerpt.slice(0, 2000),
+            no_resumable_native_session_id: true,
+            ...(mutationCapable ? { outcome_unverified: true, side_effects_may_have_occurred: true } : {}),
+          },
+          remediation,
+          retryable: false,
+        },
       )
     }
     const attemptProfile = attempt === 0
@@ -324,6 +366,10 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     // would otherwise demand a concrete resolved profile that a failed policy
     // execution never produced.
     if (terminal.status === 'failed') {
+      // A missing-terminal-result protocol failure is a delivery failure of the
+      // exact route and faults it; any other agent failure is functional and
+      // never touches route health.
+      if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.()
       throw agentFailedError(
         terminal.executionId ?? lastExecutionId ?? 'unknown',
         terminal.error ?? terminal.output,
@@ -333,6 +379,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
 
     const parsed = await parseStructuredFinalOutput(terminal.output, schema, opts.preSchemaTransform)
     if (parsed.success) {
+      opts.onRouteSuccess?.()
       opts.onDelivery?.({ summary: parsed.summary, data: parsed.data })
       return parsed.data
     }
@@ -383,12 +430,16 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
         schema: schema.schema,
         validation_errors: validationErrors,
         raw_excerpt: rawExcerpt.slice(0, 2000),
+        ...(resume ? { native_session_id: resume } : {}),
         ...unverifiedEvidence,
       },
       remediation,
       retryable: false,
     },
   )
+  // The launched model attempts never produced a valid delivery: report the
+  // terminal structured-output failure to the shared circuit before failing.
+  opts.onRouteFault?.()
   throw gateErr
 }
 
@@ -485,6 +536,9 @@ async function runTimeLimitWarningResume(
     )
   }
   if (terminal.status === 'failed') {
+    // The same protocol/delivery class faults the route here too; a functional
+    // agent failure does not.
+    if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.()
     throw agentFailedError(
       terminal.executionId ?? lastExecutionId ?? 'unknown',
       terminal.error ?? terminal.output,
@@ -493,6 +547,7 @@ async function runTimeLimitWarningResume(
   }
   const parsed = await parseStructuredFinalOutput(terminal.output, schema, opts.preSchemaTransform)
   if (parsed.success) {
+    opts.onRouteSuccess?.()
     return { data: parsed.data, summary: parsed.summary }
   }
   // The warning window did not yield a valid structured output: status timeout
@@ -787,14 +842,6 @@ function renderCorrectionDiagnostics(diagnostics: StructuredOutputDiagnostic[]):
     body.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
     '</wy-ctx-error>',
   ].join('\n')
-}
-
-/** Compact, single-line rendering of the last correction errors for a failure message. */
-function describeCorrectionErrors(validationErrors: string[] | undefined): string {
-  const normalized = normalizeDiagnostics(validationErrors)
-  return normalized.length > 0
-    ? normalized.map((diagnostic) => `${diagnostic.kind}: ${diagnostic.message}`).join('; ')
-    : 'none captured'
 }
 
 function normalizeDiagnostics(diagnostics: string[] | undefined): StructuredOutputDiagnostic[] {

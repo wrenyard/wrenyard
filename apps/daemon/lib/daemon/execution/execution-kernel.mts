@@ -34,6 +34,8 @@ import {
 } from '../../workspace/schema-loader.mts'
 import { collectStructuredOutput, firstPrompt, type StructuredOutputAgent } from '../../core/task/structured-output.mts'
 import { requireClient } from '@wrenyard/clients'
+import { parseRunSyntax } from '@wrenyard/providers/catalog'
+import type { ProbeLease, RouteGuard } from '@wrenyard/gateway'
 import {
   createTaskArtifactDirectory,
   outputSchemaDeclaresArtifacts,
@@ -521,7 +523,37 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     let truncatedByTimeLimit = false
 
     try {
-      const runAgent: StructuredOutputAgent = (profile, prompt, opts) => {
+      // ── Native-task route state ──
+      // Only a launched attempt is accounted, and only once per collected run:
+      // the first real launch acquires the shared circuit handle and every
+      // in-session correction (plus the time-limit warning resume) reuses that
+      // same guard and probe lease. The handle is settled exactly once for the
+      // whole collector — success on a schema-validated delivery, failure on the
+      // terminal delivery failure, cancelled on any other exit — never after the
+      // post-gates, which can never change route health.
+      let routeIdentity: { provider: string; model: string } | undefined
+      let routeGuard: RouteGuard | undefined
+      let routeLease: ProbeLease | undefined
+      let routeSettled = false
+      const runAgent: StructuredOutputAgent = async (profile, prompt, opts) => {
+        if (routeIdentity === undefined && options.taskRouteState) {
+          const identity = routeIdentityOf(profile)
+          if (identity !== undefined) {
+            const admission = options.taskRouteState.admit(identity.provider, identity.model, dispatchSnapshot?.mode)
+            // A pinned or automatically selected route the shared circuit still
+            // refuses fails clearly instead of launching a doomed attempt.
+            if (admission.kind === 'blocked') {
+              throw new Error(
+                `Route ${identity.provider}/${identity.model} is blocked by the shared circuit ` +
+                  `(${admission.status.state}, phase ${admission.status.phase}); refusing to launch an attempt. ` +
+                  'Retry after the next circuit probe or select another route.',
+              )
+            }
+            routeIdentity = identity
+            routeGuard = admission.guard
+            routeLease = admission.kind === 'probe' ? admission.lease : undefined
+          }
+        }
         return primitives.agent(profile, prompt, {
           ...opts,
           repoWriteLock: opts?.repoWriteLock ?? repoWriteLock,
@@ -560,6 +592,21 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
           structuredSummary = delivery.summary
           if (delivery.truncatedByTimeLimit) truncatedByTimeLimit = true
         },
+        onRouteSuccess: () => {
+          if (!routeSettled && routeIdentity !== undefined && options.taskRouteState) {
+            routeSettled = true
+            options.taskRouteState.success(routeIdentity.provider, routeIdentity.model, routeGuard, routeLease)
+          }
+        },
+        onRouteFault: () => {
+          if (!routeSettled && routeIdentity !== undefined && options.taskRouteState) {
+            // Only a launched attempt's terminal structured-output/protocol
+            // delivery failure faults the route; cancellation, time budget and
+            // functional task failures never reach this hook.
+            routeSettled = true
+            options.taskRouteState.fault(routeIdentity.provider, routeIdentity.model, routeGuard, 'structured_output', routeLease)
+          }
+        },
         beforeAttempt: () => assertTaskStillActive(taskId),
       }
       const artifactSchema = outputSchemaDeclaresArtifacts(outputSchema)
@@ -576,7 +623,16 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
           return validation.output
         }
       }
-      let output = await collectStructuredOutput(structuredOptions)
+      // The held probe lease is settled exactly once, in a finally around the
+      // collector and before any post-gate: an exit that reported neither
+      // success nor a terminal delivery failure (throw, cancellation) releases
+      // it as cancelled so a held lease never silently expires.
+      let output = await collectStructuredOutput(structuredOptions).finally(() => {
+        if (!routeSettled && routeLease !== undefined) {
+          routeSettled = true
+          options.taskRouteState?.cancel(routeLease)
+        }
+      })
       assertTaskStillActive(taskId)
 
       if (!artifactSchema) {
@@ -703,6 +759,24 @@ function normalizeExecutionOptions(opts: ExecutionOptions | string): ExecutionOp
 
 function createKernelTaskRunId(): string {
   return `task_${randomBytes(4).toString('hex')}`
+}
+
+/**
+ * Resolve the shared route identity of a canonical `provider/model:client`
+ * execution target with the canonical run-syntax helper: the provider on its
+ * own, plus the route's model key explicitly client-qualified
+ * (`deepseek-v4.1-flash:cb`). The `:client` suffix scopes health to that exact
+ * route and is never treated as an upstream model id.
+ */
+function routeIdentityOf(exactAgentRuntime: string): { provider: string; model: string } | undefined {
+  let provider: string
+  try {
+    provider = parseRunSyntax(exactAgentRuntime).provider
+  } catch {
+    return undefined
+  }
+  const model = exactAgentRuntime.slice(provider.length + 1)
+  return model.length > 0 ? { provider, model } : undefined
 }
 
 /**

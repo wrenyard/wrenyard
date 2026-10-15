@@ -1,9 +1,18 @@
 import { turnUsageRecord } from '@wrenyard/agent-client/native';
 import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
-    finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
+    finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, runFinishedRecord, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
 } from '@wrenyard/agent-client/native';
 import { ResponseTpsSampler, completeUsageTokens, hasNormalizedFailureField } from '@wrenyard/agent-client/statistics';
+
+/**
+ * Machine-readable failure class for a CodeBuddy process that exited without its
+ * terminal `result` record. It is a protocol/delivery failure of the client
+ * route, kept distinct from the functional agent failure classes. The daemon
+ * structured-output collector recognises the same identifier in
+ * `apps/daemon/lib/core/task/structured-output.mts`.
+ */
+const MISSING_TERMINAL_RESULT_FAILURE_CLASS = 'protocol_missing_terminal_result';
 
 /**
  * Decode the CodeBuddy native transcript stream.
@@ -26,8 +35,28 @@ export async function* decodeCodeBuddy(
     const sampler = new ResponseTpsSampler();
     for await (const item of readNativeRecords(events)) {
         if (item.kind === 'event') {
-            if (item.event.type === 'exit' && !finished)
-                yield finishedEvent('codebuddy', sessionId, output, item.event.exitCode !== 0 && item.event.exitCode !== null);
+            // Fail closed: a process that exits without a genuine terminal
+            // result record is a protocol/initialization failure, never a
+            // successful run. The captured native session id and output are
+            // preserved in the failed terminal; native stderr still flows
+            // through the unchanged stream path.
+            if (item.event.type === 'exit' && !finished) {
+                const missing: string[] = [];
+                if (!sessionId)
+                    missing.push('no native session id');
+                if (!output)
+                    missing.push('no output');
+                const detail = missing.length ? ` (${missing.join(', ')})` : '';
+                yield {
+                    type: 'output',
+                    record: runFinishedRecord('codebuddy', 'failed', sessionId, {
+                        ...(output ? { output } : {}),
+                        is_error: true,
+                        error: `CodeBuddy exited without a terminal result${detail}`,
+                        failure_class: MISSING_TERMINAL_RESULT_FAILURE_CLASS,
+                    }),
+                };
+            }
             yield item.event;
             continue;
         }

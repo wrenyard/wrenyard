@@ -11,6 +11,7 @@ import type {
 } from '../../core/operations/types.mts'
 import {
   type PrimitiveSet,
+  type TaskRouteStateHooks,
   type TaskRunSettingsResolver,
 } from '../../types.mts'
 import { DaemonTaskRunner } from './task-runner.mts'
@@ -29,6 +30,9 @@ export interface TaskWorkflowRunnerOptions {
    *  runner construction; daemon bootstrap attaches the single TaskSettingsService
    *  resolver after constructing the runner and the service. */
   taskSettingsResolver?: TaskRunSettingsResolver
+  /** Optional daemon-owned native-task route-state port bound to the shared
+   *  Gateway circuit. Optional so existing runner constructions stay valid. */
+  taskRouteState?: TaskRouteStateHooks
 }
 
 export class TaskWorkflowRunner implements TaskWorkflowRunHost {
@@ -38,6 +42,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
   private readonly taskRunner: DaemonTaskRunner
   private readonly taskDispatchResolver?: TaskDispatchResolver
   private taskSettingsResolver?: TaskRunSettingsResolver
+  private taskRouteState?: TaskRouteStateHooks
 
   constructor(options: TaskWorkflowRunnerOptions) {
     this.db = options.db
@@ -45,6 +50,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
     this.logger = options.logger
     this.taskDispatchResolver = options.taskDispatchResolver
     this.taskSettingsResolver = options.taskSettingsResolver
+    this.taskRouteState = options.taskRouteState
     this.taskRunner = new DaemonTaskRunner()
   }
 
@@ -54,6 +60,14 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
    *  service wired into snapshot/preflight. */
   setTaskSettingsResolver(resolver: TaskRunSettingsResolver): void {
     this.taskSettingsResolver = resolver
+  }
+
+  /** Attaches the daemon-owned native-task route-state port backed by the
+   *  single shared Gateway circuit. Mirrors {@link setTaskSettingsResolver}: the
+   *  runner is constructed before the gateway, so bootstrap/hot-switch point the
+   *  same runner at the current gateway instance. */
+  setTaskRouteState(hooks: TaskRouteStateHooks): void {
+    this.taskRouteState = hooks
   }
 
   async startTaskRun(opts: StartTaskRunOptions): Promise<TaskRunAcceptedHandle> {
@@ -80,6 +94,7 @@ export class TaskWorkflowRunner implements TaskWorkflowRunHost {
       primitives: this.agentPrimitives(),
       taskDispatchResolver: this.taskDispatchResolver,
       taskSettingsResolver: this.taskSettingsResolver,
+      ...(this.taskRouteState !== undefined ? { taskRouteState: this.taskRouteState } : {}),
       ...(opts.invocationSettings !== undefined ? { invocationSettings: opts.invocationSettings } : {}),
     }).catch(async (error: unknown) => {
       const message = errorMessage(error)

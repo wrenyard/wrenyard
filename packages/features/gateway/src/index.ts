@@ -1,14 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Catalog, GatewayProtocol, PublicGatewayModel } from '@wrenyard/providers/catalog';
 import type { ProviderRuntime } from '@wrenyard/providers';
-import { RouteStateStore, type ClientFaultKind, type RouteStateChangedEvent, type RouteStatus } from './route-state.ts';
+import { RouteStateStore, type Admission, type ClientFaultKind, type NativeRouteFaultKind, type ProbeLease, type RouteGuard, type RouteStateChangedEvent, type RouteStatus } from './route-state.ts';
 import { chatProtocol } from './protocols/chat.ts';
 import { responsesProtocol } from './protocols/responses.ts';
 import { messagesProtocol } from './protocols/messages.ts';
 import type { GatewayProtocolModule } from './protocols/types.ts';
 import { createGatewayPipeline, type GatewayRequestCompletedEvent, type GatewayRoute } from './pipeline.ts';
 
-export type { RouteStateChangedEvent, RouteStatus, CircuitPhase, ClientFaultKind } from './route-state.ts';
+export type { RouteStateChangedEvent, RouteStatus, CircuitPhase, ClientFaultKind, NativeRouteFaultKind, Admission, ProbeLease, RouteGuard } from './route-state.ts';
 export type { RouteFaultKind } from './route-failure.ts';
 export type { GatewayRequestCompletedEvent } from './pipeline.ts';
 
@@ -48,6 +48,29 @@ export interface ModelGateway {
   reportRouteFault(publicModel: string, attemptId: string, kind: ClientFaultKind): void;
   /** Finish a client attempt; its settled tombstone expires after a bounded TTL. */
   completeRouteAttempt(publicModel: string, attemptId: string): void;
+  /**
+   * Admit one native task attempt for an exact `provider/model` route before it
+   * launches. The identity is the route's provider plus its model key (the
+   * canonical target's client-qualified model), never a re-split public string.
+   * A `blocked` decision means the shared circuit refuses the route and the
+   * attempt must not launch.
+   */
+  admitRoute(provider: string, model: string): Admission;
+  /**
+   * Record a schema-validated native task success. When the attempt was admitted
+   * as one, the held half-open probe lease is settled as success so a
+   * native-only route can close its own circuit and clear the faults it
+   * observed at admission.
+   */
+  completeRouteSuccess(provider: string, model: string, guard?: RouteGuard, lease?: ProbeLease): void;
+  /**
+   * Record a route-local fault a native task attempt observed on its own route.
+   * A held half-open probe lease is settled with the classified fault so the
+   * probe backoff is preserved.
+   */
+  reportNativeRouteFault(provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease): void;
+  /** Release a held native-task probe lease as cancelled; it never silently expires. */
+  releaseNativeProbe(lease: ProbeLease): void;
   close(): Promise<void>;
 }
 
@@ -98,6 +121,27 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
   const completeRouteAttempt = (publicModel: string, attemptId: string): void => {
     const split = splitModel(publicModel);
     if (split !== undefined) routeStates.completeAttempt(split.provider, split.model, attemptId);
+  };
+
+  // ── Native task route-state ──
+  // The task path admits exactly one attempt per collected run, so it hands the
+  // admission handle back to be settled here instead of re-deriving a route.
+  // These delegate to the same single RouteStateStore the HTTP callers use.
+  const admitRoute = (provider: string, model: string): Admission => routeStates.admit(provider, model);
+
+  const completeRouteSuccess = (provider: string, model: string, guard?: RouteGuard, lease?: ProbeLease): void => {
+    // A due half-open probe is settled as success first, then the captured
+    // generations are cleared; either order leaves the route healthy.
+    if (lease !== undefined) routeStates.releaseProbe(lease, 'success');
+    routeStates.success(provider, model, guard);
+  };
+
+  const reportNativeRouteFault = (provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease): void => {
+    routeStates.reportNativeRouteFault(provider, model, kind, guard, lease);
+  };
+
+  const releaseNativeProbe = (lease: ProbeLease): void => {
+    routeStates.releaseNativeProbe(lease);
   };
 
   /**
@@ -153,6 +197,10 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     beginRouteAttempt,
     reportRouteFault,
     completeRouteAttempt,
+    admitRoute,
+    completeRouteSuccess,
+    reportNativeRouteFault,
+    releaseNativeProbe,
     handle: (request, response) => pipeline.handle(request, response),
 
     async connection(origin) {
