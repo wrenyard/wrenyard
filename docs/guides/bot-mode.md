@@ -86,6 +86,22 @@ adapter paths belong in your own file.
     "defer": ["notify"]               // default ["notify"]; may be empty
   },
 
+  "watchdogs": {                      // optional; every threshold has a default
+    "loadMaxActiveExecutions": 8,     // default 8; hold new work at or above this
+    "queuedExecutionMinutes": 5,      // default 5; hold new work when the oldest
+                                      // queued execution has waited this long
+    "taskRunMinutes": {               // default { verify: 20, review: 20, accept: 60 };
+      "verify": 20,                   // a verify/review/accept task run past its
+      "review": 20,                   // budget is cancelled and retried
+      "accept": 60
+    },
+    "sessionSilentMinutes": 30,       // default 30; warn when a running session
+                                      // appends no ledger event for this long
+    "tickLagWarnMs": 10000,           // default 10000; warn above this tick lag
+    "componentCheckMinutes": 30       // default 30; how often acceptance
+                                      // components are re-checked
+  },
+
   "budgets": {
     "maxCorrections": 3,              // default 3
     "maxAcceptanceAttempts": 2,       // default 2
@@ -358,6 +374,7 @@ is what makes that measurable; watch these numbers on the Bot page:
 | `lastError` | Absent, or an error you have already seen and accepted. |
 | `host` | The device and daemon the bot runs on (`hostname`, `platform`, `arch`, `daemonVersion`, `mode`). |
 | `components` | Every component the acceptance plans need is `ready`. |
+| `load` | `{ activeExecutions, maxExecutions, queuedExecutions, oldestQueuedMs?, backedOff }` — the live daemon load from the last tick. `backedOff` true means the bot is holding new work because the daemon is loaded. |
 
 The 24-hour counters are computed from persisted step and log rows, so they stay
 correct across daemon restarts. A run counts as continuous when ticks advance

@@ -27,7 +27,7 @@ import { createSession, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
-import { createBotHost, type BotHost, type BotTaskRunner } from './services/bot/host.mts'
+import { createBotHost, type BotHost, type BotLoadProbe, type BotTaskRunner } from './services/bot/host.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
@@ -916,6 +916,11 @@ async function createForemanDaemonResources(
         const error = typeof record.error === 'string' && record.error !== '' ? record.error : undefined
         return { status, ...(error === undefined ? {} : { error }) }
       },
+      // Cancel one run on request (the bot's stuck-task watchdog). The
+      // supervisor terminates the linked agent execution for this run id.
+      async cancelTask(runId) {
+        await taskService.cancel(runId)
+      },
     }
     const botHost = createBotHost({
       db: runtime.db,
@@ -940,6 +945,9 @@ async function createForemanDaemonResources(
       // so the Bot page can show when a required component is not ready. The
       // host only ever reads the cached list, never refreshes it.
       operationComponents: runtime.operationComponents,
+      // Live execution load for the dispatch back-off and the load watchdog,
+      // read straight from the database with no IPC round trip.
+      loadProbe: () => readExecutionLoad(runtime.db),
     })
     return {
       workspaceRoot,
@@ -1973,5 +1981,37 @@ function formatLogMeta(meta: unknown): string {
     return JSON.stringify(meta) ?? String(meta)
   } catch {
     return String(meta)
+  }
+}
+
+/**
+ * The supervisor's hard cap on concurrently running executions. Mirrors
+ * `MAX_CONCURRENT_EXECUTIONS` in `agent-supervisor.mts`; the bot only reports
+ * it, the supervisor still enforces it.
+ */
+const MAX_CONCURRENT_EXECUTIONS = 10
+
+/**
+ * Live daemon execution load, read from the database directly with no IPC round
+ * trip: how many executions are active versus queued, and how long the oldest
+ * queued one has waited. The bot uses it to back new work off and to warn.
+ */
+function readExecutionLoad(db: ForemanDatabase): BotLoadProbe {
+  const active = db.prepare<[], { count: number }>(
+    "SELECT COUNT(*) AS count FROM executions WHERE status IN ('starting','running')",
+  ).get()
+  const queued = db.prepare<[], { count: number }>(
+    "SELECT COUNT(*) AS count FROM executions WHERE status = 'queued'",
+  ).get()
+  const oldest = db.prepare<[], { created_at: string | null }>(
+    "SELECT MIN(created_at) AS created_at FROM executions WHERE status = 'queued'",
+  ).get()
+  const oldestAt = oldest?.created_at ?? null
+  const oldestQueuedMs = oldestAt === null ? undefined : Math.max(0, Date.now() - Date.parse(oldestAt))
+  return {
+    activeExecutions: active?.count ?? 0,
+    maxExecutions: MAX_CONCURRENT_EXECUTIONS,
+    queuedExecutions: queued?.count ?? 0,
+    ...(oldestQueuedMs === undefined || Number.isNaN(oldestQueuedMs) ? {} : { oldestQueuedMs }),
   }
 }

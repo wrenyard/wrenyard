@@ -18,6 +18,7 @@ import type {
 import { redactString } from '../../execution/redaction.mts'
 import type { OperationComponentId, OperationComponents } from '../operation-components.mts'
 import {
+  DEFAULT_BOT_WATCHDOGS,
   botConfigHash,
   isInQuietHours,
   resolveBotConfigPath,
@@ -25,6 +26,7 @@ import {
   type BotAdapter,
   type BotConfig,
   type BotRoutingEntry,
+  type BotWatchdogs,
 } from './config.mts'
 import {
   BotAdapterError,
@@ -129,6 +131,12 @@ const DETACHED_RUN_FAILURE: Partial<Record<BotStepKind, { counter: string; log: 
   review: { counter: 'reviewRunFailures', log: 'review.run_failed' },
   accept: { counter: 'acceptanceRunFailures', log: 'accept.run_failed' },
 }
+/** The `watchdogs.taskRunMinutes` budget each detached step kind is measured against. */
+const TASK_RUN_MINUTES_KIND: Partial<Record<BotStepKind, keyof BotWatchdogs['taskRunMinutes']>> = {
+  verify: 'verify',
+  review: 'review',
+  accept: 'accept',
+}
 /** A session's closing markers: a blocker question, or a finished-work head sha. */
 const BOT_BLOCKED_PATTERN = /BOT-BLOCKED\s+(.+)/u
 const BOT_READY_PATTERN = /BOT-READY\s+[0-9a-f]{7,40}/iu
@@ -189,6 +197,19 @@ export type BotStepPrepare =
 /** Outcome of one restart probe. */
 export type BotStepProbe = 'done' | 'not-done' | 'unavailable'
 
+/**
+ * A live read of daemon execution load, taken from the supervisor or the
+ * database directly. It drives the dispatch back-off and the load watchdog, so
+ * it is never fetched over IPC. `oldestQueuedMs` is how long the oldest queued
+ * execution has already waited.
+ */
+export interface BotLoadProbe {
+  activeExecutions: number
+  maxExecutions: number
+  oldestQueuedMs?: number
+  queuedExecutions: number
+}
+
 export interface BotStepHandler {
   /**
    * True for outward effects (merge, push, inbox.complete, annotate, release,
@@ -234,6 +255,13 @@ export interface CreateBotHostOptions {
   tickMs?: number
   /** Inbox poll cadence in milliseconds; defaults to 10 min. */
   pollMs?: number
+  /**
+   * Live daemon execution load, read from the supervisor or the database with
+   * no IPC round trip. It backs off new dispatch and task starts while the
+   * daemon is loaded and feeds the `load` watchdog. Absent means the host never
+   * backs off on load.
+   */
+  loadProbe?: () => Promise<BotLoadProbe> | BotLoadProbe
   /**
    * Routing policy hook: the model to dispatch or judge with. Stage (a) has no
    * config parser, so an unmapped send fails its step instead of guessing.
@@ -348,6 +376,12 @@ export interface BotTaskRunStatus {
 export interface BotTaskRunner {
   startTask(input: BotTaskRunInput): Promise<{ runId: string } | { rejected: string }>
   getTask(runId: string): Promise<BotTaskRunStatus>
+  /**
+   * Cancel one in-flight run so a stuck task step stops consuming the daemon.
+   * Optional: a runner without it leaves the stuck-task watchdog to escalate
+   * only, and the run is not cancelled.
+   */
+  cancelTask?(runId: string): Promise<void>
 }
 
 /** Deterministic worktree id for one item: bot id + item id, 8 URL-safe chars. */
@@ -403,6 +437,15 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   const sourceChangedLogged = new Set<string>()
   /** Bots already told that their task runs use automatic routing. */
   const routingAutoLogged = new Set<string>()
+  /** Last load probe result, and the error when the probe itself threw. */
+  let lastLoad: BotLoadProbe | undefined
+  let loadProbeError: string | undefined
+  /** Per-bot load back-off flags, so `load.backoff`/`load.recovered` log once each. */
+  const backedOffBots = new Map<string, boolean>()
+  /** Watchdog conditions already reported, so one condition logs and escalates once. */
+  const watchdogLogged = new Set<string>()
+  /** Epoch ms of the last component watchdog pass, per bot. */
+  const componentCheckedAt = new Map<string, number>()
 
   function nowIso(): string {
     return new Date().toISOString()
@@ -1146,6 +1189,259 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     }
   }
 
+  // ── load back-off and watchdogs ──────────────────────────────────────────
+
+  /** The watchdog thresholds a bot uses: its config's, or the neutral defaults. */
+  function watchdogsFor(config: BotConfig | undefined): BotWatchdogs {
+    return config?.watchdogs ?? DEFAULT_BOT_WATCHDOGS
+  }
+
+  /** True while the daemon is loaded enough that the bot starts no new work. */
+  function isOverloaded(load: BotLoadProbe | undefined, thresholds: BotWatchdogs): boolean {
+    if (load === undefined) return false
+    if (load.activeExecutions >= thresholds.loadMaxActiveExecutions) return true
+    const queuedLimitMs = thresholds.queuedExecutionMinutes * 60_000
+    return queuedLimitMs > 0 && (load.oldestQueuedMs ?? 0) > queuedLimitMs
+  }
+
+  /** True while this bot is backed off, so no new dispatch or task run starts. */
+  function isBackedOff(botId: string): boolean {
+    return backedOffBots.get(botId) === true
+  }
+
+  /**
+   * Record a load back-off transition: `load.backoff` once when the daemon first
+   * looks loaded for this bot, `load.recovered` once when it clears. Only new
+   * work is held back; merge, push, completion and notification are not.
+   */
+  function applyLoadBackoff(bot: BotRecord, load: BotLoadProbe | undefined, thresholds: BotWatchdogs): void {
+    const overloaded = isOverloaded(load, thresholds)
+    if (overloaded === isBackedOff(bot.id)) return
+    backedOffBots.set(bot.id, overloaded)
+    if (overloaded) {
+      store.appendLog({
+        botId: bot.id,
+        level: 'warn',
+        code: 'load.backoff',
+        message: `holding new work: ${load?.activeExecutions ?? 0}/${thresholds.loadMaxActiveExecutions} active executions, ${load?.queuedExecutions ?? 0} queued`,
+      })
+    } else {
+      store.appendLog({
+        botId: bot.id,
+        level: 'info',
+        code: 'load.recovered',
+        message: 'daemon load recovered; new dispatch and task runs resume',
+      })
+    }
+  }
+
+  /** Read the live load once per tick; a thrown probe is reported by the watchdog. */
+  async function probeLoad(): Promise<{ load?: BotLoadProbe; error?: string }> {
+    const probe = options.loadProbe
+    if (probe === undefined) return {}
+    try {
+      const load = await probe()
+      lastLoad = load
+      loadProbeError = undefined
+      return { load }
+    } catch (error) {
+      const message = errorMessage(error)
+      loadProbeError = message
+      return { error: message }
+    }
+  }
+
+  /**
+   * Raise one watchdog condition: a warn log with code `watchdog.<kind>` and one
+   * escalation through the rate-limited `escalate()`. A condition is reported
+   * once, so a persistent problem does not flood the log every tick.
+   */
+  async function watchdog(bot: BotRecord, config: BotConfig | undefined, kind: string, key: string, message: string): Promise<void> {
+    const escalateKey = `watchdog.${kind}:${key}`
+    if (watchdogLogged.has(escalateKey)) return
+    watchdogLogged.add(escalateKey)
+    store.appendLog({ botId: bot.id, level: 'warn', code: `watchdog.${kind}`, message })
+    await escalate(bot, config, escalateKey, message)
+  }
+
+  /**
+   * (a) task_stuck: cancel a detached verify/review/accept run that has outlived
+   * its kind's budget and hand the outcome to the existing run-failure
+   * retry/park rule. A pending step with no recorded run id only escalates.
+   */
+  async function checkStuckTasks(bot: BotRecord, config: BotConfig | undefined, thresholds: BotWatchdogs): Promise<void> {
+    for (const step of store.listPendingSteps(bot.id)) {
+      const kind = TASK_RUN_MINUTES_KIND[step.kind]
+      if (kind === undefined || step.startedAt === undefined) continue
+      const limitMs = thresholds.taskRunMinutes[kind] * 60_000
+      if (limitMs <= 0) continue
+      const started = Date.parse(step.startedAt)
+      if (Number.isNaN(started)) continue
+      const elapsed = Date.now() - started
+      if (elapsed <= limitMs) continue
+      const item = store.getItem(bot.id, step.itemId)
+      const minutes = Math.round(elapsed / 60_000)
+      const runId = detachedRunId(step)
+      if (runId === undefined) {
+        await watchdog(bot, config, 'task_stuck', `${item.id}:${step.kind}`, `pending ${step.kind} for item ${item.id} has been started for ${minutes} min with no recorded run id`)
+        continue
+      }
+      try {
+        await options.taskRunner?.cancelTask?.(runId)
+      } catch (error) {
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'warn',
+          code: 'watchdog.task_stuck',
+          message: `run ${runId} could not be cancelled: ${errorMessage(error)}`,
+        })
+      }
+      await watchdog(bot, config, 'task_stuck', `${item.id}:${runId}`, `${step.kind} run ${runId} for item ${item.id} ran longer than ${thresholds.taskRunMinutes[kind]} min; cancelled`)
+      await handleDetachedRunFailure(
+        {
+          bot,
+          item,
+          step,
+          ...(config === undefined ? {} : { config }),
+          dryRun: bot.mode === 'dryRun' || item.dryRun,
+        },
+        runId,
+        `cancelled by the task_stuck watchdog after ${thresholds.taskRunMinutes[kind]} min`,
+      )
+    }
+  }
+
+  /**
+   * (c) cwd: an execution running in a project checkout rather than a managed
+   * worktree. There is no reliable link from a bot item to the executions its
+   * session spawns, so the project-checkout rule is used while the bot has
+   * in-flight items, and the message says which rule was used.
+   */
+  async function checkExecutionCwd(bot: BotRecord, config: BotConfig | undefined): Promise<void> {
+    if (config === undefined) return
+    const inFlight = store.listItems(bot.id).some(item => IN_FLIGHT_ITEM_STATES.includes(item.state))
+    if (!inFlight) return
+    const checkouts: string[] = []
+    for (const policy of config.projects) {
+      try {
+        checkouts.push(projectManager.getProject(policy.id).path)
+      } catch {
+        // An unregistered project has no checkout to compare against.
+      }
+    }
+    if (checkouts.length === 0) return
+    const rows = db.prepare<[], { id: string; cwd: string }>(
+      "SELECT id, cwd FROM executions WHERE status IN ('queued','starting','running')",
+    ).all()
+    const offenders = rows.filter(row => checkouts.some(path => row.cwd === path || row.cwd.startsWith(`${path}/`)))
+    if (offenders.length === 0) return
+    await watchdog(
+      bot,
+      config,
+      'cwd',
+      offenders[0]?.id ?? 'unknown',
+      `${offenders.length} execution(s) run in the project checkout rather than a worktree (rule: project-checkout cwd; no session/item linkage); e.g. ${offenders[0]?.cwd ?? ''}`,
+    )
+  }
+
+  /**
+   * (d) component: every `componentCheckMinutes`, an item waiting in `ready` or
+   * `accepting` whose plan needs a browser/desktop component that the cached
+   * `components.list` does not report as `ready`.
+   */
+  async function checkComponentsDue(bot: BotRecord, config: BotConfig | undefined): Promise<void> {
+    if (config === undefined) return
+    const service = options.operationComponents
+    if (service === undefined) return
+    const periodMs = watchdogsFor(config).componentCheckMinutes * 60_000
+    if (periodMs <= 0) return
+    const last = componentCheckedAt.get(bot.id) ?? 0
+    if (Date.now() - last < periodMs) return
+    componentCheckedAt.set(bot.id, Date.now())
+    const candidates = store.listItems(bot.id).filter(item => item.state === 'ready' || item.state === 'accepting')
+    if (candidates.length === 0) return
+    let snapshots: Awaited<ReturnType<OperationComponents['list']>>
+    try {
+      snapshots = await service.list()
+    } catch {
+      return
+    }
+    for (const item of candidates) {
+      for (const id of plannedSurfaceComponents(acceptancePlan(item))) {
+        const snapshot = snapshots.find(entry => entry.id === id)
+        if (snapshot !== undefined && snapshot.state === 'ready') continue
+        await watchdog(bot, config, 'component', `${item.id}:${id}`, `item ${item.id} needs the ${id} operation component for acceptance but it is ${snapshot?.state ?? 'unknown'}`)
+      }
+    }
+  }
+
+  /**
+   * (f) session_silent: an `in_progress` item whose session is running a turn
+   * but has appended no ledger event for `sessionSilentMinutes`.
+   */
+  async function checkSessionSilent(bot: BotRecord, config: BotConfig | undefined, thresholds: BotWatchdogs): Promise<void> {
+    const limitMs = thresholds.sessionSilentMinutes * 60_000
+    if (limitMs <= 0) return
+    for (const item of store.listItems(bot.id)) {
+      if (item.state !== 'in_progress' || item.sessionId === undefined) continue
+      if (!sessionRunning(item.sessionId)) continue
+      const at = latestEventAt(item.sessionId)
+      const since = at === undefined ? Date.parse(item.updatedAt) : Date.parse(at)
+      if (Number.isNaN(since)) continue
+      const silent = Date.now() - since
+      if (silent <= limitMs) continue
+      await watchdog(bot, config, 'session_silent', item.id, `item ${item.id} session ${item.sessionId} is running a turn with no new ledger event for ${Math.round(silent / 60_000)} min`)
+    }
+  }
+
+  /**
+   * Enforce `budgets.maxItemHours`: an item that is not terminal, parked or
+   * failed and whose age since its first dispatch exceeds the budget is parked,
+   * which releases its project lane, with one escalation. The age starts at the
+   * recorded `dispatchedAtMs`, falling back to the item's `createdAt`.
+   */
+  async function enforceItemAge(bot: BotRecord, config: BotConfig | undefined): Promise<void> {
+    if (config === undefined) return
+    const maxHours = config.budgets.maxItemHours
+    if (!(maxHours > 0)) return
+    const limitMs = maxHours * 3_600_000
+    for (const item of store.listItems(bot.id)) {
+      if (isTerminalItemState(item.state) || item.state === 'parked' || item.state === 'failed') continue
+      const since = item.counters?.dispatchedAtMs ?? Date.parse(item.createdAt)
+      if (Number.isNaN(since)) continue
+      const age = Date.now() - since
+      if (age <= limitMs) continue
+      const reason = `item exceeded maxItemHours (${Math.round(age / 3_600_000)} h)`
+      try {
+        store.transitionItem(item.id, 'parked', { parkedFrom: item.state, question: reason, error: reason })
+      } catch {
+        // A state that cannot park on its own is left for its own step.
+        continue
+      }
+      await watchdog(bot, config, 'maxItemHours', item.id, reason)
+    }
+  }
+
+  /** Run every watchdog for one bot after its items were advanced. */
+  async function runWatchdogs(bot: BotRecord, config: BotConfig | undefined, load: BotLoadProbe | undefined, probeError: string | undefined): Promise<void> {
+    const thresholds = watchdogsFor(config)
+    if (probeError !== undefined) {
+      await watchdog(bot, config, 'daemon', 'probe', `the load probe threw: ${probeError}`)
+    } else if (lastTickLagMs > thresholds.tickLagWarnMs) {
+      await watchdog(bot, config, 'daemon', 'lag', `tick lag ${lastTickLagMs} ms exceeds ${thresholds.tickLagWarnMs} ms`)
+    }
+    const queuedLimitMs = thresholds.queuedExecutionMinutes * 60_000
+    if (load !== undefined && queuedLimitMs > 0 && (load.oldestQueuedMs ?? 0) > queuedLimitMs) {
+      await watchdog(bot, config, 'queued', 'queue', `${load.queuedExecutions} execution(s) queued; the oldest has waited ${Math.round((load.oldestQueuedMs ?? 0) / 60_000)} min (limit ${thresholds.queuedExecutionMinutes} min)`)
+    }
+    await checkStuckTasks(bot, config, thresholds)
+    await checkExecutionCwd(bot, config)
+    await checkSessionSilent(bot, config, thresholds)
+    await checkComponentsDue(bot, config)
+    await enforceItemAge(bot, config)
+  }
+
   // ── step handlers ────────────────────────────────────────────────────────
 
   const worktreeCreate: BotStepHandler = {
@@ -1173,13 +1469,25 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     },
   }
 
+  /**
+   * Counters for an item that just entered `dispatched`. The first dispatch
+   * records when the item started being worked on, which `maxItemHours` is
+   * measured from; a later dispatch keeps the original moment.
+   */
+  function dispatchedCounters(item: BotItemRecord): Record<string, number> {
+    const counters = item.counters ?? {}
+    return counters.dispatchedAtMs === undefined ? { ...counters, dispatchedAtMs: Date.now() } : counters
+  }
+
   const sessionCreate: BotStepHandler = {
     doneState: 'dispatched',
     async probe({ item }) {
       return item.sessionId === undefined ? 'not-done' : 'done'
     },
     async run({ bot, item }) {
-      if (item.sessionId !== undefined) return { output: { sessionId: item.sessionId, reused: true }, to: 'dispatched' }
+      if (item.sessionId !== undefined) {
+        return { output: { sessionId: item.sessionId, reused: true }, to: 'dispatched', patch: { counters: dispatchedCounters(item) } }
+      }
       const created = await session.createSession()
       // The session feature exposes only archived/pinned list metadata, so the
       // bot owns the {bot, item} association on the item row, which is the
@@ -1191,7 +1499,11 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         code: 'session.bound',
         message: `session ${created.sessionId} bound to bot ${bot.id} item ${item.id}`,
       })
-      return { output: { sessionId: created.sessionId, bot: bot.id, item: item.id }, to: 'dispatched', patch: { sessionId: created.sessionId } }
+      return {
+        output: { sessionId: created.sessionId, bot: bot.id, item: item.id },
+        to: 'dispatched',
+        patch: { sessionId: created.sessionId, counters: dispatchedCounters(item) },
+      }
     },
   }
 
@@ -1915,10 +2227,13 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     return Number.isNaN(due) ? true : due <= nowMs
   }
 
-  /** Schedule the next poll, backing off after a failure and resetting on success. */
-  function scheduleNextPoll(bot: BotRecord, backOff: boolean): void {
+  /**
+   * Schedule the next poll: a failed poll or an active load back-off doubles the
+   * interval up to the existing maximum, and a healthy poll resets it.
+   */
+  function scheduleNextPoll(bot: BotRecord, failed: boolean): void {
     const current = pollBackoff.get(bot.id) ?? pollMs
-    const next = backOff ? Math.min(current * 2, MAX_POLL_BACKOFF_MS) : pollMs
+    const next = failed || isBackedOff(bot.id) ? Math.min(current * 2, MAX_POLL_BACKOFF_MS) : pollMs
     pollBackoff.set(bot.id, next)
     store.updateBot(bot.id, { nextPollAt: new Date(Date.now() + next).toISOString() })
   }
@@ -2223,6 +2538,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       return
     }
     if (item.state === 'verified') {
+      // Load back-off holds new dispatch: while the daemon is loaded, no
+      // worktree is created for a newly verified item. Items already dispatched
+      // are unaffected, and every other step still runs.
+      if (isBackedOff(bot.id)) return
       // Worktree, then session, then the brief; each waits for the previous.
       if (ensureStep(item, 'worktree.create')) return
       ensureStep(item, 'session.create')
@@ -2392,6 +2711,15 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       return
     }
     if (canRun?.() === false) return
+    // Load back-off: while the daemon is loaded, no new dispatch worktree is
+    // created and no new verify/review/accept task run is started. A task run
+    // that already started keeps being polled, and merge, push, completion and
+    // notification are never held back.
+    if (isBackedOff(bot.id)) {
+      const startsDispatch = step.kind === 'worktree.create'
+      const startsTaskRun = DETACHED_TASK_KIND[step.kind] !== undefined && detachedRunId(step) === undefined
+      if (startsDispatch || startsTaskRun) return
+    }
     if (!laneHeld(item)) {
       // A lane-state item must already hold its lane; otherwise it is parked for
       // a user decision instead of running an effect without the lane. The step
@@ -2624,6 +2952,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       lastTickLagMs = Math.max(0, tickStartedAt - scheduledAt)
       maxTickLagMs = Math.max(maxTickLagMs, lastTickLagMs)
     }
+    // Read the daemon load once per pass: it gates new work for every bot.
+    const probe = await probeLoad()
     for (const bot of tickTargets(botId)) {
       if (stopped) return
       // A paused or stopped bot starts no new step; its items keep their state.
@@ -2641,6 +2971,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       const load = await loadConfigForBot(bot)
       if (load.status === 'invalid') continue
       const config = load.status === 'ready' ? load.config : undefined
+      applyLoadBackoff(bot, probe.load, watchdogsFor(config))
       // A named `bot.tick` forces a poll; the timer polls only when it is due.
       const polled = config === undefined ? false : await pollBot(bot, config, botId !== undefined)
       if (stopped) return
@@ -2648,6 +2979,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         if (stopped) return
         await advanceItem(bot, item, config)
       }
+      // Watchdogs run before the steps: a stuck run cancelled or an item parked
+      // here is reflected in this same pass instead of the next one.
+      await runWatchdogs(bot, config, probe.load, probe.error)
+      if (stopped) return
       for (const step of store.listPendingSteps(bot.id)) {
         if (stopped) return
         await runStep(bot, step, config)
@@ -2725,6 +3060,13 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         ...(counters.lastError === undefined ? {} : { lastError: counters.lastError }),
         host: resolveHostIdentity(),
         components: await listComponents(),
+        load: {
+          activeExecutions: lastLoad?.activeExecutions ?? 0,
+          maxExecutions: lastLoad?.maxExecutions ?? 0,
+          queuedExecutions: lastLoad?.queuedExecutions ?? 0,
+          ...(lastLoad?.oldestQueuedMs === undefined ? {} : { oldestQueuedMs: lastLoad.oldestQueuedMs }),
+          backedOff: isBackedOff(botId),
+        },
       }
     },
     control(botId: string, action): BotRecord {

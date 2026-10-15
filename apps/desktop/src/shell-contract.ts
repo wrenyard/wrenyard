@@ -1488,6 +1488,20 @@ export interface BotHealthComponent {
   state: BotComponentState;
 }
 
+/**
+ * Live daemon execution load observed at the last tick. `backedOff` is the
+ * current dispatch state: true while the bot holds new work because the daemon
+ * is loaded.
+ */
+export interface BotLoad {
+  activeExecutions: number;
+  maxExecutions: number;
+  queuedExecutions: number;
+  /** How long the oldest queued execution has waited, when any is queued. */
+  oldestQueuedMs?: number;
+  backedOff: boolean;
+}
+
 /** Durable endurance numbers for one bot, correct across daemon restarts. */
 export interface BotHealth {
   uptimeSince: string;
@@ -1502,6 +1516,8 @@ export interface BotHealth {
   host: BotHealthHost;
   /** Empty when the daemon's component service is absent or fails. */
   components: BotHealthComponent[];
+  /** Live load and dispatch back-off state; absent from older daemons. */
+  load?: BotLoad;
 }
 
 export type BotControlAction = 'start' | 'pause' | 'resume' | 'stop';

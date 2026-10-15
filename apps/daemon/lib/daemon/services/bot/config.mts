@@ -35,6 +35,12 @@ const DEFAULT_MAX_CORRECTIONS = 3
 const DEFAULT_MAX_ACCEPTANCE_ATTEMPTS = 2
 const DEFAULT_MAX_ITEM_HOURS = 8
 const DEFAULT_MAX_ITEMS_PER_DAY = 20
+const DEFAULT_LOAD_MAX_ACTIVE_EXECUTIONS = 8
+const DEFAULT_QUEUED_EXECUTION_MINUTES = 5
+const DEFAULT_TASK_RUN_MINUTES = { verify: 20, review: 20, accept: 60 } as const
+const DEFAULT_SESSION_SILENT_MINUTES = 30
+const DEFAULT_TICK_LAG_WARN_MS = 10_000
+const DEFAULT_COMPONENT_CHECK_MINUTES = 30
 
 /** A `command` adapter: argv only, one JSON request on stdin, one JSON on stdout. */
 export interface BotCommandAdapter {
@@ -112,6 +118,45 @@ export interface BotBudgets {
   maxItemsPerDay: number
 }
 
+/** Per-kind wall-clock budget for a detached verify/review/accept task run. */
+export interface BotTaskRunMinutes {
+  verify: number
+  review: number
+  accept: number
+}
+
+/**
+ * Watchdog thresholds and load back-off limits. Every value has a default, so
+ * the whole section is optional; an unknown key inside it is still rejected.
+ */
+export interface BotWatchdogs {
+  /** Back new work off at or above this many active daemon executions. */
+  loadMaxActiveExecutions: number
+  /** Back off (and warn) when an execution has been queued this many minutes. */
+  queuedExecutionMinutes: number
+  /** Cancel a detached task run that outlives its kind's budget, in minutes. */
+  taskRunMinutes: BotTaskRunMinutes
+  /** Warn when a session runs a turn with no new ledger event for this long. */
+  sessionSilentMinutes: number
+  /** Warn when the last tick started later than this, in milliseconds. */
+  tickLagWarnMs: number
+  /** Re-check acceptance components at most this often, in minutes. */
+  componentCheckMinutes: number
+}
+
+/**
+ * The neutral watchdog defaults, also used by the host for a bot that has no
+ * readable config, so the thresholds are defined in exactly one place.
+ */
+export const DEFAULT_BOT_WATCHDOGS: BotWatchdogs = {
+  loadMaxActiveExecutions: DEFAULT_LOAD_MAX_ACTIVE_EXECUTIONS,
+  queuedExecutionMinutes: DEFAULT_QUEUED_EXECUTION_MINUTES,
+  taskRunMinutes: { ...DEFAULT_TASK_RUN_MINUTES },
+  sessionSilentMinutes: DEFAULT_SESSION_SILENT_MINUTES,
+  tickLagWarnMs: DEFAULT_TICK_LAG_WARN_MS,
+  componentCheckMinutes: DEFAULT_COMPONENT_CHECK_MINUTES,
+}
+
 /** The complete, default-applied bot configuration. */
 export interface BotConfig {
   name: string
@@ -124,6 +169,7 @@ export interface BotConfig {
   concurrency: BotConcurrency
   cadence: BotCadence
   quietHours?: BotQuietHours
+  watchdogs: BotWatchdogs
   budgets: BotBudgets
 }
 
@@ -141,6 +187,7 @@ const TOP_LEVEL_KEYS = [
   'concurrency',
   'cadence',
   'quietHours',
+  'watchdogs',
   'budgets',
 ] as const
 const COMMAND_ADAPTER_KEYS = ['kind', 'argv', 'cwd', 'env', 'timeoutMs'] as const
@@ -150,6 +197,15 @@ const ROUTING_ENTRY_KEYS = ['provider', 'model', 'reasoningEffort', 'target'] as
 const CONCURRENCY_KEYS = ['maxActiveItems', 'maxDispatchPerTick'] as const
 const CADENCE_KEYS = ['tickSeconds', 'pollMinutes'] as const
 const QUIET_HOURS_KEYS = ['timeZone', 'start', 'end', 'defer'] as const
+const WATCHDOG_KEYS = [
+  'loadMaxActiveExecutions',
+  'queuedExecutionMinutes',
+  'taskRunMinutes',
+  'sessionSilentMinutes',
+  'tickLagWarnMs',
+  'componentCheckMinutes',
+] as const
+const TASK_RUN_MINUTES_KEYS = ['verify', 'review', 'accept'] as const
 const BUDGET_KEYS = ['maxCorrections', 'maxAcceptanceAttempts', 'maxItemHours', 'maxItemsPerDay'] as const
 const REQUIRED_ROUTING_CLASSES = ['default', 'acceptance', 'judgment'] as const
 const CLOCK_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -208,6 +264,21 @@ export function validateBotConfig(value: unknown): BotConfigValidation {
   const routing = validateRouting(issues, value.routing)
   const quietHours = validateQuietHours(issues, 'quietHours', value.quietHours)
 
+  const watchdogsRaw = readSection(issues, 'watchdogs', value.watchdogs, WATCHDOG_KEYS)
+  const taskRunRaw = readSection(issues, 'watchdogs.taskRunMinutes', watchdogsRaw.taskRunMinutes, TASK_RUN_MINUTES_KEYS)
+  const watchdogs: BotWatchdogs = {
+    loadMaxActiveExecutions: readNumberOrDefault(issues, 'watchdogs.loadMaxActiveExecutions', watchdogsRaw.loadMaxActiveExecutions, DEFAULT_LOAD_MAX_ACTIVE_EXECUTIONS, { min: 1, integer: true }),
+    queuedExecutionMinutes: readNumberOrDefault(issues, 'watchdogs.queuedExecutionMinutes', watchdogsRaw.queuedExecutionMinutes, DEFAULT_QUEUED_EXECUTION_MINUTES, { min: 0 }),
+    taskRunMinutes: {
+      verify: readNumberOrDefault(issues, 'watchdogs.taskRunMinutes.verify', taskRunRaw.verify, DEFAULT_TASK_RUN_MINUTES.verify, { min: 0 }),
+      review: readNumberOrDefault(issues, 'watchdogs.taskRunMinutes.review', taskRunRaw.review, DEFAULT_TASK_RUN_MINUTES.review, { min: 0 }),
+      accept: readNumberOrDefault(issues, 'watchdogs.taskRunMinutes.accept', taskRunRaw.accept, DEFAULT_TASK_RUN_MINUTES.accept, { min: 0 }),
+    },
+    sessionSilentMinutes: readNumberOrDefault(issues, 'watchdogs.sessionSilentMinutes', watchdogsRaw.sessionSilentMinutes, DEFAULT_SESSION_SILENT_MINUTES, { min: 0 }),
+    tickLagWarnMs: readNumberOrDefault(issues, 'watchdogs.tickLagWarnMs', watchdogsRaw.tickLagWarnMs, DEFAULT_TICK_LAG_WARN_MS, { min: 0 }),
+    componentCheckMinutes: readNumberOrDefault(issues, 'watchdogs.componentCheckMinutes', watchdogsRaw.componentCheckMinutes, DEFAULT_COMPONENT_CHECK_MINUTES, { min: 0 }),
+  }
+
   const concurrencyRaw = readSection(issues, 'concurrency', value.concurrency, CONCURRENCY_KEYS)
   const concurrency: BotConcurrency = {
     maxActiveItems: readNumberOrDefault(issues, 'concurrency.maxActiveItems', concurrencyRaw.maxActiveItems, DEFAULT_MAX_ACTIVE_ITEMS, { min: 1, integer: true }),
@@ -232,7 +303,7 @@ export function validateBotConfig(value: unknown): BotConfigValidation {
   if (name === undefined || inbox === undefined || notifier === undefined || projects === undefined || routing === undefined) {
     return { ok: false, issues: ['config is invalid'] }
   }
-  return { ok: true, config: { name, mode, inbox, notifier, projects, routing, concurrency, cadence, ...(quietHours === undefined ? {} : { quietHours }), budgets } }
+  return { ok: true, config: { name, mode, inbox, notifier, projects, routing, concurrency, cadence, ...(quietHours === undefined ? {} : { quietHours }), watchdogs, budgets } }
 }
 
 /**

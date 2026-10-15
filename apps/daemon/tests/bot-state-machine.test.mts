@@ -840,3 +840,131 @@ test('a stalled session is nudged once per finished turn', async () => {
     await removeFixture(fixture)
   }
 })
+
+// ── load back-off, watchdogs and the item age budget ───────────────────────
+
+test('load back-off holds new dispatch while overloaded and resumes when it clears', async () => {
+  const root = `${WORKSPACE}-backoff`
+  const fixture = await writeBotFixture({
+    name: 'backoff',
+    mode: 'live',
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'backoff', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'verified', project: 'alpha' })
+
+      let active = 8
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(),
+        log: () => {},
+        loadProbe: () => ({ activeExecutions: active, maxExecutions: 10, queuedExecutions: 0 }),
+      })
+      const dispatchKey = `${item.id}:1:worktree.create:1`
+
+      // Overloaded: the verified -> worktree.create dispatch step is not created,
+      // the back-off is logged once and health reports it.
+      await host.tick(bot.id)
+      assert.equal(store.findStepByIdemKey(dispatchKey), undefined)
+      assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'load.backoff').length, 1)
+      assert.equal((await host.health(bot.id)).load.backedOff, true)
+
+      // Healthy again: dispatch resumes on the next tick.
+      active = 0
+      await host.tick(bot.id)
+      assert.notEqual(store.findStepByIdemKey(dispatchKey), undefined)
+      assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'load.recovered').length, 1)
+      assert.equal((await host.health(bot.id)).load.backedOff, false)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('a verify run that outlives its budget is cancelled and retried', async () => {
+  const root = `${WORKSPACE}-stuck`
+  const fixture = await writeBotFixture({
+    name: 'stuck',
+    mode: 'live',
+    inboxBehavior: { list: { items: [] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'stuck', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'verifying', project: 'alpha' })
+
+      // A detached verify run that was started 30 minutes ago: past the default
+      // 20-minute verify budget.
+      const verifyKey = `${item.id}:1:verify:1`
+      const { step } = store.beginStep({ itemId: item.id, kind: 'verify', idemKey: verifyKey })
+      store.markStepStarted(step.id)
+      store.recordStepOutput(step.id, { runId: 'run-stuck' })
+      const startedAt = new Date(Date.now() - 30 * 60_000).toISOString()
+      db.prepare<[string, string], unknown>('UPDATE bot_step SET started_at = ? WHERE id = ?').run(startedAt, step.id)
+
+      const cancelled: string[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(),
+        log: () => {},
+        taskRunner: {
+          async startTask() { return { runId: 'run-stuck' } },
+          async getTask() { return { status: 'running' as const } },
+          async cancelTask(runId) { cancelled.push(runId) },
+        },
+      })
+
+      await host.tick(bot.id)
+
+      // The stuck run is cancelled, its attempt fails and a fresh attempt is
+      // queued while the item keeps its state.
+      assert.deepEqual(cancelled, ['run-stuck'])
+      assert.equal(store.findStepByIdemKey(verifyKey)?.status, 'failed')
+      assert.notEqual(store.findStepByIdemKey(`${item.id}:1:verify:2`), undefined)
+      assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'watchdog.task_stuck').length, 1)
+      assert.equal(store.getItem(bot.id, item.id).state, 'verifying')
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('an item past its maxItemHours budget is parked and escalated', async () => {
+  const root = `${WORKSPACE}-maxhours`
+  const fixture = await writeBotFixture({
+    name: 'aged',
+    mode: 'live',
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'aged', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'in_progress', project: 'alpha' })
+      // Dispatched ten hours ago; the config budget is eight.
+      store.patchItem(item.id, { counters: { dispatchedAtMs: Date.now() - 10 * 3_600_000 } })
+
+      const host = createBotHost({ db, workspaceRoot: root, session: botSession(), log: () => {} })
+      await host.tick(bot.id)
+
+      const parked = store.getItem(bot.id, item.id)
+      assert.equal(parked.state, 'parked')
+      assert.equal(parked.parkedFrom, 'in_progress')
+      assert.match(parked.question ?? '', /item exceeded maxItemHours \(10 h\)/)
+      const log = store.listLog(bot.id, 0)
+      assert.equal(log.some(entry => entry.code === 'watchdog.maxItemHours'), true)
+      assert.equal(log.some(entry => entry.code === 'escalation'), true)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})

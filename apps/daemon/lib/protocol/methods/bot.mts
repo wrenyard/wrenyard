@@ -165,6 +165,20 @@ export interface BotHealthComponent {
 }
 
 /**
+ * Live daemon execution load observed at the last tick. `backedOff` is the
+ * current dispatch state, so the Bot page can show whether the bot is holding
+ * new work because the daemon is loaded.
+ */
+export interface BotLoad {
+  activeExecutions: number
+  maxExecutions: number
+  queuedExecutions: number
+  /** How long the oldest queued execution has waited, when any is queued. */
+  oldestQueuedMs?: number
+  backedOff: boolean
+}
+
+/**
  * Durable endurance numbers for one bot. The 24h counters are computed from
  * `bot_step` and `bot_log`, so they stay correct across daemon restarts.
  */
@@ -183,6 +197,8 @@ export interface BotHealth {
   host: BotHealthHost
   /** Operation component states; empty when the service is absent or fails. */
   components: BotHealthComponent[]
+  /** Live daemon load from the last tick, and whether new work is backed off. */
+  load: BotLoad
 }
 
 export type BotControlAction = 'start' | 'pause' | 'resume' | 'stop'
@@ -363,12 +379,25 @@ const botHealthComponentSchema = {
   },
 } as const satisfies JsonSchema
 
+const botLoadSchema = {
+  type: 'object',
+  required: ['activeExecutions', 'maxExecutions', 'queuedExecutions', 'backedOff'],
+  additionalProperties: false,
+  properties: {
+    activeExecutions: { type: 'integer', minimum: 0 },
+    maxExecutions: { type: 'integer', minimum: 0 },
+    queuedExecutions: { type: 'integer', minimum: 0 },
+    oldestQueuedMs: { type: 'number', minimum: 0 },
+    backedOff: { type: 'boolean' },
+  },
+} as const satisfies JsonSchema
+
 const botHealthSchema = {
   type: 'object',
   required: [
     'uptimeSince', 'ticks', 'tickLagMs', 'itemsByState',
     'stepsFailed24h', 'adapterErrors24h', 'escalations24h',
-    'host', 'components',
+    'host', 'components', 'load',
   ],
   additionalProperties: false,
   properties: {
@@ -393,6 +422,7 @@ const botHealthSchema = {
     },
     host: botHealthHostSchema,
     components: { type: 'array', items: botHealthComponentSchema },
+    load: botLoadSchema,
   },
 } as const satisfies JsonSchema
 
