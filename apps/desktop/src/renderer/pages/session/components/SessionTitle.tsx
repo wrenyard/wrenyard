@@ -51,9 +51,15 @@ export function SessionTitle({ title, session, draft, onRename }: SessionTitlePr
     };
   }, []);
 
-  // Entering the editor focuses it.
+  // Entering the editor focuses it and shows the start of a long title; later
+  // caret movement scrolls natively.
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
+    if (!editing) return;
+    const input = inputRef.current;
+    if (input === null) return;
+    input.focus();
+    input.setSelectionRange(0, 0);
+    input.scrollLeft = 0;
   }, [editing]);
 
   // While not editing, track the shown title (which an automatic title may change).
@@ -125,39 +131,44 @@ export function SessionTitle({ title, session, draft, onRename }: SessionTitlePr
     return <Button variant="ghost" className="max-w-80 truncate text-base font-medium">{label}</Button>;
   }
 
-  if (editing) {
-    return (
-      <span className="flex min-w-0 flex-col">
-        <Input
-          ref={inputRef}
-          value={value}
-          aria-label="会话标题"
-          aria-invalid={error !== ''}
-          className="h-8 max-w-80 text-base font-medium"
-          onChange={(event) => setValue(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault();
-              cancel();
-              return;
-            }
-            if (event.key === 'Enter' && !event.nativeEvent.isComposing && !composing.current) {
-              event.preventDefault();
-              void commit();
-            }
-          }}
-          onCompositionStart={() => { composing.current = true; }}
-          onCompositionEnd={() => { composing.current = false; }}
-          onBlur={() => { void commit(); }}
-        />
-        {error !== '' && <span className="px-1 pt-0.5 text-xs text-destructive">{error}</span>}
-      </span>
-    );
-  }
-
+  // Display and edit states share one inline box: the ghost button keeps the
+  // saved title's geometry (invisible while editing) and the input overlays it.
   return (
-    <Button variant="ghost" className="max-w-80 truncate text-base font-medium" onClick={begin}>
-      {label}
-    </Button>
+    <span className="relative inline-flex min-w-0 max-w-80 flex-col">
+      <Button
+        variant="ghost"
+        className={`min-w-0 max-w-full shrink truncate text-base font-medium${editing ? ' invisible' : ''}`}
+        onClick={begin}
+      >
+        {label}
+      </Button>
+      {editing && (
+      <Input
+        ref={inputRef}
+        value={value}
+        aria-label="会话标题"
+        aria-invalid={error !== ''}
+        className="absolute inset-x-0 top-0 h-8 rounded-[4px] border-transparent bg-transparent px-3 py-0 text-base font-medium outline-none ring-0 focus-visible:border-ring focus-visible:ring-0 aria-invalid:ring-0 md:text-base dark:bg-transparent"
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            cancel();
+            return;
+          }
+          if (event.key === 'Enter' && !event.nativeEvent.isComposing && !composing.current) {
+            event.preventDefault();
+            void commit();
+          }
+        }}
+        onCompositionStart={() => { composing.current = true; }}
+        onCompositionEnd={() => { composing.current = false; }}
+        onBlur={() => { void commit(); }}
+      />
+      )}
+      {editing && error !== '' && (
+        <span className="px-1 pt-0.5 text-xs text-destructive">{error}</span>
+      )}
+    </span>
   );
 }
