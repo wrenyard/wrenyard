@@ -252,49 +252,46 @@ export function WorkerOverlay({ appearance, api }: WorkerOverlayProps): ReactEle
       isCanvasOpaqueAt={isCanvasOpaqueAt}
       onPassthroughChange={onPassthroughChange}
     >
-      {bubbleVisible ? (
-        <div
-          className="pointer-events-none absolute"
-          style={{ left: anchorX, bottom: footlineY + 26, transform: 'translateX(-50%)', opacity: typewriter.alpha }}
-        >
-          <Bubble
-            data-hit
-            variant="outline"
-            className="pointer-events-auto max-w-[280px]"
-          >
-            <BubbleContent className="px-2 py-1 text-xs">
-              <span className="whitespace-pre-wrap break-words">{typewriter.text}</span>
-            </BubbleContent>
-          </Bubble>
-        </div>
-      ) : null}
-
-      {toolVisible ? (
-        <div
-          className="pointer-events-none absolute"
-          style={{ left: anchorX + 11 * scale, bottom: footlineY + 4, opacity: toolAlpha }}
-        >
-          <Badge variant="secondary" data-hit className="pointer-events-auto gap-0.5">
-            <ToolIcon skinId={workerView?.appearance.skin.id} />
-            <span className="tabular-nums">× {Math.floor(toolCount)}</span>
-          </Badge>
-        </div>
-      ) : null}
-
       {workerView ? (
         <div
-          className="pointer-events-none absolute flex flex-col items-center gap-1"
+          className="pointer-events-none absolute flex w-max flex-col items-center gap-1"
           style={{ left: anchorX, bottom: Math.max(0, footlineY - 14), transform: 'translateX(-50%)' }}
         >
-          {workerView.client !== 'unknown' ? (
-            <Badge variant="outline" data-hit className="pointer-events-auto gap-1">
-              <ClientIcon client={workerView.client} />
-            </Badge>
+          {bubbleVisible ? (
+            <div style={{ opacity: typewriter.alpha }}>
+              <Bubble data-hit variant="outline" className="pointer-events-auto max-w-[280px]">
+                <BubbleContent className="px-2 py-1 text-xs shadow-sm">
+                  {/* At most three lines; bottom-anchored so the newest text stays visible. */}
+                  <div className="flex max-h-[3lh] flex-col justify-end overflow-hidden">
+                    <span className="whitespace-pre-wrap break-words">{typewriter.text}</span>
+                    {/* Full text reserves the final width so the bubble does not widen while typing. */}
+                    <span aria-hidden className="invisible h-0 overflow-hidden whitespace-pre-wrap break-words">{bubble?.text}</span>
+                  </div>
+                </BubbleContent>
+              </Bubble>
+            </div>
           ) : null}
           {label ? (
-            <Badge variant={label.kind === 'task' ? 'secondary' : 'outline'} data-hit className="pointer-events-auto">
-              {label.text}
-            </Badge>
+            <div className="relative">
+              <Badge
+                variant={label.kind === 'task' ? 'secondary' : 'outline'}
+                data-hit
+                className={label.kind === 'task'
+                  ? 'pointer-events-auto shadow-sm'
+                  : 'pointer-events-auto bg-popover text-popover-foreground shadow-sm'}
+              >
+                {workerView.client !== 'unknown' ? <ClientIcon client={workerView.client} /> : null}
+                {label.text}
+              </Badge>
+              {toolVisible ? (
+                <div className="absolute bottom-0 left-full ml-1" style={{ opacity: toolAlpha }}>
+                  <Badge variant="secondary" data-hit className="pointer-events-auto gap-0.5 shadow-sm">
+                    <ToolIcon skinId={workerView.appearance.skin.id} />
+                    <span className="tabular-nums">× {Math.floor(toolCount)}</span>
+                  </Badge>
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}

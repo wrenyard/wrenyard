@@ -142,7 +142,7 @@ export class EntityManager {
       const lastActivityTs = existing?.lastActivityTs;
       const lastContentTs = existing?.lastContentTs;
       const client = classifyWorkerClient(ws.profile, ws.meta?.clientFamily);
-      const bubble = this.buildBubble(ws);
+      const bubble = this.buildBubble(ws, existing?.view.bubble);
       // Detect new tool use by comparing toolCount
       const hasNewTool = ws.toolCount > 0 && (!existing || ws.toolCount > existing.view.toolCount);
       const hasNewText = Boolean(bubble?.text && (!existing || bubble.text !== existing.view.bubble?.text));
@@ -701,13 +701,18 @@ export class EntityManager {
     };
   }
 
-  private buildBubble(ws: WorkerSnapshot): { text: string; untilMs: number } | undefined {
+  private buildBubble(
+    ws: WorkerSnapshot,
+    previous: { text: string; untilMs: number } | undefined,
+  ): { text: string; untilMs: number } | undefined {
     const text = ws.lastText || ws.firstSentence;
     if (!text) return undefined;
-    return {
-      text,
-      untilMs: ws.bubbleUntilMs ?? this.now() + this.config.bubbleSeconds * 1000,
-    };
+    if (ws.bubbleUntilMs !== undefined) return { text, untilMs: ws.bubbleUntilMs };
+    // Keep the deadline fixed for unchanged text; a new message restarts it.
+    if (previous?.text === text) return previous;
+    // Typewriter reveal time (BUBBLE_REVEAL_CPS = 40 in overlay/use-typewriter.ts) plus reading time.
+    const revealMs = (Array.from(text).length / 40) * 1000;
+    return { text, untilMs: this.now() + revealMs + this.config.bubbleSeconds * 1000 };
   }
 
   private attachRendererDebug(win: BrowserWindow): void {
