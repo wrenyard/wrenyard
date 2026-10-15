@@ -190,7 +190,10 @@ test('a handler error in a lane state parks the item and releases the project la
   const store = createBotStore({ db, workspaceRoot: root })
   // A live bot runs the real handler; a dry-run bot would only record it.
   const bot = store.createBot({ name: 'laner', state: 'running', mode: 'live' })
-  const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'accepting', project: 'alpha' })
+  // `merging` is a lane state whose only next step is the merge handler; using
+  // it here keeps the failing step deterministic (an `accepting` item would also
+  // enqueue the rebase step).
+  const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'merging', project: 'alpha' })
   assert.equal(store.acquireLane({ project: 'alpha', botId: bot.id, itemId: item.id }), true)
   // The merge handler throws for an item without a worktree, so the step fails
   // while the item holds the lane.
@@ -201,7 +204,7 @@ test('a handler error in a lane state parks the item and releases the project la
 
   const parked = store.getItem(bot.id, item.id)
   assert.equal(parked.state, 'parked')
-  assert.equal(parked.parkedFrom, 'accepting')
+  assert.equal(parked.parkedFrom, 'merging')
   assert.equal(parked.question, 'item has no project worktree to merge')
   // The lane is released in the same write, so the project is not blocked.
   assert.equal(store.getLane('alpha'), undefined)

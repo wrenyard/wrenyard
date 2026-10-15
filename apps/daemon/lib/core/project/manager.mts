@@ -29,6 +29,8 @@ import type {
   WorktreeInfo,
   WorktreeMergeCommit,
   WorktreeMergeResult,
+  WorktreeRebaseCommit,
+  WorktreeRebaseResult,
   WorktreeRemoteCheck,
   WorktreeRemoveResult,
   WorktreeUntrackedContent,
@@ -44,6 +46,7 @@ export type {
   WorktreeCreateResult,
   WorktreeInfo,
   WorktreeMergeResult,
+  WorktreeRebaseResult,
   WorktreeRemoveResult,
 } from './types.mts'
 
@@ -52,12 +55,23 @@ interface WorktreeMatch {
   path: string
 }
 
+/** Metadata recorded per managed worktree under `{stateRoot}/worktrees/.foreman/<id>.json`. */
+interface WorktreeMetadata {
+  id: string
+  project: string
+  path: string
+  /** Owning bot (`bot:<botId>/<itemId>`), absent for user-created worktrees. */
+  owner?: string
+}
+
 const WORKTREE_ID_RE = /^[A-Za-z0-9_-]{8}$/u
 const PROJECT_ID_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u
 const WORKTREE_METADATA_DIR = '.foreman'
 const DIRTY_TEXT_LIMIT = 64 * 1024
 const UNTRACKED_TEXT_LIMIT = 8 * 1024
 const UNTRACKED_LARGE_LIMIT = 64 * 1024
+/** Target commits reported for one failed rebase, capped so the result stays bounded. */
+const REBASE_CONFLICT_COMMIT_LIMIT = 20
 
 /** A project registration/host configuration failure carrying a machine-readable `code`. */
 export class ProjectConfigError extends Error {
@@ -254,11 +268,11 @@ export class ProjectManager {
 
     return this.listWorktreeMetadata()
       .filter((metadata) => metadata.project === project.name && existsSync(metadata.path))
-      .map((metadata) => this.describeWorktree(metadata.id, metadata.path))
+      .map((metadata) => this.describeWorktree(metadata))
       .sort((a, b) => a.id.localeCompare(b.id))
   }
 
-  createWorktree(projectName: string, branch?: string): WorktreeCreateResult {
+  createWorktree(projectName: string, branch?: string, options: { owner?: string } = {}): WorktreeCreateResult {
     const project = this.getProject(projectName)
     if (project.noWorktree) throw new Error(this.worktreeUnsupportedProjectMessage(project))
     if (!existsSync(project.path)) throw new Error(`Project path does not exist: ${project.path}`)
@@ -268,6 +282,7 @@ export class ProjectManager {
     const branchName = branch?.trim() || `wrenyard/${id}`
     if (!branchName) throw new Error('branch must not be empty')
 
+    const owner = options.owner?.trim()
     mkdirSync(dirname(targetPath), { recursive: true })
     const args = this.localBranchExists(project.path, branchName)
       ? ['worktree', 'add', targetPath, branchName]
@@ -279,6 +294,7 @@ export class ProjectManager {
         id,
         project: project.name,
         path: targetPath,
+        ...(owner ? { owner } : {}),
       })
     } catch (e) {
       rmSync(targetPath, { recursive: true, force: true })
@@ -347,7 +363,7 @@ export class ProjectManager {
     }
   }
 
-  mergeWorktree(projectName: string, worktreeId: string): WorktreeMergeResult {
+  mergeWorktree(projectName: string, worktreeId: string, caller: { owner?: string } = {}): WorktreeMergeResult {
     const requestedProject = projectName.trim()
     let id: string
     try {
@@ -371,6 +387,17 @@ export class ProjectManager {
       removed: false,
       ...extra,
     })
+
+    // A bot-owned worktree may be merged only by the bot that created it: the
+    // caller must present the exact recorded owner. Checked before any git
+    // operation so a session (which passes no owner) cannot self-merge.
+    if (metadata && metadata.owner?.startsWith('bot:') && metadata.owner !== caller.owner) {
+      return requestedBase({
+        worktree_path: metadata.path,
+        reason: 'bot_owned',
+        error: `worktree is owned by ${metadata.owner}; only that bot can merge it`,
+      })
+    }
 
     let project: ProjectEntry
     try {
@@ -633,6 +660,240 @@ export class ProjectManager {
     })
   }
 
+  /**
+   * Rebase one clean worktree onto its resolved target branch, in the worktree
+   * only. It never checks out or moves the base checkout and never touches the
+   * target branch: a worktree whose head already contains the target head is
+   * reported rebased without running git, and a conflicting rebase is aborted
+   * before returning, together with the conflicting paths and the target-branch
+   * commits that touched them.
+   */
+  rebaseWorktree(projectName: string, worktreeId: string): WorktreeRebaseResult {
+    const requestedProject = projectName.trim()
+    let id: string
+    try {
+      id = validateWorktreeId(worktreeId)
+    } catch (error) {
+      return {
+        project: requestedProject,
+        worktree_id: worktreeId.trim(),
+        rebased: false,
+        reason: 'invalid_worktree_id',
+        error: errorMessage(error),
+      }
+    }
+
+    const metadata = this.readWorktreeMetadata(id)
+    const requestedBase = (extra: Partial<WorktreeRebaseResult> = {}): WorktreeRebaseResult => ({
+      project: requestedProject,
+      worktree_id: id,
+      rebased: false,
+      ...extra,
+    })
+
+    let project: ProjectEntry
+    try {
+      project = this.getProject(projectName)
+    } catch (error) {
+      if (metadata && metadata.project === requestedProject) {
+        return requestedBase({
+          reason: 'metadata_project_missing',
+          error: `Worktree '${id}' metadata references missing project '${metadata.project}'`,
+        })
+      }
+      return requestedBase({
+        reason: 'project_missing',
+        error: errorMessage(error),
+      })
+    }
+    const base = (extra: Partial<WorktreeRebaseResult> = {}): WorktreeRebaseResult => ({
+      project: project.name,
+      worktree_id: id,
+      rebased: false,
+      ...extra,
+    })
+
+    if (project.noWorktree) {
+      return base({
+        reason: 'project_unsupported',
+        error: `Project '${project.name}' does not support worktrees`,
+      })
+    }
+    if (!existsSync(project.path)) {
+      return base({
+        reason: 'project_path_missing',
+        error: `Project path does not exist: ${project.path}`,
+      })
+    }
+    if (!metadata) {
+      return base({
+        reason: 'worktree_metadata_missing',
+        error: `Worktree '${id}' metadata was not found`,
+      })
+    }
+    if (metadata.project !== project.name) {
+      return base({
+        reason: 'project_mismatch',
+        error: `Worktree '${id}' belongs to project '${metadata.project}', not '${project.name}'`,
+      })
+    }
+    if (!existsSync(metadata.path)) {
+      return base({
+        reason: 'worktree_path_missing',
+        error: `Managed worktree path does not exist: ${metadata.path}`,
+      })
+    }
+
+    const branch = this.attachedBranch(metadata.path)
+    if (!branch) {
+      return base({
+        reason: 'detached_head',
+        error: `Worktree '${id}' is not on an attached branch`,
+      })
+    }
+
+    const dirty = this.dirtyDetails(metadata.path)
+    if (dirty.dirty) {
+      return base({
+        reason: 'worktree_dirty',
+        error: `Worktree '${id}' has uncommitted changes`,
+      })
+    }
+
+    const targetBranch = this.resolveTargetBranch(project)
+    if (!targetBranch) {
+      return base({
+        reason: 'target_branch_missing',
+        error: 'No local target branch found. Expected fmproj git.default_branch, main, or master.',
+      })
+    }
+
+    const targetBase = (extra: Partial<WorktreeRebaseResult> = {}): WorktreeRebaseResult => base({
+      target_branch: targetBranch,
+      ...extra,
+    })
+
+    const beforeSha = this.revParse(metadata.path, 'HEAD') ?? undefined
+    const targetSha = this.revParse(project.path, `refs/heads/${targetBranch}`) ?? undefined
+    if (targetSha !== undefined && beforeSha !== undefined && this.isAncestor(metadata.path, targetSha, beforeSha)) {
+      return targetBase({
+        rebased: true,
+        before_sha: beforeSha,
+        head_sha: beforeSha,
+      })
+    }
+
+    try {
+      this.git(metadata.path, ['rebase', targetBranch])
+    } catch (error) {
+      const conflicts = this.unmergedPaths(metadata.path)
+      try {
+        this.git(metadata.path, ['rebase', '--abort'])
+      } catch {
+        // Best effort cleanup; the failure result still reports the conflict.
+      }
+      return targetBase({
+        before_sha: beforeSha,
+        reason: 'rebase_conflict',
+        conflicts,
+        target_commits: this.conflictTargetCommits(project.path, beforeSha, targetBranch, conflicts),
+        error: errorMessage(error),
+      })
+    }
+
+    const headSha = this.revParse(metadata.path, 'HEAD') ?? undefined
+    return targetBase({
+      rebased: true,
+      ...(beforeSha === undefined ? {} : { before_sha: beforeSha }),
+      ...(headSha === undefined ? {} : { head_sha: headSha }),
+    })
+  }
+
+  /**
+   * Lightweight read-only ancestry probe for the bot rebase step: true when the
+   * target branch head is already an ancestor of the worktree head. Resolves to
+   * false on any missing input and never touches the base checkout or target.
+   */
+  worktreeContainsTarget(projectName: string, worktreeId: string): boolean {
+    let id: string
+    try {
+      id = validateWorktreeId(worktreeId)
+    } catch {
+      return false
+    }
+    const project = this.findProject(projectName)
+    if (!project || project.noWorktree) return false
+    const metadata = this.readWorktreeMetadata(id)
+    if (!metadata || metadata.project !== project.name || !existsSync(metadata.path)) return false
+    const targetBranch = this.resolveTargetBranch(project)
+    if (!targetBranch) return false
+    const targetSha = this.revParse(project.path, `refs/heads/${targetBranch}`)
+    const head = this.revParse(metadata.path, 'HEAD')
+    if (!targetSha || !head) return false
+    return this.isAncestor(metadata.path, targetSha, head)
+  }
+
+  /** Unmerged paths recorded by an in-progress rebase, or an empty list. */
+  private unmergedPaths(path: string): string[] {
+    try {
+      return this.git(path, ['diff', '--name-only', '--diff-filter=U'])
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * The target-branch commits since the merge base that touched the given paths,
+   * with the paths each of them changed. Capped so the result stays bounded; a
+   * git failure yields an empty list rather than failing the rebase result.
+   */
+  private conflictTargetCommits(
+    repoPath: string,
+    worktreeHead: string | undefined,
+    targetBranch: string,
+    paths: string[],
+  ): WorktreeRebaseCommit[] {
+    if (paths.length === 0) return []
+    const anchor = worktreeHead ?? targetBranch
+    let mergeBase: string
+    try {
+      mergeBase = this.git(repoPath, ['merge-base', anchor, targetBranch]).trim()
+    } catch {
+      return []
+    }
+    if (!mergeBase) return []
+    let commits: Array<{ sha: string; subject: string }>
+    try {
+      commits = this.git(repoPath, ['log', '--format=%H%x09%s', `${mergeBase}..${targetBranch}`, '--', ...paths])
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => {
+          const [sha, subject = ''] = line.split('\t')
+          return { sha, subject }
+        })
+    } catch {
+      return []
+    }
+    const result: WorktreeRebaseCommit[] = []
+    for (const commit of commits) {
+      if (result.length >= REBASE_CONFLICT_COMMIT_LIMIT) break
+      let files: string[] = []
+      try {
+        files = this.git(repoPath, ['diff-tree', '--no-commit-id', '--name-only', '-r', commit.sha, '--', ...paths])
+          .split(/\r?\n/u)
+          .map((line) => line.trim())
+          .filter(Boolean)
+      } catch {
+        files = []
+      }
+      result.push({ sha: commit.sha, subject: commit.subject, files })
+    }
+    return result
+  }
+
   async pushProject(options: { project?: string; worktreeId?: string }): Promise<ProjectGitPushResult> {
     const requestedProject = options.project?.trim() ?? ''
     const rawWorktreeId = options.worktreeId?.trim() ?? ''
@@ -877,12 +1138,13 @@ export class ProjectManager {
     return null
   }
 
-  private describeWorktree(id: string, path: string): WorktreeInfo {
+  private describeWorktree(metadata: WorktreeMetadata): WorktreeInfo {
     return {
-      id,
-      path,
-      branch: this.currentBranch(path),
-      clean: this.isClean(path),
+      id: metadata.id,
+      path: metadata.path,
+      branch: this.currentBranch(metadata.path),
+      clean: this.isClean(metadata.path),
+      ...(metadata.owner === undefined ? {} : { owner: metadata.owner }),
     }
   }
 
@@ -910,18 +1172,23 @@ export class ProjectManager {
     return join(this.worktreeMetadataRoot(), `${validateWorktreeId(worktreeId)}.json`)
   }
 
-  private writeWorktreeMetadata(metadata: { id: string; project: string; path: string }): void {
+  private writeWorktreeMetadata(metadata: WorktreeMetadata): void {
     mkdirSync(this.worktreeMetadataRoot(), { recursive: true })
     writeFileSync(this.worktreeMetadataPath(metadata.id), `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8')
   }
 
-  private readWorktreeMetadata(worktreeId: string): { id: string; project: string; path: string } | null {
+  private readWorktreeMetadata(worktreeId: string): WorktreeMetadata | null {
     const path = this.worktreeMetadataPath(worktreeId)
     if (!existsSync(path)) return null
     try {
-      const metadata = JSON.parse(readFileSync(path, 'utf-8')) as { id?: unknown; project?: unknown; path?: unknown }
+      const metadata = JSON.parse(readFileSync(path, 'utf-8')) as { id?: unknown; project?: unknown; path?: unknown; owner?: unknown }
       if (metadata.id === worktreeId && typeof metadata.project === 'string' && typeof metadata.path === 'string') {
-        return { id: worktreeId, project: metadata.project, path: metadata.path }
+        return {
+          id: worktreeId,
+          project: metadata.project,
+          path: metadata.path,
+          ...(typeof metadata.owner === 'string' && metadata.owner !== '' ? { owner: metadata.owner } : {}),
+        }
       }
     } catch {
       return null
@@ -929,13 +1196,13 @@ export class ProjectManager {
     return null
   }
 
-  private listWorktreeMetadata(): Array<{ id: string; project: string; path: string }> {
+  private listWorktreeMetadata(): WorktreeMetadata[] {
     const root = this.worktreeMetadataRoot()
     if (!existsSync(root)) return []
     return readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
       .map((entry) => this.readWorktreeMetadata(entry.name.slice(0, -'.json'.length)))
-      .filter((metadata): metadata is { id: string; project: string; path: string } => metadata !== null)
+      .filter((metadata): metadata is WorktreeMetadata => metadata !== null)
   }
 
   private removeWorktreeMetadata(worktreeId: string): void {

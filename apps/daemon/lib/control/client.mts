@@ -32,6 +32,8 @@ import type {
   ProjectWorktreeListResult,
   ProjectWorktreeMergeParams,
   ProjectWorktreeMergeResult,
+  ProjectWorktreeRebaseParams,
+  ProjectWorktreeRebaseResult,
   ProjectWorktreeRemoveParams,
   ProjectWorktreeRemoveResult,
   StatsTodayParams,
@@ -373,6 +375,9 @@ export class ForemanClient {
       },
       merge: (params: ProjectWorktreeMergeParams): Promise<ProjectWorktreeMergeResult> => {
         return this.rpc.request<ProjectWorktreeMergeResult>('project.worktree.merge', params)
+      },
+      rebase: (params: ProjectWorktreeRebaseParams): Promise<ProjectWorktreeRebaseResult> => {
+        return this.rpc.request<ProjectWorktreeRebaseResult>('project.worktree.rebase', params)
       },
     },
   }

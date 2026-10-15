@@ -190,6 +190,8 @@ import {
   projectWorktreeListResultSchema,
   projectWorktreeMergeParamsSchema,
   projectWorktreeMergeResultSchema,
+  projectWorktreeRebaseParamsSchema,
+  projectWorktreeRebaseResultSchema,
   projectWorktreeRemoveParamsSchema,
   projectWorktreeRemoveResultSchema,
   type ProjectCommitParams,
@@ -214,6 +216,8 @@ import {
   type ProjectWorktreeListResult,
   type ProjectWorktreeMergeParams,
   type ProjectWorktreeMergeResult,
+  type ProjectWorktreeRebaseParams,
+  type ProjectWorktreeRebaseResult,
   type ProjectWorktreeRemoveParams,
   type ProjectWorktreeRemoveResult,
 } from './methods/project.mts'
@@ -494,6 +498,8 @@ export type {
   ProjectWorktreeListResult,
   ProjectWorktreeMergeParams,
   ProjectWorktreeMergeResult,
+  ProjectWorktreeRebaseParams,
+  ProjectWorktreeRebaseResult,
   ProjectWorktreeRemoveParams,
   ProjectWorktreeRemoveResult,
 } from './methods/project.mts'
@@ -887,6 +893,7 @@ export interface ForemanMethodParams {
   'project.worktree.create': ProjectWorktreeCreateParams
   'project.worktree.remove': ProjectWorktreeRemoveParams
   'project.worktree.merge': ProjectWorktreeMergeParams
+  'project.worktree.rebase': ProjectWorktreeRebaseParams
   'project.commitLog': ProjectCommitLogParams
   'project.register': ProjectRegisterParams
   'taskgraph.create': TaskGraphCreateParams
@@ -995,6 +1002,7 @@ export interface ForemanMethodResults {
   'project.worktree.create': ProjectWorktreeCreateResult
   'project.worktree.remove': ProjectWorktreeRemoveResult
   'project.worktree.merge': ProjectWorktreeMergeResult
+  'project.worktree.rebase': ProjectWorktreeRebaseResult
   'project.commitLog': ProjectCommitLogResult
   'project.register': ProjectRegisterResult
   'taskgraph.create': TaskGraphCreateResult
@@ -1229,6 +1237,11 @@ export const methodRegistry: {
     params: projectWorktreeMergeParamsSchema,
     result: projectWorktreeMergeResultSchema,
     description: 'Rebase a clean worktree onto its target branch, fast-forward the target, then remove the worktree. Refuses on a dirty worktree, a diverged or stale target, or a non-fast-forward merge.',
+  },
+  'project.worktree.rebase': {
+    params: projectWorktreeRebaseParamsSchema,
+    result: projectWorktreeRebaseResultSchema,
+    description: 'Rebase a clean worktree onto its target branch in the worktree only. Never touches the base checkout or the target branch; on conflict it aborts the rebase and reports the conflicting paths and the target commits that touched them.',
   },
   'project.commitLog': {
     params: projectCommitLogParamsSchema,

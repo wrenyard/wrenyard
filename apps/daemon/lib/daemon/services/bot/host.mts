@@ -79,6 +79,8 @@ const DAY_MS = 24 * 60 * 60 * 1_000
 const ADAPTER_ERROR_ESCALATION_THRESHOLD = 3
 /** Failed steps for one item before one escalation is raised. */
 const ITEM_FAILURE_ESCALATION_THRESHOLD = 3
+/** Acceptance attempts (rebases) allowed when a bot config has no budget. */
+const DEFAULT_MAX_ACCEPTANCE_ATTEMPTS = 2
 /** Minimum spacing between two escalation notifications. */
 const ESCALATION_MIN_INTERVAL_MS = 10 * 60_000
 /**
@@ -218,6 +220,11 @@ type SourceGate = 'open' | 'changed' | 'gone' | 'retry' | 'unavailable'
 /** Deterministic worktree id for one item: bot id + item id, 8 URL-safe chars. */
 export function deterministicWorktreeId(botId: string, itemId: string): string {
   return createHash('sha1').update(`${botId}:${itemId}`).digest('base64url').slice(0, 8)
+}
+
+/** The durable owner one bot records on its item's worktree: `bot:<botId>/<itemId>`. */
+function ownerForItem(bot: BotRecord, item: BotItemRecord): string {
+  return `bot:${bot.id}/${item.id}`
 }
 
 export function createBotHost(options: CreateBotHostOptions): BotHost {
@@ -441,14 +448,15 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     async run({ bot, item }) {
       if (!item.project) throw new Error('item has no project')
       const id = deterministicWorktreeId(bot.id, item.id)
+      const owner = ownerForItem(bot, item)
       const existing = projectManager.listWorktrees(item.project).find(worktree => worktree.id === id)
       if (existing) {
         return { output: { worktreeId: existing.id, branch: existing.branch, reused: true }, patch: { worktreeId: existing.id, branch: existing.branch } }
       }
       const creator = new ProjectManager({ workspaceRoot, idGenerator: () => id })
-      const created = creator.createWorktree(item.project)
+      const created = creator.createWorktree(item.project, undefined, { owner })
       return {
-        output: { worktreeId: created.worktree_id, branch: created.branch },
+        output: { worktreeId: created.worktree_id, branch: created.branch, owner },
         patch: { worktreeId: created.worktree_id, branch: created.branch },
       }
     },
@@ -539,6 +547,31 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     },
   }
 
+  /**
+   * Send one rebase-conflict follow-up into the item's own session, reusing the
+   * session's latest `turn.started` model (adopting it when it changed). Only
+   * full session ids are used, and a send failure throws so the step is marked
+   * failed rather than silently dropping the message.
+   */
+  async function sendRebaseConflictFollowUp(
+    bot: BotRecord,
+    item: BotItemRecord,
+    conflict: ReturnType<ProjectManager['rebaseWorktree']>,
+  ): Promise<void> {
+    if (item.sessionId === undefined) throw new Error('item has no session for the rebase conflict follow-up')
+    const model = resolveSendModel(bot, item)
+    if (model === undefined) throw new Error('no routed model is available for the rebase conflict follow-up')
+    await session.send(item.sessionId, { text: buildRebaseConflictText(item, conflict), model })
+    store.patchItem(item.id, { sessionModel: model })
+    store.appendLog({
+      botId: bot.id,
+      itemId: item.id,
+      level: 'info',
+      code: 'rebase.conflict_sent',
+      message: `rebase conflict sent to session ${item.sessionId}`,
+    })
+  }
+
   const mergeStep: BotStepHandler = {
     sideEffect: true,
     doneState: 'merged',
@@ -549,9 +582,9 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       output: { dryRun: true, wouldMerge: { project: item.project, worktreeId: item.worktreeId } },
       to: 'merged',
     }),
-    async run({ item }) {
+    async run({ bot, item }) {
       if (!item.project || !item.worktreeId) throw new Error('item has no project worktree to merge')
-      const result = projectManager.mergeWorktree(item.project, item.worktreeId)
+      const result = projectManager.mergeWorktree(item.project, item.worktreeId, { owner: ownerForItem(bot, item) })
       if (!result.merged) {
         // A non-merged worktree needs a human decision, so the item parks with
         // the reason verbatim instead of silently failing.
@@ -569,6 +602,80 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         output: result,
         to: 'merged',
         ...(result.after_sha === undefined ? {} : { patch: { mergedSha: result.after_sha } }),
+      }
+    },
+  }
+
+  /**
+   * Rebase the item's worktree onto the target branch before acceptance. This
+   * is worktree-local (it never touches the base checkout or the target branch),
+   * so it is not a side effect and also runs for real in dry-run mode. It runs
+   * first in `accepting`, after the lane is held.
+   */
+  const rebaseStep: BotStepHandler = {
+    // A rebase is proven done when the target head is already an ancestor of the
+    // worktree head, so a restart never re-runs an already-successful rebase.
+    async probe({ item }) {
+      if (!item.project || !item.worktreeId) return 'unavailable'
+      try {
+        return projectManager.worktreeContainsTarget(item.project, item.worktreeId) ? 'done' : 'not-done'
+      } catch {
+        return 'unavailable'
+      }
+    },
+    async run({ bot, item, config }) {
+      if (!item.project || !item.worktreeId) throw new Error('item has no project worktree to rebase')
+      const result = projectManager.rebaseWorktree(item.project, item.worktreeId)
+      if (result.rebased) {
+        // Success keeps the item in `accepting`; the next acceptance step is
+        // enqueued from the item's state by advanceItem.
+        return {
+          output: result,
+          ...(result.head_sha === undefined ? {} : { patch: { headSha: result.head_sha } }),
+        }
+      }
+      if (result.reason === 'rebase_conflict') {
+        const attempts = (item.counters?.acceptanceAttempts ?? 0) + 1
+        const maxAttempts = config?.budgets.maxAcceptanceAttempts ?? DEFAULT_MAX_ACCEPTANCE_ATTEMPTS
+        if (attempts > maxAttempts) {
+          return {
+            output: result,
+            to: 'parked',
+            patch: {
+              parkedFrom: item.state,
+              counters: { ...(item.counters ?? {}), acceptanceAttempts: attempts },
+              question: `acceptance budget exhausted (${attempts}/${maxAttempts}) after repeated rebase conflicts onto ${result.target_branch ?? 'the target branch'}`,
+              error: 'rebase_conflict',
+            },
+          }
+        }
+        // Reject in its own write (releasing the lane when the item later returns
+        // to in_progress), then hand the conflicting paths and the target commits
+        // that caused them back to the session for a fix.
+        store.transitionItem(item.id, 'rejected', {
+          counters: { ...(item.counters ?? {}), acceptanceAttempts: attempts },
+          error: result.error ?? 'rebase_conflict',
+        })
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'warn',
+          code: 'rebase.conflict',
+          message: `rebase of worktree ${item.worktreeId} onto ${result.target_branch ?? 'the target branch'} conflicted on ${result.conflicts?.length ?? 0} path(s)`,
+        })
+        await sendRebaseConflictFollowUp(bot, item, result)
+        return { output: result, to: 'in_progress' }
+      }
+      // Any other failure (dirty worktree, missing metadata or path) parks the
+      // item with that reason for a user decision.
+      return {
+        output: result,
+        to: 'parked',
+        patch: {
+          parkedFrom: item.state,
+          question: `rebase of worktree ${item.worktreeId} onto ${result.target_branch ?? 'the target branch'} failed: ${result.reason ?? 'unknown'}`,
+          error: result.error ?? result.reason ?? 'rebase_failed',
+        },
       }
     },
   }
@@ -606,6 +713,11 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    * stays `ready` to retry on a later tick.
    */
   const laneAcquire: BotStepHandler = {
+    // The effect is proven done once the item is in a lane state: the store
+    // acquires the lane inside the same write that moves the item there.
+    async probe({ item }) {
+      return requiresDeliveryLane(item.state) ? 'done' : 'not-done'
+    },
     async run() { return { to: 'accepting' } },
   }
 
@@ -666,6 +778,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     'worktree.create': worktreeCreate,
     'session.create': sessionCreate,
     'session.send': sessionSend,
+    rebase: rebaseStep,
     merge: mergeStep,
     push: pushStep,
     'inbox.complete': inboxCompleteStep,
@@ -959,12 +1072,32 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
-   * Enqueue the next step of an item that is waiting for one: merge after
+   * Enqueue the next step of an item that is waiting for one: the lane acquire
+   * when it is `ready`, then rebase and acceptance in `accepting`, merge after
    * acceptance, push after merge, then inbox.complete and notify in
    * `completing`, so a pushed item always reaches `completed`.
    */
   function advanceItem(bot: BotRecord, item: BotItemRecord): void {
     if (isTerminalItemState(item.state)) return
+    if (item.state === 'ready') {
+      // Deterministic ready -> accepting: the store takes the project's lane
+      // inside the state write, and a busy lane leaves the item in `ready` to
+      // retry on a later tick.
+      enqueueStep(item, 'lane.acquire')
+      return
+    }
+    if (item.state === 'accepting') {
+      // Rebase runs first; acceptance follows once it is done. The accept
+      // handler arrives in a later stage, so until then the item waits in
+      // `accepting` and logs the step as unavailable.
+      const rebase = store.findStepByIdemKey(idemKeyFor(item, 'rebase'))
+      if (rebase === undefined) {
+        enqueueStep(item, 'rebase')
+        return
+      }
+      if (rebase.status === 'done') enqueueStep(item, 'accept')
+      return
+    }
     if (item.state === 'merging') {
       enqueueStep(item, 'merge')
       return
@@ -1459,6 +1592,26 @@ function buildNotificationText(item: BotItemRecord): string {
     if (verified.length > 0) lines.push(`Verified: ${verified.join('; ')}`)
     lines.push(notVerified.length > 0 ? `Not verified: ${notVerified.join('; ')}` : 'Not verified: none')
   }
+  return lines.join('\n')
+}
+
+/** The rebase-conflict follow-up: the offending paths, the target commits and the ask. */
+function buildRebaseConflictText(item: BotItemRecord, conflict: ReturnType<ProjectManager['rebaseWorktree']>): string {
+  const lines: string[] = []
+  lines.push(`Bot item ${item.id}: rebasing your worktree onto ${conflict.target_branch ?? 'the target branch'} hit conflicts.`)
+  const paths = conflict.conflicts ?? []
+  lines.push(paths.length === 0
+    ? 'Conflicting paths: (none reported)'
+    : `Conflicting paths:\n${paths.map(path => `- ${path}`).join('\n')}`)
+  const commits = conflict.target_commits ?? []
+  if (commits.length > 0) {
+    const rendered = commits.map((commit) => {
+      const files = commit.files.length === 0 ? '' : `\n  files: ${commit.files.join(', ')}`
+      return `- ${commit.sha.slice(0, 7)} ${commit.subject}${files}`
+    })
+    lines.push(`Target commits that touched those paths:\n${rendered.join('\n')}`)
+  }
+  lines.push('Rebase onto the target branch, resolve the conflicts and commit in your worktree, then reply `BOT-READY <head sha>`.')
   return lines.join('\n')
 }
 

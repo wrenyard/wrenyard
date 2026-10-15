@@ -36,6 +36,8 @@ export interface WorktreeInfo {
   path: string
   branch: string | null
   clean: boolean
+  /** Owning bot (`bot:<botId>/<itemId>`) recorded in the worktree metadata, when present. */
+  owner?: string
 }
 
 export interface ProjectOverview {
@@ -135,6 +137,28 @@ export interface WorktreeMergeResult {
   branch_deleted?: boolean
   dirty?: WorktreeDirtyDetails
   metadata_project?: string
+  reason?: string
+  error?: string
+}
+
+/** One target-branch commit that touched the conflicting paths of a failed rebase. */
+export interface WorktreeRebaseCommit {
+  sha: string
+  subject: string
+  files: string[]
+}
+
+export interface WorktreeRebaseResult {
+  project: string
+  worktree_id: string
+  rebased: boolean
+  target_branch?: string
+  before_sha?: string
+  head_sha?: string
+  /** Unmerged workspace-relative paths; the rebase is aborted before returning. */
+  conflicts?: string[]
+  /** Target-branch commits since the merge base that touched the conflicting paths (capped). */
+  target_commits?: WorktreeRebaseCommit[]
   reason?: string
   error?: string
 }

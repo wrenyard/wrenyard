@@ -37,6 +37,7 @@ export interface WorktreeInfo {
   path: string
   branch: string | null
   clean: boolean
+  owner?: string
 }
 
 export interface ProjectOverview {
@@ -132,6 +133,31 @@ export interface ProjectWorktreeMergeResult {
   error?: string
 }
 
+export interface ProjectWorktreeRebaseParams {
+  project: string
+  worktree_id: string
+}
+
+/** One target-branch commit that touched the conflicting paths of a failed rebase. */
+export interface ProjectWorktreeRebaseCommit {
+  sha: string
+  subject: string
+  files: string[]
+}
+
+export interface ProjectWorktreeRebaseResult {
+  project: string
+  worktree_id: string
+  rebased: boolean
+  target_branch?: string
+  before_sha?: string
+  head_sha?: string
+  conflicts?: string[]
+  target_commits?: ProjectWorktreeRebaseCommit[]
+  reason?: string
+  error?: string
+}
+
 export interface ProjectWorktreeRemoveParams {
   worktree_id: string
   project?: string
@@ -197,6 +223,7 @@ export const worktreeInfoSchema = {
     path: { type: 'string', minLength: 1, description: 'Absolute filesystem path of the worktree.' },
     branch: { ...nullableStringSchema, description: 'Branch the worktree is on, or null on a detached HEAD.' },
     clean: { type: 'boolean', description: 'True when the worktree has no uncommitted changes.' },
+    owner: { type: 'string', description: 'Owning bot (bot:<botId>/<itemId>) recorded in the worktree metadata, when present.' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -345,6 +372,57 @@ export const projectWorktreeMergeResultSchema = {
     branch_deleted: { type: 'boolean', description: 'True when the merged feature branch was deleted.' },
     reason: { type: 'string', description: 'Machine-readable failure or refusal reason.' },
     error: { type: 'string', description: 'Human-readable failure message.' },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const projectWorktreeRebaseParamsSchema = {
+  type: 'object',
+  required: ['project', 'worktree_id'],
+  properties: {
+    project: { type: 'string', minLength: 1, description: 'Project that owns the worktree to rebase.' },
+    worktree_id: { type: 'string', minLength: 1, description: 'Managed worktree to rebase onto its target branch.' },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const projectWorktreeRebaseCommitSchema = {
+  type: 'object',
+  required: ['sha', 'subject', 'files'],
+  properties: {
+    sha: { type: 'string', minLength: 1, description: 'Target-branch commit sha.' },
+    subject: { type: 'string', description: 'Commit subject line.' },
+    files: {
+      type: 'array',
+      items: { type: 'string', minLength: 1, description: 'Conflicting workspace-relative path this commit touched.' },
+      description: 'The conflicting paths this target-branch commit changed.',
+    },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const projectWorktreeRebaseResultSchema = {
+  type: 'object',
+  required: ['project', 'worktree_id', 'rebased'],
+  properties: {
+    project: { type: 'string', minLength: 1, description: 'Project the rebase targeted.' },
+    worktree_id: { type: 'string', minLength: 1, description: 'Worktree that was rebased.' },
+    rebased: { type: 'boolean', description: 'True when the worktree head contains the target branch head afterwards.' },
+    target_branch: { type: 'string', description: 'Target branch the worktree was rebased onto.' },
+    before_sha: { type: 'string', description: 'Worktree head before the rebase.' },
+    head_sha: { type: 'string', description: 'Worktree head after a successful rebase.' },
+    conflicts: {
+      type: 'array',
+      items: { type: 'string', minLength: 1, description: 'Unmerged workspace-relative path.' },
+      description: 'Conflicting paths when the rebase stopped; the rebase is aborted before returning.',
+    },
+    target_commits: {
+      type: 'array',
+      items: projectWorktreeRebaseCommitSchema,
+      description: 'Target-branch commits since the merge base that touched the conflicting paths (capped at 20).',
+    },
+    reason: { type: 'string', description: 'Machine-readable failure reason when rebased is false.' },
+    error: { type: 'string', description: 'Human-readable failure message when rebased is false.' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

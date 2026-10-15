@@ -15,6 +15,7 @@ import type {
   ProjectWorktreeCreateResult,
   ProjectWorktreeListResult,
   ProjectWorktreeMergeResult,
+  ProjectWorktreeRebaseResult,
   ProjectWorktreeRemoveResult,
 } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../rpc-router.mts'
@@ -92,7 +93,12 @@ export function registerProjectHandlers(router: RpcRouter, options: ProjectRpcHa
     })
   })
   router.register('project.worktree.merge', async (params) => {
+    // No owner is forwarded: a worktree owned by a bot can only be merged by
+    // that bot, so a session (or any other caller) gets reason 'bot_owned'.
     return projectJsonResult<ProjectWorktreeMergeResult>(() => manager.mergeWorktree(params.project, params.worktree_id))
+  })
+  router.register('project.worktree.rebase', async (params) => {
+    return projectJsonResult<ProjectWorktreeRebaseResult>(() => manager.rebaseWorktree(params.project, params.worktree_id))
   })
   router.register('project.commitLog', async (params) => {
     return projectJsonResult<ProjectCommitLogResult>(() => manager.commitLog(params.project, params.limit ?? 20))
