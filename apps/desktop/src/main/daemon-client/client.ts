@@ -1,4 +1,5 @@
 import { WrenyardIpcClient, resolveWrenyardIpcPath } from '@wrenyard/control';
+import { StaleGenerationError } from '../remote/context.js';
 
 /** Extra request options accepted by the shared daemon transport. */
 export interface DaemonRequestOptions {
@@ -14,6 +15,8 @@ export interface DaemonRequestOptions {
 export interface DaemonClient {
   readonly endpoint: string;
   request<TResult = unknown>(method: string, params?: unknown, options?: DaemonRequestOptions): Promise<TResult>;
+  /** Retarget the transport to the active endpoint, dropping the live socket. */
+  setPath(path: string): void;
   /** Drop a connection whose identity/socket changed (e.g. daemon restart). */
   reset(): void;
   close(): void;
@@ -24,6 +27,12 @@ export interface DaemonClientOptions {
   canConnect?: () => boolean;
   /** Default transport deadline for ordinary requests. */
   requestTimeoutMs?: number;
+  /**
+   * Active connection generation. It is captured before each request and
+   * re-checked once the reply resolves, so a result produced on the previous
+   * endpoint is discarded instead of being applied to the new context.
+   */
+  getGeneration?: () => number;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -34,19 +43,33 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
  * Pet pollers while reusing the shared control-client protocol.
  */
 export class WrenyardDaemonClient implements DaemonClient {
-  private readonly path: string;
+  private path: string;
   private readonly requestTimeoutMs: number;
   private client: WrenyardIpcClient | null = null;
   private readonly canConnect: () => boolean;
+  private readonly getGeneration: (() => number) | undefined;
 
   constructor(options: DaemonClientOptions = {}) {
     this.path = options.path ?? resolveWrenyardIpcPath();
     this.canConnect = options.canConnect ?? (() => true);
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.getGeneration = options.getGeneration;
   }
 
   get endpoint(): string {
     return this.path;
+  }
+
+  /**
+   * Retarget the transport. A changed path is a different daemon, so the live
+   * socket is dropped rather than reused across the switch. The stable Desktop
+   * bridge path usually does not change on a context switch; the bridge drops
+   * the live sockets itself, and a superseded generation is fenced per request.
+   */
+  setPath(path: string): void {
+    if (this.path === path) return;
+    this.path = path;
+    this.reset();
   }
 
   async request<TResult = unknown>(
@@ -58,14 +81,21 @@ export class WrenyardDaemonClient implements DaemonClient {
       this.reset();
       throw new Error('daemon 不可用');
     }
+    const generation = this.getGeneration?.();
     const client = this.ensureClient();
     const timeoutMs = options?.timeoutMs === undefined ? this.requestTimeoutMs : options.timeoutMs;
     try {
-      return await client.request<TResult>(
+      const result = await client.request<TResult>(
         method,
         params,
         timeoutMs === null ? { timeoutMs: null } : { timeoutMs },
       );
+      // A switch that committed while this request was in flight makes the reply
+      // belong to the previous endpoint: drop it instead of returning it.
+      if (generation !== undefined && this.getGeneration?.() !== generation) {
+        throw new StaleGenerationError('连接上下文已切换，忽略过期结果');
+      }
+      return result;
     } catch (error) {
       // A dead socket must not be reused: the next request reconnects.
       if (this.client === client && isTransportFailure(error)) this.reset();

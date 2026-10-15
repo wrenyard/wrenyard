@@ -77,6 +77,23 @@ export class DesktopQuotaController {
     return snapshot;
   }
 
+  /**
+   * Drop every cached business snapshot on a connection transition. Unlike a
+   * refetch, this does not wait for the new endpoint: the previous context's
+   * quota and provider rows (and the Pet projection built from them) are cleared
+   * immediately, so no stale data survives the switch. The next refresh
+   * repopulates from the committed endpoint.
+   */
+  resetSnapshots(): QuotaSnapshot {
+    this.providers = [];
+    this.discovered = [];
+    this.refreshedAt = undefined;
+    this.message = undefined;
+    const snapshot = this.snapshot();
+    this.options.onChanged?.(snapshot, []);
+    return snapshot;
+  }
+
   private refresh(forceRefresh: boolean): Promise<QuotaSnapshot> {
     if (this.pending) {
       return forceRefresh && !this.pendingForced

@@ -13,8 +13,15 @@ import type {
   SessionBridgeModelEntry,
   SessionBridgeTaskBrief,
 } from './preload.js';
-import { describeFiles, discardStagedFiles, stageClipboardImage } from './media.js';
+import {
+  clipboardToRemoteAttachment,
+  describeFiles,
+  describeRemoteFiles,
+  discardStagedFiles,
+  stageClipboardImage,
+} from './media.js';
 import type { SessionSeenStore } from './seen-store.js';
+import { StaleGenerationError } from '../main/remote/context.js';
 
 export const SESSION_CHANNELS = {
   list: 'session:list', create: 'session:create', ledger: 'session:ledger',
@@ -49,6 +56,22 @@ export type {
 export interface RegisterSessionOptions {
   ipcPath: string;
   canConnect?: () => boolean;
+  /**
+   * Whether the active host context is *not* local (WY Remote): `connecting`,
+   * `disconnected` and `remote` all count, because in none of them may a
+   * locally picked/revealed path be used. When true the media surface is
+   * remote-safe: locally picked/clipboard bytes become bounded `dataUrl`
+   * uploads instead of local paths, and revealing a remote canonical path on
+   * the local machine is refused.
+   */
+  isRemote?: () => boolean;
+  /**
+   * Active connection generation. Captured before every session request and
+   * re-checked once it resolves, so a reply produced on the previous endpoint
+   * is dropped instead of being applied to a surface that now belongs to a new
+   * context. Applies to the ledger polls as well as the one-shot RPCs.
+   */
+  currentGeneration?: () => number;
   isShellSender(sender: WebContents): boolean;
   /**
    * Shared "seen" state behind the 新结果 dot. Every trusted window reads the
@@ -224,14 +247,27 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     void promise.then(() => work.delete(promise), () => work.delete(promise));
     return promise;
   };
+  /** Drop a reply whose connection generation a switch already superseded. */
+  const assertCurrentGeneration = (generation: number | undefined): void => {
+    if (generation === undefined) return;
+    if (options.currentGeneration?.() !== generation) {
+      throw new StaleGenerationError('连接上下文已切换，忽略过期结果');
+    }
+  };
   const request = <T,>(method: string, params: unknown, signal?: AbortSignal): Promise<T> => {
     if (closed || signal?.aborted) return Promise.reject(aborted());
     if (options.canConnect?.() === false) return Promise.reject(new Error('daemon 不可用'));
+    const generation = options.currentGeneration?.();
     const client = new WrenyardIpcClient({ path: options.ipcPath, requestTimeoutMs: 30_000 });
     clients.add(client);
     const stop = (): void => client.close();
     signal?.addEventListener('abort', stop, { once: true });
-    return track(client.request<T>(method, params).finally(() => {
+    return track(client.request<T>(method, params).then((result) => {
+      // The context may have switched while this request was in flight: the
+      // reply belongs to the previous endpoint and must not reach a view.
+      assertCurrentGeneration(generation);
+      return result;
+    }).finally(() => {
       signal?.removeEventListener('abort', stop);
       clients.delete(client);
       client.close();
@@ -424,6 +460,13 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     request('session.media.read', readMediaRequest(value)));
   handle(SESSION_CHANNELS.mediaReveal, async (_event, value) => {
     const media = readMediaRequest(value);
+    // A remote canonical path is a path on the *remote* host: revealing it in
+    // the local file manager would either fail or expose an unrelated local
+    // file. Remote media is read through `session.media.read` instead, so this
+    // local-only action fails explicitly while remote.
+    if (options.isRemote?.() === true) {
+      throw new Error('远程模式下无法在本地打开远程媒体文件');
+    }
     // The daemon authorizes the ledger-known file and returns its canonical
     // path. Reveal exactly that path — never the renderer-requested raw value —
     // and only after it is a nonempty absolute string.
@@ -465,12 +508,16 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
   handle(SESSION_CHANNELS.mediaPick, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] });
     if (result.canceled) return [];
-    return describeFiles(result.filePaths);
+    // Remote: the daemon cannot read a local path, so the picked bytes become
+    // bounded `dataUrl` uploads. Local: the path is forwarded as before.
+    return options.isRemote?.() === true
+      ? describeRemoteFiles(result.filePaths)
+      : describeFiles(result.filePaths);
   });
   handle(SESSION_CHANNELS.mediaDescribe, async (_event, value) => {
     const paths = readStringArray(value);
     if (paths === undefined) throw new Error('文件路径无效');
-    return describeFiles(paths);
+    return options.isRemote?.() === true ? describeRemoteFiles(paths) : describeFiles(paths);
   });
   handle(SESSION_CHANNELS.mediaStageClipboard, (_event, value) => {
     if (typeof value !== 'object' || value === null) throw new Error('剪贴板图片无效');
@@ -478,7 +525,13 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     const dataUrl = readString(record.dataUrl);
     if (dataUrl === undefined) throw new Error('剪贴板图片无效');
     const name = readString(record.name);
-    return stageClipboardImage({ dataUrl, ...(name === undefined ? {} : { name }) });
+    const input = { dataUrl, ...(name === undefined ? {} : { name }) };
+    // Remote: forward the bytes as a dataUrl attachment without staging a local
+    // file (its path would be meaningless to the remote daemon). Local: stage
+    // the image on disk exactly as before.
+    return options.isRemote?.() === true
+      ? clipboardToRemoteAttachment(input)
+      : stageClipboardImage(input);
   });
   handle(SESSION_CHANNELS.mediaDiscard, async (_event, value) => {
     if (!Array.isArray(value)) throw new Error('附件列表无效');

@@ -246,6 +246,15 @@ export const SHELL_CHANNELS = {
   openSettingsFile: 'wrenyard-shell:open-settings-file',
   openLogsDirectory: 'wrenyard-shell:open-logs-directory',
   revealWorkspace: 'wrenyard-shell:reveal-workspace',
+  remoteState: 'wrenyard-shell:remote-state',
+  remoteHostList: 'wrenyard-shell:remote-host-list',
+  remoteHostDiscovered: 'wrenyard-shell:remote-host-discovered',
+  remoteHostTest: 'wrenyard-shell:remote-host-test',
+  remoteHostConfirm: 'wrenyard-shell:remote-host-confirm',
+  remoteHostRename: 'wrenyard-shell:remote-host-rename',
+  remoteHostConnect: 'wrenyard-shell:remote-host-connect',
+  remoteReturnLocal: 'wrenyard-shell:remote-return-local',
+  remoteChanged: 'wrenyard-shell:remote-changed',
 } as const;
 
 export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'schedules';
@@ -1295,6 +1304,73 @@ export interface ScheduleItem {
   runCount: number;
 }
 
+/* ------------------------------------------------------------------ */
+/* WY Remote: SSH connection and single active context                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * State of the single active daemon endpoint. `disconnected` is explicitly
+ * *remote*-disconnected (a remote tunnel was lost): it never means the local
+ * daemon took over, because remote and local are never both active.
+ */
+export type RemoteConnectionState = 'local' | 'connecting' | 'remote' | 'disconnected';
+
+/** One remote host row: a saved host or a discovered local SSH host. */
+export interface RemoteHostView {
+  alias: string;
+  displayName: string;
+  /** Resolved address, or null when the fact is not yet known (never faked). */
+  address: string | null;
+  /** Remote OS (`darwin`/`win32`/`linux`) or null until honestly probed. */
+  os: string | null;
+}
+
+/**
+ * The active remote connection projection pushed to the renderer. Every emit
+ * carries the committed connection generation, so a subscriber can key its own
+ * reset on the generation (and drop a late push from a superseded switch)
+ * instead of guessing from the state alone.
+ */
+export interface RemoteConnectionSnapshot {
+  state: RemoteConnectionState;
+  /** Monotonic committed-connection generation; bumps on every transition. */
+  generation: number;
+  host: { alias: string; displayName: string } | null;
+  message?: string;
+}
+
+/**
+ * Ephemeral SSH configuration candidate for the add-new form and for
+ * silent/Test validation. It is never persisted from a probe; only a
+ * successful Confirm appends a `Host` stanza.
+ */
+export interface RemoteConnectionTestInput {
+  alias: string;
+  host?: string;
+  user?: string;
+  port?: number;
+  identityPath?: string;
+  displayName?: string;
+}
+
+/** Outcome of a silent/Test validation; platform/arch are present on success. */
+export interface RemoteConnectionTestResult {
+  ok: boolean;
+  platform?: string | null;
+  arch?: string | null;
+  message?: string;
+}
+
+/** Outcome of a confirm/rename/connect/return mutation. */
+export interface RemoteHostMutationResult {
+  ok: boolean;
+  message?: string;
+}
+
+export interface RemoteHostListResult {
+  hosts: RemoteHostView[];
+}
+
 export interface WrenyardShellApi {
   platform: NodeJS.Platform;
   /**
@@ -1400,6 +1476,24 @@ export interface WrenyardShellApi {
   openLogsDirectory(): Promise<void>;
   /** Reveal a workspace path in the OS file manager. */
   revealWorkspace(path: string): Promise<void>;
+  /** The active remote connection state (WY Remote). */
+  getRemoteConnection(): Promise<RemoteConnectionSnapshot>;
+  /** Saved remote hosts, owned by the daemon config, not Desktop settings. */
+  listRemoteHosts(): Promise<RemoteHostListResult>;
+  /** Concrete hosts discovered from the local SSH configuration. */
+  listDiscoveredSshHosts(): Promise<RemoteHostListResult>;
+  /** Ephemeral silent/Test validation of a candidate SSH configuration. */
+  testRemoteConnection(input: RemoteConnectionTestInput): Promise<RemoteConnectionTestResult>;
+  /** Validate, provision if needed, connect and remember the host. */
+  confirmRemoteConnection(input: RemoteConnectionTestInput): Promise<RemoteHostMutationResult>;
+  /** Rename one saved host's display name in the daemon config. */
+  renameRemoteHost(alias: string, displayName: string): Promise<RemoteHostMutationResult>;
+  /** Connect a saved host directly, without re-adding or reinstalling. */
+  connectSavedRemoteHost(alias: string): Promise<RemoteHostMutationResult>;
+  /** Explicit return to the local endpoint; refreshes every view. */
+  returnToLocal(): Promise<RemoteHostMutationResult>;
+  /** Pushed after every committed connection-state change. */
+  onRemoteChanged(listener: (snapshot: RemoteConnectionSnapshot) => void): () => void;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {

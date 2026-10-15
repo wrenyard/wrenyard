@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification as ElectronNotification, powerMonitor, screen, session, shell, type MessageBoxOptions, type WebContents } from 'electron';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { createServer as createNetServer, connect as connectNet, type Server as NetServer, type Socket as NetSocket } from 'node:net';
 import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import { registerSession, type SessionRegistration } from './session/ipc.js';
@@ -25,7 +26,7 @@ import { ActivityStatusProjector, TaskRunLifecycleTracker } from './main/activit
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ScheduleItem, type ScheduleState, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ScheduleItem, type ScheduleState, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { MiniCardManager } from './mini-cards.js';
 import { Notifier } from './main/notifications/notifier.js';
@@ -58,6 +59,20 @@ import {
   inspectProductWorkspace,
 } from './workspace.js';
 import { assertDaemonIdle } from './workspace-activation.js';
+import { bootstrapRemoteDaemon } from './main/remote/bootstrap.js';
+import { ActiveConnectionContext, ConnectionBusyError, type ActiveConnectionSnapshot } from './main/remote/context.js';
+import {
+  appendSshHostStanza,
+  listLocalSshHosts,
+  probeSshHost,
+  resolveDefaultSshConfigPath,
+  restoreSshHostStanza,
+  validateSshAlias,
+  validateSshCandidate,
+  withCandidateConfig,
+  type SshStanzaRollback,
+} from './main/remote/ssh-discovery.js';
+import { SshRelay, type RemotePlatform } from './main/remote/ssh-relay.js';
 
 // Isolate Electron's data directories before any session/BrowserWindow or the
 // single-instance lock is created when a private state root is requested.
@@ -92,6 +107,12 @@ const SMOKE_TIMEOUT_MS = 90_000;
 /** Bounded settle budget: React mounts/activates the target page asynchronously after `setPage`. */
 const SMOKE_PAGE_VISIBILITY_TIMEOUT_MS = 10_000;
 
+/** Human-readable message for a thrown value crossing an IPC boundary. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+
 /**
  * Structured outcome of the daemon's `workspace.switch` method. Desktop applies
  * a workspace change through that method while the daemon keeps running, and
@@ -102,6 +123,24 @@ interface DaemonWorkspaceSwitchResult {
   ok: boolean;
   outcome: WorkspaceSwitchOutcome;
   workspace_root?: string;
+  message?: string;
+}
+
+/** Remote-safe result of the daemon's `workspace.inspect` method. */
+interface DaemonWorkspaceInspectResult {
+  ok: boolean;
+  outcome: 'configured' | 'missing' | 'invalid';
+  root: string;
+  exists: boolean;
+  readOnly: boolean;
+  message?: string;
+}
+
+/** Remote-safe result of the daemon's `workspace.initialize` method. */
+interface DaemonWorkspaceInitializeResult {
+  ok: boolean;
+  outcome: 'initialized' | 'exists' | 'busy' | 'invalid' | 'unavailable' | 'error';
+  root?: string;
   message?: string;
 }
 
@@ -157,6 +196,87 @@ function resolveUpdateAppPath(): string {
 
 function resolvePetAssets(): { preloadDir: string } {
   return { preloadDir: join(app.getAppPath(), 'dist', 'preload') };
+}
+
+/**
+ * Desktop-owned stable endpoint that every control consumer points at. It is an
+ * owner-only local IPC endpoint (Unix socket or Windows named pipe) bridged to
+ * whichever daemon is active: the local daemon, or a remote daemon reached over
+ * the SSH relay. Consumers never need to know whether the active endpoint is
+ * local or remote; switching only retargets this bridge.
+ */
+function resolveActiveEndpointPath(ipcPath: string): string {
+  if (process.platform === 'win32' || ipcPath.startsWith('\\\\')) {
+    return `\\\\.\\pipe\\wrenyard-active-${process.pid}`;
+  }
+  return join(dirname(ipcPath), `wrenyard-active-${process.pid}.sock`);
+}
+
+/**
+ * Byte-forwarding bridge. It never parses the NDJSON stream: frames, the
+ * protocol-v2 handshake, timeouts and cancellation pass through untouched.
+ * Retargeting drops every live connection so old clients and long polls are
+ * invalidated rather than silently reading the previous context's data.
+ */
+class ActiveEndpointBridge {
+  private server: NetServer | null = null;
+  private target: string;
+  private readonly connections = new Set<NetSocket>();
+
+  constructor(private readonly bridgePath: string, target: string) {
+    this.target = target;
+  }
+
+  get endpoint(): string {
+    return this.bridgePath;
+  }
+
+  async start(): Promise<void> {
+    if (process.platform !== 'win32' && existsSync(this.bridgePath)) {
+      try { unlinkSync(this.bridgePath); } catch { /* best effort */ }
+    }
+    this.server = createNetServer((socket) => this.forward(socket));
+    await new Promise<void>((resolveStart, reject) => {
+      this.server!.once('error', reject);
+      this.server!.listen(this.bridgePath, () => resolveStart());
+    });
+  }
+
+  setTarget(target: string): void {
+    this.target = target;
+    this.dropConnections();
+  }
+
+  private forward(socket: NetSocket): void {
+    this.connections.add(socket);
+    const upstream = connectNet(this.target);
+    const closeBoth = (): void => {
+      socket.destroy();
+      upstream.destroy();
+      this.connections.delete(socket);
+    };
+    socket.on('error', closeBoth);
+    upstream.on('error', closeBoth);
+    socket.on('close', closeBoth);
+    upstream.on('close', closeBoth);
+    socket.pipe(upstream);
+    upstream.pipe(socket);
+  }
+
+  dropConnections(): void {
+    for (const connection of [...this.connections]) connection.destroy();
+    this.connections.clear();
+  }
+
+  async stop(): Promise<void> {
+    this.dropConnections();
+    const server = this.server;
+    this.server = null;
+    if (server) await new Promise<void>((resolveStop) => server.close(() => resolveStop()));
+    if (process.platform !== 'win32' && existsSync(this.bridgePath)) {
+      try { unlinkSync(this.bridgePath); } catch { /* best effort */ }
+    }
+  }
 }
 
 /**
@@ -256,6 +376,11 @@ async function refreshQuotaProjectionAfterGatewayRestart(): Promise<void> {
 
 /** Session IPC relay; null until bootstrap registers it. */
 let sessionRegistration: SessionRegistration | null = null;
+/** Stable active-endpoint bridge and the single active-connection context (WY Remote). */
+let activeEndpointBridge: ActiveEndpointBridge | null = null;
+let connectionContext: ActiveConnectionContext | null = null;
+/** Live SSH relay while a remote connection is active; null while local. */
+let activeSshRelay: SshRelay | null = null;
 let shellWindow: ShellWindowController | null = null;
 /** Mini-card window owner; null until bootstrap creates it. */
 let miniCards: MiniCardManager | null = null;
@@ -273,7 +398,22 @@ let daemonSupervisor: DesktopDaemonSupervisor | null = null;
 /** Latest known product workspace; refreshed when a save activates a new root. */
 let workspaceConfiguration: WorkspaceConfigurationSnapshot | null = null;
 let daemonRunning = false;
-const canConnectDaemon = (): boolean => daemonSupervisor?.snapshot().state === 'running';
+/**
+ * Business requests are allowed only against a committed endpoint: the local
+ * daemon while it supervises/runs, or a fully switched remote. `connecting` and
+ * `disconnected` are denied, so a request can neither race a half-open target
+ * nor be sent to a lost endpoint.
+ */
+const allowsBusinessOperations = (): boolean => connectionContext?.allowsBusinessOperations() ?? true;
+/**
+ * True whenever the active host context is *not* the local daemon: a switch in
+ * progress, a committed remote, or a lost remote tunnel. Local paths and
+ * local-only actions must never run in any of those states.
+ */
+const isNonLocalContext = (): boolean => !(connectionContext?.isLocal() ?? true);
+const isCommittedRemote = (): boolean => connectionContext?.isRemote() === true;
+const canConnectDaemon = (): boolean =>
+  allowsBusinessOperations() && (isCommittedRemote() || daemonSupervisor?.snapshot().state === 'running');
 function requireDaemonRunning(): void {
   if (!canConnectDaemon()) throw new Error('daemon 不可用');
 }
@@ -319,6 +459,18 @@ function notifyDaemonChanged(): void {
   }
 }
 
+/**
+ * Push the committed remote-connection state to the renderer so every
+ * endpoint-bound view (session/draft/task/project/provider/quota/statistics/
+ * Pet) resets together on a local↔remote switch.
+ */
+function notifyRemoteChanged(): void {
+  if (shellWindow && !shellWindow.window.isDestroyed()) {
+    const snapshot: ActiveConnectionSnapshot = connectionContext?.snapshot() ?? { state: 'local', generation: 0, host: null };
+    shellWindow.window.webContents.send(SHELL_CHANNELS.remoteChanged, snapshot);
+  }
+}
+
 /** Final teardown shared by every exit path; the daemon stop already happened. */
 async function finalizeQuit(): Promise<void> {
   try {
@@ -343,6 +495,14 @@ async function finalizeQuit(): Promise<void> {
     // Stop the relay; session turns remain owned by the daemon.
     await sessionRegistration?.close();
     sessionRegistration = null;
+    // Stop only the relay/daemon processes this app started: the SSH relay and
+    // the local active-endpoint bridge. An externally owned remote daemon is
+    // left running.
+    await activeSshRelay?.stop();
+    activeSshRelay = null;
+    await activeEndpointBridge?.stop();
+    activeEndpointBridge = null;
+    connectionContext = null;
   } catch {
     // best-effort termination
   } finally {
@@ -653,12 +813,34 @@ async function bootstrap(): Promise<void> {
   });
   const configPath = resolveForemanConfigPath();
   const ipcPath = resolveWrenyardIpcPath(process.env, { configPath });
+  // Single stable active endpoint every control consumer points at. It is
+  // bridged to the local daemon at boot and retargeted to the SSH relay when a
+  // remote connection becomes active, so consumers follow the active context
+  // without knowing which daemon is behind it.
+  const activeEndpointPath = resolveActiveEndpointPath(ipcPath);
+  activeEndpointBridge = new ActiveEndpointBridge(activeEndpointPath, ipcPath);
+  await activeEndpointBridge.start();
   const pageLoader = createPageLoader({ appPath: app.getAppPath(), packaged: app.isPackaged, env: process.env });
   workspaceConfiguration = await inspectProductWorkspace();
   console.info('[wrenyard-desktop] workspace ready');
 
   const requestForeman = async (method: string, params: unknown): Promise<unknown> => {
     requireDaemonRunning();
+    // Generation fencing: a reply that resolves after a connection switch is
+    // discarded instead of leaking the previous context's data into a view.
+    const generation = connectionContext?.currentGeneration() ?? 0;
+    const client = new WrenyardIpcClient({ path: activeEndpointPath, requestTimeoutMs: TASK_SETTINGS_REQUEST_TIMEOUT_MS });
+    try {
+      const result = await client.request(method, params);
+      connectionContext?.assertCurrent(generation);
+      return result;
+    } finally {
+      await client.close?.();
+    }
+  };
+  // Host-registry management always targets the local daemon: the saved-host
+  // registry is owned by the originating machine, not by the active remote.
+  const requestLocalDaemon = async (method: string, params: unknown): Promise<unknown> => {
     const client = new WrenyardIpcClient({ path: ipcPath, requestTimeoutMs: TASK_SETTINGS_REQUEST_TIMEOUT_MS });
     try {
       return await client.request(method, params);
@@ -666,6 +848,156 @@ async function bootstrap(): Promise<void> {
       await client.close?.();
     }
   };
+  /**
+   * Read the endpoint the app is *leaving*, without the business-operation gate.
+   * Only the pre-switch idle check uses this: it runs while the state is already
+   * `connecting` (so business requests are denied) but must still target the
+   * previous endpoint, never the not-yet-committed candidate. The stable bridge
+   * has not been retargeted yet at that point.
+   */
+  const requestLeavingEndpoint = async (method: string, params: unknown): Promise<unknown> => {
+    const client = new WrenyardIpcClient({ path: activeEndpointPath, requestTimeoutMs: TASK_SETTINGS_REQUEST_TIMEOUT_MS });
+    try {
+      return await client.request(method, params);
+    } finally {
+      await client.close?.();
+    }
+  };
+
+  /**
+   * Re-read the active workspace. A local context reads the local config; a
+   * non-local context reads the daemon's remote-safe `workspace.inspect`, so a
+   * remote path is never stat'ed on the local machine and there is no implicit
+   * local inspection. Callers only reach the remote branch while the endpoint is
+   * committed, so the request never targets a half-open or lost endpoint.
+   */
+  const readActiveWorkspaceSnapshot = async (): Promise<WorkspaceConfigurationSnapshot> => {
+    if (!isNonLocalContext()) return inspectProductWorkspace();
+    const result = await requestForeman('workspace.inspect', {}) as DaemonWorkspaceInspectResult;
+    return {
+      status: result.outcome,
+      source: 'user-config',
+      configPath,
+      ...(result.root ? { path: result.root } : {}),
+      ...(result.message ? { message: result.message } : {}),
+      readOnly: result.readOnly,
+    };
+  };
+
+  /**
+   * Reset session selection, drafts and every data cache together on a context
+   * transition, then notify the surfaces.
+   *
+   * The ordering is explicit and every step is awaited, so a caller awaiting
+   * this observes the real end state rather than a placeholder completion:
+   * subscriptions first (reconnect when the endpoint is committed, pause when it
+   * is not), then the session ledger polls, then the renderer's session
+   * selection and composer draft, then the workspace snapshot, then the change
+   * notifications. While the endpoint is unsettled nothing is fetched: no
+   * request is sent to the previous or to a lost endpoint, and no local
+   * inspection runs in a non-local context.
+   */
+  const refreshActiveContext = async (reason: string): Promise<void> => {
+    // Fence the whole refresh to the generation it started under: if a newer
+    // transition (or a tunnel loss) supersedes it while it awaits, it must not
+    // apply a stale workspace snapshot or push a stale context to the renderer,
+    // and it never refetches anything from the previous endpoint (every read
+    // below resolves against the current active endpoint at call time).
+    const generation = connectionContext?.currentGeneration() ?? 0;
+    const settled = canConnectDaemon();
+    if (settled) desktopSubscriptions?.setEndpoint(activeEndpointPath);
+    else desktopSubscriptions?.pause();
+    sessionRegistration?.reset();
+    // Drop the cached quota/provider business snapshots (and the Pet projection
+    // built from them) immediately, rather than exposing the previous context's
+    // numbers until a refetch lands.
+    quotaController?.resetSnapshots();
+    shellWindow?.deliverCommandAction({ id: 'session.newDraft' });
+    if (settled) {
+      try {
+        const snapshot = await readActiveWorkspaceSnapshot();
+        if (!(connectionContext?.isCurrent(generation) ?? true)) return;
+        workspaceConfiguration = snapshot;
+      } catch (error) {
+        console.warn('[wrenyard-desktop] workspace re-read after context change failed:', messageOf(error));
+      }
+    }
+    if (!(connectionContext?.isCurrent(generation) ?? true)) return;
+    notifyDaemonChanged();
+    notifyRemoteChanged();
+    shellWindow?.notifyQuotaChanged();
+    console.info('[wrenyard-desktop] active context changed:', reason);
+  };
+
+  /**
+   * Authoritative pre-switch check: the daemon that is currently active must
+   * have no admitted work. The shared activity cache only tracks
+   * tasks/taskgraphs, so it is not sufficient — this reads `daemon.status`
+   * itself, whose `idle` flag accounts for tasks, taskgraphs, executions and
+   * sessions. It runs before anything is provisioned or persisted, so a refusal
+   * leaves no trace.
+   *
+   * `check` is false only when the leaving context is itself unsettled (a lost
+   * remote tunnel): there is then no reachable daemon whose work could be
+   * harmed, and refusing would make a re-connect impossible.
+   */
+  const assertActiveContextIdle = async (check: boolean): Promise<void> => {
+    if (!check) return;
+    const status = await requestLeavingEndpoint('daemon.status', {});
+    const counts = (status ?? {}) as Record<string, unknown>;
+    const activeTaskGraphs = typeof counts.activeTaskGraphCount === 'number' ? counts.activeTaskGraphCount : 0;
+    if (!assertDaemonIdle(status).idle || activeTaskGraphs > 0) {
+      throw new ConnectionBusyError('当前有任务正在进行，完成后才能切换连接');
+    }
+  };
+
+  /**
+   * Surface an SSH-config rollback conflict instead of swallowing it: when the
+   * appended `Host` stanza could not be rewound (the file changed underneath
+   * us), the user has to resolve the leftover configuration by hand.
+   */
+  const withSshRollbackNote = (error: unknown, rollbackError: unknown): Error => {
+    const base = error instanceof Error ? error : new Error(messageOf(error));
+    if (rollbackError === null || rollbackError === undefined) return base;
+    return new Error(`${base.message}；SSH 配置回滚失败：${messageOf(rollbackError)}`);
+  };
+
+  /**
+   * Real user work still in flight, read from the shared activity round:
+   * queued/running task runs and live task graphs. A connection switch waits
+   * for this instead of killing the user's work.
+   */
+  const hasActiveAppWork = (): boolean => {
+    const presence = desktopSubscriptions?.activity();
+    if (!presence) return false;
+    return presence.tasks.length > 0 || presence.taskgraphs.length > 0;
+  };
+
+  // The one active-connection context. Its applyEndpoint retargets the single
+  // stable bridge; its resetCaches resets every endpoint-bound surface together.
+  connectionContext = new ActiveConnectionContext({
+    localEndpoint: ipcPath,
+    applyEndpoint: (endpoint) => {
+      // Retarget the single stable bridge. Every control consumer resolves
+      // through it, and dropping the live sockets invalidates old clients and
+      // long polls instead of letting them keep reading the previous context.
+      activeEndpointBridge?.setTarget(endpoint);
+    },
+    // Always awaited, so a caller sees the real end of the reset sequence rather
+    // than a fire-and-forget placeholder. The underlying error is logged here
+    // and then rethrown so the context can surface it on the committed remote;
+    // the context never rolls back a switch that already persisted.
+    resetCaches: async ({ reason }) => {
+      try {
+        await refreshActiveContext(reason);
+      } catch (error) {
+        console.warn('[wrenyard-desktop] active context refresh failed:', messageOf(error));
+        throw error;
+      }
+    },
+    onStateChange: () => { notifyDaemonChanged(); notifyRemoteChanged(); },
+    hasActiveOperations: () => hasActiveAppWork(),
+  });
   // One Notifier for the whole process, gated by `notifications.enabled`.
   // Each producer states its channels explicitly; the notifier holds no state
   // of its own and the in-app channel owns the history.
@@ -688,9 +1020,11 @@ async function bootstrap(): Promise<void> {
   const sessionNotifier = createSessionNotifier({ notifier });
   const quotaNotifier = createQuotaNotifier({ notifier });
   const daemonNotifier = createDaemonNotifier({ notifier });
+  // The updater lifecycle stays local: it must observe and stop the daemon this
+  // Desktop owns, never a remote daemon reached through the active endpoint.
   const readUpdateDaemonIdle = async (): Promise<boolean | null> => {
     try {
-      return assertDaemonIdle(await requestForeman('daemon.status', {})).idle;
+      return assertDaemonIdle(await requestLocalDaemon('daemon.status', {})).idle;
     } catch {
       // A confirmed-absent daemon (unreachable probe) is idle; a reachable but
       // unreadable one stays unknown so the install defers instead of guessing.
@@ -941,8 +1275,15 @@ async function bootstrap(): Promise<void> {
 
   // Relay session IPC over the same owner-only daemon control socket.
   sessionRegistration = registerSession({
-    ipcPath,
+    ipcPath: activeEndpointPath,
     canConnect: canConnectDaemon,
+    // Media and local-only actions are remote-safe whenever the host context is
+    // not local (connecting/disconnected/remote alike): picked/clipboard bytes
+    // become bounded dataUrl uploads and a remote canonical path is never
+    // revealed locally.
+    isRemote: () => isNonLocalContext(),
+    // Drop a session reply whose connection generation a switch superseded.
+    currentGeneration: () => connectionContext?.currentGeneration() ?? 0,
     // Shared seen state behind the 新结果 dot; every trusted window reads it.
     seenStore: sessionSeenStore,
     // The shell window and the mini-card owner are created after this
@@ -1038,7 +1379,13 @@ async function bootstrap(): Promise<void> {
   // One shared daemon transport and subscription set for the whole Desktop
   // process. The shell window, tray and Pet all consume the same rounds; the
   // Pet never opens its own connection or timer.
-  const daemonClient = new WrenyardDaemonClient({ path: ipcPath, canConnect: canConnectDaemon });
+  const daemonClient = new WrenyardDaemonClient({
+    path: activeEndpointPath,
+    canConnect: canConnectDaemon,
+    // Fence every shared reply with the active generation so a result produced
+    // on the previous endpoint is discarded after a switch.
+    getGeneration: () => connectionContext?.currentGeneration() ?? 0,
+  });
   const windowOwner = createTaskGraphWindows({
     daemonClient,
     pageLoader,
@@ -1058,7 +1405,7 @@ async function bootstrap(): Promise<void> {
   taskgraphWindowOwner = windowOwner;
   desktopSubscriptions = new DaemonSubscriptions({
     client: daemonClient,
-    ipcPath,
+    ipcPath: activeEndpointPath,
     getTrackedTaskgraphIds: () => windowOwner.getTrackedTaskgraphIds(),
   });
   if (canConnectDaemon()) desktopSubscriptions.start();
@@ -1100,9 +1447,21 @@ async function bootstrap(): Promise<void> {
     console.warn('[wrenyard-desktop] Pet module failed to start:', error);
   });
   if (SMOKE) await petStart;
-  const providerService = new ProviderService({ ipcPath, canConnect: canConnectDaemon });
+  const providerService = new ProviderService({
+    ipcPath: activeEndpointPath,
+    canConnect: canConnectDaemon,
+    // A provider/quota reply produced on the previous endpoint must not be
+    // applied after a switch.
+    getGeneration: () => connectionContext?.currentGeneration() ?? 0,
+  });
   quotaController = new DesktopQuotaController({
-    source: new DesktopQuotaSource(ipcPath, canConnectDaemon),
+    source: new DesktopQuotaSource(
+      activeEndpointPath,
+      canConnectDaemon,
+      // Fence every quota reply with the active generation so a result produced
+      // on the previous endpoint cannot repopulate the cache after a switch.
+      () => connectionContext?.currentGeneration() ?? 0,
+    ),
     providerSource: providerService,
     getProviderOrder: () => settingsStore.load().providers.providers,
     onChanged: (snapshot, providers) => {
@@ -1124,22 +1483,372 @@ async function bootstrap(): Promise<void> {
     petController?.setQuotaFocus(normalizeQuotaFocus(focus));
   });
 
+  // ── WY Remote: host management and active-connection control ──────────
+  // The modal/menu bridge. Saved hosts live in the local daemon config and are
+  // read/written through the local daemon; discovery, validation and the relay
+  // are Desktop-local. Only a validated, compatible, ready connection is saved.
+  const sshConfigPath = resolveDefaultSshConfigPath(process.env);
+
   /**
-   * Reactivate the daemon after a workspace change: gate on an idle daemon,
-   * run a planned CLI restart, and let the restarted daemon bind the saved
-   * workspace from config. Any failure stays visible instead of claiming
-   * activation succeeded, and a busy daemon is never interrupted.
+   * Unique local endpoint per relay attempt: a replacement candidate is started
+   * on its own path, so the current relay is never torn down before the new one
+   * is ready.
    */
+  let relaySequence = 0;
+  const nextRelayEndpointPath = (): string => {
+    relaySequence += 1;
+    return process.platform === 'win32'
+      ? `\\\\.\\pipe\\wrenyard-relay-${process.pid}-${relaySequence}`
+      : join(dirname(ipcPath), `wrenyard-relay-${process.pid}-${relaySequence}.sock`);
+  };
+
+  /** The first-version install matrix: macOS ARM64 and Windows x64 only. */
+  const supportedTriplet = (platform: string | null, arch: string | null): 'darwin-arm64' | 'win32-x64' | null => {
+    if (platform === 'darwin' && arch === 'arm64') return 'darwin-arm64';
+    if (platform === 'win32' && arch === 'x64') return 'win32-x64';
+    return null;
+  };
+
+  const unsupportedPlatformMessage = (platform: string | null, arch: string | null): string =>
+    `不支持的目标平台（${platform ?? '未知'}-${arch ?? '未知'}）；首版仅支持 macOS ARM64 与 Windows x64`;
+
+  /** Bounded projection of a renderer-supplied candidate into typed fields. */
+  const normalizeRemoteInput = (value: unknown): RemoteConnectionTestInput => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return { alias: '' };
+    const record = value as Record<string, unknown>;
+    return {
+      alias: typeof record.alias === 'string' ? record.alias : '',
+      ...(typeof record.host === 'string' ? { host: record.host } : {}),
+      ...(typeof record.user === 'string' ? { user: record.user } : {}),
+      ...(typeof record.port === 'number' ? { port: record.port } : {}),
+      ...(typeof record.identityPath === 'string' ? { identityPath: record.identityPath } : {}),
+      ...(typeof record.displayName === 'string' ? { displayName: record.displayName } : {}),
+    };
+  };
+
+  /**
+   * Project saved daemon-config records into the shared host view. The daemon
+   * stores only alias/display name and verified platform metadata, so the
+   * address stays honestly unknown (null) rather than being fabricated.
+   */
+  const toSavedHostViews = (hosts: unknown): RemoteHostView[] => {
+    if (!Array.isArray(hosts)) return [];
+    const views: RemoteHostView[] = [];
+    for (const entry of hosts) {
+      if (typeof entry !== 'object' || entry === null) continue;
+      const record = entry as Record<string, unknown>;
+      if (typeof record.alias !== 'string' || record.alias === '') continue;
+      views.push({
+        alias: record.alias,
+        displayName: typeof record.displayName === 'string' && record.displayName !== '' ? record.displayName : record.alias,
+        address: null,
+        os: typeof record.platform === 'string' && record.platform !== '' ? record.platform : null,
+      });
+    }
+    return views;
+  };
+
+  /**
+   * Ephemeral silent/Test validation: structural validation of the candidate,
+   * then a non-installing remote probe under `ssh -F` with the candidate in a
+   * private temp config. It never writes the user's SSH config and never
+   * installs anything.
+   */
+  const validateRemoteCandidate = async (
+    input: RemoteConnectionTestInput,
+  ): Promise<RemoteConnectionTestResult> => {
+    const validated = validateSshCandidate(input);
+    if (!validated.ok) return { ok: false, message: validated.message };
+    const candidate = validated.candidate;
+    const hasExplicitFields = candidate.host !== null || candidate.user !== null
+      || candidate.port !== null || candidate.identityPath !== null;
+    try {
+      const probe = hasExplicitFields
+        ? await withCandidateConfig(candidate, sshConfigPath, (configFile) => probeSshHost(candidate.alias, { configFile }))
+        : await probeSshHost(candidate.alias);
+      if (!supportedTriplet(probe.platform, probe.arch)) {
+        return {
+          ok: false,
+          platform: probe.platform,
+          arch: probe.arch,
+          message: probe.platform === null && probe.arch === null
+            ? '无法连接或未识别远程系统（请确认主机密钥已手动信任且可免密登录）'
+            : unsupportedPlatformMessage(probe.platform, probe.arch),
+        };
+      }
+      return { ok: true, platform: probe.platform, arch: probe.arch };
+    } catch (error) {
+      return { ok: false, message: messageOf(error) };
+    }
+  };
+
+  /**
+   * Validate, provision if needed, connect and remember a remote host.
+   *
+   * The *entire* sequence — authoritative idle check, readiness, the SSH
+   * configuration write and the context switch — runs inside the connection
+   * context's transition lock. The lock and the reserved generation are taken
+   * synchronously before the first await, so a second switch can never
+   * interleave and every business request is denied for the whole `connecting`
+   * window. The active endpoint target is only retargeted once the switch
+   * commits, so the target stays hidden until the SSH configuration is
+   * persisted.
+   *
+   * The authoritative idle refusal happens before anything is provisioned or
+   * persisted, so it leaves no trace. Every ssh invocation (probe, bootstrap
+   * transfer, remote command, relay verification) runs under the ephemeral `-F`
+   * candidate so a not-yet-persisted add-new host resolves exactly the stanza
+   * that will be appended.
+   *
+   * The host is remembered in the daemon config *before* the context commits,
+   * while the state is still `connecting`, so no business request ever reaches
+   * the candidate endpoint and no view is retargeted before the registry record
+   * is saved. Because the commit that follows is a non-failing assignment, a
+   * failure at any earlier step aborts with nothing active and no new record;
+   * the appended `Host` stanza is still rewound to its exact previous bytes
+   * (without clobbering a concurrent edit). Only a relay this app started is
+   * stopped, and an SSH rollback conflict is surfaced rather than swallowed.
+   */
+  const activateRemoteConnection = async (input: RemoteConnectionTestInput): Promise<void> => {
+    const validated = validateSshCandidate(input);
+    if (!validated.ok) throw new Error(validated.message);
+    const candidate = validated.candidate;
+    const displayName = typeof input.displayName === 'string' && input.displayName.trim() !== ''
+      ? input.displayName.trim()
+      : undefined;
+    const hostName = displayName ?? candidate.alias;
+    const hasExplicitFields = candidate.host !== null || candidate.user !== null
+      || candidate.port !== null || candidate.identityPath !== null;
+    const previousRelay = activeSshRelay;
+    // Captured before the lock: only a reachable endpoint has work the
+    // pre-switch idle check could protect. A stopped local daemon or a lost
+    // remote tunnel must not make a new connection impossible.
+    const leavingContextSettled = canConnectDaemon();
+
+    // An add-new candidate lives in a private temp config for the whole
+    // transaction; an already-configured alias uses the user's default config.
+    const withSshConfig = <T>(use: (configFile: string | null) => Promise<T>): Promise<T> =>
+      hasExplicitFields
+        ? withCandidateConfig(candidate, sshConfigPath, (configFile) => use(configFile))
+        : use(null);
+
+    let stanzaRollback: SshStanzaRollback | null = null;
+    let verifiedPlatform: string | null = null;
+    let verifiedArch: string | null = null;
+    // Held on an object so the assignment made inside the connect callback is
+    // visible to the rollback path below; a plain `let` would be narrowed to its
+    // initial `null` because the closure assignment is invisible to flow analysis.
+    const transaction: { relay: SshRelay | null } = { relay: null };
+
+    /** Rewind the appended `Host` stanza; report a conflict instead of hiding it. */
+    const rollbackSshConfig = async (): Promise<unknown> => {
+      const rollback = stanzaRollback;
+      stanzaRollback = null;
+      if (rollback === null) return null;
+      try {
+        await restoreSshHostStanza(rollback);
+        return null;
+      } catch (error) {
+        return error;
+      }
+    };
+
+    try {
+      await connectionContext!.connectToRemote(
+        { alias: candidate.alias, displayName: hostName },
+        async (generation) => {
+          connectionContext!.assertCurrent(generation);
+          return withSshConfig(async (configFile) => {
+            // ── 0. Authoritative pre-switch idle check ───────────────────────
+            // Read daemon.status from the endpoint being left (the bridge is not
+            // retargeted yet); it is not a business request, so it is allowed
+            // while the state is already `connecting`. Nothing has been
+            // provisioned or persisted, so a refusal leaves no trace.
+            await assertActiveContextIdle(leavingContextSettled);
+            connectionContext!.assertCurrent(generation);
+
+            // ── 1. Readiness ────────────────────────────────────────────────
+            // Probe (installs nothing, writes no config), provision the
+            // versioned payload and verify the remote daemon's protocol/version
+            // handshake.
+            const probeOptions = configFile ? { configFile } : {};
+            const probe = await probeSshHost(candidate.alias, probeOptions);
+            connectionContext!.assertCurrent(generation);
+            const triplet = supportedTriplet(probe.platform, probe.arch);
+            if (!triplet) {
+              if (probe.platform === null && probe.arch === null) {
+                throw new Error('无法连接或未识别远程系统（请确认主机密钥已手动信任且可免密登录）');
+              }
+              throw new Error(unsupportedPlatformMessage(probe.platform, probe.arch));
+            }
+            const platform = probe.platform as RemotePlatform;
+            const arch = probe.arch as string;
+            verifiedPlatform = platform;
+            verifiedArch = arch;
+
+            const bootstrap = await bootstrapRemoteDaemon({
+              target: { alias: candidate.alias, platform, arch },
+              version,
+              ...(configFile ? { candidateConfigFile: configFile } : {}),
+            });
+            connectionContext!.assertCurrent(generation);
+
+            const relay = new SshRelay({
+              target: { alias: candidate.alias, platform, arch },
+              remote: {
+                nodePath: bootstrap.nodePath,
+                bridgePath: bootstrap.bridgePath,
+                ipcPath: bootstrap.ipcPath,
+                bridgeArgs: bootstrap.bridgeArgs,
+              },
+              localEndpointPath: nextRelayEndpointPath(),
+              expectedVersion: version,
+              ...(configFile ? { candidateConfigFile: configFile } : {}),
+              onTunnelLost: (reason: string) => {
+                // Only the committed relay may change the context: a candidate
+                // whose tunnel drops during the switch must not mark the
+                // *previous* active remote lost.
+                if (activeSshRelay !== relay) return;
+                // Explicit disconnected-remote; never a silent local fallback.
+                void connectionContext?.markDisconnected(`远程连接已断开：${reason}`);
+              },
+            });
+            transaction.relay = relay;
+            await relay.start();
+
+            // ── 2. Persistence: the SSH configuration ───────────────────────
+            // Append the nonconflicting `Host` stanza. Its exact previous bytes
+            // are rewound if the transaction fails, so the SSH config is never
+            // left half-applied.
+            if (hasExplicitFields) {
+              const appended = await appendSshHostStanza(candidate, { configPath: sshConfigPath });
+              if (!appended.ok) throw new Error(appended.message);
+              stanzaRollback = appended.rollback;
+            }
+            // The stanza is now in the user's config, so the default config
+            // resolves the new host: the relay can drop its `-F` candidate.
+            relay.commitSshConfig();
+
+            // ── 3. Persistence: remember the host in the daemon's own config ─
+            // The host is remembered *before* the context commits, while the
+            // state is still `connecting`: no business request reaches the
+            // candidate endpoint and no view is retargeted until the registry
+            // record is saved, so a failed save aborts with nothing active and
+            // leaves no stale record behind.
+            await requestLocalDaemon('remote.host.save', {
+              alias: candidate.alias,
+              displayName: hostName,
+              platform: verifiedPlatform,
+              arch: verifiedArch,
+              daemonVersion: version,
+              ready: true,
+            });
+
+            // ── 4. Commit the switch (only now is the target visible) ───────
+            // Everything past this point is a non-failing assignment, so the
+            // commit cannot leave a remembered host without an active context.
+            activeSshRelay = relay;
+            return {
+              endpoint: relay.endpoint,
+              host: { alias: candidate.alias, displayName: hostName, platform, arch },
+            };
+          });
+        },
+      );
+    } catch (error) {
+      // Detach the candidate first: its tunnel-loss callback must not be
+      // attributed to it while the previous context is being restored.
+      const failedRelay = transaction.relay;
+      transaction.relay = null;
+      activeSshRelay = previousRelay;
+      const rollbackError = await rollbackSshConfig();
+      if (failedRelay) await failedRelay.stop().catch(() => undefined);
+      throw withSshRollbackNote(error, rollbackError);
+    }
+    // Only a previous relay this app owned is stopped; an externally owned
+    // remote daemon is never stopped.
+    if (previousRelay && previousRelay !== transaction.relay) await previousRelay.stop();
+  };
+
+  // The renderer bridge (typed in the shell contract). Every value is
+  // re-validated at this boundary; saved hosts are read/written through the
+  // local daemon and are never a Desktop settings source of truth.
+  ipcMain.handle(SHELL_CHANNELS.remoteState, (): RemoteConnectionSnapshot => connectionContext!.snapshot());
+  ipcMain.handle(SHELL_CHANNELS.remoteHostList, async (): Promise<RemoteHostListResult> => {
+    const result = await requestLocalDaemon('remote.host.list', {}) as { hosts?: unknown };
+    return { hosts: toSavedHostViews(result?.hosts) };
+  });
+  ipcMain.handle(SHELL_CHANNELS.remoteHostDiscovered, async (): Promise<RemoteHostListResult> => {
+    const hosts = await listLocalSshHosts({ configPath: sshConfigPath });
+    return {
+      hosts: hosts.map((host) => ({
+        alias: host.alias,
+        displayName: host.displayName,
+        address: host.address,
+        os: host.os,
+      })),
+    };
+  });
+  ipcMain.handle(
+    SHELL_CHANNELS.remoteHostTest,
+    async (_event, input: unknown): Promise<RemoteConnectionTestResult> =>
+      validateRemoteCandidate(normalizeRemoteInput(input)),
+  );
+  ipcMain.handle(SHELL_CHANNELS.remoteHostConfirm, async (_event, input: unknown): Promise<RemoteHostMutationResult> => {
+    try {
+      await activateRemoteConnection(normalizeRemoteInput(input));
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: messageOf(error) };
+    }
+  });
+  ipcMain.handle(SHELL_CHANNELS.remoteHostConnect, async (_event, alias: unknown): Promise<RemoteHostMutationResult> => {
+    try {
+      const validated = validateSshAlias(alias);
+      if (!validated.ok) return { ok: false, message: validated.message };
+      await activateRemoteConnection({ alias: validated.alias });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: messageOf(error) };
+    }
+  });
+  ipcMain.handle(SHELL_CHANNELS.remoteHostRename, async (_event, alias: unknown, displayName: unknown): Promise<RemoteHostMutationResult> => {
+    try {
+      const validated = validateSshAlias(alias);
+      if (!validated.ok) return { ok: false, message: validated.message };
+      const name = typeof displayName === 'string' ? displayName.trim() : '';
+      if (name === '') return { ok: false, message: '请输入显示名称' };
+      await requestLocalDaemon('remote.host.rename', { alias: validated.alias, displayName: name });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: messageOf(error) };
+    }
+  });
+  ipcMain.handle(SHELL_CHANNELS.remoteReturnLocal, async (): Promise<RemoteHostMutationResult> => {
+    try {
+      if (connectionContext!.snapshot().state === 'local') return { ok: true };
+      await connectionContext!.returnToLocal();
+      const relay = activeSshRelay;
+      activeSshRelay = null;
+      // Only our relay process is stopped; an externally owned remote daemon is
+      // never stopped.
+      await relay?.stop();
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: messageOf(error) };
+    }
+  });
+
   const version = app.getVersion();
   const buildTime = resolveDesktopBuildTime();
   const getSettings = async () => buildSettingsSnapshot({
-    endpoint: ipcPath,
+    endpoint: activeEndpointPath,
     workspace: workspaceConfiguration!,
     desktopVersion: version,
     wrenyardVersion: version,
     buildTime,
-    readHealth: () => canConnectDaemon() ? readWrenyardHealth(ipcPath) : Promise.resolve({ connected: false }),
-    readGatewayModels: async () => { requireDaemonRunning(); return readGatewayConnection(ipcPath).then((connection) => connection.models); },
+    readHealth: () => canConnectDaemon() ? readWrenyardHealth(activeEndpointPath) : Promise.resolve({ connected: false }),
+    readGatewayModels: async () => { requireDaemonRunning(); return readGatewayConnection(activeEndpointPath).then((connection) => connection.models); },
     readPet: async () => petController!.snapshot(),
     readUpdate: () => updateController!.snapshot(),
   });
@@ -1148,11 +1857,15 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle(SHELL_CHANNELS.daemonSnapshot, () => daemonSnapshot());
   ipcMain.handle(SHELL_CHANNELS.daemonStart, async () => {
     if (quitController?.isQuitting()) return daemonSnapshot();
+    // While remote, daemon lifecycle actions must not target the local
+    // supervisor: the active daemon is externally owned and never restarted.
+    if (isNonLocalContext()) throw new Error('远程模式下无法启动本地 daemon');
     await daemonSupervisor?.start();
     return daemonSnapshot();
   });
   ipcMain.handle(SHELL_CHANNELS.daemonRestart, async () => {
     if (quitController?.isQuitting()) return daemonSnapshot();
+    if (isNonLocalContext()) throw new Error('远程模式下无法重启本地 daemon');
     if (daemonSupervisor?.mode === 'supervised') await daemonSupervisor.restart();
     else await daemonSupervisor?.start();
     return daemonSnapshot();
@@ -1217,7 +1930,7 @@ async function bootstrap(): Promise<void> {
     onCreated: (controller) => { shellWindow = controller; },
     getAppearance: () => appearanceController!.resolve(),
     getSettings,
-    getStats: () => { requireDaemonRunning(); return readStatsSnapshot(ipcPath); },
+    getStats: () => { requireDaemonRunning(); return readStatsSnapshot(activeEndpointPath); },
     getQuota: (forceRefresh = false) => quotaController!.getSnapshot(forceRefresh),
     saveProviderOrder: async (providerIds: string[]) => {
       settingsStore.patch('providers', {
@@ -1257,10 +1970,20 @@ async function bootstrap(): Promise<void> {
     saveWorkspace: async (path: string, create = false) => {
       if (quitController?.isQuitting()) throw new Error('正在退出，无法切换工作区');
       requireDaemonRunning();
-      // Directory initialization stays in Desktop: onboarding may create a new
-      // empty workspace. The daemon owns the authoritative config write, so
-      // Desktop never persists workspace.root itself.
-      const root = create ? await initializeProductWorkspace(path) : path.trim();
+      // Initializing a workspace is remote-safe when remote: the daemon creates
+      // the directory on its own host, so the local machine never stats or
+      // creates a remote path. Locally the same onboarding runs in Desktop; in
+      // both cases the daemon owns the authoritative workspace.root write.
+      let root: string;
+      if (create && isNonLocalContext()) {
+        const initialized = await requestForeman('workspace.initialize', { root: path.trim() }) as DaemonWorkspaceInitializeResult;
+        if (!initialized.ok) throw new Error(initialized.message ?? '初始化远程工作区失败');
+        root = initialized.root ?? path.trim();
+      } else if (create) {
+        root = await initializeProductWorkspace(path);
+      } else {
+        root = path.trim();
+      }
       if (root === '') throw new Error('请输入 workspace 路径');
       // The daemon applies the change in place: it rebinds every workspace-scoped
       // service and persists the root while the same process, lock, database and
@@ -1270,12 +1993,11 @@ async function bootstrap(): Promise<void> {
       if (result.ok !== true) {
         throw new Error(result.message ?? '切换工作区失败，请重试。');
       }
-      // Re-read the daemon-owned config, then rebuild the Desktop session
-      // surface so the previous workspace's session ids cannot silently carry
-      // over into the switched-to workspace. Retire the old workspace's live
-      // session.events polls first; the session IPC handlers stay registered.
+      // Re-read the active workspace (remote-safe while remote), then rebuild the
+      // Desktop session surface so the previous workspace's session ids cannot
+      // silently carry over. Retire the old live polls first.
       sessionRegistration?.reset();
-      const refreshed = await inspectProductWorkspace();
+      const refreshed = await readActiveWorkspaceSnapshot();
       workspaceConfiguration = refreshed;
       desktopSubscriptions?.reconnect();
       notifyDaemonChanged();
@@ -1308,9 +2030,20 @@ async function bootstrap(): Promise<void> {
     getPreferences: async () => preferencesController!.get(),
     setPreference: async (id: PreferenceId, value: unknown) => preferencesController!.set(id, value),
     getActivityStatus: () => activityProjector.get(),
-    openSettingsFile: async () => { await shell.openPath(settingsPath); },
-    openLogsDirectory: async () => { await shell.openPath(join(foremanStateRoot(), 'logs')); },
-    revealWorkspace: async (path: string) => { shell.showItemInFolder(path); },
+    // Local-only bypasses are explicitly unavailable while remote: they must
+    // never open a same-named local path for remote data.
+    openSettingsFile: async () => {
+      if (isNonLocalContext()) throw new Error('远程模式下无法打开本地设置文件');
+      await shell.openPath(settingsPath);
+    },
+    openLogsDirectory: async () => {
+      if (isNonLocalContext()) throw new Error('远程模式下无法打开本地日志目录');
+      await shell.openPath(join(foremanStateRoot(), 'logs'));
+    },
+    revealWorkspace: async (path: string) => {
+      if (isNonLocalContext()) throw new Error('远程模式下无法在本地打开远程路径');
+      shell.showItemInFolder(path);
+    },
   });
   interfaceZoom.applyShellZoom();
   // Keep any already-open cards on the same zoom as the shell at startup.
@@ -1497,6 +2230,10 @@ if (!gotSingleInstanceLock) {
       taskgraphWindowOwner = null;
       await sessionRegistration?.close();
       sessionRegistration = null;
+      await activeSshRelay?.stop();
+      activeSshRelay = null;
+      await activeEndpointBridge?.stop();
+      activeEndpointBridge = null;
     } catch {
       // best-effort termination
     }

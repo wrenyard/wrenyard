@@ -39,7 +39,7 @@ export interface DaemonSubscriptionsOptions {
  */
 export class DaemonSubscriptions {
   private readonly client: DaemonClient;
-  private readonly ipcPath: string;
+  private ipcPath: string;
   private readonly getTrackedTaskgraphIds: () => string[];
   private readonly logger: DiagnosticLogger;
   private readonly handlers = new Set<DaemonSubscriptionHandlers>();
@@ -114,6 +114,27 @@ export class DaemonSubscriptions {
     return () => {
       this.handlers.delete(handlers);
     };
+  }
+
+  /**
+   * Follow the active endpoint across a connection transition.
+   *
+   * On the stable Desktop bridge the path never changes, so treating an
+   * unchanged path as "nothing happened" would leave the previous context's
+   * replayed snapshots and pending poll rounds in place. Every call therefore
+   * invalidates and restarts: the replayed snapshots are dropped and the pollers
+   * are stopped and started together, so they only reconnect once the switch is
+   * committed. Restarting unconditionally also resumes pollers that a previous
+   * unsettled period paused. A round that resolves after the restart is dropped
+   * by the poller generation guard and by the shared client's generation fence.
+   */
+  setEndpoint(path: string): void {
+    if (this.disposed) return;
+    this.ipcPath = path;
+    this.client.setPath(path);
+    this.lastStats = undefined;
+    this.lastActivity = undefined;
+    this.reconnect();
   }
 
   /** Current shared activity round, when one has been observed. */

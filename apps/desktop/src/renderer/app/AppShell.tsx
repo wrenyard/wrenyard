@@ -1,7 +1,8 @@
-import { Activity, useEffect, useState } from 'react';
+import { Activity, Fragment, useEffect, useState } from 'react';
 import type { ComponentType, CSSProperties, ReactNode } from 'react';
-import type { ShellPage } from '@/shell-contract';
-import { useShellPage } from '@/renderer/lib/desktop';
+import type { RemoteConnectionState, ShellPage } from '@/shell-contract';
+import { useRemoteConnection, useShellPage } from '@/renderer/lib/desktop';
+import { Spinner } from '@/renderer/components/ui/spinner';
 import { useMiniMode } from '@/renderer/lib/mini';
 import { startViewTransition } from '@/renderer/lib/motion';
 import { useIsMobile } from '@/renderer/hooks/use-mobile';
@@ -33,6 +34,27 @@ function WorkspaceGatedSessionPage() {
   );
 }
 
+/**
+ * Transition/disconnected overlay for the single active context. While the
+ * endpoint is not settled (`connecting`/`disconnected`) the business pages are
+ * unmounted rather than left showing the previous host's data, and the copy
+ * points the user at the Daemon menu, which stays reachable because this
+ * covers only the page area — never the sidebar, title bar or status bar.
+ */
+function RemoteTransitionNotice({ state, message }: { state: RemoteConnectionState; message?: string }) {
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground"
+      data-remote-transition
+    >
+      {state === 'connecting' ? <Spinner className="size-5" /> : null}
+      <p>{state === 'connecting' ? '正在切换远程连接…' : '远程连接已断开'}</p>
+      {message ? <p className="max-w-md text-xs">{message}</p> : null}
+      <p className="text-xs">业务页面已暂停；可在左侧 Daemon 菜单中返回本地或重新连接。</p>
+    </div>
+  );
+}
+
 // Settings is dispatched separately: it renders into the shell's left column
 // through the portal host, so it needs props the other pages do not.
 const PAGES: Record<Exclude<ShellPage, 'settings'>, ComponentType> = {
@@ -54,6 +76,12 @@ const PAGES: Record<Exclude<ShellPage, 'settings'>, ComponentType> = {
 export function AppShell() {
   const page = useShellPage();
   const mini = useMiniMode();
+  const connection = useRemoteConnection();
+  // Business pages exist only while the active endpoint is committed. A switch
+  // in progress or a lost remote tunnel unmounts them, and a committed change
+  // remounts them under a generation key so no page-owned state (session
+  // selection, drafts, inspector) carries to the other host.
+  const endpointSettled = connection.state === 'local' || connection.state === 'remote';
   // The rendered page lags the store by one view transition so the page swap
   // runs inside `document.startViewTransition`; without a transition it follows
   // the store directly.
@@ -140,29 +168,37 @@ export function AppShell() {
           )}
           {!mini && shellSidebarOpen && !isMobile && <div {...sidebarResize.handleProps} />}
           <SidebarInset className="motion-surface-page flex min-h-0 min-w-0 flex-col">
-            {PAGE_ORDER.map((id) => {
-              if (!mounted.has(id)) return null;
-              let content: ReactNode;
-              if (id === 'settings') {
-                content = (
-                  <SettingsPage
-                    sidebarHost={settingsSidebarHost}
-                    settingsSidebarOpen={settingsSidebarOpen}
-                    onSettingsSidebarOpenChange={setSettingsSidebarOpen}
-                  />
-                );
-              } else {
-                const PageComponent = PAGES[id];
-                content = <PageComponent />;
-              }
-              return (
-                <Activity key={id} mode={id === active ? 'visible' : 'hidden'}>
-                  <TitleBarPageProvider page={id}>
-                    <div className="flex min-h-0 flex-1 flex-col">{content}</div>
-                  </TitleBarPageProvider>
-                </Activity>
-              );
-            })}
+            {endpointSettled ? (
+              // Generation-keyed boundary: a committed switch remounts the page
+              // tree, so page-owned state cannot leak across hosts.
+              <Fragment key={connection.generation}>
+                {PAGE_ORDER.map((id) => {
+                  if (!mounted.has(id)) return null;
+                  let content: ReactNode;
+                  if (id === 'settings') {
+                    content = (
+                      <SettingsPage
+                        sidebarHost={settingsSidebarHost}
+                        settingsSidebarOpen={settingsSidebarOpen}
+                        onSettingsSidebarOpenChange={setSettingsSidebarOpen}
+                      />
+                    );
+                  } else {
+                    const PageComponent = PAGES[id];
+                    content = <PageComponent />;
+                  }
+                  return (
+                    <Activity key={id} mode={id === active ? 'visible' : 'hidden'}>
+                      <TitleBarPageProvider page={id}>
+                        <div className="flex min-h-0 flex-1 flex-col">{content}</div>
+                      </TitleBarPageProvider>
+                    </Activity>
+                  );
+                })}
+              </Fragment>
+            ) : (
+              <RemoteTransitionNotice state={connection.state} message={connection.message} />
+            )}
           </SidebarInset>
           <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />
         </SidebarProvider>

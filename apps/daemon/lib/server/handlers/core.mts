@@ -50,8 +50,11 @@ import type {
   ExecGetResult,
   ExecStartResult,
   WorkspaceSwitchResult,
+  WorkspaceInspectResult,
+  WorkspaceInitializeResult,
 } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../rpc-router.mts'
+import type { RemoteHostRegistryService } from '../../remote/host-registry.mts'
 import { registerProjectHandlers } from './project.mts'
 import { registerWorkspaceVcsHandlers } from './workspace-vcs.mts'
 import { registerWorkspaceDocHandlers, type WorkspaceDocHandlerService } from './workspace-doc.mts'
@@ -116,6 +119,26 @@ export interface CoreRpcHandlerOptions {
    * reporting `unavailable` instead of being silently dropped.
    */
   workspaceSwitch?: (root: string) => Promise<WorkspaceSwitchResult>
+  /**
+   * Daemon-owned saved-remote-host registry backing `remote.host.list/save/rename`.
+   * Optional: when absent those methods fail loud with a bounded unavailable
+   * error instead of being silently dropped.
+   */
+  remoteHostRegistry?: RemoteHostRegistryService
+  /**
+   * Remote-safe workspace inspection backing `workspace.inspect`. It runs on the
+   * daemon host, so a remote workspace path is never stat'ed on the client.
+   * Optional: when absent the method answers `unavailable` rather than being
+   * silently dropped.
+   */
+  workspaceInspect?: (root?: string) => Promise<WorkspaceInspectResult>
+  /**
+   * Remote-safe workspace initialization backing `workspace.initialize`. It
+   * creates the directory on the daemon host only; the daemon still owns the
+   * authoritative `workspace.root` write. Optional: when absent the method
+   * answers `unavailable`.
+   */
+  workspaceInitialize?: (root: string) => Promise<WorkspaceInitializeResult>
   /**
    * Authoritative active-work counts for `daemon.status`. Optional so a context
    * without a live daemon reports zeros rather than fabricating counts.
@@ -348,6 +371,83 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       } satisfies WorkspaceSwitchResult
     }
     return options.workspaceSwitch(params.root)
+  })
+  // remote.host.list/save/rename delegate to the injected daemon-owned
+  // RemoteHostRegistryService; the RPC surface never recreates registry or
+  // persistence logic. IPC-only, like every other administrative surface. When
+  // the dependency is absent the methods fail loud with a bounded unavailable
+  // error instead of being silently dropped. There is deliberately no
+  // remote.host.remove: the product does not offer host deletion.
+  const requireRemoteHostRegistry = (
+    context: unknown,
+    method: string,
+  ): RemoteHostRegistryService => {
+    const rpcContext = coreRpcContextFromUnknown(context)
+    if (rpcContext.transport !== 'ipc') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: `${method} is only available over IPC` },
+        { code: 'remote_host_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+      )
+    }
+    if (!options.remoteHostRegistry) {
+      throw new ProtocolError(
+        { code: INTERNAL_ERROR.code, message: `${method} is not available in this runtime` },
+        { code: 'remote_host_unavailable' },
+      )
+    }
+    return options.remoteHostRegistry
+  }
+  router.register('remote.host.list', async (_params, _message, context) => {
+    return requireRemoteHostRegistry(context, 'remote.host.list').list()
+  })
+  router.register('remote.host.save', async (params, _message, context) => {
+    return requireRemoteHostRegistry(context, 'remote.host.save').save(params)
+  })
+  router.register('remote.host.rename', async (params, _message, context) => {
+    return requireRemoteHostRegistry(context, 'remote.host.rename').rename(params.alias, params.displayName)
+  })
+  // workspace.inspect/workspace.initialize are remote-safe workspace operations:
+  // they run on the daemon host, so an active remote workspace never requires
+  // local Desktop filesystem access. They are registered unconditionally (like
+  // workspace.switch) and are IPC-only; a refused or unavailable result is a
+  // fact, not a protocol error. The daemon remains the only authority for the
+  // authoritative workspace.root write.
+  router.register('workspace.inspect', async (params, _message, context) => {
+    const rpcContext = coreRpcContextFromUnknown(context)
+    if (rpcContext.transport !== 'ipc') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'workspace.inspect is only available over IPC' },
+        { code: 'workspace_inspect_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+      )
+    }
+    if (!options.workspaceInspect) {
+      return {
+        ok: false,
+        outcome: 'invalid',
+        root: '',
+        exists: false,
+        readOnly: false,
+        message: 'workspace.inspect is not available in this runtime',
+      } satisfies WorkspaceInspectResult
+    }
+    return options.workspaceInspect(params.root)
+  })
+  router.register('workspace.initialize', async (params, _message, context) => {
+    const rpcContext = coreRpcContextFromUnknown(context)
+    if (rpcContext.transport !== 'ipc') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'workspace.initialize is only available over IPC' },
+        { code: 'workspace_initialize_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+      )
+    }
+    if (!options.workspaceInitialize) {
+      return {
+        ok: false,
+        outcome: 'unavailable',
+        message: 'workspace.initialize is not available in this runtime',
+      } satisfies WorkspaceInitializeResult
+    }
+    return options.workspaceInitialize(params.root)
   })
   // daemon.status is registered unconditionally: it is the lifecycle surface
   // (shutdown + idle + active counts) and must not disappear with any optional

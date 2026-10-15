@@ -37,6 +37,11 @@ import {
   type DesktopPreferences,
   type PreferenceId,
   type ActivityStatusSnapshot,
+  type RemoteConnectionSnapshot,
+  type RemoteHostListResult,
+  type RemoteConnectionTestInput,
+  type RemoteConnectionTestResult,
+  type RemoteHostMutationResult,
 } from './shell-contract.js';
 import { exposeSession } from './session/preload.js';
 
@@ -80,6 +85,17 @@ function isBoundedNotificationId(value: unknown): value is string {
 function isWindowStateSnapshot(value: unknown): value is WindowStateSnapshot {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   return typeof (value as { fullscreen?: unknown }).fullscreen === 'boolean';
+}
+
+/**
+ * A remote-connection push from the main process. The generation is part of the
+ * typed contract, so a snapshot without a numeric generation is not a valid
+ * delivery and is dropped rather than keying a boundary on an unknown value.
+ */
+function isRemoteConnectionSnapshot(value: unknown): value is RemoteConnectionSnapshot {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  return typeof snapshot.state === 'string' && typeof snapshot.generation === 'number';
 }
 
 const api: WrenyardShellApi = {
@@ -315,6 +331,37 @@ const api: WrenyardShellApi = {
   },
   revealWorkspace(path: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.revealWorkspace, path) as Promise<void>;
+  },
+  getRemoteConnection(): Promise<RemoteConnectionSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.remoteState) as Promise<RemoteConnectionSnapshot>;
+  },
+  listRemoteHosts(): Promise<RemoteHostListResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.remoteHostList) as Promise<RemoteHostListResult>;
+  },
+  listDiscoveredSshHosts(): Promise<RemoteHostListResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.remoteHostDiscovered) as Promise<RemoteHostListResult>;
+  },
+  testRemoteConnection(input: RemoteConnectionTestInput): Promise<RemoteConnectionTestResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.remoteHostTest, input) as Promise<RemoteConnectionTestResult>;
+  },
+  confirmRemoteConnection(input: RemoteConnectionTestInput): Promise<RemoteHostMutationResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.remoteHostConfirm, input) as Promise<RemoteHostMutationResult>;
+  },
+  renameRemoteHost(alias: string, displayName: string): Promise<RemoteHostMutationResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.remoteHostRename, alias, displayName) as Promise<RemoteHostMutationResult>;
+  },
+  connectSavedRemoteHost(alias: string): Promise<RemoteHostMutationResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.remoteHostConnect, alias) as Promise<RemoteHostMutationResult>;
+  },
+  returnToLocal(): Promise<RemoteHostMutationResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.remoteReturnLocal) as Promise<RemoteHostMutationResult>;
+  },
+  onRemoteChanged(listener: (snapshot: RemoteConnectionSnapshot) => void): () => void {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: unknown): void => {
+      if (isRemoteConnectionSnapshot(snapshot)) listener(snapshot);
+    };
+    ipcRenderer.on(SHELL_CHANNELS.remoteChanged, handler);
+    return () => ipcRenderer.removeListener(SHELL_CHANNELS.remoteChanged, handler);
   },
 };
 

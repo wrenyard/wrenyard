@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { requirePlainVersion } from './release-context.mjs';
+import { REMOTE_TARGETS, remotePayloadName, remoteMetadataName } from './remote-payload.mjs';
 
 import {
   UPDATE_FEED_SCHEMA_VERSION as SCHEMA_VERSION,
@@ -32,11 +33,20 @@ import {
 //     "published_at": "<ISO-8601>",
 //     "assets": [
 //       { "name": "<asset name>", "url": "<release download url>", "sha256": "<64 hex>" }
+//     ],
+//     "remote_payloads": [
+//       { "target": "<triplet>", "name": "<archive>", "url": "<url>", "sha256": "<64 hex>" }
 //     ]
 //   }
 //
-// Every release publishes exactly three assets: the macOS installer (DMG), the
-// macOS in-app update (ZIP) and the Windows installer/update (NSIS setup.exe).
+// `remote_payloads` is optional and omitted when a release has no remote daemon
+// bootstrap payloads.
+//
+// Every release publishes exactly three Desktop assets: the macOS installer
+// (DMG), the macOS in-app update (ZIP) and the Windows installer/update (NSIS
+// setup.exe). A release may additionally carry target-specific remote daemon
+// bootstrap payloads; when present they are listed, hashed, in the optional
+// `remote_payloads` field, which clients that predate it simply ignore.
 //
 // Everything in this module is pure generation/preparation. It never reads
 // credentials, never talks to git, and never publishes anything: the release
@@ -55,6 +65,20 @@ export function canonicalAssetNames(version) {
     updateAssetName(version, 'darwin-arm64'),
     installerAssetName(version, 'win32-x64'),
   ];
+}
+
+// The remote daemon bootstrap payloads published alongside the Desktop assets:
+// one archive, its checksum sidecar and its matching-version metadata per
+// supported target. They are additive to the Desktop asset contract and are
+// advertised in the feed's optional `remote_payloads` digest list.
+export function remotePayloadAssetNames(version) {
+  requirePlainVersion(version);
+  const names = [];
+  for (const target of REMOTE_TARGETS) {
+    const archive = remotePayloadName(version, target);
+    names.push(archive, `${archive}.sha256`, remoteMetadataName(version, target));
+  }
+  return names;
 }
 
 export function sha256File(path) {
@@ -78,16 +102,18 @@ function assertTimestamp(publishedAt) {
   return parsed.toISOString();
 }
 
-// The assets must be exactly the canonical names derived from the requested
-// version. A missing, extra, wrong-version or malformed name is a hard error: a
-// feed that advertises a partial or mislabeled asset set would break every
-// client that trusts it.
+// The assets must be exactly the canonical Desktop names derived from the
+// requested version, or one of the additive remote payload artifacts. A missing,
+// extra, wrong-version or malformed Desktop name is a hard error: a feed that
+// advertises a partial or mislabeled asset set would break every client that
+// trusts it.
 export function assertAssetNames(names, version) {
   const expected = canonicalAssetNames(version);
   const expectedSet = new Set(expected);
+  const allowed = new Set([...expected, ...remotePayloadAssetNames(version)]);
   const seen = new Set();
   for (const name of names) {
-    if (typeof name !== 'string' || !expectedSet.has(name)) {
+    if (typeof name !== 'string' || !allowed.has(name)) {
       throw new Error(`release asset is not a canonical public archive: ${name}`);
     }
     if (seen.has(name)) {
@@ -95,7 +121,7 @@ export function assertAssetNames(names, version) {
     }
     seen.add(name);
   }
-  for (const name of expected) {
+  for (const name of expectedSet) {
     if (!seen.has(name)) {
       throw new Error(`missing canonical public archive ${name}`);
     }
@@ -103,10 +129,32 @@ export function assertAssetNames(names, version) {
   return expected;
 }
 
+// The matching-version remote daemon payloads present in `assetsDir`, hashed the
+// same way as the Desktop assets. The list is optional: a staging directory with
+// no remote payload leaves the feed document's `remote_payloads` field absent.
+function collectRemotePayloads({ version, repository, assetsDir }) {
+  const payloads = [];
+  for (const target of REMOTE_TARGETS) {
+    const name = remotePayloadName(version, target);
+    const path = resolve(assetsDir, name);
+    if (!existsSync(path)) continue;
+    const sha256 = sha256File(path);
+    if (!SHA256_PATTERN.test(sha256)) throw new Error(`malformed sha256 for ${name}`);
+    payloads.push({
+      target,
+      name,
+      url: `https://github.com/${repository}/releases/download/v${version}/${name}`,
+      sha256,
+    });
+  }
+  return payloads;
+}
+
 // Build one immutable version document from local release assets. `assetsDir`
 // holds the three installers, which are hashed here so the manifest can never
 // disagree with what was uploaded, and every asset URL is derived from the
-// validated version/repository rather than being accepted from the caller.
+// validated version/repository rather than being accepted from the caller. Any
+// remote daemon payload archives present are recorded in `remote_payloads`.
 export function buildVersionDocument({ version, repository, publishedAt, assetsDir }) {
   // Fail closed on prerelease or build-metadata versions before any feed file
   // is created or written; prepareMetadata and the CLI both funnel through here.
@@ -129,12 +177,10 @@ export function buildVersionDocument({ version, repository, publishedAt, assetsD
       sha256,
     };
   });
-  return {
-    schema_version: SCHEMA_VERSION,
-    version,
-    published_at: published,
-    assets,
-  };
+  const remotePayloads = collectRemotePayloads({ version, repository: repo, assetsDir });
+  return remotePayloads.length > 0
+    ? { schema_version: SCHEMA_VERSION, version, published_at: published, assets, remote_payloads: remotePayloads }
+    : { schema_version: SCHEMA_VERSION, version, published_at: published, assets };
 }
 
 export function renderDocument(document) {

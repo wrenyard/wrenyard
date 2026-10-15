@@ -1,6 +1,6 @@
 /** The only renderer module that reads the typed preload shell facade. */
 import { useSyncExternalStore } from 'react';
-import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, ShellPage, WindowStateSnapshot, WrenyardShellApi } from '@/shell-contract';
+import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi } from '@/shell-contract';
 
 declare global {
   interface Window {
@@ -69,6 +69,63 @@ export function onPreferencesChanged(listener: (preferences: DesktopPreferences)
 
 export function onActivityChanged(listener: (snapshot: ActivityStatusSnapshot) => void): () => void {
   return shell.onActivityChanged(listener);
+}
+
+/**
+ * The committed remote-connection state changed: every endpoint-bound view must
+ * reset together (the app query client invalidates on this push).
+ */
+export function onRemoteChanged(listener: (snapshot: RemoteConnectionSnapshot) => void): () => void {
+  return shell.onRemoteChanged(listener);
+}
+
+/* ------------------------------------------------------------------ */
+/* Remote connection (WY Remote)                                       */
+/* ------------------------------------------------------------------ */
+
+// The committed remote-connection snapshot, kept in one module-level store so
+// the renderer subscribes to the bridge exactly once. Every push carries the
+// connection generation, so a subscriber can key its own reset on the committed
+// generation and drop a late async delivery from a superseded switch.
+const DEFAULT_REMOTE_CONNECTION: RemoteConnectionSnapshot = { state: 'local', generation: 0, host: null };
+let remoteConnection: RemoteConnectionSnapshot = DEFAULT_REMOTE_CONNECTION;
+const remoteConnectionListeners = new Set<() => void>();
+
+function sameRemoteConnection(a: RemoteConnectionSnapshot, b: RemoteConnectionSnapshot): boolean {
+  return a.state === b.state
+    && a.generation === b.generation
+    && a.message === b.message
+    && (a.host?.alias ?? null) === (b.host?.alias ?? null);
+}
+
+function publishRemoteConnection(snapshot: RemoteConnectionSnapshot): void {
+  // Ignore a snapshot that is not newer than the committed one: a stale async
+  // read resolving after a push must never roll the context boundary back.
+  if (snapshot.generation < remoteConnection.generation) return;
+  if (sameRemoteConnection(snapshot, remoteConnection)) return;
+  remoteConnection = snapshot;
+  for (const listener of remoteConnectionListeners) listener();
+}
+
+// Subscribe once at module load so the very first push is never missed; the
+// initial async read fills the store if no push has arrived yet.
+shell.onRemoteChanged(publishRemoteConnection);
+void shell.getRemoteConnection().then(publishRemoteConnection).catch(() => undefined);
+
+function subscribeRemoteConnection(listener: () => void): () => void {
+  remoteConnectionListeners.add(listener);
+  return () => {
+    remoteConnectionListeners.delete(listener);
+  };
+}
+
+function getRemoteConnectionSnapshot(): RemoteConnectionSnapshot {
+  return remoteConnection;
+}
+
+/** Latest committed remote-connection snapshot (generation-keyed). */
+export function useRemoteConnection(): RemoteConnectionSnapshot {
+  return useSyncExternalStore(subscribeRemoteConnection, getRemoteConnectionSnapshot, getRemoteConnectionSnapshot);
 }
 
 /* ------------------------------------------------------------------ */

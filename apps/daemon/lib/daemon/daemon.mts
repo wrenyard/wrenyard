@@ -44,6 +44,8 @@ import { ExecService } from '@wrenyard/exec'
 import { ProviderService } from '@wrenyard/provider-service'
 import { createExecFeatureRegistry } from './execution/exec-features.mts'
 import { RuntimeAliasService } from './services/runtime-alias-service.mts'
+import { RemoteHostRegistryService } from '../remote/host-registry.mts'
+import { createWorkspaceControl } from './services/workspace-control.mts'
 import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
@@ -269,6 +271,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
         isShuttingDown: () => this.shutdownRequestedFlag,
         isSwitching: () => this.switching,
         workspaceSwitch: (root) => this.switchWorkspace(root),
+        workspacePinned: () => this.workspacePinSource !== undefined,
         onScheduler: (scheduler) => { this.scheduler = scheduler },
       })
     } catch (error) {
@@ -539,6 +542,8 @@ async function createForemanDaemonResources(
     isSwitching?: () => boolean
     /** Daemon-owned workspace hot switch backing the workspace.switch RPC. */
     workspaceSwitch?: (root: string) => Promise<WorkspaceSwitchResult>
+    /** True when WRENYARD_WORKSPACE / --work-dir pins the workspace root. */
+    workspacePinned?: () => boolean
     /** Receives the scheduler as soon as it exists, before the IPC server. */
     onScheduler?: (scheduler: Scheduler) => void
   },
@@ -833,6 +838,20 @@ async function createForemanDaemonResources(
     modelStatus: () => workspaceScoped.taskSettingsService.modelStatus(),
     localSpeed: readLocalSpeedSamples,
   })
+  // Daemon-owned saved-remote-host registry backing remote.host.list/save/rename.
+  // It is independent of the active workspace and persists only to the daemon
+  // config, through the same atomic mode-0600 writer as every other config write.
+  const remoteHostRegistry = new RemoteHostRegistryService({ configPath: authoritativeConfigPath })
+  // Remote-safe workspace control backing workspace.inspect/workspace.initialize.
+  // It reads the live workspace root so a hot switch is observed without ever
+  // rebuilding the helper, and refuses while the daemon is pinned, switching or
+  // shutting down.
+  const workspaceControl = createWorkspaceControl({
+    currentRoot: () => workspaceScoped.workspaceRoot,
+    isPinned: () => options.workspacePinned?.() === true,
+    isShuttingDown: options.isShuttingDown,
+    isSwitching: () => options.isSwitching?.() === true,
+  })
   coreOptions = {
     startedAt,
     workspaceRoot: config.workspaceRoot,
@@ -840,6 +859,9 @@ async function createForemanDaemonResources(
     isShuttingDown: options.isShuttingDown,
     isSwitching: options.isSwitching,
     workspaceSwitch: options.workspaceSwitch,
+    remoteHostRegistry,
+    workspaceInspect: (root) => workspaceControl.inspect(root),
+    workspaceInitialize: (root) => workspaceControl.initialize(root),
     daemonActiveWork: readDaemonActiveCounts,
     taskgraphService: workspaceScoped.taskgraphService,
     workspaceDocService: workspaceScoped.workspaceDocService,

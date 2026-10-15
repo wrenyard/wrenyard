@@ -9,7 +9,7 @@
  */
 import { app, nativeImage } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { DraftAttachment } from './preload.js';
 
@@ -19,6 +19,8 @@ export const MAX_DESCRIBE_FILES = 128;
 export const MAX_FILE_BYTES = 64 * 1024 * 1024;
 /** A clipboard image larger than this is rejected outright. */
 export const MAX_CLIPBOARD_BYTES = 32 * 1024 * 1024;
+/** Largest local file that may be inlined as a byte-carrying remote upload. */
+export const MAX_REMOTE_UPLOAD_BYTES = 32 * 1024 * 1024;
 /** Longest edge of a generated thumbnail, in pixels. */
 export const THUMBNAIL_MAX_PX = 192;
 /** A data URL preview longer than this is dropped rather than relayed. */
@@ -158,4 +160,74 @@ export async function discardStagedFiles(paths: readonly string[]): Promise<void
     // Already removed or no longer accessible: nothing to clean up.
     await unlink(candidate).catch(() => undefined);
   }));
+}
+
+/* ------------------------------------------------------------------ */
+/* Remote-safe media (WY Remote)                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Describe one locally picked file for a *remote* target. The remote daemon
+ * cannot read a local path, so the bytes are inlined as a bounded data URL and
+ * the local path is never part of the attachment. Oversized or unreadable files
+ * are dropped rather than silently truncated.
+ */
+export async function describeRemoteFile(path: string): Promise<DraftAttachment | undefined> {
+  let info: Awaited<ReturnType<typeof stat>>;
+  try {
+    info = await stat(path);
+  } catch {
+    return undefined;
+  }
+  if (!info.isFile() || info.size > MAX_REMOTE_UPLOAD_BYTES) return undefined;
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(path);
+  } catch {
+    return undefined;
+  }
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_REMOTE_UPLOAD_BYTES) return undefined;
+  const mime = IMAGE_MIME_BY_EXTENSION[extname(path).toLowerCase()] ?? 'application/octet-stream';
+  const preview = mime.startsWith('image/') ? previewOf(nativeImage.createFromBuffer(bytes)) : undefined;
+  return {
+    id: stableId(bytes),
+    name: basename(path),
+    bytes: bytes.byteLength,
+    mime,
+    dataUrl: `data:${mime};base64,${bytes.toString('base64')}`,
+    ...(preview === undefined ? {} : { preview }),
+  };
+}
+
+/** Bounded, de-duplicated remote upload projection of picked file paths. */
+export async function describeRemoteFiles(paths: readonly string[]): Promise<DraftAttachment[]> {
+  const bounded = [...new Set(paths.filter((path) => path !== ''))].slice(0, MAX_DESCRIBE_FILES);
+  const described = await Promise.all(bounded.map(describeRemoteFile));
+  return described.filter((file): file is DraftAttachment => file !== undefined);
+}
+
+/**
+ * Clipboard image for a remote target. The renderer already holds the bytes as
+ * a data URL, so it is validated and forwarded as-is: no local staging file is
+ * written and no local path is sent to the remote daemon.
+ */
+export function clipboardToRemoteAttachment(input: { dataUrl: string; name?: string }): DraftAttachment {
+  if (input.dataUrl.length > MAX_DATA_URL_CHARS) throw new Error('图片过大，无法添加');
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i.exec(input.dataUrl);
+  if (!match) throw new Error('剪贴板图片格式不支持');
+  const mime = match[1]!.toLowerCase();
+  const extension = IMAGE_EXTENSION_BY_MIME[mime];
+  if (extension === undefined) throw new Error('剪贴板图片格式不支持');
+  const bytes = Buffer.from(match[2]!, 'base64');
+  if (bytes.byteLength === 0) throw new Error('剪贴板图片为空');
+  if (bytes.byteLength > MAX_CLIPBOARD_BYTES) throw new Error('图片过大，无法添加');
+  const preview = previewOf(nativeImage.createFromBuffer(bytes));
+  return {
+    id: stableId(bytes),
+    name: safeName(input.name, `粘贴图片${extension}`),
+    bytes: bytes.byteLength,
+    mime,
+    dataUrl: input.dataUrl,
+    ...(preview === undefined ? {} : { preview }),
+  };
 }

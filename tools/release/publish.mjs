@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Single publish entry point. It validates the tag, confirms the three canonical
-// installers, publishes them as a normal release, commits the update feed to the
+// installers plus the target-specific remote daemon payload archives and their
+// metadata, publishes them as a normal release, commits the update feed to the
 // `updates` branch, then removes this run's transient workflow artifacts. Every
 // external command goes through the injectable `run` seam so the fixture tests
 // never touch a real remote.
@@ -11,14 +12,14 @@ import { fileURLToPath } from 'node:url';
 
 import { packageVersion, REPO_ROOT, signingSummary, validateReleaseTag } from './release-context.mjs';
 import { runCommand } from './run-command.mjs';
-import { assertAssetNames, canonicalAssetNames, prepareMetadata } from './update-feed.mjs';
+import { assertAssetNames, canonicalAssetNames, prepareMetadata, remotePayloadAssetNames } from './update-feed.mjs';
 
 const MAX_FEED_ATTEMPTS = 5;
 
 // Confirm the three canonical installers exist in the downloaded artifacts
 // before anything is published. The map is built in memory and validated
-// against the version-derived names, so a missing, extra or mislabeled asset
-// fails closed.
+// against the version-derived names, so a missing or mislabeled installer fails
+// closed. Additional remote payload artifacts are validated separately.
 export function confirmCanonicalAssets({ artifactsDir, version = packageVersion() }) {
   const found = new Map();
   const walk = (dir) => {
@@ -33,6 +34,31 @@ export function confirmCanonicalAssets({ artifactsDir, version = packageVersion(
   };
   walk(artifactsDir);
   return assertAssetNames([...found.keys()].sort(), version).map((name) => ({ name, path: found.get(name) }));
+}
+
+// Confirm the target-specific remote daemon payload archives, their checksum
+// sidecars and their matching-version metadata are all present before anything
+// is published. A missing payload fails closed rather than publishing a release
+// that advertises remote daemons it cannot provision.
+export function confirmRemotePayloadAssets({ artifactsDir, version = packageVersion() }) {
+  const expected = remotePayloadAssetNames(version);
+  const found = new Map();
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const file = join(dir, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.isFile()) {
+        if (found.has(entry.name)) throw new Error(`duplicate release asset: ${entry.name}`);
+        found.set(entry.name, file);
+      }
+    }
+  };
+  walk(artifactsDir);
+  return expected.map((name) => {
+    const path = found.get(name);
+    if (path === undefined) throw new Error(`missing remote payload artifact ${name}`);
+    return { name, path };
+  });
 }
 
 // Create a draft release, upload the three installers, then publish it as a
@@ -165,12 +191,14 @@ export function publishRelease({
 }) {
   validateReleaseTag(tag, version);
   const confirmed = confirmCanonicalAssets({ artifactsDir, version });
+  const remotePayloads = confirmRemotePayloadAssets({ artifactsDir, version });
   rmSync(stagingDir, { recursive: true, force: true });
   mkdirSync(stagingDir, { recursive: true });
-  for (const { name, path: source } of confirmed) copyFileSync(source, resolve(stagingDir, name));
+  for (const { name, path: source } of [...confirmed, ...remotePayloads]) copyFileSync(source, resolve(stagingDir, name));
 
+  const uploadNames = [...canonicalAssetNames(version), ...remotePayloads.map((asset) => asset.name)];
   publishGitHubRelease({
-    assets: canonicalAssetNames(version).map((name) => resolve(stagingDir, name)),
+    assets: uploadNames.map((name) => resolve(stagingDir, name)),
     repository,
     tag,
     sha,

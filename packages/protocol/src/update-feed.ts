@@ -22,6 +22,11 @@
  *
  *   { schema_version, version, published_at, assets: [{ name, url, sha256 }] }
  *
+ * A release that also ships remote daemon bootstrap payloads adds an optional
+ * matching-version digest list; a document without it keeps parsing unchanged:
+ *
+ *   remote_payloads: [{ target, name, url, sha256 }]
+ *
  * Client parsing rules, shared by Desktop and the release tooling:
  *
  *   - read the canonical `latest.json` head when no version is requested,
@@ -56,12 +61,31 @@ interface UpdateFeedAsset {
   readonly sha256: string;
 }
 
+/**
+ * One target-specific remote daemon bootstrap payload as advertised by the feed.
+ * These are additive: a document published before remote payloads existed simply
+ * omits the whole `remote_payloads` array.
+ */
+interface RemotePayloadAsset {
+  /** Host triplet the payload runs on (`darwin-arm64` / `win32-x64`). */
+  readonly target: string;
+  readonly name: string;
+  readonly url: string;
+  readonly sha256: string;
+}
+
 /** One immutable feed document. */
 interface UpdateFeedDocument {
   readonly schema_version: string;
   readonly version: string;
   readonly published_at: string;
   readonly assets: readonly UpdateFeedAsset[];
+  /**
+   * Optional matching-version remote daemon payload digests. Absent on older
+   * documents, so {@link parseUpdateFeed} must accept a document with or without
+   * it. Desktop update parsing never depends on this field.
+   */
+  readonly remote_payloads?: readonly RemotePayloadAsset[];
 }
 
 /** The two resolved assets for one host triplet. */
@@ -84,6 +108,11 @@ interface ParsedUpdateFeed extends PlatformAssets {
   readonly document: UpdateFeedDocument;
   readonly version: string;
   readonly triplet: PlatformTriplet;
+  /**
+   * Matching-version remote daemon payloads, or an empty list when the document
+   * carries no `remote_payloads` field.
+   */
+  readonly remotePayloads: readonly RemotePayloadAsset[];
 }
 
 /** Environment slice consulted by {@link resolveUpdateBaseUrl}. */
@@ -216,6 +245,42 @@ function readAsset(record: unknown, index: number): UpdateFeedAsset {
   return { name, url, sha256: sha256.toLowerCase() };
 }
 
+function readRemotePayload(record: unknown, index: number): RemotePayloadAsset {
+  if (!isRecord(record)) {
+    throw new Error(`update feed remote payload #${index} is not an object`);
+  }
+  const target = record.target;
+  const name = record.name;
+  const url = record.url;
+  const sha256 = record.sha256;
+  if (typeof target !== 'string' || target === '') {
+    throw new Error(`update feed remote payload #${index} has no target`);
+  }
+  if (typeof name !== 'string' || name === '') {
+    throw new Error(`update feed remote payload ${target} has no name`);
+  }
+  if (typeof url !== 'string' || url === '') {
+    throw new Error(`update feed remote payload ${target} has no url`);
+  }
+  if (typeof sha256 !== 'string' || !SHA256_PATTERN.test(sha256)) {
+    throw new Error(`update feed remote payload ${target} has an invalid sha256 digest`);
+  }
+  return { target, name, url, sha256: sha256.toLowerCase() };
+}
+
+/**
+ * Read the optional `remote_payloads` array. A document without the field parses
+ * to an empty list, so feeds published before remote payloads existed are still
+ * accepted and Desktop update parsing is never broken by this addition.
+ */
+function readRemotePayloads(value: unknown): RemotePayloadAsset[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error('update feed remote_payloads is not an array');
+  }
+  return value.map(readRemotePayload);
+}
+
 /**
  * Validates an already-parsed feed document and resolves the host triplet's
  * installer and update assets. Throws on any schema, version, name or digest
@@ -262,17 +327,18 @@ function parseUpdateFeed(input: unknown, options: ParseUpdateFeedOptions): Parse
   if (update === undefined) {
     throw new Error(`update feed has no asset ${updateName}`);
   }
+  const remotePayloads = readRemotePayloads(input.remote_payloads);
+  const publishedAt = typeof input.published_at === 'string' ? input.published_at : '';
+  const document: UpdateFeedDocument = remotePayloads.length > 0
+    ? { schema_version: UPDATE_FEED_SCHEMA_VERSION, version, published_at: publishedAt, assets, remote_payloads: remotePayloads }
+    : { schema_version: UPDATE_FEED_SCHEMA_VERSION, version, published_at: publishedAt, assets };
   return {
-    document: {
-      schema_version: UPDATE_FEED_SCHEMA_VERSION,
-      version,
-      published_at: typeof input.published_at === 'string' ? input.published_at : '',
-      assets,
-    },
+    document,
     version,
     triplet,
     installer,
     update,
+    remotePayloads,
   };
 }
 

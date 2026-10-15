@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Canonical local/CI packaging entry. It builds this platform's Desktop
-// installer and smokes the assembled application. It never publishes, never
-// mutates tracked files and never writes a version commit; release.mjs wraps it
-// with version bookkeeping. Running on a tag validates the tag against the root
-// version (a mismatched tag fails closed before any output is produced).
+// installer, derives the matching remote daemon bootstrap payload from the same
+// staged closure, and smokes the assembled application. It never publishes,
+// never mutates tracked files and never writes a version commit; release.mjs
+// wraps it with version bookkeeping. Running on a tag validates the tag against
+// the root version (a mismatched tag fails closed before any output is produced).
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { entryFor } from './platform.mjs';
 import { packageVersion, releaseTagFromEnv, validateNativeTarget, validateReleaseTag } from './release-context.mjs';
+import { buildRemotePayload } from './remote-payload.mjs';
 import { scanText } from '../check-secrets.mjs';
 
 const RELEASE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -503,6 +505,17 @@ async function main() {
     assertSafeReleasePayload(STAGE_DIR, 'payload', tmp, ROOT);
     buildInstaller();
     assertArtifacts(OUTPUT_DIR, version);
+    // Remote daemon bootstrap payload for this target, built from the same
+    // staged resources/wrenyard closure the Desktop app ships (no second source
+    // build). It lands next to the installers so the release job uploads it.
+    const remote = buildRemotePayload({
+      stageDir: STAGE_DIR,
+      version,
+      targetTriplet: target.triplet,
+      sourceTriplet: target.triplet,
+      outDir: OUTPUT_DIR,
+    });
+    console.log(`[pack] remote payload ${remote.name} (${remote.bytes} bytes)`);
     const appDir = findAssembledApp(OUTPUT_DIR);
     // The final assembled app must be symlink-free too, not only the stage tree.
     if (target.triplet === 'win32-x64') assertNoSymlinks(appDir, 'assembled app');

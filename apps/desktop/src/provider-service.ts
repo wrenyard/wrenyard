@@ -1,4 +1,5 @@
 import { WrenyardIpcClient, type WrenyardProviderStatus } from '@wrenyard/control';
+import { StaleGenerationError } from './main/remote/context.js';
 import type { ProviderAuthStatus } from './shell-contract.js';
 
 const MAX_PROVIDER_ID_LENGTH = 120;
@@ -13,6 +14,12 @@ export interface ProviderControlClient {
 export interface ProviderServiceOptions {
   ipcPath: string;
   canConnect?: () => boolean;
+  /**
+   * Active connection generation, captured before each request and re-checked
+   * once it resolves. A provider/quota reply produced on the previous endpoint
+   * is discarded instead of being applied after a connection switch.
+   */
+  getGeneration?: () => number;
   clientFactory?: (path: string) => ProviderControlClient;
 }
 
@@ -24,11 +31,25 @@ export class ProviderService {
     this.clientFactory = options.clientFactory ?? ((path) => new WrenyardIpcClient({ path }));
   }
 
+  /**
+   * Reject a reply whose generation was superseded by a connection switch. The
+   * caller sees the same error a fenced transport request would raise, so a
+   * previous context's catalog can never be projected into the new one.
+   */
+  private assertCurrentGeneration(generation: number | undefined): void {
+    if (generation === undefined) return;
+    if (this.options.getGeneration?.() !== generation) {
+      throw new StaleGenerationError('连接上下文已切换，忽略过期结果');
+    }
+  }
+
   async listProviders(): Promise<ProviderAuthStatus[]> {
     if (this.options.canConnect?.() === false) throw new Error('daemon 不可用');
+    const generation = this.options.getGeneration?.();
     const client = this.clientFactory(this.options.ipcPath);
     try {
       const result = await client.providerList();
+      this.assertCurrentGeneration(generation);
       return result.providers.map((provider) => ({
         id: provider.id,
         displayName: provider.displayName,
@@ -68,9 +89,11 @@ export class ProviderService {
     }
     const normalized = key.trim();
     if (!normalized || normalized.length > MAX_KEY_LENGTH) throw new Error('API Key 格式无效');
+    const generation = this.options.getGeneration?.();
     const client = this.clientFactory(this.options.ipcPath);
     try {
       await client.providerConfigure(providerId, normalized);
+      this.assertCurrentGeneration(generation);
     } finally {
       client.close();
     }

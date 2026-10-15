@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ArrowUp, ChevronUp, Gauge, Info, Plug, Unplug, WalletCards } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowUp, ChevronRight, ChevronUp, Gauge, Info, Plug, Plus, Server, Unplug, WalletCards } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/renderer/components/ui/button';
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/renderer/components/ui/popover';
@@ -8,13 +8,15 @@ import { Spinner } from '@/renderer/components/ui/spinner';
 import { useConfirm } from '@/renderer/hooks/use-confirm';
 import { PRIMARY_NAV, UPDATE_VISIBLE_STATES } from '@/renderer/app/nav';
 import { executeCommand } from '@/renderer/lib/commands';
-import { shell } from '@/renderer/lib/desktop';
+import { shell, onRemoteChanged } from '@/renderer/lib/desktop';
 import { daemonQuery, settingsQuery, updateQuery } from '@/renderer/lib/queries';
 import { updateView } from '@/renderer/lib/update';
+import { RemoteConnectDialog, type RemoteHostView } from '@/renderer/pages/remote/RemoteConnectDialog';
 import type {
   DaemonConnectionMode,
   DaemonLifecycleSnapshot,
   DaemonProcessState,
+  RemoteConnectionSnapshot,
   ServiceSnapshot,
 } from '@/shell-contract';
 import { cn } from 'cn';
@@ -115,24 +117,50 @@ export interface DaemonItemProps {
   onOpenUpdate: () => void;
 }
 
+/** The remote-connection surface read from the typed preload bridge (WY Remote). */
+
+const REMOTE_STATE_LABEL: Readonly<Record<RemoteConnectionSnapshot['state'], string>> = {
+  local: '本地',
+  connecting: '连接中',
+  remote: '远程',
+  disconnected: '连接已断开',
+};
+
 export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
   const daemon = useQuery(daemonQuery);
   const settings = useQuery(settingsQuery);
   const update = useQuery(updateQuery);
   const confirm = useConfirm();
   const [open, setOpen] = useState(false);
+  const [remoteMenuOpen, setRemoteMenuOpen] = useState(false);
+  const [remoteDialogOpen, setRemoteDialogOpen] = useState(false);
+  const [remoteHosts, setRemoteHosts] = useState<RemoteHostView[]>([]);
+  const [remoteState, setRemoteState] = useState<RemoteConnectionSnapshot | null>(null);
   const snapshot = daemon.data;
   const starting = snapshot?.state === 'starting' || (snapshot === undefined && daemon.isPending);
   const disconnected = isDaemonDisconnected(snapshot);
 
-  const status = starting ? '连接中' : connectionLabel(snapshot, settings.data?.service.runtimeMode);
-  const tone: ConnectivityTone = starting
-    ? 'starting'
-    : disconnected
+  // The primary label reflects the *active* endpoint, not the local supervisor:
+  // while remote, "本地" would be a lie even though the local daemon is healthy.
+  const remoteStateValue = remoteState?.state ?? 'local';
+  const remoteHostName = remoteState?.host?.displayName;
+  const status = (() => {
+    if (remoteStateValue === 'remote') return remoteHostName ? `远程 · ${remoteHostName}` : '远程';
+    if (remoteStateValue === 'connecting') return '连接中';
+    if (remoteStateValue === 'disconnected') return '远程已断开';
+    return starting ? '连接中' : connectionLabel(snapshot, settings.data?.service.runtimeMode);
+  })();
+  const tone: ConnectivityTone = remoteStateValue === 'remote'
+    ? 'online'
+    : remoteStateValue === 'disconnected'
       ? 'offline'
-      : snapshot?.state === 'running'
-        ? 'online'
-        : 'unknown';
+      : remoteStateValue === 'connecting' || starting
+        ? 'starting'
+        : disconnected
+          ? 'offline'
+          : snapshot?.state === 'running'
+            ? 'online'
+            : 'unknown';
 
   const updateState = update.data?.state;
   const updateVisible =
@@ -168,7 +196,51 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
     onOpenUpdate();
   };
 
+  // The compact menu loads the saved hosts and the active-connection state when
+  // it opens; the remote bridge may be unavailable, in which case the submenu
+  // shows only the Add entry.
+  useEffect(() => {
+    if (!open) return;
+    void (async () => {
+      try {
+        const [hosts, state] = await Promise.all([
+          shell.listRemoteHosts(),
+          shell.getRemoteConnection(),
+        ]);
+        setRemoteHosts(hosts.hosts ?? []);
+        setRemoteState(state);
+      } catch {
+        // Leave the menu in its empty state rather than surfacing an error here.
+      }
+    })();
+  }, [open]);
+
+  // A committed context change resets this menu's remote state and host list.
+  // The app query client invalidates the business views (session/task/project/
+  // provider/quota/statistics) on the same push.
+  useEffect(() => onRemoteChanged((state) => {
+    setRemoteState(state);
+    void shell.listRemoteHosts()
+      .then((hosts) => setRemoteHosts(hosts.hosts ?? []))
+      .catch(() => undefined);
+  }), []);
+
+  /** Saved-host direct connection: connect without re-adding or re-installing. */
+  const connectRemoteHost = async (host: RemoteHostView): Promise<void> => {
+    const result = await shell.connectSavedRemoteHost(host.alias);
+    if (result.ok) setOpen(false);
+  };
+
+  /** Explicit, confirmed return to the local endpoint; refreshes every view. */
+  const returnToLocal = async (): Promise<void> => {
+    const confirmed = await confirm({ title: '返回本地连接？', confirmLabel: '返回本地' });
+    if (!confirmed) return;
+    await shell.returnToLocal();
+    setOpen(false);
+  };
+
   return (
+    <>
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger nativeButton={false} render={<span className="inline-flex min-w-0 flex-1" />}>
         <Button
@@ -179,7 +251,9 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
           aria-haspopup="dialog"
           className="h-7 w-full min-w-0 justify-start gap-1.5 rounded-xl px-2 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
         >
-          {starting ? (
+          {remoteStateValue === 'remote' ? (
+            <Server className="size-4 shrink-0" />
+          ) : starting ? (
             <Spinner className="size-4 shrink-0" />
           ) : snapshot?.state === 'running' ? (
             <Plug className="size-4 shrink-0" />
@@ -222,8 +296,18 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
             valueClassName="break-all"
           />
           <LifecycleRow label="生命周期" value={lifecycleLabel(snapshot)} />
+          {remoteStateValue !== 'local' ? (
+            <LifecycleRow
+              label="远程状态"
+              value={remoteHostName
+                ? `${REMOTE_STATE_LABEL[remoteStateValue]} · ${remoteHostName}`
+                : REMOTE_STATE_LABEL[remoteStateValue]}
+            />
+          ) : null}
         </dl>
-        {snapshot?.canStart ? (
+        {/* The restart action is a local-supervisor action: while remote it must
+            never be routed to the local daemon. */}
+        {snapshot?.canStart && remoteStateValue === 'local' ? (
           <Button type="button" variant="outline" size="sm" onClick={() => void handleRestart()}>
             重启
           </Button>
@@ -290,8 +374,65 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
               <span className="ml-auto truncate text-xs text-muted-foreground">{updateSummary}</span>
             ) : null}
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="justify-start gap-2"
+            onClick={() => setRemoteMenuOpen((value) => !value)}
+            aria-expanded={remoteMenuOpen}
+          >
+            <Server />
+            <span>远程连接</span>
+            <span className="ml-auto truncate text-xs text-muted-foreground">
+              {remoteState ? REMOTE_STATE_LABEL[remoteState.state] : ''}
+            </span>
+            <ChevronRight className={cn('size-3.5 transition-transform', remoteMenuOpen && 'rotate-90')} aria-hidden />
+          </Button>
+          {remoteMenuOpen ? (
+            <div className="ml-4 flex flex-col gap-1 border-l border-border/60 pl-2" data-remote-menu>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="justify-start gap-2"
+                onClick={() => { setOpen(false); setRemoteDialogOpen(true); }}
+              >
+                <Plus />
+                <span>新增</span>
+              </Button>
+              {remoteHosts.map((host) => (
+                <Button
+                  key={host.alias}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="justify-start gap-2"
+                  title={host.address ?? undefined}
+                  onClick={() => void connectRemoteHost(host)}
+                >
+                  <Server className="text-muted-foreground" />
+                  <span className="truncate">{host.displayName}</span>
+                </Button>
+              ))}
+              {remoteState !== null && remoteState.state !== 'local' ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="justify-start gap-2"
+                  onClick={() => void returnToLocal()}
+                >
+                  <Unplug />
+                  <span>返回本地连接</span>
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </PopoverContent>
     </Popover>
+    <RemoteConnectDialog open={remoteDialogOpen} onOpenChange={setRemoteDialogOpen} />
+    </>
   );
 }
