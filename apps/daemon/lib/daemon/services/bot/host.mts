@@ -428,6 +428,17 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
+   * The routing entry for one item class, falling back to `default`. A session
+   * send takes only the provider/model/reasoningEffort triple, never an entry's
+   * explicit run `target`.
+   */
+  function routedClassModel(config: BotConfig | undefined, className: string | undefined): BotModel | undefined {
+    if (config === undefined) return undefined
+    const entry = (className === undefined ? undefined : config.routing[className]) ?? config.routing.default
+    return { provider: entry.provider, model: entry.model, reasoningEffort: entry.reasoningEffort }
+  }
+
+  /**
    * Record, once per bot, that a task kind whose routing entry has no explicit
    * `target` relies on automatic routing.
    */
@@ -772,9 +783,9 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /** Send one follow-up into an item's own session, reusing the session's model. */
-  async function sendSessionFollowUp(bot: BotRecord, item: BotItemRecord, text: string): Promise<void> {
+  async function sendSessionFollowUp(bot: BotRecord, item: BotItemRecord, text: string, config?: BotConfig): Promise<void> {
     if (item.sessionId === undefined) throw new Error('item has no session for a follow-up')
-    const model = resolveSendModel(bot, item)
+    const model = resolveSendModel(bot, item, config)
     if (model === undefined) throw new Error('no routed model is available for the follow-up')
     await session.send(item.sessionId, { text, model })
     store.patchItem(item.id, { sessionModel: model })
@@ -1009,11 +1020,14 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
-   * The model one send must use. A first dispatch takes the routing policy's
-   * choice; every follow-up reuses the session's own latest turn model and
-   * adopts (and logs) it when it changed, so a user switch is never overridden.
+   * The model one send must use, decided by the session's ledger state rather
+   * than by the presence of a session id: a session that already started a turn
+   * keeps its own latest model (adopted and logged when it changed, so a user
+   * switch is never overridden), an item with a stored model reuses it, and a
+   * first dispatch takes the routing entry for the item's class from the loaded
+   * bot config, falling back to `default`.
    */
-  function resolveSendModel(bot: BotRecord, item: BotItemRecord): BotModel | undefined {
+  function resolveSendModel(bot: BotRecord, item: BotItemRecord, config?: BotConfig): BotModel | undefined {
     if (item.sessionId !== undefined) {
       const adopted = latestSessionModel(item.sessionId)
       if (adopted !== undefined) {
@@ -1028,9 +1042,9 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         }
         return adopted
       }
-      return item.sessionModel
     }
-    return options.routeModel?.({ kind: 'dispatch', ...(item.class === undefined ? {} : { class: item.class }) })
+    if (item.sessionModel !== undefined) return item.sessionModel
+    return routedClassModel(config, item.class)
   }
 
   const sessionSend: BotStepHandler = {
@@ -1043,9 +1057,9 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       )
       return found ? 'done' : 'not-done'
     },
-    async run({ bot, item, step }) {
+    async run({ bot, item, step, config }) {
       if (item.sessionId === undefined) throw new Error('item has no session')
-      const model = resolveSendModel(bot, item)
+      const model = resolveSendModel(bot, item, config)
       if (model === undefined) throw new Error('no routed model is available for this item')
       const text = options.buildBrief?.(item, step) ?? dispatchBrief(item, step)
       const result = await session.send(item.sessionId, { text, model })
@@ -1068,8 +1082,9 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     bot: BotRecord,
     item: BotItemRecord,
     conflict: ReturnType<ProjectManager['rebaseWorktree']>,
+    config?: BotConfig,
   ): Promise<void> {
-    await sendSessionFollowUp(bot, item, buildRebaseConflictText(item, conflict))
+    await sendSessionFollowUp(bot, item, buildRebaseConflictText(item, conflict), config)
     store.appendLog({
       botId: bot.id,
       itemId: item.id,
@@ -1170,7 +1185,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           code: 'rebase.conflict',
           message: `rebase of worktree ${item.worktreeId} onto ${result.target_branch ?? 'the target branch'} conflicted on ${result.conflicts?.length ?? 0} path(s)`,
         })
-        await sendRebaseConflictFollowUp(bot, item, result)
+        await sendRebaseConflictFollowUp(bot, item, result, config)
         return { output: result, to: 'in_progress' }
       }
       // Any other failure (dirty worktree, missing metadata or path) parks the
@@ -1462,7 +1477,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
             },
           }
         }
-        await sendSessionFollowUp(bot, item, verdict.correction ?? verdict.reason)
+        await sendSessionFollowUp(bot, item, verdict.correction ?? verdict.reason, config)
         store.appendLog({
           botId: bot.id,
           itemId: item.id,
@@ -1487,6 +1502,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         bot,
         item,
         `The work is not ready to accept yet: ${gate.failed}. Finish the change, commit in your worktree, and reply \`BOT-READY <head sha>\`.`,
+        config,
       )
       store.appendLog({
         botId: bot.id,
@@ -1613,7 +1629,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           code: 'acceptance.failed',
           message: `${failed.length} check(s) failed; the session was asked to fix them`,
         })
-        await sendSessionFollowUp(bot, item, buildAcceptanceFailureText(item, checks, output))
+        await sendSessionFollowUp(bot, item, buildAcceptanceFailureText(item, checks, output), config)
         return { output, to: 'in_progress' }
       }
       const unverified = checks.filter(check => check.status === 'not_verified')

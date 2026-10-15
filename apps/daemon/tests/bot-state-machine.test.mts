@@ -620,3 +620,51 @@ test('dry-run completion and notification record would-be outputs without sendin
     await removeFixture(fixture)
   }
 })
+
+test('a dispatched item with an empty ledger sends the routed default model', async () => {
+  const root = `${WORKSPACE}-first-send`
+  const fixture = await writeBotFixture({
+    name: 'firstsend',
+    mode: 'live',
+    // The source is still listed, so the in-flight item is not withdrawn.
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'firstsend', state: 'running', mode: 'live', configPath: fixture.configPath })
+      // The state right after `session.create` stored the id: the session exists,
+      // the ledger has no `turn.started` yet and no model is stored on the item.
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'dispatched', project: 'alpha' })
+      store.patchItem(item.id, { sessionId: 'session-1' })
+
+      const sent: { sessionId: string; text: string; model: { provider: string; model: string; reasoningEffort: string } }[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        // `readLedger` defaults to an empty ledger.
+        session: botSession(async (sessionId, input) => {
+          sent.push({ sessionId, text: input.text, model: input.model })
+          return { turn: 1 }
+        }),
+        log: () => {},
+      })
+
+      await host.tick(bot.id)
+
+      // The first dispatch resolves the routing entry for the item's class
+      // (here the `default` one) instead of failing for a missing stored model.
+      assert.equal(sent.length, 1)
+      assert.equal(sent[0]?.sessionId, 'session-1')
+      assert.deepEqual(sent[0]?.model, ADAPTER_ROUTING.default)
+      assert.match(sent[0]?.text ?? '', /\[bot:/)
+      const after = store.getItem(bot.id, item.id)
+      assert.equal(after.state, 'in_progress')
+      assert.deepEqual(after.sessionModel, ADAPTER_ROUTING.default)
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:session.send:1`)?.status, 'done')
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
