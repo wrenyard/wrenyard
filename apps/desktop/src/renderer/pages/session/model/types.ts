@@ -58,9 +58,9 @@ export interface TurnModel {
   /** An interrupt was requested but `turn.finished` has not arrived yet. */
   interrupting: boolean;
   cycles: CycleModel[];
-  /** Every committed communication reply, in chronological order. */
+  /** Every committed communication publication, in chronological order. */
   replies: ReplyModel[];
-  /** The latest committed reply, when the turn has one. */
+  /** The latest committed final-kind reply, when the turn has one. */
   final?: ReplyModel;
   calls: CallModel[];
   actions: ActionModel[];
@@ -196,10 +196,19 @@ export interface CallModel {
   error?: string;
 }
 
+/** A published reply is either a process update or the turn's closing reply. */
+export type ReplyKind = 'progress' | 'final';
+
 export interface ReplyModel {
   text: string;
   at: string;
   cycle?: number;
+  /**
+   * `progress` for an intermediate process update, `final` for the turn's
+   * closing reply. Absent only on a record written before the ledger recorded
+   * the kind.
+   */
+  kind?: ReplyKind;
 }
 
 export interface ErrorItem {

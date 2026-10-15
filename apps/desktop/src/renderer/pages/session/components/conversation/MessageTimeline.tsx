@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { MessageScrollerItem } from '@/renderer/components/ui/message-scroller';
 import { useNow } from '@/renderer/hooks/use-now';
 import { shell } from '@/renderer/lib/desktop';
@@ -132,7 +133,9 @@ export function buildMessageTimeline(
     turn.replies.forEach((reply, index) => {
       entries.push({ kind: 'reply', id: `reply:${turn.id}:${index}:${reply.at}`, at: reply.at, turn, reply });
     });
-    if (turn.replies.length === 0 && turn.status !== 'running') {
+    // A turn with no final-kind reply still gets its terminal fallback, even
+    // when it published process updates first.
+    if (turn.final === undefined && turn.status !== 'running') {
       entries.push({ kind: 'fallback', id: `fallback:${turn.id}`, at: turn.endedAt ?? turn.startedAt, turn });
     }
     for (const action of turn.actions) {
@@ -197,6 +200,19 @@ function DispatchFileCard({ action, sessionId }: { action: ActionModel; sessionI
   );
 }
 
+/**
+ * One intermediate process update: a muted status line instead of an assistant
+ * bubble. Its complete Markdown is shown, never merged with another reply.
+ */
+function ProgressLine({ reply }: { reply: ReplyModel }) {
+  return (
+    <div className="flex items-start gap-2 text-xs text-muted-foreground">
+      <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-muted-foreground/50" aria-hidden="true" />
+      <Markdown className="min-w-0 flex-1 text-xs">{reply.text}</Markdown>
+    </div>
+  );
+}
+
 interface EntryContext {
   sessionId?: string;
   enter: boolean;
@@ -236,17 +252,21 @@ function EntryContent({ entry, sessionId, enter, onRetry, onRemove, onJump, onRe
       );
     }
     case 'reply':
-      return (
-        <AssistantMessage
-          turn={entry.turn}
-          reply={entry.reply}
-          enter={enter}
-          onReply={() => onReply(excerpt(entry.reply.text))}
-          {...(entry.reference === undefined ? {} : {
-            reference: { ...entry.reference, onJump: () => onJump(entry.reference!.messageId) },
-          })}
-        />
-      );
+      // A process update is a lightweight status line; only the final reply is
+      // a full assistant message. Neither text is merged or dropped.
+      return entry.reply.kind === 'progress'
+        ? <ProgressLine reply={entry.reply} />
+        : (
+          <AssistantMessage
+            turn={entry.turn}
+            reply={entry.reply}
+            enter={enter}
+            onReply={() => onReply(excerpt(entry.reply.text))}
+            {...(entry.reference === undefined ? {} : {
+              reference: { ...entry.reference, onJump: () => onJump(entry.reference!.messageId) },
+            })}
+          />
+        );
     case 'fallback':
       return (
         <AssistantMessage

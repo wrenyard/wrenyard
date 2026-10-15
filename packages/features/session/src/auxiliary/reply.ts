@@ -233,6 +233,9 @@ export class ReplyWriter {
         step: request.step,
         parent: outcome.spanId,
         text,
+        // The publication kind follows execution alone: the invocation that
+        // finalizes the turn is the final reply, every other one is progress.
+        kind: request.terminal ? 'final' : 'progress',
       });
     }
     if (turn.finished || turn.abort.signal.aborted) return;

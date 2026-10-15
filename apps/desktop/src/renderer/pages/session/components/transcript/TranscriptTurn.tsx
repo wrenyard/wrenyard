@@ -65,7 +65,7 @@ function ReplyBlock({ reply }: { reply: ReplyModel }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="text-xs text-muted-foreground">
-        助手 · <Timestamp value={reply.at} precision="second" />
+        {reply.kind === 'progress' ? '过程更新' : '助手'} · <Timestamp value={reply.at} precision="second" />
       </div>
       <AppMarkdown className="text-sm">{reply.text}</AppMarkdown>
     </div>
@@ -223,7 +223,7 @@ export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask }: T
           <Spinner className="size-3.5" />
           <span className="shimmer">{turnStatusText(turn)}</span>
         </div>
-      ) : turn.replies.length === 0 ? (
+      ) : turn.final === undefined ? (
         <p className={cn('px-1 text-sm', fallback.variant === 'destructive' ? 'text-destructive' : 'text-muted-foreground')}>
           {fallback.text}
         </p>

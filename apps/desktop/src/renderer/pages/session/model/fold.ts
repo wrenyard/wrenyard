@@ -351,13 +351,14 @@ function buildTurn(
   const cycle = cycles.length > 0 ? cycles[cycles.length - 1]!.index : 0;
   const attachments = buildUserAttachments(events);
 
-  // Every reply sent to the user projects into `replies` in timeline order. `final` is the latest committed reply; a
+  // Every publication sent to the user projects into `replies` in timeline
+  // order, each carrying its kind. `final` is the latest final-kind reply; a
   // live reply span is never fabricated into a user-facing message before it
   // commits.
-  const replies = events
-    .filter((event): event is ReplySentEvent => eventType(event) === 'reply.sent')
-    .map(replyModel);
-  const committedFinal = replies.at(-1);
+  const replyEvents = events.filter((event): event is ReplySentEvent => eventType(event) === 'reply.sent');
+  const replyKindsOf = replyKinds(events, replyEvents, finished);
+  const replies = replyEvents.map((event, index) => replyModel(event, replyKindsOf[index]!));
+  const committedFinal = replies.filter((reply) => reply.kind === 'final').at(-1);
 
   const errors: ErrorItem[] = events
     .filter(isFault)
@@ -392,12 +393,40 @@ function buildTurn(
   return model;
 }
 
-function replyModel(event: ReplySentEvent): ReplyModel {
+function replyModel(event: ReplySentEvent, kind: 'progress' | 'final'): ReplyModel {
   return {
     text: event.text,
     at: event.at,
     ...(event.step === undefined ? {} : { cycle: event.step }),
+    kind,
   };
+}
+
+/**
+ * Classify the turn's reply publications, one per input. An explicit durable
+ * `kind` always wins. A record written before the field existed is classified
+ * from the turn's recorded order: only the closing publication of a completed
+ * or failed turn may be the final reply — the turn's last publication, on its
+ * last step, with no later step or started action after it. Every other
+ * publication, and every publication of an interrupted turn, stays a process
+ * update, so a turn with only progress publications has no final reply.
+ */
+function replyKinds(
+  events: LedgerEvent[],
+  replies: readonly ReplySentEvent[],
+  finished: TurnFinishedEvent | undefined,
+): ('progress' | 'final')[] {
+  const terminal = finished !== undefined && finished.status !== 'interrupted';
+  const last = replies[replies.length - 1];
+  const maxStep = events.reduce((max, event) => (event.step !== undefined && event.step > max ? event.step : max), 0);
+  return replies.map((reply) => {
+    if (reply.kind !== undefined) return reply.kind;
+    if (!terminal || reply !== last) return 'progress';
+    if (reply.step !== undefined && reply.step < maxStep) return 'progress';
+    const continued = events.some((event) => event.seq > reply.seq
+      && (eventType(event) === 'step.started' || eventType(event) === 'action.started'));
+    return continued ? 'progress' : 'final';
+  });
 }
 
 /** User attachments for a turn, from its `files.attached` events with source `user`. */

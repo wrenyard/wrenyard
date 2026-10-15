@@ -495,6 +495,13 @@ export interface ReplySentEvent extends LedgerEventBase {
   /** The reply span; absent on records that predate spans. */
   parent?: string;
   text: string;
+  /**
+   * Whether this publication is an intermediate process update (`progress`) or
+   * the turn's closing reply (`final`). Optional, so a record written before
+   * the field existed still parses; a missing kind is read from execution
+   * order rather than from the text.
+   */
+  kind?: 'progress' | 'final';
 }
 
 /** The session title; never part of the model context. */
