@@ -26,7 +26,7 @@ import { ActivityStatusProjector, TaskRunLifecycleTracker } from './main/activit
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
-import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ScheduleItem, type ScheduleState, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome } from './shell-contract.js';
+import { SHELL_CHANNELS, APPEARANCE_ZOOM_STEP, isSettingsLaunchRequest, type DaemonLifecycleSnapshot, type ExecEventsRequest, type ExecEventsResult, type ExecSnapshotDto, type ExecStartRequest, type PetCompanionSettings, type PreferenceId, type RemoteConnectionTestInput, type RemoteConnectionTestResult, type RemoteConnectionSnapshot, type RemoteHostListResult, type RemoteHostMutationResult, type RemoteHostView, type RuntimeAliasPutRequest, type RuntimeAliasRemoveRequest, type RuntimeAliasSnapshot, type ScheduleItem, type ScheduleState, type ShellPage, type TaskRoutingTestParams, type TaskRoutingTestResult, type TaskRoutingTestTasksResult, type TaskSettingsSaveRequest, type TaskSettingsSnapshot, type WorkspaceConfigurationSnapshot, type WorkspaceSwitchOutcome, type OperationComponentAction, type OperationComponentId, type OperationComponentSnapshot } from './shell-contract.js';
 import { ShellWindowController } from './shell-window.js';
 import { MiniCardManager } from './mini-cards.js';
 import { Notifier } from './main/notifications/notifier.js';
@@ -90,6 +90,11 @@ const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.include
 const FOREMAN_HEALTH_TIMEOUT_MS = 5_000;
 /** Task definition enumeration may cold-load the workspace and model catalog. */
 const TASK_SETTINGS_REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Operation-component reads run both health checks on the first call, so they
+ * use a longer budget than a routine settings request.
+ */
+const OPERATION_COMPONENTS_REQUEST_TIMEOUT_MS = 90_000;
 const TASK_SETTINGS_SAVE_ERROR_MESSAGES: Record<string, string> = {
   content_conflict: '任务设置已被外部修改，保存冲突',
   invalid_settings: '任务设置内容无效',
@@ -1141,6 +1146,30 @@ async function bootstrap(): Promise<void> {
   const deleteSchedule = async (id: string): Promise<{ deleted: true }> => {
     return (await requestForeman('schedule.delete', { id })) as { deleted: true };
   };
+  // Operation-component transport. The daemon owns installation, authorization
+  // and health checks for its own machine; Desktop only forwards the read and
+  // the user-triggered action. A dedicated client with a longer budget is used
+  // because the first read runs both component health checks.
+  const requestOperationComponents = async (method: string, params: unknown): Promise<unknown> => {
+    requireDaemonRunning();
+    const client = new WrenyardIpcClient({ path: ipcPath, requestTimeoutMs: OPERATION_COMPONENTS_REQUEST_TIMEOUT_MS });
+    try {
+      return await client.request(method, params);
+    } finally {
+      await client.close?.();
+    }
+  };
+  const getOperationComponents = async (): Promise<OperationComponentSnapshot[]> => {
+    const result = (await requestOperationComponents('components.list', {})) as { components: OperationComponentSnapshot[] };
+    return result.components;
+  };
+  const runOperationComponentAction = async (
+    id: OperationComponentId,
+    action: OperationComponentAction,
+  ): Promise<OperationComponentSnapshot> => {
+    const result = (await requestOperationComponents('components.action', { id, action })) as { component: OperationComponentSnapshot };
+    return result.component;
+  };
 
   // The updater is constructed and preflighted *before* the daemon is started
   // or contacted: a startup blocker (DMG-in-place, translocation) must end
@@ -1956,6 +1985,10 @@ async function bootstrap(): Promise<void> {
     getUpdate: async () => updateController!.snapshot(),
     checkUpdate: () => updateController!.checkForUpdates(),
     requestInstall: () => updateController!.requestInstall(),
+    getOperationComponents: () => getOperationComponents(),
+    runOperationComponentAction: (id: OperationComponentId, action: OperationComponentAction) => (
+      runOperationComponentAction(id, action)
+    ),
     savePetSettings: async (settings: PetCompanionSettings) => {
       // Provider order has one mutation surface: the Provider page. A stale
       // settings draft must never overwrite that order when Pet settings save.

@@ -42,6 +42,9 @@ import {
   type RemoteConnectionTestInput,
   type RemoteConnectionTestResult,
   type RemoteHostMutationResult,
+  type OperationComponentId,
+  type OperationComponentAction,
+  type OperationComponentSnapshot,
 } from './shell-contract.js';
 import { exposeSession } from './session/preload.js';
 
@@ -362,6 +365,19 @@ const api: WrenyardShellApi = {
     };
     ipcRenderer.on(SHELL_CHANNELS.remoteChanged, handler);
     return () => ipcRenderer.removeListener(SHELL_CHANNELS.remoteChanged, handler);
+  },
+  getOperationComponents(): Promise<OperationComponentSnapshot[]> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.operationComponents) as Promise<OperationComponentSnapshot[]>;
+  },
+  runOperationComponentAction(
+    id: OperationComponentId,
+    action: OperationComponentAction,
+  ): Promise<OperationComponentSnapshot> {
+    return ipcRenderer.invoke(
+      SHELL_CHANNELS.operationComponentAction,
+      id,
+      action,
+    ) as Promise<OperationComponentSnapshot>;
   },
 };
 

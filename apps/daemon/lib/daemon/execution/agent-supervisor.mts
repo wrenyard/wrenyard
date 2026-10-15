@@ -12,6 +12,7 @@ import { killProcessTree } from '../../adapters/shell/process.mts'
 import { redactEvent, redactJsonString } from './redaction.mts'
 import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protocol.mts'
 import { RepoWriteLocks } from './repo-write-locks.mts'
+import { toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
@@ -89,6 +90,13 @@ export interface AgentExecutionSupervisorOptions {
    * translation; the ExecService only runs the resolved client.
    */
   execService?: ExecService
+  /**
+   * Shared operation execution adapter. When supplied, a run that requests
+   * legacy browser/computer operation ids resolves them through it before the
+   * run starts, so the adapter verifies the components on this host and attaches
+   * the agent-browser CLI environment or the Cua Driver MCP server.
+   */
+  operations?: OperationAdapter
 }
 
 /**
@@ -182,6 +190,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly isProcessLiveFn: (pid: number) => boolean
   private readonly catalog: ReturnType<typeof createBuiltinCatalog>
   private readonly execService: ExecService
+  private readonly operations?: OperationAdapter
   /** True when this supervisor built its own fallback ExecService and must
    *  close it on shutdown. A shared, externally supplied service is never
    *  closed here. */
@@ -190,7 +199,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private acceptingNew = true
   private promoting = false
 
-  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService }: AgentExecutionSupervisorOptions) {
+  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations }: AgentExecutionSupervisorOptions) {
     this.db = db
     this.repoWriteLocks = repoWriteLocks
     this.logger = logger
@@ -204,6 +213,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     // direct client.start fallback and always owns only what it created.
     this.execService = execService ?? new ExecService({ clients: agentClients })
     this.ownsExecService = execService === undefined
+    this.operations = operations
   }
 
   private taskRuns(): TaskRunStore {
@@ -643,6 +653,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const resolvedProfile = this.readResolvedProfile(entry.executionId)
 
     let session: AgentSession
+    let prepared: PreparedOperations | undefined
     try {
       const profile = resolvedProfile ?? opts.profile;
       const syntax = profile.includes(':') ? parseRunSyntax(profile) : undefined;
@@ -681,27 +692,46 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         ...(plan.clientReasoningEffort === undefined ? {} : { clientReasoningEffort: plan.clientReasoningEffort }),
         ...(plan.clientReasoningEnvironment === undefined ? {} : { clientReasoningEnvironment: plan.clientReasoningEnvironment }),
       };
+      const operationIds = toOperationIds(opts.features)
+      if (operationIds.length > 0) {
+        if (!this.operations) throw new Error('Operation components are not available in this runtime')
+        prepared = await this.operations.prepare({
+          prompt: opts.prompt,
+          ids: operationIds,
+          runId: entry.executionId,
+          owner: opts.taskId ?? entry.executionId,
+        })
+      }
       // The fully resolved user request is shaped once, then lowered onto the
-      // shared exec surface. Task-declared feature ids map to exec feature ids
-      // through one explicit compatibility boundary; an unknown id throws rather
-      // than being silently dropped.
+      // shared exec surface. Requested operation components (legacy ids
+      // browser/browser-use and computer/computer-use) are resolved by the shared
+      // operation adapter: it checks readiness on this host, attaches the CLI
+      // environment or MCP server and the guidance text, and fails before spawn
+      // when a component is not ready. An unknown id still throws.
       const execRequest: ExecRequest = {
         ...agentRequest,
+        prompt: prepared?.prompt ?? agentRequest.prompt,
+        ...(prepared?.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
         client: client.id,
-        features: toExecFeatureIds(opts.features),
       };
       // The authoritative task run id is always derived from `opts.taskId`, whether the
       // execution launched immediately or was reconstructed from a persisted execution row.
+      const baseEnv = resolveTaskAgentEnv(
+        process.env,
+        opts.taskId,
+        this.buildReasoningEffortPlanEnv(entry.executionId),
+        entry.executionId,
+      )
       const operationOptions = {
-        env: resolveTaskAgentEnv(
-          process.env,
-          opts.taskId,
-          this.buildReasoningEffortPlanEnv(entry.executionId),
-          entry.executionId,
-        ),
+        env: prepared ? prepared.applyEnv(baseEnv) : baseEnv,
       };
       session = await this.execService.start(execRequest, operationOptions)
+      if (prepared) {
+        const release = prepared
+        void Promise.resolve(session.result).catch(() => undefined).finally(() => { void release.release() })
+      }
     } catch (error) {
+      await prepared?.release().catch(() => undefined)
       this.terminalizeStartingFailure(entry, error)
       return
     }
@@ -1638,41 +1668,6 @@ function toPersistedReasoningEffort(raw: string | null): ReasoningEffort | undef
   return raw === 'none' || raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh' || raw === 'max'
     ? raw
     : undefined
-}
-
-/**
- * Single explicit compatibility boundary mapping task-declared feature ids onto
- * exec feature ids.
- *
- * The exec feature registry exposes exactly `browser-use` and `computer-use`
- * (see exec-features.mts). Historical/legacy task definitions may still declare
- * `browser` / `browser-use` and `computer` / `computer-use`, so both spellings
- * of each known feature are mapped explicitly. Mapping is total for the known
- * ids and ordered/de-duplicated. An unknown requested feature MUST throw: a
- * task can never silently drop a feature it asked for.
- */
-const TASK_FEATURE_TO_EXEC_FEATURE: Readonly<Record<string, string>> = {
-  'browser': 'browser-use',
-  'browser-use': 'browser-use',
-  'computer': 'computer-use',
-  'computer-use': 'computer-use',
-}
-
-function toExecFeatureIds(features: readonly string[] | undefined): readonly string[] {
-  if (!features || features.length === 0) return []
-  const resolved: string[] = []
-  for (const feature of features) {
-    const trimmed = feature.trim()
-    if (!trimmed) {
-      throw new Error('Requested execution feature id must be a non-empty string')
-    }
-    const featureId = TASK_FEATURE_TO_EXEC_FEATURE[trimmed]
-    if (!featureId) {
-      throw new Error(`Unknown execution feature '${trimmed}'`)
-    }
-    if (!resolved.includes(featureId)) resolved.push(featureId)
-  }
-  return resolved
 }
 
 export function resolveTaskAgentEnv(

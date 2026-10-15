@@ -22,6 +22,7 @@ export type CustomControlKey =
   | 'daemon'
   | 'endpoint'
   | 'logs'
+  | 'operationComponents'
   | 'petBottomOffset'
   | 'petBubbleSeconds'
   | 'petDisplay'
@@ -368,6 +369,19 @@ const PET_CATEGORY: SettingDefinition[] = [
   },
 ];
 
+const COMPONENTS_CATEGORY: SettingDefinition[] = [
+  {
+    id: 'components.status',
+    category: 'components',
+    title: '浏览器与桌面操作',
+    description: '为浏览器与桌面操作安装并授权本地组件；未就绪的组件不会提供给 Agent。',
+    keywords: ['操作组件', '浏览器', '桌面', 'agent-browser', 'cua', '安装', '授权', 'components'],
+    control: custom('operationComponents'),
+    readonly: true,
+    source: { kind: 'readonly' },
+  },
+];
+
 const RUNTIME_CATEGORY: SettingDefinition[] = [
   {
     id: 'runtime.daemon',
@@ -501,6 +515,7 @@ export const SETTINGS_REGISTRY: readonly SettingDefinition[] = [
   ...SESSION_CATEGORY,
   ...MODELS_CATEGORY,
   ...PET_CATEGORY,
+  ...COMPONENTS_CATEGORY,
   ...RUNTIME_CATEGORY,
   ...UPDATE_CATEGORY,
   ...ABOUT_CATEGORY,

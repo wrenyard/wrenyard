@@ -14,6 +14,7 @@ export type SettingsCategoryId =
   | 'models'
   | 'shortcuts'
   | 'pet'
+  | 'components'
   | 'runtime'
   | 'update'
   | 'about';
@@ -36,6 +37,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
   { id: 'models', label: '模型与路由', description: '自动派发参考、路由权重与运行时别名。' },
   { id: 'shortcuts', label: '快捷键', description: '当前平台生效的全部快捷键；暂不支持自定义。' },
   { id: 'pet', label: '桌宠', description: '桌宠的显示内容与行为，由啾啾工坊直接管理生命周期。' },
+  { id: 'components', label: '操作组件', description: '浏览器与桌面操作所需的组件：安装、授权、健康检查与更新。' },
   { id: 'runtime', label: '运行环境', description: '本地服务、日志与设置文件。' },
   { id: 'update', label: '更新', description: '检查并安装啾啾工坊套件的新版本。' },
   { id: 'about', label: '关于', description: '版本、当前主题与诊断信息。' },

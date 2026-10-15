@@ -368,6 +368,16 @@ import {
   type ExecStartParams,
   type ExecStartResult,
 } from './methods/exec.mts'
+import {
+  componentsActionParamsSchema,
+  componentsActionResultSchema,
+  componentsListParamsSchema,
+  componentsListResultSchema,
+  type ComponentsActionParams,
+  type ComponentsActionResult,
+  type ComponentsListParams,
+  type ComponentsListResult,
+} from './methods/components.mts'
 
 export type {
   ActivitySnapshotParams,
@@ -840,6 +850,8 @@ export interface ForemanMethodParams {
   'exec.get': ExecGetParams
   'exec.events': ExecEventsParams
   'exec.cancel': ExecCancelParams
+  'components.list': ComponentsListParams
+  'components.action': ComponentsActionParams
   'session.list': SessionListParams
   'session.create': SessionCreateParams
   'session.send': SessionSendParams
@@ -933,6 +945,8 @@ export interface ForemanMethodResults {
   'exec.get': ExecGetResult
   'exec.events': ExecEventsResult
   'exec.cancel': ExecCancelResult
+  'components.list': ComponentsListResult
+  'components.action': ComponentsActionResult
   'session.list': SessionListResult
   'session.create': SessionCreateResult
   'session.send': SessionSendResult
@@ -1274,6 +1288,16 @@ export const methodRegistry: {
   'exec.cancel': {
     params: execCancelParamsSchema,
     result: execCancelResultSchema,
+  },
+  'components.list': {
+    params: componentsListParamsSchema,
+    result: componentsListResultSchema,
+    description: 'Machine-local operation component status (agent-browser, Cua Driver).',
+  },
+  'components.action': {
+    params: componentsActionParamsSchema,
+    result: componentsActionResultSchema,
+    description: 'User-triggered operation component action: refresh, install, update, repair, authorize, uninstall, enable or disable.',
   },
   'session.list': { params: sessionListParamsSchema, result: sessionListResultSchema },
   'session.create': { params: sessionCreateParamsSchema, result: sessionCreateResultSchema },

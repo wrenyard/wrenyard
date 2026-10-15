@@ -1,5 +1,5 @@
 import type { AgentClient } from '@wrenyard/agent-client';
-export type { AccountOptions, AccountSnapshot, AgentClient, AgentEvent, AgentRequest, AgentResult, AgentSession, ClientCapabilities, ClientStatus, ExecutionFeature, InspectOptions, McpServer, NativeClientReadiness, NativeModelAvailability, NativeModelAvailabilityReason, NativeModelAvailabilityStatus, OperationOptions, ReadinessOptions } from '@wrenyard/agent-client';
+export type { AccountOptions, AccountSnapshot, AgentClient, AgentEvent, AgentRequest, AgentResult, AgentSession, ClientCapabilities, ClientStatus, InspectOptions, McpServer, NativeClientReadiness, NativeModelAvailability, NativeModelAvailabilityReason, NativeModelAvailabilityStatus, OperationOptions, ReadinessOptions } from '@wrenyard/agent-client';
 export { claudeFamilyMcpConfig, resolveMcpServers, requireHttpServer } from '@wrenyard/agent-client/mcp';
 export type { ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
 export type { OperationOptions as ClientOptions } from '@wrenyard/agent-client';

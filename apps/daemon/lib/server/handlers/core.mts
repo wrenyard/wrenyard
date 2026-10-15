@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { bundledSuiteRoot, readSuiteVersion, runningFromBundle } from '../../layout/suite-root.mts'
 import type { OperationHost } from '../../core/operations/types.mts'
 import { TaskService, TaskServiceError } from '../../core/task/service.mts'
@@ -75,6 +76,16 @@ import {
   MalformedStoreError,
   RevisionConflictError,
 } from '../../runtime-aliases/store.mts'
+import type {
+  OperationComponentAction,
+  OperationComponentId,
+  OperationComponents,
+} from '../../daemon/services/operation-components.mts'
+import {
+  toOperationIds,
+  type OperationAdapter,
+  type PreparedOperations,
+} from '../../daemon/execution/operation-adapter.mts'
 import type { ExecService, ExecRequest } from '@wrenyard/exec'
 import type { ExecStartParams } from '@wrenyard/protocol'
 import { WRENYARD_PROTOCOL_VERSION } from '@wrenyard/control'
@@ -163,6 +174,10 @@ export interface CoreRpcHandlerOptions {
    */
   execService?: ExecService
   resolveExecRequest?: (params: ExecStartParams) => ExecRequest
+  /** Machine-local operation component manager backing components.list/action. */
+  operationComponents?: OperationComponents
+  /** Shared operation adapter that prepares one run's prompt/MCP/env per component. */
+  operationAdapter?: OperationAdapter
   /**
    * Daemon-owned TaskService shared by every transport. The session feature
    * waits on and cancels task runs through this same instance so an in-process
@@ -661,6 +676,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   router.register('exec.start', async (params, _message, context) => {
     const service = requireExecService(context, 'exec.start')
     let handle: Awaited<ReturnType<ExecService['start']>>
+    let prepared: PreparedOperations | undefined
     try {
       const request = options.resolveExecRequest?.(params)
       if (!request) throw new Error('Exec catalog resolution is unavailable')
@@ -668,9 +684,49 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       // daemon.resolveExecRequest), so spreading params first and the resolved
       // request second carries every mandatory field exactly once while letting
       // the resolved provider/model/mode/reasoning-effort override the raw input.
-      handle = await service.start({ ...params, ...request })
+      // `features` is a wire-level request only: the legacy ids are resolved here
+      // through the shared operation adapter, which checks readiness on this host
+      // and fails before spawn when a requested component is not available. A
+      // request without operation ids keeps its exact previous behaviour.
+      const { features, ...merged } = { ...params, ...request }
+      const ids = toOperationIds(features)
+      if (ids.length > 0) {
+        if (!options.operationAdapter) {
+          throw new Error('Operation components are not available in this runtime')
+        }
+        const runId = `exec-${randomBytes(4).toString('hex')}`
+        prepared = await options.operationAdapter.prepare({
+          prompt: merged.prompt,
+          mcpServers: merged.mcpServers,
+          ids,
+          runId,
+          owner: runId,
+        })
+      }
+      handle = await service.start(
+        prepared
+          ? {
+              ...merged,
+              prompt: prepared.prompt,
+              ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
+            }
+          : merged,
+        prepared ? { env: prepared.applyEnv(process.env) } : undefined,
+      )
     } catch (error) {
+      await prepared?.release().catch(() => undefined)
       throw protocolErrorFromExecStart(error, params.client)
+    }
+    // Release the acquired component resources (the browser session is closed
+    // and the desktop lock is freed) once the execution reaches its terminal
+    // result. Release is idempotent and never rejects the caller.
+    if (prepared) {
+      const preparedRun = prepared
+      void Promise.resolve(handle.result)
+        .catch(() => undefined)
+        .finally(() => {
+          void preparedRun.release()
+        })
     }
     return { execution: toJsonShape(handle.snapshot) } satisfies ExecStartResult
   })
@@ -711,6 +767,49 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       id: params.id,
       status: snapshot?.status ?? 'cancelled',
     } satisfies ExecCancelResult
+  })
+  // components.* expose the daemon-owned machine-local operation components to
+  // Desktop Settings; the RPC surface never installs, authorizes or mutates
+  // anything itself. IPC-only, like exec.*. A dependency that is absent fails
+  // loud with a bounded unavailable error instead of being silently dropped.
+  const requireOperationComponents = (
+    context: unknown,
+    method: string,
+  ): OperationComponents => {
+    const rpcContext = coreRpcContextFromUnknown(context)
+    if (rpcContext.transport !== 'ipc') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: `${method} is only available over IPC` },
+        { code: 'components_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+      )
+    }
+    if (!options.operationComponents) {
+      throw new ProtocolError(
+        { code: INTERNAL_ERROR.code, message: `${method} is not available in this runtime` },
+        { code: 'components_unavailable' },
+      )
+    }
+    return options.operationComponents
+  }
+  router.register('components.list', async (_params, _message, context) => {
+    const service = requireOperationComponents(context, 'components.list')
+    return { components: await service.list() }
+  })
+  router.register('components.action', async (params, _message, context) => {
+    const service = requireOperationComponents(context, 'components.action')
+    const { id, action } = params as {
+      id: OperationComponentId
+      action: OperationComponentAction
+    }
+    try {
+      return { component: await service.act(id, action) }
+    } catch (error) {
+      if (error instanceof ProtocolError) throw error
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: error instanceof Error ? error.message : String(error) },
+        { code: 'component_action_rejected' },
+      )
+    }
   })
   router.register('task.run.create', async (params, _message, context) => {
     // The only admission rule left is shutting_down: no new top-level work once

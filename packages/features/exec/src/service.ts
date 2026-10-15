@@ -8,15 +8,13 @@ import {
 } from '@wrenyard/clients';
 import type {
   ExecEventEnvelope,
-  ExecFeatureId,
   ExecId,
   ExecSnapshot,
   ExecStatus,
 } from '@wrenyard/protocol';
 import { ExecReplayBuffer } from './replay.ts';
-import type { ExecutionFeature, McpServer } from '@wrenyard/agent-client';
 
-export type { ExecutionFeature, McpServer } from '@wrenyard/agent-client';
+export type { McpServer } from '@wrenyard/agent-client';
 
 /**
  * Bounded wait for a client `result` after its event stream already ended. The
@@ -35,10 +33,6 @@ const CLOSE_DRAIN_GRACE_MS = 5_000;
 export interface ExecServiceOptions {
   /** Agent clients by id. Defaults to the composed `@wrenyard/clients` map. */
   readonly clients?: ReadonlyMap<string, AgentClient>;
-  /** Configured execution features by id. */
-  readonly features?: ReadonlyMap<string, ExecutionFeature>;
-  /** Configured feature ids to activate when a request names none. */
-  readonly defaultFeatures?: readonly ExecFeatureId[];
   /** Maximum retained event records per execution. Defaults to 2 000. */
   readonly maxRetainedEvents?: number;
   /** Maximum retained event bytes per execution. Defaults to 4 MiB. */
@@ -58,8 +52,6 @@ export interface ExecHandle extends AgentSession {
 export interface ExecRequest extends AgentRequest {
   /** Agent client id to run. */
   readonly client: string;
-  /** Configured execution-feature ids to activate for this run. */
-  readonly features?: readonly ExecFeatureId[];
 }
 
 interface ExecEntry {
@@ -102,6 +94,8 @@ interface PreparedRun {
  *
  * - It never resolves a provider, canonical model, mode, reasoning effort or
  *   working directory. The caller supplies all of them.
+ * - It never composes prompts or merges MCP servers: the caller's `prompt` and
+ *   `mcpServers` are forwarded to the client unchanged.
  * - It never touches the task graph, the database or the provider catalog.
  * - It never retries, backs off or opens a circuit: one request starts one run.
  *
@@ -112,8 +106,6 @@ interface PreparedRun {
  */
 export class ExecService {
   readonly #clients: ReadonlyMap<string, AgentClient>;
-  readonly #features: ReadonlyMap<string, ExecutionFeature>;
-  readonly #defaultFeatures: readonly ExecFeatureId[];
   readonly #maxRetainedEvents: number;
   readonly #maxRetainedBytes: number;
   readonly #maxCompletedRuns: number;
@@ -124,8 +116,6 @@ export class ExecService {
 
   constructor(options: ExecServiceOptions = {}) {
     this.#clients = options.clients ?? createAgentClients();
-    this.#features = options.features ?? new Map();
-    this.#defaultFeatures = options.defaultFeatures ?? [];
     this.#maxRetainedEvents = options.maxRetainedEvents ?? 2_000;
     this.#maxRetainedBytes = options.maxRetainedBytes ?? 4 * 1024 * 1024;
     this.#maxCompletedRuns = Math.max(1, Math.trunc(options.maxCompletedRuns ?? 200));
@@ -134,10 +124,9 @@ export class ExecService {
   /**
    * Start one execution and return its handle.
    *
-   * Everything that can fail before a child exists — an unknown client, an
-   * unknown feature id, a collision between two selected features' MCP servers
-   * — rejects here without starting anything, so a rejected `start` never
-   * leaves a half-configured run behind.
+   * Everything that can fail before a child exists — an unknown client or a
+   * client that cannot start executions — rejects here without starting
+   * anything, so a rejected `start` never leaves a half-configured run behind.
    */
   async start(request: ExecRequest, options?: OperationOptions): Promise<ExecHandle> {
     if (this.#closed) throw new Error('ExecService is closed');
@@ -239,14 +228,13 @@ export class ExecService {
     for (const entry of live) this.#settle(entry, {});
   }
 
-  /** Resolve the client, activate features, and compose the child request. */
+  /** Resolve the client and compose the child request. */
   #prepare(request: ExecRequest): PreparedRun {
     const clientId = request.client.trim();
     const client = this.#clients.get(clientId);
     if (!client) throw new Error(`Unknown agent client '${clientId}'`);
     if (!client.capabilities.run) throw new Error(`Agent client '${clientId}' cannot start executions`);
 
-    const selected = this.#selectFeatures(request.features ?? this.#defaultFeatures);
     const entry: ExecEntry = {
       id: `exec_${(this.#sequence += 1).toString(36)}_${Date.now().toString(36)}`,
       client: clientId,
@@ -263,28 +251,13 @@ export class ExecService {
       terminal: false,
     };
 
-    const { mcpServers, instructions } = mergeFeatures(selected);
-    for (const [name, server] of Object.entries(request.mcpServers ?? {})) {
-      if (name in mcpServers) throw new Error(`Duplicate MCP server '${name}'`);
-      mcpServers[name] = server;
-    }
-    const { client: _client, features: _features, ...nativeRequest } = request;
+    const { client: _client, ...nativeRequest } = request;
     const agentRequest: AgentRequest = {
       ...nativeRequest,
       model: request.mode === 'gateway' && request.provider && request.canonicalModel
         ? `${request.provider}/${request.canonicalModel}` : request.model,
-      prompt: composePrompt(request.prompt, instructions),
-      ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     };
     return { entry, request: agentRequest };
-  }
-
-  #selectFeatures(ids: readonly ExecFeatureId[]): readonly ExecutionFeature[] {
-    const unknown = ids.filter((id) => !this.#features.has(id));
-    if (unknown.length > 0) {
-      throw new Error(`Unknown execution feature${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`);
-    }
-    return ids.map((id) => this.#features.get(id)!);
   }
 
   /**
@@ -455,38 +428,6 @@ function agentEventOf(envelope: ExecEventEnvelope): AgentEvent {
     };
   }
   return { type: 'output', record };
-}
-
-/**
- * Fold the selected features' MCP servers and instructions.
- *
- * Two selected features that both declare the same MCP server name are a
- * configuration conflict, not a merge: silently preferring one would send the
- * model a tool surface neither feature asked for.
- */
-function mergeFeatures(features: readonly ExecutionFeature[]): {
-  mcpServers: Record<string, McpServer>;
-  instructions: string[];
-} {
-  const mcpServers: Record<string, McpServer> = {};
-  const instructions: string[] = [];
-  for (const feature of features) {
-    for (const [name, server] of Object.entries(feature.mcpServers ?? {})) {
-      if (name in mcpServers) {
-        throw new Error(`Execution features declare the same MCP server '${name}'`);
-      }
-      mcpServers[name] = server;
-    }
-    if (feature.instructions) instructions.push(feature.instructions);
-  }
-  return { mcpServers, instructions };
-}
-
-/** Append selected feature instructions to the raw prompt, in selection order. */
-function composePrompt(prompt: string, instructions: readonly string[]): string {
-  if (instructions.length === 0) return prompt;
-  const sections = instructions.map((text, index) => `# Instruction ${index + 1}\n${text}`);
-  return `${prompt}\n\n${sections.join('\n\n')}`;
 }
 
 /** Resolve with the promise's value, or `undefined` once `ms` elapses. */

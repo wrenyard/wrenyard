@@ -37,17 +37,6 @@ export type McpServer = {
     readonly url: string;
     readonly headers?: Readonly<Record<string, string>>;
 };
-/**
- * A named bundle of agent behaviour the caller can attach to a launch. A
- * feature always contributes MCP servers (keyed by the name the client should
- * expose) and may carry free-form instructions that describe how the agent
- * should use them.
- */
-export interface ExecutionFeature {
-    readonly id: string;
-    readonly instructions?: string;
-    readonly mcpServers: Readonly<Record<string, McpServer>>;
-}
 export interface AgentRequest {
     readonly model: string;
     readonly canonicalModel?: string;

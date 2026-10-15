@@ -57,18 +57,19 @@ Shape:
 `], labels: ["criteria","运行时填入任务输入"] } as const
 
 export const TASK_PROMPT_TEMPLATE_2 = { label: "浏览器验证", strings: [`
-You are a **Verification Runner** with **browser capabilities**. Use the Playwright MCP tool for all page-level interactions, state inspection, navigation, and screenshots.
+You are a **Verification Runner** with **browser capabilities**. Use the \`agent-browser\` CLI (already on PATH with an isolated browser session) for all page-level interactions, state inspection, navigation, and screenshots.
 
 ## Acceptance Criteria
 `,
 `
 
 ## Rules
-- Use Playwright MCP for every browser interaction: page navigation, element interaction, DOM state inspection, and screenshots.
+- Use \`agent-browser\` for every browser interaction: \`open <url>\`, \`snapshot\` (element refs such as \`@e1\`), \`click\`, \`fill\`, \`screenshot <path>\`; run \`agent-browser --help\` for other commands. Do not install or launch other browsers or automation tools.
 - Rely on observed page state (DOM text, element visibility, screenshot analysis) to determine pass/fail.
 - Mark \`blocked\` for missing credentials, unavailable remote services, unavailable browser tooling, or environment problems that prevent a meaningful verdict.
 - Mark \`not_supported\` when the criterion cannot be verified through automated browser interaction.
 - Do not edit files and do not propose code patches.
+- Do not perform irreversible or sensitive actions (purchases or payments, sending messages, submitting credentials or personal data, uploading or downloading user files, deleting data, changing account or system settings). Mark the criterion \`blocked\` with the reason \`needs user confirmation: <action>\` instead.
 
 ## Workflow
 1. For each criterion, navigate to the relevant page(s) and gather observations as pooled \`evidences\`.
@@ -103,6 +104,7 @@ You are a **Verification Runner** with **desktop application capabilities**. Use
 - Rely on observed app state (window content, element labels, screenshot analysis) to determine pass/fail.
 - Mark \`not_supported\` when the criterion cannot be verified through Cua Driver interaction.
 - Do not edit files and do not propose code patches.
+- Do not perform irreversible or sensitive actions (purchases or payments, sending messages, submitting credentials or personal data, uploading or downloading user files, deleting data, changing account or system settings). Mark the criterion \`blocked\` with the reason \`needs user confirmation: <action>\` instead.
 
 ## Workflow
 1. For each criterion, interact with the desktop application and gather observations as pooled \`evidences\`.
@@ -135,8 +137,9 @@ Shape:
  * each criterion, chooses a reasonable verification action, and reports
  * evidence without proposing code edits.
  *
- * Feature guidance (browser-use / computer-use) is injected into the
- * prompt when the corresponding capability is selected via TaskConfig.
+ * Selecting capability `browser-use` or `computer-use` requests the browser or
+ * desktop operation component; the daemon's operation adapter checks readiness
+ * and attaches the agent-browser CLI or the Cua Driver MCP for that run.
  */
 
 // ─── I/O schemas ──────────────────────────────────────────────────
@@ -199,7 +202,7 @@ const definition = {
   __type: 'task' as const,
   config: {
     description:
-      'Generic verification runner. Interprets acceptance criteria, chooses reasonable verification actions, and reports evidence and assessments without proposing code edits. Supports browser and desktop-app verification via execution features.',
+      'Generic verification runner. Interprets acceptance criteria, chooses reasonable verification actions, and reports evidence and assessments without proposing code edits. Supports browser verification through the agent-browser CLI and desktop-app verification through Cua Driver, using the operation components installed in Settings.',
     dispatch: FREQUENT_DISPATCH_REQUIREMENTS,
     // A declared empty target set means this mutation-capable task requires a
     // conservative repo-wide coordination lock.

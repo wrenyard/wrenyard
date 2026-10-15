@@ -39,8 +39,10 @@ updates. There is no separate agent runtime binary or Go build.
   account reads and token/TPS statistics.
 - `packages/execution` owns subprocess lifetime, stdio RPC and native credential
   primitives (read-only SQLite and macOS keychain), without provider knowledge.
-- Browser/computer feature packages provide MCP descriptors and instructions;
-  clients encode those descriptors in their native configuration.
+- Browser operations use the daemon-managed `agent-browser` CLI and desktop
+  operations use the Cua Driver MCP; both are managed by the daemon's
+  operation-component service (Settings > 操作组件) and attached per run by one
+  execution adapter. Task-declared `mcpServers` are unaffected.
 - `packages/themes` holds pure theme tokens, metadata and icons consumed by
   Desktop.
 
@@ -59,9 +61,11 @@ environment variables) and Desktop's embedded DSH sessions (through the
 `gateway.connection` IPC method) consume it, and its listener serves only
 `/gateway/*` and returns 404 elsewhere. ChatGPT subscription models are
 forwarded over the Responses protocol with the Codex client's existing ChatGPT
-login, which the daemon reads and refreshes through that client. Separately injected stdio MCP servers
-(`browser-use`, `computer-use` and task-declared `mcpServers`) are unrelated to
-the daemon and remain in place.
+login, which the daemon reads and refreshes through that client. Browser
+operations use the daemon-managed `agent-browser` CLI and desktop operations
+use the Cua Driver MCP; both are managed by the daemon's operation-component
+service (Settings > 操作组件) and attached per run by one execution adapter.
+Task-declared `mcpServers` are unaffected.
 
 ## Execution
 

@@ -42,7 +42,8 @@ import {
 import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refreshCodexGatewayCredential, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
 import { ExecService } from '@wrenyard/exec'
 import { ProviderService } from '@wrenyard/provider-service'
-import { createExecFeatureRegistry } from './execution/exec-features.mts'
+import { OperationComponents } from './services/operation-components.mts'
+import { OperationAdapter } from './execution/operation-adapter.mts'
 import { RuntimeAliasService } from './services/runtime-alias-service.mts'
 import { RemoteHostRegistryService } from '../remote/host-registry.mts'
 import { createWorkspaceControl } from './services/workspace-control.mts'
@@ -872,6 +873,8 @@ async function createForemanDaemonResources(
     taskSettings: workspaceScoped.taskSettingsService,
     runtimeAlias: runtimeAliasService,
     execService: runtime.execService,
+    operationComponents: runtime.operationComponents,
+    operationAdapter: runtime.operationAdapter,
     taskService: workspaceScoped.taskService,
     resolveExecRequest: (params) => {
       const provider = params.provider ?? catalog.clients().find(client => client.id === params.client)?.nativeProvider
@@ -1560,6 +1563,10 @@ interface ForemanDaemonRuntime {
   runner: TaskWorkflowRunner
   /** Shared raw prompt-execution service consumed by the RPC surface and tasks. */
   execService: ExecService
+  /** Machine-local operation component manager (agent-browser CLI, Cua Driver). */
+  operationComponents: OperationComponents
+  /** Single execution boundary that resolves operation components per run. */
+  operationAdapter: OperationAdapter
   catalog: import('@wrenyard/providers/catalog').Catalog
   providerRuntime: import('@wrenyard/providers').ProviderRuntime
   /** Canonical task dispatch plans keyed by provider/model:client targets. */
@@ -1626,22 +1633,26 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     new WorkflowRunStore(db).markAllNonTerminalCancelled(new Date().toISOString())
     const repoWriteLocks = new RepoWriteLocks()
     // One daemon-owned raw prompt-execution service shared by the RPC surface,
-    // the CLI, and the task supervisor. It owns a single client map and a single
-    // configured feature registry, so a structured task attempt and an explicit
-    // `wrenyard exec` share the exact same launch path and shutdown handling.
-    // Its features are explicit environment MCP descriptors (see
-    // exec-features.mts); no credential or environment value crosses the public
-    // IPC surface.
+    // the CLI, and the task supervisor. It owns a single client map, so a
+    // structured task attempt and an explicit `wrenyard exec` share the exact
+    // same launch path and shutdown handling. The service runs resolved clients
+    // with direct MCP servers and prompts supplied by the operation adapter; no
+    // credential or environment value crosses the public IPC surface.
     const execService = new ExecService({
       clients: createAgentClients(),
-      features: createExecFeatureRegistry(),
     })
+    const operationComponents = new OperationComponents({
+      stateRoot: foremanStateRoot(),
+      log: (message) => writeDaemonLog('warn', message),
+    })
+    const operationAdapter = new OperationAdapter(operationComponents)
     const supervisor = new AgentExecutionSupervisor({
       db,
       repoWriteLocks,
       logger: createDaemonSupervisorLogger(),
       catalog,
       execService,
+      operations: operationAdapter,
     })
     const runner = new TaskWorkflowRunner({
       db,
@@ -1653,7 +1664,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     setAgentExecutionSupervisor(supervisor)
     setTaskWorkflowRunner(runner)
 
-    return { db, repoWriteLocks, supervisor, runner, execService, catalog, providerRuntime, dispatchPlans, taskDispatchResolver }
+    return { db, repoWriteLocks, supervisor, runner, execService, operationComponents, operationAdapter, catalog, providerRuntime, dispatchPlans, taskDispatchResolver }
   } catch (error) {
     releaseDaemonDb()
     throw error

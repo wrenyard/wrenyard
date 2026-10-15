@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   Bird,
+  Blocks,
   Boxes,
   ChevronRight,
   Download,
@@ -37,6 +38,7 @@ const CATEGORY_ICONS: Readonly<Record<SettingsCategoryId, LucideIcon>> = {
   models: Route,
   shortcuts: Keyboard,
   pet: Bird,
+  components: Blocks,
   runtime: Server,
   update: Download,
   about: Info,

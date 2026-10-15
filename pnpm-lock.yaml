@@ -82,15 +82,9 @@ importers:
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../../packages/features/auto-routing
-      '@wrenyard/browser-use':
-        specifier: workspace:*
-        version: link:../../packages/features/browser-use
       '@wrenyard/clients':
         specifier: workspace:*
         version: link:../../packages/clients
-      '@wrenyard/computer-use':
-        specifier: workspace:*
-        version: link:../../packages/features/computer-use
       '@wrenyard/control':
         specifier: workspace:*
         version: link:../../packages/control
@@ -581,44 +575,6 @@ importers:
       '@wrenyard/providers':
         specifier: workspace:*
         version: link:../../providers
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/features/browser-use:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../../clients/base
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.20.1
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
-      tsx:
-        specifier: ^4.22.4
-        version: 4.23.12
-      typescript:
-        specifier: ^5.9.0
-        version: 5.9.3
-
-  packages/features/computer-use:
-    dependencies:
-      '@wrenyard/agent-client':
-        specifier: workspace:*
-        version: link:../../clients/base
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

@@ -6,6 +6,7 @@ import {
   AboutThemeControl,
   AboutWrenyardVersionControl,
 } from './AboutSettings.js';
+import { OperationComponentsControl } from './OperationComponentsSettings.js';
 import {
   PetBottomOffsetControl,
   PetBubbleSecondsControl,
@@ -50,6 +51,7 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   daemon: DaemonControl,
   endpoint: EndpointControl,
   logs: LogsControl,
+  operationComponents: OperationComponentsControl,
   petBottomOffset: PetBottomOffsetControl,
   petBubbleSeconds: PetBubbleSecondsControl,
   petDisplay: PetDisplayControl,

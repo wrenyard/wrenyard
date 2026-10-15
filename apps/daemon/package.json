@@ -56,8 +56,6 @@
     "@wrenyard/quota": "workspace:*",
     "@wrenyard/clients": "workspace:*",
     "@wrenyard/exec": "workspace:*",
-    "@wrenyard/browser-use": "workspace:*",
-    "@wrenyard/computer-use": "workspace:*",
     "@wrenyard/protocol": "workspace:*",
     "@wrenyard/provider-service": "workspace:*"
   },

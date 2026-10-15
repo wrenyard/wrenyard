@@ -255,6 +255,8 @@ export const SHELL_CHANNELS = {
   remoteHostConnect: 'wrenyard-shell:remote-host-connect',
   remoteReturnLocal: 'wrenyard-shell:remote-return-local',
   remoteChanged: 'wrenyard-shell:remote-changed',
+  operationComponents: 'wrenyard-shell:operation-components',
+  operationComponentAction: 'wrenyard-shell:operation-component-action',
 } as const;
 
 export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'schedules';
@@ -1371,6 +1373,80 @@ export interface RemoteHostListResult {
   hosts: RemoteHostView[];
 }
 
+/* ------------------------------------------------------------------ */
+/* Operation components                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Operation components are machine-local capabilities the daemon owns for the
+ * machine it runs on: a browser CLI (`agent-browser`) and a desktop-control MCP
+ * driver (Cua Driver). The daemon installs, authorizes and health-checks them;
+ * Desktop is only a transport/UI client. These wire types mirror the daemon's
+ * `components.*` snapshots exactly so the preload facade, main handlers and
+ * renderer read one definition.
+ */
+export type OperationComponentId = 'browser' | 'desktop';
+
+export type OperationComponentState =
+  | 'not-installed'
+  | 'installing'
+  | 'needs-authorization'
+  | 'ready'
+  | 'failed'
+  | 'unsupported'
+  | 'disabled';
+
+export type OperationComponentAction =
+  | 'refresh'
+  | 'install'
+  | 'update'
+  | 'repair'
+  | 'authorize'
+  | 'uninstall'
+  | 'enable'
+  | 'disable';
+
+export type OperationComponentHint =
+  | 'legacy-browser-mcp'
+  | 'shared-browser-runtime'
+  | 'external-mcp'
+  | 'existing-installation'
+  | 'missing-accessibility'
+  | 'missing-screen-recording';
+
+/** Staged progress of an in-flight component action. */
+export interface OperationComponentProgress {
+  phase: string;
+  /** Bytes received so far; present only while a download is running. */
+  receivedBytes?: number;
+  /** Total expected bytes; present only when the size is known. */
+  totalBytes?: number;
+}
+
+export interface OperationComponentSnapshot {
+  id: OperationComponentId;
+  /** Upstream component name, e.g. `agent-browser` or `Cua Driver`. */
+  name: string;
+  state: OperationComponentState;
+  /** Who owns the installation: Wrenyard-managed or an external installation. */
+  source?: 'managed' | 'external';
+  version?: string;
+  /** Pinned upstream version this delivery targets. */
+  pinnedVersion: string;
+  path?: string;
+  /** Host the component belongs to (the daemon's machine). */
+  host: string;
+  platform: string;
+  arch: string;
+  checkedAt?: string;
+  progress?: OperationComponentProgress;
+  /** Sanitized failure reason; present only in the `failed` state. */
+  error?: string;
+  hints: OperationComponentHint[];
+  /** Actions currently offered for this snapshot; the UI renders only these. */
+  actions: OperationComponentAction[];
+}
+
 export interface WrenyardShellApi {
   platform: NodeJS.Platform;
   /**
@@ -1494,6 +1570,13 @@ export interface WrenyardShellApi {
   returnToLocal(): Promise<RemoteHostMutationResult>;
   /** Pushed after every committed connection-state change. */
   onRemoteChanged(listener: (snapshot: RemoteConnectionSnapshot) => void): () => void;
+  /** Operation components installed on the daemon's machine. */
+  getOperationComponents(): Promise<OperationComponentSnapshot[]>;
+  /** Run one user-triggered component action; resolves with the updated snapshot. */
+  runOperationComponentAction(
+    id: OperationComponentId,
+    action: OperationComponentAction,
+  ): Promise<OperationComponentSnapshot>;
 }
 
 export function isShellPage(value: unknown): value is ShellPage {

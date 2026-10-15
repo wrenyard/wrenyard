@@ -48,7 +48,7 @@ handle.
 ```ts
 import { ExecService } from '@wrenyard/exec'
 
-const exec = new ExecService({ features })   // clients default to @wrenyard/clients
+const exec = new ExecService()               // clients default to @wrenyard/clients
 
 const handle = await exec.start({
   client: 'codex',
@@ -58,7 +58,10 @@ const handle = await exec.start({
   prompt: 'Summarize this workspace.',
   cwd: '/absolute/path',
   thinking: 'medium',
-  features: ['browser'],
+  mcpServers: {
+    // any stdio or http MCP server, keyed by the name the client should expose
+    browser: { transport: 'stdio', command: '/absolute/path/to/agent-browser', args: ['mcp'] },
+  },
 })
 
 exec.get(handle.id)                 // ExecSnapshot | undefined
@@ -72,8 +75,6 @@ await exec.close()                  // cancels every live run
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `clients` | `createAgentClients()` | agent clients by id |
-| `features` | empty map | configured features by id |
-| `defaultFeatures` | `[]` | feature ids used when a request names none |
 | `maxRetainedEvents` | `2000` | per-execution retained event records |
 | `maxRetainedBytes` | `4 MiB` | per-execution retained event bytes |
 | `maxCompletedRuns` | `200` | terminal executions kept for later reads |
@@ -115,22 +116,16 @@ count (`maxCompletedRuns`) and are the only entries ever dropped; live runs are
 never pruned. `close()` cancels — it does not abandon — every live run, so no
 agent child outlives the service.
 
-## Features
+## MCP servers and prompt
 
-A configured `ExecutionFeature` is `{ id, instructions?, mcpServers }`. A
-request selects them by id; every id must be known *before* the client is
-started, so an unknown id rejects the call without spawning anything.
+The caller owns the prompt and the MCP servers, and both are forwarded to the
+client unchanged. `request.mcpServers` is keyed by the name the client should
+expose; this package never merges, renames or synthesises servers, and never
+rewrites or truncates the prompt.
 
-- **MCP servers** from all selected features are merged into one map. Two
-  selected features declaring the same server name is a hard error, not a
-  preference: silently winning would hand the model a tool surface neither
-  feature asked for.
-- **Instructions** are appended to the raw prompt as numbered sections, in
-  selection order. The caller's prompt is never rewritten or truncated.
-
-Browser and computer feature *factories* are separate packages owned elsewhere;
-this package only accepts the resulting feature records and does not define what
-"browser" or "computer" means.
+Deciding what a given operation component means — which executable a browser or
+desktop capability resolves to — happens outside this package, at the execution
+boundary that builds the request.
 
 ## Boundaries
 

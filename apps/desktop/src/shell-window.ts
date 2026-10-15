@@ -41,6 +41,9 @@ import {
   type NotificationCommandAction,
   type NotificationSnapshot,
   type ActivityStatusSnapshot,
+  type OperationComponentId,
+  type OperationComponentAction,
+  type OperationComponentSnapshot,
 } from './shell-contract.js';
 import type { ShellIpcDeps } from './main/ipc/deps.js';
 import { registerAppearancePreferencesIpc } from './main/ipc/appearance-preferences.js';
@@ -163,6 +166,13 @@ export interface ShellWindowOptions {
   openSettingsFile(): Promise<void>;
   openLogsDirectory(): Promise<void>;
   revealWorkspace(path: string): Promise<void>;
+  /** Operation components installed on the daemon's machine. */
+  getOperationComponents(): Promise<OperationComponentSnapshot[]>;
+  /** Run one user-triggered component action; resolves with the updated snapshot. */
+  runOperationComponentAction(
+    id: OperationComponentId,
+    action: OperationComponentAction,
+  ): Promise<OperationComponentSnapshot>;
 }
 
 export class ShellWindowController {
