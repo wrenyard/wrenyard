@@ -8,15 +8,40 @@ export interface ParsedTaskResult {
   status?: string;
   value?: unknown;
   answer?: string;
+  /** Bounded, nonempty leading text kept separately from the parsed result. */
+  summary?: string;
   truncated: boolean;
 }
 
 const TRUNCATION_MARKER = '\u2026';
 const STATUS_LENGTH_LIMIT = 40;
+const SUMMARY_LENGTH_LIMIT = 400;
 
-const FOREMAN_OUTPUT_OPEN = /^\s*<foreman-task-output>\s*/i;
-const FOREMAN_OUTPUT_CLOSE = /\s*<\/foreman-task-output>\s*$/i;
+const FOREMAN_OUTPUT_OPEN = /<foreman-task-output>/i;
+const FOREMAN_OUTPUT_CLOSE = /<\/foreman-task-output>/i;
+const FOREMAN_SUMMARY_OPEN = /<summary>/i;
+const FOREMAN_SUMMARY_CLOSE = /<\/summary>/i;
+const FOREMAN_RESULT_OPEN = /<result>/i;
+const FOREMAN_RESULT_CLOSE = /<\/result>/i;
 const MARKDOWN_FENCE = /^```[ \t]*(?:json)?[ \t]*\r?\n?([\s\S]*?)\r?\n?```[ \t]*$/i;
+
+// Top-level keys the built-in task definitions put on a structured result.
+// Only used to recognise a JSON suffix that follows prose; a direct or fenced
+// JSON body keeps its previous, permissive handling.
+const RESULT_KEYS = new Set([
+  'status',
+  'answer',
+  'summary',
+  'locations',
+  'evidences',
+  'assessments',
+  'artifacts',
+  'findings',
+  'required_changes',
+  'conclusion',
+  'observations',
+  'error',
+]);
 
 const SIMPLE_ESCAPES = new Set(['"', '\\', '/', 'b', 'f', 'n', 'r', 't']);
 const UNICODE_ESCAPE = /^[0-9a-fA-F]{4}$/;
@@ -70,11 +95,49 @@ const STATUS_LABELS: Record<string, string> = {
   success: '成功',
   cancelled: '已取消',
   pending: '进行中',
+  done: '已完成',
 };
 
 /** Unmapped statuses are returned unchanged rather than dropped. */
 export function statusLabel(status: string): string {
   return Object.hasOwn(STATUS_LABELS, status) ? STATUS_LABELS[status] : status;
+}
+
+/** Visual tone a status or value pill is drawn with. */
+export type StatusTone = 'success' | 'destructive' | 'warning' | 'muted';
+
+const STATUS_TONES: Record<string, StatusTone> = {
+  answered: 'success',
+  passed: 'success',
+  ok: 'success',
+  success: 'success',
+  done: 'success',
+  failed: 'destructive',
+  error: 'destructive',
+  blocked: 'warning',
+  not_found: 'warning',
+  running: 'warning',
+  pending: 'warning',
+};
+
+const VALUE_LABELS: Record<string, Record<string, string>> = {
+  confidence: { high: '高', medium: '中', low: '低' },
+  action: { create: '新建', update: '修改', remove: '删除' },
+  kind: { file: '文件', command: '命令', image: '图片', url: '链接' },
+};
+
+/** User-facing text for an enumerated field value; unknown values stay unchanged. */
+export function valueLabel(field: string, value: string): string {
+  if (field === 'status') return statusLabel(value);
+  const table = Object.hasOwn(VALUE_LABELS, field) ? VALUE_LABELS[field] : undefined;
+  return table !== undefined && Object.hasOwn(table, value) ? table[value] : value;
+}
+
+/** Colour tone for an enumerated field value. */
+export function valueTone(field: string, value: string): StatusTone {
+  if (field === 'status') return Object.hasOwn(STATUS_TONES, value) ? STATUS_TONES[value] : 'muted';
+  if (field === 'confidence') return value === 'high' ? 'success' : value === 'medium' ? 'warning' : 'muted';
+  return 'muted';
 }
 
 function isJsonWhitespace(char: string | undefined): boolean {
@@ -89,21 +152,19 @@ function isStructured(value: unknown): boolean {
   return typeof value === 'object' && value !== null;
 }
 
-/** Strip a whole-text `<foreman-task-output>` wrapper and a whole-text code fence. */
-function unwrapText(text: string): string {
-  let unwrapped = text;
-  if (FOREMAN_OUTPUT_OPEN.test(unwrapped)) {
-    unwrapped = unwrapped.replace(FOREMAN_OUTPUT_OPEN, '');
-  }
-  if (FOREMAN_OUTPUT_CLOSE.test(unwrapped)) {
-    unwrapped = unwrapped.replace(FOREMAN_OUTPUT_CLOSE, '');
-  }
-  unwrapped = unwrapped.trim();
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
-  const fenced = MARKDOWN_FENCE.exec(unwrapped);
-  if (fenced) unwrapped = fenced[1].trim();
+/** Strip a whole-text code fence so fenced JSON parses directly. */
+function unwrapFence(text: string): string {
+  const fenced = MARKDOWN_FENCE.exec(text);
+  return fenced ? fenced[1].trim() : text;
+}
 
-  return unwrapped;
+/** Trim, collapse and bound a preserved summary so it can never be unbounded. */
+function boundSummary(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, SUMMARY_LENGTH_LIMIT);
 }
 
 interface ScannedString {
@@ -250,6 +311,168 @@ function tryParseJson(candidate: string): { ok: true; value: unknown } | { ok: f
   }
 }
 
+/** An array of evidence objects, the shape an `edit`/`test` result can be. */
+function isEvidenceArray(value: unknown[]): boolean {
+  return value.length > 0 && value.every((item) => isRecord(item) && 'source' in item && 'observation' in item);
+}
+
+function hasExpectedShape(value: unknown): boolean {
+  if (Array.isArray(value)) return isEvidenceArray(value);
+  if (isRecord(value)) return Object.keys(value).some((key) => RESULT_KEYS.has(key));
+  return false;
+}
+
+/**
+ * True when a possibly truncated preview opens with a built-in result key.
+ * Only the first key is guaranteed complete in a cut-off object, so a leading
+ * `[` is accepted as a truncated evidence list.
+ */
+function startsWithResultKey(text: string): boolean {
+  if (text.startsWith('[')) return true;
+  const body = text.startsWith('{') ? text.slice(1).trimStart() : text.trimStart();
+  for (const key of RESULT_KEYS) {
+    if (body.startsWith(`"${key}"`)) return true;
+  }
+  return false;
+}
+
+/**
+ * True when text is a built-in task result shape: either it parses and carries
+ * an expected key (or is an evidence array), or the received preview ends with
+ * the real truncation marker and opens with a result key.
+ */
+function looksLikeResult(candidate: string): boolean {
+  const parsed = tryParseJson(candidate);
+  if (parsed.ok) return hasExpectedShape(parsed.value);
+  if (candidate.endsWith(TRUNCATION_MARKER)) return startsWithResultKey(candidate.slice(0, -1));
+  return false;
+}
+
+interface Envelope {
+  /** Text before the envelope opening tag, trimmed; '' when the tag opens the text. */
+  prose: string;
+  /** Complete `<summary>` body; '' when the tag is absent or was cut off. */
+  summary: string;
+  /** `<result>` body (or the text after the summary), trimmed. */
+  candidate: string;
+}
+
+/**
+ * Read a `<foreman-task-output>` envelope, tolerating a truncated tail: the
+ * closing tags may be missing and the summary may be cut off. The envelope
+ * must open at a line boundary so inline prose mentioning the tag is ignored.
+ */
+function readEnvelope(text: string): Envelope | null {
+  const open = FOREMAN_OUTPUT_OPEN.exec(text);
+  if (!open) return null;
+
+  const before = text.slice(0, open.index);
+  if (before.trim() !== '' && !before.endsWith('\n')) return null;
+
+  let body = text.slice(open.index + open[0].length);
+  const envelopeClose = FOREMAN_OUTPUT_CLOSE.exec(body);
+  if (envelopeClose) body = body.slice(0, envelopeClose.index);
+
+  let summary = '';
+  let afterSummary = body;
+  const summaryOpen = FOREMAN_SUMMARY_OPEN.exec(body);
+  if (summaryOpen) {
+    const rest = body.slice(summaryOpen.index + summaryOpen[0].length);
+    const summaryClose = FOREMAN_SUMMARY_CLOSE.exec(rest);
+    if (summaryClose) {
+      summary = rest.slice(0, summaryClose.index).trim();
+      afterSummary = rest.slice(summaryClose.index + summaryClose[0].length);
+    } else {
+      // The preview was cut inside the summary element; keep what arrived.
+      summary = rest.trim();
+      afterSummary = '';
+    }
+  }
+
+  let candidate = afterSummary;
+  const resultOpen = FOREMAN_RESULT_OPEN.exec(afterSummary);
+  if (resultOpen) {
+    candidate = afterSummary.slice(resultOpen.index + resultOpen[0].length);
+    const resultClose = FOREMAN_RESULT_CLOSE.exec(candidate);
+    if (resultClose) candidate = candidate.slice(0, resultClose.index);
+  }
+
+  return { prose: before.trim(), summary: boundSummary(summary), candidate: candidate.trim() };
+}
+
+interface ProseSuffix {
+  prose: string;
+  candidate: string;
+}
+
+/**
+ * Split `prose + JSON` text at the first line that opens a JSON body. The
+ * suffix must start at a line boundary, so a JSON example quoted inside a
+ * sentence is never mistaken for a task result.
+ */
+function splitProseSuffix(text: string): ProseSuffix | null {
+  const lines = text.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    const candidate = lines.slice(index).join('\n').trim();
+    if (candidate === '' || (candidate[0] !== '{' && candidate[0] !== '[')) continue;
+    return { prose: lines.slice(0, index).join('\n').trim(), candidate };
+  }
+  return null;
+}
+
+/**
+ * Turn an isolated structured candidate plus its preserved summary into the
+ * renderable result. `cut` records that the whole received preview ended with
+ * the truncation marker. Returns `null` when there is nothing safe to show, so
+ * malformed non-truncated text keeps its plain rendering.
+ */
+function finishParse(candidate: string, summary: string, envelope: boolean, cut: boolean): ParsedTaskResult | null {
+  const label = summary === '' ? {} : { summary };
+  const truncated = cut || candidate.endsWith(TRUNCATION_MARKER);
+
+  if (candidate.startsWith('{') || candidate.startsWith('[')) {
+    const parsed = tryParseJson(candidate);
+    if (parsed.ok) {
+      const value = parsed.value;
+      if (!isStructured(value)) return null;
+      const rawStatus = Array.isArray(value) ? undefined : (value as Record<string, unknown>).status;
+      const status = typeof rawStatus === 'string' ? normalizeStatus(rawStatus) : '';
+      return {
+        ...(status !== '' ? { status } : {}),
+        value,
+        ...label,
+        truncated: false,
+      };
+    }
+
+    // A malformed payload that was not cut short stays plain text, unless the
+    // envelope explicitly marked it as a task result.
+    if (!truncated) {
+      return envelope && summary !== '' ? { ...label, truncated: false } : null;
+    }
+
+    // The terminal truncation marker is not part of the JSON text.
+    const body = candidate.endsWith(TRUNCATION_MARKER) ? candidate.slice(0, -1) : candidate;
+    const recovered = recoverTruncatedFields(body);
+    const status = recovered.status !== undefined ? normalizeStatus(recovered.status) : '';
+    const answer = recovered.answer;
+
+    return {
+      ...(status !== '' ? { status } : {}),
+      ...(answer !== undefined ? { answer } : {}),
+      ...label,
+      truncated: true,
+    };
+  }
+
+  // The envelope carried no JSON body at all: keep only what is safe — the
+  // preserved summary and, for a cut-off preview, the truncation notice.
+  if (!envelope) return null;
+  if (summary !== '') return { ...label, truncated };
+  if (candidate !== '' && truncated) return { truncated: true };
+  return null;
+}
+
 /**
  * Parse the structured result of a task. Returns `null` when the text is not a
  * structured result, so plain running commentary, plain text results and
@@ -260,37 +483,75 @@ export function parseTaskResult(summary: string): ParsedTaskResult | null {
     const text = summary.trim();
     if (text.length === 0) return null;
 
-    const candidate = unwrapText(text);
-    if (!candidate.startsWith('{') && !candidate.startsWith('[')) return null;
-
-    const parsed = tryParseJson(candidate);
-    if (parsed.ok) {
-      const value = parsed.value;
-      if (!isStructured(value)) return null;
-
-      const rawStatus = Array.isArray(value) ? undefined : (value as Record<string, unknown>).status;
-      const status = typeof rawStatus === 'string' ? normalizeStatus(rawStatus) : '';
-      return {
-        ...(status !== '' ? { status } : {}),
-        value,
-        truncated: false,
-      };
+    const envelope = readEnvelope(text);
+    if (envelope !== null) {
+      const label = envelope.summary !== '' ? envelope.summary : boundSummary(envelope.prose);
+      return finishParse(envelope.candidate, label, true, text.endsWith(TRUNCATION_MARKER));
     }
 
-    // A malformed payload that was not cut short stays plain text.
-    if (!candidate.endsWith(TRUNCATION_MARKER)) return null;
+    const fenced = unwrapFence(text);
+    if (fenced !== text) return finishParse(fenced, '', false, false);
 
-    // The terminal truncation marker is not part of the JSON text.
-    const recovered = recoverTruncatedFields(candidate.slice(0, -1));
-    const status = recovered.status !== undefined ? normalizeStatus(recovered.status) : '';
-    const answer = recovered.answer;
+    if (!text.startsWith('{') && !text.startsWith('[')) {
+      const suffix = splitProseSuffix(text);
+      if (suffix === null || !looksLikeResult(suffix.candidate)) return null;
+      return finishParse(suffix.candidate, boundSummary(suffix.prose), false, text.endsWith(TRUNCATION_MARKER));
+    }
 
-    return {
-      ...(status !== '' ? { status } : {}),
-      ...(answer !== undefined ? { answer } : {}),
-      truncated: true,
-    };
+    return finishParse(text, '', false, false);
   } catch {
     return null;
   }
+}
+
+// ── Compact file references ──────────────────────────────────────────
+
+export interface FileReference {
+  kind?: string;
+  text: string;
+}
+
+/** Keys a source object may use to describe a file target. */
+const REFERENCE_KEYS = new Set(['kind', 'value', 'path', 'line', 'line_range']);
+
+function rangeSuffix(value: unknown): string | null {
+  if (value === undefined) return '';
+  if (typeof value === 'number' && Number.isFinite(value)) return `:${value}`;
+  if (Array.isArray(value) && value.length === 2 && value.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+    return `:${value[0]}–${value[1]}`;
+  }
+  return null;
+}
+
+/**
+ * A `{path|value, kind?, line?|line_range?}` target as one line, or null.
+ * Collapsing is only allowed when nothing would be lost: the object may carry
+ * no other keys, exactly one target key and it must be a string, `kind` must
+ * be a string when present, and the line metadata must be valid and
+ * nonconflicting. Anything else is left to the generic renderer.
+ */
+export function fileReference(value: unknown): FileReference | null {
+  if (!isRecord(value)) return null;
+  const keys = Object.keys(value);
+  if (keys.length === 0 || !keys.every((key) => REFERENCE_KEYS.has(key))) return null;
+
+  const hasPath = Object.hasOwn(value, 'path');
+  const hasValue = Object.hasOwn(value, 'value');
+  if (hasPath === hasValue) return null;
+  const target = hasPath ? value.path : value.value;
+  if (typeof target !== 'string') return null;
+
+  if (value.kind !== undefined && typeof value.kind !== 'string') return null;
+  if (value.line !== undefined && value.line_range !== undefined) return null;
+
+  const suffix = rangeSuffix(value.line !== undefined ? value.line : value.line_range);
+  if (suffix === null || target.includes('\n')) return null;
+
+  return { ...(typeof value.kind === 'string' ? { kind: value.kind } : {}), text: `${target}${suffix}` };
+}
+
+/** `[a, b]` line range as `a–b`, or null. */
+export function lineRangeText(value: unknown): string | null {
+  const suffix = Array.isArray(value) ? rangeSuffix(value) : null;
+  return suffix ? suffix.slice(1) : null;
 }

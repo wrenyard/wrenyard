@@ -28,7 +28,17 @@ import { Markdown } from '@/renderer/components/markdown';
 import { formatClockSeconds, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
 import { petAppearanceBridge, type PetAppearanceApi } from '../shared/appearance';
 import type { SafeTaskRunEventsResult, SafeTranscriptEventData, TranscriptRunInfo } from '../shared/taskgraph';
-import { labelForField, parseTaskResult, statusLabel, type ParsedTaskResult } from './task-result';
+import {
+  fileReference,
+  labelForField,
+  lineRangeText,
+  parseTaskResult,
+  valueLabel,
+  valueTone,
+  type FileReference,
+  type ParsedTaskResult,
+  type StatusTone,
+} from './task-result';
 
 interface TranscriptWindowApi {
   onData: (taskRunId: string, cb: (data: SafeTaskRunEventsResult) => void) => () => void;
@@ -249,105 +259,184 @@ interface RowAppearance {
 
 // ── Structured task results ──────────────────────────────────────────
 
+// Transcript markdown keeps headings at body scale inside compact bubbles.
+const MARKDOWN_CLASS = 'text-sm [&_h1]:text-base [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_h4]:text-sm [&_h4]:font-medium';
+// Decoded result text keeps its single line breaks.
+const RESULT_MARKDOWN_CLASS = `${MARKDOWN_CLASS} [&_p]:whitespace-pre-wrap`;
+const MARKDOWN_SYNTAX = /[\n`*#[\]|>]/;
+const PILL_FIELDS = new Set(['status', 'confidence', 'action']);
+
+const TONE_CLASS: Record<StatusTone, string> = {
+  success: 'border-success/30 bg-success/10 text-success',
+  destructive: 'border-destructive/30 bg-destructive/10 text-destructive',
+  warning: 'border-warning/30 bg-warning/10 text-warning',
+  muted: 'border-border bg-muted/60 text-muted-foreground',
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function TaskResultPrimitive({ value, appearance }: { value: unknown; appearance: RowAppearance }): ReactElement {
-  if (value === null) return <span className="text-muted-foreground">—</span>;
-  if (typeof value === 'string') {
-    return (
-      <Markdown
-        className="text-sm [&_p]:whitespace-pre-wrap"
-        dark={appearance.dark}
-        onOpenExternal={appearance.onOpenExternal}
-      >
-        {value}
-      </Markdown>
-    );
-  }
-  return <span className="tabular-nums">{String(value)}</span>;
+function isShortPrimitive(value: unknown): boolean {
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return true;
+  return typeof value === 'string' && value.length <= 40 && !value.includes('\n');
 }
 
-interface TaskResultValueProps {
+function primitiveText(value: unknown): string {
+  return value === null ? '—' : String(value);
+}
+
+function ResultPill({ field, value }: { field: string; value: string }): ReactElement {
+  return (
+    <Badge variant="outline" className={cn('h-4 shrink-0 px-1.5 text-[10px] font-normal', TONE_CLASS[valueTone(field, value)])}>
+      {valueLabel(field, value)}
+    </Badge>
+  );
+}
+
+function ResultMuted({ children }: { children: ReactNode }): ReactElement {
+  return <span className="text-[11px] text-muted-foreground">{children}</span>;
+}
+
+function ResultReference({ reference }: { reference: FileReference }): ReactElement {
+  return (
+    <code className="min-w-0 break-all font-mono text-[11px] text-foreground/90">
+      {reference.kind !== undefined && <span className="text-muted-foreground">{valueLabel('kind', reference.kind)} · </span>}
+      {reference.text}
+    </code>
+  );
+}
+
+function ResultText({ text, appearance }: { text: string; appearance: RowAppearance }): ReactElement {
+  if (!MARKDOWN_SYNTAX.test(text)) return <span className="break-words">{text}</span>;
+  return (
+    <Markdown className={RESULT_MARKDOWN_CLASS} dark={appearance.dark} onOpenExternal={appearance.onOpenExternal}>
+      {text}
+    </Markdown>
+  );
+}
+
+const NO_FIELDS: ReadonlySet<string> = new Set();
+
+interface ResultValueProps {
+  field: string;
   value: unknown;
   appearance: RowAppearance;
-  omitStatus?: boolean;
 }
 
-/**
- * Render every field of a parsed result in its original order: known keys get
- * their Chinese label, unknown keys keep their own name, and nested objects and
- * arrays recurse without deepening the indentation. Empty arrays and objects say
- * so explicitly, and no field is ever discarded.
- */
-function TaskResultValue({ value, appearance, omitStatus = false }: TaskResultValueProps): ReactElement | null {
-  if (Array.isArray(value)) {
-    if (value.length === 0) {
-      return <span className="text-[11px] text-muted-foreground">空列表</span>;
-    }
-    return (
-      <ol className="flex min-w-0 flex-col gap-1">
-        {value.map((item, index) => (
-          <li key={index} className="min-w-0 break-words">
-            <TaskResultValue value={item} appearance={appearance} />
-          </li>
-        ))}
-      </ol>
-    );
+/** One value of a parsed result, rendered compactly and without dropping data. */
+function ResultValue({ field, value, appearance }: ResultValueProps): ReactElement | null {
+  if (value === null || value === undefined) return <ResultMuted>—</ResultMuted>;
+  if (typeof value === 'string') {
+    if (PILL_FIELDS.has(field) && value.length > 0 && value.length <= 40) return <ResultPill field={field} value={value} />;
+    return <ResultText text={value} appearance={appearance} />;
   }
-
-  if (isRecord(value)) {
-    const keys = Object.keys(value);
-    const entries = Object.entries(value).filter(([key]) => !(omitStatus && key === 'status'));
-    if (entries.length === 0) {
-      // A record left empty only by the status already shown as the header badge
-      // is not an empty object.
-      if (omitStatus && keys.length > 0) return null;
-      return <span className="text-[11px] text-muted-foreground">空对象</span>;
-    }
-    return (
-      <div className="flex min-w-0 flex-col gap-1 break-words">
-        {entries.map(([key, entry]) => (
-          <Fragment key={key}>
-            <span className="text-[11px] text-muted-foreground">{labelForField(key)}</span>
-            <TaskResultValue value={entry} appearance={appearance} />
-          </Fragment>
-        ))}
-      </div>
-    );
-  }
-
-  return <TaskResultPrimitive value={value} appearance={appearance} />;
+  if (typeof value !== 'object') return <span className="tabular-nums">{String(value)}</span>;
+  const reference = fileReference(value);
+  if (reference) return <ResultReference reference={reference} />;
+  if (Array.isArray(value)) return <ResultList field={field} items={value} appearance={appearance} />;
+  return <ResultFields record={value as Record<string, unknown>} omit={NO_FIELDS} appearance={appearance} />;
 }
 
-/** Readable body of a structured result with the untouched original text below. */
+function ResultList({ field, items, appearance }: { field: string; items: unknown[]; appearance: RowAppearance }): ReactElement {
+  if (items.length === 0) return <ResultMuted>空列表</ResultMuted>;
+  const range = field === 'line_range' ? lineRangeText(items) : null;
+  if (range !== null) return <span className="font-mono text-[11px] tabular-nums">{range}</span>;
+  if (items.every(isShortPrimitive)) {
+    return <span className="break-words tabular-nums">{items.map(primitiveText).join(' · ')}</span>;
+  }
+  const references = items.map(fileReference);
+  if (references.every((reference) => reference !== null)) {
+    return (
+      <ul className="flex min-w-0 flex-col gap-0.5">
+        {references.map((reference, index) => (
+          <li key={index} className="min-w-0"><ResultReference reference={reference as FileReference} /></li>
+        ))}
+      </ul>
+    );
+  }
+  if (items.every((item) => !isRecord(item) && !Array.isArray(item))) {
+    return (
+      <ul className="flex min-w-0 list-disc flex-col gap-0.5 pl-4">
+        {items.map((item, index) => (
+          <li key={index} className="min-w-0 break-words"><ResultValue field={field} value={item} appearance={appearance} /></li>
+        ))}
+      </ul>
+    );
+  }
+  return (
+    <ol className="flex min-w-0 flex-col gap-1.5">
+      {items.map((item, index) => (
+        <li key={index} className="min-w-0 rounded-md border border-border/60 bg-background/40 px-2 py-1.5">
+          <ResultValue field={field} value={item} appearance={appearance} />
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** Labelled two-column grid of a result object; unknown keys keep their own name. */
+function ResultFields(
+  { record, omit, appearance }: { record: Record<string, unknown>; omit: ReadonlySet<string>; appearance: RowAppearance },
+): ReactElement | null {
+  const entries = Object.entries(record).filter(([key]) => !omit.has(key));
+  if (entries.length === 0) return Object.keys(record).length === 0 ? <ResultMuted>空对象</ResultMuted> : null;
+  return (
+    <dl className="grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-2.5 gap-y-1">
+      {entries.map(([key, entry]) => (
+        <Fragment key={key}>
+          <dt className="text-[11px] text-muted-foreground">{labelForField(key)}</dt>
+          <dd className="min-w-0 break-words">
+            <ResultValue field={key} value={entry} appearance={appearance} />
+          </dd>
+        </Fragment>
+      ))}
+    </dl>
+  );
+}
+
+/** Readable card for a structured result with the untouched original text behind 原始内容. */
 function TaskResultMessage(
   { parsed, text, appearance }: { parsed: ParsedTaskResult; text: string; appearance: RowAppearance },
 ): ReactElement {
-  const answer = parsed.answer !== undefined && parsed.answer.trim() !== '' ? parsed.answer : null;
+  const value = parsed.value;
+  const answerField = isRecord(value) && typeof value.answer === 'string' ? value.answer : undefined;
+  const answer = parsed.answer ?? answerField;
+  const hasAnswer = answer !== undefined && answer.trim() !== '';
+  const omit = new Set<string>();
+  if (parsed.status !== undefined) omit.add('status');
+  if (hasAnswer && answerField !== undefined) omit.add('answer');
+  const restCount = isRecord(value)
+    ? Object.keys(value).filter((key) => !omit.has(key)).length
+    : value !== undefined ? 1 : 0;
+  const summary = parsed.summary ?? '';
+  // The preserved leading text is only shown when it adds information beyond
+  // the promoted answer, and never in place of the untouched raw text.
+  const showSummary = summary !== '' && summary !== (answer?.trim() ?? '');
   return (
-    <div className="flex min-w-0 flex-col gap-1 break-words">
-      {answer !== null && (
-        <Markdown className="text-sm [&_p]:whitespace-pre-wrap" dark={appearance.dark} onOpenExternal={appearance.onOpenExternal}>
+    <div className="flex min-w-0 flex-col gap-2 text-xs">
+      {showSummary && <p className="min-w-0 break-words text-[11px] leading-relaxed text-muted-foreground">{summary}</p>}
+      {hasAnswer && (
+        <Markdown className={RESULT_MARKDOWN_CLASS} dark={appearance.dark} onOpenExternal={appearance.onOpenExternal}>
           {answer}
         </Markdown>
       )}
-      {parsed.value !== undefined && (
-        <TaskResultValue
-          value={parsed.value}
-          appearance={appearance}
-          omitStatus={parsed.status !== undefined}
-        />
+      {restCount > 0 && (
+        <div className={cn('min-w-0', hasAnswer && 'border-t border-border/60 pt-2')}>
+          {isRecord(value)
+            ? <ResultFields record={value} omit={omit} appearance={appearance} />
+            : <ResultValue field="" value={value} appearance={appearance} />}
+        </div>
       )}
       {parsed.truncated && (
-        <span className="text-[11px] text-muted-foreground">
-          {answer !== null ? '内容已截断' : '结构化结果预览已截断，请展开原始内容查看。'}
-        </span>
+        <ResultMuted>{hasAnswer ? '内容已截断' : '结构化结果预览已截断，请展开原始内容查看。'}</ResultMuted>
       )}
-      <details className="mt-1 min-w-0">
-        <summary className="cursor-pointer text-[11px] text-muted-foreground">原始内容</summary>
-        <pre className="mt-1 max-h-64 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed">{text}</pre>
+      <details className="group min-w-0 border-t border-border/60 pt-1.5">
+        <summary className="flex cursor-pointer select-none list-none items-center gap-1 text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="size-3 transition-transform group-open:rotate-90 motion-reduce:transition-none" />
+          原始内容
+        </summary>
+        <pre className="mt-1.5 max-h-64 min-w-0 overflow-auto whitespace-pre-wrap break-all rounded-md bg-background/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground/90">{text}</pre>
       </details>
     </div>
   );
@@ -364,20 +453,12 @@ function MessageRow({ event, appearance }: { event: SafeMessageEvent; appearance
         <MessageHeader className="gap-2 px-0 text-xs">
           <span className="font-medium text-foreground">{role}</span>
           <time className="tabular-nums text-muted-foreground">{formatClockSeconds(event.timestamp)}</time>
-          {parsed !== null && parsed.status !== undefined && (
-            <Badge variant="secondary" className="ml-1 shrink-0 text-[10px] font-normal">
-              {statusLabel(parsed.status)}
-            </Badge>
-          )}
+          {parsed?.status !== undefined && <ResultPill field="status" value={parsed.status} />}
         </MessageHeader>
-        <Bubble variant={event.role === 'user' ? 'default' : 'muted'} align={align}>
+        <Bubble variant={event.role === 'user' ? 'default' : 'muted'} align={align} className={parsed ? 'w-full' : undefined}>
           <BubbleContent>
             {parsed === null ? (
-              <Markdown
-                className="text-sm"
-                dark={appearance.dark}
-                onOpenExternal={appearance.onOpenExternal}
-              >
+              <Markdown className={MARKDOWN_CLASS} dark={appearance.dark} onOpenExternal={appearance.onOpenExternal}>
                 {event.message_summary}
               </Markdown>
             ) : (
