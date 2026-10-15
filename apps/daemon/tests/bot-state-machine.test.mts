@@ -576,6 +576,92 @@ test('a detached verify run keeps the item verifying until its task run finishes
   }
 })
 
+test('a failed acceptance run is retried while the item keeps its project lane', async () => {
+  const root = `${WORKSPACE}-accept-run`
+  const fixture = await writeBotFixture({
+    name: 'acceptor',
+    mode: 'live',
+    // The source is still listed, so the in-flight item is not withdrawn.
+    inboxBehavior: { list: { items: [{ id: 'source-a', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'acceptor', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-a', state: 'accepting', project: 'alpha' })
+      store.patchItem(item.id, { worktreeId: 'wt-accept' })
+      // The store acquires the project lane when an item enters `accepting`.
+      assert.equal(store.acquireLane({ project: 'alpha', botId: bot.id, itemId: item.id }), true)
+      // A recorded acceptance plan and a finished rebase: acceptance runs next.
+      const verify = store.beginStep({ itemId: item.id, kind: 'verify', idemKey: `${item.id}:1:verify:1` })
+      store.finishStep(verify.step.id, {
+        status: 'done',
+        output: {
+          decision: 'real',
+          reason: 'reproduced on main',
+          project: 'alpha',
+          class: 'default',
+          acceptance: {
+            checks: [{ id: 'c1', claim: 'greeting.txt reads hello, bot', surface: 'daemon', recipe: 'cat greeting.txt' }],
+          },
+        },
+      })
+      const rebase = store.beginStep({ itemId: item.id, kind: 'rebase', idemKey: `${item.id}:1:rebase:1` })
+      store.finishStep(rebase.step.id, { status: 'done', output: { rebased: true } })
+
+      const started: string[] = []
+      let polls = 0
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(),
+        log: () => {},
+        taskRunner: {
+          async startTask({ task }) { started.push(task); return { runId: `run-${started.length}` } },
+          async getTask() {
+            polls += 1
+            // The first acceptance run ends failed; the retry finishes cleanly.
+            if (polls === 1) return { status: 'failed' as const, error: 'final output is empty' }
+            return { status: 'done' as const, output: { assessments: [{ criterion_id: 'c1', status: 'passed' }] } }
+          },
+        },
+      })
+
+      // The first tick starts the detached acceptance run; the item waits.
+      await host.tick(bot.id)
+      assert.deepEqual(started, ['test'])
+      assert.equal(store.getItem(bot.id, item.id).state, 'accepting')
+      const firstAttempt = store.findStepByIdemKey(`${item.id}:1:accept:1`)
+      assert.equal(firstAttempt?.status, 'pending')
+      assert.match(String(firstAttempt?.output ?? ''), /run-1/)
+
+      // The second tick sees the run failed: no park on the first occurrence.
+      await host.tick(bot.id)
+      const afterFailure = store.getItem(bot.id, item.id)
+      assert.equal(afterFailure.state, 'accepting')
+      assert.equal(store.getLane('alpha')?.itemId, item.id)
+      assert.equal(afterFailure.counters?.acceptanceRunFailures, 1)
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:accept:1`)?.status, 'failed')
+      const log = store.listLog(bot.id, 0)
+      assert.equal(log.some(entry => entry.code === 'accept.run_failed'), true)
+      assert.equal(log.some(entry => entry.code === 'step.failed'), false)
+
+      // The retry is a new attempt: it starts, then its passing result lands.
+      await host.tick(bot.id)
+      assert.deepEqual(started, ['test', 'test'])
+      await host.tick(bot.id)
+
+      assert.equal(store.getItem(bot.id, item.id).state, 'accepted')
+      assert.equal(store.getItem(bot.id, item.id).counters?.acceptanceRunFailures, 1)
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:accept:2`)?.status, 'done')
+      assert.equal(store.listLog(bot.id, 0).some(entry => entry.code === 'acceptance.passed'), true)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
 test('dry-run completion and notification record would-be outputs without sending', async () => {
   const root = `${WORKSPACE}-dryrun`
   const title = 'Ship the thing'

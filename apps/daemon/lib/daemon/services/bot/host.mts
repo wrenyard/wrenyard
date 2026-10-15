@@ -15,6 +15,7 @@ import type {
   BotModel,
   BotRecord,
 } from '../../../protocol/methods/bot.mts'
+import { redactString } from '../../execution/redaction.mts'
 import type { OperationComponentId, OperationComponents } from '../operation-components.mts'
 import {
   botConfigHash,
@@ -109,6 +110,20 @@ const DETACHED_TASK_KIND: Partial<Record<BotStepKind, string>> = {
 }
 /** The failure recorded when a detached run cannot be found any more. */
 const TASK_RUN_MISSING = 'task run missing'
+/** Longest error kept in a run-failure log line; the rest is dropped. */
+const RUN_FAILURE_MAX_CHARS = 300
+/**
+ * Per-kind bookkeeping for a detached task run that ended without a result
+ * (failed, cancelled, timeout, or a run that no longer exists). The counter
+ * lives on the item; the code names the log line. Assessment results (a
+ * finished run whose checks failed or could not be verified) keep their own
+ * handling and never count here.
+ */
+const DETACHED_RUN_FAILURE: Partial<Record<BotStepKind, { counter: string; log: string }>> = {
+  verify: { counter: 'verifyRunFailures', log: 'verify.run_failed' },
+  review: { counter: 'reviewRunFailures', log: 'review.run_failed' },
+  accept: { counter: 'acceptanceRunFailures', log: 'accept.run_failed' },
+}
 /** A session's closing markers: a blocker question, or a finished-work head sha. */
 const BOT_BLOCKED_PATTERN = /BOT-BLOCKED\s+(.+)/u
 const BOT_READY_PATTERN = /BOT-READY\s+[0-9a-f]{7,40}/iu
@@ -518,7 +533,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     if (existing !== undefined) {
       const outcome = await pollDetachedRun(existing, task)
       if (outcome.kind === 'running') throw new BotStepRunning()
-      if (outcome.kind === 'failed') throw new Error(outcome.message)
+      if (outcome.kind === 'failed') throw new BotStepRunFailed(existing, outcome.message)
       return await apply(context, outcome.output)
     }
     const prepared = await prepare(context)
@@ -535,6 +550,58 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       message: `${task} run ${runId} started; the item waits for it across ticks`,
     })
     return { pendingRun: { runId } }
+  }
+
+  /**
+   * A detached task run that ended without a result (failed, cancelled or
+   * timeout, or a run that no longer exists) is an infrastructure failure, not
+   * an assessment. The item keeps its state and its project lane, the failure is
+   * counted on the item and a fresh attempt is queued for a later tick, so one
+   * flaky run does not stop delivery. Only once the kind's failure count exceeds
+   * the acceptance budget does the item park with the last error (which releases
+   * the lane) and raise one escalation.
+   */
+  async function handleDetachedRunFailure(context: BotStepContext, runId: string, rawMessage: string): Promise<void> {
+    const { bot, item, step, config } = context
+    const mapping = DETACHED_RUN_FAILURE[step.kind]
+    if (mapping === undefined) {
+      // Not a kind this rule covers: keep the generic failure path.
+      await failStep(bot, item, step, new Error(rawMessage), config)
+      return
+    }
+    const detail = redactString(rawMessage, RUN_FAILURE_MAX_CHARS)
+    const failures = (item.counters?.[mapping.counter] ?? 0) + 1
+    const counters = { ...(item.counters ?? {}), [mapping.counter]: failures }
+    const maxFailures = config?.budgets.maxAcceptanceAttempts ?? DEFAULT_MAX_ACCEPTANCE_ATTEMPTS
+    const output = { runId, error: detail, runFailures: failures }
+    store.appendLog({
+      botId: bot.id,
+      itemId: item.id,
+      level: 'warn',
+      code: mapping.log,
+      message: `run ${runId} ${step.kind} failed (${failures}/${maxFailures}): ${detail}`,
+    })
+    if (failures > maxFailures) {
+      store.finishStep(step.id, {
+        status: 'failed',
+        error: detail,
+        output,
+        patch: {
+          state: 'parked',
+          parkedFrom: item.state,
+          counters,
+          error: detail,
+          question: `${step.kind} task run failed ${failures} times (budget ${maxFailures}): ${detail}`,
+        },
+      })
+      await escalate(bot, config, `run-failures:${item.id}:${step.kind}`, `${step.kind} task run failed ${failures} times for item ${item.id}: ${detail}`)
+      return
+    }
+    // Finish this attempt as failed and queue the next one; the item stays in
+    // its state, so a lane-holding item keeps its project lane.
+    store.finishStep(step.id, { status: 'failed', error: detail, output, patch: { counters, error: detail } })
+    const { attempt } = latestStep(item, step.kind)
+    enqueueStep(item, step.kind, undefined, attempt + 1)
   }
 
   /** Trim to the last `max` characters, marking that the head was dropped. */
@@ -2280,6 +2347,13 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         store.appendLog({ botId: bot.id, itemId: item.id, level: 'info', code: error.code, message: error.message })
         return
       }
+      if (error instanceof BotStepRunFailed) {
+        // The task run itself failed: count it and retry as a fresh attempt
+        // while the item keeps its state (and its lane) instead of parking on
+        // the first flaky run.
+        await handleDetachedRunFailure(context, error.runId, error.message)
+        return
+      }
       await failStep(bot, item, step, error, config)
     }
   }
@@ -2297,12 +2371,28 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       const context: BotStepContext = { bot, item, step, dryRun: bot.mode === 'dryRun' || item.dryRun }
       // A detached task step that already started keeps being polled: its run is
       // durable, so a restart never marks it unknown mid-flight, and a run that
-      // cannot be found any more fails its step (`task run missing`) so the
-      // normal retry or park path applies. These steps have no outward effect.
+      // cannot be found any more is counted and retried (`task run missing`)
+      // instead of parking on the first occurrence. These steps have no outward
+      // effect.
       const runId = detachedRunId(step)
       if (runId !== undefined) {
         const outcome = await pollDetachedRun(runId, DETACHED_TASK_KIND[step.kind] ?? step.kind)
-        if (outcome.kind === 'failed') await failStep(bot, item, step, new Error(outcome.message), undefined)
+        if (outcome.kind === 'failed') {
+          // The run ended badly while the daemon was down: apply the same
+          // counted retry rule as a live tick, using the bot's own budget.
+          const load = await loadConfigForBot(bot)
+          await handleDetachedRunFailure(
+            {
+              bot,
+              item,
+              step,
+              ...(load.status === 'ready' ? { config: load.config } : {}),
+              dryRun: bot.mode === 'dryRun' || item.dryRun,
+            },
+            runId,
+            outcome.message,
+          )
+        }
         // `running` keeps polling; a finished run is applied by the next tick.
         continue
       }
@@ -2762,6 +2852,19 @@ class BotStepRunning extends Error {
   constructor() {
     super('the task run is still in flight')
     this.name = 'BotStepRunning'
+  }
+}
+
+/**
+ * Thrown when a detached task run itself ended without a result (failed,
+ * cancelled, timeout, or a run that no longer exists). It is not an assessment
+ * failure: the host counts it and retries with a fresh attempt while the item
+ * keeps its state, and only parks once the budget is exhausted.
+ */
+class BotStepRunFailed extends Error {
+  constructor(readonly runId: string, message: string) {
+    super(message)
+    this.name = 'BotStepRunFailed'
   }
 }
 
