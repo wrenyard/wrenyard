@@ -1,7 +1,7 @@
 /**
  * Fixed-width leading slot for a session row. It always renders the slot so
  * titles align regardless of status: `working` keeps its pulsing ring and
- * `idle` shows a muted 8px dot, while `attention`, `error` and `unread` each
+ * `idle` shows a muted 8px hollow ring, while `attention`, `error` and `unread` each
  * use their own 16px icon in the state's existing colour. Every glyph carries
  * a hover tooltip; the tooltip trigger is a span so it never nests a button
  * inside the row's own button.
@@ -14,7 +14,7 @@ import type { SessionStatus, SessionStatusKind } from '../model/session-status';
 /** The two states that stay 8px dots; `working` keeps the pulse. */
 const DOT_CLASS: Record<'working' | 'idle', string> = {
   working: 'border-[1.5px] border-current text-primary motion-session-dot',
-  idle: 'bg-muted-foreground',
+  idle: 'border-[1.5px] border-muted-foreground',
 };
 
 /** Every other state gets a 16px icon in its existing status colour. */
