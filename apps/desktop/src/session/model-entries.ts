@@ -1,5 +1,5 @@
 /** Projects current daemon route metadata; a defective row never breaks the list. */
-import { REASONING_EFFORTS } from '@wrenyard/models';
+import { REASONING_EFFORTS, isMainstreamModelId } from '@wrenyard/models';
 import type { WrenyardGatewayModel } from '@wrenyard/control';
 import type { ProviderListResult } from '@wrenyard/protocol/provider';
 import { selectSessionProtocol } from '@wrenyard/session/model-metadata';
@@ -25,6 +25,8 @@ export function toModelEntries(
       // Session inference uses the credential-backed Gateway, not Task client admission.
       if (model.taskOnly === true
         || model.supportedClients !== undefined || entries.has(publicId)) continue;
+      // The picker offers only mainstream models; being free is not an exception.
+      if (!isMainstreamModelId(model.canonicalId ?? model.id)) continue;
       const gatewayModel = gatewayByPublicId.get(publicId);
       if (gatewayModel === undefined) continue;
       const runtime = selectSessionProtocol(gatewayModel.protocols);
