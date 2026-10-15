@@ -4,7 +4,7 @@ import { Message, MessageContent } from '@/renderer/components/ui/message';
 import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { useEnterAnimation } from '@/renderer/lib/motion';
 import { noFinalReply } from '../../model/describe.js';
-import type { ReplyModel, TurnModel } from '../../model/types.js';
+import type { ReplyModel, SessionFile, TurnModel } from '../../model/types.js';
 import { HoverTime } from './HoverTime.js';
 import { ReplyMenu } from './ReplyMenu.js';
 
@@ -17,6 +17,10 @@ export interface AssistantMessageProps {
   /** Play the entry animation; only set for genuinely new appends. */
   enter?: boolean;
   onReply?: () => void;
+  /** Every task file the session produced, so the reply's references resolve. */
+  attachmentFiles?: readonly SessionFile[];
+  /** Ledger session id, used to authorize attachment media reads and reveals. */
+  sessionId?: string;
 }
 
 /**
@@ -24,7 +28,7 @@ export interface AssistantMessageProps {
  * omitted. Raw reason/thinking output is never shown here (it lives in the
  * transcript view only).
  */
-export function AssistantMessage({ turn, reply, reference, enter, onReply }: AssistantMessageProps) {
+export function AssistantMessage({ turn, reply, reference, enter, onReply, attachmentFiles, sessionId }: AssistantMessageProps) {
   const animate = useEnterAnimation(enter === true);
   const fallback = reply === undefined ? noFinalReply(turn) : undefined;
   const at = reply?.at ?? turn.endedAt;
@@ -47,7 +51,14 @@ export function AssistantMessage({ turn, reply, reference, enter, onReply }: Ass
                   </button>
                 )}
                 {reply !== undefined
-                  ? <Markdown>{reply.text}</Markdown>
+                  ? (
+                    <Markdown
+                      {...(attachmentFiles === undefined ? {} : { attachments: attachmentFiles })}
+                      {...(sessionId === undefined ? {} : { sessionId })}
+                    >
+                      {reply.text}
+                    </Markdown>
+                  )
                   : <span className="whitespace-pre-wrap">{fallback!.text}</span>}
               </BubbleContent>
             </Bubble>

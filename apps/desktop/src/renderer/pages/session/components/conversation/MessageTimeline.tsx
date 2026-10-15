@@ -1,14 +1,14 @@
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { MessageScrollerItem } from '@/renderer/components/ui/message-scroller';
 import { useNow } from '@/renderer/hooks/use-now';
-import { shell } from '@/renderer/lib/desktop';
 import { formatDivider } from '@/renderer/lib/format';
 import { prefersReducedMotion } from '@/renderer/lib/motion';
+import { attachmentFileIdentity } from '@/renderer/components/markdown';
 import { DIVIDER_GAP_MS } from '../../model/dividers.js';
-import type { ActionModel, DraftAttachment, ReplyModel, TurnModel } from '../../model/types.js';
+import type { DraftAttachment, ReplyModel, SessionFile, TurnModel } from '../../model/types.js';
 import type { PendingTurn } from '../../state/session-reducer.js';
-import { MediaAttachments, fromDraftAttachment, fromSessionFile } from '../MediaAttachments.js';
+import { fromDraftAttachment, fromSessionFile } from '../MediaAttachments.js';
 import { AssistantMessage } from './AssistantMessage.js';
 import { TimeDivider } from './TimeDivider.js';
 import { isWritingReply, TurnStatus } from './TurnStatus.js';
@@ -46,20 +46,11 @@ export interface TimelineFallbackEntry {
   reference?: MessageReference;
 }
 
-export interface TimelineArtifactEntry {
-  kind: 'artifact';
-  id: string;
-  at: string;
-  turn: TurnModel;
-  action: ActionModel;
-}
-
 export type MessageTimelineEntry =
   | TimelineUserEntry
   | TimelinePendingEntry
   | TimelineReplyEntry
-  | TimelineFallbackEntry
-  | TimelineArtifactEntry;
+  | TimelineFallbackEntry;
 
 interface MessageReference {
   messageId: string;
@@ -85,7 +76,7 @@ function withReplyReferences(entries: MessageTimelineEntry[]): MessageTimelineEn
     const turnId = entry.kind === 'pending' ? undefined : entry.turn.id;
     if (turnId !== previousTurn) runStart = index;
     previousTurn = turnId;
-    if (entry.kind === 'pending' || entry.kind === 'artifact') return entry;
+    if (entry.kind === 'pending') return entry;
 
     const prior = latest.get(entry.turn.id);
     const reference = prior !== undefined && prior.index < runStart ? prior.message : undefined;
@@ -119,9 +110,10 @@ function sortByAt(entries: MessageTimelineEntry[]): MessageTimelineEntry[] {
 
 /**
  * Flatten the folded turns and optimistic pending turns into independent
- * message rows: every user message, every committed reply, a terminal fallback
- * for an ended turn without replies and every completed dispatch that produced
- * files. Rows are ordered by their own timestamp across all concurrent turns.
+ * message rows: every user message, every committed reply and a terminal
+ * fallback for an ended turn without replies. Task attachments are not appended
+ * automatically; a task file appears only where a reply references it. Rows are
+ * ordered by their own timestamp across all concurrent turns.
  */
 export function buildMessageTimeline(
   turns: readonly TurnModel[],
@@ -138,22 +130,29 @@ export function buildMessageTimeline(
     if (turn.final === undefined && turn.status !== 'running') {
       entries.push({ kind: 'fallback', id: `fallback:${turn.id}`, at: turn.endedAt ?? turn.startedAt, turn });
     }
-    for (const action of turn.actions) {
-      if (action.kind === 'dispatch' && action.status === 'done' && (action.files?.length ?? 0) > 0) {
-        entries.push({
-          kind: 'artifact',
-          id: `artifact:${turn.id}:${action.id}`,
-          at: action.endedAt ?? action.startedAt,
-          turn,
-          action,
-        });
-      }
-    }
   }
   for (const item of pending) {
     entries.push({ kind: 'pending', id: `pending:${item.localId}`, at: item.at, pending: item });
   }
   return withReplyReferences(sortByAt(entries));
+}
+
+/**
+ * Every task file the whole session produced, deduped by path + hash, so a
+ * reply can reference a file from an earlier turn as well as the current one.
+ */
+function taskAttachmentDirectory(turns: readonly TurnModel[]): SessionFile[] {
+  const files = new Map<string, SessionFile>();
+  for (const turn of turns) {
+    for (const action of turn.actions) {
+      for (const file of action.files ?? []) {
+        if (file.source !== 'task') continue;
+        const identity = attachmentFileIdentity(file);
+        if (!files.has(identity)) files.set(identity, file);
+      }
+    }
+  }
+  return [...files.values()];
 }
 
 function startOfLocalDay(timestamp: number): number {
@@ -177,29 +176,6 @@ function dividerLabelFor(at: string, previousAt: string | undefined, now: number
   return undefined;
 }
 
-/** Completed dispatch result card, matching the previous per-turn design. */
-function DispatchFileCard({ action, sessionId }: { action: ActionModel; sessionId: string }) {
-  return (
-    <div className="flex flex-col gap-2 pl-10">
-      <div className="rounded-xl border bg-muted/40 px-2.5 py-2">
-        <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <span className="truncate">{action.task?.taskName ?? action.title}</span>
-          {action.taskRunId !== undefined && (
-            <button
-              type="button"
-              className="shrink-0 underline-offset-2 hover:underline"
-              onClick={() => { void shell.openTaskTranscript(action.taskRunId!); }}
-            >
-              查看任务
-            </button>
-          )}
-        </div>
-        <MediaAttachments items={action.files!.map(fromSessionFile)} sessionId={sessionId} />
-      </div>
-    </div>
-  );
-}
-
 /**
  * One intermediate process update: a muted status line instead of an assistant
  * bubble. Its complete Markdown is shown, never merged with another reply.
@@ -215,6 +191,7 @@ function ProgressLine({ reply }: { reply: ReplyModel }) {
 
 interface EntryContext {
   sessionId?: string;
+  attachmentFiles: readonly SessionFile[];
   enter: boolean;
   onRetry: (text: string, attachments: DraftAttachment[]) => void;
   onRemove: (localId: string) => void;
@@ -223,7 +200,7 @@ interface EntryContext {
 }
 
 /** The body of one timeline row, without its scroller item or divider. */
-function EntryContent({ entry, sessionId, enter, onRetry, onRemove, onJump, onReply }: EntryContext & { entry: MessageTimelineEntry }) {
+function EntryContent({ entry, sessionId, attachmentFiles, enter, onRetry, onRemove, onJump, onReply }: EntryContext & { entry: MessageTimelineEntry }) {
   switch (entry.kind) {
     case 'user': {
       const attachments = (entry.turn.user.attachments ?? []).map(fromSessionFile);
@@ -253,15 +230,19 @@ function EntryContent({ entry, sessionId, enter, onRetry, onRemove, onJump, onRe
     }
     case 'reply':
       // A process update is a lightweight status line; only the final reply is
-      // a full assistant message. Neither text is merged or dropped.
+      // a full assistant message. Neither text is merged or dropped. Only the
+      // final reply resolves the task files it references, so progress lines
+      // stay plain text.
       return entry.reply.kind === 'progress'
         ? <ProgressLine reply={entry.reply} />
         : (
           <AssistantMessage
             turn={entry.turn}
             reply={entry.reply}
+            attachmentFiles={attachmentFiles}
             enter={enter}
             onReply={() => onReply(excerpt(entry.reply.text))}
+            {...(sessionId === undefined ? {} : { sessionId })}
             {...(entry.reference === undefined ? {} : {
               reference: { ...entry.reference, onJump: () => onJump(entry.reference!.messageId) },
             })}
@@ -277,8 +258,6 @@ function EntryContent({ entry, sessionId, enter, onRetry, onRemove, onJump, onRe
           })}
         />
       );
-    case 'artifact':
-      return sessionId === undefined ? null : <DispatchFileCard action={entry.action} sessionId={sessionId} />;
   }
 }
 
@@ -297,9 +276,11 @@ export interface MessageTimelineProps {
 }
 
 /**
- * Message-level conversation: one row per user message, reply, fallback and
- * artifact result across all turns, with time dividers and bottom typing
- * indicators only while replies are being written.
+ * Message-level conversation: one row per user message, reply and fallback
+ * across all turns, with time dividers, bottom typing indicators only while
+ * replies are being written, and an activity row for every running turn. Task
+ * attachments are never appended on their own; each final reply row resolves
+ * the files it references against the whole session's task files.
  */
 export const MessageTimeline = memo(function MessageTimeline({
   timeline,
@@ -311,6 +292,7 @@ export const MessageTimeline = memo(function MessageTimeline({
   onReply,
 }: MessageTimelineProps) {
   const now = useNow();
+  const attachmentFiles = useMemo(() => taskAttachmentDirectory(turns), [turns]);
 
   const writingTurns = turns.filter(isWritingReply);
   const jumpToMessage = (messageId: string): void => {
@@ -337,6 +319,7 @@ export const MessageTimeline = memo(function MessageTimeline({
             <EntryContent
               entry={entry}
               sessionId={sessionId}
+              attachmentFiles={attachmentFiles}
               enter={freshMessageKeys.has(entry.id)}
               onRetry={onRetry}
               onRemove={onRemove}
