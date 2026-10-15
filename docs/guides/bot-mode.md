@@ -365,8 +365,9 @@ file). The real config and state homes are never written.
 node tools/bot-demo/run.mjs --session-model <provider>/<model>/<effort> \
   [--judgment-target <provider>/<model>:<client>] \
   [--acceptance-target <provider>/<model>:<client>] \
+  [--task-target <provider>/<model>:<client>] \
   [--provider-config-from <dir>] \
-  [--timeout-minutes 30] [--keep]
+  [--timeout-minutes 30] [--hold-minutes 0] [--keep]
 ```
 
 | Flag | Meaning |
@@ -374,14 +375,17 @@ node tools/bot-demo/run.mjs --session-model <provider>/<model>/<effort> \
 | `--session-model` | Required. `<provider>/<model>/<effort>` for the session turns. |
 | `--judgment-target` | Optional explicit run target for `bot-verify`/`bot-review`. |
 | `--acceptance-target` | Optional explicit run target for acceptance. |
+| `--task-target` | Optional explicit run target for the work session's dispatched builtin `edit`, `test` and `explore` runs. It is written as per-task explicit runtime settings (`tasks.settings.byTask` with `selection_mode: "explicit"` and `explicit_runtime: { kind: "target", target }`) into the temp config home only. |
 | `--provider-config-from` | Copy only the provider credential/runtime subtrees the daemon needs for model access into the temp config home; contents are never printed. |
 | `--timeout-minutes` | Overall wall-clock budget; default 30. |
+| `--hold-minutes` | Keep the demo daemon up for this many minutes *after* the final item JSON, health JSON and assertions are printed, so the Bot page can be inspected in the final state. Ends early on `SIGINT`/`SIGTERM`. Default 0. |
 | `--keep` | Keep the temp root instead of deleting it. |
 
 The driver seeds one open item, registers the demo project, validates the config,
 creates and starts the bot, then ticks it while printing state transitions, log
-codes and health until the item reaches a terminal state or the budget runs out.
-Finally it asserts four things and exits 0 only when all four hold:
+codes and health until the item reaches a terminal state (or `parked`) or the
+budget runs out. Finally it asserts four things and exits 0 only when all four
+hold:
 
 1. the item reached `completed` (otherwise the exact state, `item.error` and the
    last log codes are reported);
@@ -389,8 +393,11 @@ Finally it asserts four things and exits 0 only when all four hold:
 3. the fake notifier log file is empty or absent — a dry run never notifies;
 4. the demo project's `main` head is unchanged — a dry run never merges.
 
-It then prints the `bot.health` snapshot and stops the daemon gracefully (IPC
-`daemon.shutdown`, then `SIGTERM`, then `SIGKILL` after 15 s).
+It then prints the `bot.health` snapshot. With `--hold-minutes` it holds the
+daemon up so the Bot page can be inspected in the final state. The daemon is
+stopped gracefully on any exit, or on `SIGINT`/`SIGTERM` at any point: the IPC
+`daemon.shutdown` method first, then `SIGTERM` to the daemon's own process
+group, then `SIGKILL` after 15 s. The demo never leaves an orphaned daemon.
 
 ## 13. Watching an 8-hour unattended run
 

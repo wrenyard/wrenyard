@@ -20,8 +20,12 @@
 // Options:
 //   --judgment-target <provider>/<model>:<client>     explicit run target for judgment task runs
 //   --acceptance-target <provider>/<model>:<client>   explicit run target for acceptance task runs
+//   --task-target <provider>/<model>:<client>         route the session's builtin edit/test/explore
+//                                                     runs to this registered target (temp config only)
 //   --provider-config-from <dir>                      copy provider credential/runtime subtrees into the temp config home
 //   --timeout-minutes <n>                             overall wall-clock budget (default 30)
+//   --hold-minutes <n>                                keep the daemon up for n minutes after the final
+//                                                     report, or until SIGINT/SIGTERM (default 0)
 //   --keep                                            keep the temp root for inspection
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -55,6 +59,19 @@ const SOURCE_ID = 'demo-1'
 const PROJECT_ID = 'demo'
 /** Item states with no further automatic work. */
 const TERMINAL_STATES = new Set(['completed', 'dismissed', 'withdrawn', 'failed'])
+/**
+ * States at which the driver stops waiting and reports. `parked` is not
+ * terminal — the item waits for a decision — but the demo still stops there.
+ */
+const STOP_STATES = new Set([...TERMINAL_STATES, 'parked'])
+/**
+ * Builtin tasks whose runs `--task-target` routes. The daemon keys per-task
+ * settings by the stable identity `builtin:<name>`
+ * (apps/daemon/lib/config/task-settings.mts).
+ */
+const TASK_TARGET_BUILTINS = ['edit', 'test', 'explore']
+/** Canonical explicit run target: `<provider>/<model>:<client>`. */
+const RUN_TARGET_PATTERN = /^[^\/\s]+\/[^:\s]+:[^:\s]+$/
 
 function log(message) {
   process.stderr.write(`[bot-demo] ${message}\n`)
@@ -70,8 +87,10 @@ function printUsage() {
     'Usage: node tools/bot-demo/run.mjs --session-model <provider>/<model>/<effort> [options]\n'
     + '  --judgment-target <provider>/<model>:<client>\n'
     + '  --acceptance-target <provider>/<model>:<client>\n'
+    + '  --task-target <provider>/<model>:<client>   (temp config home only)\n'
     + '  --provider-config-from <dir>\n'
     + '  --timeout-minutes <n>   (default 30)\n'
+    + '  --hold-minutes <n>      (default 0)\n'
     + '  --keep\n',
   )
 }
@@ -81,8 +100,10 @@ function parseArgs(argv) {
     sessionModel: undefined,
     judgmentTarget: undefined,
     acceptanceTarget: undefined,
+    taskTarget: undefined,
     providerConfigFrom: undefined,
     timeoutMinutes: 30,
+    holdMinutes: 0,
     keep: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
@@ -96,8 +117,10 @@ function parseArgs(argv) {
       case '--session-model': options.sessionModel = next(); break
       case '--judgment-target': options.judgmentTarget = next(); break
       case '--acceptance-target': options.acceptanceTarget = next(); break
+      case '--task-target': options.taskTarget = next(); break
       case '--provider-config-from': options.providerConfigFrom = next(); break
       case '--timeout-minutes': options.timeoutMinutes = Number(next()); break
+      case '--hold-minutes': options.holdMinutes = Number(next()); break
       case '--keep': options.keep = true; break
       case '--help':
       case '-h': printUsage(); process.exit(0)
@@ -114,6 +137,12 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(options.timeoutMinutes) || options.timeoutMinutes <= 0) {
     die('--timeout-minutes must be a positive number')
+  }
+  if (!Number.isFinite(options.holdMinutes) || options.holdMinutes < 0) {
+    die('--hold-minutes must be a number >= 0')
+  }
+  if (options.taskTarget !== undefined && !RUN_TARGET_PATTERN.test(options.taskTarget)) {
+    die('--task-target must look like <provider>/<model>:<client>')
   }
   options.routing = { provider: parts[0], model: parts[1], reasoningEffort: parts[2] }
   return options
@@ -292,11 +321,35 @@ function createDemoRepo(repoDir, originDir) {
   git(repoDir, ['push', '--quiet', '--set-upstream', 'origin', 'main'])
 }
 
-function writeDemoConfig(layout) {
-  writeFileSync(layout.configFile, `${JSON.stringify({
+/**
+ * Write the daemon config into the temp config home. Nothing outside the temp
+ * root is ever touched.
+ *
+ * With `--task-target`, per-task explicit runtime settings are written here
+ * (the daemon's own persisted format) so the work session's dispatched builtin
+ * `edit`, `test` and `explore` runs bind that registered run target. The daemon
+ * reads `tasks.settings.byTask["builtin:<name>"]` as a layer
+ * `{ selection_mode: 'explicit', explicit_runtime: { kind: 'target', target } }`
+ * (apps/daemon/lib/config/task-settings.mts, read via
+ * apps/daemon/lib/daemon/services/task-settings-service.mts).
+ */
+function writeDemoConfig(layout, options) {
+  const config = {
     service: { enabled: true, ipc: { path: layout.ipcPath } },
     workspace: { root: layout.workspaceDir },
-  }, null, 2)}\n`, 'utf8')
+  }
+  if (options.taskTarget) {
+    const explicitLayer = () => ({
+      selection_mode: 'explicit',
+      explicit_runtime: { kind: 'target', target: options.taskTarget },
+    })
+    config.tasks = {
+      settings: {
+        byTask: Object.fromEntries(TASK_TARGET_BUILTINS.map((name) => [`builtin:${name}`, explicitLayer()])),
+      },
+    }
+  }
+  writeFileSync(layout.configFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
 }
 
 function seedInbox(layout) {
@@ -349,10 +402,12 @@ function writeBotConfig(layout, options) {
 }
 
 function startDaemon(layout, childEnv) {
+  // `detached` puts the daemon in its own process group so the whole group can
+  // be signalled on shutdown and no daemon process is left orphaned.
   const child = spawn(
     process.execPath,
     [CLI_ENTRY, 'daemon', 'run', '--config', layout.configFile, '--work-dir', layout.workspaceDir],
-    { cwd: REPO_ROOT, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
+    { cwd: REPO_ROOT, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: true },
   )
   child.stdout.setEncoding('utf8')
   child.stderr.setEncoding('utf8')
@@ -379,7 +434,33 @@ async function connectWhenReady(ipcPath, deadline) {
   throw new Error(`daemon IPC was not ready in time: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
 }
 
-/** IPC stop, then SIGTERM, then SIGKILL after the bounded grace period. */
+/**
+ * Signal the daemon's whole process group. The daemon is spawned detached, so
+ * its children share the group; signalling the group is what prevents an
+ * orphaned daemon from outliving the demo.
+ */
+function signalProcessGroup(child, signal) {
+  if (child.pid === undefined) return
+  if (process.platform === 'win32') {
+    const args = ['/pid', String(child.pid), '/T']
+    if (signal === 'SIGKILL') args.push('/F')
+    spawnSync('taskkill', args, { windowsHide: true })
+    return
+  }
+  try {
+    process.kill(-child.pid, signal)
+  } catch (error) {
+    if (error?.code !== 'ESRCH') {
+      log(`could not signal the daemon process group: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+}
+
+/**
+ * Stop the spawned daemon gracefully: the IPC shutdown method first, then
+ * SIGTERM to its process group, then SIGKILL after the bounded grace period.
+ * The daemon is never left running.
+ */
 async function stopDaemon(ipc, child) {
   try {
     await ipc.request('daemon.shutdown', {}, REQUEST_TIMEOUT_MS)
@@ -388,11 +469,11 @@ async function stopDaemon(ipc, child) {
   }
   ipc.close()
   if (await waitForExit(child, STOP_TIMEOUT_MS)) return
-  log('daemon did not exit after the IPC stop; sending SIGTERM')
-  child.kill('SIGTERM')
+  log('daemon did not exit after the IPC stop; sending SIGTERM to the process group')
+  signalProcessGroup(child, 'SIGTERM')
   if (await waitForExit(child, STOP_TIMEOUT_MS)) return
-  log('daemon did not exit after SIGTERM; sending SIGKILL')
-  child.kill('SIGKILL')
+  log('daemon did not exit after SIGTERM; sending SIGKILL to the process group')
+  signalProcessGroup(child, 'SIGKILL')
   await waitForExit(child, STOP_TIMEOUT_MS)
 }
 
@@ -408,6 +489,42 @@ function waitForExit(child, timeoutMs) {
       resolveExit(true)
     }
     child.once('exit', onExit)
+  })
+}
+
+/** Set when the driver receives SIGINT/SIGTERM; the run then shuts down. */
+let stopRequested = false
+
+/**
+ * Take over SIGINT/SIGTERM so the driver always stops the daemon it spawned
+ * before exiting instead of dying and leaving it behind.
+ */
+function installSignalHandlers() {
+  const onSignal = (signal) => {
+    if (stopRequested) return
+    stopRequested = true
+    log(`received ${signal}; stopping the run and the daemon`)
+  }
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
+}
+
+/**
+ * Keep the daemon running so the Bot page can be inspected in the item's final
+ * state. Ends after `minutes`, or early on SIGINT/SIGTERM; the caller stops the
+ * daemon afterwards either way.
+ */
+function holdDaemon(minutes, isStopRequested) {
+  const until = Date.now() + minutes * 60_000
+  return new Promise((resolveHold) => {
+    const poll = () => {
+      if (isStopRequested() || Date.now() >= until) {
+        resolveHold()
+        return
+      }
+      setTimeout(poll, 500)
+    }
+    poll()
   })
 }
 
@@ -438,6 +555,9 @@ async function main() {
     die('the fake inbox and notifier scripts must sit next to this driver')
   }
 
+  // Handled before anything else, so a signal always reaches the shutdown path.
+  installSignalHandlers()
+
   const layout = createTempLayout()
   if (!resolve(layout.root).startsWith(resolve(tmpdir()))) {
     die('refusing to run outside the system temp directory')
@@ -462,13 +582,14 @@ async function main() {
   const originMainBefore = git(layout.bareRepoDir, ['rev-parse', 'main'])
   log(`demo-origin main before: ${originMainBefore}`)
 
-  writeDemoConfig(layout)
+  writeDemoConfig(layout, options)
   seedInbox(layout)
   writeBotConfig(layout, options)
   if (options.providerConfigFrom) copyProviderSubtrees(options.providerConfigFrom, layout.configDir)
 
   const daemon = startDaemon(layout, childEnv)
   const assertions = []
+  let failed = []
   let ipc
 
   try {
@@ -509,7 +630,7 @@ async function main() {
     // Ask for a pass only on the tick cadence; the progress print below still
     // runs on every poll and only reads state.
     let nextTickAt = 0
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && !stopRequested) {
       if (Date.now() >= nextTickAt) {
         nextTickAt = Date.now() + TICK_INTERVAL_MS
         await ipc.request('bot.tick', { botId })
@@ -529,7 +650,7 @@ async function main() {
         log(`${new Date().toISOString()} item ${item.sourceId} -> ${item.state}`)
       }
       log(formatHealth(health))
-      if (item && TERMINAL_STATES.has(item.state)) break
+      if (item && STOP_STATES.has(item.state)) break
       await sleep(POLL_INTERVAL_MS)
     }
 
@@ -537,7 +658,7 @@ async function main() {
       const items = await ipc.request('bot.items', { botId })
       item = items.items.find((candidate) => candidate.sourceId === SOURCE_ID)
     }
-    if (item && !TERMINAL_STATES.has(item.state)) log(`stopped waiting: item still ${item.state} at the deadline`)
+    if (item && !STOP_STATES.has(item.state)) log(`stopped waiting: item still ${item.state} at the deadline`)
 
     const finalState = item?.state ?? '(no item)'
     assertions.push({
@@ -585,9 +706,20 @@ async function main() {
     const finalHealth = await ipc.request('bot.health', { botId })
     process.stdout.write(`${JSON.stringify({ item: finalItem, health: finalHealth }, null, 2)}\n`)
     if (health) log(`bot.health ${formatHealth(health)}`)
+
+    // Report the verdict before the optional hold, so the daemon stays up with
+    // the final report already printed and the Bot page can be inspected.
+    failed = assertions.filter((assertion) => !assertion.ok)
+    for (const assertion of assertions) log(`${assertion.ok ? 'PASS' : 'FAIL'} ${assertion.name} (${assertion.detail})`)
+    process.stdout.write(`${JSON.stringify({ ok: failed.length === 0, assertions }, null, 2)}\n`)
+
+    if (options.holdMinutes > 0 && !stopRequested) {
+      log(`holding daemon for ${options.holdMinutes} min at ${layout.ipcPath}`)
+      await holdDaemon(options.holdMinutes, () => stopRequested)
+    }
   } finally {
     if (ipc) await stopDaemon(ipc, daemon)
-    else daemon.kill('SIGTERM')
+    else signalProcessGroup(daemon, 'SIGTERM')
     if (!options.keep) {
       try {
         rmSync(layout.root, { recursive: true, force: true })
@@ -599,9 +731,6 @@ async function main() {
     }
   }
 
-  const failed = assertions.filter((assertion) => !assertion.ok)
-  for (const assertion of assertions) log(`${assertion.ok ? 'PASS' : 'FAIL'} ${assertion.name} (${assertion.detail})`)
-  process.stdout.write(`${JSON.stringify({ ok: failed.length === 0, assertions }, null, 2)}\n`)
   if (failed.length > 0) {
     process.stderr.write(`[bot-demo] failed assertion: ${failed[0].name}\n`)
     process.exitCode = 1
