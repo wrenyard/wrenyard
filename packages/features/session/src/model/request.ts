@@ -49,6 +49,11 @@ export type CallRole = (typeof CALL_ROLES)[number];
 export const REASON_IDLE_TIMEOUT_MS = 180_000;
 /** Every auxiliary request is bounded end to end. */
 export const AUXILIARY_TIMEOUT_MS = 60_000;
+/** How long an auxiliary route that timed out or failed in transport is skipped. */
+export const AUXILIARY_ROUTE_COOLDOWN_MS = 10 * 60_000;
+/** Auxiliary routes recently seen failing, keyed by `provider/model`, with the time they are admitted again. */
+const auxiliaryRouteCooldown = new Map<string, number>();
+const auxiliaryRouteCoolingDown = (model: string): boolean => (auxiliaryRouteCooldown.get(model) ?? 0) > Date.now();
 
 /** Caller-supplied expensive model for the `reason` role. */
 export interface ReasonSelection {
@@ -522,8 +527,12 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         const choices: readonly AuxiliaryRoute[] = input.role === 'reason'
           ? [{ model, reasoningEffort: requestedReasoningEffort as ReasoningEffort }]
           : routes!;
-        const choice = choices.find((candidate) => input.role === 'reason'
-          || options.routeStatus?.(candidate.model) === undefined);
+        const routable = (candidate: AuxiliaryRoute): boolean => input.role === 'reason'
+          || options.routeStatus?.(candidate.model) === undefined;
+        // Skip auxiliary routes that recently timed out or failed; if every
+        // candidate is cooling down, fall back to the plain route order.
+        const choice = choices.find((candidate) => routable(candidate) && (input.role === 'reason' || !auxiliaryRouteCoolingDown(candidate.model)))
+          ?? choices.find(routable);
         if (choice === undefined) throw new Error(`Model call ${input.role} failed: every candidate route is blocked`);
         const rank = input.role === 'reason' ? undefined : choices.indexOf(choice) + 1;
         model = choice.model;
@@ -578,6 +587,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         }), controller.signal);
       } catch (error) {
         if (error instanceof ModelCallError) throw error;
+        if (input.role !== 'reason' && abortKind !== 'signal' && abortKind !== 'idle') {
+          auxiliaryRouteCooldown.set(model, Date.now() + AUXILIARY_ROUTE_COOLDOWN_MS);
+        }
         const status: 'failed' | 'aborted' = abortKind === 'signal' ? 'aborted' : 'failed';
         const message = abortKind === undefined
           ? withOverflowPrefix(error)
