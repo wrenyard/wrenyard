@@ -248,6 +248,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
       const project = params.project ?? ''
       const result = await taskService.run({
         taskId: params.task, project, input: params.input, ctx: params.ctx as TaskContext | undefined,
+        ...(params.worktree === undefined ? {} : { worktree: params.worktree }),
       })
       if (isTaskRunRejection(result)) throw new Error(`Task run rejected: ${JSON.stringify(result)}`)
       return { taskRunId: result.task_run_id }

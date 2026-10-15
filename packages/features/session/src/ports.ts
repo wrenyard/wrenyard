@@ -97,6 +97,8 @@ export interface SessionHost {
   createTaskRun(params: {
     task: string;
     project?: string;
+    /** A managed worktree of the project to run the task in; absent runs in the project checkout. */
+    worktree?: string;
     input: unknown;
     ctx?: Record<string, unknown>;
   }): Promise<{ taskRunId: string }>;

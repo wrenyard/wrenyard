@@ -139,10 +139,11 @@ export function normalizeTaskContext(value: unknown): Record<string, unknown> {
 
 const COMPILE_SYSTEM = `<wy-system>
 You are the task compiler. Generate run parameters only for the one dispatch that this <intent> refers to.
-Output exactly one strict JSON object: {"project":"project id","task":"task id","input":<value matching the schema>,"title":"short phrase"}
+Output exactly one strict JSON object: {"project":"project id","task":"task id","input":<value matching the schema>,"title":"short phrase"}, plus "worktree":"worktree id" only when the rule below asks for it.
 Rules:
 - project must come from the project list. task must come from the task list and belong to the chosen project or be a builtin task.
 - <intent> is the sole authority for this action. <reference-context> is only for cross-checking and cannot authorize sibling tasks or historical goals. Do only the one thing that <intent> describes. Keep the exact registered project and task it names. They must not be replaced with a parent project, a sibling project or an unrelated project. Builtin tasks (including explore) remain usable for a correctly named registered subproject.
+- worktree: when <intent> names a managed worktree of the chosen project (for example "worktree 'wy-abcd'"), copy that worktree id exactly into "worktree" so the task runs inside it. Otherwise omit the field. Never invent one.
 - input must strictly match the input schema of the chosen task. The schema is visible only here.
 - The program attaches the conversation, the documents and memories already in context, and the session files to the task automatically. Put in input only what the task's input schema asks for.
 - title is a short phrase that summarizes what this task does. Write it in the language of the <user> message in <reference-context>: at most 20 characters for Chinese or Japanese, at most 8 words otherwise.
@@ -267,7 +268,7 @@ export async function runDispatchAction(
     };
   }
   if (compiled === undefined) return fail(compileError);
-  const { parsed, project, taskId, effectiveInput } = compiled;
+  const { parsed, project, taskId, worktree, effectiveInput } = compiled;
 
   const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
   const title = rawTitle !== '' && rawTitle.length <= 40 ? rawTitle : '';
@@ -287,6 +288,7 @@ export async function runDispatchAction(
     const createParams: Parameters<ActionWorkflowDeps['host']['createTaskRun']>[0] & { title?: string } = {
       task: taskId,
       project: project.id,
+      ...(worktree === undefined ? {} : { worktree }),
       input: effectiveInput,
       ctx: taskCtx,
       ...(title === '' ? {} : { title }),
@@ -417,7 +419,7 @@ function checkCompiled(
   text: string,
   ctx: ActionRunContext,
   contracts: readonly CompileContract[],
-): { ok: true; parsed: Record<string, unknown>; project: ProjectInfo; taskId: string; effectiveInput: unknown }
+): { ok: true; parsed: Record<string, unknown>; project: ProjectInfo; taskId: string; worktree?: string; effectiveInput: unknown }
   | { ok: false; error: string } {
   const bad = (error: string): { ok: false; error: string } => ({ ok: false, error });
   let parsed: Record<string, unknown>;
@@ -438,6 +440,10 @@ function checkCompiled(
   const contract = contracts.find((candidate) => candidate.id === taskId
     && (candidate.project === undefined || candidate.project === projectId));
   if (!contract) return bad(`unknown task '${taskId}' for project ${projectId}`);
+  const worktree = parsed.worktree;
+  if (worktree !== undefined && (typeof worktree !== 'string' || worktree.trim() === '')) {
+    return bad('worktree must be a non-empty worktree id when present');
+  }
 
   // Reject a model-provided absolute input path that does not exist on disk.
   const missingPath = findMissingAbsolutePath(parsed.input);
@@ -448,7 +454,7 @@ function checkCompiled(
   if (!validation.ok) {
     return bad(`input does not satisfy the task schema: ${validation.errors.join('; ')}`);
   }
-  return { ok: true, parsed, project, taskId, effectiveInput };
+  return { ok: true, parsed, project, taskId, ...(worktree === undefined ? {} : { worktree: worktree.trim() }), effectiveInput };
 }
 
 // ─── Task context builder ───────────────────────────────────────────────────
