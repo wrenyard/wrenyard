@@ -1,7 +1,7 @@
 import { codeBuddyRouteFailure } from './route-errors.ts';
 import type { ClientDefinition, ModelDefinition, ProviderDefinition, ReasoningEffort } from '../base/index.ts';
 import { resolveProviderModel, REASONING_LOW_HIGH_MAX, type CanonicalModelOverrides } from '../base/model-defaults.ts';
-import { models } from '@wrenyard/models';
+import { isMainstreamModelId, models } from '@wrenyard/models';
 import {
   codeBuddyCanonicalModelId,
   codeBuddyHasLongContextVariant,
@@ -62,6 +62,17 @@ const CODEBUDDY_HISTORICAL_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Claude generation-5 identities retired from the selectable catalog. The
+ * installed product file may still list these rows, but they are withheld from
+ * the offerings; their observed spellings keep this exact identity rather than
+ * being aliased forward onto the 5.5 generation.
+ */
+const RETIRED_CLAUDE_FIVE_MODEL_IDS: ReadonlySet<string> = new Set([
+  'claude-opus-5',
+  'claude-sonnet-5',
+]);
+
+/**
  * Listed CodeBuddy routes accept the disable switch, even where the upstream
  * still thinks. Other strengths retain their documented/probed ladders. Only a
  * row matching a registered model uses this map; an unregistered endpoint row
@@ -96,10 +107,11 @@ export const codeBuddyClient: ClientDefinition = {
 /**
  * Exact canonical ids and genuine aliases precede normalized matching; the
  * result is always an existing registered model, so its registry metadata and
- * aliases stay intact. Membership is therefore the full registry, not only the
- * mainstream list: a model the endpoint offers may be registered without being
- * mainstream. Product ids are canonicalized by stripping the `-ioa` and `-1m`
- * wire suffixes (in either order) before the numeric-separator comparison.
+ * aliases stay intact. Resolution deliberately covers the whole registry, not
+ * only the mainstream list, so an observed id keeps its own identity; the
+ * mainstream gate is applied separately when the selectable offerings are
+ * built. Product ids are canonicalized by stripping the `-ioa` and `-1m` wire
+ * suffixes (in either order) before the numeric-separator comparison.
  */
 function lookupUnifiedModelId(productId: string): string | undefined {
   if (models.get(productId)) return productId;
@@ -114,11 +126,24 @@ function lookupUnifiedModelId(productId: string): string | undefined {
  * Map a product id onto the registered model it names, or return undefined for
  * an unknown registry identity. A `/v3/config` cli row that resolves adopts that
  * model's registered identity, so its registry metadata and aliases are
- * retained; a row that resolves to no registered identity is still offered, just
- * without registry metadata.
+ * retained. Resolution is identity-only: whether the resolved identity is
+ * selectable is decided by {@link isSelectableCodeBuddyModelId} in the offering
+ * builder, so caller-visible routing (observed-id normalization) stays stable
+ * even for a row that is not offered.
  */
 export function resolveCodeBuddyProductModelId(productId: string): string | undefined {
   return lookupUnifiedModelId(productId);
+}
+
+/**
+ * The selectable gate for the user-facing picker: only a mainstream canonical
+ * identity is offered, and the retired Claude generation-5 identities are
+ * withheld even where the mainstream list still carries one (Opus 5). The
+ * capability catalog itself is untouched — a withheld row stays a real endpoint
+ * capability, it is simply not selectable.
+ */
+function isSelectableCodeBuddyModelId(canonicalId: string): boolean {
+  return isMainstreamModelId(canonicalId) && !RETIRED_CLAUDE_FIVE_MODEL_IDS.has(canonicalId);
 }
 
 /**
@@ -207,16 +232,18 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
   models: ModelDefinition[];
   upstreamByCanonical: Record<string, string>;
 } {
-  // Membership is endpoint-driven: the endpoint supplies membership, order and
-  // the raw public ids — exactly one offering per `/v3/config` cli row, in the
-  // endpoint's own order. The registry supplies the base name and metadata for
-  // the models it knows: the offered name is that registry base name, plus a
-  // generic ` 1M` label when the endpoint row is a long-context variant, so
-  // variants sharing one registry identity stay distinguishable. The registry
-  // name is never published unchanged for a long-context row. A row naming no
-  // registered model is still offered, using the endpoint name — or the raw id
-  // when the endpoint gives no name — with hyphens replaced by spaces; no
-  // metadata is fabricated for it. No row is dropped and no rows are merged.
+  // Selectable membership is endpoint-driven *and* mainstream-gated: exactly
+  // one offering per `/v3/config` cli row whose id resolves onto a mainstream
+  // canonical registry identity, in the endpoint's own order. The endpoint
+  // supplies the raw public id; the registry supplies the base name and
+  // metadata for the models it knows: the offered name is that registry base
+  // name, plus a generic ` 1M` label when the endpoint row is a long-context
+  // variant, so variants sharing one registry identity stay distinguishable.
+  // The registry name is never published unchanged for a long-context row. A
+  // row naming no registered identity, a registered-but-non-mainstream
+  // identity, or a retired Claude generation-5 identity is not offered — the
+  // capability catalog keeps it, the picker does not. No offered row is merged
+  // with another.
   const offerings: ModelDefinition[] = [];
   const upstreamByCanonical: Record<string, string> = {};
   const seen = new Set<string>();
@@ -224,38 +251,33 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
     if (seen.has(entry.id)) continue;
     seen.add(entry.id);
     const canonicalId = resolveCodeBuddyProductModelId(entry.id);
-    const registered = canonicalId === undefined ? undefined : models.get(canonicalId);
-    let definition: ModelDefinition;
-    if (canonicalId !== undefined && registered !== undefined) {
-      definition = {
-        ...resolveProviderModel({
-          canonical: canonicalId,
-          overrides: {
-            ...productMetadataOverrides(entry, registered.defaults.contextWindow),
-            ...claudeMetadataOverrides(canonicalId),
-            reasoningEfforts: codeBuddyReasoningEfforts(canonicalId),
-          },
-        }),
-        // The endpoint supplies the raw public id; the registry supplies the
-        // metadata and the base name. The offered name is that base name with a
-        // ` 1M` suffix for a long-context endpoint row, so two rows sharing one
-        // registry identity are not published under the same name. The
-        // registered identity and its untouched name stay available as
-        // `canonicalModel`.
-        id: entry.id,
-        displayName: codeBuddyHasLongContextVariant(entry.id) ? `${registered.displayName} 1M` : registered.displayName,
-      };
-    } else {
-      definition = resolveProviderModel({
-        id: entry.id,
-        displayName: (entry.name ?? entry.id).replace(/-/gu, ' '),
-        ...(entry.maxOutputTokens === undefined ? {} : { maxOutputTokens: entry.maxOutputTokens }),
-        ...(entry.supportsImages === true ? { capabilities: ['text', 'image'] } : {}),
-      });
-    }
+    // The mainstream gate runs after identity resolution: a row that resolves to
+    // no registered identity, to a registered-but-non-mainstream identity, or to
+    // a retired Claude generation-5 identity is not selectable and is skipped.
+    if (canonicalId === undefined || !isSelectableCodeBuddyModelId(canonicalId)) continue;
+    const registered = models.get(canonicalId);
+    if (registered === undefined) continue;
+    const definition: ModelDefinition = {
+      ...resolveProviderModel({
+        canonical: canonicalId,
+        overrides: {
+          ...productMetadataOverrides(entry, registered.defaults.contextWindow),
+          ...claudeMetadataOverrides(canonicalId),
+          reasoningEfforts: codeBuddyReasoningEfforts(canonicalId),
+        },
+      }),
+      // The endpoint supplies the raw public id; the registry supplies the
+      // metadata and the base name. The offered name is that base name with a
+      // ` 1M` suffix for a long-context endpoint row, so two rows sharing one
+      // registry identity are not published under the same name. The
+      // registered identity and its untouched name stay available as
+      // `canonicalModel`.
+      id: entry.id,
+      displayName: codeBuddyHasLongContextVariant(entry.id) ? `${registered.displayName} 1M` : registered.displayName,
+    };
     // The endpoint's per-model credit multiplier is carried verbatim onto the
-    // offering; a row that declares none (e.g. echo) omits the field entirely.
-    // It is a display-only multiplier, never a balance or USD price.
+    // offering; a row that declares none omits the field entirely. It is a
+    // display-only multiplier, never a balance or USD price.
     const offering: ModelDefinition = entry.credits === undefined
       ? definition
       : { ...definition, credits: entry.credits };
