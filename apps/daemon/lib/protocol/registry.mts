@@ -378,6 +378,23 @@ import {
   type ComponentsListParams,
   type ComponentsListResult,
 } from './methods/components.mts'
+import {
+  storageUsageParamsSchema,
+  storageUsageResultSchema,
+  type StorageUsageParams,
+  type StorageUsageResult,
+} from './methods/storage.mts'
+
+export type {
+  StorageCategoryId,
+  StorageCategoryUsage,
+  StorageDeviceIdentity,
+  StorageRootInfo,
+  StorageUsageParams,
+  StorageUsageResult,
+  StorageUsageSnapshot,
+  StorageUsageStatus,
+} from './methods/storage.mts'
 
 export type {
   ActivitySnapshotParams,
@@ -789,6 +806,7 @@ export interface ForemanMethodParams {
   'event.list': EventListParams
   'stats.today': StatsTodayParams
   'stats.summary': StatsSummaryParams
+  'storage.usage': StorageUsageParams
   'task.definition.list': TaskDefinitionListParams
   'task.definition.describe': TaskDefinitionDescribeParams
   'task.settings.snapshot': TaskSettingsSnapshotParams
@@ -884,6 +902,7 @@ export interface ForemanMethodResults {
   'event.list': EventListResult
   'stats.today': StatsTodayResult
   'stats.summary': StatsSummaryResult
+  'storage.usage': StorageUsageResult
   'task.definition.list': TaskDefinitionListResult
   'task.definition.describe': TaskDefinitionDescribeResult
   'task.settings.snapshot': TaskSettingsSnapshotResult
@@ -1017,6 +1036,11 @@ export const methodRegistry: {
   'stats.summary': {
     params: statsSummaryParamsSchema,
     result: statsSummaryResultSchema,
+  },
+  'storage.usage': {
+    params: storageUsageParamsSchema,
+    result: storageUsageResultSchema,
+    description: 'Read-only WY data directory usage snapshot',
   },
   'task.definition.list': {
     params: taskDefinitionListParamsSchema,

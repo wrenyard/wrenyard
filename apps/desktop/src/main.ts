@@ -1960,6 +1960,7 @@ async function bootstrap(): Promise<void> {
     getAppearance: () => appearanceController!.resolve(),
     getSettings,
     getStats: () => { requireDaemonRunning(); return readStatsSnapshot(activeEndpointPath); },
+    request: (method, params) => daemonClient.request(method, params),
     getQuota: (forceRefresh = false) => quotaController!.getSnapshot(forceRefresh),
     saveProviderOrder: async (providerIds: string[]) => {
       settingsStore.patch('providers', {

@@ -51,6 +51,7 @@ import { registerNavigationChromeIpc } from './main/ipc/navigation-chrome.js';
 import { registerNotificationsIpc } from './main/ipc/notifications.js';
 import { registerQuotaProvidersIpc } from './main/ipc/quota-providers.js';
 import { registerSessionExecIpc } from './main/ipc/session-exec.js';
+import { registerStorageUsageIpc } from './main/ipc/storage-usage.js';
 import { registerTasksStatsIpc } from './main/ipc/tasks-stats.js';
 import { registerSchedulesIpc } from './main/ipc/schedules.js';
 import { registerUpdateDaemonIpc } from './main/ipc/update-daemon.js';
@@ -126,6 +127,8 @@ export interface ShellWindowOptions {
   getAppearance(): ResolvedAppearance;
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;
+  /** Injected daemon request transport for read-only bridges with no projection. */
+  request(method: string, params?: unknown): Promise<unknown>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
   saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot>;
   configureProviderKey(providerId: string, key: string): Promise<QuotaSnapshot>;
@@ -381,6 +384,7 @@ export class ShellWindowController {
       registerQuotaProvidersIpc(ipcMain, deps),
       registerSessionExecIpc(ipcMain, deps),
       registerTasksStatsIpc(ipcMain, deps),
+      registerStorageUsageIpc(ipcMain, deps),
       registerSchedulesIpc(ipcMain, deps),
       registerUpdateDaemonIpc(ipcMain, deps),
     ];

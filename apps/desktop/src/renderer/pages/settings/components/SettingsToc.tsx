@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Download,
   FlaskConical,
+  HardDrive,
   Info,
   Keyboard,
   LayoutGrid,
@@ -40,6 +41,7 @@ const CATEGORY_ICONS: Readonly<Record<SettingsCategoryId, LucideIcon>> = {
   pet: Bird,
   components: Blocks,
   runtime: Server,
+  storage: HardDrive,
   update: Download,
   about: Info,
 };

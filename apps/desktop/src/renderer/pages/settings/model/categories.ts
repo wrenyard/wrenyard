@@ -16,6 +16,7 @@ export type SettingsCategoryId =
   | 'pet'
   | 'components'
   | 'runtime'
+  | 'storage'
   | 'update'
   | 'about';
 
@@ -39,6 +40,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
   { id: 'pet', label: '桌宠', description: '桌宠的显示内容与行为，由啾啾工坊直接管理生命周期。' },
   { id: 'components', label: '操作组件', description: '浏览器与桌面操作所需的组件：安装、授权、健康检查与更新。' },
   { id: 'runtime', label: '运行环境', description: '本地服务、日志与设置文件。' },
+  { id: 'storage', label: '存储', description: '查看啾啾工坊数据目录在当前设备上的占用（只读）。' },
   { id: 'update', label: '更新', description: '检查并安装啾啾工坊套件的新版本。' },
   { id: 'about', label: '关于', description: '版本、当前主题与诊断信息。' },
 ];

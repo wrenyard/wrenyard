@@ -10,6 +10,7 @@ import {
   type StatsSnapshot,
   type QuotaSnapshot,
   type QuotaFocus,
+  type StorageUsageSnapshot,
   type SettingsSnapshot,
   type WorkspaceConfigurationSnapshot,
   type UpdateSnapshot,
@@ -148,6 +149,9 @@ const api: WrenyardShellApi = {
   },
   getQuota(forceRefresh = false): Promise<QuotaSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.quotaSnapshot, forceRefresh) as Promise<QuotaSnapshot>;
+  },
+  getStorageUsage(refresh = false): Promise<StorageUsageSnapshot> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.storageUsage, refresh) as Promise<StorageUsageSnapshot>;
   },
   saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.saveProviderOrder, providerIds) as Promise<QuotaSnapshot>;

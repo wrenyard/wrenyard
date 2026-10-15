@@ -25,6 +25,7 @@ import { SettingRow, type SettingBinding } from './components/SettingRow.js';
 import { SettingsSearch } from './components/SettingsSearch.js';
 import { SettingsToc, type TocCategory } from './components/SettingsToc.js';
 import { ShortcutsTable } from './components/ShortcutsTable.js';
+import { StorageUsage } from './components/StorageUsage.js';
 import { ModelList } from './supply/components/ModelList.js';
 import { ProviderDialog } from './supply/components/ProviderDialog.js';
 import { ProviderSupply } from './supply/components/ProviderSupply.js';
@@ -449,6 +450,11 @@ export function SettingsPage({
           active={!searchActive && activeCategory === 'routingTest'}
         />
       );
+    }
+    if (categoryId === 'storage') {
+      // Read-only usage page: it only queries (and the daemon only scans) while
+      // this category is the visible page, so opening Settings scans nothing.
+      return <StorageUsage active={!searchActive && activeCategory === 'storage'} />;
     }
     const groups = categoryGroups.get(categoryId) ?? [];
     return groups.map((group) => (

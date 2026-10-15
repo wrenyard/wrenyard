@@ -198,6 +198,7 @@ export const SHELL_CHANNELS = {
   quotaSnapshot: 'wrenyard-shell:quota-snapshot',
   saveProviderOrder: 'wrenyard-shell:save-provider-order',
   quotaFocus: 'wrenyard-shell:quota-focus',
+  storageUsage: 'wrenyard-shell:storage-usage',
   savePetSettings: 'wrenyard-shell:save-pet-settings',
   saveWorkspace: 'wrenyard-shell:save-workspace',
   taskTranscript: 'wrenyard-shell:task-transcript',
@@ -888,6 +889,37 @@ export interface QuotaSnapshot {
 }
 
 /**
+ * Read-only WY data-directory usage snapshot (`storage.usage`), mirrored from
+ * the daemon contract. `result` is the last successful scan; `status` describes
+ * the current or most recent scan, so a running or failed re-scan may still
+ * carry the previous `result`.
+ */
+export interface StorageUsageSnapshot {
+  device: { hostname: string; platform: string };
+  roots: Array<{ kind: 'state' | 'config'; path: string }>;
+  status: 'scanning' | 'ready' | 'failed';
+  /** ISO time the current or most recent scan started. */
+  startedAt?: string;
+  /** ISO time the scan that produced `result` finished. */
+  scannedAt?: string;
+  /** Top-level failure message of the last scan, present when `status` is `failed`. */
+  error?: string;
+  result?: {
+    totalBytes: number;
+    fileCount: number;
+    categories: Array<{
+      id: 'sessions' | 'records' | 'files' | 'worktrees' | 'logs' | 'clients' | 'other';
+      bytes: number;
+      fileCount: number;
+      unreadable: number;
+    }>;
+    unreadable: number;
+    unreadableSamples: string[];
+    skippedLinks: number;
+  };
+}
+
+/**
  * How many points a window's remaining percentage may trail its expected
  * remaining percentage before the pace is considered too fast.
  */
@@ -1472,6 +1504,8 @@ export interface WrenyardShellApi {
   getSettings(): Promise<SettingsSnapshot>;
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
+  /** Read-only data-directory usage from the connected daemon; `refresh` starts a new scan. */
+  getStorageUsage(refresh?: boolean): Promise<StorageUsageSnapshot>;
   saveProviderOrder(providerIds: string[]): Promise<QuotaSnapshot>;
   /**
    * Publish the quota provider of the model currently selected in the composer

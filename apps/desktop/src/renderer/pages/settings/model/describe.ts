@@ -3,6 +3,7 @@ import type {
   ColorMode,
   DaemonProcessState,
   PetCompanionSnapshot,
+  StorageUsageSnapshot,
   WorkspaceConfigurationSnapshot,
 } from '@/shell-contract';
 import type { AliasValidationReason, AutoCapParseResult } from './settings.js';
@@ -250,3 +251,56 @@ export const SETTING_SAVE_FAILED_PREFIX = '保存失败：';
 export const SETTING_SAVED_LABEL = '已保存';
 export const SETTING_INVALID_NUMBER = '请输入有效数值';
 export const SETTING_NUMBER_RANGE = '数值超出允许范围';
+
+/* ------------------------------------------------------------------ */
+/* Storage (存储)                                                      */
+/* ------------------------------------------------------------------ */
+
+/** One category id from the daemon usage snapshot; kept in sync by structure. */
+export type StorageCategoryId = NonNullable<StorageUsageSnapshot['result']>['categories'][number]['id'];
+
+export const STORAGE_DEVICE_PREFIX = '统计设备：';
+export const STORAGE_DEVICE_NOTE = '由当前连接的 daemon 在其所在设备上统计。';
+export const STORAGE_TOTAL_PREFIX = '啾啾工坊占用';
+export const STORAGE_REFRESH_LABEL = '刷新';
+export const STORAGE_SCANNING_LABEL = '扫描中…';
+export const STORAGE_SCAN_STATUS = '正在扫描…';
+export const STORAGE_SCANNED_AT_PREFIX = '统计于 ';
+export const STORAGE_FAILED_PREFIX = '扫描失败：';
+export const STORAGE_REFRESH_FAILED_PREFIX = '刷新失败：';
+export const STORAGE_UNAVAILABLE_TITLE = '存储占用不可用';
+export const STORAGE_UNREADABLE_NOTE_PREFIX = '有 ';
+export const STORAGE_UNREADABLE_NOTE_SUFFIX = ' 项因权限或读取错误未计入，总量仅为可读部分。';
+export const STORAGE_CATEGORY_UNREADABLE_SUFFIX = ' 项无法读取';
+export const STORAGE_ROOT_STATE_LABEL = '状态目录';
+export const STORAGE_ROOT_CONFIG_LABEL = '配置目录';
+export const STORAGE_SCOPE_NOTE =
+  '统计范围：状态目录与配置目录内的文件大小合计。不跟随符号链接或目录联接，硬链接只计一次；不包含工作区文档与项目仓库。';
+
+export const STORAGE_CATEGORY_LABELS: Record<StorageCategoryId, string> = {
+  sessions: '会话记录',
+  records: '任务与执行记录',
+  files: '附件与产物',
+  worktrees: '工作树',
+  logs: '日志',
+  clients: '客户端状态与缓存',
+  other: '其他（配置等）',
+};
+
+export const STORAGE_CATEGORY_DOT_CLASS: Record<StorageCategoryId, string> = {
+  sessions: 'bg-blue-600',
+  records: 'bg-violet-500',
+  files: 'bg-cyan-400',
+  worktrees: 'bg-emerald-500',
+  logs: 'bg-rose-500',
+  clients: 'bg-amber-400',
+  other: 'bg-zinc-400',
+};
+
+/** Readable platform name for the device line; unknown platforms pass through. */
+export function storagePlatformLabel(platform: string): string {
+  if (platform === 'darwin') return 'macOS';
+  if (platform === 'win32') return 'Windows';
+  if (platform === 'linux') return 'Linux';
+  return platform;
+}

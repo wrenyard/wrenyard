@@ -57,6 +57,7 @@ import type {
 import type { RpcRouter } from '../rpc-router.mts'
 import type { RemoteHostRegistryService } from '../../remote/host-registry.mts'
 import { registerProjectHandlers } from './project.mts'
+import { registerStorageHandlers } from './storage.mts'
 import { registerWorkspaceVcsHandlers } from './workspace-vcs.mts'
 import { registerWorkspaceDocHandlers, type WorkspaceDocHandlerService } from './workspace-doc.mts'
 import {
@@ -892,6 +893,10 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   registerProjectHandlers(router, {
     workspaceRoot: options.workspaceRoot,
   })
+
+  // Read-only storage-usage surface. It is process-wide (it never depends on the
+  // workspace), reports the daemon's own STATE/CONFIG footprint, and is IPC-only.
+  registerStorageHandlers(router)
 
   registerWorkspaceVcsHandlers(router, {
     workspaceRoot: options.workspaceRoot,

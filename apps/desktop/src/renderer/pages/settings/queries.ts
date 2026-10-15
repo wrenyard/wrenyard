@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { shell } from '@/renderer/lib/desktop';
 import { toast } from '@/renderer/lib/notify';
-import type { DesktopPreferences, PreferenceId, TaskSettingsPatch, TaskSettingsSnapshot } from '@/shell-contract';
+import type { DesktopPreferences, PreferenceId, StorageUsageSnapshot, TaskSettingsPatch, TaskSettingsSnapshot } from '@/shell-contract';
 import {
   daemonQuery,
   preferencesQuery,
@@ -286,6 +286,28 @@ export function useGlobalTaskSettingSave<T>(
     markDirty,
     commit,
   };
+}
+
+/**
+ * Storage usage snapshot for the 存储 page. Read-only, and gated by the page's
+ * `active` flag so opening Settings never starts a scan. While the daemon
+ * reports `scanning` the query polls once a second; otherwise it stays idle.
+ */
+const STORAGE_SCAN_POLL_MS = 1_000;
+
+export const storageUsageQueryKey = ['storage', 'usage'] as const;
+
+export function useStorageUsageQuery(enabled: boolean) {
+  const queryClient = useQueryClient();
+  const scanning = queryClient.getQueryData<StorageUsageSnapshot>(storageUsageQueryKey)?.status === 'scanning';
+  return useQuery({
+    queryKey: storageUsageQueryKey,
+    queryFn: () => shell.getStorageUsage(false),
+    enabled,
+    // A plain value (not a function) so a snapshot written by the refresh
+    // mutation re-arms polling on the next render.
+    refetchInterval: enabled && scanning ? STORAGE_SCAN_POLL_MS : false,
+  });
 }
 
 /** Every page query key, used by the header refresh action. */
