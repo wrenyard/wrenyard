@@ -100,7 +100,11 @@ export function AppShell() {
           open={sidebarOpen}
           onOpenChange={setSidebarOpen}
         >
-          {!mini && <AppSidebar page={shown} onOpenUpdate={() => setUpdateOpen(true)} />}
+          {!mini && (
+            <Activity mode={active === 'settings' ? 'hidden' : 'visible'}>
+              <AppSidebar page={shown} onOpenUpdate={() => setUpdateOpen(true)} />
+            </Activity>
+          )}
           <SidebarInset className="motion-surface-page flex min-h-0 min-w-0 flex-col">
             {PAGE_ORDER.map((id) => {
               if (!mounted.has(id)) return null;

@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Braces, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Braces, RefreshCw } from 'lucide-react';
 import { Page, PageActions, PageHeader, PageTitle } from '@/renderer/components/page';
 import { Button } from '@/renderer/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
-import { Sidebar, SidebarContent, SidebarProvider } from '@/renderer/components/ui/sidebar';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+} from '@/renderer/components/ui/sidebar';
 import { toast } from '@/renderer/lib/notify';
 import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
 import { shell } from '@/renderer/lib/desktop';
@@ -76,10 +84,16 @@ export function SettingsPage() {
 
   const [searchInput, setSearchInput] = useState('');
   const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>('general');
-  const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem('settings-sidebar-open') !== 'false');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // The shell keeps the Settings page mounted inside an `Activity` boundary that
+  // pauses effects while the page is hidden and re-runs them when it becomes
+  // visible again, so reopening the group sidebar here restores the open default
+  // on every re-entry. It runs on mount/resume only — never on each render — so
+  // the title-bar / Cmd-or-Ctrl+B toggle still controls the sidebar while the
+  // user stays on the page.
   useEffect(() => {
-    localStorage.setItem('settings-sidebar-open', String(sidebarOpen));
-  }, [sidebarOpen]);
+    setSidebarOpen(true);
+  }, []);
   const [pendingTarget, setPendingTarget] = useState<PendingTarget | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
 
@@ -290,7 +304,7 @@ export function SettingsPage() {
     setPendingTarget(settingId !== undefined ? { kind: 'setting', id: settingId, focus: true } : null);
   }, []);
 
-  // The directory always lists all nine categories; counts reflect the search.
+  // The directory lists every registry category; counts reflect the search.
   const tocCategories = useMemo<TocCategory[]>(() => {
     return SETTINGS_CATEGORIES.map((category) => {
       const definitions = categoryMatches.get(category.id) ?? [];
@@ -367,6 +381,16 @@ export function SettingsPage() {
         <div className="flex min-h-0 w-full flex-1">
           {sidebarOpen && (
             <Sidebar collapsible="none" className="border-r">
+              <SidebarHeader>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton tooltip="返回首页" onClick={() => void shell.navigate('session')}>
+                      <ArrowLeft />
+                      <span>返回首页</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarHeader>
               <SidebarContent>
                 <SettingsToc
                   categories={tocCategories}
