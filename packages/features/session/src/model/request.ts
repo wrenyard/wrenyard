@@ -15,7 +15,7 @@
  */
 import { getEncoding } from 'js-tiktoken';
 import type { GatewayRouteStatus, ProviderDefinition } from '@wrenyard/providers/base';
-import type { ReasoningEffort } from '@wrenyard/models';
+import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
 import {
   abortError,
   isContextOverflowError,
@@ -215,6 +215,13 @@ export function sanitizeMessagesForRole(
 export interface ContextBudget {
   metadata: ModelMetadata;
   estimatedInputTokens: number;
+  /**
+   * The request output cap this call resolves and forwards as the serialized
+   * transport cap. See {@link checkContextBudget}. Absent when the legacy
+   * behaviour applies and no explicit per-call cap was given, in which case the
+   * protocol's own default output field still applies.
+   */
+  requestMaxOutputTokens?: number;
   /** True when the call may be sent. */
   ok: boolean;
   /** Why the call may not be sent; absent when `ok`. */
@@ -223,25 +230,81 @@ export interface ContextBudget {
 
 /**
  * Context budget check. The model maximum is the only limit — there is no
- * extra soft budget — and a call is refused when the estimate plus the model's
- * output allowance would exceed its window.
+ * extra soft budget — and a call is refused when the estimate plus the output
+ * the request reserves would exceed its window.
+ *
+ * The declared `metadata.maxOutputTokens` is the model's source maximum — a
+ * capability, not a mandatory per-request reservation. A route whose provider
+ * opted out of the canonical metadata fallback therefore resolves its request
+ * output cap to the smallest of the per-call cap (or the source maximum when
+ * none was requested), the source maximum when known, and the room left after
+ * the estimated input:
+ *
+ *   min(requested cap or source max, source max when known, contextWindow - estimatedInputTokens)
+ *
+ * Such a route fails only when the estimated input leaves no positive room. Its
+ * resolved `requestMaxOutputTokens` is the single cap handed back for both this
+ * check and the serialized transport request. Every other route keeps its prior
+ * budget semantics: the per-call cap is reserved verbatim (never raised above the
+ * source maximum) and, with none, the source maximum is reserved exactly as
+ * before.
  */
-export function checkContextBudget(publicId: string, messages: readonly import('../transport/index.ts').Message[], resolveProvider?: (providerId: string) => ProviderDefinition | undefined): ContextBudget {
+export function checkContextBudget(
+  publicId: string,
+  messages: readonly import('../transport/index.ts').Message[],
+  resolveProvider?: (providerId: string) => ProviderDefinition | undefined,
+  requestedMaxOutputTokens?: number,
+): ContextBudget {
   const metadata = resolveModelMetadata(publicId, resolveProvider);
   const estimatedInputTokens = estimateInputTokens(messages);
-  if (metadata.contextWindow === undefined || metadata.maxOutputTokens === undefined) {
+  const { contextWindow, maxOutputTokens: sourceMax } = metadata;
+
+  if (metadata.skipCanonicalMetadataFallback === true) {
+    const requested = requestedMaxOutputTokens ?? sourceMax;
+    if (requested === undefined) return { metadata, estimatedInputTokens, ok: true };
+    const bounded = sourceMax === undefined ? requested : Math.min(requested, sourceMax);
+    if (contextWindow === undefined) {
+      return { metadata, estimatedInputTokens, requestMaxOutputTokens: bounded, ok: true };
+    }
+    const room = contextWindow - estimatedInputTokens;
+    if (room <= 0) {
+      return {
+        metadata,
+        estimatedInputTokens,
+        ok: false,
+        reason: `Estimated input ${estimatedInputTokens} leaves no room in the context window ${contextWindow}`,
+      };
+    }
+    return { metadata, estimatedInputTokens, requestMaxOutputTokens: Math.min(bounded, room), ok: true };
+  }
+
+  // No declared window or maximum: nothing to check, exactly as before.
+  if (contextWindow === undefined || sourceMax === undefined) {
     return { metadata, estimatedInputTokens, ok: true };
   }
-  const total = estimatedInputTokens + metadata.maxOutputTokens;
-  if (total > metadata.contextWindow) {
+  // With no explicit per-call cap the legacy reservation is the source maximum;
+  // the protocol default is still what the transport sends, so no cap is added.
+  if (requestedMaxOutputTokens === undefined) {
+    if (estimatedInputTokens + sourceMax > contextWindow) {
+      return {
+        metadata,
+        estimatedInputTokens,
+        ok: false,
+        reason: `Estimated input ${estimatedInputTokens} + max output ${sourceMax} exceeds the context window ${contextWindow}`,
+      };
+    }
+    return { metadata, estimatedInputTokens, ok: true };
+  }
+  const reserved = Math.min(requestedMaxOutputTokens, sourceMax);
+  if (estimatedInputTokens + reserved > contextWindow) {
     return {
       metadata,
       estimatedInputTokens,
       ok: false,
-      reason: `Estimated input ${estimatedInputTokens} + max output ${metadata.maxOutputTokens} exceeds the context window ${metadata.contextWindow}`,
+      reason: `Estimated input ${estimatedInputTokens} + max output ${reserved} exceeds the context window ${contextWindow}`,
     };
   }
-  return { metadata, estimatedInputTokens, ok: true };
+  return { metadata, estimatedInputTokens, requestMaxOutputTokens: reserved, ok: true };
 }
 
 /**
@@ -250,6 +313,18 @@ export function checkContextBudget(publicId: string, messages: readonly import('
  */
 export function isReasoningEffortSupported(metadata: ModelMetadata, effort: ReasoningEffort): boolean {
   return metadata.reasoningEfforts?.includes(effort) ?? false;
+}
+
+/**
+ * True only for a route whose whole ladder is the single provider-default
+ * sentinel. Such a route offers no selectable weak-to-strong level; any
+ * requested level is satisfied by the route's own upstream default, which
+ * materializes no explicit reasoning field. The sentinel is never substituted
+ * for a route that declares real levels.
+ */
+export function isProviderDefaultReasoningOnly(metadata: ModelMetadata): boolean {
+  const efforts = metadata.reasoningEfforts;
+  return efforts !== undefined && efforts.length === 1 && efforts[0] === PROVIDER_DEFAULT_REASONING;
 }
 
 /** Reject promptly when the signal aborts, even while awaiting a plain promise. */
@@ -453,12 +528,20 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         const rank = input.role === 'reason' ? undefined : choices.indexOf(choice) + 1;
         model = choice.model;
         selectedRank = rank;
-        const budget = checkContextBudget(model, messages, options.resolveProvider);
+        const budget = checkContextBudget(model, messages, options.resolveProvider, input.maxTokens);
         estimatedInputTokens = budget.estimatedInputTokens;
-        if (!isReasoningEffortSupported(budget.metadata, choice.reasoningEffort)) {
+        // The serialized cap is the one the budget check resolved; a route that
+        // resolved none keeps the caller's per-call cap, exactly as before.
+        const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? input.maxTokens;
+        // A route whose whole ladder is the provider-default sentinel has no
+        // selectable level: it accepts any requested effort and is sent at its
+        // own default, which materializes no explicit reasoning field. Every
+        // other route keeps the exact explicit-effort support check.
+        const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
+        if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, choice.reasoningEffort)) {
           return await fail(`Model ${model} does not support reasoning effort "${choice.reasoningEffort ?? ''}"`);
         }
-        actualReasoningEffort = choice.reasoningEffort;
+        actualReasoningEffort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : choice.reasoningEffort;
         if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
         await options.append({
           type: 'span.started',
@@ -487,7 +570,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           reasoningEffort: actualReasoningEffort,
           attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
           ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
-          ...(input.maxTokens === undefined ? {} : { maxOutputTokens: input.maxTokens }),
+          ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
           ...(input.tools === undefined ? {} : { tools: input.tools }),
           ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
           signal: controller.signal,

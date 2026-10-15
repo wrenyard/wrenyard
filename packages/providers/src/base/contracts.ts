@@ -1,7 +1,7 @@
 import type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
 import type { GatewayRouteState } from './gateway-wire.ts';
 export type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
-export { REASONING_EFFORTS, resolveReasoningEffort } from '@wrenyard/models';
+export { PROVIDER_DEFAULT_REASONING, REASONING_EFFORTS, resolveReasoningEffort } from '@wrenyard/models';
 
 export const GATEWAY_PROTOCOLS = [
   'openai_chat',
@@ -336,4 +336,24 @@ export interface ProviderDefinition {
   defaultModel?: string;
   quotaProvider?: string;
   useClientBinary?: boolean;
+  /**
+   * Opt out of the registered-canonical metadata fallback. When true, every
+   * model keeps exactly the metadata its declaration supplies: no registered
+   * canonical speed/intelligence/pricing/context default is filled in. Used by
+   * the generic models.dev-derived providers, whose canonical identities are
+   * identity-only and whose missing or tiered source metadata must stay
+   * genuinely undefined rather than silently regaining a registry value.
+   */
+  skipCanonicalMetadataFallback?: boolean;
+  /**
+   * Provider-level opt-in to the single provider-default reasoning ladder. When
+   * true, every route of this provider that declares no explicit
+   * `reasoningEfforts` ladder is materialized as the singleton `['default']`
+   * sentinel ladder instead of an empty one. `default` asks the route to use
+   * its own upstream-native behaviour and materializes no explicit reasoning
+   * field; it is not a fabricated effort level. A route that declares its own
+   * ladder keeps it verbatim, and a provider that does not opt in keeps the
+   * existing empty-ladder ("unknown / no selectable level") semantics.
+   */
+  usesProviderDefaultReasoning?: boolean;
 }

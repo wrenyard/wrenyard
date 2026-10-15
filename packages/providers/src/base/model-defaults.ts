@@ -1,4 +1,4 @@
-import { builtinModelDisplayName, models, type ReasoningEffort } from '@wrenyard/models';
+import { builtinModelDisplayName, models, PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
 import type { ProviderDefinition, IntelligenceTier, ModelDefinition, ModelPricing } from './catalog.ts';
 
 type RawModelDefinition = Omit<ModelDefinition, 'speed' | 'intelligence' | 'pricing' | 'reasoningEfforts'> & {
@@ -70,6 +70,10 @@ export const openAI = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'b
 export const anthropic = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'bearer') =>
   ({ protocol: 'anthropic_messages' as const, endpoint, authScheme });
 
+/** The single provider-default ladder materialized for a ladder-less route of a
+ * provider that opted in to `usesProviderDefaultReasoning`. */
+const PROVIDER_DEFAULT_LADDER: readonly ReasoningEffort[] = [PROVIDER_DEFAULT_REASONING];
+
 // Route-owned effort ladders. These are declaration helpers only: a provider
 // chooses the exact subset its transport materializes; nothing is inferred from
 // a model id and no provider defaults a missing ladder.
@@ -95,12 +99,29 @@ function isCanonicalSelection(declaration: ProviderModel): declaration is Canoni
     && typeof (declaration as CanonicalModelSelection).canonical === 'string';
 }
 
-/** Resolve canonical defaults first; provider fields are explicit overrides. */
-function resolveModelDefaults(def: RawModelDefinition): ModelDefinition {
-  // A route that declares its own effort ladder owns it; a route that declares
-  // none resolves to an EMPTY ladder (unknown / no selectable level) rather than
-  // inheriting one from the registry or a model id.
-  const reasoningEfforts = def.reasoningEfforts ?? [];
+/** Resolve canonical defaults first; provider fields are explicit overrides.
+ * When `skipCanonicalMetadata` is set the canonical defaults are never merged:
+ * a declaration keeps exactly the metadata it supplies, so a missing (or
+ * tiered-price) value stays genuinely undefined. An explicitly declared
+ * canonical identity is still validated as a real reference. */
+function resolveModelDefaults(
+  def: RawModelDefinition,
+  skipCanonicalMetadata: boolean,
+  usesProviderDefaultReasoning: boolean,
+): ModelDefinition {
+  // A route that declares its own effort ladder owns it. A route that declares
+  // none resolves to an EMPTY ladder (unknown / no selectable level) unless its
+  // provider opted in to the provider-default sentinel, in which case the
+  // singleton ['default'] ladder is materialized. A ladder is never inferred
+  // from the registry or a model id.
+  const reasoningEfforts = def.reasoningEfforts
+    ?? (usesProviderDefaultReasoning ? PROVIDER_DEFAULT_LADDER : []);
+  if (skipCanonicalMetadata) {
+    if (def.canonicalModel && !models.get(def.canonicalModel.id)) {
+      throw new Error(`model ${def.id} references unknown canonical model ${def.canonicalModel.id}`);
+    }
+    return { ...def, reasoningEfforts };
+  }
   const registered = models.get(def.canonicalModel?.id ?? def.id);
   if (!registered) return completeDefinition(def, reasoningEfforts);
   const { defaults } = registered;
@@ -132,15 +153,31 @@ function completeDefinition(
 }
 
 /** Resolve one provider model declaration into a complete definition. */
-export function resolveProviderModel(declaration: ProviderModel): ModelDefinition {
-  if (typeof declaration === 'string') return resolveModelDefaults(canonicalDefinition(declaration));
+export function resolveProviderModel(
+  declaration: ProviderModel,
+  skipCanonicalMetadata = false,
+  usesProviderDefaultReasoning = false,
+): ModelDefinition {
+  if (typeof declaration === 'string') {
+    return resolveModelDefaults(canonicalDefinition(declaration), skipCanonicalMetadata, usesProviderDefaultReasoning);
+  }
   if (isCanonicalSelection(declaration)) {
     const { canonical, overrides } = declaration;
-    return resolveModelDefaults({ ...canonicalDefinition(canonical), ...overrides });
+    return resolveModelDefaults(
+      { ...canonicalDefinition(canonical), ...overrides },
+      skipCanonicalMetadata,
+      usesProviderDefaultReasoning,
+    );
   }
-  return resolveModelDefaults(declaration);
+  return resolveModelDefaults(declaration, skipCanonicalMetadata, usesProviderDefaultReasoning);
 }
 
 export function defineProvider(provider: RawProviderDefinition): ProviderDefinition {
-  return { ...provider, models: provider.models.map(resolveProviderModel) };
+  const skipCanonicalMetadata = provider.skipCanonicalMetadataFallback === true;
+  const usesProviderDefaultReasoning = provider.usesProviderDefaultReasoning === true;
+  return {
+    ...provider,
+    models: provider.models.map((declaration) =>
+      resolveProviderModel(declaration, skipCanonicalMetadata, usesProviderDefaultReasoning)),
+  };
 }

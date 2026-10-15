@@ -1,7 +1,7 @@
 import { defineModel } from './define.ts';
 
 export const cohereModels = [
-  defineModel('north-mini-code', 'North Mini Code Free', {
+  defineModel('north-mini-code', 'North Mini Code', {
     intelligence: 'low',
     capabilities: ['text'],
     contextWindow: 256_000,

@@ -32,7 +32,7 @@ export const googleModels = [
     pricing: [0.003, 0.15, 0.6],
     speed: 20,
   }, { lab: 'google', family: 'gemma' }),
-  defineModel('gemma-4-31b-it', 'Gemma 4 31B Free', {
+  defineModel('gemma-4-31b-it', 'Gemma 4 31B', {
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     contextWindow: 262_144,

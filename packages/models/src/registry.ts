@@ -1,5 +1,6 @@
 import { MAINSTREAM_MODEL_IDS } from './mainstream.ts';
 import { INTELLIGENCE_TIERS, type RegisteredModel } from './types.ts';
+import { defineModel } from './definitions/define.ts';
 import { alibabaModels } from './definitions/alibaba.ts';
 import { anthropicModels } from './definitions/anthropic.ts';
 import { bytedanceModels } from './definitions/bytedance.ts';
@@ -46,22 +47,25 @@ function validateModel(model: RegisteredModel, seen: Set<string>): void {
   if (!model.lab.trim()) {
     throw new Error(`registered model ${model.id} lab must be a non-empty string`);
   }
-  if (!INTELLIGENCE_SET.has(model.defaults.intelligence)) {
+  if (model.defaults.intelligence !== undefined && !INTELLIGENCE_SET.has(model.defaults.intelligence)) {
     throw new Error(`registered model ${model.id} has invalid intelligence tier`);
   }
-  if (!Number.isInteger(model.defaults.speed) || model.defaults.speed <= 0) {
+  if (model.defaults.speed !== undefined
+    && (!Number.isInteger(model.defaults.speed) || model.defaults.speed <= 0)) {
     throw new Error(`registered model ${model.id} speed must be a positive integer`);
   }
   if (!Number.isSafeInteger(model.defaults.contextWindow) || model.defaults.contextWindow <= 0) {
     throw new Error(`registered model ${model.id} context window must be a positive integer`);
   }
   const pricing = model.defaults.pricing;
-  if (pricing.length !== 3) {
-    throw new Error(`registered model ${model.id} pricing must be [cached, input, output]`);
-  }
-  for (const [index, value] of pricing.entries()) {
-    if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`registered model ${model.id} pricing[${index}] must be finite and non-negative`);
+  if (pricing !== undefined) {
+    if (pricing.length !== 3) {
+      throw new Error(`registered model ${model.id} pricing must be [cached, input, output]`);
+    }
+    for (const [index, value] of pricing.entries()) {
+      if (!Number.isFinite(value) || value < 0) {
+        throw new Error(`registered model ${model.id} pricing[${index}] must be finite and non-negative`);
+      }
     }
   }
   if (model.defaults.capabilities.length === 0) {
@@ -107,6 +111,44 @@ export function builtinModelDisplayName(id: string): string {
   return name;
 }
 
+/**
+ * Canonical identities for the models.dev-derived mainstream providers.
+ *
+ * Each entry is an identity: the exact canonical id, its hyphen-free SSOT
+ * display name, the origin lab, the source context window and the source input
+ * modalities. `intelligence`, `speed` and `pricing` are deliberately absent —
+ * models.dev supplies none of them for these rows (and its pricing is tiered
+ * for some), so no placeholder value is invented here. Providers that publish
+ * these identities opt out of the canonical metadata fallback and carry exactly
+ * the metadata their own snapshot supplies.
+ */
+const modelsDevCanonicalModels: readonly RegisteredModel[] = [
+  defineModel('gemini-3.1-pro-preview', 'Gemini 3.1 Pro Preview', { capabilities: ['text', 'image'], contextWindow: 1_048_576 }, { lab: 'google', family: 'gemini' }),
+  defineModel('gemini-3.5-flash', 'Gemini 3.5 Flash', { capabilities: ['text', 'image'], contextWindow: 1_048_576 }, { lab: 'google', family: 'gemini' }),
+  defineModel('gemini-3.1-flash-lite', 'Gemini 3.1 Flash Lite', { capabilities: ['text', 'image'], contextWindow: 1_048_576 }, { lab: 'google', family: 'gemini' }),
+  defineModel('mistral-large-4', 'Mistral Large 4', { capabilities: ['text', 'image'], contextWindow: 1_048_576 }, { lab: 'mistral' }),
+  defineModel('mistral-medium-3.5', 'Mistral Medium 3.5', { capabilities: ['text', 'image'], contextWindow: 262_144 }, { lab: 'mistral' }),
+  defineModel('mistral-small-latest', 'Mistral Small', { capabilities: ['text', 'image'], contextWindow: 262_144 }, { lab: 'mistral' }),
+  defineModel('devstral-2', 'Devstral 2', { capabilities: ['text'], contextWindow: 262_144 }, { lab: 'mistral' }),
+  defineModel('codestral-latest', 'Codestral', { capabilities: ['text'], contextWindow: 256_000 }, { lab: 'mistral' }),
+  defineModel('gpt-oss-120b', 'GPT OSS 120B', { capabilities: ['text'], contextWindow: 131_072 }, { lab: 'openai' }),
+  defineModel('gpt-oss-20b', 'GPT OSS 20B', { capabilities: ['text'], contextWindow: 131_072 }, { lab: 'openai' }),
+  defineModel('llama-3.3-70b', 'Llama 3.3 70B', { capabilities: ['text'], contextWindow: 131_072 }, { lab: 'meta' }),
+  defineModel('groq-compound', 'Groq Compound', { capabilities: ['text'], contextWindow: 131_072 }, { lab: 'groq' }),
+  defineModel('deepseek-v4-pro-0813', 'DeepSeek V4 Pro 0813', { capabilities: ['text'], contextWindow: 1_048_576 }, { lab: 'deepseek', family: 'deepseek-v4' }),
+  defineModel('deepseek-v3.2', 'DeepSeek V3.2', { capabilities: ['text'], contextWindow: 32_768 }, { lab: 'deepseek', family: 'deepseek-v3' }),
+  defineModel('qwen3.7-max', 'Qwen3.7 Max', { capabilities: ['text'], contextWindow: 1_000_000 }, { lab: 'alibaba', family: 'qwen' }),
+  defineModel('qwen3.8-2.4t-a95b', 'Qwen3.8 2.4T A95B', { capabilities: ['text'], contextWindow: 262_144 }, { lab: 'alibaba', family: 'qwen' }),
+  defineModel('command-a-plus', 'Command A Plus', { capabilities: ['text', 'image'], contextWindow: 128_000 }, { lab: 'cohere', family: 'command' }),
+  defineModel('command-a-reasoning', 'Command A Reasoning', { capabilities: ['text'], contextWindow: 256_000 }, { lab: 'cohere', family: 'command' }),
+  defineModel('command-a', 'Command A', { capabilities: ['text'], contextWindow: 256_000 }, { lab: 'cohere', family: 'command' }),
+  defineModel('command-a-vision', 'Command A Vision', { capabilities: ['text', 'image'], contextWindow: 128_000 }, { lab: 'cohere', family: 'command' }),
+  defineModel('sonar', 'Sonar', { capabilities: ['text'], contextWindow: 128_000 }, { lab: 'perplexity', family: 'sonar' }),
+  defineModel('sonar-pro', 'Sonar Pro', { capabilities: ['text', 'image'], contextWindow: 200_000 }, { lab: 'perplexity', family: 'sonar' }),
+  defineModel('sonar-reasoning-pro', 'Sonar Reasoning Pro', { capabilities: ['text', 'image'], contextWindow: 128_000 }, { lab: 'perplexity', family: 'sonar' }),
+  defineModel('sonar-deep-research', 'Sonar Deep Research', { capabilities: ['text'], contextWindow: 128_000 }, { lab: 'perplexity', family: 'sonar' }),
+];
+
 const BUILTIN_MODELS: readonly RegisteredModel[] = [
   ...deepseekModels,
   ...tencentModels,
@@ -130,6 +172,7 @@ const BUILTIN_MODELS: readonly RegisteredModel[] = [
   ...liquidModels,
   ...thinkingmachinesModels,
   ...poolsideModels,
+  ...modelsDevCanonicalModels,
 ];
 
 function assertMainstreamModelIds(registry: ModelRegistry): void {

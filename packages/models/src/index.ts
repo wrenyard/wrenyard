@@ -9,6 +9,7 @@ export type {
 } from './types.ts';
 export {
   INTELLIGENCE_TIERS,
+  PROVIDER_DEFAULT_REASONING,
   REASONING_EFFORTS,
   REASONING_EFFORT_NAMES,
   reasoningEffortRank,
