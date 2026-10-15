@@ -106,14 +106,14 @@ function TreeGroup({ label, count, open, onToggle, children }: {
         onOpenChange={onToggle}
         className="group/collapsible [&[data-open]>button>svg:first-child]:rotate-90"
       >
-        <SidebarMenuButton render={<CollapsibleTrigger />}>
+        <SidebarMenuButton render={<CollapsibleTrigger />} className="pr-8" title={label}>
           <ChevronRight className="transition-transform" />
           <Folder />
           <span>{label}</span>
         </SidebarMenuButton>
         <SidebarMenuBadge>{count}</SidebarMenuBadge>
         <CollapsibleContent>
-          <SidebarMenuSub>{children}</SidebarMenuSub>
+          <SidebarMenuSub className="mr-0 pr-0">{children}</SidebarMenuSub>
         </CollapsibleContent>
       </Collapsible>
     </SidebarMenuItem>
@@ -135,7 +135,7 @@ function TaskLeaf({ row, selected, onSelect }: {
   if (failure === null) {
     return (
       <SidebarMenuItem>
-        <SidebarMenuButton isActive={selected} onClick={() => onSelect(row.identity)}>
+        <SidebarMenuButton isActive={selected} onClick={() => onSelect(row.identity)} title={row.display_name}>
           {body}
         </SidebarMenuButton>
       </SidebarMenuItem>
@@ -144,7 +144,7 @@ function TaskLeaf({ row, selected, onSelect }: {
   return (
     <SidebarMenuItem>
       <Tooltip>
-        <SidebarMenuButton render={<TooltipTrigger />} isActive={selected} onClick={() => onSelect(row.identity)}>
+        <SidebarMenuButton render={<TooltipTrigger />} isActive={selected} onClick={() => onSelect(row.identity)} className="pr-8" title={row.display_name}>
           {body}
         </SidebarMenuButton>
         <TooltipContent>{failure}</TooltipContent>
@@ -159,7 +159,7 @@ function ErrorLeaf({ entry }: { entry: TaskTreeLoadError }) {
   return (
     <SidebarMenuItem>
       <Tooltip>
-        <SidebarMenuButton render={<TooltipTrigger />} title={entry.source_path}>
+        <SidebarMenuButton render={<TooltipTrigger />} title={entry.source_path} className="pr-8">
           <File />
           <span>{entry.file_name}</span>
         </SidebarMenuButton>

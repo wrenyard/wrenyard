@@ -144,7 +144,7 @@ export function TasksPage() {
           setError('');
           setSuccessNote(copy.SUCCESS_NOTE);
           // Re-seed the draft from the freshly saved layer (applies to reset too).
-          setReseedNonce((nonce) => nonce + 1);
+          void detail.refetch().finally(() => setReseedNonce((nonce) => nonce + 1));
         },
         onError: (cause) => {
           const message = tasksErrorMessage(cause);
@@ -177,14 +177,18 @@ export function TasksPage() {
             <>
               {listStaleError && <QueryError query={list} />}
               {detail.isError && <QueryError query={detail} />}
-              <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] gap-4 @3xl/main:grid-cols-[clamp(170px,23vw,250px)_minmax(0,1fr)]">
+              <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,12rem)_minmax(0,1fr)] gap-4 @3xl/main:grid-cols-[clamp(170px,23vw,250px)_minmax(0,1fr)] @3xl/main:grid-rows-[minmax(0,1fr)]">
                 <TaskTree
                   model={tree}
                   loading={list.isPending}
                   selectedId={selectedIdentity}
                   collapsed={collapsed}
                   onToggleGroup={toggleGroup}
-                  onSelect={setSelectedId}
+                  onSelect={(identity) => {
+                    setSelectedId(identity);
+                    setSuccessNote('');
+                    setError('');
+                  }}
                 />
                 {row !== null ? (
                   <TaskDetail

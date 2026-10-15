@@ -60,6 +60,7 @@ export const PREVIEW_TITLE = '指令模板预览';
 export const PREVIEW_EMPTY = '该任务没有可预览的指令模板。';
 export const PREVIEW_TAB_PREVIEW = '预览';
 export const PREVIEW_TAB_JSON = 'JSON';
+export const PREVIEW_EXPAND_LABEL = '展开查看';
 
 export const ISSUE_UNRESOLVED_LABEL = '运行时解析失败，聚焦查看原因';
 export const ISSUE_LOAD_FAILED_LABEL = '读取失败，聚焦查看原因';
