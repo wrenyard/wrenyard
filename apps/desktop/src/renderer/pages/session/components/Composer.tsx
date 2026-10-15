@@ -264,6 +264,12 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     textareaRef.current?.focus({ preventScroll: true });
     onFocusRequestHandled?.();
   }, [focusRequest, disabled, selected, onFocusRequestHandled]);
+
+  // The inline model entry is only useful while the composer is empty; as soon
+  // as any character (including whitespace) is typed it hides and the textarea
+  // takes the freed width. Clearing the draft or a successful send restores it;
+  // a failed send keeps the text, so the entry stays hidden until then.
+  const showInlineModelPicker = text.length === 0;
   const options: ModelOption[] = models.map((entry) => ({
     value: entry.publicId,
     label: entry.displayName,
@@ -372,7 +378,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         submitDisabled={sending || exceeded}
         sendKey={preferences.data?.session.sendKey ?? 'enter'}
         textareaRef={textareaRef}
-        placeholder="输入消息，可随时发起新的并行轮次"
+        placeholder="输入消息…"
+        className="@container/composer"
         attachments={attachmentStrip}
         hasAttachments={attachments.length > 0}
         onPaste={handlePaste}
@@ -381,17 +388,21 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         onDismissSuggestion={dismissSuggestion}
         toolbar={
           <>
-            {/* Bounded only by the row width so a long model name can use it and
-                wrap instead of truncating; the toolbar wraps to the next row
-                when a narrow card runs out of room. */}
-            <ModelPicker
-              models={options}
-              value={modelId}
-              effort={effort}
-              onChange={selectModel}
-              disabled={models.length === 0}
-              className="min-w-0 max-w-full"
-            />
+            {/* Empty composer only: the inline model entry. As soon as any text
+                (including whitespace) is typed it hides so the textarea takes
+                the freed width, and clearing the draft or a successful send
+                brings it back without changing the selected model or effort. */}
+            {showInlineModelPicker && (
+              <ModelPicker
+                models={options}
+                value={modelId}
+                effort={effort}
+                onChange={selectModel}
+                disabled={models.length === 0}
+                className="min-w-0 max-w-full"
+                compactTrigger
+              />
+            )}
             {exceeded && (
               <span className="flex items-center gap-1 text-xs text-destructive" role="status">
                 <AlertTriangle className="size-3.5 shrink-0" />

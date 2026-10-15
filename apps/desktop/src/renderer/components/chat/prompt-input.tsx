@@ -83,6 +83,7 @@ export function PromptInput({
   // is muted, never part of the value, and a "Tab 补全" hint names the accept key.
   const ghost = !disabled && value === '' && suggestion !== undefined ? suggestion : '';
   const placeholderText = ghost === '' ? placeholder : `${ghost}\u2003Tab 补全`;
+  const isEmpty = value.length === 0;
 
   const submit = (): void => {
     if (canSubmit) onSubmit();
@@ -102,10 +103,11 @@ export function PromptInput({
         submit();
       }}
     >
-      {/* One layout at every window size: the textarea and the trailing controls
-          share a row while there is room, and the controls wrap to the next
-          (right-aligned) row once the textarea's ~12rem basis no longer fits, so
-          narrow cards (down to the 300px mini minimum) never clip the controls. */}
+      {/* Stable row: the leading '+' sits on the left, the `grow` textarea takes
+          the free space (`min-w-0`, no fixed basis), the send button sits on the
+          right. Controls bottom-align (`items-end` + `py-1`) with the last text
+          line; `flex-wrap` still lets wide full model names and the overflow
+          fallback use a second row. */}
       <InputGroup className="flex flex-wrap items-end gap-x-1 gap-y-1 sm:gap-x-1.5 h-auto">
         {attachments !== undefined && attachments !== null && (
           <div className="w-full min-w-0 px-2.5 pt-2">{attachments}</div>
@@ -113,15 +115,16 @@ export function PromptInput({
         {hasLeading && (
           <div className="flex min-w-0 items-center gap-1 pl-1 py-1 sm:gap-1.5 sm:pl-1.5">{toolbarLeading}</div>
         )}
-        {/* The textarea keeps the primitive's `field-sizing-content`, so it grows
-            with the text and scrolls once it reaches `max-h-60`. */}
+        {/* Empty: a fixed one-line 40px box (`field-sizing-fixed`) so a long
+            placeholder cannot stretch it. Populated: content-sized, wrapping as
+            it grows and scrolling at `max-h-60`. The same element stays mounted. */}
         <InputGroupTextarea
           ref={textareaRef}
           value={value}
           placeholder={placeholderText}
           disabled={disabled}
           rows={1}
-          className="min-h-10 min-w-0 basis-48 grow leading-6 max-h-60"
+          className={`min-w-0 grow leading-6 ${isEmpty ? 'field-sizing-fixed h-10 min-h-10' : 'field-sizing-content min-h-10 max-h-60'}`}
           onChange={(event) => onValueChange(event.target.value)}
           onPaste={onPaste}
           onKeyDown={(event) => {

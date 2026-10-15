@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { BatteryFull, Gift, Search, Zap } from 'lucide-react';
+import { BatteryFull, Gift, Search, SlidersHorizontal, Zap } from 'lucide-react';
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import {
   DropdownMenu,
@@ -80,6 +80,15 @@ export interface ModelPickerProps {
   disabled?: boolean;
   placeholder?: string;
   className?: string;
+  /**
+   * Alternate trigger presentation for narrow composers. When true the trigger
+   * follows the enclosing `composer` container query: at a wide container it
+   * shows the full model name plus effort, and at a narrow one it collapses to
+   * an icon whose accessible name/title still carries the full model name and
+   * effort. It is never a truncation of the model name. Default false keeps the
+   * existing full-name trigger untouched for other consumers.
+   */
+  compactTrigger?: boolean;
 }
 
 /** One option's truncating name and aligned supply indicators. */
@@ -139,7 +148,7 @@ function SelectedModelIndicator() {
  * field filters by model name/id and provider group name, and takes over the
  * keyboard so its text editing never reaches the menu's typeahead.
  */
-export function ModelPicker({ models, value, effort, onChange, disabled = false, placeholder = '选择模型', className }: ModelPickerProps) {
+export function ModelPicker({ models, value, effort, onChange, disabled = false, placeholder = '选择模型', className, compactTrigger = false }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -161,6 +170,9 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
   );
 
   const effortLabel = REASONING_EFFORT_NAMES[effort];
+  // The full model name plus effort, used as the trigger's accessible name and
+  // (in compact mode) its title, so the narrow icon trigger is never ambiguous.
+  const triggerLabel = selected === null ? placeholder : `${selected.label}，思考强度：${effortLabel}`;
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleGroups = useMemo(() => {
@@ -241,12 +253,27 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
             variant="ghost"
             className={`h-auto min-h-8 max-w-full min-w-0 whitespace-normal py-1${className ? ` ${className}` : ''}`}
             disabled={disabled}
-            aria-label={selected === null ? placeholder : `${selected.label}，思考强度：${effortLabel}`}
+            aria-label={triggerLabel}
+            title={compactTrigger ? triggerLabel : undefined}
           />
         }
       >
         {selected === null ? (
           placeholder
+        ) : compactTrigger ? (
+          <>
+            {/* Wide composer: the full model name plus effort, wrapping rather
+                than truncating. */}
+            <span className="hidden min-w-0 max-w-full flex-wrap items-center gap-2 @sm/composer:flex">
+              <ModelOptionContent option={selected} compact />
+              <span className="shrink-0 text-xs text-muted-foreground" aria-hidden="true">{effortLabel}</span>
+            </span>
+            {/* Narrow composer: an icon-only trigger; the accessible name/title
+                on the button still carries the full model name and effort. */}
+            <span className="flex items-center @sm/composer:hidden" aria-hidden="true">
+              <SlidersHorizontal className="size-4" />
+            </span>
+          </>
         ) : (
           <span className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             <ModelOptionContent option={selected} compact />
