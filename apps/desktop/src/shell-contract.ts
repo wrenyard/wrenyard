@@ -248,7 +248,7 @@ export const SHELL_CHANNELS = {
   revealWorkspace: 'wrenyard-shell:reveal-workspace',
 } as const;
 
-export type ShellPage = 'session' | 'trace' | 'stats' | 'quota' | 'settings' | 'tasks' | 'schedules';
+export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'schedules';
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */
@@ -1403,7 +1403,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'session' || value === 'trace' || value === 'stats' || value === 'quota' || value === 'settings' || value === 'tasks' || value === 'schedules';
+  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'schedules';
 }
 
 /**
@@ -1452,7 +1452,6 @@ export function acceleratorPage(input: AcceleratorInput, platform: NodeJS.Platfo
   if (input.key === '1') return 'session';
   if (input.key === '2') return 'trace';
   if (input.key === '3') return 'stats';
-  if (input.key === '4') return 'quota';
   if (input.key === '5') return 'tasks';
   if (input.key === '6') return 'schedules';
   return null;
@@ -1493,7 +1492,6 @@ export const KNOWN_SHORTCUTS: readonly KnownShortcut[] = [
   { category: '导航', title: '会话', mac: '⌘1', other: 'Ctrl+1', scope: '全局', page: 'session' },
   { category: '导航', title: '追踪', mac: '⌘2', other: 'Ctrl+2', scope: '全局', page: 'trace' },
   { category: '导航', title: '工房台账', mac: '⌘3', other: 'Ctrl+3', scope: '全局', page: 'stats' },
-  { category: '导航', title: '模型供应', mac: '⌘4', other: 'Ctrl+4', scope: '全局', page: 'quota' },
   { category: '导航', title: '任务', mac: '⌘5', other: 'Ctrl+5', scope: '全局', page: 'tasks' },
   { category: '导航', title: '定时任务', mac: '⌘6', other: 'Ctrl+6', scope: '全局', page: 'schedules' },
   { category: '导航', title: '设置', mac: '⌘,', other: 'Ctrl+,', scope: '全局', page: 'settings' },

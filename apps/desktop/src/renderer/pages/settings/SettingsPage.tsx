@@ -4,6 +4,7 @@ import { ArrowLeft, Braces, RefreshCw } from 'lucide-react';
 import { Page, PageActions, PageHeader, PageTitle } from '@/renderer/components/page';
 import { Button } from '@/renderer/components/ui/button';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
+import { QueryError } from '@/renderer/components/query-error';
 import {
   Sidebar,
   SidebarContent,
@@ -13,17 +14,26 @@ import {
   SidebarMenuItem,
   SidebarProvider,
 } from '@/renderer/components/ui/sidebar';
+import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { toast } from '@/renderer/lib/notify';
 import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
 import { shell } from '@/renderer/lib/desktop';
 import { preferencesQueryKey } from '@/renderer/lib/queries';
-import type { DesktopPreferences, PreferenceId } from '@/shell-contract';
+import type { DesktopPreferences, PreferenceId, ProviderCatalogSnapshot } from '@/shell-contract';
 import { KNOWN_SHORTCUTS, knownShortcutKeys } from '@/shell-contract';
 import { PetSettingsProvider, PetStatusBadge } from './components/PetSettings.js';
 import { SettingRow, type SettingBinding } from './components/SettingRow.js';
 import { SettingsSearch } from './components/SettingsSearch.js';
 import { SettingsToc, type TocCategory } from './components/SettingsToc.js';
 import { ShortcutsTable } from './components/ShortcutsTable.js';
+import { ModelList } from './supply/components/ModelList.js';
+import { ProviderDialog } from './supply/components/ProviderDialog.js';
+import { ProviderSupply } from './supply/components/ProviderSupply.js';
+import { ProviderUsage } from './supply/components/ProviderUsage.js';
+import { RoutingTest } from './supply/components/RoutingTest.js';
+import { QUOTA_UNAVAILABLE_FALLBACK } from './supply/model/describe.js';
+import { buildModelListRows } from './supply/model/models.js';
+import { quotaQuery, useQuotaQuery, useQuotaRefresh, useSaveProviderOrder } from './supply/queries.js';
 import {
   OPEN_SETTINGS_FILE_LABEL,
   PAGE_TITLE,
@@ -69,6 +79,13 @@ function HighlightedText({ text, terms }: { text: string; terms: readonly string
   );
 }
 
+/** Supply pages whose header carries the quota refresh action (usage spec 6). */
+const QUOTA_REFRESH_CATEGORIES: ReadonlySet<SettingsCategoryId> = new Set<SettingsCategoryId>([
+  'usage',
+  'providers',
+  'catalog',
+]);
+
 /**
  * The Settings Activity: a 220px secondary sidebar that switches between one
  * page per category, a fixed search row, and a scrolling body. Every category
@@ -96,6 +113,9 @@ export function SettingsPage() {
   }, []);
   const [pendingTarget, setPendingTarget] = useState<PendingTarget | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
+  // The shared provider dialog entry: 用量 and 供应商 both open this one instance.
+  const [dialogEntry, setDialogEntry] = useState<ProviderCatalogSnapshot | null>(null);
+  const [reorderError, setReorderError] = useState('');
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -123,6 +143,25 @@ export function SettingsPage() {
   const visiblePageRef = useRef(visiblePage);
 
   const preferences = usePreferencesQuery();
+
+  // The supply categories (用量 / 供应商 / 模型 / 派发测试) read the shared quota
+  // snapshot and its provider-order mutation; the same cache entry backs the
+  // status-bar quota panel.
+  const quota = useQuotaQuery();
+  const quotaRefresh = useQuotaRefresh();
+  const providerOrder = useSaveProviderOrder();
+  const snapshot = quota.data ?? null;
+  const modelRows = useMemo(() => buildModelListRows(snapshot), [snapshot]);
+  const quotaFallback = quota.isPending
+    ? <Skeleton className="h-24 w-full" />
+    : <QueryError query={quota} title={QUOTA_UNAVAILABLE_FALLBACK} />;
+
+  const handleReorder = (providerIds: string[]): void => {
+    setReorderError('');
+    providerOrder.mutate(providerIds, {
+      onError: (cause) => setReorderError(errorMessage(cause)),
+    });
+  };
 
   const savePreference = useMutation({
     mutationFn: (input: { id: PreferenceId; value: unknown }) => shell.setPreference(input.id, input.value),
@@ -357,6 +396,61 @@ export function SettingsPage() {
     );
   }
 
+  // One category page's body. 快捷键 and the four supply pages render their own
+  // component instead of registry groups; every other category renders its
+  // group cards. The supply pages keep the same always-mounted,
+  // hidden-when-inactive section, so switching categories never discards a
+  // dialog draft.
+  function renderCategoryBody(categoryId: SettingsCategoryId): ReactNode {
+    if (categoryId === 'shortcuts') {
+      return <ShortcutsTable platform={platform} query={query} />;
+    }
+    if (categoryId === 'usage') {
+      return <ProviderUsage />;
+    }
+    if (categoryId === 'providers') {
+      if (snapshot === null) return quotaFallback;
+      return (
+        <ProviderSupply
+          snapshot={snapshot}
+          savingOrder={providerOrder.isPending}
+          reorderError={reorderError}
+          onReorder={handleReorder}
+          onConfigure={setDialogEntry}
+        />
+      );
+    }
+    if (categoryId === 'catalog') {
+      if (snapshot === null) return quotaFallback;
+      return <ModelList rows={modelRows} />;
+    }
+    if (categoryId === 'routingTest') {
+      return (
+        <RoutingTest
+          snapshot={snapshot}
+          active={!searchActive && activeCategory === 'routingTest'}
+        />
+      );
+    }
+    const groups = categoryGroups.get(categoryId) ?? [];
+    return groups.map((group) => (
+      <section
+        key={group.key || 'all'}
+        data-group={group.key === '' ? undefined : group.key}
+        className="flex scroll-mt-4 flex-col gap-2"
+      >
+        {group.label !== '' && (
+          <h3 className="text-sm font-medium text-muted-foreground">{group.label}</h3>
+        )}
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <div className="@container/field-group flex w-full flex-col divide-y">
+            {group.definitions.map(renderRow)}
+          </div>
+        </div>
+      </section>
+    ));
+  }
+
   return (
     <Page data-page="settings">
       <PageHeader>
@@ -472,7 +566,6 @@ export function SettingsPage() {
                   )}
                   {SETTINGS_CATEGORIES.map((category) => {
                     const visible = !searchActive && category.id === activeCategory;
-                    const groups = categoryGroups.get(category.id) ?? [];
                     return (
                       <section
                         key={category.id}
@@ -482,31 +575,25 @@ export function SettingsPage() {
                           <h1 className="flex items-center gap-3 text-xl font-semibold">
                             {settingsCategoryLabel(category.id)}
                             {category.id === 'pet' && <PetStatusBadge />}
+                            {QUOTA_REFRESH_CATEGORIES.has(category.id) && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-sm"
+                                className="ml-auto"
+                                aria-label="刷新"
+                                disabled={quotaRefresh.isPending}
+                                onClick={() => quotaRefresh.mutate()}
+                              >
+                                <RefreshCw />
+                              </Button>
+                            )}
                           </h1>
                           <p className="text-sm text-muted-foreground">
                             {settingsCategoryDescription(category.id)}
                           </p>
                         </header>
-                        {category.id === 'shortcuts' ? (
-                          <ShortcutsTable platform={platform} query={query} />
-                        ) : (
-                          groups.map((group) => (
-                            <section
-                              key={group.key || 'all'}
-                              data-group={group.key === '' ? undefined : group.key}
-                              className="flex scroll-mt-4 flex-col gap-2"
-                            >
-                              {group.label !== '' && (
-                                <h3 className="text-sm font-medium text-muted-foreground">{group.label}</h3>
-                              )}
-                              <div className="overflow-hidden rounded-xl border bg-card">
-                                <div className="@container/field-group flex w-full flex-col divide-y">
-                                  {group.definitions.map(renderRow)}
-                                </div>
-                              </div>
-                            </section>
-                          ))
-                        )}
+                        {renderCategoryBody(category.id)}
                       </section>
                     );
                   })}
@@ -516,6 +603,11 @@ export function SettingsPage() {
           </div>
         </div>
       </SidebarProvider>
+      <ProviderDialog
+        entry={dialogEntry}
+        onClose={() => setDialogEntry(null)}
+        onSaved={(next) => queryClient.setQueryData(quotaQuery.queryKey, next)}
+      />
     </Page>
   );
 }

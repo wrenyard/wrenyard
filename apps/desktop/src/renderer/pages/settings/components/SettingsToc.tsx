@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import {
   Bird,
+  Boxes,
   ChevronRight,
   Download,
+  FlaskConical,
+  Gauge,
   Info,
   Keyboard,
   LayoutGrid,
@@ -10,6 +13,7 @@ import {
   Palette,
   Route,
   Server,
+  WalletCards,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from 'cn';
@@ -28,6 +32,10 @@ const CATEGORY_ICONS: Readonly<Record<SettingsCategoryId, LucideIcon>> = {
   general: LayoutGrid,
   appearance: Palette,
   session: MessageSquare,
+  usage: Gauge,
+  providers: WalletCards,
+  catalog: Boxes,
+  routingTest: FlaskConical,
   models: Route,
   shortcuts: Keyboard,
   pet: Bird,

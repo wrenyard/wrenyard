@@ -5,7 +5,7 @@ import { Button } from '@/renderer/components/ui/button';
 import { Separator } from '@/renderer/components/ui/separator';
 import { QuotaProviderBlock } from '@/renderer/components/usage/QuotaProviderBlock';
 import { PanelFooterAction } from '@/renderer/components/panel-footer-action';
-import { shell } from '@/renderer/lib/desktop';
+import { executeCommand } from '@/renderer/lib/commands';
 import { quotaQuery, useQuotaRefresh } from '@/renderer/lib/queries';
 import type { ProviderOrderSnapshot, QuotaProviderSnapshot } from '@/shell-contract';
 import { cn } from 'cn';
@@ -13,7 +13,7 @@ import { cn } from 'cn';
 /**
  * Status-bar quota panel (usage spec 6.3). Rendered inside the quota item's
  * popover: a header with the last refresh time and a manual refresh, the
- * provider blocks in the user's order, and a jump to the Model Supply page.
+ * provider blocks in the user's order, and a jump to the 用量 settings page.
  */
 
 /** Re-renders once a minute so the "更新于 …" stamp stays current. */
@@ -89,7 +89,7 @@ export function QuotaPanel() {
         )}
       </div>
       <Separator />
-      <PanelFooterAction label="打开模型供应页" onClick={() => void shell.navigate('quota')} />
+      <PanelFooterAction label="打开用量设置" onClick={() => { executeCommand('settings.open', 'usage'); }} />
     </div>
   );
 }

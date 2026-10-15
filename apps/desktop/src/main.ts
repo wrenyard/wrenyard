@@ -224,17 +224,15 @@ async function runSmoke(shell: ShellWindowController): Promise<void> {
     const settingsVisible = await waitForVisiblePageRoot(shell, 'settings');
     shell.setPage('stats', false);
     const statsVisible = await waitForVisiblePageRoot(shell, 'stats');
-    shell.setPage('quota', false);
-    const quotaVisible = await waitForVisiblePageRoot(shell, 'quota');
     shell.setPage('tasks', false);
     const tasksVisible = await waitForVisiblePageRoot(shell, 'tasks');
     shell.setPage('schedules', false);
     const schedulesVisible = await waitForVisiblePageRoot(shell, 'schedules');
     shell.setPage('session', false);
     const sessionVisible = await waitForVisiblePageRoot(shell, 'session');
-    if (!shellOk || !snapshotOk || !quotaOk || !tasksOk || !routingOk || !statsOk || !settingsVisible || !statsVisible || !quotaVisible || !tasksVisible || !schedulesVisible || !sessionVisible) {
+    if (!shellOk || !snapshotOk || !quotaOk || !tasksOk || !routingOk || !statsOk || !settingsVisible || !statsVisible || !tasksVisible || !schedulesVisible || !sessionVisible) {
       throw new Error(
-        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, quota=${quotaOk}, tasks=${tasksOk}, routing=${routingOk}, stats=${statsOk}, settings=${settingsVisible}, statsPage=${statsVisible}, quotaPage=${quotaVisible}, tasksPage=${tasksVisible}, schedulesPage=${schedulesVisible}, session=${sessionVisible})`,
+        `smoke failed (shell=${shellOk}, snapshot=${snapshotOk}, quota=${quotaOk}, tasks=${tasksOk}, routing=${routingOk}, stats=${statsOk}, settings=${settingsVisible}, statsPage=${statsVisible}, tasksPage=${tasksVisible}, schedulesPage=${schedulesVisible}, session=${sessionVisible})`,
       );
     }
   };

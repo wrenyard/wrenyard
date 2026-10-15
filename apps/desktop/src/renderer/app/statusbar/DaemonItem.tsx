@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowUp, ChevronUp, Gauge, Info, Plug, Unplug } from 'lucide-react';
+import { ArrowUp, ChevronUp, Gauge, Info, Plug, Unplug, WalletCards } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/renderer/components/ui/button';
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/renderer/components/ui/popover';
@@ -150,7 +150,12 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
 
   const openUsage = (): void => {
     setOpen(false);
-    void shell.navigate('quota');
+    executeCommand('settings.open', 'usage');
+  };
+
+  const openProviders = (): void => {
+    setOpen(false);
+    executeCommand('settings.open', 'providers');
   };
 
   const openAbout = (): void => {
@@ -234,6 +239,16 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
           >
             <Gauge />
             <span>用量</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="justify-start gap-2"
+            onClick={openProviders}
+          >
+            <WalletCards />
+            <span>供应商</span>
           </Button>
           {/* Destinations the sidebar header no longer exposes stay reachable here. */}
           {PRIMARY_NAV.filter((item) => item.id === 'trace' || item.id === 'stats').map((item) => (

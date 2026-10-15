@@ -8,6 +8,10 @@ export type SettingsCategoryId =
   | 'general'
   | 'appearance'
   | 'session'
+  | 'usage'
+  | 'providers'
+  | 'catalog'
+  | 'routingTest'
   | 'models'
   | 'shortcuts'
   | 'pet'
@@ -27,7 +31,11 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
   { id: 'general', label: '通用', description: '启动、通知与菜单栏等基础偏好。' },
   { id: 'appearance', label: '外观', description: '主题、明暗模式、界面缩放与动效。' },
   { id: 'session', label: '会话', description: '消息发送方式与会话绑定的工作区。' },
-  { id: 'models', label: '模型与路由', description: '供应商、自动派发参考与运行时别名。' },
+  { id: 'usage', label: '用量', description: '各供应商的额度、余额与重置时间。' },
+  { id: 'providers', label: '供应商', description: '激活、配置凭据并调整派发优先顺序。' },
+  { id: 'catalog', label: '模型', description: '已激活供应商提供的模型、价格与点数倍率。' },
+  { id: 'routingTest', label: '派发测试', description: '按条件预览自动派发会选中的模型。' },
+  { id: 'models', label: '模型与路由', description: '自动派发参考、路由权重与运行时别名。' },
   { id: 'shortcuts', label: '快捷键', description: '当前平台生效的全部快捷键；暂不支持自定义。' },
   { id: 'pet', label: '桌宠', description: '桌宠的显示内容与行为，由啾啾工坊直接管理生命周期。' },
   { id: 'runtime', label: '运行环境', description: '本地服务、日志与设置文件。' },

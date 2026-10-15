@@ -410,6 +410,9 @@ function normalizeWindowSettings(value: unknown): WindowSettings {
   if (typeof obj.shellMaximized === 'boolean') result.shellMaximized = obj.shellMaximized;
   const graphSlip = normalizeGeometry(obj.graphSlip);
   if (graphSlip) result.graphSlip = graphSlip;
+  // A legacy lastPage id from an install that predates the page move lands on
+  // Settings instead of falling back to the startup default.
+  if (obj.lastPage === 'quota') obj.lastPage = 'settings';
   if (isShellPage(obj.lastPage)) result.lastPage = obj.lastPage;
   return result;
 }

@@ -20,8 +20,8 @@ export default async function screenshots(ctx) {
   await ctx.click('[aria-label="关闭检查器"]', { move: 1 });
   await ctx.hideCursor();
 
-  await ctx.page('quota');
-  await ctx.click({ text: '供应商', scope: '[role="tab"]' }, { move: 1 });
+  await ctx.page('settings');
+  await ctx.click({ text: '供应商', scope: RAIL }, { move: 1 });
   await ctx.hideCursor();
   await ctx.sleep(600);
   await ctx.shot('providers');

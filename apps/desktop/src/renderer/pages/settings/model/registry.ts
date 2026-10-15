@@ -31,7 +31,6 @@ export type CustomControlKey =
   | 'petShowHouse'
   | 'petShowTaskgraphs'
   | 'petShowWorkers'
-  | 'providerSummary'
   | 'routingWeights'
   | 'runtimeAliases'
   | 'service'
@@ -247,16 +246,6 @@ const SESSION_CATEGORY: SettingDefinition[] = [
 ];
 
 const MODELS_CATEGORY: SettingDefinition[] = [
-  {
-    id: 'models.providers',
-    category: 'models',
-    title: '供应商',
-    description: '凭据与排序在模型供应页管理，设置页不重复。',
-    keywords: ['供应商', 'provider', '模型供应'],
-    control: custom('providerSummary'),
-    readonly: true,
-    source: { kind: 'readonly' },
-  },
   {
     id: 'models.autoPriceCap',
     category: 'models',

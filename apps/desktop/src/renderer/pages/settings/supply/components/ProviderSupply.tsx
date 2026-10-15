@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import {
   closestCenter,
   DndContext,
@@ -18,12 +18,11 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ChevronRightIcon, GripVerticalIcon, SettingsIcon } from 'lucide-react';
+import { GripVerticalIcon } from 'lucide-react';
 import { BrandIcon } from '@/renderer/components/brand-icon';
 import type { StatusTone } from '@/renderer/components/status-badge';
 import { Badge } from '@/renderer/components/ui/badge';
 import { Button } from '@/renderer/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/components/ui/collapsible';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -31,29 +30,22 @@ import {
   ContextMenuTrigger,
 } from '@/renderer/components/ui/context-menu';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/renderer/components/ui/hover-card';
-import { Item, ItemGroup } from '@/renderer/components/ui/item';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { QuotaBar } from '@/renderer/components/usage/QuotaBar';
 import { providerBrand } from '@/renderer/lib/model-brand';
 import { cn } from 'cn';
 import { reorderProviders } from '@/provider-order';
 import type { ProviderCatalogSnapshot, QuotaProviderSnapshot, QuotaSnapshot } from '@/shell-contract';
 import {
   ACTIVATION_NOTE,
-  BALANCE_LABEL,
   MOVE_DOWN_LABEL,
   MOVE_UP_LABEL,
-  NO_DATA_NOTE,
   ORDER_SAVE_ERROR_PREFIX,
-  RETRY_LABEL,
   SUPPLY_EMPTY,
   SUPPLY_UNAVAILABLE,
   configureProviderLabel,
   dragHandleLabel,
   modelCountLabel,
-  providerNoQuotaNote,
   providerStatusDot,
-  unconfiguredTitle,
 } from '../model/describe.js';
 
 /** Status-dot colour per resolved tone (usage spec 6.5). */
@@ -65,6 +57,9 @@ const DOT_CLASS: Record<StatusTone, string> = {
   muted: 'bg-muted-foreground',
 };
 
+const ACTIVATED_EMPTY = '还没有已激活的供应商。';
+const UNCONFIGURED_EMPTY = '所有供应商都已激活。';
+
 export interface ProviderSupplyProps {
   snapshot: QuotaSnapshot;
   /** True while a provider-order save is in flight. */
@@ -73,15 +68,14 @@ export interface ProviderSupplyProps {
   reorderError: string;
   onReorder: (providerIds: string[]) => void;
   onConfigure: (entry: ProviderCatalogSnapshot) => void;
-  /** Force-refresh the quota snapshot after a failed provider read. */
-  onRetry: () => void;
 }
 
 /**
- * Provider catalog: compact configured rows (reorderable) above an
- * unconfigured disclosure. Order comes from the snapshot; the component never
- * reorders on render and only asks the page to persist a drag, keyboard move or
- * context-menu move.
+ * Provider catalog for the settings 供应商 page: an 已激活 card of reorderable
+ * rows above an always-visible 未配置 card. Order comes from the snapshot; the
+ * component never reorders on render and only asks the page to persist a drag,
+ * keyboard move or context-menu move. Quota and balance detail lives on the
+ * 用量 page, so nothing here renders a bar.
  */
 export function ProviderSupply({
   snapshot,
@@ -89,7 +83,6 @@ export function ProviderSupply({
   reorderError,
   onReorder,
   onConfigure,
-  onRetry,
 }: ProviderSupplyProps) {
   const dndContextId = useId();
 
@@ -133,16 +126,31 @@ export function ProviderSupply({
     persistConfigured(arrayMove(configuredIds, index, next));
   };
 
+  if (catalog.length === 0) {
+    return (
+      <div className="flex flex-col gap-6">
+        {reorderError !== '' && (
+          <p className="text-sm text-destructive" role="alert">{`${ORDER_SAVE_ERROR_PREFIX}${reorderError}`}</p>
+        )}
+        <p className="text-sm text-muted-foreground">
+          {snapshot.status === 'available' ? SUPPLY_EMPTY : SUPPLY_UNAVAILABLE}
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       {reorderError !== '' && (
-        <p className="text-destructive" role="alert">{`${ORDER_SAVE_ERROR_PREFIX}${reorderError}`}</p>
+        <p className="text-sm text-destructive" role="alert">{`${ORDER_SAVE_ERROR_PREFIX}${reorderError}`}</p>
       )}
-      {catalog.length === 0 ? (
-        <p className="text-muted-foreground">{SUPPLY_EMPTY_TEXT(snapshot)}</p>
-      ) : (
-        <>
-          {orderedConfigured.length > 0 && (
+
+      <section className="flex flex-col gap-2">
+        <h3 className="text-sm font-medium text-muted-foreground">已激活</h3>
+        <div className="overflow-hidden rounded-xl border bg-card">
+          {orderedConfigured.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-muted-foreground">{ACTIVATED_EMPTY}</p>
+          ) : (
             <DndContext
               id={dndContextId}
               collisionDetection={closestCenter}
@@ -151,7 +159,7 @@ export function ProviderSupply({
               onDragEnd={handleDragEnd}
             >
               <SortableContext items={configuredIds} strategy={verticalListSortingStrategy}>
-                <ItemGroup>
+                <div className="flex flex-col divide-y">
                   {orderedConfigured.map((entry, index) => (
                     <SortableRow
                       key={entry.id}
@@ -160,54 +168,31 @@ export function ProviderSupply({
                       lastPosition={orderedConfigured.length - 1}
                       savingOrder={savingOrder}
                       onConfigure={onConfigure}
-                      onRetry={onRetry}
                       onMove={move}
                     />
                   ))}
-                </ItemGroup>
+                </div>
               </SortableContext>
             </DndContext>
           )}
-          {unconfigured.length > 0 && (
-            <UnconfiguredGroup entries={unconfigured} onConfigure={onConfigure} onRetry={onRetry} />
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h3 className="text-sm font-medium text-muted-foreground">未配置</h3>
+        <div className="overflow-hidden rounded-xl border bg-card">
+          {unconfigured.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-muted-foreground">{UNCONFIGURED_EMPTY}</p>
+          ) : (
+            <div className="flex flex-col divide-y">
+              {unconfigured.map((entry) => (
+                <UnconfiguredRow key={entry.id} entry={entry} onConfigure={onConfigure} />
+              ))}
+            </div>
           )}
-        </>
-      )}
+        </div>
+      </section>
     </div>
-  );
-}
-
-/** Snapshot-level empty copy: an unavailable snapshot reads differently from an empty catalog. */
-function SUPPLY_EMPTY_TEXT(snapshot: QuotaSnapshot): string {
-  return snapshot.status === 'available' ? SUPPLY_EMPTY : SUPPLY_UNAVAILABLE;
-}
-
-function UnconfiguredGroup({
-  entries,
-  onConfigure,
-  onRetry,
-}: {
-  entries: ProviderCatalogSnapshot[];
-  onConfigure: (entry: ProviderCatalogSnapshot) => void;
-  onRetry: () => void;
-}) {
-  const [open, setOpen] = useState(true);
-  return (
-    <Collapsible open={open} onOpenChange={setOpen} className="flex flex-col gap-2">
-      <CollapsibleTrigger className="flex w-fit cursor-pointer items-center gap-1 text-sm text-muted-foreground">
-        <ChevronRightIcon className={cn('size-4 transition-transform', open && 'rotate-90')} />
-        {unconfiguredTitle(entries.length)}
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <ItemGroup>
-          {entries.map((entry) => (
-            <Item key={entry.id} role="listitem" size="xs" className="flex-nowrap opacity-60">
-              <RowContent entry={entry} onConfigure={onConfigure} onRetry={onRetry} />
-            </Item>
-          ))}
-        </ItemGroup>
-      </CollapsibleContent>
-    </Collapsible>
   );
 }
 
@@ -217,7 +202,6 @@ interface SortableRowProps {
   lastPosition: number;
   savingOrder: boolean;
   onConfigure: (entry: ProviderCatalogSnapshot) => void;
-  onRetry: () => void;
   onMove: (id: string, delta: number) => void;
 }
 
@@ -227,7 +211,6 @@ function SortableRow({
   lastPosition,
   savingOrder,
   onConfigure,
-  onRetry,
   onMove,
 }: SortableRowProps) {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } =
@@ -238,22 +221,20 @@ function SortableRow({
       <ContextMenuTrigger
         ref={setNodeRef}
         render={
-          <Item
+          <div
             role="listitem"
-            size="xs"
             data-dragging={isDragging || undefined}
             style={{
               transform: CSS.Transform.toString(transform),
               transition,
             }}
-            className="relative z-0 flex-nowrap data-[dragging=true]:z-10 data-[dragging=true]:opacity-80"
+            className="relative z-0 bg-card data-[dragging=true]:z-10 data-[dragging=true]:opacity-80"
           />
         }
       >
-        <RowContent
+        <ActivatedRowBody
           entry={entry}
           onConfigure={onConfigure}
-          onRetry={onRetry}
           dragHandle={
             <DragHandle
               label={entry.label || entry.id}
@@ -314,57 +295,77 @@ function DragHandle({
   );
 }
 
-/** Single compact row body shared by configured (sortable) and unconfigured rows. */
-function RowContent({
+/** One activated-provider row: drag handle, brand, name, status, models, 配置. */
+function ActivatedRowBody({
   entry,
   onConfigure,
-  onRetry,
   dragHandle,
 }: {
   entry: ProviderCatalogSnapshot;
   onConfigure: (entry: ProviderCatalogSnapshot) => void;
-  onRetry: () => void;
   dragHandle?: ReactNode;
 }) {
   const name = entry.label || entry.id;
   return (
-    <>
-      {entry.configured && dragHandle}
-      <div className="flex w-40 shrink-0 items-center gap-2">
-        <BrandIcon brand={providerBrand(entry.id)} />
-        <span className="min-w-0 truncate font-medium">{name}</span>
-      </div>
-      {entry.quota && <ProviderStatusDot quota={entry.quota} />}
-      <div className="min-w-0 flex-1">
-        <QuotaContent entry={entry} onRetry={onRetry} />
-      </div>
-      <div className="ml-auto flex shrink-0 items-center gap-2">
-        <ModelCount entry={entry} />
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={configureProviderLabel(name, entry.configured)}
-          title={entry.configured ? '配置' : '激活'}
-          onClick={() => onConfigure(entry)}
-        >
-          <SettingsIcon />
-        </Button>
-      </div>
-    </>
+    <div className="flex items-center gap-2 px-3 py-2">
+      {dragHandle}
+      <BrandIcon brand={providerBrand(entry.id)} />
+      <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
+      {entry.quota !== undefined && <ProviderStatus quota={entry.quota} />}
+      <ModelCount entry={entry} />
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label={configureProviderLabel(name, entry.configured)}
+        onClick={() => onConfigure(entry)}
+      >
+        配置
+      </Button>
+    </div>
   );
 }
 
-function ProviderStatusDot({ quota }: { quota: QuotaProviderSnapshot }) {
+/** One unconfigured-provider row: brand, name, activation hint, 激活 button. */
+function UnconfiguredRow({
+  entry,
+  onConfigure,
+}: {
+  entry: ProviderCatalogSnapshot;
+  onConfigure: (entry: ProviderCatalogSnapshot) => void;
+}) {
+  const name = entry.label || entry.id;
+  return (
+    <div className="flex items-center gap-2 px-3 py-2">
+      <BrandIcon brand={providerBrand(entry.id)} />
+      <span className="min-w-0 shrink-0 truncate font-medium">{name}</span>
+      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{ACTIVATION_NOTE}</span>
+      <Button
+        type="button"
+        size="sm"
+        aria-label={configureProviderLabel(name, false)}
+        onClick={() => onConfigure(entry)}
+      >
+        激活
+      </Button>
+    </div>
+  );
+}
+
+/** Status dot plus its label for one activated provider. */
+function ProviderStatus({ quota }: { quota: QuotaProviderSnapshot }) {
   const view = providerStatusDot(quota.status, quota.stale);
   const tooltip = quota.message ? `${view.label} · ${quota.message}` : view.label;
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<span className={cn('size-2 shrink-0 rounded-full', DOT_CLASS[view.tone])} />}
-      />
-      <TooltipContent>{tooltip}</TooltipContent>
-    </Tooltip>
+    <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+      <Tooltip>
+        <TooltipTrigger
+          render={<span className={cn('size-2 shrink-0 rounded-full', DOT_CLASS[view.tone])} />}
+        />
+        <TooltipContent>{tooltip}</TooltipContent>
+      </Tooltip>
+      {view.label}
+    </span>
   );
 }
 
@@ -385,52 +386,5 @@ function ModelCount({ entry }: { entry: ProviderCatalogSnapshot }) {
         </ul>
       </HoverCardContent>
     </HoverCard>
-  );
-}
-
-function QuotaContent({ entry, onRetry }: { entry: ProviderCatalogSnapshot; onRetry: () => void }) {
-  if (!entry.configured) {
-    return <span className="text-xs text-muted-foreground">{ACTIVATION_NOTE}</span>;
-  }
-  const quota = entry.quota;
-  if (!quota) {
-    return <span className="text-xs text-muted-foreground">{providerNoQuotaNote(entry.authMode)}</span>;
-  }
-  if (quota.status === 'error' || quota.status === 'unavailable') {
-    return (
-      <span className="flex flex-wrap items-center gap-2 text-xs text-destructive">
-        <span>{quota.message ?? NO_DATA_NOTE}</span>
-        <Button type="button" variant="link" size="xs" onClick={onRetry}>{RETRY_LABEL}</Button>
-      </span>
-    );
-  }
-  const windows = quota.windows;
-  const balances = quota.balances;
-  const hasStructured = windows.length > 0 || balances.length > 0;
-  return (
-    <div className="flex items-center gap-x-4">
-      {windows.map((window) => (
-        <QuotaBar
-          key={window.name}
-          name={window.name}
-          poolLabel={window.poolLabel}
-          remainingPct={window.remainingPct}
-          expectedRemainingPct={window.expectedRemainingPct}
-          resetsAt={window.resetsAt}
-        />
-      ))}
-      {balances.map((balance) => (
-        <span key={`${balance.currency}:${balance.display}`} className="flex items-baseline gap-1 text-xs">
-          <span className="text-muted-foreground">{BALANCE_LABEL}</span>
-          <strong className="tabular-nums">{balance.display}</strong>
-        </span>
-      ))}
-      {!hasStructured && quota.message && (
-        <span className="text-xs text-muted-foreground">{quota.message}</span>
-      )}
-      {!hasStructured && !quota.message && (
-        <span className="text-xs text-destructive">{NO_DATA_NOTE}</span>
-      )}
-    </div>
   );
 }

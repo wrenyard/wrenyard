@@ -19,7 +19,6 @@ import {
 } from './PetSettings.js';
 import {
   AutoPriceCapControl,
-  ProviderSummaryControl,
   RuntimeAliasesControl,
 } from './ProviderSettings.js';
 import { RoutingWeightsControl } from './RoutingWeightsSettings.js';
@@ -60,7 +59,6 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   petShowHouse: PetShowHouseControl,
   petShowTaskgraphs: PetShowTaskgraphsControl,
   petShowWorkers: PetShowWorkersControl,
-  providerSummary: ProviderSummaryControl,
   routingWeights: RoutingWeightsControl,
   runtimeAliases: RuntimeAliasesControl,
   service: ServiceControl,

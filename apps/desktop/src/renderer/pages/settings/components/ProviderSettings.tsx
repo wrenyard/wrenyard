@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink } from 'lucide-react';
 import { QueryError } from '@/renderer/components/query-error';
 import { Button } from '@/renderer/components/ui/button';
 import { Input } from '@/renderer/components/ui/input';
@@ -9,7 +8,6 @@ import { Label } from '@/renderer/components/ui/label';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { useConfirm } from '@/renderer/hooks/use-confirm';
 import { shell } from '@/renderer/lib/desktop';
-import { navigate } from '@/renderer/lib/navigation';
 import { taskSettingsQuery } from '@/renderer/lib/queries';
 import {
   ALIAS_DELETE_LABEL,
@@ -28,30 +26,11 @@ import {
   AUTO_CAP_UNIT,
   AUTO_CAP_UNAVAILABLE,
   CONFLICT_MESSAGE,
-  PROVIDER_COUNT_SUFFIX,
-  PROVIDER_MANAGE_LABEL,
   autoCapEffectiveText,
   autoCapErrorMessage,
 } from '../model/describe.js';
 import { autoCapDisplayValue, errorMessage, parseAutoCapInput, validateAlias } from '../model/settings.js';
-import { runtimeAliasesQueryKey, useQuotaQuery, useRuntimeAliasesQuery } from '../queries.js';
-
-/** Read-only provider count with a link to the model-supply page. */
-export function ProviderSummaryControl() {
-  const quota = useQuotaQuery();
-  if (quota.isPending) return <Skeleton className="h-5 w-24" />;
-  if (quota.isError) return <QueryError query={quota} title="读取失败" />;
-  const count = quota.data.catalog.filter((provider) => provider.configured).length;
-  return (
-    <div className="flex items-center gap-3">
-      <span className="text-sm text-muted-foreground">{`${count}${PROVIDER_COUNT_SUFFIX}`}</span>
-      <Button variant="outline" onClick={() => { void navigate('quota'); }}>
-        <ExternalLink />
-        {PROVIDER_MANAGE_LABEL}
-      </Button>
-    </div>
-  );
-}
+import { runtimeAliasesQueryKey, useRuntimeAliasesQuery } from '../queries.js';
 
 /**
  * The global auto-dispatch reference output cap. Committing on blur writes only
