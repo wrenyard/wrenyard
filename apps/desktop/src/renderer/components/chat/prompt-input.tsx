@@ -84,17 +84,13 @@ export function PromptInput({
         submit();
       }}
     >
-      {/* One layout at every window size: a single grid row where the textarea
-          owns the shrinkable text column and the controls sit inline at the end,
-          bottom-aligned so they track the last text line. Narrow cards (down to
-          the 300px mini minimum) only tighten the control gap and inset. */}
-      <InputGroup
-        className={`grid ${
-          hasLeading ? 'grid-cols-[auto_minmax(0,1fr)_auto]' : 'grid-cols-[minmax(0,1fr)_auto]'
-        } items-end gap-x-1 gap-y-1 sm:gap-x-1.5`}
-      >
+      {/* One layout at every window size: the textarea and the trailing controls
+          share a row while there is room, and the controls wrap to the next
+          (right-aligned) row once the textarea's ~12rem basis no longer fits, so
+          narrow cards (down to the 300px mini minimum) never clip the controls. */}
+      <InputGroup className="flex flex-wrap items-end gap-x-1 gap-y-1 sm:gap-x-1.5 h-auto">
         {attachments !== undefined && attachments !== null && (
-          <div className="col-span-full w-full min-w-0 px-2.5 pt-2">{attachments}</div>
+          <div className="w-full min-w-0 px-2.5 pt-2">{attachments}</div>
         )}
         {hasLeading && (
           <div className="flex min-w-0 items-center gap-1 pl-1 sm:gap-1.5 sm:pl-1.5">{toolbarLeading}</div>
@@ -107,7 +103,7 @@ export function PromptInput({
           placeholder={placeholder}
           disabled={disabled}
           rows={1}
-          className="min-h-10 min-w-0 leading-6 max-h-60"
+          className="min-h-10 min-w-0 basis-48 grow leading-6 max-h-60"
           onChange={(event) => onValueChange(event.target.value)}
           onPaste={onPaste}
           onKeyDown={(event) => {
@@ -119,10 +115,10 @@ export function PromptInput({
           onCompositionStart={() => { composing.current = true; }}
           onCompositionEnd={() => { composing.current = false; }}
         />
-        <div className="flex min-w-0 items-center justify-end gap-1 pr-1 sm:gap-1.5 sm:pr-1.5">
-          <div className="flex min-w-0 items-center gap-1 sm:gap-1.5">{toolbar}</div>
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1 pr-1 sm:gap-1.5 sm:pr-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1 sm:gap-1.5">{toolbar}</div>
           {toolbarTrailing}
-          <InputGroupButton type="submit" variant="default" size="icon-sm" disabled={!canSubmit} aria-label="发送" title="发送">
+          <InputGroupButton type="submit" variant="default" size="icon-sm" className="shrink-0" disabled={!canSubmit} aria-label="发送" title="发送">
             <ArrowUp />
           </InputGroupButton>
         </div>

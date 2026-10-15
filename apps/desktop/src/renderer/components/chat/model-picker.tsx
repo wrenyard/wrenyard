@@ -104,8 +104,8 @@ function ModelOptionContent({ option, compact = false }: { option: ModelOption; 
   };
 
   return (
-    <span className={compact ? 'flex min-w-0 flex-1 items-center gap-2' : 'flex min-w-0 flex-1 items-center gap-1.5'}>
-      <span className="min-w-0 truncate">{option.label}</span>
+    <span className={compact ? 'flex min-w-0 max-w-full flex-1 flex-wrap items-center gap-2' : 'flex min-w-0 flex-1 items-center gap-1.5'}>
+      <span className={compact ? 'min-w-0 max-w-full whitespace-normal [overflow-wrap:anywhere]' : 'min-w-0 truncate'}>{option.label}</span>
       {speed && slot(speed, speed.kind, 'flex shrink-0 items-center gap-1')}
       {!compact && free && slot(free, 'free', 'flex w-3.5 shrink-0 items-center justify-center')}
       {!compact && quota && slot(quota, 'quota', 'flex w-3.5 shrink-0 items-center justify-center')}
@@ -239,7 +239,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
         render={
           <InputGroupButton
             variant="ghost"
-            className={className}
+            className={`h-auto min-h-8 max-w-full min-w-0 whitespace-normal py-1${className ? ` ${className}` : ''}`}
             disabled={disabled}
             aria-label={selected === null ? placeholder : `${selected.label}，思考强度：${effortLabel}`}
           />
@@ -248,7 +248,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
         {selected === null ? (
           placeholder
         ) : (
-          <span className="flex min-w-0 items-center gap-2">
+          <span className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
             <ModelOptionContent option={selected} compact />
             <span className="shrink-0 text-xs text-muted-foreground" aria-hidden="true">{effortLabel}</span>
           </span>

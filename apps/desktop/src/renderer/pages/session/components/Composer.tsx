@@ -332,15 +332,16 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         onPaste={handlePaste}
         toolbar={
           <>
-            {/* Capped so the model name and its effort indicator still fit beside
-                the send button inside a 300px-wide mini card. */}
+            {/* Bounded only by the row width so a long model name can use it and
+                wrap instead of truncating; the toolbar wraps to the next row
+                when a narrow card runs out of room. */}
             <ModelPicker
               models={options}
               value={modelId}
               effort={effort}
               onChange={selectModel}
               disabled={models.length === 0}
-              className="min-w-0 max-w-28 sm:max-w-40"
+              className="min-w-0 max-w-full"
             />
             {exceeded && (
               <span className="flex items-center gap-1 text-xs text-destructive" role="status">
