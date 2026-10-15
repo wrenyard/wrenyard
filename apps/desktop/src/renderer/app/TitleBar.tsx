@@ -198,10 +198,7 @@ export function TitleBar() {
         ))}
       </div>
 
-      <div className={cn('flex shrink-0 items-center gap-1 px-2', DRAG, SLOT_NO_DRAG)}>
-        <TitleBarButton label="迷你模式" tooltip="迷你模式" onClick={() => openMiniCard(getCurrentSession())}>
-          <PictureInPicture2 />
-        </TitleBarButton>
+      <div className={cn('flex shrink-0 items-center gap-2 px-2', DRAG, SLOT_NO_DRAG)}>
         {TITLE_BAR_PAGES.map((id) => (
           <div
             key={id}
@@ -210,6 +207,9 @@ export function TitleBar() {
             ref={(element) => registerTitleBarSlot(id, 'auxiliary', element)}
           />
         ))}
+        <TitleBarButton label="迷你模式" tooltip="迷你模式" onClick={() => openMiniCard(getCurrentSession())}>
+          <PictureInPicture2 />
+        </TitleBarButton>
       </div>
     </header>
   );
