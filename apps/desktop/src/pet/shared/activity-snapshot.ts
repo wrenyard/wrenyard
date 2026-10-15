@@ -103,6 +103,7 @@ export interface ActivityTaskPresence {
   taskLabel?: string;
   project?: string;
   worktree?: boolean;
+  requestedAgentRuntime?: string;
   resolvedProfile?: string;
   taskgraphId?: string;
   nodeId?: string;
@@ -410,6 +411,7 @@ export function deriveActivityPresence(snapshot: ActivitySnapshotV1, stale: bool
     ...(task.task_label !== undefined ? { taskLabel: task.task_label } : {}),
     ...(task.project !== undefined ? { project: task.project } : {}),
     ...(task.worktree !== undefined ? { worktree: task.worktree } : {}),
+    ...(task.requested_agent_runtime !== undefined ? { requestedAgentRuntime: task.requested_agent_runtime } : {}),
     ...(task.resolved_profile !== undefined ? { resolvedProfile: task.resolved_profile } : {}),
     ...(task.taskgraph_id !== undefined ? { taskgraphId: task.taskgraph_id } : {}),
     ...(task.node_id !== undefined ? { nodeId: task.node_id } : {}),

@@ -2,131 +2,286 @@ import type {
   Appearance,
   WorkerClient,
   WorkerSkin,
-  WorkerSkinColors,
   WorkerSkinId,
 } from '../../shared/snapshot';
 
-// ─── Role categories ──────────────────────────────────────────────────
+// ─── Skin catalog ─────────────────────────────────────────────────────
 //
-//   official = classic-codebuddy, classic-codex, classic-claude
-//   classic  = classic-voxel-miner
-//   original = the nine generated per-run-themed skins
+// One table holds every worker skin. Categories:
+//   official = native client mascots (one or more per client)
+//   classic  = video-game character themes
+//   original = Pet-created characters (the Lamplight crew)
 //
-// For each Foreman task/run, exactly one candidate list is constructed:
-// one official role (selected from client_family, with profile regex as a
-// legacy fallback when client_family is missing/unknown), all classic roles,
-// and all original roles — each appearing exactly once. A stable hash seed
-// picks one candidate uniformly.
+// Selection first picks a category (native mascot vs. everything else) and
+// only then a skin inside that category, so changing a pool's size never
+// dilutes the 80/20 native share.
 
-type OfficialSkinId = 'classic-codebuddy' | 'classic-codex' | 'classic-claude';
-type ClassicSkinId = 'classic-voxel-miner';
-type OriginalSkinId = Exclude<WorkerSkinId, OfficialSkinId | ClassicSkinId>;
+/**
+ * Catalog row: a worker skin plus the client it mascots (official only).
+ */
+export interface WorkerSkinCatalogEntry extends WorkerSkin {
+  client?: WorkerClient;
+}
 
-export const OFFICIAL_SKIN_IDS: readonly OfficialSkinId[] = [
-  'classic-codebuddy',
-  'classic-codex',
-  'classic-claude',
-];
-
-export const CLASSIC_SKIN_IDS: readonly ClassicSkinId[] = ['classic-voxel-miner'];
-
-export const ORIGINAL_SKIN_IDS: readonly OriginalSkinId[] = [
-  'red-jumper',
-  'green-quest',
-  'blue-dash',
-  'block-miner',
-  'space-bounty',
-  'arcade-ghost',
-  'rune-mage',
-  'shadow-ninja',
-  'slime-king',
-];
-
-const ORIGINAL_SKIN_NAMES: Record<OriginalSkinId, string> = {
-  'red-jumper': 'Carpenter',
-  'green-quest': 'Gardener',
-  'blue-dash': 'Runner',
-  'block-miner': 'Mason',
-  'space-bounty': 'Welder',
-  'arcade-ghost': 'Night Watch',
-  'rune-mage': 'Surveyor',
-  'shadow-ninja': 'Roofer',
-  'slime-king': 'Foreman',
-};
-
-// Fixed authored color sets for every original role using the Lamplight
-// workshop palette: primary = role color, accent = lamp #FFC94D, tool = ink #2E2018.
-const ORIGINAL_SKIN_COLORS: Record<OriginalSkinId, WorkerSkinColors> = {
-  'red-jumper': { primary: '#4A6FA5', accent: '#FFC94D', tool: '#2E2018' },
-  'green-quest': { primary: '#B5653A', accent: '#FFC94D', tool: '#2E2018' },
-  'blue-dash': { primary: '#7BA05B', accent: '#FFC94D', tool: '#2E2018' },
-  'block-miner': { primary: '#C99A3C', accent: '#FFC94D', tool: '#2E2018' },
-  'space-bounty': { primary: '#7D5A7A', accent: '#FFC94D', tool: '#2E2018' },
-  'arcade-ghost': { primary: '#5A6B7A', accent: '#FFC94D', tool: '#2E2018' },
-  'rune-mage': { primary: '#2F8F83', accent: '#FFC94D', tool: '#2E2018' },
-  'shadow-ninja': { primary: '#A8523F', accent: '#FFC94D', tool: '#2E2018' },
-  'slime-king': { primary: '#8A8A4A', accent: '#FFC94D', tool: '#2E2018' },
-};
-
-const OFFICIAL_SKINS: Record<OfficialSkinId, WorkerSkin> = {
-  'classic-codebuddy': {
+export const SKIN_CATALOG: readonly WorkerSkinCatalogEntry[] = [
+  // official — native client mascots
+  {
     kind: 'official',
     id: 'classic-codebuddy',
-    name: 'Classic CodeBuddy',
+    name: 'CodeBuddy',
     colors: { primary: '#9AA3AA', accent: '#44D7B6', tool: '#334155' },
+    client: 'codebuddy',
   },
-  'classic-codex': {
+  {
+    kind: 'official',
+    id: 'crew-codebuddy',
+    name: 'CodeBuddy Crew',
+    colors: { primary: '#9AA3AA', accent: '#44D7B6', tool: '#334155' },
+    client: 'codebuddy',
+  },
+  {
     kind: 'official',
     id: 'classic-codex',
-    name: 'Classic Codex',
+    name: 'Codex',
     colors: { primary: '#111827', accent: '#38BDF8', tool: '#1B2440' },
+    client: 'codex',
   },
-  'classic-claude': {
+  {
+    kind: 'official',
+    id: 'crew-codex',
+    name: 'Codex Crew',
+    colors: { primary: '#111827', accent: '#38BDF8', tool: '#1B2440' },
+    client: 'codex',
+  },
+  {
     kind: 'official',
     id: 'classic-claude',
-    name: 'Classic Claude',
+    name: 'Claude Crab',
     colors: { primary: '#D97757', accent: '#F6C7A9', tool: '#4B2C24' },
+    client: 'claude',
   },
-};
+  {
+    kind: 'official',
+    id: 'crew-claude',
+    name: 'Claude Crew',
+    colors: { primary: '#D97757', accent: '#F6C7A9', tool: '#4B2C24' },
+    client: 'claude',
+  },
+  {
+    kind: 'official',
+    id: 'native-dsh-fish',
+    name: 'DeepSeek Big Fish',
+    colors: { primary: '#4D6BFE', accent: '#F7EFD8', tool: '#2E3FA8' },
+    client: 'dsh',
+  },
 
-const CLASSIC_SKINS: Record<ClassicSkinId, WorkerSkin> = {
-  'classic-voxel-miner': {
+  // classic — video-game character themes
+  {
     kind: 'classic',
     id: 'classic-voxel-miner',
-    name: 'Classic Voxel Miner',
+    name: 'Voxel Miner',
     colors: { primary: '#2A93B5', accent: '#41DDE8', tool: '#118A9A' },
   },
-};
+  {
+    kind: 'classic',
+    id: 'red-jumper',
+    name: 'Red Jumper',
+    colors: { primary: '#D33A2C', accent: '#2F5DA8', tool: '#FFC94D' },
+  },
+  {
+    kind: 'classic',
+    id: 'green-quest',
+    name: 'Green Quest',
+    colors: { primary: '#3E9B4F', accent: '#E8C36A', tool: '#A9B4BC' },
+  },
+  {
+    kind: 'classic',
+    id: 'blue-dash',
+    name: 'Blue Dash',
+    colors: { primary: '#2F6FD6', accent: '#E2483D', tool: '#F2D2A9' },
+  },
+  {
+    kind: 'classic',
+    id: 'block-miner',
+    name: 'Block Miner',
+    colors: { primary: '#8A5A2E', accent: '#FFC94D', tool: '#5A6B7A' },
+  },
+  {
+    kind: 'classic',
+    id: 'space-bounty',
+    name: 'Space Bounty',
+    colors: { primary: '#E07A2E', accent: '#7BD389', tool: '#C44E3A' },
+  },
+  {
+    kind: 'classic',
+    id: 'arcade-ghost',
+    name: 'Arcade Ghost',
+    colors: { primary: '#E5484D', accent: '#F7EFD8', tool: '#2F5DA8' },
+  },
+  {
+    kind: 'classic',
+    id: 'rune-mage',
+    name: 'Rune Mage',
+    colors: { primary: '#5B4BA8', accent: '#FFC94D', tool: '#8A5A2E' },
+  },
+  {
+    kind: 'classic',
+    id: 'shadow-ninja',
+    name: 'Shadow Ninja',
+    colors: { primary: '#2B2D42', accent: '#C44E3A', tool: '#A9B4BC' },
+  },
+  {
+    kind: 'classic',
+    id: 'slime-king',
+    name: 'Slime King',
+    colors: { primary: '#4A90D9', accent: '#FFC94D', tool: '#C44E3A' },
+  },
 
-// Legacy profile-regex fallback for the official role. Used only when
-// client_family is missing or unknown.
-const OFFICIAL_PROFILE_SKINS: Array<{ pattern: RegExp; id: OfficialSkinId }> = [
-  { pattern: /codex(?:-mini|-lite|-high|-xhigh|-spark)?/i, id: 'classic-codex' },
-  { pattern: /claude|anthropic/i, id: 'classic-claude' },
-  { pattern: /(?:^|[^a-z0-9])(?:steve|voxel-miner|classic-voxel-miner)(?:$|[^a-z0-9])/i, id: 'classic-codebuddy' },
-  { pattern: /(?:^|[^a-z0-9])(?:cb-dsf|cb-ds|ccb-ds|ccb-dsf|ccb-hy|ccg|ccds|codebuddy)(?:$|[^a-z0-9])/i, id: 'classic-codebuddy' },
+  // original — the Lamplight crew (b10e22a8 drawings). Colors are inherited
+  // from the pre-existing entries those drawings were authored against.
+  {
+    kind: 'original',
+    id: 'crew-headlamp',
+    name: 'Headlamp Worker',
+    colors: { primary: '#2A93B5', accent: '#41DDE8', tool: '#118A9A' },
+  },
+  {
+    kind: 'original',
+    id: 'crew-carpenter',
+    name: 'Carpenter',
+    colors: { primary: '#4A6FA5', accent: '#FFC94D', tool: '#2E2018' },
+  },
+  {
+    kind: 'original',
+    id: 'crew-gardener',
+    name: 'Gardener',
+    colors: { primary: '#B5653A', accent: '#FFC94D', tool: '#2E2018' },
+  },
+  {
+    kind: 'original',
+    id: 'crew-runner',
+    name: 'Runner',
+    colors: { primary: '#7BA05B', accent: '#FFC94D', tool: '#2E2018' },
+  },
+  {
+    kind: 'original',
+    id: 'crew-mason',
+    name: 'Mason',
+    colors: { primary: '#C99A3C', accent: '#FFC94D', tool: '#2E2018' },
+  },
+  {
+    kind: 'original',
+    id: 'crew-welder',
+    name: 'Welder',
+    colors: { primary: '#7D5A7A', accent: '#FFC94D', tool: '#2E2018' },
+  },
+  {
+    kind: 'original',
+    id: 'crew-night-watch',
+    name: 'Night Watch',
+    colors: { primary: '#5A6B7A', accent: '#FFC94D', tool: '#2E2018' },
+  },
+  {
+    kind: 'original',
+    id: 'crew-surveyor',
+    name: 'Surveyor',
+    colors: { primary: '#2F8F83', accent: '#FFC94D', tool: '#2E2018' },
+  },
+  {
+    kind: 'original',
+    id: 'crew-roofer',
+    name: 'Roofer',
+    colors: { primary: '#A8523F', accent: '#FFC94D', tool: '#2E2018' },
+  },
+  {
+    kind: 'original',
+    id: 'crew-foreman',
+    name: 'Foreman',
+    colors: { primary: '#8A8A4A', accent: '#FFC94D', tool: '#2E2018' },
+  },
 ];
 
-function officialSkinForClient(client: WorkerClient): OfficialSkinId | null {
-  if (client === 'codebuddy') return 'classic-codebuddy';
-  if (client === 'codex') return 'classic-codex';
-  if (client === 'claude') return 'classic-claude';
-  return null;
+const SKIN_BY_ID = new Map<WorkerSkinId, WorkerSkinCatalogEntry>(
+  SKIN_CATALOG.map((skin) => [skin.id, skin] as const),
+);
+
+export const OFFICIAL_SKIN_IDS: readonly WorkerSkinId[] = SKIN_CATALOG.filter(
+  (skin) => skin.kind === 'official',
+).map((skin) => skin.id);
+
+export const CLASSIC_SKIN_IDS: readonly WorkerSkinId[] = SKIN_CATALOG.filter(
+  (skin) => skin.kind === 'classic',
+).map((skin) => skin.id);
+
+export const ORIGINAL_SKIN_IDS: readonly WorkerSkinId[] = SKIN_CATALOG.filter(
+  (skin) => skin.kind === 'original',
+).map((skin) => skin.id);
+
+/** Catalog lookup by skin id. */
+export function skinById(id: WorkerSkinId): WorkerSkinCatalogEntry | undefined {
+  return SKIN_BY_ID.get(id);
 }
 
-function officialSkinForProfile(profile: string): OfficialSkinId | null {
-  for (const { pattern, id } of OFFICIAL_PROFILE_SKINS) {
-    if (pattern.test(profile)) return id;
-  }
-  return null;
+/** Official skins that mascot the given client ("unknown" has none). */
+export function nativeSkinIds(client: WorkerClient): WorkerSkinId[] {
+  if (client === 'unknown') return [];
+  return SKIN_CATALOG.filter((skin) => skin.client === client).map((skin) => skin.id);
 }
 
+/** Every non-official skin: all classic and all original roles. */
+export function nonNativeSkinIds(): WorkerSkinId[] {
+  return SKIN_CATALOG.filter((skin) => skin.kind !== 'official').map((skin) => skin.id);
+}
+
+// ─── Stable selection ─────────────────────────────────────────────────
+
+/** Native category share, in basis points (8000 = 80%). */
+export const NATIVE_SHARE_BASIS_POINTS = 8000;
+
+const FALLBACK_SKIN_ID: WorkerSkinId = 'crew-runner';
+
+/**
+ * Stable unsigned 32-bit hash: FNV-1a over the UTF-16 code units followed by
+ * the murmur3 `fmix32` finalizer for good bit distribution.
+ */
 function stableHash(key: string): number {
-  let hash = 5381;
+  let hash = 0x811c9dc5;
   for (let i = 0; i < key.length; i++) {
-    hash = ((hash << 5) + hash + key.charCodeAt(i)) | 0;
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
   }
-  return Math.abs(hash);
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x85ebca6b);
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 0xc2b2ae35);
+  hash ^= hash >>> 16;
+  return hash >>> 0;
+}
+
+/**
+ * Pick a skin from a native pool and a non-native pool.
+ *
+ * The category is chosen first: when both pools are non-empty the native pool
+ * wins `NATIVE_SHARE_BASIS_POINTS` out of 10000, so pool sizes never dilute the
+ * split. A single non-empty pool is used directly; two empty pools return null.
+ */
+export function pickSkinId(
+  nativePool: readonly WorkerSkinId[],
+  nonNativePool: readonly WorkerSkinId[],
+  seedKey: string,
+): WorkerSkinId | null {
+  if (nativePool.length === 0 && nonNativePool.length === 0) return null;
+
+  let pool: readonly WorkerSkinId[];
+  if (nativePool.length === 0) {
+    pool = nonNativePool;
+  } else if (nonNativePool.length === 0) {
+    pool = nativePool;
+  } else {
+    const native = stableHash(`${seedKey}:category`) % 10000 < NATIVE_SHARE_BASIS_POINTS;
+    pool = native ? nativePool : nonNativePool;
+  }
+  return pool[stableHash(`${seedKey}:skin`) % pool.length];
 }
 
 function compactProfileLabel(profile: string): string {
@@ -134,46 +289,13 @@ function compactProfileLabel(profile: string): string {
   return trimmed.length > 0 ? trimmed : 'unknown';
 }
 
-function originalSkin(id: OriginalSkinId, _seedKey: string): WorkerSkin {
-  return {
-    kind: 'original',
-    id,
-    name: ORIGINAL_SKIN_NAMES[id],
-    colors: ORIGINAL_SKIN_COLORS[id],
-  };
-}
-
 /**
- * Build the role candidate list for a single Foreman task/run:
- * exactly one official role (from client_family, falling back to profile
- * regex when the family is unknown), all classic roles, and all original
- * roles — each appearing exactly once.
- */
-export function roleCandidates(client: WorkerClient, profile: string): WorkerSkinId[] {
-  const officialId = officialSkinForClient(client) ?? officialSkinForProfile(profile);
-  const candidates: WorkerSkinId[] = [];
-  if (officialId) candidates.push(officialId);
-  candidates.push(...CLASSIC_SKIN_IDS);
-  candidates.push(...ORIGINAL_SKIN_IDS);
-  return candidates;
-}
-
-function resolveSkin(client: WorkerClient, profile: string, seedKey: string): WorkerSkin {
-  const candidates = roleCandidates(client, profile);
-  const id = candidates[stableHash(`${seedKey}:role`) % candidates.length];
-  if (id in OFFICIAL_SKINS) return OFFICIAL_SKINS[id as OfficialSkinId];
-  if (id in CLASSIC_SKINS) return CLASSIC_SKINS[id as ClassicSkinId];
-  return originalSkin(id as OriginalSkinId, seedKey);
-}
-
-/**
- * Generate appearance from profile, worker identity, and client family.
+ * Generate appearance from profile, worker identity, and client.
  *
  * `foremanTaskRunID` (when present) is preferred as the per-run seed so the
- * original-role theme follows the task run; otherwise the worker identity
- * key is used. `client` (already classified) selects the official role
- * candidate; profile regex is a legacy fallback only when the family is
- * unknown.
+ * selected skin follows the task run; otherwise the worker identity key is
+ * used. The client picks the native mascot pool; when neither pool yields a
+ * skin the crew-runner fallback is used.
  */
 export function getAppearance(
   profile: string,
@@ -182,9 +304,11 @@ export function getAppearance(
   foremanTaskRunID?: string,
 ): Appearance {
   const seedKey = foremanTaskRunID ?? workerIdentityKey;
+  const id = pickSkinId(nativeSkinIds(client), nonNativeSkinIds(), seedKey) ?? FALLBACK_SKIN_ID;
+  const skin = skinById(id) ?? skinById(FALLBACK_SKIN_ID)!;
   return {
     profile,
     profileLabel: compactProfileLabel(profile),
-    skin: resolveSkin(client, profile, seedKey),
+    skin,
   };
 }

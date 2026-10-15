@@ -18,7 +18,21 @@ export type WorkerSkinId =
   | 'arcade-ghost'
   | 'rune-mage'
   | 'shadow-ninja'
-  | 'slime-king';
+  | 'slime-king'
+  | 'native-dsh-fish'
+  | 'crew-codebuddy'
+  | 'crew-codex'
+  | 'crew-claude'
+  | 'crew-headlamp'
+  | 'crew-carpenter'
+  | 'crew-gardener'
+  | 'crew-runner'
+  | 'crew-mason'
+  | 'crew-welder'
+  | 'crew-night-watch'
+  | 'crew-surveyor'
+  | 'crew-roofer'
+  | 'crew-foreman';
 
 export interface WorkerSkinColors {
   primary: string;
@@ -28,9 +42,9 @@ export interface WorkerSkinColors {
 
 /**
  * Role category for a worker skin.
- * - `official`: branded mascot for a supported client family (codebuddy/codex/claude).
- * - `classic`: the legacy classic-voxel-miner skin.
- * - `original`: the nine generated per-run-themed skins.
+ * - `official`: native client mascots (one or more per client).
+ * - `classic`: video-game character themes.
+ * - `original`: Pet-created characters (the Lamplight crew).
  */
 export type WorkerSkinKind = 'official' | 'classic' | 'original';
 
@@ -47,7 +61,7 @@ export interface Appearance {
   skin: WorkerSkin;
 }
 
-export type WorkerClient = 'claude' | 'codebuddy' | 'codex' | 'unknown';
+export type WorkerClient = 'claude' | 'codebuddy' | 'codex' | 'dsh' | 'unknown';
 
 export interface SiteSnapshot {
   workers: import('../../main/daemon-client/agent-types').WorkerSnapshot[];

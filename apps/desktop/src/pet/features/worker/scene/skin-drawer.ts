@@ -1,11 +1,17 @@
 /**
  * Live-only worker skin pixel drawing.
  *
- * All 13 production skins share one crew body (planted legs and boots, a
- * uniform torso, arms and a head) in the Lamplight workshop palette. Each
- * role adds its own headgear, uniform detail and hand tool; the three
- * official client mascots swap the head for their own and keep the crew
- * uniform. Drawing targets a PixelBuilder (src/render): `px` maps to filled
+ * The thirteen Lamplight crew skins share one crew body (planted legs and
+ * boots, a uniform torso, arms and a head) in the Lamplight workshop palette.
+ * Each crew role adds its own headgear, uniform detail and hand tool; the
+ * three crew client outfits swap the head for their own and keep the crew
+ * uniform.
+ *
+ * The native client mascots and the video-game character skins live in
+ * ./native-skins.ts and ./game-skins.ts and are reached through the same
+ * dispatcher. The shared helpers they need are exported from this module.
+ *
+ * Drawing targets a PixelBuilder (src/render): `px` maps to filled
  * pixel rects and OffsetBuilder applies the sprite's local offset.
  *
  * Local sprite space: the figure stands on row 21 with its ground shadow on
@@ -15,10 +21,28 @@
 import type { Appearance, Phase } from '../../../shared/snapshot';
 import type { PixelBuilder } from '../../../render';
 import { CREW_COLORS, parseColorAlpha, skinPalette, voxelMinerPalette, type SkinPalette } from './palette';
+import {
+  drawNativeClaudeCrab,
+  drawNativeCodeBuddy,
+  drawNativeCodex,
+  drawNativeDshFish,
+} from './native-skins';
+import {
+  drawGameArcadeGhost,
+  drawGameBlockMiner,
+  drawGameBlueDash,
+  drawGameGreenQuest,
+  drawGameRedJumper,
+  drawGameRuneMage,
+  drawGameShadowNinja,
+  drawGameSlimeKing,
+  drawGameSpaceBounty,
+  drawGameVoxelMiner,
+} from './game-skins';
 
 // ─── Pixel-builder bridge ──────────────────────────────────────────────
 
-interface RectSink {
+export interface RectSink {
   rect(x: number, y: number, w: number, h: number, color: string, alpha?: number): void;
   clearRect(x: number, y: number, w: number, h: number): void;
 }
@@ -41,7 +65,7 @@ class OffsetBuilder implements RectSink {
 }
 
 /** Paint a filled pixel rect, separating color and alpha from rgba strings. */
-function px(b: RectSink, x: number, y: number, width: number, height: number, color: string): void {
+export function px(b: RectSink, x: number, y: number, width: number, height: number, color: string): void {
   const { color: hex, alpha } = parseColorAlpha(color);
   b.rect(Math.round(x), Math.round(y), Math.round(width), Math.round(height), hex, alpha);
 }
@@ -66,7 +90,7 @@ export function drawZzz(b: RectSink, x: number, y: number, color: string): void 
 }
 
 /** Pose facts the role layers draw against. */
-interface Pose {
+export interface Pose {
   phase: Phase;
   mood: Mood;
   /** Upper-body drop: 1 while dozing, 2 when dejected. */
@@ -79,7 +103,7 @@ interface Pose {
 type HeadPainter = (b: RectSink, y: number, mood: Mood) => void;
 
 /** Eyes, cheeks and mouth centred on the head; eyes start on row `ey`. */
-function drawFace(b: RectSink, ey: number, mood: Mood, eye: string, mouth: string, blush?: string): void {
+export function drawFace(b: RectSink, ey: number, mood: Mood, eye: string, mouth: string, blush?: string): void {
   if (mood === 'sleep') {
     px(b, 9, ey + 1, 2, 1, eye);
     px(b, 13, ey + 1, 2, 1, eye);
@@ -119,7 +143,7 @@ function humanHead(c: SkinPalette): HeadPainter {
 }
 
 /** Shared crew body. Returns where the role's tool is gripped. */
-function drawCrewBody(
+export function drawCrewBody(
   b: RectSink,
   c: SkinPalette,
   phase: Phase,
@@ -178,13 +202,13 @@ function hardHat(b: RectSink, c: SkinPalette, y: number, fill: string, shade: st
   px(b, 9, y + 1, 1, 2, shine);
 }
 
-function twinkle(b: RectSink, x: number, y: number, color: string): void {
+export function twinkle(b: RectSink, x: number, y: number, color: string): void {
   px(b, x, y - 1, 1, 3, color);
   px(b, x - 1, y, 3, 1, color);
 }
 
 /** Sleep Zs and celebration twinkles shared by every skin. */
-function drawPhaseFx(b: RectSink, c: SkinPalette, p: Pose, frame: number): void {
+export function drawPhaseFx(b: RectSink, c: SkinPalette, p: Pose, frame: number): void {
   const f = frame % 2;
   if (p.phase === 'sleeping') {
     drawZzz(b, 20, -1 + f, c.outline);
@@ -210,27 +234,80 @@ export function drawPixelMascot(
   const ctx = new OffsetBuilder(b, 8, 7 + activityOffset);
 
   switch (appearance.skin.id) {
-    case 'classic-codebuddy':
-      drawCodeBuddyMascot(ctx, appearance, phase, frame, workArmShift);
-      break;
-    case 'classic-codex':
-      drawCodexMascot(ctx, appearance, phase, frame, workArmShift);
-      break;
-    case 'classic-claude':
-      drawClaudeMascot(ctx, appearance, phase, frame, workArmShift);
-      break;
-    case 'classic-voxel-miner':
-      drawVoxelMinerMascot(ctx, phase, frame, workArmShift);
-      break;
-    default:
+    // Original Lamplight crew — one drawing per role.
+    case 'crew-codebuddy':
+    case 'crew-codex':
+    case 'crew-claude':
+    case 'crew-headlamp':
+    case 'crew-carpenter':
+    case 'crew-gardener':
+    case 'crew-runner':
+    case 'crew-mason':
+    case 'crew-welder':
+    case 'crew-night-watch':
+    case 'crew-surveyor':
+    case 'crew-roofer':
+    case 'crew-foreman':
       drawGeneratedSkin(ctx, appearance, phase, frame, workArmShift);
       break;
+
+    // Official native client mascots.
+    case 'classic-codebuddy':
+      drawNativeCodeBuddy(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'classic-codex':
+      drawNativeCodex(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'classic-claude':
+      drawNativeClaudeCrab(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'native-dsh-fish':
+      drawNativeDshFish(ctx, appearance, phase, frame, workArmShift);
+      break;
+
+    // Classic video-game character skins.
+    case 'classic-voxel-miner':
+      drawGameVoxelMiner(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'red-jumper':
+      drawGameRedJumper(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'green-quest':
+      drawGameGreenQuest(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'blue-dash':
+      drawGameBlueDash(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'block-miner':
+      drawGameBlockMiner(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'space-bounty':
+      drawGameSpaceBounty(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'arcade-ghost':
+      drawGameArcadeGhost(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'rune-mage':
+      drawGameRuneMage(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'shadow-ninja':
+      drawGameShadowNinja(ctx, appearance, phase, frame, workArmShift);
+      break;
+    case 'slime-king':
+      drawGameSlimeKing(ctx, appearance, phase, frame, workArmShift);
+      break;
+
+    default: {
+      const never: never = appearance.skin.id;
+      void never;
+      break;
+    }
   }
 }
 
-// ─── Official client mascots in crew uniform ───────────────────────────
+// ─── Crew client outfits ───────────────────────────────────────────────
 
-export function drawCodeBuddyMascot(
+export function drawCrewCodeBuddy(
   b: RectSink,
   appearance: Appearance,
   phase: Phase,
@@ -255,7 +332,7 @@ export function drawCodeBuddyMascot(
   drawPhaseFx(b, c, p, frame);
 }
 
-export function drawCodexMascot(
+export function drawCrewCodex(
   b: RectSink,
   appearance: Appearance,
   phase: Phase,
@@ -278,7 +355,7 @@ export function drawCodexMascot(
   drawPhaseFx(b, c, p, frame);
 }
 
-export function drawClaudeMascot(
+export function drawCrewClaude(
   b: RectSink,
   appearance: Appearance,
   phase: Phase,
@@ -300,9 +377,9 @@ export function drawClaudeMascot(
   drawPhaseFx(b, c, p, frame);
 }
 
-// ─── Classic headlamp miner ────────────────────────────────────────────
+// ─── Crew headlamp worker ──────────────────────────────────────────────
 
-export function drawVoxelMinerMascot(
+export function drawCrewHeadlamp(
   b: RectSink,
   phase: Phase,
   frame: number,
@@ -338,7 +415,7 @@ export function drawVoxelMinerMascot(
   drawPhaseFx(b, c, p, frame);
 }
 
-// ─── Original crew roles ───────────────────────────────────────────────
+// ─── Crew role dispatcher ──────────────────────────────────────────────
 
 export function drawGeneratedSkin(
   b: RectSink,
@@ -349,38 +426,50 @@ export function drawGeneratedSkin(
 ): void {
   const c = skinPalette(appearance);
   switch (appearance.skin.id) {
-    case 'red-jumper':
-      drawRedJumper(b, c, phase, frame, workArmShift);
+    case 'crew-codebuddy':
+      drawCrewCodeBuddy(b, appearance, phase, frame, workArmShift);
       break;
-    case 'green-quest':
-      drawGreenQuest(b, c, phase, frame, workArmShift);
+    case 'crew-codex':
+      drawCrewCodex(b, appearance, phase, frame, workArmShift);
       break;
-    case 'blue-dash':
-      drawBlueDash(b, c, phase, frame, workArmShift);
+    case 'crew-claude':
+      drawCrewClaude(b, appearance, phase, frame, workArmShift);
       break;
-    case 'block-miner':
-      drawBlockMiner(b, c, phase, frame, workArmShift);
+    case 'crew-headlamp':
+      drawCrewHeadlamp(b, phase, frame, workArmShift);
       break;
-    case 'space-bounty':
-      drawSpaceBounty(b, c, phase, frame, workArmShift);
+    case 'crew-carpenter':
+      drawCrewCarpenter(b, c, phase, frame, workArmShift);
       break;
-    case 'arcade-ghost':
-      drawArcadeGhost(b, c, phase, frame, workArmShift);
+    case 'crew-gardener':
+      drawCrewGardener(b, c, phase, frame, workArmShift);
       break;
-    case 'rune-mage':
-      drawRuneMage(b, c, phase, frame, workArmShift);
+    case 'crew-runner':
+      drawCrewRunner(b, c, phase, frame, workArmShift);
       break;
-    case 'shadow-ninja':
-      drawShadowNinja(b, c, phase, frame, workArmShift);
+    case 'crew-mason':
+      drawCrewMason(b, c, phase, frame, workArmShift);
       break;
-    case 'slime-king':
-      drawSlimeKing(b, c, phase, frame, workArmShift);
+    case 'crew-welder':
+      drawCrewWelder(b, c, phase, frame, workArmShift);
+      break;
+    case 'crew-night-watch':
+      drawCrewNightWatch(b, c, phase, frame, workArmShift);
+      break;
+    case 'crew-surveyor':
+      drawCrewSurveyor(b, c, phase, frame, workArmShift);
+      break;
+    case 'crew-roofer':
+      drawCrewRoofer(b, c, phase, frame, workArmShift);
+      break;
+    case 'crew-foreman':
+      drawCrewForeman(b, c, phase, frame, workArmShift);
       break;
   }
 }
 
 /** Carpenter: lamp hard hat, bib overalls with tool belt, claw hammer. */
-export function drawRedJumper(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+export function drawCrewCarpenter(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
   const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
   const { y, hx: x, hy } = p;
   hardHat(b, c, y, c.lamp, c.lampDeep, c.lampLight);
@@ -394,7 +483,7 @@ export function drawRedJumper(b: RectSink, c: SkinPalette, phase: Phase, frame: 
 }
 
 /** Gardener: straw sun hat with a moss band, apron, shovel. */
-export function drawGreenQuest(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+export function drawCrewGardener(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
   const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
   const { y, hx: x, hy } = p;
   px(b, 8, y + 1, 8, 1, c.outline);
@@ -413,7 +502,7 @@ export function drawGreenQuest(b: RectSink, c: SkinPalette, phase: Phase, frame:
 }
 
 /** Runner: striped cap, race bib, sealed envelope, speed lines. */
-export function drawBlueDash(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+export function drawCrewRunner(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
   const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
   const { y, hx: x, hy } = p;
   px(b, 8, y + 1, 8, 1, c.outline);
@@ -436,7 +525,7 @@ export function drawBlueDash(b: RectSink, c: SkinPalette, phase: Phase, frame: n
 }
 
 /** Mason: paper hard hat, reflective stripe, trowel, brick at the feet. */
-export function drawBlockMiner(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+export function drawCrewMason(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
   const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
   const { y, hx: x, hy } = p;
   hardHat(b, c, y, c.paper, c.paperShade, c.white);
@@ -450,7 +539,7 @@ export function drawBlockMiner(b: RectSink, c: SkinPalette, phase: Phase, frame:
 }
 
 /** Welder: flip-up mask, leather apron, torch with sparks. */
-export function drawSpaceBounty(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+export function drawCrewWelder(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
   const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
   const { y, hx: x, hy } = p;
   px(b, 7, y, 10, 5, c.outline);
@@ -472,7 +561,7 @@ export function drawSpaceBounty(b: RectSink, c: SkinPalette, phase: Phase, frame
 }
 
 /** Night Watch: knit cap with a lamp pompom, coat badge, lantern. */
-export function drawArcadeGhost(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift = 0): void {
+export function drawCrewNightWatch(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift = 0): void {
   const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
   const { y, hx: x, hy } = p;
   px(b, 10, y - 2, 4, 3, c.outline);
@@ -489,7 +578,7 @@ export function drawArcadeGhost(b: RectSink, c: SkinPalette, phase: Phase, frame
 }
 
 /** Surveyor: tan bucket hat, lamp-striped vest, striped ranging pole. */
-export function drawRuneMage(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+export function drawCrewSurveyor(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
   const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
   const { y, hx: x, hy } = p;
   px(b, 8, y + 1, 8, 1, c.outline);
@@ -510,7 +599,7 @@ export function drawRuneMage(b: RectSink, c: SkinPalette, phase: Phase, frame: n
 }
 
 /** Roofer: dotted bandana, suspenders, stack of roof tiles. */
-export function drawShadowNinja(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+export function drawCrewRoofer(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
   const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
   const { y, hx: x, hy } = p;
   px(b, 4, y + 3, 4, 3, c.outline);
@@ -529,7 +618,7 @@ export function drawShadowNinja(b: RectSink, c: SkinPalette, phase: Phase, frame
 }
 
 /** Foreman: terracotta hard hat, moustache, tie, clipboard. */
-export function drawSlimeKing(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift = 0): void {
+export function drawCrewForeman(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift = 0): void {
   const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
   const { y, hx: x, hy } = p;
   hardHat(b, c, y, c.terracotta, c.mouth, c.blush);

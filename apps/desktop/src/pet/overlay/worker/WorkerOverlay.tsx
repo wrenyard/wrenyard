@@ -280,7 +280,7 @@ export function WorkerOverlay({ appearance, api }: WorkerOverlayProps): ReactEle
                   ? 'pointer-events-auto shadow-sm'
                   : 'pointer-events-auto bg-popover text-popover-foreground shadow-sm'}
               >
-                {workerView.client !== 'unknown' ? <ClientIcon client={workerView.client} /> : null}
+                {workerView.client !== 'unknown' && workerView.client !== 'dsh' ? <ClientIcon client={workerView.client} /> : null}
                 {label.text}
               </Badge>
               {toolVisible ? (

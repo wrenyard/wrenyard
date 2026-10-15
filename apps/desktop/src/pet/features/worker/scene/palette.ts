@@ -9,6 +9,7 @@
  */
 
 import type { Appearance, WorkerSkin, WorkerSkinKind } from '../../../shared/snapshot';
+import { SKIN_CATALOG, skinById } from '../appearance';
 
 function toHex(component: number): string {
   const clamped = Math.max(0, Math.min(255, Math.floor(component)));
@@ -29,37 +30,28 @@ export function lightenColor(hex: string, factor: number): string {
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
-export const VALID_SKIN_IDS: ReadonlySet<WorkerSkin['id']> = new Set<WorkerSkin['id']>([
-  'classic-codebuddy',
-  'classic-codex',
-  'classic-claude',
-  'classic-voxel-miner',
-  'red-jumper',
-  'green-quest',
-  'blue-dash',
-  'block-miner',
-  'space-bounty',
-  'arcade-ghost',
-  'rune-mage',
-  'shadow-ninja',
-  'slime-king',
-]);
+export const VALID_SKIN_IDS: ReadonlySet<WorkerSkin['id']> = new Set<WorkerSkin['id']>(
+  SKIN_CATALOG.map((skin) => skin.id),
+);
 
 export function isWorkerSkinId(value: unknown): value is WorkerSkin['id'] {
   return typeof value === 'string' && VALID_SKIN_IDS.has(value as WorkerSkin['id']);
 }
 
-const FALLBACK_SKIN: WorkerSkin = {
+const SKIN_KIND_BY_ID = new Map<WorkerSkin['id'], WorkerSkinKind>(
+  SKIN_CATALOG.map((skin) => [skin.id, skin.kind] as const),
+);
+
+/** Fallback skin when an id is missing or unknown: the Runner crew skin. */
+const FALLBACK_SKIN: WorkerSkin = skinById('crew-runner') ?? {
   kind: 'original',
-  id: 'blue-dash',
-  name: 'Blue Dash',
-  colors: { primary: '#2F7DE1', accent: '#8FE3FF', tool: '#1F3D6D' },
+  id: 'crew-runner',
+  name: 'Runner',
+  colors: { primary: '#7BA05B', accent: '#FFC94D', tool: '#2E2018' },
 };
 
 function skinKindForId(id: WorkerSkin['id']): WorkerSkinKind {
-  if (id === 'classic-codebuddy' || id === 'classic-codex' || id === 'classic-claude') return 'official';
-  if (id === 'classic-voxel-miner') return 'classic';
-  return 'original';
+  return SKIN_KIND_BY_ID.get(id) ?? 'original';
 }
 
 function normalizeColor(value: unknown, fallback: string): string {

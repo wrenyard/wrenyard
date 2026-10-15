@@ -144,7 +144,7 @@ export class SiteModel {
       } else {
         next.set(key, {
           workerIdentityKey: key,
-          profile: task.resolvedProfile ?? 'foreman',
+          profile: task.resolvedProfile ?? task.requestedAgentRuntime ?? 'foreman',
           phase: 'working',
           phaseSinceMs: now,
           toolCount: 0,
@@ -416,7 +416,7 @@ function metaFromPresence(task: ActivityTaskPresence): SessionMetaData {
   const meta: SessionMetaData = {
     workerIdentityKey: task.taskRunId,
     foremanTaskRunID: task.taskRunId,
-    profile: task.resolvedProfile ?? 'foreman',
+    profile: task.resolvedProfile ?? task.requestedAgentRuntime ?? 'foreman',
     workDir: '',
     isWorktree: task.worktree ?? false,
     status: 'running',
