@@ -33,6 +33,7 @@ import {
   type TaskRoutingTestTasksResult,
   type ScheduleItem,
   type ScheduleState,
+  type BotMethod,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -54,6 +55,7 @@ import { registerSessionExecIpc } from './main/ipc/session-exec.js';
 import { registerStorageUsageIpc } from './main/ipc/storage-usage.js';
 import { registerTasksStatsIpc } from './main/ipc/tasks-stats.js';
 import { registerSchedulesIpc } from './main/ipc/schedules.js';
+import { registerBotIpc } from './main/ipc/bot.js';
 import { registerUpdateDaemonIpc } from './main/ipc/update-daemon.js';
 import { formatShellWindowTitle } from './shell-window-title.js';
 import { TITLE_BAR_HEIGHT, platformWindowChrome } from './window-chrome.js';
@@ -150,6 +152,8 @@ export interface ShellWindowOptions {
   updateSchedule(id: string, state: ScheduleState): Promise<{ schedule: ScheduleItem }>;
   runSchedule(id: string): Promise<{ schedule: ScheduleItem }>;
   deleteSchedule(id: string): Promise<{ deleted: true }>;
+  /** Forward one allowlisted bot method to the daemon; results are unchanged. */
+  requestBot(method: BotMethod, params?: unknown): Promise<unknown>;
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;
   execGet(id: string): Promise<ExecSnapshotDto>;
   execEvents(request: ExecEventsRequest): Promise<ExecEventsResult>;
@@ -386,6 +390,7 @@ export class ShellWindowController {
       registerTasksStatsIpc(ipcMain, deps),
       registerStorageUsageIpc(ipcMain, deps),
       registerSchedulesIpc(ipcMain, deps),
+      registerBotIpc(ipcMain, deps),
       registerUpdateDaemonIpc(ipcMain, deps),
     ];
   }

@@ -258,9 +258,10 @@ export const SHELL_CHANNELS = {
   remoteChanged: 'wrenyard-shell:remote-changed',
   operationComponents: 'wrenyard-shell:operation-components',
   operationComponentAction: 'wrenyard-shell:operation-component-action',
+  botRequest: 'wrenyard-shell:bot-request',
 } as const;
 
-export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'schedules';
+export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'schedules' | 'bot';
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */
@@ -1339,6 +1340,233 @@ export interface ScheduleItem {
 }
 
 /* ------------------------------------------------------------------ */
+/* Bot mode                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Bot mode is the daemon's autonomous dispatcher: one bot polls a user-local
+ * inbox, drives one session and worktree per item, runs acceptance and delivers
+ * one item at a time. The daemon owns lifecycle, persistence and every step;
+ * Desktop only reads the projections below and forwards the allowlisted
+ * `bot.*` calls. These wire types mirror the daemon's bot DTOs exactly.
+ */
+
+/** Lifecycle of one bot. */
+export type BotState = 'running' | 'paused' | 'stopped';
+
+/** `live` performs merge/push/complete/notify; `dryRun` only records them. */
+export type BotMode = 'live' | 'dryRun';
+
+/** One item's lifecycle state, mirrored from the daemon's item machine. */
+export type BotItemState =
+  | 'discovered'
+  | 'verifying'
+  | 'verified'
+  | 'dispatched'
+  | 'in_progress'
+  | 'ready'
+  | 'accepting'
+  | 'accepted'
+  | 'rejected'
+  | 'merging'
+  | 'merged'
+  | 'completing'
+  | 'completed'
+  | 'dismissed'
+  | 'parked'
+  | 'failed'
+  | 'withdrawn';
+
+/** The model a bot dispatched an item's session with. */
+export interface BotModel {
+  provider: string;
+  model: string;
+  reasoningEffort: string;
+}
+
+export interface BotRecord {
+  /** 8 lowercase hex characters. */
+  id: string;
+  workspaceRoot: string;
+  name: string;
+  configPath?: string;
+  configHash?: string;
+  state: BotState;
+  mode: BotMode;
+  lastTickAt?: string;
+  nextPollAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One acceptance check recorded for an item. */
+export interface BotAcceptanceCheck {
+  claim: string;
+  method: string;
+  status: 'verified' | 'failed' | 'not_verified';
+  evidence?: string[];
+  note?: string;
+}
+
+export interface BotItemRecord {
+  id: string;
+  botId: string;
+  sourceId: string;
+  generation: number;
+  fingerprint?: string;
+  title?: string;
+  body?: string;
+  project?: string;
+  class?: string;
+  state: BotItemState;
+  parkedFrom?: BotItemState;
+  question?: string;
+  answer?: string;
+  sessionId?: string;
+  sessionModel?: BotModel;
+  worktreeId?: string;
+  branch?: string;
+  headSha?: string;
+  mergedSha?: string;
+  acceptance?: BotAcceptanceCheck[];
+  counters?: Record<string, number>;
+  error?: string;
+  dryRun: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BotLogRecord {
+  seq: number;
+  botId: string;
+  itemId?: string;
+  at: string;
+  level: string;
+  code?: string;
+  message: string;
+}
+
+/** Last and worst delay between a scheduled tick and its actual start. */
+export interface BotTickLag {
+  last: number;
+  max: number;
+}
+
+export interface BotHealthError {
+  at: string;
+  code: string;
+  message: string;
+}
+
+/** `installed` when the daemon runs from the bundled suite; `source` otherwise. */
+export type BotHostMode = 'installed' | 'source';
+
+/** The device and daemon a bot runs on. */
+export interface BotHealthHost {
+  hostname: string;
+  platform: string;
+  arch: string;
+  daemonVersion?: string;
+  mode: BotHostMode;
+}
+
+/** The managed operation components a bot's acceptance may require. */
+export type BotComponentId = 'browser' | 'desktop';
+
+export type BotComponentState =
+  | 'not-installed'
+  | 'installing'
+  | 'needs-authorization'
+  | 'ready'
+  | 'failed'
+  | 'unsupported'
+  | 'disabled';
+
+/** One operation component's current state, mirrored from `components.list`. */
+export interface BotHealthComponent {
+  id: BotComponentId;
+  state: BotComponentState;
+}
+
+/** Durable endurance numbers for one bot, correct across daemon restarts. */
+export interface BotHealth {
+  uptimeSince: string;
+  ticks: number;
+  lastTickAt?: string;
+  tickLagMs: BotTickLag;
+  itemsByState: Record<string, number>;
+  stepsFailed24h: number;
+  adapterErrors24h: number;
+  escalations24h: number;
+  lastError?: BotHealthError;
+  host: BotHealthHost;
+  /** Empty when the daemon's component service is absent or fails. */
+  components: BotHealthComponent[];
+}
+
+export type BotControlAction = 'start' | 'pause' | 'resume' | 'stop';
+export type BotItemAction = 'retry' | 'dismiss' | 'answer' | 'cleanup';
+
+/**
+ * The exact daemon methods the shell bridge forwards. Any other method is
+ * rejected before it can reach the daemon; the daemon itself accepts `bot.*`
+ * only over the local IPC transport.
+ */
+export const BOT_METHODS = [
+  'bot.list',
+  'bot.create',
+  'bot.control',
+  'bot.tick',
+  'bot.config.validate',
+  'bot.items',
+  'bot.item.get',
+  'bot.item.action',
+  'bot.log',
+  'bot.health',
+] as const;
+
+export type BotMethod = (typeof BOT_METHODS)[number];
+
+export interface BotCreateParams { name: string; configPath: string; mode?: BotMode }
+export interface BotCreateResult { bot: BotRecord }
+export interface BotControlParams { botId: string; action: BotControlAction }
+export interface BotControlResult { bot: BotRecord }
+export interface BotTickParams { botId: string }
+export interface BotTickResult { ticked: true }
+export interface BotConfigValidateParams { configPath: string }
+export interface BotConfigValidateResult { valid: boolean; name?: string; error?: string }
+export interface BotItemsParams { botId: string; state?: BotItemState }
+export interface BotItemsResult { items: BotItemRecord[] }
+export interface BotItemGetParams { botId: string; itemId: string }
+export interface BotItemGetResult { item: BotItemRecord }
+export interface BotItemActionParams {
+  botId: string;
+  itemId: string;
+  action: BotItemAction;
+  answer?: string;
+}
+export interface BotItemActionResult { item: BotItemRecord }
+export interface BotLogParams { botId: string; afterSeq: number; limit?: number }
+export interface BotLogResult { entries: BotLogRecord[] }
+export interface BotHealthParams { botId: string }
+export type BotHealthResult = BotHealth;
+export interface BotListResult { bots: BotRecord[] }
+
+/** Params and result of each forwarded bot method, used to type the facade. */
+export interface BotMethodMap {
+  'bot.list': { params: undefined; result: BotListResult };
+  'bot.create': { params: BotCreateParams; result: BotCreateResult };
+  'bot.control': { params: BotControlParams; result: BotControlResult };
+  'bot.tick': { params: BotTickParams; result: BotTickResult };
+  'bot.config.validate': { params: BotConfigValidateParams; result: BotConfigValidateResult };
+  'bot.items': { params: BotItemsParams; result: BotItemsResult };
+  'bot.item.get': { params: BotItemGetParams; result: BotItemGetResult };
+  'bot.item.action': { params: BotItemActionParams; result: BotItemActionResult };
+  'bot.log': { params: BotLogParams; result: BotLogResult };
+  'bot.health': { params: BotHealthParams; result: BotHealthResult };
+}
+
+/* ------------------------------------------------------------------ */
 /* WY Remote: SSH connection and single active context                 */
 /* ------------------------------------------------------------------ */
 
@@ -1552,6 +1780,15 @@ export interface WrenyardShellApi {
   updateSchedule(id: string, state: ScheduleState): Promise<{ schedule: ScheduleItem }>;
   runSchedule(id: string): Promise<{ schedule: ScheduleItem }>;
   deleteSchedule(id: string): Promise<{ deleted: true }>;
+  /**
+   * Forward one allowlisted `bot.*` call to the daemon. The main-process
+   * registrar rejects any method outside {@link BOT_METHODS} before it reaches
+   * the daemon, so this facade is the renderer's only path to Bot mode.
+   */
+  bot<M extends BotMethod>(
+    method: M,
+    params?: BotMethodMap[M]['params'],
+  ): Promise<BotMethodMap[M]['result']>;
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
   runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
@@ -1614,7 +1851,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'schedules';
+  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'schedules' || value === 'bot';
 }
 
 /**

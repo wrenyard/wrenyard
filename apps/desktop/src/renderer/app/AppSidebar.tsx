@@ -41,17 +41,17 @@ function matchesStatusFilter(session: { archived?: boolean }, filter: SessionSta
 }
 
 /** Full-width page rows rendered directly below the header's action buttons. */
-const VISIBLE_NAV_IDS: ReadonlySet<ShellPage> = new Set(['tasks', 'schedules']);
+const VISIBLE_NAV_IDS: ReadonlySet<ShellPage> = new Set(['tasks', 'schedules', 'bot']);
 
 /**
  * The shell's single global sidebar (`offcanvas`, no icon rail): a top group of
- * full-width rows — the 新建对话 and 搜索 action buttons followed by the 任务 and
- * 定时任务 pages — the shared conversation list with its own scrolling, and a
+ * full-width rows — the 新建对话 and 搜索 action buttons followed by the 任务,
+ * 定时任务 and 机器人 pages — the shared conversation list with its own scrolling, and a
  * bottom bar pinned at the bottom. The bottom bar holds the long Daemon button
  * (environment label and connectivity, opening the daemon menu) on the left and a
  * compact settings icon button on the right. The other feature pages stay
  * reachable outside this header (追踪 and 工房台账 from the Daemon menu, 模型供应
- * from Settings), so the header only carries the four primary entries. The list
+ * from Settings), so the header only carries these primary entries. The list
  * is composed through `SessionSidebar`'s header and footer slots so there is only
  * one conversation-list implementation.
  *

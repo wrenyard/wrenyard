@@ -27,6 +27,8 @@ import {
   type TaskRoutingTestTasksResult,
   type ScheduleItem,
   type ScheduleState,
+  type BotMethod,
+  type BotMethodMap,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -247,6 +249,16 @@ const api: WrenyardShellApi = {
   },
   deleteSchedule(id: string): Promise<{ deleted: true }> {
     return ipcRenderer.invoke(SHELL_CHANNELS.scheduleDelete, id) as Promise<{ deleted: true }>;
+  },
+  bot<M extends BotMethod>(
+    method: M,
+    params?: BotMethodMap[M]['params'],
+  ): Promise<BotMethodMap[M]['result']> {
+    return ipcRenderer.invoke(
+      SHELL_CHANNELS.botRequest,
+      method,
+      params,
+    ) as Promise<BotMethodMap[M]['result']>;
   },
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.runtimeAliasSnapshot) as Promise<RuntimeAliasSnapshot>;

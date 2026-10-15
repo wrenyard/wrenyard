@@ -1,6 +1,6 @@
 /** The only renderer module that reads the typed preload shell facade. */
 import { useSyncExternalStore } from 'react';
-import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi } from '@/shell-contract';
+import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi, BotMethod, BotMethodMap } from '@/shell-contract';
 
 declare global {
   interface Window {
@@ -21,6 +21,23 @@ export async function copyText(text: string): Promise<void> {
     }
   }
   await navigator.clipboard.writeText(text);
+}
+
+/* ------------------------------------------------------------------ */
+/* Bot mode bridge                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Forward one allowlisted `bot.*` call through the shell bridge. The main
+ * process rejects any method outside `BOT_METHODS`, and the daemon accepts
+ * `bot.*` only over local IPC, so every renderer bot read and write goes
+ * through this typed facade instead of the preload object directly.
+ */
+export function botRequest<M extends BotMethod>(
+  method: M,
+  params?: BotMethodMap[M]['params'],
+): Promise<BotMethodMap[M]['result']> {
+  return shell.bot(method, params);
 }
 
 /* ------------------------------------------------------------------ */
