@@ -323,10 +323,10 @@ export function SessionPage() {
             <TooltipContent>对话视图</TooltipContent>
           </Tooltip>
           <Tooltip>
-            <TooltipTrigger render={(<ToggleGroupItem value="transcript" aria-label="Transcript 视图" />)}>
+            <TooltipTrigger render={(<ToggleGroupItem value="transcript" aria-label="详细视图" />)}>
               <ScrollText />
             </TooltipTrigger>
-            <TooltipContent>Transcript 视图</TooltipContent>
+            <TooltipContent>详细视图</TooltipContent>
           </Tooltip>
         </ToggleGroup>
       </TitleBarAuxiliary>
