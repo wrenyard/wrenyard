@@ -47,6 +47,7 @@ import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
 import { packagedDaemonLaunch } from '../../daemon/lib/daemon/launch.mts';
 import { resolveWrenyardConfigPath as resolveForemanConfigPath, resolveWrenyardDesktopDataDir } from '@wrenyard/paths';
+import { getTheme } from '@wrenyard/themes';
 import { foremanStateRoot } from '../../daemon/lib/config/state.mts';
 import {
   createMacQuitConfirmationGate,
@@ -437,6 +438,95 @@ function restoreQuitSurfaces(): void {
   taskgraphWindowOwner?.setEntitiesVisible(
     (pet?.enabled ?? true) && (pet?.entities.taskgraphs ?? true),
   );
+}
+
+/**
+ * Transient macOS Cmd+Q hint (Chrome-style "Hold ⌘Q to quit" overlay). Unlike
+ * the blocking drain dialog this is a small, non-interactive, transparent card
+ * that follows the current Desktop appearance and disappears on its own, so it
+ * never steals focus or blocks the quit.
+ */
+const QUIT_HINT_HTML = (background: string, foreground: string, border: string): string =>
+  `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:transparent;overflow:hidden;user-select:none;cursor:default}
+body{display:flex;align-items:center;justify-content:center;font-family:system-ui,-apple-system,sans-serif;font-size:14px;font-weight:500}
+.card{padding:14px 22px;border-radius:12px;border:1px solid ${border};background:${background};color:${foreground};box-shadow:0 2px 8px rgba(0,0,0,.22)}
+</style></head><body><div class="card">再次按下 ⌘Q 退出啾啾工坊</div></body></html>`;
+
+let quitHintWindow: BrowserWindow | null = null;
+let quitHintTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Tear down the transient hint card, if one is still on screen. */
+function dismissQuitHint(): void {
+  if (quitHintTimer) {
+    clearTimeout(quitHintTimer);
+    quitHintTimer = null;
+  }
+  const window = quitHintWindow;
+  quitHintWindow = null;
+  if (window && !window.isDestroyed()) window.destroy();
+}
+
+/**
+ * Show the macOS "press ⌘Q again" hint as a small, non-interactive card that
+ * follows the current appearance. Colors come from the same `getTheme().modes`
+ * metadata `appearance.ts` uses: the mode definition only exposes
+ * `windowBackground` and the title-bar palette, so the card background uses
+ * `windowBackground`, the text uses `titleBarOverlay.symbolColor`, and the border
+ * uses a mode-appropriate translucent value. Falls back to dark when no
+ * appearance controller is available yet. `attach` is deliberately skipped: it
+ * would paint an opaque background over this transparent, 3s-only window.
+ */
+function showQuitHint(): void {
+  dismissQuitHint();
+  const resolved = appearanceController?.resolve();
+  const mode = resolved ? getTheme(resolved.theme).modes[resolved.dark ? 'dark' : 'light'] : null;
+  const dark = resolved ? resolved.dark : true;
+  const background = mode?.windowBackground ?? '#1f1f24';
+  const foreground = mode?.titleBarOverlay.symbolColor ?? '#f2f2f5';
+  const border = dark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.12)';
+  const width = 300;
+  const height = 72;
+  const window = new BrowserWindow({
+    width,
+    height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    show: false,
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  quitHintWindow = window;
+  // Center over the shell window when it is on screen, otherwise over the
+  // display under the cursor.
+  const parent = shellWindow?.window;
+  const anchor = parent && !parent.isDestroyed() && parent.isVisible()
+    ? parent.getBounds()
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  window.setBounds({
+    x: Math.round(anchor.x + (anchor.width - width) / 2),
+    y: Math.round(anchor.y + (anchor.height - height) / 2),
+    width,
+    height,
+  });
+  // Never interactive and never focus-stealing: show without activating.
+  window.setIgnoreMouseEvents(true);
+  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  window.once('ready-to-show', () => { if (!window.isDestroyed()) window.showInactive(); });
+  window.on('closed', () => { if (quitHintWindow === window) quitHintWindow = null; });
+  void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(QUIT_HINT_HTML(background, foreground, border))}`);
+  quitHintTimer = setTimeout(() => {
+    quitHintTimer = null;
+    if (!window.isDestroyed()) window.destroy();
+  }, 3_000);
 }
 
 /**
@@ -1237,22 +1327,26 @@ async function bootstrap(): Promise<void> {
         app.quit();
         return;
       }
+      // Windows/Linux have no Cmd+Q confirmation: an accelerator press only
+      // backgrounds the app (the same effect as closing the window to the tray)
+      // and never arms the macOS gate or quits.
+      if (process.platform !== 'darwin') {
+        const window = shellWindow?.window;
+        if (window && !window.isDestroyed()) window.hide();
+        return;
+      }
       if (macQuitGate('accelerator') === 'quit') {
+        // The second press fully exits; drop any hint still on screen first.
+        dismissQuitHint();
         app.quit();
         return;
       }
       // Warn, never quit: a second Cmd+Q inside the 3s window fully exits
-      // while Cmd+W only backgrounds. The dialog is intentionally non-blocking.
-      // A first press never starts a quit, so make sure nothing stays blocked.
+      // while Cmd+W only backgrounds. The hint is a small, non-interactive,
+      // themed card that dismisses itself; a first press never starts a quit,
+      // so make sure nothing stays blocked.
       restoreQuitSurfaces();
-      void showUpdateMessage({
-        type: 'warning',
-        title: '退出啾啾工坊',
-        message: '再次按下 Cmd+Q 将完全退出',
-        detail: '3 秒内再次按下 Cmd+Q 才会完全退出并停止后台服务；Cmd+W 只会将窗口隐藏到托盘。',
-        buttons: ['好'],
-        noLink: true,
-      });
+      showQuitHint();
     },
     {
       // The View menu drives the same persisted `appearance.zoom` as the setting.
