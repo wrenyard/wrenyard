@@ -74,7 +74,8 @@ export interface ComposerSelection {
   /**
    * Record whether the composer may receive a suggestion right now. Called while
    * the composer renders, so a turn completing in the same commit is judged on
-   * the current value; the composer drops the suggestion itself when ineligible.
+   * the current value. Eligibility only gates *new* requests; a shown suggestion
+   * is dropped only on an explicit invalidation.
    */
   setSuggestionEligible(eligible: boolean): void;
   /** Accept the suggestion into the draft (never sends it). */
@@ -289,34 +290,46 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
   }, []);
 
   /**
-   * Hiding this surface (the standard window sitting behind a mini card) releases
-   * the suggestion at once: the pending request is cancelled, the ghost text is
-   * cleared, and no request may be issued until this surface is visible again.
-   * Completed-turn markers observed while hidden are still consumed by the
-   * request effect below, so showing the surface again never asks for a past turn.
+   * Hiding this surface (the standard window sitting behind a mini card) only
+   * suppresses *new* generation: it marks the current render ineligible
+   * synchronously so no request is issued while hidden (the composer's next
+   * render also republishes eligibility). An already generated suggestion, and
+   * any in-flight request that can still resolve, are deliberately left intact —
+   * only genuine invalidation clears them. Completed-turn markers observed while
+   * hidden are still consumed by the request effect below, so showing the
+   * surface again never asks for a past turn.
    */
   useEffect(() => {
     const onVisibility = (): void => {
       if (document.visibilityState === 'visible') return;
       suggestionEligibleRef.current = false;
-      dismissSuggestion();
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [dismissSuggestion]);
+  }, []);
 
   /** Ask the daemon for one suggestion; the result is validated before it shows. */
   const requestSuggestion = useCallback((targetSessionKey: string): void => {
     const requestId = newSuggestionRequestId();
     suggestionPendingRef.current = { id: requestId, sessionKey: targetSessionKey };
-    setSuggestionState({ sessionKey: targetSessionKey, text: '' });
+    // Starting a request must not blank a valid suggestion for the same session;
+    // only a suggestion owned by a different session key is cleared here.
+    setSuggestionState((current) =>
+      current.sessionKey === targetSessionKey ? current : { sessionKey: targetSessionKey, text: '' });
     void promptSuggest({ sessionId: targetSessionKey, requestId })
       .then((result) => {
         const pending = suggestionPendingRef.current;
         // A cancelled, replaced or differently-keyed result must never revive a
         // suggestion or leak into another draft.
         if (pending.id !== requestId || pending.sessionKey !== targetSessionKey) return;
-        setSuggestionState({ sessionKey: targetSessionKey, text: result.suggestion ?? '' });
+        // The request settled; drop the pending marker so it can no longer be
+        // cancelled as in-flight.
+        suggestionPendingRef.current = { id: '', sessionKey: '' };
+        // An empty refresh result never erases an already shown suggestion.
+        const next = result.suggestion;
+        if (next !== undefined && next !== '') {
+          setSuggestionState({ sessionKey: targetSessionKey, text: next });
+        }
       })
       .catch(() => {
         const pending = suggestionPendingRef.current;
@@ -333,11 +346,13 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
   const acceptSuggestion = useCallback((): void => {
     const next = activeSuggestion;
     if (next === '') return;
-    setSuggestionState({ sessionKey: '', text: '' });
+    // Cancel any in-flight request first, so a late response cannot revive the
+    // suggestion after it has been accepted into the draft.
+    dismissSuggestion();
     // Accepting writes an editable draft; it is never sent automatically.
     setTextState(next);
     writeDraft(sessionKey, next);
-  }, [activeSuggestion, sessionKey]);
+  }, [activeSuggestion, sessionKey, dismissSuggestion]);
 
   // Request at most once per new completed turn of the active session, and only
   // when the composer reported eligibility during the completing render. The

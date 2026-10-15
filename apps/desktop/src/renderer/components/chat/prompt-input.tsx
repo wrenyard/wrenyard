@@ -41,9 +41,10 @@ export interface PromptInputProps {
   className?: string;
   /**
    * Ghost next-input suggestion. While the value is empty it reads as the
-   * field's muted placeholder; Tab accepts it into the draft, and Escape or any
-   * other key dismisses it. No suggestion leaves every existing key behaviour
-   * untouched.
+   * field's muted placeholder; Tab accepts it into the draft and Escape
+   * dismisses it. Navigation and modifier keys leave it in place, and typing
+   * (handled by the composer) clears it. No suggestion leaves every existing key
+   * behaviour untouched.
    */
   suggestion?: string;
   /** Accept the shown suggestion into the draft (never submits). */
@@ -84,19 +85,39 @@ export function PromptInput({
   // expansion measurement keeps a local one.
   const innerRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? innerRef;
-  // COMPACT while the draft is empty or fits one row; EXPANDED once it carries a
-  // strip (attachments/reply/error), an explicit newline, or a line that no
-  // longer fits the compact row. Expansion is sticky and holds until the draft
-  // is emptied.
+  // Set once the measured content no longer fits the compact row; see `expanded`.
   const [overflow, setOverflow] = useState(false);
   const canSubmit = !disabled && !submitDisabled && (value.trim() !== '' || hasAttachments);
   const hasLeading = toolbarLeading !== undefined && toolbarLeading !== null;
   const hasStrip = attachments !== undefined && attachments !== null;
-  const expanded = hasStrip || (value !== '' && (overflow || value.includes('\n')));
   // The suggestion reads as the field's placeholder while the value is empty: it
   // is muted, never part of the value, and a "Tab 补全" hint names the accept key.
-  const ghost = !disabled && value === '' && suggestion !== undefined ? suggestion : '';
+  // A retained suggestion stays visible through a transient loading/disabled
+  // state so the field neither hides it nor collapses its height.
+  const ghost = value === '' && suggestion !== undefined ? suggestion : '';
   const placeholderText = ghost === '' ? placeholder : `${ghost}\u2003Tab 补全`;
+  // The content that drives the layout: the real draft when present, otherwise
+  // the shown ghost placeholder (the accept hint included; the ordinary
+  // placeholder is excluded). A newline expands at once; a wrapped ghost is
+  // caught before paint by the measurement below.
+  const measured = value !== '' ? value : ghost === '' ? '' : placeholderText ?? '';
+  // EXPANDED once the measured content carries a strip (attachments/reply/error),
+  // an explicit newline, or a line that no longer fits the compact row. Expansion
+  // is sticky for the same content and holds until that content is emptied.
+  const expanded = hasStrip || (measured !== '' && (overflow || measured.includes('\n')));
+  // A changed suggestion is re-measured from scratch so a stale expansion never
+  // sticks to a new one; the same content keeps its expansion (as do typed
+  // drafts). Resetting during render re-measures before the next paint.
+  const [measuredGhost, setMeasuredGhost] = useState(ghost);
+  if (measuredGhost !== ghost) {
+    setMeasuredGhost(ghost);
+    setOverflow(false);
+  }
+  // A shown ghost sizes to whole 22px lines plus the 1rem vertical padding,
+  // bounded by main's 200px cap and by the viewport minus room for the composer
+  // toolbar and window chrome, then scrolls rather than clipping; `max(22px, …)`
+  // keeps at least one whole line.
+  const ghostMaxHeight = 'calc(1rem + max(22px, round(down, calc(min(200px, 100svh - 8rem) - 1rem), 22px)))';
 
   const submit = (): void => {
     if (canSubmit) onSubmit();
@@ -108,11 +129,11 @@ export function PromptInput({
     return sendKey === 'mod-enter' ? modifier : !modifier;
   };
 
-  // A drawn line taller than the compact box by more than 4px means the text no
-  // longer fits one row. The 4px tolerance absorbs fractional-DPI rounding
-  // (Windows 125%/150%); one wrapped line adds a whole 24px line.
+  // A drawn line taller than the compact box by more than 4px means the measured
+  // content no longer fits one row. The 4px tolerance absorbs fractional-DPI
+  // rounding (Windows 125%/150%); one wrapped line adds a whole 24px line.
   useLayoutEffect(() => {
-    if (value === '') {
+    if (measured === '') {
       setOverflow(false);
       return;
     }
@@ -120,11 +141,11 @@ export function PromptInput({
     const el = ref.current;
     if (el === null) return;
     if (el.scrollHeight - el.clientHeight > 4) setOverflow(true);
-  }, [value, expanded]);
+  }, [measured, expanded]);
 
-  // While the compact row still holds the draft, a narrowing window can push the
-  // text past one line; watch the textarea's box so it expands without a keystroke.
-  const watchCompactWidth = !expanded && value !== '';
+  // While the compact row still holds the content, a narrowing window can push
+  // it past one line; watch the textarea's box so it expands without a keystroke.
+  const watchCompactWidth = !expanded && measured !== '';
   useEffect(() => {
     if (!watchCompactWidth) return;
     const el = ref.current;
@@ -143,6 +164,9 @@ export function PromptInput({
   const expandedLayout = 'flex-col items-stretch gap-0 rounded-[18px] p-0';
   const compactTextareaClass = 'min-w-0 flex-1 h-6 min-h-6 py-0 pl-1 pr-0 leading-6 field-sizing-fixed overflow-hidden';
   const expandedTextareaClass = 'w-full min-w-0 px-3 py-2 leading-[22px] min-h-9 max-h-[200px] field-sizing-content overflow-y-auto';
+  // A shown ghost in the expanded layout wraps long unbroken tokens
+  // (`break-words`) and scrolls at the whole-line cap above instead of clipping.
+  const ghostExpandedTextareaClass = 'w-full min-w-0 px-3 py-2 leading-[22px] min-h-9 field-sizing-content overflow-y-auto break-words';
   // Shared by both layouts; only one branch renders at a time.
   const sendButton = (
     <InputGroupButton type="submit" variant="default" size="icon-sm" className="size-6 shrink-0 rounded-full p-0 [&_svg]:size-3.5" disabled={!canSubmit} aria-label="发送" title="发送">
@@ -176,7 +200,8 @@ export function PromptInput({
           placeholder={placeholderText}
           disabled={disabled}
           rows={1}
-          className={`${expanded ? expandedTextareaClass : compactTextareaClass} [[data-mini]_&]:text-sm`}
+          className={`${expanded ? (ghost !== '' ? ghostExpandedTextareaClass : expandedTextareaClass) : compactTextareaClass} [[data-mini]_&]:text-sm`}
+          style={expanded && ghost !== '' ? { maxHeight: ghostMaxHeight } : undefined}
           onChange={(event) => onValueChange(event.target.value)}
           onPaste={onPaste}
           onKeyDown={(event) => {
@@ -196,10 +221,6 @@ export function PromptInput({
             if (event.key === 'Escape') {
               if (value === '') onDismissSuggestion?.();
               return;
-            }
-            // Any other key dismisses the suggestion; modifiers alone do not.
-            if (ghost !== '' && event.key !== 'Shift' && event.key !== 'Control' && event.key !== 'Alt' && event.key !== 'Meta') {
-              onDismissSuggestion?.();
             }
           }}
           onCompositionStart={() => { composing.current = true; onDismissSuggestion?.(); }}

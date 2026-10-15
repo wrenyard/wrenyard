@@ -86,8 +86,9 @@ function routeUnavailableLabel(entry: ModelEntry): string {
 
 /**
  * Whether this renderer's document is currently visible. A standard window
- * hidden behind a mini card reports `hidden`; only the surface the user is
- * actually looking at may request or hold a suggestion.
+ * hidden behind a mini card reports `hidden`. Visibility gates *new* suggestion
+ * generation only: an already generated suggestion is retained regardless of
+ * whether this surface is visible.
  */
 function useSurfaceVisible(): boolean {
   const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
@@ -263,18 +264,26 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // completed turn still shows the ghost text without re-focusing the field.
   const surfaceVisible = useSurfaceVisible();
   const promptCompletionEnabled = preferences.data?.session.promptCompletion === true;
+  const turnRunning = turns.some((turn) => turn.status === 'running');
   const suggestionEligible = promptCompletionEnabled && !disabled && !sending && surfaceVisible
-    && reply === undefined && text === '' && attachments.length === 0
-    && !turns.some((turn) => turn.status === 'running');
+    && reply === undefined && text === '' && attachments.length === 0 && !turnRunning;
   // Publish the current render's eligibility synchronously, so a turn that
   // completes in this very commit is judged on today's value rather than the
-  // one captured while it was still running.
+  // one captured while it was still running. Eligibility only gates *new*
+  // requests; on its own it never drops a suggestion the user can still see.
   setSuggestionEligible(suggestionEligible);
-  // Becoming ineligible (typing, attaching, replying, a disabled field or a new
-  // running turn) drops the shown suggestion and cancels any in-flight request.
+  // Invalidation is separate from, and narrower than, eligibility: a shown
+  // suggestion is cleared — and any in-flight request cancelled — only on an
+  // explicit invalidation. The feature being explicitly off, a send, a new
+  // running turn, real typed input, attachments or a reply all invalidate. A
+  // hidden surface, a disabled/loading composer, or preference data that is
+  // transiently absent must NOT: they only suppress eligibility above.
+  const promptCompletionDisabled = preferences.data?.session.promptCompletion === false;
   useEffect(() => {
-    if (!suggestionEligible) dismissSuggestion();
-  }, [suggestionEligible, dismissSuggestion]);
+    if (promptCompletionDisabled || sending || turnRunning || text !== '' || attachments.length > 0 || reply !== undefined) {
+      dismissSuggestion();
+    }
+  }, [promptCompletionDisabled, sending, turnRunning, text, attachments.length, reply, dismissSuggestion]);
 
   // Seed the model/effort once per session (or per new turn). A nonempty
   // remembered or explicit pick is never overwritten by an availability
