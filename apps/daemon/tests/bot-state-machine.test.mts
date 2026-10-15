@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -369,7 +369,19 @@ test('repeated inbox polls admit one item per source', async () => {
       const db = initDb(':memory:')
       const store = createBotStore({ db, workspaceRoot: root })
       const bot = store.createBot({ name: 'poller', state: 'running', mode: 'live', configPath: fixture.configPath })
-      const host = createBotHost({ db, workspaceRoot: root, session: botSession(), log: () => {} })
+      // The first tick also runs the verify step this stage wires in, so a stub
+      // parks the item deterministically instead of failing the step.
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(),
+        log: () => {},
+        taskRunner: async () => ({
+          status: 'done',
+          runId: 'run-verify',
+          output: { decision: 'park', reason: 'needs a decision', question: 'which project?' },
+        }),
+      })
 
       await host.tick(bot.id)
       await host.tick(bot.id)
@@ -377,7 +389,7 @@ test('repeated inbox polls admit one item per source', async () => {
       const items = store.listItems(bot.id)
       assert.equal(items.length, 1)
       assert.equal(items[0]?.sourceId, 'source-a')
-      assert.equal(items[0]?.state, 'discovered')
+      assert.equal(items[0]?.state, 'parked')
       assert.equal(items[0]?.project, 'alpha')
       assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'poll.discovered').length, 1)
     })
@@ -413,6 +425,63 @@ test('a source that disappears mid-flight is withdrawn and never merged', async 
       const log = store.listLog(bot.id, 0)
       assert.equal(log.some(entry => entry.code === 'source.withdrawn'), true)
       assert.equal(log.some(entry => entry.code === 'step.failed'), false)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('a bot-verify not_real decision dismisses the item and queues its notification', async () => {
+  const root = `${WORKSPACE}-verify`
+  const fixture = await writeBotFixture({
+    name: 'verifier',
+    mode: 'live',
+    inboxBehavior: { list: { items: [] }, get: { item: null } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'verifier', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({
+        botId: bot.id,
+        sourceId: 'source-x',
+        state: 'discovered',
+        title: 'Ship the thing',
+        project: 'alpha',
+      })
+
+      const calls: string[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(),
+        log: () => {},
+        taskRunner: async ({ task }) => {
+          calls.push(task)
+          return task === 'bot-verify'
+            ? { status: 'done', runId: 'run-verify', output: { decision: 'not_real', reason: 'already implemented' } }
+            : { status: 'failed', runId: 'run-other', error: `unexpected task ${task}` }
+        },
+      })
+
+      await host.tick(bot.id)
+
+      // Exactly one judgment run happened, and it was the verify task.
+      assert.deepEqual(calls, ['bot-verify'])
+      const after = store.getItem(bot.id, item.id)
+      assert.equal(after.state, 'dismissed')
+      assert.equal(after.error, 'already implemented')
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:verify:1`)?.status, 'done')
+      // The dismissal notification is queued for a later tick, not sent now.
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:notify:1`)?.status, 'pending')
+      assert.equal(store.listLog(bot.id, 0).some(entry => entry.code === 'verify.not_real'), true)
+
+      // The next tick sends it, even though the item is already terminal.
+      await host.tick(bot.id)
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:notify:1`)?.status, 'done')
+      assert.equal(existsSync(fixture.notifyFile), true)
+      assert.match(readFileSync(fixture.notifyFile, 'utf-8'), /Not dispatched: Ship the thing/)
     })
   } finally {
     await removeFixture(fixture)

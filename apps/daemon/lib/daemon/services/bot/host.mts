@@ -3,8 +3,10 @@ import { readFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import type { Session } from '@wrenyard/session'
 import { ProjectManager } from '../../../core/project/manager.mts'
+import { runGitSync } from '../../../core/vcs/index.mts'
 import type { ForemanDatabase } from '../../../db/types.mts'
 import type {
+  BotAcceptanceCheck,
   BotConfigValidateResult,
   BotHealth,
   BotHealthComponent,
@@ -13,7 +15,7 @@ import type {
   BotModel,
   BotRecord,
 } from '../../../protocol/methods/bot.mts'
-import type { OperationComponents } from '../operation-components.mts'
+import type { OperationComponentId, OperationComponents } from '../operation-components.mts'
 import {
   botConfigHash,
   isInQuietHours,
@@ -21,6 +23,7 @@ import {
   validateBotConfig,
   type BotAdapter,
   type BotConfig,
+  type BotRoutingEntry,
 } from './config.mts'
 import {
   BotAdapterError,
@@ -83,6 +86,27 @@ const ITEM_FAILURE_ESCALATION_THRESHOLD = 3
 const DEFAULT_MAX_ACCEPTANCE_ATTEMPTS = 2
 /** Minimum spacing between two escalation notifications. */
 const ESCALATION_MIN_INTERVAL_MS = 10 * 60_000
+/**
+ * Idle window after which an unchanged session is reviewed anyway, so a stalled
+ * session is noticed instead of waiting forever for new events.
+ */
+const REVIEW_IDLE_MS = 10 * 60_000
+/** Worktree diff sent to `bot-review`; the caller truncates to this. */
+const MAX_DIFF_CHARS = 60_000
+/** Recent replies sent to `bot-review`; the caller truncates to this. */
+const MAX_TURNS_CHARS = 20_000
+/** Upper bound when scanning prior attempts of a repeatable step kind. */
+const MAX_STEP_ATTEMPTS = 500
+/** A session's closing markers: a blocker question, or a finished-work head sha. */
+const BOT_BLOCKED_PATTERN = /BOT-BLOCKED\s+(.+)/u
+const BOT_READY_PATTERN = /BOT-READY\s+[0-9a-f]{7,40}/iu
+/** Check surfaces and the operation component each one needs. */
+const SURFACE_COMPONENT: Record<string, OperationComponentId | undefined> = {
+  daemon: undefined,
+  renderer: 'browser',
+  native: 'desktop',
+  static: undefined,
+}
 /**
  * States whose source is watched after a successful poll (§5.5): an item that
  * is being worked on or is parked for the user. `discovered`/`verifying` items
@@ -174,11 +198,20 @@ export interface CreateBotHostOptions {
    */
   identity?: () => BotHealthHost
   /**
-   * Operation component service backing `bot.health.components`. Only `list` is
-   * read, so health never triggers a refresh; when it is absent or throws the
-   * reported list is empty.
+   * Task runner port: starts one builtin task run bound to a project (and
+   * optionally a managed worktree) and resolves with its terminal structured
+   * output. Injected by the daemon; without it, judgment and acceptance steps
+   * fail their step rather than guessing a result.
    */
-  operationComponents?: Pick<OperationComponents, 'list'>
+  taskRunner?: BotTaskRunner
+  /**
+   * Operation component service backing `bot.health.components` and the
+   * acceptance readiness check. `list` is read for health (never refreshing);
+   * the acceptance step refreshes the components its plan requires with `act`.
+   * When it is absent, health reports an empty list and acceptance that needs a
+   * component parks instead of running.
+   */
+  operationComponents?: Pick<OperationComponents, 'list' | 'act'>
 }
 
 export interface BotHost {
@@ -216,6 +249,41 @@ type BotConfigLoad =
 
 /** Result of checking whether an item's source is still the one it was sent. */
 type SourceGate = 'open' | 'changed' | 'gone' | 'retry' | 'unavailable'
+
+/**
+ * One judgment or acceptance task run the host asks for. The bot never reasons
+ * itself: every decision is a structured task run whose output it stores.
+ */
+export interface BotTaskRunInput {
+  /** Builtin task id: `bot-verify`, `bot-review` or `test`. */
+  task: string
+  project: string
+  /** Managed worktree the run is bound to; absent runs in the project checkout. */
+  worktree?: string
+  input: unknown
+  /**
+   * The routing model the bot chose for this run (the `judgment` triple for
+   * `bot-verify`/`bot-review`, the `acceptance` triple for `test`). A caller
+   * that cannot honor an explicit model uses automatic routing instead.
+   */
+  model?: BotModel
+  /**
+   * The routing entry's explicit canonical run target, when it has one. A
+   * runner that honors it selects exactly that target; a target the daemon
+   * cannot resolve fails the run instead of falling back to automatic routing.
+   */
+  target?: string
+}
+
+/** Terminal outcome of one task run the host started. */
+export interface BotTaskRunResult {
+  status: 'done' | 'failed' | 'cancelled' | 'timeout' | 'unknown'
+  output?: unknown
+  runId: string
+  error?: string
+}
+
+export type BotTaskRunner = (input: BotTaskRunInput) => Promise<BotTaskRunResult>
 
 /** Deterministic worktree id for one item: bot id + item id, 8 URL-safe chars. */
 export function deterministicWorktreeId(botId: string, itemId: string): string {
@@ -268,6 +336,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   const deferredNotifyLogged = new Set<string>()
   /** Parked items already reported as changed, keyed by item and fingerprint. */
   const sourceChangedLogged = new Set<string>()
+  /** Bots already told that their task runs use automatic routing. */
+  const routingAutoLogged = new Set<string>()
 
   function nowIso(): string {
     return new Date().toISOString()
@@ -297,6 +367,334 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     } catch {
       return []
     }
+  }
+
+  // ── judgment and acceptance task runs ────────────────────────────────────
+
+  /**
+   * The routing entry one task kind uses: `judgment` for `bot-verify` and
+   * `bot-review`, `acceptance` for the builtin `test` task. The entry carries
+   * provider/model/reasoningEffort and an optional explicit `target`; the
+   * runner selects that target when present and otherwise uses automatic
+   * routing.
+   */
+  function routedModelFor(config: BotConfig, kind: 'judgment' | 'acceptance'): BotRoutingEntry {
+    return config.routing[kind] ?? config.routing.default
+  }
+
+  /**
+   * Record, once per bot, that a task kind whose routing entry has no explicit
+   * `target` relies on automatic routing.
+   */
+  function noteAutomaticRouting(bot: BotRecord): void {
+    if (routingAutoLogged.has(bot.id)) return
+    routingAutoLogged.add(bot.id)
+    store.appendLog({
+      botId: bot.id,
+      level: 'info',
+      code: 'routing.auto',
+      message: 'bot task runs use automatic routing: the routing entry has no explicit target',
+    })
+  }
+
+  /**
+   * Start one task run and resolve with its structured output. A failed,
+   * cancelled or timed-out run throws, so the caller's step fails through the
+   * existing failure and escalation path instead of guessing a result.
+   */
+  async function runBotTask(input: BotTaskRunInput): Promise<unknown> {
+    const runner = options.taskRunner
+    if (runner === undefined) throw new Error(`bot task runner is unavailable for ${input.task}`)
+    const result = await runner(input)
+    if (result.status !== 'done') {
+      const run = result.runId === '' ? '(no run id)' : result.runId
+      throw new Error(`${input.task} run ${run} ${result.status}${result.error === undefined ? '' : `: ${result.error}`}`)
+    }
+    if (result.output === undefined) throw new Error(`${input.task} returned no structured output`)
+    return result.output
+  }
+
+  /** Trim to the last `max` characters, marking that the head was dropped. */
+  function truncateTail(text: string, max: number): string {
+    return text.length <= max ? text : `[...${text.length - max} characters omitted...]\n${text.slice(-max)}`
+  }
+
+  /** Trim to the first `max` characters, marking that the tail was dropped. */
+  function truncateHead(text: string, max: number): string {
+    return text.length <= max ? text : `${text.slice(0, max)}\n[...${text.length - max} characters omitted...]`
+  }
+
+  // ── session ledger reads ──────────────────────────────────────────────────
+
+  /** True while a session has an admitted turn that has not reached its end. */
+  function sessionRunning(sessionId: string): boolean {
+    let running = false
+    for (const event of session.readLedger(sessionId)) {
+      if (event.type === 'turn.started') running = true
+      else if (event.type === 'turn.finished' || event.type === 'turn.interrupted') running = false
+    }
+    return running
+  }
+
+  /** The latest `reply.sent` text of one session, or undefined. */
+  function latestReply(sessionId: string): string | undefined {
+    let text: string | undefined
+    for (const event of session.readLedger(sessionId)) {
+      if (event.type === 'reply.sent') text = event.text
+    }
+    return text
+  }
+
+  /** The last `max` characters of one session's replies, oldest turn first. */
+  function recentReplies(sessionId: string, max: number): string {
+    const replies: string[] = []
+    for (const event of session.readLedger(sessionId)) {
+      if (event.type === 'reply.sent') replies.push(event.text)
+    }
+    return truncateTail(replies.join('\n\n---\n\n'), max)
+  }
+
+  /** The ledger's highest sequence number for one session, or 0. */
+  function latestEventSeq(sessionId: string): number {
+    const events = session.readLedger(sessionId)
+    return events.length === 0 ? 0 : (events[events.length - 1]?.seq ?? 0)
+  }
+
+  /** ISO time of the newest ledger event for one session, or undefined. */
+  function latestEventAt(sessionId: string): string | undefined {
+    const events = session.readLedger(sessionId)
+    return events.length === 0 ? undefined : events[events.length - 1]?.at
+  }
+
+  // ── step lookups ─────────────────────────────────────────────────────────
+
+  /** Parse one step's stored JSON output, or undefined when it is absent or invalid. */
+  function stepOutput<T>(step: BotStepRecord | undefined): T | undefined {
+    if (step?.output === undefined) return undefined
+    try {
+      return JSON.parse(step.output) as T
+    } catch {
+      return undefined
+    }
+  }
+
+  /** The highest existing attempt of one repeatable step kind, and its row. */
+  function latestStep(item: BotItemRecord, kind: BotStepKind): { step?: BotStepRecord; attempt: number } {
+    let attempt = 0
+    let step: BotStepRecord | undefined
+    for (let n = 1; n <= MAX_STEP_ATTEMPTS; n += 1) {
+      const found = store.findStepByIdemKey(idemKeyFor(item, kind, n))
+      if (found === undefined) break
+      step = found
+      attempt = n
+    }
+    return { step, attempt }
+  }
+
+  /** The `bot-verify` result stored on an item's verify step, when present. */
+  function verifyEnvelope(item: BotItemRecord): BotVerifyEnvelope | undefined {
+    return stepOutput<BotVerifyEnvelope>(store.findStepByIdemKey(idemKeyFor(item, 'verify')))
+  }
+
+  /** The acceptance plan a verified item carries on its verify step. */
+  function acceptancePlan(item: BotItemRecord): BotVerifyCheck[] {
+    const envelope = verifyEnvelope(item)
+    return envelope?.acceptance?.checks ?? []
+  }
+
+  /**
+   * True when a review is due: the session produced new ledger events since the
+   * last review, or it has been idle past the idle window since the last one.
+   */
+  function reviewDue(item: BotItemRecord): boolean {
+    if (item.sessionId === undefined) return false
+    const counters = item.counters ?? {}
+    if (latestEventSeq(item.sessionId) > (counters.lastReviewSeq ?? 0)) return true
+    if (Date.now() - (counters.lastReviewAtMs ?? 0) <= REVIEW_IDLE_MS) return false
+    const at = latestEventAt(item.sessionId)
+    const idleSince = at === undefined ? Date.parse(item.updatedAt) : Date.parse(at)
+    return Number.isNaN(idleSince) || Date.now() - idleSince > REVIEW_IDLE_MS
+  }
+
+  // ── git helpers for the ready gate ───────────────────────────────────────
+
+  /** Resolve one ref to a commit sha in a checkout, or undefined. */
+  function revParse(cwd: string, ref: string): string | undefined {
+    const result = runGitSync(cwd, ['rev-parse', '--verify', '--quiet', ref])
+    const sha = result.stdout.trim()
+    return result.code === 0 && sha !== '' ? sha : undefined
+  }
+
+  /**
+   * True when the worktree head is strictly ahead of the project's target
+   * branch; `undefined` when the target branch or either head cannot be
+   * resolved, so the caller fails the gate instead of guessing.
+   */
+  function worktreeAheadOfTarget(project: string, worktreeId: string): boolean | undefined {
+    try {
+      const entry = projectManager.getProject(project)
+      const targetRef = entry.defaultBranch === undefined
+        ? (revParse(entry.path, 'refs/heads/main') === undefined ? 'refs/heads/master' : 'refs/heads/main')
+        : `refs/heads/${entry.defaultBranch}`
+      const targetSha = revParse(entry.path, targetRef)
+      if (targetSha === undefined) return undefined
+      const worktreePath = projectManager.resolveWorktreePath(worktreeId, project)
+      const head = revParse(worktreePath, 'HEAD')
+      if (head === undefined) return undefined
+      if (head === targetSha) return false
+      return runGitSync(worktreePath, ['merge-base', '--is-ancestor', targetSha, head]).code === 0
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * The ready gate (§5.3): the session is not running a turn, the worktree is
+   * clean, it has at least one commit ahead of the target branch, and the latest
+   * reply carries `BOT-READY <head sha>`.
+   */
+  async function checkReadyGate(item: BotItemRecord): Promise<{ ok: true } | { ok: false; failed: string }> {
+    if (item.sessionId === undefined) return { ok: false, failed: 'the item has no session' }
+    if (sessionRunning(item.sessionId)) return { ok: false, failed: 'the session is still running a turn' }
+    if (!item.project || !item.worktreeId) return { ok: false, failed: 'the item has no project worktree' }
+    const worktree = projectManager.listWorktrees(item.project).find(entry => entry.id === item.worktreeId)
+    if (worktree === undefined) return { ok: false, failed: `worktree ${item.worktreeId} is not registered` }
+    if (!worktree.clean) return { ok: false, failed: `worktree ${item.worktreeId} has uncommitted changes` }
+    const ahead = worktreeAheadOfTarget(item.project, item.worktreeId)
+    if (ahead === undefined) return { ok: false, failed: 'the worktree could not be compared with the target branch' }
+    if (!ahead) return { ok: false, failed: 'the worktree has no commits ahead of the target branch' }
+    const reply = latestReply(item.sessionId)
+    if (reply === undefined || !BOT_READY_PATTERN.test(reply)) {
+      return { ok: false, failed: 'the latest reply does not carry `BOT-READY <head sha>`' }
+    }
+    return { ok: true }
+  }
+
+  // ── acceptance components ────────────────────────────────────────────────
+
+  /** The operation components one acceptance plan requires, by check surface. */
+  function plannedSurfaceComponents(plan: readonly BotVerifyCheck[]): OperationComponentId[] {
+    const needed = new Set<OperationComponentId>()
+    for (const check of plan) {
+      const component = SURFACE_COMPONENT[check.surface]
+      if (component !== undefined) needed.add(component)
+    }
+    return [...needed]
+  }
+
+  /**
+   * Refresh and read the operation components an acceptance plan requires.
+   * Resolves with the first component that is not ready, or undefined when
+   * every required component is ready. A failed refresh of the single-owner
+   * desktop component defers the step instead of failing it.
+   */
+  async function checkComponents(
+    needed: readonly OperationComponentId[],
+  ): Promise<{ id: OperationComponentId; name: string; state: string; host: string } | undefined> {
+    if (needed.length === 0) return undefined
+    const service = options.operationComponents
+    if (service === undefined) throw new Error('operation components are unavailable on this host')
+    for (const id of needed) {
+      try {
+        await service.act(id, 'refresh')
+      } catch (error) {
+        // The desktop component has one owner per host: while another run holds
+        // it, the readiness refresh fails and this item waits for a later tick.
+        if (id === 'desktop') throw new BotStepPending('desktop.busy', `desktop component is busy: ${errorMessage(error)}`)
+        throw error
+      }
+    }
+    const snapshots = await service.list()
+    for (const id of needed) {
+      const snapshot = snapshots.find(entry => entry.id === id)
+      if (snapshot === undefined) return { id, name: id, state: 'unknown', host: 'this host' }
+      if (snapshot.state !== 'ready') return { id, name: snapshot.name, state: snapshot.state, host: snapshot.host }
+    }
+    return undefined
+  }
+
+  /** Map a `test` task result back onto the plan's checks. */
+  function mapAcceptanceChecks(plan: readonly BotVerifyCheck[], output: unknown): BotAcceptanceCheck[] {
+    const parsed = asTestOutput(output)
+    const assessments = new Map((parsed?.assessments ?? []).map(entry => [entry.criterion_id, entry]))
+    const evidence = (parsed?.artifacts ?? []).map(artifact => artifact.path)
+    const checks: BotAcceptanceCheck[] = []
+    for (const check of plan) {
+      if (check.surface === 'static') {
+        // A static check (lint, typecheck, reading the code) never verifies a
+        // runtime claim, so it is always reported as not verified.
+        checks.push({
+          claim: check.claim,
+          method: check.recipe,
+          status: 'not_verified',
+          note: 'static check; it cannot verify a runtime claim',
+        })
+        continue
+      }
+      const assessment = assessments.get(check.id)
+      const status = assessment?.status === 'passed'
+        ? 'verified' as const
+        : assessment?.status === 'failed' ? 'failed' as const : 'not_verified' as const
+      checks.push({
+        claim: check.claim,
+        method: check.recipe,
+        status,
+        ...(evidence.length === 0 ? {} : { evidence }),
+        ...(assessment?.reason === undefined ? {} : { note: assessment.reason }),
+      })
+    }
+    return checks
+  }
+
+  /** The follow-up sent to a session when acceptance found failing checks. */
+  function buildAcceptanceFailureText(item: BotItemRecord, checks: readonly BotAcceptanceCheck[], output: unknown): string {
+    const failed = checks.filter(check => check.status === 'failed')
+    const parsed = asTestOutput(output)
+    const artifacts = (parsed?.artifacts ?? []).map(artifact => artifact.path)
+    const lines: string[] = []
+    lines.push(`Bot item ${item.id}: acceptance found ${failed.length} failing check(s).`)
+    lines.push(`Failing checks:\n${failed.map((check) => `- ${check.claim}\n  how: ${check.method}${check.note === undefined ? '' : `\n  reason: ${check.note}`}`).join('\n')}`)
+    if (artifacts.length > 0) lines.push(`Evidence:\n${artifacts.map(path => `- ${path}`).join('\n')}`)
+    lines.push('Fix the failing checks in your worktree, commit there, and reply `BOT-READY <head sha>`.')
+    return lines.join('\n')
+  }
+
+  /** Send one follow-up into an item's own session, reusing the session's model. */
+  async function sendSessionFollowUp(bot: BotRecord, item: BotItemRecord, text: string): Promise<void> {
+    if (item.sessionId === undefined) throw new Error('item has no session for a follow-up')
+    const model = resolveSendModel(bot, item)
+    if (model === undefined) throw new Error('no routed model is available for the follow-up')
+    await session.send(item.sessionId, { text, model })
+    store.patchItem(item.id, { sessionModel: model })
+  }
+
+  /**
+   * The dispatch brief: the verified brief, the acceptance checks, the working
+   * rules and the idempotency marker. It names the worktree so every dispatched
+   * task run binds it, and demands the `Refs: bot/<itemId>` commit trailer.
+   */
+  function dispatchBrief(item: BotItemRecord, step: BotStepRecord): string {
+    const envelope = verifyEnvelope(item)
+    const lines: string[] = []
+    lines.push(`Bot item ${item.id}${item.title === undefined ? '' : `: ${item.title}`}`)
+    if (item.project !== undefined) lines.push(`Project: ${item.project}`)
+    if (item.worktreeId !== undefined) lines.push(`Worktree id: ${item.worktreeId}`)
+    const brief = envelope?.brief
+    if (brief !== undefined && brief.trim() !== '') lines.push(`Brief:\n${brief}`)
+    else if (item.body !== undefined) lines.push(`Request:\n${item.body}`)
+    const checks = envelope?.acceptance?.checks ?? []
+    if (checks.length > 0) {
+      lines.push(`Acceptance checks that must hold:\n${checks.map(check => `- [${check.surface}] ${check.claim} — ${check.recipe}`).join('\n')}`)
+    }
+    lines.push([
+      'Rules: keep the diff minimal; add no tests unless they are needed;',
+      `work only in worktree ${item.worktreeId ?? '(unnamed)'} and bind every dispatched task to it;`,
+      `commit locally in that worktree with the trailer \`Refs: bot/${item.id}\`;`,
+      'never merge, push, tag or release;',
+      'finish with a line `BOT-READY <head sha>` when done or `BOT-BLOCKED <question>` when blocked.',
+    ].join(' '))
+    lines.push(`[bot:${step.idemKey}]`)
+    return lines.join('\n\n')
   }
 
   /**
@@ -463,11 +861,12 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   const sessionCreate: BotStepHandler = {
+    doneState: 'dispatched',
     async probe({ item }) {
       return item.sessionId === undefined ? 'not-done' : 'done'
     },
     async run({ bot, item }) {
-      if (item.sessionId !== undefined) return { output: { sessionId: item.sessionId, reused: true } }
+      if (item.sessionId !== undefined) return { output: { sessionId: item.sessionId, reused: true }, to: 'dispatched' }
       const created = await session.createSession()
       // The session feature exposes only archived/pinned list metadata, so the
       // bot owns the {bot, item} association on the item row, which is the
@@ -479,7 +878,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         code: 'session.bound',
         message: `session ${created.sessionId} bound to bot ${bot.id} item ${item.id}`,
       })
-      return { output: { sessionId: created.sessionId, bot: bot.id, item: item.id }, patch: { sessionId: created.sessionId } }
+      return { output: { sessionId: created.sessionId, bot: bot.id, item: item.id }, to: 'dispatched', patch: { sessionId: created.sessionId } }
     },
   }
 
@@ -536,7 +935,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       if (item.sessionId === undefined) throw new Error('item has no session')
       const model = resolveSendModel(bot, item)
       if (model === undefined) throw new Error('no routed model is available for this item')
-      const text = options.buildBrief?.(item, step) ?? defaultBrief(item, step)
+      const text = options.buildBrief?.(item, step) ?? dispatchBrief(item, step)
       const result = await session.send(item.sessionId, { text, model })
       return {
         output: { turn: result.turn, model },
@@ -558,17 +957,13 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     item: BotItemRecord,
     conflict: ReturnType<ProjectManager['rebaseWorktree']>,
   ): Promise<void> {
-    if (item.sessionId === undefined) throw new Error('item has no session for the rebase conflict follow-up')
-    const model = resolveSendModel(bot, item)
-    if (model === undefined) throw new Error('no routed model is available for the rebase conflict follow-up')
-    await session.send(item.sessionId, { text: buildRebaseConflictText(item, conflict), model })
-    store.patchItem(item.id, { sessionModel: model })
+    await sendSessionFollowUp(bot, item, buildRebaseConflictText(item, conflict))
     store.appendLog({
       botId: bot.id,
       itemId: item.id,
       level: 'info',
       code: 'rebase.conflict_sent',
-      message: `rebase conflict sent to session ${item.sessionId}`,
+      message: `rebase conflict sent to session ${item.sessionId ?? '(unknown)'}`,
     })
   }
 
@@ -773,7 +1168,386 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     },
   }
 
+  /**
+   * Verify one `discovered` item with the `bot-verify` judgment task in the
+   * project checkout on the current default branch. `real` records the project,
+   * class, brief and acceptance plan so dispatch can proceed; `not_real`
+   * dismisses the item and queues its notification; `park` parks it with the
+   * task's question. The task is read-only, so a restart may safely retry it.
+   */
+  const verifyStep: BotStepHandler = {
+    async probe({ item }) {
+      return item.state === 'discovered' || item.state === 'verifying' ? 'not-done' : 'done'
+    },
+    async run({ bot, item, config }) {
+      if (config === undefined) throw new Error('bot config is unavailable for verification')
+      const runProject = item.project ?? config.projects[0]?.id
+      if (runProject === undefined) {
+        return {
+          to: 'parked',
+          patch: { parkedFrom: item.state, question: 'no project is configured to verify this request against', error: 'no_project' },
+        }
+      }
+      const routed = routedModelFor(config, 'judgment')
+      if (routed.target === undefined) noteAutomaticRouting(bot)
+      const output = await runBotTask({
+        task: 'bot-verify',
+        project: runProject,
+        input: {
+          request: { title: item.title ?? '', ...(item.body === undefined ? {} : { body: item.body }) },
+          ...(item.project === undefined ? {} : { project: item.project }),
+          projects: config.projects.map(policy => ({ id: policy.id })),
+          classes: Object.keys(config.routing),
+        },
+        model: routed,
+        ...(routed.target === undefined ? {} : { target: routed.target }),
+      })
+      const verdict = asVerifyEnvelope(output)
+      if (verdict === undefined) throw new Error('bot-verify returned an unrecognised decision')
+      if (verdict.decision === 'park') {
+        return {
+          output: verdict,
+          to: 'parked',
+          patch: { parkedFrom: item.state, question: verdict.question ?? verdict.reason, error: 'verify_parked' },
+        }
+      }
+      if (verdict.decision === 'not_real') {
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'verify.not_real',
+          message: `not dispatched: ${verdict.reason}`,
+        })
+        // Queued while the item is still `verifying`; both run on a later tick,
+        // once the item is already dismissed and terminal.
+        enqueueStep(item, 'annotate')
+        enqueueStep(item, 'notify')
+        return { output: verdict, to: 'dismissed', patch: { error: verdict.reason } }
+      }
+      const project = mapProject(config, verdict.project ?? item.project)
+      if (project === undefined) {
+        return {
+          output: verdict,
+          to: 'parked',
+          patch: {
+            parkedFrom: item.state,
+            question: `unknown project "${verdict.project ?? ''}"; configured projects are ${config.projects.map(policy => policy.id).join(', ')}`,
+            error: 'unknown_project',
+          },
+        }
+      }
+      const className = verdict.class === undefined || !(verdict.class in config.routing) ? 'default' : verdict.class
+      store.appendLog({
+        botId: bot.id,
+        itemId: item.id,
+        level: 'info',
+        code: 'verify.real',
+        message: `verified as real for ${project} (class ${className})`,
+      })
+      return { output: verdict, to: 'verified', patch: { project, class: className, error: null } }
+    },
+  }
+
+  /**
+   * Review one `in_progress` item with the `bot-review` judgment task, on new
+   * ledger activity or after an idle timeout, and never while the session is
+   * running a turn. The correction and ready follow-ups reuse the session's own
+   * latest model, and corrections are capped by the bot budget.
+   */
+  const reviewStep: BotStepHandler = {
+    // No probe on purpose: a started review may already have sent a correction,
+    // so a restart marks it unknown and never sends it a second time.
+    async run({ bot, item, config }) {
+      if (config === undefined) throw new Error('bot config is unavailable for review')
+      if (item.sessionId === undefined) throw new Error('item has no session to review')
+      if (item.project === undefined) throw new Error('item has no project to review')
+      // The session may have started a turn between the enqueue and this run.
+      if (sessionRunning(item.sessionId)) {
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'review.skipped',
+          message: 'session is running a turn; review deferred',
+        })
+        return {}
+      }
+      const blocked = latestReply(item.sessionId)?.match(BOT_BLOCKED_PATTERN)
+      if (blocked !== null && blocked !== undefined) {
+        const question = blocked[1]?.trim() ?? 'the session is blocked'
+        store.appendLog({ botId: bot.id, itemId: item.id, level: 'warn', code: 'review.blocked', message: question })
+        return { to: 'parked', patch: { parkedFrom: 'in_progress', question, error: 'session_blocked' } }
+      }
+      const counters = item.counters ?? {}
+      const corrections = counters.corrections ?? 0
+      const envelope = verifyEnvelope(item)
+      const diff = item.worktreeId === undefined
+        ? ''
+        : truncateHead(await projectManager.diff({ project: item.project, worktree_id: item.worktreeId }), MAX_DIFF_CHARS)
+      const routed = routedModelFor(config, 'judgment')
+      if (routed.target === undefined) noteAutomaticRouting(bot)
+      const output = await runBotTask({
+        task: 'bot-review',
+        project: item.project,
+        ...(item.worktreeId === undefined ? {} : { worktree: item.worktreeId }),
+        input: {
+          request: { title: item.title ?? '', ...(item.body === undefined ? {} : { body: item.body }) },
+          brief: envelope?.brief ?? '',
+          worktree: item.worktreeId ?? '',
+          diff,
+          recentTurns: recentReplies(item.sessionId, MAX_TURNS_CHARS),
+          corrections,
+        },
+        model: routed,
+        ...(routed.target === undefined ? {} : { target: routed.target }),
+      })
+      const verdict = asReviewEnvelope(output)
+      if (verdict === undefined) throw new Error('bot-review returned an unrecognised verdict')
+      // Mark the review point so the next review waits for new activity (or the
+      // idle window) instead of running every tick.
+      const reviewed = {
+        ...counters,
+        lastReviewSeq: latestEventSeq(item.sessionId),
+        lastReviewAtMs: Date.now(),
+      }
+      if (verdict.verdict === 'park') {
+        return {
+          output: verdict,
+          to: 'parked',
+          patch: { parkedFrom: 'in_progress', question: verdict.question ?? verdict.reason, error: 'review_parked' },
+        }
+      }
+      if (verdict.verdict === 'continue') return { output: verdict, patch: { counters: reviewed } }
+      if (verdict.verdict === 'correct') {
+        if (corrections + 1 > config.budgets.maxCorrections) {
+          return {
+            output: verdict,
+            to: 'parked',
+            patch: {
+              parkedFrom: 'in_progress',
+              counters: reviewed,
+              question: `correction budget exhausted (${corrections + 1}/${config.budgets.maxCorrections}): ${verdict.reason}`,
+              error: 'corrections_exhausted',
+            },
+          }
+        }
+        await sendSessionFollowUp(bot, item, verdict.correction ?? verdict.reason)
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'review.correction',
+          message: `correction ${corrections + 1}/${config.budgets.maxCorrections} sent: ${verdict.reason}`,
+        })
+        return { output: verdict, patch: { counters: { ...reviewed, corrections: corrections + 1 } } }
+      }
+      const gate = await checkReadyGate(item)
+      if (gate.ok) {
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'review.ready',
+          message: 'the ready gate passed; the item enters acceptance',
+        })
+        return { output: { ...verdict, gate: 'passed' }, to: 'ready', patch: { counters: reviewed } }
+      }
+      await sendSessionFollowUp(
+        bot,
+        item,
+        `The work is not ready to accept yet: ${gate.failed}. Finish the change, commit in your worktree, and reply \`BOT-READY <head sha>\`.`,
+      )
+      store.appendLog({
+        botId: bot.id,
+        itemId: item.id,
+        level: 'info',
+        code: 'review.gate_failed',
+        message: `ready gate failed: ${gate.failed}`,
+      })
+      return { output: { ...verdict, gate: 'failed', failed: gate.failed }, patch: { counters: reviewed } }
+    },
+  }
+
+  /**
+   * Acceptance for a lane-holding `accepting` item after its rebase: check the
+   * operation components the plan requires, run the builtin `test` task bound to
+   * the item's worktree, map its assessments back onto the plan's checks and
+   * gate the item on them. A required component that is not ready parks the
+   * item; a busy desktop component leaves the step pending for a later tick.
+   */
+  const acceptStep: BotStepHandler = {
+    // The effect is a local task run, so a started-but-unfinished acceptance is
+    // simply retried; recorded checks prove whether it already finished.
+    async probe({ item }) {
+      return item.acceptance !== undefined && item.acceptance.length > 0 ? 'done' : 'not-done'
+    },
+    async run({ bot, item, config }) {
+      if (config === undefined) throw new Error('bot config is unavailable for acceptance')
+      if (!item.project || !item.worktreeId) throw new Error('item has no project worktree to accept')
+      const plan = acceptancePlan(item)
+      if (plan.length === 0) {
+        return {
+          to: 'parked',
+          patch: { parkedFrom: item.state, question: 'the item has no acceptance plan', error: 'no_acceptance_plan' },
+        }
+      }
+      const runtimeChecks = plan.filter(check => check.surface !== 'static')
+      if (runtimeChecks.length === 0) {
+        return {
+          to: 'parked',
+          patch: {
+            parkedFrom: item.state,
+            question: 'the acceptance plan has no runtime check; a static check cannot verify the change',
+            error: 'no_runtime_check',
+          },
+        }
+      }
+      const notReady = await checkComponents(plannedSurfaceComponents(runtimeChecks))
+      if (notReady !== undefined) {
+        const detail = `${notReady.name} is ${notReady.state} on host ${notReady.host}`
+        store.appendLog({ botId: bot.id, itemId: item.id, level: 'warn', code: 'acceptance.component', message: detail })
+        await escalate(bot, config, `component:${notReady.id}:${notReady.state}`, `acceptance blocked: ${detail}`)
+        return {
+          output: { component: notReady },
+          to: 'parked',
+          patch: {
+            parkedFrom: item.state,
+            question: `acceptance needs a ready operation component: ${detail}`,
+            error: 'component_not_ready',
+          },
+        }
+      }
+      const capability = runtimeChecks.some(check => check.surface === 'native')
+        ? 'computer-use' as const
+        : runtimeChecks.some(check => check.surface === 'renderer') ? 'browser-use' as const : undefined
+      const routed = routedModelFor(config, 'acceptance')
+      if (routed.target === undefined) noteAutomaticRouting(bot)
+      let output: unknown
+      try {
+        output = await runBotTask({
+          task: 'test',
+          project: item.project,
+          worktree: item.worktreeId,
+          input: {
+            acceptance_criteria: runtimeChecks.map(check => ({
+              id: check.id,
+              given: `the ${check.surface} surface of ${item.project}`,
+              when: check.recipe,
+              then: check.claim,
+            })),
+            ...(capability === undefined ? {} : { capability }),
+          },
+          model: routed,
+          ...(routed.target === undefined ? {} : { target: routed.target }),
+        })
+      } catch (error) {
+        const message = errorMessage(error)
+        // The desktop component is single-owner: while another run holds it, the
+        // test cannot start. Leave the step pending and retry on a later tick.
+        if (/desktop/i.test(message) && /busy|not ready|owner|held/i.test(message)) {
+          throw new BotStepPending('desktop.busy', `desktop acceptance deferred: ${message}`)
+        }
+        throw error
+      }
+      const checks = mapAcceptanceChecks(plan, output)
+      const acceptanceAttempts = (item.counters?.acceptanceAttempts ?? 0) + 1
+      const maxAttempts = config.budgets.maxAcceptanceAttempts
+      const failed = checks.filter(check => check.status === 'failed')
+      if (failed.length > 0) {
+        if (acceptanceAttempts > maxAttempts) {
+          return {
+            output,
+            to: 'parked',
+            patch: {
+              parkedFrom: item.state,
+              acceptance: checks,
+              counters: { ...(item.counters ?? {}), acceptanceAttempts },
+              question: `acceptance budget exhausted (${acceptanceAttempts}/${maxAttempts}); failing checks: ${failed.map(check => check.claim).join('; ')}`,
+              error: 'acceptance_failed',
+            },
+          }
+        }
+        store.transitionItem(item.id, 'rejected', {
+          acceptance: checks,
+          counters: { ...(item.counters ?? {}), acceptanceAttempts },
+          error: 'acceptance_failed',
+        })
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'warn',
+          code: 'acceptance.failed',
+          message: `${failed.length} check(s) failed; the session was asked to fix them`,
+        })
+        await sendSessionFollowUp(bot, item, buildAcceptanceFailureText(item, checks, output))
+        return { output, to: 'in_progress' }
+      }
+      const unverified = checks.filter(check => check.status === 'not_verified')
+      if (unverified.length > 0) {
+        return {
+          output,
+          to: 'parked',
+          patch: {
+            parkedFrom: item.state,
+            acceptance: checks,
+            counters: { ...(item.counters ?? {}), acceptanceAttempts },
+            question: `acceptance could not verify: ${unverified.map(check => `${check.claim} (${check.note ?? 'not verified'})`).join('; ')}`,
+            error: 'acceptance_not_verified',
+          },
+        }
+      }
+      store.appendLog({
+        botId: bot.id,
+        itemId: item.id,
+        level: 'info',
+        code: 'acceptance.passed',
+        message: `all ${checks.length} check(s) verified`,
+      })
+      return {
+        output,
+        to: 'accepted',
+        patch: { acceptance: checks, counters: { ...(item.counters ?? {}), acceptanceAttempts } },
+      }
+    },
+  }
+
+  /**
+   * Write the outcome back to the source item. The inbox adapter may not
+   * implement `annotate`; an adapter error is logged and the step still
+   * succeeds, because the annotation is a courtesy rather than a delivery
+   * guarantee.
+   */
+  const annotateStep: BotStepHandler = {
+    sideEffect: true,
+    dryRun: ({ item }) => ({
+      output: { dryRun: true, wouldAnnotate: { sourceId: item.sourceId, text: dismissReason(item) } },
+    }),
+    async run({ bot, item, config }) {
+      if (config === undefined) throw new Error('bot config is unavailable for inbox.annotate')
+      const text = dismissReason(item)
+      try {
+        const result = await createInboxClient(config.inbox).annotate(item.sourceId, text)
+        resetAdapterErrors(bot.id)
+        return { output: { annotated: result.ok } }
+      } catch (error) {
+        const code = error instanceof BotAdapterError ? error.code : 'adapter.error'
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'annotate.skipped',
+          message: `inbox.annotate is not available (${code})`,
+        })
+        return { output: { annotated: false, reason: code } }
+      }
+    },
+  }
+
   const handlers: Partial<Record<BotStepKind, BotStepHandler>> = {
+    verify: verifyStep,
+    review: reviewStep,
+    accept: acceptStep,
     'lane.acquire': laneAcquire,
     'worktree.create': worktreeCreate,
     'session.create': sessionCreate,
@@ -782,6 +1556,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     merge: mergeStep,
     push: pushStep,
     'inbox.complete': inboxCompleteStep,
+    annotate: annotateStep,
     notify: notifyStep,
   }
 
@@ -1059,8 +1834,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /** Insert one pending step unless its idempotency key already exists. */
-  function enqueueStep(item: BotItemRecord, kind: BotStepKind, patch?: BotItemPatch): BotStepRecord | undefined {
-    const idemKey = idemKeyFor(item, kind)
+  function enqueueStep(item: BotItemRecord, kind: BotStepKind, patch?: BotItemPatch, attempt = 1): BotStepRecord | undefined {
+    const idemKey = idemKeyFor(item, kind, attempt)
     if (store.findStepByIdemKey(idemKey) !== undefined) return undefined
     const { step } = store.beginStep({
       itemId: item.id,
@@ -1072,13 +1847,55 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
-   * Enqueue the next step of an item that is waiting for one: the lane acquire
-   * when it is `ready`, then rebase and acceptance in `accepting`, merge after
-   * acceptance, push after merge, then inbox.complete and notify in
+   * Enqueue one step unless a done attempt of the same kind already exists.
+   * Returns true while the item must wait, because a new or unfinished step is
+   * queued; false lets the caller move on to the next step of the chain.
+   */
+  function ensureStep(item: BotItemRecord, kind: BotStepKind): boolean {
+    const existing = store.findStepByIdemKey(idemKeyFor(item, kind))
+    if (existing === undefined) {
+      enqueueStep(item, kind)
+      return true
+    }
+    return existing.status !== 'done'
+  }
+
+  /**
+   * Enqueue the next step of an item that is waiting for one: verify when it is
+   * `discovered`, the dispatch chain (worktree, session, brief) when it is
+   * `verified` or `dispatched`, a review when it is `in_progress`, the lane
+   * acquire when it is `ready`, then rebase and acceptance in `accepting`, merge
+   * after acceptance, push after merge, then inbox.complete and notify in
    * `completing`, so a pushed item always reaches `completed`.
    */
   function advanceItem(bot: BotRecord, item: BotItemRecord): void {
     if (isTerminalItemState(item.state)) return
+    if (item.state === 'discovered') {
+      // The deterministic discovered -> verifying write happens with the step.
+      enqueueStep(item, 'verify', { state: 'verifying' })
+      return
+    }
+    if (item.state === 'verified') {
+      // Worktree, then session, then the brief; each waits for the previous.
+      if (ensureStep(item, 'worktree.create')) return
+      ensureStep(item, 'session.create')
+      return
+    }
+    if (item.state === 'dispatched') {
+      enqueueStep(item, 'session.send')
+      return
+    }
+    if (item.state === 'in_progress') {
+      // Review only on new ledger activity or after an idle timeout, and never
+      // while the session is running a turn. Each review is a new attempt, so
+      // the journal keeps every verdict.
+      const { step, attempt } = latestStep(item, 'review')
+      if (step?.status === 'pending') return
+      if (item.sessionId === undefined || sessionRunning(item.sessionId)) return
+      if (!reviewDue(item)) return
+      enqueueStep(item, 'review', undefined, attempt + 1)
+      return
+    }
     if (item.state === 'ready') {
       // Deterministic ready -> accepting: the store takes the project's lane
       // inside the state write, and a busy lane leaves the item in `ready` to
@@ -1087,15 +1904,23 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       return
     }
     if (item.state === 'accepting') {
-      // Rebase runs first; acceptance follows once it is done. The accept
-      // handler arrives in a later stage, so until then the item waits in
-      // `accepting` and logs the step as unavailable.
-      const rebase = store.findStepByIdemKey(idemKeyFor(item, 'rebase'))
-      if (rebase === undefined) {
-        enqueueStep(item, 'rebase')
+      // Rebase runs first; acceptance follows once it is done. A failed or
+      // unproven acceptance runs again as a new attempt while no checks are
+      // recorded yet.
+      if (ensureStep(item, 'rebase')) return
+      const { step, attempt } = latestStep(item, 'accept')
+      if (step === undefined) {
+        enqueueStep(item, 'accept')
         return
       }
-      if (rebase.status === 'done') enqueueStep(item, 'accept')
+      if (step.status === 'pending') return
+      if ((item.acceptance?.length ?? 0) === 0) enqueueStep(item, 'accept', undefined, attempt + 1)
+      return
+    }
+    if (item.state === 'accepted') {
+      // The deterministic accepted -> merging write happens with the step, and
+      // the item keeps the project lane across both states.
+      enqueueStep(item, 'merge', { state: 'merging' })
       return
     }
     if (item.state === 'merging') {
@@ -1196,9 +2021,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
 
   async function runStep(bot: BotRecord, step: BotStepRecord, config: BotConfig | undefined): Promise<void> {
     const item = store.getItem(bot.id, step.itemId)
-    if (isTerminalItemState(item.state)) {
+    if (isTerminalItemState(item.state) && !RESOLVED_ITEM_STEPS.has(step.kind)) {
       // A step of a resolved item (for example after a withdrawal cancelled its
-      // siblings) is never re-run.
+      // siblings) is never re-run. The closing effects of a resolved item — its
+      // notification and its inbox annotation — still run exactly once.
       store.markStepStatus(step.id, 'unknown')
       return
     }
@@ -1284,6 +2110,12 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         })
         return
       }
+      if (error instanceof BotStepPending) {
+        // The step must wait for a later tick (a single-owner component is busy,
+        // for example); it stays pending and is retried, not failed.
+        store.appendLog({ botId: bot.id, itemId: item.id, level: 'info', code: error.code, message: error.message })
+        return
+      }
       await failStep(bot, item, step, error, config)
     }
   }
@@ -1294,7 +2126,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   async function reconcileBot(bot: BotRecord): Promise<void> {
     for (const step of store.listPendingSteps(bot.id)) {
       const item = store.getItem(bot.id, step.itemId)
-      if (isTerminalItemState(item.state)) {
+      if (isTerminalItemState(item.state) && !RESOLVED_ITEM_STEPS.has(step.kind)) {
         store.markStepStatus(step.id, 'unknown')
         continue
       }
@@ -1577,6 +2409,14 @@ function sameModel(left: BotModel, right: BotModel): boolean {
 
 /** The one user-facing message per item: outcome, merge, checks and gaps. */
 function buildNotificationText(item: BotItemRecord): string {
+  // A dismissed request was never dispatched, and a withdrawn source was never
+  // merged: each has its own one-line message.
+  if (item.state === 'dismissed') {
+    return `Not dispatched: ${item.title ?? item.sourceId} — ${item.error ?? 'the request is not real'}`
+  }
+  if (item.state === 'withdrawn') {
+    return `Withdrawn: ${item.title ?? item.sourceId} — not merged`
+  }
   const lines: string[] = []
   lines.push(`Bot item ${item.id}${item.title === undefined ? '' : `: ${item.title}`}`)
   lines.push(`State: ${item.state}`)
@@ -1593,6 +2433,11 @@ function buildNotificationText(item: BotItemRecord): string {
     lines.push(notVerified.length > 0 ? `Not verified: ${notVerified.join('; ')}` : 'Not verified: none')
   }
   return lines.join('\n')
+}
+
+/** The reason recorded on a dismissed item, for its notification and annotation. */
+function dismissReason(item: BotItemRecord): string {
+  return item.error ?? 'the request is not real'
 }
 
 /** The rebase-conflict follow-up: the offending paths, the target commits and the ask. */
@@ -1615,17 +2460,127 @@ function buildRebaseConflictText(item: BotItemRecord, conflict: ReturnType<Proje
   return lines.join('\n')
 }
 
-/** The generic dispatch brief: the request, the rules and the idempotency marker. */
-function defaultBrief(item: BotItemRecord, step: BotStepRecord): string {
-  return [
-    `Bot item ${item.id}${item.title === undefined ? '' : `: ${item.title}`}`,
-    ...(item.body === undefined ? [] : [`Request:\n${item.body}`]),
-    ...(item.project === undefined ? [] : [`Project: ${item.project}`]),
-    [
-      'Rules: keep the diff minimal; add no tests unless they are needed;',
-      'commit locally in this worktree; never merge, push, tag or release;',
-      'end with `BOT-READY <head sha>` when done or `BOT-BLOCKED <question>`.',
-    ].join(' '),
-    `[bot:${step.idemKey}]`,
-  ].join('\n\n')
+// ─── task output shapes the host acts on ──────────────────────────────────
+
+/** One acceptance check of a `bot-verify` plan. */
+interface BotVerifyCheck {
+  id: string
+  claim: string
+  surface: 'daemon' | 'renderer' | 'native' | 'static'
+  recipe: string
 }
+
+/** The subset of a `bot-verify` result the host acts on. */
+interface BotVerifyEnvelope {
+  decision: 'real' | 'not_real' | 'park'
+  reason: string
+  project?: string
+  class?: string
+  brief?: string
+  acceptance?: { checks: BotVerifyCheck[] }
+  touchedPaths?: string[]
+  question?: string
+}
+
+/** The subset of a `bot-review` result the host acts on. */
+interface BotReviewEnvelope {
+  verdict: 'continue' | 'correct' | 'ready' | 'park'
+  reason: string
+  correction?: string
+  question?: string
+}
+
+/** The subset of a builtin `test` result the host acts on. */
+interface BotTestOutput {
+  assessments?: { criterion_id: string; status: string; reason?: string }[]
+  artifacts?: { path: string; kind?: string }[]
+}
+
+function isVerifyCheck(value: unknown): value is BotVerifyCheck {
+  if (value === null || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return typeof record.id === 'string'
+    && typeof record.claim === 'string'
+    && typeof record.recipe === 'string'
+    && (record.surface === 'daemon' || record.surface === 'renderer'
+      || record.surface === 'native' || record.surface === 'static')
+}
+
+/** Validate the parts of a `bot-verify` result the host relies on. */
+function asVerifyEnvelope(value: unknown): BotVerifyEnvelope | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const decision = record.decision
+  if (decision !== 'real' && decision !== 'not_real' && decision !== 'park') return undefined
+  const reason = typeof record.reason === 'string' ? record.reason : ''
+  if (reason.trim() === '') return undefined
+  const acceptance = record.acceptance as { checks?: unknown } | undefined
+  const checks = Array.isArray(acceptance?.checks) ? acceptance.checks.filter(isVerifyCheck) : []
+  return {
+    decision,
+    reason,
+    ...(typeof record.project === 'string' && record.project !== '' ? { project: record.project } : {}),
+    ...(typeof record.class === 'string' && record.class !== '' ? { class: record.class } : {}),
+    ...(typeof record.brief === 'string' && record.brief !== '' ? { brief: record.brief } : {}),
+    ...(checks.length === 0 ? {} : { acceptance: { checks } }),
+    ...(Array.isArray(record.touchedPaths)
+      ? { touchedPaths: record.touchedPaths.filter((entry): entry is string => typeof entry === 'string') }
+      : {}),
+    ...(typeof record.question === 'string' && record.question !== '' ? { question: record.question } : {}),
+  }
+}
+
+/** Validate the parts of a `bot-review` result the host relies on. */
+function asReviewEnvelope(value: unknown): BotReviewEnvelope | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const verdict = record.verdict
+  if (verdict !== 'continue' && verdict !== 'correct' && verdict !== 'ready' && verdict !== 'park') return undefined
+  const reason = typeof record.reason === 'string' ? record.reason : ''
+  if (reason.trim() === '') return undefined
+  return {
+    verdict,
+    reason,
+    ...(typeof record.correction === 'string' && record.correction !== '' ? { correction: record.correction } : {}),
+    ...(typeof record.question === 'string' && record.question !== '' ? { question: record.question } : {}),
+  }
+}
+
+/** Read the parts of a builtin `test` result the host maps onto its checks. */
+function asTestOutput(value: unknown): BotTestOutput | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const assessments = Array.isArray(record.assessments)
+    ? record.assessments.filter((entry): entry is { criterion_id: string; status: string; reason?: string } => {
+        if (entry === null || typeof entry !== 'object') return false
+        const item = entry as Record<string, unknown>
+        return typeof item.criterion_id === 'string' && typeof item.status === 'string'
+      })
+    : []
+  const artifacts = Array.isArray(record.artifacts)
+    ? record.artifacts.filter((entry): entry is { path: string; kind?: string } => {
+        if (entry === null || typeof entry !== 'object') return false
+        return typeof (entry as Record<string, unknown>).path === 'string'
+      })
+    : []
+  return { assessments, artifacts }
+}
+
+/**
+ * Thrown by a step handler that must leave its step pending for a later tick,
+ * for example while a single-owner operation component is busy. The step is not
+ * failed and not finished: the next tick retries it.
+ */
+class BotStepPending extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message)
+    this.name = 'BotStepPending'
+  }
+}
+
+/**
+ * The closing effects of a resolved item. Every other step of a terminal item
+ * is never re-run, so a withdrawal or dismissal that raced a queued step can
+ * never execute it; the notification and its inbox annotation still run once.
+ */
+const RESOLVED_ITEM_STEPS: ReadonlySet<BotStepKind> = new Set<BotStepKind>(['notify', 'annotate'])

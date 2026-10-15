@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 import { resolveWrenyardConfigRoot } from '@wrenyard/paths'
-import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
+import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 
 /**
  * Bot configuration loader.
@@ -72,6 +72,12 @@ export interface BotRoutingEntry {
   provider: string
   model: string
   reasoningEffort: ReasoningEffort
+  /**
+   * Optional canonical run target `<provider>/<model>:<client>`. When present,
+   * task runs of this class select it explicitly; absent means automatic
+   * routing.
+   */
+  target?: string
 }
 
 /** Routing by item class; `default`, `acceptance` and `judgment` are required. */
@@ -140,7 +146,7 @@ const TOP_LEVEL_KEYS = [
 const COMMAND_ADAPTER_KEYS = ['kind', 'argv', 'cwd', 'env', 'timeoutMs'] as const
 const MCP_ADAPTER_KEYS = ['kind', 'server', 'tool', 'timeoutMs'] as const
 const PROJECT_KEYS = ['id', 'match', 'merge', 'push', 'release'] as const
-const ROUTING_ENTRY_KEYS = ['provider', 'model', 'reasoningEffort'] as const
+const ROUTING_ENTRY_KEYS = ['provider', 'model', 'reasoningEffort', 'target'] as const
 const CONCURRENCY_KEYS = ['maxActiveItems', 'maxDispatchPerTick'] as const
 const CADENCE_KEYS = ['tickSeconds', 'pollMinutes'] as const
 const QUIET_HOURS_KEYS = ['timeZone', 'start', 'end', 'defer'] as const
@@ -421,11 +427,12 @@ function validateRouting(issues: string[], value: unknown): BotRouting | undefin
     const provider = readString(issues, `${path}.provider`, entry.provider, { required: true })
     const model = readString(issues, `${path}.model`, entry.model, { required: true })
     const reasoningEffort = readReasoningEffort(issues, `${path}.reasoningEffort`, entry.reasoningEffort)
+    const target = readRunTarget(issues, `${path}.target`, entry.target)
     if (provider === undefined || model === undefined || reasoningEffort === undefined) {
       ok = false
       continue
     }
-    routing[className] = { provider, model, reasoningEffort }
+    routing[className] = { provider, model, reasoningEffort, ...(target === undefined ? {} : { target }) }
   }
   for (const required of REQUIRED_ROUTING_CLASSES) {
     if (!(required in value)) {
@@ -446,6 +453,24 @@ function readReasoningEffort(issues: string[], path: string, value: unknown): Re
     return undefined
   }
   return value as ReasoningEffort
+}
+
+/**
+ * Optional canonical run target `<provider>/<model>:<client>`, validated with
+ * the same parser the task dispatcher uses, so a routing entry can only name a
+ * target the daemon could actually select.
+ */
+function readRunTarget(issues: string[], path: string, value: unknown): string | undefined {
+  const target = readString(issues, path, value)
+  if (target === undefined) return undefined
+  try {
+    parseRunSyntax(target)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    issues.push(`${path} must be a run target like <provider>/<model>:<client> (${reason})`)
+    return undefined
+  }
+  return target
 }
 
 function validateQuietHours(issues: string[], path: string, value: unknown): BotQuietHours | undefined {

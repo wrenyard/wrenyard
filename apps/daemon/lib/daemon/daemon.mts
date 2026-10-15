@@ -20,13 +20,14 @@ import { registerSessionHandlers } from '../server/handlers/session.mts'
 import { registerScheduleHandlers } from '../server/handlers/schedule.mts'
 import { registerBotHandlers } from '../server/handlers/bot.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
+import type { TaskSettingsLayer } from '../protocol/methods/task.mts'
 import type { WorkspaceSwitchResult } from '../protocol/registry.mts'
-import { TaskService } from '../core/task/service.mts'
+import { TaskService, isTaskRunRejection } from '../core/task/service.mts'
 import { createSession, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
-import { createBotHost, type BotHost } from './services/bot/host.mts'
+import { createBotHost, type BotHost, type BotTaskRunner } from './services/bot/host.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
@@ -856,12 +857,57 @@ async function createForemanDaemonResources(
     // The bot host shares the same workspace scope, the same in-process session
     // and the same admission gate as the scheduler, and persists into the same
     // daemon database, so a stopped bot stays stopped across a restart.
+    // The bot host runs its judgment and acceptance tasks through the same
+    // in-process TaskService the session host uses: one run per decision, with
+    // the project (and the item's managed worktree) bound explicitly.
+    //
+    // A routing entry may carry an explicit `target` (a canonical
+    // `provider/model:client` run target). When it does, the run selects that
+    // target through the same one-shot invocation settings layer other callers
+    // use. An unknown or unavailable target fails the run; it never falls back
+    // silently to automatic routing. An entry without a target leaves the run
+    // on automatic routing, and the host records `routing.auto` once per bot.
+    const botTaskRunner: BotTaskRunner = async ({ task, project, worktree, input, model, target }) => {
+      try {
+        const invocationSettings: TaskSettingsLayer | undefined = target === undefined
+          ? undefined
+          : {
+              mode: 'explicit',
+              explicit_runtime: { kind: 'target', target },
+              ...(model === undefined ? {} : { automatic: { expected_reasoning_effort: model.reasoningEffort } }),
+            }
+        const accepted = await taskService.run({
+          taskId: task,
+          project,
+          input,
+          ...(worktree === undefined ? {} : { worktree }),
+          ...(invocationSettings === undefined ? {} : { invocationSettings }),
+        })
+        if (isTaskRunRejection(accepted)) {
+          return { status: 'failed', runId: '', error: `run rejected: ${accepted.error_type}` }
+        }
+        const finished = await taskService.wait(accepted.task_run_id)
+        const status = typeof finished.status === 'string' ? finished.status : 'unknown'
+        return {
+          status: status === 'done' ? 'done'
+            : status === 'failed' ? 'failed'
+              : status === 'cancelled' ? 'cancelled'
+                : status === 'timeout' ? 'timeout' : 'unknown',
+          ...(finished.output === undefined ? {} : { output: finished.output }),
+          runId: accepted.task_run_id,
+          ...(typeof finished.error === 'string' && finished.error !== '' ? { error: finished.error } : {}),
+        }
+      } catch (error) {
+        return { status: 'failed', runId: '', error: error instanceof Error ? error.message : String(error) }
+      }
+    }
     const botHost = createBotHost({
       db: runtime.db,
       workspaceRoot,
       session,
       log: writeDaemonLog,
       canRun: () => !options.isShuttingDown() && options.isSwitching?.() !== true,
+      taskRunner: botTaskRunner,
       // bot.health reports the device and daemon it runs on: hostname/platform/
       // arch from this process plus the same suite identity health.ping reports.
       identity: () => {

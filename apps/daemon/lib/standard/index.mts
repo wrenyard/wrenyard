@@ -6,6 +6,8 @@ import codeReviewTask from './tasks/code-review.mts'
 import commitTask from './tasks/commit.mts'
 import librarianTask from './tasks/librarian.mts'
 import oracleTask from './tasks/oracle.mts'
+import botVerifyTask from './tasks/bot-verify.mts'
+import botReviewTask from './tasks/bot-review.mts'
 
 export const BUILTIN_SOURCE_PATH = '(builtin)'
 
@@ -22,6 +24,9 @@ const catalog: readonly (BuiltinTaskEntry & BuiltinTaskMetadata)[] = [
   { name: 'commit', definition: commitTask as TaskDefinition, category: { id: 'commit', displayLabel: '提交' }, displayName: '提交更改' },
   { name: 'librarian', definition: librarianTask as TaskDefinition, category: { id: 'research', displayLabel: '资料研究' }, displayName: '资料研究' },
   { name: 'oracle', definition: oracleTask as TaskDefinition, category: { id: 'architecture', displayLabel: '复杂分析' }, displayName: '分析顾问' },
+  // Bot mode judgment tasks: the bot host runs them, never a user session.
+  { name: 'bot-verify', definition: botVerifyTask as TaskDefinition, category: { id: 'bot', displayLabel: '调度' }, displayName: '请求核实' },
+  { name: 'bot-review', definition: botReviewTask as TaskDefinition, category: { id: 'bot', displayLabel: '调度' }, displayName: '进度审查' },
 ]
 
 export const BUILTIN_METADATA: Readonly<Record<string, BuiltinTaskMetadata>> = Object.fromEntries([
