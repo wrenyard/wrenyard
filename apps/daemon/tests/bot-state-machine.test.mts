@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import type { Session } from '@wrenyard/session'
 import { initDb } from '../lib/db/connection.mts'
@@ -10,6 +14,7 @@ import {
 } from '../lib/daemon/services/bot/machine.mts'
 import { createBotStore } from '../lib/daemon/services/bot/store.mts'
 import { createBotHost } from '../lib/daemon/services/bot/host.mts'
+import { itemFingerprint } from '../lib/daemon/services/bot/adapters.mts'
 
 const WORKSPACE = '/tmp/wrenyard-bot-test-workspace'
 
@@ -135,14 +140,16 @@ test('restart reconciliation marks an unprobeable pending notify unknown without
   const after = store.findStepByIdemKey(idemKey)
   assert.equal(after?.status, 'unknown')
   const log = store.listLog(bot.id, 0)
-  assert.equal(log.filter(entry => entry.code === 'step.unavailable').length, 1)
+  // The notify handler is registered, but it has no probe, so reconciliation
+  // reports it as unprobeable rather than unavailable.
+  assert.equal(log.filter(entry => entry.code === 'step.unprobeable').length, 1)
   assert.equal(log.some(entry => entry.code === 'step.failed'), false)
   // The item itself is left exactly where it was.
   assert.equal(store.getItem(bot.id, item.id).state, 'completing')
   // A second reconciliation does not re-log or change anything.
   await host.reconcile()
   assert.equal(store.findStepByIdemKey(idemKey)?.status, 'unknown')
-  assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'step.unavailable').length, 1)
+  assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'step.unprobeable').length, 1)
 })
 
 test('a public tick during an in-flight tick never runs the same step twice', async () => {
@@ -241,4 +248,215 @@ test('reconcile leaves a never-started pending step for the tick to run', async 
   await host.tick(bot.id)
   assert.equal(store.findStepByIdemKey(idemKey)?.status, 'done')
   assert.equal(store.getItem(bot.id, item.id).state, 'in_progress')
+})
+
+// ── adapter host integration ───────────────────────────────────────────────
+
+/** Routing entries the config loader requires; the tests never send a turn. */
+const ADAPTER_ROUTING = {
+  default: { provider: 'test', model: 'test-model', reasoningEffort: 'high' },
+  acceptance: { provider: 'test', model: 'test-model', reasoningEffort: 'high' },
+  judgment: { provider: 'test', model: 'test-model', reasoningEffort: 'high' },
+} as const
+
+/** An inbox command adapter: one JSON request on stdin, one reply per op. */
+function inboxScript(behavior: Record<string, unknown>): string {
+  return [
+    `const behavior = ${JSON.stringify(behavior)};`,
+    "let raw = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { raw += chunk });",
+    "process.stdin.on('end', () => {",
+    "  const request = JSON.parse(raw === '' ? '{}' : raw);",
+    "  const reply = behavior[request.op];",
+    "  process.stdout.write(JSON.stringify(reply === undefined ? { ok: false } : reply));",
+    "});",
+  ].join('\n')
+}
+
+/** A notifier command adapter that appends every request to a file. */
+function notifierScript(): string {
+  return [
+    "import { appendFileSync } from 'node:fs'",
+    "let raw = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { raw += chunk });",
+    "process.stdin.on('end', () => {",
+    "  const target = process.env.BOT_FAKE_NOTIFY_FILE;",
+    "  if (typeof target === 'string' && target !== '') appendFileSync(target, raw + '\\n');",
+    "  process.stdout.write(JSON.stringify({ ok: true }));",
+    "});",
+  ].join('\n')
+}
+
+interface BotFixture {
+  configPath: string
+  notifyFile: string
+  home: string
+  dir: string
+}
+
+/**
+ * Write a temporary bot config under `<home>/bots` plus its fake inbox and
+ * notifier scripts, launched through this same node binary.
+ */
+async function writeBotFixture(options: {
+  name: string
+  mode: 'live' | 'dryRun'
+  inboxBehavior: Record<string, unknown>
+}): Promise<BotFixture> {
+  const home = await mkdtemp(join(tmpdir(), 'wrenyard-bot-home-'))
+  const dir = await mkdtemp(join(tmpdir(), 'wrenyard-bot-adapter-'))
+  const botsDir = join(home, 'bots')
+  await mkdir(botsDir, { recursive: true })
+  const inboxPath = join(dir, 'inbox.mjs')
+  await writeFile(inboxPath, inboxScript(options.inboxBehavior), 'utf-8')
+  const notifierPath = join(dir, 'notifier.mjs')
+  await writeFile(notifierPath, notifierScript(), 'utf-8')
+  const notifyFile = join(dir, 'notify.log')
+  const config = {
+    name: options.name,
+    mode: options.mode,
+    inbox: { kind: 'command', argv: [process.execPath, inboxPath], timeoutMs: 10_000 },
+    notifier: {
+      kind: 'command',
+      argv: [process.execPath, notifierPath],
+      env: { BOT_FAKE_NOTIFY_FILE: notifyFile },
+      timeoutMs: 10_000,
+    },
+    projects: [{ id: 'alpha', match: ['alpha'], merge: true, push: true }],
+    routing: ADAPTER_ROUTING,
+    concurrency: { maxActiveItems: 3, maxDispatchPerTick: 2 },
+    cadence: { tickSeconds: 10, pollMinutes: 1 },
+    budgets: { maxCorrections: 3, maxAcceptanceAttempts: 2, maxItemHours: 8, maxItemsPerDay: 20 },
+  }
+  const configPath = join(botsDir, `${options.name}.json`)
+  await writeFile(configPath, JSON.stringify(config), 'utf-8')
+  return { configPath, notifyFile, home, dir }
+}
+
+/** Run a body with the config home pointed at one fixture, then restore it. */
+async function withConfigHome<T>(home: string, body: () => Promise<T>): Promise<T> {
+  const previous = process.env.WRENYARD_CONFIG_HOME
+  process.env.WRENYARD_CONFIG_HOME = home
+  try {
+    return await body()
+  } finally {
+    if (previous === undefined) delete process.env.WRENYARD_CONFIG_HOME
+    else process.env.WRENYARD_CONFIG_HOME = previous
+  }
+}
+
+async function removeFixture(fixture: BotFixture): Promise<void> {
+  await rm(fixture.home, { recursive: true, force: true })
+  await rm(fixture.dir, { recursive: true, force: true })
+}
+
+test('repeated inbox polls admit one item per source', async () => {
+  const root = `${WORKSPACE}-poll`
+  const fixture = await writeBotFixture({
+    name: 'poller',
+    mode: 'live',
+    inboxBehavior: {
+      list: { items: [{ id: 'source-a', title: 'Do the thing', body: 'details', project: 'alpha' }] },
+    },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'poller', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const host = createBotHost({ db, workspaceRoot: root, session: botSession(), log: () => {} })
+
+      await host.tick(bot.id)
+      await host.tick(bot.id)
+
+      const items = store.listItems(bot.id)
+      assert.equal(items.length, 1)
+      assert.equal(items[0]?.sourceId, 'source-a')
+      assert.equal(items[0]?.state, 'discovered')
+      assert.equal(items[0]?.project, 'alpha')
+      assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'poll.discovered').length, 1)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('a source that disappears mid-flight is withdrawn and never merged', async () => {
+  const root = `${WORKSPACE}-withdraw`
+  const fixture = await writeBotFixture({
+    name: 'withdrawer',
+    mode: 'live',
+    inboxBehavior: { list: { items: [] }, get: { item: null } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'withdrawer', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-gone', state: 'accepted', project: 'alpha' })
+      assert.equal(store.acquireLane({ project: 'alpha', botId: bot.id, itemId: item.id }), true)
+      const mergeKey = `${item.id}:1:merge:1`
+      store.beginStep({ itemId: item.id, kind: 'merge', idemKey: mergeKey })
+
+      const host = createBotHost({ db, workspaceRoot: root, session: botSession(), log: () => {} })
+      await host.tick(bot.id)
+
+      assert.equal(store.getItem(bot.id, item.id).state, 'withdrawn')
+      // The lane is released and the pending merge is cancelled, not run.
+      assert.equal(store.getLane('alpha'), undefined)
+      assert.equal(store.findStepByIdemKey(mergeKey)?.status, 'unknown')
+      const log = store.listLog(bot.id, 0)
+      assert.equal(log.some(entry => entry.code === 'source.withdrawn'), true)
+      assert.equal(log.some(entry => entry.code === 'step.failed'), false)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('dry-run completion and notification record would-be outputs without sending', async () => {
+  const root = `${WORKSPACE}-dryrun`
+  const title = 'Ship the thing'
+  const body = 'with details'
+  const fixture = await writeBotFixture({
+    name: 'dry',
+    mode: 'dryRun',
+    inboxBehavior: {
+      list: { items: [{ id: 'source-c', title, body, project: 'alpha' }] },
+      get: { item: { id: 'source-c', title, body, project: 'alpha', open: true } },
+    },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'dry', state: 'running', mode: 'dryRun', configPath: fixture.configPath })
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-c', state: 'ready', project: 'alpha' })
+      store.patchItem(item.id, { title, body, fingerprint: itemFingerprint({ title, body }) })
+      // Walk the item into the lane range so the store acquires the project
+      // lane, exactly as the accept, merge and push steps would.
+      for (const next of ['accepting', 'accepted', 'merging', 'merged', 'completing'] as const) {
+        store.transitionItem(item.id, next)
+      }
+      assert.equal(store.getLane('alpha')?.itemId, item.id)
+
+      const host = createBotHost({ db, workspaceRoot: root, session: botSession(), log: () => {} })
+      await host.tick(bot.id)
+      await host.tick(bot.id)
+
+      assert.equal(store.getItem(bot.id, item.id).state, 'completed')
+      const completeStep = store.findStepByIdemKey(`${item.id}:1:inbox.complete:1`)
+      assert.equal(completeStep?.status, 'done')
+      assert.match(String(completeStep?.output ?? ''), /wouldComplete/)
+      const notifyStep = store.findStepByIdemKey(`${item.id}:1:notify:1`)
+      assert.equal(notifyStep?.status, 'done')
+      assert.match(String(notifyStep?.output ?? ''), /wouldNotify/)
+      // The fake notifier was never started, so its file was never written.
+      assert.equal(existsSync(fixture.notifyFile), false)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
 })

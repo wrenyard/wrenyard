@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
-import { join, resolve, sep } from 'node:path'
-import { resolveWrenyardConfigRoot } from '@wrenyard/paths'
 import type { Session } from '@wrenyard/session'
 import { ProjectManager } from '../../../core/project/manager.mts'
 import type { ForemanDatabase } from '../../../db/types.mts'
@@ -16,7 +14,30 @@ import type {
   BotRecord,
 } from '../../../protocol/methods/bot.mts'
 import type { OperationComponents } from '../operation-components.mts'
-import { requiresDeliveryLane, type BotItemState, type BotStepKind } from './machine.mts'
+import {
+  botConfigHash,
+  isInQuietHours,
+  resolveBotConfigPath,
+  validateBotConfig,
+  type BotAdapter,
+  type BotConfig,
+} from './config.mts'
+import {
+  BotAdapterError,
+  createInboxClient,
+  createNotifier,
+  describeAdapter,
+  itemFingerprint,
+  type BotAdapterDescription,
+  type InboxClient,
+  type InboxItem,
+} from './adapters.mts'
+import {
+  isTerminalItemState,
+  requiresDeliveryLane,
+  type BotItemState,
+  type BotStepKind,
+} from './machine.mts'
 import {
   BotLaneBusyError,
   classifyStepProbe,
@@ -35,6 +56,12 @@ import {
  * judgment belongs to task runs, and every outward effect is a named step with
  * an idempotency key so a restart reconciles instead of repeating.
  *
+ * The host also owns the user-local integrations: each running bot's config is
+ * loaded and cached by content hash, its inbox is polled on cadence, and its
+ * items are admitted, watched for withdrawal or change and delivered through
+ * the inbox.complete and notify steps. Every adapter call is bounded by a
+ * timeout and logged with safe metadata only.
+ *
  * The host never restarts, upgrades or reinstalls the app or daemon it runs in.
  */
 
@@ -45,11 +72,39 @@ export type BotLog = (level: 'info' | 'warn' | 'error', message: string, meta?: 
 const DEFAULT_TICK_MS = 60_000
 /** How often an inbox poll is due when adapters exist. */
 const DEFAULT_POLL_MS = 10 * 60_000
+/** Ceiling the poll interval backs off to after repeated adapter failures. */
+const MAX_POLL_BACKOFF_MS = 60 * 60_000
+const DAY_MS = 24 * 60 * 60 * 1_000
+/** Consecutive adapter failures before one escalation is raised. */
+const ADAPTER_ERROR_ESCALATION_THRESHOLD = 3
+/** Failed steps for one item before one escalation is raised. */
+const ITEM_FAILURE_ESCALATION_THRESHOLD = 3
+/** Minimum spacing between two escalation notifications. */
+const ESCALATION_MIN_INTERVAL_MS = 10 * 60_000
+/**
+ * States whose source is watched after a successful poll (§5.5): an item that
+ * is being worked on or is parked for the user. `discovered`/`verifying` items
+ * are only snapshots, so their text is refreshed instead of parked.
+ */
+const IN_FLIGHT_ITEM_STATES: readonly BotItemState[] = [
+  'verified',
+  'dispatched',
+  'in_progress',
+  'ready',
+  'accepting',
+  'accepted',
+  'rejected',
+  'merging',
+  'merged',
+  'completing',
+]
 
 export interface BotStepContext {
   bot: BotRecord
   item: BotItemRecord
   step: BotStepRecord
+  /** Effective config when the bot has a usable one; absent otherwise. */
+  config?: BotConfig
   /** True when the effect must be recorded instead of performed. */
   dryRun: boolean
 }
@@ -137,13 +192,28 @@ export interface BotHost {
   flush(): Promise<void>
   /** Resolve every pending step by probe; unprobeable ones become unknown. */
   reconcile(): Promise<void>
-  /** Run one tick now (all running bots, or just one). */
+  /** Run one tick now (all running bots, or just one); a named bot also polls. */
   tick(botId?: string): Promise<void>
   health(botId: string): Promise<BotHealth>
   control(botId: string, action: 'start' | 'pause' | 'resume' | 'stop'): BotRecord
   validateConfig(configPath: string): Promise<BotConfigValidateResult>
   itemAction(botId: string, itemId: string, action: 'retry' | 'dismiss' | 'answer' | 'cleanup', answer?: string): Promise<BotItemRecord>
 }
+
+/**
+ * The outcome of reading one bot's config file:
+ * - `none`: no config path bound, so the bot has no adapters and no policies.
+ * - `invalid`: a bound config that could not be read or parsed; the pass is
+ *   skipped so no step runs with unknown policies.
+ * - `ready`: the validated, default-applied config.
+ */
+type BotConfigLoad =
+  | { status: 'none' }
+  | { status: 'invalid' }
+  | { status: 'ready'; config: BotConfig }
+
+/** Result of checking whether an item's source is still the one it was sent. */
+type SourceGate = 'open' | 'changed' | 'gone' | 'retry' | 'unavailable'
 
 /** Deterministic worktree id for one item: bot id + item id, 8 URL-safe chars. */
 export function deterministicWorktreeId(botId: string, itemId: string): string {
@@ -173,9 +243,31 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   let maxTickLagMs = 0
   /** `itemId:kind` keys already reported as unavailable, so the log stays once-per-item. */
   const unavailableLogged = new Set<string>()
+  /** Validated config per bot, keyed by content hash so an unchanged file is not re-parsed. */
+  const configCache = new Map<string, { hash: string; config: BotConfig }>()
+  /** Config problems already logged, keyed by hash (or path), so one bad file logs once. */
+  const loggedConfigIssues = new Set<string>()
+  /** Current poll delay per bot; doubles on an adapter failure and resets on success. */
+  const pollBackoff = new Map<string, number>()
+  /** Consecutive adapter failures per bot, for the escalation threshold. */
+  const adapterErrorStreak = new Map<string, number>()
+  /** Failed steps per item, for the escalation threshold. */
+  const itemFailures = new Map<string, number>()
+  /** Conditions already escalated, so one condition notifies once. */
+  const escalatedConditions = new Set<string>()
+  /** Epoch ms of the last escalation, so notifications are rate-limited. */
+  let lastEscalationAt = 0
+  /** Notifications already logged as deferred, so quiet hours do not spam the log. */
+  const deferredNotifyLogged = new Set<string>()
+  /** Parked items already reported as changed, keyed by item and fingerprint. */
+  const sourceChangedLogged = new Set<string>()
 
   function nowIso(): string {
     return new Date().toISOString()
+  }
+
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error)
   }
 
   /** This process's device/daemon identity, used when none is injected. */
@@ -216,9 +308,124 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     return run
   }
 
-  function itemContext(bot: BotRecord, step: BotStepRecord): BotStepContext {
-    const item = store.getItem(bot.id, step.itemId)
-    return { bot, item, step, dryRun: bot.mode === 'dryRun' || item.dryRun }
+  // ── configuration ────────────────────────────────────────────────────────
+
+  /**
+   * Load one bot's user-local config, cached by content hash. An unreadable or
+   * invalid file is reported once per hash (never with file contents) and the
+   * caller skips that bot's pass rather than running steps with unknown policy.
+   */
+  async function loadConfigForBot(bot: BotRecord): Promise<BotConfigLoad> {
+    const boundPath = bot.configPath?.trim()
+    if (boundPath === undefined || boundPath === '') return { status: 'none' }
+    let resolved: string
+    try {
+      resolved = resolveBotConfigPath(boundPath)
+    } catch {
+      logConfigIssueOnce(bot, `path:${boundPath}`, 'bot config path is outside the config home bots/ directory')
+      return { status: 'invalid' }
+    }
+    let text: string
+    try {
+      text = await readFile(resolved, 'utf-8')
+    } catch {
+      logConfigIssueOnce(bot, `read:${resolved}`, 'bot config file could not be read')
+      return { status: 'invalid' }
+    }
+    const hash = botConfigHash(text)
+    const cached = configCache.get(bot.id)
+    if (cached !== undefined && cached.hash === hash) return { status: 'ready', config: cached.config }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text) as unknown
+    } catch {
+      logConfigIssueOnce(bot, `invalid:${hash}`, 'bot config is not valid JSON')
+      return { status: 'invalid' }
+    }
+    const validation = validateBotConfig(parsed)
+    if (!validation.ok) {
+      logConfigIssueOnce(bot, `invalid:${hash}`, `bot config is invalid: ${validation.issues.join('; ')}`)
+      return { status: 'invalid' }
+    }
+    configCache.set(bot.id, { hash, config: validation.config })
+    if (bot.configHash !== hash) store.updateBot(bot.id, { configHash: hash })
+    return { status: 'ready', config: validation.config }
+  }
+
+  function logConfigIssueOnce(bot: BotRecord, key: string, message: string): void {
+    if (loggedConfigIssues.has(key)) return
+    loggedConfigIssues.add(key)
+    store.appendLog({ botId: bot.id, level: 'warn', code: 'config.invalid', message })
+    log?.('warn', `bot ${bot.id}: ${message}`)
+  }
+
+  /** True when notifications must be held because quiet hours are active. */
+  function shouldDefer(config: BotConfig, action: string): boolean {
+    const quiet = config.quietHours
+    if (quiet === undefined || !quiet.defer.includes(action)) return false
+    try {
+      return isInQuietHours(quiet, new Date())
+    } catch {
+      return false
+    }
+  }
+
+  /** Log-safe adapter label: the executable base name or the MCP tool. */
+  function adapterLabel(adapter: BotAdapter): string {
+    const description: BotAdapterDescription = describeAdapter(adapter)
+    return description.kind === 'mcp' ? `mcp:${description.tool}` : `command:${description.command}`
+  }
+
+  // ── escalation ───────────────────────────────────────────────────────────
+
+  function resetAdapterErrors(botId: string): void {
+    adapterErrorStreak.delete(botId)
+  }
+
+  /**
+   * Record one adapter failure with safe metadata only (op and error code, never
+   * the request, response, argv or environment), and escalate once the failure
+   * streak reaches the threshold.
+   */
+  function recordAdapterError(bot: BotRecord, config: BotConfig | undefined, adapter: BotAdapter, op: string, error: unknown): void {
+    const streak = (adapterErrorStreak.get(bot.id) ?? 0) + 1
+    adapterErrorStreak.set(bot.id, streak)
+    const code = error instanceof BotAdapterError ? error.code : 'adapter.error'
+    store.appendLog({
+      botId: bot.id,
+      level: 'error',
+      code: 'adapter.error',
+      message: `adapter ${adapterLabel(adapter)} ${op} failed (${code})`,
+    })
+    if (streak >= ADAPTER_ERROR_ESCALATION_THRESHOLD) {
+      void escalate(bot, config, `adapter:${bot.id}`, `adapter ${adapterLabel(adapter)} failed ${streak} times in a row`)
+    }
+  }
+
+  /**
+   * Raise one escalation: recorded in the log (which feeds `escalations24h` and
+   * the Bot page) and, in live mode outside quiet hours, sent through the
+   * notifier. One notifier message per new condition, rate-limited.
+   */
+  async function escalate(bot: BotRecord, config: BotConfig | undefined, key: string, message: string): Promise<void> {
+    if (escalatedConditions.has(key)) return
+    const nowMs = Date.now()
+    if (nowMs - lastEscalationAt < ESCALATION_MIN_INTERVAL_MS) return
+    escalatedConditions.add(key)
+    lastEscalationAt = nowMs
+    store.appendLog({ botId: bot.id, level: 'error', code: 'escalation', message })
+    log?.('warn', `bot ${bot.id} escalation: ${message}`)
+    if (config === undefined) return
+    if (bot.mode === 'dryRun' || config.mode === 'dryRun') {
+      store.appendLog({ botId: bot.id, level: 'info', code: 'escalation.dry_run', message: 'dry run: escalation notification not sent' })
+      return
+    }
+    if (shouldDefer(config, 'notify')) return
+    try {
+      await createNotifier(config.notifier).send({ text: message })
+    } catch {
+      store.appendLog({ botId: bot.id, level: 'warn', code: 'escalation.notify_failed', message: 'escalation notification could not be sent' })
+    }
   }
 
   // ── step handlers ────────────────────────────────────────────────────────
@@ -402,6 +609,58 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     async run() { return { to: 'accepting' } },
   }
 
+  /**
+   * Complete the source item in the user's inbox. Like merge and push this is an
+   * outward effect: dry-run only records what would have been completed, and the
+   * caller gates it with `inbox.get` first (§5.5).
+   */
+  const inboxCompleteStep: BotStepHandler = {
+    sideEffect: true,
+    dryRun: ({ item }) => ({ output: { dryRun: true, wouldComplete: { sourceId: item.sourceId } } }),
+    async run({ bot, item, config }) {
+      if (config === undefined) throw new Error('bot config is unavailable for inbox.complete')
+      const inbox = createInboxClient(config.inbox)
+      try {
+        const result = await inbox.complete(item.sourceId)
+        if (!result.ok) throw new Error('inbox.complete was not confirmed')
+        resetAdapterErrors(bot.id)
+        return { output: { ok: true } }
+      } catch (error) {
+        recordAdapterError(bot, config, config.inbox, 'complete', error)
+        throw error
+      }
+    },
+  }
+
+  /**
+   * Notify the user with one message per item. It is an outward effect, so
+   * dry-run records the would-be message, and quiet hours hold the step pending
+   * until the window ends. A `completing` item becomes `completed` here, so
+   * `completed` always means both completion and notification happened.
+   */
+  const notifyStep: BotStepHandler = {
+    sideEffect: true,
+    dryRun: ({ item }) => ({
+      output: { dryRun: true, wouldNotify: buildNotificationText(item) },
+      ...(item.state === 'completing' ? { to: 'completed' as BotItemState } : {}),
+    }),
+    async run({ bot, item, config }) {
+      if (config === undefined) throw new Error('bot config is unavailable for notifications')
+      const notifier = createNotifier(config.notifier)
+      try {
+        const result = await notifier.send({ text: buildNotificationText(item) })
+        resetAdapterErrors(bot.id)
+        return {
+          output: { ok: result.ok, ...(result.messageId === undefined ? {} : { messageId: result.messageId }) },
+          ...(item.state === 'completing' ? { to: 'completed' as BotItemState } : {}),
+        }
+      } catch (error) {
+        recordAdapterError(bot, config, config.notifier, 'send', error)
+        throw error
+      }
+    },
+  }
+
   const handlers: Partial<Record<BotStepKind, BotStepHandler>> = {
     'lane.acquire': laneAcquire,
     'worktree.create': worktreeCreate,
@@ -409,6 +668,318 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     'session.send': sessionSend,
     merge: mergeStep,
     push: pushStep,
+    'inbox.complete': inboxCompleteStep,
+    notify: notifyStep,
+  }
+
+  // ── inbox polling and source checks ──────────────────────────────────────
+
+  function pollDue(bot: BotRecord, nowMs: number): boolean {
+    if (bot.nextPollAt === undefined) return true
+    const due = Date.parse(bot.nextPollAt)
+    return Number.isNaN(due) ? true : due <= nowMs
+  }
+
+  /** Schedule the next poll, backing off after a failure and resetting on success. */
+  function scheduleNextPoll(bot: BotRecord, backOff: boolean): void {
+    const current = pollBackoff.get(bot.id) ?? pollMs
+    const next = backOff ? Math.min(current * 2, MAX_POLL_BACKOFF_MS) : pollMs
+    pollBackoff.set(bot.id, next)
+    store.updateBot(bot.id, { nextPollAt: new Date(Date.now() + next).toISOString() })
+  }
+
+  /** Map an inbox project hint onto a configured project id, or undefined. */
+  function mapProject(config: BotConfig, hint: string | undefined): string | undefined {
+    const trimmed = hint?.trim()
+    if (trimmed === undefined || trimmed === '') return undefined
+    const policy = config.projects.find(project => project.id === trimmed || project.match.includes(trimmed))
+    return policy?.id
+  }
+
+  /** True when this bot already admitted its daily budget of items. */
+  function dailyLimitReached(bot: BotRecord, config: BotConfig): boolean {
+    const since = new Date(Date.now() - DAY_MS).toISOString()
+    const created = store.listItems(bot.id).filter(item => item.createdAt >= since).length
+    return created >= config.budgets.maxItemsPerDay
+  }
+
+  /**
+   * Fold one successful `inbox.list` into durable items: admit new sources
+   * (deduplicated by source id, capped per pass and per day, mapped to a
+   * configured project), reopen a changed terminal source as a new generation,
+   * and park an in-flight item whose request changed.
+   */
+  function applyInboxSnapshot(bot: BotRecord, config: BotConfig, listed: readonly InboxItem[]): void {
+    const dryRun = bot.mode === 'dryRun' || config.mode === 'dryRun'
+    let admitted = 0
+    for (const source of listed) {
+      const fingerprint = itemFingerprint(source)
+      const existing = store.findItemBySource(bot.id, source.id)
+      if (existing === undefined) {
+        if (admitted >= config.concurrency.maxDispatchPerTick) {
+          store.appendLog({
+            botId: bot.id,
+            level: 'info',
+            code: 'poll.admitted',
+            message: `admitted ${admitted} new item(s) this poll; the rest wait for the next poll`,
+          })
+          break
+        }
+        if (dailyLimitReached(bot, config)) {
+          store.appendLog({
+            botId: bot.id,
+            level: 'warn',
+            code: 'poll.daily_limit',
+            message: `daily item budget ${config.budgets.maxItemsPerDay} reached; no new item admitted`,
+          })
+          break
+        }
+        const project = mapProject(config, source.project)
+        store.createItem({
+          botId: bot.id,
+          sourceId: source.id,
+          generation: 1,
+          fingerprint,
+          title: source.title,
+          ...(source.body === undefined ? {} : { body: source.body }),
+          ...(project === undefined ? {} : { project }),
+          state: 'discovered',
+          ...(dryRun ? { dryRun: true } : {}),
+        })
+        admitted += 1
+        store.appendLog({
+          botId: bot.id,
+          level: 'info',
+          code: 'poll.discovered',
+          message: `discovered source item ${source.id}${project === undefined ? ' (unmapped project)' : ''}`,
+        })
+        continue
+      }
+
+      if (isTerminalItemState(existing.state)) {
+        // A source that is still open with a different fingerprint starts a new
+        // generation; the terminal one keeps its history.
+        if (existing.fingerprint !== fingerprint && !dailyLimitReached(bot, config)) {
+          const generation = store.nextGeneration(bot.id, source.id)
+          const project = mapProject(config, source.project)
+          store.createItem({
+            botId: bot.id,
+            sourceId: source.id,
+            generation,
+            fingerprint,
+            title: source.title,
+            ...(source.body === undefined ? {} : { body: source.body }),
+            ...(project === undefined ? {} : { project }),
+            state: 'discovered',
+            ...(dryRun ? { dryRun: true } : {}),
+          })
+          store.appendLog({
+            botId: bot.id,
+            level: 'info',
+            code: 'poll.generation',
+            message: `source item ${source.id} reopened as generation ${generation}`,
+          })
+        }
+        continue
+      }
+
+      if (existing.fingerprint === undefined || existing.fingerprint === fingerprint) continue
+
+      if (existing.state === 'parked') {
+        const key = `changed:${existing.id}:${fingerprint}`
+        if (sourceChangedLogged.has(key)) continue
+        sourceChangedLogged.add(key)
+        store.appendLog({
+          botId: bot.id,
+          itemId: existing.id,
+          level: 'warn',
+          code: 'source.changed',
+          message: `source item ${existing.sourceId} changed while parked`,
+        })
+        continue
+      }
+
+      parkForSourceChange(bot, existing, source.title)
+    }
+  }
+
+  /**
+   * Confirm that every in-flight or parked item that is absent from the list is
+   * really gone. `inbox.get` decides: an adapter error is retryable and is never
+   * treated as a withdrawal.
+   */
+  async function confirmWithdrawals(bot: BotRecord, config: BotConfig, inbox: InboxClient, listed: readonly InboxItem[]): Promise<void> {
+    const present = new Set(listed.map(item => item.id))
+    for (const item of store.listItems(bot.id)) {
+      if (isTerminalItemState(item.state)) continue
+      if (item.state !== 'parked' && !IN_FLIGHT_ITEM_STATES.includes(item.state)) continue
+      if (present.has(item.sourceId)) continue
+      let fetched: (InboxItem & { open: boolean }) | null
+      try {
+        fetched = (await inbox.get(item.sourceId)).item
+      } catch (error) {
+        recordAdapterError(bot, config, config.inbox, 'get', error)
+        continue
+      }
+      resetAdapterErrors(bot.id)
+      if (fetched !== null && fetched.open === true) continue
+      withdrawItem(bot, item, 'source item is no longer open in the inbox', config)
+    }
+  }
+
+  /**
+   * Poll the inbox on cadence (or on demand). A failed call is logged with safe
+   * metadata and backs the poll off; a successful call re-checks the sources it
+   * already admitted.
+   */
+  async function pollBot(bot: BotRecord, config: BotConfig, force: boolean): Promise<boolean> {
+    if (!force && !pollDue(bot, Date.now())) return false
+    const inbox = createInboxClient(config.inbox)
+    let listed: InboxItem[]
+    try {
+      listed = (await inbox.list()).items
+    } catch (error) {
+      recordAdapterError(bot, config, config.inbox, 'list', error)
+      scheduleNextPoll(bot, true)
+      return true
+    }
+    resetAdapterErrors(bot.id)
+    store.appendLog({
+      botId: bot.id,
+      level: 'info',
+      code: 'poll.ok',
+      message: `inbox poll returned ${listed.length} item(s) via ${adapterLabel(config.inbox)}`,
+    })
+    applyInboxSnapshot(bot, config, listed)
+    await confirmWithdrawals(bot, config, inbox, listed)
+    scheduleNextPoll(bot, false)
+    return true
+  }
+
+  /**
+   * Withdraw an item whose source disappeared or was completed elsewhere: no
+   * merge, push or completion, the lane is released, the user is notified and
+   * the session and worktree are left intact for inspection.
+   */
+  function withdrawItem(bot: BotRecord, item: BotItemRecord, reason: string, config: BotConfig | undefined): void {
+    let withdrawn: BotItemRecord
+    try {
+      withdrawn = store.transitionItem(item.id, 'withdrawn', { error: reason })
+    } catch (error) {
+      store.appendLog({
+        botId: bot.id,
+        itemId: item.id,
+        level: 'error',
+        code: 'source.withdraw_failed',
+        message: `could not withdraw item ${item.id}: ${errorMessage(error)}`,
+      })
+      return
+    }
+    cancelPendingSteps(bot, item.id)
+    store.appendLog({
+      botId: bot.id,
+      itemId: item.id,
+      level: 'warn',
+      code: 'source.withdrawn',
+      message: `item ${item.id} withdrawn: ${reason}`,
+    })
+    if (config !== undefined) enqueueStep(withdrawn, 'notify')
+  }
+
+  /** Park an in-flight item whose source text changed since it was dispatched. */
+  function parkForSourceChange(bot: BotRecord, item: BotItemRecord, nextTitle: string | undefined): void {
+    try {
+      store.transitionItem(item.id, 'parked', {
+        parkedFrom: item.state,
+        question: `source changed: "${item.title ?? ''}" -> "${nextTitle ?? ''}"; answer 'continue' to use the new text or 'dismiss'`,
+        error: 'source_changed',
+      })
+      store.appendLog({
+        botId: bot.id,
+        itemId: item.id,
+        level: 'warn',
+        code: 'source.changed',
+        message: `item ${item.id} parked: the source item changed since it was dispatched`,
+      })
+    } catch (error) {
+      store.appendLog({
+        botId: bot.id,
+        itemId: item.id,
+        level: 'error',
+        code: 'source.park_failed',
+        message: `could not park item ${item.id}: ${errorMessage(error)}`,
+      })
+    }
+  }
+
+  /** Mark every still-pending step of one item unknown so nothing re-runs it. */
+  function cancelPendingSteps(bot: BotRecord, itemId: string): void {
+    for (const step of store.listPendingSteps(bot.id)) {
+      if (step.itemId !== itemId) continue
+      store.markStepStatus(step.id, 'unknown')
+    }
+  }
+
+  /**
+   * Ask the inbox whether an item's source is still open and unchanged. Runs
+   * immediately before merge and before inbox.complete; an adapter error is
+   * retryable, never a withdrawal.
+   */
+  async function gateSource(bot: BotRecord, config: BotConfig, item: BotItemRecord): Promise<SourceGate> {
+    const inbox = createInboxClient(config.inbox)
+    try {
+      const fetched = (await inbox.get(item.sourceId)).item
+      if (fetched === null || fetched.open !== true) return 'gone'
+      if (item.fingerprint !== undefined && itemFingerprint(fetched) !== item.fingerprint) return 'changed'
+      resetAdapterErrors(bot.id)
+      return 'open'
+    } catch (error) {
+      recordAdapterError(bot, config, config.inbox, 'get', error)
+      return 'retry'
+    }
+  }
+
+  // ── step scheduling ──────────────────────────────────────────────────────
+
+  function idemKeyFor(item: BotItemRecord, kind: BotStepKind, attempt = 1): string {
+    return `${item.id}:${item.generation}:${kind}:${attempt}`
+  }
+
+  /** Insert one pending step unless its idempotency key already exists. */
+  function enqueueStep(item: BotItemRecord, kind: BotStepKind, patch?: BotItemPatch): BotStepRecord | undefined {
+    const idemKey = idemKeyFor(item, kind)
+    if (store.findStepByIdemKey(idemKey) !== undefined) return undefined
+    const { step } = store.beginStep({
+      itemId: item.id,
+      kind,
+      idemKey,
+      ...(patch === undefined ? {} : { patch }),
+    })
+    return step
+  }
+
+  /**
+   * Enqueue the next step of an item that is waiting for one: merge after
+   * acceptance, push after merge, then inbox.complete and notify in
+   * `completing`, so a pushed item always reaches `completed`.
+   */
+  function advanceItem(bot: BotRecord, item: BotItemRecord): void {
+    if (isTerminalItemState(item.state)) return
+    if (item.state === 'merging') {
+      enqueueStep(item, 'merge')
+      return
+    }
+    if (item.state === 'merged') {
+      enqueueStep(item, 'push')
+      return
+    }
+    if (item.state !== 'completing') return
+    const complete = store.findStepByIdemKey(idemKeyFor(item, 'inbox.complete'))
+    if (complete === undefined) {
+      enqueueStep(item, 'inbox.complete')
+      return
+    }
+    if (complete.status === 'done') enqueueStep(item, 'notify')
   }
 
   // ── step execution ───────────────────────────────────────────────────────
@@ -453,8 +1024,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     })
   }
 
-  function failStep(bot: BotRecord, item: BotItemRecord, step: BotStepRecord, error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error)
+  async function failStep(bot: BotRecord, item: BotItemRecord, step: BotStepRecord, error: unknown, config: BotConfig | undefined): Promise<void> {
+    const message = errorMessage(error)
     // A failure while the item is in a lane state parks it in the same
     // transaction that releases the lane, so a stuck handler can never leave the
     // project's lane held forever.
@@ -473,13 +1044,11 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       code: 'step.failed',
       message: `${step.kind} failed: ${message}`,
     })
-    store.appendLog({
-      botId: bot.id,
-      itemId: item.id,
-      level: 'error',
-      code: 'escalation',
-      message: `escalation: ${step.kind} failed for item ${item.id} (${message})`,
-    })
+    const failures = (itemFailures.get(item.id) ?? 0) + 1
+    itemFailures.set(item.id, failures)
+    if (failures >= ITEM_FAILURE_ESCALATION_THRESHOLD) {
+      await escalate(bot, config, `item-failures:${item.id}`, `item ${item.id} failed ${failures} steps`)
+    }
   }
 
   /**
@@ -492,50 +1061,97 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     return await handler.run(context)
   }
 
-  async function runStep(bot: BotRecord, step: BotStepRecord): Promise<void> {
-    const context = itemContext(bot, step)
+  async function runStep(bot: BotRecord, step: BotStepRecord, config: BotConfig | undefined): Promise<void> {
+    const item = store.getItem(bot.id, step.itemId)
+    if (isTerminalItemState(item.state)) {
+      // A step of a resolved item (for example after a withdrawal cancelled its
+      // siblings) is never re-run.
+      store.markStepStatus(step.id, 'unknown')
+      return
+    }
     const handler = handlers[step.kind]
     if (handler === undefined) {
-      reportUnavailable(bot, context.item, step)
+      reportUnavailable(bot, item, step)
       return
     }
     if (canRun?.() === false) return
-    if (!laneHeld(context.item)) {
+    if (!laneHeld(item)) {
       // A lane-state item must already hold its lane; otherwise it is parked for
       // a user decision instead of running an effect without the lane. The step
       // becomes unknown so it is never re-run automatically.
       store.markStepStatus(step.id, 'unknown')
       store.appendLog({
         botId: bot.id,
-        itemId: context.item.id,
+        itemId: item.id,
         level: 'warn',
         code: 'lane.missing',
-        message: `item ${context.item.id} is in ${context.item.state} without holding the ${context.item.project} lane; parking`,
+        message: `item ${item.id} is in ${item.state} without holding the ${item.project} lane; parking`,
       })
-      store.transitionItem(context.item.id, 'parked', {
-        parkedFrom: context.item.state,
-        question: `item lost its project delivery lane while in ${context.item.state}`,
+      store.transitionItem(item.id, 'parked', {
+        parkedFrom: item.state,
+        question: `item lost its project delivery lane while in ${item.state}`,
       })
       return
+    }
+
+    // Source gate: never merge or complete an item whose source was withdrawn or
+    // changed. An adapter error leaves the step pending for a later tick.
+    if (step.kind === 'merge' || step.kind === 'inbox.complete') {
+      if (config !== undefined) {
+        const gate = await gateSource(bot, config, item)
+        if (gate === 'retry') return
+        if (gate === 'gone') {
+          withdrawItem(bot, item, `source item is no longer open in the inbox (before ${step.kind})`, config)
+          return
+        }
+        if (gate === 'changed') {
+          parkForSourceChange(bot, item, undefined)
+          return
+        }
+      }
+    }
+
+    // Quiet hours: hold a notification until the window ends by leaving the step
+    // pending, so it is sent afterwards exactly once.
+    if (step.kind === 'notify' && config !== undefined && shouldDefer(config, 'notify')) {
+      if (!deferredNotifyLogged.has(step.id)) {
+        deferredNotifyLogged.add(step.id)
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'notify.deferred',
+          message: 'notification deferred during quiet hours',
+        })
+      }
+      return
+    }
+
+    const context: BotStepContext = {
+      bot,
+      item,
+      step,
+      ...(config === undefined ? {} : { config }),
+      dryRun: bot.mode === 'dryRun' || config?.mode === 'dryRun' || item.dryRun,
     }
     try {
       const result = handler.sideEffect === true && context.dryRun
         ? (handler.dryRun?.(context) ?? { output: { dryRun: true, wouldRun: step.kind } })
         : await runEffect(step, context, handler)
-      commitStep(context.item, step, await result)
+      commitStep(item, step, await result)
     } catch (error) {
       if (error instanceof BotLaneBusyError) {
         // The lane is busy: leave the step pending so the next tick retries it.
         store.appendLog({
           botId: bot.id,
-          itemId: context.item.id,
+          itemId: item.id,
           level: 'info',
           code: 'lane.busy',
           message: `project ${error.project} is delivering another item`,
         })
         return
       }
-      failStep(bot, context.item, step, error)
+      await failStep(bot, item, step, error, config)
     }
   }
 
@@ -545,6 +1161,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   async function reconcileBot(bot: BotRecord): Promise<void> {
     for (const step of store.listPendingSteps(bot.id)) {
       const item = store.getItem(bot.id, step.itemId)
+      if (isTerminalItemState(item.state)) {
+        store.markStepStatus(step.id, 'unknown')
+        continue
+      }
       const context: BotStepContext = { bot, item, step, dryRun: bot.mode === 'dryRun' || item.dryRun }
       // Only a step whose effect may already be in flight is probed. A pending
       // step that never started is still queued and is run normally by the tick.
@@ -594,7 +1214,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
             itemId: item.id,
             level: 'warn',
             code: 'step.reconcile.state',
-            message: `proven-done ${step.kind} could not advance item: ${error instanceof Error ? error.message : String(error)}`,
+            message: `proven-done ${step.kind} could not advance item: ${errorMessage(error)}`,
           })
         }
       }
@@ -621,10 +1241,11 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
-   * One tick pass: advance the pending steps of the running bots. Every tick
-   * path (timer, start, public `bot.tick`) runs through {@link scheduleTick}, so
-   * two passes are never in flight at once and each pass re-checks `stopped` and
-   * the admission gate.
+   * One tick pass: poll due inboxes, watch the sources already admitted, advance
+   * items whose next step is due, then run the pending steps. Every tick path
+   * (timer, start, public `bot.tick`) runs through {@link scheduleTick}, so two
+   * passes are never in flight at once and each pass re-checks `stopped` and the
+   * admission gate.
    */
   async function tickPass(scheduledAt?: number, botId?: string): Promise<void> {
     if (stopped || canRun?.() === false) return
@@ -647,13 +1268,26 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         }
         continue
       }
+      const load = await loadConfigForBot(bot)
+      if (load.status === 'invalid') continue
+      const config = load.status === 'ready' ? load.config : undefined
+      // A named `bot.tick` forces a poll; the timer polls only when it is due.
+      const polled = config === undefined ? false : await pollBot(bot, config, botId !== undefined)
+      if (stopped) return
+      for (const item of store.listItems(bot.id)) {
+        if (stopped) return
+        advanceItem(bot, item)
+      }
       for (const step of store.listPendingSteps(bot.id)) {
         if (stopped) return
-        await runStep(bot, step)
+        await runStep(bot, step, config)
       }
+      const fresh = store.getBot(bot.id)
       store.updateBot(bot.id, {
         lastTickAt: nowIso(),
-        nextPollAt: bot.nextPollAt ?? new Date(tickStartedAt + pollMs).toISOString(),
+        ...(polled || fresh.nextPollAt !== undefined
+          ? {}
+          : { nextPollAt: new Date(tickStartedAt + pollMs).toISOString() }),
       })
     }
     lastTickAt = nowIso()
@@ -735,24 +1369,27 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       return updated
     },
     async validateConfig(configPath: string): Promise<BotConfigValidateResult> {
-      const botsDir = join(resolveWrenyardConfigRoot(), 'bots')
-      const resolved = resolve(configPath)
-      if (resolved !== botsDir && !resolved.startsWith(`${botsDir}${sep}`)) {
-        return { valid: false, error: 'config path must live in the config home bots/ directory' }
-      }
+      let resolved: string
       try {
-        const parsed = JSON.parse(await readFile(resolved, 'utf-8')) as unknown
-        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          return { valid: false, error: 'config must be a JSON object' }
-        }
-        const name = (parsed as { name?: unknown }).name
-        if (typeof name !== 'string' || name.trim() === '') {
-          return { valid: false, error: 'config is missing a name' }
-        }
-        return { valid: true, name: name.trim() }
+        resolved = resolveBotConfigPath(configPath)
       } catch (error) {
-        return { valid: false, error: error instanceof Error ? error.message : String(error) }
+        return { valid: false, error: errorMessage(error) }
       }
+      let text: string
+      try {
+        text = await readFile(resolved, 'utf-8')
+      } catch {
+        return { valid: false, error: 'bot config file could not be read' }
+      }
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(text) as unknown
+      } catch {
+        return { valid: false, error: 'bot config is not valid JSON' }
+      }
+      const validation = validateBotConfig(parsed)
+      if (!validation.ok) return { valid: false, error: validation.issues.join('; ') }
+      return { valid: true, name: validation.config.name }
     },
     async itemAction(botId, itemId, action, answer): Promise<BotItemRecord> {
       const item = store.getItem(botId, itemId)
@@ -803,6 +1440,26 @@ function sameModel(left: BotModel, right: BotModel): boolean {
   return left.provider === right.provider
     && left.model === right.model
     && left.reasoningEffort === right.reasoningEffort
+}
+
+/** The one user-facing message per item: outcome, merge, checks and gaps. */
+function buildNotificationText(item: BotItemRecord): string {
+  const lines: string[] = []
+  lines.push(`Bot item ${item.id}${item.title === undefined ? '' : `: ${item.title}`}`)
+  lines.push(`State: ${item.state}`)
+  if (item.project !== undefined) lines.push(`Project: ${item.project}`)
+  if (item.mergedSha !== undefined) lines.push(`Merged commit: ${item.mergedSha}`)
+  if (item.worktreeId !== undefined) lines.push(`Worktree: ${item.worktreeId}`)
+  if (item.error !== undefined) lines.push(`Reason: ${item.error}`)
+  if (item.acceptance !== undefined && item.acceptance.length > 0) {
+    const verified = item.acceptance.filter(check => check.status === 'verified').map(check => check.claim)
+    const notVerified = item.acceptance
+      .filter(check => check.status !== 'verified')
+      .map(check => `${check.claim} (${check.status})`)
+    if (verified.length > 0) lines.push(`Verified: ${verified.join('; ')}`)
+    lines.push(notVerified.length > 0 ? `Not verified: ${notVerified.join('; ')}` : 'Not verified: none')
+  }
+  return lines.join('\n')
 }
 
 /** The generic dispatch brief: the request, the rules and the idempotency marker. */
