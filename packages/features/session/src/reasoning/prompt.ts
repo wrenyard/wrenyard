@@ -88,6 +88,12 @@ Wrenyard orchestrator: understand the user's goal and direct the system to get t
  *   {@link ACTION_RUNNING} tool result for good, and its real result arrives as
  *   an `<action-result>` record at the position it finished.
  *
+ * A raw action id can repeat after a session is recovered (the in-memory
+ * counter used to restart at 1), so every `action.started` stays its own
+ * occurrence: it is grouped with the reasoning step that wrote it, paired only
+ * with the result belonging to that same occurrence, and given its own
+ * tool-call id once the bare id is no longer unique.
+ *
  * Thinking is not replayed. An action whose reasoning output never completed
  * has no assistant message to hang on and stays record text. System actions
  * (reply, title, memory) are never tool calls here; the renderer decides them.
@@ -96,35 +102,81 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
   const images = input.allowImages === false ? {} : (input.images ?? {});
   const events = input.events;
 
-  // Index the ledger: where each reasoning action started and finished, which
-  // steps produced a reasoning output, and where every step started.
+  // Index the ledger by occurrence, not by raw action id: a recovered session
+  // can reuse an id, and each reuse is its own call with its own result.
   const stepKey = (turn: number | undefined, step: number | undefined): string => `${turn ?? 0}:${step ?? 0}`;
-  const started = new Map<string, { index: number; type: string; intent: string; key: string }>();
-  const finished = new Map<string, { index: number; event: Extract<LedgerEvent, { type: 'action.finished' }> }>();
+  interface StartOccurrence {
+    index: number;
+    type: string;
+    intent: string;
+    /** The reasoning step that started it: `turn:step`. */
+    key: string;
+    /** Emitted tool-call id; the bare id for the first occurrence of that id. */
+    callId: string;
+    /** The finish paired to this occurrence, when resolved unambiguously. */
+    finish?: FinishOccurrence;
+  }
+  interface FinishOccurrence {
+    index: number;
+    event: Extract<LedgerEvent, { type: 'action.finished' }>;
+    /** The start this finish belongs to, when resolved unambiguously. */
+    start?: StartOccurrence;
+  }
+
   const completedSteps = new Set<string>();
   const stepStarts: number[] = [];
+  const starts: StartOccurrence[] = [];
+  const startByIndex = new Map<number, StartOccurrence>();
+  const finishByIndex = new Map<number, FinishOccurrence>();
+  /** How many times each raw id has already appeared, in ledger order. */
+  const occurrences = new Map<string, number>();
+  /** Starts of one `id:turn:step` still waiting for their finish, in order. */
+  const awaiting = new Map<string, StartOccurrence[]>();
+
+  // A start and its finish pair by the same id and the same turn/step; an event
+  // without that metadata cannot be correlated and stays record text.
+  const occurrenceKey = (id: string, turn: number | undefined, step: number | undefined): string | undefined =>
+    typeof turn === 'number' && typeof step === 'number' ? `${id}:${turn}:${step}` : undefined;
+
   events.forEach((event, index) => {
-    if (event.type === 'action.started' && !started.has(event.id)) {
-      started.set(event.id, {
-        index, type: event.action.type, key: stepKey(event.turn, event.step),
+    if (event.type === 'action.started') {
+      const ordinal = occurrences.get(event.id) ?? 0;
+      occurrences.set(event.id, ordinal + 1);
+      const start: StartOccurrence = {
+        index,
+        type: event.action.type,
         intent: event.action.prompt,
-      });
-    } else if (event.type === 'action.finished' && event.afterInterrupt !== true && !finished.has(event.id)) {
-      finished.set(event.id, { index, event });
+        key: stepKey(event.turn, event.step),
+        // The first occurrence keeps the bare id so the bytes already sent to
+        // the model never change; a reuse gets a stable id from its own event.
+        callId: ordinal === 0
+          ? event.id
+          : `${event.id}_${event.turn ?? 0}_${event.step ?? 0}_${event.seq}`,
+      };
+      starts.push(start);
+      startByIndex.set(index, start);
+      const key = occurrenceKey(event.id, event.turn, event.step);
+      if (key !== undefined) awaiting.set(key, [...(awaiting.get(key) ?? []), start]);
+    } else if (event.type === 'action.finished' && event.afterInterrupt !== true) {
+      const finish: FinishOccurrence = { index, event };
+      finishByIndex.set(index, finish);
+      const key = occurrenceKey(event.id, event.turn, event.step);
+      const start = key === undefined ? undefined : awaiting.get(key)?.shift();
+      if (start !== undefined) {
+        finish.start = start;
+        start.finish = finish;
+      }
     } else if (event.type === 'reasoning.completed') {
       completedSteps.add(stepKey(event.turn, event.step));
     } else if (event.type === 'step.started') {
       stepStarts.push(index);
     }
   });
-  const isNative = (actionId: string): boolean => {
-    const start = started.get(actionId);
-    return start !== undefined && completedSteps.has(start.key);
-  };
+
+  const isNative = (start: StartOccurrence): boolean => completedSteps.has(start.key);
   /** The result was not yet available when some later request was assembled. */
-  const arrivedLate = (actionId: string): boolean => {
-    const start = started.get(actionId)!;
-    const end = finished.get(actionId)?.index ?? Number.POSITIVE_INFINITY;
+  const arrivedLate = (start: StartOccurrence): boolean => {
+    const end = start.finish?.index ?? Number.POSITIVE_INFINITY;
     return stepStarts.some((at) => at > start.index && at < end);
   };
 
@@ -159,38 +211,43 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
       }
       case 'reasoning.thinking':
         break;
-      case 'action.started':
-        if (!isNative(event.id) && started.get(event.id)?.index === index) {
-          pushText(renderEventText(event)!);
-        }
+      case 'action.started': {
+        const start = startByIndex.get(index);
+        // An action whose reasoning step never completed has no assistant
+        // message to hang on: it stays record text. Each occurrence is judged
+        // on its own, so a reused id is never dropped.
+        if (start === undefined || !isNative(start)) pushText(renderEventText(event)!);
         break;
+      }
       case 'reasoning.completed': {
         const key = stepKey(event.turn, event.step);
-        const calls = [...started.entries()].filter(([, start]) => start.key === key);
+        const calls = starts.filter((start) => start.key === key);
         if (event.text === '' && calls.length === 0) break;
         endUserMessage();
         messages.push({
           role: 'assistant',
           content: event.text,
-          toolCalls: calls.map(([id, start]) => ({
-            id,
+          toolCalls: calls.map((start) => ({
+            id: start.callId,
             name: 'wy_action',
             arguments: JSON.stringify({ type: start.type, intent: start.intent }),
           })),
         });
-        for (const [id] of calls) {
-          const result = finished.get(id);
-          const content = result === undefined || arrivedLate(id)
+        for (const start of calls) {
+          const content = start.finish === undefined || arrivedLate(start)
             ? ACTION_RUNNING
-            : actionResultText(result.event);
-          messages.push({ role: 'tool', toolCallId: id, content });
+            : actionResultText(start.finish.event);
+          messages.push({ role: 'tool', toolCallId: start.callId, content });
         }
         break;
       }
       case 'action.finished': {
         if (event.afterInterrupt === true) break;
-        // Delivered as the action's tool result unless it arrived late.
-        if (isNative(event.id) && !arrivedLate(event.id)) break;
+        // Delivered as the action's own tool result unless the pair is
+        // unresolved or the result arrived late; a late or orphaned result
+        // stays an <action-result> record.
+        const start = finishByIndex.get(index)?.start;
+        if (start !== undefined && isNative(start) && !arrivedLate(start)) break;
         pushText(renderEventText(event)!);
         break;
       }

@@ -632,11 +632,16 @@ class Engine implements Session, SessionCallHost {
     return session;
   }
 
-  /** Rebuild cheap derived state (title, next turn) from the ledger. */
+  /** Rebuild cheap derived state (title, next turn, action counter) from the ledger. */
   private replay(session: SessionRuntime, events: LedgerEvent[]): void {
     let nextTurn = 1;
+    let maxAction = 0;
     for (const event of events) {
       if (typeof event.turn === 'number' && event.turn >= nextTurn) nextTurn = event.turn + 1;
+      if (event.type === 'action.started' || event.type === 'action.finished') {
+        const match = /^a(\d+)$/u.exec(event.id);
+        if (match !== null) maxAction = Math.max(maxAction, Number(match[1]));
+      }
       switch (event.type) {
         case 'session.titled': {
           const title = event.text.trim();
@@ -658,6 +663,11 @@ class Engine implements Session, SessionCallHost {
       }
     }
     session.nextTurn = nextTurn;
+    // Continue above the highest action id already on the ledger. A restart used
+    // to leave the in-memory counter at 0, so new actions reused `a1` and
+    // collided with earlier ones; the maximum suffix (not the count) covers both
+    // a plain ledger and one whose ids were already reused by a past recovery.
+    session.actionSeq = maxAction;
   }
 
   /** Append synthetic interruption for turns the previous process never finished. */
