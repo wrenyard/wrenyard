@@ -96,7 +96,34 @@ export function normalizeAppearance(appearance: Partial<Appearance> | null | und
   };
 }
 
-export interface SkinPalette {
+/** Shared Lamplight crew colors used by every worker skin. */
+export const CREW_COLORS = {
+  outline: '#2E2018',
+  panel: '#2E2018',
+  panelLight: '#3A2A1E',
+  white: '#F7EFD8',
+  cream: '#F7EFD8',
+  shadow: 'rgba(46,32,24,0.30)',
+  skin: '#EFC6A0',
+  skinShade: '#D29C70',
+  mouth: '#9E3A2C',
+  blush: '#E8957C',
+  pants: '#4A5B6A',
+  boot: '#5B3218',
+  wood: '#B17D3E',
+  woodDark: '#8A5A2E',
+  metal: '#5A6B7A',
+  metalLight: '#A9B4BC',
+  paper: '#F5EBD4',
+  paperShade: '#D9CBA8',
+  lamp: '#FFC94D',
+  lampLight: '#FFE88A',
+  lampDeep: '#E8A33D',
+  terracotta: '#C44E3A',
+  moss: '#7BA05B',
+};
+
+export interface SkinPalette extends Record<keyof typeof CREW_COLORS, string> {
   primary: string;
   primaryDark: string;
   primaryLight: string;
@@ -104,30 +131,19 @@ export interface SkinPalette {
   accentDark: string;
   tool: string;
   toolDark: string;
-  outline: string;
-  panel: string;
-  panelLight: string;
-  white: string;
-  cream: string;
-  shadow: string;
 }
 
 export function skinPalette(appearance: Appearance): SkinPalette {
   const colors = appearance.skin.colors;
   return {
+    ...CREW_COLORS,
     primary: colors.primary,
-    primaryDark: darkenColor(colors.primary, 0.58),
+    primaryDark: darkenColor(colors.primary, 0.7),
     primaryLight: lightenColor(colors.primary, 1.28),
     accent: colors.accent,
     accentDark: darkenColor(colors.accent, 0.64),
     tool: colors.tool,
     toolDark: darkenColor(colors.tool, 0.6),
-    outline: '#2E2018',
-    panel: '#2E2018',
-    panelLight: '#3A2A1E',
-    white: '#F7EFD8',
-    cream: '#F7EFD8',
-    shadow: 'rgba(46,32,24,0.30)',
   };
 }
 

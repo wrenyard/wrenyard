@@ -1,21 +1,20 @@
 /**
  * Live-only worker skin pixel drawing.
  *
- * Contains the 13 production worker skin draw routines plus shared helpers for
- * PixelBuilder rendering.
+ * All 13 production skins share one crew body (planted legs and boots, a
+ * uniform torso, arms and a head) in the Lamplight workshop palette. Each
+ * role adds its own headgear, uniform detail and hand tool; the three
+ * official client mascots swap the head for their own and keep the crew
+ * uniform. Drawing targets a PixelBuilder (src/render): `px` maps to filled
+ * pixel rects and OffsetBuilder applies the sprite's local offset.
  *
- * Drawing targets a PixelBuilder (src/render); the `px` helper maps to filled
- * pixel rectangles. OffsetBuilder applies the sprite's local pixel offset to
- * every rect. Preview-only artwork, retired vector helpers, and inactive
- * tool-call popup art are intentionally absent.
- *
- * FU-002 / IU-001
+ * Local sprite space: the figure stands on row 21 with its ground shadow on
+ * row 22, centred between columns 11 and 12.
  */
 
-import type { Appearance } from '../../../shared/snapshot';
-import type { Phase } from '../../../shared/snapshot';
+import type { Appearance, Phase } from '../../../shared/snapshot';
 import type { PixelBuilder } from '../../../render';
-import { skinPalette, voxelMinerPalette, parseColorAlpha } from './palette';
+import { CREW_COLORS, parseColorAlpha, skinPalette, voxelMinerPalette, type SkinPalette } from './palette';
 
 // ─── Pixel-builder bridge ──────────────────────────────────────────────
 
@@ -58,75 +57,143 @@ export function moodForPhase(phase: Phase): Mood {
   return 'open';
 }
 
+/** A 4x4 pixel "Z". */
+export function drawZzz(b: RectSink, x: number, y: number, color: string): void {
+  px(b, x, y, 4, 1, color);
+  px(b, x + 2, y + 1, 1, 1, color);
+  px(b, x + 1, y + 2, 1, 1, color);
+  px(b, x, y + 3, 4, 1, color);
+}
 
-export function drawPixelEyes(
-  b: RectSink,
-  x1: number,
-  x2: number,
-  y: number,
-  color: string,
-  mood: Mood,
-): void {
+/** Pose facts the role layers draw against. */
+interface Pose {
+  phase: Phase;
+  mood: Mood;
+  /** Upper-body drop: 1 while dozing, 2 when dejected. */
+  y: number;
+  /** Tool shaft column and the top row of the right-hand grip. */
+  hx: number;
+  hy: number;
+}
+
+type HeadPainter = (b: RectSink, y: number, mood: Mood) => void;
+
+/** Eyes, cheeks and mouth centred on the head; eyes start on row `ey`. */
+function drawFace(b: RectSink, ey: number, mood: Mood, eye: string, mouth: string, blush?: string): void {
   if (mood === 'sleep') {
-    px(b, x1, y, 3, 1, color);
-    px(b, x2, y, 3, 1, color);
-  } else if (mood === 'sad') {
-    px(b, x1, y, 2, 1, color);
-    px(b, x1 + 2, y + 1, 1, 1, color);
-    px(b, x2 + 1, y + 1, 1, 1, color);
-    px(b, x2 + 2, y, 2, 1, color);
+    px(b, 9, ey + 1, 2, 1, eye);
+    px(b, 13, ey + 1, 2, 1, eye);
+    px(b, 11, ey + 3, 2, 1, mouth);
   } else if (mood === 'happy') {
-    px(b, x1, y, 2, 1, color);
-    px(b, x1 + 2, y + 1, 1, 1, color);
-    px(b, x2, y + 1, 1, 1, color);
-    px(b, x2 + 1, y, 2, 1, color);
+    px(b, 9, ey + 1, 1, 1, eye);
+    px(b, 10, ey, 1, 1, eye);
+    px(b, 13, ey, 1, 1, eye);
+    px(b, 14, ey + 1, 1, 1, eye);
+    px(b, 11, ey + 2, 2, 2, mouth);
+  } else if (mood === 'sad') {
+    px(b, 10, ey + 1, 1, 1, eye);
+    px(b, 13, ey + 1, 1, 1, eye);
+    px(b, 11, ey + 3, 2, 1, mouth);
+    px(b, 10, ey + 4, 1, 1, mouth);
+    px(b, 13, ey + 4, 1, 1, mouth);
+    px(b, 14, ey + 2, 1, 1, CREW_COLORS.metalLight);
   } else {
-    px(b, x1, y, 2, 2, color);
-    px(b, x2, y, 2, 2, color);
+    px(b, 10, ey, 1, 2, eye);
+    px(b, 13, ey, 1, 2, eye);
+    px(b, 11, ey + 3, 2, 1, mouth);
+  }
+  if (blush && mood !== 'sad') {
+    px(b, 9, ey + 2, 1, 1, blush);
+    px(b, 14, ey + 2, 1, 1, blush);
   }
 }
 
-export function drawZzz(b: RectSink, x: number, y: number, color: string): void {
-  px(b, x, y, 3, 1, color);
-  px(b, x + 2, y + 1, 1, 1, color);
-  px(b, x, y + 2, 3, 1, color);
+function humanHead(c: SkinPalette): HeadPainter {
+  return (b, y, mood) => {
+    px(b, 8, y + 3, 8, 9, c.outline);
+    px(b, 7, y + 4, 10, 7, c.outline);
+    px(b, 8, y + 4, 8, 7, c.skin);
+    px(b, 8, y + 10, 8, 1, c.skinShade);
+    drawFace(b, y + 6, mood, c.outline, c.mouth, c.blush);
+  };
 }
 
-export function drawVoxelMinerHead(
+/** Shared crew body. Returns where the role's tool is gripped. */
+function drawCrewBody(
   b: RectSink,
-  x: number,
-  y: number,
-  unit: number,
-  mood: Mood,
-): void {
-  const c = voxelMinerPalette();
-  // Hard hat / headlamp worker silhouette (not Steve face/hair grid)
-  const rows = [
-    'DDDDDDDD',
-    'DHHHHHHD',
-    'DHHHHHHD',
-    'DSLLLSSD',
-    mood === 'sleep' ? 'DSLLSLSD' : 'DSEESESD',
-    'DSSssSSD',
-    mood === 'sad' ? 'DSSMMMMD' : 'DSSMMSSD',
-    'DDSSSSDD',
-  ];
-  const colors: Record<string, string> = {
-    D: c.hairDark,
-    H: c.hair,
-    S: c.skin,
-    s: c.skinDark,
-    E: c.eye,
-    L: c.mouth,
-    M: c.mouth,
-  };
+  c: SkinPalette,
+  phase: Phase,
+  workArmShift: number,
+  head: HeadPainter,
+  hand: string = c.skin,
+): Pose {
+  const mood = moodForPhase(phase);
+  const y = mood === 'sad' ? 2 : mood === 'sleep' ? 1 : 0;
+  const s = workArmShift;
 
-  for (let row = 0; row < rows.length; row++) {
-    for (let col = 0; col < rows[row].length; col++) {
-      const color = colors[rows[row][col]];
-      if (!color) continue;
-      px(b, x + col * unit, y + row * unit, unit, unit, color);
-    }
+  px(b, 6, 22, 12, 1, c.shadow);
+  // Legs and boots stay planted while the upper body slumps.
+  px(b, 8, 17, 8, 4, c.outline);
+  px(b, 9, 17, 2, 3, c.pants);
+  px(b, 13, 17, 2, 3, c.pants);
+  px(b, 7, 20, 4, 2, c.outline);
+  px(b, 13, 20, 4, 2, c.outline);
+  px(b, 8, 20, 2, 1, c.boot);
+  px(b, 14, 20, 2, 1, c.boot);
+
+  // Uniform torso.
+  px(b, 8, y + 11, 8, 7, c.outline);
+  px(b, 9, y + 12, 6, 5, c.primary);
+  px(b, 9, y + 12, 6, 1, c.primaryLight);
+  px(b, 9, y + 16, 6, 1, c.primaryDark);
+
+  head(b, y, mood);
+
+  if (phase === 'celebrating') {
+    px(b, 5, y + 6, 3, 7, c.outline);
+    px(b, 6, y + 7, 1, 2, hand);
+    px(b, 6, y + 9, 1, 3, c.primary);
+    px(b, 16, y + 6 + s, 3, 7 - s, c.outline);
+    px(b, 17, y + 7 + s, 1, 2, hand);
+    px(b, 17, y + 9 + s, 1, 3 - s, c.primary);
+    px(b, 18, y + 7 + s, 1, 2, hand);
+    return { phase, mood, y, hx: 19, hy: y + 7 + s };
+  }
+  px(b, 6, y + 12, 3, 6, c.outline);
+  px(b, 7, y + 12, 1, 3, c.primary);
+  px(b, 7, y + 15, 1, 2, hand);
+  px(b, 15, y + 12 + s, 3, 6, c.outline);
+  px(b, 16, y + 12 + s, 1, 3, c.primary);
+  px(b, 16, y + 15 + s, 2, 2, hand);
+  return { phase, mood, y, hx: 18, hy: y + 15 + s };
+}
+
+function hardHat(b: RectSink, c: SkinPalette, y: number, fill: string, shade: string, shine: string): void {
+  px(b, 8, y, 8, 1, c.outline);
+  px(b, 7, y + 1, 10, 4, c.outline);
+  px(b, 6, y + 4, 12, 2, c.outline);
+  px(b, 8, y + 1, 8, 3, fill);
+  px(b, 7, y + 4, 10, 1, fill);
+  px(b, 11, y + 1, 2, 3, shade);
+  px(b, 9, y + 1, 1, 2, shine);
+}
+
+function twinkle(b: RectSink, x: number, y: number, color: string): void {
+  px(b, x, y - 1, 1, 3, color);
+  px(b, x - 1, y, 3, 1, color);
+}
+
+/** Sleep Zs and celebration twinkles shared by every skin. */
+function drawPhaseFx(b: RectSink, c: SkinPalette, p: Pose, frame: number): void {
+  const f = frame % 2;
+  if (p.phase === 'sleeping') {
+    drawZzz(b, 20, -1 + f, c.outline);
+    drawZzz(b, 19, -2 + f, c.lamp);
+    drawZzz(b, 24, -6 + f, c.outline);
+    drawZzz(b, 23, -7 + f, c.lamp);
+  } else if (p.phase === 'celebrating') {
+    twinkle(b, f ? 2 : 1, f ? 2 : 4, c.lamp);
+    twinkle(b, f ? 21 : 22, f ? 14 : 12, c.lampDeep);
   }
 }
 
@@ -161,7 +228,7 @@ export function drawPixelMascot(
   }
 }
 
-// ─── Classic skins ─────────────────────────────────────────────────────
+// ─── Official client mascots in crew uniform ───────────────────────────
 
 export function drawCodeBuddyMascot(
   b: RectSink,
@@ -171,39 +238,21 @@ export function drawCodeBuddyMascot(
   workArmShift: number,
 ): void {
   const c = skinPalette(appearance);
-  const mood = moodForPhase(phase);
-  const bodyBob = 0;
-  const y = mood === 'sad' ? 2 : bodyBob;
-  const blink = workArmShift > 0;
-  const armLift = phase === 'celebrating' ? -5 : 0;
-
-  px(b, 5, 22, 14, 1, c.shadow);
-  px(b, 11, y + 0, 2, 2, c.toolDark);
-  px(b, 12, y - 1, 1, 1, c.accent);
-
-  px(b, 5, y + 3, 14, 10, c.outline);
-  px(b, 6, y + 4, 12, 8, c.primary);
-  px(b, 7, y + 5, 10, 6, c.panel);
-  px(b, 8, y + 6, 8, 1, c.panelLight);
-  drawPixelEyes(b, 8, 14, y + 7, c.accent, blink ? 'sleep' : mood);
-  px(b, 10, y + 10, mood === 'sad' ? 4 : 3, 1, c.accentDark);
-
-  px(b, 7, y + 13, 10, 7, c.outline);
-  px(b, 8, y + 14, 8, 5, c.primaryDark);
-  px(b, 10, y + 15, 4, 2, c.accent);
-  px(b, 11, y + 17, 2, 1, c.tool);
-  px(b, 6, y + 15 + armLift + workArmShift, 2, phase === 'celebrating' ? 5 : 4, c.tool);
-  px(b, 16, y + 15 + armLift + workArmShift, 2, phase === 'celebrating' ? 5 : 4, c.tool);
-  px(b, 5, y + 19 + armLift + workArmShift, 3, 2, c.accentDark);
-  px(b, 16, y + 19 + armLift + workArmShift, 3, 2, c.accentDark);
-  px(b, 8, 20, 4, 2, c.toolDark);
-  px(b, 13, 20, 4, 2, c.toolDark);
-  px(b, 7, 22, 4, 1, c.outline);
-  px(b, 14, 22, 4, 1, c.outline);
-
-  if (phase === 'sleeping') {
-    drawZzz(b, 17, 2 + (frame % 2), c.accent);
-  }
+  const p = drawCrewBody(b, c, phase, workArmShift, (s, y, mood) => {
+    // Robot head with an antenna bulb, ear lights and a face screen.
+    px(s, 10, y - 2, 4, 4, c.outline);
+    px(s, 11, y - 1, 2, 2, c.accent);
+    px(s, 7, y + 2, 10, 10, c.outline);
+    px(s, 6, y + 5, 12, 4, c.outline);
+    px(s, 8, y + 3, 8, 8, c.primary);
+    px(s, 8, y + 3, 8, 1, c.primaryLight);
+    px(s, 9, y + 4, 6, 6, c.tool);
+    px(s, 6, y + 6, 1, 2, c.accentDark);
+    px(s, 17, y + 6, 1, 2, c.accentDark);
+    drawFace(s, y + 5, mood, c.accent, c.accent);
+  }, c.primaryLight);
+  px(b, 11, p.y + 13, 2, 2, c.accent);
+  drawPhaseFx(b, c, p, frame);
 }
 
 export function drawCodexMascot(
@@ -214,37 +263,19 @@ export function drawCodexMascot(
   workArmShift: number,
 ): void {
   const c = skinPalette(appearance);
-  const mood = moodForPhase(phase);
-  const bodyBob = 0;
-  const y = mood === 'sad' ? 2 : bodyBob;
   const cursorOn = phase === 'working' ? workArmShift > 0 : frame % 2 === 0;
-
-  px(b, 4, 22, 16, 1, c.shadow);
-  px(b, 4, y + 3, 16, 13, c.primary);
-  px(b, 5, y + 4, 14, 11, c.outline);
-  px(b, 6, y + 5, 12, 9, c.accent);
-  px(b, 6, y + 5, 12, 2, c.primary);
-  px(b, 8, y + 8, 2, 1, c.tool);
-  px(b, 9, y + 9, 1, 1, c.tool);
-  px(b, 8, y + 10, 2, 1, c.tool);
-  drawPixelEyes(b, 11, 15, y + 8, c.primary, mood);
-  px(b, 11, y + 12, mood === 'sad' ? 5 : 4, 1, c.primary);
-  if (cursorOn && mood === 'open') px(b, 16, y + 12, 1, 1, c.tool);
-
-  px(b, 10, y + 16, 4, 2, c.primary);
-  px(b, 6, y + 18, 12, 3, c.primaryDark);
-  px(b, 7, y + 19, 10, 1, c.panelLight);
-  px(b, 4, y + 17 + workArmShift, 3, 5, c.toolDark);
-  px(b, 17, y + 17 + workArmShift, 3, 5, c.toolDark);
-  if (phase === 'celebrating') {
-    px(b, 2, y + 10, 4, 2, c.tool);
-    px(b, 18, y + 10, 4, 2, c.tool);
-    px(b, 3, y + 8, 2, 2, c.accent);
-    px(b, 19, y + 8, 2, 2, c.accent);
-  }
-  if (phase === 'sleeping') {
-    drawZzz(b, 17, 2 + (frame % 2), c.tool);
-  }
+  const p = drawCrewBody(b, c, phase, workArmShift, (s, y, mood) => {
+    // Terminal head: cream bezel around a dark prompt screen.
+    px(s, 7, y + 2, 10, 10, c.outline);
+    px(s, 8, y + 3, 8, 8, c.cream);
+    px(s, 9, y + 4, 6, 6, c.primary);
+    px(s, 8, y + 10, 8, 1, c.paperShade);
+    drawFace(s, y + 5, mood, c.accent, c.accent);
+    if (cursorOn && mood === 'open') px(s, 14, y + 8, 1, 1, c.accent);
+  }, c.cream);
+  px(b, 10, p.y + 12, 1, 2, c.cream);
+  px(b, 13, p.y + 12, 1, 2, c.cream);
+  drawPhaseFx(b, c, p, frame);
 }
 
 export function drawClaudeMascot(
@@ -255,37 +286,21 @@ export function drawClaudeMascot(
   workArmShift: number,
 ): void {
   const c = skinPalette(appearance);
-  const mood = moodForPhase(phase);
-  const bodyBob = 0;
-  const y = (mood === 'sad' ? 2 : 0) + bodyBob;
-  const celebrate = phase === 'celebrating';
-
-  px(b, 4, 22, 16, 1, c.shadow);
-  px(b, 5, y + 8, 14, 5, c.outline);
-  px(b, 6, y + 9, 12, 3, c.primary);
-  px(b, 7, y + 7, 10, 2, c.primaryLight);
-  px(b, 8, y + 5, 8, 3, c.primary);
-  px(b, 9, y + 4, 6, 2, c.primaryDark);
-
-  px(b, 7, y + 11, 10, 7, c.cream);
-  drawPixelEyes(b, 9, 14, y + 13, c.outline, mood);
-  px(b, 10, y + 16, mood === 'sad' ? 5 : 4, 1, c.outline);
-
-  px(b, 6, y + 18, 12, 4, c.outline);
-  px(b, 7, y + 18, 10, 3, c.primaryDark);
-  px(b, 8, y + 19, 8, 1, c.primaryLight);
-
-  px(b, 4, y + (celebrate ? 10 : 16) + workArmShift, 3, 6, c.primary);
-  px(b, 17, y + (celebrate ? 10 : 16) + workArmShift, 3, 6, c.primary);
-  px(b, 3, y + (celebrate ? 8 : 20) + workArmShift, 3, 2, c.accent);
-  px(b, 18, y + (celebrate ? 8 : 20) + workArmShift, 3, 2, c.accent);
-  px(b, 7, 22, 4, 1, c.toolDark);
-  px(b, 13, 22, 4, 1, c.toolDark);
-
-  if (phase === 'sleeping') {
-    drawZzz(b, 17, 2 + (frame % 2), c.primaryLight);
-  }
+  const p = drawCrewBody(b, c, phase, workArmShift, (s, y, mood) => {
+    // Wide orange block head with side nubs.
+    px(s, 4, y + 6, 16, 4, c.outline);
+    px(s, 6, y + 3, 12, 9, c.outline);
+    px(s, 7, y + 4, 10, 7, c.primary);
+    px(s, 7, y + 4, 10, 1, c.primaryLight);
+    px(s, 5, y + 7, 2, 2, c.primary);
+    px(s, 17, y + 7, 2, 2, c.primary);
+    drawFace(s, y + 6, mood, c.outline, c.tool, c.accent);
+  }, c.accent);
+  px(b, 10, p.y + 12, 4, 1, c.accent);
+  drawPhaseFx(b, c, p, frame);
 }
+
+// ─── Classic headlamp miner ────────────────────────────────────────────
 
 export function drawVoxelMinerMascot(
   b: RectSink,
@@ -293,33 +308,37 @@ export function drawVoxelMinerMascot(
   frame: number,
   workArmShift: number,
 ): void {
-  const c = voxelMinerPalette();
-  const mood = moodForPhase(phase);
-  const y = mood === 'sad' ? 2 : 0;
-  const celebrate = phase === 'celebrating';
-
-  px(b, 4, 22, 16, 1, 'rgba(46,32,24,0.26)');
-  drawVoxelMinerHead(b, 8, y + 1, 1, mood);
-
-  px(b, 8, y + 8, 8, 8, c.outline);
-  px(b, 9, y + 9, 6, 7, c.shirt);
-  px(b, 10, y + 9, 4, 2, c.shirtLight);
-  px(b, 5, y + 8 + (celebrate ? -3 : workArmShift), 3, 10, c.skin);
-  px(b, 16, y + 8 + (celebrate ? -3 : workArmShift), 3, 10, c.skin);
-  px(b, 5, y + 8 + (celebrate ? -3 : workArmShift), 3, 3, c.shirtDark);
-  px(b, 16, y + 8 + (celebrate ? -3 : workArmShift), 3, 3, c.shirtDark);
-
-  px(b, 8, 16, 4, 6, c.pants);
-  px(b, 12, 16, 4, 6, c.pantsDark);
-  px(b, 7, 22, 5, 1, c.shoe);
-  px(b, 12, 22, 5, 1, c.shoe);
-
-  if (phase === 'sleeping') {
-    drawZzz(b, 18, 1 + (frame % 2), c.diamondLight);
-  }
+  const v = voxelMinerPalette();
+  const c: SkinPalette = {
+    ...CREW_COLORS,
+    primary: v.shirt,
+    primaryDark: v.shirtDark,
+    primaryLight: v.shirtLight,
+    accent: v.diamond,
+    accentDark: v.diamondDark,
+    tool: v.handle,
+    toolDark: v.handleDark,
+    skin: v.skin,
+    skinShade: v.skinDark,
+    pants: v.pants,
+  };
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  hardHat(b, c, y, v.hairLight, v.hair, c.metalLight);
+  px(b, 11, y + 1, 2, 2, v.diamond);
+  px(b, 11, y + 1, 1, 1, v.diamondLight);
+  px(b, 9, y + 15, 6, 1, v.handleDark);
+  px(b, 11, y + 15, 2, 1, v.diamond);
+  // Wooden-handled pick.
+  px(b, x, hy - 4, 1, 7, c.tool);
+  px(b, x - 1, hy - 7, 5, 3, c.outline);
+  px(b, x - 2, hy - 6, 1, 2, c.outline);
+  px(b, x + 4, hy - 6, 1, 2, c.outline);
+  px(b, x, hy - 6, 3, 1, c.metalLight);
+  drawPhaseFx(b, c, p, frame);
 }
 
-// ─── Generated skins ───────────────────────────────────────────────────
+// ─── Original crew roles ───────────────────────────────────────────────
 
 export function drawGeneratedSkin(
   b: RectSink,
@@ -346,7 +365,7 @@ export function drawGeneratedSkin(
       drawSpaceBounty(b, c, phase, frame, workArmShift);
       break;
     case 'arcade-ghost':
-      drawArcadeGhost(b, c, phase, frame);
+      drawArcadeGhost(b, c, phase, frame, workArmShift);
       break;
     case 'rune-mage':
       drawRuneMage(b, c, phase, frame, workArmShift);
@@ -355,159 +374,171 @@ export function drawGeneratedSkin(
       drawShadowNinja(b, c, phase, frame, workArmShift);
       break;
     case 'slime-king':
-      drawSlimeKing(b, c, phase, frame);
+      drawSlimeKing(b, c, phase, frame, workArmShift);
       break;
   }
 }
 
-type GeneratedPalette = ReturnType<typeof skinPalette>;
-
-export function drawHumanoidBase(
-  b: RectSink,
-  c: GeneratedPalette,
-  phase: Phase,
-  headY: number,
-  workArmShift = 0,
-): { y: number; mood: Mood; workArmShift: number } {
-  const mood = moodForPhase(phase);
-  const bodyBob = 0;
-  const y = headY + (mood === 'sad' ? 2 : bodyBob);
-  const celebrate = phase === 'celebrating';
-
-  px(b, 5, 22, 14, 1, c.shadow);
-  px(b, 8, y + 3, 8, 7, c.outline);
-  px(b, 9, y + 4, 6, 5, c.cream);
-  drawPixelEyes(b, 9, 13, y + 6, c.outline, mood);
-  px(b, 10, y + 9, mood === 'sad' ? 5 : 4, 1, c.outline);
-  px(b, 7, y + 11, 10, 8, c.outline);
-  px(b, 8, y + 12, 8, 6, c.primary);
-  px(b, 9, y + 13, 6, 2, c.primaryLight);
-  px(b, 5, y + (celebrate ? 8 : 13) + workArmShift, 3, 6, c.primaryDark);
-  px(b, 16, y + (celebrate ? 8 : 13) + workArmShift, 3, 6, c.primaryDark);
-  px(b, 6, y + (celebrate ? 7 : 18) + workArmShift, 3, 2, c.tool);
-  px(b, 15, y + (celebrate ? 7 : 18) + workArmShift, 3, 2, c.tool);
-  px(b, 8, 20, 4, 2, c.toolDark);
-  px(b, 13, 20, 4, 2, c.toolDark);
-  return { y, mood, workArmShift };
+/** Carpenter: lamp hard hat, bib overalls with tool belt, claw hammer. */
+export function drawRedJumper(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  hardHat(b, c, y, c.lamp, c.lampDeep, c.lampLight);
+  px(b, 11, y + 13, 2, 2, c.primaryDark);
+  px(b, 9, y + 15, 6, 1, c.woodDark);
+  px(b, 11, y + 15, 2, 1, c.lamp);
+  px(b, x, hy - 3, 1, 6, c.woodDark);
+  px(b, x - 1, hy - 6, 5, 3, c.outline);
+  px(b, x, hy - 5, 3, 1, c.metalLight);
+  drawPhaseFx(b, c, p, frame);
 }
 
-export function drawRedJumper(b: RectSink, c: GeneratedPalette, phase: Phase, frame: number, workArmShift: number): void {
-  void frame;
-  const { y } = drawHumanoidBase(b, c, phase, 2, workArmShift);
-  px(b, 7, y + 1, 10, 3, c.primary);
-  px(b, 8, y, 8, 2, c.primaryLight);
-  px(b, 15, y + 2, 3, 1, c.accent);
-  px(b, 9, y + 15 + workArmShift, 2, 3, c.accent);
-  px(b, 13, y + 15 + workArmShift, 2, 3, c.accent);
+/** Gardener: straw sun hat with a moss band, apron, shovel. */
+export function drawGreenQuest(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  px(b, 8, y + 1, 8, 1, c.outline);
+  px(b, 7, y + 2, 10, 2, c.outline);
+  px(b, 5, y + 4, 14, 2, c.outline);
+  px(b, 8, y + 2, 8, 1, c.lampDeep);
+  px(b, 8, y + 3, 8, 1, c.moss);
+  px(b, 6, y + 4, 12, 1, c.lampDeep);
+  px(b, 9, y + 2, 2, 1, c.lamp);
+  px(b, 10, y + 13, 4, 3, c.moss);
+  px(b, x - 1, hy - 6, 3, 1, c.woodDark);
+  px(b, x, hy - 5, 1, 9, c.woodDark);
+  px(b, x - 1, hy + 3, 3, 3, c.outline);
+  px(b, x, hy + 3, 1, 2, c.metalLight);
+  drawPhaseFx(b, c, p, frame);
 }
 
-export function drawGreenQuest(b: RectSink, c: GeneratedPalette, phase: Phase, frame: number, workArmShift: number): void {
-  void frame;
-  const { y } = drawHumanoidBase(b, c, phase, 2, workArmShift);
-  px(b, 11, y - 1, 3, 1, c.accent);
-  px(b, 9, y, 7, 2, c.primary);
-  px(b, 8, y + 2, 9, 2, c.primaryDark);
-  px(b, 10, y + 12, 4, 6, c.primaryDark);
-  px(b, 18, y + 8 + workArmShift, 1, 11, c.tool);
-  px(b, 17, y + 7 + workArmShift, 3, 2, c.accent);
+/** Runner: striped cap, race bib, sealed envelope, speed lines. */
+export function drawBlueDash(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  px(b, 8, y + 1, 8, 1, c.outline);
+  px(b, 7, y + 2, 10, 4, c.outline);
+  px(b, 15, y + 4, 4, 2, c.outline);
+  px(b, 8, y + 2, 8, 2, c.primaryDark);
+  px(b, 8, y + 4, 8, 1, c.lamp);
+  px(b, 16, y + 4, 2, 1, c.primaryDark);
+  px(b, 10, y + 13, 4, 3, c.paper);
+  px(b, 11, y + 14, 2, 1, c.terracotta);
+  px(b, x, hy - 1, 5, 4, c.outline);
+  px(b, x + 1, hy, 3, 2, c.paper);
+  px(b, x + 2, hy, 1, 1, c.terracotta);
+  if (phase === 'working') {
+    const f = frame % 2;
+    px(b, 1 + f, y + 13, 3, 1, c.lampDeep);
+    px(b, 2 - f, y + 16, 3, 1, c.lampDeep);
+  }
+  drawPhaseFx(b, c, p, frame);
 }
 
-export function drawBlueDash(b: RectSink, c: GeneratedPalette, phase: Phase, frame: number, workArmShift: number): void {
-  void frame;
-  const { y } = drawHumanoidBase(b, c, phase, 2, workArmShift);
-  px(b, 7, y + 2, 10, 3, c.primaryDark);
-  px(b, 8, y, 2, 2, c.accent);
-  px(b, 11, y - 1, 2, 3, c.accent);
-  px(b, 14, y, 2, 2, c.accent);
-  px(b, 8, y + 6, 8, 2, c.accent);
-  px(b, 4, 18, 3, 1, c.accent);
-  px(b, 17, 20, 4, 1, c.accent);
+/** Mason: paper hard hat, reflective stripe, trowel, brick at the feet. */
+export function drawBlockMiner(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  hardHat(b, c, y, c.paper, c.paperShade, c.white);
+  px(b, 9, y + 14, 6, 1, c.paper);
+  px(b, x, hy - 1, 1, 3, c.woodDark);
+  px(b, x - 1, hy - 5, 3, 4, c.outline);
+  px(b, x, hy - 5, 1, 3, c.metalLight);
+  px(b, 18, 19, 6, 3, c.outline);
+  px(b, 19, 20, 4, 1, c.terracotta);
+  drawPhaseFx(b, c, p, frame);
 }
 
-export function drawBlockMiner(b: RectSink, c: GeneratedPalette, phase: Phase, frame: number, workArmShift: number): void {
-  void frame;
-  const { y } = drawHumanoidBase(b, c, phase, 3, workArmShift);
-  px(b, 7, y, 10, 4, c.tool);
-  px(b, 8, y + 1, 8, 2, c.accent);
-  px(b, 11, y, 2, 1, c.white);
-  px(b, 18, y + 7 + workArmShift, 2, 9, c.tool);
-  px(b, 16, y + 6 + workArmShift, 6, 2, c.tool);
-  px(b, 20, y + 5 + workArmShift, 2, 2, c.accent);
+/** Welder: flip-up mask, leather apron, torch with sparks. */
+export function drawSpaceBounty(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  px(b, 7, y, 10, 5, c.outline);
+  px(b, 8, y + 1, 8, 3, c.metal);
+  px(b, 9, y + 2, 6, 1, c.outline);
+  px(b, 10, y + 2, 2, 1, c.lamp);
+  px(b, 7, y + 5, 10, 1, c.outline);
+  px(b, 10, y + 13, 4, 4, c.woodDark);
+  px(b, x, hy - 1, 1, 4, c.metal);
+  px(b, x, hy - 3, 3, 2, c.outline);
+  px(b, x + 1, hy - 3, 2, 1, c.metalLight);
+  if (phase === 'working') {
+    const f = frame % 2;
+    px(b, x + 3, hy - 3, 1, 1, c.lampLight);
+    px(b, x + 4, hy - 4 - f, 1, 1, c.lamp);
+    px(b, x + 4, hy - 2 + f, 1, 1, c.lampDeep);
+  }
+  drawPhaseFx(b, c, p, frame);
 }
 
-export function drawSpaceBounty(b: RectSink, c: GeneratedPalette, phase: Phase, frame: number, workArmShift: number): void {
-  const mood = moodForPhase(phase);
-  const bodyBob = 0;
-  const y = 2 + (mood === 'sad' ? 2 : bodyBob);
-  px(b, 5, 22, 14, 1, c.shadow);
-  px(b, 6, y + 2, 12, 10, c.outline);
-  px(b, 7, y + 3, 10, 8, c.primary);
-  px(b, 8, y + 5, 8, 4, c.panel);
-  drawPixelEyes(b, 9, 13, y + 6, c.accent, mood);
-  px(b, 7, y + 13, 10, 7, c.outline);
-  px(b, 8, y + 14, 8, 5, c.primaryDark);
-  px(b, 4, y + 15 + workArmShift, 3, 5, c.tool);
-  px(b, 17, y + 15 + workArmShift, 3, 5, c.tool);
-  px(b, 5, y + 20 + workArmShift, 2, 2, c.accent);
-  px(b, 17, y + 20 + workArmShift, 2, 2, c.accent);
+/** Night Watch: knit cap with a lamp pompom, coat badge, lantern. */
+export function drawArcadeGhost(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift = 0): void {
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  px(b, 10, y - 2, 4, 3, c.outline);
+  px(b, 11, y - 1, 2, 1, c.lamp);
+  px(b, 8, y + 1, 8, 1, c.outline);
+  px(b, 7, y + 2, 10, 4, c.outline);
+  px(b, 8, y + 2, 8, 2, c.primaryDark);
+  px(b, 8, y + 4, 8, 1, c.primaryLight);
+  px(b, 13, y + 13, 1, 1, c.lamp);
+  px(b, x + 1, hy - 1, 1, 1, c.outline);
+  px(b, x, hy, 3, 5, c.outline);
+  px(b, x + 1, hy + 1, 1, 3, frame % 2 === 0 ? c.lamp : c.lampLight);
+  drawPhaseFx(b, c, p, frame);
 }
 
-export function drawArcadeGhost(b: RectSink, c: GeneratedPalette, phase: Phase, frame: number): void {
-  void frame;
-  const mood = moodForPhase(phase);
-  const bodyDrift = 0;
-  const accentWave = 0;
-  const y = 5 + bodyDrift + (mood === 'sad' ? 2 : 0);
-  px(b, 5, 22, 14, 1, c.shadow);
-  px(b, 6, y + 1, 12, 11, c.outline);
-  px(b, 7, y, 10, 12, c.primary);
-  px(b, 8, y + 2, 8, 2, c.primaryLight);
-  drawPixelEyes(b, 9, 14, y + 5, c.panel, mood);
-  px(b, 11, y + 8, 3, 2, c.panel);
-  px(b, 7, y + 12, 2, 2, c.primary);
-  px(b, 11, y + 12, 2, 2, c.primary);
-  px(b, 15, y + 12, 2, 2, c.primary);
-  px(b, 17, y + 8 + accentWave, 2, 2, c.accent);
+/** Surveyor: tan bucket hat, lamp-striped vest, striped ranging pole. */
+export function drawRuneMage(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  px(b, 8, y + 1, 8, 1, c.outline);
+  px(b, 7, y + 2, 10, 4, c.outline);
+  px(b, 6, y + 4, 12, 2, c.outline);
+  px(b, 8, y + 2, 8, 2, c.wood);
+  px(b, 7, y + 4, 10, 1, c.woodDark);
+  px(b, 10, y + 12, 1, 4, c.lamp);
+  px(b, 13, y + 12, 1, 4, c.lamp);
+  const top = hy - 9;
+  const bottom = phase === 'celebrating' ? hy + 4 : 21;
+  px(b, x - 1, top - 1, 3, bottom - top + 2, c.outline);
+  for (let r = top; r < bottom; r++) {
+    px(b, x, r, 1, 1, Math.floor((r - top) / 2) % 2 === 0 ? c.terracotta : c.paper);
+  }
+  px(b, x - 1, hy, 1, 2, c.skin);
+  drawPhaseFx(b, c, p, frame);
 }
 
-export function drawRuneMage(b: RectSink, c: GeneratedPalette, phase: Phase, frame: number, workArmShift: number): void {
-  void frame;
-  const { y } = drawHumanoidBase(b, c, phase, 3, workArmShift);
-  px(b, 10, y - 2, 4, 2, c.accent);
-  px(b, 8, y, 8, 4, c.primaryDark);
-  px(b, 9, y + 4, 6, 3, c.primary);
-  px(b, 11, y + 13, 2, 3, c.accent);
-  px(b, 18, y + 6 + workArmShift, 1, 12, c.tool);
-  px(b, 17, y + 5 + workArmShift, 3, 3, c.accent);
-  px(b, 18, y + 6 + workArmShift, 1, 1, c.white);
+/** Roofer: dotted bandana, suspenders, stack of roof tiles. */
+export function drawShadowNinja(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift: number): void {
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  px(b, 4, y + 3, 4, 3, c.outline);
+  px(b, 5, y + 4, 2, 1, c.moss);
+  px(b, 8, y + 2, 8, 1, c.outline);
+  px(b, 7, y + 3, 10, 3, c.outline);
+  px(b, 8, y + 3, 8, 2, c.moss);
+  px(b, 10, y + 3, 1, 1, c.paper);
+  px(b, 13, y + 4, 1, 1, c.paper);
+  px(b, 10, y + 12, 1, 4, c.primaryDark);
+  px(b, 13, y + 12, 1, 4, c.primaryDark);
+  px(b, x, hy - 2, 5, 5, c.outline);
+  px(b, x + 1, hy - 1, 3, 1, c.terracotta);
+  px(b, x + 1, hy + 1, 3, 1, c.terracotta);
+  drawPhaseFx(b, c, p, frame);
 }
 
-export function drawShadowNinja(b: RectSink, c: GeneratedPalette, phase: Phase, frame: number, workArmShift: number): void {
-  void frame;
-  const { y } = drawHumanoidBase(b, c, phase, 3, workArmShift);
-  px(b, 7, y + 2, 10, 7, c.panel);
-  px(b, 8, y + 5, 8, 2, c.accent);
-  px(b, 16, y + 3, 4, 2, c.accent);
-  px(b, 4, y + 16 + workArmShift, 16, 1, c.tool);
-  px(b, 17, y + 15 + workArmShift, 2, 3, c.white);
-}
-
-export function drawSlimeKing(b: RectSink, c: GeneratedPalette, phase: Phase, frame: number): void {
-  void frame;
-  const mood = moodForPhase(phase);
-  const bodyBounce = 0;
-  const crownWave = 0;
-  const y = 7 + (mood === 'sad' ? 2 : -bodyBounce);
-  px(b, 5, 22, 14, 1, c.shadow);
-  px(b, 7, y + 1, 10, 1, c.accent);
-  px(b, 8, y - 1 + crownWave, 2, 3, c.accent);
-  px(b, 11, y - 2 + crownWave, 2, 4, c.accent);
-  px(b, 14, y - 1 + crownWave, 2, 3, c.accent);
-  px(b, 5, y + 4, 14, 11, c.outline);
-  px(b, 6, y + 3, 12, 12, c.primary);
-  px(b, 8, y + 5, 8, 2, c.primaryLight);
-  drawPixelEyes(b, 9, 14, y + 8, c.panel, mood);
-  px(b, 11, y + 12, mood === 'sad' ? 4 : 3, 1, c.panel);
-  px(b, 6, y + 14, 3, 2, c.primaryDark);
-  px(b, 15, y + 14, 3, 2, c.primaryDark);
+/** Foreman: terracotta hard hat, moustache, tie, clipboard. */
+export function drawSlimeKing(b: RectSink, c: SkinPalette, phase: Phase, frame: number, workArmShift = 0): void {
+  const p = drawCrewBody(b, c, phase, workArmShift, humanHead(c));
+  const { y, hx: x, hy } = p;
+  hardHat(b, c, y, c.terracotta, c.mouth, c.blush);
+  px(b, 10, y + 8, 4, 1, c.boot);
+  px(b, 11, y + 12, 2, 1, c.paper);
+  px(b, 11, y + 13, 2, 3, c.terracotta);
+  px(b, x, hy - 3, 4, 6, c.outline);
+  px(b, x + 1, hy - 2, 2, 4, c.paper);
+  px(b, x + 1, hy - 3, 2, 1, c.metalLight);
+  px(b, x + 1, hy, 2, 1, c.paperShade);
+  drawPhaseFx(b, c, p, frame);
 }
