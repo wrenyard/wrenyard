@@ -150,7 +150,7 @@ export function PromptInput({
           onCompositionStart={() => { composing.current = true; onDismissSuggestion?.(); }}
           onCompositionEnd={() => { composing.current = false; }}
         />
-        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1 pr-1 sm:gap-1.5 sm:pr-1.5">
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1 pr-1 py-1 sm:gap-1.5 sm:pr-1.5">
           <div className="flex min-w-0 flex-wrap items-center gap-1 sm:gap-1.5">{toolbar}</div>
           {toolbarTrailing}
           <InputGroupButton type="submit" variant="default" size="icon-sm" className="shrink-0" disabled={!canSubmit} aria-label="发送" title="发送">
