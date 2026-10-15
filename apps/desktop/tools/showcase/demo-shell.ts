@@ -707,6 +707,7 @@ const TODAY: StatsTodaySnapshot = {
   outputTokens: 2_100_000,
   totalTokens: 11_500_000,
   outcomes: { done: 10, failed: 1, cancelled: 0, running: 1 },
+  taskDispatches: { count: 9, done: 8 },
 };
 
 interface RunProfile {

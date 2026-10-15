@@ -339,6 +339,27 @@ export function readStatsSummary(
     fullEndIso,
   )
 
+  // One bounded cohort scan over canonical executions (never events). Each
+  // task's EARLIEST execution created_at, grouped by task_id (idx_exec_task),
+  // decides its first-dispatch day: queued executions are included and retries
+  // collapse across all days, so a task first dispatched yesterday but retried
+  // today stays in yesterday's cohort. `done` is the current tasks.status of
+  // that exact cohort — never a completion-date total and never clamped.
+  const todayDispatchCohort = dbGet<{ count: number; done: number }>(
+    `SELECT COUNT(*) AS count,
+            COALESCE(SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END), 0) AS done
+     FROM (
+       SELECT task_id, MIN(created_at) AS first_dispatched_at
+       FROM executions
+       WHERE task_id IS NOT NULL
+       GROUP BY task_id
+     ) e
+     INNER JOIN tasks t ON t.id = e.task_id
+     WHERE e.first_dispatched_at >= ? AND e.first_dispatched_at < ?`,
+    todayWindow.startAt,
+    todayWindow.endAt,
+  )
+
   // Partition events into daily buckets by local calendar day
   const bucketByDayKey = new Map<string, DailyBucket>()
   for (const bucket of dailyBuckets) {
@@ -404,6 +425,10 @@ export function readStatsSummary(
     outputTokens: dailyBuckets[dailyBuckets.length - 1].outputTokens,
     totalTokens: dailyBuckets[dailyBuckets.length - 1].totalTokens,
     outcomes: todaysOutcomes,
+    taskDispatches: {
+      count: todayDispatchCohort?.count ?? 0,
+      done: todayDispatchCohort?.done ?? 0,
+    },
   }
 
   // --- TODAY RANKINGS: filter the full event set to today only ---

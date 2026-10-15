@@ -76,7 +76,17 @@ function parseToday(value: unknown, requireOutcomes: boolean): StatsTodaySnapsho
   if (!base || startAt === null || endAt === null) return null;
   const outcomes = parseOutcomes(record.outcomes, true);
   if (requireOutcomes && !outcomes) return null;
-  return { ...base, startAt, endAt, ...(outcomes ? { outcomes } : {}) };
+  // Additive first-dispatch cohort. Surfaced only when the daemon sent a valid
+  // {count,done}; an absent or malformed payload stays undefined (older daemon
+  // compatibility) and is never back-filled from dispatchCount/outcomes.done.
+  const taskDispatches = parseTaskDispatches(record.taskDispatches);
+  return {
+    ...base,
+    startAt,
+    endAt,
+    ...(outcomes ? { outcomes } : {}),
+    ...(taskDispatches ? { taskDispatches } : {}),
+  };
 }
 
 function parseDaily(value: unknown): StatsDailySnapshot | null {
@@ -107,6 +117,21 @@ function parseOutcomes(value: unknown, allowRunning: boolean): StatsOutcomesSnap
   if (done === null || failed === null || cancelled === null) return null;
   const running = allowRunning ? readCount(record.running) : null;
   return { done, failed, cancelled, ...(running !== null ? { running } : {}) };
+}
+
+/**
+ * Parses the additive first-dispatch cohort. Both counters must be present,
+ * finite and non-negative; anything else (absent, non-object, malformed, or
+ * partially numeric) yields null so the caller leaves the field undefined
+ * rather than falling back to a legacy total.
+ */
+function parseTaskDispatches(value: unknown): { count: number; done: number } | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const count = readCount(record.count);
+  const done = readCount(record.done);
+  if (count === null || done === null) return null;
+  return { count, done };
 }
 
 function parseWindow(value: unknown): StatsWindowSnapshot | null {

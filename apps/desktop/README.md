@@ -33,7 +33,17 @@ Desktop renderer + preload + Electron main
   receives a bounded view of today totals, completion rate, a 31-day heat map
   and 24h/7d/1mo windows, which are the single authoritative source for Profile
   and Task rankings. Pet only polls `stats.today` to enrich its passive house
-  hover summary; it has no statistics window or action.
+  hover summary; it has no statistics window or action. The empty-session
+  homepage “今日调度” cohort counts unique tasks whose first execution dispatch
+  (`executions.created_at`) falls inside the current daemon-local calendar day:
+  queued dispatches count even though no dispatch event is written, and retries
+  count once, so a task first dispatched on an earlier day stays in that earlier
+  day's cohort. Its “其中已完成 N” subtitle is the number of that same cohort
+  that is currently `status='done'`; completion-date totals from other days are
+  excluded. The window is always the daemon-local calendar day. When a daemon
+  omits `taskDispatches` (older daemon), Desktop shows `—` with no completion
+  subtitle and never falls back to the legacy `dispatchCount`/`outcomes`
+  metrics.
 - **Desktop-owned quota & providers** — one Desktop controller runs the Runtime
   `quota --json` adapter on a bounded cache/refresh interval, applies the
   configured provider order once and projects the result to the notification-area

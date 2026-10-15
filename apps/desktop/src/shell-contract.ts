@@ -693,6 +693,13 @@ export interface StatsTodaySnapshot {
   outputTokens: number;
   totalTokens: number;
   outcomes?: StatsOutcomesSnapshot;
+  /**
+   * First-dispatch-today task cohort (unique tasks whose earliest canonical
+   * execution landed in the daemon-local day; queued dispatches included,
+   * retries counted once). Optional so a desktop build tolerates a daemon that
+   * does not return it; never substituted from `dispatchCount`/`outcomes.done`.
+   */
+  taskDispatches?: { count: number; done: number };
 }
 
 export interface StatsDailySnapshot {

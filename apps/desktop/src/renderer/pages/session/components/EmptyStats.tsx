@@ -8,12 +8,15 @@ interface StatCell {
   label: string;
   value: string;
   note?: string;
+  /** Optional hover tooltip that spells out the figure's exact cohort. */
+  title?: string;
 }
 
 /** One compact figure: muted label, tabular value, optional one-line note. */
-function Cell({ label, value, note, compact }: StatCell & { compact: boolean }) {
+function Cell({ label, value, note, title, compact }: StatCell & { compact: boolean }) {
   return (
     <div
+      title={title}
       className={compact
         ? 'flex flex-col gap-0.5 rounded-lg border bg-card/50 px-2.5 py-2'
         : 'flex flex-col gap-1 rounded-lg border bg-card/50 px-3 py-2.5'}
@@ -48,8 +51,15 @@ export function EmptyStats({ compact = false }: { compact?: boolean }) {
 
   const snapshot = stats.data !== undefined && stats.data.status === 'available' ? stats.data : undefined;
   const today = snapshot?.today ?? null;
-  const dispatchValue = today === null ? '—' : formatCount(today.dispatchCount);
-  const dispatchNote = today?.outcomes ? `完成 ${formatCount(today.outcomes.done)}` : undefined;
+  // 今日调度 is the first-dispatch-today cohort only. An older daemon that omits
+  // it shows an em dash with no completion subtitle; the legacy dispatchCount
+  // and outcomes.done are never substituted here.
+  const taskDispatches = today?.taskDispatches;
+  const dispatchValue = taskDispatches === undefined ? '—' : formatCount(taskDispatches.count);
+  const dispatchNote = taskDispatches === undefined ? undefined : `其中已完成 ${formatCount(taskDispatches.done)}`;
+  const dispatchTitle = taskDispatches === undefined || today === null
+    ? undefined
+    : `今日调度：本地日历日 ${today.dayKey} 内首次派发的任务数（按任务去重，含排队中的派发，重试只计一次）；其中已完成按该批任务当前状态统计。`;
 
   const tokenValue = today === null ? '—' : formatTokenCount(today.totalTokens);
   const window = snapshot === undefined ? undefined : selectWindow(snapshot, '24h');
@@ -66,7 +76,7 @@ export function EmptyStats({ compact = false }: { compact?: boolean }) {
 
   const cells: StatCell[] = [
     { label: '今日会话', value: sessionsToday },
-    { label: '今日调度', value: dispatchValue, note: dispatchNote },
+    { label: '今日调度', value: dispatchValue, note: dispatchNote, title: dispatchTitle },
     { label: '今日 Token', value: tokenValue, note: tokenNote },
     { label: '可用提供者', value: providersValue },
   ];
@@ -74,7 +84,7 @@ export function EmptyStats({ compact = false }: { compact?: boolean }) {
   return (
     <div className={compact ? 'grid grid-cols-2 gap-2' : 'grid grid-cols-4 gap-3'}>
       {cells.map((cell) => (
-        <Cell key={cell.label} label={cell.label} value={cell.value} note={cell.note} compact={compact} />
+        <Cell key={cell.label} label={cell.label} value={cell.value} note={cell.note} title={cell.title} compact={compact} />
       ))}
     </div>
   );

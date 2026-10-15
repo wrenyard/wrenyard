@@ -60,6 +60,15 @@ export interface StatsTodayItem {
     cancelled: number
     running?: number
   }
+  /**
+   * Additive today task-dispatch cohort. `count` is the number of unique tasks
+   * whose EARLIEST canonical execution was created inside the daemon-local day
+   * window (queued dispatches included, retries collapsed by task_id across all
+   * days); `done` is how many of that exact cohort currently have
+   * tasks.status = 'done'. Not a completion-date total and never clamped to
+   * `count`. Optional so older daemons/clients stay compatible.
+   */
+  taskDispatches?: { count: number; done: number }
 }
 
 export interface ProfileRankingItem {
@@ -286,6 +295,17 @@ export const statsSummaryResultSchema = {
             failed: { type: 'integer', minimum: 0 },
             cancelled: { type: 'integer', minimum: 0 },
             running: { type: 'integer', minimum: 0 },
+          },
+          additionalProperties: true,
+        },
+        // Additive optional cohort: absent on older daemons, so it is never
+        // required and existing fields/window semantics are unchanged.
+        taskDispatches: {
+          type: 'object',
+          required: ['count', 'done'],
+          properties: {
+            count: { type: 'integer', minimum: 0 },
+            done: { type: 'integer', minimum: 0 },
           },
           additionalProperties: true,
         },
