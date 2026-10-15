@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/renderer/components/
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { Field, FieldLabel } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
+import { ScrollArea } from '@/renderer/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/renderer/components/ui/table';
@@ -20,6 +21,7 @@ import { useConfirm } from '@/renderer/hooks/use-confirm';
 import { executeCommand } from '@/renderer/lib/commands';
 import { toast } from '@/renderer/lib/notify';
 import { useRemoteConnection } from '@/renderer/lib/desktop';
+import { formatElapsedMs } from '@/renderer/lib/format';
 import type {
   BotAcceptanceCheck,
   BotComponentId,
@@ -118,6 +120,28 @@ const COMPONENT_STATE_LABELS: Record<BotComponentState, string> = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Chinese text for the error strings the daemon stores on an item. `session
+ * stalled` and `task run missing` are reasons, the rest are codes.
+ */
+const ERROR_LABELS: Record<string, string> = {
+  session_blocked: '会话请求决定',
+  'session stalled': '会话停滞',
+  'task run missing': '任务运行丢失',
+  rebase_conflict: '变基冲突',
+  bot_owned: '归机器人所有',
+};
+
+/** Longest raw error shown before it is elided; the tooltip keeps it whole. */
+const ERROR_TEXT_LIMIT = 80;
+
+/** Known error text in Chinese, else the raw text truncated to {@link ERROR_TEXT_LIMIT}. */
+function describeError(error: string): string {
+  const known = ERROR_LABELS[error.trim()];
+  if (known !== undefined) return known;
+  return error.length > ERROR_TEXT_LIMIT ? `${error.slice(0, ERROR_TEXT_LIMIT)}…` : error;
 }
 
 function shortSha(sha: string): string {
@@ -421,7 +445,22 @@ export function BotPage() {
                       </Stat>
                       <Stat label="24h 失败步骤">{health.data.stepsFailed24h}</Stat>
                       <Stat label="24h 适配器错误">{health.data.adapterErrors24h}</Stat>
-                      <Stat label="24h 升级提醒">{health.data.escalations24h}</Stat>
+                      <Stat label="24h 上报提醒">{health.data.escalations24h}</Stat>
+                      <Stat label="负载">
+                        {health.data.load === undefined ? NONE : (
+                          <span className="inline-flex min-w-0 items-center gap-1">
+                            <span className="truncate tabular-nums">
+                              {`${health.data.load.activeExecutions}/${health.data.load.maxExecutions} 执行中 · ${health.data.load.queuedExecutions} 排队`}
+                            </span>
+                            {health.data.load.oldestQueuedMs === undefined ? null : (
+                              <span className="truncate text-muted-foreground">
+                                {`（排队最久 ${formatElapsedMs(health.data.load.oldestQueuedMs)}）`}
+                              </span>
+                            )}
+                            {health.data.load.backedOff ? <StatusBadge tone="warning" label="已退避" /> : null}
+                          </span>
+                        )}
+                      </Stat>
                       <Stat label="组件">
                         {health.data.components.length === 0
                           ? NONE
@@ -550,7 +589,7 @@ export function BotPage() {
                               {item.error === undefined ? NONE : (
                                 <Tooltip>
                                   <TooltipTrigger render={<span className="block max-w-[14rem] truncate" />}>
-                                    {item.error}
+                                    {describeError(item.error)}
                                   </TooltipTrigger>
                                   <TooltipContent>{item.error}</TooltipContent>
                                 </Tooltip>
@@ -650,32 +689,34 @@ export function BotPage() {
                 ) : log.entries.length === 0 ? (
                   <p className="text-sm text-muted-foreground">暂无日志。</p>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>时间</TableHead>
-                        <TableHead>级别</TableHead>
-                        <TableHead>代码</TableHead>
-                        <TableHead>消息</TableHead>
-                        <TableHead>条目</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {log.entries.map((entry) => (
-                        <TableRow key={entry.seq}>
-                          <TableCell className="text-muted-foreground tabular-nums">
-                            <Timestamp value={entry.at} precision="second" />
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">{entry.level}</TableCell>
-                          <TableCell className="text-muted-foreground">{entry.code ?? NONE}</TableCell>
-                          <TableCell>{entry.message}</TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {entry.itemId === undefined ? NONE : shortSha(entry.itemId)}
-                          </TableCell>
+                  <ScrollArea className="h-[480px]">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>时间</TableHead>
+                          <TableHead>级别</TableHead>
+                          <TableHead>代码</TableHead>
+                          <TableHead>消息</TableHead>
+                          <TableHead>条目</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {[...log.entries].reverse().map((entry) => (
+                          <TableRow key={entry.seq}>
+                            <TableCell className="text-muted-foreground tabular-nums">
+                              <Timestamp value={entry.at} precision="second" />
+                            </TableCell>
+                            <TableCell className="text-muted-foreground">{entry.level}</TableCell>
+                            <TableCell className="text-muted-foreground">{entry.code ?? NONE}</TableCell>
+                            <TableCell>{entry.message}</TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {entry.itemId === undefined ? NONE : shortSha(entry.itemId)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </ScrollArea>
                 )}
               </CardContent>
             </Card>
