@@ -15,7 +15,26 @@ export const GATEWAY_HEADERS = {
 
 export const GATEWAY_ROUTE_STATES = ['rate_limited', 'quota_exhausted', 'auth_failed', 'model_unavailable'] as const;
 export type GatewayRouteState = (typeof GATEWAY_ROUTE_STATES)[number];
-export interface GatewayRouteStatus { state: GatewayRouteState; until: string; }
+
+/** Circuit phase of one route: `closed` is healthy, `open` faulted, `half_open` probing. */
+export type GatewayRoutePhase = 'closed' | 'open' | 'half_open';
+
+/**
+ * The health of one public route as an in-process caller reads it. `state` and
+ * `until` are the legacy block; the circuit detail is optional so a producer
+ * that only reports open blocks stays valid. `phase` distinguishes an open
+ * circuit from a half-open route that may run one bounded recovery probe;
+ * `nextProbeAt` is when such a probe may next be admitted. `faultKind` names the
+ * fault behind the block (a timeout, transport, server, rate-limit or auth
+ * reason), never a prompt or raw upstream text.
+ */
+export interface GatewayRouteStatus {
+  state: GatewayRouteState;
+  until: string;
+  phase?: GatewayRoutePhase;
+  nextProbeAt?: string;
+  faultKind?: string;
+}
 
 /**
  * Upstream response headers the Gateway forwards to a client. Values are

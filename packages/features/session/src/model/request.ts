@@ -13,6 +13,7 @@
  * and an auxiliary call keeps the one route it selected after skipping blocked
  * routes, failing on the selected route instead of switching to another.
  */
+import { randomUUID } from 'node:crypto';
 import { getEncoding } from 'js-tiktoken';
 import type { GatewayRouteStatus, ProviderDefinition } from '@wrenyard/providers/base';
 import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
@@ -21,8 +22,10 @@ import {
   isContextOverflowError,
   type ModelContentPart,
   type ModelErrorKind,
+  type ModelAttempt,
   type ModelEvent,
   type ModelMetrics,
+  type ModelRequest,
   type ModelResult,
   type ModelTransport,
   type ToolCall,
@@ -49,11 +52,19 @@ export type CallRole = (typeof CALL_ROLES)[number];
 export const REASON_IDLE_TIMEOUT_MS = 180_000;
 /** Every auxiliary request is bounded end to end. */
 export const AUXILIARY_TIMEOUT_MS = 60_000;
-/** How long an auxiliary route that timed out or failed in transport is skipped. */
-export const AUXILIARY_ROUTE_COOLDOWN_MS = 10 * 60_000;
-/** Auxiliary routes recently seen failing, keyed by `provider/model`, with the time they are admitted again. */
-const auxiliaryRouteCooldown = new Map<string, number>();
-const auxiliaryRouteCoolingDown = (model: string): boolean => (auxiliaryRouteCooldown.get(model) ?? 0) > Date.now();
+/** The whole bounded auxiliary failover budget: route selection plus every attempt. */
+export const AUXILIARY_TOTAL_BUDGET_MS = AUXILIARY_TIMEOUT_MS;
+/** At most this long on any one route, further capped by the remaining budget. */
+export const AUXILIARY_PER_ROUTE_MS = 20_000;
+/** At most this many distinct candidate routes, each tried once. */
+export const AUXILIARY_MAX_ROUTES = 3;
+
+/**
+ * Route health the runner reads: the Gateway's typed route status, whose circuit
+ * detail (`phase`, `nextProbeAt`, `faultKind`) is what decides whether a route
+ * may be tried now.
+ */
+export type RouteHealth = GatewayRouteStatus;
 
 /** Caller-supplied expensive model for the `reason` role. */
 export interface ReasonSelection {
@@ -67,6 +78,12 @@ export interface ReasonSelection {
 export interface CallErrorFact {
   kind: ModelErrorKind;
   status?: number;
+  /**
+   * The earliest instant the failed call may be retried, when the route health
+   * a bounded failover read gives one. It is not an attempt record: a route
+   * that was never called still reports its own retry instant here.
+   */
+  retryAt?: string;
   /** Supplier's original message. */
   message: string;
 }
@@ -126,7 +143,21 @@ export interface CallRunnerOptions {
   /** The one unified transport every role calls. */
   transport: ModelTransport;
   /** Current Gateway state of a route; a provider or pool failure can block sibling routes. */
-  routeStatus?: (model: string) => GatewayRouteStatus | undefined;
+  routeStatus?: (model: string) => RouteHealth | undefined;
+  /**
+   * Announce the start of one auxiliary attempt, so a later client-observed
+   * timeout or transport failure is attributed to the same attempt the Gateway
+   * already saw. Optional: absent, no attempt-level feedback is sent.
+   */
+  beginRouteAttempt?: (publicModel: string, attemptId: string) => void;
+  /**
+   * Report a client-observed route fault (timeout or real transport failure) for
+   * one attempt into the same route-health authority. Never called for a user
+   * cancellation or an HTTP error the Gateway already recorded.
+   */
+  reportRouteFault?: (publicModel: string, attemptId: string, kind: 'timeout' | 'transport') => void;
+  /** Release one attempt's bookkeeping once it has settled. */
+  completeRouteAttempt?: (publicModel: string, attemptId: string) => void;
   /** Session id, sent to the Gateway for request attribution. */
   sessionId?: string;
   /** Fresh non-empty ranked routes for each auxiliary invocation. */
@@ -390,6 +421,45 @@ function metricsOf(error: unknown): ModelMetrics | undefined {
     : undefined;
 }
 
+/**
+ * Distinct candidate routes for one logical auxiliary call, in preference order.
+ * A repeated model is dropped so a failover can never retry a route it already
+ * used. The list is NOT truncated here: the runner skips routes that are open or
+ * mid-probe and stops only after {@link AUXILIARY_MAX_ROUTES} routes were
+ * actually called, so a skipped route never consumes one of the three attempts.
+ */
+function distinctCandidates(routes: readonly AuxiliaryRoute[]): AuxiliaryRoute[] {
+  const candidates: AuxiliaryRoute[] = [];
+  const seen = new Set<string>();
+  for (const route of routes) {
+    if (seen.has(route.model)) continue;
+    seen.add(route.model);
+    candidates.push(route);
+  }
+  return candidates;
+}
+
+/**
+ * True when the route may be called now: healthy, or half-open with its bounded
+ * recovery probe due. An open route, or a route whose `nextProbeAt` is still in
+ * the future — a half-open route another caller is already probing under a
+ * lease, as well as one whose probe is not yet due — is skipped so the attempt
+ * is spent on a route that can actually answer.
+ */
+function isCallableNow(health: RouteHealth | undefined, nowMs: number): boolean {
+  if (health === undefined) return true;
+  if (health.phase === 'open') return false;
+  if (health.nextProbeAt !== undefined) return Date.parse(health.nextProbeAt) <= nowMs;
+  return true;
+}
+
+/** The earlier of two optional ISO instants. */
+function earliest(current: string | undefined, candidate: string | undefined): string | undefined {
+  if (candidate === undefined) return current;
+  if (current === undefined) return candidate;
+  return Date.parse(candidate) < Date.parse(current) ? candidate : current;
+}
+
 /** Create the role-aware call runner. */
 export function createCallRunner(options: CallRunnerOptions): CallRunner {
   return {
@@ -450,7 +520,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       };
 
       // Timers and abort wiring come first so the total deadline also covers
-      // auxiliary route selection and driver acquisition.
+      // auxiliary route selection and driver acquisition; the same start instant
+      // anchors the per-route budget, so selection time is never free.
+      const startedAtMs = Date.now();
       const controller = new AbortController();
       let abortKind: 'signal' | 'timeout' | 'idle' | undefined;
       const abort = (kind: 'signal' | 'timeout' | 'idle'): void => {
@@ -461,10 +533,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       if (input.signal.aborted) abort('signal');
       else input.signal.addEventListener('abort', onExternalAbort, { once: true });
 
-      // Document generation is bounded by caller cancellation, not elapsed time.
-      const totalTimeoutMs = input.role === 'reason' || input.role === 'document'
-        ? undefined
-        : AUXILIARY_TIMEOUT_MS;
+      // Every auxiliary role, including document, shares one finite total budget
+      // that also covers route selection; only the reasoning role streams with
+      // no total deadline.
+      const totalTimeoutMs = input.role === 'reason' ? undefined : AUXILIARY_TOTAL_BUDGET_MS;
       const totalTimer = totalTimeoutMs === undefined
         ? undefined
         : setTimeout(() => abort('timeout'), totalTimeoutMs);
@@ -502,56 +574,82 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       };
 
       let result: ModelResult | undefined;
-      try {
-        if (input.role === 'reason') {
-          const selection = input.reason;
-          if (!selection) return await fail('The reason role requires a model selection');
-          model = `${selection.provider}/${selection.model}`;
-          requestedReasoningEffort = selection.reasoningEffort;
-        } else {
-          auxiliaryRole = input.role;
-          requestedReasoningEffort = ROLE_REQUIREMENTS[input.role].expectedReasoningEffort[0];
-          routes = await settleWithAbort(options.selectAuxiliary(input.role), controller.signal);
-          if (!routes.length) throw new Error(`Auxiliary role ${input.role}: no candidate qualified (empty route selection)`);
-          selectedRank = 1;
-          model = routes[0]!.model;
+      // Per-attempt evidence in order: a bounded failover merges every route's
+      // attempts so the ledger records exactly what was tried and when the route
+      // may be retried.
+      const routeAttempts: ModelAttempt[] = [];
+      /** Merge one route's own attempt records in order, stamped with its retry instant. */
+      const collectAttempts = (metrics: ModelMetrics | undefined, routeUntil: string | undefined): number => {
+        let added = 0;
+        for (const attempt of metrics?.attempts ?? []) {
+          routeAttempts.push(routeUntil === undefined ? attempt : { ...attempt, routeUntil });
+          added += 1;
         }
-        if (controller.signal.aborted) {
-          return await fail(abortMessage(abortKind, totalTimeoutMs), {
-            status: abortKind === 'signal' ? 'aborted' : 'failed',
-          });
-        }
+        return added;
+      };
+      const retryInstantOf = (candidate: string): string | undefined => {
+        const health = options.routeStatus?.(candidate);
+        return health?.nextProbeAt ?? health?.until;
+      };
+      /**
+       * The failure detail of one auxiliary exhaustion: every attempt tried so
+       * far, the route's own retry instant, and the kind of the last real
+       * failure. A user cancellation is neutral — it is `aborted` and carries no
+       * retry time — and an all-open set reports the earliest retry it read from
+       * the route health without inventing an attempt that never happened.
+       */
+      const auxiliaryFailure = (
+        message: string,
+        retryAt: string | undefined,
+        kind: ModelErrorKind,
+      ): { status: 'failed' | 'aborted'; error: CallErrorFact; metrics?: ModelMetrics } => {
+        const cancelled = abortKind === 'signal';
+        return {
+          status: cancelled ? 'aborted' : 'failed',
+          error: {
+            kind: cancelled ? 'aborted' : kind,
+            ...(cancelled || retryAt === undefined ? {} : { retryAt }),
+            message,
+          },
+          ...(routeAttempts.length === 0 ? {} : { metrics: { attempts: routeAttempts } }),
+        };
+      };
 
-        // The main reasoning call is explicit and never switches; an auxiliary
-        // call keeps the one route it selected after skipping blocked routes.
-        const choices: readonly AuxiliaryRoute[] = input.role === 'reason'
-          ? [{ model, reasoningEffort: requestedReasoningEffort as ReasoningEffort }]
-          : routes!;
-        const routable = (candidate: AuxiliaryRoute): boolean => input.role === 'reason'
-          || options.routeStatus?.(candidate.model) === undefined;
-        // Skip auxiliary routes that recently timed out or failed; if every
-        // candidate is cooling down, fall back to the plain route order.
-        const choice = choices.find((candidate) => routable(candidate) && (input.role === 'reason' || !auxiliaryRouteCoolingDown(candidate.model)))
-          ?? choices.find(routable);
-        if (choice === undefined) throw new Error(`Model call ${input.role} failed: every candidate route is blocked`);
-        const rank = input.role === 'reason' ? undefined : choices.indexOf(choice) + 1;
-        model = choice.model;
-        selectedRank = rank;
-        const budget = checkContextBudget(model, messages, options.resolveProvider, input.maxTokens);
-        estimatedInputTokens = budget.estimatedInputTokens;
-        // The serialized cap is the one the budget check resolved; a route that
-        // resolved none keeps the caller's per-call cap, exactly as before.
-        const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? input.maxTokens;
-        // A route whose whole ladder is the provider-default sentinel has no
-        // selectable level: it accepts any requested effort and is sent at its
-        // own default, which materializes no explicit reasoning field. Every
-        // other route keeps the exact explicit-effort support check.
-        const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
-        if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, choice.reasoningEffort)) {
-          return await fail(`Model ${model} does not support reasoning effort "${choice.reasoningEffort ?? ''}"`);
+      /**
+       * Bounded cross-route failover for one logical auxiliary call: at most
+       * three distinct routes, each tried once, inside one total budget and a
+       * per-route cap. It never fails over after visible output has begun, on a
+       * user cancellation, or on an invalid-request/context/protocol failure,
+       * and it never reuses a known-open first route.
+       */
+      const runAuxiliary = async (): Promise<ModelResult> => {
+        const all = routes!;
+        const candidates = distinctCandidates(all);
+        const deadlineMs = startedAtMs + AUXILIARY_TOTAL_BUDGET_MS;
+        // The span records the first candidate that may actually be tried; the
+        // list itself is the full ranked set, never pre-truncated. Only a route
+        // that could really be called may raise a terminal effort or budget
+        // failure: when every candidate is open the all-open feedback below is
+        // what the caller needs, so an unavailable route's budget error never
+        // replaces it.
+        const callable = candidates.find((candidate) => isCallableNow(options.routeStatus?.(candidate.model), startedAtMs));
+        const primary = callable ?? candidates[0]!;
+        const primaryBudget = checkContextBudget(primary.model, messages, options.resolveProvider, input.maxTokens);
+        estimatedInputTokens = primaryBudget.estimatedInputTokens;
+        model = primary.model;
+        selectedRank = all.indexOf(primary) + 1;
+        const primaryDefault = isProviderDefaultReasoningOnly(primaryBudget.metadata);
+        if (callable !== undefined) {
+          if (!primaryDefault && !isReasoningEffortSupported(primaryBudget.metadata, primary.reasoningEffort)) {
+            const message = `Model ${primary.model} does not support reasoning effort "${primary.reasoningEffort ?? ''}"`;
+            return await fail(message, auxiliaryFailure(message, undefined, 'protocol'));
+          }
+          if (!primaryBudget.ok) {
+            const message = `context_overflow: ${primaryBudget.reason}`;
+            return await fail(message, auxiliaryFailure(message, undefined, 'context_overflow'));
+          }
         }
-        actualReasoningEffort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : choice.reasoningEffort;
-        if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
+        actualReasoningEffort = primaryDefault ? PROVIDER_DEFAULT_REASONING : primary.reasoningEffort;
         await options.append({
           type: 'span.started',
           id: input.spanId,
@@ -568,34 +666,217 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             },
             inputEstimate: estimatedInputTokens,
             layers: input.layers,
-            ...(routes === undefined || selectedRank === undefined
-              ? {}
-              : { route: { candidates: routes, rank: selectedRank } }),
+            route: { candidates: all, rank: selectedRank },
           },
         });
-        result = await settleWithAbort(options.transport.complete({
-          model,
-          messages,
-          reasoningEffort: actualReasoningEffort,
-          attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
-          ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
-          ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
-          ...(input.tools === undefined ? {} : { tools: input.tools }),
-          ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
-          signal: controller.signal,
-          onEvent,
-        }), controller.signal);
+
+        let attempted = 0;
+        let lastMessage = `Auxiliary role ${input.role}: no candidate route succeeded`;
+        let earliestRetry: string | undefined;
+        let lastFailure: CallErrorFact | undefined;
+        for (const candidate of candidates) {
+          if (controller.signal.aborted) break;
+          // Stop once three distinct routes have really been called: a route
+          // skipped because it is open or mid-probe never spends an attempt.
+          if (attempted >= AUXILIARY_MAX_ROUTES) break;
+          const remaining = deadlineMs - Date.now();
+          if (remaining <= 0) {
+            lastMessage = `Auxiliary budget of ${AUXILIARY_TOTAL_BUDGET_MS} ms exhausted`;
+            break;
+          }
+          const health = options.routeStatus?.(candidate.model);
+          // A route whose circuit is open, or whose recovery probe is not yet
+          // due — including one another caller is already probing under a lease —
+          // cannot be called: the Gateway would only reject it. Record its retry
+          // time and try the next candidate.
+          if (!isCallableNow(health, Date.now())) {
+            earliestRetry = earliest(earliestRetry, health?.nextProbeAt ?? health?.until);
+            continue;
+          }
+          const budget = checkContextBudget(candidate.model, messages, options.resolveProvider, input.maxTokens);
+          const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
+          if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, candidate.reasoningEffort)) {
+            lastMessage = `Model ${candidate.model} does not support reasoning effort "${candidate.reasoningEffort}"`;
+            continue;
+          }
+          if (!budget.ok) {
+            const message = `context_overflow: ${budget.reason}`;
+            return await fail(message, auxiliaryFailure(message, earliestRetry, 'context_overflow'));
+          }
+          const effort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : candidate.reasoningEffort;
+          const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? input.maxTokens;
+          model = candidate.model;
+          selectedRank = all.indexOf(candidate) + 1;
+          actualReasoningEffort = effort;
+          attempted += 1;
+
+          const perRouteMs = Math.min(AUXILIARY_PER_ROUTE_MS, remaining);
+          // A fresh id per attempt lets the Gateway tie a client-observed timeout
+          // or fetch failure to the exact attempt it already saw.
+          const attemptId = randomUUID();
+          options.beginRouteAttempt?.(candidate.model, attemptId);
+          const attemptController = new AbortController();
+          const onMainAbort = (): void => attemptController.abort();
+          controller.signal.addEventListener('abort', onMainAbort, { once: true });
+          let perRouteTimedOut = false;
+          const attemptTimer = setTimeout(() => { perRouteTimedOut = true; attemptController.abort(); }, perRouteMs);
+          try {
+            const request: ModelRequest = {
+              model: candidate.model,
+              messages,
+              reasoningEffort: effort,
+              attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
+              ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
+              ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
+              ...(input.tools === undefined ? {} : { tools: input.tools }),
+              ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
+              signal: attemptController.signal,
+              onEvent,
+              // An auxiliary call must not use the same-route retry loop, so a
+              // failover cannot multiply attempts on one route.
+              noRetry: true,
+              // The Gateway records this deadline so a client-observed timeout is
+              // accounted to the route even though it only sees a disconnect.
+              deadlineAtMs: Date.now() + perRouteMs,
+              attemptId,
+            };
+            const completed = await settleWithAbort(options.transport.complete(request), attemptController.signal);
+            collectAttempts(completed.metrics, retryInstantOf(candidate.model));
+            return completed;
+          } catch (error) {
+            if (error instanceof ModelCallError) throw error;
+            const fact = errorFactOf(error);
+            // A user cancellation is neutral and final: it never fails over and
+            // is never reported as a route fault.
+            const cancelled = abortKind === 'signal';
+            const timedOut = perRouteTimedOut || abortKind === 'timeout';
+            // Report the real fault before reading the route's retry instant, so
+            // the attempt record carries the `until` this report just wrote, and
+            // before stopping failover, so a timeout or transport failure after
+            // visible output still reaches the route-health authority.
+            if (!cancelled) {
+              if (timedOut) options.reportRouteFault?.(candidate.model, attemptId, 'timeout');
+              else if (fact.kind === 'network') options.reportRouteFault?.(candidate.model, attemptId, 'transport');
+            }
+            const attemptUntil = retryInstantOf(candidate.model);
+            if (!cancelled) earliestRetry = earliest(earliestRetry, attemptUntil);
+            // Exactly one record per attempt: the transport's own record when it
+            // produced one, otherwise a synthetic record of this route's timeout.
+            const supplied = collectAttempts(metricsOf(error), attemptUntil);
+            if (supplied === 0 && timedOut) {
+              routeAttempts.push({
+                error: 'network',
+                ms: perRouteMs,
+                model: candidate.model,
+                ...(attemptUntil === undefined ? {} : { routeUntil: attemptUntil }),
+              });
+            }
+            lastFailure = fact;
+            // A cancellation or any visible output already produced is final:
+            // no further route may be tried.
+            if (cancelled || outputStarted) throw error;
+            if (perRouteTimedOut) {
+              // A per-route timeout is a fallback fact, never a terminal aborted
+              // state: the route fault is reported and the next candidate tried.
+              lastMessage = `Route ${candidate.model} timed out after ${perRouteMs} ms`;
+              continue;
+            }
+            if (abortKind === 'timeout') { lastMessage = abortMessage('timeout', totalTimeoutMs); break; }
+            // A caller-caused or protocol failure is not the route's fault: it is
+            // reported once and never fails over.
+            if (fact.kind === 'invalid_request' || fact.kind === 'context_overflow' || fact.kind === 'protocol' || fact.kind === 'aborted') throw error;
+            lastMessage = withOverflowPrefix(error);
+            continue;
+          } finally {
+            options.completeRouteAttempt?.(candidate.model, attemptId);
+            clearTimeout(attemptTimer);
+            controller.signal.removeEventListener('abort', onMainAbort);
+          }
+        }
+        if (attempted === 0 && earliestRetry !== undefined) {
+          const message = `Auxiliary role ${input.role}: every candidate route is cooling down or probing; earliest retry ${earliestRetry} (${candidates.length} candidate route(s), budget ${AUXILIARY_TOTAL_BUDGET_MS} ms)`;
+          return await fail(message, auxiliaryFailure(message, earliestRetry, 'protocol'));
+        }
+        const message = `${lastMessage} (${attempted} of ${candidates.length} candidate route(s), budget ${AUXILIARY_TOTAL_BUDGET_MS} ms)`;
+        return await fail(message, auxiliaryFailure(message, earliestRetry, lastFailure?.kind ?? 'protocol'));
+      };
+
+      try {
+        if (input.role === 'reason') {
+          const selection = input.reason;
+          if (!selection) return await fail('The reason role requires a model selection');
+          model = `${selection.provider}/${selection.model}`;
+          requestedReasoningEffort = selection.reasoningEffort;
+        } else {
+          auxiliaryRole = input.role;
+          requestedReasoningEffort = ROLE_REQUIREMENTS[input.role].expectedReasoningEffort[0];
+          routes = await settleWithAbort(options.selectAuxiliary(input.role), controller.signal);
+          if (!routes.length) throw new Error(`Auxiliary role ${input.role}: no candidate qualified (empty route selection)`);
+        }
+        if (controller.signal.aborted) {
+          return await fail(abortMessage(abortKind, totalTimeoutMs), {
+            status: abortKind === 'signal' ? 'aborted' : 'failed',
+          });
+        }
+
+        if (input.role === 'reason') {
+          // The main reasoning call is explicit and never switches routes.
+          const selection = input.reason!;
+          const budget = checkContextBudget(model, messages, options.resolveProvider, input.maxTokens);
+          estimatedInputTokens = budget.estimatedInputTokens;
+          const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? input.maxTokens;
+          // A route whose whole ladder is the provider-default sentinel has no
+          // selectable level: it accepts any requested effort and is sent at its
+          // own default. Every other route keeps the exact support check.
+          const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
+          if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, selection.reasoningEffort)) {
+            return await fail(`Model ${model} does not support reasoning effort "${selection.reasoningEffort ?? ''}"`);
+          }
+          actualReasoningEffort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : selection.reasoningEffort;
+          if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
+          await options.append({
+            type: 'span.started',
+            id: input.spanId,
+            parent: input.parent,
+            kind: spanKind,
+            ...(input.turn === undefined ? {} : { turn: input.turn }),
+            ...(input.step === undefined ? {} : { step: input.step }),
+            request: {
+              model,
+              effort: {
+                ...(requestedReasoningEffort === undefined ? {} : { requested: requestedReasoningEffort }),
+                ...(actualReasoningEffort === undefined ? {} : { sent: actualReasoningEffort }),
+              },
+              inputEstimate: estimatedInputTokens,
+              layers: input.layers,
+            },
+          });
+          result = await settleWithAbort(options.transport.complete({
+            model,
+            messages,
+            reasoningEffort: actualReasoningEffort,
+            attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
+            ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
+            ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
+            ...(input.tools === undefined ? {} : { tools: input.tools }),
+            ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
+            signal: controller.signal,
+            onEvent,
+          }), controller.signal);
+        } else {
+          result = await runAuxiliary();
+        }
       } catch (error) {
         if (error instanceof ModelCallError) throw error;
-        if (input.role !== 'reason' && abortKind !== 'signal' && abortKind !== 'idle') {
-          auxiliaryRouteCooldown.set(model, Date.now() + AUXILIARY_ROUTE_COOLDOWN_MS);
-        }
         const status: 'failed' | 'aborted' = abortKind === 'signal' ? 'aborted' : 'failed';
         const message = abortKind === undefined
           ? withOverflowPrefix(error)
           : abortMessage(abortKind, totalTimeoutMs);
         const failure = abortKind === undefined ? errorFactOf(error) : { kind: 'aborted' as ModelErrorKind, message };
-        const metrics = metricsOf(error);
+        const baseMetrics = metricsOf(error);
+        const metrics: ModelMetrics | undefined = routeAttempts.length === 0
+          ? baseMetrics
+          : { ...(baseMetrics ?? { attempts: [] }), attempts: routeAttempts };
         return await fail(message, {
           status,
           error: failure,
@@ -612,11 +893,14 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
       const finalText = completed.text;
       const finalReasoning = completed.reasoning;
       const usage = completed.usage ?? partialUsage;
+      const metrics: ModelMetrics = routeAttempts.length === 0
+        ? completed.metrics
+        : { ...completed.metrics, attempts: routeAttempts };
 
       await finish('ok', {
         output: finalText,
         ...(finalReasoning === undefined ? {} : { reasoning: finalReasoning }),
-        metrics: completed.metrics,
+        metrics,
       });
 
       return {
@@ -626,7 +910,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         ...(usage === undefined ? {} : { usage }),
         toolCalls: completed.toolCalls,
         ...(completed.finishReason === undefined ? {} : { finishReason: completed.finishReason }),
-        metrics: completed.metrics,
+        metrics,
       };
     },
   };

@@ -398,10 +398,17 @@ function failedSpanFacts(events: readonly LedgerEvent[], bound: number, turn: nu
       errorKind: event.error.kind,
       errorMessage: event.error.message,
     };
+    // A transport attempt carries the route's own retry instant (`routeUntil`)
+    // as a typed field; the newest one that produced it becomes the span's
+    // `retryAt`, which flows into `SessionSummary.lastTurn.retryAt`. A failure
+    // that never issued a request — every candidate route was cooling down or
+    // probing — carries its retry instant on the error itself instead.
     for (const attempt of event.metrics?.attempts ?? []) {
-      const routeUntil = (attempt as { routeUntil?: unknown }).routeUntil;
+      const routeUntil = attempt.routeUntil;
       if (typeof routeUntil === 'string' && routeUntil !== '') facts.retryAt = routeUntil;
     }
+    const failureRetryAt = event.error.retryAt;
+    if (typeof failureRetryAt === 'string' && failureRetryAt !== '') facts.retryAt = failureRetryAt;
     found = facts;
   }
   return found;

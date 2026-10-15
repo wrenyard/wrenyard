@@ -638,11 +638,29 @@ async function createForemanDaemonResources(
     catalog,
     providers: providerRuntime,
     onRouteStateChanged: async (event) => {
+      // Only safe structured facts are emitted: the fault reason, circuit phase,
+      // the retry/probe instants and the latest probe outcome. No prompt, body,
+      // credential or raw upstream text is ever carried on this event.
       const foremanEvent: ForemanEvent = {
         id: `gateway_route_${randomBytes(12).toString('hex')}`,
         kind: 'gateway.route.state.changed', source: 'wrenyard.gateway',
         severity: event.state === 'available' ? 'info' : 'warning', refs: {},
-        data: { ...event }, occurredAt: new Date().toISOString(),
+        data: {
+          publicModel: event.publicModel,
+          provider: event.provider,
+          scope: event.scope,
+          ...(event.quotaPoolId === undefined ? {} : { quotaPoolId: event.quotaPoolId }),
+          state: event.state,
+          ...(event.faultKind === undefined ? {} : { faultKind: event.faultKind }),
+          phase: event.phase,
+          ...(event.until === undefined ? {} : { until: event.until }),
+          ...(event.nextProbeAt === undefined ? {} : { nextProbeAt: event.nextProbeAt }),
+          ...(event.nextRetryAt === undefined ? {} : { nextRetryAt: event.nextRetryAt }),
+          ...(event.probe === undefined ? {} : { probe: event.probe }),
+          status: event.status,
+          reason: event.reason,
+        },
+        occurredAt: new Date().toISOString(),
       }
       gatewayEventStore.append(foremanEvent)
       await getForemanEventBus().publish(foremanEvent)
@@ -654,7 +672,31 @@ async function createForemanDaemonResources(
         source: 'wrenyard.gateway',
         severity: event.status >= 500 ? 'error' : event.status >= 400 ? 'warning' : 'info',
         refs: {},
-        data: { ...event },
+        // The route fault reason, phase, retry (until/next probe) and probe
+        // outcome are safe structured facts; the attempt id is a gateway-only
+        // correlation marker, never a prompt, body or credential.
+        data: {
+          protocol: event.protocol,
+          ...(event.role === undefined ? {} : { role: event.role }),
+          ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
+          ...(event.publicModel === undefined ? {} : { publicModel: event.publicModel }),
+          ...(event.provider === undefined ? {} : { provider: event.provider }),
+          ...(event.routeState === undefined ? {} : { routeState: event.routeState }),
+          ...(event.routeUntil === undefined ? {} : { routeUntil: event.routeUntil }),
+          ...(event.faultReason === undefined ? {} : { faultReason: event.faultReason }),
+          ...(event.routePhase === undefined ? {} : { routePhase: event.routePhase }),
+          ...(event.nextProbeAt === undefined ? {} : { nextProbeAt: event.nextProbeAt }),
+          ...(event.probeOutcome === undefined ? {} : { probeOutcome: event.probeOutcome }),
+          ...(event.attemptId === undefined ? {} : { attemptId: event.attemptId }),
+          ...(event.reasoningEffort === undefined ? {} : { reasoningEffort: event.reasoningEffort }),
+          ...(event.reasoningParameters === undefined ? {} : { reasoningParameters: event.reasoningParameters }),
+          status: event.status,
+          durationMs: event.durationMs,
+          ...(event.executionId === undefined ? {} : { executionId: event.executionId }),
+          ...(event.usage === undefined ? {} : { usage: event.usage }),
+          ...(event.tps_samples === undefined ? {} : { tps_samples: event.tps_samples }),
+          ...(event.upstream === undefined ? {} : { upstream: event.upstream }),
+        },
         occurredAt: new Date().toISOString(),
       }
       gatewayEventStore.append(foremanEvent)
@@ -730,6 +772,9 @@ async function createForemanDaemonResources(
       taskService,
       router: rpcRouter,
       routeStatus: model => gateway.routeStatus(model),
+      beginRouteAttempt: (publicModel, attemptId) => gateway.beginRouteAttempt(publicModel, attemptId),
+      reportRouteFault: (publicModel, attemptId, kind) => gateway.reportRouteFault(publicModel, attemptId, kind),
+      completeRouteAttempt: (publicModel, attemptId) => gateway.completeRouteAttempt(publicModel, attemptId),
       selectAuxiliary: createAuxiliarySelector({ catalog, quotaSnapshots: autoRoutingQuotaSnapshots,
         // The Gateway model directory is the only source of per-model protocols.
         gatewayModels: async () => (await gateway.connection(gatewayOrigin(boundPort))).models,

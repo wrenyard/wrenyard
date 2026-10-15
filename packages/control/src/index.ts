@@ -79,6 +79,12 @@ export interface WrenyardGatewayModel {
   reasoningEfforts?: ProviderListModel['reasoningEfforts'];
   routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'model_unavailable';
   routeUntil?: string;
+  /** Circuit phase of the route; absent while the route is healthy. */
+  routePhase?: 'closed' | 'open' | 'half_open';
+  /** When a half-open recovery probe may next be admitted for the route. */
+  routeNextProbeAt?: string;
+  /** The fault kind behind the route's block, when the Gateway knows it. */
+  faultKind?: string;
   speed?: number;
   pricing?: WrenyardGatewayModelPricing;
 }

@@ -57,7 +57,7 @@ function errorTooltip(lastTurn: NonNullable<SessionSummary['lastTurn']>): string
     const retry = Date.parse(lastTurn.retryAt);
     if (Number.isFinite(retry) && retry > Date.now()) {
       const at = new Date(retry);
-      tooltip += ` · 约 ${pad2(at.getHours())}:${pad2(at.getMinutes())} 恢复`;
+      tooltip += ` · 约 ${pad2(at.getHours())}:${pad2(at.getMinutes())} 可重试`;
     }
   }
   return tooltip;

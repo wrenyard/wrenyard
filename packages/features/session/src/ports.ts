@@ -52,8 +52,27 @@ export interface SessionHost {
   /** The product-wired provider definitions main inference validates its
    *  target against. */
   resolveInferenceProvider(providerId: string): ProviderDefinition | undefined;
-  /** In-memory Gateway state of a `provider/model` route; never queries a provider. */
+  /**
+   * In-memory Gateway state of a `provider/model` route; never queries a
+   * provider. The typed circuit detail (`phase`, `nextProbeAt`, `faultKind`) lets
+   * a caller skip an open route instead of only a legacy block.
+   */
   routeStatus?(model: string): import('@wrenyard/providers/base').GatewayRouteStatus | undefined;
+  /**
+   * Announce the start of one auxiliary attempt so a later client-observed
+   * timeout or transport failure is attributed to the same attempt the Gateway
+   * already knows about. Optional: a host without attempt-level feedback keeps
+   * the prior behaviour.
+   */
+  beginRouteAttempt?(publicModel: string, attemptId: string): void;
+  /**
+   * Report a client-observed route fault (a timeout or a real transport failure)
+   * for one attempt into the same route-health authority. A user cancellation is
+   * never reported as a route fault.
+   */
+  reportRouteFault?(publicModel: string, attemptId: string, kind: 'timeout' | 'transport'): void;
+  /** Release one attempt's bookkeeping once it has settled, success or failure. */
+  completeRouteAttempt?(publicModel: string, attemptId: string): void;
   selectAuxiliary(role: import('./model/roles.ts').AuxiliaryCallRole): Promise<readonly import('./model/request.ts').AuxiliaryRoute[]>;
   /** Read-only, per-role rank-1 auxiliary route preview; never calls a model. */
   previewAuxiliaryRoutes(): Promise<readonly import('./model/roles.ts').AuxiliaryRoutePreview[]>;

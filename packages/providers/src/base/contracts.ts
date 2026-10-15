@@ -1,5 +1,5 @@
 import type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
-import type { GatewayRouteState } from './gateway-wire.ts';
+import type { GatewayRoutePhase, GatewayRouteState } from './gateway-wire.ts';
 export type { IntelligenceTier, ModelCapability, ModelPricing, ReasoningEffort } from '@wrenyard/models';
 export { PROVIDER_DEFAULT_REASONING, REASONING_EFFORTS, resolveReasoningEffort } from '@wrenyard/models';
 
@@ -152,6 +152,12 @@ export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
   protocols: readonly GatewayProtocol[];
   routeState?: GatewayRouteState;
   routeUntil?: string;
+  /** Circuit phase of the route; absent when the route is healthy. */
+  routePhase?: GatewayRoutePhase;
+  /** When a half-open recovery probe may next be admitted for the route. */
+  routeNextProbeAt?: string;
+  /** The fault kind behind the route's block, when known. */
+  faultKind?: string;
 };
 
 export interface ResolvedGatewayModel {

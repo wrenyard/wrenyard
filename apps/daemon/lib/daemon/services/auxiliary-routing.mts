@@ -8,6 +8,13 @@ import type { AutoRoutingQuotaSnapshotService } from './auto-routing-snapshot-se
 import type { TaskSettingsRuntimeAvailabilityCallback } from './task-settings-service.mts';
 import { deepSeekAutomaticPricingOf, effectiveRoutingCap, toAutomaticCandidateInput, type ModelRoutingEntry } from './model-routing-inputs.mts';
 
+/** Gateway route status extended with the circuit phase auxiliary ordering reads. */
+export type GatewayRouteStatusWithPhase = GatewayRouteStatus & {
+  phase?: 'closed' | 'open' | 'half_open';
+  faultKind?: string;
+  nextProbeAt?: string;
+};
+
 /** The Gateway model fields auxiliary selection needs: identity and per-model protocols. */
 export interface GatewaySessionModel {
   publicId: string;
@@ -22,8 +29,12 @@ export interface AuxiliaryRoutingOptions {
   runtimeAvailability: TaskSettingsRuntimeAvailabilityCallback;
   localSpeed?: () => LocalSpeedSample[];
   readSettings: () => TaskSettingsLayer | undefined;
-  /** In-memory Gateway route state; a marked route never enters the candidate pool. */
-  routeStatus?: (model: string) => GatewayRouteStatus | undefined;
+  /**
+   * In-memory Gateway route state. An unhealthy route is retained in the pool
+   * (ordered by the existing preference) rather than discarded, so the runner
+   * may try a half-open preferred route and let it recover.
+   */
+  routeStatus?: (model: string) => GatewayRouteStatusWithPhase | undefined;
   /**
    * The Gateway model directory: each model's own supported protocols, never
    * the provider's blanket capabilities. Authenticated per invocation so a
@@ -66,8 +77,13 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
       { codeBuddySnapshot: bound.codeBuddySnapshot, nativeProviderReadiness: null },
     )));
     models.forEach(({ provider, model }, index) => {
+      // An unhealthy Gateway route is retained rather than discarded: the runner
+      // orders eligible candidates by the existing preference and may try the
+      // (possibly preferred) half-open route so it can recover. The route is
+      // never reported as healthy, and a faulted route is not excluded forever.
+      // Its state is surfaced as readable diagnostic/cooldown feedback.
       const routeStatus = options.routeStatus?.(`${provider.id}/${model.id}`);
-      if (routeStatus) return reject(`route ${routeStatus.state}`);
+      if (routeStatus) reject(`route ${routeStatus.phase === 'half_open' ? 'half_open (probe eligible)' : routeStatus.faultKind ?? routeStatus.state}`);
       if (!availability[index]!.available || availability[index]!.providerCredential !== 'available') return reject('provider not configured/available');
       if (snapshot.hardBlockedProviderIds.includes(provider.id)) return reject('quota blocked');
       if (!requirements.requiredCapabilities.every(capability => model.capabilities?.includes(capability))) return reject('text capability missing');

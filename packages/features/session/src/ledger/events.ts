@@ -310,6 +310,12 @@ export interface TaskSpanMetrics {
 export interface SpanError {
   kind: ModelErrorKind | 'task';
   status?: number;
+  /**
+   * The earliest instant the failed call may be retried, when the failure
+   * carried one. A route that was never called reports its own retry instant
+   * here rather than as an attempt record.
+   */
+  retryAt?: string;
   /** Supplier's original message. */
   message: string;
 }

@@ -9,6 +9,9 @@
     ".": "./src/index.ts",
     "./model-metadata": "./src/model/metadata.ts"
   },
+  "scripts": {
+    "test": "tsx --test test/*.test.ts"
+  },
   "dependencies": {
     "@wrenyard/agent-client": "workspace:*",
     "@wrenyard/control": "workspace:*",

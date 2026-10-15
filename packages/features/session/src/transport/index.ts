@@ -134,6 +134,14 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
       };
       if (request.attribution?.role !== undefined) headers[GATEWAY_HEADERS.callRole] = request.attribution.role;
       if (request.attribution?.sessionId !== undefined) headers[GATEWAY_HEADERS.sessionId] = request.attribution.sessionId;
+      // Internal, gateway-only deadline metadata: a call advertises the instant
+      // its own budget expires so a client-observed timeout is recorded against
+      // the route rather than mistaken for a cancellation. Never sent upstream.
+      if (request.deadlineAtMs !== undefined && Number.isFinite(request.deadlineAtMs)) headers['x-wrenyard-deadline'] = String(Math.round(request.deadlineAtMs));
+      // Internal, gateway-only attempt correlation: a client-observed timeout or
+      // fetch failure is reported against this exact attempt id so the same
+      // attempt is never double-counted with a Gateway-side timeout.
+      if (request.attemptId !== undefined) headers['x-wrenyard-gateway-attempt'] = request.attemptId;
 
       const endpoints: GatewayEndpoints = {
         chat: connection.openaiChatBaseUrl,
@@ -195,25 +203,35 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
           } catch (error) {
             throw normalizeStreamError(error, request.signal, outputStarted);
           }
-          attempts.push({ status: 200, ms: Date.now() - attemptStartMs, ...wait });
+          attempts.push({ status: 200, ms: Date.now() - attemptStartMs, model: request.model, ...wait });
           // Only a successfully completed stream yields a sample; the sampler
           // produces nothing for a failed, cancelled or truncated attempt.
           const sample = tps.sample();
           return sample === undefined ? { completion } : { completion, sample: { outputTokens: sample.outputTokens, windowMs: sample.windowMs } };
         } catch (error) {
           if (!(error instanceof ModelError)) throw error;
-          attempts.push({
+          // One request record per attempt. When an upstream retry hint was
+          // adopted, the instant it points at is carried as `routeUntil` so the
+          // ledger's `retryAt` projection can surface it; `model` keeps the route
+          // identity of the attempt.
+          const record: ModelAttempt = {
             ...(error.status === undefined ? {} : { status: error.status }),
             error: error.kind,
             ms: Date.now() - attemptStartMs,
+            model: request.model,
             ...wait,
-          });
+            ...(error.retryAfterMs === undefined ? {} : { routeUntil: new Date(Date.now() + error.retryAfterMs).toISOString() }),
+          };
+          attempts.push(record);
           throw error;
         }
       };
 
+      // An auxiliary call disables the same-route retry loop so a failover
+      // cannot multiply attempts on one route; every other call keeps it.
+      const noSameRouteRetry = request.noRetry === true;
       try {
-        const { completion, sample } = await runWithRetry(attempt, {
+        const { completion, sample } = noSameRouteRetry ? await attempt() : await runWithRetry(attempt, {
           signal: request.signal,
           outputStarted: () => outputStarted,
           onRetry: (decision) => {

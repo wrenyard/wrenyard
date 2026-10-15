@@ -147,6 +147,25 @@ export interface ModelRequest {
   cacheKey?: string;
   /** Attribution metadata for the Gateway event; never sent upstream. */
   attribution?: ModelAttribution;
+  /**
+   * When true the transport never runs its same-route retry loop. A caller that
+   * owns its own bounded cross-route failover sets it so a failover can never
+   * multiply attempts on one route.
+   */
+  noRetry?: boolean;
+  /**
+   * Absolute instant (epoch ms) at which this call's own budget expires. It is
+   * sent to the Gateway as internal deadline metadata (never upstream) so a
+   * client-observed timeout is accounted to the route even though the Gateway
+   * sees only a disconnect.
+   */
+  deadlineAtMs?: number;
+  /**
+   * Gateway-only correlation id of this attempt, sent as an internal header. It
+   * lets the Gateway tie a client-reported timeout or fetch failure to the exact
+   * attempt it already knows about, so one attempt is never double-counted.
+   */
+  attemptId?: string;
   signal: AbortSignal;
   /** Called for every event of the call, in arrival order. */
   onEvent?: (event: ModelEvent) => void;
@@ -179,6 +198,10 @@ export interface ModelAttempt {
   waitedMs?: number;
   /** Present only when an upstream retry hint was adopted for that wait. */
   retryAfter?: RetryAfterHint;
+  /** The route this request was issued for, when a caller distinguishes routes. */
+  model?: string;
+  /** When this route is expected to recover, from an adopted hint or route state. */
+  routeUntil?: string;
 }
 
 /** Measured facts of one completed or failed call, produced by the transport. */

@@ -1,15 +1,15 @@
-import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Catalog, GatewayProtocol, PublicGatewayModel } from '@wrenyard/providers/catalog';
 import type { ProviderRuntime } from '@wrenyard/providers';
-import { RouteStateStore, type RouteStateChangedEvent } from './route-state.ts';
+import { RouteStateStore, type ClientFaultKind, type RouteStateChangedEvent, type RouteStatus } from './route-state.ts';
 import { chatProtocol } from './protocols/chat.ts';
 import { responsesProtocol } from './protocols/responses.ts';
 import { messagesProtocol } from './protocols/messages.ts';
 import type { GatewayProtocolModule } from './protocols/types.ts';
 import { createGatewayPipeline, type GatewayRequestCompletedEvent, type GatewayRoute } from './pipeline.ts';
 
-export type { RouteStateChangedEvent } from './route-state.ts';
+export type { RouteStateChangedEvent, RouteStatus, CircuitPhase, ClientFaultKind } from './route-state.ts';
+export type { RouteFaultKind } from './route-failure.ts';
 export type { GatewayRequestCompletedEvent } from './pipeline.ts';
 
 export interface GatewayConnection {
@@ -32,8 +32,22 @@ export interface ModelGatewayOptions {
 export interface ModelGateway {
   handle(request: IncomingMessage, response: ServerResponse): Promise<boolean>;
   connection(origin: string): Promise<GatewayConnection>;
-  /** Current in-memory state of a public `provider/model` route; never queries a provider. */
-  routeStatus(publicModel: string): GatewayRouteStatus | undefined;
+  /** Current in-memory state of a public `provider/model` route, with circuit detail. */
+  routeStatus(publicModel: string): RouteStatus | undefined;
+  /**
+   * Begin a client attempt, capturing the fault generations it observes. The
+   * attempt identity is shared with the Gateway through `x-wrenyard-gateway-attempt`.
+   */
+  beginRouteAttempt(publicModel: string, attemptId: string): void;
+  /**
+   * Report a client-observed fault (a timeout or fetch failure the Gateway only
+   * saw as a disconnect) into the same route state store. A fault is recorded
+   * only while the attempt is unsettled, so a client report and the server-side
+   * timeout of the same attempt are never double counted.
+   */
+  reportRouteFault(publicModel: string, attemptId: string, kind: ClientFaultKind): void;
+  /** Finish a client attempt; its settled tombstone expires after a bounded TTL. */
+  completeRouteAttempt(publicModel: string, attemptId: string): void;
   close(): Promise<void>;
 }
 
@@ -46,6 +60,12 @@ const ROUTES: ReadonlyMap<string, GatewayRoute> = new Map(
     [module.inferencePath, { module, kind: 'inference' }],
   ]),
 );
+
+/** Split a public `provider/model` id; a malformed id yields no route. */
+function splitModel(publicModel: string): { provider: string; model: string } | undefined {
+  const separator = publicModel.indexOf('/');
+  return separator > 0 ? { provider: publicModel.slice(0, separator), model: publicModel.slice(separator + 1) } : undefined;
+}
 
 /**
  * Assemble the Model Gateway from its parts: the route table, the in-memory
@@ -60,15 +80,32 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     options.providers.quotaPools ?? (() => []),
     event => { void Promise.resolve().then(() => options.onRouteStateChanged?.(event)).catch(() => undefined); });
 
-  const routeStatus = (publicModel: string): GatewayRouteStatus | undefined => {
-    const separator = publicModel.indexOf('/');
-    return separator > 0 ? routeStates.status(publicModel.slice(0, separator), publicModel.slice(separator + 1)) : undefined;
+  const routeStatus = (publicModel: string): RouteStatus | undefined => {
+    const split = splitModel(publicModel);
+    return split === undefined ? undefined : routeStates.status(split.provider, split.model);
+  };
+
+  const beginRouteAttempt = (publicModel: string, attemptId: string): void => {
+    const split = splitModel(publicModel);
+    if (split !== undefined) routeStates.beginAttempt(split.provider, split.model, attemptId);
+  };
+
+  const reportRouteFault = (publicModel: string, attemptId: string, kind: ClientFaultKind): void => {
+    const split = splitModel(publicModel);
+    if (split !== undefined) routeStates.reportAttemptFault(split.provider, split.model, attemptId, kind, kind === 'timeout' ? 504 : 502);
+  };
+
+  const completeRouteAttempt = (publicModel: string, attemptId: string): void => {
+    const split = splitModel(publicModel);
+    if (split !== undefined) routeStates.completeAttempt(split.provider, split.model, attemptId);
   };
 
   /**
    * Credential-backed public models, each annotated with its current route
    * state. Without a protocol the complete, protocol-independent directory is
-   * returned; with one the entries are filtered to that protocol.
+   * returned; with one the entries are filtered to that protocol. A faulted or
+   * half-open route stays visible with its state and retry time rather than
+   * being hidden or excluded.
    */
   const availableModels = async (protocol?: GatewayProtocol): Promise<PublicGatewayModel[]> => {
     const available = new Set<string>();
@@ -82,7 +119,15 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       .filter((model) => protocol === undefined || model.protocols.includes(protocol))
       .map((model) => {
         const status = routeStates.status(model.provider, model.id);
-        return status ? { ...model, routeState: status.state, routeUntil: status.until } : model;
+        return {
+          ...model,
+          ...(status === undefined ? {} : {
+            routeState: status.state, routeUntil: status.until,
+            routePhase: status.phase,
+            ...(status.nextProbeAt === undefined ? {} : { routeNextProbeAt: status.nextProbeAt }),
+            ...(status.faultKind === undefined ? {} : { faultKind: status.faultKind }),
+          }),
+        };
       });
   };
 
@@ -105,6 +150,9 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
 
   return {
     routeStatus,
+    beginRouteAttempt,
+    reportRouteFault,
+    completeRouteAttempt,
     handle: (request, response) => pipeline.handle(request, response),
 
     async connection(origin) {

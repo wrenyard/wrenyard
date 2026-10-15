@@ -51,6 +51,10 @@ export interface DaemonSessionHostOptions {
   stateRoot: string
   gateway(): Promise<WrenyardGatewayConnection>
   routeStatus?: SessionHost['routeStatus']
+  /** Attempt-level route feedback forwarded to the same gateway health store. */
+  beginRouteAttempt?: SessionHost['beginRouteAttempt']
+  reportRouteFault?: SessionHost['reportRouteFault']
+  completeRouteAttempt?: SessionHost['completeRouteAttempt']
   selectAuxiliary: SessionHost['selectAuxiliary']
   taskService: TaskService
   /** The product-wired provider definitions main inference validates its
@@ -177,6 +181,9 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     resolveInferenceProvider: options.resolveInferenceProvider,
     selectAuxiliary: options.selectAuxiliary,
     routeStatus: options.routeStatus,
+    beginRouteAttempt: options.beginRouteAttempt,
+    reportRouteFault: options.reportRouteFault,
+    completeRouteAttempt: options.completeRouteAttempt,
     /**
      * Read-only rank-1 preview of every auxiliary role. Reuses the injected
      * selector and the same provider catalog `provider.list` serves; a role with
