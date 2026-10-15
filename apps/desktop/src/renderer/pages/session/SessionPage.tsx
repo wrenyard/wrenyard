@@ -371,7 +371,6 @@ export function SessionPage() {
                             setReplyTo({ sessionKey, quote });
                             setComposerFocusRequest((value) => value + 1);
                           }}
-                          onInterrupt={onInterrupt}
                         />
                       )}
                     </MessageScrollerContent>
