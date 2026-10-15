@@ -111,7 +111,7 @@ export function PromptInput({
           <div className="w-full min-w-0 px-2.5 pt-2">{attachments}</div>
         )}
         {hasLeading && (
-          <div className="flex min-w-0 items-center gap-1 pl-1 sm:gap-1.5 sm:pl-1.5">{toolbarLeading}</div>
+          <div className="flex min-w-0 items-center gap-1 pl-1 py-1 sm:gap-1.5 sm:pl-1.5">{toolbarLeading}</div>
         )}
         {/* The textarea keeps the primitive's `field-sizing-content`, so it grows
             with the text and scrolls once it reaches `max-h-60`. */}
