@@ -40,6 +40,7 @@ export interface SessionController {
   newDraft(): void;
   sendMessage(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): Promise<void>;
   interruptTurn(turn: number): Promise<void>;
+  cancelTask(taskRunId: string): Promise<void>;
   deleteSession(sessionId: string): Promise<void>;
   renameSession(sessionId: string, title: string): Promise<void>;
   removePending(localId: string): void;
@@ -169,6 +170,15 @@ export function useSessionController(api: SessionApi) {
     }
   }, [api, reportError]);
 
+  const cancelTask = useCallback(async (taskRunId: string): Promise<void> => {
+    try {
+      await api.cancelTask(taskRunId);
+    } catch (error) {
+      reportError(error, selected.current);
+      throw error;
+    }
+  }, [api, reportError]);
+
   const removePending = useCallback((localId: string): void => {
     dispatch({ type: 'pending-remove', localId });
   }, []);
@@ -266,5 +276,5 @@ export function useSessionController(api: SessionApi) {
     };
   }, [api, refreshList, reportError, selectSession]);
 
-  return { state, selectSession, newDraft, sendMessage, interruptTurn, deleteSession, renameSession, removePending, setTasks, clearError };
+  return { state, selectSession, newDraft, sendMessage, interruptTurn, cancelTask, deleteSession, renameSession, removePending, setTasks, clearError };
 }

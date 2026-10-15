@@ -2,7 +2,7 @@ import { Spinner } from '@/renderer/components/ui/spinner';
 import { cn } from 'cn';
 
 /**
- * The context-usage ring shown by the status-bar ctx item and the inspector
+ * The context-usage ring shown by the status-bar ctx item
  * (usage spec 4). It only receives the ratio and a coarse status; the caller
  * owns the tooltip, the popover and the send-blocking decision.
  *

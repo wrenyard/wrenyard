@@ -1494,7 +1494,6 @@ export const KNOWN_SHORTCUTS: readonly KnownShortcut[] = [
   { category: '会话', title: '新建对话', mac: '⌘N', other: 'Ctrl+N', scope: '全局', command: 'session.newDraft' },
   { category: '会话', title: '发送消息', mac: 'Enter', other: 'Enter', scope: '输入框' },
   { category: '会话', title: '换行', mac: '⇧Enter', other: 'Shift+Enter', scope: '输入框' },
-  { category: '会话', title: '关闭检查器', mac: 'Esc', other: 'Esc', scope: '会话页' },
   { category: '编辑', title: '撤销', mac: '⌘Z', other: 'Ctrl+Z', scope: '全局' },
   { category: '编辑', title: '重做', mac: '⇧⌘Z', other: 'Ctrl+Y', scope: '全局' },
   { category: '编辑', title: '剪切', mac: '⌘X', other: 'Ctrl+X', scope: '全局' },

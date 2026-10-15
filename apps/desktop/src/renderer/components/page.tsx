@@ -38,7 +38,7 @@ export function PageActions({ className, ...props }: ComponentProps<'div'>) {
 
 /**
  * Auxiliary page entries rendered into the title bar's right slot (chrome spec
- * 3.6), e.g. the session inspector toggle.
+ * 3.6), e.g. the session view switch.
  */
 export function TitleBarAuxiliary({ className, ...props }: ComponentProps<'div'>) {
   const page = useTitleBarPage();

@@ -20,6 +20,7 @@ export const SESSION_CHANNELS = {
   list: 'session:list', create: 'session:create', ledger: 'session:ledger',
   ledgerSnapshot: 'session:ledger-snapshot',
   send: 'session:send', interrupt: 'session:interrupt', models: 'session:models',
+  cancelTask: 'session:cancel-task',
   context: 'session:context', tasks: 'session:tasks',
   routesPreview: 'session:routes-preview',
   mediaRead: 'session:media-read', mediaReveal: 'session:media-reveal',
@@ -361,6 +362,11 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
   handle(SESSION_CHANNELS.create, () => request('session.create', {}));
   handle(SESSION_CHANNELS.send, (_event, value) => request('session.send', value));
   handle(SESSION_CHANNELS.interrupt, async (_event, value) => { await request('session.interrupt', value); });
+  handle(SESSION_CHANNELS.cancelTask, async (_event, value) => {
+    if (typeof value !== 'string' || value === '') throw new Error('Invalid taskRunId');
+    const result = await request<{ ok?: boolean; message?: string }>('task.run.cancel', { task_run_id: value });
+    if (result?.ok === false) throw new Error(result.message ?? '取消任务失败');
+  });
   handle(SESSION_CHANNELS.models, async () => {
     // The Provider list carries configured eligibility and display metadata;
     // the Gateway connection carries each model's own protocols, which is the

@@ -71,7 +71,7 @@ function failureLabel(kind: string, status: number | undefined): string {
 }
 
 /**
- * Inspector chips for a span's route selection and retry record: rank, retry
+ * Transcript chips for a span's route selection and retry record: rank, retry
  * count and reason, and the terminal failure. The rank and retry facts arrive
  * on the span's request and transport metrics; the fold copies them onto the
  * call model.
@@ -111,7 +111,7 @@ export function cycleLabel(index: number): string {
 
 /**
  * One-line status for a running turn, shown under the streaming assistant
- * message. Kept exact so the page, the inspector and screenshots agree.
+ * message. Kept exact so both session views and screenshots agree.
  */
 export function turnStatusText(turn: TurnModel): string {
   if (turn.interrupting) return '正在中断…';

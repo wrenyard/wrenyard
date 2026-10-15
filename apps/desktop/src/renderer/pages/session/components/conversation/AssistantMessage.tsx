@@ -22,7 +22,7 @@ export interface AssistantMessageProps {
 /**
  * One committed communication reply, or the terminal fallback when `reply` is
  * omitted. Raw reason/thinking output is never shown here (it lives in the
- * inspector only).
+ * transcript view only).
  */
 export function AssistantMessage({ turn, reply, reference, enter, onReply }: AssistantMessageProps) {
   const animate = useEnterAnimation(enter === true);

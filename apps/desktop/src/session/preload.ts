@@ -45,6 +45,8 @@ export const SESSION_CHANNELS = {
   send: 'session:send',
   /** Renderer → main: `{ sessionId, turn }`. */
   interrupt: 'session:interrupt',
+  /** Renderer → main: a task run id, forwarded to `task.run.cancel`. */
+  cancelTask: 'session:cancel-task',
   /** Renderer → main: the gateway model list. */
   models: 'session:models',
   /** Renderer → main: `{ sessionId?, model }`, forwarded to `session.context.inspect`. */
@@ -207,6 +209,8 @@ export interface SessionBridge {
   pathForFile(file: File): string;
   /** Interrupt one running turn. */
   interrupt(request: SessionBridgeInterruptRequest): Promise<void>;
+  /** Cancel one dispatched task run. */
+  cancelTask(taskRunId: string): Promise<void>;
   /** The live gateway models the reason-model picker may offer. */
   models(): Promise<SessionBridgeModelEntry[]>;
   /**
@@ -311,6 +315,9 @@ const bridge: SessionBridge = {
   },
   interrupt(request: SessionBridgeInterruptRequest): Promise<void> {
     return ipcRenderer.invoke(SESSION_CHANNELS.interrupt, request) as Promise<void>;
+  },
+  cancelTask(taskRunId: string): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.cancelTask, taskRunId) as Promise<void>;
   },
   models(): Promise<SessionBridgeModelEntry[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.models) as Promise<SessionBridgeModelEntry[]>;

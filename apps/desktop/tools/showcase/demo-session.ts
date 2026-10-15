@@ -1311,6 +1311,9 @@ export function createDemoSession(): { api: SessionBridge; playTurn(text: string
     async interrupt(): Promise<void> {
       // The demo has nothing to interrupt.
     },
+    async cancelTask(): Promise<void> {
+      // The demo has no dispatched task runs to cancel.
+    },
     async models(): Promise<SessionBridgeModelEntry[]> {
       return MODEL_ENTRIES.map((entry) => ({
         ...entry,

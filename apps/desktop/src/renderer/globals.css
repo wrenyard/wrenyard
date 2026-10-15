@@ -1009,6 +1009,20 @@ html[data-platform="win32"] {
   transition: stroke-dashoffset var(--duration-base) var(--ease-out);
 }
 
+/* Auxiliary call in flight: an indeterminate highlight sweeping along a thin
+   track under the call row. */
+@keyframes wy-aux-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+.motion-aux-sweep {
+  animation: wy-aux-sweep 1.4s var(--ease-in-out) infinite;
+}
+
 /* ------------------------------------------------------------------ */
 /* Interaction polish: hairline, dark inset, differentiated motion     */
 /* ------------------------------------------------------------------ */
@@ -1162,6 +1176,11 @@ html[data-theme-switching] *::after {
   .motion-pulse-slow {
     animation: none;
   }
+  .motion-aux-sweep {
+    animation: none;
+    transform: none;
+    opacity: 0.6;
+  }
   .motion-typing-dot {
     animation: none;
     opacity: 0.6;
@@ -1223,6 +1242,11 @@ html[data-motion="reduce"] .transition-all {
 }
 html[data-motion="reduce"] .motion-pulse-slow {
   animation: none;
+}
+html[data-motion="reduce"] .motion-aux-sweep {
+  animation: none;
+  transform: none;
+  opacity: 0.6;
 }
 html[data-motion="reduce"] .motion-typing-dot {
   animation: none;

@@ -137,87 +137,6 @@ export interface ActionModel {
   cycle: number;
 }
 
-/** One row in the session tree: a model call, memory, document, file or error. */
-export interface TreeEntry {
-  seq: number;
-  at: string;
-  kind: 'call' | 'memory' | 'doc' | 'file' | 'task' | 'error' | 'notice';
-  /** Short: role name, or file name without directory and extension. */
-  label: string;
-  /** Full path. */
-  path?: string;
-  model?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  tokens?: number;
-  durationMs?: number;
-  status?: string;
-  taskRunId?: string;
-  callId?: string;
-  unchanged?: boolean;
-  body?: string;
-}
-
-export interface ActionNode {
-  id: string;
-  seq: number;
-  kind: 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule';
-  title?: string;
-  intent: string;
-  task?: string;
-  taskDisplayName?: string;
-  project?: string;
-  taskRunId?: string;
-  status: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout';
-  startedAt: string;
-  endedAt?: string;
-  result?: string;
-  compile?: TreeEntry;
-  /** Doc-search call, loaded docs, memory. */
-  entries: TreeEntry[];
-  /** Artifacts produced by this action. */
-  files: SessionFile[];
-  errors: string[];
-}
-
-export interface ReasonNode {
-  seq: number;
-  callId: string;
-  model: string;
-  thinking?: string;
-  text: string;
-  startedAt: string;
-  endedAt?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cachedInputTokens?: number;
-  actions: ActionNode[];
-}
-
-export type CycleItem =
-  | { kind: 'entry'; seq: number; entry: TreeEntry }
-  | { kind: 'reasoning'; seq: number; reason: ReasonNode }
-  | { kind: 'action'; seq: number; action: ActionNode }
-  | { kind: 'reply'; seq: number; at: string; text: string }
-  | { kind: 'error' | 'notice'; seq: number; at: string; text: string };
-
-export interface CycleNode {
-  cycle: number;
-  startedAt?: string;
-  endedAt?: string;
-  running: boolean;
-  items: CycleItem[];
-}
-
-export interface TurnNode {
-  turn: number;
-  userText: string;
-  status: 'running' | 'completed' | 'failed' | 'interrupted';
-  startedAt: string;
-  endedAt?: string;
-  cycles: CycleNode[];
-}
-
 export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project' | 'schedule' | 'status';
 
 export interface CallModel {
@@ -227,6 +146,8 @@ export interface CallModel {
   status: 'running' | 'ok' | 'failed' | 'aborted';
   turn: number;
   cycle?: number;
+  /** The span's parent id: the action id for an auxiliary span an action ran. */
+  parent?: string;
   startedAt: string;
   firstTokenAt?: string;
   endedAt?: string;
@@ -282,15 +203,6 @@ export interface TurnStats {
   docsLoaded: number;
   docsWritten: number;
 }
-
-/** What the inspector can show. Breadcrumbs are derived from it. */
-export type InspectorTarget =
-  | { kind: 'turn'; turnId: number }
-  | { kind: 'cycle'; turnId: number; cycle: number }
-  | { kind: 'reasoning'; turnId: number; cycle: number }
-  | { kind: 'context'; turnId: number; cycle?: number; key: string }
-  | { kind: 'action'; turnId: number; actionId: string }
-  | { kind: 'call'; callId: string };
 
 declare global {
   interface Window {

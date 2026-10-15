@@ -7,8 +7,8 @@ import { CALL_ROLE_LABEL } from './describe.js';
 
 /**
  * Pure usage projections for the session page. No React, DOM, bridge or window
- * access lives here: the status-bar items and the inspector context tab render
- * exactly what these functions derive from a `ContextInspection`, the loaded
+ * access lives here: the status-bar items render exactly what these functions
+ * derive from a `ContextInspection`, the loaded
  * call models and a quota snapshot.
  *
  * The main reasoning view is forward-looking (context ledger spec): the budget

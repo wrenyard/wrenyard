@@ -10,7 +10,8 @@ import type { PendingTurn } from '../../state/session-reducer.js';
 import { MediaAttachments, fromDraftAttachment, fromSessionFile } from '../MediaAttachments.js';
 import { AssistantMessage } from './AssistantMessage.js';
 import { TimeDivider } from './TimeDivider.js';
-import { isWritingReply, TurnStatus } from './TurnStatus.js';
+import { TurnActivity } from './TurnActivity.js';
+import { TurnStatus } from './TurnStatus.js';
 import { splitReplyQuote, UserMessage } from './UserMessage.js';
 
 /** One independently positioned row of the conversation. */
@@ -274,12 +275,15 @@ export interface MessageTimelineProps {
   onRetry: (text: string, attachments: DraftAttachment[]) => void;
   onRemove: (localId: string) => void;
   onReply: (quote: string) => void;
+  /** Interrupt one running turn. */
+  onInterrupt: (turn: number) => void;
 }
 
 /**
  * Message-level conversation: one row per user message, reply, fallback and
- * artifact result across all turns, with time dividers and bottom typing
- * indicators only while replies are being written.
+ * artifact result across all turns, with time dividers, bottom typing
+ * indicators only while replies are being written, and an activity row for
+ * every running turn.
  */
 export const MessageTimeline = memo(function MessageTimeline({
   timeline,
@@ -289,10 +293,11 @@ export const MessageTimeline = memo(function MessageTimeline({
   onRetry,
   onRemove,
   onReply,
+  onInterrupt,
 }: MessageTimelineProps) {
   const now = useNow();
 
-  const replyingTurns = turns.filter(isWritingReply);
+  const runningTurns = turns.filter((turn) => turn.status === 'running');
   const jumpToMessage = (messageId: string): void => {
     // Resolve inside this conversation, even when other session pages exist.
     document.getElementById(`session-message:${sessionId ?? 'draft'}:${messageId}`)
@@ -326,14 +331,15 @@ export const MessageTimeline = memo(function MessageTimeline({
           </MessageScrollerItem>
         );
       })}
-      {replyingTurns.map((turn) => (
+      {runningTurns.map((turn) => (
         <MessageScrollerItem
-          key={`typing:${turn.id}`}
-          messageId={`typing:${turn.id}`}
+          key={`activity:${turn.id}`}
+          messageId={`activity:${turn.id}`}
           data-turn-id={turn.id}
-          className="flex flex-col gap-4"
+          className="flex flex-col gap-2"
         >
           <TurnStatus turn={turn} />
+          <TurnActivity turn={turn} onInterrupt={onInterrupt} />
         </MessageScrollerItem>
       ))}
     </>

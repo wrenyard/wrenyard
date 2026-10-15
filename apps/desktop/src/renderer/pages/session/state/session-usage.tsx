@@ -1,7 +1,7 @@
 /**
  * Session usage context: a React context owned by the session page that carries
  * the loaded session projection and the composer selection to sibling session
- * components (the composer, the status bar ctx item, inspector). Draft text is
+ * components (the composer, the status bar ctx item). Draft text is
  * persisted through the per-session drafts module; there is no module-level
  * state and no effect-based publishing.
  */
