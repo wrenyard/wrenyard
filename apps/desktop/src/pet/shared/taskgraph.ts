@@ -255,11 +255,18 @@ export interface TaskRunEventsResult {
   has_more: boolean;
 }
 
+export interface TranscriptRunInfo {
+  status: string;
+  task_name?: string;
+}
+
 export interface SafeTaskRunEventsResult {
   task_run_id: string;
   events: SafeTranscriptEventData[];
   next_seq: number;
   has_more: boolean;
+  // Authoritative run status and task display name from task.run.status, pushed by the window owner.
+  run?: TranscriptRunInfo;
 }
 
 // ── SafeTranscriptEventData — strict Foreman response-time projection ──

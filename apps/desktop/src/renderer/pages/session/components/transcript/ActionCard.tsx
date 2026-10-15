@@ -65,7 +65,7 @@ function TaskRow({ action, onCancelTask }: { action: ActionModel; onCancelTask: 
       <Button
         variant="ghost"
         size="xs"
-        onClick={() => { if (action.taskRunId !== undefined) void shell.openTaskTranscript(action.taskRunId); }}
+        onClick={() => { if (action.taskRunId !== undefined) void shell.openTaskTranscript(action.taskRunId, action.title); }}
       >
         <ExternalLink />
         查看任务对话

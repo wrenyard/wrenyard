@@ -312,7 +312,7 @@ export class TaskGraphWindowOwner {
    * graph and node the run belongs to; standalone runs keep the canonical
    * standalone node id and are never attached to an arbitrary graph.
    */
-  async openTaskTranscript(taskRunId: string): Promise<void> {
+  async openTaskTranscript(taskRunId: string, title?: string): Promise<void> {
     if (this.destroyed) throw new Error('TaskGraph: window owner is destroyed');
     if (typeof taskRunId !== 'string' || taskRunId.length === 0) {
       throw new Error('TaskGraph: invalid task run id');
@@ -325,7 +325,7 @@ export class TaskGraphWindowOwner {
     await this.reader.loadTaskEvents(taskRunId, undefined, 1);
 
     const association = this.findRunAssociation(taskRunId);
-    const taskLabel = association?.taskLabel ?? '任务对话';
+    const taskLabel = title ?? association?.taskLabel ?? '任务对话';
     const nodeId = association?.nodeId ?? standaloneTranscriptNodeId(taskRunId);
 
     this.openTranscriptWindow(nodeId, taskRunId, !isTerminal, association?.graphId, taskLabel);
@@ -1075,9 +1075,12 @@ export class TaskGraphWindowOwner {
     );
 
     try {
-      const result = await this.reader.loadTaskEvents(taskRunId, afterSeq);
+      const [result, run] = await Promise.all([
+        this.reader.loadTaskEvents(taskRunId, afterSeq),
+        this.reader.taskRunInfo(taskRunId).catch(() => undefined),
+      ]);
       if (!isCurrent()) return;
-      this.pushTranscriptData(taskRunId, result);
+      this.pushTranscriptData(taskRunId, run ? { ...result, run } : result);
 
       if (result.has_more || this.liveTranscriptRuns.has(taskRunId)) {
         this.startTranscriptPolling(taskRunId, result.next_seq);
@@ -1103,20 +1106,21 @@ export class TaskGraphWindowOwner {
         if (!pollIsCurrent() || this.transcriptWindows.get(taskRunId) !== expectedWin || expectedWin.isDestroyed()) {
           return false;
         }
-        this.pushTranscriptData(taskRunId, result);
+        let run: import('../../shared/taskgraph').TranscriptRunInfo | undefined;
+        if (!result.has_more && this.liveTranscriptRuns.has(taskRunId)) {
+          run = await this.reader.taskRunInfo(taskRunId);
+          if (!pollIsCurrent() || this.transcriptWindows.get(taskRunId) !== expectedWin || expectedWin.isDestroyed()) {
+            return false;
+          }
+        }
+        this.pushTranscriptData(taskRunId, run ? { ...result, run } : result);
         nextSeq = result.next_seq;
         if (!result.has_more && !this.liveTranscriptRuns.has(taskRunId)) {
           return false;
         }
-        if (!result.has_more) {
-          const isTerminal = await this.reader.taskRunIsTerminal(taskRunId);
-          if (!pollIsCurrent() || this.transcriptWindows.get(taskRunId) !== expectedWin || expectedWin.isDestroyed()) {
-            return false;
-          }
-          if (isTerminal) {
-            this.liveTranscriptRuns.delete(taskRunId);
-            return false;
-          }
+        if (run && ['done', 'failed', 'cancelled', 'interrupted'].includes(run.status)) {
+          this.liveTranscriptRuns.delete(taskRunId);
+          return false;
         }
         return true;
       },
@@ -1193,7 +1197,7 @@ export interface TaskGraphWindowsHandle {
   reconnect(): void;
   getTrackedTaskgraphIds(): string[];
   setEntitiesVisible(visible: boolean): void;
-  openTaskTranscript(taskRunId: string): Promise<void>;
+  openTaskTranscript(taskRunId: string, title?: string): Promise<void>;
   openTaskGraph(taskGraphId: string): Promise<void>;
   destroy(): void;
 }

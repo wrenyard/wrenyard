@@ -131,7 +131,7 @@ export interface ShellWindowOptions {
   requestInstall(onInstall?: () => void): Promise<UpdateSnapshot>;
   savePetSettings(settings: PetCompanionSettings): Promise<SettingsSnapshot>;
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
-  openTaskTranscript(taskRunId: string): Promise<void>;
+  openTaskTranscript(taskRunId: string, title?: string): Promise<void>;
   openTaskGraph(taskGraphId: string): Promise<void>;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;

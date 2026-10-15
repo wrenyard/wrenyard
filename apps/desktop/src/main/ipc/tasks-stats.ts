@@ -22,12 +22,13 @@ export function registerTasksStatsIpc(ipcMain: IpcMain, deps: ShellIpcDeps): () 
     assertShellSender(event.sender);
     return options.getStats();
   });
-  ipcMain.handle(SHELL_CHANNELS.taskTranscript, async (event, taskRunId: unknown) => {
+  ipcMain.handle(SHELL_CHANNELS.taskTranscript, async (event, taskRunId: unknown, title: unknown) => {
     assertShellSender(event.sender);
     if (typeof taskRunId !== 'string' || !/^task_[a-zA-Z0-9_-]{1,128}$/.test(taskRunId)) {
       throw new Error('任务运行 id 无效');
     }
-    return options.openTaskTranscript(taskRunId);
+    const boundedTitle = typeof title === 'string' ? title.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+    return options.openTaskTranscript(taskRunId, boundedTitle || undefined);
   });
   ipcMain.handle(SHELL_CHANNELS.taskGraph, async (event, taskGraphId: unknown) => {
     assertShellSender(event.sender);

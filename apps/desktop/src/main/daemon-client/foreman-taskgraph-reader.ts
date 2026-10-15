@@ -18,6 +18,7 @@ import {
   type TaskGraphSlipResult,
   type SafeTranscriptEventData,
   type SafeTaskRunEventsResult,
+  type TranscriptRunInfo,
 } from '../../pet/main/controller.js';
 
 const NODE_INSPECT_CONCURRENCY = 12;
@@ -294,7 +295,7 @@ export class ForemanTaskGraphReader {
     };
   }
 
-  async taskRunIsTerminal(taskRunId: string): Promise<boolean> {
+  async taskRunInfo(taskRunId: string): Promise<TranscriptRunInfo> {
     const raw = await this.client.request('task.run.status', { task_run_id: taskRunId });
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
       throw new Error('TaskGraph: malformed task.run.status response');
@@ -303,6 +304,16 @@ export class ForemanTaskGraphReader {
     if (record.task_run_id !== taskRunId || typeof record.status !== 'string') {
       throw new Error('TaskGraph: task.run.status identity mismatch');
     }
-    return ['done', 'failed', 'cancelled', 'interrupted'].includes(record.status);
+    const name = typeof record.task_name === 'string'
+      ? record.task_name.replace(/\s+/g, ' ').trim().slice(0, 80)
+      : '';
+    return {
+      status: record.status.slice(0, 40),
+      ...(name ? { task_name: name } : {}),
+    };
+  }
+
+  async taskRunIsTerminal(taskRunId: string): Promise<boolean> {
+    return ['done', 'failed', 'cancelled', 'interrupted'].includes((await this.taskRunInfo(taskRunId)).status);
   }
 }

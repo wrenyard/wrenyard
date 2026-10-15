@@ -1351,7 +1351,7 @@ export interface WrenyardShellApi {
    * never prewrites config on a refused or failed switch.
    */
   saveWorkspace(path: string, create?: boolean): Promise<WorkspaceConfigurationSnapshot>;
-  openTaskTranscript(taskRunId: string): Promise<void>;
+  openTaskTranscript(taskRunId: string, title?: string): Promise<void>;
   /** Open the native Graph Slip window for a live task graph (never a transcript). */
   openTaskGraph(taskGraphId: string): Promise<void>;
   copyText(text: string): Promise<void>;

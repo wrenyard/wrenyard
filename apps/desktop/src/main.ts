@@ -1284,7 +1284,7 @@ async function bootstrap(): Promise<void> {
     },
     // Task detail/transcript windows are general Desktop windows, owned by the
     // window owner and reachable even when Pet is hidden.
-    openTaskTranscript: (taskRunId) => windowOwner.openTaskTranscript(taskRunId),
+    openTaskTranscript: (taskRunId, title) => windowOwner.openTaskTranscript(taskRunId, title),
     openTaskGraph: (taskGraphId) => windowOwner.openTaskGraph(taskGraphId),
     getTaskSettings: (project?: string, taskId?: string) => getTaskSettings(project, taskId),
     saveTaskSettings: (request: TaskSettingsSaveRequest) => saveTaskSettings(request),

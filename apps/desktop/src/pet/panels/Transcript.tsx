@@ -1,9 +1,9 @@
-// ── Work Slip transcript panel (React) ──────────────────────────────
-// Renders persisted task.run.events as a read-only conversation record with
-// the shared Message/Bubble/Markdown components. Only the sanitized
-// SafeTranscriptEventData allowlist crosses the preload boundary; the panel
-// accumulates incremental rounds and keeps the stream pinned to the bottom
-// while the reader stays there.
+// ── Task transcript panel (React) ─────────────────────────────────────
+// Frameless task transcript styled like the Desktop Mini card: a 36px themed
+// title bar with the task title, the task type display name and the run
+// status, over a compact timeline. Tool calls between two messages fold into
+// one execution record that expands to every recorded call. Only the
+// SafeTranscriptEventData allowlist crosses the preload boundary.
 
 import {
   useCallback,
@@ -15,16 +15,18 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { X } from 'lucide-react';
+import { ChevronRight, X } from 'lucide-react';
+import { cn } from 'cn';
 import { Badge } from '@/renderer/components/ui/badge';
 import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
 import { Button } from '@/renderer/components/ui/button';
-import { Card } from '@/renderer/components/ui/card';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/renderer/components/ui/collapsible';
 import { Message, MessageContent, MessageHeader } from '@/renderer/components/ui/message';
+import { Spinner } from '@/renderer/components/ui/spinner';
 import { Markdown } from '@/renderer/components/markdown';
 import { formatClockSeconds, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
 import { petAppearanceBridge, type PetAppearanceApi } from '../shared/appearance';
-import type { SafeTaskRunEventsResult, SafeTranscriptEventData } from '../shared/taskgraph';
+import type { SafeTaskRunEventsResult, SafeTranscriptEventData, TranscriptRunInfo } from '../shared/taskgraph';
 
 interface TranscriptWindowApi {
   onData: (taskRunId: string, cb: (data: SafeTaskRunEventsResult) => void) => () => void;
@@ -39,6 +41,12 @@ declare global {
     petAppearance: PetAppearanceApi;
   }
 }
+
+// ── Constants ────────────────────────────────────────────────────────
+
+const DEFAULT_TITLE = '任务对话';
+const DRAG = '[-webkit-app-region:drag] [app-region:drag]';
+const NO_DRAG = '[-webkit-app-region:no-drag] [app-region:no-drag]';
 
 // ── Parsing helpers (ported from the removed transcript DOM module) ──
 
@@ -58,17 +66,68 @@ const LIFECYCLE_LABELS: Record<string, string> = {
   'task.cancelled': '任务取消',
 };
 
+const LIFECYCLE_TONE: Record<string, string> = {
+  'task.done': 'text-success',
+  'task.completed': 'text-success',
+  'task.failed': 'text-destructive',
+};
+
+interface RunStatusView {
+  label: string;
+  tone: string;
+  dot: string;
+  live: boolean;
+}
+
+/** Map an authoritative run status to its Chinese label, tone and liveness. */
+function runStatusView(status?: string): RunStatusView | undefined {
+  if (status === undefined || status === '') return undefined;
+  switch (status) {
+    case 'done':
+      return { label: '已完成', tone: 'text-success', dot: 'bg-success', live: false };
+    case 'failed':
+      return { label: '失败', tone: 'text-destructive', dot: 'bg-destructive', live: false };
+    case 'cancelled':
+      return { label: '已取消', tone: 'text-muted-foreground', dot: 'bg-muted-foreground', live: false };
+    case 'interrupted':
+      return { label: '已中断', tone: 'text-warning', dot: 'bg-warning', live: false };
+    case 'queued':
+    case 'pending':
+    case 'created':
+      return { label: '排队中', tone: 'text-muted-foreground', dot: 'bg-muted-foreground', live: true };
+    default:
+      return {
+        label: '运行中',
+        tone: 'text-foreground',
+        dot: 'bg-warning animate-pulse motion-reduce:animate-none [[data-motion=reduce]_&]:animate-none',
+        live: true,
+      };
+  }
+}
+
+// ── Tool activity model ──────────────────────────────────────────────
+
 type ToolState = 'pending' | 'ok' | 'error';
+
+interface ToolCallRecord {
+  key: string;
+  callId?: string;
+  timestamp: string;
+  label: string;
+  toolName: string;
+  input: string;
+  output: string;
+  state: ToolState;
+}
+
+interface ToolActivity {
+  timestamp: string;
+  calls: ToolCallRecord[];
+}
 
 interface SafeMessageEvent extends Extract<SafeTranscriptEventData, { type: 'message' }> {}
 interface SafeUsageEvent extends Extract<SafeTranscriptEventData, { type: 'turn_usage' }> {}
 interface SafeLifecycleEvent extends Extract<SafeTranscriptEventData, { type: 'lifecycle' }> {}
-
-interface ToolActivity {
-  timestamp: string;
-  counts: Map<string, number>;
-  calls: Map<string, ToolState>;
-}
 
 type RenderedEvent =
   | { kind: 'message'; key: string; event: SafeMessageEvent }
@@ -95,13 +154,12 @@ function humanToolLabel(toolName: string): string {
 
 /**
  * Flatten the safe event stream into renderable rows. Tool calls/results
- * between two messages collapse into one aggregated activity row; unknown
- * adapter bookkeeping is intentionally omitted.
+ * between two messages collapse into one execution record that keeps every
+ * recorded call; unknown adapter bookkeeping is intentionally omitted.
  */
 function projectEvents(events: SafeTranscriptEventData[]): RenderedEvent[] {
   const rows: RenderedEvent[] = [];
   let toolActivity: ToolActivity | null = null;
-  let syntheticCallId = 0;
   let index = 0;
 
   const flushToolActivity = (): void => {
@@ -120,16 +178,38 @@ function projectEvents(events: SafeTranscriptEventData[]): RenderedEvent[] {
         break;
       }
       case 'tool_call': {
-        toolActivity ??= { timestamp: event.timestamp, counts: new Map(), calls: new Map() };
-        const label = humanToolLabel(event.tool_name);
-        toolActivity.counts.set(label, (toolActivity.counts.get(label) ?? 0) + 1);
-        toolActivity.calls.set(event.call_id ?? `call-${syntheticCallId++}`, 'pending');
+        toolActivity ??= { timestamp: event.timestamp, calls: [] };
+        toolActivity.calls.push({
+          key: `call-${toolActivity.calls.length}`,
+          callId: event.call_id,
+          timestamp: event.timestamp,
+          label: humanToolLabel(event.tool_name),
+          toolName: event.tool_name,
+          input: isMeaningfulSummary(event.input_summary) ? event.input_summary : '',
+          output: '',
+          state: 'pending',
+        });
         break;
       }
       case 'tool_result': {
-        toolActivity ??= { timestamp: event.timestamp, counts: new Map(), calls: new Map() };
-        if (toolActivity.counts.size === 0) toolActivity.counts.set('后台操作', 1);
-        toolActivity.calls.set(event.call_id ?? `result-${syntheticCallId++}`, event.is_error ? 'error' : 'ok');
+        toolActivity ??= { timestamp: event.timestamp, calls: [] };
+        const match = event.call_id !== undefined
+          ? toolActivity.calls.find((call) => call.callId === event.call_id)
+          : toolActivity.calls.find((call) => call.state === 'pending' && call.callId === undefined);
+        if (match) {
+          match.state = event.is_error ? 'error' : 'ok';
+          match.output = isMeaningfulSummary(event.output_summary) ? event.output_summary : '';
+        } else {
+          toolActivity.calls.push({
+            key: `call-${toolActivity.calls.length}`,
+            timestamp: event.timestamp,
+            label: '后台操作',
+            toolName: '',
+            input: '',
+            output: isMeaningfulSummary(event.output_summary) ? event.output_summary : '',
+            state: event.is_error ? 'error' : 'ok',
+          });
+        }
         break;
       }
       case 'turn_usage': {
@@ -171,14 +251,14 @@ function MessageRow({ event, appearance }: { event: SafeMessageEvent; appearance
   return (
     <Message align={align}>
       <MessageContent>
-        <MessageHeader className="px-0">
-          <time className="text-xs text-muted-foreground">{formatClockSeconds(event.timestamp)}</time>
-          <span className="ml-2 text-xs font-bold text-muted-foreground">{role}</span>
+        <MessageHeader className="gap-2 px-0 text-xs">
+          <span className="font-medium text-foreground">{role}</span>
+          <time className="tabular-nums text-muted-foreground">{formatClockSeconds(event.timestamp)}</time>
         </MessageHeader>
-        <Bubble variant={event.role === 'user' ? 'secondary' : 'muted'} align={align}>
+        <Bubble variant={event.role === 'user' ? 'default' : 'muted'} align={align}>
           <BubbleContent>
             <Markdown
-              className="text-xs"
+              className="text-sm"
               dark={appearance.dark}
               onOpenExternal={appearance.onOpenExternal}
             >
@@ -191,29 +271,85 @@ function MessageRow({ event, appearance }: { event: SafeMessageEvent; appearance
   );
 }
 
-function ToolRow({ activity }: { activity: ToolActivity }): ReactElement {
-  const states = [...activity.calls.values()];
-  const failed = states.filter((state) => state === 'error').length;
-  const pending = states.filter((state) => state === 'pending').length;
-  const status = failed > 0
-    ? { label: `${failed} 项失败`, variant: 'destructive' as const, tone: 'text-destructive' }
-    : pending > 0
-      ? { label: `${pending} 项进行中`, variant: 'outline' as const, tone: 'text-warning' }
-      : { label: `${states.length} 项完成`, variant: 'outline' as const, tone: 'text-success' };
-  const summary = [...activity.counts.entries()].map(([label, count]) => `${label} ×${count}`).join(' · ');
+const TOOL_STATE_DOT: Record<ToolState, { className: string; label: string }> = {
+  ok: { className: 'bg-success', label: '完成' },
+  error: { className: 'bg-destructive', label: '失败' },
+  pending: { className: 'bg-warning', label: '进行中' },
+};
+
+function ToolDetail({ label, text, error }: { label: string; text: string; error: boolean }): ReactElement {
   return (
-    <Card size="sm" className="mx-3 gap-1 border-l-2 bg-muted/20 py-2">
-      <div className="flex items-center gap-2 px-3">
-        <time className="text-xs text-muted-foreground">{formatClockSeconds(activity.timestamp)}</time>
-        <span className="text-xs font-bold text-muted-foreground">执行记录</span>
-        <Badge variant={status.variant} className={`ml-auto ${status.tone}`}>
-          {status.label}
-        </Badge>
+    <div className="flex min-w-0 flex-col gap-0.5 pl-3.5">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <pre className={cn('whitespace-pre-wrap break-all rounded-md bg-muted/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed', error ? 'text-destructive' : 'text-foreground/90')}>{text}</pre>
+    </div>
+  );
+}
+
+function ToolCallItem({ call, live }: { call: ToolCallRecord; live: boolean }): ReactElement {
+  const dot = call.state === 'pending' && !live
+    ? { className: 'bg-muted-foreground', label: '无结果' }
+    : TOOL_STATE_DOT[call.state];
+  return (
+    <li className="flex min-w-0 flex-col gap-1 px-2.5 py-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className={cn('size-1.5 shrink-0 rounded-full', dot.className)} title={dot.label} aria-label={dot.label} />
+        <span className="shrink-0 font-medium text-foreground">{call.label}</span>
+        {call.toolName !== '' && (
+          <code className="min-w-0 truncate font-mono text-[11px] text-muted-foreground" title={call.toolName}>{call.toolName}</code>
+        )}
+        <time className="ml-auto shrink-0 tabular-nums text-muted-foreground">{formatClockSeconds(call.timestamp)}</time>
       </div>
-      <div className="truncate px-3 text-xs text-muted-foreground" title={summary}>
-        {summary}
-      </div>
-    </Card>
+      {call.input !== '' && <ToolDetail label="输入" text={call.input} error={false} />}
+      {call.output !== '' && <ToolDetail label="输出" text={call.output} error={call.state === 'error'} />}
+    </li>
+  );
+}
+
+function ToolGroup({ activity, live }: { activity: ToolActivity; live: boolean }): ReactElement {
+  const [open, setOpen] = useState(false);
+  const calls = activity.calls;
+  const failed = calls.filter((call) => call.state === 'error').length;
+  const pending = calls.filter((call) => call.state === 'pending').length;
+  const status = failed > 0
+    ? { label: `${failed} 项失败`, tone: 'text-destructive' }
+    : pending > 0
+      ? live
+        ? { label: `${pending} 项进行中`, tone: 'text-warning' }
+        : { label: `${pending} 项无结果`, tone: 'text-muted-foreground' }
+      : { label: `${calls.length} 项完成`, tone: 'text-success' };
+
+  const counts = new Map<string, number>();
+  for (const call of calls) counts.set(call.label, (counts.get(call.label) ?? 0) + 1);
+  const summary = [...counts.entries()]
+    .map(([label, count]) => (count > 1 ? `${label} ×${count}` : label))
+    .join(' · ');
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border bg-card text-xs">
+      <CollapsibleTrigger className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/50">
+        <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none', open && 'rotate-90')} />
+        <span className="shrink-0 font-medium text-foreground">执行记录</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={summary}>{summary}</span>
+        <span className={cn('shrink-0', status.tone)}>{status.label}</span>
+        <time className="shrink-0 tabular-nums text-muted-foreground">{formatClockSeconds(activity.timestamp)}</time>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ol className="flex flex-col divide-y border-t">
+          {calls.map((call) => <ToolCallItem key={call.key} call={call} live={live} />)}
+        </ol>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function TimelineDivider({ children }: { children: ReactNode }): ReactElement {
+  return (
+    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+      <span className="h-px flex-1 bg-border" />
+      <span className="min-w-0 truncate tabular-nums">{children}</span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 
@@ -223,25 +359,23 @@ function UsageRow({ event }: { event: SafeUsageEvent }): ReactElement {
     event.output_tokens > 0 ? `输出 ${formatTokenCount(event.output_tokens)}` : '',
     event.duration_ms > 0 ? `用时 ${formatElapsedMs(event.duration_ms)}` : '',
   ].filter(Boolean);
-  return (
-    <div className="my-2 border-y border-dashed border-border px-2 py-1 text-center text-xs text-muted-foreground">
-      {`${formatClockSeconds(event.timestamp)} · ${parts.join(' · ')}`}
-    </div>
-  );
+  return <TimelineDivider>{[formatClockSeconds(event.timestamp), ...parts].join(' · ')}</TimelineDivider>;
 }
 
 function LifecycleRow({ event, label }: { event: SafeLifecycleEvent; label: string }): ReactElement {
   return (
-    <div className="px-2 py-1 text-center text-xs text-muted-foreground">
-      {`${formatClockSeconds(event.timestamp)}  —  ${label}`}
-    </div>
+    <TimelineDivider>
+      <span className={cn('font-medium', LIFECYCLE_TONE[event.event])}>{label}</span>
+      {' · '}
+      {formatClockSeconds(event.timestamp)}
+    </TimelineDivider>
   );
 }
 
-function renderRow(row: RenderedEvent, appearance: RowAppearance): ReactNode {
+function renderRow(row: RenderedEvent, appearance: RowAppearance, live: boolean): ReactNode {
   switch (row.kind) {
     case 'message': return <MessageRow key={row.key} event={row.event} appearance={appearance} />;
-    case 'tool': return <ToolRow key={row.key} activity={row.activity} />;
+    case 'tool': return <ToolGroup key={row.key} activity={row.activity} live={live} />;
     case 'usage': return <UsageRow key={row.key} event={row.event} />;
     case 'lifecycle': return <LifecycleRow key={row.key} event={row.event} label={row.label} />;
   }
@@ -262,12 +396,10 @@ function usePetAppearance(): { dark: boolean } {
 
 export function Transcript(): ReactElement {
   const [taskRunId] = useState(() => new URLSearchParams(window.location.search).get('task_run_id') ?? '');
-  const [nodeLabel] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('task_label') || params.get('node_id') || '任务对话';
-  });
+  const [taskLabel] = useState(() => (new URLSearchParams(window.location.search).get('task_label') ?? '').trim());
   const [platform] = useState(() => new URLSearchParams(window.location.search).get('platform') ?? '');
   const [events, setEvents] = useState<SafeTranscriptEventData[]>([]);
+  const [run, setRun] = useState<TranscriptRunInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const stickToBottom = useRef(true);
@@ -278,6 +410,16 @@ export function Transcript(): ReactElement {
   const onOpenExternal = useCallback((href: string) => {
     void window.petAppearance.openExternal(href);
   }, []);
+
+  const status = runStatusView(run?.status);
+  const live = status?.live ?? false;
+  const typeName = run?.task_name;
+  const title = taskLabel && taskLabel !== DEFAULT_TITLE ? taskLabel : (typeName ?? DEFAULT_TITLE);
+  const showType = typeName !== undefined && typeName !== title;
+
+  useEffect(() => {
+    document.title = showType ? `${title} · ${typeName}` : title;
+  }, [showType, title, typeName]);
 
   useEffect(() => {
     if (platform) document.documentElement.dataset.platform = platform;
@@ -308,6 +450,7 @@ export function Transcript(): ReactElement {
     const disposeData = api.onData(taskRunId, (data) => {
       setLoading(false);
       setError(null);
+      if (data.run) setRun(data.run);
       if (data.events.length > 0) setEvents((current) => [...current, ...data.events]);
     });
     const disposeError = api.onError((message) => {
@@ -325,34 +468,42 @@ export function Transcript(): ReactElement {
     const stream = streamRef.current;
     if (!stream || !stickToBottom.current) return;
     stream.scrollTop = stream.scrollHeight;
-  }, [events]);
+  }, [events, live]);
 
   const rows = useMemo(() => projectEvents(events), [events]);
   const rowAppearance = useMemo<RowAppearance>(
     () => ({ dark: appearance.dark, onOpenExternal }),
     [appearance.dark, onOpenExternal],
   );
-  const boundedRunId = taskRunId.length > 12 ? `${taskRunId.slice(0, 12)}…` : taskRunId;
-  const boundedLabel = nodeLabel.length > 48 ? `${nodeLabel.slice(0, 47)}…` : nodeLabel;
   const showEmpty = !loading && !error && rows.length === 0;
 
   return (
     <div className="relative flex h-screen w-screen flex-col bg-background text-xs text-foreground">
-      <div className="flex min-h-9 items-center gap-2 border-b border-border bg-background/95 px-2.5 py-1 shadow-sm [-webkit-app-region:drag]">
-        {platform === 'darwin' && (
+      <header data-titlebar className={cn('flex h-9 shrink-0 items-center gap-2 border-b bg-sidebar pl-3 pr-1.5 text-sidebar-foreground', DRAG)}>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground" title={title}>{title}</span>
+        {showType && (
+          <Badge variant="secondary" className="min-w-0 max-w-32 shrink-0" title={typeName}>
+            <span className="truncate">{typeName}</span>
+          </Badge>
+        )}
+        {status && (
+          <span className="flex shrink-0 items-center gap-1.5">
+            <span className={cn('size-1.5 rounded-full', status.dot)} />
+            <span className={status.tone}>{status.label}</span>
+          </span>
+        )}
+        <div className={cn('flex shrink-0 items-center', NO_DRAG)}>
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="关闭任务对话"
-            className="[-webkit-app-region:no-drag]"
+            aria-label="关闭"
+            className="hover:text-destructive"
             onClick={() => void window.transcriptApi.close()}
           >
             <X />
           </Button>
-        )}
-        <span className="flex-1 truncate text-xs font-semibold" title={nodeLabel}>{boundedLabel}</span>
-        <span className="text-xs text-muted-foreground">{boundedRunId}</span>
-      </div>
+        </div>
+      </header>
 
       <div
         ref={streamRef}
@@ -363,9 +514,14 @@ export function Transcript(): ReactElement {
           const element = event.currentTarget;
           stickToBottom.current = element.scrollTop + element.clientHeight >= element.scrollHeight - 20;
         }}
-        className="flex-1 overflow-y-auto px-2.5 pb-4 pt-2.5"
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3"
       >
-        {rows.map((row) => renderRow(row, rowAppearance))}
+        {rows.map((row) => renderRow(row, rowAppearance, live))}
+        {live && rows.length > 0 && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Spinner className="size-3" />运行中…
+          </div>
+        )}
       </div>
 
       {loading && !error && (
@@ -375,12 +531,12 @@ export function Transcript(): ReactElement {
       )}
       {showEmpty && (
         <div className="absolute inset-x-0 bottom-0 top-9 flex items-center justify-center bg-background/97 text-muted-foreground">
-          还没有可读的对话信息。
+          {live ? '正在等待第一条记录…' : '还没有可读的对话信息。'}
         </div>
       )}
       {error && (
         <div className="absolute inset-x-0 bottom-0 top-9 flex flex-col items-center justify-center gap-2 bg-background/97 text-destructive">
-          <span>{error}</span>
+          <span>读取任务对话失败</span>
           {!missingRunId && (
             <Button
               onClick={() => {

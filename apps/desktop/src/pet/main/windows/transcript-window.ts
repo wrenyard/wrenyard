@@ -1,7 +1,9 @@
 // ── Task transcript window ───────────────────────────────────────────
-// Themed (non-transparent) transcript window for a single task run. This
-// module owns construction, appearance attachment and load lifecycle; the
-// owner owns the window registry, the incremental event poller and IPC.
+// Themed (non-transparent) frameless transcript window for a single task
+// run, styled like the Desktop Mini card on every platform; the renderer
+// paints the title bar and close button. This module owns construction,
+// appearance attachment and load lifecycle; the owner owns the window
+// registry, the incremental event poller and IPC.
 
 import { BrowserWindow } from 'electron';
 import type { PageLoader } from '../../../pages.js';
@@ -39,8 +41,7 @@ export function createTranscriptWindow(options: TranscriptWindowOptions): Browse
     minWidth: TRANSCRIPT_MIN_WIDTH,
     minHeight: TRANSCRIPT_MIN_HEIGHT,
     transparent: false,
-    frame: true,
-    thickFrame: false,
+    frame: false,
     hasShadow: true,
     skipTaskbar: false,
     alwaysOnTop: false,
@@ -50,7 +51,6 @@ export function createTranscriptWindow(options: TranscriptWindowOptions): Browse
     fullscreenable: false,
     closable: true,
     title: options.taskLabel,
-    ...(process.platform === 'darwin' ? { titleBarStyle: 'hidden' as const } : {}),
     show: false,
     ...(options.stayHidden ? { paintWhenInitiallyHidden: true } : {}),
     acceptFirstMouse: true,
@@ -67,9 +67,6 @@ export function createTranscriptWindow(options: TranscriptWindowOptions): Browse
   registerThemedPetWindow(win);
 
   win.setMenuBarVisibility(false);
-  if (process.platform === 'darwin') {
-    win.setWindowButtonVisibility(false);
-  }
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('did-create-window', (childWin) => {
     if (!childWin.isDestroyed()) childWin.destroy();

@@ -184,8 +184,8 @@ const api: WrenyardShellApi = {
   openExternal(url: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.openExternal, url);
   },
-  openTaskTranscript(taskRunId: string): Promise<void> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.taskTranscript, taskRunId);
+  openTaskTranscript(taskRunId: string, title?: string): Promise<void> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.taskTranscript, taskRunId, title);
   },
   openTaskGraph(taskGraphId: string): Promise<void> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskGraph, taskGraphId);
