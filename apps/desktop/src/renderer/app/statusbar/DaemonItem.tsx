@@ -26,8 +26,8 @@ import { cn } from 'cn';
  * endpoint and lifecycle ownership, a restart action when the daemon is
  * Desktop-supervised, the usage, trace, ledger and about destinations, and the
  * update entry.
- * While an update is actionable, a compact direct-dialog 更新 button renders
- * beside the trigger so it stays discoverable without opening the menu.
+ * While an update is actionable, a compact direct-dialog update-icon button
+ * renders beside the trigger so it stays discoverable without opening the menu.
  */
 
 const DISCONNECTED_STATES: ReadonlySet<DaemonProcessState> = new Set<DaemonProcessState>([
@@ -190,13 +190,15 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
         <Button
           type="button"
           variant="ghost"
-          size="sm"
-          className="h-7 shrink-0 rounded-full px-2 text-xs text-warning hover:bg-sidebar-accent"
+          size="icon-sm"
+          className="shrink-0 rounded-full hover:bg-sidebar-accent"
           title={updateStatus ?? '有可用更新'}
           aria-label={updateStatus ?? '有可用更新'}
           onClick={openUpdate}
         >
-          更新
+          <span aria-hidden className="flex size-5 items-center justify-center rounded-full bg-warning text-white shadow-sm">
+            <ArrowUp className="size-3.5" strokeWidth={2.75} />
+          </span>
         </Button>
       ) : null}
       <PopoverContent
