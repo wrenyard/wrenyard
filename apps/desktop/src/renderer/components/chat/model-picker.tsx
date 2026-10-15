@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { BatteryFull, Gauge, Gift, Search, Zap } from 'lucide-react';
+import { BatteryFull, Gift, Search, Zap } from 'lucide-react';
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import {
   DropdownMenu,
@@ -29,7 +29,7 @@ export interface ModelBadge {
 
 const MODEL_BADGE_ICONS = {
   turbo: Zap,
-  fast: Gauge,
+  fast: Zap,
   quota: BatteryFull,
   free: Gift,
 } as const;
