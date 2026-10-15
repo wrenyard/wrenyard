@@ -29,6 +29,9 @@ export interface SessionPageState {
   interrupting: number[];
   loadingList: boolean;
   loadingLedger: boolean;
+  /** True once this session's snapshot has been merged. Until then an empty
+   *  ledger is not yet a known-empty session. */
+  ledgerLoaded: boolean;
   error: string;
 }
 
@@ -43,6 +46,7 @@ export const initialSessionPageState: SessionPageState = {
   interrupting: [],
   loadingList: true,
   loadingLedger: false,
+  ledgerLoaded: false,
   error: '',
 };
 
@@ -112,6 +116,13 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
     case 'models':
       return { ...state, models: action.models };
     case 'select':
+      // Reselecting the same id — a retry, or a window returning to the session
+      // it already shows — keeps the loaded ledger, pending turns, live layer,
+      // tasks and scroll identity, and only asks for a fresh snapshot. Any
+      // other id starts clean.
+      if (action.sessionId === state.selectedId) {
+        return { ...state, loadingLedger: true, error: '' };
+      }
       return {
         ...state,
         selectedId: action.sessionId,
@@ -121,6 +132,7 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         pending: [],
         interrupting: [],
         loadingLedger: true,
+        ledgerLoaded: false,
         error: '',
       };
     case 'draft':
@@ -133,6 +145,7 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         pending: [],
         interrupting: [],
         loadingLedger: false,
+        ledgerLoaded: false,
         error: '',
       };
     case 'events': {
@@ -152,6 +165,7 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         pending,
         interrupting: state.interrupting.filter((turn) => !finishedTurns.has(turn)),
         loadingLedger: action.snapshot ? false : state.loadingLedger,
+        ledgerLoaded: action.snapshot ? true : state.ledgerLoaded,
         sessions: withLedgerTitle(state.sessions, events, action.sessionId),
       };
     }

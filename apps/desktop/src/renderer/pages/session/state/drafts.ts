@@ -72,6 +72,7 @@ export function writeDraft(id: string, text: string): void {
 
 /** Writes any pending draft edit for `id` immediately. */
 export function flushDraft(id: string): void {
+  if (!timers.has(id)) return;
   cancelTimer(id);
   const text = drafts.get(id);
   if (text !== undefined) writeStored(id, text);
@@ -175,6 +176,7 @@ export function writeDraftAttachments(id: string, attachments: readonly DraftAtt
 
 /** Writes any pending attachment edit for `id` immediately. */
 export function flushDraftAttachments(id: string): void {
+  if (!attachmentTimers.has(id)) return;
   cancelAttachmentTimer(id);
   const attachments = attachmentDrafts.get(id);
   if (attachments !== undefined) writeStoredAttachments(id, attachments);
@@ -185,6 +187,37 @@ export function clearDraftAttachments(id: string): void {
   attachmentDrafts.delete(id);
   cancelAttachmentTimer(id);
   writeStoredAttachments(id, []);
+}
+
+// ─── Cross-renderer sync ───────────────────────────────────────────────────
+
+/**
+ * Notifies `listener` when another renderer writes this session's draft. Only
+ * the cache and pending debounce matching the changed storage entry are
+ * invalidated: a text key drops the text draft and its timer, an attachments
+ * key drops the attachment draft and its timer, so an unrelated pending edit is
+ * left intact instead of being overwritten by a stale value. The listener only
+ * observes: it must not write storage back. Returns the unsubscribe used on
+ * teardown.
+ */
+export function subscribeDraft(id: string, listener: () => void): () => void {
+  const textKey = storageKey(id);
+  const filesKey = attachmentStorageKey(id);
+  const onStorage = (event: StorageEvent): void => {
+    if (event.storageArea !== window.localStorage) return;
+    if (event.key === textKey) {
+      drafts.delete(id);
+      cancelTimer(id);
+    } else if (event.key === filesKey) {
+      attachmentDrafts.delete(id);
+      cancelAttachmentTimer(id);
+    } else {
+      return;
+    }
+    listener();
+  };
+  window.addEventListener('storage', onStorage);
+  return () => window.removeEventListener('storage', onStorage);
 }
 
 // ─── In-flight reconciliation ──────────────────────────────────────────────

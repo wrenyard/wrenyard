@@ -6,6 +6,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { shell } from '@/renderer/lib/desktop';
+import { flushDraft, flushDraftAttachments } from '@/renderer/pages/session/state/drafts';
 
 const params = new URLSearchParams(window.location.search);
 
@@ -61,17 +62,27 @@ export function getCurrentSession(): string {
   return currentSession;
 }
 
+/** Persist a session's composer draft before another window takes it over. */
+function flushSessionDrafts(sessionId: string): void {
+  const key = sessionId === '' ? 'draft' : sessionId;
+  flushDraft(key);
+  flushDraftAttachments(key);
+}
+
 /** Open a new mini card for a session ('' starts a new draft chat). */
 export function openMiniCard(sessionId: string): void {
+  flushSessionDrafts(sessionId);
   void shell.openMiniCard(sessionId).catch(() => undefined);
 }
 
 /** Close this card and bring the shell back, opened to `sessionId`. */
 export function restoreMain(sessionId: string): void {
+  flushSessionDrafts(sessionId);
   void shell.restoreMain(sessionId).catch(() => undefined);
 }
 
 /** Close this card only; the shell returns when the last card closes. */
 export function closeCard(): void {
+  flushSessionDrafts(getCurrentSession());
   void shell.closeWindow().catch(() => undefined);
 }

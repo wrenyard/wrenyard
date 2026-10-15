@@ -109,6 +109,12 @@ export function SessionPage() {
     void interruptTurn(turn);
   }, [interruptTurn]);
 
+  // Retry a ledger load that never produced a snapshot; reselecting the same
+  // session keeps whatever is already shown and only refetches.
+  const retryLedger = useCallback((): void => {
+    void selectSession(state.selectedId).catch(() => undefined);
+  }, [selectSession, state.selectedId]);
+
   // Publish the shown session so the title bar can open a card for it (shell)
   // or return to it (card), and so the shell sidebar highlights it. No cleanup:
   // the last value survives a page switch.
@@ -150,9 +156,15 @@ export function SessionPage() {
   }, []);
 
   const selectedSession = state.sessions.find((session) => session.sessionId === state.selectedId);
-  const selectedTitle = selectedSession?.title ?? '新会话';
   const draft = state.selectedId === '';
-  const empty = draft || (!state.loadingLedger && model.turns.length === 0 && state.pending.length === 0);
+  // A session id that is known but not yet titled by the list or a pushed
+  // `session.titled` is not a new session, so it keeps a neutral label.
+  const selectedTitle = selectedSession?.title ?? (draft ? '新会话' : '当前会话');
+  // An existing session counts as empty only once its snapshot has confirmed it;
+  // until then it is loading, and a load that settled without a snapshot failed.
+  const empty = draft || (state.ledgerLoaded && model.turns.length === 0 && state.pending.length === 0);
+  const hydrating = !draft && !state.ledgerLoaded && state.loadingLedger;
+  const loadFailed = !draft && !state.ledgerLoaded && !state.loadingLedger;
   const sessionKey = state.selectedId === '' ? 'draft' : state.selectedId;
 
   // Mark the shown session as seen while this window is visible and focused.
@@ -266,7 +278,7 @@ export function SessionPage() {
       models={state.models}
       turns={model.turns}
       sessionKey={sessionKey}
-      disabled={state.loadingLedger}
+      disabled={!draft && !state.ledgerLoaded}
       onSend={async (text, entry, effort, attachments) => {
         await sendMessage(reply === undefined ? text : withReplyQuote(reply, text), entry, effort, attachments);
         setReplyTo(undefined);
@@ -335,7 +347,7 @@ export function SessionPage() {
         models={state.models}
         events={state.events}
         turns={model.turns}
-        ledgerReady={sessionKey === 'draft' || !state.loadingLedger}
+        ledgerReady={draft || state.ledgerLoaded}
       >
         <RunningDispatchTasks api={api} turns={model.turns} setTasks={setTasks} />
         <SessionStatusItems />
@@ -351,6 +363,17 @@ export function SessionPage() {
                 <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
                   <MessageScrollerViewport className="scroll-fade-y">
                     <MessageScrollerContent className={cn('w-full pt-(--header-height) pb-4', view === 'transcript' ? 'gap-6' : 'gap-2', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
+                      {hydrating && (
+                        <div role="status" className="py-8 text-center text-sm text-muted-foreground">
+                          正在载入对话…
+                        </div>
+                      )}
+                      {loadFailed && (
+                        <div role="status" className="flex flex-col items-center gap-3 py-8 text-center">
+                          <p className="text-sm text-muted-foreground">对话载入失败，请重试。</p>
+                          <Button variant="outline" size="sm" onClick={retryLedger}>重试</Button>
+                        </div>
+                      )}
                       {view === 'transcript' ? (
                         <TranscriptView
                           turns={model.turns}

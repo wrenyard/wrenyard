@@ -33,6 +33,7 @@ import {
   flushDraftAttachments,
   readDraft,
   readDraftAttachments,
+  subscribeDraft,
   writeDraft,
   writeDraftAttachments,
 } from './drafts.js';
@@ -146,6 +147,27 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
     flushDraft(sessionKey);
     flushDraftAttachments(sessionKey);
   }, [sessionKey]);
+
+  // A native close never runs the unmount cleanup, so the last debounce window
+  // of typing would be lost; the live session is flushed synchronously here.
+  useEffect(() => {
+    const onBeforeUnload = (): void => {
+      flushDraft(sessionKey);
+      flushDraftAttachments(sessionKey);
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [sessionKey]);
+
+  // The other window of the same session (shell and card are separate
+  // renderers) writes the draft to storage; re-read so the newer text and
+  // attachments replace this renderer's copy. The subscription already dropped
+  // the stale caches and pending timers, so these reads see the stored values
+  // and nothing is written back from here.
+  useEffect(() => subscribeDraft(sessionKey, () => {
+    setTextState(readDraft(sessionKey));
+    setAttachmentsState(readDraftAttachments(sessionKey));
+  }), [sessionKey]);
 
   // Publish the quota provider of the composer's currently selected model so
   // the status-bar quota item focuses it. Cleared when the page hides (effect

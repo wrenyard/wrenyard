@@ -36,6 +36,19 @@ function toAttachmentInputs(attachments: readonly DraftAttachment[]): Attachment
   return inputs;
 }
 
+/**
+ * A card is opened for one session, so its first frame already carries that
+ * identity — and an existing session starts in the loading state instead of as
+ * an empty draft. The main window starts on a draft until the shell or the
+ * session list selects one.
+ */
+const initialSelectedId = mini ? miniSession : '';
+const initialSessionState: SessionPageState = {
+  ...initialSessionPageState,
+  selectedId: initialSelectedId,
+  loadingLedger: initialSelectedId !== '',
+};
+
 export interface SessionController {
   state: SessionPageState;
   selectSession(sessionId: string): Promise<void>;
@@ -52,9 +65,9 @@ export interface SessionController {
 
 /** Owns selection, ledger merging, optimistic turns and interrupt requests. */
 export function useSessionController(api: SessionApi) {
-  const [state, dispatch] = useReducer(sessionReducer, initialSessionPageState);
+  const [state, dispatch] = useReducer(sessionReducer, initialSessionState);
   const alive = useRef(false);
-  const selected = useRef('');
+  const selected = useRef(initialSelectedId);
   const selectionVersion = useRef(0);
   const listVersion = useRef(0);
   const creation = useRef<Promise<string> | null>(null);
@@ -255,18 +268,21 @@ export function useSessionController(api: SessionApi) {
     const offLive = api.onLive(({ sessionId, live }) => {
       if (!cancelled) dispatch({ type: 'live', sessionId, live });
     });
+    // A card is bound to its routed session before the list arrives, so its
+    // ledger is requested right away instead of waiting for `refreshList`. The
+    // fetch is started only after the push subscriptions above are in place, so
+    // no snapshot or pushed update can be missed; a failure is already reported
+    // through the error state and must not escape as an unhandled rejection.
+    if (mini && initialSelectedId !== '') void selectSession(initialSelectedId).catch(() => undefined);
     void refreshModels();
     const timer = setInterval(() => { void refreshList(); }, 3000);
     const modelsTimer = setInterval(() => { void refreshModels(); }, MODELS_REFRESH_MS);
     window.addEventListener('focus', refreshModels);
     void refreshList().then(async (sessions) => {
       if (cancelled || creation.current) return;
-      // A card opens on its query session, or stays an empty draft when the
-      // query carries none; the mini window never auto-opens an unrelated one.
-      if (mini) {
-        if (!selected.current && miniSession !== '') await selectSession(miniSession);
-        return;
-      }
+      // A card is already bound to its own session (draft or routed id) and
+      // never reselects from the list; only the shell window follows it.
+      if (mini) return;
       // A selected session that still exists is left untouched, so a status
       // filter or archive change alone never reselects. Only a selected id that
       // vanished (deleted from another page or shell) recovers here: drop its
