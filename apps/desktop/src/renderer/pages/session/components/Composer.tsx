@@ -339,11 +339,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     onFocusRequestHandled?.();
   }, [focusRequest, disabled, selected, onFocusRequestHandled]);
 
-  // The inline model entry is only useful while the composer is empty; as soon
-  // as any character (including whitespace) is typed it hides and the textarea
-  // takes the freed width. Clearing the draft or a successful send restores it;
-  // a failed send keeps the text, so the entry stays hidden until then.
-  const showInlineModelPicker = text.length === 0;
+  // The model entry always rides the composer toolbar: next to the typed text in
+  // the compact row, and on the toolbar's left in the expanded layout.
   // Callable routes are offered; a probe-eligible route is labelled as a retry.
   const options: ModelOption[] = models
     .filter((entry) => isRouteCallable(entry))
@@ -474,22 +471,20 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         onDismissSuggestion={dismissSuggestion}
         toolbar={
           <>
-            {/* Empty composer only: the inline model entry. As soon as any text
-                (including whitespace) is typed it hides so the textarea takes
-                the freed width, and clearing the draft or a successful send
-                brings it back without changing the selected model or effort. */}
-            {showInlineModelPicker && (
-              <ModelPicker
-                models={options}
-                value={modelId}
-                effort={effort}
-                onChange={selectModel}
-                disabled={options.length === 0}
-                placeholder={selectionPlaceholder}
-                className="min-w-0 max-w-full"
-                compactTrigger
-              />
-            )}
+            {/* Always mounted: the compact pill sits next to the text, and the
+                expanded layout puts it on the toolbar's left. Its compact
+                trigger collapses to an icon below the composer container width
+                without ever truncating the model name. */}
+            <ModelPicker
+              models={options}
+              value={modelId}
+              effort={effort}
+              onChange={selectModel}
+              disabled={options.length === 0}
+              placeholder={selectionPlaceholder}
+              className="min-w-0 max-w-full min-h-6 py-0.5"
+              compactTrigger
+            />
             {selectionUnusable && (
               <span className="flex items-center gap-1 text-xs text-destructive" role="status">
                 <AlertTriangle className="size-3.5 shrink-0" />
@@ -514,6 +509,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
           <InputGroupButton
             type="button"
             size="icon-sm"
+            className="size-6 rounded-full bg-muted p-0 text-muted-foreground hover:bg-muted/80 hover:text-foreground [&_svg]:size-3.5"
             aria-label="添加附件"
             title="添加附件"
             disabled={disabled || attachments.length >= MAX_ATTACHMENTS}

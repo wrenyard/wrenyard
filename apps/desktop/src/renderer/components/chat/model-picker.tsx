@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { BatteryFull, Gift, Search, SlidersHorizontal, Zap } from 'lucide-react';
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
+import { cn } from 'cn';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -251,7 +252,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
         render={
           <InputGroupButton
             variant="ghost"
-            className={`h-auto min-h-8 max-w-full min-w-0 whitespace-normal py-1${className ? ` ${className}` : ''}`}
+            className={cn('h-auto min-h-8 max-w-full min-w-0 whitespace-normal py-1', className)}
             disabled={disabled}
             aria-label={triggerLabel}
             title={compactTrigger ? triggerLabel : undefined}

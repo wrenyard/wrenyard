@@ -1,5 +1,8 @@
 import {
+  useEffect,
+  useLayoutEffect,
   useRef,
+  useState,
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -77,13 +80,23 @@ export function PromptInput({
   onDismissSuggestion,
 }: PromptInputProps) {
   const composing = useRef(false);
+  // The caller may own the textarea ref (the composer focuses it); otherwise the
+  // expansion measurement keeps a local one.
+  const innerRef = useRef<HTMLTextAreaElement>(null);
+  const ref = textareaRef ?? innerRef;
+  // COMPACT while the draft is empty or fits one row; EXPANDED once it carries a
+  // strip (attachments/reply/error), an explicit newline, or a line that no
+  // longer fits the compact row. Expansion is sticky and holds until the draft
+  // is emptied.
+  const [overflow, setOverflow] = useState(false);
   const canSubmit = !disabled && !submitDisabled && (value.trim() !== '' || hasAttachments);
   const hasLeading = toolbarLeading !== undefined && toolbarLeading !== null;
+  const hasStrip = attachments !== undefined && attachments !== null;
+  const expanded = hasStrip || (value !== '' && (overflow || value.includes('\n')));
   // The suggestion reads as the field's placeholder while the value is empty: it
   // is muted, never part of the value, and a "Tab 补全" hint names the accept key.
   const ghost = !disabled && value === '' && suggestion !== undefined ? suggestion : '';
   const placeholderText = ghost === '' ? placeholder : `${ghost}\u2003Tab 补全`;
-  const isEmpty = value.length === 0;
 
   const submit = (): void => {
     if (canSubmit) onSubmit();
@@ -95,6 +108,48 @@ export function PromptInput({
     return sendKey === 'mod-enter' ? modifier : !modifier;
   };
 
+  // A drawn line taller than the compact box by more than 4px means the text no
+  // longer fits one row. The 4px tolerance absorbs fractional-DPI rounding
+  // (Windows 125%/150%); one wrapped line adds a whole 24px line.
+  useLayoutEffect(() => {
+    if (value === '') {
+      setOverflow(false);
+      return;
+    }
+    if (expanded) return;
+    const el = ref.current;
+    if (el === null) return;
+    if (el.scrollHeight - el.clientHeight > 4) setOverflow(true);
+  }, [value, expanded]);
+
+  // While the compact row still holds the draft, a narrowing window can push the
+  // text past one line; watch the textarea's box so it expands without a keystroke.
+  const watchCompactWidth = !expanded && value !== '';
+  useEffect(() => {
+    if (!watchCompactWidth) return;
+    const el = ref.current;
+    if (el === null) return;
+    const observer = new ResizeObserver(() => {
+      if (el.scrollHeight - el.clientHeight > 4) setOverflow(true);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [watchCompactWidth]);
+
+  // Shared container overrides win over the InputGroup defaults through its own
+  // cn merge; the field's focus ring is replaced by a border tint.
+  const containerBase = 'h-auto border-border bg-background shadow-none has-[[data-slot=input-group-control]:focus-visible]:ring-0 has-[[data-slot=input-group-control]:focus-visible]:border-foreground/20';
+  const compactLayout = 'flex-row flex-nowrap items-center gap-1 rounded-full p-2';
+  const expandedLayout = 'flex-col items-stretch gap-0 rounded-[18px] p-0';
+  const compactTextareaClass = 'min-w-0 flex-1 h-6 min-h-6 py-0 pl-1 pr-0 leading-6 field-sizing-fixed overflow-hidden';
+  const expandedTextareaClass = 'w-full min-w-0 px-3 py-2 leading-[22px] min-h-9 max-h-[200px] field-sizing-content overflow-y-auto';
+  // Shared by both layouts; only one branch renders at a time.
+  const sendButton = (
+    <InputGroupButton type="submit" variant="default" size="icon-sm" className="size-6 shrink-0 rounded-full p-0 [&_svg]:size-3.5" disabled={!canSubmit} aria-label="发送" title="发送">
+      <ArrowUp />
+    </InputGroupButton>
+  );
+
   return (
     <form
       className={className}
@@ -103,28 +158,25 @@ export function PromptInput({
         submit();
       }}
     >
-      {/* Stable row: the leading '+' sits on the left, the `grow` textarea takes
-          the free space (`min-w-0`, no fixed basis), the send button sits on the
-          right. Controls bottom-align (`items-end` + `py-1`) with the last text
-          line; `flex-wrap` still lets wide full model names and the overflow
-          fallback use a second row. */}
-      <InputGroup className="flex flex-wrap items-end gap-x-1 gap-y-1 sm:gap-x-1.5 h-auto">
-        {attachments !== undefined && attachments !== null && (
-          <div className="w-full min-w-0 px-2.5 pt-2">{attachments}</div>
+      {/* One mounted textarea, two layouts: COMPACT keeps the leading control,
+          the text, the toolbar and the send button on a single pill row while
+          the draft is empty or short; EXPANDED lifts the text onto its own top
+          row and moves the leading control down beside the toolbar, with the
+          status spans and send on the right. `expanded` alone picks the layout. */}
+      <InputGroup className={`${containerBase} ${expanded ? expandedLayout : compactLayout}`}>
+        {hasStrip && (
+          <div className="w-full min-w-0 px-3 pt-2">{attachments}</div>
         )}
-        {hasLeading && (
-          <div className="flex min-w-0 items-center gap-1 pl-1 py-1 sm:gap-1.5 sm:pl-1.5">{toolbarLeading}</div>
-        )}
-        {/* Empty: a fixed one-line 40px box (`field-sizing-fixed`) so a long
-            placeholder cannot stretch it. Populated: content-sized, wrapping as
-            it grows and scrolling at `max-h-60`. The same element stays mounted. */}
+        {!expanded && hasLeading && toolbarLeading}
+        {/* The textarea keeps its slot in the children list across both layouts,
+            so focus, caret and IME composition survive the switch. */}
         <InputGroupTextarea
-          ref={textareaRef}
+          ref={ref}
           value={value}
           placeholder={placeholderText}
           disabled={disabled}
           rows={1}
-          className={`min-w-0 grow leading-6 [[data-mini]_&]:text-sm ${isEmpty ? 'field-sizing-fixed h-10 min-h-10' : 'field-sizing-content min-h-10 max-h-60'}`}
+          className={`${expanded ? expandedTextareaClass : compactTextareaClass} [[data-mini]_&]:text-sm`}
           onChange={(event) => onValueChange(event.target.value)}
           onPaste={onPaste}
           onKeyDown={(event) => {
@@ -153,13 +205,25 @@ export function PromptInput({
           onCompositionStart={() => { composing.current = true; onDismissSuggestion?.(); }}
           onCompositionEnd={() => { composing.current = false; }}
         />
-        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1 pr-1 py-1 sm:gap-1.5 sm:pr-1.5">
-          <div className="flex min-w-0 flex-wrap items-center gap-1 sm:gap-1.5">{toolbar}</div>
-          {toolbarTrailing}
-          <InputGroupButton type="submit" variant="default" size="icon-sm" className="shrink-0" disabled={!canSubmit} aria-label="发送" title="发送">
-            <ArrowUp />
-          </InputGroupButton>
-        </div>
+        {!expanded && (
+          <div className="flex shrink-0 items-center gap-1">
+            {toolbar}
+            {toolbarTrailing}
+            {sendButton}
+          </div>
+        )}
+        {expanded && (
+          <div className="flex w-full min-w-0 items-center justify-between gap-2 p-2">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+              {toolbarLeading}
+              {toolbar}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {toolbarTrailing}
+              {sendButton}
+            </div>
+          </div>
+        )}
       </InputGroup>
     </form>
   );
