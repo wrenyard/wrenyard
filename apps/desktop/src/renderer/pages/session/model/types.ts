@@ -60,7 +60,13 @@ export interface TurnModel {
   cycles: CycleModel[];
   /** Every committed communication publication, in chronological order. */
   replies: ReplyModel[];
-  /** The latest committed final-kind reply, when the turn has one. */
+  /**
+   * The turn's closing publication: the latest final-kind reply, or, for a
+   * successfully completed turn with no final-kind reply, the last published
+   * reply. Undefined for failed, interrupted or running turns without a
+   * final-kind reply, so their fallback, error or interruption display is
+   * unaffected.
+   */
   final?: ReplyModel;
   calls: CallModel[];
   actions: ActionModel[];
@@ -204,9 +210,10 @@ export interface ReplyModel {
   at: string;
   cycle?: number;
   /**
-   * `progress` for an intermediate process update, `final` for the turn's
-   * closing reply. Absent only on a record written before the ledger recorded
-   * the kind.
+   * Records how the reply was produced: `progress` for an intermediate process
+   * update, `final` for the turn's closing reply. The model layer uses it, so
+   * it is execution metadata, not diagnostic only. Optional, for records
+   * written before the ledger recorded the kind.
    */
   kind?: ReplyKind;
 }

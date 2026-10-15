@@ -65,7 +65,7 @@ function ReplyBlock({ reply }: { reply: ReplyModel }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="text-xs text-muted-foreground">
-        {reply.kind === 'progress' ? '过程更新' : '助手'} · <Timestamp value={reply.at} precision="second" />
+        助手 · <Timestamp value={reply.at} precision="second" />
       </div>
       <AppMarkdown className="text-sm">{reply.text}</AppMarkdown>
     </div>

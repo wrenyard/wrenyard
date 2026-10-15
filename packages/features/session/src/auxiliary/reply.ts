@@ -1,8 +1,9 @@
 /**
- * session replies: the communication calls of a session. Exactly one call is
- * made after each main reasoning output that produced something (a progress
- * reply while the turn runs, or the terminal reply that also ends the turn),
- * plus one closing call when a turn ends without fresh output.
+ * session replies: the communication calls of a session. One call is made after
+ * each main reasoning output that produced something, plus one closing call when
+ * a turn's reasoning failed without output. The writer sends a message only when
+ * this output carries new user-visible content; otherwise it stays silent, even
+ * on a terminal step.
  */
 
 import { attachmentRefUrl, type SessionFile } from '@wrenyard/protocol';
@@ -406,10 +407,13 @@ Input:
 
 When to reply:
 - When a reply is needed, you must call the reply tool once and put the entire message in its text argument. Never send a reply as ordinary output text.
-- While the turn is running, when there is no new conclusion, progress, question or thing for the user to do, choose not to reply. If you choose not to reply, do not call the reply tool and do not output any text. Just end.
-- Do not say again what you already said in wy-conversation, not even in other words.
+- Before you write, compare wy-output with the replies already in wy-conversation. Send only what this output supports.
+- Always worth sending: the first reply of the session, a new failure, a real new conclusion, real new progress, or a new, unanswered decision actually asked in this output.
+- Do not say again what you already said in wy-conversation, not even in other words. This covers unsolicited restatement; when the latest user message explicitly asks to repeat, summarize or explain something again, answer that request.
+- Do not ask a decision the reasoning model did not ask in this output. Do not ask now a question it will ask later.
+- When this output has no new user-visible conclusion — only internal dispatch, retry or verification actions — and the goal has not changed, do not announce the same goal again. Real natural-language progress may still be sent.
 - The user can see running actions in the interface. Do not report that something is "still running".
-- When the turn ends (the turn status is not running), you must call the reply tool once with the closing message. State the conclusion and what the user needs to do. When the reasoning model asked a question, ask that question. You cannot choose silence for a closing message.
+- When the turn ends (the turn status is not running), the end of the turn is not new information. If you already delivered the conclusion or the question and this output adds nothing, choose silence: call no tool and output no text. You may choose silence on a terminal step when nothing new needs saying.
 
 Language:
 - Write text in the language of the latest user message in wy-conversation.
@@ -460,7 +464,7 @@ Durable memory, only when the reply tool offers memories:
 Output contract:
 - A reply must be a native function call to reply, with your message in the text argument. Ordinary assistant content does not send a message and is discarded.
 - Do not describe a tool call, print its JSON as text, or write the answer outside the function call.
-- If you choose not to reply while the turn is running, return no content and no tool calls.
+- If you choose not to reply, return no content and no tool calls.
 </wy-system>`;
 
 /**
@@ -603,7 +607,6 @@ function buildReply(input: ReplyViewInput): BuiltView {
     tag('actions', [], actions.length === 0 ? '(none)' : escapeReplyBody(actions.join('\n'))),
     tag('wy-output', [], escapeReplyBody(worker === undefined ? '(none)' : worker.workerOutput ?? worker.text)),
     '</wy-info>',
-    ...(input.status === 'running' ? [] : [tag('wy-reply-instruction', [], '\nThis is the final reply of this turn. You must call the reply function now. Put the closing message in the text argument. Do not write ordinary assistant content. Do not end without a reply function call.\n')]),
   ].join('\n');
   const user = `${ctx}\n${info}`;
   return {

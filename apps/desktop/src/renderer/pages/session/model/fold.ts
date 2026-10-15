@@ -352,13 +352,17 @@ function buildTurn(
   const attachments = buildUserAttachments(events);
 
   // Every publication sent to the user projects into `replies` in timeline
-  // order, each carrying its kind. `final` is the latest final-kind reply; a
-  // live reply span is never fabricated into a user-facing message before it
-  // commits.
+  // order, each keeping its kind. `final` is the latest final-kind reply. The
+  // last-reply coalescing applies only when a successfully completed turn
+  // recorded no final-kind reply; a failed, interrupted or running turn
+  // without a final-kind reply keeps `final` undefined, so its fallback, error
+  // or interruption display is unchanged. A live reply span is never
+  // fabricated into a user-facing message before it commits.
   const replyEvents = events.filter((event): event is ReplySentEvent => eventType(event) === 'reply.sent');
   const replyKindsOf = replyKinds(events, replyEvents, finished);
   const replies = replyEvents.map((event, index) => replyModel(event, replyKindsOf[index]!));
-  const committedFinal = replies.filter((reply) => reply.kind === 'final').at(-1);
+  const committedFinal = replies.filter((reply) => reply.kind === 'final').at(-1)
+    ?? (status === 'completed' ? replies.at(-1) : undefined);
 
   const errors: ErrorItem[] = events
     .filter(isFault)

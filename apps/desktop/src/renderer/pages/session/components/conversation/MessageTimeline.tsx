@@ -1,5 +1,4 @@
 import { memo, useMemo } from 'react';
-import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { MessageScrollerItem } from '@/renderer/components/ui/message-scroller';
 import { useNow } from '@/renderer/hooks/use-now';
 import { formatDivider } from '@/renderer/lib/format';
@@ -111,9 +110,9 @@ function sortByAt(entries: MessageTimelineEntry[]): MessageTimelineEntry[] {
 /**
  * Flatten the folded turns and optimistic pending turns into independent
  * message rows: every user message, every committed reply and a terminal
- * fallback for an ended turn without replies. Task attachments are not appended
- * automatically; a task file appears only where a reply references it. Rows are
- * ordered by their own timestamp across all concurrent turns.
+ * fallback for an ended turn with no final reply. Task attachments are not
+ * appended automatically; a task file appears only where a reply references it.
+ * Rows are ordered by their own timestamp across all concurrent turns.
  */
 export function buildMessageTimeline(
   turns: readonly TurnModel[],
@@ -125,8 +124,11 @@ export function buildMessageTimeline(
     turn.replies.forEach((reply, index) => {
       entries.push({ kind: 'reply', id: `reply:${turn.id}:${index}:${reply.at}`, at: reply.at, turn, reply });
     });
-    // A turn with no final-kind reply still gets its terminal fallback, even
-    // when it published process updates first.
+    // The terminal fallback is emitted when the turn has no final reply for
+    // its current status — no final-kind reply and no last-reply coalescing
+    // (coalescing happens only for a successfully completed turn) — and the
+    // status is not running. This includes a completed turn that published no
+    // reply at all.
     if (turn.final === undefined && turn.status !== 'running') {
       entries.push({ kind: 'fallback', id: `fallback:${turn.id}`, at: turn.endedAt ?? turn.startedAt, turn });
     }
@@ -176,19 +178,6 @@ function dividerLabelFor(at: string, previousAt: string | undefined, now: number
   return undefined;
 }
 
-/**
- * One intermediate process update: a muted status line instead of an assistant
- * bubble. Its complete Markdown is shown, never merged with another reply.
- */
-function ProgressLine({ reply }: { reply: ReplyModel }) {
-  return (
-    <div className="flex items-start gap-2 text-xs text-muted-foreground">
-      <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-muted-foreground/50" aria-hidden="true" />
-      <Markdown className="min-w-0 flex-1 text-xs">{reply.text}</Markdown>
-    </div>
-  );
-}
-
 interface EntryContext {
   sessionId?: string;
   attachmentFiles: readonly SessionFile[];
@@ -229,25 +218,22 @@ function EntryContent({ entry, sessionId, attachmentFiles, enter, onRetry, onRem
       );
     }
     case 'reply':
-      // A process update is a lightweight status line; only the final reply is
-      // a full assistant message. Neither text is merged or dropped. Only the
-      // final reply resolves the task files it references, so progress lines
-      // stay plain text.
-      return entry.reply.kind === 'progress'
-        ? <ProgressLine reply={entry.reply} />
-        : (
-          <AssistantMessage
-            turn={entry.turn}
-            reply={entry.reply}
-            attachmentFiles={attachmentFiles}
-            enter={enter}
-            onReply={() => onReply(excerpt(entry.reply.text))}
-            {...(sessionId === undefined ? {} : { sessionId })}
-            {...(entry.reference === undefined ? {} : {
-              reference: { ...entry.reference, onJump: () => onJump(entry.reference!.messageId) },
-            })}
-          />
-        );
+      // Every publication to the user is a full assistant message, intermediate
+      // and closing alike. No text is merged or dropped, and every reply
+      // resolves the task files it references.
+      return (
+        <AssistantMessage
+          turn={entry.turn}
+          reply={entry.reply}
+          attachmentFiles={attachmentFiles}
+          enter={enter}
+          onReply={() => onReply(excerpt(entry.reply.text))}
+          {...(sessionId === undefined ? {} : { sessionId })}
+          {...(entry.reference === undefined ? {} : {
+            reference: { ...entry.reference, onJump: () => onJump(entry.reference!.messageId) },
+          })}
+        />
+      );
     case 'fallback':
       return (
         <AssistantMessage
@@ -279,7 +265,7 @@ export interface MessageTimelineProps {
  * Message-level conversation: one row per user message, reply and fallback
  * across all turns, with time dividers, bottom typing indicators only while
  * replies are being written, and an activity row for every running turn. Task
- * attachments are never appended on their own; each final reply row resolves
+ * attachments are never appended on their own; each reply row resolves
  * the files it references against the whole session's task files.
  */
 export const MessageTimeline = memo(function MessageTimeline({
