@@ -124,7 +124,7 @@ export function PromptInput({
           placeholder={placeholderText}
           disabled={disabled}
           rows={1}
-          className={`min-w-0 grow leading-6 ${isEmpty ? 'field-sizing-fixed h-10 min-h-10' : 'field-sizing-content min-h-10 max-h-60'}`}
+          className={`min-w-0 grow leading-6 [[data-mini]_&]:text-sm ${isEmpty ? 'field-sizing-fixed h-10 min-h-10' : 'field-sizing-content min-h-10 max-h-60'}`}
           onChange={(event) => onValueChange(event.target.value)}
           onPaste={onPaste}
           onKeyDown={(event) => {
