@@ -104,8 +104,12 @@ export function assertTargetNativeClosure(stageDir, entry, sourceTriplet) {
     // A prebuild directory names its platform-arch; if this native does not sit
     // under a matching prebuild dir, it is a compiled `build/Release` binary
     // that only the build host can run.
-    const named = segments.find((segment) => /^(darwin|linux|win32)-/.test(segment));
-    if (named && named !== expected) {
+    // A prebuild may be a directory (`darwin-arm64/`) or a file
+    // (`darwin-arm64.node`), optionally with a libc suffix (`linux-x64-musl`).
+    const named = segments
+      .find((segment) => /^(darwin|linux|win32)-/.test(segment))
+      ?.replace(/\.node$/, '');
+    if (named && named !== expected && !named.startsWith(`${expected}-`)) {
       throw new Error(`native module ${rel} targets ${named}, expected ${expected}`);
     }
     if (!named && crossBuild && rel.includes('build/Release/')) {
