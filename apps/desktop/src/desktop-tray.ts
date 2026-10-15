@@ -68,15 +68,19 @@ export function createDesktopTray(
             if (icon.isEmpty()) {
               return { label: provider.displayLine ?? `${provider.id} · ${provider.message ?? provider.status}`, enabled: false };
             }
-            // The bitmap atlas is ASCII-only, so a declared pool label (e.g.
-            // 官方/外部) cannot be drawn and would render as dashes. When any
-            // window carries such a label, reuse the provider's synthesized
-            // display line as the native label beside the unchanged bar image.
-            const hasPoolLabel = provider.windows.some((window) => window.poolLabel !== undefined);
-            if (hasPoolLabel && provider.displayLine) {
-              return { label: provider.displayLine, icon, enabled: false };
+            // The native text carries only the distinct non-ASCII pool names
+            // (e.g. 官方/外部) that the ASCII-only bitmap atlas cannot draw; the
+            // provider name and ordinary cycle captions are already drawn in the
+            // bitmap.
+            const poolLabels: string[] = [];
+            for (const window of provider.windows) {
+              const poolLabel = window.poolLabel;
+              if (poolLabel === undefined || poolLabel === '' || poolLabel === window.name) continue;
+              if (!/[^\x00-\x7F]/.test(poolLabel)) continue;
+              if (!poolLabels.includes(poolLabel)) poolLabels.push(poolLabel);
             }
-            return { label: '\u200B', icon, enabled: false };
+            const label = poolLabels.length > 0 ? poolLabels.join(' / ') : '\u200B';
+            return { label, icon, toolTip: provider.displayLine, enabled: false };
           })
         : [{ label: quota.status === 'available' ? '暂无可展示额度' : '额度暂不可用', enabled: false }];
 
