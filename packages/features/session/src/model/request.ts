@@ -510,6 +510,13 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           ...(fields.output === undefined ? {} : { output: fields.output }),
           ...(fields.reasoning === undefined ? {} : { reasoning: fields.reasoning }),
           ...(fields.error === undefined ? {} : { error: fields.error }),
+          // The model this request actually selected, independent of the
+          // provider's measured facts: after an auxiliary route failover the
+          // started span names the primary route but the answer came from a
+          // later candidate. Kept out of `metrics` so the provider's own metrics
+          // stay untouched, and added even without metrics so the serving
+          // identity survives a missing usage or a failed request.
+          ...(model === '' ? {} : { requestModel: model }),
           ...(fields.metrics === undefined ? {} : { metrics: fields.metrics }),
         });
       };

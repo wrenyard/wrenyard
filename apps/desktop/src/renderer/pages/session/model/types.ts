@@ -139,6 +139,21 @@ export interface ActionModel {
 
 export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project' | 'schedule' | 'status' | 'suggestion';
 
+/**
+ * One per-request context snapshot folded from a `span.context` event: the
+ * actual prompt occupancy of exactly one request, ordered by its ledger `seq`.
+ * It is deliberately separate from the cumulative `usage` a multi-round span
+ * accumulates for consumption accounting.
+ */
+export interface CallContextSnapshot {
+  /** Ledger seq of the snapshot event; the ordering key, independent of span start order. */
+  seq: number;
+  /** Public id (`provider/model`) of the model that served this request. */
+  model: string;
+  /** Input tokens of this one request, including cached input; absent when unknown. */
+  inputTokens?: number;
+}
+
 export interface CallModel {
   id: string;
   role: CallRoleModel;
@@ -152,6 +167,12 @@ export interface CallModel {
   firstTokenAt?: string;
   endedAt?: string;
   usage?: { input?: number; cachedInput?: number; output?: number; reasoning?: number };
+  /**
+   * Per-request context snapshots folded from `span.context` events, oldest
+   * first, kept separate from the cumulative `usage`. Historical records
+   * written before the event existed have none.
+   */
+  snapshots?: CallContextSnapshot[];
   /**
    * Recorded generation sample of a successful call (tokenizer speed sample). Historical
    * records written before the transport refactor have none and are never

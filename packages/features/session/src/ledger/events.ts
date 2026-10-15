@@ -37,6 +37,7 @@ export type LedgerEventType =
   | 'action.finished'
   | 'span.started'
   | 'span.finished'
+  | 'span.context'
   | 'reasoning.thinking'
   | 'reasoning.completed'
   | 'memory.recalled'
@@ -357,6 +358,13 @@ export interface ModelSpanFinishedEvent extends SpanFinishedBase {
   /** Raw reasoning text of the last completed request. */
   reasoning?: string;
   /**
+   * Public id (`provider/model`) of the model the request actually selected for
+   * the last completed round, including a fallback route. It is the session's
+   * own serving identity, distinct from any provider-native response metadata
+   * inside `metrics`.
+   */
+  requestModel?: string;
+  /**
    * Measured by the transport. One span is one whole auxiliary task or one
    * reasoning request, so a multi-round task carries the sum of its requests,
    * including the part measured before a failure.
@@ -370,6 +378,31 @@ export interface TaskSpanFinishedEvent extends SpanFinishedBase {
 }
 
 export type SpanFinishedEvent = ModelSpanFinishedEvent | TaskSpanFinishedEvent;
+
+/**
+ * Per-request context snapshot of one finished model request: the actual prompt
+ * occupancy of that single request, as opposed to the cumulative metrics a
+ * multi-request span accumulates. One is written for every reported request,
+ * including each round of a held multi-round auxiliary task, so a consumer can
+ * show the latest request's occupancy rather than the task's summed
+ * consumption.
+ *
+ * `model` is the public id (`provider/model`) of the model that actually served
+ * the request, including a fallback route chosen after a failover. `inputTokens`
+ * is that request's upstream-reported input count and already includes cached
+ * input; it is omitted — unknown — when the request reported no usage, never a
+ * sentinel zero.
+ */
+export interface SpanContextEvent extends LedgerEventBase {
+  type: 'span.context';
+  /** The span this request belongs to. */
+  id: string;
+  kind: 'reasoning' | 'auxiliary';
+  /** Public id (`provider/model`) of the model that actually served the request. */
+  model: string;
+  /** Input tokens of exactly this request, including cached input; absent when unknown. */
+  inputTokens?: number;
+}
 
 // ─── Content ───────────────────────────────────────────────────────────────
 
@@ -523,6 +556,7 @@ export type LedgerEvent =
   | ActionFinishedEvent
   | SpanStartedEvent
   | SpanFinishedEvent
+  | SpanContextEvent
   | ReasoningThinkingEvent
   | ReasoningCompletedEvent
   | MemoryRecalledEvent

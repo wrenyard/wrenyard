@@ -14,6 +14,7 @@ import type {
   ModelSpanStartedEvent,
   ReasoningCompletedEvent,
   ReasoningThinkingEvent,
+  SpanContextEvent,
   SpanError,
   SpanFinishedEvent,
   SpanStartedEvent,
@@ -26,6 +27,7 @@ import type {
 import { actionLabel } from './describe.js';
 import type {
   ActionModel,
+  CallContextSnapshot,
   CallModel,
   ContextItem,
   CycleModel,
@@ -410,6 +412,76 @@ function buildUserAttachments(events: LedgerEvent[]): SessionFile[] {
   return files;
 }
 
+/** Auxiliary roles whose span holds several model rounds and sums their metrics. */
+const MULTI_ROUND_AUX_ROLES: ReadonlySet<CallModel['role']> = new Set<CallModel['role']>([
+  'document',
+  'vcs',
+  'project',
+  'schedule',
+]);
+
+/** Per-request context snapshots of every span, keyed by span id, in ledger order. */
+function snapshotsBySpan(events: LedgerEvent[]): Map<string, CallContextSnapshot[]> {
+  const bySpan = new Map<string, CallContextSnapshot[]>();
+  for (const event of events) {
+    if (eventType(event) !== 'span.context') continue;
+    const record = event as SpanContextEvent;
+    const snapshot: CallContextSnapshot = {
+      seq: record.seq,
+      model: record.model,
+      ...(record.inputTokens === undefined ? {} : { inputTokens: record.inputTokens }),
+    };
+    const list = bySpan.get(record.id);
+    if (list) list.push(snapshot);
+    else bySpan.set(record.id, [snapshot]);
+  }
+  for (const list of bySpan.values()) list.sort((a, b) => a.seq - b.seq);
+  return bySpan;
+}
+
+/** True when `value` is a `provider/model` public id, never a bare model name. */
+function isPublicModelId(value: string): boolean {
+  const separator = value.indexOf('/');
+  return separator > 0 && separator < value.length - 1;
+}
+
+/**
+ * The public id of the last successful attempt's route, when the transport
+ * recorded one. A provider-native or bare model name is never treated as a
+ * public id.
+ */
+function lastSuccessfulAttemptModel(attempts: SpanAttempts | undefined): string | undefined {
+  let model: string | undefined;
+  for (const attempt of attempts ?? []) {
+    if (attempt.error !== undefined || attempt.model === undefined) continue;
+    if (isPublicModelId(attempt.model)) model = attempt.model;
+  }
+  return model;
+}
+
+/**
+ * The context snapshots of one span written before `span.context` existed. The
+ * identity is the request's own serving model — never the provider-native
+ * `responseModel` — falling back to the last successful attempt's public route
+ * and then the started route. A single-request span may reuse its own reported
+ * usage as its one snapshot; a legacy multi-round auxiliary span (held
+ * project/document/vcs/schedule) must not infer occupancy from its summed usage
+ * or a first-round estimate, so it stays unknown. Either way an unknown marker
+ * is emitted at the span's sequence so a newer uninstrumented finished span
+ * cannot be overridden by an older known sample.
+ */
+function legacySnapshots(
+  role: CallModel['role'],
+  done: ModelSpanFinishedEvent,
+  start: ModelSpanStartedEvent | undefined,
+): CallContextSnapshot[] {
+  const model = done.requestModel ?? lastSuccessfulAttemptModel(done.metrics?.attempts) ?? start?.request.model ?? '';
+  const reported = MULTI_ROUND_AUX_ROLES.has(role) ? undefined : done.metrics?.usage?.inputTokens;
+  const known = model !== '' && reported !== undefined && Number.isFinite(reported) && reported >= 0;
+  if (!known) return [{ seq: done.seq, model }];
+  return [{ seq: done.seq, model, inputTokens: reported }];
+}
+
 function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded: boolean): CallModel[] {
   const startedEvents = new Map<string, ModelSpanStartedEvent>();
   const completed = new Map<string, ModelSpanFinishedEvent>();
@@ -425,6 +497,7 @@ function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded:
       completed.set(record.id, record);
     }
   }
+  const snapshots = snapshotsBySpan(events);
 
   const liveById = new Map(live.map((entry) => [entry.spanId, entry]));
   const ids = [...new Set([...startedEvents.keys(), ...completed.keys()])];
@@ -432,6 +505,7 @@ function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded:
     const start = startedEvents.get(id);
     const done = completed.get(id);
     const role = spanRole(start, done);
+    const recorded = snapshots.get(id);
     if (done) {
       // The transport records every measured fact in `metrics`; a historical
       // span without one stays without usage, ttft or a speed sample.
@@ -447,6 +521,7 @@ function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded:
         : undefined;
       const retries = metrics === undefined ? [] : retriesOf(metrics.attempts);
       const step = done.step ?? start?.step;
+      const context = recorded ?? legacySnapshots(role, done, start);
       return {
         id,
         role,
@@ -459,6 +534,7 @@ function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded:
         ...(firstTokenAt === undefined ? {} : { firstTokenAt }),
         endedAt: done.at,
         ...(usage === undefined ? {} : { usage }),
+        ...(context.length === 0 ? {} : { snapshots: context }),
         ...(tps === undefined ? {} : { tps }),
         ...(start?.request.inputEstimate === undefined ? {} : { estimatedInputTokens: start.request.inputEstimate }),
         ...(start?.request.layers === undefined ? {} : { layers: start.request.layers }),
@@ -483,6 +559,7 @@ function buildCalls(events: LedgerEvent[], live: readonly LiveCall[], turnEnded:
       ...(start!.step === undefined ? {} : { cycle: start!.step }),
       ...(start!.parent === undefined ? {} : { parent: start!.parent }),
       startedAt: start!.at,
+      ...(recorded === undefined ? {} : { snapshots: recorded }),
       estimatedInputTokens: request.inputEstimate,
       layers: request.layers,
       ...(request.effort?.sent === undefined ? {} : { reasoningEffort: request.effort.sent }),

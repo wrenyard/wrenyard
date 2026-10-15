@@ -169,6 +169,7 @@ export type {
   ReasoningThinkingEvent,
   SessionCreatedEvent,
   SessionSummary,
+  SpanContextEvent,
   SpanError,
   SpanFinishedEvent,
   SpanKind,

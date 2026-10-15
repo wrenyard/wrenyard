@@ -68,12 +68,13 @@ export function SessionStatusItems() {
     );
     return { reason: grouped('reason'), aux: grouped('aux') };
   }, [calls, quota.data, models]);
-  // One entry per internal LLM conversation; the reason role carries the live
-  // budget total (inspection total plus draft input) that blocks sending, and
-  // every auxiliary role the preview lists appears even before its first call.
+  // One entry per internal LLM conversation; each row is the latest reported
+  // single-request actual occupancy, and the main selected model identifies the
+  // reason row. Every auxiliary role the preview lists appears before its first
+  // call, with no tokens.
   const roles = useMemo(
-    () => roleContexts(calls, { reasonTokens: budget?.total, resolve: resolveModel, preview: routesPreview?.roles }),
-    [calls, budget?.total, resolveModel, routesPreview],
+    () => roleContexts(calls, { reasonModel: modelId, resolve: resolveModel, preview: routesPreview?.roles }),
+    [calls, modelId, resolveModel, routesPreview],
   );
 
   const selected = models.find((entry) => entry.publicId === modelId);
@@ -122,10 +123,14 @@ interface CtxStatusItemProps {
 function CtxStatusItem({ budget, groups, roles, modelName, onRefresh }: CtxStatusItemProps) {
   const [open, setOpen] = useState(false);
   const wasOpen = useRef(false);
-  const ratio = budget?.ratio !== undefined && Number.isFinite(budget.ratio) ? budget.ratio : 0;
-  const level = usageRingLevel(ratio);
+  // The ring and its percent report the main reason conversation's actual
+  // occupancy against its model's full window; an unknown ratio shows a neutral
+  // dash, never a fabricated 0%.
+  const reason = roles.find((entry) => entry.role === 'reason');
+  const reasonRatio = reason?.ratio !== undefined && Number.isFinite(reason.ratio) ? reason.ratio : undefined;
+  const level = reasonRatio === undefined ? 'normal' : usageRingLevel(reasonRatio);
   const tone = levelTone(level);
-  const pct = budget?.ratio === undefined ? '—' : `${Math.round(Math.min(ratio, 9.99) * 100)}%`;
+  const pct = reasonRatio === undefined ? '—' : `${Math.round(Math.min(reasonRatio, 9.99) * 100)}%`;
 
   useEffect(() => {
     if (open && !wasOpen.current) onRefresh();
@@ -133,8 +138,8 @@ function CtxStatusItem({ budget, groups, roles, modelName, onRefresh }: CtxStatu
   }, [open, onRefresh]);
 
   const button = (
-    <StatusBarButton ariaLabel="上下文占用" tone={tone} tooltip={ctxTooltip(budget, pct)}>
-      <UsageRing ratio={ratio} status="ready" className="size-3.5 [&_svg]:size-3.5" />
+    <StatusBarButton ariaLabel="上下文占用" tone={tone} tooltip={ctxTooltip(reason, pct)}>
+      <UsageRing ratio={reasonRatio} status={reasonRatio === undefined ? 'unknown' : 'ready'} className="size-3.5 [&_svg]:size-3.5" />
       <span className="min-w-[3ch] text-right tabular-nums">{pct}</span>
     </StatusBarButton>
   );
@@ -458,14 +463,13 @@ function formatPercent(value: number): string {
 }
 
 /**
- * Single-line hover copy: `上下文 42% · 约 84.2k / 200k`. The percent is the
- * reason conversation's send-blocking budget share and the figures are its
- * context over the available window. The window-unknown and no-budget variants
- * keep the `窗口未知` note.
+ * Single-line hover copy: `上下文 42% · 150.0k / 1M`. Both figures come from the
+ * main reason conversation's latest reported single request and the full window
+ * of the model that produced it; an unknown value shows a dash.
  */
-function ctxTooltip(budget: ContextBudgetView | undefined, pct: string): string {
-  if (budget === undefined) return '上下文数据暂不可用';
-  const totalLabel = formatTokenCount(budget.total);
-  if (budget.available === undefined) return `上下文 · 约 ${totalLabel} · 窗口未知`;
-  return `上下文 ${pct} · 约 ${totalLabel} / ${formatTokenCount(budget.available)}`;
+function ctxTooltip(reason: RoleContextEntry | undefined, pct: string): string {
+  if (reason === undefined || reason.tokens === undefined || reason.window === undefined) {
+    return `上下文 ${pct} · 占用未知`;
+  }
+  return `上下文 ${pct} · ${formatTokenCount(reason.tokens)} / ${formatTokenCount(reason.window)}`;
 }

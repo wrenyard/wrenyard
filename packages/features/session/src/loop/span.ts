@@ -11,16 +11,21 @@
  * span open across rounds and releases it when the task ends, so whatever was
  * measured before a failure or an interrupt is still written.
  */
-import type { ModelSpanFinishedEvent, ModelSpanStartedEvent, SpanStatus } from '../ledger/events.ts';
+import type { ModelSpanFinishedEvent, ModelSpanStartedEvent, SpanContextEvent, SpanStatus } from '../ledger/events.ts';
 import type { ModelMetrics, Usage } from '../transport/protocol.ts';
 
 export type ModelSpanDraft =
   | Omit<ModelSpanStartedEvent, 'seq' | 'at'>
   | Omit<ModelSpanFinishedEvent, 'seq' | 'at'>;
 
+/** The per-request context snapshot the recorder derives and appends itself. */
+export type SpanContextDraft = Omit<SpanContextEvent, 'seq' | 'at'>;
+
 interface OpenSpan {
   held: boolean;
   started: boolean;
+  /** Latest model public id any `span.started` reported for this span. */
+  model?: string;
   /** The latest finish report, with metrics summed over every report so far. */
   last?: Omit<ModelSpanFinishedEvent, 'seq' | 'at'>;
 }
@@ -28,23 +33,53 @@ interface OpenSpan {
 export class SpanRecorder {
   private readonly spans = new Map<string, OpenSpan>();
 
-  constructor(private readonly append: (draft: ModelSpanDraft) => void | Promise<void>) {}
+  constructor(private readonly append: (draft: ModelSpanDraft | SpanContextDraft) => void | Promise<void>) {}
 
   /** The sink the model request executor reports each request to. */
   readonly report = async (draft: ModelSpanDraft): Promise<void> => {
     const span = this.spans.get(draft.id) ?? { held: false, started: false };
     this.spans.set(draft.id, span);
     if (draft.type === 'span.started') {
-      // Later rounds of a held span reuse the span opened by the first one.
+      // The serving model starts from every reported route, including a later
+      // round of a held span whose started event is suppressed as a duplicate.
+      span.model = draft.request.model;
       if (span.started) return;
       span.started = true;
       await this.append(draft);
       return;
     }
+    // The snapshot is derived from this request alone and appended before the
+    // per-span aggregation, so a multi-round task reports each round's own
+    // occupancy instead of its running sum.
+    await this.snapshot(span, draft);
     const metrics = sumMetrics(span.last?.metrics, draft.metrics);
     span.last = { ...draft, ...(metrics === undefined ? {} : { metrics }) };
     if (!span.held) await this.close(draft.id, span);
   };
+
+  /**
+   * Append the context snapshot of one reported request: the serving model
+   * (the finished request's `requestModel`, which names the fallback route that
+   * actually answered, else the latest started route) and this one request's
+   * input tokens. A request that reported no usage keeps the field absent —
+   * unknown — never the previous round's number or the accumulated sum.
+   */
+  private async snapshot(span: OpenSpan, done: Omit<ModelSpanFinishedEvent, 'seq' | 'at'>): Promise<void> {
+    const model = done.requestModel ?? span.model;
+    // No serving model means the request facts never arrived: nothing to report.
+    if (model === undefined) return;
+    const reported = done.metrics?.usage?.inputTokens;
+    const inputTokens = reported !== undefined && Number.isFinite(reported) && reported >= 0 ? reported : undefined;
+    await this.append({
+      type: 'span.context',
+      id: done.id,
+      kind: done.kind,
+      ...(done.turn === undefined ? {} : { turn: done.turn }),
+      ...(done.step === undefined ? {} : { step: done.step }),
+      model,
+      ...(inputTokens === undefined ? {} : { inputTokens }),
+    });
+  }
 
   /** Keep a span open across several requests until {@link release}. */
   hold(id: string): void {

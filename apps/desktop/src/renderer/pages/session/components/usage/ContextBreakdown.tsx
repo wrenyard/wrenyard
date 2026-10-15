@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { TokenBar, type TokenBarSegment } from '@/renderer/components/usage/TokenBar';
@@ -11,10 +11,11 @@ import { cn } from 'cn';
  * Expanded detail of the ctx popover (usage spec 5.2). A Wrenyard session is
  * several separate stateless LLM conversations — reason plus the auxiliary
  * roles reply, dispatch, document, vcs, project, search, memory-search and title. The panel groups
- * by internal conversation: the 主推理 row comes first (with the collapsed
- * 构成明细 toggle) and the auxiliary conversations follow under the muted
- * 辅助会话 label. The header shows only the reason conversation's context, never
- * a session-wide sum. Chinese product copy.
+ * by internal conversation. The forward-looking send-block estimate is shown
+ * first, labelled as an estimate with its 构成明细 construction detail, and the
+ * actual role rows follow from each conversation's latest reported single
+ * request. The estimate is never attached to an actual token value. Chinese
+ * product copy.
  */
 
 /** Bar fill colour for a ratio at the 70% / 90% thresholds (usage spec 4). */
@@ -27,9 +28,9 @@ const ROLE_FILL_CLASS: Record<UsageRingLevel, string> = {
 export interface ContextBreakdownProps {
   /** Per-role context entries: the reason row first, then auxiliary roles. */
   roles: RoleContextEntry[];
-  /** Live reason budget (inspection total plus draft input); the reason line. */
+  /** Forward-looking send-block budget (inspection total plus draft input). */
   budget: ContextBudgetView | undefined;
-  /** Layer composition groups of the reason context; the 构成明细 legend. */
+  /** Layer composition groups of the estimated next request; the 构成明细 legend. */
   groups: UsageGroupView[];
   /** Display name of the reason model, for the overflow alert. */
   modelName?: string;
@@ -46,15 +47,23 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
   const compositionTotal = groups.reduce((sum, group) => sum + group.tokens, 0);
   const reason = roles.find((entry) => entry.role === 'reason');
   const auxiliary = roles.filter((entry) => entry.role !== 'reason');
-  // Header carries only the reason conversation's context (`84.2k / 200k`).
-  const headerFigure = budget === undefined
+  // The estimate sizes the next request against the available window and is
+  // what the Composer blocks sending on; it is labelled as an estimate and is
+  // never mixed into an actual role row.
+  const estimateFigure = budget === undefined
     ? undefined
     : budget.available === undefined
       ? `约 ${formatTokenCount(budget.total)}`
       : `${formatTokenCount(budget.total)} / ${formatTokenCount(budget.available)}`;
 
-  const reasonDetail = (
-    <div className="flex flex-col gap-2 pt-1">
+  const estimateDetail = budget === undefined ? null : (
+    <div className="flex flex-col gap-2 pt-1" data-slot="context-estimate">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="shrink-0">预计发送</span>
+        {estimateFigure !== undefined && (
+          <span className="ml-auto tabular-nums text-muted-foreground">{estimateFigure}</span>
+        )}
+      </div>
       <button
         type="button"
         onClick={() => setExpanded((current) => !current)}
@@ -67,7 +76,7 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
       </button>
       {expanded && (
         <>
-          <TokenBar segments={segments} window={budget?.window} reserved={budget?.reserved} />
+          <TokenBar segments={segments} window={budget.window} reserved={budget.reserved} />
           <div className="flex flex-col">
             {groups.map((group) => {
               const pct = compositionTotal > 0 ? (group.tokens / compositionTotal) * 100 : 0;
@@ -91,9 +100,6 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
       {/* Header */}
       <div className="flex items-center justify-between gap-3 px-3 pt-3">
         <span className="text-sm font-medium">会话上下文</span>
-        {headerFigure !== undefined && (
-          <span className="tabular-nums text-xs text-muted-foreground">{headerFigure}</span>
-        )}
       </div>
 
       {budget?.exceeded === true && (
@@ -106,8 +112,10 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
         </div>
       )}
 
+      <div className="px-3 pt-2">{estimateDetail}</div>
+
       <div className="flex flex-col gap-2.5 px-3 py-3">
-        {reason !== undefined && <RoleRow entry={reason} detail={reasonDetail} />}
+        {reason !== undefined && <RoleRow entry={reason} />}
         {auxiliary.length > 0 && (
           <>
             <span className="text-xs text-muted-foreground" data-slot="context-auxiliary-label">辅助会话</span>
@@ -115,19 +123,20 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
           </>
         )}
       </div>
-
     </div>
   );
 }
 
 interface RoleRowProps {
   entry: RoleContextEntry;
-  /** The reason row's 构成明细 toggle and legend. */
-  detail?: ReactNode;
 }
 
-/** One internal conversation row: label, model, tokens/window/percent and bar. */
-function RoleRow({ entry, detail }: RoleRowProps) {
+/**
+ * One internal conversation's actual occupancy row: label, model, the latest
+ * reported single-request tokens over that model's window, and its bar. An
+ * unknown token count or window shows a dash with no bar or risk colour.
+ */
+function RoleRow({ entry }: RoleRowProps) {
   // A role with no usable route shows only its label and a muted note.
   if (entry.error !== undefined) {
     return (
@@ -153,12 +162,14 @@ function RoleRow({ entry, detail }: RoleRowProps) {
         )}
         <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">{amount}</span>
       </div>
+      <span className="text-[11px] text-muted-foreground" data-slot="context-role-basis">
+        {entry.latestReported === true ? '运行中 · 最近一次上报' : '最近一次请求'}
+      </span>
       {entry.ratio !== undefined && (
         <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
           <div className={cn('h-full rounded-full', ROLE_FILL_CLASS[level])} style={{ width: `${width}%` }} />
         </div>
       )}
-      {detail}
     </div>
   );
 }

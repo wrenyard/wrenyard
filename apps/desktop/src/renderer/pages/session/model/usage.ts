@@ -2,7 +2,7 @@ import { isUsableTpsSample, rollingTps, tpsOfSample as tpsOf, weightedTps } from
 import { getEncoding, type Tiktoken } from 'js-tiktoken';
 import type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, QuotaSnapshot, TaskRunUsage } from '@/shell-contract';
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
-import type { CallModel } from './types.js';
+import type { CallContextSnapshot, CallModel } from './types.js';
 import { CALL_ROLE_LABEL } from './describe.js';
 
 /**
@@ -751,24 +751,31 @@ const ROLE_CONTEXT_ORDER: readonly CallModel['role'][] = [
   'title',
 ];
 
-/** One internal LLM conversation's managed context: the role's latest model, its
- *  prompt tokens and its share of the model window. The reason role carries the
- *  live budget total; auxiliary roles carry their latest finished call's input,
- *  their rank-1 preview model, or no tokens at all before their first call. */
+/**
+ * One internal LLM conversation's managed context: the latest reported
+ * single-request actual input tokens and the context window of the model that
+ * produced that sample. The forward-looking estimate of the next request is
+ * never mixed in here.
+ */
 export interface RoleContextEntry {
   role: CallModel['role'];
   label: string;
-  /** Latest call's or preview's model public id; undefined when neither known. */
+  /** Public id of the sampled, running or preview model; undefined when unknown. */
   model: string | undefined;
   /** Resolved model display name; undefined when the caller knows none. */
   modelLabel: string | undefined;
-  /** Prompt tokens of the role's current context; undefined before any call. */
+  /** Latest reported single-request actual input tokens; undefined when unknown. */
   tokens: number | undefined;
-  /** Model context window; undefined when the model declares none. */
+  /** Context window of the model that produced `tokens`; undefined when unknown. */
   window: number | undefined;
   /** `tokens / window`; undefined when either is unknown. */
   ratio: number | undefined;
-  /** Preview selection failure; present only when the daemon returned none. */
+  /** True while a request is in flight and `tokens` is the previous reported snapshot. */
+  latestReported?: boolean;
+  /**
+   * Preview selection failure; surfaced only for a role with no actual sample,
+   * so an unavailable future route cannot hide historical usage.
+   */
   error?: string;
 }
 
@@ -779,8 +786,8 @@ export interface RoleModelInfo {
 }
 
 export interface RoleContextOptions {
-  /** Live reason total (inspection total plus draft input); overrides the latest reason call. */
-  reasonTokens?: number;
+  /** Public id of the main model currently selected; samples of another model are masked. */
+  reasonModel?: string;
   /** Resolve a model public id to its display name and context window. */
   resolve(modelId: string): RoleModelInfo | undefined;
   /**
@@ -790,59 +797,80 @@ export interface RoleContextOptions {
   preview?: readonly SessionRoutesPreviewRole[];
 }
 
-/** Latest finished (non-running) call of a role, or undefined when it has none. */
-function latestFinishedRoleCall(calls: readonly CallModel[], role: CallModel['role']): CallModel | undefined {
-  for (let index = calls.length - 1; index >= 0; index -= 1) {
-    const call = calls[index]!;
-    if (call.role === role && call.status !== 'running') return call;
+/** The latest reported single-request snapshot across a role's calls, by ledger seq. */
+function latestRoleSnapshot(calls: readonly CallModel[]): CallContextSnapshot | undefined {
+  let latest: CallContextSnapshot | undefined;
+  for (const call of calls) {
+    for (const snapshot of call.snapshots ?? []) {
+      if (latest === undefined || snapshot.seq > latest.seq) latest = snapshot;
+    }
   }
-  return undefined;
-}
-
-/** Reported prompt tokens of a call, else its raw input estimate; 0 when absent. */
-function callContextTokens(call: CallModel | undefined): number {
-  if (call === undefined) return 0;
-  return call.usage?.input ?? call.estimatedInputTokens ?? 0;
+  return latest;
 }
 
 /**
  * Per-role context projection for the ctx popover: one entry per internal LLM
- * conversation, in fixed role order. The reason role always appears when
- * `options.reasonTokens` supplies the live total; every auxiliary role the
- * preview lists appears even before its first call, using the preview's model
- * and window with no tokens. Model name and window come from the preview first,
- * then the caller's resolver, so this module never imports React or hooks.
+ * conversation, in fixed role order. Every row shows the latest reported
+ * single-request actual input tokens and the window of the model that produced
+ * that sample; the numerator and denominator therefore always come from the
+ * same model. A role that has not run yet borrows the route preview's model (and
+ * its own window) for identity only, with no tokens. Model name and window come
+ * from the caller's resolver, so this module never imports React or hooks.
  */
 export function roleContexts(calls: readonly CallModel[], options: RoleContextOptions): RoleContextEntry[] {
   const previewByRole = new Map<CallModel['role'], SessionRoutesPreviewRole>();
   for (const entry of options.preview ?? []) previewByRole.set(entry.role, entry);
+  // An empty selection is no selection: it names no model and masks no sample.
+  const reasonModel = options.reasonModel === '' ? undefined : options.reasonModel;
   const entries: RoleContextEntry[] = [];
   for (const role of ROLE_CONTEXT_ORDER) {
-    const preview = previewByRole.get(role);
     const isReason = role === 'reason';
+    const preview = previewByRole.get(role);
     const roleCalls = calls.filter((call) => call.role === role);
-    const hasReasonTotal = isReason && options.reasonTokens !== undefined;
-    if (roleCalls.length === 0 && !hasReasonTotal && preview === undefined) continue;
-    const latest = roleCalls.length > 0 ? roleCalls[roleCalls.length - 1]! : undefined;
-    const model = isReason ? latest?.model : preview?.model ?? latest?.model;
-    const resolved = model === undefined ? undefined : options.resolve(model);
-    const tokens = isReason
-      ? options.reasonTokens ?? callContextTokens(latest)
-      : roleCalls.length > 0 ? callContextTokens(latestFinishedRoleCall(calls, role) ?? latest) : undefined;
-    const window = isReason ? resolved?.contextWindow : preview?.contextWindow ?? resolved?.contextWindow;
-    const modelLabel = isReason ? resolved?.label : preview?.modelName ?? resolved?.label;
+    const hasRun = roleCalls.length > 0;
+    let sample = latestRoleSnapshot(roleCalls);
+    // The main model can switch, so a snapshot of a previously selected model is
+    // not the current main identity and must not be shown as its occupancy.
+    if (isReason && sample !== undefined && reasonModel !== undefined && sample.model !== reasonModel) {
+      sample = undefined;
+    }
+    // A role appears once it ran, once the main model is known, or on the
+    // preview that lists it — but an errored preview role always appears.
+    const present = isReason ? sample !== undefined || reasonModel !== undefined : hasRun || preview !== undefined;
+    if (!present) continue;
+
+    const identity = sample?.model
+      ?? (isReason ? reasonModel : hasRun ? roleCalls[roleCalls.length - 1]!.model : preview?.model);
+    if (identity === undefined && preview?.error === undefined) continue;
+    const resolved = identity === undefined ? undefined : options.resolve(identity);
+    const tokens = sample?.inputTokens;
+    const window = sample !== undefined
+      ? resolved?.contextWindow
+      : preview !== undefined && !hasRun
+        ? preview.contextWindow ?? resolved?.contextWindow
+        : resolved?.contextWindow;
+    const modelLabel = sample !== undefined
+      ? resolved?.label
+      : preview !== undefined && !hasRun
+        ? preview.modelName ?? resolved?.label
+        : resolved?.label;
     const ratio = window !== undefined && tokens !== undefined && Number.isFinite(window) && window > 0
       ? tokens / window
       : undefined;
+    const running = roleCalls.some((call) => call.status === 'running');
     entries.push({
       role,
       label: CALL_ROLE_LABEL[role],
-      model,
+      model: identity,
       modelLabel,
       tokens,
       window,
       ratio,
-      ...(preview?.error === undefined ? {} : { error: preview.error }),
+      ...(running && sample !== undefined ? { latestReported: true } : {}),
+      // A valid actual sample wins: only a role with no sample reports the
+      // preview failure, so an unavailable future route never hides historical
+      // usage as an error.
+      ...(preview?.error === undefined || sample !== undefined ? {} : { error: preview.error }),
     });
   }
   return entries;
