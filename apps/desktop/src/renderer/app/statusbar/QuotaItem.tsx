@@ -167,7 +167,7 @@ export function QuotaItem({ onOpenChange }: QuotaItemProps = {}) {
         </Tooltip>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-[480px] max-w-[calc(100vw-1rem)] p-0">
-        <QuotaPanel />
+        <QuotaPanel onClose={() => handleOpenChange(false)} />
       </PopoverContent>
     </Popover>
   );

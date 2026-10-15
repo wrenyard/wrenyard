@@ -13,7 +13,7 @@ import { cn } from 'cn';
 /**
  * Status-bar quota panel (usage spec 6.3). Rendered inside the quota item's
  * popover: a header with the last refresh time and a manual refresh, the
- * provider blocks in the user's order, and a jump to the 用量 settings page.
+ * provider blocks in the user's order, and a jump to the 供应商 settings page.
  */
 
 /** Re-renders once a minute so the "更新于 …" stamp stays current. */
@@ -49,7 +49,12 @@ function orderProviders(
   );
 }
 
-export function QuotaPanel() {
+export interface QuotaPanelProps {
+  /** Closes the hosting popover after a jump into the 供应商 settings page. */
+  onClose?: () => void;
+}
+
+export function QuotaPanel({ onClose }: QuotaPanelProps = {}) {
   const quota = useQuery(quotaQuery);
   const refresh = useQuotaRefresh();
   const now = useMinuteNow();
@@ -89,7 +94,13 @@ export function QuotaPanel() {
         )}
       </div>
       <Separator />
-      <PanelFooterAction label="打开用量设置" onClick={() => { executeCommand('settings.open', 'usage'); }} />
+      <PanelFooterAction
+        label="打开用量设置"
+        onClick={() => {
+          onClose?.();
+          executeCommand('settings.open', 'providers');
+        }}
+      />
     </div>
   );
 }

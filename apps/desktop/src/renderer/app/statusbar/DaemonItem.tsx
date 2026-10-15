@@ -150,7 +150,7 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
 
   const openUsage = (): void => {
     setOpen(false);
-    executeCommand('settings.open', 'usage');
+    executeCommand('settings.open', 'providers');
   };
 
   const openProviders = (): void => {

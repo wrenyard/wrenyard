@@ -42,7 +42,7 @@ import {
 } from './model/describe.js';
 import {
   SETTINGS_CATEGORIES,
-  isSettingsCategoryId,
+  normalizeSettingsCategoryId,
   settingsCategoryDescription,
   settingsCategoryLabel,
   type SettingsCategoryId,
@@ -80,7 +80,6 @@ function HighlightedText({ text, terms }: { text: string; terms: readonly string
 
 /** Supply pages whose header carries the quota refresh action (usage spec 6). */
 const QUOTA_REFRESH_CATEGORIES: ReadonlySet<SettingsCategoryId> = new Set<SettingsCategoryId>([
-  'usage',
   'providers',
   'catalog',
 ]);
@@ -124,7 +123,7 @@ export function SettingsPage({
   }, [setSidebarOpen]);
   const [pendingTarget, setPendingTarget] = useState<PendingTarget | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
-  // The shared provider dialog entry: 用量 and 供应商 both open this one instance.
+  // The shared provider dialog entry: opened from the merged 供应商 page.
   const [dialogEntry, setDialogEntry] = useState<ProviderCatalogSnapshot | null>(null);
   const [reorderError, setReorderError] = useState('');
 
@@ -135,10 +134,14 @@ export function SettingsPage({
   const navState = useMemo<Record<string, string>>(() => ({ category: activeCategory }), [activeCategory]);
   const restoreLocation = useCallback((state: Record<string, string>) => {
     const category = state.category;
-    if (category !== undefined && isSettingsCategoryId(category)) {
-      setSearchInput('');
-      setActiveCategory(category);
-      return true;
+    if (category !== undefined) {
+      // A restored legacy `usage` position resolves to the merged 供应商 page.
+      const normalized = normalizeSettingsCategoryId(category);
+      if (normalized !== null) {
+        setSearchInput('');
+        setActiveCategory(normalized);
+        return true;
+      }
     }
     return false;
   }, []);
@@ -155,7 +158,7 @@ export function SettingsPage({
 
   const preferences = usePreferencesQuery();
 
-  // The supply categories (用量 / 供应商 / 模型 / 派发测试) read the shared quota
+  // The supply categories (供应商 / 模型 / 派发测试) read the shared quota
   // snapshot and its provider-order mutation; the same cache entry backs the
   // status-bar quota panel.
   const quota = useQuotaQuery();
@@ -314,8 +317,9 @@ export function SettingsPage({
       if (typeof target !== 'string') return;
       setSearchInput('');
       setPendingTarget(null);
-      if (isSettingsCategoryId(target)) {
-        setActiveCategory(target);
+      const category = normalizeSettingsCategoryId(target);
+      if (category !== null) {
+        setActiveCategory(category);
         return;
       }
       const definition = SETTINGS_REGISTRY.find((candidate) => candidate.id === target);
@@ -407,7 +411,7 @@ export function SettingsPage({
     );
   }
 
-  // One category page's body. 快捷键 and the four supply pages render their own
+  // One category page's body. 快捷键 and the supply pages render their own
   // component instead of registry groups; every other category renders its
   // group cards. The supply pages keep the same always-mounted,
   // hidden-when-inactive section, so switching categories never discards a
@@ -416,19 +420,22 @@ export function SettingsPage({
     if (categoryId === 'shortcuts') {
       return <ShortcutsTable platform={platform} query={query} />;
     }
-    if (categoryId === 'usage') {
-      return <ProviderUsage />;
-    }
     if (categoryId === 'providers') {
+      // The merged 供应商 page: provider management (activation, ordering,
+      // configuration) plus the quota windows and balance detail that used to
+      // live on the standalone 用量 page.
       if (snapshot === null) return quotaFallback;
       return (
-        <ProviderSupply
-          snapshot={snapshot}
-          savingOrder={providerOrder.isPending}
-          reorderError={reorderError}
-          onReorder={handleReorder}
-          onConfigure={setDialogEntry}
-        />
+        <>
+          <ProviderSupply
+            snapshot={snapshot}
+            savingOrder={providerOrder.isPending}
+            reorderError={reorderError}
+            onReorder={handleReorder}
+            onConfigure={setDialogEntry}
+          />
+          <ProviderUsage />
+        </>
       );
     }
     if (categoryId === 'catalog') {

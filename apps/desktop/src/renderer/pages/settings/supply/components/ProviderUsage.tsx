@@ -1,9 +1,7 @@
 import { BrandIcon } from '@/renderer/components/brand-icon';
 import { QueryError } from '@/renderer/components/query-error';
-import { Button } from '@/renderer/components/ui/button';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { QuotaBar } from '@/renderer/components/usage/QuotaBar';
-import { executeCommand } from '@/renderer/lib/commands';
 import { providerBrand } from '@/renderer/lib/model-brand';
 import { useQuotaQuery } from '@/renderer/lib/queries';
 import { reorderProviders } from '@/provider-order';
@@ -11,13 +9,13 @@ import type { ProviderCatalogSnapshot, QuotaSnapshot } from '@/shell-contract';
 import { BALANCE_LABEL } from '../model/describe.js';
 
 /**
- * The 用量 settings page. One card per activated provider, in the saved
- * provider order, in the style of the reference app's settings usage view:
- * every quota window renders through the shared {@link QuotaBar} (window label,
- * full-width bar, floored remaining text and the reset countdown) and every
- * balance renders as a bare label + amount. A trailing muted line points at the
- * 供应商 page while some providers are still unconfigured. A read failure stays
- * visible on the card instead of hiding the provider.
+ * The 供应商 page's quota detail, merged in from the former standalone 用量 page:
+ * one card per activated provider, in the saved provider order, in the style of
+ * the reference app's settings usage view. Every quota window renders through
+ * the shared {@link QuotaBar} (window label, full-width bar, floored remaining
+ * text and the reset countdown) and every balance renders as a bare label +
+ * amount. A read failure stays visible on the card instead of hiding the
+ * provider.
  */
 
 function providerStatus(entry: ProviderCatalogSnapshot): string {
@@ -56,7 +54,6 @@ function ProviderUsageCards({ snapshot }: { snapshot: QuotaSnapshot }) {
   const activated = orderIds
     .map((id) => byId.get(id))
     .filter((entry): entry is ProviderCatalogSnapshot => entry !== undefined && entry.configured);
-  const unconfiguredCount = catalog.filter((entry) => !entry.configured).length;
 
   return (
     <div className="flex flex-col gap-3">
@@ -64,19 +61,6 @@ function ProviderUsageCards({ snapshot }: { snapshot: QuotaSnapshot }) {
         <p className="text-sm text-muted-foreground">还没有已激活的供应商。</p>
       ) : (
         activated.map((entry) => <ProviderUsageCard key={entry.id} entry={entry} />)
-      )}
-      {unconfiguredCount > 0 && (
-        <p className="flex items-center gap-1 text-sm text-muted-foreground">
-          {`还有 ${unconfiguredCount} 个供应商未配置`}
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            onClick={() => { executeCommand('settings.open', 'providers'); }}
-          >
-            去配置
-          </Button>
-        </p>
       )}
     </div>
   );
