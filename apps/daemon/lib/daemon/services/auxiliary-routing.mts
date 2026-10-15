@@ -1,6 +1,6 @@
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { rankAutoRoutingCandidates, type CandidateInput } from '@wrenyard/auto-routing';
-import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
+import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, routingReferencePriceOf, explicitFreeAutoEligibility, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
 import { ROLE_REQUIREMENTS, AUXILIARY_TIMEOUT_MS, supportsSession, type AuxiliaryCallRole, type AuxiliaryRoute } from '@wrenyard/session';
 import { JsonForemanConfigStore } from '../../config/manager.mts';
 import { readGlobalTaskSettings, type TasksConfigSettingsInput, type TaskSettingsLayer } from '../../config/task-settings.mts';
@@ -84,6 +84,19 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
       // Its state is surfaced as readable diagnostic/cooldown feedback.
       const routeStatus = options.routeStatus?.(`${provider.id}/${model.id}`);
       if (routeStatus) reject(`route ${routeStatus.phase === 'half_open' ? 'half_open (probe eligible)' : routeStatus.faultKind ?? routeStatus.state}`);
+      // An explicitly free offering is excluded while the shared Gateway circuit
+      // blocks its route: an open route cannot serve, and a half-open route is
+      // excluded until its probe is actually due. A due half-open route stays
+      // admitted so the Gateway's own bounded probe lease can recover it. Paid
+      // routes keep their existing retain-for-recovery behavior.
+      if (model.free === true && routeStatus !== undefined) {
+        if (routeStatus.phase === 'open') return reject('free route open');
+        if (routeStatus.phase === 'half_open'
+          && routeStatus.nextProbeAt !== undefined
+          && new Date(routeStatus.nextProbeAt).getTime() > nowMs) {
+          return reject('free route half-open until next probe');
+        }
+      }
       if (!availability[index]!.available || availability[index]!.providerCredential !== 'available') return reject('provider not configured/available');
       if (snapshot.hardBlockedProviderIds.includes(provider.id)) return reject('quota blocked');
       if (!requirements.requiredCapabilities.every(capability => model.capabilities?.includes(capability))) return reject('text capability missing');
@@ -94,7 +107,20 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
       if (model.intelligence === undefined) return reject('intelligence unknown');
       if (INTELLIGENCE_ORDER[model.intelligence] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) return reject('intelligence below minimum');
       if (model.reasoningEfforts.length === 0) return reject('no reasoning-effort ladder');
-      if (model.pricing === undefined) return reject('pricing unknown');
+      // Explicit-free automatic eligibility, decided by the shared helper before
+      // ranking: a free offering is admitted only with a mainstream canonical
+      // identity plus code-recorded measured speed provenance. Every other free
+      // offering stays chat-picker-only. Non-free routes pass unchanged.
+      const freeEligibility = explicitFreeAutoEligibility(provider, model);
+      if (!freeEligibility.eligible) return reject(`free route not auto-eligible (${freeEligibility.reason})`);
+      // Routing-only reference price, explicit free vs priced: an explicitly
+      // free route (kind 'free') is admitted whether or not it declares a price,
+      // and a priced route keeps its declared price. Only a paid route with no
+      // declared price stays ineligible, so unknown paid pricing is never treated
+      // as free or as zero. Free is decided by the kind, never by a number.
+      const referencePrice = routingReferencePriceOf(model);
+      if (referencePrice?.kind !== 'free' && referencePrice?.outputUsdPerMillion === undefined)
+        return reject('pricing unknown');
       if ((model.contextWindow ?? 0) < requirements.minimumContextWindow) return reject('context below minimum');
       const speed = resolveModelSpeed(provider, model, localSpeed, new Date(nowMs));
       if (speed === undefined) return reject('speed unknown');
@@ -102,14 +128,22 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
         levels: model.reasoningEfforts,
         entry: {
           choice: { provider: provider.id, model: model.id, client: 'gateway', exactAgentRuntime: `${provider.id}/${model.id}`, intelligence: model.intelligence,
-            reference_pricing: { output_usd_per_million: model.pricing[2] }, speed: { effective_tps: speed.tps } },
+            reference_pricing: referencePrice.kind === 'priced'
+              // A priced route carries its declared reference price verbatim.
+              ? { output_usd_per_million: referencePrice.outputUsdPerMillion }
+              // An explicitly free route preserves a declared list price when it
+              // has one, otherwise it carries the explicit free marker `{}`.
+              : referencePrice.outputUsdPerMillion === undefined
+                ? {}
+                : { output_usd_per_million: referencePrice.outputUsdPerMillion },
+            speed: { effective_tps: speed.tps } },
           availability: availability[index],
         },
       });
     });
     const pricings = entries.map(({ entry }) => deepSeekAutomaticPricingOf(entry.choice, nowMs, AUXILIARY_TIMEOUT_MS));
     const caps = [settings?.dispatch?.maxOutputUsdPerMillion, settings?.maxAutoOutputUsdPerMillion].filter((cap): cap is number => cap !== undefined);
-    const capUsdPerM = effectiveRoutingCap(entries.map(({ entry }, index) => pricings[index]?.safetyOutputUsdPerM ?? entry.choice.reference_pricing.output_usd_per_million!), caps);
+    const capUsdPerM = effectiveRoutingCap(entries.map(({ entry }, index) => pricings[index]?.safetyOutputUsdPerM ?? entry.choice.reference_pricing.output_usd_per_million), caps);
     const inputs: CandidateInput[] = [];
     entries.forEach(({ entry }, index) => {
       const candidate = toAutomaticCandidateInput(entry, {

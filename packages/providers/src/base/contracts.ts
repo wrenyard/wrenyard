@@ -313,6 +313,13 @@ export interface ProviderDefinition {
   // Canonical model speed overrides keyed by exact declared model id; alias keys
   // and unknown model keys are rejected at registration.
   modelSpeedOverrides?: Readonly<Record<string, number>>;
+  // Provenance of real measured speed evidence, keyed by exact declared model
+  // id: the initial measured TPS plus when and how it was measured. This records
+  // the evidence behind the integer `modelSpeedOverrides` value and never
+  // replaces it — the override stays the single routing fact.
+  modelSpeedMeasurements?: Readonly<
+    Record<string, { readonly initialTps: number; readonly measuredAt: string; readonly method: string }>
+  >;
   // Per-runtime reasoning-effort materializations, keyed model id then client id
   // then effort level. The presence of an entry is the only claim that a runtime
   // explicitly supports realizing that level; absent means capability unknown,

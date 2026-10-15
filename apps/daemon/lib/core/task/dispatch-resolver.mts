@@ -1,6 +1,6 @@
-import type { Catalog, DispatchCandidate, DispatchPlan, LocalSpeedSample, ModelDefinition, ModelPricing, SpeedEvidence } from '@wrenyard/providers/catalog';
+import type { Catalog, DispatchCandidate, DispatchPlan, LocalSpeedSample, ModelDefinition, SpeedEvidence } from '@wrenyard/providers/catalog';
 import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
-import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveModelSpeed } from '@wrenyard/providers/catalog';
+import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveModelSpeed, routingReferencePriceOf, explicitFreeAutoEligibility } from '@wrenyard/providers/catalog';
 import { resolveConstrainedDispatch } from '@wrenyard/auto-routing';
 import { resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
 import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts'
@@ -273,7 +273,21 @@ export interface TaskDispatchResolver {
   displayLabels(input: TaskDispatchDisplayLabelsInput): TaskDispatchDisplayLabels | undefined
 }
 
-function toReferencePricing(pricing: ModelPricing): TaskResolvedDispatch['reference_pricing'] {
+/** Truthful resolved reference pricing of a model. Explicit free is decided
+ *  first: an explicitly free route that publishes no price emits the empty free
+ *  marker `{}`, while one that declares a price carries it verbatim like any
+ *  priced route. A price-less paid route (reachable only on the explicit-target
+ *  path) also emits `{}`. No branch ever synthesizes or zeroes a price. */
+function toReferencePricing(model: ModelDefinition): TaskResolvedDispatch['reference_pricing'] {
+  const reference = routingReferencePriceOf(model)
+  // Paid route with no declared price: no reference exists (explicit-target path).
+  if (reference === undefined) return {}
+  // Explicitly free is decided before the priced tuple: the bare free marker
+  // emits no price, while a free route that declares a list price carries it
+  // verbatim through the tuple below.
+  if (reference.kind === 'free' && model.pricing === undefined) return {}
+  const pricing = model.pricing
+  if (pricing === undefined) return {}
   return {
     cached_input_usd_per_million: pricing[0],
     input_usd_per_million: pricing[1],
@@ -281,20 +295,12 @@ function toReferencePricing(pricing: ModelPricing): TaskResolvedDispatch['refere
   }
 }
 
-/**
- * Reference pricing projected for an explicitly free model: a genuinely free
- * entitlement has no reference cost. This is a branch on the explicit free flag,
- * never an inference from a declared price of 0.
- */
-const FREE_REFERENCE_PRICING: ModelPricing = [0, 0, 0]
-
 function toResolvedDispatch(
   requestedAgentRuntime: string,
   profileId: string,
   plan: { client: string; provider: string; model: string; mode: 'native' | 'gateway'; protocol?: string; reasoningEffort?: TaskResolvedDispatch['reasoningEffort']; clientReasoningEffort?: TaskResolvedDispatch['clientReasoningEffort'] },
   model: ModelDefinition,
   speed: SpeedEvidence,
-  pricing: ModelPricing,
   requirements: TaskDispatchRequirements,
 ): TaskResolvedDispatch {
   const expectedTps = requirements.expectedTps
@@ -315,7 +321,7 @@ function toResolvedDispatch(
       ...(speed.checkedAt === undefined ? {} : { checked_at: speed.checkedAt }),
     },
     intelligence: model.intelligence as string,
-    reference_pricing: toReferencePricing(pricing),
+    reference_pricing: toReferencePricing(model),
   }
   if (plan.protocol) resolved.protocol = plan.protocol
   if (plan.reasoningEffort !== undefined) resolved.reasoningEffort = plan.reasoningEffort
@@ -397,11 +403,22 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!provider) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
     const modelDef = provider.models.find((entry) => entry.id === plan.model)
     if (!modelDef) return { code: 'no_available_provider', detail: 'runtime_unresolved' }
-    // Reference output price used for both the submitted price ceiling and the
-    // price diagnostic: an explicitly free model resolves to zero (branched on
-    // the explicit free flag), otherwise its declared output price. It is never
-    // inferred from a price of 0, and an unknown non-free price stays undefined.
-    const priceUsdPerMillion = modelDef.free === true ? 0 : modelDef.pricing?.[2]
+    const referencePrice = routingReferencePriceOf(modelDef)
+    // Routing-only reference price for diagnostics, explicit free vs priced: a
+    // priced route and an explicitly free route that declares a reference both
+    // surface that declared price verbatim, while the bare free marker and a paid
+    // route with no declared price surface no numeric price. Free is decided by
+    // the kind, never inferred from an absent or zero number.
+    let priceUsdPerMillion: number | undefined
+    if (referencePrice === undefined) {
+      priceUsdPerMillion = undefined
+    }
+    else if (referencePrice.kind === 'free') {
+      priceUsdPerMillion = referencePrice.outputUsdPerMillion
+    }
+    else {
+      priceUsdPerMillion = referencePrice.outputUsdPerMillion
+    }
     const atGate = (
       code: TaskResolutionFailureCode,
       detail?: TaskResolutionFailureDetail,
@@ -411,6 +428,14 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // Canonical-alias model exclusion mirrors the same post-resolution gate.
     if (excludedModels.includes(plan.model)) {
       return atGate('no_available_provider', 'model_excluded')
+    }
+
+    // Explicit-free automatic eligibility, mirroring the authoritative
+    // dispatcher gate: a free offering that is not mainstream or lacks recorded
+    // measured speed provenance is not auto-eligible. The closed detail set has
+    // no free-eligibility member, so no cause is invented here.
+    if (!explicitFreeAutoEligibility(provider, modelDef).eligible) {
+      return atGate('no_available_provider')
     }
 
     if (requirements.inputTokens !== undefined &&
@@ -445,9 +470,16 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
 
     if (requirements.maxOutputUsdPerMillion !== undefined) {
-      // No declared price means the ceiling cannot be checked: the candidate is
-      // ineligible for this constraint, never admitted as if priced at zero.
-      if (priceUsdPerMillion === undefined || priceUsdPerMillion > requirements.maxOutputUsdPerMillion) {
+      // Mirrors the authoritative gate: a paid route with no declared price is
+      // ineligible, while an explicitly free route is admitted and, when it also
+      // declares a reference price, is capped by it exactly like a priced route.
+      if (referencePrice === undefined) return atGate('price_limit')
+      if (referencePrice.kind === 'free') {
+        if (referencePrice.outputUsdPerMillion !== undefined && referencePrice.outputUsdPerMillion > requirements.maxOutputUsdPerMillion) {
+          return atGate('price_limit')
+        }
+      }
+      else if (referencePrice.outputUsdPerMillion > requirements.maxOutputUsdPerMillion) {
         return atGate('price_limit')
       }
     }
@@ -464,13 +496,18 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   // Reference output price of a rejected candidate, used only so
   // selectTaskResolutionFailure can surface the elimination of the candidate
   // the deterministic router would have ranked first had it passed its gate.
+  // Explicit free vs priced, decided by the kind: a priced route and an
+  // explicitly free route that declares a reference both compare by that
+  // declared price, while the bare free marker and a paid price-less route have
+  // none. Free is never inferred from an absent or zero price.
   const referenceOutputPriceOf = (candidate: DispatchCandidate): number | undefined => {
     const provider = catalog.provider(candidate.provider)
     const modelDef = provider?.models.find((entry) => entry.id === candidate.model)
-    // Explicitly free → zero reference output price; otherwise the declared
-    // output price (unknown stays undefined). Never inferred from price === 0.
-    if (modelDef?.free === true) return 0
-    return modelDef?.pricing?.[2]
+    if (modelDef === undefined) return undefined
+    const reference = routingReferencePriceOf(modelDef)
+    if (reference === undefined) return undefined
+    if (reference.kind === 'free') return reference.outputUsdPerMillion
+    return reference.outputUsdPerMillion
   }
 
   // Single authoritative evaluation. `resolve` selection and the `eligible`
@@ -526,8 +563,11 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
 
     // Fail-closed. Constrained tasks always set speed, intelligence, and
     // max-price, so a selected result must carry a finite positive TPS, a
-    // declared intelligence tier and a declared reference price. Fabricating any
-    // of them is never allowed. Catalog defaults and provider overrides are
+    // declared intelligence tier and a routing reference (a priced route or an
+    // explicitly free offering, which may declare a price or carry the free
+    // marker). Fabricating any of them is never allowed: the shared helper
+    // returns undefined ONLY for a paid route with no declared price, which fails
+    // closed here as price_limit. Catalog defaults and provider overrides are
     // TPS-only; checkedAt is required only for local samples.
     const speed = selected.speed
     if (!Number.isFinite(speed.tps) || speed.tps <= 0) {
@@ -538,13 +578,21 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!model.intelligence) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'intelligence_requirement') }
     }
-    // Reference-pricing projection. An explicitly free model projects a zero
-    // reference price (branched on the explicit free flag, never inferred from a
-    // price of 0); every non-free model must still declare its pricing, and an
-    // unknown non-free price stays rejected.
-    const pricing = model.free === true ? FREE_REFERENCE_PRICING : model.pricing
-    if (pricing === undefined) {
+    // Explicit free vs priced, decided by the free marker: an explicitly free
+    // route is admitted whether or not it declares a reference price, and a
+    // priced route always declares one. Only a paid route with no declared price
+    // has no reference and fails closed here; free is never inferred from an
+    // absent or zero price.
+    const referencePrice = routingReferencePriceOf(model)
+    if (referencePrice?.kind !== 'free' && referencePrice?.outputUsdPerMillion === undefined) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'price_limit') }
+    }
+    // Conservative re-assertion of the explicit-free automatic-eligibility gate
+    // for the selected offering: the authoritative dispatcher already enforces
+    // it, and selection must never admit a free route that fails it.
+    const selectedProvider = catalog.provider(selected.plan.provider)
+    if (selectedProvider && !explicitFreeAutoEligibility(selectedProvider, model).eligible) {
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'no_available_provider') }
     }
 
     const resolved = toResolvedDispatch(
@@ -553,7 +601,6 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       selected.plan,
       model,
       verifiedSpeed,
-      pricing,
       req,
     )
     return { ok: true, exactAgentRuntime: canonicalTarget, resolved }
@@ -599,6 +646,26 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
           exactAgentRuntime,
           `target '${canonicalTarget}' has no compiled runtime plan or credential route`,
         ),
+      }
+    }
+
+    // Conservative explicit-target gate for an explicitly free offering: the
+    // exact pin must still carry the same automatic-eligibility evidence
+    // (mainstream identity plus recorded measurement provenance). A free pin
+    // that lacks it is rejected rather than admitted.
+    const pinnedProvider = catalog.provider(candidate.provider)
+    const pinnedModel = pinnedProvider?.models.find((entry) => entry.id === candidate.model)
+    if (pinnedProvider && pinnedModel) {
+      const freeEligibility = explicitFreeAutoEligibility(pinnedProvider, pinnedModel)
+      if (!freeEligibility.eligible) {
+        return {
+          ok: false,
+          error: new ExplicitRuntimeUnavailableError(
+            taskName,
+            exactAgentRuntime,
+            `free target '${canonicalTarget}' is not automatically eligible (${freeEligibility.reason})`,
+          ),
+        }
       }
     }
 

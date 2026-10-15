@@ -46,6 +46,25 @@ export const definition = defineProvider({
     // through the OpenAI or Anthropic gateway.
     { canonical: 'gemini-4-argon', overrides: { supportedClients: ['opencode'], reasoningEfforts: ['low', 'medium', 'high'] } },
   ],
+  // Real measured evidence for the exact free route, threaded through the shared
+  // explicit-free gate: the canonical default speed is 95 too, and this
+  // provider-scoped override states the same floored value as a routing fact.
+  modelSpeedOverrides: {
+    // measured 95.58 TPS (median of 3 sequential samples), 2026-10-15, floored to 95
+    'deepseek-v4.1-flash-free': 95,
+  },
+  // Provenance of the override above: initial measured TPS and when/how it was
+  // measured. Never replaces the integer override.
+  modelSpeedMeasurements: {
+    'deepseek-v4.1-flash-free': {
+      initialTps: 95.58,
+      // Minute precision: docs/opencode-free-deepseek.md records the
+      // measurement window as 2026-10-15 17:00–17:02 UTC, not a second-exact
+      // instant, so the end time is spelled to the minute.
+      measuredAt: '2026-10-15T17:02:00Z',
+      method: 'native OpenCode client 1.19.0, 3 sequential samples, median estimate from output tokens over part timestamp windows (not token-level instrumentation); see docs/opencode-free-deepseek.md',
+    },
+  },
   reasoningEffortMappings: {
     ...Object.fromEntries(['mimo-v2.5-free','ling-3.0-flash-fin-free','big-pickle','union-alpha','nemotron-3-ultra-free','nemotron-3.5-lightning-free','glm-5.3','kimi-k3','gemini-4-argon','gpt-6.1-sol'].map(id=>[id,{opencode:Object.fromEntries((id === 'glm-5.3' || id === 'kimi-k3' ? REASONING_LOW_HIGH_MAX : id === 'gemini-4-argon' ? ['low','medium','high'] : ['high']).map(e=>[e,{effort:e}]))}])),
     // Native provider-default reasoning: a non-empty, model-only mapping so the

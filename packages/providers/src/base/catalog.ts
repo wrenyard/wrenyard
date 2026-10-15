@@ -1,4 +1,4 @@
-import { REASONING_EFFORTS, resolveReasoningEffort, type ReasoningEffort } from '@wrenyard/models';
+import { isMainstreamModelId, REASONING_EFFORTS, resolveReasoningEffort, type ReasoningEffort } from '@wrenyard/models';
 import { GATEWAY_PROTOCOLS, type GatewayProtocol, type IntelligenceTier, INTELLIGENCE_ORDER, type ModelCapability, type ModelPricing, type SpeedSource, type SpeedEvidence, type CanonicalModelDefinition, type ModelDefinition, type DispatchCandidate, type LocalSpeedSample, type ClientDefinition, type PublicGatewayModel, type ResolvedGatewayModel, type DispatchPlan, type RunSyntaxRef, PUBLIC_CLIENT_KEYS, type ProtocolCapability, type ProviderDefinition, type ProviderReasoningEffortMappings } from './contracts.ts';
 export * from './contracts.ts';
 
@@ -121,6 +121,43 @@ function validateSpeed(speed: number | undefined, label: string): void {
   }
 }
 
+// Measured-speed provenance may only reference exact declared model ids, must
+// back an existing integer override for the same id, and must describe a real
+// measurement: a finite positive initial TPS, a parseable timestamp, and a
+// non-empty method.
+function validateModelSpeedMeasurements(
+  providerID: string,
+  measurements: ProviderDefinition['modelSpeedMeasurements'],
+  overrides: ProviderDefinition['modelSpeedOverrides'],
+  modelIDs: ReadonlySet<string>,
+): void {
+  if (measurements === undefined) return;
+  for (const [modelID, measurement] of Object.entries(measurements)) {
+    if (!modelIDs.has(modelID)) {
+      throw new Error(
+        `provider ${providerID} model speed measurement ${JSON.stringify(modelID)} must reference an exact canonical model id`,
+      );
+    }
+    if (measurement === null || typeof measurement !== 'object') {
+      throw new Error(`provider ${providerID} model speed measurement ${modelID} must be an object`);
+    }
+    if (!Number.isFinite(measurement.initialTps) || measurement.initialTps <= 0) {
+      throw new Error(`provider ${providerID} model speed measurement ${modelID} initialTps must be finite and positive`);
+    }
+    if (typeof measurement.measuredAt !== 'string' || !Number.isFinite(new Date(measurement.measuredAt).getTime())) {
+      throw new Error(`provider ${providerID} model speed measurement ${modelID} measuredAt must be a valid date`);
+    }
+    if (typeof measurement.method !== 'string' || measurement.method.trim() === '') {
+      throw new Error(`provider ${providerID} model speed measurement ${modelID} method must be a non-empty string`);
+    }
+    if (overrides?.[modelID] === undefined) {
+      throw new Error(
+        `provider ${providerID} model speed measurement ${modelID} must have a matching modelSpeedOverrides entry`,
+      );
+    }
+  }
+}
+
 // A local sample is usable only when it carries a finite positive tps, a positive
 // integer sample count, a non-empty checkedAt timestamp that is valid, not in
 // the future, and within the trailing 31-day window.
@@ -181,6 +218,75 @@ export function resolveModelSpeed(
     source: 'catalog_default',
     tps: modelDef.speed,
   }
+}
+
+/**
+ * Routing-only reference output price of one route (USD per M output tokens).
+ *
+ * Every route branches on the explicit free flag first: a route whose model is
+ * an explicit free offering (`free === true`) is always `kind: 'free'`, whether
+ * or not it also declares a pricing tuple. A declared tuple is retained only as
+ * the optional free reference price so a known list price still caps the route;
+ * a free route that publishes no price keeps the bare `free` marker rather than
+ * a synthesized zero. Only a non-free route with a declared tuple is `priced`.
+ * Every other price-less route returns undefined: its price is genuinely unknown
+ * and is never inferred as free, and never treated as zero.
+ */
+export type RoutingReferencePrice =
+  | { readonly kind: 'priced'; readonly outputUsdPerMillion: number }
+  | { readonly kind: 'free'; readonly outputUsdPerMillion?: number }
+
+export function routingReferencePriceOf(
+  model: Pick<ModelDefinition, 'pricing' | 'free'>,
+): RoutingReferencePrice | undefined {
+  if (model.free === true) {
+    return model.pricing === undefined
+      ? { kind: 'free' }
+      : { kind: 'free', outputUsdPerMillion: model.pricing[2] }
+  }
+  if (model.pricing !== undefined) return { kind: 'priced', outputUsdPerMillion: model.pricing[2] }
+  return undefined
+}
+
+/** True when the provider records valid measured speed provenance for one
+ *  exact declared model id: a usable measurement entry plus the integer
+ *  override it backs. Catalog defaults and local samples are NOT provenance. */
+function hasMeasuredSpeedProvenance(provider: ProviderDefinition, modelID: string): boolean {
+  const measurement = provider.modelSpeedMeasurements?.[modelID]
+  if (measurement === undefined) return false
+  if (provider.modelSpeedOverrides?.[modelID] === undefined) return false
+  return Number.isFinite(measurement.initialTps) && measurement.initialTps > 0
+    && typeof measurement.measuredAt === 'string' && Number.isFinite(new Date(measurement.measuredAt).getTime())
+    && typeof measurement.method === 'string' && measurement.method.trim() !== ''
+}
+
+/**
+ * Explicit free automatic-eligibility of one route — the single shared decision
+ * for automatic Task and auxiliary selection.
+ *
+ * Free status is decided by the explicit `free: true` flag alone, never by a
+ * price. A non-free route passes unchanged. An explicitly free offering is
+ * auto-eligible only when its canonical identity (`canonicalModel.id` when
+ * declared, else its own id) is in the mainstream list AND the provider records
+ * real measured speed provenance for its exact id with a matching override.
+ * Every other free offering stays chat-picker-only and is never auto-selected.
+ */
+export type ExplicitFreeAutoEligibility =
+  | { readonly eligible: true }
+  | { readonly eligible: false; readonly reason: 'free_not_mainstream' | 'free_missing_measured_tps' }
+
+export function explicitFreeAutoEligibility(
+  provider: ProviderDefinition,
+  model: ModelDefinition,
+): ExplicitFreeAutoEligibility {
+  // Non-free routes carry no free-offering restriction: this gate never adds a
+  // new constraint to a paid route.
+  if (model.free !== true) return { eligible: true }
+  // Canonical identity resolution matches the shared metadata resolution.
+  const canonicalID = model.canonicalModel?.id ?? model.id
+  if (!isMainstreamModelId(canonicalID)) return { eligible: false, reason: 'free_not_mainstream' }
+  if (!hasMeasuredSpeedProvenance(provider, model.id)) return { eligible: false, reason: 'free_missing_measured_tps' }
+  return { eligible: true }
 }
 
 export class Catalog {
@@ -263,6 +369,10 @@ export class Catalog {
       }
       validateSpeed(override, `provider ${provider.id} model speed override ${modelID}`);
     }
+    // Measured-speed provenance references exact declared model ids and must
+    // back an existing integer override, so a free route can never claim
+    // recorded evidence without the override it is evidence for.
+    validateModelSpeedMeasurements(provider.id, provider.modelSpeedMeasurements, provider.modelSpeedOverrides, modelIDs);
     // Reasoning-effort mappings may only reference exact declared model ids and
     // legal levels, and every mapping entry must be an object. References/values
     // are validated here so a registration never stages an unusable mapping.

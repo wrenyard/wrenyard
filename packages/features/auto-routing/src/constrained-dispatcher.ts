@@ -1,10 +1,24 @@
-import { type Catalog, resolveModelSpeed } from '@wrenyard/providers/catalog';
+import { type Catalog, type ModelDefinition, explicitFreeAutoEligibility, resolveModelSpeed, routingReferencePriceOf } from '@wrenyard/providers/catalog';
 import type { DispatchCandidate, LocalSpeedSample, DispatchPlan } from '@wrenyard/providers/base';
 import type { TaskDispatchRequirements, ConstrainedDispatch, DispatchResolution } from './types.ts';
 import { INTELLIGENCE_TIERS, type IntelligenceTier } from '@wrenyard/models';
 const INTELLIGENCE_ORDER = Object.fromEntries(INTELLIGENCE_TIERS.map((tier, rank) => [tier, rank])) as Record<IntelligenceTier, number>;
 export function isDynamicFast(tps: number): boolean {
   return tps > 80;
+}
+/** Comparable reference output price used only to ORDER routed candidates.
+ *  Explicit free vs priced, decided by the kind: a priced route and an
+ *  explicitly free route that declares a reference price both compare by that
+ *  declared price, while the bare free marker and a paid route with no declared
+ *  price have no comparable price. Free status is decided by the kind and is
+ *  never inferred from a zero price. */
+function comparableReferencePrice(model: ModelDefinition): number | undefined {
+  const reference = routingReferencePriceOf(model);
+  if (reference === undefined)
+    return undefined;
+  if (reference.kind === 'free')
+    return reference.outputUsdPerMillion;
+  return reference.outputUsdPerMillion;
 }
 /** Resolves provider catalog candidates against task constraints before dispatch. */
 export class ConstrainedDispatcher {
@@ -57,6 +71,13 @@ export class ConstrainedDispatcher {
       // its own id, never by a glm-5.3 exclusion.
       if (excludedModels.has(plan.model))
         continue;
+      // Explicit-free automatic eligibility, decided by the shared helper and
+      // applied in addition to every gate below: a free offering is admitted
+      // only with a mainstream canonical identity plus code-recorded measured
+      // speed provenance. Every other free offering stays chat-picker-only.
+      // Non-free routes pass unchanged.
+      if (!explicitFreeAutoEligibility(provider, modelDef).eligible)
+        continue;
       if (requirements.inputTokens !== undefined &&
         (!Number.isFinite(modelDef.contextWindow) || requirements.inputTokens + (modelDef.maxOutputTokens ?? 0) > modelDef.contextWindow!))
         continue;
@@ -83,14 +104,21 @@ export class ConstrainedDispatcher {
       }
       // List-price constraint; account-specific free routing is evaluated by the routing policy.
       if (requirements.maxOutputUsdPerMillion !== undefined) {
-        // Reference output price: an explicitly free model has a zero reference
-        // output price (branched on the explicit free flag, never inferred from
-        // a price of 0). No declared price on a non-free model means the ceiling
-        // cannot be checked: the candidate is ineligible for this constraint,
-        // never admitted as if priced at zero.
-        const outputPrice = modelDef.free === true ? 0 : modelDef.pricing?.[2];
-        if (outputPrice === undefined || outputPrice > requirements.maxOutputUsdPerMillion)
+        // Explicit free vs priced. A paid route with no declared price cannot be
+        // checked and is ineligible, never admitted as if priced at zero. An
+        // explicitly free route (kind 'free') is admitted; when it also declares a
+        // reference price that price is capped exactly like a priced route. Free
+        // status comes only from the explicit kind, never from a zero price.
+        const reference = routingReferencePriceOf(modelDef);
+        if (reference === undefined)
           continue;
+        if (reference.kind === 'free') {
+          if (reference.outputUsdPerMillion !== undefined && reference.outputUsdPerMillion > requirements.maxOutputUsdPerMillion)
+            continue;
+        }
+        else if (reference.outputUsdPerMillion > requirements.maxOutputUsdPerMillion) {
+          continue;
+        }
       }
       // Speed evidence tiers in exact precedence order via the shared resolver:
       // the first usable exact-provider/model local 31-day TPS sample,
@@ -154,12 +182,15 @@ export class ConstrainedDispatcher {
       const bMeets = expected !== undefined && expected > 0 && b.speed.tps >= expected;
       if (aMeets !== bMeets)
         return aMeets ? -1 : 1;
-      // Lower reference output price first. An explicitly free model has a zero
-      // reference output price (branched on the explicit free flag). A non-free
-      // model with no declared price has no comparable price, so it orders after
-      // every priced model instead of being treated as the cheapest (zero).
-      const pa = a.model.free === true ? 0 : a.model.pricing?.[2];
-      const pb = b.model.free === true ? 0 : b.model.pricing?.[2];
+      // Lower reference output price first. Explicit free vs priced: a priced
+      // route and an explicitly free route that declares a reference price both
+      // order by that declared reference price. A price-less paid route and an
+      // explicitly free route with no declared reference have no comparable
+      // price, so both order after every comparably priced route instead of being
+      // treated as the cheapest (zero). Free status is never inferred from a zero
+      // price.
+      const pa = comparableReferencePrice(a.model);
+      const pb = comparableReferencePrice(b.model);
       if (pa !== pb) {
         if (pa === undefined)
           return 1;

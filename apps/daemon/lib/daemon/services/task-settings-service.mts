@@ -2,6 +2,7 @@ import { deepSeekAutomaticPricingOf, withDeepSeekAttemptPricing, toAutomaticCand
 import { assessRequiredQuota } from '@wrenyard/auto-routing';
 import { createHash } from 'node:crypto'
 import { INTELLIGENCE_ORDER, type IntelligenceTier, type ReasoningEffort } from '@wrenyard/providers/catalog';
+import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { rankAutoRoutingCandidates, type RankedCandidate } from '@wrenyard/auto-routing';
 import type { CandidateInput } from '@wrenyard/auto-routing';
 import {
@@ -269,6 +270,14 @@ export interface TaskSettingsServiceOptions {
    *  preview takes one immutable snapshot per request; every other selection
    *  call takes its own. */
   quotaSnapshots?: AutoRoutingQuotaSnapshotService
+  /** Optional in-memory Gateway route circuit status keyed by public
+   *  `provider/model`, using the shared Gateway instance and callable semantics
+   *  already consumed by session and auxiliary routing. Only Gateway-backed
+   *  candidates consult it: an open route, or a half-open route whose next
+   *  recovery probe is still in the future, is not admitted, while a due
+   *  half-open route is (the Gateway owns the bounded probe/lease). Native
+   *  (non-Gateway) routes are never gated on Gateway faults. */
+  routeStatus?: (model: string) => GatewayRouteStatus | undefined
   /** Injectable request clock for deterministic pricing snapshots. */
   now?: () => number
 }
@@ -653,6 +662,7 @@ export class TaskSettingsService {
   private readonly nativeProviderReadiness?: TaskSettingsNativeProviderReadinessCallback
   private readonly clientReadiness?: TaskSettingsClientReadinessCallback
   private readonly quotaSnapshots?: AutoRoutingQuotaSnapshotService
+  private readonly routeStatus?: (model: string) => GatewayRouteStatus | undefined
   private readonly now: () => number
 
   constructor(options: TaskSettingsServiceOptions) {
@@ -666,6 +676,7 @@ export class TaskSettingsService {
     this.nativeProviderReadiness = options.nativeProviderReadiness
     this.clientReadiness = options.clientReadiness
     this.quotaSnapshots = options.quotaSnapshots
+    this.routeStatus = options.routeStatus
     this.now = options.now ?? (() => Date.now())
   }
 
@@ -1801,6 +1812,18 @@ export class TaskSettingsService {
         )
       }
     }
+    // Explicit execution availability observes the shared Gateway route circuit
+    // for Gateway-backed targets: an open route, or a half-open route whose
+    // recovery probe is not yet due, is unavailable. A native target never
+    // consults Gateway faults, and a due half-open route remains available so
+    // the Gateway's own bounded probe can recover it.
+    if (triple.mode === 'gateway' && !this.gatewayRouteAdmitted(triple.provider, triple.model, this.now())) {
+      throw new TaskSettingsRuntimeUnavailableError(
+        taskId,
+        runtimeId,
+        `gateway route '${triple.provider}/${triple.model}' is not currently available`,
+      )
+    }
     if (this.runtimeAvailability) {
       const availability = await this.runtimeAvailability(triple)
       if (!availability.available) {
@@ -1851,6 +1874,23 @@ export class TaskSettingsService {
     const state = sample.clientsById[client]
     if (state === undefined) return false
     return state.enabled && state.installed
+  }
+
+  /** Gateway route circuit admission for one public `provider/model`. An open
+   *  route is rejected, and a half-open route is admitted only once its next
+   *  recovery probe is due; the Gateway itself owns the bounded probe lease and
+   *  any recovery, so no state, timer, or second circuit store is created here.
+   *  A route with no status, or a healthy/closed one, is admitted unchanged.
+   *  Only Gateway-backed candidates consult this; native routes never do. */
+  private gatewayRouteAdmitted(provider: string, model: string, nowMs: number): boolean {
+    const status = this.routeStatus?.(`${provider}/${model}`)
+    if (status === undefined) return true
+    if (status.phase === 'open') return false
+    if (status.phase !== 'half_open') return true
+    const nextProbeAt = status.nextProbeAt
+    if (nextProbeAt === undefined) return true
+    const due = Date.parse(nextProbeAt)
+    return !Number.isFinite(due) || due <= nowMs
   }
 
   /** Non-billable live provider credential/route readiness for one canonical
@@ -1975,7 +2015,7 @@ export class TaskSettingsService {
     // order below.
     type ProbePlanEntry =
       | { choice: TaskDispatchChoice; availability: Promise<TaskSettingsProviderAvailability | undefined> }
-      | { choice: TaskDispatchChoice; eliminated: 'client' | 'blocked' }
+      | { choice: TaskDispatchChoice; eliminated: 'client' | 'blocked' | 'route' }
     const probePlan: ProbePlanEntry[] = []
     for (const choice of eligible.choices) {
       // Authoritative client gate: disabled or not-installed clients are
@@ -1988,6 +2028,15 @@ export class TaskSettingsService {
       if (blocked.has(choice.provider)) {
         // A determinate hard-blocked provider is a real quota gate.
         probePlan.push({ choice, eliminated: 'blocked' })
+        continue
+      }
+      // Gateway-backed candidates observe the shared route circuit: an open
+      // route, or a half-open route whose recovery probe is not yet due, is
+      // eliminated here. Native (non-Gateway) routes never consult Gateway
+      // faults, and a due half-open route stays admitted so the Gateway's own
+      // bounded probe can recover it.
+      if (choice.mode === 'gateway' && !this.gatewayRouteAdmitted(choice.provider, choice.model, nowMs)) {
+        probePlan.push({ choice, eliminated: 'route' })
         continue
       }
       const availability = this.previewRuntimeAvailability(
@@ -2003,7 +2052,7 @@ export class TaskSettingsService {
     }
     for (const entry of probePlan) {
       if ('eliminated' in entry) {
-        if (entry.eliminated === 'client') {
+        if (entry.eliminated === 'client' || entry.eliminated === 'route') {
           eliminations.push({ code: 'no_available_provider' })
           if (trace !== undefined) trace.readinessRejectedIds.push(entry.choice.exactAgentRuntime)
         } else {
@@ -2040,10 +2089,12 @@ export class TaskSettingsService {
       if (pricing !== undefined) deepSeekPricing.set(entry.choice.exactAgentRuntime, pricing)
     }
     // Current choices originate from validated Catalog prices; optional metadata
-    // fields only describe older persisted dispatch records.
+    // fields only describe older persisted dispatch records. A missing reference
+    // (explicit free route with no declared price) is passed through as undefined
+    // so effectiveRoutingCap keeps its finite-only default semantics.
     const finiteReferences = collapsed
       .map((entry) => deepSeekPricing.get(entry.choice.exactAgentRuntime)?.safetyOutputUsdPerM
-        ?? entry.choice.reference_pricing.output_usd_per_million!)
+        ?? entry.choice.reference_pricing.output_usd_per_million)
     const capUsdPerM = effectiveRoutingCap(finiteReferences, caps)
 
     if (trace !== undefined) trace.capUsdPerMillion = capUsdPerM
@@ -2081,7 +2132,7 @@ export class TaskSettingsService {
       const candidate = toAutomaticCandidateInput(entry, context, pricing)
       if (candidate === null) {
         const referenceUsdPerM = pricing?.safetyOutputUsdPerM
-          ?? entry.choice.reference_pricing.output_usd_per_million!
+          ?? entry.choice.reference_pricing.output_usd_per_million
         eliminations.push(eliminationOf('intelligence_requirement', referenceUsdPerM))
         if (trace !== undefined) {
           trace.unscorable.push({ id: entry.choice.exactAgentRuntime, code: 'intelligence_requirement' })

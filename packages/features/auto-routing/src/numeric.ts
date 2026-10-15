@@ -16,8 +16,12 @@ export function clamp01(value: number): number {
 }
 /**
  * Interpolate the normalized price factor P in [0, 1] from PRICE_FACTOR_ANCHORS.
- * Non-positive or non-finite prices score P = 1 (free); prices at or above the
- * final anchor (>= 50) score P = 0; intermediate prices are linearly blended.
+ * A non-positive or non-finite price scores the maximum P = 1 (the cheapest
+ * anchor). That is a purely numeric ordering value and is NOT proof of free
+ * entitlement: zero-priced standard supply stays standard, and callers decide
+ * free status explicitly from the supply class, never from a price of zero.
+ * Prices at or above the final anchor (>= 50) score P = 0; intermediate prices
+ * are linearly blended.
  */
 export function interpolatePriceFactor(priceUsdPerM: number): number {
   if (!isFiniteNumber(priceUsdPerM) || priceUsdPerM <= 0)

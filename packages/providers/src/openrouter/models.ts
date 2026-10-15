@@ -33,6 +33,43 @@ export const definition = defineProvider({
     { ...model('google/gemma-4-31b-it:free', 262_144, 32_768, 'gemma-4-31b-it'), free: true, capabilities: ['text', 'image'], reasoningEfforts: REASONING_BASIC },
     { ...model('nvidia/nemotron-3-super-120b-a12b:free', 262_144, 235_929, 'nemotron-3-super-120b-a12b'), free: true, reasoningEfforts: ['default'] },
   ],
+  // Initial measured TPS, recorded only after real verification: measured on the
+  // installed daemon 1.0.65 from real session
+  // f42a6c7d-729b-461d-b148-4ff02e12133d. Sampler formula:
+  // TPS = streamTokens / (streamMs / 1000). These are short PONG /
+  // short reasoning-inclusive initial observations, not sustained text
+  // benchmarks, and they do not establish intelligence. See
+  // docs/free-mainstream-models.md.
+  // Catalog.validateSpeed requires a positive integer, so each stored value is
+  // the measured TPS floored; the exact measured value is kept in its comment.
+  modelSpeedOverrides: {
+    // measured 97.345 TPS, 2026-10-15T17:03:45.852Z, TTFT 1957 ms, floored to 97
+    'nvidia/nemotron-3.5-lightning:free': 97,
+    // measured 2.356 TPS, 2026-10-15T17:04:24.314Z, TTFT 9407 ms, floored to 2
+    'nvidia/nemotron-3-ultra-550b-a55b:free': 2,
+    // measured 33.659 TPS, 2026-10-15T17:04:28.646Z, TTFT 2002 ms, floored to 33
+    'nvidia/nemotron-3-super-120b-a12b:free': 33,
+  },
+  // Provenance of the measured override above: the initial measured TPS and
+  // when/how it was measured. These never replace the integer override, which
+  // stays the routing fact.
+  modelSpeedMeasurements: {
+    'nvidia/nemotron-3.5-lightning:free': {
+      initialTps: 97.345,
+      measuredAt: '2026-10-15T17:03:45.852Z',
+      method: 'installed daemon 1.0.65 session sampler, streamTokens / (streamMs / 1000) over a short reasoning-inclusive PONG observation (not a sustained benchmark)',
+    },
+    'nvidia/nemotron-3-ultra-550b-a55b:free': {
+      initialTps: 2.356,
+      measuredAt: '2026-10-15T17:04:24.314Z',
+      method: 'installed daemon 1.0.65 session sampler, streamTokens / (streamMs / 1000) over a short reasoning-inclusive PONG observation (not a sustained benchmark)',
+    },
+    'nvidia/nemotron-3-super-120b-a12b:free': {
+      initialTps: 33.659,
+      measuredAt: '2026-10-15T17:04:28.646Z',
+      method: 'installed daemon 1.0.65 session sampler, streamTokens / (streamMs / 1000) over a short reasoning-inclusive PONG observation (not a sustained benchmark)',
+    },
+  },
   protocols: [openAI('https://openrouter.ai/api/v1/chat/completions')],
   // OpenRouter free requests must not carry a model fallback list or route
   // object, which would let the client select a paid model. The exact free

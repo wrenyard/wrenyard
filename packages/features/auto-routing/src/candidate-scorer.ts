@@ -10,10 +10,15 @@ export class CandidateScorer {
     const expectedRank = candidate.intelligenceExpectedRank;
     // Equal mean of pool scores, without efficiency bonuses or unknown floors.
     const quotaQuality = clamp01(headroom);
-    // Normalized price factor P in [0, 1] from the fixed continuous price anchors
-    // (interpolatePriceFactor): cheaper per-M output price scores higher; price
-    // >= 50 scores 0. Confirmed-free routing already zeroed routingPriceUsdPerM.
-    const priceFactor = interpolatePriceFactor(routingPriceUsdPerM);
+    // Normalized price factor P in [0, 1]. Branch explicitly on the assessed
+    // supply class: an explicitly confirmed-free candidate scores the maximum
+    // free price factor, while every other candidate uses the fixed continuous
+    // price anchors (interpolatePriceFactor) where cheaper per-M output price
+    // scores higher and price >= 50 scores 0. Free status is taken from the
+    // confirmed-free supply class, never inferred from a numeric zero price.
+    const priceFactor = supply.supplyClass === 'confirmed_free'
+      ? 1
+      : interpolatePriceFactor(routingPriceUsdPerM);
     // Normalized speed factor S in [0, 1]: effective TPS saturated at the global
     // base plus the task's expected TPS. A candidate below the expectation scores
     // proportionally less and one above it keeps gaining until saturation, so the

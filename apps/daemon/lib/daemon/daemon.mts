@@ -745,6 +745,11 @@ async function createForemanDaemonResources(
       resolver: taskDispatchResolver,
       aliases: runtimeAliasService,
       quotaSnapshots: autoRoutingQuotaSnapshots,
+      // The same shared Gateway instance and route-status callable already used
+      // by session and auxiliary routing: Task automatic candidates and explicit
+      // availability observe the one in-memory route circuit, with no second
+      // Gateway or duplicated circuit state.
+      routeStatus: model => gateway.routeStatus(model),
       nativeProviderReadiness: loadNativeProviderReadiness,
       // The production gate uses each registered client's own inspect state for
       // ALL clients; a client must be enabled AND installed to be admitted.

@@ -30,9 +30,16 @@ export interface AutomaticSelectionContext {
   intelligenceExpectedRank: number | undefined
 }
 
-/** Task and auxiliary selection share the same cap and normalization rules. */
-export function effectiveRoutingCap(references: readonly number[], caps: readonly number[]): number {
-  return caps.length > 0 ? Math.min(...caps) : Math.max(...references);
+/** Task and auxiliary selection share the same cap and normalization rules.
+ *  Callers may pass a missing routing-only reference price (undefined) for an
+ *  explicit free offering; those absent values must not turn the default cap
+ *  into NaN/Infinity. Only finite references participate, and a pool whose
+ *  every reference is absent falls back to a zero routing cap, which admits the
+ *  zero-reference free candidates and rejects anything above zero. */
+export function effectiveRoutingCap(references: readonly (number | null | undefined)[], caps: readonly number[]): number {
+  if (caps.length > 0) return Math.min(...caps)
+  const finite = references.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  return finite.length > 0 ? Math.max(...finite) : 0
 }
 
 const DEEPSEEK_SAFETY_LOOKAHEAD_MS = 7 * 24 * 60 * 60 * 1_000
@@ -136,10 +143,21 @@ export function toAutomaticCandidateInput(
   deepSeekPricing?: DeepSeekAutomaticPricing,
 ): CandidateInput | null {
   const choice = entry.choice
-  const referenceUsdPerM = deepSeekPricing?.safetyOutputUsdPerM
-    ?? choice.reference_pricing.output_usd_per_million!
   const intelligenceRank = INTELLIGENCE_ORDER[choice.intelligence as keyof typeof INTELLIGENCE_ORDER]
   if (intelligenceRank === undefined || !Number.isFinite(intelligenceRank)) return null
+  const freeFact = entry.availability?.freeSupply
+  // Authenticated confirmed-free supply (`freeFact.confirmedFree === true`) is
+  // the only evidence that lets a free route with no published price reach
+  // ranking: the routing-only reference becomes a numeric zero, used solely as
+  // authenticated confirmed-free routing evidence, never a catalog, picker,
+  // Gateway or billing price. A declared reference price is preserved verbatim.
+  // A missing price without confirmed-free evidence is treated as paid/unknown
+  // and stays unresolved (null) rather than asserting an undefined reference.
+  const declaredReferenceUsdPerM = choice.reference_pricing.output_usd_per_million
+  const referenceUsdPerM = deepSeekPricing?.safetyOutputUsdPerM
+    ?? declaredReferenceUsdPerM
+    ?? (freeFact?.confirmedFree === true ? 0 : undefined)
+  if (referenceUsdPerM === undefined || !Number.isFinite(referenceUsdPerM)) return null
   const quotaEntry = context.snapshot?.entries.find(
     (candidate) => candidate.providerId === choice.provider && candidate.modelId === choice.model,
   ) ?? context.snapshot?.entries.find(
@@ -154,7 +172,6 @@ export function toAutomaticCandidateInput(
   const requiredQuota = quotaEntry !== undefined
     ? quotaEntry.requiredQuota
     : missingEntryRequiredQuota(choice.provider, choice.model)
-  const freeFact = entry.availability?.freeSupply
   // Fixed base-pool automatic-routing discount, resolved from the bound pools.
   // The conservative rate is the maximum across pools and is applied ONCE, never
   // multiplied/compounded across multiple 5h/7d pools. A balance pool is always
@@ -179,7 +196,7 @@ export function toAutomaticCandidateInput(
     intelligenceExpectedRank: context.intelligenceExpectedRank,
     requiredQuota,
     ...(deepSeekPricing !== undefined ? { marginalPrice: deepSeekPricing.marginalPrice } : {}),
-    confirmedFreeSupply: freeFact
+    confirmedFreeSupply: freeFact?.confirmedFree === true
       ? {
           kind: 'confirmed_free',
           appliesFromMs: context.nowMs,
