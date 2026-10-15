@@ -207,9 +207,11 @@ export function TitleBar() {
             ref={(element) => registerTitleBarSlot(id, 'auxiliary', element)}
           />
         ))}
-        <TitleBarButton label="迷你模式" tooltip="迷你模式" onClick={() => openMiniCard(getCurrentSession())}>
-          <PictureInPicture2 />
-        </TitleBarButton>
+        {page === 'session' && (
+          <TitleBarButton label="迷你模式" tooltip="迷你模式" onClick={() => openMiniCard(getCurrentSession())}>
+            <PictureInPicture2 />
+          </TitleBarButton>
+        )}
       </div>
     </header>
   );

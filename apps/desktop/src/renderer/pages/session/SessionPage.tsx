@@ -15,6 +15,7 @@ import {
   useMessageScroller,
 } from '@/renderer/components/ui/message-scroller';
 import { Page, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
+import { useShellPage } from '@/renderer/lib/desktop';
 import { registerPageCommands } from '@/renderer/lib/commands';
 import { openMiniCard, restoreMain, setCurrentSession, useMiniMode } from '@/renderer/lib/mini';
 import { markSessionSeen } from '@/renderer/lib/session-seen';
@@ -78,6 +79,7 @@ function RunningDispatchTasks({ api, turns, setTasks }: {
 export function SessionPage() {
   const api = getSessionApi();
   const mini = useMiniMode();
+  const page = useShellPage();
   const queryClient = useQueryClient();
   const { state, selectSession, newDraft, sendMessage, deleteSession, renameSession, removePending, setTasks, clearError, interruptTurn, cancelTask } = useSessionController(api);
   const [view, setView] = useState<SessionView>(() => localStorage.getItem(VIEW_STORAGE_KEY) === 'transcript' ? 'transcript' : 'chat');
@@ -126,6 +128,7 @@ export function SessionPage() {
   // Cmd/Ctrl+Shift+M: the shell opens a card for the current session; a card
   // returns to the main window on the same session (a draft when there is none).
   useEffect(() => {
+    if (!mini && page !== 'session') return;
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey) || !event.shiftKey) return;
       if (event.key.toLowerCase() !== 'm') return;
@@ -135,7 +138,7 @@ export function SessionPage() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [mini, state.selectedId]);
+  }, [mini, page, state.selectedId]);
 
   // Cmd/Ctrl+K opens search while this Activity is visible; hide closes it.
   useEffect(() => {
