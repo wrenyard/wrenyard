@@ -198,6 +198,43 @@ duration, the exit status, and item counts and ids.
 basename, `env` values, request bodies, or their contents. Every log string
 passes the daemon's redaction utilities before it is stored.
 
+### Poll logging
+
+A poll whose result matches the previous successful poll — the same set of
+source ids with the same fingerprints — writes nothing at info level. It is
+reported only by one debug `poll.unchanged` row per hour at most:
+
+```text
+poll.unchanged  inbox unchanged for 57 polls since 2026-01-01T00:00:00.000Z
+```
+
+A poll whose result changed writes one info `poll.changed` row with its counts:
+
+```text
+poll.changed  inbox changed: 4 item(s), 1 new, 0 removed, 1 changed
+```
+
+The first poll after host start has no baseline, so it counts as a change. The
+Bot page hides routine rows by default (debug level, or `poll.ok`,
+`poll.unchanged`, `tick.skipped`, `notify.deferred`) behind the 显示例行日志
+toggle. Adapter errors keep their own logging: `adapter.error` rows, escalated
+once per code per hour.
+
+`bot.tick` forces a poll, but at most once per 30 s per bot. A tick inside that
+window still advances items; it just does not reach the adapter again, so a
+client that ticks on its own schedule cannot flood the log.
+
+### Cadence
+
+Both cadences come from the bot config's `cadence` section. A bot is polled
+every `cadence.pollMinutes` (the host's 10-minute default applies only to a bot
+with no usable config); the interval doubles while the bot is backing off or
+after a failed poll, up to one hour, and never drops below the configured value.
+The host runs a single timer at the smallest cadence a config may ask for (10 s)
+and advances each bot only once its own `cadence.tickSeconds` has elapsed, so one
+slow bot does not hold the others back; the first pass after start always runs.
+An explicit `bot.tick` is not gated by that cadence.
+
 ## 7. Minimal adapter skeletons
 
 Adapt these to your own tools. Both read one JSON request from stdin and print
@@ -364,9 +401,10 @@ is what makes that measurable; watch these numbers on the Bot page:
 | Field | What a healthy 8-hour run looks like |
 | --- | --- |
 | `uptimeSince` | Older than the intended run window; it resets only when the host restarts. |
-| `ticks` | Keeps advancing at the configured `cadence.tickSeconds`. |
+| `ticks` | Timer passes that advanced **this bot**, so it keeps advancing at that bot's configured `cadence.tickSeconds`. |
+| `forcedTicks` | Passes started by an explicit `bot.tick`. They are not cadence ticks, so read `ticks` when checking that the host ticked on time. |
 | `lastTickAt` | Recent — a stale value means the host stopped ticking. |
-| `tickLagMs` (`last`, `max`) | `last` near the cadence, `max` bounded; a growing `max` is the first sign of overload. |
+| `tickLagMs` (`last`, `max`) | Measured against this bot's own due time: `last` near zero, `max` bounded; a growing `max` is the first sign of overload. |
 | `itemsByState` | Items move forward; a growing pile of items in one state shows where they stalled. |
 | `stepsFailed24h` | Zero, or explained by the log. |
 | `adapterErrors24h` | Zero, or explained by the log; repeated adapter errors are escalated once per code per hour. |

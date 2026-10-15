@@ -7,13 +7,15 @@ import type { StatusTone } from '@/renderer/components/status-badge';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { Button } from '@/renderer/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/renderer/components/ui/card';
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/renderer/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { Field, FieldLabel } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
+import { Label } from '@/renderer/components/ui/label';
 import { ScrollArea } from '@/renderer/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
+import { Switch } from '@/renderer/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/renderer/components/ui/table';
 import { Textarea } from '@/renderer/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
@@ -29,6 +31,7 @@ import type {
   BotItemAction,
   BotItemRecord,
   BotItemState,
+  BotLogRecord,
   BotMode,
   BotState,
 } from '@/shell-contract';
@@ -137,6 +140,20 @@ const ERROR_LABELS: Record<string, string> = {
 /** Longest raw error shown before it is elided; the tooltip keeps it whole. */
 const ERROR_TEXT_LIMIT = 80;
 
+/** Codes of the routine housekeeping rows the default log view hides. */
+const ROUTINE_LOG_CODES: ReadonlySet<string> = new Set([
+  'poll.ok',
+  'poll.unchanged',
+  'tick.skipped',
+  'notify.deferred',
+]);
+
+/** Routine rows are debug-level, or carry one of {@link ROUTINE_LOG_CODES}. */
+function isRoutineLogEntry(entry: BotLogRecord): boolean {
+  if (entry.level === 'debug') return true;
+  return entry.code !== undefined && ROUTINE_LOG_CODES.has(entry.code);
+}
+
 /** Known error text in Chinese, else the raw text truncated to {@link ERROR_TEXT_LIMIT}. */
 function describeError(error: string): string {
   const known = ERROR_LABELS[error.trim()];
@@ -194,11 +211,18 @@ export function BotPage() {
   const [configPath, setConfigPath] = useState('');
   const [mode, setMode] = useState<BotMode>('dryRun');
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [showRoutineLog, setShowRoutineLog] = useState(false);
 
   const pipeline = items.data?.items ?? [];
   const decisions = pipeline.filter(
     (item) => item.state === 'parked' || TERMINAL_STATES.has(item.state),
   );
+
+  const routineLogCount = log.entries.filter(isRoutineLogEntry).length;
+  const hiddenLogCount = showRoutineLog ? 0 : routineLogCount;
+  const visibleLog = (showRoutineLog ? log.entries : log.entries.filter((entry) => !isRoutineLogEntry(entry)))
+    .slice()
+    .reverse();
 
   const connectionLine = connection.state === 'local'
     ? '本地守护进程'
@@ -682,12 +706,27 @@ export function BotPage() {
             <Card className="min-w-0">
               <CardHeader>
                 <CardTitle>日志</CardTitle>
+                <CardAction>
+                  <div className="flex items-center gap-2">
+                    {hiddenLogCount > 0 ? (
+                      <span className="text-xs text-muted-foreground">{`已隐藏 ${hiddenLogCount} 条例行日志`}</span>
+                    ) : null}
+                    <Label htmlFor="bot-show-routine-log">显示例行日志</Label>
+                    <Switch
+                      id="bot-show-routine-log"
+                      checked={showRoutineLog}
+                      onCheckedChange={(checked) => setShowRoutineLog(checked)}
+                    />
+                  </div>
+                </CardAction>
               </CardHeader>
               <CardContent>
                 {log.query.isError ? (
                   <QueryError query={log.query} title="日志" />
                 ) : log.entries.length === 0 ? (
                   <p className="text-sm text-muted-foreground">暂无日志。</p>
+                ) : visibleLog.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">仅剩例行日志，打开「显示例行日志」可查看。</p>
                 ) : (
                   <ScrollArea className="h-[480px]">
                     <Table>
@@ -701,7 +740,7 @@ export function BotPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {[...log.entries].reverse().map((entry) => (
+                        {visibleLog.map((entry) => (
                           <TableRow key={entry.seq}>
                             <TableCell className="text-muted-foreground tabular-nums">
                               <Timestamp value={entry.at} precision="second" />

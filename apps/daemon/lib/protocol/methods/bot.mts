@@ -185,7 +185,10 @@ export interface BotLoad {
 export interface BotHealth {
   /** ISO timestamp the host started serving this bot. */
   uptimeSince: string
+  /** Cadence (timer) passes only, so the number tracks the configured cadence. */
   ticks: number
+  /** Passes an explicit `bot.tick` asked for; never counted as cadence ticks. */
+  forcedTicks: number
   lastTickAt?: string
   tickLagMs: BotTickLag
   itemsByState: Record<string, number>
@@ -395,7 +398,7 @@ const botLoadSchema = {
 const botHealthSchema = {
   type: 'object',
   required: [
-    'uptimeSince', 'ticks', 'tickLagMs', 'itemsByState',
+    'uptimeSince', 'ticks', 'forcedTicks', 'tickLagMs', 'itemsByState',
     'stepsFailed24h', 'adapterErrors24h', 'escalations24h',
     'host', 'components', 'load',
   ],
@@ -403,6 +406,7 @@ const botHealthSchema = {
   properties: {
     uptimeSince: { type: 'string', minLength: 1 },
     ticks: { type: 'integer', minimum: 0 },
+    forcedTicks: { type: 'integer', minimum: 0 },
     lastTickAt: { type: 'string', minLength: 1 },
     tickLagMs: {
       type: 'object', required: ['last', 'max'], additionalProperties: false,

@@ -1506,6 +1506,8 @@ export interface BotLoad {
 export interface BotHealth {
   uptimeSince: string;
   ticks: number;
+  /** `bot.tick` passes, which are not cadence ticks; absent from older daemons. */
+  forcedTicks?: number;
   lastTickAt?: string;
   tickLagMs: BotTickLag;
   itemsByState: Record<string, number>;

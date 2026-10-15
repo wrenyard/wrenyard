@@ -74,12 +74,30 @@ import {
 /** Diagnostic sink; wired to the daemon log by the caller. */
 export type BotLog = (level: 'info' | 'warn' | 'error', message: string, meta?: unknown) => void
 
-/** How often the host advances items and runs its watchdogs. */
+/**
+ * Per-bot tick cadence used when a bot has no usable config; a config's
+ * `cadence.tickSeconds` (default 60 s) overrides it.
+ */
 const DEFAULT_TICK_MS = 60_000
-/** How often an inbox poll is due when adapters exist. */
+/**
+ * Smallest tick cadence a bot config may ask for, and therefore the interval of
+ * the single host timer: each bot is only advanced once its own cadence has
+ * elapsed since its last cadence pass.
+ */
+const MIN_TICK_MS = 10_000
+/** Fallback inbox poll cadence for a bot whose config sets no poll interval. */
 const DEFAULT_POLL_MS = 10 * 60_000
 /** Ceiling the poll interval backs off to after repeated adapter failures. */
 const MAX_POLL_BACKOFF_MS = 60 * 60_000
+/**
+ * Minimum spacing between two `bot.tick`-forced inbox polls for one bot. A
+ * forced poll inside this window is skipped and the pass falls back to the
+ * cadence, so a client that ticks on its own schedule cannot flood the log or
+ * hammer the adapter.
+ */
+const FORCED_POLL_MIN_INTERVAL_MS = 30_000
+/** Rate limit for the one debug row that reports a run of unchanged polls. */
+const UNCHANGED_POLL_LOG_INTERVAL_MS = 60 * 60_000
 const DAY_MS = 24 * 60 * 60 * 1_000
 /** Consecutive adapter failures before one escalation is raised. */
 const ADAPTER_ERROR_ESCALATION_THRESHOLD = 3
@@ -243,6 +261,19 @@ export interface BotStepHandler {
   applyTaskResult?: (context: BotStepContext, output: unknown) => Promise<BotStepResult>
 }
 
+/**
+ * Per-bot tick bookkeeping reported by `bot.health`: `ticks` counts the timer
+ * passes that actually advanced this bot, `forcedTicks` the passes a client
+ * asked for with `bot.tick`, and the lag is measured against the bot's own due
+ * time so one busy bot cannot distort another bot's numbers.
+ */
+export interface BotTickStats {
+  ticks: number
+  forcedTicks: number
+  lastLagMs: number
+  maxLagMs: number
+}
+
 export interface CreateBotHostOptions {
   db: ForemanDatabase
   /** The workspace root this host serves; another root's bots are never ticked. */
@@ -251,10 +282,22 @@ export interface CreateBotHostOptions {
   session: Pick<Session, 'createSession' | 'listSessions' | 'send' | 'readLedger'>
   /** Project manager used for the worktree, merge and push steps. */
   projectManager?: ProjectManager
-  /** Tick cadence in milliseconds; defaults to 60 s. */
+  /**
+   * Host timer interval in milliseconds; defaults to the smallest cadence a
+   * config may ask for ({@link MIN_TICK_MS}). The timer never advances a bot
+   * before that bot's own `cadence.tickSeconds` has elapsed.
+   */
   tickMs?: number
-  /** Inbox poll cadence in milliseconds; defaults to 10 min. */
+  /**
+   * Fallback inbox poll cadence in milliseconds, used for a bot whose config
+   * sets no `cadence.pollMinutes`; defaults to 10 min.
+   */
   pollMs?: number
+  /**
+   * Clock the host reads for its cadence bookkeeping and tick lag; defaults to
+   * `Date.now`. A test injects it to advance a cadence without waiting.
+   */
+  now?: () => number
   /**
    * Live daemon execution load, read from the supervisor or the database with
    * no IPC round trip. It backs off new dispatch and task starts while the
@@ -302,7 +345,7 @@ export interface BotHost {
   readonly store: BotStore
   /** Load and prepare without reconciling or arming the timer (hot-switch staging). */
   prepare(): Promise<void>
-  /** Reconcile pending steps once, then tick every 60 s. */
+  /** Reconcile pending steps once, then tick on the host timer. */
   start(): Promise<void>
   stop(): void
   /** True while a tick or a reconciliation is in flight. */
@@ -398,8 +441,9 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   const { db, workspaceRoot, session, log, canRun } = options
   const store = createBotStore({ db, workspaceRoot })
   const projectManager = options.projectManager ?? new ProjectManager({ workspaceRoot })
-  const tickMs = options.tickMs ?? DEFAULT_TICK_MS
+  const timerMs = options.tickMs ?? MIN_TICK_MS
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS
+  const clock = options.now ?? Date.now
 
   let timer: ReturnType<typeof setInterval> | undefined
   let stopped = false
@@ -408,13 +452,17 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   let inFlightTicks = 0
   /** Tail of the serialized tick chain; every tick path joins it, never races it. */
   let tickChain: Promise<void> = Promise.resolve()
-  /** Epoch ms the next scheduled tick was due; used to measure tick lag. */
+  /** Epoch ms the next scheduled tick was due. */
   let nextTickAt = 0
   let startedAt = new Date().toISOString()
-  let tickCount = 0
-  let lastTickAt: string | undefined
-  let lastTickLagMs = 0
-  let maxTickLagMs = 0
+  /**
+   * Epoch ms each bot was last advanced by a cadence pass. A `bot.tick` pass is
+   * forced and does not touch this, so the counters keep measuring the host's
+   * own tick instead of an eager client's.
+   */
+  const lastBotCadenceAt = new Map<string, number>()
+  /** Per-bot cadence counters and lag, so health describes one bot. */
+  const botTickStats = new Map<string, BotTickStats>()
   /** `itemId:kind` keys already reported as unavailable, so the log stays once-per-item. */
   const unavailableLogged = new Set<string>()
   /** Validated config per bot, keyed by content hash so an unchanged file is not re-parsed. */
@@ -423,6 +471,12 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   const loggedConfigIssues = new Set<string>()
   /** Current poll delay per bot; doubles on an adapter failure and resets on success. */
   const pollBackoff = new Map<string, number>()
+  /** Epoch ms of the last `bot.tick`-forced poll per bot. */
+  const forcedPollAt = new Map<string, number>()
+  /** Source id -> fingerprint of the last successful poll per bot. */
+  const pollSnapshots = new Map<string, Map<string, string>>()
+  /** Current run of unchanged polls per bot, for the rate-limited debug row. */
+  const unchangedPolls = new Map<string, { count: number; since: string; loggedAt?: number }>()
   /** Consecutive adapter failures per bot, for the escalation threshold. */
   const adapterErrorStreak = new Map<string, number>()
   /** Failed steps per item, for the escalation threshold. */
@@ -1426,10 +1480,11 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   /** Run every watchdog for one bot after its items were advanced. */
   async function runWatchdogs(bot: BotRecord, config: BotConfig | undefined, load: BotLoadProbe | undefined, probeError: string | undefined): Promise<void> {
     const thresholds = watchdogsFor(config)
+    const lastLagMs = botTickStats.get(bot.id)?.lastLagMs ?? 0
     if (probeError !== undefined) {
       await watchdog(bot, config, 'daemon', 'probe', `the load probe threw: ${probeError}`)
-    } else if (lastTickLagMs > thresholds.tickLagWarnMs) {
-      await watchdog(bot, config, 'daemon', 'lag', `tick lag ${lastTickLagMs} ms exceeds ${thresholds.tickLagWarnMs} ms`)
+    } else if (lastLagMs > thresholds.tickLagWarnMs) {
+      await watchdog(bot, config, 'daemon', 'lag', `tick lag ${lastLagMs} ms exceeds ${thresholds.tickLagWarnMs} ms`)
     }
     const queuedLimitMs = thresholds.queuedExecutionMinutes * 60_000
     if (load !== undefined && queuedLimitMs > 0 && (load.oldestQueuedMs ?? 0) > queuedLimitMs) {
@@ -2228,12 +2283,97 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
-   * Schedule the next poll: a failed poll or an active load back-off doubles the
-   * interval up to the existing maximum, and a healthy poll resets it.
+   * True when a `bot.tick` for this bot may force a poll now, and records the
+   * attempt. Forced polls are spaced by {@link FORCED_POLL_MIN_INTERVAL_MS} so
+   * repeated ticks fall back to the ordinary cadence instead of polling on
+   * every call.
    */
-  function scheduleNextPoll(bot: BotRecord, failed: boolean): void {
-    const current = pollBackoff.get(bot.id) ?? pollMs
-    const next = failed || isBackedOff(bot.id) ? Math.min(current * 2, MAX_POLL_BACKOFF_MS) : pollMs
+  function forcedPollAllowed(botId: string, nowMs: number): boolean {
+    const last = forcedPollAt.get(botId)
+    if (last !== undefined && nowMs - last < FORCED_POLL_MIN_INTERVAL_MS) return false
+    forcedPollAt.set(botId, nowMs)
+    return true
+  }
+
+  /** How one successful poll's source set differs from the previous one. */
+  function pollSnapshotDiff(
+    previous: Map<string, string> | undefined,
+    current: Map<string, string>,
+  ): { first: boolean; added: number; removed: number; changed: number } {
+    // The first poll after host start has no baseline: it always counts as a
+    // change, so the log states what the inbox held when the bot started.
+    if (previous === undefined) return { first: true, added: current.size, removed: 0, changed: 0 }
+    let added = 0
+    let changed = 0
+    for (const [id, fingerprint] of current) {
+      const before = previous.get(id)
+      if (before === undefined) added += 1
+      else if (before !== fingerprint) changed += 1
+    }
+    let removed = 0
+    for (const id of previous.keys()) if (!current.has(id)) removed += 1
+    return { first: false, added, removed, changed }
+  }
+
+  /**
+   * Record one successful poll. A result that differs from the previous
+   * successful poll (source id set or fingerprints) writes one info
+   * `poll.changed` row with its counts. A routine repeat writes nothing at info
+   * level: it is only reported by one debug `poll.unchanged` row per hour, so an
+   * 8-hour run does not bury verify/session/review events under poll noise.
+   */
+  function recordPollOutcome(bot: BotRecord, listed: readonly InboxItem[]): void {
+    const current = new Map(listed.map(item => [item.id, itemFingerprint(item)]))
+    const diff = pollSnapshotDiff(pollSnapshots.get(bot.id), current)
+    pollSnapshots.set(bot.id, current)
+    if (diff.first || diff.added > 0 || diff.removed > 0 || diff.changed > 0) {
+      unchangedPolls.delete(bot.id)
+      store.appendLog({
+        botId: bot.id,
+        level: 'info',
+        code: 'poll.changed',
+        message: `inbox changed: ${listed.length} item(s), ${diff.added} new, ${diff.removed} removed, ${diff.changed} changed`,
+      })
+      return
+    }
+    const nowMs = Date.now()
+    const run = unchangedPolls.get(bot.id) ?? { count: 0, since: nowIso() }
+    run.count += 1
+    if (run.loggedAt !== undefined && nowMs - run.loggedAt < UNCHANGED_POLL_LOG_INTERVAL_MS) {
+      unchangedPolls.set(bot.id, run)
+      return
+    }
+    run.loggedAt = nowMs
+    unchangedPolls.set(bot.id, run)
+    store.appendLog({
+      botId: bot.id,
+      level: 'debug',
+      code: 'poll.unchanged',
+      message: `inbox unchanged for ${run.count} polls since ${run.since}`,
+    })
+  }
+
+  /**
+   * Base poll interval for one bot: the bot config's `cadence.pollMinutes`, or
+   * the host default when the bot has no usable config.
+   */
+  function pollBaseMs(config: BotConfig | undefined): number {
+    const minutes = config?.cadence.pollMinutes
+    if (minutes === undefined || !Number.isFinite(minutes) || minutes <= 0) return pollMs
+    return minutes * 60_000
+  }
+
+  /**
+   * Schedule the next poll from the bot's configured cadence: a failed poll or
+   * an active load back-off doubles the interval up to the existing maximum,
+   * and a healthy poll resets it. It never falls below the configured base.
+   */
+  function scheduleNextPoll(bot: BotRecord, config: BotConfig | undefined, failed: boolean): void {
+    const base = pollBaseMs(config)
+    const current = pollBackoff.get(bot.id) ?? base
+    const next = failed || isBackedOff(bot.id)
+      ? Math.max(Math.min(current * 2, MAX_POLL_BACKOFF_MS), base)
+      : base
     pollBackoff.set(bot.id, next)
     store.updateBot(bot.id, { nextPollAt: new Date(Date.now() + next).toISOString() })
   }
@@ -2390,19 +2530,14 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       listed = (await inbox.list()).items
     } catch (error) {
       recordAdapterError(bot, config, config.inbox, 'list', error)
-      scheduleNextPoll(bot, true)
+      scheduleNextPoll(bot, config, true)
       return true
     }
     resetAdapterErrors(bot.id)
-    store.appendLog({
-      botId: bot.id,
-      level: 'info',
-      code: 'poll.ok',
-      message: `inbox poll returned ${listed.length} item(s) via ${adapterLabel(config.inbox)}`,
-    })
+    recordPollOutcome(bot, listed)
     applyInboxSnapshot(bot, config, listed)
     await confirmWithdrawals(bot, config, inbox, listed)
-    scheduleNextPoll(bot, false)
+    scheduleNextPoll(bot, config, false)
     return true
   }
 
@@ -2938,20 +3073,42 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     return botId === undefined ? store.listBots() : [store.getBot(botId)]
   }
 
+  /** This bot's cadence counters, created on first use. */
+  function tickStats(botId: string): BotTickStats {
+    const existing = botTickStats.get(botId)
+    if (existing !== undefined) return existing
+    const fresh: BotTickStats = { ticks: 0, forcedTicks: 0, lastLagMs: 0, maxLagMs: 0 }
+    botTickStats.set(botId, fresh)
+    return fresh
+  }
+
+  /**
+   * The tick cadence one bot asks for: its config's `cadence.tickSeconds`
+   * (minimum {@link MIN_TICK_MS}), or the default when it has no usable config.
+   */
+  function botCadenceMs(config: BotConfig | undefined): number {
+    const seconds = config?.cadence.tickSeconds
+    if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return DEFAULT_TICK_MS
+    return Math.max(seconds * 1_000, MIN_TICK_MS)
+  }
+
   /**
    * One tick pass: poll due inboxes, watch the sources already admitted, advance
    * items whose next step is due, then run the pending steps. Every tick path
    * (timer, start, public `bot.tick`) runs through {@link scheduleTick}, so two
    * passes are never in flight at once and each pass re-checks `stopped` and the
    * admission gate.
+   *
+   * The single host timer runs at the smallest cadence any config may ask for,
+   * so a pass only advances a bot whose own `cadence.tickSeconds` has elapsed
+   * since that bot's last cadence pass; the first pass after start always runs.
+   * A pass a client asked for with `bot.tick` is forced: it advances its bot
+   * immediately without disturbing the bot's cadence. `scheduledAt` marks a
+   * cadence timer pass, so health can report timed and forced passes separately.
    */
-  async function tickPass(scheduledAt?: number, botId?: string): Promise<void> {
+  async function tickPass(scheduledAt?: number, botId?: string, forced = false): Promise<void> {
     if (stopped || canRun?.() === false) return
-    const tickStartedAt = Date.now()
-    if (scheduledAt !== undefined) {
-      lastTickLagMs = Math.max(0, tickStartedAt - scheduledAt)
-      maxTickLagMs = Math.max(maxTickLagMs, lastTickLagMs)
-    }
+    const tickStartedAt = clock()
     // Read the daemon load once per pass: it gates new work for every bot.
     const probe = await probeLoad()
     for (const bot of tickTargets(botId)) {
@@ -2971,9 +3128,22 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       const load = await loadConfigForBot(bot)
       if (load.status === 'invalid') continue
       const config = load.status === 'ready' ? load.config : undefined
+      // The bot's own cadence gates a timer pass; a forced pass is never gated.
+      const cadenceMs = botCadenceMs(config)
+      const lastCadence = lastBotCadenceAt.get(bot.id)
+      const dueAt = lastCadence === undefined ? tickStartedAt : lastCadence + cadenceMs
+      if (!forced && lastCadence !== undefined && tickStartedAt < dueAt) continue
+      const stats = tickStats(bot.id)
+      if (scheduledAt !== undefined) {
+        // Lag is this bot's own due time, not the host timer's.
+        stats.lastLagMs = Math.max(0, tickStartedAt - dueAt)
+        stats.maxLagMs = Math.max(stats.maxLagMs, stats.lastLagMs)
+      }
       applyLoadBackoff(bot, probe.load, watchdogsFor(config))
-      // A named `bot.tick` forces a poll; the timer polls only when it is due.
-      const polled = config === undefined ? false : await pollBot(bot, config, botId !== undefined)
+      // A `bot.tick` forces a poll, but at most once per
+      // FORCED_POLL_MIN_INTERVAL_MS; every other pass polls only when due.
+      const force = forced && forcedPollAllowed(bot.id, tickStartedAt)
+      const polled = config === undefined ? false : await pollBot(bot, config, force)
       if (stopped) return
       for (const item of store.listItems(bot.id)) {
         if (stopped) return
@@ -2992,11 +3162,15 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         lastTickAt: nowIso(),
         ...(polled || fresh.nextPollAt !== undefined
           ? {}
-          : { nextPollAt: new Date(tickStartedAt + pollMs).toISOString() }),
+          : { nextPollAt: new Date(tickStartedAt + pollBaseMs(config)).toISOString() }),
       })
+      // Only a non-forced pass moves the bot's cadence clock, and only a timer
+      // pass counts as a cadence tick; a `bot.tick` pass is counted separately
+      // so an eager client cannot distort the endurance numbers.
+      if (forced) stats.forcedTicks += 1
+      else lastBotCadenceAt.set(bot.id, tickStartedAt)
+      if (scheduledAt !== undefined) stats.ticks += 1
     }
-    lastTickAt = nowIso()
-    tickCount += 1
   }
 
   async function prepareHost(): Promise<void> {
@@ -3013,15 +3187,15 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     // previous process ended is probed, never repeated.
     await reconcileAll()
     if (stopped) return
-    nextTickAt = Date.now() + tickMs
+    nextTickAt = Date.now() + timerMs
     timer = setInterval(() => {
       const scheduled = nextTickAt
-      nextTickAt += tickMs
+      nextTickAt += timerMs
       void scheduleTick(() => tickPass(scheduled))
-    }, tickMs)
+    }, timerMs)
     timer.unref()
     await scheduleTick(() => tickPass())
-    log?.('info', `bot host started for ${workspaceRoot} (tick every ${tickMs} ms)`)
+    log?.('info', `bot host started for ${workspaceRoot} (timer every ${timerMs} ms)`)
   }
 
   return {
@@ -3043,16 +3217,18 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     reconcile: reconcileAll,
     tick(botId?: string): Promise<void> {
       if (stopped) return Promise.resolve()
-      return scheduleTick(() => tickPass(undefined, botId))
+      return scheduleTick(() => tickPass(undefined, botId, true))
     },
     async health(botId: string): Promise<BotHealth> {
       const bot = store.getBot(botId)
       const counters = store.healthCounters(botId)
+      const stats = botTickStats.get(botId)
       return {
         uptimeSince: startedAt,
-        ticks: tickCount,
+        ticks: stats?.ticks ?? 0,
+        forcedTicks: stats?.forcedTicks ?? 0,
         ...(bot.lastTickAt === undefined ? {} : { lastTickAt: bot.lastTickAt }),
-        tickLagMs: { last: lastTickLagMs, max: maxTickLagMs },
+        tickLagMs: { last: stats?.lastLagMs ?? 0, max: stats?.maxLagMs ?? 0 },
         itemsByState: counters.itemsByState,
         stepsFailed24h: counters.stepsFailed24h,
         adapterErrors24h: counters.adapterErrors24h,

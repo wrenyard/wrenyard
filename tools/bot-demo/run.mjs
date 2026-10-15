@@ -42,7 +42,14 @@ const PROTOCOL_VERSION = 2
 const REQUEST_TIMEOUT_MS = 120_000
 const STARTUP_TIMEOUT_MS = 120_000
 const STOP_TIMEOUT_MS = 15_000
+/** How often the driver prints progress: bot.items/bot.health reads only. */
 const POLL_INTERVAL_MS = 2_000
+/**
+ * How often the driver asks the bot for a pass. `bot.tick` forces an inbox
+ * poll, so ticking every couple of seconds floods the bot log and makes the
+ * tick counters meaningless; the bot itself also throttles forced polls.
+ */
+const TICK_INTERVAL_MS = 15_000
 
 const SOURCE_ID = 'demo-1'
 const PROJECT_ID = 'demo'
@@ -499,8 +506,14 @@ async function main() {
     let item
     let health
 
+    // Ask for a pass only on the tick cadence; the progress print below still
+    // runs on every poll and only reads state.
+    let nextTickAt = 0
     while (Date.now() < deadline) {
-      await ipc.request('bot.tick', { botId })
+      if (Date.now() >= nextTickAt) {
+        nextTickAt = Date.now() + TICK_INTERVAL_MS
+        await ipc.request('bot.tick', { botId })
+      }
       const items = await ipc.request('bot.items', { botId })
       item = items.items.find((candidate) => candidate.sourceId === SOURCE_ID)
       const entries = await ipc.request('bot.log', { botId, afterSeq: lastSeq })
