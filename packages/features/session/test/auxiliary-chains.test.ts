@@ -5,11 +5,12 @@
  * local transport, so the bounded cross-route failover is exercised through the
  * real call chains without contacting any (paid) provider.
  */
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderDefinition } from '@wrenyard/providers/base';
 import {
+  AUXILIARY_IDLE_TIMEOUT_MS,
   createCallRunner,
   type CallRole,
   type CallRunner,
@@ -19,7 +20,7 @@ import {
 import { ROLE_REQUIREMENTS } from '../src/model/roles.ts';
 import { ModelError, type ModelRequest, type ModelResult, type ModelTransport } from '../src/transport/index.ts';
 import type { BuiltView, CallsPort } from '../src/ports.ts';
-import type { LedgerEventDraft } from '../src/ledger/store.ts';
+import type { LedgerEvent, LedgerEventDraft } from '../src/ledger/store.ts';
 import type { SessionRuntime, TurnRuntime } from '../src/turn/runtime.ts';
 import { ReplyWriter, REPLY_TOOL, type ReplyHost } from '../src/auxiliary/reply.ts';
 import { runDispatchAction } from '../src/auxiliary/dispatch.ts';
@@ -30,6 +31,41 @@ const providerStub = {
   id: 'test',
   models: MODEL_IDS.map((id) => ({ id, reasoningEfforts: ['none', 'low', 'medium', 'high'] })),
 } as unknown as ProviderDefinition;
+
+/** Let the runner reach its in-flight await before a test drives its timing. */
+const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * Drive a dispatch whose transport stalls to completion by advancing the fake
+ * clock one idle deadline at a time. Mock timers must already be enabled.
+ */
+async function driveToCompletion<T>(run: () => Promise<T>): Promise<T> {
+  let done = false;
+  const pending = run().then((value) => { done = true; return value; });
+  for (let round = 0; round < 64 && !done; round += 1) {
+    await flush();
+    mock.timers.tick(AUXILIARY_IDLE_TIMEOUT_MS);
+    await flush();
+  }
+  return await pending;
+}
+
+/** A minimal `turn.started` ledger event carrying `text`. */
+function compileEvent(seq: number, text: string): LedgerEvent {
+  return {
+    seq, at: '2026-01-01T00:00:00.000Z', type: 'turn.started', turn: 1,
+    id: `t${seq}`, text, model: { provider: 'test', model: 'alpha', reasoningEffort: 'low' },
+  } as unknown as LedgerEvent;
+}
+
+/** The plain text of a request's messages, exactly as the compile view sent it. */
+function requestText(request: ModelRequest): string {
+  return request.messages
+    .map((message) => (typeof message.content === 'string'
+      ? message.content
+      : message.content.map((part) => (part.type === 'text' ? part.text : '')).join('')))
+    .join('\n');
+}
 
 /** A chain runner over a fake local transport; every request is recorded as `role:model`. */
 function makeChain(options: {
@@ -332,8 +368,9 @@ test('task dispatch returns a readable failure when every route faults', async (
   });
   const { deps } = dispatchDeps(runner);
   const outcome = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
-  // Three compile attempts, each failing over across both routes.
-  assert.equal(calls.length, 6);
+  // Call-level failures are capped at COMPILE_CALL_FAILURES_MAX (2), so the
+  // compile spends at most 2 attempts × 2 routes = 4 transport calls.
+  assert.equal(calls.length, 4);
   assert.ok(calls.every((call) => call.startsWith('dispatch:')));
   assert.equal(outcome.status, 'failed');
   // The failure feedback names what was tried instead of silently doing nothing.
@@ -349,4 +386,97 @@ test('task dispatch returns a readable failure when every route faults', async (
       ['test/alpha', 'test/beta'],
     );
   }
+});
+
+test('dispatch stops after bounded call failures and never opens a run', async () => {
+  let calls = 0;
+  const { runner, events } = makeChain({
+    routes: ['test/alpha', 'test/beta'],
+    onCall: () => {
+      calls += 1;
+      // One server error in the middle; every other route call stalls with no
+      // output, so only the idle deadline can end it.
+      if (calls === 3) throw new ModelError('server exploded', { kind: 'server', status: 500 });
+      return new Promise<ModelResult>(() => {});
+    },
+  });
+  const { deps } = dispatchDeps(runner);
+  let createCalls = 0;
+  (deps.host as unknown as { createTaskRun: () => Promise<{ taskRunId: string }> }).createTaskRun = async () => {
+    createCalls += 1;
+    return { taskRunId: 'run-1' };
+  };
+
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const outcome = await driveToCompletion(() => runDispatchAction(deps, DISPATCH_ACTION, dispatchContext()))
+    .finally(() => mock.timers.reset());
+
+  assert.equal(outcome.status, 'failed');
+  assert.equal(createCalls, 0);
+  assert.ok(failedSpans(events).length >= 1);
+
+  // A second dispatch on the same deps still never opens a run.
+  mock.timers.enable({ apis: ['setTimeout'] });
+  await driveToCompletion(() => runDispatchAction(deps, DISPATCH_ACTION, dispatchContext()))
+    .finally(() => mock.timers.reset());
+  assert.equal(createCalls, 0);
+});
+
+test('the compile view keeps the intent focus and a bounded event tail', async () => {
+  const captured: ModelRequest[] = [];
+  const { runner } = makeChain({
+    routes: ['test/alpha'],
+    onCall: (request) => { captured.push(request); return compileResult(request.model); },
+  });
+  const { deps } = dispatchDeps(runner);
+  const events: LedgerEvent[] = [
+    compileEvent(0, 'please finish project p1 task t1'),
+    compileEvent(1, 'attention on project p1'),
+    ...Array.from({ length: 60 }, (_, index) => compileEvent(index + 2, `UNREL${index} ${'a'.repeat(1000)}`)),
+  ];
+  const ctx = { ...dispatchContext(), currentEvents: () => events };
+  const action: ParsedAction = { type: 'dispatch', intent: 'dispatch task t1 in project p1' };
+
+  const outcome = await runDispatchAction(deps, action, ctx);
+
+  assert.equal(outcome.status, 'done');
+  assert.equal(captured.length, 1);
+  const text = requestText(captured[0]!);
+  // The whole compile view stays far below the old unbounded size.
+  assert.ok(text.length < 40_000, `compile request text was ${text.length} chars`);
+  // The intent's own project and task are kept even though they are the oldest.
+  assert.ok(text.includes('project p1 task t1'));
+  // The oldest unrelated events are dropped once the tail budget is spent.
+  assert.equal(text.includes('UNREL0 '), false);
+});
+
+test('dispatch blocks a task whose capabilities no environment provides', async () => {
+  const { runner } = makeChain({
+    routes: ['test/alpha'],
+    onCall: (request) => compileResult(request.model),
+  });
+  const { deps } = dispatchDeps(runner);
+  let createCalls = 0;
+  const host = deps.host as unknown as {
+    describeTask: () => Promise<Record<string, unknown>>;
+    createTaskRun: () => Promise<{ taskRunId: string }>;
+  };
+  host.createTaskRun = async () => { createCalls += 1; return { taskRunId: 'run-1' }; };
+  const inputSchema = { type: 'object', properties: { x: { type: 'number' } }, required: ['x'], additionalProperties: false };
+
+  host.describeTask = async () => ({
+    description: 't1', source: 'builtin', inputSchema, requiredCapabilities: ['text', 'unreal'],
+  });
+  const blocked = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
+  assert.equal(blocked.status, 'failed');
+  assert.match(blocked.result, /no execution environment provides required capabilities: unreal/);
+  assert.equal(createCalls, 0);
+
+  // With only a capability the environment provides, the run is opened once.
+  host.describeTask = async () => ({
+    description: 't1', source: 'builtin', inputSchema, requiredCapabilities: ['image'],
+  });
+  const proceeded = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
+  assert.equal(proceeded.status, 'done');
+  assert.equal(createCalls, 1);
 });

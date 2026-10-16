@@ -184,7 +184,7 @@ function buildCompile(input: CompileViewInput): BuiltView {
       const inner = [
         tag('description', [], escapeBody(task.description)),
         tag('input-summary', [], escapeBody(task.inputSummary.join('; '))),
-        tag('input-schema', [], escapeBody(JSON.stringify(task.inputSchema, null, 2))),
+        tag('input-schema', [], escapeBody(JSON.stringify(task.inputSchema))),
       ].join('\n');
       return `<task id="${escapeAttr(task.id)}"${project} capabilities="${escapeAttr(capabilities)}">\n${inner}\n</task>`;
     }).join('\n');
@@ -200,6 +200,40 @@ function buildCompile(input: CompileViewInput): BuiltView {
     tag('intent', [], escapeBody(input.intent)),
   ].join('\n');
   return twoPartView(COMPILE_SYSTEM, tag('wy-compile', [], body), 'wy-compile');
+}
+
+/**
+ * Characters of the most recent rendered events kept in the compile view. The
+ * compiler only needs the tail of the conversation the one intent depends on,
+ * so the full ledger is never re-sent on every compile attempt.
+ */
+const COMPILE_CONTEXT_EVENT_CHARS = 24_000;
+
+/**
+ * The compile view's reference events: the events whose rendered text names
+ * something in `focus` — the project and task ids the one intent refers to —
+ * plus a bounded tail of the most recent other events. Walking newest to
+ * oldest, a focused event is always kept and every other event is kept only
+ * while the running total stays within {@link COMPILE_CONTEXT_EVENT_CHARS};
+ * events that render no text are skipped. The result is returned in
+ * chronological order, so the compiler still reads the conversation in order.
+ */
+function boundCompileEvents(events: readonly LedgerEvent[], focus: ReadonlySet<string>): LedgerEvent[] {
+  const tokens = [...focus];
+  let tailChars = 0;
+  const kept = new Set<number>();
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const text = renderEventText(events[index]!);
+    if (text === undefined) continue;
+    if (tokens.length > 0 && tokens.some((token) => text.includes(token))) {
+      kept.add(index);
+      continue;
+    }
+    if (tailChars + text.length > COMPILE_CONTEXT_EVENT_CHARS) continue;
+    tailChars += text.length;
+    kept.add(index);
+  }
+  return events.filter((_, index) => kept.has(index));
 }
 
 // ─── Dispatch action ────────────────────────────────────────────────────────
@@ -226,11 +260,21 @@ export async function runDispatchAction(
     });
   }
 
+  // The compile view keeps every event that names the project or task this one
+  // intent refers to, plus a bounded tail of the most recent conversation.
+  const focus = new Set<string>();
+  for (const project of ctx.projects) {
+    if (action.intent.includes(project.id)) focus.add(project.id);
+  }
+  for (const contract of contracts) {
+    if (action.intent.includes(contract.id)) focus.add(contract.id);
+  }
+
   const view = buildCompile({
     kind: 'dispatch',
     intent: action.intent,
     userText: ctx.userText,
-    events: ctx.currentEvents(),
+    events: boundCompileEvents(ctx.currentEvents(), focus),
     workspaceRoot: ctx.workspaceRoot,
     projects: ctx.projects.map((project) => ({
       id: project.id,
@@ -246,10 +290,18 @@ export async function runDispatchAction(
   let compiled: Extract<ReturnType<typeof checkCompiled>, { ok: true }> | undefined;
   let compileError = '';
   let attemptView = view;
+  // A call-level failure (timeout, server error) is not a correction the
+  // compiler can learn from, so it is counted separately and bounded on its
+  // own: after a bounded recovery pass there is no point burning the full
+  // attempt budget on repeated wipes. Schema-invalid output still gets the full
+  // COMPILE_ATTEMPTS corrections below.
+  let callFailures = 0;
   for (let attempt = 1; attempt <= COMPILE_ATTEMPTS && compiled === undefined && !ctx.signal.aborted; attempt += 1) {
     const outcome = await runCompileCall(deps, attemptView, ctx);
     if (!outcome.ok) {
       compileError = `compile call failed: ${outcome.error}`;
+      callFailures += 1;
+      if (callFailures >= COMPILE_CALL_FAILURES_MAX) break;
       continue;
     }
     const checked = checkCompiled(outcome.text, ctx, contracts);
@@ -269,6 +321,17 @@ export async function runDispatchAction(
   }
   if (compiled === undefined) return fail(compileError);
   const { parsed, project, taskId, worktree, effectiveInput } = compiled;
+
+  // Capability gate: a task whose contract requires a capability no execution
+  // environment provides must not open a run at all. Only the built-in text and
+  // image capabilities are serviceable today.
+  const resolvedContract = contracts.find((candidate) => candidate.id === taskId
+    && (candidate.project === undefined || candidate.project === project.id));
+  const unsupported = (resolvedContract?.requiredCapabilities ?? [])
+    .filter((capability) => capability !== 'text' && capability !== 'image');
+  if (unsupported.length > 0) {
+    return fail(`cannot dispatch task '${taskId}': no execution environment provides required capabilities: ${unsupported.join(', ')}`);
+  }
 
   const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
   const title = rawTitle !== '' && rawTitle.length <= 40 ? rawTitle : '';
@@ -578,6 +641,8 @@ type Waited = Awaited<ReturnType<ActionWorkflowDeps['host']['waitTaskRun']>>;
 type TaskContract = Awaited<ReturnType<ActionWorkflowDeps['host']['describeTask']>>;
 
 const COMPILE_ATTEMPTS = 3;
+/** At most this many call-level failures (timeout/server error) before giving up. */
+const COMPILE_CALL_FAILURES_MAX = 2;
 
 type CompileContract = ActionTaskInfo & { inputSchema: unknown; requiredCapabilities: readonly string[] };
 

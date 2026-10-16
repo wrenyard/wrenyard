@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderDefinition } from '@wrenyard/providers/base';
 import {
+  AUXILIARY_IDLE_TIMEOUT_MS,
   AUXILIARY_MAX_ROUTES,
-  AUXILIARY_PER_ROUTE_MS,
   AUXILIARY_TOTAL_BUDGET_MS,
   createCallRunner,
   ModelCallError,
@@ -290,24 +290,87 @@ test('a real transport failure is reported to the route health before failing ov
   assert.deepEqual(faults, [{ model: 'test/alpha', kind: 'transport' }]);
 });
 
-test('a total-deadline timeout is reported as a route fault', async () => {
+test('the finite total budget cuts the call without blaming the route', async () => {
   const faults: string[] = [];
-  const transport: ModelTransport = { complete: () => new Promise<ModelResult>(() => {}) };
+  // A route that keeps streaming progress never trips the idle deadline, so
+  // only the caller's finite total budget can end this call.
+  const transport: ModelTransport = {
+    complete: (request) => {
+      const progress = setInterval(() => request.onEvent?.({ type: 'activity' }), 7000);
+      request.signal.addEventListener('abort', () => clearInterval(progress), { once: true });
+      return new Promise<ModelResult>(() => {});
+    },
+  };
   const { runner } = makeRunner({
     transport,
     routes: ['test/alpha'],
     reportRouteFault: (_model, _attemptId, kind) => { faults.push(kind); },
   });
-  mock.timers.enable({ apis: ['setTimeout'] });
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  let error: unknown;
   try {
-    const pending = runner.run(callInput('reply', new AbortController().signal));
+    const pending = runner.run(callInput('reply', new AbortController().signal))
+      .then(() => undefined, (failure: unknown) => failure);
     await flush();
     mock.timers.tick(AUXILIARY_TOTAL_BUDGET_MS);
-    await assert.rejects(pending);
+    await flush();
+    error = await pending;
   } finally {
     mock.timers.reset();
   }
-  assert.deepEqual(faults, ['timeout']);
+  assert.ok(error instanceof ModelCallError);
+  // The caller's own budget is a local deadline, not the route's fault.
+  assert.match(error.message, /Call timed out after 60000 ms/);
+  assert.deepEqual(faults, []);
+  // No synthesized attempt record is attributed to the route either.
+  assert.equal((error.detail.metrics?.attempts ?? []).length, 0);
+});
+
+test('a silent route idle-stalls once, reports one timeout fault, and fails over', async () => {
+  const calls: string[] = [];
+  const faults: Array<{ model: string; kind: string }> = [];
+  const transport: ModelTransport = {
+    complete: (request) => {
+      calls.push(request.model);
+      if (request.model === 'test/alpha') return new Promise<ModelResult>(() => {});
+      return Promise.resolve(succeeded(request.model));
+    },
+  };
+  const { runner } = makeRunner({
+    transport,
+    routes: ['test/alpha', 'test/beta'],
+    reportRouteFault: (model, _attemptId, kind) => { faults.push({ model, kind }); },
+  });
+  mock.timers.enable({ apis: ['setTimeout'] });
+  let output: ModelResult | undefined;
+  try {
+    const pending = runner.run(callInput('reply', new AbortController().signal));
+    await flush();
+    // No output for the whole idle deadline is the one thing that may be
+    // reported as a route timeout.
+    mock.timers.tick(AUXILIARY_IDLE_TIMEOUT_MS);
+    await flush();
+    output = await pending;
+  } finally {
+    mock.timers.reset();
+  }
+  assert.equal(output?.model, 'test/beta');
+  assert.deepEqual(calls, ['test/alpha', 'test/beta']);
+  assert.deepEqual(faults, [{ model: 'test/alpha', kind: 'timeout' }]);
+});
+
+test('no auxiliary request carries a local deadline for a transport to blame', async () => {
+  const requests: ModelRequest[] = [];
+  const transport: ModelTransport = {
+    async complete(request) {
+      requests.push(request);
+      return succeeded(request.model);
+    },
+  };
+  const { runner } = makeRunner({ transport, routes: ['test/alpha', 'test/beta'] });
+  await runner.run(callInput('reply', new AbortController().signal));
+  assert.ok(requests.length >= 1);
+  assert.ok(requests.every((request) => request.deadlineAtMs === undefined));
 });
 
 test('an explicit user cancellation stays neutral and reports no route fault', async () => {
@@ -357,7 +420,9 @@ test('a cancellation between the span.started append and the loop finishes as ab
   await assert.rejects(runner.run(callInput('reply', controller.signal)), (error: unknown) => {
     assert.ok(error instanceof ModelCallError);
     assert.equal(error.detail.status, 'aborted');
-    assert.equal(error.detail.failure?.kind, 'aborted');
+    // The pre-loop cancellation is terminal `aborted` with the plain abort
+    // message and carries no structured route-failure fact.
+    assert.equal(error.message, 'Model call was aborted');
     return true;
   });
   assert.equal(events.filter((event) => event.type === 'span.finished').length, 1);
@@ -371,7 +436,7 @@ test('a timed-out attempt is recorded exactly once', async () => {
   try {
     const pending = runner.run(callInput('reply', new AbortController().signal));
     await flush();
-    mock.timers.tick(AUXILIARY_PER_ROUTE_MS);
+    mock.timers.tick(AUXILIARY_IDLE_TIMEOUT_MS);
     error = await pending.then(() => undefined, (failure: unknown) => failure);
   } finally {
     mock.timers.reset();
