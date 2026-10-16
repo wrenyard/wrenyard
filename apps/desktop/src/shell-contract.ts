@@ -1855,7 +1855,10 @@ export type OperationComponentAction =
   | 'authorize'
   | 'uninstall'
   | 'enable'
-  | 'disable';
+  | 'disable'
+  | 'login'
+  | 'save-login'
+  | 'clear-login';
 
 export type OperationComponentHint =
   | 'legacy-browser-mcp'
@@ -1898,6 +1901,12 @@ export interface OperationComponentSnapshot {
   hints: OperationComponentHint[];
   /** Actions currently offered for this snapshot; the UI renders only these. */
   actions: OperationComponentAction[];
+  /**
+   * Present only while a managed browser login store exists: saved cookie
+   * domains and origin hostnames plus the store's save time. Values are never
+   * included.
+   */
+  loginState?: { domains: string[]; savedAt: string };
 }
 
 export interface WrenyardShellApi {

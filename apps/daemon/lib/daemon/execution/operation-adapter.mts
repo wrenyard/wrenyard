@@ -21,8 +21,9 @@
  */
 
 import { execFile } from 'node:child_process'
-import { hostname } from 'node:os'
-import { delimiter, dirname } from 'node:path'
+import { chmodSync, copyFileSync, existsSync, rmSync } from 'node:fs'
+import { hostname, tmpdir } from 'node:os'
+import { delimiter, dirname, join } from 'node:path'
 import type { McpServer } from '@wrenyard/exec'
 import type {
   OperationComponentId,
@@ -31,7 +32,7 @@ import type {
   OperationComponents,
 } from '../services/operation-components.mts'
 
-const BROWSER_INSTRUCTION = `An agent-browser CLI is available for this run as \`agent-browser\` on PATH. Its browser session is preselected through AGENT_BROWSER_SESSION; do not pass --session, --profile or --auto-connect, and do not attach to the user's own browser or to any browser this run did not start. The only way to attach to an existing debugging endpoint is the global \`--cdp <port>\` flag, placed before the subcommand, for example \`agent-browser --cdp 127.0.0.1:<port> open <url>\` or \`agent-browser --cdp 127.0.0.1:<port> snapshot\`. Use it only for a loopback endpoint (127.0.0.1 or localhost) whose process this run itself launched. The \`agent-browser connect\` subcommand does not attach to an already running browser in this version - it rejects a host:port value and a bare port starts a new managed browser - so never use \`connect\` to reach an existing endpoint. Typical loop against a browser this run started: \`agent-browser open <url>\`, \`agent-browser snapshot\` to list elements with refs such as \`@e1\`, \`agent-browser click @e1\`, \`agent-browser fill @e2 "text"\`, \`agent-browser screenshot <path>\`. To drive the repository's own Electron/Desktop app, launch it as a child of this run with a remote-debugging port bound to 127.0.0.1, then use \`agent-browser --cdp 127.0.0.1:<port> snapshot\` and \`agent-browser --cdp 127.0.0.1:<port> screenshot <path>\` to interact with its window and capture it. Run \`agent-browser skills get core --full\` for the version-matched command guide, and \`agent-browser --help\` for other commands. Quote the exact URL you loaded when reporting results.`
+const BROWSER_INSTRUCTION = `An agent-browser CLI is available for this run as \`agent-browser\` on PATH. Its browser session is preselected through AGENT_BROWSER_SESSION; do not pass --session, --profile or --auto-connect, and do not attach to the user's own browser or to any browser this run did not start. The only way to attach to an existing debugging endpoint is the global \`--cdp <port>\` flag, placed before the subcommand, for example \`agent-browser --cdp 127.0.0.1:<port> open <url>\` or \`agent-browser --cdp 127.0.0.1:<port> snapshot\`. Use it only for a loopback endpoint (127.0.0.1 or localhost) whose process this run itself launched. The \`agent-browser connect\` subcommand does not attach to an already running browser in this version - it rejects a host:port value and a bare port starts a new managed browser - so never use \`connect\` to reach an existing endpoint. Typical loop against a browser this run started: \`agent-browser open <url>\`, \`agent-browser snapshot\` to list elements with refs such as \`@e1\`, \`agent-browser click @e1\`, \`agent-browser fill @e2 "text"\`, \`agent-browser screenshot <path>\`. To drive the repository's own Electron/Desktop app, launch it as a child of this run with a remote-debugging port bound to 127.0.0.1, then use \`agent-browser --cdp 127.0.0.1:<port> snapshot\` and \`agent-browser --cdp 127.0.0.1:<port> screenshot <path>\` to interact with its window and capture it. Run \`agent-browser skills get core --full\` for the version-matched command guide, and \`agent-browser --help\` for other commands. Quote the exact URL you loaded when reporting results. This session starts preloaded with the workspace-managed login state from AGENT_BROWSER_STATE; never modify, save, print or exfiltrate that state file.`
 
 const DESKTOP_INSTRUCTION = `A desktop-control MCP server is attached for this run under the server name \`computer\` (its tools are named like \`mcp__computer__<tool>\`). Use its tools to inspect the screen, move the pointer, click, type, and press keys, then verify each action by re-reading the screen before continuing. Limit interaction to the windows relevant to the task and describe any state you changed. The desktop is the user's real session and is not sandboxed.`
 
@@ -242,6 +243,7 @@ function applyBrowserEnv(
   directory: string,
   baseEnv: Record<string, string>,
   session: string,
+  stateCopy?: string,
 ): NodeJS.ProcessEnv {
   const next: NodeJS.ProcessEnv = { ...env }
   const key = pathKeyOf(next)
@@ -255,6 +257,7 @@ function applyBrowserEnv(
   for (const [name, value] of Object.entries(baseEnv)) next[name] = value
   if (env.AGENT_BROWSER_HEADED !== undefined) next.AGENT_BROWSER_HEADED = env.AGENT_BROWSER_HEADED
   next.AGENT_BROWSER_SESSION = session
+  if (stateCopy !== undefined) next.AGENT_BROWSER_STATE = stateCopy
   return next
 }
 
@@ -310,13 +313,38 @@ export class OperationAdapter {
           const session = browserSessionName(runId)
           const directory = dirname(launch.executable)
           const baseEnv = launch.env
-          envModifiers.push((env) => applyBrowserEnv(env, directory, baseEnv, session))
+          // Each run gets its own read-only copy of the managed login store; the
+          // store itself is never written by a run and the copy dies with the run.
+          let stateCopy: string | undefined
+          const storePath = this.#components.loginStorePath()
+          if (existsSync(storePath)) {
+            const candidate = join(tmpdir(), `wy-browser-state-${session}.json`)
+            try {
+              copyFileSync(storePath, candidate)
+              chmodSync(candidate, 0o600)
+              stateCopy = candidate
+            } catch {
+              // Signed out is better than failing the run when the copy fails.
+              stateCopy = undefined
+            }
+          }
+          envModifiers.push((env) => applyBrowserEnv(env, directory, baseEnv, session, stateCopy))
           cleanups.push(() =>
             runQuietly(launch.executable, ['--session', session, 'close'], {
               ...launch.env,
               AGENT_BROWSER_SESSION: session,
             }),
           )
+          if (stateCopy !== undefined) {
+            const copy = stateCopy
+            cleanups.push(async () => {
+              try {
+                rmSync(copy, { force: true })
+              } catch {
+                // Best effort: the per-run copy is deleted with the run.
+              }
+            })
+          }
           instructions.push(BROWSER_INSTRUCTION)
           continue
         }

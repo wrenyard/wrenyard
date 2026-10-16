@@ -34,7 +34,7 @@
  *     `authorize` action and are never granted silently.
  */
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -62,6 +62,9 @@ export type OperationComponentAction =
   | 'uninstall'
   | 'enable'
   | 'disable'
+  | 'login'
+  | 'save-login'
+  | 'clear-login'
 
 export type OperationComponentHint =
   | 'legacy-browser-mcp'
@@ -84,6 +87,9 @@ export const OPERATION_COMPONENT_ACTIONS: readonly OperationComponentAction[] = 
   'uninstall',
   'enable',
   'disable',
+  'login',
+  'save-login',
+  'clear-login',
 ]
 
 /** One component's observed status, as rendered by Desktop Settings. */
@@ -111,6 +117,12 @@ export interface OperationComponentSnapshot {
   runtimePresent?: boolean
   hints: OperationComponentHint[]
   actions: OperationComponentAction[]
+  /**
+   * Present only while a managed login store exists. Carries the saved cookie
+   * domains and origin hostnames plus the store's save time; cookie and storage
+   * values are never included.
+   */
+  loginState?: { domains: string[]; savedAt: string }
 }
 
 /** Everything a run needs to use a ready component. */
@@ -144,6 +156,9 @@ export class OperationComponentUnavailableError extends Error {
 
 const BROWSER_VERSION = '0.39.1'
 const DESKTOP_VERSION = '0.35.4'
+
+/** The single agent-browser session name the Settings login window uses. */
+const LOGIN_SESSION = 'wy-login'
 
 const BROWSER_RELEASE_BASE = `https://github.com/vercel-labs/agent-browser/releases/download/v${BROWSER_VERSION}`
 const DESKTOP_RELEASE_BASE = `https://github.com/trycua/cua/releases/download/cua-driver-rs-v${DESKTOP_VERSION}`
@@ -541,6 +556,8 @@ export class OperationComponents {
   readonly #componentsRoot: string
   readonly #browserDir: string
   readonly #settingsPath: string
+  readonly #loginProfileDir: string
+  readonly #loginStatePath: string
   readonly #env: NodeJS.ProcessEnv
   readonly #log?: (message: string) => void
 
@@ -553,6 +570,8 @@ export class OperationComponents {
     this.#componentsRoot = join(options.stateRoot, 'components')
     this.#browserDir = join(this.#componentsRoot, 'agent-browser')
     this.#settingsPath = join(this.#componentsRoot, 'settings.json')
+    this.#loginProfileDir = join(this.#browserDir, 'login-profile')
+    this.#loginStatePath = join(this.#browserDir, 'login-state.json')
     this.#env = options.env ?? process.env
     this.#log = options.log
     if (this.#env.WRENYARD_BROWSER_USE_MCP?.trim()) {
@@ -581,6 +600,10 @@ export class OperationComponents {
 
     if (action === 'refresh') return this.#check(id)
     if (action === 'enable' || action === 'disable') return this.#setDisabled(id, action === 'disable')
+
+    if (action === 'login') return this.#loginBrowser(id)
+    if (action === 'save-login') return this.#saveBrowserLogin(id)
+    if (action === 'clear-login') return this.#clearBrowserLogin(id)
 
     if (action === 'uninstall') {
       return this.#startJob(id, 'uninstalling', () => this.#jobBrowserUninstall())
@@ -616,6 +639,14 @@ export class OperationComponents {
     }
   }
 
+  /**
+   * Absolute path of the managed browser login store. The run adapter copies it
+   * into each run read-only; runs never write it.
+   */
+  loginStorePath(): string {
+    return this.#loginStatePath
+  }
+
   #base(id: OperationComponentId): OperationComponentSnapshot {
     return {
       id,
@@ -631,7 +662,12 @@ export class OperationComponents {
   }
 
   async #check(id: OperationComponentId): Promise<OperationComponentSnapshot> {
-    return (await this.#inspect(id)).snapshot
+    const snapshot = (await this.#inspect(id)).snapshot
+    if (id !== 'browser') return snapshot
+    const loginState = await this.#readLoginState()
+    const next = loginState === undefined ? snapshot : { ...snapshot, loginState }
+    this.#snapshots.set(id, next)
+    return next
   }
 
   /** Run one bounded check, cache the result and never throw. */
@@ -799,7 +835,13 @@ export class OperationComponents {
     }
     for (const entry of entries) {
       if (keep.has(entry)) continue
-      if (entry === 'current.json' || entry === 'config.json' || entry.includes('.partial-')) continue
+      const preserved =
+        entry === 'current.json' ||
+        entry === 'config.json' ||
+        entry === 'login-state.json' ||
+        entry === 'login-profile' ||
+        entry.includes('.partial-')
+      if (preserved) continue
       await rm(join(this.#browserDir, entry), { recursive: true, force: true }).catch(() => undefined)
     }
   }
@@ -810,17 +852,132 @@ export class OperationComponents {
   ): OperationComponentAction[] {
     const managed = runtime?.managed === true
     if (state === 'ready') {
+      const hasLoginStore = existsSync(this.#loginStatePath)
       return [
         'refresh',
         'disable',
         ...(managed && runtime?.outdated ? (['update'] as const) : []),
         ...(managed ? (['uninstall'] as const) : []),
+        'login',
+        ...(hasLoginStore ? (['save-login', 'clear-login'] as const) : []),
       ]
     }
     if (state === 'failed') {
       return ['repair', 'refresh', 'disable', ...(managed ? (['uninstall'] as const) : [])]
     }
     return ['refresh']
+  }
+
+  /**
+   * Read the managed login store's cookie domains and origin hostnames plus the
+   * store's save time. Cookie and storage values are read but never returned,
+   * copied elsewhere or logged; any defect yields `undefined`.
+   */
+  async #readLoginState(): Promise<{ domains: string[]; savedAt: string } | undefined> {
+    try {
+      const info = await stat(this.#loginStatePath)
+      if (!info.isFile()) return undefined
+      const parsed = parseJson(await readFile(this.#loginStatePath, 'utf8'))
+      if (!isRecord(parsed)) return undefined
+      const domains = new Set<string>()
+      if (Array.isArray(parsed.cookies)) {
+        for (const cookie of parsed.cookies) {
+          if (isRecord(cookie) && typeof cookie.domain === 'string' && cookie.domain) {
+            domains.add(cookie.domain)
+          }
+        }
+      }
+      if (Array.isArray(parsed.origins)) {
+        for (const origin of parsed.origins) {
+          if (!isRecord(origin) || typeof origin.origin !== 'string') continue
+          try {
+            domains.add(new URL(origin.origin).hostname)
+          } catch {
+            // Ignore a malformed origin entry; never surface it as state.
+          }
+        }
+      }
+      return { domains: [...domains].sort(), savedAt: info.mtime.toISOString() }
+    } catch {
+      return undefined
+    }
+  }
+
+  #browserExecutable(id: OperationComponentId, snapshot: OperationComponentSnapshot): string {
+    const executable = this.#runtime.get(id)?.executable ?? snapshot.path
+    if (!executable) throw new Error('agent-browser is not installed')
+    return executable
+  }
+
+  /** Open the headed login window on the Wrenyard-owned persistent profile. */
+  async #loginBrowser(id: OperationComponentId): Promise<OperationComponentSnapshot> {
+    if (id !== 'browser') throw new Error(`Action 'login' is not available for '${id}'`)
+    const snapshot = this.#snapshots.get(id) ?? (await this.#check(id))
+    const executable = this.#browserExecutable(id, snapshot)
+    const configPath = await this.#ensureBrowserConfig()
+    await mkdir(this.#loginProfileDir, { recursive: true })
+    const child = spawn(
+      executable,
+      ['--profile', this.#loginProfileDir, '--session', LOGIN_SESSION, '--headed', 'open'],
+      { detached: true, stdio: 'ignore', env: this.#browserEnv(configPath) },
+    )
+    child.unref()
+    return this.#check(id)
+  }
+
+  /** Save the live login window's state into the managed store (mode 0600). */
+  async #saveBrowserLogin(id: OperationComponentId): Promise<OperationComponentSnapshot> {
+    if (id !== 'browser') throw new Error(`Action 'save-login' is not available for '${id}'`)
+    const snapshot = this.#snapshots.get(id) ?? (await this.#check(id))
+    const executable = this.#browserExecutable(id, snapshot)
+    const configPath = await this.#ensureBrowserConfig()
+    const env = this.#browserEnv(configPath)
+
+    const live = await run(executable, ['--session', LOGIN_SESSION, 'get', 'url'], {
+      timeoutMs: 10_000,
+      env,
+    })
+    if (live.code !== 0) {
+      throw new Error('The login window is not open. Open it with 登录网站 first.')
+    }
+
+    await mkdir(this.#browserDir, { recursive: true })
+    const tmpPath = join(this.#browserDir, `login-state.partial-${randomBytes(6).toString('hex')}`)
+    try {
+      const saved = await run(executable, ['--session', LOGIN_SESSION, 'state', 'save', tmpPath], {
+        timeoutMs: 15_000,
+        env,
+      })
+      if (saved.code !== 0) {
+        const reason = sanitize(saved.stderr || saved.stdout).slice(0, 200)
+        throw new Error(reason || `agent-browser state save exited with code ${saved.code}`)
+      }
+      await chmod(tmpPath, 0o600)
+      await rename(tmpPath, this.#loginStatePath)
+    } finally {
+      await rm(tmpPath, { force: true }).catch(() => undefined)
+    }
+
+    // Closing the login window is best effort; it must not fail the save.
+    await run(executable, ['--session', LOGIN_SESSION, 'close'], { timeoutMs: 10_000, env })
+    return this.#check(id)
+  }
+
+  /** Remove the managed login store and the owned login profile. */
+  async #clearBrowserLogin(id: OperationComponentId): Promise<OperationComponentSnapshot> {
+    if (id !== 'browser') throw new Error(`Action 'clear-login' is not available for '${id}'`)
+    const snapshot = this.#snapshots.get(id) ?? (await this.#check(id))
+    const executable = this.#runtime.get(id)?.executable ?? snapshot.path
+    if (executable) {
+      const configPath = await this.#ensureBrowserConfig()
+      await run(executable, ['--session', LOGIN_SESSION, 'close'], {
+        timeoutMs: 10_000,
+        env: this.#browserEnv(configPath),
+      })
+    }
+    await rm(this.#loginStatePath, { force: true }).catch(() => undefined)
+    await rm(this.#loginProfileDir, { recursive: true, force: true }).catch(() => undefined)
+    return this.#check(id)
   }
 
   async #checkBrowser(): Promise<CheckResult> {

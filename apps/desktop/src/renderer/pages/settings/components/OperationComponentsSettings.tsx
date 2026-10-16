@@ -68,6 +68,9 @@ const ACTION_LABEL: Readonly<Record<OperationComponentAction, string>> = {
   uninstall: '卸载',
   enable: '启用',
   disable: '停用',
+  login: '登录网站',
+  'save-login': '保存登录状态',
+  'clear-login': '清除',
 };
 
 const SOURCE_LABEL: Readonly<Record<'managed' | 'external' | 'unknown', string>> = {
@@ -153,8 +156,8 @@ function checkedAtText(component: OperationComponentSnapshot): string {
 }
 
 function actionVariant(action: OperationComponentAction): 'default' | 'outline' | 'destructive' {
-  if (action === 'uninstall') return 'destructive';
-  if (action === 'install' || action === 'repair') return 'default';
+  if (action === 'uninstall' || action === 'clear-login') return 'destructive';
+  if (action === 'install' || action === 'repair' || action === 'login') return 'default';
   return 'outline';
 }
 
@@ -204,6 +207,13 @@ function actionConfirmation(
         title: `卸载${title}组件？`,
         description: '只会删除 Wrenyard 管理的 agent-browser 二进制及其版本目录，不会删除 ~/.agent-browser/browsers 中的浏览器运行时，也不会影响其他软件。',
         confirmLabel: '卸载',
+        destructive: true,
+      };
+    case 'clear-login':
+      return {
+        title: '清除保存的登录状态？',
+        description: '已保存的网站登录状态会被删除，之后的运行将不再处于登录状态。',
+        confirmLabel: '清除',
         destructive: true,
       };
     default:
@@ -266,6 +276,21 @@ function ComponentCard({ component, busy, onAction }: ComponentCardProps) {
               <li key={hint}>{HINT_TEXT[hint]}</li>
             ))}
           </ul>
+        )}
+
+        {component.id === 'browser' && component.loginState !== undefined && (
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>{`已保存登录状态 · ${new Date(component.loginState.savedAt).toLocaleString('zh-CN')}`}</span>
+            {component.loginState.domains.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {component.loginState.domains.map((domain) => (
+                  <code key={domain} className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs">
+                    {domain}
+                  </code>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         <Separator />

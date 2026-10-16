@@ -27,6 +27,9 @@ const OPERATION_COMPONENT_ACTIONS: readonly OperationComponentAction[] = [
   'uninstall',
   'enable',
   'disable',
+  'login',
+  'save-login',
+  'clear-login',
 ];
 
 function isOperationComponentId(value: unknown): value is OperationComponentId {
