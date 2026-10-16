@@ -3208,7 +3208,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         if (todo.status === 'cancelled') return 'gone'
         const fetched = (await inbox.get(item.sourceId)).item
         if (fetched === null) return 'gone'
-        if (item.fingerprint !== undefined && itemFingerprint(fetched) !== item.fingerprint) return 'changed'
+        const fingerprint = itemFingerprint(fetched)
+        if (item.fingerprint !== undefined && fingerprint !== item.fingerprint) return { changed: fetched, fingerprint }
         resetAdapterErrors(bot.id)
         return 'open'
       }
