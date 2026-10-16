@@ -588,7 +588,12 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       await this.requestKillOnce(entry)
     }
 
-    await Promise.allSettled([...this.registry.values()].map((entry) => entry.waitPromise))
+    // Bound the final settle wait: a child whose stdio pipes are held open by a
+    // surviving descendant never closes, so without a deadline shutdown hangs.
+    await Promise.race([
+      Promise.allSettled([...this.registry.values()].map((entry) => entry.waitPromise)),
+      sleep(CANCEL_SETTLEMENT_TIMEOUT_MS),
+    ])
 
     // Close only the fallback ExecService this supervisor created. A shared,
     // externally supplied service is owned by its daemon and must not be closed

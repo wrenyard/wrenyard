@@ -442,11 +442,21 @@ export class ForemanDaemon implements RunningForemanDaemon {
 
   /**
    * Waits for admitted work to finish by polling isIdle() every 200ms until the
-   * daemon is idle, or an explicit force skips the wait entirely. Never closes
-   * the daemon. A force takes effect within one 200ms tick.
+   * daemon is idle, an explicit force skips the wait, or the drain exceeds
+   * SHUTDOWN_DRAIN_TIMEOUT_MS. On timeout the drain escalates to force so the
+   * caller cancels active work instead of waiting forever. Never closes the
+   * daemon. A force takes effect within one 200ms tick.
    */
   async drain(): Promise<void> {
-    while (!this.shutdownForce && this.resources && !(await this.isIdle())) await sleep(200)
+    const deadline = Date.now() + SHUTDOWN_DRAIN_TIMEOUT_MS
+    while (!this.shutdownForce && this.resources && !(await this.isIdle())) {
+      if (Date.now() >= deadline) {
+        writeDaemonLog('warn', `shutdown drain exceeded ${SHUTDOWN_DRAIN_TIMEOUT_MS}ms; cancelling active work`)
+        this.shutdownForce = true
+        break
+      }
+      await sleep(200)
+    }
   }
 
   /**
@@ -2062,6 +2072,13 @@ function formatLogMeta(meta: unknown): string {
  * it, the supervisor still enforces it.
  */
 const MAX_CONCURRENT_EXECUTIONS = 10
+
+/**
+ * Bound for the graceful drain on a requested shutdown. Once the drain
+ * exceeds this, it escalates to the forced path: active work is cancelled
+ * and teardown proceeds, so a single SIGTERM always leads to exit.
+ */
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 20_000
 
 /**
  * Live daemon execution load, read from the database directly with no IPC round
