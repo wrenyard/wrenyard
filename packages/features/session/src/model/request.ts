@@ -65,6 +65,22 @@ export const AUXILIARY_MAX_ROUTES = 3;
  * whole call regardless of progress.
  */
 export const AUXILIARY_IDLE_TIMEOUT_MS = 30_000;
+/**
+ * The two local, caller-side terminal classifications this runner decides
+ * itself — never a transport adapter: the caller's finite auxiliary total
+ * budget ran out (`local_budget`) or the last attempt was cut by the local
+ * per-route no-progress deadline (`local_deadline`). They share the `kind` slot
+ * with the transport's {@link ModelErrorKind} so the span and attempt error
+ * surfaces keep one shape, but they are local facts and must never be read as
+ * an upstream `network`, `server` or `aborted`; the assertions below are the
+ * single point where the local vocabulary meets the transport's.
+ */
+export const LOCAL_CALL_ERROR = {
+  /** The caller's own finite total budget cut the whole call. */
+  budget: 'local_budget' as ModelErrorKind,
+  /** The per-route idle/no-progress deadline cut the last attempt. */
+  deadline: 'local_deadline' as ModelErrorKind,
+};
 
 /**
  * Route health the runner reads: the Gateway's typed route status, whose circuit
@@ -419,6 +435,17 @@ function abortMessage(kind: 'signal' | 'timeout' | 'idle' | undefined, totalTime
   if (kind === 'idle') return `Reasoning stalled: no output for ${REASON_IDLE_TIMEOUT_MS} ms`;
   if (kind === 'signal') return 'Model call was aborted';
   return 'Model call failed';
+}
+
+/**
+ * Structured failure fact of a call this runner cut itself. It carries the
+ * local classification — `local_budget` for the caller's exhausted total
+ * budget, `local_deadline` for a per-route idle stall that ended the call — so
+ * the span error surface tells a local cut apart from any upstream
+ * {@link ModelErrorKind}.
+ */
+function localCutFact(kind: 'budget' | 'deadline', message: string): CallErrorFact {
+  return { kind: kind === 'budget' ? LOCAL_CALL_ERROR.budget : LOCAL_CALL_ERROR.deadline, message };
 }
 
 /**
@@ -788,10 +815,13 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         });
 
         // A cancel can land while the started span is appended; never start a
-        // transport request for a call that is already cancelled.
+        // transport request for a call that is already cancelled. A total-budget
+        // cut that landed in the same window is a local cut, not a route fault.
         if (controller.signal.aborted) {
-          return await fail(abortMessage(abortKind, totalTimeoutMs), {
+          const message = abortMessage(abortKind, totalTimeoutMs);
+          return await fail(message, {
             status: abortKind === 'signal' ? 'aborted' : 'failed',
+            ...(abortKind === 'timeout' ? { error: localCutFact('budget', message) } : {}),
           });
         }
 
@@ -799,6 +829,12 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         let lastMessage = `Auxiliary role ${input.role}: no candidate route succeeded`;
         let earliestRetry: string | undefined;
         let lastFailure: CallErrorFact | undefined;
+        // Local cuts that may have ended the call: the caller's finite total
+        // budget and the per-route idle deadline. They are classified as local
+        // facts at the terminal failure below, distinct from the upstream
+        // `lastFailure` kind, and never touch route health.
+        let budgetExhausted = false;
+        let idleDeadlineCut = false;
         for (const candidate of candidates) {
           if (controller.signal.aborted) break;
           // Stop once three distinct routes have really been called: a route
@@ -807,6 +843,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           const remaining = deadlineMs - Date.now();
           if (remaining <= 0) {
             lastMessage = `Auxiliary budget of ${AUXILIARY_TOTAL_BUDGET_MS} ms exhausted`;
+            budgetExhausted = true;
             break;
           }
           const health = options.routeStatus?.(candidate.model);
@@ -913,13 +950,23 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             if (perRouteTimedOut) {
               // An idle route stall is a fallback fact, never a terminal aborted
               // state: the route fault is reported and the next candidate tried.
+              // If it also ends the call, the terminal fact is the local idle
+              // deadline — not the `aborted` its request abort happens to carry.
               lastMessage = `Route ${candidate.model} stalled after ${AUXILIARY_IDLE_TIMEOUT_MS} ms without output`;
+              idleDeadlineCut = true;
               continue;
             }
-            if (callerBudgetExhausted) { lastMessage = abortMessage('timeout', totalTimeoutMs); break; }
+            if (callerBudgetExhausted) {
+              lastMessage = abortMessage('timeout', totalTimeoutMs);
+              budgetExhausted = true;
+              break;
+            }
             // A caller-caused or protocol failure is not the route's fault: it is
             // reported once and never fails over.
             if (fact.kind === 'invalid_request' || fact.kind === 'context_overflow' || fact.kind === 'protocol' || fact.kind === 'aborted') throw error;
+            // A later upstream fault supersedes an earlier idle stall: the
+            // terminal classification is the upstream kind, not the local cut.
+            idleDeadlineCut = false;
             lastMessage = withOverflowPrefix(error);
             continue;
           } finally {
@@ -934,7 +981,16 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           return await fail(message, auxiliaryFailure(message, earliestRetry, 'protocol'));
         }
         const message = `${lastMessage} (${attempted} of ${candidates.length} candidate route(s), budget ${AUXILIARY_TOTAL_BUDGET_MS} ms)`;
-        return await fail(message, auxiliaryFailure(message, earliestRetry, lastFailure?.kind ?? 'protocol'));
+        // The terminal classification: a local cut this runner made itself — the
+        // caller's exhausted budget or the per-route idle deadline — is told
+        // apart from every upstream kind, so the span never reports a local cut
+        // as `network`, `server` or `aborted`.
+        const classification = abortKind === 'timeout' || budgetExhausted
+          ? LOCAL_CALL_ERROR.budget
+          : idleDeadlineCut
+            ? LOCAL_CALL_ERROR.deadline
+            : lastFailure?.kind ?? 'protocol';
+        return await fail(message, auxiliaryFailure(message, earliestRetry, classification));
       };
 
       try {
@@ -950,8 +1006,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           if (!routes.length) throw new Error(`Auxiliary role ${input.role}: no candidate qualified (empty route selection)`);
         }
         if (controller.signal.aborted) {
-          return await fail(abortMessage(abortKind, totalTimeoutMs), {
+          const message = abortMessage(abortKind, totalTimeoutMs);
+          return await fail(message, {
             status: abortKind === 'signal' ? 'aborted' : 'failed',
+            ...(abortKind === 'timeout' ? { error: localCutFact('budget', message) } : {}),
           });
         }
 
