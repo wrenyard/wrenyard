@@ -74,6 +74,7 @@ export const operationComponentSnapshotSchema = {
       additionalProperties: false,
     },
     error: { type: 'string', maxLength: 1000 },
+    runtimePresent: { type: 'boolean' },
     hints: {
       type: 'array',
       items: {
@@ -85,6 +86,8 @@ export const operationComponentSnapshotSchema = {
           'existing-installation',
           'missing-accessibility',
           'missing-screen-recording',
+          'screen-locked',
+          'no-gui-session',
         ],
       },
     },

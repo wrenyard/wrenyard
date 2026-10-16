@@ -718,6 +718,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           ids: operationIds,
           runId: entry.executionId,
           owner: opts.taskId ?? entry.executionId,
+          clientId,
         })
       }
       // The fully resolved user request is shaped once, then lowered onto the

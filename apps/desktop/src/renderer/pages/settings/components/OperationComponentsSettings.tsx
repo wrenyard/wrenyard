@@ -85,6 +85,8 @@ const HINT_TEXT: Readonly<Record<OperationComponentHint, string>> = {
   'existing-installation': '检测到既有的外部安装：Wrenyard 不会覆盖、升级或删除它，仅做版本校验。',
   'missing-accessibility': '需要在「系统设置 › 隐私与安全性 › 辅助功能」中为 CuaDriver 授权。',
   'missing-screen-recording': '需要在「系统设置 › 隐私与安全性 › 屏幕录制」中为 CuaDriver 授权。',
+  'screen-locked': '屏幕已锁定或显示器已休眠：请先解锁并唤醒屏幕，桌面操作才能继续。',
+  'no-gui-session': '当前没有可交互的图形会话（桌面操作需要已登录的图形界面）。',
 };
 
 /** Staged progress phase → Chinese label; unknown phases pass through raw. */

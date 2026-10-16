@@ -741,6 +741,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
           ids,
           runId,
           owner: runId,
+          clientId: merged.client,
         })
       }
       handle = await service.start(

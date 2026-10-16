@@ -1861,7 +1861,9 @@ export type OperationComponentHint =
   | 'external-mcp'
   | 'existing-installation'
   | 'missing-accessibility'
-  | 'missing-screen-recording';
+  | 'missing-screen-recording'
+  | 'screen-locked'
+  | 'no-gui-session';
 
 /** Staged progress of an in-flight component action. */
 export interface OperationComponentProgress {

@@ -70,6 +70,8 @@ export type OperationComponentHint =
   | 'existing-installation'
   | 'missing-accessibility'
   | 'missing-screen-recording'
+  | 'screen-locked'
+  | 'no-gui-session'
 
 export const OPERATION_COMPONENT_IDS: readonly OperationComponentId[] = ['browser', 'desktop']
 
@@ -105,6 +107,8 @@ export interface OperationComponentSnapshot {
   checkedAt?: string
   progress?: { phase: string; receivedBytes?: number; totalBytes?: number }
   error?: string
+  /** True when the Chrome-for-Testing browser runtime was found; browser only. */
+  runtimePresent?: boolean
   hints: OperationComponentHint[]
   actions: OperationComponentAction[]
 }
@@ -125,10 +129,11 @@ export class OperationComponentUnavailableError extends Error {
   readonly snapshot: OperationComponentSnapshot
 
   constructor(snapshot: OperationComponentSnapshot) {
+    const hints = snapshot.hints.length > 0 ? ` Hints: ${snapshot.hints.join(', ')}.` : ''
     super(
       `Operation component '${snapshot.name}' is not ready on host '${snapshot.host}' (${snapshot.state}${
         snapshot.error ? ': ' + snapshot.error : ''
-      }). Open Settings > 操作组件 (Operation components) in Wrenyard Desktop on this computer to install, authorize or enable it.`,
+      }).${hints} Open Settings > 操作组件 (Operation components) in Wrenyard Desktop on this computer to install, authorize or enable it.`,
     )
     this.name = 'OperationComponentUnavailableError'
     this.snapshot = snapshot
@@ -181,6 +186,7 @@ const INSTALLER_MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
 const VERSION_TIMEOUT_MS = 10_000
 const DOCTOR_TIMEOUT_MS = 30_000
 const PERMISSIONS_TIMEOUT_MS = 15_000
+const ENVIRONMENT_PROBE_TIMEOUT_MS = 5_000
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000
 const INSTALL_TIMEOUT_MS = 15 * 60_000
 const INSTALLER_RUN_TIMEOUT_MS = 15 * 60_000
@@ -377,6 +383,21 @@ function collectCheckFailures(parsed: unknown): string[] {
     if (typeof entry.message === 'string' && entry.message.trim()) messages.push(entry.message.trim())
   }
   return messages
+}
+
+/** Read one boolean out of an `ioreg -a` XML plist; undefined when absent. */
+function plistBoolean(output: string, key: string): boolean | undefined {
+  const match = new RegExp(`<key>${key}</key>\\s*<(true|false)\\s*/>`, 'i').exec(output)
+  if (!match) return undefined
+  return match[1].toLowerCase() === 'true'
+}
+
+/** Read one integer out of an `ioreg -a` XML plist; undefined when absent. */
+function plistInteger(output: string, key: string): number | undefined {
+  const match = new RegExp(`<key>${key}</key>\\s*<integer>(-?\\d+)</integer>`, 'i').exec(output)
+  if (!match) return undefined
+  const value = Number.parseInt(match[1], 10)
+  return Number.isFinite(value) ? value : undefined
 }
 
 interface DownloadOptions {
@@ -871,6 +892,7 @@ export class OperationComponents {
       env: this.#browserEnv(configPath),
     })
     const parsed = parseJson(doctor.stdout)
+    const runtimePresent = await this.#browserRuntimePresent()
     if (isRecord(parsed) && parsed.success === true) {
       return {
         snapshot: {
@@ -880,6 +902,7 @@ export class OperationComponents {
           version,
           path: executable,
           hints,
+          runtimePresent,
           checkedAt: nowIso(),
           actions: this.#browserActions('ready', runtime),
         },
@@ -899,11 +922,22 @@ export class OperationComponents {
         version,
         path: executable,
         hints,
+        runtimePresent,
         checkedAt: nowIso(),
         error,
         actions: this.#browserActions('failed', runtime),
       },
       runtime,
+    }
+  }
+
+  /** Read-only probe for the shared Chrome-for-Testing runtime directory. */
+  async #browserRuntimePresent(): Promise<boolean> {
+    try {
+      const entries = await readdir(join(homedir(), '.agent-browser', 'browsers'))
+      return entries.length > 0
+    } catch {
+      return false
     }
   }
 
@@ -1136,6 +1170,23 @@ export class OperationComponents {
       if (!flags.accessibility) authHints.push('missing-accessibility')
       if (!flags.screenRecording) authHints.push('missing-screen-recording')
       if (flags.accessibility && flags.screenRecording) {
+        const environmentHints = await this.#checkDesktopEnvironment()
+        if (environmentHints.length > 0) {
+          return {
+            snapshot: {
+              ...base,
+              state: 'failed',
+              source,
+              version,
+              path: binary,
+              hints: [...authHints, ...environmentHints],
+              checkedAt: nowIso(),
+              error: `Desktop environment is not ready: ${environmentHints.join(', ')}`,
+              actions: this.#desktopActions('failed', runtime),
+            },
+            runtime,
+          }
+        }
         return {
           snapshot: {
             ...base,
@@ -1167,6 +1218,23 @@ export class OperationComponents {
 
     const doctor = await run(binary, ['doctor', '--json'], { timeoutMs: DOCTOR_TIMEOUT_MS })
     if (doctor.code === 0) {
+      const environmentHints = await this.#checkDesktopEnvironment()
+      if (environmentHints.length > 0) {
+        return {
+          snapshot: {
+            ...base,
+            state: 'failed',
+            source,
+            version,
+            path: binary,
+            hints: [...hints, ...environmentHints],
+            checkedAt: nowIso(),
+            error: `Desktop environment is not ready: ${environmentHints.join(', ')}`,
+            actions: this.#desktopActions('failed', runtime),
+          },
+          runtime,
+        }
+      }
       return {
         snapshot: {
           ...base,
@@ -1195,6 +1263,82 @@ export class OperationComponents {
       },
       runtime,
     }
+  }
+
+  /**
+   * Read-only environment blockers for the desktop component. Every probe only
+   * reads OS state; a failing or unparseable probe yields no hint, so a flaky
+   * check never falsely blocks a run and nothing here grants permissions.
+   */
+  async #checkDesktopEnvironment(): Promise<OperationComponentHint[]> {
+    if (process.platform === 'darwin') {
+      const blockers: OperationComponentHint[] = []
+      const consoleUser = await this.#probeDarwinConsoleUser()
+      if (consoleUser !== undefined && (consoleUser === '' || consoleUser === 'root')) {
+        blockers.push('no-gui-session')
+      }
+      if ((await this.#probeDarwinScreenLocked()) === true) blockers.push('screen-locked')
+      return blockers
+    }
+    if (process.platform === 'win32') return this.#probeWindowsEnvironment()
+    return []
+  }
+
+  /** `stat -f %Su /dev/console`; undefined when the probe itself fails. */
+  async #probeDarwinConsoleUser(): Promise<string | undefined> {
+    const result = await run('stat', ['-f', '%Su', '/dev/console'], {
+      timeoutMs: ENVIRONMENT_PROBE_TIMEOUT_MS,
+    })
+    if (result.code !== 0) return undefined
+    return result.stdout.trim()
+  }
+
+  /** IOConsoleLocked, or a powered-off display, means the screen is not usable. */
+  async #probeDarwinScreenLocked(): Promise<boolean | undefined> {
+    const consoleIo = await run('ioreg', ['-n', 'Root', '-d1', '-a'], {
+      timeoutMs: ENVIRONMENT_PROBE_TIMEOUT_MS,
+    })
+    if (consoleIo.code !== 0) return undefined
+    const locked = plistBoolean(consoleIo.stdout, 'IOConsoleLocked')
+    if (locked === true) return true
+    const display = await run('ioreg', ['-n', 'IODisplayWrangler', '-d1', '-a'], {
+      timeoutMs: ENVIRONMENT_PROBE_TIMEOUT_MS,
+    })
+    if (display.code === 0) {
+      const current = plistInteger(display.stdout, 'CurrentPowerState')
+      const max = plistInteger(display.stdout, 'MaxPowerState')
+      if (current === 0 && max !== undefined && max > 0) return true
+    }
+    return locked
+  }
+
+  /** Windows: a Session 0/non-interactive session or a locked workstation blocks. */
+  async #probeWindowsEnvironment(): Promise<OperationComponentHint[]> {
+    const blockers: OperationComponentHint[] = []
+    const sessionName = this.#env.SESSIONNAME?.trim().toLowerCase()
+    if (sessionName === 'services') {
+      blockers.push('no-gui-session')
+    } else {
+      const sessions = await run('qwinsta', [], { timeoutMs: ENVIRONMENT_PROBE_TIMEOUT_MS })
+      if (sessions.code === 0 && sessions.stdout.trim() && !/(^|\s)Active(\s|$)/i.test(sessions.stdout)) {
+        blockers.push('no-gui-session')
+      }
+    }
+    const lock = await run(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '(Get-Process -Name LogonUI -ErrorAction SilentlyContinue | Measure-Object).Count',
+      ],
+      { timeoutMs: ENVIRONMENT_PROBE_TIMEOUT_MS },
+    )
+    const logonUiCount = Number.parseInt(lock.stdout.trim(), 10)
+    if (lock.code === 0 && Number.isFinite(logonUiCount) && logonUiCount > 0) {
+      blockers.push('screen-locked')
+    }
+    return blockers
   }
 
   async #jobDesktopInstall(report: ProgressReporter): Promise<void> {

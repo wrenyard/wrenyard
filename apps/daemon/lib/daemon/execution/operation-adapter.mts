@@ -21,17 +21,19 @@
  */
 
 import { execFile } from 'node:child_process'
+import { hostname } from 'node:os'
 import { delimiter, dirname } from 'node:path'
 import type { McpServer } from '@wrenyard/exec'
 import type {
   OperationComponentId,
   OperationComponentLaunch,
+  OperationComponentSnapshot,
   OperationComponents,
 } from '../services/operation-components.mts'
 
-const BROWSER_INSTRUCTION = `An agent-browser CLI is available for this run as \`agent-browser\` on PATH. Its browser session is preselected through AGENT_BROWSER_SESSION; do not pass --session, --profile or --cdp, and do not attach to the user's own browser. Typical loop: \`agent-browser open <url>\`, \`agent-browser snapshot\` to list elements with refs such as \`@e1\`, \`agent-browser click @e1\`, \`agent-browser fill @e2 "text"\`, \`agent-browser screenshot <path>\`; run \`agent-browser --help\` for other commands. Quote the exact URL you loaded when reporting results.`
+const BROWSER_INSTRUCTION = `An agent-browser CLI is available for this run as \`agent-browser\` on PATH. Its browser session is preselected through AGENT_BROWSER_SESSION; do not pass --session, --profile or --auto-connect, and do not attach to the user's own browser or to any browser this run did not start. You may pass --cdp or use \`agent-browser connect <endpoint>\` only for a loopback endpoint (127.0.0.1 or localhost) whose process this run itself launched. Typical loop: \`agent-browser open <url>\`, \`agent-browser snapshot\` to list elements with refs such as \`@e1\`, \`agent-browser click @e1\`, \`agent-browser fill @e2 "text"\`, \`agent-browser screenshot <path>\`. To drive the repository's own Electron/Desktop app, launch it as a child of this run with a remote-debugging port bound to 127.0.0.1, then run \`agent-browser connect 127.0.0.1:<port>\`, interact with its window and capture it with \`agent-browser screenshot <path>\`. Run \`agent-browser skills get core --full\` for the version-matched command guide, and \`agent-browser --help\` for other commands. Quote the exact URL you loaded when reporting results.`
 
-const DESKTOP_INSTRUCTION = `A desktop-control MCP server is attached for this run. Use its tools to inspect the screen, move the pointer, click, type, and press keys, then verify each action by re-reading the screen before continuing. Limit interaction to the windows relevant to the task and describe any state you changed. The desktop is the user's real session and is not sandboxed.`
+const DESKTOP_INSTRUCTION = `A desktop-control MCP server is attached for this run under the server name \`computer\` (its tools are named like \`mcp__computer__<tool>\`). Use its tools to inspect the screen, move the pointer, click, type, and press keys, then verify each action by re-reading the screen before continuing. Limit interaction to the windows relevant to the task and describe any state you changed. The desktop is the user's real session and is not sandboxed.`
 
 const SENSITIVE_ACTION_INSTRUCTION = `Before any irreversible or sensitive action — purchases or payments, sending messages or posts, submitting credentials or personal data, uploading or downloading user files, deleting data, or changing account or system settings — stop and report that the action needs the user's confirmation instead of performing it.`
 
@@ -89,6 +91,8 @@ export interface PrepareOperationInput {
   runId: string
   /** Lock owner; the same task retry keeps the same owner. */
   owner: string
+  /** Resolved agent client id; selects the per-client discovery hint. */
+  clientId?: string
 }
 
 // The desktop is a single shared resource across the whole daemon. The lock is
@@ -115,6 +119,12 @@ function releaseDesktopLock(): void {
 
 function browserSessionName(runId: string): string {
   return `wy-${runId.replace(/[^A-Za-z0-9_-]/g, '-')}`.slice(0, 48)
+}
+
+/** Claude-family clients expose MCP tools as deferred tools found via ToolSearch. */
+function isClaudeFamily(clientId: string | undefined): boolean {
+  const id = clientId?.trim().toLowerCase()
+  return id === 'claude' || id === 'codebuddy'
 }
 
 function pathKeyOf(env: NodeJS.ProcessEnv): string | undefined {
@@ -171,7 +181,7 @@ export class OperationAdapter {
   }
 
   async prepare(input: PrepareOperationInput): Promise<PreparedOperations> {
-    const { prompt, mcpServers, ids, runId, owner } = input
+    const { prompt, mcpServers, ids, runId, owner, clientId } = input
 
     if (ids.length === 0) {
       return {
@@ -189,6 +199,9 @@ export class OperationAdapter {
     let desktopHeld = false
 
     try {
+      const snapshots = new Map<OperationComponentId, OperationComponentSnapshot>()
+      for (const snapshot of await this.#components.list()) snapshots.set(snapshot.id, snapshot)
+
       for (const id of ids) {
         const launch: OperationComponentLaunch = await this.#components.resolve(id)
 
@@ -217,9 +230,10 @@ export class OperationAdapter {
       }
 
       instructions.push(SENSITIVE_ACTION_INSTRUCTION)
-      const sections = instructions
-        .map((text, index) => `# Instruction ${index + 1}\n${text}`)
-        .join('\n\n')
+      const sections = [
+        this.#environmentPreamble(clientId, ids, snapshots),
+        ...instructions.map((text, index) => `# Instruction ${index + 1}\n${text}`),
+      ].join('\n\n')
 
       const acquired = [...cleanups]
       let released = false
@@ -249,5 +263,34 @@ export class OperationAdapter {
       if (desktopHeld) releaseDesktopLock()
       throw error
     }
+  }
+
+  /** Short host/platform/component preamble prepended to every operation prompt. */
+  #environmentPreamble(
+    clientId: string | undefined,
+    ids: readonly OperationComponentId[],
+    snapshots: ReadonlyMap<OperationComponentId, OperationComponentSnapshot>,
+  ): string {
+    const lines = ['# Environment']
+    lines.push(`Host: ${hostname()} (${process.platform} ${process.arch})`)
+    for (const id of ids) {
+      const snapshot = snapshots.get(id)
+      if (!snapshot) continue
+      const version = snapshot.version ? ` ${snapshot.version}` : ''
+      const runtime = snapshot.runtimePresent ? ' (browser runtime present)' : ''
+      lines.push(`- ${id}: ${snapshot.state}${version}${runtime}`)
+    }
+    if (ids.includes('desktop')) {
+      lines.push('Desktop control MCP server name: `computer`.')
+      lines.push(
+        isClaudeFamily(clientId)
+          ? 'desktop tools may be deferred; search ToolSearch for mcp__computer__ first'
+          : 'Computer tools are available directly.',
+      )
+    }
+    if (ids.includes('browser')) {
+      lines.push('Run `agent-browser skills get core --full` for the version-matched browser command guide.')
+    }
+    return lines.join('\n')
   }
 }
