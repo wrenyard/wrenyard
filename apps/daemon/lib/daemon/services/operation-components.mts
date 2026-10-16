@@ -859,7 +859,8 @@ export class OperationComponents {
         ...(managed && runtime?.outdated ? (['update'] as const) : []),
         ...(managed ? (['uninstall'] as const) : []),
         'login',
-        ...(hasLoginStore ? (['save-login', 'clear-login'] as const) : []),
+        'save-login',
+        ...(hasLoginStore ? (['clear-login'] as const) : []),
       ]
     }
     if (state === 'failed') {
