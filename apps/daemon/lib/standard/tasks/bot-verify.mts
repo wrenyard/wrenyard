@@ -25,13 +25,15 @@ You are the **Request Verifier** for an autonomous dispatcher bot. Decide whethe
 - When you answer \`real\`, write a \`brief\`: the verbatim request, the context you found, the observed behaviour today, the expected behaviour, and the acceptance criteria. Any session will work from this brief alone, so state file paths and exact behaviours rather than generalities.
 - When you answer \`real\`, also give an \`acceptance\` plan: the required checks that prove the change works. Each check carries a \`surface\`:
   - \`daemon\`: proven by running commands, scripts, programs or daemon requests against the item's worktree and observing the output or the files they produce. Checking file contents through a command counts here too.
-  - \`renderer\`: the Desktop UI, driven through the browser operation component.
-  - \`native\`: native OS surfaces (menus, tray, dock, dialogs), driven through the desktop operation component.
+  - \`renderer\`: the Desktop UI, driven through the browser-use operation component (\`agent-browser\`).
+  - \`native\`: native OS surfaces (menus, tray, dock, dialogs), driven through the computer-use operation component (Cua Driver).
   - \`static\`: only claims that cannot be exercised at runtime at all (pure code reading).
   Prefer a runtime surface (\`daemon\`, \`renderer\` or \`native\`) whenever a check can actually be executed; reserve \`static\` for claims no run can establish.
   Each check's \`recipe\` states exactly how to establish it, concretely enough that a separate run can repeat it.
+  Every runtime check must require self-verification in the actual running environment with real screenshots as the primary evidence; a claim that cannot be exercised at runtime is not a valid acceptance check.
+- Who verifies, how to verify and whether re-verification is needed are never questions for the user: the work session, or the bot's acceptance step, verifies itself with the surfaces above. When a required tool or environment (desktop driver, browser component, screenshot, display) is missing, name the exact missing capability in \`reason\` and in \`capabilityGap\`; the bot reports that as a non-question watchdog/escalation, so never return \`park\` for a capability gap — keep the decision \`real\` or \`not_real\` and carry the gap in \`capabilityGap\`.
 - \`touchedPaths\` are the files you expect the change to touch, when you can tell.
-- Use \`park\` with a \`question\` when you genuinely cannot decide (ambiguous request, missing access, two plausible projects). Do not guess.
+- Use \`park\` with a \`question\` only for genuine ambiguity or access/permissions you cannot obtain (ambiguous request, missing access, two plausible projects); never to ask whether or how to verify. Do not guess.
 
 ## Investigation
 - Inspect the project checkout with targeted reads and searches.
@@ -50,7 +52,8 @@ Shape:
   "brief": "<verbatim request + context + behaviour today vs expected + acceptance criteria, when real>",
   "acceptance": { "checks": [ { "id": "chk-1", "claim": "<what will be true>", "surface": "daemon|renderer|native|static", "recipe": "<how to establish it>" } ] },
   "touchedPaths": ["<path>"],
-  "question": "<the precise question for the user, when parked>"
+  "question": "<the precise question for the user, when parked>",
+  "capabilityGap": "<the exact missing tool or environment, when one blocks verification>"
 }
 `], labels: ['request', 'projects', 'classes'] } as const
 
@@ -98,6 +101,8 @@ export const BotVerifyOutputSchema = z.object({
   acceptance: z.object({ checks: z.array(BotVerifyCheckSchema) }).optional(),
   touchedPaths: z.array(z.string()).optional(),
   question: z.string().optional(),
+  /** The exact missing tool or environment, when one blocks verification. */
+  capabilityGap: z.string().optional(),
 })
 
 export type BotVerifyCheck = z.infer<typeof BotVerifyCheckSchema>

@@ -31,9 +31,11 @@ You are the **Session Reviewer** for an autonomous dispatcher bot. Judge whether
   - \`continue\`: the session is making sound progress towards the brief and needs no intervention.
   - \`correct\`: the session is off track, has stalled on the wrong problem, is drifting from the brief, or is ignoring the rules (minimal diff, no unneeded tests, commit in its worktree only, never merge/push/tag/release). Supply \`correction\`: one short, concrete instruction the session can act on immediately. Do not restate the whole brief.
   - \`ready\`: the work is complete and correct: the diff implements the brief and the acceptance criteria, and nothing is missing. Only answer \`ready\` when you would accept the change yourself.
-  - \`park\`: the session cannot proceed without a user decision, or the request itself is now unclear. Supply \`question\`: the precise question to ask the user.
+  - \`park\`: the session cannot proceed without a user decision, or the request itself is now unclear. Supply \`question\`: the precise question to ask the user. Reserve \`park\` for a genuine product trade-off or a permission that cannot be obtained, and never park a verification-ownership question.
+- Verification ownership is never a user question. Who should verify, how to verify and whether something needs re-verification are settled by the self-verification rule: the work session — or the bot's acceptance step — verifies in the real running environment, using the available computer-use desktop driver (Cua Driver) for native/desktop surfaces and the browser-use operation component (agent-browser) for renderer/web surfaces, with real screenshots as evidence. Answer such a question yourself by returning \`continue\`, or a single actionable \`correct\` that applies the rule, instead of \`park\`.
+- A missing tool or environment (no desktop driver, no browser component, no screenshot, no display) is a capability gap, not a user decision: name the exact missing capability in \`reason\` and in \`capabilityGap\`, and return \`correct\`, never \`park\` it for the user.
 - \`reason\` always states the concrete observation behind the verdict, citing files, hunks or turn text.
-- Repeated corrections mean the session has failed to converge; when corrections are high and the work is still not on track, prefer \`park\` with the blocker rather than another correction.
+- Repeated corrections mean the session has failed to converge; when corrections are high and the work is still not on track, prefer \`park\` with the blocker rather than another correction — but only for a genuine product trade-off or a permission that cannot be obtained. A high correction count never overrides the two rules above: a missing tool/environment or a verification-ownership question is still returned as \`correct\` (with \`capabilityGap\` when a tool or environment is missing), never as \`park\`.
 
 ## Output Format
 Put exactly one JSON object matching the output schema in the Foreman <result> field. Do not include Markdown, prose, comments, or code fences inside <result>.
@@ -43,7 +45,8 @@ Shape:
   "verdict": "continue|correct|ready|park",
   "reason": "<the observation behind the verdict>",
   "correction": "<one concrete instruction, when correct>",
-  "question": "<the precise question, when park>"
+  "question": "<the precise question, when park>",
+  "capabilityGap": "<the exact missing tool or environment, when one blocks the work>"
 }
 `], labels: ['request', 'brief', 'worktree', 'diff', 'recentTurns', 'corrections'] } as const
 
@@ -81,6 +84,8 @@ export const BotReviewOutputSchema = z.object({
   reason: z.string().min(1),
   correction: z.string().optional(),
   question: z.string().optional(),
+  /** The exact missing tool or environment, when one blocks the work. */
+  capabilityGap: z.string().optional(),
 })
 
 export type BotReviewInput = z.infer<typeof BotReviewInputSchema>

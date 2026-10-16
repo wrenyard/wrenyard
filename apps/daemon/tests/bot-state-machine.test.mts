@@ -1115,3 +1115,449 @@ test('an item past its maxItemHours budget is parked and escalated', async () =>
     await removeFixture(fixture)
   }
 })
+
+// ── answer delivery to a bound session ─────────────────────────────────────
+
+/** A parked `in_progress` item whose dispatch send already happened. */
+function parkedWithSession(
+  store: ReturnType<typeof createBotStore>,
+  botId: string,
+  sourceId: string,
+): ReturnType<ReturnType<typeof createBotStore>['createItem']> {
+  const item = store.createItem({ botId, sourceId, state: 'parked', project: 'alpha' })
+  store.patchItem(item.id, {
+    parkedFrom: 'in_progress',
+    sessionId: 'session-1',
+    worktreeId: 'wt-answer',
+    question: 'which button?',
+  })
+  const dispatch = store.beginStep({ itemId: item.id, kind: 'session.send', idemKey: `${item.id}:1:session.send:1` })
+  store.finishStep(dispatch.step.id, { status: 'done', output: { turn: 1 } })
+  return store.getItem(botId, item.id)
+}
+
+/** The pre-answer ledger: one finished turn whose reply leaves the item blocked. */
+function blockedLedger(at: string): ReturnType<BotTestSession['readLedger']> {
+  return [
+    { seq: 1, at, type: 'turn.started', turn: 1, id: 't1', text: 'the dispatch brief', model: { provider: 'ledger', model: 'ledger-model', reasoningEffort: 'high' } },
+    { seq: 2, at, type: 'reply.sent', turn: 1, text: 'BOT-BLOCKED which button?' },
+    { seq: 3, at, type: 'turn.finished', turn: 1, id: 't1', status: 'completed' },
+  ]
+}
+
+test('answering a parked item delivers exactly one follow-up turn with the answer and its marker', async () => {
+  const root = `${WORKSPACE}-answer`
+  const fixture = await writeBotFixture({
+    name: 'answerer',
+    mode: 'live',
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'answerer', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = parkedWithSession(store, bot.id, 'source-1')
+
+      const ledger = blockedLedger(new Date().toISOString())
+      const sent: { text: string; model: unknown }[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(
+          async (_sessionId, input) => { sent.push({ text: input.text, model: input.model }); return { turn: 2 } },
+          () => ledger,
+        ),
+        log: () => {},
+      })
+
+      const resumed = await host.itemAction(bot.id, item.id, 'answer', '  use the blue button  ')
+      assert.equal(resumed.state, 'in_progress')
+      assert.equal(resumed.answer, 'use the blue button')
+      assert.equal(resumed.counters?.answerPending, 1)
+      assert.equal(resumed.counters?.answerSeq, 3)
+      // The follow-up is queued durably, carrying the exact trimmed answer.
+      const answerKey = `${item.id}:1:session.send:2`
+      const queued = store.findStepByIdemKey(answerKey)
+      assert.equal(queued?.status, 'pending')
+      assert.match(String(queued?.input ?? ''), /use the blue button/)
+
+      await host.tick(bot.id)
+
+      // Exactly one turn, the trimmed answer verbatim, its marker, the
+      // session's own model (never the bot's default).
+      assert.equal(sent.length, 1)
+      assert.ok((sent[0]?.text ?? '').includes('use the blue button'))
+      assert.equal((sent[0]?.text ?? '').includes('  use the blue button  '), false)
+      assert.ok((sent[0]?.text ?? '').includes(`[bot:${answerKey}]`))
+      assert.deepEqual(sent[0]?.model, { provider: 'ledger', model: 'ledger-model', reasoningEffort: 'high' })
+      assert.equal(store.findStepByIdemKey(answerKey)?.status, 'done')
+      assert.equal(store.listLog(bot.id, 0).some(entry => entry.code === 'item.answered'), true)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('an answer follow-up is never delivered twice and a restart probes its marker', async () => {
+  const root = `${WORKSPACE}-answer-once`
+  const fixture = await writeBotFixture({
+    name: 'once',
+    mode: 'live',
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'once', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = parkedWithSession(store, bot.id, 'source-1')
+
+      let ledger = blockedLedger(new Date().toISOString())
+      let sends = 0
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(async () => { sends += 1; return { turn: 2 } }, () => ledger),
+        log: () => {},
+      })
+
+      await host.itemAction(bot.id, item.id, 'answer', 'use the blue button')
+      await host.tick(bot.id)
+      assert.equal(sends, 1)
+
+      // Re-entry: a later tick does not send a second turn.
+      await host.tick(bot.id)
+      assert.equal(sends, 1)
+
+      // Restart: a started-but-unfinished answer send whose marker is already in
+      // the ledger is proven done by the probe and never re-sent.
+      const second = parkedWithSession(store, bot.id, 'source-2')
+      const answerKey = `${second.id}:1:session.send:2`
+      const pending = store.beginStep({ itemId: second.id, kind: 'session.send', idemKey: answerKey, input: { botAnswer: 'use the blue button' } })
+      store.markStepStarted(pending.step.id)
+      const at = new Date().toISOString()
+      ledger = [
+        ...blockedLedger(at),
+        {
+          seq: 4,
+          at,
+          type: 'turn.started',
+          turn: 2,
+          id: 't2',
+          text: `Bot item ${second.id}: the user answered your question:\n\nuse the blue button\n\n[bot:${answerKey}]`,
+          model: { provider: 'ledger', model: 'ledger-model', reasoningEffort: 'high' },
+        },
+      ]
+
+      await host.reconcile()
+
+      assert.equal(sends, 1)
+      assert.equal(store.findStepByIdemKey(answerKey)?.status, 'done')
+      // The answer send never moves the item out of the state it parked from.
+      assert.equal(store.getItem(bot.id, second.id).state, 'parked')
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('review waits for the answer turn and never parks from the pre-answer reply', async () => {
+  const root = `${WORKSPACE}-answer-review`
+  const fixture = await writeBotFixture({
+    name: 'answerreview',
+    mode: 'live',
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'answerreview', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = parkedWithSession(store, bot.id, 'source-1')
+
+      let ledger = blockedLedger(new Date().toISOString())
+      const started: { task: string; recentTurns: string }[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(async () => ({ turn: 2 }), () => ledger),
+        projectManager: { diff: async () => '' } as unknown as ProjectManager,
+        log: () => {},
+        taskRunner: {
+          async startTask(run) {
+            const payload = run.input as { recentTurns?: unknown }
+            started.push({ task: run.task, recentTurns: String(payload.recentTurns ?? '') })
+            return { runId: `run-${started.length}` }
+          },
+          async getTask() {
+            return { status: 'done' as const, output: { verdict: 'continue', reason: 'still working on it' } }
+          },
+        },
+      })
+
+      await host.itemAction(bot.id, item.id, 'answer', 'use the blue button')
+      // The pre-answer reply still says BOT-BLOCKED, but no review may run and
+      // re-park the item before the answer turn finishes.
+      await host.tick(bot.id)
+      await host.tick(bot.id)
+      assert.equal(started.length, 0)
+      assert.equal(store.getItem(bot.id, item.id).state, 'in_progress')
+
+      // The answer turn starts and finishes; the review now sees only the
+      // post-answer reply, never the pre-answer BOT-BLOCKED.
+      const at = new Date().toISOString()
+      const answerKey = `${item.id}:1:session.send:2`
+      ledger = [
+        ...blockedLedger(at),
+        { seq: 4, at, type: 'turn.started', turn: 2, id: 't2', text: `answered\n\n[bot:${answerKey}]`, model: { provider: 'ledger', model: 'ledger-model', reasoningEffort: 'high' } },
+        { seq: 5, at, type: 'reply.sent', turn: 2, text: 'I will verify with the browser component.' },
+        { seq: 6, at, type: 'turn.finished', turn: 2, id: 't2', status: 'completed' },
+      ]
+      await host.tick(bot.id)
+
+      const review = started.find(entry => entry.task === 'bot-review')
+      assert.notEqual(review, undefined)
+      assert.match(review?.recentTurns ?? '', /verify with the browser component/)
+      assert.equal((review?.recentTurns ?? '').includes('BOT-BLOCKED'), false)
+      assert.equal(store.getItem(bot.id, item.id).state, 'in_progress')
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('a review that raced an answer discards its pre-answer park verdict', async () => {
+  const root = `${WORKSPACE}-answer-race`
+  const fixture = await writeBotFixture({
+    name: 'race',
+    mode: 'live',
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'race', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'in_progress', project: 'alpha' })
+      // The review sampled the ledger at seq 3; the answer arrived at seq 3, so
+      // the in-flight verdict is based on the pre-answer reply.
+      store.patchItem(item.id, {
+        sessionId: 'session-1',
+        worktreeId: 'wt-race',
+        counters: { answerPending: 1, answerSeq: 3, reviewSampledSeq: 3 },
+      })
+      const review = store.beginStep({ itemId: item.id, kind: 'review', idemKey: `${item.id}:1:review:1` })
+      store.markStepStarted(review.step.id)
+      store.recordStepOutput(review.step.id, { runId: 'run-race' })
+
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(async () => ({ turn: 2 }), () => []),
+        log: () => {},
+        taskRunner: {
+          async startTask() { return { runId: 'run-race' } },
+          async getTask() {
+            return { status: 'done' as const, output: { verdict: 'park', reason: 'who should verify?', question: 'who should verify this?' } }
+          },
+        },
+      })
+
+      await host.tick(bot.id)
+
+      const after = store.getItem(bot.id, item.id)
+      assert.equal(after.state, 'in_progress')
+      assert.equal(after.question, undefined)
+      assert.equal(store.listLog(bot.id, 0).some(entry => entry.code === 'review.deferred_answer'), true)
+      assert.equal(store.listLog(bot.id, 0).some(entry => entry.code === 'review_parked'), false)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('an unbound intake answer resumes the item and queues no session follow-up', async () => {
+  const root = `${WORKSPACE}-answer-intake`
+  const fixture = await writeBotFixture({
+    name: 'intake',
+    mode: 'live',
+    inboxBehavior: { list: { items: [] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'intake', state: 'running', mode: 'live', configPath: fixture.configPath })
+      // An intake item parked before any session was bound.
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'parked', project: 'alpha' })
+      store.patchItem(item.id, { parkedFrom: 'verifying', question: 'which branch?' })
+
+      let sends = 0
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(async () => { sends += 1; return { turn: 1 } }),
+        log: () => {},
+      })
+
+      const resumed = await host.itemAction(bot.id, item.id, 'answer', 'the target is main')
+      assert.equal(resumed.state, 'verifying')
+      assert.equal(resumed.answer, 'the target is main')
+      assert.equal(resumed.counters?.answerPending, undefined)
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:session.send:1`), undefined)
+      assert.equal(sends, 0)
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('an interrupted answer turn clears the barrier without a second send or judging partial replies', async () => {
+  const root = `${WORKSPACE}-answer-interrupted`
+  const fixture = await writeBotFixture({
+    name: 'interrupted',
+    mode: 'live',
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'interrupted', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = parkedWithSession(store, bot.id, 'source-1')
+
+      let ledger = blockedLedger(new Date().toISOString())
+      const sent: string[] = []
+      const started: { task: string; recentTurns: string }[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(async (_sessionId, input) => { sent.push(input.text); return { turn: 2 } }, () => ledger),
+        projectManager: { diff: async () => '' } as unknown as ProjectManager,
+        log: () => {},
+        taskRunner: {
+          async startTask(run) {
+            const payload = run.input as { recentTurns?: unknown }
+            started.push({ task: run.task, recentTurns: String(payload.recentTurns ?? '') })
+            return { runId: `run-${started.length}` }
+          },
+          async getTask() {
+            return { status: 'done' as const, output: { verdict: 'continue', reason: 'keep going' } }
+          },
+        },
+      })
+
+      await host.itemAction(bot.id, item.id, 'answer', 'use the blue button')
+      await host.tick(bot.id)
+
+      // The answer turn starts, then the session is interrupted: the ledger writes
+      // `turn.interrupted` and then the matching interrupted `turn.finished`.
+      const at = new Date().toISOString()
+      const answerKey = `${item.id}:1:session.send:2`
+      ledger = [
+        ...blockedLedger(at),
+        { seq: 4, at, type: 'turn.started', turn: 2, id: 't2', text: `answered\n\n[bot:${answerKey}]`, model: { provider: 'ledger', model: 'ledger-model', reasoningEffort: 'high' } },
+        { seq: 5, at, type: 'reply.sent', turn: 2, text: 'partial answer before the interrupt' },
+        { seq: 6, at, type: 'turn.interrupted', turn: 2, parent: 't2', reason: 'shutdown' },
+        { seq: 7, at, type: 'turn.finished', turn: 2, id: 't2', status: 'interrupted' },
+      ]
+      await host.tick(bot.id)
+
+      // The barrier cleared and a fresh review ran, but the answer step was never
+      // sent again and the review judged neither the interrupted turn's partial
+      // reply nor the pre-answer reply.
+      const review = started.find(entry => entry.task === 'bot-review')
+      assert.notEqual(review, undefined)
+      assert.ok((review?.recentTurns ?? '').includes('ended without completing'))
+      assert.equal((review?.recentTurns ?? '').includes('partial answer before the interrupt'), false)
+      assert.equal((review?.recentTurns ?? '').includes('BOT-BLOCKED'), false)
+      assert.equal(store.getItem(bot.id, item.id).state, 'in_progress')
+      assert.equal(sent.filter(text => text.includes(`[bot:${answerKey}]`)).length, 1)
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:session.send:3`), undefined)
+      assert.equal(store.findStepByIdemKey(answerKey)?.status, 'done')
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})
+
+test('a delayed pre-answer reply appended after the answer turn started is never eligible', async () => {
+  const root = `${WORKSPACE}-answer-delayed`
+  const fixture = await writeBotFixture({
+    name: 'delayed',
+    mode: 'live',
+    inboxBehavior: { list: { items: [{ id: 'source-1', title: 'Ship the thing' }] } },
+  })
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: root })
+      const bot = store.createBot({ name: 'delayed', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const item = store.createItem({ botId: bot.id, sourceId: 'source-1', state: 'in_progress', project: 'alpha' })
+      const answerKey = `${item.id}:1:session.send:2`
+      store.patchItem(item.id, {
+        sessionId: 'session-1',
+        worktreeId: 'wt-delayed',
+        counters: { answerPending: 1, answerSeq: 3 },
+      })
+      // The dispatch send happened first, then the answer send: its turn 2 is the
+      // answer turn and completed with a plain reply.
+      const dispatch = store.beginStep({ itemId: item.id, kind: 'session.send', idemKey: `${item.id}:1:session.send:1` })
+      store.finishStep(dispatch.step.id, { status: 'done', output: { turn: 1 } })
+      const answer = store.beginStep({ itemId: item.id, kind: 'session.send', idemKey: answerKey, input: { botAnswer: 'use the blue button' } })
+      store.finishStep(answer.step.id, { status: 'done', output: { turn: 2, answer: true } })
+
+      const at = new Date().toISOString()
+      const ledger: ReturnType<BotTestSession['readLedger']> = [
+        { seq: 1, at, type: 'turn.started', turn: 1, id: 't1', text: 'the dispatch brief', model: { provider: 'ledger', model: 'ledger-model', reasoningEffort: 'high' } },
+        { seq: 2, at, type: 'reply.sent', turn: 1, text: 'BOT-BLOCKED which button?' },
+        { seq: 3, at, type: 'turn.finished', turn: 1, id: 't1', status: 'completed' },
+        { seq: 4, at, type: 'turn.started', turn: 2, id: 't2', text: `answered\n\n[bot:${answerKey}]`, model: { provider: 'ledger', model: 'ledger-model', reasoningEffort: 'high' } },
+        { seq: 5, at, type: 'reply.sent', turn: 2, text: 'still working on it' },
+        { seq: 6, at, type: 'turn.finished', turn: 2, id: 't2', status: 'completed' },
+        // A delayed reply from the pre-answer turn, appended after the answer turn
+        // started: only its higher seq would make a seq-only filter admit it.
+        { seq: 7, at, type: 'reply.sent', turn: 1, text: 'BOT-BLOCKED delayed old reply' },
+      ]
+
+      const sent: string[] = []
+      const started: { task: string; recentTurns: string }[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: root,
+        session: botSession(async (_sessionId, input) => { sent.push(input.text); return { turn: 3 } }, () => ledger),
+        projectManager: { diff: async () => '' } as unknown as ProjectManager,
+        log: () => {},
+        taskRunner: {
+          async startTask(run) {
+            const payload = run.input as { recentTurns?: unknown }
+            started.push({ task: run.task, recentTurns: String(payload.recentTurns ?? '') })
+            return { runId: `run-${started.length}` }
+          },
+          async getTask() {
+            return { status: 'done' as const, output: { verdict: 'continue', reason: 'no closing marker yet' } }
+          },
+        },
+      })
+
+      await host.tick(bot.id)
+      // The review run is detached: its verdict is applied on the next tick.
+      await host.tick(bot.id)
+
+      // The review read only the completed answer turn's reply, and the stalled
+      // nudge judged that same reply, so the delayed pre-answer reply was never
+      // eligible for either.
+      const review = started.find(entry => entry.task === 'bot-review')
+      assert.notEqual(review, undefined)
+      assert.ok((review?.recentTurns ?? '').includes('still working on it'))
+      assert.equal((review?.recentTurns ?? '').includes('delayed old reply'), false)
+      assert.equal((review?.recentTurns ?? '').includes('which button?'), false)
+      assert.equal(store.listLog(bot.id, 0).some(entry => entry.code === 'review.nudge'), true)
+      assert.equal(sent.length, 1)
+      assert.ok((sent[0] ?? '').includes('ended without BOT-READY'))
+    })
+  } finally {
+    await removeFixture(fixture)
+  }
+})

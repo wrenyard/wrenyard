@@ -728,22 +728,56 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     return running
   }
 
-  /** The latest `reply.sent` text of one session, or undefined. */
-  function latestReply(sessionId: string): string | undefined {
-    let text: string | undefined
-    for (const event of session.readLedger(sessionId)) {
-      if (event.type === 'reply.sent') text = event.text
+  /**
+   * The `reply.sent` texts a judgement may read, oldest turn first: only replies
+   * that belong to the answer's own turn when it completed, or to a later
+   * completed turn. Identity is the ledger's numeric turn index, not the append
+   * sequence, so a delayed reply of a pre-answer turn appended after the answer
+   * turn started is never read as its outcome. Without an answer follow-up every
+   * reply after `fromSeq` qualifies.
+   */
+  function eligibleReplies(item: BotItemRecord, fromSeq: number): string[] {
+    if (item.sessionId === undefined) return []
+    const answer = answerTurn(item)
+    const events = session.readLedger(item.sessionId)
+    const completed = new Set<number>()
+    if (answer.marker !== undefined) {
+      for (const event of events) {
+        if (event.type === 'turn.finished' && event.status === 'completed' && event.turn !== undefined) completed.add(event.turn)
+      }
     }
-    return text
+    const replies: string[] = []
+    for (const event of events) {
+      if (event.type !== 'reply.sent' || event.seq <= fromSeq) continue
+      if (answer.marker !== undefined) {
+        const turn = event.turn
+        if (answer.turn === undefined || turn === undefined || turn < answer.turn || !completed.has(turn)) continue
+      }
+      replies.push(event.text)
+    }
+    return replies
   }
 
-  /** The last `max` characters of one session's replies, oldest turn first. */
-  function recentReplies(sessionId: string, max: number): string {
-    const replies: string[] = []
-    for (const event of session.readLedger(sessionId)) {
-      if (event.type === 'reply.sent') replies.push(event.text)
-    }
-    return truncateTail(replies.join('\n\n---\n\n'), max)
+  /** The latest reply a judgement may read, or undefined. */
+  function latestReply(item: BotItemRecord): string | undefined {
+    const replies = eligibleReplies(item, replyFloor(item))
+    return replies.length === 0 ? undefined : replies[replies.length - 1]
+  }
+
+  /**
+   * The last `max` characters of an item's eligible replies, oldest turn first,
+   * prefixed with an explicit note when the answer's own turn ended without
+   * completing, so a review sees the interruption instead of falling back to the
+   * pre-answer reply.
+   */
+  function recentReplies(item: BotItemRecord, max: number): string {
+    const replies = truncateTail(eligibleReplies(item, replyFloor(item)).join('\n\n---\n\n'), max)
+    const answer = answerTurn(item)
+    if (answer.marker === undefined || answer.turn === undefined || answer.completed) return replies
+    const note = answer.finished
+      ? '[the answer turn ended without completing; its partial replies are excluded]'
+      : '[the answer turn has not finished]'
+    return replies === '' ? note : `${note}\n\n---\n\n${replies}`
   }
 
   /** The ledger's highest sequence number for one session, or 0. */
@@ -795,6 +829,16 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     }
   }
 
+  /** Parse one step's stored JSON input, or undefined when it is absent or invalid. */
+  function stepInput<T>(step: BotStepRecord | undefined): T | undefined {
+    if (step?.input === undefined) return undefined
+    try {
+      return JSON.parse(step.input) as T
+    } catch {
+      return undefined
+    }
+  }
+
   /** The highest existing attempt of one repeatable step kind, and its row. */
   function latestStep(item: BotItemRecord, kind: BotStepKind): { step?: BotStepRecord; attempt: number } {
     let attempt = 0
@@ -819,12 +863,87 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     return envelope?.acceptance?.checks ?? []
   }
 
+  /** The latest answer follow-up step of one item: the `session.send` carrying a `botAnswer`. */
+  function answerStep(item: BotItemRecord): BotStepRecord | undefined {
+    const { attempt } = latestStep(item, 'session.send')
+    for (let n = attempt; n >= 1; n -= 1) {
+      const step = store.findStepByIdemKey(idemKeyFor(item, 'session.send', n))
+      if (step !== undefined && answerTextFromStep(step) !== undefined) return step
+    }
+    return undefined
+  }
+
+  /**
+   * The answer turn of one item: the marker of its latest answer follow-up, the
+   * numeric index of the newer turn that marker started, its ledger sequence and
+   * whether that turn reached a terminal `turn.finished` — with `completed` true
+   * only for a `completed` status. An interruption is not a reply, but the ledger
+   * always writes the matching `turn.finished` after `turn.interrupted`, so the
+   * scan never stops at the interruption and the barrier still clears.
+   */
+  function answerTurn(item: BotItemRecord): { marker?: string; turn?: number; startedSeq: number; finished: boolean; completed: boolean } {
+    if (item.sessionId === undefined) return { startedSeq: 0, finished: false, completed: false }
+    const step = answerStep(item)
+    if (step === undefined) return { startedSeq: 0, finished: false, completed: false }
+    const marker = `[bot:${step.idemKey}]`
+    const since = item.counters?.answerSeq ?? 0
+    const events = session.readLedger(item.sessionId)
+    let startedSeq = 0
+    let turn: number | undefined
+    let turnId: string | undefined
+    for (const event of events) {
+      if (event.seq <= since) continue
+      if (event.type === 'turn.started' && event.text.includes(marker)) {
+        startedSeq = event.seq
+        turnId = event.id
+        turn = event.turn
+        break
+      }
+    }
+    if (turnId === undefined) return { marker, startedSeq: 0, finished: false, completed: false }
+    for (const event of events) {
+      if (event.seq <= startedSeq) continue
+      if (event.type === 'turn.finished' && event.id === turnId) {
+        return { marker, turn, startedSeq, finished: true, completed: event.status === 'completed' }
+      }
+    }
+    return { marker, turn, startedSeq, finished: false, completed: false }
+  }
+
+  /**
+   * The ledger sequence before which no reply may be judged: the start of the
+   * latest answer's turn, so a delayed reply that predates the answer is never
+   * read as its outcome. Without an answer every reply qualifies.
+   */
+  function replyFloor(item: BotItemRecord): number {
+    const turn = answerTurn(item)
+    if (turn.marker === undefined) return 0
+    return turn.startedSeq === 0 ? Number.MAX_SAFE_INTEGER : turn.startedSeq
+  }
+
+  /**
+   * The answer delivery/review barrier: true while an answer has been handed to
+   * the session but the newer turn its marker started has not yet reached a
+   * terminal `turn.finished` (an interruption still writes one). It is keyed to
+   * the session's own ledger sequence and turn id, never to wall-clock, so a
+   * delayed tick cannot slip a review in before the answer turn ends.
+   */
+  function answerBarrierPending(item: BotItemRecord): boolean {
+    if (item.sessionId === undefined) return false
+    if (item.counters?.answerPending !== 1) return false
+    const turn = answerTurn(item)
+    return turn.startedSeq === 0 || !turn.finished
+  }
+
   /**
    * True when a review is due: the session produced new ledger events since the
    * last review, or it has been idle past the idle window since the last one.
    */
   function reviewDue(item: BotItemRecord): boolean {
     if (item.sessionId === undefined) return false
+    // An answer whose newer turn has not started and finished holds the review
+    // back, so no judgement runs against the pre-answer reply.
+    if (answerBarrierPending(item)) return false
     const counters = item.counters ?? {}
     if (latestEventSeq(item.sessionId) > (counters.lastReviewSeq ?? 0)) return true
     if (Date.now() - (counters.lastReviewAtMs ?? 0) <= REVIEW_IDLE_MS) return false
@@ -880,7 +999,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     const ahead = worktreeAheadOfTarget(item.project, item.worktreeId)
     if (ahead === undefined) return { ok: false, failed: 'the worktree could not be compared with the target branch' }
     if (!ahead) return { ok: false, failed: 'the worktree has no commits ahead of the target branch' }
-    const reply = latestReply(item.sessionId)
+    const reply = latestReply(item)
     if (reply === undefined || !BOT_READY_PATTERN.test(reply)) {
       return { ok: false, failed: 'the latest reply does not carry `BOT-READY <head sha>`' }
     }
@@ -977,12 +1096,29 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /** Send one follow-up into an item's own session, reusing the session's model. */
-  async function sendSessionFollowUp(bot: BotRecord, item: BotItemRecord, text: string, config?: BotConfig): Promise<void> {
+  async function sendSessionFollowUp(bot: BotRecord, item: BotItemRecord, text: string, config?: BotConfig): Promise<{ turn: number }> {
     if (item.sessionId === undefined) throw new Error('item has no session for a follow-up')
     const model = resolveSendModel(bot, item, config)
     if (model === undefined) throw new Error('no routed model is available for the follow-up')
-    await session.send(item.sessionId, { text, model })
+    const result = await session.send(item.sessionId, { text, model })
     store.patchItem(item.id, { sessionModel: model })
+    return result
+  }
+
+  /**
+   * The follow-up that delivers a user's answer to a parked session's question,
+   * verbatim, carrying the step's stable idempotency marker so a retry or a
+   * restart proves whether the turn was already delivered instead of sending it
+   * a second time.
+   */
+  function buildAnswerFollowUp(item: BotItemRecord, step: BotStepRecord, answer: string): string {
+    return `Bot item ${item.id}: the user answered your question:\n\n${answer}\n\n[bot:${step.idemKey}]`
+  }
+
+  /** The answer a `session.send` step carries on its stored input, when it is an answer follow-up. */
+  function answerTextFromStep(step: BotStepRecord): string | undefined {
+    const stored = stepInput<{ botAnswer?: unknown }>(step)?.botAnswer
+    return typeof stored === 'string' && stored !== '' ? stored : undefined
   }
 
   /**
@@ -1016,7 +1152,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   ): StalledNudgeDecision {
     if (item.sessionId === undefined) return { kind: 'none' }
     if (sessionRunning(item.sessionId)) return { kind: 'none' }
-    const reply = latestReply(item.sessionId)
+    const reply = latestReply(item)
     if (reply !== undefined && (BOT_READY_PATTERN.test(reply) || BOT_BLOCKED_PATTERN.test(reply))) {
       return { kind: 'none' }
     }
@@ -1101,6 +1237,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       `work only in worktree ${item.worktreeId ?? '(unnamed)'} and bind every dispatched task to it;`,
       `commit locally in that worktree with the trailer \`Refs: bot/${item.id}\`;`,
       'never merge, push, tag or release;',
+      'verify your own change in the real running environment before you finish: use the available computer-use desktop driver (Cua Driver) for native/desktop surfaces and the browser-use operation component (agent-browser) for renderer/web surfaces, and keep the real screenshots as evidence;',
+      'who verifies, how to verify and whether re-verification is needed are never questions for the user — apply the rule above and settle them yourself;',
+      'if a tool or environment you need is missing, name the exact missing capability in your `BOT-BLOCKED` line so the bot reports it as a watchdog/escalation instead of asking the user;',
+      'only a genuine product trade-off or a permission you cannot obtain may be raised as a question for the user;',
       'finish with a line `BOT-READY <head sha>` when done or `BOT-BLOCKED <question>` when blocked.',
     ].join(' '))
     lines.push(`[bot:${step.idemKey}]`)
@@ -1616,6 +1756,18 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     },
     async run({ bot, item, step, config }) {
       if (item.sessionId === undefined) throw new Error('item has no session')
+      // An answer follow-up carries the user's own answer through the same
+      // follow-up path as every other session message, so it reuses the
+      // session's own latest model (never the bot's default) and its marker is
+      // what a retry or restart probes below.
+      const answer = answerTextFromStep(step)
+      if (answer !== undefined) {
+        const delivered = await sendSessionFollowUp(bot, item, buildAnswerFollowUp(item, step, answer), config)
+        return {
+          output: { turn: delivered.turn, answer: true },
+          ...(item.state === 'dispatched' ? { to: 'in_progress' as BotItemState } : {}),
+        }
+      }
       const model = resolveSendModel(bot, item, config)
       if (model === undefined) throw new Error('no routed model is available for this item')
       const text = options.buildBrief?.(item, step) ?? dispatchBrief(item, step)
@@ -1897,6 +2049,25 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       if (config === undefined) throw new Error('bot config is unavailable for verification')
       const verdict = asVerifyEnvelope(output)
       if (verdict === undefined) throw new Error('bot-verify returned an unrecognised decision')
+      // A missing tool or environment is a capability gap, never a user decision:
+      // report it once by its exact name. A gap that would otherwise park the item
+      // leaves it retryable instead, so verification runs again once the
+      // capability is present.
+      if (verdict.capabilityGap !== undefined) {
+        await watchdog(bot, config, 'capability', `${item.id}:${verdict.capabilityGap}`, `item ${item.id} cannot be verified: ${verdict.capabilityGap}`)
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'verify.capability_gap',
+          message: verdict.capabilityGap,
+        })
+        if (verdict.decision === 'park') {
+          const { attempt } = latestStep(item, 'verify')
+          enqueueStep(item, 'verify', undefined, attempt + 1)
+          return { output: verdict }
+        }
+      }
       if (verdict.decision === 'park') {
         return {
           output: verdict,
@@ -1968,11 +2139,12 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         })
         return { result: {} }
       }
-      const blocked = latestReply(item.sessionId)?.match(BOT_BLOCKED_PATTERN)
-      if (blocked !== null && blocked !== undefined) {
-        const question = blocked[1]?.trim() ?? 'the session is blocked'
-        store.appendLog({ botId: bot.id, itemId: item.id, level: 'warn', code: 'review.blocked', message: question })
-        return { result: { to: 'parked', patch: { parkedFrom: 'in_progress', question, error: 'session_blocked' } } }
+      // An answer that was handed to the session while its newer turn is still
+      // starting or running defers the review: judging now would read the
+      // pre-answer reply and re-park the item. The barrier is a ledger sequence,
+      // so the same pending step is retried until the answer turn finishes.
+      if (answerBarrierPending(item)) {
+        throw new BotStepPending('review.answer_pending', `the answer turn for item ${item.id} has not finished; review deferred`, true)
       }
       const counters = item.counters ?? {}
       const envelope = verifyEnvelope(item)
@@ -1991,7 +2163,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
             brief: envelope?.brief ?? '',
             worktree: item.worktreeId ?? '',
             diff,
-            recentTurns: recentReplies(item.sessionId, MAX_TURNS_CHARS),
+            recentTurns: recentReplies(item, MAX_TURNS_CHARS),
             corrections: counters.corrections ?? 0,
           },
           model: routed,
@@ -1999,19 +2171,52 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         },
       }
     },
-    async applyTaskResult({ bot, item, config }, output) {
+    async applyTaskResult({ bot, item, step, config }, output) {
       if (config === undefined) throw new Error('bot config is unavailable for review')
       if (item.sessionId === undefined) throw new Error('item has no session to review')
       const counters = item.counters ?? {}
       const corrections = counters.corrections ?? 0
       const verdict = asReviewEnvelope(output)
       if (verdict === undefined) throw new Error('bot-review returned an unrecognised verdict')
+      // A review that raced an answer must never act on the pre-answer reply: the
+      // answer arrived after this review sampled the ledger (the sample is stored
+      // on the review step itself, not on the shared counters) or the answer turn
+      // is still in flight. The verdict is discarded and a fresh review runs once
+      // the answer turn has finished.
+      const sampled = stepInput<{ sampledSeq?: unknown }>(step)?.sampledSeq
+      const sampledSeq = typeof sampled === 'number' ? sampled : undefined
+      const answeredDuringReview = counters.answerSeq !== undefined
+        && (sampledSeq === undefined || counters.answerSeq >= sampledSeq)
+      if (answerBarrierPending(item) || answeredDuringReview) {
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'review.deferred_answer',
+          message: 'the item was answered while the review was in flight; the verdict is discarded',
+        })
+        return { output: { ...verdict, deferred: 'answered' } }
+      }
       // Mark the review point so the next review waits for new activity (or the
       // idle window) instead of running every tick.
       const reviewed = {
         ...counters,
         lastReviewSeq: latestEventSeq(item.sessionId),
         lastReviewAtMs: Date.now(),
+      }
+      // A missing tool or environment is a capability gap, not a user decision:
+      // report it once by its exact name, keep the item on track and increment no
+      // correction, whatever verdict came with it.
+      if (verdict.capabilityGap !== undefined) {
+        await watchdog(bot, config, 'capability', `${item.id}:${verdict.capabilityGap}`, `item ${item.id} cannot be verified: ${verdict.capabilityGap}`)
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'review.capability_gap',
+          message: verdict.capabilityGap,
+        })
+        return { output: verdict, patch: { counters: reviewed } }
       }
       if (verdict.verdict === 'park') {
         return {
@@ -2031,16 +2236,18 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       }
       if (verdict.verdict === 'correct') {
         if (corrections + 1 > config.budgets.maxCorrections) {
-          return {
-            output: verdict,
-            to: 'parked',
-            patch: {
-              parkedFrom: 'in_progress',
-              counters: reviewed,
-              question: `correction budget exhausted (${corrections + 1}/${config.budgets.maxCorrections}): ${verdict.reason}`,
-              error: 'corrections_exhausted',
-            },
-          }
+          // An exhausted correction budget on a non-converging session is not a
+          // user decision: report it once as a watchdog and leave the item
+          // retryable instead of parking it on a question.
+          await watchdog(bot, config, 'corrections', item.id, `item ${item.id} still needs correction after ${corrections} attempt(s), budget ${config.budgets.maxCorrections}: ${verdict.reason}`)
+          store.appendLog({
+            botId: bot.id,
+            itemId: item.id,
+            level: 'info',
+            code: 'review.corrections_exhausted',
+            message: verdict.reason,
+          })
+          return { output: verdict, patch: { counters: reviewed } }
         }
         await sendSessionFollowUp(bot, item, verdict.correction ?? verdict.reason, config)
         store.appendLog({
@@ -2124,19 +2331,13 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       const notReady = await checkComponents(plannedSurfaceComponents(runtimeChecks))
       if (notReady !== undefined) {
         const detail = `${notReady.name} is ${notReady.state} on host ${notReady.host}`
-        store.appendLog({ botId: bot.id, itemId: item.id, level: 'warn', code: 'acceptance.component', message: detail })
-        await escalate(bot, config, `component:${notReady.id}:${notReady.state}`, `acceptance blocked: ${detail}`)
-        return {
-          result: {
-            output: { component: notReady },
-            to: 'parked',
-            patch: {
-              parkedFrom: item.state,
-              question: `acceptance needs a ready operation component: ${detail}`,
-              error: 'component_not_ready',
-            },
-          },
-        }
+        // A missing or non-ready acceptance component is a capability gap, not a
+        // user decision: it is reported once as a watchdog/escalation naming the
+        // exact component, and the step stays pending so a later tick retries
+        // (for example after the component is installed) instead of parking the
+        // item on a question for the user.
+        await watchdog(bot, config, 'component', `${item.id}:${notReady.id}`, `item ${item.id} needs the ${notReady.id} operation component for acceptance but it is ${notReady.state} on host ${notReady.host}`)
+        throw new BotStepPending('acceptance.component', `acceptance needs a ready operation component: ${detail}`, true)
       }
       const capability = runtimeChecks.some(check => check.surface === 'native')
         ? 'computer-use' as const
@@ -2199,17 +2400,38 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       }
       const unverified = checks.filter(check => check.status === 'not_verified')
       if (unverified.length > 0) {
-        return {
-          output,
-          to: 'parked',
-          patch: {
-            parkedFrom: item.state,
-            acceptance: checks,
-            counters: { ...(item.counters ?? {}), acceptanceAttempts },
-            question: `acceptance could not verify: ${unverified.map(check => `${check.claim} (${check.note ?? 'not verified'})`).join('; ')}`,
-            error: 'acceptance_not_verified',
-          },
+        // A sensitive action the runner may not take on its own is the one gap
+        // that is genuinely the user's decision: it carries the exact
+        // `needs user confirmation: <action>` reason and keeps the park.
+        const permission = unverified.find(check => isUserQuestion(check.note ?? ''))
+        if (permission !== undefined) {
+          return {
+            output,
+            to: 'parked',
+            patch: {
+              parkedFrom: item.state,
+              acceptance: checks,
+              counters: { ...(item.counters ?? {}), acceptanceAttempts },
+              question: permission.note ?? `acceptance could not verify: ${permission.claim}`,
+              error: 'acceptance_needs_user',
+            },
+          }
         }
+        // Every other gap (a missing component or environment, an unobservable
+        // surface, a blocked run) is not a user question: report it once by its
+        // exact reason and retry acceptance on a later tick.
+        const reasons = unverified.map(check => `${check.claim} (${check.note ?? 'not verified'})`).join('; ')
+        await watchdog(bot, config, 'acceptance_gap', item.id, `item ${item.id} acceptance could not verify: ${reasons}`)
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'acceptance.not_a_question',
+          message: reasons,
+        })
+        const { attempt } = latestStep(item, 'accept')
+        enqueueStep(item, 'accept', { counters: { ...(item.counters ?? {}), acceptanceAttempts } }, attempt + 1)
+        return { output }
       }
       store.appendLog({
         botId: bot.id,
@@ -2631,7 +2853,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /** Insert one pending step unless its idempotency key already exists. */
-  function enqueueStep(item: BotItemRecord, kind: BotStepKind, patch?: BotItemPatch, attempt = 1): BotStepRecord | undefined {
+  function enqueueStep(item: BotItemRecord, kind: BotStepKind, patch?: BotItemPatch, attempt = 1, input?: unknown): BotStepRecord | undefined {
     const idemKey = idemKeyFor(item, kind, attempt)
     if (store.findStepByIdemKey(idemKey) !== undefined) return undefined
     const { step } = store.beginStep({
@@ -2639,6 +2861,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       kind,
       idemKey,
       ...(patch === undefined ? {} : { patch }),
+      ...(input === undefined ? {} : { input }),
     })
     return step
   }
@@ -2698,12 +2921,14 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         // the idle window and still carries no closing marker will never move on
         // its own, so it is nudged once per finished turn.
         const idle = sessionIdleMs(item)
-        if (idle !== undefined && idle > REVIEW_IDLE_MS) {
+        if (idle !== undefined && idle > REVIEW_IDLE_MS && !answerBarrierPending(item)) {
           await applyStalledNudge(bot, item, decideStalledNudge(item, config), config)
         }
         return
       }
-      enqueueStep(item, 'review', undefined, attempt + 1)
+      // The ledger point is stored on the review step itself, so the later
+      // verdict can tell whether the session was answered while the review ran.
+      enqueueStep(item, 'review', undefined, attempt + 1, { sampledSeq: latestEventSeq(item.sessionId) })
       return
     }
     if (item.state === 'ready') {
@@ -2946,8 +3171,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       }
       if (error instanceof BotStepPending) {
         // The step must wait for a later tick (a single-owner component is busy,
-        // for example); it stays pending and is retried, not failed.
-        store.appendLog({ botId: bot.id, itemId: item.id, level: 'info', code: error.code, message: error.message })
+        // for example); it stays pending and is retried, not failed. A pending
+        // cause already reported once (for example by a watchdog) is not logged
+        // again on every tick.
+        if (!error.reported) store.appendLog({ botId: bot.id, itemId: item.id, level: 'info', code: error.code, message: error.message })
         return
       }
       if (error instanceof BotStepRunFailed) {
@@ -3038,7 +3265,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         continue
       }
       store.markStepStatus(step.id, 'done')
-      if (handler.doneState !== undefined && handler.doneState !== item.state) {
+      // An answer follow-up send never moves the item: the answer resumes the
+      // state it parked from, so a proven answer send must not force it to
+      // `in_progress` (which would also drop the project lane).
+      if (handler.doneState !== undefined && handler.doneState !== item.state && answerTextFromStep(step) === undefined) {
         try {
           store.transitionItem(item.id, handler.doneState)
         } catch (error) {
@@ -3288,16 +3518,36 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           throw new Error(`item ${itemId} is not parked on a decision`)
         }
         if (answer === undefined || answer.trim() === '') throw new Error('an answer is required')
-        const resumed = store.transitionItem(itemId, item.parkedFrom, {
-          answer: answer.trim(),
-          question: null,
-        })
+        const text = answer.trim()
+        // An item with no bound session is an intake item: the answer is kept on
+        // the row and the item resumes exactly as before, with no follow-up step.
+        if (item.sessionId === undefined) {
+          const resumed = store.transitionItem(itemId, item.parkedFrom, { answer: text, question: null })
+          store.appendLog({
+            botId,
+            itemId,
+            level: 'info',
+            code: 'item.answered',
+            message: `item ${itemId} resumed into ${resumed.state}`,
+          })
+          return resumed
+        }
+        // A bound session must actually receive the answer. The resume, the
+        // delivery barrier and the answer's durable `session.send` step are one
+        // `beginStep` transaction, so no crash can leave the item resumed without
+        // its answer queued (or the answer queued without the barrier). Its stable
+        // idempotency key and marker make a retry or restart deliver exactly one
+        // follow-up turn.
+        const counters = { ...(item.counters ?? {}), answerPending: 1, answerSeq: latestEventSeq(item.sessionId) }
+        const { attempt } = latestStep(item, 'session.send')
+        enqueueStep(item, 'session.send', { state: item.parkedFrom, answer: text, question: null, counters }, attempt + 1, { botAnswer: text })
+        const resumed = store.getItem(botId, itemId)
         store.appendLog({
           botId,
           itemId,
           level: 'info',
           code: 'item.answered',
-          message: `item ${itemId} resumed into ${resumed.state}`,
+          message: `item ${itemId} resumed into ${resumed.state}; the answer is queued as a session follow-up`,
         })
         return resumed
       }
@@ -3403,6 +3653,8 @@ interface BotVerifyEnvelope {
   acceptance?: { checks: BotVerifyCheck[] }
   touchedPaths?: string[]
   question?: string
+  /** The exact tool or environment missing, when one blocks verification. */
+  capabilityGap?: string
 }
 
 /** The subset of a `bot-review` result the host acts on. */
@@ -3411,6 +3663,8 @@ interface BotReviewEnvelope {
   reason: string
   correction?: string
   question?: string
+  /** The exact tool or environment missing, when one blocks the work. */
+  capabilityGap?: string
 }
 
 /** The subset of a builtin `test` result the host acts on. */
@@ -3450,6 +3704,7 @@ function asVerifyEnvelope(value: unknown): BotVerifyEnvelope | undefined {
       ? { touchedPaths: record.touchedPaths.filter((entry): entry is string => typeof entry === 'string') }
       : {}),
     ...(typeof record.question === 'string' && record.question !== '' ? { question: record.question } : {}),
+    ...(typeof record.capabilityGap === 'string' && record.capabilityGap !== '' ? { capabilityGap: record.capabilityGap } : {}),
   }
 }
 
@@ -3466,7 +3721,13 @@ function asReviewEnvelope(value: unknown): BotReviewEnvelope | undefined {
     reason,
     ...(typeof record.correction === 'string' && record.correction !== '' ? { correction: record.correction } : {}),
     ...(typeof record.question === 'string' && record.question !== '' ? { question: record.question } : {}),
+    ...(typeof record.capabilityGap === 'string' && record.capabilityGap !== '' ? { capabilityGap: record.capabilityGap } : {}),
   }
+}
+
+/** True only for a park that asks the user to confirm or grant an action. */
+function isUserQuestion(text: string): boolean {
+  return /needs user confirmation:/iu.test(text)
 }
 
 /** Read the parts of a builtin `test` result the host maps onto its checks. */
@@ -3495,7 +3756,7 @@ function asTestOutput(value: unknown): BotTestOutput | undefined {
  * failed and not finished: the next tick retries it.
  */
 class BotStepPending extends Error {
-  constructor(readonly code: string, message: string) {
+  constructor(readonly code: string, message: string, readonly reported = false) {
     super(message)
     this.name = 'BotStepPending'
   }
