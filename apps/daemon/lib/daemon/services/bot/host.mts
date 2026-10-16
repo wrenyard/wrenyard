@@ -1134,7 +1134,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   /** The one nudge sent to a session whose turn ended without a closing marker. */
   function stalledNudgeText(item: BotItemRecord): string {
     const worktree = item.worktreeId ?? '(unnamed)'
-    return `Your last turn ended without BOT-READY or BOT-BLOCKED. Continue the task in worktree ${worktree}: make the change, commit it locally with the Refs trailer, and end with BOT-READY <head sha>, or reply BOT-BLOCKED <question> if you need a decision.`
+    return `Your last turn ended without BOT-READY or BOT-BLOCKED. Continue the task in worktree ${worktree}: make the change, commit it locally, and end with BOT-READY <head sha>, or reply BOT-BLOCKED <question> if you need a decision.`
   }
 
   /**
@@ -1217,7 +1217,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   /**
    * The dispatch brief: the verified brief, the acceptance checks, the working
    * rules and the idempotency marker. It names the worktree so every dispatched
-   * task run binds it, and demands the `Refs: bot/<itemId>` commit trailer.
+   * task run binds it.
    */
   function dispatchBrief(item: BotItemRecord, step: BotStepRecord): string {
     const envelope = verifyEnvelope(item)
@@ -1235,7 +1235,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     lines.push([
       'Rules: keep the diff minimal; add no tests unless they are needed;',
       `work only in worktree ${item.worktreeId ?? '(unnamed)'} and bind every dispatched task to it;`,
-      `commit locally in that worktree with the trailer \`Refs: bot/${item.id}\`;`,
+      'commit locally in that worktree; commit messages carry no internal ids, local paths or user names;',
       'never merge, push, tag or release;',
       'verify your own change in the real running environment before you finish: use the available computer-use desktop driver (Cua Driver) for native/desktop surfaces and the browser-use operation component (agent-browser) for renderer/web surfaces, and keep the real screenshots as evidence;',
       'who verifies, how to verify and whether re-verification is needed are never questions for the user — apply the rule above and settle them yourself;',

@@ -970,7 +970,7 @@ test('a stalled session is nudged once per finished turn', async () => {
       assert.match(sent[0]?.text ?? '', /wt-nudge/)
       assert.match(sent[0]?.text ?? '', /BOT-READY <head sha>/)
       assert.match(sent[0]?.text ?? '', /BOT-BLOCKED <question>/)
-      assert.match(sent[0]?.text ?? '', /Refs trailer/)
+      assert.match(sent[0]?.text ?? '', /commit it locally, and end/)
 
       const nudged = store.getItem(bot.id, item.id)
       assert.equal(nudged.state, 'in_progress')
