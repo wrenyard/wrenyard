@@ -1890,6 +1890,13 @@ export class TaskSettingsService {
     return this.taskRouteAdmitted(this.routeStatus?.(`${provider}/${model}`), nowMs)
   }
 
+  /** Shared-route admission for a native candidate, mirroring the launch guard:
+   *  any shared route that is not closed refuses a native attempt. */
+  private nativeSharedRouteAdmitted(provider: string, model: string): boolean {
+    const status = this.routeStatus?.(`${provider}/${model}`)
+    return status === undefined || status.phase === 'closed'
+  }
+
   /** Circuit admission for one route status: an open route is rejected, and a
    *  half-open route is admitted only once its next recovery probe is due; the
    *  Gateway itself owns the bounded probe lease and any recovery, so no state,
@@ -2048,6 +2055,14 @@ export class TaskSettingsService {
       // faults, and a due half-open route stays admitted so the Gateway's own
       // bounded probe can recover it.
       if (choice.mode === 'gateway' && !this.gatewayRouteAdmitted(choice.provider, choice.model, nowMs)) {
+        probePlan.push({ choice, eliminated: 'route' })
+        continue
+      }
+      // A native attempt cannot run the Gateway's HTTP recovery probe, so launch
+      // admission refuses it while the shared `provider/model` route is open or
+      // half-open. Apply the same rule here so selection never picks a route the
+      // launch will refuse, and the next candidate is chosen instead.
+      if (choice.mode !== 'gateway' && !this.nativeSharedRouteAdmitted(choice.provider, choice.model)) {
         probePlan.push({ choice, eliminated: 'route' })
         continue
       }
