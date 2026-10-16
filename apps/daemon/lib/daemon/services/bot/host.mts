@@ -376,7 +376,7 @@ type BotConfigLoad =
   | { status: 'ready'; config: BotConfig }
 
 /** Result of checking whether an item's source is still the one it was sent. */
-type SourceGate = 'open' | 'changed' | 'gone' | 'retry' | 'unavailable'
+type SourceGate = 'open' | 'gone' | 'retry' | 'unavailable' | { changed: { title: string; body?: string }; fingerprint: string }
 
 /**
  * One judgment or acceptance task run the host asks for. The bot never reasons
@@ -2730,7 +2730,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         continue
       }
 
-      parkForSourceChange(bot, existing, source.title)
+      parkForSourceChange(bot, existing, source, fingerprint)
     }
   }
 
@@ -2812,13 +2812,20 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     if (config !== undefined) enqueueStep(withdrawn, 'notify')
   }
 
-  /** Park an in-flight item whose source text changed since it was dispatched. */
-  function parkForSourceChange(bot: BotRecord, item: BotItemRecord, nextTitle: string | undefined): void {
+  /**
+   * Park an in-flight item whose source text changed since it was dispatched.
+   * The new text and fingerprint are adopted now, so answering `continue`
+   * resumes with them instead of re-parking on the same change at the next poll.
+   */
+  function parkForSourceChange(bot: BotRecord, item: BotItemRecord, source: { title: string; body?: string }, fingerprint: string): void {
     try {
       store.transitionItem(item.id, 'parked', {
         parkedFrom: item.state,
-        question: `source changed: "${item.title ?? ''}" -> "${nextTitle ?? ''}"; answer 'continue' to use the new text or 'dismiss'`,
+        question: `source changed: "${item.title ?? ''}" -> "${source.title}"; answer 'continue' to use the new text or 'dismiss'`,
         error: 'source_changed',
+        fingerprint,
+        title: source.title,
+        body: source.body ?? null,
       })
       store.appendLog({
         botId: bot.id,
@@ -2856,7 +2863,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     try {
       const fetched = (await inbox.get(item.sourceId)).item
       if (fetched === null || fetched.open !== true) return 'gone'
-      if (item.fingerprint !== undefined && itemFingerprint(fetched) !== item.fingerprint) return 'changed'
+      const fingerprint = itemFingerprint(fetched)
+      if (item.fingerprint !== undefined && fingerprint !== item.fingerprint) return { changed: fetched, fingerprint }
       resetAdapterErrors(bot.id)
       return 'open'
     } catch (error) {
@@ -3128,8 +3136,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           withdrawItem(bot, item, `source item is no longer open in the inbox (before ${step.kind})`, config)
           return
         }
-        if (gate === 'changed') {
-          parkForSourceChange(bot, item, undefined)
+        if (typeof gate === 'object') {
+          parkForSourceChange(bot, item, gate.changed, gate.fingerprint)
           return
         }
       }
