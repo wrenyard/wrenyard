@@ -798,3 +798,78 @@ test('a public answer to a verify park dispatches one fresh verify run that forw
     removeFixture(fixture)
   }
 })
+
+// ── 8. a workspace dryRun dispatch brief carries the clarification and deps ──
+//
+// A resumed dispatch (an item parked from `dispatched` and answered) reuses the
+// same dispatch brief. For a workspace dry-run bot the brief must carry the
+// stored public answer as a labeled clarification and truthful dependency
+// semantics, so the session neither mistakes a todo id for a commit nor assumes
+// a predecessor's dry-run artifact exists on main.
+
+test('a workspace dryRun session.send payload carries the stored answer and truthful dependency semantics', async () => {
+  const fixture = makeFixture('briefcontext', 'dryRun')
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: fixture.root })
+      const bot = store.createBot({ name: 'briefcontext', state: 'running', mode: 'dryRun', configPath: fixture.configPath })
+      const service = new WorkspaceTodoService(fixture.root)
+      const predecessor = await service.createTodo({ title: 'Predecessor', request: 'r', acceptance: 'a' })
+      const dependent = await service.createTodo({
+        title: 'Dependent',
+        depends_on: [predecessor.id],
+        request: 'create the dependent artifact',
+        acceptance: 'a',
+      })
+
+      const sent: string[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: fixture.root,
+        session: botSession(async (_sessionId, input) => {
+          sent.push(input.text)
+          return { turn: 1 }
+        }),
+        log: () => {},
+      })
+      // Warm-up pass consumes the forced-poll allowance, so the driving tick
+      // neither polls nor re-reads the dependent's blocked source.
+      await host.tick(bot.id)
+
+      // The item is already dispatched and carries the public answer a park
+      // resume stored; its dependency lives in the todo file, not in the brief.
+      const item = store.createItem({
+        botId: bot.id,
+        sourceId: dependent.id,
+        state: 'dispatched',
+        project: 'alpha',
+        title: 'Dependent',
+      })
+      store.patchItem(item.id, {
+        sessionId: 'session-1',
+        answer: 'the predecessor id is a todo id, not a commit to wait for',
+      })
+
+      await host.tick(bot.id)
+
+      assert.equal(sent.length, 1)
+      const brief = sent[0] ?? ''
+      // The stored public answer reaches the session as a labeled clarification.
+      assert.match(brief, /User clarification:\nthe predecessor id is a todo id, not a commit to wait for/)
+      // The dependency semantics are truthful: ids are todo ids, a dry run
+      // merges nothing, scheduling completion is not artifact availability, and
+      // a genuinely missing artifact must be reported rather than worked around.
+      assert.match(brief, /depends_on/)
+      assert.match(brief, new RegExp(predecessor.id))
+      assert.match(brief, /todo ids, not Git commit hashes/i)
+      assert.match(brief, /never merges/i)
+      assert.match(brief, /genuinely missing/i)
+      // The dry run wrote neither todo file.
+      assert.equal(todoStatus(fixture.root, predecessor.id), 'open')
+      assert.equal(todoStatus(fixture.root, dependent.id), 'open')
+    })
+  } finally {
+    removeFixture(fixture)
+  }
+})

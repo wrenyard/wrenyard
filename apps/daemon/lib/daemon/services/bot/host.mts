@@ -1411,11 +1411,54 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
+   * The extra blocks appended to a dispatch brief.
+   *
+   * A stored public answer always becomes a labeled clarification, so a session
+   * resumed after a park sees the user's decision in the very prompt that
+   * resumes it (the same label the verify task uses in its request body). Only a
+   * workspace dry run additionally gets dependency semantics: its `depends_on`
+   * values are todo ids, not commit hashes, and a dry run merges nothing, so a
+   * predecessor's artifacts may be absent from the current branch. Any other
+   * inbox or a live bot adds neither, so no live brief changes.
+   */
+  async function dispatchContext(
+    config: BotConfig | undefined,
+    item: BotItemRecord,
+    dryRun: boolean,
+  ): Promise<string[]> {
+    const blocks: string[] = []
+    const answer = item.answer?.trim()
+    if (answer !== undefined && answer !== '') blocks.push(`User clarification:\n${answer}`)
+    if (config?.inbox.kind !== 'workspace' || !dryRun) return blocks
+    const dependsOn = await sourceDependencies(item.sourceId)
+    if (dependsOn.length === 0) return blocks
+    blocks.push([
+      `Dependency context (workspace dry run): this item depends_on ${dependsOn.join(', ')}.`,
+      'Those values are workspace todo ids, not Git commit hashes.',
+      'It was admitted because each dependency is done or accepted on disk, or a matching completed same-bot dry-run run recorded it finished.',
+      "A dry run never merges a predecessor's changes into main, so a predecessor's artifacts may be absent from the current branch.",
+      'Treat scheduling completion as distinct from artifact availability: if a prerequisite artifact is genuinely missing, report it in your reply instead of weakening or bypassing the requirement.',
+    ].join(' '))
+    return blocks
+  }
+
+  /** A workspace todo's dependency ids, or none when the source cannot be read. */
+  async function sourceDependencies(sourceId: string): Promise<string[]> {
+    try {
+      return (await workspaceTodoService.getTodo(sourceId)).depends_on
+    } catch {
+      return []
+    }
+  }
+
+  /**
    * The dispatch brief: the verified brief, the acceptance checks, the working
    * rules and the idempotency marker. It names the worktree so every dispatched
-   * task run binds it.
+   * task run binds it. The optional context blocks (a public-answer
+   * clarification and, for a workspace dry run, dependency semantics) are
+   * inserted after the request.
    */
-  function dispatchBrief(item: BotItemRecord, step: BotStepRecord): string {
+  function dispatchBrief(item: BotItemRecord, step: BotStepRecord, context: readonly string[] = []): string {
     const envelope = verifyEnvelope(item)
     const lines: string[] = []
     lines.push(`Bot item ${item.id}${item.title === undefined ? '' : `: ${item.title}`}`)
@@ -1424,6 +1467,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     const brief = envelope?.brief
     if (brief !== undefined && brief.trim() !== '') lines.push(`Brief:\n${brief}`)
     else if (item.body !== undefined) lines.push(`Request:\n${item.body}`)
+    for (const block of context) if (block !== '') lines.push(block)
     const checks = envelope?.acceptance?.checks ?? []
     if (checks.length > 0) {
       lines.push(`Acceptance checks that must hold:\n${checks.map(check => `- [${check.surface}] ${check.claim} — ${check.recipe}`).join('\n')}`)
@@ -1994,7 +2038,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       }
       const model = resolveSendModel(bot, item, config)
       if (model === undefined) throw new Error('no routed model is available for this item')
-      const text = options.buildBrief?.(item, step) ?? dispatchBrief(item, step)
+      const context = await dispatchContext(config, item, dryRun)
+      const text = options.buildBrief?.(item, step) ?? dispatchBrief(item, step, context)
       const result = await session.send(item.sessionId, { text, model })
       // Dispatch starts execution, so a native workspace todo becomes
       // `in_progress`. A dry run records the would-be status instead of touching
