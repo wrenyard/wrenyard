@@ -6,15 +6,17 @@ import {
   BOT_ADAPTER_DEFAULT_TIMEOUT_MS,
   BOT_ADAPTER_MAX_TIMEOUT_MS,
   type BotAdapter,
+  type BotNotifierAdapter,
 } from './config.mts'
+import { WorkspaceTodoError, type Todo, type WorkspaceTodoService } from '../workspace-todo-service.mts'
 
 /**
  * Adapter runtime for Bot mode.
  *
  * Every private integration of a bot (its inbox, its notifier) is one of these
- * adapters: a user-local command that exchanges JSON, or an MCP tool. This
- * module is the only place that starts those processes, so timeouts, output
- * caps, process-tree cleanup and redaction are enforced once for every call.
+ * adapters: a user-local command that exchanges JSON, an MCP tool, or a native
+ * workspace todo service. Command-process timeouts, output caps, process-tree
+ * cleanup and redaction are enforced here for every call.
  *
  * Nothing here ever logs or returns raw stdout, stderr, argv or environment
  * values: an error carries a redacted stderr tail and the executable's base
@@ -97,7 +99,7 @@ export function resolveAdapterEnv(
  * An `mcp` adapter is not implemented yet and fails with `adapter.unsupported`.
  */
 export async function runAdapter(
-  adapter: BotAdapter,
+  adapter: BotNotifierAdapter,
   request: object,
   options: RunAdapterOptions = {},
 ): Promise<BotAdapterRunResult> {
@@ -248,10 +250,34 @@ export interface InboxClient {
   release(id: string): Promise<{ ok: boolean }>
 }
 
+export interface InboxClientOptions extends RunAdapterOptions {
+  workspaceTodoService?: WorkspaceTodoService
+  /**
+   * Optional, read-only supplement for dependency gating: an id this returns
+   * true for counts as a finished dependency for intake even when its file is
+   * not yet `done`/`accepted`. It never changes a dependency's own status,
+   * never rescues a missing or cancelled dependency, and when absent gating is
+   * exactly the on-disk check.
+   */
+  isDependencyCompleted?: (id: string) => boolean
+}
+
 /** Typed inbox client over one adapter; every response shape is validated. */
-export function createInboxClient(adapter: BotAdapter, options: RunAdapterOptions = {}): InboxClient {
+export function createInboxClient(adapter: BotAdapter, options: InboxClientOptions = {}): InboxClient {
+  if (adapter.kind === 'workspace') {
+    if (options.workspaceTodoService === undefined) {
+      throw new Error('workspace inbox requires an injected WorkspaceTodoService')
+    }
+    return createWorkspaceInboxClient(options.workspaceTodoService, options.isDependencyCompleted)
+  }
+
+  // Capture the adapter once the workspace variant has returned, so its type is
+  // narrowed to the command/mcp notifier the runner accepts. The closure below
+  // holds the narrowed local rather than the widened `BotAdapter` parameter.
+  const notifier = adapter
+
   async function call(op: InboxOp, request: object): Promise<Record<string, unknown>> {
-    const { response } = await runAdapter(adapter, request, options)
+    const { response } = await runAdapter(notifier, request, options)
     return response as Record<string, unknown>
   }
 
@@ -291,6 +317,101 @@ export function createInboxClient(adapter: BotAdapter, options: RunAdapterOption
   }
 }
 
+function createWorkspaceInboxClient(
+  service: WorkspaceTodoService,
+  isDependencyCompleted?: (id: string) => boolean,
+): InboxClient {
+  return {
+    async list() {
+      const todos = await service.listTodos()
+      const byId = new Map(todos.map((todo) => [todo.id, todo]))
+      return {
+        items: todos
+          .filter((todo) => isWorkspaceTodoDispatchable(todo, byId, isDependencyCompleted))
+          .map(workspaceTodoToInboxItem),
+      }
+    },
+    async get(id: string) {
+      const todo = await getWorkspaceTodo(service, id)
+      if (todo === null) return { item: null }
+      const todos = await service.listTodos()
+      const byId = new Map(todos.map((entry) => [entry.id, entry]))
+      return {
+        item: {
+          ...workspaceTodoToInboxItem(todo),
+          open: isWorkspaceTodoDispatchable(todo, byId, isDependencyCompleted),
+        },
+      }
+    },
+    async complete(id: string) {
+      const todo = await getWorkspaceTodo(service, id)
+      if (todo === null) return { ok: false }
+      if (todo.status !== 'accepted' && todo.status !== 'done') {
+        await service.updateTodo({ id, status: 'done' })
+      }
+      return { ok: true }
+    },
+    async annotate(id: string, text: string) {
+      const todo = await getWorkspaceTodo(service, id)
+      if (todo === null) return { ok: false }
+      await service.annotateTodo(id, text)
+      return { ok: true }
+    },
+    async release(id: string) {
+      const todo = await getWorkspaceTodo(service, id)
+      if (todo === null) return { ok: false }
+      if (todo.status === 'in_progress') await service.updateTodo({ id, status: 'open' })
+      return { ok: true }
+    },
+  }
+}
+
+async function getWorkspaceTodo(service: WorkspaceTodoService, id: string): Promise<Todo | null> {
+  try {
+    return await service.getTodo(id)
+  } catch (error) {
+    if (error instanceof WorkspaceTodoError && error.code === 'missing') return null
+    throw error
+  }
+}
+
+/**
+ * A todo is dispatchable when it is open work and every dependency is finished
+ * on disk (`done`/`accepted`). The optional callback may additionally treat an
+ * unfinished dependency as finished, but it can never rescue a missing or
+ * cancelled dependency, and it never changes the todo's own status or `open`.
+ */
+function isWorkspaceTodoDispatchable(
+  todo: Todo,
+  todos: ReadonlyMap<string, Todo>,
+  isDependencyCompleted?: (id: string) => boolean,
+): boolean {
+  if (todo.status !== 'open' && todo.status !== 'in_progress') return false
+  return todo.depends_on.every((id) => {
+    const dependency = todos.get(id)
+    if (dependency === undefined) return false
+    if (dependency.status === 'done' || dependency.status === 'accepted') return true
+    if (dependency.status === 'cancelled') return false
+    return isDependencyCompleted?.(id) === true
+  })
+}
+
+function workspaceTodoToInboxItem(todo: Todo): InboxItem {
+  const sections = [
+    `Request:\n${todo.request}`,
+    `Acceptance criteria:\n${todo.acceptance}`,
+  ]
+  if (todo.attachments.length > 0) sections.push(`Attachments:\n${todo.attachments.map((path) => `- ${path}`).join('\n')}`)
+  if (todo.project !== undefined) sections.push(`Project hint: ${todo.project}`)
+  return {
+    id: todo.id,
+    title: todo.title,
+    body: sections.join('\n\n'),
+    ...(todo.project === undefined ? {} : { project: todo.project }),
+    updatedAt: todo.updated,
+  }
+}
+
 export interface NotifierMedia {
   path: string
   kind: 'image' | 'file'
@@ -306,7 +427,7 @@ export interface Notifier {
 }
 
 /** Typed notifier over one adapter; the response shape is validated. */
-export function createNotifier(adapter: BotAdapter, options: RunAdapterOptions = {}): Notifier {
+export function createNotifier(adapter: BotNotifierAdapter, options: RunAdapterOptions = {}): Notifier {
   return {
     async send(input: NotifierSendInput) {
       const request = input.media === undefined
@@ -340,8 +461,10 @@ export function itemFingerprint(item: { title: string; body?: string }): string 
 export type BotAdapterDescription =
   | { kind: 'command'; command: string }
   | { kind: 'mcp'; tool: string }
+  | { kind: 'workspace' }
 
 export function describeAdapter(adapter: BotAdapter): BotAdapterDescription {
+  if (adapter.kind === 'workspace') return { kind: 'workspace' }
   if (adapter.kind === 'mcp') return { kind: 'mcp', tool: adapter.tool }
   return { kind: 'command', command: basename(adapter.argv[0] ?? '') }
 }

@@ -58,6 +58,7 @@ import { getForemanEventBus } from '../events/event-bus.mts'
 import { readLocalSpeedSamples } from '../events/tps.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
+import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
 import { createModelGateway, type ModelGateway, type RouteStatus } from '@wrenyard/gateway'
 import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin } from '@wrenyard/providers'
 import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
@@ -181,6 +182,7 @@ interface WorkspaceScopedResources {
   taskgraphService: TaskGraphService
   taskSettingsService: TaskSettingsService
   workspaceDocService: WorkspaceDocService
+  workspaceTodoService: WorkspaceTodoService
   session: Session
   scheduler: Scheduler
   /** Bot mode host for this workspace; replaced whole on a hot switch. */
@@ -850,6 +852,12 @@ async function createForemanDaemonResources(
       runtimeAvailability,
     })
     const workspaceDocService = new WorkspaceDocService(workspaceRoot)
+    // The todo index is disposable and lives under the daemon local state root
+    // (keyed by workspace), never inside the workspace tree or the runtime DB.
+    const workspaceTodoService = new WorkspaceTodoService(
+      workspaceRoot,
+      todoIndexPath(sessionStateRoot, workspaceRoot),
+    )
     // The session feature owns the append-only ledger, the workspace document
     // surface and per-role automatic auxiliary selection. Its gateway connection and task
     // wait/cancel are injected in-process, and DSH MCP tools reach the daemon over
@@ -993,6 +1001,7 @@ async function createForemanDaemonResources(
       taskgraphService,
       taskSettingsService,
       workspaceDocService,
+      workspaceTodoService,
       session,
       scheduler,
       botHost,
@@ -1006,6 +1015,7 @@ async function createForemanDaemonResources(
     coreOptions.taskgraphService = bindings.taskgraphService
     coreOptions.taskSettings = bindings.taskSettingsService
     coreOptions.workspaceDocService = bindings.workspaceDocService
+    coreOptions.workspaceTodoService = bindings.workspaceTodoService
   }
 
   /**
@@ -1058,6 +1068,7 @@ async function createForemanDaemonResources(
     lowDiskState: options.lowDiskState,
     taskgraphService: workspaceScoped.taskgraphService,
     workspaceDocService: workspaceScoped.workspaceDocService,
+    workspaceTodoService: workspaceScoped.workspaceTodoService,
     gatewayConnection: gatewayConnectionSnapshot,
     providerList: () => providerService.list(),
     providerConfigure: (params) => providerService.configure(params),

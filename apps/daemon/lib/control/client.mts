@@ -127,6 +127,14 @@ import type {
   WorkspaceDocEditParams,
   WorkspaceDocDeleteParams,
   WorkspaceDocDeleteResult,
+  TodoListParams,
+  TodoListResult,
+  TodoGetParams,
+  TodoGetResult,
+  TodoCreateParams,
+  TodoCreateResult,
+  TodoUpdateParams,
+  TodoUpdateResult,
   ProviderListParams,
   ProviderListResult,
 } from '../protocol/registry.mts'
@@ -418,6 +426,21 @@ export class ForemanClient {
     },
     delete: (params: WorkspaceDocDeleteParams): Promise<WorkspaceDocDeleteResult> => {
       return this.rpc.request<WorkspaceDocDeleteResult>('workspace.doc.delete', params)
+    },
+  }
+
+  readonly todo = {
+    list: (params: TodoListParams = {}): Promise<TodoListResult> => {
+      return this.rpc.request<TodoListResult>('todo.list', params)
+    },
+    get: (params: TodoGetParams): Promise<TodoGetResult> => {
+      return this.rpc.request<TodoGetResult>('todo.get', params)
+    },
+    create: (params: TodoCreateParams): Promise<TodoCreateResult> => {
+      return this.rpc.request<TodoCreateResult>('todo.create', params)
+    },
+    update: (params: TodoUpdateParams): Promise<TodoUpdateResult> => {
+      return this.rpc.request<TodoUpdateResult>('todo.update', params)
     },
   }
 

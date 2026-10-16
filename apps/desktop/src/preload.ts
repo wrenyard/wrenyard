@@ -29,6 +29,8 @@ import {
   type ScheduleState,
   type BotMethod,
   type BotMethodMap,
+  type TodoMethod,
+  type TodoMethodMap,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -259,6 +261,16 @@ const api: WrenyardShellApi = {
       method,
       params,
     ) as Promise<BotMethodMap[M]['result']>;
+  },
+  todo<M extends TodoMethod>(
+    method: M,
+    params?: TodoMethodMap[M]['params'],
+  ): Promise<TodoMethodMap[M]['result']> {
+    return ipcRenderer.invoke(
+      SHELL_CHANNELS.todoRequest,
+      method,
+      params,
+    ) as Promise<TodoMethodMap[M]['result']>;
   },
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.runtimeAliasSnapshot) as Promise<RuntimeAliasSnapshot>;

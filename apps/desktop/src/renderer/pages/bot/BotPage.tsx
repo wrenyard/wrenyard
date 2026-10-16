@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Page, PageContent, PageDescription, PageHeader, PageTitle } from '@/renderer/components/page';
 import { QueryError } from '@/renderer/components/query-error';
 import { StatusBadge } from '@/renderer/components/status-badge';
@@ -22,7 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/u
 import { useConfirm } from '@/renderer/hooks/use-confirm';
 import { executeCommand } from '@/renderer/lib/commands';
 import { toast } from '@/renderer/lib/notify';
-import { useRemoteConnection } from '@/renderer/lib/desktop';
+import { useRemoteConnection, todoRequest } from '@/renderer/lib/desktop';
 import { formatElapsedMs } from '@/renderer/lib/format';
 import type {
   BotAcceptanceCheck,
@@ -34,6 +35,10 @@ import type {
   BotLogRecord,
   BotMode,
   BotState,
+  Todo,
+  TodoCreateInput,
+  TodoStatus,
+  TodoUpdateInput,
 } from '@/shell-contract';
 import {
   useBotConfigValidateMutation,
@@ -108,6 +113,49 @@ const BOT_STATE_VIEW: Record<BotState, { label: string; tone: StatusTone }> = {
 };
 
 const MODE_LABELS: Record<BotMode, string> = { dryRun: '试运行', live: '正式' };
+
+/** Chinese label and tone of every workspace-todo status. `done` (execution
+ *  finished) and `accepted` (acceptance passed) are deliberately distinct. */
+const TODO_STATUS_VIEW: Record<TodoStatus, { label: string; tone: StatusTone }> = {
+  open: { label: '待处理', tone: 'muted' },
+  in_progress: { label: '进行中', tone: 'running' },
+  done: { label: '执行完成', tone: 'warning' },
+  accepted: { label: '验收完成', tone: 'success' },
+  cancelled: { label: '已取消', tone: 'muted' },
+};
+
+/** Every status in dropdown order. */
+const TODO_STATUS_ORDER: readonly TodoStatus[] = ['open', 'in_progress', 'done', 'accepted', 'cancelled'];
+
+const TODO_KEYS = { list: ['todo', 'list'] as const };
+
+/** Polled workspace-todo list; the daemon owns the Markdown files. */
+function useTodosQuery(enabled: boolean) {
+  return useQuery({
+    queryKey: TODO_KEYS.list,
+    queryFn: () => todoRequest('todo.list'),
+    refetchInterval: 5000,
+    enabled,
+  });
+}
+
+/** Create one workspace todo; the daemon generates its stable id. */
+function useTodoCreateMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: TodoCreateInput) => todoRequest('todo.create', input),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: TODO_KEYS.list }); },
+  });
+}
+
+/** Update one workspace todo (status change); returns the fresh todo. */
+function useTodoUpdateMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: TodoUpdateInput) => todoRequest('todo.update', input),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: TODO_KEYS.list }); },
+  });
+}
 
 const COMPONENT_NAMES: Record<BotComponentId, string> = { browser: 'agent-browser', desktop: 'Cua Driver' };
 
@@ -212,6 +260,21 @@ export function BotPage() {
   const [mode, setMode] = useState<BotMode>('dryRun');
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [showRoutineLog, setShowRoutineLog] = useState(false);
+  const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null);
+  const [todoTitle, setTodoTitle] = useState('');
+  const [todoRequestBody, setTodoRequestBody] = useState('');
+  const [todoAcceptance, setTodoAcceptance] = useState('');
+  const [todoProject, setTodoProject] = useState('');
+  const [todoDependsOn, setTodoDependsOn] = useState('');
+
+  // Workspace todos are only meaningful while an endpoint is committed.
+  const todoEnabled = connection.state === 'local' || connection.state === 'remote';
+  const todos = useTodosQuery(todoEnabled);
+  const createTodo = useTodoCreateMutation();
+  const updateTodo = useTodoUpdateMutation();
+
+  const todoList = todos.data?.todos ?? [];
+  const currentTodo = todoList.find((todo) => todo.id === selectedTodoId) ?? null;
 
   const pipeline = items.data?.items ?? [];
   const decisions = pipeline.filter(
@@ -275,6 +338,162 @@ export function BotPage() {
     })();
   };
 
+  const requestCreateTodo = (): void => {
+    const title = todoTitle.trim();
+    if (title === '') return;
+    const dependsOn = todoDependsOn
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '');
+    void createTodo
+      .mutateAsync({
+        title,
+        ...(todoProject.trim() === '' ? {} : { project: todoProject.trim() }),
+        ...(todoRequestBody.trim() === '' ? {} : { request: todoRequestBody }),
+        ...(todoAcceptance.trim() === '' ? {} : { acceptance: todoAcceptance }),
+        ...(dependsOn.length === 0 ? {} : { depends_on: dependsOn }),
+      })
+      .then(() => {
+        setTodoTitle('');
+        setTodoRequestBody('');
+        setTodoAcceptance('');
+        setTodoProject('');
+        setTodoDependsOn('');
+        toast('已添加待办');
+      })
+      .catch((error: unknown) => {
+        toast(`添加待办失败：${errorMessage(error)}`, { level: 'error' });
+      });
+  };
+
+  const changeTodoStatus = (todo: Todo, status: TodoStatus): void => {
+    void updateTodo
+      .mutateAsync({ id: todo.id, status })
+      .catch((error: unknown) => {
+        toast(`更新待办失败：${errorMessage(error)}`, { level: 'error' });
+      });
+  };
+
+  const todoCard = (
+    <Card className="min-w-0">
+      <CardHeader>
+        <CardTitle>待办</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4 @3xl/main:flex-row">
+          <div className="min-w-0 flex-1">
+            {todos.isError ? (
+              <QueryError query={todos} title="待办" />
+            ) : todos.isPending ? (
+              <Skeleton className="h-16 w-full" />
+            ) : todoList.length === 0 ? (
+              <p className="text-sm text-muted-foreground">暂无待办。</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>标题</TableHead>
+                    <TableHead>状态</TableHead>
+                    <TableHead>项目</TableHead>
+                    <TableHead>依赖</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {todoList.map((todo) => (
+                    <TableRow
+                      key={todo.id}
+                      className="cursor-pointer"
+                      data-state={todo.id === selectedTodoId ? 'selected' : undefined}
+                      onClick={() => setSelectedTodoId(todo.id)}
+                    >
+                      <TableCell className="font-medium">{todo.title}</TableCell>
+                      <TableCell>
+                        <StatusBadge
+                          tone={TODO_STATUS_VIEW[todo.status].tone}
+                          label={TODO_STATUS_VIEW[todo.status].label}
+                        />
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{todo.project ?? NONE}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {todo.depends_on.length === 0 ? NONE : todo.depends_on.join('、')}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+          <div className="min-w-0 @3xl/main:w-[22rem]">
+            {currentTodo === null ? (
+              <p className="text-sm text-muted-foreground">选择一条待办查看详情。</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 truncate font-medium">{currentTodo.title}</span>
+                  <div className="ml-auto">
+                    <Select
+                      value={currentTodo.status}
+                      onValueChange={(value) => changeTodoStatus(currentTodo, value as TodoStatus)}
+                    >
+                      <SelectTrigger className="w-[8rem]" aria-label="状态">
+                        <SelectValue>{(value) => TODO_STATUS_VIEW[value as TodoStatus].label}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TODO_STATUS_ORDER.map((status) => (
+                          <SelectItem key={status} value={status}>{TODO_STATUS_VIEW[status].label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs text-muted-foreground">需求</span>
+                  <p className="whitespace-pre-wrap text-sm">
+                    {currentTodo.request === '' ? NONE : currentTodo.request}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs text-muted-foreground">验收</span>
+                  <p className="whitespace-pre-wrap text-sm">
+                    {currentTodo.acceptance === '' ? NONE : currentTodo.acceptance}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 border-t pt-4">
+          <span className="text-sm font-medium">新建待办</span>
+          <Field>
+            <FieldLabel>标题</FieldLabel>
+            <Input value={todoTitle} onChange={(event) => setTodoTitle(event.target.value)} />
+          </Field>
+          <Field>
+            <FieldLabel>需求</FieldLabel>
+            <Textarea value={todoRequestBody} onChange={(event) => setTodoRequestBody(event.target.value)} />
+          </Field>
+          <Field>
+            <FieldLabel>验收标准</FieldLabel>
+            <Textarea value={todoAcceptance} onChange={(event) => setTodoAcceptance(event.target.value)} />
+          </Field>
+          <Field>
+            <FieldLabel>项目（可选）</FieldLabel>
+            <Input value={todoProject} onChange={(event) => setTodoProject(event.target.value)} />
+          </Field>
+          <Field>
+            <FieldLabel>依赖（可选，逗号分隔的待办 id）</FieldLabel>
+            <Input value={todoDependsOn} onChange={(event) => setTodoDependsOn(event.target.value)} />
+          </Field>
+          <div>
+            <Button size="sm" disabled={todoTitle.trim() === '' || createTodo.isPending} onClick={requestCreateTodo}>
+              添加
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
   const createForm = (
     <div className="flex max-w-md flex-col gap-3">
       <Field>
@@ -335,6 +554,7 @@ export function BotPage() {
         </PageDescription>
       </PageHeader>
       <PageContent>
+        {todoCard}
         {bots.isError ? (
           <QueryError query={bots} title={PAGE_TITLE} />
         ) : bots.isPending ? (

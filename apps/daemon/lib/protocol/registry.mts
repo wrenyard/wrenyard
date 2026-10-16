@@ -364,6 +364,24 @@ import {
   type WorkspaceDocDeleteResult,
 } from './methods/workspace-doc.mts'
 import {
+  todoListParamsSchema,
+  todoListResultSchema,
+  todoGetParamsSchema,
+  todoGetResultSchema,
+  todoCreateParamsSchema,
+  todoCreateResultSchema,
+  todoUpdateParamsSchema,
+  todoUpdateResultSchema,
+  type TodoListParams,
+  type TodoListResult,
+  type TodoGetParams,
+  type TodoGetResult,
+  type TodoCreateParams,
+  type TodoCreateResult,
+  type TodoUpdateParams,
+  type TodoUpdateResult,
+} from './methods/workspace-todo.mts'
+import {
   workspaceVcsStatusParamsSchema,
   workspaceVcsStatusResultSchema,
   workspaceVcsDiffParamsSchema,
@@ -532,6 +550,30 @@ export {
   workspaceDocDeleteParamsSchema,
   workspaceDocDeleteResultSchema,
 } from './methods/workspace-doc.mts'
+export type {
+  Todo,
+  TodoStatus,
+  TodoCreateInput,
+  TodoUpdateInput,
+  TodoListParams,
+  TodoListResult,
+  TodoGetParams,
+  TodoGetResult,
+  TodoCreateParams,
+  TodoCreateResult,
+  TodoUpdateParams,
+  TodoUpdateResult,
+} from './methods/workspace-todo.mts'
+export {
+  todoListParamsSchema,
+  todoListResultSchema,
+  todoGetParamsSchema,
+  todoGetResultSchema,
+  todoCreateParamsSchema,
+  todoCreateResultSchema,
+  todoUpdateParamsSchema,
+  todoUpdateResultSchema,
+} from './methods/workspace-todo.mts'
 export type {
   RuntimeAliasPutParams,
   RuntimeAliasPutResult,
@@ -912,6 +954,10 @@ export interface ForemanMethodParams {
   'workspace.doc.update': WorkspaceDocUpdateParams
   'workspace.doc.edit': WorkspaceDocEditParams
   'workspace.doc.delete': WorkspaceDocDeleteParams
+  'todo.list': TodoListParams
+  'todo.get': TodoGetParams
+  'todo.create': TodoCreateParams
+  'todo.update': TodoUpdateParams
   'workspace.vcs.status': WorkspaceVcsStatusParams
   'workspace.vcs.diff': WorkspaceVcsDiffParams
   'workspace.vcs.commit': WorkspaceVcsCommitParams
@@ -1021,6 +1067,10 @@ export interface ForemanMethodResults {
   'workspace.doc.update': WorkspaceDocUpdateResult
   'workspace.doc.edit': WorkspaceDocUpdateResult
   'workspace.doc.delete': WorkspaceDocDeleteResult
+  'todo.list': TodoListResult
+  'todo.get': TodoGetResult
+  'todo.create': TodoCreateResult
+  'todo.update': TodoUpdateResult
   'workspace.vcs.status': WorkspaceVcsStatusResult
   'workspace.vcs.diff': WorkspaceVcsDiffResult
   'workspace.vcs.commit': WorkspaceVcsCommitResult
@@ -1321,6 +1371,26 @@ export const methodRegistry: {
     params: workspaceDocDeleteParamsSchema,
     result: workspaceDocDeleteResultSchema,
     description: "Delete exactly one document of a registered project. name is a full name returned by workspace.doc.list or workspace.doc.create and base_version comes from workspace.doc.read, so a document changed since it was read is not deleted. Refuses with missing when the document does not exist, not_a_file when it is not a regular document, and conflict when base_version no longer matches.",
+  },
+  'todo.list': {
+    params: todoListParamsSchema,
+    result: todoListResultSchema,
+    description: 'List every workspace todo, ordered by id. Read-only.',
+  },
+  'todo.get': {
+    params: todoGetParamsSchema,
+    result: todoGetResultSchema,
+    description: 'Read one workspace todo by its id. Refuses with missing when no such todo exists. Read-only.',
+  },
+  'todo.create': {
+    params: todoCreateParamsSchema,
+    result: todoCreateResultSchema,
+    description: "Create one workspace todo. The daemon generates the short stable id; there is no caller-selectable filesystem root. Refuses with bad_title, bad_status, bad_dependency/dependency_self/dependency_cycle or bad_attachment on invalid input.",
+  },
+  'todo.update': {
+    params: todoUpdateParamsSchema,
+    result: todoUpdateResultSchema,
+    description: "Update one existing workspace todo by id. Absent fields are kept, id and created are immutable and updated is refreshed. Refuses with missing when no such todo exists.",
   },
   'workspace.vcs.status': {
     params: workspaceVcsStatusParamsSchema,

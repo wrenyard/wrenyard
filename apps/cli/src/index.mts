@@ -12,6 +12,7 @@ import { handleDaemonRun, handleDaemonStop } from './commands/daemon.mts'
 import { handleDoctor } from './commands/doctor.mts'
 import { handleProject } from './commands/project.mts'
 import { handleWorkspace } from './commands/workspace.mts'
+import { handleTodo } from './commands/todo.mts'
 import { handleStatus } from './commands/status.mts'
 import { handleTask } from './commands/task.mts'
 import { handleSession } from './commands/session.mts'
@@ -75,6 +76,8 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return handleProject(args.slice(1))
       case 'workspace':
         return handleWorkspace(args.slice(1))
+      case 'todo':
+        return handleTodo(args.slice(1))
       case 'status':
         return handleStatus(args.slice(1))
       case 'doctor':
@@ -145,6 +148,10 @@ Usage:
   wrenyard workspace doc update <project> <kind> <name> --file <f> --base <version> [--config path] [--json]
   wrenyard workspace doc edit <project> <kind> <name> --old <text> --new <text> [--base <version>] [--config path] [--json]
   wrenyard workspace doc delete <project> <kind> <name> --base <version> [--config path] [--json]
+  wrenyard todo list [--config path] [--json]
+  wrenyard todo add --title <t> [--request <text>] [--acceptance <text>] [--project <p>] [--depends-on <id>]... [--attach <path>]... [--config path] [--json]
+  wrenyard todo show <id> [--config path] [--json]
+  wrenyard todo set-status <id> <open|in_progress|done|accepted|cancelled> [--config path] [--json]
   wrenyard taskgraph create <json-params> [--config path] [--json]
   wrenyard taskgraph patch <json-params> [--config path] [--json]
   wrenyard taskgraph status <json-params> [--config path] [--json]

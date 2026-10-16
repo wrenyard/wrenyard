@@ -259,6 +259,7 @@ export const SHELL_CHANNELS = {
   operationComponents: 'wrenyard-shell:operation-components',
   operationComponentAction: 'wrenyard-shell:operation-component-action',
   botRequest: 'wrenyard-shell:bot-request',
+  todoRequest: 'wrenyard-shell:todo-request',
 } as const;
 
 export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'schedules' | 'bot';
@@ -1585,6 +1586,88 @@ export interface BotMethodMap {
 }
 
 /* ------------------------------------------------------------------ */
+/* Workspace todos                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Workspace todos are the bot's native task source: one Markdown file per todo
+ * under the daemon-owned workspace `todos/` directory. The daemon owns the
+ * files and every method; a caller names a todo and its fields, never where it
+ * lives. Execution-finished (`done`) and acceptance-passed (`accepted`) are
+ * distinct stored statuses. These wire types mirror the daemon's workspace-todo
+ * DTOs exactly.
+ */
+
+/** The complete, ordered set of valid todo statuses. */
+export type TodoStatus = 'open' | 'in_progress' | 'done' | 'accepted' | 'cancelled';
+
+/** One workspace todo, as stored in its Markdown file. */
+export interface Todo {
+  id: string;
+  title: string;
+  status: TodoStatus;
+  project?: string;
+  depends_on: string[];
+  created: string;
+  updated: string;
+  request: string;
+  acceptance: string;
+  attachments: string[];
+}
+
+/** Input for creating one workspace todo; the daemon generates the id. */
+export interface TodoCreateInput {
+  title: string;
+  status?: TodoStatus;
+  project?: string;
+  depends_on?: string[];
+  request?: string;
+  acceptance?: string;
+  attachments?: string[];
+}
+
+/** Input for updating one workspace todo; absent fields are kept. */
+export interface TodoUpdateInput {
+  id: string;
+  title?: string;
+  status?: TodoStatus;
+  project?: string;
+  depends_on?: string[];
+  request?: string;
+  acceptance?: string;
+  attachments?: string[];
+}
+
+/**
+ * The exact daemon methods the shell bridge forwards. Any other method is
+ * rejected before it can reach the daemon.
+ */
+export const TODO_METHODS = [
+  'todo.list',
+  'todo.get',
+  'todo.create',
+  'todo.update',
+] as const;
+
+export type TodoMethod = (typeof TODO_METHODS)[number];
+
+export interface TodoListResult { todos: Todo[] }
+export interface TodoGetParams { id: string }
+export interface TodoGetResult { todo: Todo }
+export type TodoCreateParams = TodoCreateInput;
+export interface TodoCreateResult { todo: Todo }
+export type TodoUpdateParams = TodoUpdateInput;
+export interface TodoUpdateResult { todo: Todo }
+
+/** Params and result of each forwarded todo method, used to type the facade. */
+export interface TodoMethodMap {
+  'todo.list': { params: undefined; result: TodoListResult };
+  'todo.get': { params: TodoGetParams; result: TodoGetResult };
+  'todo.create': { params: TodoCreateParams; result: TodoCreateResult };
+  'todo.update': { params: TodoUpdateParams; result: TodoUpdateResult };
+}
+
+/* ------------------------------------------------------------------ */
 /* WY Remote: SSH connection and single active context                 */
 /* ------------------------------------------------------------------ */
 
@@ -1807,6 +1890,15 @@ export interface WrenyardShellApi {
     method: M,
     params?: BotMethodMap[M]['params'],
   ): Promise<BotMethodMap[M]['result']>;
+  /**
+   * Forward one allowlisted `todo.*` call to the daemon. The main-process
+   * registrar rejects any method outside {@link TODO_METHODS} before it reaches
+   * the daemon, so this facade is the renderer's only path to workspace todos.
+   */
+  todo<M extends TodoMethod>(
+    method: M,
+    params?: TodoMethodMap[M]['params'],
+  ): Promise<TodoMethodMap[M]['result']>;
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
   runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;

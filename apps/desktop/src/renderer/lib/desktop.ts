@@ -1,6 +1,6 @@
 /** The only renderer module that reads the typed preload shell facade. */
 import { useSyncExternalStore } from 'react';
-import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi, BotMethod, BotMethodMap } from '@/shell-contract';
+import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi, BotMethod, BotMethodMap, TodoMethod, TodoMethodMap } from '@/shell-contract';
 
 declare global {
   interface Window {
@@ -38,6 +38,23 @@ export function botRequest<M extends BotMethod>(
   params?: BotMethodMap[M]['params'],
 ): Promise<BotMethodMap[M]['result']> {
   return shell.bot(method, params);
+}
+
+/* ------------------------------------------------------------------ */
+/* Workspace todo bridge                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Forward one allowlisted `todo.*` call through the shell bridge. The main
+ * process rejects any method outside `TODO_METHODS`, and the daemon addresses
+ * todos only inside the configured workspace, so every renderer todo read and
+ * write goes through this typed facade instead of the preload object directly.
+ */
+export function todoRequest<M extends TodoMethod>(
+  method: M,
+  params?: TodoMethodMap[M]['params'],
+): Promise<TodoMethodMap[M]['result']> {
+  return shell.todo(method, params);
 }
 
 /* ------------------------------------------------------------------ */

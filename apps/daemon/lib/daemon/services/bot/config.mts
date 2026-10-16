@@ -60,7 +60,13 @@ export interface BotMcpAdapter {
   timeoutMs: number
 }
 
-export type BotAdapter = BotCommandAdapter | BotMcpAdapter
+/** A daemon-native workspace todo inbox; it has no caller-supplied settings. */
+export interface BotWorkspaceAdapter {
+  kind: 'workspace'
+}
+
+export type BotNotifierAdapter = BotCommandAdapter | BotMcpAdapter
+export type BotAdapter = BotNotifierAdapter | BotWorkspaceAdapter
 
 /** Per-project standing authorization for the bot. */
 export interface BotProjectPolicy {
@@ -163,7 +169,7 @@ export interface BotConfig {
   /** `dryRun` keeps every outward effect in the journal instead of performing it. */
   mode: BotConfigMode
   inbox: BotAdapter
-  notifier: BotAdapter
+  notifier: BotNotifierAdapter
   projects: BotProjectPolicy[]
   routing: BotRouting
   concurrency: BotConcurrency
@@ -192,6 +198,7 @@ const TOP_LEVEL_KEYS = [
 ] as const
 const COMMAND_ADAPTER_KEYS = ['kind', 'argv', 'cwd', 'env', 'timeoutMs'] as const
 const MCP_ADAPTER_KEYS = ['kind', 'server', 'tool', 'timeoutMs'] as const
+const WORKSPACE_ADAPTER_KEYS = ['kind'] as const
 const PROJECT_KEYS = ['id', 'match', 'merge', 'push', 'release'] as const
 const ROUTING_ENTRY_KEYS = ['provider', 'model', 'reasoningEffort', 'target'] as const
 const CONCURRENCY_KEYS = ['maxActiveItems', 'maxDispatchPerTick'] as const
@@ -258,7 +265,9 @@ export function validateBotConfig(value: unknown): BotConfigValidation {
 
   const name = readString(issues, 'name', value.name, { required: true })
   const mode = readMode(issues, value.mode)
-  const inbox = validateAdapter(issues, 'inbox', value.inbox, { required: true })
+  const inbox = value.inbox === undefined
+    ? { kind: 'workspace' as const }
+    : validateAdapter(issues, 'inbox', value.inbox, { required: true, allowWorkspace: true })
   const notifier = validateAdapter(issues, 'notifier', value.notifier, { required: true })
   const projects = validateProjects(issues, value.projects)
   const routing = validateRouting(issues, value.routing)
@@ -356,7 +365,19 @@ function validateAdapter(
   issues: string[],
   path: string,
   value: unknown,
-  options: { required?: boolean } = {},
+  options: { required?: boolean; allowWorkspace: true },
+): BotAdapter | undefined
+function validateAdapter(
+  issues: string[],
+  path: string,
+  value: unknown,
+  options?: { required?: boolean; allowWorkspace?: false },
+): BotNotifierAdapter | undefined
+function validateAdapter(
+  issues: string[],
+  path: string,
+  value: unknown,
+  options: { required?: boolean; allowWorkspace?: boolean } = {},
 ): BotAdapter | undefined {
   if (value === undefined) {
     if (options.required === true) issues.push(`${path} is required`)
@@ -366,8 +387,16 @@ function validateAdapter(
     issues.push(`${path} must be an adapter object`)
     return undefined
   }
+  if (value.kind === 'workspace') {
+    if (options.allowWorkspace !== true) {
+      issues.push(`${path}.kind must be 'command' or 'mcp'`)
+      return undefined
+    }
+    pushUnknownKeys(issues, path, value, WORKSPACE_ADAPTER_KEYS)
+    return { kind: 'workspace' }
+  }
   if (value.kind !== 'command' && value.kind !== 'mcp') {
-    issues.push(`${path}.kind must be 'command' or 'mcp'`)
+    issues.push(`${path}.kind must be 'command' or 'mcp'${options.allowWorkspace === true ? " or 'workspace'" : ''}`)
     return undefined
   }
 

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import type { Session } from '@wrenyard/session'
+import { foremanStateRoot } from '../../../config/state.mts'
 import { ProjectManager } from '../../../core/project/manager.mts'
 import { runGitSync } from '../../../core/vcs/index.mts'
 import type { ForemanDatabase } from '../../../db/types.mts'
@@ -17,6 +18,7 @@ import type {
 } from '../../../protocol/methods/bot.mts'
 import { redactString } from '../../execution/redaction.mts'
 import type { OperationComponentId, OperationComponents } from '../operation-components.mts'
+import { WorkspaceTodoError, WorkspaceTodoService, todoIndexPath, type TodoStatus } from '../workspace-todo-service.mts'
 import {
   DEFAULT_BOT_WATCHDOGS,
   botConfigHash,
@@ -445,6 +447,17 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   const { db, workspaceRoot, session, log, canRun } = options
   const store = createBotStore({ db, workspaceRoot })
   const projectManager = options.projectManager ?? new ProjectManager({ workspaceRoot })
+  // The native (`kind: 'workspace'`) inbox is backed by the workspace's own todo
+  // files. It is built from this host's configured workspace root, so a native
+  // inbox never accepts a caller-supplied path; the command (Things) and MCP
+  // adapters are untouched and keep going through their own processes. Its index
+  // is disposable and lives under the daemon local state root keyed by the
+  // workspace, the same convention the daemon uses, never inside the workspace
+  // tree or the runtime database.
+  const workspaceTodoService = new WorkspaceTodoService(
+    workspaceRoot,
+    todoIndexPath(foremanStateRoot(), workspaceRoot),
+  )
   const timerMs = options.tickMs ?? MIN_TICK_MS
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS
   const clock = options.now ?? Date.now
@@ -511,6 +524,165 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
 
   function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error)
+  }
+
+  /**
+   * Build the typed inbox client for one bot and its config, injecting the
+   * native service.
+   *
+   * Only a dry-run workspace bot gets a dependency projection: a dependency that
+   * finished a same-bot dry run, with a fingerprint still matching the file on
+   * disk, counts as finished for intake, so the dry-run flow can advance past a
+   * predecessor whose source file was never written. The projection is prepared
+   * here, before the client exists, and it resolves fingerprints through a
+   * callback-free inbox read, so it cannot recurse. A live bot receives no
+   * callback at all, so its gating is exactly the on-disk check.
+   */
+  async function openInbox(bot: BotRecord, config: BotConfig): Promise<InboxClient> {
+    const isDependencyCompleted = await dryRunDependencyProjection(bot, config)
+    return createInboxClient(config.inbox, {
+      workspaceTodoService,
+      ...(isDependencyCompleted === undefined ? {} : { isDependencyCompleted }),
+    })
+  }
+
+  /**
+   * The dry-run-only dependency projection. A source id is projected finished
+   * only when its latest same-bot item completed in dry-run mode and the
+   * recorded dispatch fingerprint still matches the current source. Anything
+   * else — a live bot, a non-workspace inbox, no completed dry run, a changed
+   * fingerprint or a read failure — yields `undefined`, so gating falls back to
+   * the on-disk status alone and a missing or cancelled dependency stays
+   * blocked. It never changes a todo's own status or `open`.
+   */
+  async function dryRunDependencyProjection(
+    bot: BotRecord,
+    config: BotConfig,
+  ): Promise<((id: string) => boolean) | undefined> {
+    if (config.inbox.kind !== 'workspace') return undefined
+    if (bot.mode !== 'dryRun' && config.mode !== 'dryRun') return undefined
+    const projected = new Set<string>()
+    for (const candidate of store.listItems(bot.id)) {
+      if (candidate.state !== 'completed' || candidate.dryRun !== true) continue
+      // The latest generation for a source is the one that counts; a superseded
+      // or re-opened item never projects.
+      const latest = store.findItemBySource(bot.id, candidate.sourceId)
+      if (latest === undefined || latest.state !== 'completed' || latest.dryRun !== true) continue
+      if (latest.fingerprint === undefined) continue
+      if (!(await sourceFingerprintMatches(config, candidate.sourceId, latest.fingerprint))) continue
+      projected.add(candidate.sourceId)
+    }
+    if (projected.size === 0) return undefined
+    return (id: string) => projected.has(id)
+  }
+
+  /** Whether the current source fingerprint still equals a recorded one. */
+  async function sourceFingerprintMatches(
+    config: BotConfig,
+    sourceId: string,
+    fingerprint: string,
+  ): Promise<boolean> {
+    try {
+      // A callback-free client, so resolving the fingerprint can never re-enter
+      // the projection this helper is building.
+      const base = createInboxClient(config.inbox, { workspaceTodoService })
+      const fetched = (await base.get(sourceId)).item
+      return fetched !== null && itemFingerprint(fetched) === fingerprint
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Reflect one bot lifecycle status onto a native workspace todo.
+   *
+   * Only a `kind: 'workspace'` inbox has writable source state; a command
+   * (Things) or MCP adapter owns its own store and is left untouched, so this is
+   * a no-op for them. In dry-run mode the todo file is never modified: the
+   * intended transition is recorded as a log row instead of faking a write.
+   *
+   * The write is guarded so it never clobbers a terminal source: a cancelled
+   * todo refuses every transition, and an accepted todo is never downgraded to
+   * `in_progress` or `done`. Reading or writing failure is logged and rethrown,
+   * so the calling step fails and retries instead of the bot committing its own
+   * transition while the source file stayed unchanged.
+   */
+  async function reflectNativeTodoStatus(
+    bot: BotRecord,
+    config: BotConfig | undefined,
+    sourceId: string,
+    status: TodoStatus,
+    dryRun: boolean,
+  ): Promise<void> {
+    if (config?.inbox.kind !== 'workspace') return
+    if (dryRun) {
+      store.appendLog({
+        botId: bot.id,
+        level: 'info',
+        code: 'todo.status_dry_run',
+        message: `dry run: workspace todo ${sourceId} would be set to ${status}`,
+      })
+      return
+    }
+    try {
+      const todo = await workspaceTodoService.getTodo(sourceId)
+      if (todo.status === status) return
+      if (todo.status === 'cancelled') {
+        throw new WorkspaceTodoError('cancelled', `workspace todo ${sourceId} is cancelled; refusing to set it to ${status}`)
+      }
+      if (todo.status === 'accepted' && (status === 'in_progress' || status === 'done')) {
+        throw new WorkspaceTodoError('accepted', `workspace todo ${sourceId} is accepted; refusing to downgrade it to ${status}`)
+      }
+      await workspaceTodoService.updateTodo({ id: sourceId, status })
+      store.appendLog({
+        botId: bot.id,
+        level: 'info',
+        code: 'todo.status',
+        message: `workspace todo ${sourceId} set to ${status}`,
+      })
+    } catch (error) {
+      store.appendLog({
+        botId: bot.id,
+        level: 'warn',
+        code: 'todo.status_failed',
+        message: `workspace todo ${sourceId} status ${status} was not written: ${errorMessage(error)}`,
+      })
+      throw error
+    }
+  }
+
+  /**
+   * Native-only dispatch safeguard. Immediately before dispatch a workspace todo
+   * is re-read so an item whose source was withdrawn, or whose dependency is no
+   * longer `done`/`accepted` (unfinished or cancelled), is not dispatched.
+   * `list`/`get` already treat such a todo as not open; this re-check closes the
+   * gap between admission and dispatch.
+   *
+   * The result is tri-state. `dispatch` lets the item proceed; `blocked` means
+   * the read succeeded and the source is missing or not open, so the item is
+   * parked; `retry` means the adapter itself failed, so a transient read error
+   * neither parks the item nor enqueues dispatch — the item stays `verified`
+   * and the recheck runs again on a later tick. A command (Things) or MCP inbox
+   * is never re-read here and always returns `dispatch`.
+   */
+  async function nativeSourceDispatchable(
+    bot: BotRecord,
+    config: BotConfig | undefined,
+    sourceId: string,
+  ): Promise<'dispatch' | 'blocked' | 'retry'> {
+    if (config?.inbox.kind !== 'workspace') return 'dispatch'
+    try {
+      const inbox = await openInbox(bot, config)
+      return (await inbox.get(sourceId)).item?.open === true ? 'dispatch' : 'blocked'
+    } catch (error) {
+      store.appendLog({
+        botId: bot.id,
+        level: 'warn',
+        code: 'dispatch.source_retry',
+        message: `could not re-read workspace todo ${sourceId}; the dispatch recheck will retry: ${errorMessage(error)}`,
+      })
+      return 'retry'
+    }
   }
 
   /** This process's device/daemon identity, used when none is injected. */
@@ -1353,6 +1525,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   /** Log-safe adapter label: the executable base name or the MCP tool. */
   function adapterLabel(adapter: BotAdapter): string {
     const description: BotAdapterDescription = describeAdapter(adapter)
+    if (description.kind === 'workspace') return 'workspace'
     return description.kind === 'mcp' ? `mcp:${description.tool}` : `command:${description.command}`
   }
 
@@ -1805,7 +1978,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       )
       return found ? 'done' : 'not-done'
     },
-    async run({ bot, item, step, config }) {
+    async run({ bot, item, step, config, dryRun }) {
       if (item.sessionId === undefined) throw new Error('item has no session')
       // An answer follow-up carries the user's own answer through the same
       // follow-up path as every other session message, so it reuses the
@@ -1823,6 +1996,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       if (model === undefined) throw new Error('no routed model is available for this item')
       const text = options.buildBrief?.(item, step) ?? dispatchBrief(item, step)
       const result = await session.send(item.sessionId, { text, model })
+      // Dispatch starts execution, so a native workspace todo becomes
+      // `in_progress`. A dry run records the would-be status instead of touching
+      // the file.
+      await reflectNativeTodoStatus(bot, config, item.sourceId, 'in_progress', dryRun)
       return {
         output: { turn: result.turn, model },
         patch: { sessionModel: model },
@@ -2013,7 +2190,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     dryRun: ({ item }) => ({ output: { dryRun: true, wouldComplete: { sourceId: item.sourceId } } }),
     async run({ bot, item, config }) {
       if (config === undefined) throw new Error('bot config is unavailable for inbox.complete')
-      const inbox = createInboxClient(config.inbox)
+      const inbox = await openInbox(bot, config)
       try {
         const result = await inbox.complete(item.sourceId)
         if (!result.ok) throw new Error('inbox.complete was not confirmed')
@@ -2222,7 +2399,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         },
       }
     },
-    async applyTaskResult({ bot, item, step, config }, output) {
+    async applyTaskResult({ bot, item, step, config, dryRun }, output) {
       if (config === undefined) throw new Error('bot config is unavailable for review')
       if (item.sessionId === undefined) throw new Error('item has no session to review')
       const counters = item.counters ?? {}
@@ -2312,6 +2489,11 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       }
       const gate = await checkReadyGate(item)
       if (gate.ok) {
+        // Execution is finished: a native workspace todo reaches `done` here,
+        // before acceptance later persists `accepted`. The guarded write runs
+        // before the `ready` transition, so a refused or failed write keeps the
+        // item out of acceptance and the step retries.
+        await reflectNativeTodoStatus(bot, config, item.sourceId, 'done', dryRun)
         store.appendLog({
           botId: bot.id,
           itemId: item.id,
@@ -2414,7 +2596,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         },
       }
     },
-    async applyTaskResult({ bot, item, config }, output) {
+    async applyTaskResult({ bot, item, config, dryRun }, output) {
       if (config === undefined) throw new Error('bot config is unavailable for acceptance')
       const checks = mapAcceptanceChecks(acceptancePlan(item), output)
       const acceptanceAttempts = (item.counters?.acceptanceAttempts ?? 0) + 1
@@ -2434,6 +2616,11 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
             },
           }
         }
+        // Acceptance failed and the session resumes work: a native workspace todo
+        // that still reads `done` (execution finished) goes back to
+        // `in_progress`. The guarded write runs before the bot transition
+        // commits, so a refused or failed write retries instead of advancing.
+        await reflectNativeTodoStatus(bot, config, item.sourceId, 'in_progress', dryRun)
         store.transitionItem(item.id, 'rejected', {
           acceptance: checks,
           counters: { ...(item.counters ?? {}), acceptanceAttempts },
@@ -2491,6 +2678,11 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         code: 'acceptance.passed',
         message: `all ${checks.length} check(s) verified`,
       })
+      // Acceptance is a source status of its own. A native workspace todo moves
+      // to `accepted`, which is independent of the later `complete` (execution
+      // finished) write and is never downgraded by it; a dry run records the
+      // would-be status instead of writing it.
+      await reflectNativeTodoStatus(bot, config, item.sourceId, 'accepted', dryRun)
       return {
         output,
         to: 'accepted',
@@ -2514,7 +2706,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       if (config === undefined) throw new Error('bot config is unavailable for inbox.annotate')
       const text = dismissReason(item)
       try {
-        const inbox = createInboxClient(config.inbox)
+        const inbox = await openInbox(bot, config)
         const result = await inbox.annotate(item.sourceId, text)
         resetAdapterErrors(bot.id)
         // The annotation edits the source item itself; adopting the annotated
@@ -2819,7 +3011,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    */
   async function pollBot(bot: BotRecord, config: BotConfig, force: boolean): Promise<boolean> {
     if (!force && !pollDue(bot, Date.now())) return false
-    const inbox = createInboxClient(config.inbox)
+    const inbox = await openInbox(bot, config)
     let listed: InboxItem[]
     try {
       listed = (await inbox.list()).items
@@ -2908,13 +3100,61 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
+   * Park a `verified` item whose native workspace source is no longer open, so
+   * it is not dispatched against a withdrawn source or an unfinished/cancelled
+   * dependency. Mirrors {@link parkForSourceChange}: the reason is durable and a
+   * user answer returns the item to `verified` for a fresh check.
+   */
+  function parkUndispatchableSource(bot: BotRecord, item: BotItemRecord): void {
+    try {
+      store.transitionItem(item.id, 'parked', {
+        parkedFrom: 'verified',
+        question: 'the source todo is no longer open (withdrawn, or a dependency is unfinished or cancelled); answer to retry once it is ready',
+        error: 'source_not_dispatchable',
+      })
+      store.appendLog({
+        botId: bot.id,
+        itemId: item.id,
+        level: 'warn',
+        code: 'dispatch.blocked',
+        message: `item ${item.id} not dispatched: the source todo is no longer open`,
+      })
+    } catch (error) {
+      store.appendLog({
+        botId: bot.id,
+        itemId: item.id,
+        level: 'error',
+        code: 'dispatch.block_failed',
+        message: `could not hold item ${item.id}: ${errorMessage(error)}`,
+      })
+    }
+  }
+
+  /**
    * Ask the inbox whether an item's source is still open and unchanged. Runs
    * immediately before merge and before inbox.complete; an adapter error is
    * retryable, never a withdrawal.
+   *
+   * The `open` flag of a workspace inbox means "dispatchable", so `done` and
+   * `accepted` report it false even though the source is not withdrawn. A
+   * workspace source is therefore read through the todo service: it is `gone`
+   * only when the todo is missing or cancelled, `changed` when the inbox
+   * fingerprint differs for any other state (including `done`/`accepted`), and
+   * `retry` on any other read error. A command (Things) or MCP inbox keeps the
+   * open-flag check.
    */
   async function gateSource(bot: BotRecord, config: BotConfig, item: BotItemRecord): Promise<SourceGate> {
-    const inbox = createInboxClient(config.inbox)
+    const inbox = await openInbox(bot, config)
     try {
+      if (config.inbox.kind === 'workspace') {
+        const todo = await workspaceTodoService.getTodo(item.sourceId)
+        if (todo.status === 'cancelled') return 'gone'
+        const fetched = (await inbox.get(item.sourceId)).item
+        if (fetched === null) return 'gone'
+        if (item.fingerprint !== undefined && itemFingerprint(fetched) !== item.fingerprint) return 'changed'
+        resetAdapterErrors(bot.id)
+        return 'open'
+      }
       const fetched = (await inbox.get(item.sourceId)).item
       if (fetched === null || fetched.open !== true) return 'gone'
       const fingerprint = itemFingerprint(fetched)
@@ -2922,6 +3162,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       resetAdapterErrors(bot.id)
       return 'open'
     } catch (error) {
+      if (error instanceof WorkspaceTodoError && error.code === 'missing') return 'gone'
       recordAdapterError(bot, config, config.inbox, 'get', error)
       return 'retry'
     }
@@ -2981,6 +3222,16 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       // worktree is created for a newly verified item. Items already dispatched
       // are unaffected, and every other step still runs.
       if (isBackedOff(bot.id)) return
+      // Native-only safeguard: a workspace todo whose source was withdrawn, or
+      // whose dependency is no longer done/accepted, is held instead of being
+      // dispatched against stale source state. A failed re-read leaves the item
+      // `verified` (neither parked nor dispatched) so the check retries later.
+      const sourceState = await nativeSourceDispatchable(bot, config, item.sourceId)
+      if (sourceState === 'blocked') {
+        parkUndispatchableSource(bot, item)
+        return
+      }
+      if (sourceState === 'retry') return
       // Worktree, then session, then the brief; each waits for the previous.
       if (ensureStep(item, 'worktree.create')) return
       ensureStep(item, 'session.create')
