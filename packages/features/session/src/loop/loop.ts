@@ -391,7 +391,7 @@ export async function protocolTools(
       async run(args: Record<string, unknown>): Promise<string> {
         let result: unknown;
         try {
-          result = await deps.host.call(info.name, args);
+          result = await deps.host.call(info.name, args, { sessionId: ctx.sessionId });
         } catch (error) {
           return errorResult(errorCodeOf(error), messageOf(error));
         }

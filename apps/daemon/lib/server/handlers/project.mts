@@ -107,21 +107,21 @@ export function registerProjectHandlers(router: RpcRouter, options: ProjectRpcHa
           idGenerator: () => params.worktree_id as string,
         })
         : manager
-      return createManager.createWorktree(params.project, params.branch)
+      return createManager.createWorktree(params.project, params.branch, { ...(params.lock ? { lock: params.lock } : {}) })
     })
   })
   router.register('project.worktree.remove', async (params) => {
     assertNotBotHeld(params.worktree_id)
     return projectJsonResult<ProjectWorktreeRemoveResult>(() => {
       if (params.project) manager.getProject(params.project)
-      return manager.removeWorktree(params.worktree_id)
+      return manager.removeWorktree(params.worktree_id, { lock: params.lock, force: params.force === true })
     })
   })
   router.register('project.worktree.merge', async (params) => {
     assertNotBotHeld(params.worktree_id)
     // No owner is forwarded: a worktree owned by a bot can only be merged by
     // that bot, so a session (or any other caller) gets reason 'bot_owned'.
-    return projectJsonResult<ProjectWorktreeMergeResult>(() => manager.mergeWorktree(params.project, params.worktree_id))
+    return projectJsonResult<ProjectWorktreeMergeResult>(() => manager.mergeWorktree(params.project, params.worktree_id, { lock: params.lock, force: params.force === true }))
   })
   router.register('project.worktree.rebase', async (params) => {
     return projectJsonResult<ProjectWorktreeRebaseResult>(() => manager.rebaseWorktree(params.project, params.worktree_id))

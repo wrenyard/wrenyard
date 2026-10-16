@@ -132,7 +132,7 @@ Usage:
   wrenyard project commit <project> [--worktree id] -m <message> <file>... [--config path] [--json]
   wrenyard project worktree list <project> [--config path] [--json]
   wrenyard project worktree create <project> <worktree_id> [--config path] [--json]
-  wrenyard project worktree remove <worktree_id> [--config path] [--json]
+  wrenyard project worktree remove <worktree_id> [--force] [--config path] [--json]
   wrenyard project worktree merge <project> <worktree_id> [--config path] [--json]
   wrenyard workspace status [--config path] [--json]
   wrenyard workspace diff [--staged] [--path p]... [--config path] [--json]

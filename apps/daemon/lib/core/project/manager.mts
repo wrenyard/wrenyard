@@ -62,6 +62,24 @@ interface WorktreeMetadata {
   path: string
   /** Owning bot (`bot:<botId>/<itemId>`), absent for user-created worktrees. */
   owner?: string
+  /**
+   * Lock set by the creating caller (a session passes `session:<id>`); removing
+   * or merging requires the same lock, or an explicit `force`.
+   */
+  lock?: string
+}
+
+/** The caller of a lock-protected worktree operation. */
+interface WorktreeCaller {
+  owner?: string
+  lock?: string
+  force?: boolean
+}
+
+/** The refusal for a locked worktree, or undefined when the caller may proceed. */
+function lockRefusal(metadata: WorktreeMetadata | null, caller: WorktreeCaller): string | undefined {
+  if (!metadata?.lock || caller.force === true || caller.lock === metadata.lock) return undefined
+  return `worktree ${metadata.id} is locked by ${metadata.lock}; only its creator can remove or merge it (use force to override)`
 }
 
 const WORKTREE_ID_RE = /^[A-Za-z0-9_-]{8}$/u
@@ -272,7 +290,7 @@ export class ProjectManager {
       .sort((a, b) => a.id.localeCompare(b.id))
   }
 
-  createWorktree(projectName: string, branch?: string, options: { owner?: string } = {}): WorktreeCreateResult {
+  createWorktree(projectName: string, branch?: string, options: { owner?: string; lock?: string } = {}): WorktreeCreateResult {
     const project = this.getProject(projectName)
     if (project.noWorktree) throw new Error(this.worktreeUnsupportedProjectMessage(project))
     if (!existsSync(project.path)) throw new Error(`Project path does not exist: ${project.path}`)
@@ -283,6 +301,7 @@ export class ProjectManager {
     if (!branchName) throw new Error('branch must not be empty')
 
     const owner = options.owner?.trim()
+    const lock = options.lock?.trim()
     mkdirSync(dirname(targetPath), { recursive: true })
     const args = this.localBranchExists(project.path, branchName)
       ? ['worktree', 'add', targetPath, branchName]
@@ -295,6 +314,7 @@ export class ProjectManager {
         project: project.name,
         path: targetPath,
         ...(owner ? { owner } : {}),
+        ...(lock ? { lock } : {}),
       })
     } catch (e) {
       rmSync(targetPath, { recursive: true, force: true })
@@ -310,7 +330,7 @@ export class ProjectManager {
     }
   }
 
-  removeWorktree(worktreeId: string): WorktreeRemoveResult {
+  removeWorktree(worktreeId: string, caller: WorktreeCaller = {}): WorktreeRemoveResult {
     const id = validateWorktreeId(worktreeId)
     const metadata = this.readWorktreeMetadata(id)
     if (!metadata || !existsSync(metadata.path)) {
@@ -320,6 +340,8 @@ export class ProjectManager {
         error: `Worktree '${id}' was not found`,
       }
     }
+    const locked = lockRefusal(metadata, caller)
+    if (locked !== undefined) return { worktree_id: id, removed: false, project: metadata.project, path: metadata.path, error: locked }
 
     const project = this.findProject(metadata.project)
     if (!project) {
@@ -363,7 +385,7 @@ export class ProjectManager {
     }
   }
 
-  mergeWorktree(projectName: string, worktreeId: string, caller: { owner?: string } = {}): WorktreeMergeResult {
+  mergeWorktree(projectName: string, worktreeId: string, caller: WorktreeCaller = {}): WorktreeMergeResult {
     const requestedProject = projectName.trim()
     let id: string
     try {
@@ -391,6 +413,10 @@ export class ProjectManager {
     // A bot-owned worktree may be merged only by the bot that created it: the
     // caller must present the exact recorded owner. Checked before any git
     // operation so a session (which passes no owner) cannot self-merge.
+    const locked = lockRefusal(metadata, caller)
+    if (locked !== undefined) {
+      return requestedBase({ worktree_path: metadata?.path, reason: 'locked', error: locked })
+    }
     if (metadata && metadata.owner?.startsWith('bot:') && metadata.owner !== caller.owner) {
       return requestedBase({
         worktree_path: metadata.path,
@@ -600,7 +626,7 @@ export class ProjectManager {
     }
 
     const afterSha = this.revParse(project.path, `refs/heads/${targetBranch}`) ?? undefined
-    const removeResult = this.removeWorktree(id)
+    const removeResult = this.removeWorktree(id, caller)
     if (!removeResult.removed) {
       return targetBase({
         before_sha: beforeSha,
@@ -1181,13 +1207,14 @@ export class ProjectManager {
     const path = this.worktreeMetadataPath(worktreeId)
     if (!existsSync(path)) return null
     try {
-      const metadata = JSON.parse(readFileSync(path, 'utf-8')) as { id?: unknown; project?: unknown; path?: unknown; owner?: unknown }
+      const metadata = JSON.parse(readFileSync(path, 'utf-8')) as { id?: unknown; project?: unknown; path?: unknown; owner?: unknown; lock?: unknown }
       if (metadata.id === worktreeId && typeof metadata.project === 'string' && typeof metadata.path === 'string') {
         return {
           id: worktreeId,
           project: metadata.project,
           path: metadata.path,
           ...(typeof metadata.owner === 'string' && metadata.owner !== '' ? { owner: metadata.owner } : {}),
+          ...(typeof metadata.lock === 'string' && metadata.lock !== '' ? { lock: metadata.lock } : {}),
         }
       }
     } catch {

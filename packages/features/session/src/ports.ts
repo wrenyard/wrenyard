@@ -84,7 +84,7 @@ export interface SessionHost {
    * Invoke one protocol method with raw params. A rejection is an `Error`
    * carrying a string `code` and a message; a success returns the result value.
    */
-  call(method: string, params: unknown): Promise<unknown>;
+  call(method: string, params: unknown, context?: { sessionId?: string }): Promise<unknown>;
   listTaskDefinitions(): Promise<{ id: string; description: string; project?: string; inputSummary: string[] }[]>;
   describeTask(id: string, project?: string): Promise<{
     description: string;

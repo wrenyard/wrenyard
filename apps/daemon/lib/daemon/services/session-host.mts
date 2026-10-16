@@ -46,6 +46,9 @@ const SESSION_CALLABLE_METHODS = new Set([
   'schedule.delete',
 ])
 
+/** Worktree methods whose lock a session carries automatically. */
+const LOCKED_WORKTREE_METHODS = new Set(['project.worktree.create', 'project.worktree.remove', 'project.worktree.merge'])
+
 export interface DaemonSessionHostOptions {
   workspaceRoot: string
   stateRoot: string
@@ -295,12 +298,20 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
      * `code` is the error data's string `code` when present, otherwise the
      * numeric protocol code, and whose message is the protocol message.
      */
-    async call(method, params) {
+    async call(method, params, context) {
       if (!SESSION_CALLABLE_METHODS.has(method)) {
         throw new ProtocolError(METHOD_NOT_FOUND, { method })
       }
+      // A session's worktrees carry its own lock: it is set on create and
+      // required to remove or merge, so one session can never delete another's
+      // worktree. Sessions never get the force escape hatch.
+      let effective = params
+      if (LOCKED_WORKTREE_METHODS.has(method) && params !== null && typeof params === 'object') {
+        const { lock: _lock, force: _force, ...rest } = params as Record<string, unknown>
+        effective = context?.sessionId ? { ...rest, lock: `session:${context.sessionId}` } : rest
+      }
       try {
-        return await options.router.invoke(method, params, { transport: 'session' })
+        return await options.router.invoke(method, effective, { transport: 'session' })
       } catch (error) {
         if (!(error instanceof ProtocolError)) throw error
         const data = error.data

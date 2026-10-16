@@ -102,6 +102,8 @@ export interface ProjectWorktreeCreateParams {
   project: string
   worktree_id?: string
   branch?: string
+  /** Lock required to remove or merge the worktree; sessions get their own id. */
+  lock?: string
 }
 
 export interface ProjectWorktreeCreateResult {
@@ -114,6 +116,9 @@ export interface ProjectWorktreeCreateResult {
 export interface ProjectWorktreeMergeParams {
   project: string
   worktree_id: string
+  lock?: string
+  /** Escape hatch: merge a worktree locked by another creator. */
+  force?: boolean
 }
 
 export interface ProjectWorktreeMergeResult {
@@ -161,6 +166,9 @@ export interface ProjectWorktreeRebaseResult {
 export interface ProjectWorktreeRemoveParams {
   worktree_id: string
   project?: string
+  lock?: string
+  /** Escape hatch: remove a worktree locked by another creator. */
+  force?: boolean
 }
 
 export interface ProjectWorktreeRemoveResult {
@@ -350,6 +358,7 @@ export const projectWorktreeMergeParamsSchema = {
   properties: {
     project: { type: 'string', minLength: 1, description: 'Project that owns the worktree to merge.' },
     worktree_id: { type: 'string', minLength: 1, description: 'Managed worktree to rebase, merge, and remove.' },
+    force: { type: 'boolean', description: 'Override the lock of a worktree created by another session.' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -433,6 +442,7 @@ export const projectWorktreeRemoveParamsSchema = {
   properties: {
     worktree_id: { type: 'string', minLength: 1, description: 'Managed worktree id to remove.' },
     project: { type: 'string', minLength: 1, description: 'Optional owning project to validate before removing.' },
+    force: { type: 'boolean', description: 'Override the lock of a worktree created by another session.' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

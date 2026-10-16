@@ -322,20 +322,20 @@ export async function handleProjectWorktreeCreate(args: string[]): Promise<numbe
 
 export async function handleProjectWorktreeRemove(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project worktree remove <worktree_id> [--config path] [--json]')
+    console.log('Usage: wrenyard project worktree remove <worktree_id> [--force] [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' }, json: { type: 'boolean' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' }, force: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
-  const worktreeId = requireSinglePositional(positionals, 'wrenyard project worktree remove <worktree_id> [--config path] [--json]')
+  const worktreeId = requireSinglePositional(positionals, 'wrenyard project worktree remove <worktree_id> [--force] [--config path] [--json]')
 
   const client = await connectConfiguredForemanClient(values.config)
   try {
-    const result = await client.project.worktree.remove({ worktree_id: worktreeId })
+    const result = await client.project.worktree.remove({ worktree_id: worktreeId, ...(values.force ? { force: true } : {}) })
     writeServicePayload(servicePayload(result))
     return result.removed ? 0 : 1
   } finally {
@@ -345,24 +345,24 @@ export async function handleProjectWorktreeRemove(args: string[]): Promise<numbe
 
 export async function handleProjectWorktreeMerge(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard project worktree merge <project> <worktree_id> [--config path] [--json]')
+    console.log('Usage: wrenyard project worktree merge <project> <worktree_id> [--force] [--config path] [--json]')
     return 0
   }
   const { values, positionals } = parseArgs({
     args,
-    options: { config: { type: 'string' }, json: { type: 'boolean' } },
+    options: { config: { type: 'string' }, json: { type: 'boolean' }, force: { type: 'boolean' } },
     allowPositionals: true,
     strict: true,
   })
   if (positionals.length !== 2) {
-    console.error('Usage: wrenyard project worktree merge <project> <worktree_id> [--config path] [--json]')
+    console.error('Usage: wrenyard project worktree merge <project> <worktree_id> [--force] [--config path] [--json]')
     return 1
   }
   const [project, worktreeId] = positionals
 
   const client = await connectConfiguredForemanClient(values.config)
   try {
-    const result = await client.project.worktree.merge({ project, worktree_id: worktreeId })
+    const result = await client.project.worktree.merge({ project, worktree_id: worktreeId, ...(values.force ? { force: true } : {}) })
     writeServicePayload(servicePayload(result))
     return result.merged && result.removed ? 0 : 1
   } finally {
