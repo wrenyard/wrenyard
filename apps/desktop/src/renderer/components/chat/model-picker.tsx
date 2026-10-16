@@ -362,6 +362,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
                             </DropdownMenuRadioItem>
                           ))}
                         </DropdownMenuRadioGroup>
+                        <DropdownMenuItem disabled>Fast（暂不支持：该模型未提供独立快速模式）</DropdownMenuItem>
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
                   );
