@@ -1,5 +1,6 @@
 import { canonicalizeBuiltinPublicModelId } from '@wrenyard/providers'
 import type { NativeModelAvailability, NativeModelAvailabilityReason, NativeModelAvailabilityStatus } from '@wrenyard/clients'
+import type { CodexModelDiscovery } from '@wrenyard/clients'
 export type { NativeModelAvailability, NativeModelAvailabilityReason, NativeModelAvailabilityStatus } from '@wrenyard/clients'
 
 /**
@@ -18,6 +19,8 @@ export interface NativeProviderReadinessSnapshot {
   readonly sampledAtMs: number
   /** Canonical provider id -> current native auth status. */
   readonly authByProvider: Readonly<Record<string, boolean>>
+  /** Fresh Codex account model discovery; unknown data never denies routing. */
+  readonly codexModelDiscovery?: CodexModelDiscovery
   /** Safe Cursor per-model access; absent/malformed data never means available. */
   readonly cursorModelAvailability?: Readonly<Record<string, NativeModelAvailability>>
 }
@@ -32,7 +35,7 @@ export interface NativeRoute {
   readonly model?: string
 }
 
-export type NativeRouteReadiness = 'available' | 'missing' | 'unknown' | 'unsupported' | 'blocked'
+export type NativeRouteReadiness = 'available' | 'missing' | 'unknown' | 'unsupported' | 'blocked' | { status: 'blocked'; reason: string }
 
 const SAFE_MODEL_STATUS = new Set<NativeModelAvailabilityStatus>(['available', 'blocked', 'unknown'])
 const SAFE_MODEL_REASON = new Set<NativeModelAvailabilityReason>([
@@ -99,7 +102,25 @@ export function evaluateNativeRouteReadiness(
   if (snapshot === undefined) return 'unknown'
   const authOk = snapshot.authByProvider[route.providerId]
   if (route.providerId === 'chatgpt') {
-    return authOk === true ? 'available' : authOk === false ? 'missing' : 'unknown'
+    const authReadiness = authOk === true ? 'available' : authOk === false ? 'missing' : 'unknown'
+    if (authReadiness !== 'available') return authReadiness
+    const discovery = snapshot.codexModelDiscovery
+    const model = route.model
+    if (
+      route.client !== 'codex'
+      || discovery?.status !== 'available'
+      || !Array.isArray(discovery.models)
+      || discovery.models.length === 0
+      || typeof discovery.clientVersion !== 'string'
+      || discovery.clientVersion.length === 0
+      || typeof model !== 'string'
+      || !isSafeModelId(model)
+      || discovery.models.includes(model)
+    ) return authReadiness
+    return {
+      status: 'blocked',
+      reason: `model ${route.providerId}/${model} is not offered by codex-cli ${discovery.clientVersion} for this account`,
+    }
   }
   if (authOk === false) return 'missing'
   if (authOk !== true) return 'unknown'

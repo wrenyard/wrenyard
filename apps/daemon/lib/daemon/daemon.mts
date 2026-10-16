@@ -44,7 +44,7 @@ import {
   projectModelAvailability,
   type NativeProviderReadinessSnapshot,
 } from './execution/native-provider-readiness.mts'
-import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refreshCodexGatewayCredential, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
+import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refreshCodexGatewayCredential, readCodexModels, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
 import { ExecService } from '@wrenyard/exec'
 import { ProviderService } from '@wrenyard/provider-service'
 import { OperationComponents } from './services/operation-components.mts'
@@ -631,6 +631,7 @@ async function createForemanDaemonResources(
     const codexReadiness = await readClientReadiness(clients.get('codex'))
     if (codexReadiness?.authentication === 'ready') authByProvider.chatgpt = true
     else if (codexReadiness?.authentication === 'missing') authByProvider.chatgpt = false
+    const codexModelDiscovery = await readCodexModels().catch(() => undefined)
     const cursorReadiness = await readClientReadiness(clients.get('cursor'))
     if (cursorReadiness?.authentication === 'ready') authByProvider.cursor = true
     else if (cursorReadiness?.authentication === 'missing') authByProvider.cursor = false
@@ -640,6 +641,7 @@ async function createForemanDaemonResources(
     return Object.freeze({
       sampledAtMs: Date.now(),
       authByProvider: Object.freeze(authByProvider),
+      ...(codexModelDiscovery === undefined ? {} : { codexModelDiscovery }),
       ...(cursorModelAvailability === undefined ? {} : { cursorModelAvailability }),
     })
   }

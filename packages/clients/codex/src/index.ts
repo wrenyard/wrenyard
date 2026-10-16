@@ -12,6 +12,8 @@ export {
     refreshCodexGatewayCredential,
 } from './readiness.ts';
 export type { CodexGatewayAuthOptions, CodexGatewayCredential } from './readiness.ts';
+export { readCodexModels } from './models.ts';
+export type { CodexModelDiscovery, CodexModelsAvailable, CodexModelsUnknown, CodexModelDiscoveryOptions } from './models.ts';
 export class CodexClient implements AgentClient {
     readonly id = 'codex';
     readonly capabilities = { run: true, account: true, resume: true };

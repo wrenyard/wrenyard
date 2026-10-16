@@ -172,6 +172,7 @@ export interface TaskSettingsProviderAvailability {
   providerLive: 'available' | 'unavailable' | 'unknown'
   quota: 'available' | 'unavailable' | 'unknown'
   available: boolean
+  reason?: string
   /** Privacy-safe confirmed-free routing supply fact for the already-read
    *  credential (current CodeBuddy internal/ioa environments only). Never
    *  carries a token, domain, or internal upstream suffix. Absent means the
@@ -1838,7 +1839,7 @@ export class TaskSettingsService {
         throw new TaskSettingsRuntimeUnavailableError(
           taskId,
           runtimeId,
-          `provider '${triple.provider}' is not currently available`,
+          availability.reason ?? `provider '${triple.provider}' is not currently available`,
         )
       }
       return availability

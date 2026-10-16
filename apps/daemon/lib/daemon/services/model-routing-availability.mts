@@ -58,6 +58,15 @@ export function createRoutingAvailability(options: {
             available: false,
           }
         }
+        if (typeof state === 'object') {
+          return {
+            providerCredential: 'available',
+            providerLive: 'unavailable',
+            quota: 'unknown',
+            available: false,
+            reason: state.reason,
+          }
+        }
         if (state === 'blocked') {
           return {
             providerCredential: 'available',
