@@ -383,12 +383,16 @@ async function listDirectory(stateRoot: string, path: string): Promise<Directory
   return { names: await readdir(path) }
 }
 
+const MEASURE_PATH_CONCURRENCY = 16
+
 /** Recursively measure a validated path without following symlinks. */
 async function measurePath(path: string): Promise<Measure> {
   const result: Measure = { logicalBytes: 0, allocatedBytes: 0 }
   const stack: string[] = [path]
-  while (stack.length > 0) {
-    const current = stack.pop() as string
+  const inFlight = new Set<Promise<void>>()
+  let firstError: { error: unknown } | undefined
+
+  const measureEntry = async (current: string): Promise<void> => {
     const stats = await lstat(current)
     result.logicalBytes += stats.size
     result.allocatedBytes += stats.blocks * 512
@@ -397,6 +401,27 @@ async function measurePath(path: string): Promise<Measure> {
       for (const name of names) stack.push(join(current, name))
     }
   }
+
+  while (firstError === undefined) {
+    while (inFlight.size < MEASURE_PATH_CONCURRENCY && stack.length > 0) {
+      const current = stack.pop() as string
+      const task = measureEntry(current).then(
+        () => {
+          inFlight.delete(task)
+        },
+        (error: unknown) => {
+          inFlight.delete(task)
+          if (firstError === undefined) firstError = { error }
+        },
+      )
+      inFlight.add(task)
+    }
+    if (inFlight.size === 0) break
+    await Promise.race(inFlight)
+  }
+
+  if (inFlight.size > 0) await Promise.allSettled([...inFlight])
+  if (firstError !== undefined) throw firstError.error
   return result
 }
 
@@ -1543,7 +1568,6 @@ async function runManagedCleanupInner(options: ManagedCleanupOptions): Promise<C
       auditOutcome.reason = 'removal intent recorded; awaiting immediate revalidation'
       auditOutcome.startedAt = new Date().toISOString()
       auditOutcome.finishedAt = null
-      updateRunRecord(db, record.id, auditPayload, auditOutcome.startedAt)
       const removal = await removeEligible(stateRoot, configuredRoot, db, pm, candidate, now)
       outcome = removal.outcome
     } else {
@@ -1572,7 +1596,6 @@ async function runManagedCleanupInner(options: ManagedCleanupOptions): Promise<C
     auditOutcome.finishedAt = currentFinishedAt
     auditPayload.removedLogicalBytes = removedLogicalBytes
     auditPayload.removedAllocatedBytes = removedAllocatedBytes
-    updateRunRecord(db, record.id, auditPayload, currentFinishedAt)
   }
 
   currentFinishedAt = new Date().toISOString()
