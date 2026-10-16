@@ -13,7 +13,16 @@ import { StatusBadge } from '@/renderer/components/status-badge';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { formatTokenCount } from '@/renderer/lib/format';
-import { cycleLabel, noFinalReply, statusView, turnStatusText } from '../../model/describe.js';
+import {
+  DISPATCH_TERMINAL_LABEL,
+  TASK_RUN_PHASE_LABEL,
+  cycleLabel,
+  dispatchTerminal,
+  noFinalReply,
+  runningTaskAction,
+  statusView,
+  turnStatusText,
+} from '../../model/describe.js';
 import type { ActionModel, CallModel, CycleModel, ErrorItem, ReplyModel, TurnModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
 import { InterruptButton } from '../conversation/TurnActivity.js';
@@ -169,6 +178,12 @@ export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask }: T
   const looseErrors = turn.errors.filter((error) => error.cycle === undefined);
   const tokens = tokenSummary(turn);
   const fallback = noFinalReply(turn);
+  // The implementation phase is timed from the task run it opened, separate
+  // from the compile call's own duration; it is never shown as compiling.
+  const taskRun = runningTaskAction(turn);
+  // Terminal states are told apart only for a turn that dispatched: a compile
+  // that never opened a task run reads as 编译失败, not as a running task.
+  const terminal = turn.actions.some((action) => action.kind === 'dispatch') ? dispatchTerminal(turn) : undefined;
   return (
     <div className="flex flex-col gap-3">
       <div className="rounded-xl bg-muted/60 px-4 py-3">
@@ -192,6 +207,7 @@ export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask }: T
         ) : (
           <StatusBadge tone={statusView(turn.status).tone} label={statusView(turn.status).label} />
         )}
+        {terminal !== undefined && <span>{DISPATCH_TERMINAL_LABEL[terminal]}</span>}
         <Elapsed start={turn.startedAt} end={turn.endedAt} />
         {tokens !== undefined && <span>{tokens}</span>}
         <InterruptButton className="ml-auto" turn={turn} onInterrupt={onInterrupt} />
@@ -221,7 +237,8 @@ export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask }: T
       {turn.status === 'running' ? (
         <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
           <Spinner className="size-3.5" />
-          <span className="shimmer">{turnStatusText(turn)}</span>
+          <span className="shimmer">{taskRun === undefined ? turnStatusText(turn) : `${TASK_RUN_PHASE_LABEL}…`}</span>
+          {taskRun !== undefined && <Elapsed start={taskRun.startedAt} className="tabular-nums" />}
         </div>
       ) : turn.final === undefined ? (
         <p className={cn('px-1 text-sm', fallback.variant === 'destructive' ? 'text-destructive' : 'text-muted-foreground')}>

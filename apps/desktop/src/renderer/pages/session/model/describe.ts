@@ -29,6 +29,20 @@ export const PHASE_TONE: Record<Phase, TimelineTone> = {
   replying: 'warning',
 };
 
+/**
+ * Short label of the implementation (task-run) phase. A dispatch whose task run
+ * is executing is shown with this label and its own elapsed time, never as the
+ * compile stage that produced its input.
+ */
+export const TASK_RUN_PHASE_LABEL = '实施中';
+
+/** The running dispatch action whose task run has already opened, if any. */
+export function runningTaskAction(turn: TurnModel): ActionModel | undefined {
+  return turn.actions.find(
+    (action) => action.kind === 'dispatch' && action.status === 'running' && action.taskRunId !== undefined,
+  );
+}
+
 /** Display name of every model call role. */
 export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   reason: '主推理',
@@ -65,6 +79,11 @@ const CALL_ERROR_LABEL: Record<string, string> = {
   protocol: '协议错误',
   interrupted: '输出中断',
   aborted: '已取消',
+  // Local cuts the session made itself, never an upstream fault: the caller's
+  // exhausted budget and the local idle deadline keep their own labels instead
+  // of falling back to 连接错误 or 已取消.
+  local_budget: '预算耗尽',
+  local_deadline: '本地超时',
 };
 
 function failureLabel(kind: string, status: number | undefined): string {
@@ -175,6 +194,39 @@ function summarizeError(message: string, max = 60): string {
   const line = (message.split('\n', 1)[0] ?? '').trim();
   const chars = [...line];
   return chars.length > max ? `${chars.slice(0, max).join('')}…` : line;
+}
+
+/**
+ * Terminal state of a turn's dispatch, told apart in the UI: `compile-failed`
+ * when the dispatch stopped in the compile stage without opening any task run,
+ * `not-started` when a run was opened but the implementation never settled, and
+ * `failed`/`ended` for a run that executed.
+ */
+export type DispatchTerminal = 'compile-failed' | 'not-started' | 'failed' | 'ended';
+
+/** Display label of every dispatch terminal state. */
+export const DISPATCH_TERMINAL_LABEL: Record<DispatchTerminal, string> = {
+  'compile-failed': '编译失败',
+  'not-started': '实施未启动',
+  failed: '失败',
+  ended: '已结束',
+};
+
+/**
+ * Classify an ended turn's dispatch outcome. Undefined while the turn still
+ * runs: only a turned-ended dispatch has a terminal state. A dispatch that never
+ * opened a task run stopped in the compile stage, so it can never be shown as a
+ * finished implementation.
+ */
+export function dispatchTerminal(turn: TurnModel): DispatchTerminal | undefined {
+  if (turn.status === 'running') return undefined;
+  if (turn.status === 'completed') return 'ended';
+  const dispatches = turn.actions.filter((action) => action.kind === 'dispatch');
+  if (dispatches.length === 0) return 'failed';
+  if (dispatches.every((action) => action.taskRunId === undefined)) {
+    return turn.status === 'failed' ? 'compile-failed' : 'not-started';
+  }
+  return turn.status === 'failed' ? 'failed' : 'not-started';
 }
 
 /** Fallback assistant line for an ended turn that produced no final reply. */

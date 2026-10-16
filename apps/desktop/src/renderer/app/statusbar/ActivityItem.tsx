@@ -8,12 +8,15 @@ import { StatusBarButton } from '@/renderer/components/status-bar-button';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { executeCommand } from '@/renderer/lib/commands';
 import { shell, useActivityStatus } from '@/renderer/lib/desktop';
-import { PHASE_LABEL } from '@/renderer/pages/session/model/describe';
+import { PHASE_LABEL, TASK_RUN_PHASE_LABEL, runningTaskAction } from '@/renderer/pages/session/model/describe';
+import { isRunningTask } from '@/renderer/pages/session/model/fold';
 import type { ActionKindModel } from '@/renderer/pages/session/model/types';
 import type { ActivityStatusTask, ActivityStatusTaskGraph } from '@/shell-contract';
 import { useActivityTaskDetails, useSessionActivity } from './use-activity';
 
 const ACTION_LABEL: Record<ActionKindModel, string> = {
+  // The compile stage only: a dispatch whose task run has opened is shown with
+  // its own phase label and elapsed time instead.
   dispatch: '编译任务输入',
   document: '文档管理',
   search: '检索资料',
@@ -108,12 +111,20 @@ export function ActivityItem() {
                 const turnTaskIds = new Set(turn.actions.map((action) => action.taskRunId));
                 const turnTasks = tasks.filter((task) => turnTaskIds.has(task.taskRunId));
                 const actions = turn.actions.filter((action) => action.status === 'running' && !action.taskRunId);
+                // A dispatch whose task run is executing is an implementation
+                // phase of its own: it is timed from the run it opened, not
+                // from the turn, and never labelled as compiling.
+                const taskRuns = turn.actions.filter(isRunningTask);
+                const taskRun = runningTaskAction(turn);
+                const phase = taskRun === undefined ? PHASE_LABEL[turn.phase ?? 'preparing'] : TASK_RUN_PHASE_LABEL;
                 return <div key={turn.id} className="ml-3 border-l border-border pl-2">
-                  <ActivityRow icon={Activity} title={'第 ' + turn.id + ' 轮 · ' + PHASE_LABEL[turn.phase ?? 'preparing'] + '中'}
+                  <ActivityRow icon={Activity} title={'第 ' + turn.id + ' 轮 · ' + phase + '中'}
                     detail={turn.user.text} startedAt={turn.startedAt} onClick={() => openSession(session.sessionId)} />
-                  {actions.length > 0 ? <>
+                  {actions.length + taskRuns.length > 0 ? <>
                     <p className="px-2.5 pt-1 text-xs text-muted-foreground">行动</p>
                     {actions.map((action) => <ActivityRow key={action.id} icon={Zap} title={ACTION_LABEL[action.kind]}
+                      detail={action.subtitle || action.title} startedAt={action.startedAt} onClick={() => openSession(session.sessionId)} />)}
+                    {taskRuns.map((action) => <ActivityRow key={action.id} icon={Zap} title={TASK_RUN_PHASE_LABEL}
                       detail={action.subtitle || action.title} startedAt={action.startedAt} onClick={() => openSession(session.sessionId)} />)}
                   </> : null}
                   {turnTasks.length > 0 ? <>

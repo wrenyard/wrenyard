@@ -707,7 +707,7 @@ function buildActions(
   const started = new Map<string, ActionStartedEvent>();
   const finished = new Map<string, ActionFinishedEvent>();
   const titles = new Map<string, string>();
-  const taskSpans = new Map<string, { task: string; project?: string; taskRunId: string }>();
+  const taskSpans = new Map<string, { task: string; project?: string; taskRunId: string; at: string }>();
   const writes = new Map<string, {
     path: string;
     change: WorkspaceChangedEvent['change'];
@@ -731,7 +731,8 @@ function buildActions(
       // A dispatch's task span is parented by its action and carries the run id
       // (and task name) as soon as the run opens.
       const record = event as SpanStartedEvent;
-      if (record.kind === 'task') taskSpans.set(record.parent, record.request);
+      // The task span opens with the run; its `at` is the run's own start.
+      if (record.kind === 'task') taskSpans.set(record.parent, { ...record.request, at: record.at });
     } else if (type === 'workspace.changed') {
       const record = event as WorkspaceChangedEvent;
       const bucket = writes.get(record.parent);
@@ -771,6 +772,12 @@ function buildActions(
     // action.started, and otherwise on the task span opened when the run began.
     const taskSpan = taskSpans.get(actionId);
     const taskRunId = end?.taskRunId ?? start?.taskRunId ?? taskSpan?.taskRunId;
+    // The implementation phase times from the run it opened, not from the
+    // dispatch action's own start: the compile call keeps its own duration on
+    // its spans, so the turn's implementation elapsed never absorbs it. A
+    // legacy record whose run id arrived on a second `action.started` times
+    // from that event.
+    const runStartedAt = taskSpan?.at ?? (start?.taskRunId === undefined ? undefined : start.at);
     const status: ItemStatus = end === undefined ? (turnEnded ? 'cancelled' : 'running') : toItemStatus(end.status);
     const intent = start === undefined ? '' : firstLine(start.action.prompt);
     const title = titles.get(actionId) ?? actionLabel({ kind, intent });
@@ -783,7 +790,7 @@ function buildActions(
       title,
       ...(intent === '' ? {} : { subtitle: intent }),
       status,
-      startedAt: start?.at ?? end?.at ?? '',
+      startedAt: runStartedAt ?? start?.at ?? end?.at ?? '',
       ...(end?.at === undefined ? {} : { endedAt: end.at }),
       ...(start?.input === undefined ? {} : { parsed: start.input }),
       ...(end?.result === undefined ? {} : { result: end.result }),
@@ -888,23 +895,43 @@ function cycleOfSeq(events: LedgerEvent[], seqKey: string): number {
   return events.find((event) => event.seq === seq)?.step ?? 0;
 }
 
+/** True for a dispatch action that has opened a task run and is still executing. */
+export function isRunningTask(action: ActionModel): boolean {
+  return action.kind === 'dispatch' && action.status === 'running' && action.taskRunId !== undefined;
+}
+
 function inferPhase(events: LedgerEvent[], calls: CallModel[], actions: ActionModel[]): Phase {
   // Running calls take priority: reason -> reply -> action -> preparing.
   const running = calls.filter((call) => call.status === 'running');
   if (running.some((call) => call.role === 'reason')) return 'reasoning';
   if (running.some((call) => call.role === 'reply')) return 'replying';
-  if (actions.some((action) => action.status === 'running')) return 'acting';
 
-  // Fallback used before the live layer provides running calls: infer from events.
+  const runningActions = actions.filter((action) => action.status === 'running');
+  // A dispatch that has opened its task run and is still executing is the
+  // implementation phase: the task run is the work, not the compile call.
+  if (runningActions.some(isRunningTask)) return 'acting';
+  // A dispatch that has not opened a run yet is still compiling its input: the
+  // compile/auxiliary phase, never a running implementation.
+  if (runningActions.some((action) => action.kind === 'dispatch')) return 'preparing';
+  if (runningActions.length > 0) return 'acting';
+
+  // Fallback used before the live layer provides running calls: infer from
+  // events. A task span that opened and has not closed is a running
+  // implementation even when no model call observes it.
   let phase: Phase = 'preparing';
   for (const event of events) {
     const type = eventType(event);
     if (type === 'span.started') {
       const record = event as SpanStartedEvent;
-      if (record.kind === 'auxiliary' && (record.request.role === 'search' || record.request.role === 'memory-search')) phase = 'preparing';
+      if (record.kind === 'task') phase = 'acting';
+      else if (record.kind === 'auxiliary' && (record.request.role === 'search' || record.request.role === 'memory-search')) phase = 'preparing';
     }
+    if (type === 'span.finished' && (event as SpanFinishedEvent).kind === 'task') phase = 'preparing';
     if (type === 'document.found' || type === 'memory.recalled') phase = 'reasoning';
-    if (type === 'action.started') phase = 'acting';
+    if (type === 'action.started') {
+      const record = event as ActionStartedEvent;
+      phase = record.action.type === 'dispatch' && record.taskRunId === undefined ? 'preparing' : 'acting';
+    }
     if (type === 'reasoning.completed') {
       const hasAction = events.some((other) => other.step === event.step && eventType(other) === 'action.started');
       phase = hasAction ? 'acting' : 'replying';
