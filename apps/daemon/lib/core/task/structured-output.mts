@@ -5,7 +5,8 @@ import {
   assertValidTimeoutMs,
   effectiveTaskTimeoutMs,
 } from '../../task-timeouts.mts'
-import { GateFailureError, mapAgentFailureClass } from './failure.mts'
+import { GateFailureError, MODEL_REJECTION_FAILURE_CLASS, mapAgentFailureClass } from './failure.mts'
+import type { NativeRouteFaultKind } from '@wrenyard/gateway'
 import {
   DELIVERY_END,
   DELIVERY_START,
@@ -131,10 +132,12 @@ export interface StructuredOutputOptions {
   /** Optional shared-circuit accounting for this structured run. Only the
    *  terminal delivery outcome of actually launched attempts is reported:
    *  `onRouteSuccess` after a schema-validated delivery, `onRouteFault` after
-   *  the terminal structured-output/protocol delivery failure. Cancellation,
-   *  time budget, functional and post-gate failures never fault the route. */
+   *  the terminal delivery failure — either a structured-output/protocol
+   *  failure (`structured_output`) or a client-reported model rejection
+   *  (`model_rejected`). Cancellation, time budget, functional and post-gate
+   *  failures never fault the route. */
   onRouteSuccess?: () => void
-  onRouteFault?: () => void
+  onRouteFault?: (kind: NativeRouteFaultKind) => void
 }
 
 export type StructuredOutputAgentStatus = 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
@@ -253,7 +256,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     // check runs before profile resolution so its diagnostic is always the one
     // reported.
     if (attempt > 0 && !resume) {
-      opts.onRouteFault?.()
+      opts.onRouteFault?.('structured_output')
       const validationErrors = lastValidationErrors ?? []
       const rawExcerpt = lastOutputExcerpt ?? ''
       const hasPlaceholderErrors = validationErrors.some((e) => e.includes('placeholder'))
@@ -367,9 +370,11 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     // execution never produced.
     if (terminal.status === 'failed') {
       // A missing-terminal-result protocol failure is a delivery failure of the
-      // exact route and faults it; any other agent failure is functional and
+      // exact route and faults it; a client-reported model rejection faults the
+      // same route under its own kind; any other agent failure is functional and
       // never touches route health.
-      if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.()
+      if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.('structured_output')
+      if (terminal.failureClass === MODEL_REJECTION_FAILURE_CLASS) opts.onRouteFault?.('model_rejected')
       throw agentFailedError(
         terminal.executionId ?? lastExecutionId ?? 'unknown',
         terminal.error ?? terminal.output,
@@ -439,7 +444,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   )
   // The launched model attempts never produced a valid delivery: report the
   // terminal structured-output failure to the shared circuit before failing.
-  opts.onRouteFault?.()
+  opts.onRouteFault?.('structured_output')
   throw gateErr
 }
 
@@ -536,9 +541,10 @@ async function runTimeLimitWarningResume(
     )
   }
   if (terminal.status === 'failed') {
-    // The same protocol/delivery class faults the route here too; a functional
-    // agent failure does not.
-    if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.()
+    // The same protocol/delivery class faults the route here too, as does a
+    // client-reported model rejection; a functional agent failure does not.
+    if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.('structured_output')
+    if (terminal.failureClass === MODEL_REJECTION_FAILURE_CLASS) opts.onRouteFault?.('model_rejected')
     throw agentFailedError(
       terminal.executionId ?? lastExecutionId ?? 'unknown',
       terminal.error ?? terminal.output,

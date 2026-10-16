@@ -598,13 +598,14 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
             options.taskRouteState.success(routeIdentity.provider, routeIdentity.model, routeGuard, routeLease)
           }
         },
-        onRouteFault: () => {
+        onRouteFault: (kind) => {
           if (!routeSettled && routeIdentity !== undefined && options.taskRouteState) {
-            // Only a launched attempt's terminal structured-output/protocol
-            // delivery failure faults the route; cancellation, time budget and
-            // functional task failures never reach this hook.
+            // Only a launched attempt's terminal delivery failure faults the
+            // route — a structured-output/protocol failure or a client-reported
+            // model rejection, carried by its native fault kind. Cancellation,
+            // time budget and functional task failures never reach this hook.
             routeSettled = true
-            options.taskRouteState.fault(routeIdentity.provider, routeIdentity.model, routeGuard, 'structured_output', routeLease)
+            options.taskRouteState.fault(routeIdentity.provider, routeIdentity.model, routeGuard, kind, routeLease)
           }
         },
         beforeAttempt: () => assertTaskStillActive(taskId),

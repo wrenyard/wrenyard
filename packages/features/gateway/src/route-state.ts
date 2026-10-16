@@ -112,11 +112,14 @@ export type ClientFaultKind = 'timeout' | 'transport';
 
 /**
  * The route-local fault kinds a native task attempt may report for its own
- * route. Only the delivery/protocol failure of an attempt that produced no
- * usable output is reported: it maps to an exact route-scoped fault and never
- * claims a provider or a shared pool.
+ * route. Only a fault for the attempt's own route is reported: the
+ * delivery/protocol failure of an attempt that produced no usable output
+ * (`structured_output`), or a client-reported model rejection
+ * (`model_rejected`) where the client refuses the resolved model for its
+ * product/account. Both are route-scoped: they never claim a provider or a
+ * shared pool.
  */
-export type NativeRouteFaultKind = 'structured_output';
+export type NativeRouteFaultKind = 'structured_output' | 'model_rejected';
 
 /** One in-flight attempt, correlated by the client so a duplicate report is dropped. */
 interface Attempt {
@@ -165,6 +168,12 @@ function nativeRouteFailure(kind: NativeRouteFaultKind): MarkableFailure {
   switch (kind) {
     case 'structured_output':
       return structuredOutputFailure();
+    case 'model_rejected':
+      // A client-reported model rejection means this exact route cannot serve
+      // the resolved model (unsupported for the client's product/account, or a
+      // model-not-found response). It is route-scoped like a 404 model-missing
+      // fault and is recorded under the route's `model_unavailable` state.
+      return { state: 'model_unavailable', scope: 'route', faultKind: 'model_unavailable' };
   }
 }
 

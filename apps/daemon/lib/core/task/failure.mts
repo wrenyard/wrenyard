@@ -65,6 +65,17 @@ export type AgentFailureClass =
   | 'policy_exhausted'
 
 /**
+ * Client-reported model-rejection classification. Unlike the native-runtime
+ * failure classes above, this value is synthesized by the execution layer when a
+ * client child refuses the resolved model — the model is unsupported for the
+ * client's product or account, or the upstream answers model-not-found — so the
+ * exact route is marked unhealthy instead of the failure being collapsed into a
+ * generic agent failure. It is a specific signature, never applied to an
+ * ordinary failed execution.
+ */
+export const MODEL_REJECTION_FAILURE_CLASS = 'model_rejected'
+
+/**
  * Distinct task failure categories that must stay separable in reporting. The
  * structured-output collector and supervisor map classified agent-runtime
  * failures onto these without inferring from error text; the categories below
@@ -90,6 +101,7 @@ export type TaskFailureCategory =
  * - `profile_specific_limit` / `policy_exhausted` -> `runtime_status`
  * - `transient_provider` -> `transport`
  * - `non_retryable` -> `agent_failed`
+ * - `model_rejected` (client-reported model rejection) -> `runtime_status`
  * - `none` / undefined -> undefined (not a failure; callers default unknown
  *   failed agents to `agent_failed`)
  *
@@ -107,6 +119,12 @@ export function mapAgentFailureClass(
       return 'transport'
     case 'non_retryable':
       return 'agent_failed'
+    // A client-reported model rejection is a runtime/status problem of the exact
+    // route (the resolved model cannot serve this account), so it stays
+    // observable as runtime_status rather than a generic agent failure. Existing
+    // class mappings above are unchanged.
+    case MODEL_REJECTION_FAILURE_CLASS:
+      return 'runtime_status'
     case 'none':
     case undefined:
     case null:

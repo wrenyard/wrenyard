@@ -9,8 +9,9 @@ import { ExecutionEventStore } from '../../db/stores/execution-event-store.mts'
 import { TaskRunStore } from '../../db/stores/task-run-store.mts'
 import { assertValidTimeoutMs } from '../../task-timeouts.mts'
 import { killProcessTree } from '../../adapters/shell/process.mts'
-import { redactEvent, redactJsonString } from './redaction.mts'
+import { redactDiagnosticText, redactEvent, redactJsonString } from './redaction.mts'
 import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protocol.mts'
+import { MODEL_REJECTION_FAILURE_CLASS } from '../../core/task/failure.mts'
 import { RepoWriteLocks } from './repo-write-locks.mts'
 import { toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
@@ -789,7 +790,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if (!entry.session) return
 
     entry.streamDone = this.consumeStream(entry).catch((error: unknown) => {
-      entry.streamError = errorMessage(error)
+      entry.streamError = redactDiagnosticText(errorMessage(error))
       this.log('warn', `[foreman] stream consumer failed for ${entry.executionId}: ${entry.streamError}`)
     })
     void entry.streamDone.then(() => {
@@ -806,11 +807,17 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
     for await (const agentEvent of entry.session.events) {
       if (agentEvent.type === 'stderr') {
-        entry.stderrTail = tailString(entry.stderrTail + agentEvent.text, STDERR_TAIL_MAX_LEN)
+        // Scrub the combined previous/current text (not just the new chunk)
+        // before bounding, so a sensitive key split across chunk boundaries is
+        // still redacted without losing its label to the tail cut.
+        entry.stderrTail = tailString(
+          redactDiagnosticText(entry.stderrTail + agentEvent.text),
+          STDERR_TAIL_MAX_LEN,
+        )
         continue
       }
       if (agentEvent.type === 'error') {
-        entry.childError = agentEvent.message
+        entry.childError = redactDiagnosticText(agentEvent.message)
         continue
       }
       if (agentEvent.type === 'exit') {
@@ -849,7 +856,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       const streamErrorText = extractStreamJsonErrorText(event, final)
       if (streamErrorText) {
         entry.resultErrorTail = tailString(
-          `${entry.resultErrorTail}${entry.resultErrorTail ? '\n' : ''}${streamErrorText}`,
+          redactDiagnosticText(`${entry.resultErrorTail}${entry.resultErrorTail ? '\n' : ''}${streamErrorText}`),
           STDERR_TAIL_MAX_LEN,
         )
       }
@@ -879,8 +886,22 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     await this.drainStreamAtDeadline(entry)
     const status = this.determineTerminalStatus(entry, intent)
     const killReason = this.determineKillReason(entry, status, intent)
-    const output = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
-    const error = this.determineTerminalError(entry, status)
+    const rawAgentOutput = (entry.finalOutput ?? entry.outputParts.join('')).trim() || null
+    // A failed execution keeps a bounded, redacted diagnostic tail of the
+    // child's captured error signals, so the real cause (e.g. an HTTP 400
+    // unsupported-model message) is retained even when a generic child error
+    // also exists. The tail is carried in the execution output as well as the
+    // error. Any failed agent output that accompanies the diagnostics is
+    // scrubbed too: a failed child can echo plain-text credentials that no
+    // structured field would have caught.
+    const failureDiagnostic = status === 'failed' ? this.failedDiagnosticTail(entry) : null
+    const agentOutput = status === 'failed' && rawAgentOutput !== null
+      ? redactDiagnosticText(rawAgentOutput)
+      : rawAgentOutput
+    const output = failureDiagnostic === null
+      ? agentOutput
+      : (agentOutput === null ? failureDiagnostic : `${agentOutput}\n${failureDiagnostic}`)
+    const error = this.determineTerminalError(entry, status, failureDiagnostic)
 
     this.terminalizeRunning(entry, {
       status,
@@ -889,8 +910,43 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       killReason,
       output,
       error,
-      failureClass: entry.pendingFailureClass ?? null,
+      failureClass: this.classifyClientFailure(entry, failureDiagnostic),
     })
+  }
+
+  /**
+   * Bounded, redacted diagnostic tail of a failed execution assembled from every
+   * captured client signal (raw stderr tail, structured result error tail, stream
+   * error, child error). The concise, structured causes follow the raw stderr so
+   * they survive the tail bound, each part is scrubbed with the shared
+   * diagnostic-text redactor (JSON/JSONL keys plus plain key=value and token
+   * forms) before it is retained, persisted or published, and the joined text is
+   * bounded to STDERR_TAIL_MAX_LEN. Returns null when nothing was captured.
+   */
+  private failedDiagnosticTail(entry: RegistryEntry): string | null {
+    const parts = compactStrings([
+      entry.stderrTail,
+      entry.resultErrorTail,
+      entry.streamError,
+      entry.childError,
+    ]).map((part) => redactDiagnosticText(part))
+    if (parts.length === 0) return null
+    return tailString(parts.join('\n'), STDERR_TAIL_MAX_LEN)
+  }
+
+  /**
+   * The failure classification carried to route health. A client-supplied class
+   * (from a run_finished record) wins; otherwise a bounded diagnostic matching a
+   * specific model-rejection signature is classified as `model_rejected` so the
+   * exact route is marked unhealthy. An ordinary failed execution stays
+   * unclassified (null).
+   */
+  private classifyClientFailure(entry: RegistryEntry, failureDiagnostic: string | null): string | null {
+    if (entry.pendingFailureClass) return entry.pendingFailureClass
+    if (failureDiagnostic !== null && isModelRejectionText(failureDiagnostic)) {
+      return MODEL_REJECTION_FAILURE_CLASS
+    }
+    return null
   }
 
   private determineTerminalStatus(entry: RegistryEntry, intent: TerminalIntent | undefined): TerminalStatus {
@@ -915,13 +971,19 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     return null
   }
 
-  private determineTerminalError(entry: RegistryEntry, status: TerminalStatus): string | null {
+  private determineTerminalError(
+    entry: RegistryEntry,
+    status: TerminalStatus,
+    failureDiagnostic: string | null,
+  ): string | null {
     if (status === 'done') return null
     if (status === 'cancelled') return 'cancelled'
     if (status === 'timeout') return 'timeout'
-    const capturedError = entry.childError ?? entry.streamError ?? (entry.resultErrorTail || entry.stderrTail)
-    if (!entry.sawTerminalResult && !entry.sawErrorResult) return capturedError || 'no terminal event'
-    return capturedError || 'execution failed'
+    // The whole bounded, redacted diagnostic tail is reported instead of only the
+    // first truthy captured field, so a generic child error never hides the real
+    // cause.
+    if (!entry.sawTerminalResult && !entry.sawErrorResult) return failureDiagnostic ?? 'no terminal event'
+    return failureDiagnostic ?? 'execution failed'
   }
 
   private terminalizeRunning(
@@ -1969,6 +2031,27 @@ function detectFailureClass(event: StreamEventRecord): string | undefined {
   }
   const fc = stringProp(event, 'failure_class')
   return fc ? fc.trim() : undefined
+}
+
+/**
+ * Signatures of a client-reported model rejection: the client child refusing the
+ * resolved model because it is unsupported for its product/account, or an
+ * upstream model-not-found response. These are deliberately narrow and specific
+ * so an ordinary execution failure is never misclassified as a model/route
+ * problem.
+ */
+const MODEL_REJECTION_PATTERNS: readonly RegExp[] = [
+  /not supported when using [a-z0-9._-]+/iu,
+  /model ['"`]?[A-Za-z0-9._:/-]+['"`]? is not supported/iu,
+  /\bunsupported (?:model|model id)\b/iu,
+  /\bmodel_(?:not_found|not_supported|unavailable)\b/iu,
+  /\b(?:unknown|no such|invalid) model\b/iu,
+  /(?:do(?:es)? not|don't) have access to (?:the )?model/iu,
+]
+
+/** True when a captured diagnostic text matches a specific model-rejection signature. */
+function isModelRejectionText(text: string): boolean {
+  return MODEL_REJECTION_PATTERNS.some((pattern) => pattern.test(text))
 }
 
 function extractFinalResult(event: StreamEventRecord): { isError: boolean; output?: string } | undefined {

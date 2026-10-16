@@ -212,6 +212,12 @@ async function* protocol(
         }
         else if (method === 'error') {
             if (params.willRetry === true) return;
+            // Carry the notification's own message onto the terminal failed
+            // record so the real cause (e.g. the HTTP 400 unsupported-model
+            // message) is preserved instead of an empty failure.
+            const message = params.message ?? params.error;
+            if (message !== undefined && message !== null)
+                yield { type: 'output', record: { type: 'run_finished', status: 'failed', error: message } };
             const terminal = complete(true);
             if (terminal) yield terminal;
         }
