@@ -1,4 +1,5 @@
 import type { ModelDefinition } from '../base/index.ts';
+import { resolveProviderModel } from '../base/model-defaults.ts';
 import { builtinModelDisplayName, MAINSTREAM_MODEL_IDS, REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import type { DevinCredentials } from './credentials.ts';
 import { Writer, metadata, parseFields, readBounded } from './protocol.ts';
@@ -50,6 +51,7 @@ export async function fetchDevinModels(credentials: DevinCredentials, fetcher: t
     });
   }
   const groups = new Map<string, DevinModel>();
+  const canonicalOf = new Map<string, string | undefined>();
   for (const model of models) {
     const match = /(?:-|_)(none|low|medium|high|xhigh|max)$/i.exec(model.id);
     const label = /\s+(No Thinking|None|Low|Medium|High|XHigh|Max)(?: Thinking)?( 1M)?$/i.exec(model.displayName);
@@ -65,6 +67,7 @@ export async function fetchDevinModels(credentials: DevinCredentials, fetcher: t
         reasoningEfforts: [], variants: {},
       };
       groups.set(id, group);
+      canonicalOf.set(id, model.canonical);
     }
     group.variants[effort] = model;
     group.reasoningEfforts = REASONING_EFFORTS.filter(level => group.variants[level] !== undefined);
@@ -73,5 +76,16 @@ export async function fetchDevinModels(credentials: DevinCredentials, fetcher: t
       if (JSON.stringify(group[key]) !== JSON.stringify(model[key])) delete group[key];
     }
   }
-  return [...groups.values()];
+  // Registered canonical identities borrow routing metadata from the shared
+  // registry (speed, intelligence, and any limit the account did not report);
+  // the account's own declared limits and prices always win. Unregistered
+  // identities keep exactly what the account reported — nothing is fabricated.
+  const catalog: DevinModel[] = [];
+  for (const group of groups.values()) {
+    const canonical = canonicalOf.get(group.id);
+    if (!canonical) { catalog.push(group); continue; }
+    const { variants, ...declared } = group;
+    catalog.push({ ...resolveProviderModel({ canonical, overrides: declared }), variants });
+  }
+  return catalog;
 }
