@@ -403,14 +403,19 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       // that instant the upstream work is aborted as a route timeout even if
       // headers were already sent, so a stalled or vanished downstream can never
       // leave the upstream promise running unbounded.
-      const hardDeadline = [clientDeadline, lease?.expiresAt].filter((value): value is number => value !== undefined);
-      const deadlineTimer = hardDeadline.length === 0
-        ? undefined
-        : setTimeout(
-            () => { upstreamTimedOut = true; abort(); },
-            Math.min(MAX_TIMER_SAFE, Math.max(0, Math.min(...hardDeadline) - options.now())),
-          );
-      deadlineTimer?.unref?.();
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const armDeadline = (deadlines: (number | undefined)[]): void => {
+        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+        const hardDeadline = deadlines.filter((value): value is number => value !== undefined);
+        deadlineTimer = hardDeadline.length === 0
+          ? undefined
+          : setTimeout(
+              () => { upstreamTimedOut = true; abort(); },
+              Math.min(MAX_TIMER_SAFE, Math.max(0, Math.min(...hardDeadline) - options.now())),
+            );
+        deadlineTimer?.unref?.();
+      };
+      armDeadline([clientDeadline, lease?.expiresAt]);
       // A completed-request client disconnect also aborts upstream work.
       const onResponseClose = (): void => { if (!response.writableEnded) abort(); };
       request.once('aborted', abort);
@@ -515,6 +520,13 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         // missing Content-Type), so the original upstream status and headers
         // are captured before it runs; in-stream error facts must record what
         // the supplier actually sent.
+        // A probe whose upstream answered successfully is no longer bounded by
+        // its lease: the lease stays held until this response settles it, and
+        // only the client deadline still bounds the stream.
+        if (lease !== undefined) {
+          options.routeStates.holdProbe(lease);
+          armDeadline([clientDeadline]);
+        }
         const originalStatus = upstream.status;
         const originalHeaders = new Headers(upstream.headers);
         const repaired = await repairUpstreamResponse(upstream, {

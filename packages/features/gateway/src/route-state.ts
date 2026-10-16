@@ -403,6 +403,21 @@ export class RouteStateStore {
     if (outcome !== undefined && lease.attemptId !== undefined) this.settleAttempt(lease.provider, lease.model, lease.attemptId);
   }
 
+  /**
+   * Keep a probe lease held past its expiry once the probe's upstream answered
+   * with a successful response. The lease bounds only the wait for that answer;
+   * a long generation (extended thinking can stream nothing for minutes) is
+   * then settled by its own end, bounded by the caller deadline and the
+   * transport's idle limit, instead of being cut at the lease expiry.
+   */
+  holdProbe(lease: ProbeLease): void {
+    for (const entry of lease.entries) {
+      const block = this.blocks.get(entry.key);
+      if (!block || block.generation !== entry.generation || block.leaseToken !== entry.token) continue;
+      if (block.leaseTimer !== undefined) { clearTimeout(block.leaseTimer); block.leaseTimer = undefined; }
+    }
+  }
+
   /** Release only the lease token that is still current; a newer lease is untouched. */
   private expireLease(key: string, token: number): void {
     const block = this.blocks.get(key);
