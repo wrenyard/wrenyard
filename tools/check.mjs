@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Publish gate. `pnpm check` runs exactly the release-blocking checks:
-// public identifiers, committed secrets, legal/provenance metadata, and the
+// public identifiers, unpushed commit metadata, committed secrets, legal/provenance metadata, and the
 // first-party version contract. Tests and type checking are not part of `check`.
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -11,6 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const GATES = [
   ['public identifiers', join('tools', 'check-public-identifiers.mjs')],
+  ['commit metadata', join('tools', 'check-commit-metadata.mjs')],
   ['secrets', join('tools', 'check-secrets.mjs')],
   ['legal', join('tools', 'release', 'verify-legal.mjs')],
 ];

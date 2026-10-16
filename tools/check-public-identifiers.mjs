@@ -38,6 +38,7 @@ const PATTERNS = [
   { name: 'internal endpoint fragment', re: /\.(internal|corp|intranet)\b|\.svc\.cluster\.local\b/i },
   { name: 'personal username', re: /\bdluck\b/i },
   { name: 'absolute user home path', re: /\/Users\/[A-Za-z0-9_.-]+/ },
+  { name: 'absolute Windows user home path', re: /[A-Za-z]:(\\\\?|\/)Users(\\\\?|\/)[A-Za-z0-9_.-]+/i },
 ];
 
 let files;
