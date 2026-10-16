@@ -24,7 +24,8 @@ import type { SessionRoutesPreviewResult } from '@wrenyard/protocol';
 import type { DraftAttachment, LedgerEvent, ModelEntry, TurnModel } from '../model/types.js';
 import { contextInspectSessionId, contextQuery, routesPreviewQuery } from '../queries.js';
 import { promptCancel, promptSuggest } from '../api.js';
-import { retainReasoningEffort, type ReasoningEffort } from './reasoning-effort.js';
+import { readModelEfforts, type ReasoningEffort } from './reasoning-effort.js';
+import { defaultModelEffort, resolveModelEffort } from './reasoning-effort-memory.js';
 import { setQuotaFocus } from '@/renderer/lib/statusbar';
 import {
   clearDraft,
@@ -109,10 +110,12 @@ export interface SessionUsageProviderProps {
 /** Owns the session projection and composer selection for the active session. */
 export function SessionUsageProvider({ sessionKey, models, events, turns, ledgerReady, children }: SessionUsageProviderProps) {
   // The composer selection is keyed by the active session: switching sessions
-  // resets the model/effort and reloads the destination draft during render.
+  // resets the model (the composer then seeds the destination model's own
+  // remembered or default level) and reloads the destination draft during render.
   const [selectionKey, setSelectionKey] = useState(sessionKey);
   const [modelId, setModelId] = useState('');
-  // A valid level until the composer seeds the real one for the active session.
+  // A valid placeholder until the composer seeds the active session's own model
+  // and that model's resolved (remembered or default) level.
   const [effort, setEffort] = useState<ReasoningEffort>('medium');
   const [text, setTextState] = useState(() => readDraft(sessionKey));
   const [attachments, setAttachmentsState] = useState<DraftAttachment[]>(() => readDraftAttachments(sessionKey));
@@ -137,7 +140,6 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
   if (selectionKey !== sessionKey) {
     setSelectionKey(sessionKey);
     setModelId('');
-    setEffort('medium');
     setTextState(readDraft(sessionKey));
     setAttachmentsState(readDraftAttachments(sessionKey));
     setInputTokensState(0);
@@ -377,14 +379,15 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
   // unmount), so a result from a session we just left can never surface.
   useLayoutEffect(() => () => dismissSuggestion(), [sessionKey, dismissSuggestion]);
 
-  // Retain the reasoning effort when the target route still supports it;
-  // otherwise fall back to the nearest-supported rule (shared with Composer).
+  // Resolve the target model's effort from that model's own memory (its last
+  // chosen level, nearest-supported), or that model's own default when it has
+  // no memory. Switching models never writes any model's memory.
   const requestModel = useCallback((nextModelId: string) => {
-    const target = models.find((entry) => entry.publicId === nextModelId);
     setModelId(nextModelId);
-    const supported = target?.reasoningEfforts ?? [];
-    if (supported.length === 0) return;
-    setEffort((current) => retainReasoningEffort(current, supported));
+    const target = models.find((entry) => entry.publicId === nextModelId);
+    if (target === undefined || target.reasoningEfforts.length === 0) return;
+    const remembered = resolveModelEffort(readModelEfforts(), target.publicId, target.reasoningEfforts);
+    setEffort(remembered ?? defaultModelEffort(target.reasoningEfforts));
   }, [models]);
 
   const value = useMemo<SessionUsageContextValue>(() => ({

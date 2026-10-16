@@ -9,7 +9,8 @@ import { InputGroupButton } from '@/renderer/components/ui/input-group';
 import { getSessionBridge } from '@/renderer/lib/session';
 import { preferencesQuery } from '@/renderer/lib/queries';
 import type { DraftAttachment, ModelEntry, TurnModel } from '../model/types.js';
-import { readFirstRequest, retainReasoningEffort, writeFirstRequest, type ReasoningEffort } from '../state/reasoning-effort.js';
+import { readFirstRequest, readModelEfforts, retainReasoningEffort, writeFirstRequest, writeModelEffort, type ReasoningEffort } from '../state/reasoning-effort.js';
+import { defaultModelEffort, resolveModelEffort } from '../state/reasoning-effort-memory.js';
 import { useComposerSelection, useSessionUsage } from '../state/session-usage.js';
 import { clearDraftAttachments, isStagedPathRetained, readDraftAttachments, reconcileSentDraft } from '../state/drafts.js';
 import { useContextBudget } from '../state/use-context-budget.js';
@@ -295,40 +296,50 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     const modelsLoaded = models.length > 0;
     if (seeded.current === seedKey && (!modelsLoaded || modelId !== '')) return;
     seeded.current = seedKey;
+    const memory = readModelEfforts();
     const last = turnsRef.current[turnsRef.current.length - 1];
     // An existing session's model is authoritative; it is kept even when its
     // route is blocked or a filter dropped it, never silently replaced. Its
-    // effort is kept when the route still supports it, else resolved by the
-    // shared nearest rule.
+    // effort is that model's own remembered level when it has one, else kept
+    // when the route still supports it, else resolved by the shared nearest
+    // rule (a missing catalog row falls back to the full effort ladder).
     if (last !== undefined) {
       const publicId = `${last.model.provider}/${last.model.model}`;
       const supported = models.find((entry) => entry.publicId === publicId)?.reasoningEfforts ?? [];
       setModelId(publicId);
-      // Normalize the stored effort to a valid level: kept when valid, else the
-      // default. A missing catalog row falls back to the full effort ladder.
-      setEffort(retainReasoningEffort(last.model.reasoningEffort, supported.length > 0 ? supported : REASONING_EFFORTS));
+      setEffort(
+        resolveModelEffort(memory, publicId, supported)
+        ?? retainReasoningEffort(last.model.reasoningEffort, supported.length > 0 ? supported : REASONING_EFFORTS),
+      );
       return;
     }
     // A brand-new session inherits the previous session's FIRST request model
-    // and effort verbatim, even when the catalog dropped it or its route is
-    // blocked — it is never replaced by another model. Missing a catalog row,
-    // the remembered effort is kept as recorded.
+    // verbatim, even when the catalog dropped it or its route is blocked — it is
+    // never replaced by another model. Its effort is that model's own remembered
+    // level when it has one, else the recorded level when the route still
+    // supports it, else the level as recorded.
     const first = readFirstRequest();
     if (first !== undefined) {
       const supported = models.find((entry) => entry.publicId === first.model)?.reasoningEfforts ?? [];
       setModelId(first.model);
-      setEffort(supported.length > 0 ? retainReasoningEffort(first.effort, supported) : first.effort);
+      setEffort(
+        resolveModelEffort(memory, first.model, supported)
+        ?? (supported.length > 0 ? retainReasoningEffort(first.effort, supported) : first.effort),
+      );
       return;
     }
     // No remembered selection: start at the first selectable model, which may
-    // only appear after a later availability refresh.
+    // only appear after a later availability refresh. Its effort is that model's
+    // own remembered level, else that model's own default.
     const fallback = models.find((entry) => isRouteCallable(entry));
     if (fallback === undefined) {
       setModelId('');
       return;
     }
     setModelId(fallback.publicId);
-    if (fallback.reasoningEfforts.length > 0) setEffort(retainReasoningEffort(undefined, fallback.reasoningEfforts));
+    if (fallback.reasoningEfforts.length > 0) {
+      setEffort(resolveModelEffort(memory, fallback.publicId, fallback.reasoningEfforts) ?? defaultModelEffort(fallback.reasoningEfforts));
+    }
   }, [seedKey, models, modelId]);
 
   useEffect(() => {
@@ -358,6 +369,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // The model entry always rides the composer toolbar: next to the typed text in
   // the compact row, and on the toolbar's left in the expanded layout.
   // Callable routes are offered; a probe-eligible route is labelled as a retry.
+  // Each model preselects its own remembered level (nearest-supported within
+  // that model's ladder), falling back to the model's own default — never to
+  // the currently selected model's global level.
+  const modelEfforts = readModelEfforts();
   const options: ModelOption[] = models
     .filter((entry) => isRouteCallable(entry))
     .map((entry) => ({
@@ -366,7 +381,9 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       group: entry.providerDisplayName,
       badges: modelBadges(entry),
       efforts: entry.reasoningEfforts,
-      defaultEffort: entry.reasoningEfforts.length === 0 ? effort : retainReasoningEffort(effort, entry.reasoningEfforts),
+      defaultEffort: entry.reasoningEfforts.length === 0
+        ? effort
+        : (resolveModelEffort(modelEfforts, entry.publicId, entry.reasoningEfforts) ?? defaultModelEffort(entry.reasoningEfforts)),
     }));
   // An unusable selection is named on the trigger (never silently becoming
   // another model) and blocks sending; a probe-eligible one is informational.
@@ -385,6 +402,13 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   };
 
   const selectModel = (nextModelId: string, nextEffort: ReasoningEffort): void => {
+    // Only a model that offers an effort ladder reaches here from an explicit
+    // submenu pick; a ladder-less model row click carries no level choice and
+    // writes nothing. In both cases only the picked model's own key is written,
+    // so a switch never overwrites another model's memory.
+    if ((models.find((entry) => entry.publicId === nextModelId)?.reasoningEfforts.length ?? 0) > 0) {
+      writeModelEffort(nextModelId, nextEffort);
+    }
     setModelId(nextModelId);
     setEffort(nextEffort);
   };

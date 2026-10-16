@@ -1,10 +1,19 @@
 /**
- * Composer reasoning-effort choice and the Desktop-local record of the previous
- * session's first request, which a brand-new session starts from.
+ * Composer reasoning-effort choice and the Desktop-local records of the previous
+ * session's first request and of each model's last chosen level. The pure
+ * parse/resolve/write logic lives in `reasoning-effort-memory.ts`; this module
+ * is the thin `localStorage` wrapper around it.
  */
 import { REASONING_EFFORTS, resolveReasoningEffort, type ReasoningEffort } from '@wrenyard/models';
+import {
+  MODEL_EFFORTS_STORAGE_KEY,
+  parseModelEfforts,
+  withModelEffort,
+  type ModelEffortMemory,
+} from './reasoning-effort-memory.js';
 
 export type { ReasoningEffort };
+export type { ModelEffortMemory };
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return (REASONING_EFFORTS as readonly unknown[]).includes(value);
@@ -35,6 +44,25 @@ export function readFirstRequest(): FirstRequest | undefined {
 export function writeFirstRequest(record: FirstRequest): void {
   try {
     localStorage.setItem(FIRST_REQUEST_KEY, JSON.stringify(record));
+  } catch {
+    // Local state is best-effort.
+  }
+}
+
+/** Read the per-model reasoning-effort memory; missing or corrupt storage reads as empty. */
+export function readModelEfforts(): ModelEffortMemory {
+  try {
+    return parseModelEfforts(localStorage.getItem(MODEL_EFFORTS_STORAGE_KEY));
+  } catch {
+    return parseModelEfforts(null);
+  }
+}
+
+/** Remember `effort` for exactly `publicId`; every other model's entry is left untouched. */
+export function writeModelEffort(publicId: string, effort: ReasoningEffort): void {
+  try {
+    const memory = withModelEffort(readModelEfforts(), publicId, effort);
+    localStorage.setItem(MODEL_EFFORTS_STORAGE_KEY, JSON.stringify(memory));
   } catch {
     // Local state is best-effort.
   }
