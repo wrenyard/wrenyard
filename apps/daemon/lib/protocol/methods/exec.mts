@@ -6,7 +6,7 @@ export type {
 } from '@wrenyard/protocol/exec'
 
 // Runtime validation lives at the daemon boundary; wire types live in protocol/exec.
-export const EXEC_STATUS_VALUES = ['running', 'completed', 'failed', 'cancelled'] as const
+export const EXEC_STATUS_VALUES = ['queued', 'running', 'completed', 'failed', 'cancelled'] as const
 
 export const execStartParamsSchema = {
   type: 'object',
@@ -41,6 +41,7 @@ export const execSnapshotSchema = {
     finishedAt: { type: 'number', minimum: 0 },
     exitCode: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
     error: { type: 'string', maxLength: 4_000 },
+    queuePosition: { type: 'integer', minimum: 1 },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema

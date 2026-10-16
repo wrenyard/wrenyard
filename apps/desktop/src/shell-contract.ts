@@ -653,6 +653,8 @@ export interface ActivityStatusTask {
   taskLabel?: string;
   project?: string;
   taskgraphId?: string;
+  /** 1-based desktop-lane queue position; present only while the run waits. */
+  queuePosition?: number;
   /** Task-run creation timestamp (ISO 8601); never fabricated from `sampledAt`. */
   startedAt: string;
 }

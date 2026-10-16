@@ -22,6 +22,8 @@ export interface ActivitySnapshotTask {
   resolved_profile?: string
   created_at: string
   updated_at: string
+  /** 1-based desktop-lane queue position; present only while the run waits. */
+  queuePosition?: number
   taskgraph_id?: string
   node_id?: string
 }
@@ -167,6 +169,7 @@ const activitySnapshotTaskSchema = {
     created_at: { type: 'string', format: 'date-time' },
     started_at: { type: 'string', format: 'date-time' },
     updated_at: { type: 'string', format: 'date-time' },
+    queuePosition: { type: 'integer', minimum: 1 },
     taskgraph_id: { type: 'string', minLength: 1 },
     node_id: { type: 'string', minLength: 1 },
   },

@@ -58,7 +58,7 @@ import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refres
 import { ExecService } from '@wrenyard/exec'
 import { ProviderService } from '@wrenyard/provider-service'
 import { OperationComponents } from './services/operation-components.mts'
-import { OperationAdapter } from './execution/operation-adapter.mts'
+import { desktopLane, OperationAdapter } from './execution/operation-adapter.mts'
 import { RuntimeAliasService } from './services/runtime-alias-service.mts'
 import { RemoteHostRegistryService } from '../remote/host-registry.mts'
 import { createWorkspaceControl } from './services/workspace-control.mts'
@@ -938,7 +938,13 @@ async function createForemanDaemonResources(
     // One daemon-owned TaskService backs both the task.run.* RPC surface and the
     // session feature's in-process wait/cancel. A session wait therefore observes
     // exactly the runs this daemon accepted, with no second registry.
-    const taskService = new TaskService({ workspaceRoot, operations })
+    const taskService = new TaskService({
+      workspaceRoot,
+      operations,
+      // Surface the shared host-wide desktop lane's FIFO position on a waiting
+      // run so `task status` reports the 1-based `queue_position` while queued.
+      lanePosition: (taskRunId) => desktopLane.positionOf(taskRunId),
+    })
     // Single shared TaskGraphService used by all RPC transports.
     const taskgraphService = createTaskGraphService({
       workspaceRoot,
@@ -1123,7 +1129,10 @@ async function createForemanDaemonResources(
         const record = taskService.status(runId)
         if (record === null) return { status: 'unknown' }
         const raw = typeof record.status === 'string' ? record.status : 'unknown'
-        if (raw === 'queued' || raw === 'running') return { status: 'running' }
+        // Keep `queued` distinct from `running` so the bot host can exclude lane
+        // wait from its budgets and stuck-task watchdog; both are waiting states.
+        if (raw === 'queued') return { status: 'queued' }
+        if (raw === 'running') return { status: 'running' }
         if (raw === 'done') {
           const finished = taskService.output(runId)
           return {

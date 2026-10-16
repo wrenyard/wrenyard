@@ -38,6 +38,8 @@ export interface ActivitySnapshotTask {
   created_at: string;
   started_at?: string;
   updated_at: string;
+  /** 1-based desktop-lane queue position; present only while the run waits. */
+  queuePosition?: number;
   taskgraph_id?: string;
   node_id?: string;
 }
@@ -115,6 +117,8 @@ export interface ActivityTaskPresence {
   createdAt: string;
   /** When the run's first execution launched; absent while it is queued. */
   startedAt?: string;
+  /** 1-based desktop-lane queue position; present only while the run waits. */
+  queuePosition?: number;
 }
 
 export interface ActivityNodePresence {
@@ -241,6 +245,15 @@ function normalizeOptionalNonnegSafeInt(v: unknown): number | undefined {
   return v;
 }
 
+// Optional 1-based desktop-lane position: missing or invalid values —
+// non-integer, zero, negative, NaN/Infinity, unsafe integers — are omitted
+// fail-closed so a malformed position never rejects the whole round.
+function normalizeOptionalQueuePosition(v: unknown): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 1) return undefined;
+  return v;
+}
+
 // ── Task / node / graph normalization ────────────────────────────────
 export function normalizeActivitySnapshotTask(v: unknown, path: string): ActivitySnapshotTask {
   const r = assertRecord(v, path);
@@ -269,6 +282,8 @@ export function normalizeActivitySnapshotTask(v: unknown, path: string): Activit
   if (taskgraphId !== undefined) result.taskgraph_id = taskgraphId;
   const nodeId = assertOptionalString(r.node_id, `${path}.node_id`);
   if (nodeId !== undefined) result.node_id = nodeId;
+  const queuePosition = normalizeOptionalQueuePosition(r.queuePosition);
+  if (queuePosition !== undefined) result.queuePosition = queuePosition;
   return result;
 }
 
@@ -417,6 +432,7 @@ export function deriveActivityPresence(snapshot: ActivitySnapshotV1, stale: bool
     ...(task.node_id !== undefined ? { nodeId: task.node_id } : {}),
     createdAt: task.created_at,
     ...(task.started_at !== undefined ? { startedAt: task.started_at } : {}),
+    ...(task.queuePosition !== undefined ? { queuePosition: task.queuePosition } : {}),
   }));
 
   const taskgraphs: ActivityTaskGraphPresence[] = snapshot.taskgraphs.map((graph) => {

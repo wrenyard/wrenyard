@@ -13,7 +13,7 @@ import { redactDiagnosticText, redactEvent, redactJsonString } from './redaction
 import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protocol.mts'
 import { MODEL_REJECTION_FAILURE_CLASS } from '../../core/task/failure.mts'
 import { RepoWriteLocks } from './repo-write-locks.mts'
-import { toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
+import { desktopLane, toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
@@ -173,6 +173,7 @@ interface RegistryEntry {
   attemptDeadlineResolve?: () => void
 }
 
+type ExecutionRecordWithFeatures = ExecutionRecord & { features: string | null }
 type TerminalStatus = 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
 type KillReason = 'cancel' | 'timeout' | 'shutdown' | 'crash' | 'spawn-error' | null
 type TerminalIntent =
@@ -249,10 +250,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       this.tx(() => {
         this.run(
           `INSERT INTO executions (
-            id, task_id, profile, permission, cwd, prompt,
+            id, task_id, profile, permission, cwd, prompt, features,
             status, native_session_id, client_family, timeout_ms,
             requested_agent_runtime, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
           executionId,
           opts.taskId ?? null,
           opts.profile,
@@ -261,6 +262,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           EXECUTIONS_LEGACY_PERMISSION,
           opts.cwd,
           opts.prompt,
+          opts.features ? JSON.stringify(opts.features) : null,
           opts.resume ?? null,
           opts.clientFamily ?? null,
           opts.timeoutMs ?? null,
@@ -453,14 +455,15 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     const timestamp = nowIso()
 
     // Persisted rows are the authoritative kill source for a fresh supervisor.
-    const staleRows = this.query<{ id: string; task_id: string | null; pid: number | null; pgid: number | null }>(
-      `SELECT id, task_id, pid, pgid
+    const staleRows = this.query<{ id: string; task_id: string | null; pid: number | null; pgid: number | null; features: string | null }>(
+      `SELECT id, task_id, pid, pgid, features
        FROM executions
        WHERE status IN ('queued', 'starting', 'running')`,
     )
 
     const interruptible: Array<{ id: string; taskId: string | null }> = []
     const failures: ExecutionTerminationFailure[] = []
+    const liveRows: typeof staleRows = []
     const failedTaskIds = new Set<string>()
 
     for (const row of staleRows) {
@@ -480,6 +483,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           'kill',
           errorMessage(error),
         ))
+        liveRows.push(row)
         if (row.task_id) failedTaskIds.add(row.task_id)
         continue
       }
@@ -491,10 +495,25 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           'verify',
           `process ${row.pid} for stale execution '${row.id}' is still live after killProcessTree`,
         ))
+        liveRows.push(row)
         if (row.task_id) failedTaskIds.add(row.task_id)
         continue
       }
       interruptible.push({ id: row.id, taskId: row.task_id })
+    }
+
+    for (const row of liveRows) {
+      const features = parsePersistedFeatures(row.features)
+      if (!features) continue
+      let operationIds: string[]
+      try {
+        operationIds = toOperationIds(features)
+      } catch {
+        continue
+      }
+      if (operationIds.includes('desktop') || operationIds.includes('browser')) {
+        desktopLane.adoptOwner(row.task_id ?? row.id)
+      }
     }
 
     for (const failure of failures) {
@@ -657,20 +676,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     }
     if (entry.terminalGeneration > 0) return
 
-    const claimed = this.run(
-      `UPDATE executions
-      SET status = 'starting', updated_at = ?
-      WHERE id = ? AND status = 'queued'`,
-      nowIso(),
-      entry.executionId,
-    )
-    if (claimed.changes !== 1) return
-    if (opts.taskId) this.taskRuns().markStarted(opts.taskId, nowIso())
-
     const resolvedProfile = this.readResolvedProfile(entry.executionId)
 
     let session: AgentSession
     let prepared: PreparedOperations | undefined
+    const laneAbort = new AbortController()
     try {
       const profile = resolvedProfile ?? opts.profile;
       const syntax = profile.includes(':') ? parseRunSyntax(profile) : undefined;
@@ -713,13 +723,25 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       const operationIds = toOperationIds(opts.features)
       if (operationIds.length > 0) {
         if (!this.operations) throw new Error('Operation components are not available in this runtime')
-        prepared = await this.operations.prepare({
-          prompt: opts.prompt,
-          ids: operationIds,
-          runId: entry.executionId,
-          owner: opts.taskId ?? entry.executionId,
-          clientId,
-        })
+        const laneWatch = setInterval(() => {
+          if (entry.cancelRequested || entry.terminalIntent) laneAbort.abort()
+        }, 250)
+        try {
+          prepared = await this.operations.prepare({
+            prompt: opts.prompt,
+            ids: operationIds,
+            runId: entry.executionId,
+            owner: opts.taskId ?? entry.executionId,
+            clientId,
+            signal: laneAbort.signal,
+            environment: opts.env,
+            onQueued: () => {
+              if (opts.taskId) this.taskRuns().markWaiting(opts.taskId, nowIso())
+            },
+          })
+        } finally {
+          clearInterval(laneWatch)
+        }
       }
       // The fully resolved user request is shaped once, then lowered onto the
       // shared exec surface. Requested operation components (legacy ids
@@ -744,6 +766,18 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       const operationOptions = {
         env: prepared ? prepared.applyEnv(baseEnv) : baseEnv,
       };
+      const claimed = this.run(
+        `UPDATE executions
+        SET status = 'starting', updated_at = ?
+        WHERE id = ? AND status = 'queued'`,
+        nowIso(),
+        entry.executionId,
+      )
+      if (claimed.changes !== 1) {
+        await prepared?.release().catch(() => undefined)
+        return
+      }
+      if (opts.taskId) this.taskRuns().markStarted(opts.taskId, nowIso())
       session = await this.execService.start(execRequest, operationOptions)
       if (prepared) {
         const release = prepared
@@ -751,6 +785,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       }
     } catch (error) {
       await prepared?.release().catch(() => undefined)
+      if (entry.cancelRequested || entry.terminalIntent) return
       this.terminalizeStartingFailure(entry, error)
       return
     }
@@ -1539,10 +1574,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
     try {
       while (this.runningCount() < MAX_CONCURRENT_EXECUTIONS) {
-        const rows = this.query<ExecutionRecord>(
+        const rows = this.query<ExecutionRecordWithFeatures>(
           `SELECT id, task_id, profile, cwd, prompt, status,
             native_session_id, client_family, pid, pgid, output, raw_result, error, exit_code,
-            kill_reason, timeout_ms, requested_agent_runtime, resolved_profile
+            kill_reason, timeout_ms, requested_agent_runtime, resolved_profile, features
           FROM executions
           WHERE status = 'queued'
           ORDER BY created_at ASC, id ASC`,
@@ -2205,7 +2240,7 @@ function validCodeBuddyExecutionBinding(
   return ['internal', 'ioa', 'cloudhosted', 'external', 'unknown'].includes(binding.expectedEnvironment)
 }
 
-function optsFromRow(row: ExecutionRecord, entry: RegistryEntry): StartExecutionOpts {
+function optsFromRow(row: ExecutionRecordWithFeatures, entry: RegistryEntry): StartExecutionOpts {
   return {
     taskId: row.task_id ?? undefined,
     profile: row.profile,
@@ -2216,6 +2251,19 @@ function optsFromRow(row: ExecutionRecord, entry: RegistryEntry): StartExecution
     resume: row.native_session_id ?? undefined,
     timeoutMs: row.timeout_ms ?? undefined,
     clientFamily: row.client_family ?? undefined,
+    features: parsePersistedFeatures(row.features),
+  }
+}
+
+function parsePersistedFeatures(value: string | null | undefined): string[] | undefined {
+  if (value === null || value === undefined) return undefined
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return Array.isArray(parsed) && parsed.every((feature) => typeof feature === 'string')
+      ? parsed
+      : undefined
+  } catch {
+    return undefined
   }
 }
 

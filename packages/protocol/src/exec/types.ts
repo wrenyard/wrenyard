@@ -34,8 +34,14 @@ export type ExecId = string
  */
 export type ExecSeq = number
 
-/** Terminal-or-in-flight state of an execution. */
-export type ExecStatus = 'running' | 'completed' | 'failed' | 'cancelled'
+/**
+ * Terminal-or-in-flight state of an execution.
+ *
+ * `queued` is the pre-spawn state of a run waiting for the host-wide desktop
+ * operation lane: nothing has been launched yet and the run's own timeout has
+ * not started.
+ */
+export type ExecStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 /** Identifiers of the configured execution features an exec request asks for. */
 export type ExecFeatureId = string
@@ -64,6 +70,11 @@ export interface ExecSnapshot {
   exitCode?: number | null
   /** Present only when `status` is `failed` or `cancelled`. */
   error?: string
+  /**
+   * 1-based position among the desktop-lane waiters; present only while
+   * `status` is `queued`.
+   */
+  queuePosition?: number
 }
 
 /**

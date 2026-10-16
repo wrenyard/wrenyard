@@ -87,6 +87,7 @@ import type {
   OperationComponents,
 } from '../../daemon/services/operation-components.mts'
 import {
+  desktopLane,
   toOperationIds,
   type OperationAdapter,
   type PreparedOperations,
@@ -716,7 +717,6 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   router.register('exec.start', async (params, _message, context) => {
     const service = requireExecService(context, 'exec.start')
     let handle: Awaited<ReturnType<ExecService['start']>>
-    let prepared: PreparedOperations | undefined
     try {
       const request = options.resolveExecRequest?.(params)
       if (!request) throw new Error('Exec catalog resolution is unavailable')
@@ -735,39 +735,54 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
           throw new Error('Operation components are not available in this runtime')
         }
         const runId = `exec-${randomBytes(4).toString('hex')}`
-        prepared = await options.operationAdapter.prepare({
-          prompt: merged.prompt,
-          mcpServers: merged.mcpServers,
-          ids,
-          runId,
-          owner: runId,
-          clientId: merged.client,
+        const laneAbort = new AbortController()
+        const queuedSnapshot = service.registerQueued(merged, {
+          id: runId,
+          queued: true,
+          onCancel: () => laneAbort.abort(),
         })
+        void (async () => {
+          let prepared: PreparedOperations | undefined
+          try {
+            prepared = await options.operationAdapter!.prepare({
+              prompt: merged.prompt,
+              mcpServers: merged.mcpServers,
+              ids,
+              runId,
+              owner: runId,
+              signal: laneAbort.signal,
+              onQueued: (position) => service.setQueuePosition(runId, position),
+            })
+            handle = await service.start(
+              {
+                ...merged,
+                prompt: prepared.prompt,
+                ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
+              },
+              {
+                env: prepared.applyEnv(process.env),
+                signal: laneAbort.signal,
+                id: runId,
+                queued: true,
+                onCancel: () => laneAbort.abort(),
+              },
+            )
+            const preparedRun = prepared
+            void Promise.resolve(handle.result)
+              .catch(() => undefined)
+              .finally(() => {
+                void preparedRun.release()
+              })
+          } catch (error) {
+            await prepared?.release().catch(() => undefined)
+            service.failStart(runId, error)
+          }
+        })()
+        return { execution: toJsonShape(queuedSnapshot) } satisfies ExecStartResult
       }
-      handle = await service.start(
-        prepared
-          ? {
-              ...merged,
-              prompt: prepared.prompt,
-              ...(prepared.mcpServers ? { mcpServers: prepared.mcpServers } : {}),
-            }
-          : merged,
-        prepared ? { env: prepared.applyEnv(process.env) } : undefined,
-      )
+      handle = await service.start(merged)
     } catch (error) {
-      await prepared?.release().catch(() => undefined)
       throw protocolErrorFromExecStart(error, params.client)
-    }
-    // Release the acquired component resources (the browser session is closed
-    // and the desktop lock is freed) once the execution reaches its terminal
-    // result. Release is idempotent and never rejects the caller.
-    if (prepared) {
-      const preparedRun = prepared
-      void Promise.resolve(handle.result)
-        .catch(() => undefined)
-        .finally(() => {
-          void preparedRun.release()
-        })
     }
     return { execution: toJsonShape(handle.snapshot) } satisfies ExecStartResult
   })
@@ -926,6 +941,8 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     return activitySnapshotResult<ActivitySnapshotV1>(() =>
       buildActivitySnapshot({
         trackedTaskgraphIds: params.tracked_taskgraph_ids,
+        // Report a waiting run's 1-based desktop-lane position in the snapshot.
+        lanePosition: (taskRunId) => desktopLane.positionOf(taskRunId),
       }),
     )
   })

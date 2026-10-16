@@ -48,6 +48,12 @@ export interface ExecHandle extends AgentSession {
   readonly snapshot: ExecSnapshot;
 }
 
+interface ExecStartOptions extends OperationOptions {
+  id?: ExecId;
+  queued?: boolean;
+  onCancel?: () => void;
+}
+
 /** A request to start one raw prompt execution. */
 export interface ExecRequest extends AgentRequest {
   /** Agent client id to run. */
@@ -62,6 +68,8 @@ interface ExecEntry {
   consumer: Promise<void>;
   readonly waiters: Set<() => void>;
   status: ExecStatus;
+  queuePosition?: number;
+  onCancel?: () => void;
   finishedAt?: number;
   exitCode?: number | null;
   error?: string;
@@ -128,21 +136,72 @@ export class ExecService {
    * client that cannot start executions — rejects here without starting
    * anything, so a rejected `start` never leaves a half-configured run behind.
    */
-  async start(request: ExecRequest, options?: OperationOptions): Promise<ExecHandle> {
+  async start(request: ExecRequest, options?: ExecStartOptions): Promise<ExecHandle> {
     if (this.#closed) throw new Error('ExecService is closed');
-    const prepared = this.#prepare(request);
-    const client = this.#clients.get(prepared.entry.client)!;
+    const prepared = this.#prepare(request, options?.id);
+    const entry = prepared.entry;
+    const client = this.#clients.get(entry.client)!;
+    const preregistered = options?.queued === true;
+    if (preregistered) {
+      if (entry.terminal) throw new Error('Execution was cancelled before start');
+      entry.status = 'queued';
+      entry.onCancel = options.onCancel;
+      this.#runs.set(entry.id, entry);
+      this.#wake(entry);
+    }
     const signal = options?.signal
       ? AbortSignal.any([options.signal, this.#shutdown.signal])
       : this.#shutdown.signal;
-    const session = await client.start(prepared.request, { ...options, signal });
-    if (this.#closed) {
-      await session.cancel();
-      throw new Error('ExecService is closed');
+    const clientOptions = { ...options };
+    delete clientOptions.id;
+    delete clientOptions.queued;
+    delete clientOptions.onCancel;
+    try {
+      const session = await client.start(prepared.request, { ...clientOptions, signal });
+      if (this.#closed || entry.terminal) {
+        await session.cancel();
+        throw new Error(this.#closed ? 'ExecService is closed' : 'Execution was cancelled before start');
+      }
+      entry.status = 'running';
+      delete entry.queuePosition;
+      entry.onCancel = undefined;
+      const handle = this.#bind(entry, session);
+      void this.#pruneCompleted();
+      return handle;
+    } catch (error) {
+      if (preregistered) {
+        this.#settle(entry, { error: error instanceof Error ? error.message : 'execution failed' });
+      }
+      throw error;
     }
-    const handle = this.#bind(prepared.entry, session);
-    void this.#pruneCompleted();
-    return handle;
+  }
+
+  /** Register a queued placeholder before waiting for an external resource. */
+  registerQueued(request: ExecRequest, options: ExecStartOptions): ExecSnapshot {
+    if (this.#closed) throw new Error('ExecService is closed');
+    if (!options.id) throw new Error('A queued execution requires an id');
+    if (this.#runs.has(options.id)) throw new Error(`Execution '${options.id}' already exists`);
+    const entry = this.#prepare(request, options.id).entry;
+    entry.status = 'queued';
+    entry.onCancel = options.onCancel;
+    this.#runs.set(entry.id, entry);
+    return snapshotOf(entry);
+  }
+
+  /** Update the queued lane position and wake snapshot/event waiters. */
+  setQueuePosition(id: ExecId, position: number | undefined): void {
+    const entry = this.#runs.get(id);
+    if (!entry || entry.terminal) return;
+    if (position === undefined) delete entry.queuePosition;
+    else entry.queuePosition = position;
+    this.#wake(entry);
+  }
+
+  /** Settle a queued placeholder when preparation fails before client start. */
+  failStart(id: ExecId, error: unknown): void {
+    const entry = this.#runs.get(id);
+    if (!entry || entry.terminal) return;
+    this.#settle(entry, { error: error instanceof Error ? error.message : 'execution failed' });
   }
 
   /** Snapshot of a live or retained execution, or `undefined` when unknown. */
@@ -203,7 +262,11 @@ export class ExecService {
     if (entry.terminal) return;
     entry.cancelRequested = true;
     const session = entry.session;
-    if (!session) return;
+    if (!session) {
+      entry.onCancel?.();
+      this.#settle(entry, {});
+      return;
+    }
     await session.cancel();
   }
 
@@ -220,7 +283,10 @@ export class ExecService {
     this.#closed = true;
     this.#shutdown.abort();
     const live = [...this.#runs.values()].filter((entry) => !entry.terminal);
-    for (const entry of live) entry.cancelRequested = true;
+    for (const entry of live) {
+      entry.cancelRequested = true;
+      if (!entry.session) entry.onCancel?.();
+    }
     await Promise.allSettled(live.map((entry) => entry.session?.cancel() ?? Promise.resolve()));
     await Promise.allSettled(live.map((entry) => withTimeout(entry.consumer, CLOSE_DRAIN_GRACE_MS)));
     // A drain loop that never observed a terminal frame must still surface a
@@ -229,14 +295,18 @@ export class ExecService {
   }
 
   /** Resolve the client and compose the child request. */
-  #prepare(request: ExecRequest): PreparedRun {
+  #prepare(request: ExecRequest, id?: ExecId): PreparedRun {
     const clientId = request.client.trim();
     const client = this.#clients.get(clientId);
     if (!client) throw new Error(`Unknown agent client '${clientId}'`);
     if (!client.capabilities.run) throw new Error(`Agent client '${clientId}' cannot start executions`);
 
-    const entry: ExecEntry = {
-      id: `exec_${(this.#sequence += 1).toString(36)}_${Date.now().toString(36)}`,
+    const existing = id ? this.#runs.get(id) : undefined;
+    if (existing && existing.client !== clientId) {
+      throw new Error(`Execution '${id}' was registered for a different client`);
+    }
+    const entry: ExecEntry = existing ?? {
+      id: id ?? `exec_${(this.#sequence += 1).toString(36)}_${Date.now().toString(36)}`,
       client: clientId,
       replay: new ExecReplayBuffer({
         maxEvents: this.#maxRetainedEvents,
@@ -332,8 +402,7 @@ export class ExecService {
 
   #record(entry: ExecEntry, event: AgentEvent, observed: ObservedFacts): void {
     // Wake replay readers after this synchronous append finishes.
-    for (const wake of entry.waiters) wake();
-    entry.waiters.clear();
+    this.#wake(entry);
     if (event.type === 'output') {
       if (event.record.type === 'run_finished' && (event.record.is_error === true || event.record.status === 'failed')) {
         observed.error = typeof event.record.error === 'string' ? event.record.error : 'Agent turn failed';
@@ -359,10 +428,17 @@ export class ExecService {
     });
   }
 
+  #wake(entry: ExecEntry): void {
+    for (const wake of entry.waiters) wake();
+    entry.waiters.clear();
+  }
+
   #settle(entry: ExecEntry, observed: ObservedFacts): void {
     if (entry.terminal) return;
     entry.terminal = true;
     entry.finishedAt = Date.now();
+    delete entry.queuePosition;
+    entry.onCancel = undefined;
     if (observed.exitCode !== undefined || entry.exitCodeSeen) {
       entry.exitCode = observed.exitCode ?? entry.exitCode ?? null;
     }
@@ -383,8 +459,7 @@ export class ExecService {
         : `execution exited with code ${entry.exitCode}`;
     }
     entry.session = undefined;
-    for (const wake of entry.waiters) wake();
-    entry.waiters.clear();
+    this.#wake(entry);
     void this.#pruneCompleted();
   }
 
@@ -405,6 +480,7 @@ function snapshotOf(entry: ExecEntry): ExecSnapshot {
     client: entry.client,
     status: entry.status,
     createdAt: entry.createdAt,
+    ...(entry.queuePosition !== undefined ? { queuePosition: entry.queuePosition } : {}),
     ...(entry.finishedAt !== undefined ? { finishedAt: entry.finishedAt } : {}),
     ...(entry.terminal ? { exitCode: entry.exitCode ?? null } : {}),
     ...(entry.error !== undefined ? { error: entry.error } : {}),

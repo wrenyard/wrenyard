@@ -60,6 +60,12 @@ export type ActivityTerminalReason = 'success' | 'node_failed' | 'cancelled'
 
 export interface ActivitySnapshotParams {
   trackedTaskgraphIds?: string[]
+  /**
+   * Optional lookup of a task run's 1-based position among the host-wide
+   * desktop operation lane waiters. Returns nothing for a run that is not
+   * waiting in the lane.
+   */
+  lanePosition?: (taskRunId: string) => number | undefined
 }
 
 export interface ActivitySnapshotTask {
@@ -75,6 +81,8 @@ export interface ActivitySnapshotTask {
   /** When the run's first execution launched; absent while it is queued. */
   started_at?: string
   updated_at: string
+  /** 1-based desktop-lane queue position; present only while the run waits. */
+  queuePosition?: number
   taskgraph_id?: string
   node_id?: string
 }
@@ -251,7 +259,7 @@ export function buildActivitySnapshot(params: ActivitySnapshotParams = {}): Acti
       }
     }
 
-    const tasks = taskRows.map((row) => taskFromRow(row, taskAssociation.get(row.task_run_id)))
+    const tasks = taskRows.map((row) => taskFromRow(row, taskAssociation.get(row.task_run_id), params.lanePosition))
     return {
       schema_version: ACTIVITY_SNAPSHOT_SCHEMA_VERSION,
       sampled_at: sampledAt,
@@ -330,6 +338,7 @@ function readLatestSequences(db: ForemanDatabase, graphIds: readonly string[]): 
 function taskFromRow(
   row: TaskRow,
   association: { taskgraph_id: string; node_id: string } | undefined,
+  lanePosition?: (taskRunId: string) => number | undefined,
 ): ActivitySnapshotTask {
   const task: ActivitySnapshotTask = {
     task_run_id: row.task_run_id,
@@ -341,6 +350,10 @@ function taskFromRow(
   if (row.template) task.task_id = row.template
   if (row.project) task.project = row.project
   if (row.worktree) task.worktree = true
+  // A run waiting in the host-wide desktop lane reports its 1-based position;
+  // the lookup returns nothing for a run that is not waiting.
+  const queuePosition = lanePosition?.(row.task_run_id)
+  if (typeof queuePosition === 'number') task.queuePosition = queuePosition
   const runtime = boundString(row.requested_agent_runtime, MAX_RUNTIME_LENGTH)
   if (runtime) task.requested_agent_runtime = runtime
   const profile = boundString(row.resolved_profile, MAX_PROFILE_LENGTH)

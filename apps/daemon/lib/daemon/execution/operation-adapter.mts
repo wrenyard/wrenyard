@@ -11,8 +11,8 @@
  * Browser operations run through the `agent-browser` CLI: the adapter puts the
  * resolved executable on PATH and selects a unique session per run so the run
  * never attaches to the user's own browser or to another run's session. Desktop
- * operations attach the Cua Driver MCP server; because the desktop is the user's
- * real, shared session, only one owner may hold it at a time.
+ * operations attach the Cua Driver MCP server; desktop and headed-browser runs
+ * share one FIFO lane for the user's real, shared session.
  *
  * A component that is not ready fails that run before anything is spawned, with
  * an actionable message that names this host and points at Settings. Nothing
@@ -89,32 +89,129 @@ export interface PrepareOperationInput {
   ids: readonly OperationComponentId[]
   /** Identifies the run; seeds the isolated browser session name. */
   runId: string
-  /** Lock owner; the same task retry keeps the same owner. */
+  /** Lane owner; retries of the same task keep the same owner. */
   owner: string
   /** Resolved agent client id; selects the per-client discovery hint. */
   clientId?: string
+  signal?: AbortSignal
+  environment?: NodeJS.ProcessEnv
+  onQueued?: (position: number | undefined) => void
 }
 
-// The desktop is a single shared resource across the whole daemon. The lock is
-// per owner so structured-output retries of one task are not refused, while a
-// different run fails fast instead of fighting over the user's real desktop.
-let desktopLockOwner: string | undefined
-let desktopLockCount = 0
+interface DesktopLaneWaiter {
+  owner: string
+  runId: string
+  resolve: () => void
+  reject: (error: Error) => void
+  signal?: AbortSignal
+  onQueued?: (position: number | undefined) => void
+  abort?: () => void
+}
 
-function acquireDesktopLock(owner: string, host: string): void {
-  if (desktopLockOwner !== undefined && desktopLockOwner !== owner) {
-    throw new Error(
-      `The desktop operation component is in use by another run on host '${host}'. Desktop operations run one at a time; retry after it finishes.`,
+export class DesktopLane {
+  #owner: string | undefined
+  #holds = 0
+  readonly #queue: DesktopLaneWaiter[] = []
+
+  positionOf(ownerOrRunId: string): number | undefined {
+    const index = this.#queue.findIndex(
+      (waiter) => waiter.owner === ownerOrRunId || waiter.runId === ownerOrRunId,
     )
+    return index === -1 ? undefined : index + 1
   }
-  desktopLockOwner = owner
-  desktopLockCount += 1
+
+  async acquire(
+    owner: string,
+    runId: string,
+    signal?: AbortSignal,
+    onQueued?: (position: number | undefined) => void,
+  ): Promise<void> {
+    if (signal?.aborted) throw abortError()
+    if (this.#owner === owner) {
+      this.#holds += 1
+      return
+    }
+    if (this.#owner === undefined && this.#queue.length === 0) {
+      this.#owner = owner
+      this.#holds = 1
+      return
+    }
+
+    return new Promise((resolve, reject) => {
+      const waiter: DesktopLaneWaiter = { owner, runId, resolve, reject, signal, onQueued }
+      if (signal) {
+        waiter.abort = () => {
+          const index = this.#queue.indexOf(waiter)
+          if (index === -1) return
+          this.#queue.splice(index, 1)
+          signal.removeEventListener('abort', waiter.abort!)
+          this.#updatePositions()
+          reject(abortError())
+        }
+        signal.addEventListener('abort', waiter.abort, { once: true })
+      }
+      this.#queue.push(waiter)
+      if (signal?.aborted) {
+        waiter.abort?.()
+      } else {
+        this.#updatePositions()
+      }
+    })
+  }
+
+  release(owner: string): void {
+    if (this.#owner !== owner || this.#holds === 0) return
+    this.#holds -= 1
+    if (this.#holds > 0) return
+    this.#owner = undefined
+    this.#grantNext()
+  }
+
+  adoptOwner(owner: string): void {
+    if (this.#owner !== undefined || this.#queue.length > 0) return
+    this.#owner = owner
+    this.#holds = 1
+  }
+
+  #grantNext(): void {
+    while (this.#queue.length > 0) {
+      const waiter = this.#queue.shift()!
+      if (waiter.signal?.aborted) {
+        waiter.signal.removeEventListener('abort', waiter.abort!)
+        waiter.reject(abortError())
+        continue
+      }
+      waiter.signal?.removeEventListener('abort', waiter.abort!)
+      this.#owner = waiter.owner
+      this.#holds = 1
+      this.#notify(waiter, undefined)
+      waiter.resolve()
+      break
+    }
+    this.#updatePositions()
+  }
+
+  #updatePositions(): void {
+    this.#queue.forEach((waiter, index) => this.#notify(waiter, index + 1))
+  }
+
+  #notify(waiter: DesktopLaneWaiter, position: number | undefined): void {
+    try {
+      waiter.onQueued?.(position)
+    } catch {
+      // Queue notifications must not interrupt lane ownership changes.
+    }
+  }
 }
 
-function releaseDesktopLock(): void {
-  if (desktopLockCount === 0) return
-  desktopLockCount -= 1
-  if (desktopLockCount === 0) desktopLockOwner = undefined
+export const desktopLane = new DesktopLane()
+
+function abortError(): Error {
+  return new Error('cancelled while waiting for the desktop lane')
+}
+
+function isTruthyEnvironmentValue(value: string | undefined): boolean {
+  return value !== undefined && ['1', 'true', 'yes'].includes(value.trim().toLowerCase())
 }
 
 function browserSessionName(runId: string): string {
@@ -157,6 +254,7 @@ function applyBrowserEnv(
     next.PATH = directory
   }
   for (const [name, value] of Object.entries(baseEnv)) next[name] = value
+  if (env.AGENT_BROWSER_HEADED !== undefined) next.AGENT_BROWSER_HEADED = env.AGENT_BROWSER_HEADED
   next.AGENT_BROWSER_SESSION = session
   return next
 }
@@ -206,10 +304,21 @@ export class OperationAdapter {
         snapshots.set(id, launch.snapshot)
 
         if (id === 'browser') {
+          const headedValue = input.environment?.AGENT_BROWSER_HEADED ?? process.env.AGENT_BROWSER_HEADED
+          if (isTruthyEnvironmentValue(headedValue) && !desktopHeld) {
+            await desktopLane.acquire(owner, runId, input.signal, input.onQueued)
+            desktopHeld = true
+          }
           const session = browserSessionName(runId)
           const directory = dirname(launch.executable)
           const baseEnv = launch.env
-          envModifiers.push((env) => applyBrowserEnv(env, directory, baseEnv, session))
+          envModifiers.push((env) => {
+            const next = applyBrowserEnv(env, directory, baseEnv, session)
+            if (input.environment?.AGENT_BROWSER_HEADED !== undefined) {
+              next.AGENT_BROWSER_HEADED = input.environment.AGENT_BROWSER_HEADED
+            }
+            return next
+          })
           cleanups.push(() =>
             runQuietly(launch.executable, ['--session', session, 'close'], {
               ...launch.env,
@@ -223,8 +332,10 @@ export class OperationAdapter {
         if (servers.computer) throw new Error(`Duplicate MCP server 'computer'`)
         const server: McpServer =
           launch.mcpServer ?? { transport: 'stdio', command: launch.executable, args: ['mcp'] }
-        acquireDesktopLock(owner, launch.host)
-        desktopHeld = true
+        if (!desktopHeld) {
+          await desktopLane.acquire(owner, runId, input.signal, input.onQueued)
+          desktopHeld = true
+        }
         servers.computer = server
         instructions.push(DESKTOP_INSTRUCTION)
       }
@@ -241,7 +352,7 @@ export class OperationAdapter {
         if (released) return
         released = true
         if (desktopHeld) {
-          releaseDesktopLock()
+          desktopLane.release(owner)
           desktopHeld = false
         }
         for (const cleanup of acquired) {
@@ -260,7 +371,7 @@ export class OperationAdapter {
         release,
       }
     } catch (error) {
-      if (desktopHeld) releaseDesktopLock()
+      if (desktopHeld) desktopLane.release(owner)
       throw error
     }
   }

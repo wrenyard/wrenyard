@@ -69,6 +69,12 @@ interface DbTaskStatusRow {
 export interface TaskServiceOptions {
   workspaceRoot: string
   operations?: OperationHost
+  /**
+   * Optional lookup of a task run's 1-based position among the host-wide
+   * desktop operation lane waiters. Returns nothing when the run is not
+   * waiting in the lane, so a non-queued run never carries `queue_position`.
+   */
+  lanePosition?: (taskRunId: string) => number | undefined
 }
 
 export interface TaskRunAccepted {
@@ -131,11 +137,13 @@ export class TaskService {
   private readonly workspaceRoot: string
   private readonly workspace: ForemanWorkspace
   private readonly operations: OperationHost
+  private readonly lanePosition?: (taskRunId: string) => number | undefined
 
   constructor(options: TaskServiceOptions) {
     this.workspaceRoot = options.workspaceRoot
     this.workspace = new ForemanWorkspace({ root: options.workspaceRoot })
     this.operations = options.operations ?? {}
+    this.lanePosition = options.lanePosition
   }
 
   async list(project?: string): Promise<Array<{
@@ -332,7 +340,15 @@ export class TaskService {
 
   status(taskRunId: string): JsonRecord | null {
     const row = readTaskStatusRow(taskRunId)
-    return row ? { ...taskStatusRowToJson(row), ...this.taskNameField(row) } : null
+    if (!row) return null
+    // A run waiting in the host-wide desktop lane reports its 1-based position;
+    // the lookup returns nothing for a run that is not waiting.
+    const queuePosition = this.lanePosition?.(taskRunId)
+    return {
+      ...taskStatusRowToJson(row),
+      ...this.taskNameField(row),
+      ...(typeof queuePosition === 'number' ? { queue_position: queuePosition } : {}),
+    }
   }
 
   async taskRunEvents(params: {

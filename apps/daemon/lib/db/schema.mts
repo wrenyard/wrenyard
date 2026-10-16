@@ -151,6 +151,7 @@ function needsStatusMetadataMigration(database: ForemanDatabase): boolean {
     || !workflowColumns.has('runtime_compat_marker')
     || !executionColumns.has('requested_agent_runtime')
     || !executionColumns.has('resolved_profile')
+    || !executionColumns.has('features')
 }
 
 function dropRepoLocksTable(database: ForemanDatabase): void {
@@ -196,6 +197,7 @@ function addStatusMetadataColumns(database: ForemanDatabase): void {
     .map((column) => column.name))
   if (!executionColumns.has('requested_agent_runtime')) database.prepare('ALTER TABLE executions ADD COLUMN requested_agent_runtime TEXT').run()
   if (!executionColumns.has('resolved_profile')) database.prepare('ALTER TABLE executions ADD COLUMN resolved_profile TEXT').run()
+  if (!executionColumns.has('features')) database.prepare('ALTER TABLE executions ADD COLUMN features TEXT').run()
 }
 
 function rebuildExecutionsForCurrentSchema(database: ForemanDatabase): void {
@@ -206,28 +208,27 @@ function rebuildExecutionsForCurrentSchema(database: ForemanDatabase): void {
     .prepare<[], { name: string }>('PRAGMA table_info(executions_schema_old)')
     .all()
     .map((column) => column.name))
-  // Preserve requested_agent_runtime and resolved_profile verbatim when the
-  // legacy source table already carries them; NULL only for older schemas that
-  // predate these columns.
+  // Preserve runtime, profile, and feature values when the legacy table carries them.
   const runtimeColumn = sourceColumns.has('requested_agent_runtime')
     ? 'requested_agent_runtime'
     : 'NULL'
   const resolvedColumn = sourceColumns.has('resolved_profile')
     ? 'resolved_profile'
     : 'NULL'
+  const featuresColumn = sourceColumns.has('features') ? 'features' : 'NULL'
 
   database.prepare(`
     INSERT INTO executions (
       id, task_id, profile, permission, cwd, prompt, status,
       native_session_id, client_family, pid, pgid, started_at, ended_at, exit_code,
       kill_signal, kill_reason, output, raw_result, error, timeout_ms,
-      requested_agent_runtime, resolved_profile, created_at, updated_at
+      requested_agent_runtime, resolved_profile, features, created_at, updated_at
     )
     SELECT
       id, task_id, profile, permission, cwd, prompt, status,
       native_session_id, client_family, pid, pgid, started_at, ended_at, exit_code,
       kill_signal, kill_reason, output, raw_result, error, timeout_ms,
-      ${runtimeColumn}, ${resolvedColumn}, created_at, updated_at
+      ${runtimeColumn}, ${resolvedColumn}, ${featuresColumn}, created_at, updated_at
     FROM executions_schema_old
   `).run()
   database.prepare('DROP TABLE executions_schema_old').run()
@@ -284,6 +285,7 @@ const EXECUTIONS_TABLE_SQL = `CREATE TABLE executions (
   permission        TEXT NOT NULL CHECK(permission IN ('readonly','edit','yolo')),
   cwd               TEXT NOT NULL,
   prompt            TEXT NOT NULL,
+  features          TEXT,
   status            TEXT NOT NULL CHECK(status IN
                       ('queued','starting','running','done','failed','cancelled','timeout','interrupted')),
   native_session_id TEXT,

@@ -410,7 +410,11 @@ export interface BotTaskRunInput {
 
 /** Terminal or still-in-flight outcome of one task run the host started. */
 export interface BotTaskRunStatus {
-  status: 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'unknown'
+  /**
+   * `queued` is a run waiting for a host resource (the desktop operation lane)
+   * before its execution starts; it is a waiting state, never a failure.
+   */
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'unknown'
   output?: unknown
   error?: string
 }
@@ -774,7 +778,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     const runner = options.taskRunner
     if (runner === undefined) return { kind: 'failed', message: `bot task runner is unavailable for ${task}` }
     const result = await runner.getTask(runId)
-    if (result.status === 'running') return { kind: 'running' }
+    // A run waiting for the host-wide desktop lane is not a failure: treat it
+    // exactly like a running run so no correction or acceptance budget is spent
+    // while it waits.
+    if (result.status === 'running' || result.status === 'queued') return { kind: 'running' }
     if (result.status === 'unknown') return { kind: 'failed', message: TASK_RUN_MISSING }
     if (result.status !== 'done') {
       const detail = result.error === undefined || result.error === '' ? '' : `: ${result.error}`
@@ -1734,6 +1741,13 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       if (runId === undefined) {
         await watchdog(bot, config, 'task_stuck', `${item.id}:${step.kind}`, `pending ${step.kind} for item ${item.id} has been started for ${minutes} min with no recorded run id`)
         continue
+      }
+      // A run still waiting for the host-wide desktop lane is not stuck: skip it
+      // so lane wait never counts against the kind's task-run budget.
+      try {
+        if ((await options.taskRunner?.getTask(runId))?.status === 'queued') continue
+      } catch {
+        // A status read failure falls through to the existing cancel path.
       }
       try {
         await options.taskRunner?.cancelTask?.(runId)

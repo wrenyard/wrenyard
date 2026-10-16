@@ -66,7 +66,13 @@ export function ActivityItem() {
     return <div key={task.taskRunId} className="flex items-center">
       <div className="min-w-0 flex-1"><ActivityRow icon={Bot}
       title={task.taskLabel ?? brief?.taskName ?? task.taskId ?? task.taskRunId}
-      detail={[task.status === 'queued' ? '排队中' : '运行中', brief?.taskName ?? task.taskId, brief?.runtime].filter(Boolean).join(' · ')}
+      detail={[
+        task.status === 'queued'
+          ? (task.queuePosition !== undefined ? `排队中 #${task.queuePosition}` : '排队中')
+          : '运行中',
+        brief?.taskName ?? task.taskId,
+        brief?.runtime,
+      ].filter(Boolean).join(' · ')}
       startedAt={task.startedAt}
       onClick={() => {
         executeCommand('tasks.open', { taskRunId: task.taskRunId, taskId: task.taskId, project: task.project });
