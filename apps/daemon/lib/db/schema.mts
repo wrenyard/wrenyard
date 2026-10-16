@@ -733,6 +733,19 @@ const BOT_INDEX_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_bot_log_bot_at ON bot_log(bot_id, at)',
 ] as const
 
+/** Bounded audit log of executed managed-artifact cleanups (newest kept, capped). */
+const STORAGE_CLEANUP_RUN_TABLE_SQL = `CREATE TABLE IF NOT EXISTS storage_cleanup_run (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at    TEXT NOT NULL,
+  finished_at   TEXT NOT NULL,
+  trigger       TEXT NOT NULL,
+  record_json   TEXT NOT NULL
+)`
+
+const STORAGE_CLEANUP_RUN_INDEX_STATEMENTS = [
+  'CREATE INDEX IF NOT EXISTS idx_storage_cleanup_run_started ON storage_cleanup_run(started_at)',
+] as const
+
 /**
  * Reconcile legacy duplicate non-closed fwa_session rows per (ticket_id, project_id).
  * Keeps the newest created_at/id row and marks older active duplicates as closed
@@ -1311,4 +1324,6 @@ const SCHEMA_STATEMENTS = [
   BOT_LOG_TABLE_SQL,
   BOT_LANE_TABLE_SQL,
   ...BOT_INDEX_STATEMENTS,
+  STORAGE_CLEANUP_RUN_TABLE_SQL,
+  ...STORAGE_CLEANUP_RUN_INDEX_STATEMENTS,
 ] as const

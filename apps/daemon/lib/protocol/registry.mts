@@ -458,8 +458,16 @@ import {
 import {
   storageUsageParamsSchema,
   storageUsageResultSchema,
+  storageCleanupPreviewParamsSchema,
+  storageCleanupPreviewResultSchema,
+  storageCleanupRunParamsSchema,
+  storageCleanupRunResultSchema,
   type StorageUsageParams,
   type StorageUsageResult,
+  type CleanupPreviewParams,
+  type CleanupPreviewResult,
+  type CleanupRunParams,
+  type CleanupRunResult,
 } from './methods/storage.mts'
 
 export type {
@@ -471,6 +479,18 @@ export type {
   StorageUsageResult,
   StorageUsageSnapshot,
   StorageUsageStatus,
+  StorageCleanupCategoryId,
+  StorageCleanupCategoryPolicy,
+  StorageCleanupCategorySummary,
+  StorageCleanupOutcome,
+  StorageCleanupOutcomeStatus,
+  StorageCleanupPathEvidence,
+  StorageCleanupPolicy,
+  StorageCleanupRunRecord,
+  CleanupPreviewParams,
+  CleanupPreviewResult,
+  CleanupRunParams,
+  CleanupRunResult,
 } from './methods/storage.mts'
 
 export type {
@@ -910,6 +930,8 @@ export interface ForemanMethodParams {
   'stats.today': StatsTodayParams
   'stats.summary': StatsSummaryParams
   'storage.usage': StorageUsageParams
+  'storage.cleanup.preview': CleanupPreviewParams
+  'storage.cleanup.run': CleanupRunParams
   'task.definition.list': TaskDefinitionListParams
   'task.definition.describe': TaskDefinitionDescribeParams
   'task.settings.snapshot': TaskSettingsSnapshotParams
@@ -1023,6 +1045,8 @@ export interface ForemanMethodResults {
   'stats.today': StatsTodayResult
   'stats.summary': StatsSummaryResult
   'storage.usage': StorageUsageResult
+  'storage.cleanup.preview': CleanupPreviewResult
+  'storage.cleanup.run': CleanupRunResult
   'task.definition.list': TaskDefinitionListResult
   'task.definition.describe': TaskDefinitionDescribeResult
   'task.settings.snapshot': TaskSettingsSnapshotResult
@@ -1178,6 +1202,16 @@ export const methodRegistry: {
     params: storageUsageParamsSchema,
     result: storageUsageResultSchema,
     description: 'Read-only WY data directory usage snapshot',
+  },
+  'storage.cleanup.preview': {
+    params: storageCleanupPreviewParamsSchema,
+    result: storageCleanupPreviewResultSchema,
+    description: 'Read-only preview of eligible managed-artifact cleanup',
+  },
+  'storage.cleanup.run': {
+    params: storageCleanupRunParamsSchema,
+    result: storageCleanupRunResultSchema,
+    description: 'Execute eligible managed-artifact cleanup',
   },
   'task.definition.list': {
     params: taskDefinitionListParamsSchema,

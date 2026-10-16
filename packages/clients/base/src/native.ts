@@ -339,6 +339,71 @@ export interface OwnedClientRunHome {
     readonly runId: string;
 }
 
+/** Launch provenance phase recorded on an owned run marker. */
+export type OwnedRunLaunchPhase = 'prepared' | 'spawning' | 'running';
+
+/**
+ * Shared contract for the `.wrenyard-run.json` ownership marker.
+ *
+ * `prepared` is written at creation, before any child process exists, so it
+ * means definitively "no spawn". `spawning` is written immediately before the
+ * spawn and `running` immediately after it, carrying the child identity. A
+ * marker left in `spawning`, or one whose child identity is missing, is an
+ * ambiguous crash window: a consumer may only reclaim it as
+ * protected/uncertain, never as a run that had no child.
+ */
+export interface OwnedRunMarker {
+    readonly version: 1;
+    readonly client_family: 'opencode' | 'codebuddy';
+    readonly run_id: string;
+    readonly state: 'active' | 'done' | 'failed';
+    readonly created_at: string;
+    readonly finished_at?: string;
+    readonly owner_pid?: number;
+    readonly launch_phase?: OwnedRunLaunchPhase;
+    readonly child_pid?: number;
+    readonly child_pgid?: number;
+}
+
+const OWNED_RUN_LAUNCH_PHASES: readonly OwnedRunLaunchPhase[] = ['prepared', 'spawning', 'running'];
+
+function isProcessId(value: unknown): value is number {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+/**
+ * Validate an already-parsed ownership marker, so a daemon-side recovery
+ * consumer shares one contract with the writer instead of re-deriving it.
+ *
+ * Markers written before process provenance existed lack `owner_pid` and
+ * `launch_phase` and remain valid, so a missing identity is unproven rather
+ * than proof that no process is running.
+ */
+export function parseOwnedRunMarker(value: unknown): OwnedRunMarker | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return undefined;
+    const marker = value as Record<string, unknown>;
+    if (marker.version !== 1)
+        return undefined;
+    if (marker.client_family !== 'opencode' && marker.client_family !== 'codebuddy')
+        return undefined;
+    if (typeof marker.run_id !== 'string' || !marker.run_id)
+        return undefined;
+    if (marker.state !== 'active' && marker.state !== 'done' && marker.state !== 'failed')
+        return undefined;
+    if (typeof marker.created_at !== 'string' || !Number.isFinite(Date.parse(marker.created_at)))
+        return undefined;
+    if (marker.finished_at !== undefined && (typeof marker.finished_at !== 'string' || !Number.isFinite(Date.parse(marker.finished_at))))
+        return undefined;
+    for (const key of ['owner_pid', 'child_pid', 'child_pgid'] as const) {
+        if (marker[key] !== undefined && !isProcessId(marker[key]))
+            return undefined;
+    }
+    if (marker.launch_phase !== undefined && !OWNED_RUN_LAUNCH_PHASES.includes(marker.launch_phase as OwnedRunLaunchPhase))
+        return undefined;
+    return marker as unknown as OwnedRunMarker;
+}
+
 /**
  * Resolve the canonical trusted state root. The macOS `/var` -> `/private/var`
  * alias is tolerated only for this trusted root ancestry; every entry below it
@@ -378,7 +443,7 @@ export async function createOwnedClientRunHome(env: NodeJS.ProcessEnv, clientFam
     const path = join(runsPath, runId);
     await mkdir(path);
     const metadataPath = join(path, '.wrenyard-run.json');
-    const marker = JSON.stringify({ version: 1, client_family: clientFamily, run_id: runId, state: 'active', created_at: new Date().toISOString() }) + '\n';
+    const marker = JSON.stringify({ version: 1, client_family: clientFamily, run_id: runId, state: 'active', created_at: new Date().toISOString(), owner_pid: process.pid, launch_phase: 'prepared' }) + '\n';
     await writeOwnedRunMarker(env, { path, metadataPath, clientFamily, runId }, marker, true);
     return { path, metadataPath, clientFamily, runId };
 }

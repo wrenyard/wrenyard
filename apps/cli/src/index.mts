@@ -14,6 +14,7 @@ import { handleProject } from './commands/project.mts'
 import { handleWorkspace } from './commands/workspace.mts'
 import { handleTodo } from './commands/todo.mts'
 import { handleStatus } from './commands/status.mts'
+import { handleStorage } from './commands/storage.mts'
 import { handleTask } from './commands/task.mts'
 import { handleSession } from './commands/session.mts'
 import { handleExec } from './commands/exec.mts'
@@ -84,6 +85,8 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return await handleDoctor(args.slice(1))
       case 'taskgraph':
         return handleTaskgraph(args.slice(1))
+      case 'storage':
+        return handleStorage(args.slice(1))
       default:
         if (args.length === 0) return tuiLauncher()
         printUsage()
@@ -125,6 +128,7 @@ Usage:
   wrenyard -v | --version
   wrenyard desktop
   wrenyard status [--config path] [--json]
+  wrenyard storage [preview] [--json] / wrenyard storage run --apply [--json]
   wrenyard doctor [--config path] [--json]
   wrenyard project list [--config path] [--json]
   wrenyard project describe <project> [--config path] [--json]

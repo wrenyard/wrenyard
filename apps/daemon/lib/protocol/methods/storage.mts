@@ -145,3 +145,260 @@ export const storageUsageResultSchema = {
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
+
+/**
+ * Managed-artifact categories the cleanup service may inventory and act on.
+ * `artifacts`, `logs` (proven closed directories only), `worktrees`, `clients`
+ * (owned run homes only) and `debug` (marker-owned `gdbg-*` directories only)
+ * may be removed once their ownership and inactivity are proven; every other
+ * entry is reported as protected.
+ */
+export type StorageCleanupCategoryId = 'artifacts' | 'logs' | 'clients' | 'worktrees' | 'debug'
+
+/** One category's retention/capacity policy, reported so protection is visible. */
+export interface StorageCleanupCategoryPolicy {
+  id: StorageCleanupCategoryId
+  /** Age at or beyond which a proven-safe candidate is removed by retention. */
+  retentionDays: number
+  /**
+   * Hard floor: nothing younger than this is ever removed, even when the
+   * category is over its capacity target.
+   */
+  minimumRetentionDays: number
+  /** Soft per-category logical-byte target; protected excess is reported, not force-evicted. */
+  targetBytes: number
+  /** Whether `storage.cleanup.run` may actually delete in this category. */
+  removes: boolean
+}
+
+export interface StorageCleanupPolicy {
+  categories: StorageCleanupCategoryPolicy[]
+}
+
+/** One enumerated path with its ownership evidence and eligibility decision. */
+export interface StorageCleanupPathEvidence {
+  id: string
+  category: StorageCleanupCategoryId
+  path: string
+  /** Short, privacy-safe ownership evidence (never file contents). */
+  ownership: string
+  /** Apparent size from `lstat` (bytes). */
+  logicalBytes: number
+  /** Allocated size from `lstat` blocks*512 (bytes). */
+  allocatedBytes: number
+  eligible: boolean
+  /** Why the path is eligible, protected or skipped. */
+  reason: string
+}
+
+/** Per-category byte aggregates, including protected over-capacity bytes. */
+export interface StorageCleanupCategorySummary {
+  id: StorageCleanupCategoryId
+  totalBytes: number
+  eligibleBytes: number
+  protectedBytes: number
+  candidateCount: number
+  eligibleCount: number
+  protectedCount: number
+  targetBytes: number
+  /** True when the category exceeds its target and protection blocks reclaim. */
+  overCapacity: boolean
+}
+
+export interface CleanupPreviewParams {
+  /** Accepted for symmetry with `storage.usage`; the scan is always fresh. */
+  refresh?: boolean
+  /** Restrict the scan to these categories; omitted means every category. */
+  categories?: StorageCleanupCategoryId[]
+}
+
+export interface CleanupPreviewResult {
+  generatedAt: string
+  stateRoot: string
+  policy: StorageCleanupPolicy
+  candidates: StorageCleanupPathEvidence[]
+  categories: StorageCleanupCategorySummary[]
+  totalLogicalBytes: number
+  totalAllocatedBytes: number
+}
+
+/** `storage.cleanup.run` takes only the optional category filter. */
+export interface CleanupRunParams {
+  /** Restrict the run to these categories; omitted means every category. */
+  categories?: StorageCleanupCategoryId[]
+}
+
+export type StorageCleanupOutcomeStatus = 'removed' | 'protected' | 'skipped' | 'failed'
+
+/** One path's result from an executed cleanup. */
+export interface StorageCleanupOutcome {
+  id: string
+  category: StorageCleanupCategoryId
+  path: string
+  status: StorageCleanupOutcomeStatus
+  reason: string
+  /** Measured logical bytes freed (0 when not removed). */
+  logicalBytes: number
+  /** Measured allocated bytes freed (0 when not removed). */
+  allocatedBytes: number
+}
+
+/** The bounded audit row persisted for one executed cleanup. */
+export interface StorageCleanupRunRecord {
+  id: number
+  startedAt: string
+  finishedAt: string
+  trigger: string
+}
+
+export interface CleanupRunResult {
+  runId: string
+  generatedAt: string
+  stateRoot: string
+  trigger: string
+  policy: StorageCleanupPolicy
+  outcomes: StorageCleanupOutcome[]
+  categories: StorageCleanupCategorySummary[]
+  /** Sum of measured logical bytes actually removed. */
+  removedLogicalBytes: number
+  /** Sum of measured allocated bytes actually removed. */
+  removedAllocatedBytes: number
+  record: StorageCleanupRunRecord
+}
+
+const storageCleanupCategoryPolicySchema = {
+  type: 'object',
+  required: ['id', 'retentionDays', 'minimumRetentionDays', 'targetBytes', 'removes'],
+  properties: {
+    id: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+    retentionDays: { type: 'number', minimum: 0 },
+    minimumRetentionDays: { type: 'number', minimum: 0 },
+    targetBytes: { type: 'number', minimum: 0 },
+    removes: { type: 'boolean' },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+const storageCleanupPolicySchema = {
+  type: 'object',
+  required: ['categories'],
+  properties: {
+    categories: { type: 'array', items: storageCleanupCategoryPolicySchema },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+const storageCleanupPathEvidenceSchema = {
+  type: 'object',
+  required: ['id', 'category', 'path', 'ownership', 'logicalBytes', 'allocatedBytes', 'eligible', 'reason'],
+  properties: {
+    id: { type: 'string' },
+    category: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+    path: { type: 'string' },
+    ownership: { type: 'string' },
+    logicalBytes: { type: 'number', minimum: 0 },
+    allocatedBytes: { type: 'number', minimum: 0 },
+    eligible: { type: 'boolean' },
+    reason: { type: 'string' },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+const storageCleanupCategorySummarySchema = {
+  type: 'object',
+  required: ['id', 'totalBytes', 'eligibleBytes', 'protectedBytes', 'candidateCount', 'eligibleCount', 'protectedCount', 'targetBytes', 'overCapacity'],
+  properties: {
+    id: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+    totalBytes: { type: 'number', minimum: 0 },
+    eligibleBytes: { type: 'number', minimum: 0 },
+    protectedBytes: { type: 'number', minimum: 0 },
+    candidateCount: { type: 'integer', minimum: 0 },
+    eligibleCount: { type: 'integer', minimum: 0 },
+    protectedCount: { type: 'integer', minimum: 0 },
+    targetBytes: { type: 'number', minimum: 0 },
+    overCapacity: { type: 'boolean' },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+/** Optional allowlist restricting a cleanup call to recognized categories. */
+const storageCleanupCategoriesSchema = {
+  type: 'array',
+  minItems: 1,
+  items: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+} as const satisfies JsonSchema
+
+export const storageCleanupPreviewParamsSchema = {
+  type: 'object',
+  properties: {
+    refresh: { type: 'boolean' },
+    categories: storageCleanupCategoriesSchema,
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const storageCleanupPreviewResultSchema = {
+  type: 'object',
+  required: ['generatedAt', 'stateRoot', 'policy', 'candidates', 'categories', 'totalLogicalBytes', 'totalAllocatedBytes'],
+  properties: {
+    generatedAt: { type: 'string' },
+    stateRoot: { type: 'string' },
+    policy: storageCleanupPolicySchema,
+    candidates: { type: 'array', items: storageCleanupPathEvidenceSchema },
+    categories: { type: 'array', items: storageCleanupCategorySummarySchema },
+    totalLogicalBytes: { type: 'number', minimum: 0 },
+    totalAllocatedBytes: { type: 'number', minimum: 0 },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const storageCleanupRunParamsSchema = {
+  type: 'object',
+  properties: {
+    categories: storageCleanupCategoriesSchema,
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+const storageCleanupOutcomeSchema = {
+  type: 'object',
+  required: ['id', 'category', 'path', 'status', 'reason', 'logicalBytes', 'allocatedBytes'],
+  properties: {
+    id: { type: 'string' },
+    category: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+    path: { type: 'string' },
+    status: { enum: ['removed', 'protected', 'skipped', 'failed'] },
+    reason: { type: 'string' },
+    logicalBytes: { type: 'number', minimum: 0 },
+    allocatedBytes: { type: 'number', minimum: 0 },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema
+
+export const storageCleanupRunResultSchema = {
+  type: 'object',
+  required: ['runId', 'generatedAt', 'stateRoot', 'trigger', 'policy', 'outcomes', 'categories', 'removedLogicalBytes', 'removedAllocatedBytes', 'record'],
+  properties: {
+    runId: { type: 'string' },
+    generatedAt: { type: 'string' },
+    stateRoot: { type: 'string' },
+    trigger: { type: 'string' },
+    policy: storageCleanupPolicySchema,
+    outcomes: { type: 'array', items: storageCleanupOutcomeSchema },
+    categories: { type: 'array', items: storageCleanupCategorySummarySchema },
+    removedLogicalBytes: { type: 'number', minimum: 0 },
+    removedAllocatedBytes: { type: 'number', minimum: 0 },
+    record: {
+      type: 'object',
+      required: ['id', 'startedAt', 'finishedAt', 'trigger'],
+      properties: {
+        id: { type: 'integer' },
+        startedAt: { type: 'string' },
+        finishedAt: { type: 'string' },
+        trigger: { type: 'string' },
+      },
+      additionalProperties: true,
+    },
+  },
+  additionalProperties: true,
+} as const satisfies JsonSchema

@@ -146,6 +146,10 @@ interface ForemanDaemonResources {
   /** Daemon-owned Bot mode host; stopped with the scheduler so it starts no new
    *  bot step during drain or a workspace switch. */
   botHost: BotHost
+  /** Inert managed-artifact cleanup handle. Automatic cleanup is disabled, so no
+   *  sweep is ever scheduled; the handle only keeps the teardown stop() call site
+   *  valid. On-demand cleanup stays on the storage.cleanup.* RPC surface. */
+  managedCleanupSweep: ManagedCleanupSweep
   rpcRouter: RpcRouter
   /** Daemon-owned task service, retained so a forced shutdown can cancel every
    *  admitted task run through the same service the RPC surface uses. */
@@ -339,6 +343,9 @@ export class ForemanDaemon implements RunningForemanDaemon {
     // no bot step may start once a shutdown is requested.
     this.scheduler?.stop()
     this.botHost?.stop()
+    // The managed-artifact cleanup handle is inert (no sweep is scheduled), but
+    // stopping it here keeps the shutdown path uniform with the other handles.
+    this.resources?.managedCleanupSweep?.stop()
     this.shutdownForce ||= force
     this.shutdownRequestedFlag = true
     this.resolveShutdownRequested()
@@ -508,6 +515,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
           session: resources.session,
           scheduler: resources.scheduler,
           botHost: resources.botHost,
+          managedCleanupSweep: resources.managedCleanupSweep,
           gateway: resources.gateway,
           restoreGatewayEnvironment: resources.restoreGatewayEnvironment,
           ipcServer: resources.ipcServer,
@@ -1475,6 +1483,13 @@ async function createForemanDaemonResources(
   // instance; this helper only returns the assembled resources. session /
   // scheduler / taskService / taskgraphService are replaced by rebindWorkspace,
   // so close() and the resource getters always observe the current workspace.
+  // Automatic managed-artifact cleanup is intentionally disabled: no startup or
+  // periodic sweep is scheduled. Cleanup remains available on demand through the
+  // storage.cleanup.preview / storage.cleanup.run RPC surface and the CLI. This
+  // inert handle keeps the existing stop() call sites valid without scheduling or
+  // starting anything.
+  const managedCleanupSweep: ManagedCleanupSweep = { stop() {} }
+
   const resources: ForemanDaemonResources = {
     runtime,
     httpServer,
@@ -1484,6 +1499,7 @@ async function createForemanDaemonResources(
     session: workspaceScoped.session,
     scheduler: workspaceScoped.scheduler,
     botHost: workspaceScoped.botHost,
+    managedCleanupSweep,
     rpcRouter,
     taskService: workspaceScoped.taskService,
     taskgraphService: workspaceScoped.taskgraphService,
@@ -1632,6 +1648,8 @@ interface DaemonResourceTeardownHandles {
   scheduler?: Scheduler
   /** Stopped with the scheduler so no bot step starts during teardown. */
   botHost?: BotHost
+  /** Stopped before the session so no cleanup removal runs during teardown. */
+  managedCleanupSweep?: ManagedCleanupSweep
   gateway?: ModelGateway
   restoreGatewayEnvironment?: () => void
   ipcServer?: IpcServer
@@ -1682,6 +1700,15 @@ async function teardownDaemonResources(handles: DaemonResourceTeardownHandles): 
       handles.botHost.stop()
     } catch (error) {
       recordFailure('bot host shutdown failed', error)
+    }
+  }
+  // Stop the cleanup sweep before the session: a late sweep must not remove
+  // managed artifacts while the session ledger and providers are torn down.
+  if (handles.managedCleanupSweep) {
+    try {
+      handles.managedCleanupSweep.stop()
+    } catch (error) {
+      recordFailure('managed cleanup sweep shutdown failed', error)
     }
   }
   // Stop the session backend immediately after: it owns the append-only ledger
@@ -2064,6 +2091,13 @@ function formatLogMeta(meta: unknown): string {
   } catch {
     return String(meta)
   }
+}
+
+/** An inert managed-artifact cleanup handle. Automatic cleanup is disabled, so
+ *  the daemon never schedules or starts a sweep; only stop() is used, by the
+ *  shutdown and teardown paths, where it is a no-op. */
+interface ManagedCleanupSweep {
+  stop(): void
 }
 
 /**

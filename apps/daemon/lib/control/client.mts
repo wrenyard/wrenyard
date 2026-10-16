@@ -2,6 +2,10 @@ import type { ProviderQuotaParams, ProviderQuotaResult, ProviderConfigureParams,
 import type {
   ActivitySnapshotParams,
   ActivitySnapshotV1,
+  CleanupPreviewParams,
+  CleanupPreviewResult,
+  CleanupRunParams,
+  CleanupRunResult,
   DaemonShutdownParams,
   DaemonShutdownResult,
   DaemonStatusParams,
@@ -240,6 +244,17 @@ export class ForemanClient {
     },
     summary: (params: StatsSummaryParams = {}): Promise<StatsSummaryResult> => {
       return this.rpc.request<StatsSummaryResult>('stats.summary', params)
+    },
+  }
+
+  readonly storage = {
+    cleanup: {
+      preview: (params: CleanupPreviewParams = {}): Promise<CleanupPreviewResult> => {
+        return this.rpc.request<CleanupPreviewResult>('storage.cleanup.preview', params, { timeoutMs: 60_000 })
+      },
+      run: (params: CleanupRunParams = {}): Promise<CleanupRunResult> => {
+        return this.rpc.request<CleanupRunResult>('storage.cleanup.run', params, { timeoutMs: 60_000 })
+      },
     },
   }
 

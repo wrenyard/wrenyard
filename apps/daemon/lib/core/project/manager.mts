@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { hostname as osHostname } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { stringify } from 'yaml'
 import { foremanStateRoot } from '../../config/state.mts'
 import { discoverProjects, findProject as findFmprojProject, invalidateProjectCache, resolveHostPath } from './loader.mts'
@@ -86,6 +86,35 @@ const WORKTREE_ID_RE = /^[A-Za-z0-9_-]{8}$/u
 const PROJECT_ID_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u
 const WORKTREE_METADATA_DIR = '.foreman'
 const DIRTY_TEXT_LIMIT = 64 * 1024
+
+function isSafeStateRootDescendant(stateRoot: string, candidate: string, leafType: 'directory' | 'file'): boolean {
+  const rel = relative(stateRoot, resolve(candidate))
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false
+
+  try {
+    const rootStats = lstatSync(stateRoot)
+    if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return false
+    const components = rel.split(sep)
+    let current = stateRoot
+    for (let index = 0; index < components.length; index += 1) {
+      current = join(current, components[index] as string)
+      const stats = lstatSync(current)
+      const leaf = index === components.length - 1
+      if (stats.isSymbolicLink()) return false
+      if (!leaf && !stats.isDirectory()) return false
+      if (leaf && (leafType === 'directory' ? !stats.isDirectory() : !stats.isFile())) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+function sameResolvedPath(left: string, right: string): boolean {
+  const a = resolve(left)
+  const b = resolve(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
 const UNTRACKED_TEXT_LIMIT = 8 * 1024
 const UNTRACKED_LARGE_LIMIT = 64 * 1024
 /** Target commits reported for one failed rebase, capped so the result stays bounded. */
@@ -332,13 +361,28 @@ export class ProjectManager {
 
   removeWorktree(worktreeId: string, caller: WorktreeCaller = {}): WorktreeRemoveResult {
     const id = validateWorktreeId(worktreeId)
-    const metadata = this.readWorktreeMetadata(id)
-    if (!metadata || !existsSync(metadata.path)) {
-      return {
-        worktree_id: id,
-        removed: false,
-        error: `Worktree '${id}' was not found`,
-      }
+    let canonicalRoot: string
+    try {
+      canonicalRoot = realpathSync.native(this.stateRoot)
+    } catch {
+      return { worktree_id: id, removed: false, error: 'Canonical state root could not be validated' }
+    }
+
+    const managedPath = join(canonicalRoot, 'worktrees', id)
+    const metadataPath = join(canonicalRoot, 'worktrees', WORKTREE_METADATA_DIR, `${id}.json`)
+    if (!isSafeStateRootDescendant(canonicalRoot, metadataPath, 'file')) {
+      return { worktree_id: id, removed: false, error: 'Managed worktree metadata path is missing or unsafe' }
+    }
+    const metadata = this.readWorktreeMetadata(id, metadataPath)
+    if (
+      metadata === null ||
+      !isAbsolute(metadata.path) ||
+      (!sameResolvedPath(metadata.path, managedPath) && !sameResolvedPath(metadata.path, this.worktreePath(id)))
+    ) {
+      return { worktree_id: id, removed: false, error: 'Worktree metadata does not identify its exact managed path' }
+    }
+    if (!isSafeStateRootDescendant(canonicalRoot, managedPath, 'directory')) {
+      return { worktree_id: id, removed: false, error: 'Managed worktree path is missing or unsafe' }
     }
     const locked = lockRefusal(metadata, caller)
     if (locked !== undefined) return { worktree_id: id, removed: false, project: metadata.project, path: metadata.path, error: locked }
@@ -349,7 +393,7 @@ export class ProjectManager {
         worktree_id: id,
         removed: false,
         project: metadata.project,
-        path: metadata.path,
+        path: managedPath,
         error: `Worktree '${id}' metadata references missing project '${metadata.project}'`,
       }
     }
@@ -358,30 +402,100 @@ export class ProjectManager {
         worktree_id: id,
         removed: false,
         project: project.name,
-        path: metadata.path,
+        path: managedPath,
         error: `Worktree '${id}' metadata references project '${project.name}', which does not support worktrees`,
       }
     }
 
+    if (
+      !isSafeStateRootDescendant(canonicalRoot, managedPath, 'directory') ||
+      !isSafeStateRootDescendant(canonicalRoot, metadataPath, 'file')
+    ) {
+      return { worktree_id: id, removed: false, project: project.name, error: 'Managed worktree paths changed or became unsafe' }
+    }
+    const currentMetadata = this.readWorktreeMetadata(id, metadataPath)
+    if (
+      currentMetadata === null ||
+      currentMetadata.project !== metadata.project ||
+      currentMetadata.path !== metadata.path ||
+      currentMetadata.owner !== metadata.owner
+    ) {
+      return { worktree_id: id, removed: false, project: project.name, error: 'Worktree metadata changed during removal validation' }
+    }
+
     try {
-      this.git(project.path, ['worktree', 'remove', metadata.path])
+      this.git(project.path, ['worktree', 'remove', managedPath])
     } catch (e) {
       return {
         worktree_id: id,
         removed: false,
         project: project.name,
-        path: metadata.path,
+        path: managedPath,
         error: errorMessage(e),
       }
     }
 
-    rmSync(metadata.path, { recursive: true, force: true })
-    this.removeWorktreeMetadata(id)
+    try {
+      lstatSync(managedPath)
+      return {
+        worktree_id: id,
+        removed: false,
+        project: project.name,
+        path: managedPath,
+        error: 'Git reported success but the managed worktree path remains; metadata was retained',
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return {
+          worktree_id: id,
+          removed: false,
+          project: project.name,
+          path: managedPath,
+          error: 'Managed worktree path could not be confirmed removed; metadata was retained',
+        }
+      }
+    }
+
+    if (!isSafeStateRootDescendant(canonicalRoot, metadataPath, 'file')) {
+      return {
+        worktree_id: id,
+        removed: true,
+        project: project.name,
+        path: managedPath,
+        error: 'Worktree removed; metadata was retained because its path became unsafe',
+      }
+    }
+    const finalMetadata = this.readWorktreeMetadata(id, metadataPath)
+    if (
+      finalMetadata === null ||
+      finalMetadata.project !== metadata.project ||
+      finalMetadata.path !== metadata.path ||
+      finalMetadata.owner !== metadata.owner
+    ) {
+      return {
+        worktree_id: id,
+        removed: true,
+        project: project.name,
+        path: managedPath,
+        error: 'Worktree removed; changed metadata was retained',
+      }
+    }
+    try {
+      unlinkSync(metadataPath)
+    } catch {
+      return {
+        worktree_id: id,
+        removed: true,
+        project: project.name,
+        path: managedPath,
+        error: 'Worktree removed; metadata could not be removed',
+      }
+    }
     return {
       worktree_id: id,
       removed: true,
       project: project.name,
-      path: metadata.path,
+      path: managedPath,
     }
   }
 
@@ -859,6 +973,30 @@ export class ProjectManager {
     return this.isAncestor(metadata.path, targetSha, head)
   }
 
+  /**
+   * Read-only probe for cleanup eligibility: true only when the worktree HEAD
+   * is fully merged into the target branch (worktree HEAD is an ancestor of
+   * the target branch head). Fails closed on invalid or missing inputs.
+   */
+  worktreeIsMergedIntoTarget(projectName: string, worktreeId: string): boolean {
+    let id: string
+    try {
+      id = validateWorktreeId(worktreeId)
+    } catch {
+      return false
+    }
+    const project = this.findProject(projectName)
+    if (!project || project.noWorktree) return false
+    const metadata = this.readWorktreeMetadata(id)
+    if (!metadata || metadata.project !== project.name || !existsSync(metadata.path)) return false
+    const targetBranch = this.resolveTargetBranch(project)
+    if (!targetBranch) return false
+    const targetSha = this.revParse(project.path, `refs/heads/${targetBranch}`)
+    const worktreeHead = this.revParse(metadata.path, 'HEAD')
+    if (!targetSha || !worktreeHead) return false
+    return this.isAncestor(metadata.path, worktreeHead, targetSha)
+  }
+
   /** Unmerged paths recorded by an in-progress rebase, or an empty list. */
   private unmergedPaths(path: string): string[] {
     try {
@@ -1203,8 +1341,7 @@ export class ProjectManager {
     writeFileSync(this.worktreeMetadataPath(metadata.id), `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8')
   }
 
-  private readWorktreeMetadata(worktreeId: string): WorktreeMetadata | null {
-    const path = this.worktreeMetadataPath(worktreeId)
+  private readWorktreeMetadata(worktreeId: string, path = this.worktreeMetadataPath(worktreeId)): WorktreeMetadata | null {
     if (!existsSync(path)) return null
     try {
       const metadata = JSON.parse(readFileSync(path, 'utf-8')) as { id?: unknown; project?: unknown; path?: unknown; owner?: unknown; lock?: unknown }

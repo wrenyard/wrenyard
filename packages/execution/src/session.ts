@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { spawnProcess } from './process.ts';
@@ -109,6 +110,18 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
     await cleanupFiles(resources, false, true);
     await cleanupOwnedRunHome(spec.ownedRunHome, false, true).catch(() => undefined);
     throw new Error('execution cancelled before start');
+  }
+
+  // The pre-spawn phase is recorded before any child can exist, so a crash
+  // between here and the spawn leaves `spawning` on disk; recovery must treat
+  // that ambiguous window as protected, never as a run with no child. A marker
+  // that cannot be updated must not be paired with a live child, so the launch
+  // fails closed rather than spawning untracked.
+  try { await markOwnedRunPhase(spec.ownedRunHome, { launch_phase: 'spawning' }); }
+  catch (error) {
+    await cleanupFiles(resources, false, true).catch(() => undefined);
+    await cleanupOwnedRunHome(spec.ownedRunHome, false, true).catch(() => undefined);
+    throw error;
   }
 
   const queue = createQueue<ExecutionEvent>(MAX_QUEUED_EVENTS);
@@ -332,6 +345,33 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
     return await startOutcome;
   }
 
+  /**
+   * Record the spawned child identity on the owned marker as soon as the
+   * `spawn` event proves it launched. A child that cannot be described on disk
+   * must not keep running untracked: its tree is terminated, and when that
+   * termination cannot be confirmed the home is retained so recovery still
+   * sees a marker for the surviving process.
+   */
+  const recordSpawnProvenance = async (): Promise<void> => {
+    const childPid = child?.pid;
+    if (!spec.ownedRunHome || childPid === undefined) return;
+    try {
+      await markOwnedRunPhase(spec.ownedRunHome, {
+        launch_phase: 'running',
+        child_pid: childPid,
+        // A Unix child is spawned detached, so its process-group id is its pid;
+        // Windows cannot express that identity and is left without it.
+        ...(process.platform === 'win32' ? {} : { child_pgid: childPid }),
+      });
+    }
+    catch (error) {
+      killRequested = true;
+      try { await terminateProcessTree(); }
+      catch { /* unconfirmed termination retains the home for recovery */ }
+      fail(`launch provenance could not be recorded: ${errorMessageOf(error)}`);
+    }
+  };
+
   removeTreeListeners = () => {
     child?.stdout?.removeAllListeners('data');
     child?.stderr?.removeAllListeners('data');
@@ -347,7 +387,10 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
   // The `spawn` event is the only proof the child launched: a synchronous pid
   // is not (Node assigns one before exec'ing the target), and 'close' can
   // arrive first for a child that exits immediately.
-  child.once('spawn', () => { confirmStarted(child?.pid); });
+  child.once('spawn', () => {
+    void recordSpawnProvenance();
+    confirmStarted(child?.pid);
+  });
   child.once('error', (error: Error) => {
     lastStartError = error;
     // 'error' alone does not mean the child never ran: an exec failure is
@@ -394,6 +437,38 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
   }
 
   return await startOutcome;
+}
+
+/**
+ * Persist one non-terminal phase update on an owned run marker.
+ *
+ * Only a marker that still proves this exact run home — same family/run id and
+ * the `active` state — is updated; a substituted symlink, a foreign identity,
+ * or an already-terminal marker is refused rather than overwritten, and every
+ * directory in the home's ancestry is re-checked so a symlink below the state
+ * root can never redirect the write.
+ */
+async function markOwnedRunPhase(home: ProcessSpec['ownedRunHome'], patch: Record<string, unknown>): Promise<void> {
+  if (!home) return;
+  const expected = resolve(home.path);
+  if (relative(expected, resolve(home.metadataPath)) !== '.wrenyard-run.json') throw new Error('owned run marker path mismatch');
+  const parent = dirname(expected);
+  const grandparent = dirname(parent);
+  for (const directory of [grandparent, parent, expected]) {
+    const stat = await lstat(directory).catch(() => undefined);
+    if (!stat?.isDirectory() || stat.isSymbolicLink()) throw new Error('owned run home failed path validation');
+  }
+  const markerStat = await lstat(home.metadataPath).catch(() => undefined);
+  if (!markerStat?.isFile() || markerStat.isSymbolicLink()) throw new Error('owned run marker failed type validation');
+  const homeReal = realpathSync.native(expected);
+  const parentReal = realpathSync.native(parent);
+  if (homeReal !== expected || relative(parentReal, homeReal) === '..' || relative(parentReal, homeReal).startsWith(`..${sep}`)) {
+    throw new Error('owned run home failed realpath confinement validation');
+  }
+  const marker = JSON.parse(await readFile(home.metadataPath, 'utf8')) as Record<string, unknown>;
+  if (marker.version !== 1 || marker.client_family !== home.clientFamily || marker.run_id !== home.runId) throw new Error('owned run marker identity mismatch');
+  if (marker.state !== 'active') return;
+  await writeFile(home.metadataPath, JSON.stringify({ ...marker, ...patch }) + '\n', { mode: 0o600 });
 }
 
 /** Remove only the exact Wrenyard-created run directory after output tails settle. */
