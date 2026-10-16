@@ -122,6 +122,8 @@ export interface OperationComponentLaunch {
   /** Present for the desktop component only. */
   mcpServer?: McpServer
   env: Record<string, string>
+  /** The fresh post-inspection snapshot this launch was resolved from. */
+  snapshot: OperationComponentSnapshot
 }
 
 /** A requested component is not usable; carries the snapshot that explains why. */
@@ -610,6 +612,7 @@ export class OperationComponents {
       executable: runtime.executable ?? snapshot.path ?? '',
       mcpServer: runtime.mcpServer,
       env: { ...runtime.env },
+      snapshot,
     }
   }
 

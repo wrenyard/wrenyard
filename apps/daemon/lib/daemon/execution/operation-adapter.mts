@@ -31,7 +31,7 @@ import type {
   OperationComponents,
 } from '../services/operation-components.mts'
 
-const BROWSER_INSTRUCTION = `An agent-browser CLI is available for this run as \`agent-browser\` on PATH. Its browser session is preselected through AGENT_BROWSER_SESSION; do not pass --session, --profile or --auto-connect, and do not attach to the user's own browser or to any browser this run did not start. You may pass --cdp or use \`agent-browser connect <endpoint>\` only for a loopback endpoint (127.0.0.1 or localhost) whose process this run itself launched. Typical loop: \`agent-browser open <url>\`, \`agent-browser snapshot\` to list elements with refs such as \`@e1\`, \`agent-browser click @e1\`, \`agent-browser fill @e2 "text"\`, \`agent-browser screenshot <path>\`. To drive the repository's own Electron/Desktop app, launch it as a child of this run with a remote-debugging port bound to 127.0.0.1, then run \`agent-browser connect 127.0.0.1:<port>\`, interact with its window and capture it with \`agent-browser screenshot <path>\`. Run \`agent-browser skills get core --full\` for the version-matched command guide, and \`agent-browser --help\` for other commands. Quote the exact URL you loaded when reporting results.`
+const BROWSER_INSTRUCTION = `An agent-browser CLI is available for this run as \`agent-browser\` on PATH. Its browser session is preselected through AGENT_BROWSER_SESSION; do not pass --session, --profile or --auto-connect, and do not attach to the user's own browser or to any browser this run did not start. The only way to attach to an existing debugging endpoint is the global \`--cdp <port>\` flag, placed before the subcommand, for example \`agent-browser --cdp 127.0.0.1:<port> open <url>\` or \`agent-browser --cdp 127.0.0.1:<port> snapshot\`. Use it only for a loopback endpoint (127.0.0.1 or localhost) whose process this run itself launched. The \`agent-browser connect\` subcommand does not attach to an already running browser in this version - it rejects a host:port value and a bare port starts a new managed browser - so never use \`connect\` to reach an existing endpoint. Typical loop against a browser this run started: \`agent-browser open <url>\`, \`agent-browser snapshot\` to list elements with refs such as \`@e1\`, \`agent-browser click @e1\`, \`agent-browser fill @e2 "text"\`, \`agent-browser screenshot <path>\`. To drive the repository's own Electron/Desktop app, launch it as a child of this run with a remote-debugging port bound to 127.0.0.1, then use \`agent-browser --cdp 127.0.0.1:<port> snapshot\` and \`agent-browser --cdp 127.0.0.1:<port> screenshot <path>\` to interact with its window and capture it. Run \`agent-browser skills get core --full\` for the version-matched command guide, and \`agent-browser --help\` for other commands. Quote the exact URL you loaded when reporting results.`
 
 const DESKTOP_INSTRUCTION = `A desktop-control MCP server is attached for this run under the server name \`computer\` (its tools are named like \`mcp__computer__<tool>\`). Use its tools to inspect the screen, move the pointer, click, type, and press keys, then verify each action by re-reading the screen before continuing. Limit interaction to the windows relevant to the task and describe any state you changed. The desktop is the user's real session and is not sandboxed.`
 
@@ -200,10 +200,10 @@ export class OperationAdapter {
 
     try {
       const snapshots = new Map<OperationComponentId, OperationComponentSnapshot>()
-      for (const snapshot of await this.#components.list()) snapshots.set(snapshot.id, snapshot)
 
       for (const id of ids) {
         const launch: OperationComponentLaunch = await this.#components.resolve(id)
+        snapshots.set(id, launch.snapshot)
 
         if (id === 'browser') {
           const session = browserSessionName(runId)
@@ -230,10 +230,10 @@ export class OperationAdapter {
       }
 
       instructions.push(SENSITIVE_ACTION_INSTRUCTION)
-      const sections = [
-        this.#environmentPreamble(clientId, ids, snapshots),
-        ...instructions.map((text, index) => `# Instruction ${index + 1}\n${text}`),
-      ].join('\n\n')
+      const environmentBlock = this.#environmentPreamble(clientId, ids, snapshots)
+      const instructionSections = instructions
+        .map((text, index) => `# Instruction ${index + 1}\n${text}`)
+        .join('\n\n')
 
       const acquired = [...cleanups]
       let released = false
@@ -254,7 +254,7 @@ export class OperationAdapter {
       }
 
       return {
-        prompt: `${prompt}\n\n${sections}`,
+        prompt: `${environmentBlock}\n\n${prompt}\n\n${instructionSections}`,
         mcpServers: Object.keys(servers).length > 0 ? servers : undefined,
         applyEnv: (env) => envModifiers.reduce((current, modify) => modify(current), { ...env }),
         release,
