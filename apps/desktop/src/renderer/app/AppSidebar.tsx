@@ -41,7 +41,7 @@ function matchesStatusFilter(session: { archived?: boolean }, filter: SessionSta
 }
 
 /** Full-width page rows rendered directly below the header's action buttons. */
-const VISIBLE_NAV_IDS: ReadonlySet<ShellPage> = new Set(['tasks', 'schedules', 'bot']);
+const VISIBLE_NAV_IDS: ReadonlySet<ShellPage> = new Set(['tasks', 'agents', 'bot']);
 
 /**
  * The shell's single global sidebar (`offcanvas`, no icon rail): a top group of

@@ -46,7 +46,7 @@ export type { ModelMetadata } from './metadata.ts';
 export type { Message, ModelContentPart, ToolCall, ToolSpec, Usage } from '../transport/index.ts';
 
 /** Every role that may issue a call. `reason` is the one expensive role. */
-export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'vcs', 'project', 'schedule', 'status', 'suggestion'] as const;
+export const CALL_ROLES = ['reason', 'memory-search', 'search', 'dispatch', 'reply', 'title', 'document', 'vcs', 'project', 'status', 'suggestion'] as const;
 export type CallRole = (typeof CALL_ROLES)[number];
 
 /** The expensive role streams with no total deadline; its idle stream is bounded. */

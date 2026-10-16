@@ -34,6 +34,7 @@ import {
 
 export type {
   ActionBaseContext,
+  AgentToolPort,
   BuiltView,
   CallFailureSummary,
   CallRunRequest,

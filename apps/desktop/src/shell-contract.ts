@@ -21,6 +21,7 @@ import type {
   ContextItem,
   ContextItemKind,
   ContextLayerId,
+  LedgerEvent,
 } from '@wrenyard/session';
 
 // The Pet module keeps its public DTOs under `src/pet`. Desktop code outside
@@ -233,10 +234,6 @@ export const SHELL_CHANNELS = {
   runtimeAliasRemove: 'wrenyard-shell:runtime-alias-remove',
   taskRoutingTest: 'wrenyard-shell:task-routing-test',
   taskRoutingTestTasks: 'wrenyard-shell:task-routing-test-tasks',
-  scheduleList: 'wrenyard-shell:schedule-list',
-  scheduleUpdate: 'wrenyard-shell:schedule-update',
-  scheduleRun: 'wrenyard-shell:schedule-run',
-  scheduleDelete: 'wrenyard-shell:schedule-delete',
   execStart: 'wrenyard-shell:exec-start',
   execGet: 'wrenyard-shell:exec-get',
   execEvents: 'wrenyard-shell:exec-events',
@@ -260,9 +257,10 @@ export const SHELL_CHANNELS = {
   operationComponentAction: 'wrenyard-shell:operation-component-action',
   botRequest: 'wrenyard-shell:bot-request',
   todoRequest: 'wrenyard-shell:todo-request',
+  agentRequest: 'wrenyard-shell:agent-request',
 } as const;
 
-export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'schedules' | 'bot';
+export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'agents' | 'bot';
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */
@@ -1313,31 +1311,107 @@ export type {
   ExecStatus, ExecSnapshotDto, ExecStartRequest, ExecEventEnvelopeDto,
   ExecEventsRequest, ExecEventsResult, ExecCancelResult,
 };
-/**
- * A scheduled prompt of a session (/loop-style scheduled task). The daemon owns
- * persistence and firing; Desktop only reads the list and pauses/resumes, runs
- * now or deletes one through the shell bridge.
- */
-export type ScheduleState = 'active' | 'paused' | 'finished' | 'failed';
+/* ------------------------------------------------------------------ */
+/* Bot agents                                                          */
+/* ------------------------------------------------------------------ */
 
-export interface ScheduleItem {
+/**
+ * A bot agent assembled from a per-bot JSON config. The daemon kernel owns
+ * wake queues, contexts and model routing; Desktop only forwards allowlisted
+ * `agent.*` and `routine.*` calls and renders their results.
+ */
+export type AgentStatus = 'idle' | 'running' | 'error' | 'disabled';
+
+export interface AgentBot {
+  id: string;
+  name: string;
+  enabled: boolean;
+  status: AgentStatus;
+  error?: string;
+  configPath: string;
+  tools: string[];
+  lastWakeAt?: string;
+  queued: number;
+  sessionId?: string;
+}
+
+export type RoutineState = 'active' | 'paused' | 'finished' | 'failed';
+/** `none` or `bot:<id>`: where the final reply of a routine round is posted. */
+export type RoutineDeliver = 'none' | `bot:${string}`;
+
+export interface Routine {
   /** 8 lowercase hex characters. */
   id: string;
-  sessionId: string;
-  /** Display title of the owning session; present when the daemon resolves it. */
-  sessionTitle?: string;
+  botId: string;
+  /** Present only for config-declared routines. */
+  name?: string;
   prompt: string;
   intervalMinutes: number;
   recurring: boolean;
-  model: { provider: string; model: string; reasoningEffort: string };
-  state: ScheduleState;
+  state: RoutineState;
+  deliver: RoutineDeliver;
   createdAt: string;
   expiresAt?: string;
   nextRunAt?: string;
   lastRunAt?: string;
-  lastTurn?: number;
   lastError?: string;
   runCount: number;
+}
+
+/**
+ * The exact daemon methods the shell bridge forwards. Any other method is
+ * rejected before it can reach the daemon.
+ */
+export const AGENT_METHODS = [
+  'agent.list',
+  'agent.get',
+  'agent.events',
+  'agent.wake',
+  'routine.list',
+  'routine.create',
+  'routine.update',
+  'routine.run',
+  'routine.delete',
+] as const;
+
+export type AgentMethod = (typeof AGENT_METHODS)[number];
+
+export interface AgentListResult { bots: AgentBot[] }
+export interface AgentGetParams { id: string }
+export interface AgentGetResult { bot: AgentBot; config: string }
+export interface AgentEventsParams { id: string; afterSeq: number; limit?: number }
+/** Same shape as the daemon `session.events` result, for the bot context ledger. */
+export interface AgentEventsResult { events: LedgerEvent[]; lastSeq: number }
+export interface AgentWakeParams { id: string; text: string }
+export interface AgentWakeResult { queued: number }
+export interface RoutineListParams { botId?: string }
+export interface RoutineListResult { routines: Routine[] }
+export interface RoutineCreateParams {
+  botId: string;
+  prompt: string;
+  intervalMinutes: number;
+  recurring: boolean;
+  deliver?: RoutineDeliver;
+}
+export interface RoutineCreateResult { routine: Routine }
+export interface RoutineUpdateParams { id: string; state: 'active' | 'paused' }
+export interface RoutineUpdateResult { routine: Routine }
+export interface RoutineRunParams { id: string }
+export interface RoutineRunResult { routine: Routine }
+export interface RoutineDeleteParams { id: string }
+export interface RoutineDeleteResult { deleted: true }
+
+/** Params and result of each forwarded agent method, used to type the facade. */
+export interface AgentMethodMap {
+  'agent.list': { params: undefined; result: AgentListResult };
+  'agent.get': { params: AgentGetParams; result: AgentGetResult };
+  'agent.events': { params: AgentEventsParams; result: AgentEventsResult };
+  'agent.wake': { params: AgentWakeParams; result: AgentWakeResult };
+  'routine.list': { params: RoutineListParams; result: RoutineListResult };
+  'routine.create': { params: RoutineCreateParams; result: RoutineCreateResult };
+  'routine.update': { params: RoutineUpdateParams; result: RoutineUpdateResult };
+  'routine.run': { params: RoutineRunParams; result: RoutineRunResult };
+  'routine.delete': { params: RoutineDeleteParams; result: RoutineDeleteResult };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1877,10 +1951,6 @@ export interface WrenyardShellApi {
   onViewChanged(listener: (page: ShellPage) => void): () => void;
   getTaskSettings(project?: string, taskId?: string): Promise<TaskSettingsSnapshot>;
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot>;
-  listSchedules(): Promise<{ schedules: ScheduleItem[] }>;
-  updateSchedule(id: string, state: ScheduleState): Promise<{ schedule: ScheduleItem }>;
-  runSchedule(id: string): Promise<{ schedule: ScheduleItem }>;
-  deleteSchedule(id: string): Promise<{ deleted: true }>;
   /**
    * Forward one allowlisted `bot.*` call to the daemon. The main-process
    * registrar rejects any method outside {@link BOT_METHODS} before it reaches
@@ -1899,6 +1969,16 @@ export interface WrenyardShellApi {
     method: M,
     params?: TodoMethodMap[M]['params'],
   ): Promise<TodoMethodMap[M]['result']>;
+  /**
+   * Forward one allowlisted `agent.*`/`routine.*` call to the daemon. The
+   * main-process registrar rejects any method outside {@link AGENT_METHODS}
+   * before it reaches the daemon, so this facade is the renderer's only path
+   * to bot agents.
+   */
+  agent<M extends AgentMethod>(
+    method: M,
+    params?: AgentMethodMap[M]['params'],
+  ): Promise<AgentMethodMap[M]['result']>;
   runtimeAliasSnapshot(): Promise<RuntimeAliasSnapshot>;
   runtimeAliasPut(request: RuntimeAliasPutRequest): Promise<RuntimeAliasSnapshot>;
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
@@ -1961,7 +2041,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'schedules' || value === 'bot';
+  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'agents' || value === 'bot';
 }
 
 /**
@@ -2011,7 +2091,7 @@ export function acceleratorPage(input: AcceleratorInput, platform: NodeJS.Platfo
   if (input.key === '2') return 'trace';
   if (input.key === '3') return 'stats';
   if (input.key === '5') return 'tasks';
-  if (input.key === '6') return 'schedules';
+  if (input.key === '6') return 'agents';
   return null;
 }
 
@@ -2051,7 +2131,7 @@ export const KNOWN_SHORTCUTS: readonly KnownShortcut[] = [
   { category: '导航', title: '追踪', mac: '⌘2', other: 'Ctrl+2', scope: '全局', page: 'trace' },
   { category: '导航', title: '工房台账', mac: '⌘3', other: 'Ctrl+3', scope: '全局', page: 'stats' },
   { category: '导航', title: '任务', mac: '⌘5', other: 'Ctrl+5', scope: '全局', page: 'tasks' },
-  { category: '导航', title: '定时任务', mac: '⌘6', other: 'Ctrl+6', scope: '全局', page: 'schedules' },
+  { category: '导航', title: '机器人', mac: '⌘6', other: 'Ctrl+6', scope: '全局', page: 'agents' },
   { category: '导航', title: '设置', mac: '⌘,', other: 'Ctrl+,', scope: '全局', page: 'settings' },
   { category: '导航', title: '后退', mac: '⌘[', other: 'Alt+←', scope: '全局', command: 'nav.back' },
   { category: '导航', title: '前进', mac: '⌘]', other: 'Alt+→', scope: '全局', command: 'nav.forward' },

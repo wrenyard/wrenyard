@@ -922,6 +922,7 @@ class Engine implements Session, SessionCallHost {
       reasonCompleted: false,
       actionsThisStep: 0,
       toolCallsThisStep: 0,
+      portToolCallsThisTurn: 0,
       asksThisStep: [],
       parsePromises: new Set(),
       actionPromises: new Set(),

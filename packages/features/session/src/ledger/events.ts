@@ -252,8 +252,13 @@ export interface StepFinishedEvent extends LedgerEventBase {
 
 // ─── Action ────────────────────────────────────────────────────────────────
 
-/** The action types: the tools the reasoning model may write. */
-export type ActionType = 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule';
+/**
+ * The action types: the tools the reasoning model may write, plus `tool` for a
+ * native agent tool call dispatched through a host's agent tool port.
+ * `schedule` is no longer produced by any action, but is kept so ledgers
+ * written before routines moved to bots still render.
+ */
+export type ActionType = 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'tool' | 'schedule';
 export type ActionStatus = 'done' | 'failed' | 'skipped' | 'cancelled' | 'interrupted';
 
 export interface ActionStartedEvent extends LedgerEventBase {

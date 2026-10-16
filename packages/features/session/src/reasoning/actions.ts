@@ -23,7 +23,6 @@ import { runDispatchAction } from '../auxiliary/dispatch.ts';
 import { runDocumentAction } from '../auxiliary/document.ts';
 import { runVcsAction } from '../auxiliary/vcs.ts';
 import { runProjectAction } from '../auxiliary/project.ts';
-import { runScheduleAction } from '../auxiliary/schedule.ts';
 
 export type { ActionStatus, ActionType } from '../ledger/store.ts';
 
@@ -33,6 +32,11 @@ export type { ActionStatus, ActionType } from '../ledger/store.ts';
 export interface ParsedAction {
   type: ActionType;
   intent: string;
+  /**
+   * The native tool name of a `tool` action started through an agent tool port;
+   * absent for every built-in action.
+   */
+  name?: string;
 }
 
 /** Result of executing one action. */
@@ -131,8 +135,10 @@ export class ActionRunner {
         return runVcsAction(this.deps, action, ctx);
       case 'project':
         return runProjectAction(this.deps, action, ctx);
-      case 'schedule':
-        return runScheduleAction(this.deps, action, ctx);
+      default:
+        // `tool` runs through the session host's agent tool port and `schedule`
+        // no longer exists, so neither ever reaches the action runner.
+        throw new Error(`unsupported action type: ${action.type}`);
     }
   }
 }

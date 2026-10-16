@@ -43,25 +43,43 @@ export type {
   SessionPromptCancelParams, SessionPromptCancelResult,
 } from './methods/session.mts'
 import {
-  scheduleListParamsSchema, scheduleListResultSchema,
-  scheduleCreateParamsSchema, scheduleCreateResultSchema,
-  scheduleUpdateParamsSchema, scheduleUpdateResultSchema,
-  scheduleRunParamsSchema, scheduleRunResultSchema,
-  scheduleDeleteParamsSchema, scheduleDeleteResultSchema,
-  type ScheduleListParams, type ScheduleListResult,
-  type ScheduleCreateParams, type ScheduleCreateResult,
-  type ScheduleUpdateParams, type ScheduleUpdateResult,
-  type ScheduleRunParams, type ScheduleRunResult,
-  type ScheduleDeleteParams, type ScheduleDeleteResult,
-} from './methods/schedule.mts'
+  routineListParamsSchema, routineListResultSchema,
+  routineCreateParamsSchema, routineCreateResultSchema,
+  routineUpdateParamsSchema, routineUpdateResultSchema,
+  routineRunParamsSchema, routineRunResultSchema,
+  routineDeleteParamsSchema, routineDeleteResultSchema,
+  type RoutineListParams, type RoutineListResult,
+  type RoutineCreateParams, type RoutineCreateResult,
+  type RoutineUpdateParams, type RoutineUpdateResult,
+  type RoutineRunParams, type RoutineRunResult,
+  type RoutineDeleteParams, type RoutineDeleteResult,
+} from './methods/routine.mts'
+import {
+  agentListParamsSchema, agentListResultSchema,
+  agentGetParamsSchema, agentGetResultSchema,
+  agentEventsParamsSchema, agentEventsResultSchema,
+  agentWakeParamsSchema, agentWakeResultSchema,
+  type AgentBotSummary,
+  type AgentListParams, type AgentListResult,
+  type AgentGetParams, type AgentGetResult,
+  type AgentEventsParams, type AgentEventsResult,
+  type AgentWakeParams, type AgentWakeResult,
+} from './methods/agent.mts'
 export type {
-  ScheduleState, ScheduleModel, ScheduleRecord,
-  ScheduleListParams, ScheduleListResult,
-  ScheduleCreateParams, ScheduleCreateResult,
-  ScheduleUpdateParams, ScheduleUpdateResult,
-  ScheduleRunParams, ScheduleRunResult,
-  ScheduleDeleteParams, ScheduleDeleteResult,
-} from './methods/schedule.mts'
+  AgentBotSummary,
+  AgentListParams, AgentListResult,
+  AgentGetParams, AgentGetResult,
+  AgentEventsParams, AgentEventsResult,
+  AgentWakeParams, AgentWakeResult,
+} from './methods/agent.mts'
+export type {
+  RoutineState, RoutineDeliver, RoutineRecord,
+  RoutineListParams, RoutineListResult,
+  RoutineCreateParams, RoutineCreateResult,
+  RoutineUpdateParams, RoutineUpdateResult,
+  RoutineRunParams, RoutineRunResult,
+  RoutineDeleteParams, RoutineDeleteResult,
+} from './methods/routine.mts'
 import {
   botListParamsSchema,
   botListResultSchema,
@@ -1013,11 +1031,15 @@ export interface ForemanMethodParams {
   'session.updateMetadata': SessionUpdateMetadataParams
   'session.prompt.suggest': SessionPromptSuggestParams
   'session.prompt.cancel': SessionPromptCancelParams
-  'schedule.list': ScheduleListParams
-  'schedule.create': ScheduleCreateParams
-  'schedule.update': ScheduleUpdateParams
-  'schedule.run': ScheduleRunParams
-  'schedule.delete': ScheduleDeleteParams
+  'routine.list': RoutineListParams
+  'routine.create': RoutineCreateParams
+  'routine.update': RoutineUpdateParams
+  'routine.run': RoutineRunParams
+  'routine.delete': RoutineDeleteParams
+  'agent.list': AgentListParams
+  'agent.get': AgentGetParams
+  'agent.events': AgentEventsParams
+  'agent.wake': AgentWakeParams
   'bot.list': BotListParams
   'bot.create': BotCreateParams
   'bot.update': BotUpdateParams
@@ -1128,11 +1150,15 @@ export interface ForemanMethodResults {
   'session.updateMetadata': SessionUpdateMetadataResult
   'session.prompt.suggest': SessionPromptSuggestResult
   'session.prompt.cancel': SessionPromptCancelResult
-  'schedule.list': ScheduleListResult
-  'schedule.create': ScheduleCreateResult
-  'schedule.update': ScheduleUpdateResult
-  'schedule.run': ScheduleRunResult
-  'schedule.delete': ScheduleDeleteResult
+  'routine.list': RoutineListResult
+  'routine.create': RoutineCreateResult
+  'routine.update': RoutineUpdateResult
+  'routine.run': RoutineRunResult
+  'routine.delete': RoutineDeleteResult
+  'agent.list': AgentListResult
+  'agent.get': AgentGetResult
+  'agent.events': AgentEventsResult
+  'agent.wake': AgentWakeResult
   'bot.list': BotListResult
   'bot.create': BotCreateResult
   'bot.update': BotUpdateResult
@@ -1556,11 +1582,15 @@ export const methodRegistry: {
     params: sessionPromptCancelParamsSchema,
     result: sessionPromptCancelResultSchema,
   },
-  'schedule.list': { params: scheduleListParamsSchema, result: scheduleListResultSchema },
-  'schedule.create': { params: scheduleCreateParamsSchema, result: scheduleCreateResultSchema },
-  'schedule.update': { params: scheduleUpdateParamsSchema, result: scheduleUpdateResultSchema },
-  'schedule.run': { params: scheduleRunParamsSchema, result: scheduleRunResultSchema },
-  'schedule.delete': { params: scheduleDeleteParamsSchema, result: scheduleDeleteResultSchema },
+  'routine.list': { params: routineListParamsSchema, result: routineListResultSchema },
+  'routine.create': { params: routineCreateParamsSchema, result: routineCreateResultSchema },
+  'routine.update': { params: routineUpdateParamsSchema, result: routineUpdateResultSchema },
+  'routine.run': { params: routineRunParamsSchema, result: routineRunResultSchema },
+  'routine.delete': { params: routineDeleteParamsSchema, result: routineDeleteResultSchema },
+  'agent.list': { params: agentListParamsSchema, result: agentListResultSchema },
+  'agent.get': { params: agentGetParamsSchema, result: agentGetResultSchema },
+  'agent.events': { params: agentEventsParamsSchema, result: agentEventsResultSchema },
+  'agent.wake': { params: agentWakeParamsSchema, result: agentWakeResultSchema },
   'bot.list': { params: botListParamsSchema, result: botListResultSchema },
   'bot.create': { params: botCreateParamsSchema, result: botCreateResultSchema },
   'bot.update': { params: botUpdateParamsSchema, result: botUpdateResultSchema },

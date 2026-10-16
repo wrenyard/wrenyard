@@ -99,8 +99,15 @@ export function replyTextOfCalls(calls: readonly ToolCall[]): string {
   return calls.filter((call) => call.name === REPLY_TOOL.name).map(replyCallText).join('\n\n');
 }
 
-/** What the reply writer needs from the engine that owns the turn. */
-export type ReplyHost = Pick<SessionCallHost, 'ledger' | 'now' | 'track' | 'invoke' | 'appendError' | 'ports'>;
+/**
+ * What the reply writer needs from the engine that owns the turn. `host` is the
+ * session host itself: it is how the writer recognises a session that runs on an
+ * agent tool port and therefore publishes its own closing text.
+ */
+export type ReplyHost = Pick<
+  SessionCallHost,
+  'host' | 'ledger' | 'now' | 'track' | 'invoke' | 'appendError' | 'ports'
+>;
 
 /** One queued communication invocation. */
 interface ReplyRequest {
@@ -179,6 +186,16 @@ export class ReplyWriter {
     // An interrupted or already-finished turn never communicates.
     if (turn.finished || turn.abort.signal.aborted) return;
 
+    // A session running on a host agent tool port is a bot context: it answers
+    // with ordinary assistant content and never calls the reply tool, so the
+    // auxiliary reply call would read no message and still finalize the turn,
+    // ending a terminal turn without any reply. Its own closing text is the
+    // reply; everything else about the turn stays exactly as it is.
+    if (request.terminal && this.host.host?.agentTools?.(session.sessionId) !== undefined) {
+      await this.publishFinal(session, turn, request);
+      return;
+    }
+
     // Memory candidates ride the ordinary terminal reply call. They are offered
     // only on a successful non-ask terminal reply, and only with a memory port;
     // no separate inference is ever added.
@@ -250,6 +267,35 @@ export class ReplyWriter {
         : undefined;
       await this.finishTurn(session, turn, request.status as TerminalStatus, request.error, text, memoryCalls);
     }
+  }
+
+  /**
+   * Publish the closing reply of a session that runs on an agent tool port,
+   * without the auxiliary reply call. The reply is the prose of the terminal
+   * step's own reasoning output, read back from the ledger. A failed turn, or
+   * one that left no text, falls back to the fixed terminal text, so the closing
+   * reply is always nonempty. Finalization stays the one existing path, and no
+   * memory is ever saved on this direct path.
+   */
+  private async publishFinal(session: SessionRuntime, turn: TurnRuntime, request: ReplyRequest): Promise<void> {
+    const events = this.host.ledger.read(session.sessionId);
+    const step = terminalReasonOutput(events, request.turn, request.step);
+    const text = request.status === 'completed' && step !== undefined && step.text.trim() !== ''
+      ? step.text
+      : fallbackReply(request.status as TerminalStatus, request.error);
+    // The reasoning span of that exact step, or the step itself, is the reply's
+    // parent when one is available.
+    const parent = step?.parent ?? turn.currentStepId;
+    await this.host.ledger.append(session.sessionId, {
+      type: 'reply.sent',
+      turn: request.turn,
+      step: request.step,
+      ...(parent === undefined ? {} : { parent }),
+      text,
+      kind: 'final',
+    });
+    if (turn.finished || turn.abort.signal.aborted) return;
+    await this.finishTurn(session, turn, request.status as TerminalStatus, request.error, text);
   }
 
   /**
@@ -370,6 +416,24 @@ export function latestReasonText(events: readonly LedgerEvent[]): string {
     if (event.type === 'reasoning.completed') return event.text;
   }
   return '';
+}
+
+/**
+ * The completed reasoning output of one exact step and the reasoning span it
+ * belongs to. Only the direct terminal path of a port-backed session uses it,
+ * where that output itself is the reply.
+ */
+function terminalReasonOutput(
+  events: readonly LedgerEvent[],
+  turn: number,
+  step: number,
+): { text: string; parent: string } | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type !== 'reasoning.completed' || event.turn !== turn || event.step !== step) continue;
+    return { text: event.workerOutput ?? event.text, parent: event.parent };
+  }
+  return undefined;
 }
 
 /** The text of the latest visible system reply on the timeline, if any. */

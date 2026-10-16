@@ -12,7 +12,7 @@ import type { RpcRouter } from '../rpc-router.mts'
 /** Minimum spacing between two normal long-poll returns. */
 const LIVE_MIN_INTERVAL_MS = 150
 
-function readEvents(session: Session, params: SessionEventsParams): SessionEventsResult {
+export function readEvents(session: Session, params: SessionEventsParams): SessionEventsResult {
   const ledger = session.readLedger(params.sessionId)
   if (!ledger.some(event => event.type === 'session.created')) throw new Error(`Unknown session: ${params.sessionId}`)
   return {

@@ -121,7 +121,38 @@ export interface SessionHost {
     artifactErrors?: string[];
   }>;
   cancelTaskRun(taskRunId: string): Promise<void>;
+  /**
+   * Optional agent tool port for one session. When a host returns one, the
+   * session's reason request uses the port's own system prompt and native tool
+   * set, and every completed tool call is dispatched to {@link AgentToolPort.run}
+   * instead of the built-in `wy_action` action layer. A host without it (or one
+   * that returns `undefined` for a session) keeps the default behaviour
+   * byte-for-byte unchanged.
+   */
+  agentTools?(sessionId: string): AgentToolPort | undefined;
   now?(): Date;
+}
+
+/**
+ * The optional agent tool surface one session may run on. It replaces the
+ * built-in orchestrator prompt and the single `wy_action` tool with a host-owned
+ * system prompt and native tool set.
+ */
+export interface AgentToolPort {
+  /** Replaces the whole reason system prompt (REASON_SYSTEM, the `<wy-global>` AGENTS.md and REASON_ROLE). */
+  system: string;
+  /** Native tools offered to the model; empty means text replies only. */
+  tools: readonly ToolSpec[];
+  /** Per-turn tool-call cap; default 24. */
+  maxToolCalls?: number;
+  /**
+   * Execute one tool call the model returned. The result maps to the action's
+   * `action.finished` status and result text.
+   */
+  run(
+    call: { name: string; arguments: string },
+    ctx: { sessionId: string; turn: number },
+  ): Promise<{ status: 'done' | 'failed'; result: string }>;
 }
 
 /**

@@ -26,13 +26,12 @@ import type { BuiltView } from '../ports.ts';
 const REASON_SYSTEM = `<wy-system>
 You are the conversation orchestrator of Wrenyard (啾啾工坊). You cannot read or write files or run commands. The only way to make the system do something is to call the wy_action tool.
 
-wy_action has seven types:
+wy_action has six types:
 - search: read workspace material: project documents, memories, and files or images that tasks left or the user attached. Give the intent or an exact path.
 - dispatch: dispatch a task in a project. State the project, the task, the goal and the acceptance criteria.
 - document: create, revise or delete ordinary project documents (spec, report or handoff), or read/revise an existing registered project AGENTS.md using the fixed document ID AGENTS.md and the same doc methods. For ordinary docs state project, kind, name/title and content; for AGENTS.md state project and the requested revision. Document actions cannot create/delete AGENTS.md, target arbitrary paths, workspace-root or checkout instruction files, or change other source/config/workspace files.
 - vcs: version control of the workspace repository itself: status, diff, commit, push, pull. For a commit list the exact files and the message.
 - project: manage registered project checkouts (status, diff, commit, push, pull, worktree create, remove and merge) or register a new project. Name the project and the worktree. For a commit, list the exact files. For registration, give the project id, a description and the checkout path.
-- schedule: create, list, pause, resume, run now or delete scheduled prompts of this session, like the /loop command. A scheduled prompt is sent to this session as a new user message every N minutes, or once after N minutes (minimum 1 minute; recurring ones expire after 7 days). State the prompt, the interval and whether it repeats.
 - ask: ask the user one question that needs their decision. Send it alone, not together with other calls.
 
 The program handles each of your outputs:
@@ -110,6 +109,8 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
     index: number;
     type: string;
     intent: string;
+    /** The native tool name of a `tool` action; absent for every other type. */
+    name?: string;
     /** The reasoning step that started it: `turn:step`. */
     key: string;
     /** Emitted tool-call id; the bare id for the first occurrence of that id. */
@@ -143,10 +144,12 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
     if (event.type === 'action.started') {
       const ordinal = occurrences.get(event.id) ?? 0;
       occurrences.set(event.id, ordinal + 1);
+      const name = event.action.type === 'tool' ? toolCallName(event.input) : undefined;
       const start: StartOccurrence = {
         index,
         type: event.action.type,
         intent: event.action.prompt,
+        ...(name === undefined ? {} : { name }),
         key: stepKey(event.turn, event.step),
         // The first occurrence keeps the bare id so the bytes already sent to
         // the model never change; a reuse gets a stable id from its own event.
@@ -228,11 +231,15 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
         messages.push({
           role: 'assistant',
           content: event.text,
-          toolCalls: calls.map((start) => ({
-            id: start.callId,
-            name: 'wy_action',
-            arguments: JSON.stringify({ type: start.type, intent: start.intent }),
-          })),
+          // A `tool` action replays under its own native name with its raw
+          // arguments string; every built-in action keeps the wy_action shape.
+          toolCalls: calls.map((start) => start.type === 'tool'
+            ? { id: start.callId, name: start.name ?? '', arguments: start.intent }
+            : {
+                id: start.callId,
+                name: 'wy_action',
+                arguments: JSON.stringify({ type: start.type, intent: start.intent }),
+              }),
         });
         for (const start of calls) {
           const content = start.finish === undefined || arrivedLate(start)
@@ -264,6 +271,13 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
   }
   endUserMessage();
   return messages;
+}
+
+/** The native tool name carried by a `tool` action's parsed input, if any. */
+function toolCallName(input: unknown): string | undefined {
+  if (input === null || typeof input !== 'object') return undefined;
+  const name = (input as { name?: unknown }).name;
+  return typeof name === 'string' && name !== '' ? name : undefined;
 }
 
 /** The text of one action's tool result: its outcome when not done, then the result. */
@@ -352,6 +366,12 @@ export interface ReasonViewInput {
   /** Prepared image data URLs keyed by processed path; used on every request. */
   images?: Record<string, { dataUrl: string; mime: string }>;
   allowImages?: boolean;
+  /**
+   * When set, the system message content is exactly this string instead of
+   * REASON_SYSTEM plus the `<wy-global>` AGENTS.md and REASON_ROLE. An agent
+   * tool port supplies its own whole system prompt through this option.
+   */
+  systemOverride?: string;
 }
 
 /**
@@ -361,7 +381,8 @@ export interface ReasonViewInput {
  * being served. Protocol adapters decide how the messages go on the wire.
  */
 export function buildReason(input: ReasonViewInput): BuiltView {
-  const systemSeg = `${REASON_SYSTEM}\n<wy-global>\n${escapeBody(input.snapshot.agents)}\n</wy-global>\n${REASON_ROLE}`;
+  const systemSeg = input.systemOverride
+    ?? `${REASON_SYSTEM}\n<wy-global>\n${escapeBody(input.snapshot.agents)}\n</wy-global>\n${REASON_ROLE}`;
   const workspaceSeg = renderWorkspace(input.snapshot);
   const infoSeg = renderInfo({
     session: input.session, deviceName: input.deviceName, inputFacts: input.inputFacts ?? {},
@@ -377,7 +398,8 @@ export function buildReason(input: ReasonViewInput): BuiltView {
     return total + calls + content;
   }, 0);
   const segments: Record<string, string> = {
-    'wy-system': REASON_SYSTEM, 'wy-global': input.snapshot.agents, 'wy-role': REASON_ROLE,
+    'wy-system': input.systemOverride ?? REASON_SYSTEM,
+    ...(input.systemOverride === undefined ? { 'wy-global': input.snapshot.agents, 'wy-role': REASON_ROLE } : {}),
     'wy-workspace': workspaceSeg, 'wy-info': infoSeg, 'wy-ctx': ctxText, 'wy-user': userSeg,
   };
   // Every layer is its segment's character count; `wy-ctx` counts the assembled

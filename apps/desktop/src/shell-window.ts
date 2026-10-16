@@ -31,8 +31,7 @@ import {
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
-  type ScheduleItem,
-  type ScheduleState,
+  type AgentMethod,
   type BotMethod,
   type ExecStartRequest,
   type ExecSnapshotDto,
@@ -54,7 +53,7 @@ import { registerQuotaProvidersIpc } from './main/ipc/quota-providers.js';
 import { registerSessionExecIpc } from './main/ipc/session-exec.js';
 import { registerStorageUsageIpc } from './main/ipc/storage-usage.js';
 import { registerTasksStatsIpc } from './main/ipc/tasks-stats.js';
-import { registerSchedulesIpc } from './main/ipc/schedules.js';
+import { registerAgentIpc } from './main/ipc/agent.js';
 import { registerBotIpc } from './main/ipc/bot.js';
 import { registerTodoIpc } from './main/ipc/todo.js';
 import { registerUpdateDaemonIpc } from './main/ipc/update-daemon.js';
@@ -149,10 +148,8 @@ export interface ShellWindowOptions {
   runtimeAliasRemove(request: RuntimeAliasRemoveRequest): Promise<RuntimeAliasSnapshot>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
-  listSchedules(): Promise<{ schedules: ScheduleItem[] }>;
-  updateSchedule(id: string, state: ScheduleState): Promise<{ schedule: ScheduleItem }>;
-  runSchedule(id: string): Promise<{ schedule: ScheduleItem }>;
-  deleteSchedule(id: string): Promise<{ deleted: true }>;
+  /** Forward one allowlisted agent/routine method to the daemon; results are unchanged. */
+  requestAgent(method: AgentMethod, params?: unknown): Promise<unknown>;
   /** Forward one allowlisted bot method to the daemon; results are unchanged. */
   requestBot(method: BotMethod, params?: unknown): Promise<unknown>;
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;
@@ -390,7 +387,7 @@ export class ShellWindowController {
       registerSessionExecIpc(ipcMain, deps),
       registerTasksStatsIpc(ipcMain, deps),
       registerStorageUsageIpc(ipcMain, deps),
-      registerSchedulesIpc(ipcMain, deps),
+      registerAgentIpc(ipcMain, deps),
       registerBotIpc(ipcMain, deps),
       registerTodoIpc(ipcMain, deps),
       registerUpdateDaemonIpc(ipcMain, deps),

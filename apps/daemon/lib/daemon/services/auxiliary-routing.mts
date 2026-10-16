@@ -1,7 +1,8 @@
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { rankAutoRoutingCandidates, type CandidateInput } from '@wrenyard/auto-routing';
 import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, routingReferencePriceOf, explicitFreeAutoEligibility, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
-import { ROLE_REQUIREMENTS, AUXILIARY_TIMEOUT_MS, supportsSession, type AuxiliaryCallRole, type AuxiliaryRoute } from '@wrenyard/session';
+import { ROLE_REQUIREMENTS, AUXILIARY_TIMEOUT_MS, supportsSession, type AuxiliaryCallRole, type AuxiliaryRoute, type RoleReasoningRequirement } from '@wrenyard/session';
+import type { IntelligenceTier } from '@wrenyard/providers/catalog';
 import { JsonForemanConfigStore } from '../../config/manager.mts';
 import { readGlobalTaskSettings, type TasksConfigSettingsInput, type TaskSettingsLayer } from '../../config/task-settings.mts';
 import type { AutoRoutingQuotaSnapshotService } from './auto-routing-snapshot-service.mts';
@@ -43,10 +44,19 @@ export interface AuxiliaryRoutingOptions {
   gatewayModels: () => Promise<readonly GatewaySessionModel[]>;
 }
 
-/** Fresh ranked routes on each invocation; no session state or result cache. */
-export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
-  return async (role: AuxiliaryCallRole): Promise<AuxiliaryRoute[]> => {
-    const requirements = ROLE_REQUIREMENTS[role];
+/** Caller-supplied intelligence requirements for the requirement selector. */
+export interface AuxiliaryIntelligenceRequirements {
+  intelligenceMin: IntelligenceTier;
+  intelligenceExpected: IntelligenceTier;
+}
+
+function createSelector(
+  options: AuxiliaryRoutingOptions,
+  requirements: RoleReasoningRequirement,
+  label: string,
+  suggestion: boolean,
+) {
+  return async (): Promise<AuxiliaryRoute[]> => {
     const bound = await options.quotaSnapshots.routingSnapshot();
     const snapshot = bound.snapshot;
     const nowMs = snapshot.nowMs;
@@ -168,18 +178,42 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
     // admits routes that can actually disable reasoning it favors those, ordered
     // by the candidate's own effective TPS. Other roles, and the case where no
     // explicit-`none` route is admitted, keep the existing ranked order.
-    const explicitNone = role === 'suggestion' ? selected.filter(({ levels }) => levels.includes('none')) : [];
+    const explicitNone = suggestion ? selected.filter(({ levels }) => levels.includes('none')) : [];
     const pool = explicitNone.length > 0
       ? explicitNone
           .map((candidate, index) => ({ candidate, index }))
           .sort((a, b) => b.candidate.speedTps - a.candidate.speedTps || a.index - b.index)
           .map(({ candidate }) => candidate)
       : selected;
-    if (!pool.length) throw new Error(`Auxiliary role ${role}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
+    if (!pool.length) throw new Error(`Auxiliary role ${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
     return pool.map(({ model, levels }) => ({
       model,
       reasoningEffort: preferred.find(effort => levels.includes(effort)) ?? resolveReasoningEffort(preferred[0]!, levels),
     }));
+  };
+}
+
+/** Fresh ranked routes on each invocation; no session state or result cache. */
+export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
+  return async (role: AuxiliaryCallRole): Promise<AuxiliaryRoute[]> =>
+    createSelector(options, ROLE_REQUIREMENTS[role], role, role === 'suggestion')();
+}
+
+/**
+ * Rank routes against explicit caller-supplied intelligence requirements. The
+ * profile is an ordinary text-only role's (the `reply` role) with only
+ * `intelligenceMin` / `intelligenceExpected` replaced, so gating, pricing, speed
+ * and ranking behave exactly like an auxiliary role selection.
+ */
+export function createRequirementSelector(options: AuxiliaryRoutingOptions) {
+  return async (requirements: AuxiliaryIntelligenceRequirements): Promise<AuxiliaryRoute[]> => {
+    const base = ROLE_REQUIREMENTS.reply;
+    const profile: RoleReasoningRequirement = {
+      ...base,
+      intelligenceMin: requirements.intelligenceMin,
+      intelligenceExpected: requirements.intelligenceExpected,
+    };
+    return createSelector(options, profile, `requirements(${requirements.intelligenceMin}/${requirements.intelligenceExpected})`, false)();
   };
 }
 

@@ -25,12 +25,12 @@ import {
   type TaskRoutingTestParams,
   type TaskRoutingTestResult,
   type TaskRoutingTestTasksResult,
-  type ScheduleItem,
-  type ScheduleState,
   type BotMethod,
   type BotMethodMap,
   type TodoMethod,
   type TodoMethodMap,
+  type AgentMethod,
+  type AgentMethodMap,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -240,18 +240,6 @@ const api: WrenyardShellApi = {
   saveTaskSettings(request: TaskSettingsSaveRequest): Promise<TaskSettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskSettingsSave, request) as Promise<TaskSettingsSnapshot>;
   },
-  listSchedules(): Promise<{ schedules: ScheduleItem[] }> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.scheduleList) as Promise<{ schedules: ScheduleItem[] }>;
-  },
-  updateSchedule(id: string, state: ScheduleState): Promise<{ schedule: ScheduleItem }> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.scheduleUpdate, id, state) as Promise<{ schedule: ScheduleItem }>;
-  },
-  runSchedule(id: string): Promise<{ schedule: ScheduleItem }> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.scheduleRun, id) as Promise<{ schedule: ScheduleItem }>;
-  },
-  deleteSchedule(id: string): Promise<{ deleted: true }> {
-    return ipcRenderer.invoke(SHELL_CHANNELS.scheduleDelete, id) as Promise<{ deleted: true }>;
-  },
   bot<M extends BotMethod>(
     method: M,
     params?: BotMethodMap[M]['params'],
@@ -261,6 +249,16 @@ const api: WrenyardShellApi = {
       method,
       params,
     ) as Promise<BotMethodMap[M]['result']>;
+  },
+  agent<M extends AgentMethod>(
+    method: M,
+    params?: AgentMethodMap[M]['params'],
+  ): Promise<AgentMethodMap[M]['result']> {
+    return ipcRenderer.invoke(
+      SHELL_CHANNELS.agentRequest,
+      method,
+      params,
+    ) as Promise<AgentMethodMap[M]['result']>;
   },
   todo<M extends TodoMethod>(
     method: M,

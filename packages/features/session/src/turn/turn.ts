@@ -218,6 +218,11 @@ export class TurnRunner {
       : {};
 
     const maxTokens = metadata.maxOutputTokens;
+    // An agent tool port, when the host provides one for this session, owns the
+    // whole system prompt and the native tool set; absent keeps the built-in
+    // orchestrator prompt and the single wy_action tool.
+    const port = this.engine.host.agentTools?.(session.sessionId);
+    const tools = port === undefined ? [ACTION_TOOL] : port.tools;
     const view = buildReason({
       deviceName: this.engine.host.deviceName,
       snapshot: session.snapshot,
@@ -226,6 +231,7 @@ export class TurnRunner {
       session: this.sessionInfo(session, turn),
       images,
       allowImages,
+      ...(port === undefined ? {} : { systemOverride: port.system }),
     });
 
     // The reason call declares the wy_action tool; completed calls are started
@@ -270,7 +276,7 @@ export class TurnRunner {
           retryAt: state.retryAt,
         }));
       },
-      tools: [ACTION_TOOL],
+      ...(tools.length === 0 ? {} : { tools }),
       onText: (delta) => {
         turn.stepText += delta;
       },
@@ -405,6 +411,24 @@ export class TurnRunner {
     workerLines: string[],
   ): Promise<void> {
     turn.toolCallsThisStep += 1;
+    // An agent tool port dispatches its own native tools by name: an unknown
+    // name forces the same correction an invalid built-in call does, and ask
+    // does not exist for a port.
+    const port = this.engine.host.agentTools?.(session.sessionId);
+    if (port !== undefined) {
+      const tool = port.tools.find((candidate) => candidate.name === call.name);
+      if (tool === undefined) {
+        turn.correctionRequired = true;
+        await this.engine.appendError(session.sessionId, 'reason', `unknown tool: ${call.name}`, turn, step);
+        return;
+      }
+      turn.portToolCallsThisTurn += 1;
+      // The call's own ordinal is captured after the increment: calls in one
+      // synchronous batch each keep their own position against the cap.
+      const ordinal = turn.portToolCallsThisTurn;
+      await this.startAction(session, turn, step, { type: 'tool', name: call.name, intent: call.arguments }, ordinal);
+      return;
+    }
     const parsed = parseActionCall(call);
     if ('error' in parsed) {
       turn.correctionRequired = true;
@@ -426,6 +450,7 @@ export class TurnRunner {
     turn: TurnRuntime,
     step: number,
     action: ParsedAction,
+    toolOrdinal?: number,
   ): Promise<void> {
     turn.actionsThisStep += 1;
     const actionId = this.engine.nextActionId(session);
@@ -455,7 +480,7 @@ export class TurnRunner {
       onTaskRun: (taskRunId: string) => this.recordTaskRun(turn, runtimeAction, taskRunId),
       onTitle: (title: string) => this.recordActionTitle(session, turn, step, actionId, title),
     };
-    const promise = this.runAction(session, turn, action, executeContext, actionId, step);
+    const promise = this.runAction(session, turn, action, executeContext, actionId, step, toolOrdinal);
     turn.actionPromises.add(promise);
     void promise.then(
       () => turn.actionPromises.delete(promise),
@@ -519,10 +544,13 @@ export class TurnRunner {
     ctx: ActionRunContext,
     actionId: string,
     step: number,
+    toolOrdinal?: number,
   ): Promise<void> {
     let outcome: ActionExecutionOutcome;
     try {
-      outcome = await session.actions.execute(action, ctx);
+      outcome = action.type === 'tool'
+        ? await this.runToolAction(session, turn, action, toolOrdinal)
+        : await session.actions.execute(action, ctx);
     } catch (error) {
       outcome = { status: 'failed', result: messageOf(error), deferred: [] };
     }
@@ -547,6 +575,31 @@ export class TurnRunner {
       },
       outcome.deferred,
     );
+  }
+
+  /**
+   * Execute one agent-tool-port call. The port is re-read from the host, so the
+   * action always runs against the current port. Only a call whose own ordinal
+   * (counted across steps) is beyond the cap fails without running.
+   */
+  private async runToolAction(
+    session: SessionRuntime,
+    turn: TurnRuntime,
+    action: ParsedAction,
+    toolOrdinal?: number,
+  ): Promise<ActionExecutionOutcome> {
+    const port = this.engine.host.agentTools?.(session.sessionId);
+    if (port === undefined) {
+      return { status: 'failed', result: `unknown tool: ${action.name ?? ''}`, deferred: [] };
+    }
+    if ((toolOrdinal ?? turn.portToolCallsThisTurn) > (port.maxToolCalls ?? 24)) {
+      return { status: 'failed', result: 'tool call limit reached; end the turn', deferred: [] };
+    }
+    const result = await port.run(
+      { name: action.name ?? '', arguments: action.intent },
+      { sessionId: session.sessionId, turn: turn.turn },
+    );
+    return { status: result.status === 'done' ? 'done' : 'failed', result: result.result, deferred: [] };
   }
 
   private async awaitParses(turn: TurnRuntime): Promise<void> {

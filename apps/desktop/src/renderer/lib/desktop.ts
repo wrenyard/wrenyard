@@ -1,6 +1,6 @@
 /** The only renderer module that reads the typed preload shell facade. */
 import { useSyncExternalStore } from 'react';
-import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi, BotMethod, BotMethodMap, TodoMethod, TodoMethodMap } from '@/shell-contract';
+import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi, AgentMethod, AgentMethodMap, BotMethod, BotMethodMap, TodoMethod, TodoMethodMap } from '@/shell-contract';
 
 declare global {
   interface Window {
@@ -38,6 +38,22 @@ export function botRequest<M extends BotMethod>(
   params?: BotMethodMap[M]['params'],
 ): Promise<BotMethodMap[M]['result']> {
   return shell.bot(method, params);
+}
+
+/* ------------------------------------------------------------------ */
+/* Bot agents bridge                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Forward one allowlisted `agent.*`/`routine.*` call through the shell bridge.
+ * The main process rejects any method outside `AGENT_METHODS`, so every
+ * renderer bot-agent read and write goes through this typed facade.
+ */
+export function agentRequest<M extends AgentMethod>(
+  method: M,
+  params?: AgentMethodMap[M]['params'],
+): Promise<AgentMethodMap[M]['result']> {
+  return shell.agent(method, params);
 }
 
 /* ------------------------------------------------------------------ */

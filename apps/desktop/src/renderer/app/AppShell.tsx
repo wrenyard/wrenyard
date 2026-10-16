@@ -19,12 +19,12 @@ import { WorkspaceGate } from '@/renderer/app/WorkspaceGate';
 import { TracePage } from '@/renderer/pages/trace';
 import { StatsPage } from '@/renderer/pages/stats';
 import { TasksPage } from '@/renderer/pages/tasks';
-import { SchedulesPage } from '@/renderer/pages/schedules';
+import { AgentsPage } from '@/renderer/pages/agents';
 import { BotPage } from '@/renderer/pages/bot/BotPage';
 import { SettingsPage } from '@/renderer/pages/settings';
 
 /** Dispatch order for the shell pages; also the first-visit mount order. */
-const PAGE_ORDER: readonly ShellPage[] = ['session', 'trace', 'stats', 'tasks', 'schedules', 'bot', 'settings'];
+const PAGE_ORDER: readonly ShellPage[] = ['session', 'trace', 'stats', 'tasks', 'agents', 'bot', 'settings'];
 
 /** The session page is the only page gated on a usable workspace. */
 function WorkspaceGatedSessionPage() {
@@ -63,7 +63,7 @@ const PAGES: Record<Exclude<ShellPage, 'settings'>, ComponentType> = {
   trace: TracePage,
   stats: StatsPage,
   tasks: TasksPage,
-  schedules: SchedulesPage,
+  agents: AgentsPage,
   bot: BotPage,
 };
 

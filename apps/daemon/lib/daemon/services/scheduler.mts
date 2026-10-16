@@ -1,20 +1,20 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
-import type { Session } from '@wrenyard/session'
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type {
-  ScheduleCreateParams,
-  ScheduleListResult,
-  ScheduleRecord,
-  ScheduleState,
-} from '../../protocol/methods/schedule.mts'
+  RoutineCreateParams,
+  RoutineDeliver,
+  RoutineListResult,
+  RoutineRecord,
+  RoutineState,
+} from '../../protocol/methods/routine.mts'
 
-/** How often due schedules are checked. */
+/** How often due routines are checked. */
 const TICK_MS = 5_000
-/** A recurring schedule is created seven days ahead and expires then. */
+/** A recurring routine is created seven days ahead and expires then. */
 const EXPIRY_MS = 7 * 24 * 60 * 60 * 1_000
-/** At most this many active or paused schedules may exist per session. */
-const MAX_PER_SESSION = 50
+/** At most this many active or paused routines may exist per bot. */
+const MAX_PER_BOT = 50
 const MIN_INTERVAL_MINUTES = 1
 const MAX_INTERVAL_MINUTES = 10_080
 const MAX_PROMPT_LENGTH = 4_000
@@ -22,64 +22,107 @@ const MAX_PROMPT_LENGTH = 4_000
 /** Diagnostic sink; wired to the daemon log by the caller. */
 export type SchedulerLog = (level: 'info' | 'warn' | 'error', message: string, meta?: unknown) => void
 
+/**
+ * A due routine wakes its owning bot agent through this callback instead of
+ * sending into a session. A rejection (for example an unknown or disabled bot)
+ * records `lastError` on the routine; a resolved call counts as a run.
+ */
+export type RoutineWake = (routine: RoutineRecord) => void | Promise<void>
+
+const DELIVER_PATTERN = /^(none|bot:[a-z0-9][a-z0-9-]{0,31})$/
+
+export function parseRoutineDeliver(value: string | undefined): RoutineDeliver {
+  if (value === undefined || value === 'none') return 'none'
+  if (!DELIVER_PATTERN.test(value)) throw new Error(`deliver must be 'none' or 'bot:<id>'`)
+  return value as RoutineDeliver
+}
+
+/**
+ * One routine declared in a bot config file. The kernel reconciles these into
+ * the routine store: they are created, updated or removed to match the config,
+ * and unlike Desktop-created routines they are named and never expire.
+ */
+export interface RoutineConfig {
+  name: string
+  prompt: string
+  intervalMinutes: number
+  deliver: RoutineDeliver
+}
+
 export interface CreateSchedulerOptions {
-  /** JSON state file holding `{ version: 1, schedules: [...] }`. */
+  /** JSON state file holding `{ version: 1, routines: [...] }`. */
   statePath: string
-  /** The session feature the scheduler sends prompts through. */
-  session: Pick<Session, 'send' | 'listSessions'>
+  /** Wakes the owning bot agent when a routine fires. */
+  wake: RoutineWake
   /**
-   * Workspace root this scheduler instance serves. Every schedule is associated
+   * Workspace root this scheduler instance serves. Every routine is associated
    * with the workspace that owned it; a scheduler never lists or fires a
-   * schedule belonging to any other workspace, so a hot switch cannot make one
-   * workspace's scheduled prompt fire into another workspace's sessions.
+   * routine belonging to any other workspace, so a hot switch cannot make one
+   * workspace's routine fire into another workspace's bots.
    */
   workspaceRoot: string
   log?: SchedulerLog
   /**
    * Admission gate checked at tick entry and again immediately before every
-   * send. The daemon returns false while a hot switch or shutdown is staging,
-   * so a suppressed scheduler cannot start a prompt after isIdle was observed.
+   * wake. The daemon returns false while a hot switch or shutdown is staging,
+   * so a suppressed scheduler cannot start a wake after isIdle was observed.
    */
   canRun?: () => boolean
+  /**
+   * Optional per-bot busy gate. When it returns true for a due routine, the
+   * tick skips that routine without touching its nextRunAt or runCount, so it
+   * fires on a later tick once the bot is free. `run(id)` does not consult it.
+   */
+  busy?: (routine: RoutineRecord) => boolean
 }
 
 export interface Scheduler {
   /**
-   * Load persisted schedules and prepare the workspace association without
-   * firing any schedule or arming the poll timer, so a hot switch can stage
+   * Load persisted routines and prepare the workspace association without
+   * firing any routine or arming the poll timer, so a hot switch can stage
    * this before it publishes.
    */
   prepare(): Promise<void>
-  /** Fire any due schedules once, then poll every 5s. Prepare must precede it. */
+  /** Fire any due routines once, then poll every 5s. Prepare must precede it. */
   start(): Promise<void>
   /** Stop polling and make later ticks no-ops. */
   stop(): void
-  /** True while a tick is firing due schedules; the daemon treats it as in-flight work. */
+  /** True while a tick is firing due routines; the daemon treats it as in-flight work. */
   readonly ticking: boolean
   /** Await every queued write; rejects when the latest write failed. */
   flush(): Promise<void>
-  list(sessionId?: string): ScheduleListResult
-  create(input: ScheduleCreateParams): ScheduleRecord
-  update(id: string, state: 'active' | 'paused', sessionId?: string): ScheduleRecord
-  run(id: string, sessionId?: string): ScheduleRecord
-  remove(id: string, sessionId?: string): void
+  list(botId?: string): RoutineListResult
+  create(input: RoutineCreateParams): RoutineRecord
+  update(id: string, state: 'active' | 'paused'): RoutineRecord
+  run(id: string): RoutineRecord
+  remove(id: string): void
+  /**
+   * Reconcile the config-declared routines of one bot with the store. Among
+   * this workspace's records for the bot that carry a `name`, missing ones are
+   * created (recurring, active, never expiring), changed prompt / interval /
+   * deliver are updated (nextRunAt is recomputed only when the interval
+   * changed, and a finished or failed routine is reactivated), and records
+   * whose name is no longer declared are deleted. Records without a `name` are
+   * left untouched, and the store is persisted once when anything changed.
+   */
+  reconcile(botId: string, routines: readonly RoutineConfig[]): Promise<void>
 }
 
 interface SchedulerStateFile {
   version: 1
-  schedules: ScheduleRecord[]
+  routines: RoutineRecord[]
   /**
-   * Original workspace root per schedule id. A store written before workspace
+   * Original workspace root per routine id. A store written before workspace
    * switching existed has no map; every record in it is associated with the
    * workspace active at its first load and persisted there, so a later switch
-   * can never re-home a legacy schedule. Entries for removed schedules are
+   * can never re-home a legacy routine. Entries for removed routines are
    * dropped on the next write.
    */
   workspaces?: Record<string, string>
 }
 
-function copyRecord(record: ScheduleRecord): ScheduleRecord {
-  return { ...record, model: { ...record.model } }
+function copyRecord(record: RoutineRecord): RoutineRecord {
+  return { ...record }
 }
 
 function isMissingFile(error: unknown): boolean {
@@ -87,53 +130,52 @@ function isMissingFile(error: unknown): boolean {
 }
 
 /** A structurally valid persisted record, or undefined for anything malformed. */
-function readRecord(value: unknown): ScheduleRecord | undefined {
+function readRecord(value: unknown): RoutineRecord | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const record = value as Record<string, unknown>
-  const model = record.model
   if (
     typeof record.id !== 'string'
-    || typeof record.sessionId !== 'string'
+    || typeof record.botId !== 'string'
     || typeof record.prompt !== 'string'
     || typeof record.intervalMinutes !== 'number'
     || typeof record.recurring !== 'boolean'
+    || typeof record.deliver !== 'string'
+    || !DELIVER_PATTERN.test(record.deliver)
     || typeof record.createdAt !== 'string'
     || typeof record.runCount !== 'number'
     || (record.state !== 'active' && record.state !== 'paused' && record.state !== 'finished' && record.state !== 'failed')
-    || !model || typeof model !== 'object' || Array.isArray(model)
+    || (record.name !== undefined && typeof record.name !== 'string')
   ) {
     return undefined
   }
-  const { provider, model: modelId, reasoningEffort } = model as Record<string, unknown>
-  if (typeof provider !== 'string' || typeof modelId !== 'string' || typeof reasoningEffort !== 'string') return undefined
   return {
     id: record.id,
-    sessionId: record.sessionId,
+    botId: record.botId,
     prompt: record.prompt,
     intervalMinutes: record.intervalMinutes,
     recurring: record.recurring,
-    model: { provider, model: modelId, reasoningEffort: reasoningEffort as ScheduleRecord['model']['reasoningEffort'] },
     state: record.state,
+    deliver: record.deliver as RoutineDeliver,
     createdAt: record.createdAt,
+    ...(typeof record.name === 'string' ? { name: record.name } : {}),
     ...(typeof record.expiresAt === 'string' ? { expiresAt: record.expiresAt } : {}),
     ...(typeof record.nextRunAt === 'string' ? { nextRunAt: record.nextRunAt } : {}),
     ...(typeof record.lastRunAt === 'string' ? { lastRunAt: record.lastRunAt } : {}),
-    ...(typeof record.lastTurn === 'number' ? { lastTurn: record.lastTurn } : {}),
     ...(typeof record.lastError === 'string' ? { lastError: record.lastError } : {}),
     runCount: record.runCount,
   }
 }
 
 /**
- * Daemon-owned scheduled-prompt service. It keeps schedules in memory, persists
- * every mutation through one serialized write chain, and fires due schedules
- * into their owning session on a 5 second timer.
+ * Daemon-owned routine service. Routines belong to bots: the store keeps them
+ * in memory, persists every mutation through one serialized write chain, and a
+ * 5 second timer wakes each due routine's owning bot agent.
  */
 export function createScheduler(options: CreateSchedulerOptions): Scheduler {
-  const { statePath, session, log, workspaceRoot, canRun } = options
-  let schedules: ScheduleRecord[] = []
-  /** Original workspace root per schedule id (see SchedulerStateFile.workspaces). */
-  const scheduleWorkspaces = new Map<string, string>()
+  const { statePath, wake, log, workspaceRoot, canRun, busy } = options
+  let routines: RoutineRecord[] = []
+  /** Original workspace root per routine id (see SchedulerStateFile.workspaces). */
+  const routineWorkspaces = new Map<string, string>()
   /** Set when load() had to associate at least one record with this workspace. */
   let associationDirty = false
   let timer: ReturnType<typeof setInterval> | undefined
@@ -144,12 +186,12 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
   let persistChain: Promise<void> = Promise.resolve()
 
   /** The workspace that owns one stored record; an unassociated record belongs here. */
-  function recordWorkspace(record: ScheduleRecord): string {
-    return scheduleWorkspaces.get(record.id) ?? workspaceRoot
+  function recordWorkspace(record: RoutineRecord): string {
+    return routineWorkspaces.get(record.id) ?? workspaceRoot
   }
 
   /** Atomically write the state file: temp file plus rename, temp removed on failure. */
-  async function writeState(records: ScheduleRecord[], associations: Map<string, string>): Promise<void> {
+  async function writeState(records: RoutineRecord[], associations: Map<string, string>): Promise<void> {
     await mkdir(dirname(statePath), { recursive: true })
     const tempPath = `${statePath}.${process.pid}.${randomUUID()}.tmp`
     const known = new Set(records.map(record => record.id))
@@ -157,7 +199,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     for (const [id, root] of associations) {
       if (known.has(id)) workspaces[id] = root
     }
-    const payload = JSON.stringify({ version: 1, schedules: records, workspaces } satisfies SchedulerStateFile)
+    const payload = JSON.stringify({ version: 1, routines: records, workspaces } satisfies SchedulerStateFile)
     try {
       await writeFile(tempPath, payload, 'utf-8')
       await rename(tempPath, statePath)
@@ -173,12 +215,12 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
    * chain's rejection for the workspace-switch path.
    */
   function persist(): void {
-    const snapshot = schedules.map(copyRecord)
-    const associations = new Map(scheduleWorkspaces)
+    const snapshot = routines.map(copyRecord)
+    const associations = new Map(routineWorkspaces)
     persistChain = persistChain
       .then(() => writeState(snapshot, associations), () => writeState(snapshot, associations))
     void persistChain.catch((error: unknown) => {
-      log?.('warn', 'scheduler failed to persist schedules', error)
+      log?.('warn', 'scheduler failed to persist routines', error)
     })
   }
 
@@ -188,26 +230,34 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
   }
 
   /** Load the state file; a missing file is empty, unreadable or invalid logs. */
-  async function load(): Promise<ScheduleRecord[]> {
+  async function load(): Promise<RoutineRecord[]> {
     let raw: string
     try {
       raw = await readFile(statePath, 'utf-8')
     } catch (error) {
-      if (isMissingFile(error)) return []
-      log?.('warn', `scheduler could not read ${statePath}; starting with an empty schedule list`, error)
+      if (isMissingFile(error)) {
+        // Session-owned schedules are not migrated: a leftover legacy store is
+        // ignored with one log line and routines start from an empty list.
+        const legacyPath = join(dirname(statePath), 'schedules.json')
+        if (await stat(legacyPath).then(() => true, error => !isMissingFile(error))) {
+          log?.('warn', `ignoring legacy schedule store ${legacyPath}; session-owned schedules are not migrated`)
+        }
+        return []
+      }
+      log?.('warn', `scheduler could not read ${statePath}; starting with an empty routine list`, error)
       return []
     }
     try {
       const parsed = JSON.parse(raw) as unknown
       const list = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? (parsed as { schedules?: unknown }).schedules
+        ? (parsed as { routines?: unknown }).routines
         : undefined
-      if (!Array.isArray(list)) throw new Error('invalid schedule store')
+      if (!Array.isArray(list)) throw new Error('invalid routine store')
       // Read the persisted original-workspace association. A store written
       // before workspace switching existed has none; each of its records is
       // associated with THIS workspace — the one active at its first load after
       // the upgrade — and the association is persisted so a later switch can no
-      // longer re-home a legacy schedule.
+      // longer re-home a legacy routine.
       const storedWorkspaces = new Map<string, string>()
       const rawWorkspaces = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
         ? (parsed as { workspaces?: unknown }).workspaces
@@ -217,7 +267,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
           if (typeof root === 'string' && root !== '') storedWorkspaces.set(id, root)
         }
       }
-      const records: ScheduleRecord[] = []
+      const records: RoutineRecord[] = []
       for (const entry of list) {
         const record = readRecord(entry)
         if (!record) continue
@@ -226,25 +276,24 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         if (storedWorkspaces.get(record.id) !== assigned) associationDirty = true
         storedWorkspaces.set(record.id, assigned)
       }
-      scheduleWorkspaces.clear()
-      for (const [id, root] of storedWorkspaces) scheduleWorkspaces.set(id, root)
+      routineWorkspaces.clear()
+      for (const [id, root] of storedWorkspaces) routineWorkspaces.set(id, root)
       return records
     } catch (error) {
-      log?.('warn', `scheduler found invalid content in ${statePath}; starting with an empty schedule list`, error)
+      log?.('warn', `scheduler found invalid content in ${statePath}; starting with an empty routine list`, error)
       return []
     }
   }
 
   /**
-   * Resolve one stored record by id, rejecting an unknown id, a session mismatch
-   * or a record owned by another workspace. A scheduler never mutates a
-   * schedule that does not belong to the workspace it serves.
+   * Resolve one stored record by id, rejecting an unknown id or a record owned
+   * by another workspace. A scheduler never mutates a routine that does not
+   * belong to the workspace it serves.
    */
-  function findRecord(id: string, sessionId?: string): ScheduleRecord {
-    const record = schedules.find(candidate => candidate.id === id)
-    if (!record || recordWorkspace(record) !== workspaceRoot
-      || (sessionId !== undefined && record.sessionId !== sessionId)) {
-      throw new Error(`unknown schedule: ${id}`)
+  function findRecord(id: string): RoutineRecord {
+    const record = routines.find(candidate => candidate.id === id)
+    if (!record || recordWorkspace(record) !== workspaceRoot) {
+      throw new Error(`unknown routine: ${id}`)
     }
     return record
   }
@@ -252,24 +301,24 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
   /** A fresh unique 8 lowercase hex characters id. */
   function nextId(): string {
     let id = randomBytes(4).toString('hex')
-    while (schedules.some(record => record.id === id)) id = randomBytes(4).toString('hex')
+    while (routines.some(record => record.id === id)) id = randomBytes(4).toString('hex')
     return id
   }
 
   /** One polling pass: fire every active record whose nextRunAt has passed. */
   async function tick(): Promise<void> {
     // Admission gate at tick entry: while a hot switch or shutdown is staging,
-    // the daemon suppresses the whole pass so no send can start after isIdle.
+    // the daemon suppresses the whole pass so no wake can start after isIdle.
     if (stopped || ticking || canRun?.() === false) return
     ticking = true
     try {
       const now = Date.now()
       // Snapshot the ids that are due now. Each live record is re-read before
-      // its send, because an earlier awaited send in this same tick may have
+      // its wake, because an earlier awaited wake in this same tick may have
       // left the store paused, resumed or deleted. A record owned by another
-      // workspace is never due here: its scheduled prompt must not fire into
-      // this workspace's sessions.
-      const dueIds = schedules
+      // workspace is never due here: its wake must not fire into this
+      // workspace's bots.
+      const dueIds = routines
         .filter(record =>
           recordWorkspace(record) === workspaceRoot
           && record.state === 'active'
@@ -277,75 +326,64 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
           && Date.parse(record.nextRunAt) <= now)
         .map(record => record.id)
       if (dueIds.length === 0) return
-      const summaries = new Map(session.listSessions().map(summary => [summary.sessionId, summary]))
-      const firedSessions = new Set<string>()
       let changed = false
       for (const id of dueIds) {
         if (stopped) break
         // Re-read the live record: skip it when it was paused, deleted,
         // rescheduled into the future or otherwise left the active state while
-        // another send in this tick was awaited.
-        const record = schedules.find(candidate => candidate.id === id)
+        // another wake in this tick was awaited.
+        const record = routines.find(candidate => candidate.id === id)
         if (!record || record.state !== 'active' || record.nextRunAt === undefined
           || Date.parse(record.nextRunAt) > now) {
           continue
         }
-        // One fire per session per tick: a second due record of the same session
-        // keeps its own nextRunAt and is re-evaluated on the next tick.
-        if (firedSessions.has(record.sessionId)) continue
-        const summary = summaries.get(record.sessionId)
-        // A running session is busy: leave the record due so missed fires
-        // collapse into a single run once the current turn finishes.
-        if (summary?.running === true) continue
-        if (!summary) {
-          record.state = 'failed'
-          record.lastError = `unknown session: ${record.sessionId}`
-          delete record.nextRunAt
-          changed = true
-          continue
-        }
-        firedSessions.add(record.sessionId)
+        // Busy gate: a bot that is already running a turn is not woken again
+        // this tick. The record keeps its past nextRunAt and its runCount, so
+        // it stays due and fires on a later tick once the bot is free.
+        if (busy?.(record)) continue
         const fireAt = new Date()
-        let turn: number | undefined
-        let fireError: unknown
-        // Admission gate re-checked immediately before the send: a scheduler
+        let wakeError: unknown
+        // Admission gate re-checked immediately before the wake: a scheduler
         // suppressed by an in-progress switch or shutdown must not start a
-        // prompt after the daemon was observed idle.
+        // wake after the daemon was observed idle.
         if (canRun?.() === false) break
         try {
-          const result = await session.send(record.sessionId, { text: record.prompt, model: record.model })
-          turn = result.turn
+          await wake(copyRecord(record))
         } catch (error) {
-          fireError = error
+          wakeError = error
         }
-        // A stop request during the awaited send aborts the rest of this tick
+        // A stop request during the awaited wake aborts the rest of this tick
         // without persisting anything: a shutdown rejection must not be stored.
         if (stopped) return
         // Re-read the live record: it may have been paused or deleted while the
-        // send above was awaited. A deleted record writes nothing.
-        const after = schedules.find(candidate => candidate.id === id)
+        // wake above was awaited. A deleted record writes nothing.
+        const after = routines.find(candidate => candidate.id === id)
         if (!after) continue
-        if (turn === undefined) {
-          // A pause during the send keeps the paused state; only an active
-          // record is overwritten with the failure.
-          if (after.state === 'active') {
+        if (wakeError !== undefined) {
+          // A wake rejection (unknown or disabled bot) skips the run and
+          // records the failure: a recurring routine retries on its next
+          // interval, a one-shot routine fails outright.
+          after.lastError = wakeError instanceof Error ? wakeError.message : String(wakeError)
+          if (after.recurring) {
+            after.nextRunAt = new Date(fireAt.getTime() + after.intervalMinutes * 60_000).toISOString()
+          } else if (after.state === 'active') {
             after.state = 'failed'
             delete after.nextRunAt
           }
-          after.lastError = fireError instanceof Error ? fireError.message : String(fireError)
           changed = true
-          log?.('warn', `scheduler failed to fire schedule ${after.id} for session ${after.sessionId}`, fireError)
+          log?.('warn', `scheduler failed to wake bot ${after.botId} for routine ${after.id}`, wakeError)
           continue
         }
-        // The run happened: always record the counters and the next run time,
-        // but keep a pause that arrived during the send.
+        // The wake happened: always record the counters and the next run time,
+        // but keep a pause that arrived during the wake.
         after.runCount += 1
         after.lastRunAt = fireAt.toISOString()
-        after.lastTurn = turn
         delete after.lastError
         if (after.recurring) {
           const next = new Date(fireAt.getTime() + after.intervalMinutes * 60_000)
-          if (after.expiresAt !== undefined && next.getTime() > Date.parse(after.expiresAt)) {
+          // Config-declared (named) routines never expire: only unnamed
+          // routines are bounded by their expiresAt.
+          if (after.name === undefined && after.expiresAt !== undefined && next.getTime() > Date.parse(after.expiresAt)) {
             if (after.state === 'active') {
               after.state = 'finished'
               delete after.nextRunAt
@@ -358,7 +396,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
           delete after.nextRunAt
         }
         changed = true
-        log?.('info', `scheduler fired schedule ${after.id} for session ${after.sessionId} (turn ${turn})`)
+        log?.('info', `scheduler fired routine ${after.id} for bot ${after.botId}`)
       }
       if (changed) persist()
     } finally {
@@ -373,9 +411,9 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
    */
   async function prepareStore(): Promise<void> {
     if (stopped || prepared) return
-    schedules = await load()
+    routines = await load()
     prepared = true
-    // Persist the first-load workspace association of any legacy schedule, so a
+    // Persist the first-load workspace association of any legacy routine, so a
     // later switch reads it back instead of re-homing the record into the
     // switched-to workspace.
     if (associationDirty) {
@@ -384,7 +422,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     }
   }
 
-  /** Fire due schedules once, then poll every 5s. A run after stop() is a no-op. */
+  /** Fire due routines once, then poll every 5s. A run after stop() is a no-op. */
   async function beginTicking(): Promise<void> {
     if (stopped) return
     await tick()
@@ -410,22 +448,16 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         timer = undefined
       }
     },
-    list(sessionId?: string): ScheduleListResult {
-      const titles = new Map(session.listSessions().map(summary => [summary.sessionId, summary.title]))
-      // Only this workspace's schedules are ever listed; another workspace's
-      // schedules stay owned by that workspace and its sessions.
-      const filtered = schedules.filter(record =>
+    list(botId?: string): RoutineListResult {
+      // Only this workspace's routines are ever listed; another workspace's
+      // routines stay owned by that workspace and its bots.
+      const filtered = routines.filter(record =>
         recordWorkspace(record) === workspaceRoot
-        && (sessionId === undefined || record.sessionId === sessionId))
+        && (botId === undefined || record.botId === botId))
       const sorted = [...filtered].sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-      return {
-        schedules: sorted.map(record => {
-          const title = titles.get(record.sessionId)
-          return { ...copyRecord(record), ...(title === undefined ? {} : { sessionTitle: title }) }
-        }),
-      }
+      return { routines: sorted.map(copyRecord) }
     },
-    create(input: ScheduleCreateParams): ScheduleRecord {
+    create(input: RoutineCreateParams): RoutineRecord {
       const prompt = input.prompt.trim()
       if (prompt.length === 0) throw new Error('prompt must not be empty')
       if (prompt.length > MAX_PROMPT_LENGTH) throw new Error(`prompt must be at most ${MAX_PROMPT_LENGTH} characters`)
@@ -434,36 +466,34 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         || input.intervalMinutes > MAX_INTERVAL_MINUTES) {
         throw new Error(`intervalMinutes must be an integer between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES}`)
       }
-      if (!session.listSessions().some(summary => summary.sessionId === input.sessionId)) {
-        throw new Error(`unknown session: ${input.sessionId}`)
-      }
-      const activeCount = schedules.filter(record =>
-        record.sessionId === input.sessionId && (record.state === 'active' || record.state === 'paused')).length
-      if (activeCount >= MAX_PER_SESSION) throw new Error(`schedule limit reached (${MAX_PER_SESSION} per session)`)
+      const deliver = parseRoutineDeliver(input.deliver)
+      const activeCount = routines.filter(record =>
+        record.botId === input.botId && (record.state === 'active' || record.state === 'paused')).length
+      if (activeCount >= MAX_PER_BOT) throw new Error(`routine limit reached (${MAX_PER_BOT} per bot)`)
       const now = new Date()
-      const record: ScheduleRecord = {
+      const record: RoutineRecord = {
         id: nextId(),
-        sessionId: input.sessionId,
+        botId: input.botId,
         prompt,
         intervalMinutes: input.intervalMinutes,
         recurring: input.recurring,
-        model: { ...input.model },
         state: 'active',
+        deliver,
         createdAt: now.toISOString(),
         nextRunAt: new Date(now.getTime() + input.intervalMinutes * 60_000).toISOString(),
         ...(input.recurring ? { expiresAt: new Date(now.getTime() + EXPIRY_MS).toISOString() } : {}),
         runCount: 0,
       }
-      schedules.push(record)
+      routines.push(record)
       // The record belongs to this scheduler's workspace for its whole life.
-      scheduleWorkspaces.set(record.id, workspaceRoot)
+      routineWorkspaces.set(record.id, workspaceRoot)
       persist()
       return copyRecord(record)
     },
-    update(id: string, state: 'active' | 'paused', sessionId?: string): ScheduleRecord {
-      const record = findRecord(id, sessionId)
-      const previous: ScheduleState = record.state
-      if (previous !== 'active' && previous !== 'paused') throw new Error(`schedule ${id} is ${previous}`)
+    update(id: string, state: 'active' | 'paused'): RoutineRecord {
+      const record = findRecord(id)
+      const previous: RoutineState = record.state
+      if (previous !== 'active' && previous !== 'paused') throw new Error(`routine ${id} is ${previous}`)
       if (state === 'paused') {
         record.state = 'paused'
       } else {
@@ -476,19 +506,114 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       persist()
       return copyRecord(record)
     },
-    run(id: string, sessionId?: string): ScheduleRecord {
-      const record = findRecord(id, sessionId)
+    run(id: string): RoutineRecord {
+      const record = findRecord(id)
       record.state = 'active'
       delete record.lastError
       record.nextRunAt = new Date().toISOString()
       persist()
       return copyRecord(record)
     },
-    remove(id: string, sessionId?: string): void {
-      const record = findRecord(id, sessionId)
-      schedules = schedules.filter(candidate => candidate.id !== record.id)
-      scheduleWorkspaces.delete(record.id)
+    remove(id: string): void {
+      const record = findRecord(id)
+      routines = routines.filter(candidate => candidate.id !== record.id)
+      routineWorkspaces.delete(record.id)
       persist()
+    },
+    async reconcile(botId: string, configs: readonly RoutineConfig[]): Promise<void> {
+      // Validate each declared entry with the same limits create enforces; an
+      // invalid entry is skipped with a warn log and never touches the store.
+      const valid: RoutineConfig[] = []
+      for (const config of configs) {
+        const prompt = config.prompt.trim()
+        if (prompt.length === 0 || prompt.length > MAX_PROMPT_LENGTH) {
+          log?.('warn', `scheduler skipped routine config ${config.name}: prompt must be 1..${MAX_PROMPT_LENGTH} characters`)
+          continue
+        }
+        if (!Number.isInteger(config.intervalMinutes)
+          || config.intervalMinutes < MIN_INTERVAL_MINUTES
+          || config.intervalMinutes > MAX_INTERVAL_MINUTES) {
+          log?.('warn', `scheduler skipped routine config ${config.name}: intervalMinutes must be an integer between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES}`)
+          continue
+        }
+        let deliver: RoutineDeliver
+        try {
+          deliver = parseRoutineDeliver(config.deliver)
+        } catch (error) {
+          log?.('warn', `scheduler skipped routine config ${config.name}: ${error instanceof Error ? error.message : String(error)}`)
+          continue
+        }
+        valid.push({ name: config.name, prompt, intervalMinutes: config.intervalMinutes, deliver })
+      }
+
+      const now = Date.now()
+      let changed = false
+
+      // Create missing and update changed config-declared routines of this bot.
+      for (const config of valid) {
+        const existing = routines.find(candidate =>
+          recordWorkspace(candidate) === workspaceRoot
+          && candidate.botId === botId
+          && candidate.name === config.name)
+        if (!existing) {
+          const record: RoutineRecord = {
+            id: nextId(),
+            botId,
+            name: config.name,
+            prompt: config.prompt,
+            intervalMinutes: config.intervalMinutes,
+            recurring: true,
+            state: 'active',
+            deliver: config.deliver,
+            createdAt: new Date(now).toISOString(),
+            nextRunAt: new Date(now + config.intervalMinutes * 60_000).toISOString(),
+            runCount: 0,
+          }
+          routines.push(record)
+          routineWorkspaces.set(record.id, workspaceRoot)
+          changed = true
+          continue
+        }
+        const intervalChanged = existing.intervalMinutes !== config.intervalMinutes
+        const reactivating = existing.state === 'finished' || existing.state === 'failed'
+        if (existing.prompt === config.prompt
+          && !intervalChanged
+          && existing.deliver === config.deliver
+          && !reactivating) {
+          continue
+        }
+        existing.prompt = config.prompt
+        existing.intervalMinutes = config.intervalMinutes
+        existing.deliver = config.deliver
+        if (reactivating) existing.state = 'active'
+        // Only an interval change reschedules a live routine; a reactivated
+        // routine needs a fresh nextRunAt because finishing cleared it.
+        if (intervalChanged || existing.nextRunAt === undefined) {
+          existing.nextRunAt = new Date(now + config.intervalMinutes * 60_000).toISOString()
+        }
+        changed = true
+      }
+
+      // Delete this bot's config-declared routines whose name is no longer
+      // declared. A name still present in the config — even when that entry was
+      // rejected as invalid above — keeps its routine. Records without a name
+      // (Desktop-created) are never reconciled.
+      const declaredNames = new Set(configs.map(config => config.name))
+      const before = routines.length
+      routines = routines.filter(record =>
+        recordWorkspace(record) !== workspaceRoot
+        || record.botId !== botId
+        || record.name === undefined
+        || declaredNames.has(record.name))
+      if (routines.length !== before) {
+        const live = new Set(routines.map(record => record.id))
+        for (const id of [...routineWorkspaces.keys()]) {
+          if (!live.has(id)) routineWorkspaces.delete(id)
+        }
+        changed = true
+      }
+
+      if (changed) persist()
     },
   }
 }

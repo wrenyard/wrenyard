@@ -42,11 +42,6 @@ const SESSION_CALLABLE_METHODS = new Set([
   'workspace.doc.update',
   'workspace.doc.edit',
   'workspace.doc.delete',
-  'schedule.list',
-  'schedule.create',
-  'schedule.update',
-  'schedule.run',
-  'schedule.delete',
 ])
 
 /** Worktree methods whose lock a session carries automatically. */

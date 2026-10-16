@@ -1,6 +1,6 @@
 import { createRoutingAvailability, createAuxiliaryAvailability } from './services/model-routing-availability.mts'
-import { createAuxiliarySelector, readAuxiliaryRoutingSettings } from './services/auxiliary-routing.mts'
-import { timingSafeEqual, randomBytes } from 'node:crypto'
+import { createAuxiliarySelector, createRequirementSelector, readAuxiliaryRoutingSettings, type AuxiliaryRoutingOptions } from './services/auxiliary-routing.mts'
+import { timingSafeEqual, randomBytes, createHash } from 'node:crypto'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
@@ -17,7 +17,8 @@ import { RpcRouter } from '../server/rpc-router.mts'
 import { registerCoreHandlers, readProcessIdentity, type CoreRpcHandlerOptions } from '../server/handlers/core.mts'
 import { createIpcServer, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
-import { registerScheduleHandlers } from '../server/handlers/schedule.mts'
+import { registerRoutineHandlers } from '../server/handlers/routine.mts'
+import { registerAgentHandlers } from '../server/handlers/agent.mts'
 import { registerBotHandlers } from '../server/handlers/bot.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
 import type { TaskSettingsLayer } from '../protocol/methods/task.mts'
@@ -28,6 +29,7 @@ import { createSession, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
+import { createBotAgentKernel, type AgentModelRoute, type BotAgentKernel } from './services/bot-agents/kernel.mts'
 import { createBotHost, type BotHost, type BotLoadProbe, type BotTaskRunner } from './services/bot/host.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
@@ -66,6 +68,7 @@ import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenya
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
+import { resolveWrenyardConfigRoot } from '@wrenyard/paths'
 import { mkdir, statfs } from 'node:fs/promises'
 
 export interface RunningForemanDaemon {
@@ -147,6 +150,9 @@ interface ForemanDaemonResources {
   /** Daemon-owned Bot mode host; stopped with the scheduler so it starts no new
    *  bot step during drain or a workspace switch. */
   botHost: BotHost
+  /** Daemon-owned bot agent kernel; stopped with the scheduler so no bot turn
+   *  starts during drain or a workspace switch. */
+  botAgents: BotAgentKernel
   rpcRouter: RpcRouter
   /** Daemon-owned task service, retained so a forced shutdown can cancel every
    *  admitted task run through the same service the RPC surface uses. */
@@ -169,6 +175,11 @@ interface ForemanDaemonResources {
 interface LowDiskState { status: 'ok' | 'low' | 'unavailable'; availableBytes: number | null; minimumBytes: number; error: string | null }
 let lowDiskStateForProcess: LowDiskState = { status: 'unavailable', availableBytes: null, minimumBytes: minimumFreeDiskBytes(), error: 'Initial state-volume sample has not completed' }
 
+/** Workspace-key hash used to scope per-workspace daemon state directories. */
+function sha256hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
 function minimumFreeDiskBytes(): number {
   const raw = process.env.WRENYARD_MIN_FREE_DISK_BYTES
   if (raw === undefined) return 3 * 1024 ** 3
@@ -188,6 +199,8 @@ interface WorkspaceScopedResources {
   scheduler: Scheduler
   /** Bot mode host for this workspace; replaced whole on a hot switch. */
   botHost: BotHost
+  /** Bot agent kernel for this workspace; replaced whole on a hot switch. */
+  botAgents: BotAgentKernel
 }
 
 /**
@@ -216,6 +229,8 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private scheduler: Scheduler | undefined
   /** Bot host held outside resources for the same reason as the scheduler. */
   private botHost: BotHost | undefined
+  /** Bot agent kernel held outside resources for the same reason as the scheduler. */
+  private botAgents: BotAgentKernel | undefined
   private readonly lockPath: string
   private lockHeld = false
   private lowDiskState: LowDiskState = lowDiskStateForProcess
@@ -306,6 +321,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
         workspaceSwitch: (root) => this.switchWorkspace(root),
         workspacePinned: () => this.workspacePinSource !== undefined,
         onScheduler: (scheduler) => { this.scheduler = scheduler },
+        onBotAgents: (botAgents) => { this.botAgents = botAgents },
         onBotHost: (botHost) => { this.botHost = botHost },
         lowDiskState: () => this.lowDiskState,
       })
@@ -340,6 +356,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
     // no bot step may start once a shutdown is requested.
     this.scheduler?.stop()
     this.botHost?.stop()
+    void this.botAgents?.stop()
     this.shutdownForce ||= force
     this.shutdownRequestedFlag = true
     this.resolveShutdownRequested()
@@ -509,6 +526,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
           session: resources.session,
           scheduler: resources.scheduler,
           botHost: resources.botHost,
+          botAgents: resources.botAgents,
           gateway: resources.gateway,
           restoreGatewayEnvironment: resources.restoreGatewayEnvironment,
           ipcServer: resources.ipcServer,
@@ -613,6 +631,8 @@ async function createForemanDaemonResources(
     workspacePinned?: () => boolean
     /** Receives the scheduler as soon as it exists, before the IPC server. */
     onScheduler?: (scheduler: Scheduler) => void
+    /** Receives the bot agent kernel as soon as it exists, before the IPC server. */
+    onBotAgents?: (botAgents: BotAgentKernel) => void
     /** Receives the bot host as soon as it exists, before the IPC server. */
     onBotHost?: (botHost: BotHost) => void
   },
@@ -875,7 +895,36 @@ async function createForemanDaemonResources(
     // this same IPC path like every other client. The ledger is stored under a
     // workspace-hashed directory, so a new root opens a new ledger and the old
     // workspace's history stays intact on disk.
-    const session = createSession(createDaemonSessionHost({
+    // One shared routing-options object feeds both the per-role auxiliary
+    // selector and the explicit-requirement selector the bot agent kernel uses.
+    const auxiliaryRoutingOptions: AuxiliaryRoutingOptions = {
+      catalog,
+      quotaSnapshots: autoRoutingQuotaSnapshots,
+      // The Gateway model directory is the only source of per-model protocols.
+      gatewayModels: async () => (await gateway.connection(gatewayOrigin(boundPort))).models,
+      routeStatus: model => gateway.routeStatus(model),
+      runtimeAvailability: createAuxiliaryAvailability(runtimeAvailability, catalog, providerRuntime),
+      localSpeed: readLocalSpeedSamples,
+      readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath),
+    }
+    // Bot agents run on a hard-coded high/premium intelligence rule; each ranked
+    // `provider/model` route is split into the explicit model session.send needs.
+    const selectModels = async (): Promise<readonly AgentModelRoute[]> => {
+      const routes = await createRequirementSelector(auxiliaryRoutingOptions)({
+        intelligenceMin: 'high',
+        intelligenceExpected: 'premium',
+      })
+      return routes.map(route => {
+        const separator = route.model.indexOf('/')
+        if (separator <= 0) return { provider: route.model, model: route.model, reasoningEffort: route.reasoningEffort }
+        return {
+          provider: route.model.slice(0, separator),
+          model: route.model.slice(separator + 1),
+          reasoningEffort: route.reasoningEffort,
+        }
+      })
+    }
+    const daemonSessionHost = createDaemonSessionHost({
       workspaceRoot,
       stateRoot: sessionStateRoot,
       gateway: gatewayConnectionSnapshot,
@@ -890,30 +939,46 @@ async function createForemanDaemonResources(
       beginRouteAttempt: (publicModel, attemptId) => gateway.beginRouteAttempt(publicModel, attemptId),
       reportRouteFault: (publicModel, attemptId, kind) => gateway.reportRouteFault(publicModel, attemptId, kind),
       completeRouteAttempt: (publicModel, attemptId) => gateway.completeRouteAttempt(publicModel, attemptId),
-      selectAuxiliary: createAuxiliarySelector({ catalog, quotaSnapshots: autoRoutingQuotaSnapshots,
-        // The Gateway model directory is the only source of per-model protocols.
-        gatewayModels: async () => (await gateway.connection(gatewayOrigin(boundPort))).models,
-        routeStatus: model => gateway.routeStatus(model),
-        runtimeAvailability: createAuxiliaryAvailability(runtimeAvailability, catalog, providerRuntime),
-        localSpeed: readLocalSpeedSamples, readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath) }),
+      selectAuxiliary: createAuxiliarySelector(auxiliaryRoutingOptions),
       // The session's main inference validates against the same product-wired
       // catalog already injected into the gateway/provider.list surface, so a
       // CodeBuddy model is only offered after the daemon read the real install.
       resolveInferenceProvider: id => catalog.provider(id),
-    }))
+    })
+    const session = createSession(daemonSessionHost)
     // The daemon-owned scheduler persists to the same state root as the session
-    // ledger and fires due schedules into that session through its in-process
-    // `send`. It is workspace-scoped, so no scheduled prompt can fire into
-    // another workspace's sessions. It shares the daemon's single diagnostic sink.
+    // ledger. A due routine wakes its owning bot agent through the `wake`
+    // callback instead of sending into a session; the bot agent kernel owns the
+    // bot registry and turn loop. Until it attaches, a wake is rejected and the
+    // routine records `lastError`. The scheduler stays workspace-scoped, so no
+    // routine can fire into another workspace's bots. It shares the daemon's
+    // single diagnostic sink.
     const scheduler = createScheduler({
-      statePath: join(sessionStateRoot, 'schedules.json'),
-      session,
+      statePath: join(sessionStateRoot, 'routines.json'),
+      // Late binding: the kernel is constructed right below the scheduler, so a
+      // routine fire can only ever run once the kernel exists.
+      wake: routine => botAgents.wakeRoutine(routine),
+      busy: routine => botAgents.routineBusy(routine),
       workspaceRoot,
       log: writeDaemonLog,
       // Admission gate: the daemon suppresses scheduler fires while a hot switch
       // or shutdown is staging, so a suppressed scheduler cannot start a prompt
       // after isIdle was observed.
       canRun: () => !options.isShuttingDown() && options.isSwitching?.() !== true,
+    })
+    // The bot agent kernel assembles LLM bots from per-bot JSON configs. It owns
+    // per-bot contexts (a private session host rooted in its own state dir),
+    // wake queues, watches and rounds, and fires through the scheduler above.
+    const botAgents = createBotAgentKernel({
+      workspaceRoot,
+      configDir: join(resolveWrenyardConfigRoot(), 'bot-agents'),
+      stateDir: join(sessionStateRoot, 'bot-agents', sha256hex(workspaceRoot)),
+      host: daemonSessionHost,
+      sessions: session,
+      todos: workspaceTodoService,
+      routines: scheduler,
+      selectModels,
+      log: (level, message) => writeDaemonLog(level, message),
     })
     // The bot host shares the same workspace scope, the same in-process session
     // and the same admission gate as the scheduler, and persists into the same
@@ -1021,6 +1086,7 @@ async function createForemanDaemonResources(
       session,
       scheduler,
       botHost,
+      botAgents,
     }
   }
 
@@ -1043,7 +1109,8 @@ async function createForemanDaemonResources(
   const registerWorkspaceRoutes = (bindings: WorkspaceScopedResources): void => {
     registerCoreHandlers(rpcRouter, coreOptions)
     registerSessionHandlers(rpcRouter, { session: bindings.session })
-    registerScheduleHandlers(rpcRouter, { scheduler: bindings.scheduler })
+    registerRoutineHandlers(rpcRouter, { scheduler: bindings.scheduler })
+    registerAgentHandlers(rpcRouter, { kernel: bindings.botAgents })
     registerBotHandlers(rpcRouter, { host: bindings.botHost })
   }
 
@@ -1189,6 +1256,7 @@ async function createForemanDaemonResources(
   runtime.runner.setTaskSettingsResolver((params) => workspaceScoped.taskSettingsService.resolveForRun(params))
   runtime.runner.setTaskRouteState(taskRouteState)
   options.onScheduler?.(workspaceScoped.scheduler)
+  options.onBotAgents?.(workspaceScoped.botAgents)
   options.onBotHost?.(workspaceScoped.botHost)
 
   // During drain, preserve status/cancel/signals and the calls required by
@@ -1211,7 +1279,8 @@ async function createForemanDaemonResources(
     'project.worktree.create', 'project.worktree.remove', 'project.worktree.merge', 'project.worktree.rebase',
     'workspace.vcs.commit', 'workspace.vcs.push', 'workspace.vcs.pull',
     'workspace.doc.create', 'workspace.doc.update', 'workspace.doc.edit', 'workspace.doc.delete',
-    'schedule.create', 'schedule.update', 'schedule.run', 'schedule.delete',
+    'routine.create', 'routine.update', 'routine.run', 'routine.delete',
+    'agent.wake',
     'runtime.alias.put', 'runtime.alias.remove',
     'bot.create', 'bot.update', 'bot.control', 'bot.delete', 'bot.tick', 'bot.item.action',
   ])
@@ -1227,7 +1296,8 @@ async function createForemanDaemonResources(
     'project.worktree.create', 'project.worktree.remove', 'project.worktree.merge', 'project.worktree.rebase',
     'workspace.vcs.commit', 'workspace.vcs.push', 'workspace.vcs.pull',
     'workspace.doc.create', 'workspace.doc.update', 'workspace.doc.edit', 'workspace.doc.delete',
-    'schedule.create', 'schedule.update', 'schedule.run', 'schedule.delete',
+    'routine.create', 'routine.update', 'routine.run', 'routine.delete',
+    'agent.wake',
     'runtime.alias.put', 'runtime.alias.remove',
     'bot.create', 'bot.update', 'bot.control', 'bot.delete', 'bot.tick', 'bot.item.action',
   ]
@@ -1247,7 +1317,7 @@ async function createForemanDaemonResources(
         { code: 'workspace_switch_in_progress', method },
       )
     }
-    if (['taskgraph.signal', 'schedule.run', 'session.send', 'bot.tick'].includes(method)) {
+    if (['taskgraph.signal', 'routine.run', 'agent.wake', 'session.send', 'bot.tick'].includes(method)) {
       const disk = options.lowDiskState?.()
       if (disk && disk.status !== 'ok') throw new ProtocolError(
         { code: INVALID_PARAMS.code, message: `low_disk_space: ${disk.status === 'low' ? `available ${disk.availableBytes} bytes is below the ${disk.minimumBytes} byte minimum` : `state-volume sample failed: ${disk.error ?? 'unknown error'}`}; free space on the Wrenyard state volume and retry` },
@@ -1343,6 +1413,14 @@ async function createForemanDaemonResources(
   }
   if (!ipcServer) throw new Error('failed to start IPC server')
   const runningIpcServer = ipcServer
+  // Load the persisted routines before anything ticks, and start the bot agent
+  // kernel before the scheduler's first tick: a routine that is already due
+  // fires on that first tick and must find a kernel whose bot configs are
+  // loaded, or the wake is refused with an unknown bot.
+  if (!options.isShuttingDown()) await workspaceScoped.scheduler.prepare()
+  // The bot agent kernel starts with the scheduler: routines may fire as soon
+  // as polling begins, and a bot wake must find a started kernel.
+  if (!options.isShuttingDown()) await workspaceScoped.botAgents.start()
   // Begin scheduled-prompt polling only after the IPC server is listening, so
   // the scheduler never fires into a session whose clients cannot reach it yet.
   // A shutdown requested during startup skips start entirely: no interval is
@@ -1445,19 +1523,33 @@ async function createForemanDaemonResources(
     runtime.runner.setTaskRouteState(taskRouteState)
     resources.session = staged.session
     resources.scheduler = staged.scheduler
+    resources.botAgents = staged.botAgents
     resources.botHost = staged.botHost
     resources.taskService = staged.taskService
     resources.taskgraphService = staged.taskgraphService
     options.onScheduler?.(staged.scheduler)
+    options.onBotAgents?.(staged.botAgents)
     options.onBotHost?.(staged.botHost)
     // Retire the previous workspace before enabling new ticks: its scheduler
     // stops and its workspace-hashed session ledger is closed (history stays on
     // disk), so the old and new writers never overlap.
     await teardownWorkspaceBindings(previous)
-    // Enable the staged scheduler's polling only now that the old writer is gone.
-    // The switch has already published, so a start failure is logged and never
-    // reported as a retained old workspace.
+    // Enable the staged workspace only now that the old writer is gone: load its
+    // routines, start its bot agent kernel, then let the scheduler poll. A
+    // routine that is already due fires on the scheduler's first tick and must
+    // find a started kernel. The switch has already published, so a start
+    // failure is logged and never reported as a retained old workspace.
     if (!options.isShuttingDown()) {
+      try {
+        await staged.scheduler.prepare()
+      } catch (error) {
+        writeDaemonLog('warn', 'scheduler failed to prepare after workspace switch', error)
+      }
+      try {
+        await staged.botAgents.start()
+      } catch (error) {
+        writeDaemonLog('warn', 'bot agent kernel failed to start after workspace switch', error)
+      }
       try {
         await staged.scheduler.start()
       } catch (error) {
@@ -1485,6 +1577,7 @@ async function createForemanDaemonResources(
     session: workspaceScoped.session,
     scheduler: workspaceScoped.scheduler,
     botHost: workspaceScoped.botHost,
+    botAgents: workspaceScoped.botAgents,
     rpcRouter,
     taskService: workspaceScoped.taskService,
     taskgraphService: workspaceScoped.taskgraphService,
@@ -1579,6 +1672,11 @@ async function teardownWorkspaceBindings(bindings: WorkspaceScopedResources): Pr
     writeDaemonLog('warn', 'workspace scheduler shutdown failed', error)
   }
   try {
+    await bindings.botAgents.stop()
+  } catch (error) {
+    writeDaemonLog('warn', 'workspace bot agent kernel shutdown failed', error)
+  }
+  try {
     bindings.botHost.stop()
   } catch (error) {
     writeDaemonLog('warn', 'workspace bot host shutdown failed', error)
@@ -1631,6 +1729,8 @@ interface DaemonResourceTeardownHandles {
   session?: Session
   /** Stopped before the session so no scheduled fire starts a new turn during teardown. */
   scheduler?: Scheduler
+  /** Stopped with the scheduler so no bot agent turn starts during teardown. */
+  botAgents?: BotAgentKernel
   /** Stopped with the scheduler so no bot step starts during teardown. */
   botHost?: BotHost
   gateway?: ModelGateway
@@ -1674,6 +1774,15 @@ async function teardownDaemonResources(handles: DaemonResourceTeardownHandles): 
       handles.scheduler.stop()
     } catch (error) {
       recordFailure('scheduler shutdown failed', error)
+    }
+  }
+  // Stop the bot agent kernel at the same point: a late bot turn must not start
+  // while the ledger and providers are being torn down.
+  if (handles.botAgents) {
+    try {
+      await handles.botAgents.stop()
+    } catch (error) {
+      recordFailure('bot agent kernel shutdown failed', error)
     }
   }
   // Stop the bot host at the same point: a late bot step must not start a new
