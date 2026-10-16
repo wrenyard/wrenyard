@@ -376,6 +376,9 @@ type BotConfigLoad =
   | { status: 'ready'; config: BotConfig }
 
 /** Result of checking whether an item's source is still the one it was sent. */
+/** Minimum spacing between follow-ups to a session whose last turn failed. */
+const FAILED_TURN_RETRY_MS = 10 * 60_000
+
 type SourceGate = 'open' | 'gone' | 'retry' | 'unavailable' | { changed: { title: string; body?: string }; fingerprint: string }
 
 /**
@@ -808,6 +811,19 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   }
 
   /**
+   * True when the session's latest finished turn failed (a model route, quota or
+   * transport failure) rather than ending on the session's own judgement.
+   */
+  function latestTurnFailed(sessionId: string): boolean {
+    let failed = false
+    for (const event of session.readLedger(sessionId)) {
+      if (event.type === 'turn.started') failed = false
+      else if (event.type === 'turn.finished') failed = (event as { status?: string }).status === 'failed'
+    }
+    return failed
+  }
+
+  /**
    * Milliseconds since one item's session last appended a ledger event, or
    * undefined when neither the ledger nor the item row carries a usable time.
    */
@@ -1161,6 +1177,13 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     if (turn === 0) return { kind: 'none' }
     const counters = base ?? item.counters ?? {}
     if ((counters.nudgedTurn ?? 0) >= turn) return { kind: 'none' }
+    // A failed turn is an infrastructure failure, not a stall: it spends no
+    // correction and is retried on a bounded cadence instead of every tick.
+    if (latestTurnFailed(item.sessionId)) {
+      const now = Date.now()
+      if (now - (counters.failedRetryAt ?? 0) < FAILED_TURN_RETRY_MS) return { kind: 'none' }
+      return { kind: 'nudge', turn, counters: { ...counters, nudgedTurn: turn, failedRetryAt: now } }
+    }
     const corrections = counters.corrections ?? 0
     const max = config?.budgets.maxCorrections ?? 0
     const next = { ...counters, corrections: corrections + 1, nudgedTurn: turn }
@@ -1736,6 +1759,22 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    * bot config, falling back to `default`.
    */
   function resolveSendModel(bot: BotRecord, item: BotItemRecord, config?: BotConfig): BotModel | undefined {
+    if (item.sessionId !== undefined && latestTurnFailed(item.sessionId)) {
+      // The session's own model just failed; follow up on the model currently
+      // routed for the item's class so a dead route is not retried forever.
+      const routed = routedClassModel(config, item.class)
+      const current = latestSessionModel(item.sessionId) ?? item.sessionModel
+      if (routed !== undefined && (current === undefined || !sameModel(current, routed))) {
+        store.appendLog({
+          botId: bot.id,
+          itemId: item.id,
+          level: 'info',
+          code: 'session.model.rerouted',
+          message: `last turn failed; following up on ${routed.provider}/${routed.model}`,
+        })
+        return routed
+      }
+    }
     if (item.sessionId !== undefined) {
       const adopted = latestSessionModel(item.sessionId)
       if (adopted !== undefined) {
@@ -3567,7 +3606,14 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         // its answer queued (or the answer queued without the barrier). Its stable
         // idempotency key and marker make a retry or restart deliver exactly one
         // follow-up turn.
-        const counters = { ...(item.counters ?? {}), answerPending: 1, answerSeq: latestEventSeq(item.sessionId) }
+        // Answering an item parked for an exhausted correction budget is the
+        // explicit decision to continue, so it grants a fresh budget.
+        const counters = {
+          ...(item.counters ?? {}),
+          ...(item.error === STALLED_REASON ? { corrections: 0 } : {}),
+          answerPending: 1,
+          answerSeq: latestEventSeq(item.sessionId),
+        }
         const { attempt } = latestStep(item, 'session.send')
         enqueueStep(item, 'session.send', { state: item.parkedFrom, answer: text, question: null, counters }, attempt + 1, { botAnswer: text })
         const resumed = store.getItem(botId, itemId)
