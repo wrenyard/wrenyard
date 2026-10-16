@@ -62,6 +62,7 @@ export async function runProjectAction(
     tools: await protocolTools(deps, ctx, record, METHODS, EFFECTS),
     maxRounds: PROJECT_MAX_ROUNDS,
     spanIdPrefix: 'project',
+    record,
   });
   return toActionOutcome(result, record);
 }

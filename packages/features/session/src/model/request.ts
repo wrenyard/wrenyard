@@ -882,15 +882,14 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             const callerBudgetExhausted = abortKind === 'timeout';
             // Report the real fault before reading the route's retry instant, so
             // the attempt record carries the `until` this report just wrote, and
-            // before stopping failover, so a genuine route stall or transport
-            // failure after visible output still reaches the route-health
-            // authority. The suggestion role's own deadline and the caller's
-            // total budget are local deadlines, not the route's fault, so neither
-            // marks the route unhealthy.
-            const localSuggestionTimeout = input.role === 'suggestion' && (perRouteTimedOut || callerBudgetExhausted);
-            if (!cancelled && !localSuggestionTimeout && !callerBudgetExhausted) {
-              if (perRouteTimedOut) options.reportRouteFault?.(candidate.model, attemptId, 'timeout');
-              else if (fact.kind === 'network') options.reportRouteFault?.(candidate.model, attemptId, 'transport');
+            // before stopping failover, so a genuine transport failure after
+            // visible output still reaches the route-health authority. Only a
+            // genuine network failure blames the route: a local deadline (an
+            // idle stall, a role's own deadline or the caller's total budget) is
+            // our own decision, not the route's fault, so it never marks the
+            // route unhealthy.
+            if (!cancelled && !callerBudgetExhausted && !perRouteTimedOut && fact.kind === 'network') {
+              options.reportRouteFault?.(candidate.model, attemptId, 'transport');
             }
             const attemptUntil = retryInstantOf(candidate.model);
             if (!cancelled && !callerBudgetExhausted) earliestRetry = earliest(earliestRetry, attemptUntil);

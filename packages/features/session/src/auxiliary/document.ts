@@ -78,6 +78,7 @@ export async function runDocumentAction(
     tools: await protocolTools(deps, ctx, record, METHODS, effects),
     maxRounds: DOCUMENT_MAX_ROUNDS,
     spanIdPrefix: 'doc',
+    record,
   });
   return toActionOutcome(result, record, record.documents);
 }

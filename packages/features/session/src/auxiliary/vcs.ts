@@ -52,6 +52,7 @@ export async function runVcsAction(
     tools: await protocolTools(deps, ctx, record, METHODS, EFFECTS),
     maxRounds: VCS_MAX_ROUNDS,
     spanIdPrefix: 'vcs',
+    record,
   });
   return toActionOutcome(result, record);
 }

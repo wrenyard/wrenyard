@@ -78,6 +78,12 @@ export interface AuxiliaryLoopOptions {
   maxRounds: number;
   /** Names this task's span within its action. */
   spanIdPrefix: string;
+  /**
+   * The run's effect record. When present, a `done` claim that recorded no
+   * workspace change and no document draft is returned as a failure: a helper
+   * cannot report successful completion without a recorded effect.
+   */
+  record?: LoopRecord;
 }
 
 /** The terminal outcome of a auxiliary loop. */
@@ -163,6 +169,16 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise
         if (!done.ok) {
           messages.push({ role: 'tool', toolCallId: call.id, content: errorResult('invalid_arguments', done.error) });
           continue;
+        }
+        // Close the false-success path: a `done` claim with no recorded
+        // workspace change or document draft is a failure with an explicit
+        // no-change explanation, never a successful completion.
+        if (done.status === 'done' && options.record !== undefined
+          && options.record.changes.length === 0 && options.record.documents.length === 0) {
+          return {
+            status: 'failed',
+            summary: 'The helper reported done, but this run recorded no workspace change and no document draft, so the claimed completion is not confirmed and the result is a failure.',
+          };
         }
         return { status: done.status, summary: done.summary };
       }

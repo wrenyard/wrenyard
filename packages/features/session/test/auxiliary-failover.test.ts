@@ -326,7 +326,7 @@ test('the finite total budget cuts the call without blaming the route', async ()
   assert.equal((error.detail.metrics?.attempts ?? []).length, 0);
 });
 
-test('a silent route idle-stalls once, reports one timeout fault, and fails over', async () => {
+test('a silent route idle-stalls once, reports no route fault, and fails over', async () => {
   const calls: string[] = [];
   const faults: Array<{ model: string; kind: string }> = [];
   const transport: ModelTransport = {
@@ -346,8 +346,8 @@ test('a silent route idle-stalls once, reports one timeout fault, and fails over
   try {
     const pending = runner.run(callInput('reply', new AbortController().signal));
     await flush();
-    // No output for the whole idle deadline is the one thing that may be
-    // reported as a route timeout.
+    // The idle deadline is a local decision, so the silent route still stalls
+    // and fails over but is never blamed as a faulty supplier route.
     mock.timers.tick(AUXILIARY_IDLE_TIMEOUT_MS);
     await flush();
     output = await pending;
@@ -357,7 +357,7 @@ test('a silent route idle-stalls once, reports one timeout fault, and fails over
   // Only the failover route resolved, so the result is the beta transport's response.
   assert.equal(output?.text, 'ok:test/beta');
   assert.deepEqual(calls, ['test/alpha', 'test/beta']);
-  assert.deepEqual(faults, [{ model: 'test/alpha', kind: 'timeout' }]);
+  assert.deepEqual(faults, []);
 });
 
 test('no auxiliary request carries a local deadline for a transport to blame', async () => {
