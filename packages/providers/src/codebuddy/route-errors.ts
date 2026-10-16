@@ -1,6 +1,6 @@
 import type { UpstreamRouteErrorInput, UpstreamRouteFailure } from '../base/contracts.ts';
 import { object, first, time } from '../base/quota-parsing.ts';
-/** Only explicit exhaustion/model codes establish a route defect; no credit guesses. */
+/** Only explicit exhaustion/model codes establish a route defect; a bare per-model 429 stays route-scoped; no credit guesses. */
 export function codeBuddyRouteFailure(input: UpstreamRouteErrorInput): UpstreamRouteFailure | undefined {
   const root = object(input.body);
   const error = object(root.error);
@@ -13,6 +13,12 @@ export function codeBuddyRouteFailure(input: UpstreamRouteErrorInput): UpstreamR
   }
   if (code === 'insufficient_balance' || code === 'balance_exhausted') return { state: 'quota_exhausted', scope: 'provider', ...(until ? { until } : {}) };
   if (code === 'model_not_found' || code === 'model_unavailable') return { state: 'model_unavailable', scope: 'route', ...(until ? { until } : {}) };
+  // A bare per-model 429 carries no account/pool exhaustion code, so it limits
+  // only this exact route; a pool claim belongs to an explicit exhaustion code
+  // or a named quota_pool_id below.
+  if (input.status === 429 && code !== 'quota_exhausted' && code !== 'insufficient_quota' && code !== 'insufficient_balance' && code !== 'balance_exhausted' && typeof quotaPoolId !== 'string') {
+    return { state: 'rate_limited', scope: 'route', ...(until ? { until } : {}) };
+  }
   if (input.status === 429 && typeof quotaPoolId === 'string') return { state: 'rate_limited', scope: 'pool', quotaPoolId, ...(until ? { until } : {}) };
   return undefined;
 }
