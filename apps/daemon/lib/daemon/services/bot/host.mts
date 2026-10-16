@@ -3616,9 +3616,10 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           answerSeq: latestEventSeq(item.sessionId),
         }
         const { attempt } = latestStep(item, 'session.send')
-        // An answer to an acceptance question clears that run's checks so
-        // acceptance runs again with the answer instead of waiting forever.
-        const rerunAcceptance = item.error === 'acceptance_needs_user' ? { acceptance: null, error: null } : {}
+        // An answer that resumes an item into acceptance clears the previous
+        // run's checks so acceptance runs again with the answer instead of
+        // waiting forever on recorded results.
+        const rerunAcceptance = item.parkedFrom === 'accepting' ? { acceptance: null, error: null } : {}
         enqueueStep(item, 'session.send', { state: item.parkedFrom, answer: text, question: null, counters, ...rerunAcceptance }, attempt + 1, { botAnswer: text })
         const resumed = store.getItem(botId, itemId)
         store.appendLog({
