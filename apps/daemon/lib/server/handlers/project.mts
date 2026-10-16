@@ -1,4 +1,5 @@
 import { ProjectManager } from '../../core/project/manager.mts'
+import { get } from '../../db/connection.mts'
 import {
   INVALID_PARAMS,
   ProtocolError,
@@ -25,6 +26,28 @@ export interface ProjectRpcHandlerOptions {
   workspaceRoot: string
 }
 
+/**
+ * Refuse a delivery or removal of a worktree that an unfinished Bot item holds.
+ * The Bot delivers and cleans up its own worktrees directly, never over this
+ * RPC surface, so a session or any other caller cannot merge, push or remove
+ * one even when the worktree's own owner record was lost (a recreated worktree).
+ */
+function assertNotBotHeld(worktreeId: string | undefined): void {
+  if (!worktreeId) return
+  let held: unknown
+  try {
+    held = get(`SELECT 1 FROM bot_item WHERE worktree_id = ? AND state NOT IN ('completed', 'dismissed', 'withdrawn', 'failed') LIMIT 1`, worktreeId)
+  } catch {
+    return
+  }
+  if (held !== undefined) {
+    throw new ProtocolError(
+      { code: INVALID_PARAMS.code, message: `worktree ${worktreeId} belongs to an unfinished Bot item; only the Bot merges, pushes or removes it` },
+      { service: 'project', code: 'bot_owned' },
+    )
+  }
+}
+
 export function registerProjectHandlers(router: RpcRouter, options: ProjectRpcHandlerOptions): void {
   const manager = new ProjectManager({ workspaceRoot: options.workspaceRoot })
 
@@ -41,6 +64,7 @@ export function registerProjectHandlers(router: RpcRouter, options: ProjectRpcHa
     return projectJsonResult<ProjectPullResult>(() => manager.pullProject(params.project))
   })
   router.register('project.push', async (params) => {
+    assertNotBotHeld(params.worktree_id)
     return projectJsonResult<ProjectPushResult>(() => manager.pushProject({
       project: params.project,
       worktreeId: params.worktree_id,
@@ -87,12 +111,14 @@ export function registerProjectHandlers(router: RpcRouter, options: ProjectRpcHa
     })
   })
   router.register('project.worktree.remove', async (params) => {
+    assertNotBotHeld(params.worktree_id)
     return projectJsonResult<ProjectWorktreeRemoveResult>(() => {
       if (params.project) manager.getProject(params.project)
       return manager.removeWorktree(params.worktree_id)
     })
   })
   router.register('project.worktree.merge', async (params) => {
+    assertNotBotHeld(params.worktree_id)
     // No owner is forwarded: a worktree owned by a bot can only be merged by
     // that bot, so a session (or any other caller) gets reason 'bot_owned'.
     return projectJsonResult<ProjectWorktreeMergeResult>(() => manager.mergeWorktree(params.project, params.worktree_id))
