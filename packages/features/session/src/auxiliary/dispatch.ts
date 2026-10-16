@@ -225,7 +225,7 @@ function boundCompileEvents(events: readonly LedgerEvent[], focus: ReadonlySet<s
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const text = renderEventText(events[index]!);
     if (text === undefined) continue;
-    if (tokens.length > 0 && tokens.some((token) => text.includes(token))) {
+    if (tokens.some((token) => text.includes(token))) {
       kept.add(index);
       continue;
     }
