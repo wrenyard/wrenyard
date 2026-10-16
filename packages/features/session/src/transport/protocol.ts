@@ -157,6 +157,8 @@ export interface ModelRequest {
   messages: readonly Message[];
   /** Required public reasoning level; forwarded as a Gateway request header. */
   reasoningEffort: ReasoningEffort;
+  /** Fast mode; forwarded as a Gateway request header when true. */
+  fast?: boolean;
   /** Tools the model may call. */
   tools?: readonly ToolSpec[];
   /** Tool usage preference; adapters map it where the protocol supports it. */

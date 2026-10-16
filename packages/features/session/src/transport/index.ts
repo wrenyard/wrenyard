@@ -133,6 +133,7 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
         'content-type': 'application/json',
         authorization: `Bearer ${connection.token}`,
         [GATEWAY_HEADERS.reasoningEffort]: request.reasoningEffort,
+        ...(request.fast ? { [GATEWAY_HEADERS.fast]: 'true' } : {}),
       };
       if (request.attribution?.role !== undefined) headers[GATEWAY_HEADERS.callRole] = request.attribution.role;
       if (request.attribution?.sessionId !== undefined) headers[GATEWAY_HEADERS.sessionId] = request.attribution.sessionId;

@@ -63,6 +63,7 @@ export function toModelEntries(
         ...(gatewayModel.routeState === undefined ? {} : { routeState: gatewayModel.routeState }),
         ...(gatewayModel.routePhase === undefined ? {} : { routePhase: gatewayModel.routePhase }),
         ...(gatewayModel.routeNextProbeAt === undefined ? {} : { routeNextProbeAt: gatewayModel.routeNextProbeAt }),
+        ...(gatewayModel.supportsFast === true ? { supportsFast: true } : {}),
       });
     }
   }

@@ -8,6 +8,7 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuCheckboxItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSub,
@@ -69,6 +70,8 @@ export interface ModelOption {
   efforts: readonly ReasoningEffort[];
   /** Effort applied when this model is picked: the current one when supported, else the nearest default. */
   defaultEffort: ReasoningEffort;
+  /** True when this route has a verified, distinct upstream Fast mode. */
+  supportsFast?: boolean;
 }
 
 export interface ModelPickerProps {
@@ -78,6 +81,10 @@ export interface ModelPickerProps {
   effort: ReasoningEffort;
   /** Selecting an effort atomically selects that model and that exact supported level. */
   onChange: (modelId: string, effort: ReasoningEffort) => void;
+  /** Whether Fast mode is on for the selected model; independent of `effort`. */
+  fast: boolean;
+  /** Toggles Fast mode. Never changes the checked effort. */
+  onFastChange: (next: boolean) => void;
   disabled?: boolean;
   placeholder?: string;
   className?: string;
@@ -149,7 +156,7 @@ function SelectedModelIndicator() {
  * field filters by model name/id and provider group name, and takes over the
  * keyboard so its text editing never reaches the menu's typeahead.
  */
-export function ModelPicker({ models, value, effort, onChange, disabled = false, placeholder = '选择模型', className, compactTrigger = false }: ModelPickerProps) {
+export function ModelPicker({ models, value, effort, onChange, fast, onFastChange, disabled = false, placeholder = '选择模型', className, compactTrigger = false }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -173,7 +180,9 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
   const effortLabel = REASONING_EFFORT_NAMES[effort];
   // The full model name plus effort, used as the trigger's accessible name and
   // (in compact mode) its title, so the narrow icon trigger is never ambiguous.
-  const triggerLabel = selected === null ? placeholder : `${selected.label}，思考强度：${effortLabel}`;
+  const triggerLabel = selected === null
+    ? placeholder
+    : `${selected.label}，思考强度：${effortLabel}${fast && selected.supportsFast === true ? '，Fast' : ''}`;
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleGroups = useMemo(() => {
@@ -362,7 +371,26 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
                             </DropdownMenuRadioItem>
                           ))}
                         </DropdownMenuRadioGroup>
-                        <DropdownMenuItem disabled>Fast（暂不支持：该模型未提供独立快速模式）</DropdownMenuItem>
+                        {option.supportsFast === true ? (
+                          <DropdownMenuCheckboxItem
+                            checked={isCurrent && fast}
+                            onCheckedChange={(next) => {
+                              if (!isCurrent) onChange(option.value, option.defaultEffort);
+                              onFastChange(next === true);
+                            }}
+                          >
+                            <span className="flex flex-col gap-0.5">
+                              <span>Fast</span>
+                              {isCurrent && fast && (
+                                <span className="text-xs text-muted-foreground">
+                                  Fast 使用 OpenAI priority 服务档，可能更快消耗订阅额度
+                                </span>
+                              )}
+                            </span>
+                          </DropdownMenuCheckboxItem>
+                        ) : (
+                          <DropdownMenuItem disabled>Fast（暂不支持：该模型未提供独立快速模式）</DropdownMenuItem>
+                        )}
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
                   );

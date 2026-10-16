@@ -63,6 +63,8 @@ export class ConstrainedDispatcher {
       // republishes `free` from its own upstream catalog, so this follows the
       // live promotion rather than a static list.
       const liveConfirmedFree = this.catalog.confirmedFreeSupply(provider.id, modelDef.id);
+      if (requirements.fast === true && modelDef.supportsFast !== true)
+        continue;
       // Hard constraint: native web search requirement, enforced before any
       // capability/intelligence/price scoring. Admitted only when the resolved
       // plan explicitly supports native web search; gateway and unknown
@@ -222,8 +224,8 @@ export class ConstrainedDispatcher {
     // eligibility and ranking are already fixed: it adapts the selected target's
     // runtime parameters and can never change which candidate wins.
     const winner = collapsed[0];
-    if (requirements.expectedReasoningEffort !== undefined) {
-      winner.plan = this.catalog.resolveRun(winner.plan.client, winner.plan.provider, winner.plan.model, requirements.expectedReasoningEffort);
+    if (requirements.expectedReasoningEffort !== undefined || requirements.fast === true) {
+      winner.plan = this.catalog.resolveRun(winner.plan.client, winner.plan.provider, winner.plan.model, requirements.expectedReasoningEffort, requirements.fast);
     }
     return { ok: true, selected: winner, considered };
   }

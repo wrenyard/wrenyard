@@ -298,7 +298,7 @@ function toReferencePricing(model: ModelDefinition): TaskResolvedDispatch['refer
 function toResolvedDispatch(
   requestedAgentRuntime: string,
   profileId: string,
-  plan: { client: string; provider: string; model: string; mode: 'native' | 'gateway'; protocol?: string; reasoningEffort?: TaskResolvedDispatch['reasoningEffort']; clientReasoningEffort?: TaskResolvedDispatch['clientReasoningEffort'] },
+  plan: { client: string; provider: string; model: string; mode: 'native' | 'gateway'; protocol?: string; reasoningEffort?: TaskResolvedDispatch['reasoningEffort']; fast?: TaskResolvedDispatch['fast']; clientReasoningEffort?: TaskResolvedDispatch['clientReasoningEffort'] },
   model: ModelDefinition,
   speed: SpeedEvidence,
   requirements: TaskDispatchRequirements,
@@ -325,6 +325,7 @@ function toResolvedDispatch(
   }
   if (plan.protocol) resolved.protocol = plan.protocol
   if (plan.reasoningEffort !== undefined) resolved.reasoningEffort = plan.reasoningEffort
+  if (plan.fast !== undefined) resolved.fast = plan.fast
   if (plan.clientReasoningEffort !== undefined) resolved.clientReasoningEffort = plan.clientReasoningEffort
   return resolved
 }

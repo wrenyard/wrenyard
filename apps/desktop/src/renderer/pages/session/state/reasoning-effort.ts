@@ -27,6 +27,8 @@ export function retainReasoningEffort(current: unknown, supported: readonly Reas
 export interface FirstRequest {
   model: string;
   effort: ReasoningEffort;
+  /** Fast mode is remembered only when it was actually enabled. */
+  fast?: boolean;
 }
 
 const FIRST_REQUEST_KEY = 'session:first-request';
@@ -35,7 +37,7 @@ export function readFirstRequest(): FirstRequest | undefined {
   try {
     const value = JSON.parse(localStorage.getItem(FIRST_REQUEST_KEY) ?? '') as Partial<FirstRequest> | null;
     if (typeof value?.model !== 'string' || value.model === '' || !isReasoningEffort(value.effort)) return undefined;
-    return { model: value.model, effort: value.effort };
+    return { model: value.model, effort: value.effort, ...(value.fast === true ? { fast: true } : {}) };
   } catch {
     return undefined;
   }

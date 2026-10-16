@@ -21,6 +21,8 @@ export interface GatewayConnectionResult {
     family?: 'claude'
     claudeTier?: 'haiku' | 'sonnet' | 'opus'
     supports1MContext?: boolean
+    /** True when a verified, distinct upstream Fast mode exists for this route. */
+    supportsFast?: boolean
     /** Catalog intelligence tier; absent when genuinely unknown (a route naming
      * no registered canonical model). */
     intelligence?: 'low' | 'mid' | 'high' | 'premium'
@@ -67,6 +69,7 @@ export const gatewayConnectionResultSchema = {
           displayName: { type: 'string' }, contextWindow: { type: 'integer', minimum: 1 }, maxTokens: { type: 'integer', minimum: 1 },
           taskOnly: { type: 'boolean' }, family: { const: 'claude' },
           claudeTier: { enum: ['haiku', 'sonnet', 'opus'] }, supports1MContext: { type: 'boolean' },
+          supportsFast: { type: 'boolean' },
           intelligence: { enum: ['low', 'mid', 'high', 'premium'] },
           maxOutputTokens: { type: 'integer', minimum: 1 },
           capabilities: { type: 'array', items: { enum: ['text', 'image'] } },

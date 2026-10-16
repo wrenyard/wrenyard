@@ -58,6 +58,10 @@ export interface ModelDefinition {
   family?: 'claude';
   claudeTier?: 'haiku' | 'sonnet' | 'opus';
   supports1MContext?: boolean;
+  /** A verified, distinct upstream Fast mode exists for this model, through a
+   * standard gateway mapping or native client passthrough. Absent means no
+   * Fast mode is known, and capability is never inferred from an alias or id. */
+  supportsFast?: boolean;
   /** Catalog intelligence tier. Required and complete for a registered canonical
    * model. A route whose model names no registered canonical model leaves this
    * absent: the tier is genuinely unknown and is never defaulted or invented. */
@@ -199,6 +203,8 @@ export interface DispatchPlan {
   // Upstream model substitution produced ONLY by an explicit effort mapping.
   // The public model id is always propagated unchanged.
   upstreamModel?: string;
+  // Fast mode requested for this plan.
+  fast?: boolean;
 }
 
 // Public dynamic run-target syntax (provider/model:client). These helpers are the

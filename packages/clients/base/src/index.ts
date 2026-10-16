@@ -51,6 +51,8 @@ export interface AgentRequest {
      * exact level; `assertLaunch` rejects a missing or unknown value.
      */
     readonly reasoningEffort: ReasoningEffort;
+    /** Optional Fast mode flag; native clients may apply a provider-verified fast variant. */
+    readonly fast?: boolean;
     /**
      * Provider-mapped wire effort alias transported to the native runtime. It
      * is optional because a runtime that substitutes the upstream model instead

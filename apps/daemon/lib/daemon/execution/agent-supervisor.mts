@@ -677,7 +677,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       const client = clientId ? agentClients.get(clientId) : undefined;
       if (!client?.capabilities.run) throw new Error('Execution requires a resolved agent client');
       if (!syntax?.model) throw new Error('Execution requires a resolved model');
-      const plan = this.buildReasoningEffortPlanEnv(entry.executionId)?.plan ?? this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model, opts.dispatchSnapshot?.reasoningEffort);
+      const plan = this.buildReasoningEffortPlanEnv(entry.executionId, opts.dispatchSnapshot?.fast)?.plan ?? this.catalog.resolveRun(syntax.client, syntax.provider, syntax.model, opts.dispatchSnapshot?.reasoningEffort, opts.dispatchSnapshot?.fast);
       // A native dispatch must hand the CLI the exact wire spelling the
       // installed product/login declares — e.g. canonical `claude-sonnet-5` is
       // the product's 1M row `claude-sonnet-5-1m`, not the 200K row that shares
@@ -705,6 +705,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         cwd: opts.cwd,
         ...(opts.resume === undefined ? {} : { resumeSessionId: opts.resume }),
         reasoningEffort: plan.reasoningEffort,
+        ...(plan.fast === true ? { fast: true } : {}),
         ...(plan.clientReasoningEffort === undefined ? {} : { clientReasoningEffort: plan.clientReasoningEffort }),
         ...(plan.clientReasoningEnvironment === undefined ? {} : { clientReasoningEnvironment: plan.clientReasoningEnvironment }),
       };
@@ -735,7 +736,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       const baseEnv = resolveTaskAgentEnv(
         process.env,
         opts.taskId,
-        this.buildReasoningEffortPlanEnv(entry.executionId),
+        this.buildReasoningEffortPlanEnv(entry.executionId, opts.dispatchSnapshot?.fast),
         entry.executionId,
       )
       const operationOptions = {
@@ -1615,7 +1616,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
    * is a plan keyed by the attempt's own canonical profile only — it never
    * mutates the process env or any global/default plans.
    */
-  private buildReasoningEffortPlanEnv(executionId: string): ReasoningEffortPlanEnvOverride | undefined {
+  private buildReasoningEffortPlanEnv(executionId: string, fast?: boolean): ReasoningEffortPlanEnvOverride | undefined {
     const row = this.get<AttemptReasoningEffortRow>(
       `SELECT reasoning_effort, provider, model, profile, mode, requested_agent_runtime, client
        FROM task_run_attempt_dispatch WHERE execution_id = ?`,
@@ -1626,7 +1627,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if ((row.mode !== 'native' && row.mode !== 'gateway') || !row.client || !row.provider || !row.model || !row.profile) {
       throw new Error('Persisted reasoning-effort dispatch is incomplete')
     }
-    const plan = this.catalog.resolveRun(row.client, row.provider, row.model, reasoningEffort)
+    const plan = this.catalog.resolveRun(row.client, row.provider, row.model, reasoningEffort, fast)
     return { profile: row.profile, plan }
   }
 

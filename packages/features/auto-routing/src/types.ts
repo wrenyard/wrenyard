@@ -278,6 +278,8 @@ export interface TaskDispatchRequirements {
    * withholds reasoning effort and no transport is invented). Task dispatch
    * declarations always carry one; the catalog omits it only for enumeration. */
   expectedReasoningEffort?: ReasoningEffort;
+  /** Requests the provider's verified Fast mode for the selected model. */
+  fast?: boolean;
 }
 export interface DispatchResolution {
   plan: DispatchPlan;

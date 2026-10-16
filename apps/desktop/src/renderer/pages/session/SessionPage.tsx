@@ -322,8 +322,8 @@ export function SessionPage() {
       turns={model.turns}
       sessionKey={sessionKey}
       disabled={!draft && !state.ledgerLoaded}
-      onSend={async (text, entry, effort, attachments) => {
-        await sendMessage(reply === undefined ? text : withReplyQuote(reply, text), entry, effort, attachments);
+      onSend={async (text, entry, effort, fast, attachments) => {
+        await sendMessage(reply === undefined ? text : withReplyQuote(reply, text), entry, effort, fast, attachments);
         setReplyTo(undefined);
       }}
       injectedText={retry}

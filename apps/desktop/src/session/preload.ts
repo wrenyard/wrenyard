@@ -116,7 +116,7 @@ export interface SessionBridgeSendRequest {
   sessionId: string;
   text: string;
   /** A send always carries the selected public reasoning effort. */
-  model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+  model: { provider: string; model: string; reasoningEffort: ReasoningEffort; fast?: boolean };
   /** Local attachment inputs forwarded untouched to the daemon. */
   attachments?: AttachmentInput[];
 }

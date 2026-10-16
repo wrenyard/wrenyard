@@ -11,7 +11,7 @@ export const definition = defineProvider({
   defaultModel: 'composer-2.5', quotaProvider: 'cursor', useClientBinary: true,
   models: [
     { ...model('composer-2.5', 200_000), pricing: [0.2, 0.5, 2.5], reasoningEfforts: ['high'] },
-    model('grok-4.7', 256_000, undefined, 'grok-4.7', REASONING_UP_TO_XHIGH),
+    { ...model('grok-4.7', 256_000, undefined, 'grok-4.7', REASONING_UP_TO_XHIGH), supportsFast: true },
     model('kimi-k3', 1_048_576, undefined, 'kimi-k3', REASONING_LOW_HIGH_MAX),
     { canonical: 'claude-opus-5-5', overrides: { contextWindow: 300_000, supports1MContext: true, reasoningEfforts: FIVE_LEVELS } },
     { ...model('gpt-5.6-luna', 272_000, undefined, 'gpt-5.6-luna', REASONING_FULL), capabilities: ['text', 'image'], pricing: [0.02, 0.2, 1.2] },

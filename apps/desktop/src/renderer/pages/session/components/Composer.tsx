@@ -107,7 +107,7 @@ export interface ComposerProps {
   /** Changes on session switch (or `'draft'`), resetting the model. */
   sessionKey: string;
   disabled?: boolean;
-  onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, attachments: DraftAttachment[]): void | Promise<void>;
+  onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, fast: boolean, attachments: DraftAttachment[]): void | Promise<void>;
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
   /** Bumped to request an explicit input focus (e.g. the new-conversation shortcut). */
   focusRequest?: number;
@@ -128,6 +128,9 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const [sending, setSending] = useState(false);
   const [attachmentError, setAttachmentError] = useState('');
   const [dragActive, setDragActive] = useState(false);
+  // Fast mode is a separate axis from the reasoning effort; it is cleared
+  // whenever the selection is (or becomes) a model without the capability.
+  const [fast, setFast] = useState(false);
   const inputTokens = useInputTokenCount(text);
   const { setInputTokens } = useSessionUsage();
   const { budget } = useContextBudget(sessionKey, modelId, inputTokens);
@@ -326,6 +329,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         resolveModelEffort(memory, first.model, supported)
         ?? (supported.length > 0 ? retainReasoningEffort(first.effort, supported) : first.effort),
       );
+      setFast(first.fast === true && models.find((entry) => entry.publicId === first.model)?.supportsFast === true);
       return;
     }
     // No remembered selection: start at the first selectable model, which may
@@ -384,6 +388,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       defaultEffort: entry.reasoningEfforts.length === 0
         ? effort
         : (resolveModelEffort(modelEfforts, entry.publicId, entry.reasoningEfforts) ?? defaultModelEffort(entry.reasoningEfforts)),
+      supportsFast: entry.supportsFast === true,
     }));
   // An unusable selection is named on the trigger (never silently becoming
   // another model) and blocks sending; a probe-eligible one is informational.
@@ -411,6 +416,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     }
     setModelId(nextModelId);
     setEffort(nextEffort);
+    // Fast is a per-route capability; never leave it on for a model without it.
+    if (models.find((entry) => entry.publicId === nextModelId)?.supportsFast !== true) setFast(false);
   };
 
   const submit = (): void => {
@@ -438,7 +445,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     // Call `onSend` inside the chain so a synchronous throw becomes a
     // rejection and the latch is always released.
     void Promise.resolve()
-      .then(() => onSend(body, selected, effort, submitted))
+      .then(() => onSend(body, selected, effort, fast && selected.supportsFast === true, submitted))
       .then(
         () => {
           // Clear the sent draft (and only the sent one) independently for text
@@ -466,7 +473,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
             void getSessionBridge().discardDraftAttachments(releasable).catch(() => undefined);
           }
           // Only a session's first request is remembered for the next new session.
-          if (firstInSession) writeFirstRequest({ model: selected.publicId, effort });
+          if (firstInSession) writeFirstRequest({ model: selected.publicId, effort, ...(fast && selected.supportsFast === true ? { fast: true } : {}) });
         },
         () => {
           // A rejected send keeps the text and every attachment so the user can retry.
@@ -532,6 +539,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
               value={modelId}
               effort={effort}
               onChange={selectModel}
+              fast={fast}
+              onFastChange={setFast}
               disabled={options.length === 0}
               placeholder={selectionPlaceholder}
               className="min-w-0 max-w-full min-h-6 py-0.5"

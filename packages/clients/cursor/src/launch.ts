@@ -23,8 +23,9 @@ export async function launchCursor(request: AgentRequest, env: NodeJS.ProcessEnv
     const status = await findExecutable(['cursor-agent'], { env });
     if (status.installation.state !== 'installed')
         throw new Error('cursor is not installed');
-    const args = ['--force', '--sandbox', 'disabled', '-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust', '--model', request.model];
+    const model = request.fast === true ? `${request.model}[fast=true]` : request.model;
+    const args = ['--force', '--sandbox', 'disabled', '-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust', '--model', model];
     if (request.resumeSessionId)
         args.push('--resume', request.resumeSessionId);
-    return { executable: status.installation.executable, args, cwd: request.cwd, env: stringEnv(env, { CURSOR_MODEL: request.model }), stdin: request.prompt };
+    return { executable: status.installation.executable, args, cwd: request.cwd, env: stringEnv(env, { CURSOR_MODEL: model }), stdin: request.prompt };
 }

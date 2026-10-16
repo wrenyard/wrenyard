@@ -809,6 +809,8 @@ async function createForemanDaemonResources(
           ...(event.attemptId === undefined ? {} : { attemptId: event.attemptId }),
           ...(event.reasoningEffort === undefined ? {} : { reasoningEffort: event.reasoningEffort }),
           ...(event.reasoningParameters === undefined ? {} : { reasoningParameters: event.reasoningParameters }),
+          ...(event.fast === undefined ? {} : { fast: event.fast }),
+          ...(event.fastParameters === undefined ? {} : { fastParameters: event.fastParameters }),
           status: event.status,
           durationMs: event.durationMs,
           ...(event.executionId === undefined ? {} : { executionId: event.executionId }),

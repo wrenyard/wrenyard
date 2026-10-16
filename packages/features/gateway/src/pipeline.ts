@@ -50,6 +50,10 @@ export interface GatewayRequestCompletedEvent {
   executionId?: string;
   /** Public reasoning effort this request was translated at, when it carried one. */
   reasoningEffort?: ReasoningEffort;
+  /** Whether this request asked for the route's Fast mode. */
+  fast?: boolean;
+  /** The provider's Fast fields merged into the upstream body, when Fast was used. */
+  fastParameters?: Record<string, unknown>;
   /** Attributable paired response samples for this request, when sampled. */
   tps_samples?: ResponseTpsContract['tps_samples'];
   /**
@@ -285,6 +289,14 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         reasoningEffort = normalized;
       }
 
+      // Fast mode arrives in a request header, never as a raw body field. It is
+      // a dimension separate from reasoning effort; it is validated against this
+      // route's own verified Fast capability here, before any upstream call.
+      const fastRequested = request.headers[GATEWAY_HEADERS.fast] === 'true';
+      if (fastRequested && resolved.model.supportsFast !== true) {
+        return reject(400, `Model ${resolved.model.id} does not support Fast mode`, target);
+      }
+
       const credential = await options.providers.credential(resolved.provider);
       if (!credential) return reject(401, `Provider ${resolved.provider.id} is not configured`, target);
       options.routeStates.observeCredential(resolved.provider.id, credential.value);
@@ -304,6 +316,12 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         reasoningParameters = structuredClone(fields);
         applyReasoningFields(body, fields);
       }
+
+      // Fast is a validated capability only: this route's verified support was
+      // checked above, and Fast never alters the resolved reasoning effort. No
+      // provider hook merges additional upstream fields, so no Fast parameters
+      // are recorded on the completed event.
+      let fastParameters: Record<string, unknown> | undefined;
 
       // Protocol-fixed request fields (e.g. Chat streaming usage reporting).
       module.prepareRequest(body);
@@ -379,6 +397,8 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         ...target,
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
         ...(reasoningParameters === undefined ? {} : { reasoningParameters }),
+        ...(fastRequested ? { fast: true } : {}),
+        ...(fastParameters === undefined ? {} : { fastParameters }),
         ...(attemptId === undefined ? {} : { attemptId }),
       };
       let usage: GatewayUsage | undefined;

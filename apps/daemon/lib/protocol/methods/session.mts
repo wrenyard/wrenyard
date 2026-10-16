@@ -106,7 +106,7 @@ export const sessionSendParamsSchema = {
     text: { type: 'string' },
     model: {
       type: 'object', required: ['provider', 'model', 'reasoningEffort'], additionalProperties: false,
-      properties: { provider: idSchema, model: idSchema, reasoningEffort: reasoningEffortSchema },
+      properties: { provider: idSchema, model: idSchema, reasoningEffort: reasoningEffortSchema, fast: { type: 'boolean' } },
     },
     attachments: { type: 'array', maxItems: 128, items: attachmentInputSchema },
   },

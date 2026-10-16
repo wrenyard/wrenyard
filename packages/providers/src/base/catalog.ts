@@ -543,6 +543,7 @@ export class Catalog {
             ...(model.family === undefined ? {} : { family: model.family }),
             ...(model.claudeTier === undefined ? {} : { claudeTier: model.claudeTier }),
             ...(model.supports1MContext === undefined ? {} : { supports1MContext: model.supports1MContext }),
+            ...(model.supportsFast === true ? { supportsFast: true } : {}),
             ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
             reasoningEfforts: model.reasoningEfforts,
             ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
@@ -617,7 +618,7 @@ export class Catalog {
     return subset;
   }
 
-  resolveRun(clientID: string, providerID: string, modelID: string, expected?: ReasoningEffort): DispatchPlan {
+  resolveRun(clientID: string, providerID: string, modelID: string, expected?: ReasoningEffort, fast?: boolean): DispatchPlan {
     const client = this.clientsByID.get(clientID);
     if (!client) throw new Error(`unknown client: ${clientID}`);
     const provider = this.providersByID.get(providerID);
@@ -649,7 +650,7 @@ export class Catalog {
       // client/provider pair: the client must declare supportsNativeWebSearch and
       // the resolved provider must be that client's exact nativeProvider. This is
       // native-provider capability alone — never third-party gateway support.
-      const plan: DispatchPlan = { client: clientID, provider: providerID, model: modelID, mode: 'native', ...effortFields };
+      const plan: DispatchPlan = { client: clientID, provider: providerID, model: modelID, mode: 'native', ...effortFields, ...(fast === true ? { fast: true } : {}) };
       if (client.supportsNativeWebSearch === true && client.nativeProvider === providerID) {
         plan.supportsWebSearch = true;
       }
@@ -662,7 +663,7 @@ export class Catalog {
       provider.protocols?.some((capability) => capability.protocol === candidate));
     if (!protocol) throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
     const effortFields = this.resolveReasoning(provider, modelDef, clientID, expected);
-    return { client: clientID, provider: providerID, model: modelID, mode: 'gateway', protocol, ...effortFields };
+    return { client: clientID, provider: providerID, model: modelID, mode: 'gateway', protocol, ...effortFields, ...(fast === true ? { fast: true } : {}) };
   }
 
   // Enumeration resolves compatibility only; operational callers supply an expectation.
