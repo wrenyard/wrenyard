@@ -1857,6 +1857,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     const limitMs = maxHours * 3_600_000
     for (const item of store.listItems(bot.id)) {
       if (isTerminalItemState(item.state) || item.state === 'parked' || item.state === 'failed') continue
+      // Delivery already under way is finished by its own steps, never parked for age.
+      if (item.state === 'accepted' || item.state === 'merging' || item.state === 'merged' || item.state === 'completing') continue
       const since = item.counters?.dispatchedAtMs ?? Date.parse(item.createdAt)
       if (Number.isNaN(since)) continue
       const age = Date.now() - since
@@ -3948,6 +3950,8 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         const counters = {
           ...(item.counters ?? {}),
           ...(item.error === STALLED_REASON ? { corrections: 0 } : {}),
+          // An answer is an explicit decision to continue: the age budget restarts.
+          dispatchedAtMs: Date.now(),
           answerPending: 1,
           answerSeq: latestEventSeq(item.sessionId),
         }
