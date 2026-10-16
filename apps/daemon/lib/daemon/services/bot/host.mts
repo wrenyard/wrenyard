@@ -2682,11 +2682,24 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    */
   function applyInboxSnapshot(bot: BotRecord, config: BotConfig, listed: readonly InboxItem[]): void {
     const dryRun = bot.mode === 'dryRun' || config.mode === 'dryRun'
+    // Items being worked on count against maxActiveItems; parked items wait on
+    // a decision and do not. New sources wait until a slot frees up.
+    let active = store.listItems(bot.id).filter(item =>
+      item.state === 'discovered' || item.state === 'verifying' || IN_FLIGHT_ITEM_STATES.includes(item.state)).length
     let admitted = 0
     for (const source of listed) {
       const fingerprint = itemFingerprint(source)
       const existing = store.findItemBySource(bot.id, source.id)
       if (existing === undefined) {
+        if (active >= config.concurrency.maxActiveItems) {
+          store.appendLog({
+            botId: bot.id,
+            level: 'info',
+            code: 'poll.capacity',
+            message: `${active} active item(s) reach maxActiveItems ${config.concurrency.maxActiveItems}; new items wait`,
+          })
+          break
+        }
         if (admitted >= config.concurrency.maxDispatchPerTick) {
           store.appendLog({
             botId: bot.id,
@@ -2718,6 +2731,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           ...(dryRun ? { dryRun: true } : {}),
         })
         admitted += 1
+        active += 1
         store.appendLog({
           botId: bot.id,
           level: 'info',
