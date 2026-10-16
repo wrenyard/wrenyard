@@ -5,6 +5,9 @@
   "license": "MIT",
   "type": "module",
   "exports": "./src/index.ts",
+  "scripts": {
+    "test": "tsx --test test/*.test.ts"
+  },
   "dependencies": {
     "@wrenyard/agent-client": "workspace:*",
     "@wrenyard/execution": "workspace:*"

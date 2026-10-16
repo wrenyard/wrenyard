@@ -111,14 +111,17 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
         args.push('--session', request.resumeSessionId);
     if (variant)
         args.push('--variant', variant);
-    args.push('-m', selector, '--title', 'Wrenyard task', '--format', 'json', '--pure', request.prompt);
+    args.push('-m', selector, '--title', 'Wrenyard task', '--format', 'json', '--pure');
     return {
         executable: status.installation.executable,
         args,
-        // The prompt travels in argv above; stdin is deliberately an empty
-        // string so the execution engine writes and immediately closes the
-        // unused pipe, sending EOF instead of leaving OpenCode waiting on it.
-        stdin: '',
+        // The prompt travels on stdin, not in argv: on Windows CreateProcess
+        // caps the whole command line at roughly 32k characters, so a large
+        // task prompt would fail the spawn itself with ENAMETOOLONG (and other
+        // platforms' ARG_MAX can also be exceeded). The execution engine writes
+        // the prompt and then immediately closes the pipe, so OpenCode receives
+        // the message followed by the EOF it needs.
+        stdin: request.prompt,
         cwd: request.cwd,
         env: stringEnv(env, {
             // Both config discovery roots resolve to the same stable shared
