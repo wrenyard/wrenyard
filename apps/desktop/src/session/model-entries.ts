@@ -25,8 +25,9 @@ export function toModelEntries(
       // Session inference uses the credential-backed Gateway, not Task client admission.
       if (model.taskOnly === true
         || (model.supportedClients?.length ?? 0) > 0 || entries.has(publicId)) continue;
-      // The picker offers only mainstream models; being free is not an exception.
-      if (!isMainstreamModelId(model.canonicalId ?? model.id)) continue;
+      // Devin SWE-2 is explicitly selectable alongside the mainstream catalog.
+      if (!isMainstreamModelId(model.canonicalId ?? model.id)
+        && !(provider.id === 'devin' && model.id === 'swe-2')) continue;
       const gatewayModel = gatewayByPublicId.get(publicId);
       if (gatewayModel === undefined) continue;
       const runtime = selectSessionProtocol(gatewayModel.protocols);

@@ -1,11 +1,12 @@
 import type { ModelDefinition, ProviderDefinition, Provider, ProviderCredential, ProviderContext } from '../base/index.ts';
 import { readDevinCredentials, type DevinCredentials } from './credentials.ts';
-import { fetchDevinModels } from './models.ts';
+import { fetchDevinModels, type DevinModel } from './models.ts';
 import { executeDevin, CHAT_RPC, jsonError } from './protocol.ts';
+import { quota } from './quota.ts';
 
 export interface DevinOptions { context?: ProviderContext; fetch?: typeof fetch }
 export interface DevinProvider extends Provider { refreshModels(): Promise<readonly ModelDefinition[]> }
-interface Snapshot { credentials: DevinCredentials; models: ModelDefinition[]; expires: number }
+interface Snapshot { credentials: DevinCredentials; models: DevinModel[]; expires: number }
 
 export function createDevin(options: DevinOptions = {}): DevinProvider {
   let current: Snapshot | undefined;
@@ -18,14 +19,17 @@ export function createDevin(options: DevinOptions = {}): DevinProvider {
     id: 'devin', displayName: 'Devin', setupHint: 'Run devin auth login, then refresh model supply.',
     credentialResolver: 'devin', models: [], skipCanonicalMetadataFallback: true,
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://server.codeium.com' + CHAT_RPC, authScheme: 'bearer' }],
-    convertReasoningEffort(_model, effort) {
-      if (effort !== 'default') throw new Error('Select the exact Devin model variant and its default effort');
-      return {};
+    convertReasoningEffort(model, effort) {
+      const variant = current?.models.find(m => m.id === model)?.variants[effort];
+      if (!variant) throw new Error(`Devin model ${model} does not support reasoning effort ${effort}`);
+      return { model: variant.id };
     },
     async executeRequest(context) {
       const snapshot = bound.get(context.credential);
-      const model = snapshot?.models.find(m => m.id === context.modelId);
-      if (!snapshot || !model) return jsonError(401, 'Devin model credentials are unavailable; run devin auth login');
+      const group = snapshot?.models.find(m => m.id === context.modelId);
+      if (!snapshot || !group) return jsonError(401, 'Devin model credentials are unavailable; run devin auth login');
+      const model = Object.values(group.variants).find(m => m.id === context.body.model);
+      if (!model) return jsonError(400, 'Select a supported Devin reasoning effort');
       if (context.protocol !== 'openai_chat') return jsonError(400, 'Devin only supports Chat Completions');
       return executeDevin({ endpoint: snapshot.credentials.server + CHAT_RPC, key: context.credential.value,
         uid: model.id, publicModel: context.publicModel, maxOutput: model.maxOutputTokens,
@@ -58,8 +62,12 @@ export function createDevin(options: DevinOptions = {}): DevinProvider {
     return result;
   }
   return {
-    id: 'devin', definition, clients: [], quota: { bindings: [], defaultPools: [] }, credential,
-    async refreshModels() { await credential(); return definition.models; },
+    id: 'devin', definition, clients: [], quota, credential,
+    async refreshModels() {
+      if (current) current.expires = 0;
+      await credential();
+      return definition.models;
+    },
     resolveModel: model => model, canonicalizeModel: model => model, applyHeaders() {},
     freeSupply(model, credential) {
       const snapshot = bound.get(credential);

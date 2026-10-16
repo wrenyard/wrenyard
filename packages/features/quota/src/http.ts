@@ -1,8 +1,8 @@
 import { homedir } from 'node:os';
-import { BUILTIN_PROVIDERS, createBuiltinProviderRuntime } from '@wrenyard/providers';
+import { BUILTIN_PROVIDERS, createBuiltinProviderRuntime, readDevinCredentials } from '@wrenyard/providers';
 import type { ClientOptions } from '@wrenyard/clients';
-export type HttpQuotaProvider = 'deepseek' | 'kimi-coding' | 'zhipu-coding';
-const endpoints: Record<HttpQuotaProvider, string> = {
+export type HttpQuotaProvider = 'deepseek' | 'kimi-coding' | 'zhipu-coding' | 'devin';
+const endpoints: Record<Exclude<HttpQuotaProvider, 'devin'>, string> = {
     deepseek: 'https://api.deepseek.com/user/balance',
     'kimi-coding': 'https://api.kimi.com/coding/v1/usages',
     'zhipu-coding': 'https://open.bigmodel.cn/api/monitor/usage/quota/limit',
@@ -24,15 +24,20 @@ async function credential(provider: HttpQuotaProvider, env: NodeJS.ProcessEnv): 
 export class HttpQuotaSource {
     constructor(private readonly request: typeof fetch = fetch) { }
     async readUsage(provider: HttpQuotaProvider, options?: ClientOptions): Promise<unknown> {
-        const token = await credential(provider, options?.env ?? process.env);
+        const devin = provider === 'devin' ? await readDevinCredentials({ env: options?.env ?? process.env }) : undefined;
+        const token = provider === 'devin' ? devin?.key : await credential(provider, options?.env ?? process.env);
         if (!token)
             return { error_code: 'configuration_missing' };
         const timeout = AbortSignal.timeout(Math.min(options?.timeoutMs ?? 10000, 10000));
         const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-        const response = await this.request(endpoints[provider], { headers: { authorization: 'Bearer ' + token, accept: 'application/json', 'user-agent': 'wrenyard' }, redirect: 'error', signal });
+        const response = await this.request(provider === 'devin'
+            ? devin!.server + '/exa.seat_management_pb.SeatManagementService/GetUserStatus' : endpoints[provider], provider === 'devin'
+            ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
+                body: JSON.stringify({ metadata: { ideName: 'devin-cli', ideVersion: '3000.11.3', extensionName: 'devin-cli', extensionVersion: '3000.11.3', apiKey: token, locale: 'en', os: process.platform === 'win32' ? 'windows' : process.platform } }), redirect: 'error', signal }
+            : { headers: { authorization: 'Bearer ' + token, accept: 'application/json', 'user-agent': 'wrenyard' }, redirect: 'error', signal });
         if (!response.ok) {
             await response.body?.cancel();
-            return { error_code: response.status === 401 || response.status === 403 ? 'authentication_required' : 'quota_query_failed' };
+            return { error_code: provider === 'devin' && response.status === 429 ? 'rate_limited' : response.status === 401 || response.status === 403 ? 'authentication_required' : 'quota_query_failed' };
         }
         if (!response.body)
             throw new Error('Empty quota response');
@@ -54,6 +59,8 @@ export class HttpQuotaSource {
         finally {
             reader.releaseLock();
         }
-        return { source: provider === 'deepseek' ? 'deepseek-balance' : 'api', fetched_at: new Date().toISOString(), data: JSON.parse(Buffer.concat(chunks).toString('utf8')) };
+        const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (provider === 'devin' && data.code) return { error_code: data.code === 'unauthenticated' || data.code === 'permission_denied' ? 'authentication_required' : data.code === 'resource_exhausted' ? 'rate_limited' : 'quota_query_failed' };
+        return { source: provider === 'deepseek' ? 'deepseek-balance' : provider === 'devin' ? 'devin.GetUserStatus' : 'api', fetched_at: new Date().toISOString(), data };
     }
 }

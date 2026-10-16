@@ -62,7 +62,7 @@ export class QuotaService {
         return { read: async (source = 'primary') => {
                 options?.signal?.throwIfAborted();
                 let raw: unknown;
-                if (provider === 'deepseek' || provider === 'kimi-coding' || provider === 'zhipu-coding')
+                if (provider === 'deepseek' || provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'devin')
                     raw = await this.http.readUsage(provider, options);
                 else if (provider === 'codebuddy')
                     raw = await readCodeBuddyObservation(context, options);

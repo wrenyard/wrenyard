@@ -1,6 +1,7 @@
 export type { Provider, ProviderContext } from './base/index.ts';
 export { createCodeBuddy } from './codebuddy/index.ts';
 export { createDevin } from './devin/index.ts';
+export { readDevinCredentials } from './devin/credentials.ts';
 export type { DevinProvider, DevinOptions } from './devin/index.ts';
 export type { CodeBuddy, CodeBuddyOptions } from './codebuddy/index.ts';
 export type { ProviderDefinition, ProviderAuthScheme, CredentialResolver, ProtocolCapability, ProviderReasoningEffortMappings, ReasoningEffortMapping } from './base/index.ts';
