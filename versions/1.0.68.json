@@ -1,0 +1,36 @@
+{
+  "schema_version": "wrenyard.update.v1",
+  "version": "1.0.68",
+  "published_at": "2026-10-16T01:44:32.000Z",
+  "assets": [
+    {
+      "name": "wrenyard-desktop-1.0.68-darwin-arm64.dmg",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.68/wrenyard-desktop-1.0.68-darwin-arm64.dmg",
+      "sha256": "3443b85f5fcf23c24c8a7c54952d160b1595870bcfc3d1c44050252b2e237b22"
+    },
+    {
+      "name": "wrenyard-desktop-1.0.68-darwin-arm64.zip",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.68/wrenyard-desktop-1.0.68-darwin-arm64.zip",
+      "sha256": "a2b6fd0f65549dcb7ebeced20ca82317cd4c736ea783c02fc293248f06c8b3e5"
+    },
+    {
+      "name": "wrenyard-desktop-1.0.68-win32-x64-setup.exe",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.68/wrenyard-desktop-1.0.68-win32-x64-setup.exe",
+      "sha256": "566ecbe2a22576a384470b82af5593d778039aee8a6c11faa24f2d48a0654707"
+    }
+  ],
+  "remote_payloads": [
+    {
+      "target": "darwin-arm64",
+      "name": "wrenyard-remote-1.0.68-darwin-arm64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.68/wrenyard-remote-1.0.68-darwin-arm64.tar.gz",
+      "sha256": "25a940520933d297691539adc053a98f78a337b245d97b9719dd43ce27f39e4e"
+    },
+    {
+      "target": "win32-x64",
+      "name": "wrenyard-remote-1.0.68-win32-x64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.68/wrenyard-remote-1.0.68-win32-x64.tar.gz",
+      "sha256": "22344360fc370ecc73f96cc21a42be2d711c8c7c16997513f5de452d7b9cae28"
+    }
+  ]
+}
