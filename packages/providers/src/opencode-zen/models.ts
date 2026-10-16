@@ -58,11 +58,11 @@ export const definition = defineProvider({
   modelSpeedMeasurements: {
     'deepseek-v4.1-flash-free': {
       initialTps: 95.58,
-      // Minute precision: docs/opencode-free-deepseek.md records the
-      // measurement window as 2026-10-15 17:00–17:02 UTC, not a second-exact
+      // Minute precision: the measurement window was
+      // 2026-10-15 17:00–17:02 UTC, not a second-exact
       // instant, so the end time is spelled to the minute.
       measuredAt: '2026-10-15T17:02:00Z',
-      method: 'native OpenCode client 1.19.0, 3 sequential samples, median estimate from output tokens over part timestamp windows (not token-level instrumentation); see docs/opencode-free-deepseek.md',
+      method: 'native OpenCode client 1.19.0, 3 sequential samples, median estimate from output tokens over part timestamp windows (not token-level instrumentation)',
     },
   },
   reasoningEffortMappings: {

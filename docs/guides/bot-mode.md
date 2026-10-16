@@ -6,9 +6,8 @@ and managed worktree, supervises progress, runs real-machine acceptance, deliver
 one item at a time (rebase → accept → merge → push), completes the source item
 and notifies you of the result. It replaces the coordinator loop that used to be
 run by hand, and it is a generic capability: everything that touches your private
-tools is configuration, never code. The design is specified in
-[bot mode design note](../specs/2026-10-16-bot-mode.md); this guide is the
-operator reference for configuring it.
+tools is configuration, never code. This guide is the operator reference for
+configuring it.
 
 ## 1. Where the configuration lives
 
@@ -428,7 +427,6 @@ appears both in the counters and in the log.
 
 ## Related
 
-- Design note: [bot mode](../specs/2026-10-16-bot-mode.md)
 - Demo drivers: [`tools/bot-demo/run.mjs`](../../tools/bot-demo/run.mjs),
   [`fake-inbox.mjs`](../../tools/bot-demo/fake-inbox.mjs),
   [`fake-notifier.mjs`](../../tools/bot-demo/fake-notifier.mjs)

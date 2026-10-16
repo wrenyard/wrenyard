@@ -34,12 +34,10 @@ export const definition = defineProvider({
     { ...model('nvidia/nemotron-3-super-120b-a12b:free', 262_144, 235_929, 'nemotron-3-super-120b-a12b'), free: true, reasoningEfforts: ['default'] },
   ],
   // Initial measured TPS, recorded only after real verification: measured on the
-  // installed daemon 1.0.65 from real session
-  // f42a6c7d-729b-461d-b148-4ff02e12133d. Sampler formula:
+  // installed daemon 1.0.65 from a real session. Sampler formula:
   // TPS = streamTokens / (streamMs / 1000). These are short PONG /
   // short reasoning-inclusive initial observations, not sustained text
-  // benchmarks, and they do not establish intelligence. See
-  // docs/free-mainstream-models.md.
+  // benchmarks, and they do not establish intelligence.
   // Catalog.validateSpeed requires a positive integer, so each stored value is
   // the measured TPS floored; the exact measured value is kept in its comment.
   modelSpeedOverrides: {

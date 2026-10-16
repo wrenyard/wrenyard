@@ -82,10 +82,10 @@ runtime profile prefixes or legacy policy-tier selectors.
 
 The application permission system is retired. Native unattended-client settings,
 request cancellation, repository write coordination and credential redaction
-remain separate responsibilities. The unified main-reasoning retry and circuit
-policy — how the transport's same-route retry relates to the Gateway's local
-circuit admission — lives in
-[the main-reasoning retry and circuit contract](specs/2026-10-15-main-reasoning-retry-circuit-contract.md).
+remain separate responsibilities. Main reasoning uses one retry and circuit
+policy: a local circuit-admission refusal from the Gateway does not consume the
+transport's same-route upstream retry budget, and a bounded, cancellable wait
+honours the route's retry-after hint.
 
 ## State and distribution
 

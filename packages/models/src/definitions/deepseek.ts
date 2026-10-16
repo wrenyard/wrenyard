@@ -23,7 +23,7 @@ export const deepseekModels = [
   // part.time end-start windows 1.972/2.170/2.511 s, yielding
   // 110.04/95.39/95.58 TPS. Method note: this is an estimate from
   // chunk-granularity part timestamps, NOT token-level instrumentation.
-  // See docs/opencode-free-deepseek.md. Never inherit the paid model's 201.
+  // Never inherit the paid model's 201.
   defineModel('deepseek-v4.1-flash-free', 'DeepSeek V4.1 Flash Free', {
     intelligence: 'mid',
     capabilities: ['text', 'image'],

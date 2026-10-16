@@ -173,7 +173,7 @@ maximum is altered (several rows declare an output max equal to their whole wind
 ## Reproducible verification
 
 ```sh
-WT=~/.local/state/wrenyard/worktrees/wy-provs
+WT=<path-to-a-wrenyard-checkout>
 BASE=$(mktemp -d /tmp/wyprovs-verify-XXXXXX)
 mkdir -p "$BASE"/{config,state,home,ipc,workspace}
 printf '{"workspace":{"root":"%s/workspace"},"service":{"enabled":true}}' "$BASE" > "$BASE/config/config.json"

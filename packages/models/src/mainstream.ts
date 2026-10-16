@@ -34,7 +34,7 @@ export const MAINSTREAM_MODEL_IDS = [
   'mimo-v2.6-pro',
   'mimo-v2.6-flash',
   'mimo-v2.6-pro-ultraspeed',
-  // OpenRouter free selection verified 2026-10-15; see docs/free-mainstream-models.md.
+  // OpenRouter free selection verified 2026-10-15.
   'nemotron-3-ultra',
   'nemotron-3.5-lightning',
   'nemotron-3-super-120b-a12b',
