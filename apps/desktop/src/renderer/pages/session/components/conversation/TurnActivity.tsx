@@ -1,8 +1,9 @@
 import { Square } from 'lucide-react';
 import { Button } from '@/renderer/components/ui/button';
+import { Elapsed } from '@/renderer/components/elapsed';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { CALL_ROLE_LABEL, turnStatusText, waitingStatusText, type TurnWaitingState } from '../../model/describe.js';
+import { CALL_ROLE_LABEL, TASK_RUN_PHASE_LABEL, runningTaskAction, turnStatusText, waitingStatusText, type TurnWaitingState } from '../../model/describe.js';
 import type { CallModel, TurnModel } from '../../model/types.js';
 
 /** Returns the currently running auxiliary calls for a turn. */
@@ -63,10 +64,14 @@ export interface TurnActivityProps {
  */
 export function TurnActivity({ turn, onInterrupt, waiting }: TurnActivityProps) {
   if (turn.status !== 'running') return null;
+  // The implementation phase is timed from the task run it opened, separate
+  // from the compile call's own duration; it is never shown as compiling.
+  const taskRun = runningTaskAction(turn);
   return (
     <div role="status" className="flex flex-wrap items-center gap-2 pl-1 text-sm text-muted-foreground">
       <Spinner className="size-3.5" />
-      <span className="shimmer">{turnStatusText(turn)}</span>
+      <span className="shimmer">{taskRun === undefined ? turnStatusText(turn) : `${TASK_RUN_PHASE_LABEL}…`}</span>
+      {taskRun !== undefined && <Elapsed start={taskRun.startedAt} className="tabular-nums" />}
       {waiting !== undefined && (
         <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/5 px-2 py-0.5 text-xs text-foreground">
           {waitingStatusText(waiting)}
