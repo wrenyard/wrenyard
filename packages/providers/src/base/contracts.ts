@@ -229,7 +229,8 @@ export type CredentialResolver =
   | 'codex'
   | 'claude'
   | 'grok-oauth'
-  | 'cursor';
+  | 'cursor'
+  | 'devin';
 
 // A concrete runtime materialization for one reasoning effort: an optional
 // upstream-model substitution and/or an optional wire effort alias. This is the
@@ -303,6 +304,20 @@ export interface ProviderResponseHookResult {
   response?: Response;
 }
 
+export interface ProviderExecuteContext {
+  /** Report upstream errors before protocol conversion; omit for local validation failures. */
+  reportUpstreamError?(fact: { status: number; code?: string; type?: string }): void;
+  protocol: GatewayProtocol;
+  modelId: string;
+  publicModel: string;
+  credential: import('./provider.ts').ProviderCredential;
+  body: Record<string, unknown>;
+  signal: AbortSignal;
+  fetch: typeof globalThis.fetch;
+}
+
+export type ProviderExecuteRequest = (context: ProviderExecuteContext) => Promise<Response>;
+
 export type ProviderRequestHook = (context: ProviderRequestHookContext) => void | Promise<void>;
 export type ProviderResponseHook = (
   context: ProviderResponseHookContext,
@@ -354,6 +369,7 @@ export interface ProviderDefinition {
    * remapping of a private error structure onto the entry protocol.
    */
   afterResponse?: ProviderResponseHook;
+  executeRequest?: ProviderExecuteRequest;
   classifyUpstreamError?(error: UpstreamRouteErrorInput): UpstreamRouteFailure | undefined;
   credentialResolver: CredentialResolver;
   defaultModel?: string;

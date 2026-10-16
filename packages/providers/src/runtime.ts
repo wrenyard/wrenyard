@@ -1,7 +1,7 @@
 import { kimiCodingUpstreamWireModel } from './kimi-coding/runtime.ts';
 import { resolveCodeBuddyProductModelId } from './codebuddy/models.ts';
 import { deepSeekEnvApiKey } from './deepseek/runtime.ts';
-import type { ProviderDefinition, ProviderRequestHookContext, ProviderResponseHookContext, ProviderResponseHookResult } from './base/index.ts';
+import type { ProviderDefinition, ProviderRequestHookContext, ProviderResponseHookContext, ProviderResponseHookResult, ProviderExecuteContext } from './base/index.ts';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -49,6 +49,7 @@ export interface ProviderRuntime {
     provider: ProviderDefinition,
     context: ProviderResponseHookContext,
   ): Promise<ProviderResponseHookResult | undefined>;
+  executeRequest?(provider: ProviderDefinition, context: ProviderExecuteContext): Promise<Response>;
   configureApiKey(provider: ProviderDefinition, key: string): Promise<void>;
   /**
    * Optional one-shot credential refresh for the single ChatGPT/Codex gateway
@@ -310,6 +311,13 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
     async afterResponse(provider, context) {
       const result = await provider.afterResponse?.(context);
       return result ? result : undefined;
+    },
+    async executeRequest(provider, context) {
+      const bound = credentialProviders.get(context.credential);
+      if (bound && bound.id !== provider.id) throw new Error('provider credential binding mismatch');
+      const execute = (bound?.definition ?? provider).executeRequest;
+      if (!execute) throw new Error(`provider ${provider.id} has no request executor`);
+      return execute(context);
     },
     async refreshCredential(provider, credential, signal) {
       // Only the ChatGPT/Codex gateway credential is refreshable, and only

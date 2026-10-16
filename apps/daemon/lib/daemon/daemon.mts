@@ -59,7 +59,7 @@ import { readLocalSpeedSamples } from '../events/tps.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { createModelGateway, type ModelGateway, type RouteStatus } from '@wrenyard/gateway'
-import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy } from '@wrenyard/providers'
+import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin } from '@wrenyard/providers'
 import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
@@ -1890,9 +1890,11 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     },
     account: () => codeBuddyClient.readAccountContext(install.product.environment),
   })
-  const catalog = createBuiltinCatalog([codeBuddy])
+  const devin = createDevin()
+  try { await devin.refreshModels() } catch { /* Missing auth or discovery must not stop daemon startup. */ }
+  const catalog = createBuiltinCatalog([codeBuddy, devin])
   const providerRuntime = createBuiltinProviderRuntime({
-    providers: [codeBuddy],
+    providers: [codeBuddy, devin],
     // The ChatGPT subscription gateway credential is read and refreshed through
     // the existing Codex native auth path (honoring the native CODEX_HOME or the
     // user home); the providers package authors no login of its own.

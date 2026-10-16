@@ -392,6 +392,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       const recordFault = (failure: MarkableFailure, status: number): RouteStatus | undefined => attemptId === undefined
         ? options.routeStates.mark(resolved.provider.id, resolved.model.id, failure, status, activeCredential.value, guard)
         : options.routeStates.markAttemptFault(resolved.provider.id, resolved.model.id, attemptId, failure, status, activeCredential.value, guard);
+      let executionUpstreamFact: UpstreamErrorFact | undefined;
       const controller = new AbortController();
       options.active.add(controller);
       let upstreamTimedOut = false;
@@ -429,9 +430,18 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           try {
             // Raced against the signal: an uncooperative fetch that ignores the
             // abort can never leave this pipeline awaiting it forever.
-            return await raceAbort(fetchImpl(resolved.capability.endpoint, {
-              method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal,
-            }), controller.signal);
+            executionUpstreamFact = undefined;
+            const execution = resolved.provider.executeRequest
+              ? options.providers.executeRequest?.(resolved.provider, {
+                  protocol, modelId: resolved.model.id, publicModel,
+                  credential: activeCredential,
+                  body, signal: controller.signal, fetch: fetchImpl,
+                  reportUpstreamError: fact => { executionUpstreamFact = fact; },
+                }) ?? Promise.reject(new Error(`provider ${resolved.provider.id} request executor is unavailable`))
+              : fetchImpl(resolved.capability.endpoint, {
+                  method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal,
+                });
+            return await raceAbort(execution, controller.signal);
           } finally {
             if (fetchTimer !== undefined) { clearTimeout(fetchTimer); fetchTimer = undefined; }
           }
@@ -470,7 +480,9 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           const errorBytes = new Uint8Array(await upstream.arrayBuffer());
           let errorBody: unknown;
           try { errorBody = JSON.parse(new TextDecoder().decode(errorBytes)); } catch { errorBody = undefined; }
-          const fact = upstreamErrorFact(upstream.status, upstream.headers, errorBody);
+          const fact = resolved.provider.executeRequest
+            ? executionUpstreamFact
+            : upstreamErrorFact(upstream.status, upstream.headers, errorBody);
           const outcome = classifyRouteOutcome(
             resolved.provider, resolved.model.id, upstream.status, upstream.headers, errorBody, options.now(),
           );
@@ -571,7 +583,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           // original `type`/`code` the protocol module observed, together with
           // the upstream's own retry hints; the HTTP status stays 200 because
           // that is what the supplier returned.
-          ...(relayed.observedError ? { upstream: streamErrorFact(originalStatus, originalHeaders, relayed.observedError) } : {}),
+          ...(relayed.observedError ? { upstream: executionUpstreamFact ?? streamErrorFact(originalStatus, originalHeaders, relayed.observedError) } : {}),
           ...(sampler.sample() ?? {}), ...(usage ? { usage } : {}),
         });
       } catch (error) {

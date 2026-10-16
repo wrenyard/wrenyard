@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "@wrenyard/models": "workspace:*",
-    "@wrenyard/paths": "workspace:*"
+    "@wrenyard/paths": "workspace:*",
+    "smol-toml": "^1.4.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
