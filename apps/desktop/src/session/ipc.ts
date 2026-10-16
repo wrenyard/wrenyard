@@ -341,8 +341,11 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
             draining = true;
             await delay(500, signal);
           } else {
-            // Business/protocol errors cannot be repaired by reconnecting.
-            if (error instanceof WrenyardRpcError && error.code !== -32001) throw error;
+            // Treat any RPC failure as transient: log it and keep polling
+            // instead of tearing the loop down and leaving the UI stale.
+            if (error instanceof WrenyardRpcError && error.code !== -32001) {
+              console.warn(`[session] event poll failed (code ${error.code}), retrying:`, error);
+            }
             draining = false;
             await delay(1000, signal);
           }

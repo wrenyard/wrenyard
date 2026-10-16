@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { initialSessionPageState, sessionReducer, type SessionPageState } from './session-reducer.js';
-import type { AttachmentInput, DraftAttachment, ModelEntry, SessionApi, SessionBridgeTaskBrief } from '../model/types.js';
+import type { AttachmentInput, DraftAttachment, LedgerEvent, ModelEntry, SessionApi, SessionBridgeTaskBrief } from '../model/types.js';
 import type { ReasoningEffort } from './reasoning-effort.js';
 import { clearDraft, clearDraftAttachments } from './drafts.js';
 import { mini, miniSession } from '@/renderer/lib/mini';
@@ -12,6 +12,24 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 let localSeq = 0;
 /** Model availability is re-read on this interval while a session is mounted. */
 const MODELS_REFRESH_MS = 15_000;
+
+/** Recalibrates the open ledger while a turn looks running, so a dropped final turn.finished cannot leave a stale running row. */
+const LEDGER_RESYNC_MS = 15_000;
+
+/**
+ * The open turn of a ledger snapshot: the last `turn.started` with no later
+ * `turn.finished` or `turn.interrupted` for the same turn number.
+ */
+function openTurnOf(events: readonly LedgerEvent[]): number | null {
+  const closed = new Set<number>();
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event === undefined || event.turn === undefined) continue;
+    if (event.type === 'turn.finished' || event.type === 'turn.interrupted') closed.add(event.turn);
+    else if (event.type === 'turn.started' && !closed.has(event.turn)) return event.turn;
+  }
+  return null;
+}
 
 /** Whether a session survives under the persisted Status filter. */
 function matchesStatusFilter(session: { archived?: boolean }, filter: SessionStatusFilter): boolean {
@@ -69,6 +87,13 @@ export function useSessionController(api: SessionApi) {
   const alive = useRef(false);
   const selected = useRef(initialSelectedId);
   const selectionVersion = useRef(0);
+  // Highest ledger seq applied for the open session; used to detect a gap in
+  // pushed events that would leave a finished turn stuck on the running row.
+  const highestSeq = useRef(0);
+  // Open (not yet finished) turn number for the selected session, tracked so
+  // the calibration interval only resyncs while a turn looks running.
+  const openTurn = useRef<number | null>(null);
+  const resyncInFlight = useRef(false);
   const listVersion = useRef(0);
   const creation = useRef<Promise<string> | null>(null);
   const preferences = useQuery(preferencesQuery);
@@ -81,10 +106,14 @@ export function useSessionController(api: SessionApi) {
   const selectSession = useCallback(async (sessionId: string): Promise<void> => {
     const version = ++selectionVersion.current;
     selected.current = sessionId;
+    highestSeq.current = 0;
+    openTurn.current = null;
     dispatch({ type: 'select', sessionId });
     try {
       const snapshot = await api.ledger(sessionId);
       if (alive.current && version === selectionVersion.current) {
+        highestSeq.current = snapshot.reduce((max, event) => Math.max(max, event.seq), 0);
+        openTurn.current = openTurnOf(snapshot);
         dispatch({ type: 'events', sessionId, events: snapshot, snapshot: true });
       }
     } catch (error) {
@@ -92,6 +121,28 @@ export function useSessionController(api: SessionApi) {
       throw error;
     }
   }, [api, reportError]);
+
+  // Terminal-state calibration: refetch the full ledger for the open session
+  // and re-apply it as a snapshot, so a missed push or reconnect converges the
+  // view back to the daemon ledger.
+  const resyncLedger = useCallback(async (): Promise<void> => {
+    const sessionId = selected.current;
+    if (!sessionId || resyncInFlight.current) return;
+    const version = selectionVersion.current;
+    resyncInFlight.current = true;
+    try {
+      const snapshot = await api.ledger(sessionId);
+      if (alive.current && version === selectionVersion.current) {
+        highestSeq.current = snapshot.reduce((max, event) => Math.max(max, event.seq), 0);
+        openTurn.current = openTurnOf(snapshot);
+        dispatch({ type: 'events', sessionId, events: snapshot, snapshot: true });
+      }
+    } catch {
+      // Resync is best-effort calibration; the next focus or gap retries.
+    } finally {
+      resyncInFlight.current = false;
+    }
+  }, [api]);
 
   const refreshList = useCallback(async () => {
     const version = ++listVersion.current;
@@ -263,7 +314,23 @@ export function useSessionController(api: SessionApi) {
       }
     };
     const offEvent = api.onEvent(({ sessionId, event }) => {
-      if (!cancelled) dispatch({ type: 'events', sessionId, events: [event] });
+      if (cancelled) return;
+      if (sessionId === selected.current && event.seq > highestSeq.current + 1) {
+        // A gap means pushes were lost (poll drop or reconnect); one guarded
+        // ledger resync repairs the terminal state instead of patching gaps.
+        void resyncLedger();
+      }
+      if (sessionId === selected.current) {
+        highestSeq.current = Math.max(highestSeq.current, event.seq);
+        if (event.type === 'turn.started' && event.turn !== undefined) openTurn.current = event.turn;
+        else if (
+          (event.type === 'turn.finished' || event.type === 'turn.interrupted')
+          && event.turn === openTurn.current
+        ) {
+          openTurn.current = null;
+        }
+      }
+      dispatch({ type: 'events', sessionId, events: [event] });
     });
     const offLive = api.onLive(({ sessionId, live }) => {
       if (!cancelled) dispatch({ type: 'live', sessionId, live });
@@ -277,7 +344,13 @@ export function useSessionController(api: SessionApi) {
     void refreshModels();
     const timer = setInterval(() => { void refreshList(); }, 3000);
     const modelsTimer = setInterval(() => { void refreshModels(); }, MODELS_REFRESH_MS);
-    window.addEventListener('focus', refreshModels);
+    const resyncTimer = setInterval(() => { if (openTurn.current !== null) void resyncLedger(); }, LEDGER_RESYNC_MS);
+    const onWindowFocus = (): void => {
+      void refreshModels();
+      // A session may have finished while the window was away; recalibrate.
+      if (selected.current) void resyncLedger();
+    };
+    window.addEventListener('focus', onWindowFocus);
     void refreshList().then(async (sessions) => {
       if (cancelled || creation.current) return;
       // A card is already bound to its own session (draft or routed id) and
@@ -307,7 +380,8 @@ export function useSessionController(api: SessionApi) {
       listVersion.current++;
       clearInterval(timer);
       clearInterval(modelsTimer);
-      window.removeEventListener('focus', refreshModels);
+      clearInterval(resyncTimer);
+      window.removeEventListener('focus', onWindowFocus);
       offEvent();
       offLive();
     };
