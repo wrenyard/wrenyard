@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDirForEnv, stringEnv } from '@wrenyard/agent-client/native';
+import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
 
 /**
@@ -42,8 +43,13 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
     if (status.installation.state !== 'installed')
         throw new Error('opencode is not installed');
     const session = request.resumeSessionId || randomBytes(16).toString('hex');
-    const home = clientStateDirForEnv(env, 'opencode', session);
-    const configPath = join(home, 'opencode.json');
+    const ownedHome = await createOwnedClientRunHome(env, 'opencode');
+    try {
+    const configPath = join(ownedHome.path, 'opencode.json');
+    // Stable per-client config discovery root, shared by every run so OpenCode
+    // installs its plugin dependency tree once instead of once per run. It
+    // holds no run-specific values; those stay in the per-run `configPath`.
+    const sharedConfigHome = clientStateDirForEnv(env, 'opencode', 'config');
     const gateway = request.protocol === 'anthropic_messages'
         ? env.WRENYARD_GATEWAY_ANTHROPIC_URL
         : env.WRENYARD_GATEWAY_OPENAI_CHAT_URL;
@@ -115,13 +121,23 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
         stdin: '',
         cwd: request.cwd,
         env: stringEnv(env, {
-            // OpenCode's child configuration interface; `home` is already
-            // rooted under WRENYARD_STATE_HOME by clientStateDirForEnv().
-            XDG_CONFIG_HOME: home,
-            OPENCODE_CONFIG_DIR: home,
+            // Both config discovery roots resolve to the same stable shared
+            // directory (`sharedConfigHome/opencode`, under WRENYARD_STATE_HOME)
+            // so plugin dependency installation is shared across runs: OpenCode
+            // appends `opencode` to XDG_CONFIG_HOME, matching OPENCODE_CONFIG_DIR.
+            // The per-run values (provider credentials, model, MCP servers)
+            // travel only in `configPath`; native data/state roots are left
+            // untouched so resume keeps working.
+            XDG_CONFIG_HOME: sharedConfigHome,
+            OPENCODE_CONFIG_DIR: join(sharedConfigHome, 'opencode'),
             OPENCODE_CONFIG: configPath,
             OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
         }),
         files: [{ path: configPath, data: config + '\n', cleanup: 'completion' }],
+        ownedRunHome: ownedHome,
     };
+    } catch (error) {
+        await rm(ownedHome.path, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+    }
 }

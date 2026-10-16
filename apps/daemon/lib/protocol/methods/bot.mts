@@ -183,6 +183,7 @@ export interface BotLoad {
  * `bot_step` and `bot_log`, so they stay correct across daemon restarts.
  */
 export interface BotHealth {
+  lowDisk: { status: 'ok' | 'low' | 'unavailable'; availableBytes: number | null; minimumBytes: number; error: string | null }
   /** ISO timestamp the host started serving this bot. */
   uptimeSince: string
   /** Cadence (timer) passes only, so the number tracks the configured cadence. */
@@ -401,6 +402,7 @@ const botHealthSchema = {
     'uptimeSince', 'ticks', 'forcedTicks', 'tickLagMs', 'itemsByState',
     'stepsFailed24h', 'adapterErrors24h', 'escalations24h',
     'host', 'components', 'load',
+    'lowDisk',
   ],
   additionalProperties: false,
   properties: {
@@ -427,6 +429,7 @@ const botHealthSchema = {
     host: botHealthHostSchema,
     components: { type: 'array', items: botHealthComponentSchema },
     load: botLoadSchema,
+    lowDisk: { type: 'object', required: ['status', 'availableBytes', 'minimumBytes', 'error'], properties: { status: { type: 'string', enum: ['ok', 'low', 'unavailable'] }, availableBytes: { type: ['integer', 'null'], minimum: 0 }, minimumBytes: { type: 'integer', minimum: 0 }, error: { type: ['string', 'null'] } }, additionalProperties: false },
   },
 } as const satisfies JsonSchema
 

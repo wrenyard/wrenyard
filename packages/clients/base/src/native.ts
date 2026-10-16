@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
-import { resolveWrenyardClientStateDir } from '@wrenyard/paths';
+import { resolveWrenyardClientStateDir, resolveWrenyardStateRoot } from '@wrenyard/paths';
 import type { AgentEvent, AgentRequest, StreamChunk } from './index.ts';
 
 export function messageEvent(text: string, role = 'assistant'): AgentEvent {
@@ -327,6 +329,86 @@ export function clientStateDir(...parts: string[]): string {
 /** Same as {@link clientStateDir}, but resolves against a launch-supplied environment. */
 export function clientStateDirForEnv(env: NodeJS.ProcessEnv, ...parts: string[]): string {
     return resolveWrenyardClientStateDir(env, ...parts);
+}
+
+/** Metadata contract for a small per-invocation client home owned by Wrenyard. */
+export interface OwnedClientRunHome {
+    readonly path: string;
+    readonly metadataPath: string;
+    readonly clientFamily: 'opencode' | 'codebuddy';
+    readonly runId: string;
+}
+
+/**
+ * Resolve the canonical trusted state root. The macOS `/var` -> `/private/var`
+ * alias is tolerated only for this trusted root ancestry; every entry below it
+ * is validated separately and may never be a symlink.
+ */
+async function canonicalStateRoot(env: NodeJS.ProcessEnv): Promise<string> {
+    return await realpath(resolveWrenyardStateRoot(env));
+}
+
+/**
+ * Reject any symlinked or non-directory entry between the canonical trusted
+ * state root and `target`, so the `/var` alias cannot be used below the root to
+ * escape containment.
+ */
+async function assertNoSymlinkBelowRoot(root: string, target: string): Promise<void> {
+    const remainder = relative(root, target);
+    if (!remainder || remainder.startsWith(`..${sep}`) || remainder === '..' || isAbsolute(remainder))
+        throw new Error('Owned client run home failed path validation');
+    let current = root;
+    for (const segment of remainder.split(sep)) {
+        current = join(current, segment);
+        const stat = await lstat(current);
+        if (stat.isSymbolicLink() || !stat.isDirectory())
+            throw new Error('Owned client run home failed path validation');
+    }
+}
+
+/** Create a unique run home and its secret-free ownership marker. */
+export async function createOwnedClientRunHome(env: NodeJS.ProcessEnv, clientFamily: OwnedClientRunHome['clientFamily']): Promise<OwnedClientRunHome> {
+    const runId = randomUUID();
+    const stateRoot = resolveWrenyardStateRoot(env);
+    await mkdir(stateRoot, { recursive: true });
+    const root = await canonicalStateRoot(env);
+    const runsPath = join(root, 'clients', clientFamily, 'runs');
+    await mkdir(runsPath, { recursive: true });
+    await assertNoSymlinkBelowRoot(root, runsPath);
+    const path = join(runsPath, runId);
+    await mkdir(path);
+    const metadataPath = join(path, '.wrenyard-run.json');
+    const marker = JSON.stringify({ version: 1, client_family: clientFamily, run_id: runId, state: 'active', created_at: new Date().toISOString() }) + '\n';
+    await writeOwnedRunMarker(env, { path, metadataPath, clientFamily, runId }, marker, true);
+    return { path, metadataPath, clientFamily, runId };
+}
+
+async function validateOwnedRunHome(env: NodeJS.ProcessEnv, home: OwnedClientRunHome): Promise<void> {
+    const root = await canonicalStateRoot(env);
+    const runsPath = join(root, 'clients', home.clientFamily, 'runs');
+    const expected = join(runsPath, home.runId);
+    if (home.path !== expected || home.metadataPath !== join(expected, '.wrenyard-run.json'))
+        throw new Error('Owned client run home path mismatch');
+    await assertNoSymlinkBelowRoot(root, runsPath);
+    const directory = await lstat(expected);
+    const withinRoot = relative(runsPath, expected);
+    if (directory.isSymbolicLink() || !directory.isDirectory() || !withinRoot || withinRoot.startsWith(`..${sep}`) || withinRoot === '..' || isAbsolute(withinRoot))
+        throw new Error('Owned client run home failed path validation');
+    try {
+        const marker = await lstat(home.metadataPath);
+        if (marker.isSymbolicLink() || !marker.isFile())
+            throw new Error('Owned client run marker failed type validation');
+    }
+    catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+}
+
+async function writeOwnedRunMarker(env: NodeJS.ProcessEnv, home: OwnedClientRunHome, contents: string, exclusive = false): Promise<void> {
+    await validateOwnedRunHome(env, home);
+    const handle = await open(home.metadataPath, exclusive ? 'wx' : 'w', 0o600);
+    try { await handle.writeFile(contents); }
+    finally { await handle.close(); }
 }
 
 /** True when `value` is one of the shared public reasoning-effort levels. */

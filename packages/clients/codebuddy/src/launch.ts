@@ -1,6 +1,9 @@
+import { mkdir, symlink } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { AgentRequest } from '@wrenyard/agent-client';
 import { claudeFamilyMcpConfig, resolveMcpServers } from '@wrenyard/agent-client/mcp';
-import { assertLaunch, clientStateDirForEnv, stringEnv } from '@wrenyard/agent-client/native';
+import { assertLaunch, clientStateDirForEnv, createOwnedClientRunHome, stringEnv } from '@wrenyard/agent-client/native';
 import type { ProcessSpec } from '@wrenyard/execution';
 
 export async function launchCodeBuddy(request: AgentRequest, env: NodeJS.ProcessEnv, executable: string): Promise<ProcessSpec> {
@@ -10,6 +13,11 @@ export async function launchCodeBuddy(request: AgentRequest, env: NodeJS.Process
     // through `--settings`, never written into any persistent user config.
     if (!request.clientReasoningEffort)
         throw new Error('codebuddy requires a mapped reasoning effort');
+    const ownedHome = await createOwnedClientRunHome(env, 'codebuddy');
+    try {
+    const sharedProjects = clientStateDirForEnv(env, 'codebuddy', 'agent-config', 'projects');
+    await mkdir(sharedProjects, { recursive: true });
+    await symlink(sharedProjects, join(ownedHome.path, 'projects'), 'dir');
     const args = ['-y', '--input-format', 'stream-json', '--output-format', 'stream-json', '--replay-user-messages', '--include-partial-messages', '--model', request.model];
     if (request.resumeSessionId)
         args.push('--resume', request.resumeSessionId);
@@ -26,11 +34,18 @@ export async function launchCodeBuddy(request: AgentRequest, env: NodeJS.Process
         args,
         cwd: request.cwd,
         env: stringEnv(env, {
-            CODEBUDDY_CONFIG_DIR: clientStateDirForEnv(env, 'codebuddy', 'agent-config'),
+            CODEBUDDY_CONFIG_DIR: ownedHome.path,
+            WORKBUDDY_CONFIG_DIR: '',
+            CODEBUDDY_DISABLE_FILE_LOGS: '1',
             DISABLE_AUTOUPDATER: '1',
             DISABLE_TELEMETRY: '1',
             DISABLE_ERROR_REPORTING: '1',
         }),
+        ownedRunHome: ownedHome,
         stdin: JSON.stringify({ type: 'user', message: { role: 'user', content: request.prompt }, parent_tool_use_id: null }) + '\n',
     };
+    } catch (error) {
+        await rm(ownedHome.path, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+    }
 }

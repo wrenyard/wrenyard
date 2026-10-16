@@ -57,6 +57,7 @@ const CANCEL_SETTLEMENT_TIMEOUT_MS = 5_000
 const EXECUTIONS_LEGACY_PERMISSION = 'yolo'
 
 export interface AgentExecutionSupervisorOptions {
+  canStartExecution?: () => { status: 'ok' | 'low' | 'unavailable'; availableBytes: number | null; minimumBytes: number; error: string | null }
   db: ForemanDatabase
   repoWriteLocks: RepoWriteLocks
   logger?: SupervisorLogger
@@ -199,8 +200,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly registry = new Map<string, RegistryEntry>()
   private acceptingNew = true
   private promoting = false
+  private readonly canStartExecution?: AgentExecutionSupervisorOptions['canStartExecution']
 
-  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations }: AgentExecutionSupervisorOptions) {
+  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution }: AgentExecutionSupervisorOptions) {
     this.db = db
     this.repoWriteLocks = repoWriteLocks
     this.logger = logger
@@ -215,6 +217,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     this.execService = execService ?? new ExecService({ clients: agentClients })
     this.ownsExecService = execService === undefined
     this.operations = operations
+    this.canStartExecution = canStartExecution
   }
 
   private taskRuns(): TaskRunStore {
@@ -227,6 +230,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
   async startExecution(rawOpts: StartExecutionOpts): Promise<ExecutionHandle> {
     if (!this.acceptingNew) throw new Error('AgentExecutionSupervisor is not accepting new executions')
+    const disk = this.canStartExecution?.()
+    if (disk && disk.status !== 'ok') throw new Error(`low_disk_space: ${disk.status === 'low' ? `available ${disk.availableBytes} bytes is below the ${disk.minimumBytes} byte minimum` : `state-volume sample failed: ${disk.error ?? 'unknown error'}`}; free space on the Wrenyard state volume and retry`)
     const opts = normalizeStartExecutionOpts(rawOpts)
     assertStartExecutionOpts(opts)
 
@@ -639,6 +644,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 
   private async launchExecution(entry: RegistryEntry, opts: StartExecutionOpts, fromQueue: boolean): Promise<void> {
+    const disk = this.canStartExecution?.()
+    if (disk && disk.status !== 'ok') {
+      await this.terminalizeQueued(entry, 'failed', 'crash', `low_disk_space: state-volume status is ${disk.status}; free space and retry`)
+      return
+    }
     if (entry.terminalGeneration > 0) return
 
     const claimed = this.run(
@@ -1188,7 +1198,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
   private terminalizeQueued(
     entry: RegistryEntry,
-    status: Extract<TerminalStatus, 'cancelled' | 'interrupted'>,
+    status: Extract<TerminalStatus, 'cancelled' | 'interrupted' | 'failed'>,
     killReason: Exclude<KillReason, null>,
     error: string,
   ): void {
@@ -1556,6 +1566,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       this.promoting = false
     }
   }
+
+  promoteQueuedAfterGuardChange(): void { void this.promoteQueued() }
 
   private runningCount(): number {
     let count = 0

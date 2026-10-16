@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute } from 'node:path';
+import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { spawnProcess } from './process.ts';
 import { killProcessTree } from './process.ts';
 
@@ -35,6 +35,7 @@ export interface ProcessSpec {
   readonly env: Readonly<Record<string, string>>;
   readonly stdin?: string | Uint8Array;
   readonly files?: readonly ProcessFile[];
+  readonly ownedRunHome?: { readonly path: string; readonly metadataPath: string; readonly clientFamily: string; readonly runId: string };
 }
 
 export interface ExecutionResult {
@@ -91,13 +92,22 @@ export interface StartProcessOptions {
  *    when that termination could not be confirmed.
  */
 export async function startProcess(spec: ProcessSpec, options: StartProcessOptions = {}): Promise<ExecutionSession> {
-  if (options.signal?.aborted) throw new Error('execution cancelled before start');
+  if (options.signal?.aborted) {
+    await cleanupOwnedRunHome(spec.ownedRunHome, false, true);
+    throw new Error('execution cancelled before start');
+  }
   const timeoutMs = options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : undefined;
-  const resources = await materializeFiles(spec.files ?? []);
+  let resources: OwnedFile[];
+  try { resources = await materializeFiles(spec.files ?? []); }
+  catch (error) {
+    await cleanupOwnedRunHome(spec.ownedRunHome, false, true).catch(() => undefined);
+    throw error;
+  }
   // A signal that fired during materialization must abort before an owned
   // resource is handed to a child that will never be spawned.
   if (options.signal?.aborted) {
     await cleanupFiles(resources, false, true);
+    await cleanupOwnedRunHome(spec.ownedRunHome, false, true).catch(() => undefined);
     throw new Error('execution cancelled before start');
   }
 
@@ -152,13 +162,28 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
    * success. A child whose normal exit already arrived needs no kill, and the
    * `closed` snapshot gives that check the same ordering the native `close`
    * event had.
+   *
+   * The leader's own close is not proof that its descendants are gone. The
+   * child is spawned detached on Unix (`detached: process.platform !== 'win32'`),
+   * so `pgid === pid`, and a surviving group member can still write into an
+   * owned run home after the leader closes. For a spec that owns a run home on
+   * Unix the group is therefore terminated and confirmed absent even when the
+   * leader has already closed; an unconfirmed group keeps `treeStopped` false
+   * so the run home is never removed. Windows cannot prove descendant
+   * termination after the leader exits with the existing taskkill behaviour, so
+   * its current semantics are preserved unchanged.
    */
   const terminateProcessTree = (): Promise<void> => {
     if (terminating) return terminating;
     terminating = (async () => {
       const childPid = child?.pid;
-      if (!childPid || (closed && !killRequested)) return;
+      if (!childPid) return;
+      const confirmOwnedGroup = spec.ownedRunHome !== undefined && process.platform !== 'win32';
+      if (closed && !killRequested && !confirmOwnedGroup) return;
       await withTimeoutResolved(killProcessTree(childPid), TERMINATION_FALLBACK_MS, `process tree ${childPid} was not confirmed terminated`);
+      if (confirmOwnedGroup && !unixProcessGroupIsGone(childPid)) {
+        throw new Error(`process group ${childPid} was not confirmed stopped`);
+      }
     })();
     // Retain the rejection for this session's callers without leaving an
     // unhandled rejection on the shared promise.
@@ -195,12 +220,15 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
     const exitEvent: ExecutionEvent = { type: 'exit', exitCode: value.exitCode, signal: value.signal };
     void (async () => {
       let cleanupFailure: string | undefined;
+      let treeStopped = false;
       try {
         await terminateProcessTree();
+        treeStopped = true;
       } catch (error) {
         cleanupFailure = `process-tree cleanup failed: ${errorMessageOf(error)}`;
       }
       await cleanupOwnedResources(success).catch(() => undefined);
+      if (treeStopped) await cleanupOwnedRunHome(spec.ownedRunHome, success).catch(() => undefined);
       removeTreeListeners();
       const message = [errorMessage, cleanupFailure].filter(Boolean).join('; ') || undefined;
       if (message) acceptTerminal({ type: 'error', message });
@@ -368,6 +396,35 @@ export async function startProcess(spec: ProcessSpec, options: StartProcessOptio
   return await startOutcome;
 }
 
+/** Remove only the exact Wrenyard-created run directory after output tails settle. */
+async function cleanupOwnedRunHome(home: ProcessSpec['ownedRunHome'], success: boolean, rollback = false): Promise<void> {
+  if (!home) return;
+  const expected = resolve(home.path);
+  if (relative(expected, resolve(home.metadataPath)) !== '.wrenyard-run.json') return;
+  const parent = dirname(expected);
+  const grandparent = dirname(parent);
+  const grandparentStat = await lstat(grandparent).catch(() => undefined);
+  if (!grandparentStat?.isDirectory() || grandparentStat.isSymbolicLink()) return;
+  const rootStat = await lstat(expected).catch(() => undefined);
+  if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) return;
+  const parentStat = await lstat(parent).catch(() => undefined);
+  if (!parentStat?.isDirectory() || parentStat.isSymbolicLink()) return;
+  const [parentReal, expectedReal] = await Promise.all([realpath(parent), realpath(expected)]);
+  if (expectedReal !== expected || relative(parentReal, expectedReal) === '..' || relative(parentReal, expectedReal).startsWith(`..${sep}`)) return;
+  let markerStat;
+  try { markerStat = await lstat(home.metadataPath); } catch { return; }
+  if (!markerStat.isFile() || markerStat.isSymbolicLink()) return;
+  let marker: Record<string, unknown>;
+  try { marker = JSON.parse(await readFile(home.metadataPath, 'utf8')) as Record<string, unknown>; } catch { return; }
+  if (marker.version !== 1 || marker.client_family !== home.clientFamily || marker.run_id !== home.runId || marker.state !== 'active') return;
+  if (!rollback) {
+    marker.state = success ? 'done' : 'failed';
+    marker.finished_at = new Date().toISOString();
+    await writeFile(home.metadataPath, JSON.stringify(marker) + '\n', { mode: 0o600 });
+  }
+  await rm(expected, { recursive: true, force: true });
+}
+
 /** Owned resource record: what this invocation created, and what it overwrote. */
 interface OwnedFile {
   readonly path: string;
@@ -448,6 +505,22 @@ function withTimeoutResolved<T>(promise: Promise<T>, ms: number, timeoutMessage:
 
 function errorMessageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Report whether a detached process group is provably gone, using the same
+ * `kill(-pgid, 0)` probe as the shared tree killer. Only ESRCH — no member
+ * remains — counts as proof; EPERM and every other/unknown error mean a member
+ * may still exist and must not be treated as stopped.
+ */
+function unixProcessGroupIsGone(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return false;
+  } catch (error) {
+    return typeof error === 'object' && error !== null && 'code' in error
+      && (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
 }
 
 /**

@@ -275,6 +275,7 @@ export interface BotTickStats {
 }
 
 export interface CreateBotHostOptions {
+  lowDiskState?: () => BotHealth['lowDisk']
   db: ForemanDatabase
   /** The workspace root this host serves; another root's bots are never ticked. */
   workspaceRoot: string
@@ -1456,6 +1457,16 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     watchdogLogged.add(escalateKey)
     store.appendLog({ botId: bot.id, level: 'warn', code: `watchdog.${kind}`, message })
     await escalate(bot, config, escalateKey, message)
+  }
+
+  const previousDiskStatusByBot = new Map<string, string | undefined>()
+  async function checkLowDisk(bot: BotRecord, config: BotConfig | undefined): Promise<void> {
+    const state = options.lowDiskState?.()
+    if (!state) return
+    if (state.status === previousDiskStatusByBot.get(bot.id)) return
+    previousDiskStatusByBot.set(bot.id, state.status)
+    if (state.status !== 'ok') await watchdog(bot, config, 'low_disk_space', `${bot.id}:state-volume`, `low_disk_space: state volume ${state.status}; available ${state.availableBytes ?? 'unknown'} bytes, minimum ${state.minimumBytes} bytes${state.error ? `; ${state.error}` : ''}`)
+    else watchdogLogged.delete(`watchdog.low_disk_space:${bot.id}:state-volume`)
   }
 
   /**
@@ -3366,6 +3377,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       const load = await loadConfigForBot(bot)
       if (load.status === 'invalid') continue
       const config = load.status === 'ready' ? load.config : undefined
+      await checkLowDisk(bot, config)
       // The bot's own cadence gates a timer pass; a forced pass is never gated.
       const cadenceMs = botCadenceMs(config)
       const lastCadence = lastBotCadenceAt.get(bot.id)
@@ -3481,6 +3493,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
           ...(lastLoad?.oldestQueuedMs === undefined ? {} : { oldestQueuedMs: lastLoad.oldestQueuedMs }),
           backedOff: isBackedOff(botId),
         },
+        lowDisk: options.lowDiskState?.() ?? { status: 'unavailable', availableBytes: null, minimumBytes: 3 * 1024 ** 3, error: 'Low-disk monitor unavailable' },
       }
     },
     control(botId: string, action): BotRecord {

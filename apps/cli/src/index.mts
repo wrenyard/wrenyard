@@ -1,4 +1,5 @@
 import {handleQuota} from './commands/quota.mts'
+import { handleClients } from './commands/clients.mts'
 import { spawn } from 'node:child_process'
 import { hostname } from 'node:os'
 import { existsSync, realpathSync } from 'node:fs'
@@ -43,6 +44,8 @@ export async function runForemanCli(argv = process.argv.slice(2), tuiLauncher: (
         return launchDesktop(args.slice(1))
       case 'quota':
         return handleQuota(args.slice(1))
+      case 'clients':
+        return handleClients(args.slice(1))
       case 'daemon':
         if (!subcommand || subcommand === '--help' || subcommand === '-h') {
           console.error(DAEMON_USAGE)
@@ -99,6 +102,7 @@ export function printUsage(): void {
 
 Usage:
   wrenyard quota [provider] [--json] [--refresh]
+  wrenyard clients prune [--dry-run | --apply] [--older-than-days N] [--json]
   wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--json] <json-input>
   wrenyard task cancel <task_run_id> [--config path] [--json]
   wrenyard task list [project_id] [--config path] [--json]

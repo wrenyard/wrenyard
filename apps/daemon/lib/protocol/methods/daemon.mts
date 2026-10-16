@@ -48,6 +48,7 @@ export interface DaemonStatusResult {
    * older daemons that predate the field remain valid.
    */
   activeTaskGraphCount?: number
+  lowDisk: { status: 'ok' | 'low' | 'unavailable'; availableBytes: number | null; minimumBytes: number; error: string | null }
 }
 
 export const daemonStatusParamsSchema = {
@@ -58,7 +59,7 @@ export const daemonStatusParamsSchema = {
 
 export const daemonStatusResultSchema = {
   type: 'object',
-  required: ['ok', 'shutting_down', 'idle', 'activeTaskCount', 'activeWorkflowCount', 'activeExecutionCount'],
+  required: ['ok', 'shutting_down', 'idle', 'activeTaskCount', 'activeWorkflowCount', 'activeExecutionCount', 'lowDisk'],
   properties: {
     ok: { const: true },
     shutting_down: { type: 'boolean' },
@@ -69,6 +70,7 @@ export const daemonStatusResultSchema = {
     // Optional (not in `required`) so a response from an older daemon that
     // predates this field still validates; the daemon always emits it.
     activeTaskGraphCount: { type: 'integer', minimum: 0 },
+    lowDisk: { type: 'object', required: ['status', 'availableBytes', 'minimumBytes', 'error'], properties: { status: { type: 'string', enum: ['ok', 'low', 'unavailable'] }, availableBytes: { type: ['integer', 'null'], minimum: 0 }, minimumBytes: { type: 'integer', minimum: 0 }, error: { type: ['string', 'null'] } }, additionalProperties: false },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

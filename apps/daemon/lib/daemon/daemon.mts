@@ -64,6 +64,7 @@ import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenya
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
+import { mkdir, statfs } from 'node:fs/promises'
 
 export interface RunningForemanDaemon {
   db: ForemanDatabase
@@ -163,6 +164,16 @@ interface ForemanDaemonResources {
   rebindWorkspace: (requestedRoot: string) => Promise<WorkspaceSwitchResult>
 }
 
+interface LowDiskState { status: 'ok' | 'low' | 'unavailable'; availableBytes: number | null; minimumBytes: number; error: string | null }
+let lowDiskStateForProcess: LowDiskState = { status: 'unavailable', availableBytes: null, minimumBytes: minimumFreeDiskBytes(), error: 'Initial state-volume sample has not completed' }
+
+function minimumFreeDiskBytes(): number {
+  const raw = process.env.WRENYARD_MIN_FREE_DISK_BYTES
+  if (raw === undefined) return 3 * 1024 ** 3
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) < 0) throw new Error('WRENYARD_MIN_FREE_DISK_BYTES must be a non-negative safe integer')
+  return Number(raw)
+}
+
 /** The workspace-scoped services one root owns; replaced whole on a switch. */
 interface WorkspaceScopedResources {
   workspaceRoot: string
@@ -204,6 +215,8 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private botHost: BotHost | undefined
   private readonly lockPath: string
   private lockHeld = false
+  private lowDiskState: LowDiskState = lowDiskStateForProcess
+  private lowDiskTimer: ReturnType<typeof setInterval> | undefined
 
   private shutdownRequestedFlag = false
   private shutdownForce = false
@@ -276,7 +289,11 @@ export class ForemanDaemon implements RunningForemanDaemon {
 
     let runtime: ForemanDaemonRuntime | undefined
     try {
+      await mkdir(foremanStateRoot(), { recursive: true })
       runtime = await bootstrapForemanDaemonRuntime()
+      await this.sampleLowDisk()
+      this.lowDiskTimer = setInterval(() => { void this.sampleLowDisk() }, 30_000)
+      this.lowDiskTimer.unref?.()
       this.resources = await createForemanDaemonResources(this.config, runtime, {
         configPath: this.configPath,
         requestShutdown: this.requestShutdown,
@@ -287,6 +304,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
         workspacePinned: () => this.workspacePinSource !== undefined,
         onScheduler: (scheduler) => { this.scheduler = scheduler },
         onBotHost: (botHost) => { this.botHost = botHost },
+        lowDiskState: () => this.lowDiskState,
       })
     } catch (error) {
       if (runtime) {
@@ -467,6 +485,8 @@ export class ForemanDaemon implements RunningForemanDaemon {
 
   /** Idempotent close; a second call never restarts cleanup, even after a failed close. */
   readonly close = async (): Promise<void> => {
+    if (this.lowDiskTimer) clearInterval(this.lowDiskTimer)
+    this.lowDiskTimer = undefined
     const resources = this.resources
     this.resources = undefined
     try {
@@ -492,6 +512,20 @@ export class ForemanDaemon implements RunningForemanDaemon {
         this.lockHeld = false
       }
     }
+  }
+
+  private async sampleLowDisk(): Promise<void> {
+    const previous = this.lowDiskState.status
+    try {
+      const info = await statfs(foremanStateRoot())
+      const availableBytes = Number(info.bavail) * Number(info.bsize)
+      this.lowDiskState = { status: availableBytes < this.lowDiskState.minimumBytes ? 'low' : 'ok', availableBytes, minimumBytes: this.lowDiskState.minimumBytes, error: null }
+    } catch (error) {
+      this.lowDiskState = { ...this.lowDiskState, status: 'unavailable', error: error instanceof Error ? error.message : String(error) }
+    }
+    if (previous !== this.lowDiskState.status) writeDaemonLog(this.lowDiskState.status === 'ok' ? 'info' : 'warn', `state volume disk status ${previous} -> ${this.lowDiskState.status}`)
+    lowDiskStateForProcess = this.lowDiskState
+    this.resources?.runtime.supervisor.promoteQueuedAfterGuardChange()
   }
 
   // Resource getters expose the started daemon's resources directly, so there is
@@ -559,6 +593,7 @@ async function createForemanDaemonResources(
     isShuttingDown: () => boolean
     /** True while a workspace hot switch holds the gate; refuses new work. */
     isSwitching?: () => boolean
+    lowDiskState?: () => LowDiskState
     /** Daemon-owned workspace hot switch backing the workspace.switch RPC. */
     workspaceSwitch?: (root: string) => Promise<WorkspaceSwitchResult>
     /** True when WRENYARD_WORKSPACE / --work-dir pins the workspace root. */
@@ -950,6 +985,7 @@ async function createForemanDaemonResources(
       // Live execution load for the dispatch back-off and the load watchdog,
       // read straight from the database with no IPC round trip.
       loadProbe: () => readExecutionLoad(runtime.db),
+      lowDiskState: options.lowDiskState,
     })
     return {
       workspaceRoot,
@@ -1019,6 +1055,7 @@ async function createForemanDaemonResources(
     workspaceInspect: (root) => workspaceControl.inspect(root),
     workspaceInitialize: (root) => workspaceControl.initialize(root),
     daemonActiveWork: readDaemonActiveCounts,
+    lowDiskState: options.lowDiskState,
     taskgraphService: workspaceScoped.taskgraphService,
     workspaceDocService: workspaceScoped.workspaceDocService,
     gatewayConnection: gatewayConnectionSnapshot,
@@ -1181,6 +1218,20 @@ async function createForemanDaemonResources(
       throw new ProtocolError(
         { code: INVALID_PARAMS.code, message: 'Daemon is switching workspace and does not accept this request; retry once the switch finishes.' },
         { code: 'workspace_switch_in_progress', method },
+      )
+    }
+    if (['taskgraph.signal', 'schedule.run', 'session.send', 'bot.tick'].includes(method)) {
+      const disk = options.lowDiskState?.()
+      if (disk && disk.status !== 'ok') throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: `low_disk_space: ${disk.status === 'low' ? `available ${disk.availableBytes} bytes is below the ${disk.minimumBytes} byte minimum` : `state-volume sample failed: ${disk.error ?? 'unknown error'}`}; free space on the Wrenyard state volume and retry` },
+        { code: 'low_disk_space', method },
+      )
+    }
+    if (['task.run.create', 'taskgraph.create', 'taskgraph.patch', 'exec.start'].includes(method)) {
+      const disk = options.lowDiskState?.()
+      if (disk && disk.status !== 'ok') throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: `low_disk_space: ${disk.status === 'low' ? `available ${disk.availableBytes} bytes is below the ${disk.minimumBytes} byte minimum` : `state-volume sample failed: ${disk.error ?? 'unknown error'}`}; free space on the Wrenyard state volume and retry` },
+        { code: 'low_disk_space', method },
       )
     }
   }, trackedWorkMethods)
@@ -1882,6 +1933,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
       catalog,
       execService,
       operations: operationAdapter,
+      canStartExecution: () => lowDiskStateForProcess,
     })
     const runner = new TaskWorkflowRunner({
       db,

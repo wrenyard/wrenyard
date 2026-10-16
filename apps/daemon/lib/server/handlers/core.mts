@@ -104,6 +104,7 @@ export interface DaemonActiveWorkCounts {
 }
 
 export interface CoreRpcHandlerOptions {
+  lowDiskState?: () => { status: 'ok' | 'low' | 'unavailable'; availableBytes: number | null; minimumBytes: number; error: string | null }
   startedAt: number
   workspaceRoot: string
   operations?: OperationHost
@@ -478,6 +479,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       idle: options.isIdle ? await options.isIdle() : false,
       ...counts,
       activeTaskGraphCount: counts.activeTaskGraphCount ?? 0,
+      lowDisk: options.lowDiskState?.() ?? { status: 'unavailable' as const, availableBytes: null, minimumBytes: 3 * 1024 ** 3, error: 'Low-disk monitor unavailable' },
     } satisfies DaemonStatusResult
   })
   router.register('task.definition.list', async (params) => {
