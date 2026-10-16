@@ -211,22 +211,65 @@ function buildCompile(input: CompileViewInput): BuiltView {
 const COMPILE_CONTEXT_EVENT_CHARS = 24_000;
 
 /**
- * The compile view's reference events: the events whose rendered text names
- * something in `focus` — the project and task ids the one intent refers to —
- * plus a bounded tail of the most recent other events. Walking newest to
- * oldest, a focused event is always kept and every other event is kept only
- * while the running total stays within {@link COMPILE_CONTEXT_EVENT_CHARS};
- * events that render no text are skipped. The result is returned in
- * chronological order, so the compiler still reads the conversation in order.
+ * The index of the event that carries the current turn's request: the turn's
+ * own `turn.started`. It opens the turn, so scanning oldest first finds the
+ * single such event in a real ledger; a history that repeats the same turn
+ * number keeps the oldest match, which is still the event that opened the
+ * turn. The event is identified by its turn, not by matching the request text,
+ * because the request wording differs from the block the intent names.
+ * Returns undefined when no event belongs to `turn`.
  */
-function boundCompileEvents(events: readonly LedgerEvent[], focus: ReadonlySet<string>): LedgerEvent[] {
+function currentTurnIntentIndex(events: readonly LedgerEvent[], turn: number): number | undefined {
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]!;
+    if (event.type === 'turn.started' && event.turn === turn) return index;
+  }
+  return undefined;
+}
+
+/**
+ * The compile view's reference events: the event carrying the current turn's
+ * request is pinned and kept unconditionally; every other event whose rendered
+ * text names something in `focus` — the project and task ids the one intent
+ * refers to — shares {@link COMPILE_CONTEXT_EVENT_CHARS} with a bounded tail of
+ * the most recent other events. Walking newest to oldest, the pinned intent
+ * event is never budgeted and every other kept event is; events that render no
+ * text are skipped. Because the intent event is pinned by its turn, a long
+ * history that names the same project cannot push the request out of the
+ * budget. When no event belongs to the current turn, the newest focused event
+ * is pinned instead. Events beyond the budget are skipped. The result is
+ * returned in chronological order, so the compiler still reads the
+ * conversation in order.
+ */
+function boundCompileEvents(
+  events: readonly LedgerEvent[],
+  focus: ReadonlySet<string>,
+  turn: number,
+): LedgerEvent[] {
   const tokens = [...focus];
+  const intentIndex = currentTurnIntentIndex(events, turn);
+  let focusChars = 0;
   let tailChars = 0;
+  // A pinned intent event satisfies the unconditional keep; without one the
+  // newest focused event is the fallback pin.
+  let pinned = intentIndex !== undefined;
   const kept = new Set<number>();
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const text = renderEventText(events[index]!);
     if (text === undefined) continue;
-    if (tokens.some((token) => text.includes(token))) {
+    if (index === intentIndex) {
+      kept.add(index);
+      continue;
+    }
+    if (tokens.length > 0 && tokens.some((token) => text.includes(token))) {
+      if (!pinned) {
+        pinned = true;
+        focusChars += text.length;
+        kept.add(index);
+        continue;
+      }
+      if (focusChars + tailChars + text.length > COMPILE_CONTEXT_EVENT_CHARS) continue;
+      focusChars += text.length;
       kept.add(index);
       continue;
     }
@@ -262,7 +305,8 @@ export async function runDispatchAction(
     });
   }
 
-  // The compile view keeps every event that names the project or task this one
+  // The compile view pins the event that carries this turn's request and keeps
+  // a bounded share of the other events that name the project or task this one
   // intent refers to, plus a bounded tail of the most recent conversation.
   const focus = new Set<string>();
   for (const project of ctx.projects) {
@@ -276,7 +320,7 @@ export async function runDispatchAction(
     kind: 'dispatch',
     intent: action.intent,
     userText: ctx.userText,
-    events: boundCompileEvents(ctx.currentEvents(), focus),
+    events: boundCompileEvents(ctx.currentEvents(), focus, ctx.turn),
     workspaceRoot: ctx.workspaceRoot,
     projects: ctx.projects.map((project) => ({
       id: project.id,
