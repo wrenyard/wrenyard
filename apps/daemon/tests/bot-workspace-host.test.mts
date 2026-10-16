@@ -676,6 +676,89 @@ test('live dependency gating stays the on-disk check: a done predecessor admits 
   }
 })
 
+test('acceptance uses checks from the latest done real verify attempt, not an earlier failed attempt', async () => {
+  const fixture = makeFixture('latestverify', 'live')
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: fixture.root })
+      const bot = store.createBot({ name: 'latestverify', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const service = new WorkspaceTodoService(fixture.root)
+      const { repo, worktree } = makeWorktreeAheadOfMain(fixture.dir)
+      const projectManager = {
+        diff: async () => '',
+        listWorktrees: () => [{ id: 'wt-1', clean: true }],
+        getProject: () => ({ path: repo, defaultBranch: 'main' }),
+        resolveWorktreePath: () => worktree,
+        worktreeContainsTarget: () => true,
+        rebaseWorktree: () => ({ rebased: true, head_sha: 'head-sha' }),
+      } as unknown as ProjectManager
+      const acceptanceInputs: Record<string, unknown>[] = []
+      const host = createBotHost({
+        db,
+        workspaceRoot: fixture.root,
+        session: botSession(),
+        projectManager,
+        log: () => {},
+        taskRunner: {
+          async startTask({ task, input }) {
+            if (task === 'test') acceptanceInputs.push(input as Record<string, unknown>)
+            return { runId: `run:${task}` }
+          },
+          async getTask() {
+            return { status: 'running' as const }
+          },
+        },
+      })
+      await host.tick(bot.id)
+
+      const todo = await service.createTodo({ title: 'Latest attempt work', request: 'r', acceptance: 'a' })
+      const item = store.createItem({
+        botId: bot.id,
+        sourceId: todo.id,
+        state: 'accepting',
+        project: 'alpha',
+        title: 'Latest attempt work',
+      })
+      store.patchItem(item.id, { worktreeId: 'wt-1' })
+      store.acquireLane({ project: 'alpha', botId: bot.id, itemId: item.id })
+
+      const firstVerify = store.beginStep({ itemId: item.id, kind: 'verify', idemKey: `${item.id}:1:verify:1` })
+      store.finishStep(firstVerify.step.id, { status: 'failed', error: 'first verification failed' })
+      const latestVerify = store.beginStep({ itemId: item.id, kind: 'verify', idemKey: `${item.id}:1:verify:2` })
+      store.finishStep(latestVerify.step.id, {
+        status: 'done',
+        output: {
+          decision: 'real',
+          reason: 'latest verification passed',
+          project: 'alpha',
+          class: 'default',
+          acceptance: {
+            checks: [
+              { id: 'latest-check', claim: 'the latest check ran', surface: 'daemon', recipe: 'run latest check' },
+            ],
+          },
+        },
+      })
+
+      for (let tick = 0; tick < 5 && acceptanceInputs.length === 0; tick += 1) await host.tick(bot.id)
+
+      assert.equal(firstVerify.step.output, undefined)
+      assert.equal(acceptanceInputs.length, 1)
+      assert.deepEqual(acceptanceInputs[0]?.acceptance_criteria, [
+        {
+          id: 'latest-check',
+          given: 'the daemon surface of alpha',
+          when: 'run latest check',
+          then: 'the latest check ran',
+        },
+      ])
+    })
+  } finally {
+    removeFixture(fixture)
+  }
+})
+
 // ── 7. a public answer to a verify park dispatches one fresh verify run ─────
 //
 // A verify park leaves the item `verifying` (its parked-from state) with its

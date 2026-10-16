@@ -1041,9 +1041,12 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     return { step, attempt }
   }
 
-  /** The `bot-verify` result stored on an item's verify step, when present. */
+  /** The `bot-verify` result stored on an item's latest completed verify step. */
   function verifyEnvelope(item: BotItemRecord): BotVerifyEnvelope | undefined {
-    return stepOutput<BotVerifyEnvelope>(store.findStepByIdemKey(idemKeyFor(item, 'verify')))
+    const { step } = latestStep(item, 'verify')
+    if (step?.status !== 'done') return undefined
+    const envelope = asVerifyEnvelope(stepOutput<unknown>(step))
+    return envelope?.decision === 'real' ? envelope : undefined
   }
 
   /** The acceptance plan a verified item carries on its verify step. */
