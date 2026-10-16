@@ -1262,6 +1262,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       'commit locally in that worktree; commit messages carry no internal ids, local paths or user names;',
       'never merge, push, tag or release;',
       'verify your own change in the real running environment before you finish: use the available computer-use desktop driver (Cua Driver) for native/desktop surfaces and the browser-use operation component (agent-browser) for renderer/web surfaces, and keep the real screenshots as evidence;',
+      'the real running environment means your worktree build against an isolated daemon you start yourself (temporary WRENYARD_IPC_PATH, WRENYARD_CONFIG_HOME and WRENYARD_STATE_HOME); never stop, restart, replace or attach to the user\'s installed app, daemon, state, config or IPC socket;',
       'who verifies, how to verify and whether re-verification is needed are never questions for the user — apply the rule above and settle them yourself;',
       'if a tool or environment you need is missing, name the exact missing capability in your `BOT-BLOCKED` line so the bot reports it as a watchdog/escalation instead of asking the user;',
       'only a genuine product trade-off or a permission you cannot obtain may be raised as a question for the user;',
