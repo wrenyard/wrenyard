@@ -2463,9 +2463,17 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       if (config === undefined) throw new Error('bot config is unavailable for inbox.annotate')
       const text = dismissReason(item)
       try {
-        const result = await createInboxClient(config.inbox).annotate(item.sourceId, text)
+        const inbox = createInboxClient(config.inbox)
+        const result = await inbox.annotate(item.sourceId, text)
         resetAdapterErrors(bot.id)
-        return { output: { annotated: result.ok } }
+        // The annotation edits the source item itself; adopting the annotated
+        // text as this generation's fingerprint keeps the bot's own note from
+        // reopening the item as a user change on the next poll.
+        const annotated = result.ok ? (await inbox.get(item.sourceId)).item : null
+        return {
+          output: { annotated: result.ok },
+          ...(annotated === null ? {} : { patch: { fingerprint: itemFingerprint(annotated) } }),
+        }
       } catch (error) {
         const code = error instanceof BotAdapterError ? error.code : 'adapter.error'
         store.appendLog({
