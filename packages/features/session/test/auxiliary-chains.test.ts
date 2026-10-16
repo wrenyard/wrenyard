@@ -321,6 +321,7 @@ function dispatchDeps(runner: CallRunner) {
       cancelTaskRun: async () => {},
       methods: async () => [],
       call: async () => undefined,
+      environmentTools: async () => ['browser', 'desktop'],
     },
     files: {},
     calls,
@@ -450,7 +451,7 @@ test('the compile view keeps the intent focus and a bounded event tail', async (
   assert.equal(text.includes('UNREL0 '), false);
 });
 
-test('dispatch blocks a task whose capabilities no environment provides', async () => {
+test('dispatch opens one run for the text and image capabilities it provides', async () => {
   const { runner } = makeChain({
     routes: ['test/alpha'],
     onCall: (request) => compileResult(request.model),
@@ -464,19 +465,101 @@ test('dispatch blocks a task whose capabilities no environment provides', async 
   host.createTaskRun = async () => { createCalls += 1; return { taskRunId: 'run-1' }; };
   const inputSchema = { type: 'object', properties: { x: { type: 'number' } }, required: ['x'], additionalProperties: false };
 
+  // The built-in text capability is serviceable: the run opens exactly once.
   host.describeTask = async () => ({
-    description: 't1', source: 'builtin', inputSchema, requiredCapabilities: ['text', 'unreal'],
+    description: 't1', source: 'builtin', inputSchema, requiredCapabilities: ['text'],
   });
-  const blocked = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
-  assert.equal(blocked.status, 'failed');
-  assert.match(blocked.result, /no execution environment provides required capabilities: unreal/);
-  assert.equal(createCalls, 0);
+  const text = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
+  assert.equal(text.status, 'done');
+  assert.equal(createCalls, 1);
 
-  // With only a capability the environment provides, the run is opened once.
+  // The image capability is serviceable too, opening one more run.
   host.describeTask = async () => ({
     description: 't1', source: 'builtin', inputSchema, requiredCapabilities: ['image'],
   });
+  const image = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
+  assert.equal(image.status, 'done');
+  assert.equal(createCalls, 2);
+});
+
+test('dispatch blocks a task whose required tools the environment lacks', async () => {
+  const { runner } = makeChain({
+    routes: ['test/alpha'],
+    onCall: (request) => compileResult(request.model),
+  });
+  const { deps } = dispatchDeps(runner);
+  let createCalls = 0;
+  const host = deps.host as unknown as {
+    describeTask: () => Promise<Record<string, unknown>>;
+    createTaskRun: () => Promise<{ taskRunId: string }>;
+    environmentTools?: () => Promise<readonly string[]>;
+  };
+  host.createTaskRun = async () => { createCalls += 1; return { taskRunId: 'run-1' }; };
+  const inputSchema = { type: 'object', properties: { x: { type: 'number' } }, required: ['x'], additionalProperties: false };
+
+  // A required tool the environment does not provide never opens a run.
+  host.describeTask = async () => ({
+    description: 't1', source: 'builtin', inputSchema, requiredTools: ['unreal'],
+  });
+  const blocked = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
+  assert.equal(blocked.status, 'failed');
+  assert.match(blocked.result, /does not provide the required tools: unreal/);
+  assert.equal(createCalls, 0);
+
+  // Once the environment declares the tool, the run opens exactly once.
+  host.environmentTools = async () => ['browser', 'desktop', 'unreal'];
   const proceeded = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
   assert.equal(proceeded.status, 'done');
   assert.equal(createCalls, 1);
+});
+
+test('dispatch maps aliased tool ids before matching the environment', async () => {
+  const { runner } = makeChain({
+    routes: ['test/alpha'],
+    onCall: (request) => compileResult(request.model),
+  });
+  const { deps } = dispatchDeps(runner);
+  let createCalls = 0;
+  const host = deps.host as unknown as {
+    describeTask: () => Promise<Record<string, unknown>>;
+    createTaskRun: () => Promise<{ taskRunId: string }>;
+    environmentTools?: () => Promise<readonly string[]>;
+  };
+  host.createTaskRun = async () => { createCalls += 1; return { taskRunId: 'run-1' }; };
+  const inputSchema = { type: 'object', properties: { x: { type: 'number' } }, required: ['x'], additionalProperties: false };
+
+  // `computer-use` maps onto the environment's `desktop` tool and proceeds.
+  host.describeTask = async () => ({
+    description: 't1', source: 'builtin', inputSchema, requiredTools: ['computer-use'],
+  });
+  host.environmentTools = async () => ['desktop'];
+  const proceeded = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
+  assert.equal(proceeded.status, 'done');
+  assert.equal(createCalls, 1);
+});
+
+test('dispatch blocks required tools when the host cannot report the environment', async () => {
+  const { runner } = makeChain({
+    routes: ['test/alpha'],
+    onCall: (request) => compileResult(request.model),
+  });
+  const { deps } = dispatchDeps(runner);
+  let createCalls = 0;
+  const host = deps.host as unknown as {
+    describeTask: () => Promise<Record<string, unknown>>;
+    createTaskRun: () => Promise<{ taskRunId: string }>;
+    environmentTools?: () => Promise<readonly string[]>;
+  };
+  host.createTaskRun = async () => { createCalls += 1; return { taskRunId: 'run-1' }; };
+  const inputSchema = { type: 'object', properties: { x: { type: 'number' } }, required: ['x'], additionalProperties: false };
+
+  // No environment report at all means no required tool is known to be present.
+  host.environmentTools = undefined;
+  host.describeTask = async () => ({
+    description: 't1', source: 'builtin', inputSchema, requiredTools: ['browser'],
+  });
+  const blocked = await runDispatchAction(deps, DISPATCH_ACTION, dispatchContext());
+  assert.equal(blocked.status, 'failed');
+  assert.match(blocked.result, /does not provide the required tools: browser/);
+  assert.equal(createCalls, 0);
 });

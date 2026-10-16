@@ -93,7 +93,15 @@ export interface SessionHost {
     source: string;
     /** Input capabilities the task requires, e.g. `['image']`. */
     requiredCapabilities?: readonly string[];
+    /** Execution tools the task requires, e.g. `['browser']` or a named MCP tool. */
+    requiredTools?: readonly string[];
   }>;
+  /**
+   * Ids of the execution tools the current environment actually provides: the
+   * ready operation components plus any declared external tools (such as a
+   * named MCP server).
+   */
+  environmentTools?(): Promise<readonly string[]>;
   createTaskRun(params: {
     task: string;
     project?: string;

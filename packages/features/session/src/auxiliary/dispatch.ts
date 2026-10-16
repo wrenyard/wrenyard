@@ -257,6 +257,7 @@ export async function runDispatchAction(
       ...task,
       inputSchema: contract.inputSchema,
       requiredCapabilities: contract.requiredCapabilities ?? [],
+      requiredTools: contract.requiredTools ?? [],
     });
   }
 
@@ -331,6 +332,28 @@ export async function runDispatchAction(
     .filter((capability) => capability !== 'text' && capability !== 'image');
   if (unsupported.length > 0) {
     return fail(`cannot dispatch task '${taskId}': no execution environment provides required capabilities: ${unsupported.join(', ')}`);
+  }
+
+  // Execution-environment tool gate: a task whose compiled contract requires an
+  // execution tool this environment does not provide must not open a run. The
+  // declared ids are mapped through the local alias table before comparing, so
+  // for example `computer-use` matches the environment's `desktop`.
+  const requiredTools = resolvedContract?.requiredTools ?? [];
+  if (requiredTools.length > 0) {
+    let available: readonly string[];
+    try {
+      available = deps.host.environmentTools === undefined ? [] : await deps.host.environmentTools();
+    } catch (error) {
+      return fail(messageOf(error));
+    }
+    const missing = requiredTools
+      .map((tool) => TOOL_ID_ALIASES[tool] ?? tool)
+      .filter((tool) => !available.includes(tool));
+    if (missing.length > 0) {
+      return fail(
+        `cannot dispatch task '${taskId}': this execution environment does not provide the required tools: ${missing.join(', ')} (available: ${available.length === 0 ? 'none' : available.join(', ')})`,
+      );
+    }
   }
 
   const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
@@ -644,7 +667,22 @@ const COMPILE_ATTEMPTS = 3;
 /** At most this many call-level failures (timeout/server error) before giving up. */
 const COMPILE_CALL_FAILURES_MAX = 2;
 
-type CompileContract = ActionTaskInfo & { inputSchema: unknown; requiredCapabilities: readonly string[] };
+type CompileContract = ActionTaskInfo & {
+  inputSchema: unknown;
+  requiredCapabilities: readonly string[];
+  requiredTools: readonly string[];
+};
+
+/**
+ * Local aliases mapping a task's declared execution-tool ids onto the ids an
+ * environment reports. Kept here so the session package never imports daemon
+ * code for the mapping.
+ */
+const TOOL_ID_ALIASES: Readonly<Record<string, string>> = {
+  'browser-use': 'browser',
+  computer: 'desktop',
+  'computer-use': 'desktop',
+};
 
 /** Recursively find the first absolute path string in `value` that does not exist. */
 function findMissingAbsolutePath(value: unknown): string | undefined {

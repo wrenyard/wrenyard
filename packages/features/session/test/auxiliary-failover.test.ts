@@ -354,7 +354,8 @@ test('a silent route idle-stalls once, reports one timeout fault, and fails over
   } finally {
     mock.timers.reset();
   }
-  assert.equal(output?.model, 'test/beta');
+  // Only the failover route resolved, so the result is the beta transport's response.
+  assert.equal(output?.text, 'ok:test/beta');
   assert.deepEqual(calls, ['test/alpha', 'test/beta']);
   assert.deepEqual(faults, [{ model: 'test/alpha', kind: 'timeout' }]);
 });

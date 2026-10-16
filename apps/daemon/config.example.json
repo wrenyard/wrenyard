@@ -3,6 +3,11 @@
     "root": "/path/to/wrenyard-suite"
   },
   "tasks": {
+    "settings": {
+      "global": {
+        "environmentTools": ["unreal"]
+      }
+    },
     "agentRuntime": {}
   }
 }

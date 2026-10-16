@@ -1,4 +1,5 @@
 import { hostname } from 'node:os'
+import { readFileSync } from 'node:fs'
 import type { WrenyardGatewayConnection } from '@wrenyard/control'
 import type { ProviderDefinition } from '@wrenyard/providers'
 import {
@@ -8,6 +9,7 @@ import {
   type SessionHost,
   type TaskArtifact,
 } from '@wrenyard/session'
+import { readGlobalTaskSettings } from '../../config/task-settings.mts'
 import { ProjectManager } from '../../core/project/manager.mts'
 import { runGitSync } from '../../core/vcs/index.mts'
 import type { TaskContext } from '../../core/task/context.mts'
@@ -15,6 +17,7 @@ import { isTaskRunRejection, type TaskService } from '../../core/task/service.mt
 import { METHOD_NOT_FOUND, ProtocolError } from '../../protocol/errors.mts'
 import { describeMethod } from '../../protocol/registry.mts'
 import type { RpcRouter } from '../../server/rpc-router.mts'
+import type { OperationComponents } from './operation-components.mts'
 
 /** Project RPC methods a session may invoke through `call`/`methods`. */
 const SESSION_CALLABLE_METHODS = new Set([
@@ -60,6 +63,11 @@ export interface DaemonSessionHostOptions {
   completeRouteAttempt?: SessionHost['completeRouteAttempt']
   selectAuxiliary: SessionHost['selectAuxiliary']
   taskService: TaskService
+  /** Operation-component snapshots used to report the environment's tools. */
+  operationComponents?: Pick<OperationComponents, 'list'>
+  /** The daemon config file `tasks.settings.global` is read from for declared
+   *  external execution tools (for example a named MCP server). */
+  taskSettingsConfigPath?: string
   /** The product-wired provider definitions main inference validates its
    *  target against. */
   resolveInferenceProvider(providerId: string): ProviderDefinition | undefined
@@ -163,6 +171,24 @@ function inputSummaryLines(schema: unknown): string[] {
   return lines
 }
 
+/**
+ * Declared external execution-tool ids from the persisted `tasks.settings.global`
+ * layer. A missing or unreadable config contributes nothing; an invalid layer is
+ * ignored the same way so dispatch never fails on a malformed declaration.
+ */
+function declaredEnvironmentTools(configPath: string | undefined): readonly string[] {
+  if (configPath === undefined) return []
+  try {
+    const record = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      tasks?: { settings?: unknown }
+    }
+    const layer = readGlobalTaskSettings({ settings: record?.tasks?.settings ?? null })
+    return layer?.environmentTools ?? []
+  } catch {
+    return []
+  }
+}
+
 /** In-process feature ports; task admission goes through TaskService, never RPC. */
 export function createDaemonSessionHost(options: DaemonSessionHostOptions): SessionHost {
   const { stateRoot, taskService } = options
@@ -238,6 +264,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     async describeTask(id, project) {
       const definition = await taskService.describe(id, project)
       const requiredCapabilities = definition.dispatch?.requiredCapabilities
+      const requiredTools = definition.features
       return {
         description: definition.description ?? definition.name,
         inputSchema: definition.input_schema,
@@ -245,7 +272,30 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
         ...(requiredCapabilities === undefined || requiredCapabilities.length === 0
           ? {}
           : { requiredCapabilities }),
+        ...(requiredTools === undefined || requiredTools.length === 0
+          ? {}
+          : { requiredTools }),
       }
+    },
+    /**
+     * Ids of the execution tools this environment actually provides: every
+     * ready operation component plus the declared external tool ids (for
+     * example a named MCP server) from `tasks.settings.global`. Deduplicated and
+     * sorted so callers can compare it against a task's required tools.
+     */
+    async environmentTools(): Promise<readonly string[]> {
+      const tools = new Set<string>()
+      if (options.operationComponents) {
+        try {
+          for (const snapshot of await options.operationComponents.list()) {
+            if (snapshot.state === 'ready') tools.add(snapshot.id)
+          }
+        } catch {
+          // A failing component check contributes no ready tools.
+        }
+      }
+      for (const id of declaredEnvironmentTools(options.taskSettingsConfigPath)) tools.add(id)
+      return [...tools].sort()
     },
     async createTaskRun(params) {
       const project = params.project ?? ''

@@ -172,6 +172,14 @@ export interface TaskSettingsLayer {
    * exclusively from the normalized user-global layer.
    */
   routingWeights?: TaskRoutingWeights
+  /**
+   * Optional user-global-only declaration of execution tools the environment
+   * provides beyond the built-in operation components — for example a named MCP
+   * server. Accepts an array of unique non-empty ids and defaults to absent. It
+   * is read exclusively from `tasks.settings.global`; the per-task `byTask`
+   * layer drops it like an unknown key.
+   */
+  environmentTools?: readonly string[]
 }
 
 /** Routing score weights keyed for config, mapped to scorer P/S/Q/I. */
@@ -269,6 +277,23 @@ function assertFiniteNonNegativeNumber(value: unknown, scope: string): number {
   return value
 }
 
+/**
+ * Validates one array-of-non-empty-strings field, returning the trimmed values.
+ * Shared by the dispatch string-list fields and the global `environmentTools`
+ * declaration so both reject non-arrays and blank entries identically.
+ */
+function normalizeNonEmptyStringList(value: unknown, scope: string, label: string): string[] {
+  if (!Array.isArray(value)) fail(scope, `${label} must be an array of strings`)
+  const list: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim() === '') {
+      fail(scope, `${label} must contain only non-empty strings`)
+    }
+    list.push(item.trim())
+  }
+  return list
+}
+
 const EXPLICIT_RUNTIME_KEYS = {
   alias: ['kind', 'name'],
   target: ['kind', 'target'],
@@ -345,14 +370,7 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
     }
 
     if (STRING_LIST_FIELDS.has(field)) {
-      if (!Array.isArray(value)) fail(scope, `dispatch.${field} must be an array of strings`)
-      const list: string[] = []
-      for (const item of value) {
-        if (typeof item !== 'string' || item.trim() === '') {
-          fail(scope, `dispatch.${field} must contain only non-empty strings`)
-        }
-        list.push(item.trim())
-      }
+      const list = normalizeNonEmptyStringList(value, scope, `dispatch.${field}`)
       if (field === 'requiredCapabilities' && list.some((item) => item !== 'text' && item !== 'image')) {
         fail(scope, 'dispatch.requiredCapabilities accepts only text or image')
       }
@@ -438,18 +456,22 @@ const LAYER_FIELD_ALIASES = {
   timeoutMs: ['timeoutMs', 'timeout_ms'],
   maxAutoOutputUsdPerMillion: ['maxAutoOutputUsdPerMillion', 'max_auto_output_usd_per_million'],
   routingWeights: ['routingWeights', 'routing_weights'],
+  environmentTools: ['environmentTools', 'environment_tools'],
   dispatch: ['dispatch'],
 } as const
 
 /**
  * Validates and normalizes one persisted/config layer. Unknown keys are
  * tolerated and dropped (so legacy `agentRuntime`/`agent_runtime` pins are
- * ignored, never honored); `null` values behave as unset fields. Returns a new
+ * ignored, never honored); `null` values behave as unset fields. The
+ * user-global-only keys (`maxAutoOutputUsdPerMillion`, `routingWeights`,
+ * `environmentTools`) are only accepted when `globalLayer` is set, so a
+ * per-task `byTask` entry drops them like any unknown key. Returns a new
  * canonical layer; the input is never mutated.
  */
 export function normalizeTaskSettingsLayer(
   raw: unknown,
-  options?: { scope?: string },
+  options?: { scope?: string; globalLayer?: boolean },
 ): TaskSettingsLayer {
   const scope = options?.scope === undefined ? '' : ` (${options.scope})`
   const layer: TaskSettingsLayer = {}
@@ -484,6 +506,19 @@ export function normalizeTaskSettingsLayer(
   const routingWeights = resolveAliased(record, LAYER_FIELD_ALIASES.routingWeights)
   if (routingWeights.value !== undefined) {
     layer.routingWeights = normalizeRoutingWeights(routingWeights.value, scope)
+  }
+
+  // `environmentTools` is a user-global-only declaration: it is validated only
+  // when normalizing the global layer and dropped from every other layer.
+  if (options?.globalLayer === true) {
+    const environmentTools = resolveAliased(record, LAYER_FIELD_ALIASES.environmentTools)
+    if (environmentTools.value !== undefined) {
+      const list = normalizeNonEmptyStringList(environmentTools.value, scope, 'environmentTools')
+      if (new Set(list).size !== list.length) {
+        fail(scope, 'environmentTools must not contain duplicate ids')
+      }
+      layer.environmentTools = list
+    }
   }
 
   const dispatch = resolveAliased(record, LAYER_FIELD_ALIASES.dispatch)
@@ -536,7 +571,7 @@ export function readGlobalTaskSettings(
 ): TaskSettingsLayer | undefined {
   const raw = tasks?.settings?.global
   if (raw === undefined || raw === null) return undefined
-  return normalizeTaskSettingsLayer(raw, { scope: 'tasks.settings.global' })
+  return normalizeTaskSettingsLayer(raw, { scope: 'tasks.settings.global', globalLayer: true })
 }
 
 /** Reads and normalizes the user-task layer for a stable definition identity

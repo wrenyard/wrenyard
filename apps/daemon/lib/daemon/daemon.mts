@@ -869,6 +869,11 @@ async function createForemanDaemonResources(
       stateRoot: sessionStateRoot,
       gateway: gatewayConnectionSnapshot,
       taskService,
+      // The environment's execution tools: the ready operation components plus
+      // the declared external tool ids from `tasks.settings.global` (read from
+      // the same authoritative daemon config the task settings service owns).
+      operationComponents: runtime.operationComponents,
+      taskSettingsConfigPath: taskSettingsService.authoritativeConfigPath,
       router: rpcRouter,
       routeStatus: model => gateway.routeStatus(model),
       beginRouteAttempt: (publicModel, attemptId) => gateway.beginRouteAttempt(publicModel, attemptId),
