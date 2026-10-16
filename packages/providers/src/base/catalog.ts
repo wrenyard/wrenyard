@@ -318,9 +318,11 @@ export class Catalog {
       if (model.free !== undefined && typeof model.free !== 'boolean') {
         throw new Error(`provider ${provider.id} model ${model.id} free must be a boolean`);
       }
-      // Model-level supported-client restriction: a declared list must carry
+      // Model-level supported-client declaration: a declared list must carry
       // unique, well-formed client ids; membership is enforced at run
-      // resolution, not registration (clients may register after providers).
+      // resolution, not registration (clients may register after providers). An
+      // EMPTY list is a valid declaration — the model supports no external
+      // client for any run — and is never rejected here.
       if (model.supportedClients !== undefined) {
         const restrictedClients = new Set<string>();
         for (const clientID of model.supportedClients) {
@@ -330,9 +332,6 @@ export class Catalog {
             throw new Error(`provider ${provider.id} model ${model.id} has duplicate supported client ${clientID}`);
           }
           restrictedClients.add(clientID);
-        }
-        if (restrictedClients.size === 0) {
-          throw new Error(`provider ${provider.id} model ${model.id} supportedClients must not be empty`);
         }
       }
       validateReasoningEfforts(provider.id, model);
@@ -476,10 +475,12 @@ export class Catalog {
         if (protocols.length === 0) return [];
         return provider.models
           .filter((model) => !model.taskOnly)
-          // Client-restricted models are usable only through their exact client
-          // transport and are never published through the client-agnostic public
-          // gateway directory.
-          .filter((model) => model.supportedClients === undefined)
+          // Only a NON-EMPTY client restriction hides the model from the
+          // client-agnostic public gateway directory: such models are usable
+          // solely through their exact client transport. A model with an empty
+          // list supports no client for a *task* run but stays valid for direct,
+          // client-agnostic gateway session turns, so it is still published.
+          .filter((model) => (model.supportedClients?.length ?? 0) === 0)
           .map((model) => ({
             id: model.id,
             displayName: model.displayName,
@@ -523,9 +524,10 @@ export class Catalog {
     const modelID = provider.modelAliases?.[requestedModelID] ?? requestedModelID;
     const model = provider.models.find((entry) => entry.id === modelID && !entry.taskOnly);
     if (!model) throw new Error(`unknown model: ${publicID}`);
-    // The public gateway is client-agnostic: a model restricted to specific
-    // clients can never be resolved through a gateway protocol.
-    if (model.supportedClients !== undefined) {
+    // The public gateway is client-agnostic: only a NON-EMPTY client
+    // restriction forbids resolution here. An empty list (no external client for
+    // a task run) is still served for direct, client-agnostic session turns.
+    if ((model.supportedClients?.length ?? 0) > 0) {
       throw new Error(`model ${publicID} is not available through the gateway`);
     }
     const capability = provider.protocols?.find((entry) => entry.protocol === protocol);
@@ -558,7 +560,7 @@ export class Catalog {
       && !provider.nativeClients?.includes(clientID)
       && client.gatewayProtocols.some(protocol => provider.protocols?.some(capability => capability.protocol === protocol))
       && !client.unsupportedGatewayProviders?.includes(providerID)
-      && (modelDef.supportedClients === undefined || modelDef.supportedClients.includes(clientID));
+      && (modelDef.supportedClients === undefined || modelDef.supportedClients.length === 0 || modelDef.supportedClients.includes(clientID));
     if (byLevel === undefined && forwardsGatewayEffort) return modelDef.reasoningEfforts;
     if (byLevel === undefined) throw new Error(`client ${clientID} has no reasoning-effort mapping for ${providerID}/${modelDef.id}`);
     const subset = modelDef.reasoningEfforts.filter((effort) => byLevel[effort] !== undefined);
@@ -576,10 +578,17 @@ export class Catalog {
     modelID = provider.modelAliases?.[modelID] ?? modelID;
     const modelDef = provider.models.find((model) => model.id === modelID);
     if (!modelDef) throw new Error(`unknown model: ${providerID}/${modelID}`);
-    // Model-level client restriction applies to native AND gateway runs alike:
-    // a restricted model resolves only for its exact declared client ids.
-    if (modelDef.supportedClients !== undefined && !modelDef.supportedClients.includes(clientID)) {
+    // Model-level client restriction applies to native AND gateway runs alike.
+    // A NON-EMPTY list resolves only for its exact declared client ids; an EMPTY
+    // list supports no client for any run, so every client is rejected before
+    // launch. Direct, client-agnostic gateway session turns do not go through
+    // resolveRun and stay available (see resolveGatewayModel).
+    const restrictedClients = modelDef.supportedClients;
+    if (restrictedClients !== undefined && restrictedClients.length > 0 && !restrictedClients.includes(clientID)) {
       throw new Error(`model ${providerID}/${modelID} is not available on client ${clientID}`);
+    }
+    if (restrictedClients !== undefined && restrictedClients.length === 0) {
+      throw new Error(`model ${providerID}/${modelID} is not supported by this client`);
     }
     // Runtime invalid *public enum* validation. A legal level is never rejected
     // here for being unsupported by a model/runtime; it is adapted into the

@@ -63,7 +63,7 @@ export function createAuxiliarySelector(options: AuxiliaryRoutingOptions) {
       gatewayByPublicId.set(`${row.provider}/${row.id}`, row);
     }
     const models = options.catalog.providers().flatMap(provider => provider.models
-      .filter(model => !model.taskOnly && model.supportedClients === undefined)
+      .filter(model => !model.taskOnly && (model.supportedClients?.length ?? 0) === 0)
       .flatMap(model => {
         const gateway = gatewayByPublicId.get(`${provider.id}/${model.id}`);
         if (gateway === undefined || !supportsSession(gateway)) {

@@ -106,13 +106,28 @@ test('model-level supportedClients restricts resolution and hides gateway public
   assert.throws(() => catalog.resolveGatewayModel('openai_chat', 'vendor/free-m'), /not available through the gateway/);
   assert.equal(catalog.resolveGatewayModel('openai_chat', 'vendor/paid-m').model.id, 'paid-m');
 
-  // Registration validates the restriction atomically.
-  const register = (supportedClients: readonly string[]) => registerProvider(new Catalog(), {
-    id: 'p', displayName: 'P', credentialResolver: 'managed',
-    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), supportedClients }],
-    protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
-  });
-  assert.throws(() => register([]), /supportedClients must not be empty/);
+  // An EMPTY supportedClients list is a valid declaration: registration succeeds
+  // and the model stays resolvable through the client-agnostic gateway directory,
+  // but no external client may resolve a task run for it, so enumeration never
+  // yields it. Malformed declarations still fail atomically.
+  const register = (supportedClients: readonly string[]) => {
+    const catalog = new Catalog();
+    catalog.registerClient({ id: 'codebuddy', gatewayProtocols: ['openai_chat'], taskCapable: true });
+    catalog.registerClient({ id: 'codex', gatewayProtocols: ['openai_chat'], taskCapable: true });
+    registerProvider(catalog, {
+      id: 'p', displayName: 'P', credentialResolver: 'managed',
+      models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), supportedClients }],
+      protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
+    });
+    return catalog;
+  };
+  const emptyList = register([]);
+  assert.ok(emptyList.listGatewayModels('openai_chat').map((entry) => entry.id).includes('m'));
+  assert.equal(emptyList.resolveGatewayModel('openai_chat', 'p/m').model.id, 'm');
+  for (const client of ['codebuddy', 'codex']) {
+    assert.throws(() => emptyList.resolveRun(client, 'p', 'm'), /not supported by this client/);
+  }
+  assert.ok(!emptyList.enumerateTaskCandidates().some((candidate) => candidate.provider === 'p' && candidate.model === 'm'));
   assert.throws(() => register(['c1', 'c1']), /duplicate supported client c1/);
   assert.throws(() => register(['   ']), /empty supported client id/);
   assert.doesNotThrow(() => register(['c1']));

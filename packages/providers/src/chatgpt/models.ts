@@ -3,14 +3,19 @@ import { chatGptAfterResponse, chatGptBeforeRequest } from './runtime.ts';
 
 export const definition = defineProvider({
   id: 'chatgpt', displayName: 'ChatGPT', credentialResolver: 'codex',
-  nativeClients: ['codex'], defaultModel: 'gpt-6.1-sol', quotaProvider: 'chatgpt',
+  nativeClients: ['codex'], defaultModel: 'gpt-6-astra', quotaProvider: 'chatgpt',
   // Supplier hooks: the pinned streamed/non-persisted openai_responses request
   // contract and the missing Content-Type repair on its SSE response.
   beforeRequest: chatGptBeforeRequest,
   afterResponse: chatGptAfterResponse,
   models: [
     { canonical: 'gpt-6-astra', overrides: { contextWindow: 1_050_000, reasoningEfforts: REASONING_FULL } },
-    { canonical: 'gpt-6.1-sol', overrides: { reasoningEfforts: REASONING_FULL } },
+    // ChatGPT accounts cannot run this model through Codex (HTTP 400 "not
+    // supported when using Codex with a ChatGPT account"). An empty
+    // supportedClients list supports no external client for any task run, so it
+    // is never a Codex task target and is never auto-selected; it stays
+    // selectable for direct ChatGPT API/gateway session turns, which do work.
+    { canonical: 'gpt-6.1-sol', overrides: { reasoningEfforts: REASONING_FULL, supportedClients: [] } },
     { canonical: 'gpt-6-luna', overrides: { reasoningEfforts: REASONING_FULL } },
   ],
   modelAliases: { 'codex-astra': 'gpt-6-astra' },

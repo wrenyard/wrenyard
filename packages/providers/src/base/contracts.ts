@@ -71,11 +71,18 @@ export interface ModelDefinition {
   maxOutputTokens?: number;
   /** Supported input types, including image content returned by tools; not output generation. */
   capabilities?: readonly ModelCapability[];
-  /** Model-level client restriction: when present, ONLY these client ids may
-   * resolve a run for this model (native or gateway). Used for entitlements
-   * that are usable solely through a client's genuine transport (e.g. free
-   * OpenCode Zen tiers); restricted models are never published through the
-   * public gateway model directory. */
+  /** Model-level client restriction. The three cases:
+   * - absent means unrestricted: every client may resolve a run for this model.
+   * - an EMPTY array means the model supports direct gateway/session access but
+   *   NO external client: it is never a task candidate, and `resolveRun` rejects
+   *   every client for it. It stays published through the gateway directory and
+   *   resolvable for direct, client-agnostic session turns.
+   * - a NON-EMPTY array is usable only by those exact client ids (native or
+   *   gateway), and the model is never published through the public gateway
+   *   model directory. Used for entitlements usable solely through a client's
+   *   genuine transport (e.g. free OpenCode Zen tiers).
+   * Consumers must branch on `(supportedClients?.length ?? 0)`, never on mere
+   * definedness. */
   supportedClients?: readonly string[];
   /** Catalog default TPS. Required for a registered canonical model. A route
    * whose model names no registered canonical model leaves this absent: the
