@@ -2258,12 +2258,21 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       }
       const routed = routedModelFor(config, 'judgment')
       if (routed.target === undefined) noteAutomaticRouting(bot)
+      // A verify run resumed from a park carries the user's answer so the
+      // verifier can act on the clarification instead of asking again. The
+      // built-in bot-verify input is strict and has no clarification field, so
+      // the answer is appended to the request body as labeled text and the rest
+      // of the request is preserved unchanged.
+      const body =
+        item.answer === undefined
+          ? item.body
+          : `${item.body === undefined || item.body === '' ? '' : `${item.body}\n\n`}User clarification:\n${item.answer}`
       return {
         input: {
           task: 'bot-verify',
           project: runProject,
           input: {
-            request: { title: item.title ?? '', ...(item.body === undefined ? {} : { body: item.body }) },
+            request: { title: item.title ?? '', ...(body === undefined ? {} : { body }) },
             ...(item.project === undefined ? {} : { project: item.project }),
             projects: config.projects.map(policy => ({ id: policy.id })),
             classes: Object.keys(config.routing),
@@ -3215,6 +3224,19 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     if (item.state === 'discovered') {
       // The deterministic discovered -> verifying write happens with the step.
       enqueueStep(item, 'verify', { state: 'verifying' })
+      return
+    }
+    if (item.state === 'verifying') {
+      // A verify park resumed by a public answer returns the item here with the
+      // answer stored. Its first attempt is already done, so one fresh attempt
+      // above the last one is scheduled; the answer reaches the verifier through
+      // the verify task input. Only a completed step schedules the retry: a
+      // pending, failed, unknown, or missing step never queues a second run, and
+      // a run id left on a done step is history, not an in-flight run.
+      if (item.answer === undefined) return
+      const { step, attempt } = latestStep(item, 'verify')
+      if (step === undefined || step.status !== 'done') return
+      enqueueStep(item, 'verify', undefined, attempt + 1)
       return
     }
     if (item.state === 'verified') {

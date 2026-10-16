@@ -675,3 +675,126 @@ test('live dependency gating stays the on-disk check: a done predecessor admits 
     removeFixture(fixture)
   }
 })
+
+// ── 7. a public answer to a verify park dispatches one fresh verify run ─────
+//
+// A verify park leaves the item `verifying` (its parked-from state) with its
+// first verify step already done, so resuming it must schedule one fresh
+// attempt above the last one. That attempt runs on the next tick, receives the
+// stored answer as labeled text inside the existing request body (the strict
+// bot-verify schema has no top-level clarification field), and advances the
+// item to `verified`. A done step that still carries the run it started is
+// history, not an in-flight run, so it must not suppress the retry; a pending
+// attempt, by contrast, never queues a duplicate.
+
+test('a public answer to a verify park dispatches one fresh verify run that forwards the answer in the request body and reaches verified', async () => {
+  const fixture = makeFixture('verifieresume', 'live')
+  try {
+    await withConfigHome(fixture.home, async () => {
+      const db = initDb(':memory:')
+      const store = createBotStore({ db, workspaceRoot: fixture.root })
+      const bot = store.createBot({ name: 'verifieresume', state: 'running', mode: 'live', configPath: fixture.configPath })
+      const service = new WorkspaceTodoService(fixture.root)
+      // Every verify task input the host starts, in order, plus one poll of the
+      // second run that reports `running` before it finishes.
+      const verifyInputs: Record<string, unknown>[] = []
+      let verifyPolls = 0
+      const host = createBotHost({
+        db,
+        workspaceRoot: fixture.root,
+        session: botSession(async () => ({ turn: 1 })),
+        log: () => {},
+        taskRunner: {
+          async startTask({ task, input }) {
+            if (task !== 'bot-verify') return { runId: `run:${task}` }
+            verifyInputs.push(input as Record<string, unknown>)
+            return { runId: `run:bot-verify:${verifyInputs.length}` }
+          },
+          async getTask(runId) {
+            if (runId === 'run:bot-verify:1') {
+              return {
+                status: 'done' as const,
+                output: { decision: 'park', reason: 'needs a decision', question: 'which branch should the change target?' },
+              }
+            }
+            if (runId === 'run:bot-verify:2') {
+              verifyPolls += 1
+              if (verifyPolls === 1) return { status: 'running' as const }
+              return {
+                status: 'done' as const,
+                output: { decision: 'real', reason: 'reproduced on main', project: 'alpha', class: 'default' },
+              }
+            }
+            return { status: 'running' as const }
+          },
+        },
+      })
+      // Warm-up pass consumes the forced-poll allowance, so later ticks neither
+      // poll nor re-discover the todo once it exists.
+      await host.tick(bot.id)
+
+      const todo = await service.createTodo({ title: 'Resumed work', request: 'r', acceptance: 'a' })
+      const item = store.createItem({
+        botId: bot.id,
+        sourceId: todo.id,
+        state: 'discovered',
+        project: 'alpha',
+        title: 'Resumed work',
+        body: 'Original request text',
+      })
+
+      // Tick 1: discovered -> verifying, and verify attempt 1 starts.
+      await host.tick(bot.id)
+      assert.equal(store.getItem(bot.id, item.id).state, 'verifying')
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:verify:1`)?.status, 'pending')
+      assert.equal(verifyInputs.length, 1)
+
+      // Tick 2: the park verdict lands and the item is parked on the question.
+      await host.tick(bot.id)
+      assert.equal(store.getItem(bot.id, item.id).state, 'parked')
+      const parked = store.findStepByIdemKey(`${item.id}:1:verify:1`)
+      assert.equal(parked?.status, 'done')
+      assert.ok(parked !== undefined)
+      // The finished step is left carrying the run it started: a persisted run
+      // id on a done step is history, not an in-flight run, so resuming must
+      // still schedule the retry (the run id must not suppress it).
+      store.recordStepOutput(parked.id, { runId: 'run:bot-verify:1' })
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:verify:1`)?.status, 'done')
+
+      // The public answer resumes the item; the next tick must dispatch exactly
+      // one fresh verify attempt above the done one.
+      await host.itemAction(bot.id, item.id, 'answer', 'target main and use the existing helper')
+      await host.tick(bot.id)
+      assert.equal(store.getItem(bot.id, item.id).state, 'verifying')
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:verify:2`)?.status, 'pending')
+      assert.equal(verifyInputs.length, 2)
+      // The answer reached the verifier as labeled text appended to the existing
+      // request body, with the rest of the request preserved and no unsupported
+      // top-level clarification field added.
+      const resumed = verifyInputs[1] as { request?: { title?: string; body?: string }; clarification?: unknown }
+      assert.equal(Object.hasOwn(resumed, 'clarification'), false)
+      assert.equal(resumed.request?.title, 'Resumed work')
+      assert.equal(
+        resumed.request?.body,
+        'Original request text\n\nUser clarification:\ntarget main and use the existing helper',
+      )
+
+      // A further tick while the fresh run is still pending starts no verify
+      // task and enqueues no third attempt: a non-done step schedules nothing.
+      await host.tick(bot.id)
+      assert.equal(verifyInputs.length, 2)
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:verify:3`), undefined)
+      assert.equal(store.getItem(bot.id, item.id).state, 'verifying')
+
+      // The finishing run moves the item to `verified`, with no further run and
+      // the earlier park step, its run id and the journal all retained.
+      await host.tick(bot.id)
+      assert.equal(store.getItem(bot.id, item.id).state, 'verified')
+      assert.equal(verifyInputs.length, 2)
+      assert.equal(store.findStepByIdemKey(`${item.id}:1:verify:1`)?.status, 'done')
+      assert.equal(store.listLog(bot.id, 0).some(entry => entry.code === 'verify.real'), true)
+    })
+  } finally {
+    removeFixture(fixture)
+  }
+})
