@@ -262,9 +262,10 @@ function applyBrowserEnv(
 /**
  * Load a staged login-state copy into the run's session once.
  *
- * The CLI reads `--state` only when it starts a browser, so the state has to be
- * applied by opening the session before the agent's first command. A failure is
- * reported as `false` and never fails the run, which then continues signed out.
+ * The copy is installed as the session's state path, so the session keeps it for
+ * the run's first navigation and later commands instead of applying it to a
+ * single invocation. A failure is reported as `false` and never fails the run,
+ * which then continues signed out.
  */
 function preloadLoginState(
   executable: string,
@@ -275,7 +276,7 @@ function preloadLoginState(
   return new Promise((resolve) => {
     execFile(
       executable,
-      ['--session', session, '--state', stateCopy, 'open'],
+      ['--session', session, 'state', 'load', stateCopy],
       { timeout: 20_000, windowsHide: true, env },
       (error) => resolve(error === null),
     )
