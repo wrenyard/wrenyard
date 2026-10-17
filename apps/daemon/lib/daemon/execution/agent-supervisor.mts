@@ -13,7 +13,7 @@ import { redactDiagnosticText, redactEvent, redactJsonString } from './redaction
 import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protocol.mts'
 import { MODEL_REJECTION_FAILURE_CLASS } from '../../core/task/failure.mts'
 import { RepoWriteLocks } from './repo-write-locks.mts'
-import { desktopLane, toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
+import { desktopLane, DesktopLaneClosedError, toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { createBuiltinCatalog } from '@wrenyard/providers'
 import type {
@@ -857,6 +857,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     } catch (error) {
       await prepared?.release().catch(() => undefined)
       if (entry.cancelRequested || entry.terminalIntent) return
+      if (error instanceof DesktopLaneClosedError) {
+        this.terminalizeQueued(entry, 'cancelled', 'cancel', 'cancelled')
+        return
+      }
       this.terminalizeStartingFailure(entry, error)
       return
     }

@@ -87,6 +87,7 @@ import type {
   OperationComponents,
 } from '../../daemon/services/operation-components.mts'
 import {
+  DesktopLaneClosedError,
   desktopLane,
   toOperationIds,
   type OperationAdapter,
@@ -775,6 +776,10 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
               })
           } catch (error) {
             await prepared?.release().catch(() => undefined)
+            if (error instanceof DesktopLaneClosedError) {
+              await service.cancel(runId).catch(() => undefined)
+              return
+            }
             service.failStart(runId, error)
           }
         })()

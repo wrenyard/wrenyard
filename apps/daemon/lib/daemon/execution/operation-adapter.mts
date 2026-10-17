@@ -108,9 +108,17 @@ interface DesktopLaneWaiter {
   abort?: () => void
 }
 
+export class DesktopLaneClosedError extends Error {
+  constructor() {
+    super('desktop lane closed for shutdown')
+    this.name = 'DesktopLaneClosedError'
+  }
+}
+
 export class DesktopLane {
   #owner: string | undefined
   #holds = 0
+  #closed = false
   readonly #queue: DesktopLaneWaiter[] = []
 
   positionOf(ownerOrRunId: string): number | undefined {
@@ -120,12 +128,29 @@ export class DesktopLane {
     return index === -1 ? undefined : index + 1
   }
 
+  /**
+   * Permanently closes the lane. Queued waiters are rejected immediately and
+   * later acquisitions fail, so nothing new can start; the current holder is
+   * left to finish under the caller's own drain policy.
+   */
+  close(): void {
+    if (this.#closed) return
+    this.#closed = true
+    while (this.#queue.length > 0) {
+      const waiter = this.#queue.shift()!
+      waiter.signal?.removeEventListener('abort', waiter.abort!)
+      waiter.reject(new DesktopLaneClosedError())
+    }
+    this.#updatePositions()
+  }
+
   async acquire(
     owner: string,
     runId: string,
     signal?: AbortSignal,
     onQueued?: (position: number | undefined) => void,
   ): Promise<void> {
+    if (this.#closed) throw new DesktopLaneClosedError()
     if (signal?.aborted) throw abortError()
     if (this.#owner === owner) {
       this.#holds += 1

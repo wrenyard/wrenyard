@@ -365,6 +365,10 @@ export class ForemanDaemon implements RunningForemanDaemon {
     this.scheduler?.stop()
     this.botHost?.stop()
     void this.botAgents?.stop()
+    // Runs still queued for the desktop lane must not start while the drain
+    // finalises: close the lane so their admission fails instead of handing
+    // them ownership when the current holder releases.
+    desktopLane.close()
     this.shutdownForce ||= force
     this.shutdownRequestedFlag = true
     this.resolveShutdownRequested()
