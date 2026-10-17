@@ -6,6 +6,8 @@ export default async function promo(ctx) {
   await ctx.appearance({ theme: 'paper', dark: false });
   await ctx.page('session');
   await ctx.sleep(1200);
+  await ctx.click('[aria-label="对话视图"]', { move: 1 });
+  await ctx.hideCursor();
 
   await ctx.record('01-session', async () => {
     await ctx.sleep(600);
@@ -22,26 +24,22 @@ export default async function promo(ctx) {
   await ctx.record('02-meter', async () => {
     await ctx.sleep(400);
     await ctx.click('[aria-label="上下文占用"]', { move: 900 });
-    await ctx.sleep(1800);
-    await ctx.click({ text: '展开明细' }, { move: 600 });
     await ctx.sleep(2600);
     await ctx.key('Escape');
     await ctx.sleep(500);
   });
 
-  await ctx.record('03-inspector', async () => {
-    await ctx.click('[aria-label="上下文占用"]', { move: 700 });
-    await ctx.sleep(900);
-    await ctx.click({ text: '展开明细' }, { move: 500 });
-    await ctx.sleep(700);
-    await ctx.click({ text: '在检查器中审计' }, { move: 600 });
+  await ctx.record('03-transcript', async () => {
+    await ctx.click('[aria-label="详细视图"]', { move: 700 });
     await ctx.sleep(1600);
-    await ctx.scroll({ x: 1240, y: 520 }, 520, { duration: 1600 });
+    await ctx.scroll({ x: 1160, y: 520 }, -1600, { duration: 1800 });
     await ctx.sleep(1400);
+    await ctx.click('[aria-label="对话视图"]', { move: 700 });
+    await ctx.sleep(800);
   });
 
   await ctx.record('04-statusbar', async () => {
-    await ctx.click('[aria-label="任务活动"]', { move: 900 });
+    await ctx.click('[aria-label="活动"]', { move: 900 });
     await ctx.sleep(2600);
     await ctx.key('Escape');
     await ctx.click('[aria-label="额度"]', { move: 900 });
@@ -50,17 +48,26 @@ export default async function promo(ctx) {
     await ctx.sleep(400);
   });
 
-  await ctx.record('05-quota', async () => {
-    await ctx.click({ text: '模型供应', scope: RAIL }, { move: 800 });
-    await ctx.sleep(700);
-    await ctx.click({ text: '供应商', scope: '[role="tab"]' }, { move: 600 });
+  await ctx.record('05-agents', async () => {
+    await ctx.click({ text: '机器人', scope: RAIL }, { move: 800 });
+    await ctx.sleep(1600);
+    await ctx.click({ text: '发布助手' }, { move: 700 });
     await ctx.sleep(1200);
-    await ctx.moveTo({ x: 640, y: 210 }, 900);
+    await ctx.click({ text: '巡检员' }, { move: 600 });
     await ctx.sleep(1800);
   });
 
-  await ctx.record('06-stats', async () => {
-    await ctx.click({ text: '工房台账', scope: RAIL }, { move: 700 });
+  await ctx.record('06-providers', async () => {
+    await ctx.page('settings');
+    await ctx.sleep(500);
+    await ctx.click({ text: '供应商', scope: RAIL }, { move: 800 });
+    await ctx.sleep(1200);
+    await ctx.moveTo({ x: 1160, y: 360 }, 900);
+    await ctx.sleep(1800);
+  });
+
+  await ctx.record('07-stats', async () => {
+    await ctx.page('stats');
     await ctx.sleep(1400);
     await ctx.click({ text: '7 天' }, { move: 900 });
     await ctx.sleep(1500);
@@ -68,8 +75,8 @@ export default async function promo(ctx) {
     await ctx.sleep(1500);
   });
 
-  await ctx.record('07-themes', async () => {
-    await ctx.click({ text: '设置', scope: RAIL }, { move: 800 });
+  await ctx.record('08-themes', async () => {
+    await ctx.page('settings');
     await ctx.sleep(500);
     await ctx.click({ text: '外观', scope: RAIL }, { move: 600 });
     await ctx.sleep(900);

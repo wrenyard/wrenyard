@@ -9,10 +9,16 @@
  * load, so relative labels (今天, 2 分钟前) stay correct on any capture day.
  */
 
+import type { LedgerEvent, LedgerEventDraft } from '@wrenyard/session';
 import {
   isPreferenceId,
   validatePreferenceValue,
   type ActivityStatusSnapshot,
+  type AgentBot,
+  type OperationComponentSnapshot,
+  type RemoteConnectionSnapshot,
+  type Routine,
+  type StorageUsageSnapshot,
   type AppearanceSettings,
   type AppNotification,
   type NotificationEntry,
@@ -219,7 +225,6 @@ const ABOUT: SettingsSnapshot['about'] = {
   desktopVersion: VERSION,
   wrenyardVersion: VERSION,
   buildTime: iso(todayAt(10, 20)),
-  sourceDevelopment: false,
 };
 
 const PET_SETTINGS_DEFAULT: PetCompanionSettings = {
@@ -963,9 +968,9 @@ const ROUTING_CANDIDATES: Array<Omit<TaskRoutingTestRow, 'rank' | 'reason'>> = [
 /* ------------------------------------------------------------------ */
 
 let preferences: DesktopPreferences = {
-  general: { startupPage: 'last', confirmQuit: true, openAtLogin: false, menuBarQuota: false },
+  general: { startupPage: 'last', openAtLogin: false, menuBarQuota: false },
   appearance: { theme: 'paper', colorMode: 'light', motion: 'system', zoom: 100 },
-  session: { defaultModel: 'last', model: null, effort: null, lastSentModel: null, lastSentEffort: null, sendKey: 'enter' },
+  session: { sendKey: 'enter', promptCompletion: true },
   notifications: { enabled: true },
   statusBar: { hidden: [] },
   update: { autoCheck: true },
@@ -987,6 +992,183 @@ function applyPreference(current: DesktopPreferences, id: PreferenceId, value: u
   cursor[parts[parts.length - 1]] = value;
   return next as unknown as DesktopPreferences;
 }
+
+/* ------------------------------------------------------------------ */
+/* Bot agents                                                          */
+/* ------------------------------------------------------------------ */
+
+const AGENT_BOTS: AgentBot[] = [
+  {
+    id: 'reviewer',
+    name: '巡检员',
+    enabled: true,
+    status: 'idle',
+    configPath: '~/.config/wrenyard/bot-agents/reviewer.json',
+    tools: ['session', 'todo', 'message'],
+    lastWakeAt: iso(NOW - 12 * MINUTE),
+    queued: 0,
+    sessionId: 'bot-reviewer',
+  },
+  {
+    id: 'release',
+    name: '发布助手',
+    enabled: true,
+    status: 'running',
+    configPath: '~/.config/wrenyard/bot-agents/release.json',
+    tools: ['session', 'message'],
+    lastWakeAt: iso(NOW - 40 * SECOND),
+    queued: 1,
+    sessionId: 'bot-release',
+  },
+];
+
+const AGENT_CONFIGS: Record<string, string> = {
+  reviewer: JSON.stringify({
+    id: 'reviewer',
+    name: '巡检员',
+    instructions: '每天早上检查 aurora 的未完成待办，为需要动手的条目开会话处理，并把结果汇总给发布助手。',
+    tools: { session: true, todo: true, message: true },
+    routines: [{ name: 'morning-review', prompt: '检查 aurora 的未完成待办', intervalMinutes: 1440, deliver: 'bot:release' }],
+  }, null, 2),
+  release: JSON.stringify({
+    id: 'release',
+    name: '发布助手',
+    instructions: '汇总收到的结果，起草发布说明。',
+    tools: { session: true, message: true },
+  }, null, 2),
+};
+
+const ROUTINES: Routine[] = [
+  {
+    id: 'a1b2c3d4',
+    botId: 'reviewer',
+    name: 'morning-review',
+    prompt: '检查 aurora 的未完成待办',
+    intervalMinutes: 1440,
+    recurring: true,
+    state: 'active',
+    deliver: 'bot:release',
+    createdAt: iso(NOW - 9 * DAY),
+    nextRunAt: iso(NOW + 20 * HOUR),
+    lastRunAt: iso(NOW - 4 * HOUR),
+    runCount: 9,
+  },
+  {
+    id: 'e5f6a7b8',
+    botId: 'reviewer',
+    prompt: '确认 billing 重试的 PR 已经通过评审',
+    intervalMinutes: 120,
+    recurring: false,
+    state: 'paused',
+    deliver: 'none',
+    createdAt: iso(NOW - DAY),
+    runCount: 0,
+  },
+];
+
+/** The reviewer bot's context ledger: one routine round that opened a session. */
+function buildAgentEvents(): LedgerEvent[] {
+  const events: LedgerEvent[] = [];
+  const push = (secondsAgo: number, draft: LedgerEventDraft): void => {
+    events.push({ ...draft, seq: events.length + 1, at: iso(NOW - secondsAgo * SECOND) } as LedgerEvent);
+  };
+  const prompt = '例行任务 morning-review：检查 aurora 的未完成待办';
+  const reasoning = '有 1 条待办需要改代码：billing 重试改为指数退避。我为它开一个会话处理，完成后把结果投递给发布助手。';
+  const reply = '今天 aurora 有 3 条未完成待办：1 条已开会话处理（billing 重试改为指数退避），2 条在等外部评审。结果已投递给发布助手。';
+  push(14_400, { type: 'turn.started', turn: 1, id: 't1', text: prompt, model: { provider: 'kimi-coding', model: 'kimi-k3', reasoningEffort: 'high' } });
+  push(14_399, { type: 'step.started', id: 't1.1', parent: 't1', turn: 1, step: 1, model: 'kimi-coding/kimi-k3' });
+  push(14_390, { type: 'reasoning.completed', turn: 1, step: 1, parent: 's1.1', text: reasoning });
+  push(14_390, { type: 'action.started', turn: 1, step: 1, id: 'a1', parent: 't1.1', action: { type: 'tool', prompt: 'todo {"op":"list"}' } });
+  push(14_389, { type: 'action.titled', turn: 1, step: 1, id: 'a1', title: '读取 aurora 待办' });
+  push(14_388, { type: 'action.finished', turn: 1, step: 1, id: 'a1', action: { type: 'tool' }, status: 'done', result: '3 条未完成待办。' });
+  push(14_388, { type: 'action.started', turn: 1, step: 1, id: 'a2', parent: 't1.1', action: { type: 'tool', prompt: 'session {"op":"create","text":"在 aurora 把 billing 重试改为指数退避并补齐测试"}' } });
+  push(14_387, { type: 'action.titled', turn: 1, step: 1, id: 'a2', title: '开会话处理 billing 重试' });
+  push(14_386, { type: 'action.finished', turn: 1, step: 1, id: 'a2', action: { type: 'tool' }, status: 'done', result: '已创建会话 demo-aurora-billing-retry。' });
+  push(14_385, { type: 'step.finished', turn: 1, step: 1, id: 't1.1', status: 'done' });
+  push(14_384, { type: 'reply.sent', turn: 1, step: 1, text: reply, kind: 'final' });
+  push(14_384, { type: 'turn.finished', turn: 1, id: 't1', status: 'completed' });
+  return events;
+}
+
+/* ------------------------------------------------------------------ */
+/* Runtime and machine facts                                           */
+/* ------------------------------------------------------------------ */
+
+const GATEWAY_SETTINGS = {
+  savedPortMode: 'fixed' as const,
+  savedPort: 47120,
+  tokenSaved: true,
+  portChangePending: false,
+  tokenChangePending: false,
+  effective: {
+    host: '127.0.0.1',
+    port: 47120,
+    openaiChatBaseUrl: 'http://127.0.0.1:47120/gateway/openai/v1',
+    openaiResponsesBaseUrl: 'http://127.0.0.1:47120/gateway/openai/v1',
+    anthropicBaseUrl: 'http://127.0.0.1:47120/gateway/anthropic',
+    token: 'wy_demo_0000000000000000',
+  },
+};
+
+const STORAGE_USAGE: StorageUsageSnapshot = {
+  device: { hostname: DEVICE_NAME, platform: 'darwin' },
+  roots: [
+    { kind: 'state', path: '~/.local/state/wrenyard' },
+    { kind: 'config', path: '~/.config/wrenyard' },
+  ],
+  status: 'ready',
+  startedAt: iso(NOW - 3 * MINUTE),
+  scannedAt: iso(NOW - 3 * MINUTE + 4 * SECOND),
+  result: {
+    totalBytes: 3_420_000_000,
+    fileCount: 18_420,
+    categories: [
+      { id: 'sessions', bytes: 410_000_000, fileCount: 1_240, unreadable: 0 },
+      { id: 'records', bytes: 280_000_000, fileCount: 3_900, unreadable: 0 },
+      { id: 'files', bytes: 620_000_000, fileCount: 2_100, unreadable: 0 },
+      { id: 'worktrees', bytes: 1_540_000_000, fileCount: 9_800, unreadable: 0 },
+      { id: 'logs', bytes: 96_000_000, fileCount: 640, unreadable: 0 },
+      { id: 'clients', bytes: 420_000_000, fileCount: 700, unreadable: 0 },
+      { id: 'other', bytes: 54_000_000, fileCount: 40, unreadable: 0 },
+    ],
+    unreadable: 0,
+    unreadableSamples: [],
+    skippedLinks: 0,
+  },
+};
+
+const OPERATION_COMPONENTS: OperationComponentSnapshot[] = [
+  {
+    id: 'browser',
+    name: 'agent-browser',
+    state: 'ready',
+    source: 'managed',
+    version: '0.9.2',
+    pinnedVersion: '0.9.2',
+    host: DEVICE_NAME,
+    platform: 'darwin',
+    arch: 'arm64',
+    checkedAt: iso(NOW - 6 * MINUTE),
+    hints: [],
+    actions: ['refresh', 'repair', 'disable'],
+  },
+  {
+    id: 'desktop',
+    name: 'Cua Driver',
+    state: 'ready',
+    source: 'managed',
+    version: '0.3.1',
+    pinnedVersion: '0.3.1',
+    host: DEVICE_NAME,
+    platform: 'darwin',
+    arch: 'arm64',
+    checkedAt: iso(NOW - 6 * MINUTE),
+    hints: [],
+    actions: ['refresh', 'repair', 'disable'],
+  },
+];
+
+const REMOTE_CONNECTION: RemoteConnectionSnapshot = { state: 'local', generation: 1, host: null };
 
 /* ------------------------------------------------------------------ */
 /* Exec (in-memory, non-persistent)                                    */
@@ -1035,6 +1217,51 @@ export function createDemoShell(control?: DemoControl): DemoShell {
     onWindowStateChanged: () => () => undefined,
 
     getSettings: async () => buildSettings(),
+    openMiniCard: async () => undefined,
+    restoreMain: async () => undefined,
+    setAlwaysOnTop: async () => undefined,
+    closeWindow: async () => undefined,
+    getGatewaySettings: async () => GATEWAY_SETTINGS,
+    saveGatewaySettings: async () => ({ ...GATEWAY_SETTINGS, ok: true }),
+    getStorageUsage: async () => STORAGE_USAGE,
+    bot: async () => {
+      throw new Error('The legacy bot is not part of the showcase.');
+    },
+    todo: async () => {
+      throw new Error('Workspace todos are not part of the showcase.');
+    },
+    agent: (async (method: string, params?: { id?: string; botId?: string; afterSeq?: number }) => {
+      switch (method) {
+        case 'agent.list':
+          return { bots: AGENT_BOTS };
+        case 'agent.get': {
+          const bot = AGENT_BOTS.find((entry) => entry.id === params?.id) ?? AGENT_BOTS[0]!;
+          return { bot, config: AGENT_CONFIGS[bot.id] ?? '{}' };
+        }
+        case 'agent.events': {
+          const events = params?.id === 'reviewer' ? buildAgentEvents() : [];
+          const fresh = events.filter((event) => event.seq > (params?.afterSeq ?? 0));
+          return { events: fresh, lastSeq: events.length };
+        }
+        case 'agent.wake':
+          return { queued: 1 };
+        case 'routine.list':
+          return { routines: ROUTINES.filter((routine) => routine.botId === params?.botId) };
+        default:
+          return { routine: ROUTINES[0]!, deleted: true };
+      }
+    }) as WrenyardShellApi['agent'],
+    getRemoteConnection: async () => REMOTE_CONNECTION,
+    listRemoteHosts: async () => ({ hosts: [{ alias: 'build-box', displayName: '构建机', address: '10.0.0.12', os: 'linux' }] }),
+    listDiscoveredSshHosts: async () => ({ hosts: [] }),
+    testRemoteConnection: async () => ({ ok: true, platform: 'linux', arch: 'x64' }),
+    confirmRemoteConnection: async () => ({ ok: true }),
+    renameRemoteHost: async () => ({ ok: true }),
+    connectSavedRemoteHost: async () => ({ ok: true }),
+    returnToLocal: async () => ({ ok: true }),
+    onRemoteChanged: () => () => undefined,
+    getOperationComponents: async () => OPERATION_COMPONENTS,
+    runOperationComponentAction: async (id) => OPERATION_COMPONENTS.find((component) => component.id === id)!,
     getStats: async () => STATS,
     getQuota: async () => buildQuota(),
     saveProviderOrder: async (providerIds) => {
