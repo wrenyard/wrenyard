@@ -271,6 +271,18 @@ export class TaskService {
     const validation = this.validateInput(description, input)
     if (validation) return validation
 
+    if (target.definition.config.writeTargets !== undefined && !params.worktree?.trim()) {
+      const entry = this.projectManager().getProject(project)
+      if (entry.noWorktree !== true) {
+        throw new TaskServiceError(
+          'worktree_required',
+          `Task '${taskId}' can write and requires a managed worktree: create or bind a worktree for project '${project}' before dispatching.`,
+          409,
+          { task: taskId, project },
+        )
+      }
+    }
+
     let workingDirectory: string
     try {
       workingDirectory = this.resolveWorkingDirectory(project, params.worktree)
