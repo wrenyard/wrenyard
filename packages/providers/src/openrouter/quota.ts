@@ -6,9 +6,9 @@ const OPENROUTER_BALANCE_POOL = balancePool('openrouter/balance', '');
 
 export const quota = {
   bindings: [
-    binding('openrouter', 'anthropic/claude-sonnet-5.5', [OPENROUTER_BALANCE_POOL]),
-    binding('openrouter', 'openai/gpt-6.1-sol', [OPENROUTER_BALANCE_POOL]),
-    binding('openrouter', 'google/gemini-4-argon', [OPENROUTER_BALANCE_POOL]),
+    binding('openrouter', 'claude-sonnet-5-5', [OPENROUTER_BALANCE_POOL]),
+    binding('openrouter', 'gpt-6.1-sol', [OPENROUTER_BALANCE_POOL]),
+    binding('openrouter', 'gemini-4-argon', [OPENROUTER_BALANCE_POOL]),
   ],
   defaultPools: [OPENROUTER_FREE_POOL],
 } satisfies Provider['quota'];

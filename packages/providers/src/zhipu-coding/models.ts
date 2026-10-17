@@ -3,8 +3,8 @@ import { defineProvider, model, openAI, anthropic, REASONING_LOW_HIGH_MAX } from
 export const definition = defineProvider({
   id: 'zhipu-coding', displayName: 'Zhipu Coding', credentialResolver: 'managed', defaultModel: 'glm-5.3', quotaProvider: 'zhipu-coding',
   models: [
-    model('glm-5.3', 1_048_576, 32_768, 'glm-5.3', REASONING_LOW_HIGH_MAX),
-    model('glm-5.3-flash', 1_048_576, 32_768, 'glm-5.3-flash', REASONING_LOW_HIGH_MAX),
+    model('glm-5.3', 1_048_576, 32_768, undefined, REASONING_LOW_HIGH_MAX),
+    model('glm-5.3-flash', 1_048_576, 32_768, undefined, REASONING_LOW_HIGH_MAX),
   ],
   protocols: [openAI('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions'), anthropic('https://open.bigmodel.cn/api/anthropic/v1/messages')],
   convertReasoningEffort: (_modelId, effort, protocol) => {

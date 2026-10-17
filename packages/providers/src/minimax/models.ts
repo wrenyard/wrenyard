@@ -1,15 +1,15 @@
 import { defineProvider, model, openAI, anthropic } from '../base/model-defaults.ts';
 
 export const definition = defineProvider({
-  id: 'minimax', displayName: 'MiniMax', credentialResolver: 'managed', defaultModel: 'MiniMax-M3',
-  models: [model('MiniMax-M3', 1_000_000, 131_072, 'minimax-m3', ['none', 'medium'])],
+  id: 'minimax', displayName: 'MiniMax', credentialResolver: 'managed', defaultModel: 'minimax-m3',
+  models: [model('minimax-m3', 1_000_000, 131_072, 'MiniMax-M3', ['none', 'medium'])],
   protocols: [openAI('https://api.minimaxi.com/v1/chat/completions'), anthropic('https://api.minimaxi.com/anthropic/v1/messages')],
   // MiniMax M3 exposes only `none` and `medium`: `medium` selects adaptive
   // thinking, `none` disables it entirely. Every other MiniMax row sends the
   // level verbatim as `reasoning_effort`.
   convertReasoningEffort: (modelId, effort, protocol) => {
     if (protocol !== 'openai_chat' && protocol !== 'anthropic_messages') throw new Error('MiniMax M3 does not expose Responses');
-    if (modelId !== 'MiniMax-M3' && modelId !== 'minimax-m3') throw new Error('Unknown MiniMax route');
+    if (modelId !== 'minimax-m3') throw new Error('Unknown MiniMax route');
     if (effort !== 'none' && effort !== 'medium') throw new Error('MiniMax M3 supports only none and medium');
     return { thinking: { type: effort === 'medium' ? 'adaptive' : 'disabled' } };
   },

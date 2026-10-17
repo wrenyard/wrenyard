@@ -10,6 +10,13 @@
 export const GATEWAY_HEADERS = {
   /** Request: unified public reasoning effort the Gateway translates per provider. */
   reasoningEffort: 'x-wrenyard-reasoning-effort',
+  /**
+   * Request: exact provider selector. The body's `model` field is always the
+   * bare registered model id; the provider is a separate dimension. When absent
+   * the Gateway admits the request only if exactly one provider offers that
+   * registered id on the requested protocol.
+   */
+  provider: 'x-wrenyard-provider',
   /** Request: call role, recorded on the Gateway event for attribution. */
   callRole: 'x-wrenyard-call-role',
   /** Request: session id, recorded on the Gateway event for attribution. */

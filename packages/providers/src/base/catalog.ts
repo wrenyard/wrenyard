@@ -1,5 +1,5 @@
-import { isMainstreamModelId, REASONING_EFFORTS, resolveReasoningEffort, type ReasoningEffort } from '@wrenyard/models';
-import { GATEWAY_PROTOCOLS, type GatewayProtocol, type IntelligenceTier, INTELLIGENCE_ORDER, type ModelCapability, type ModelPricing, type SpeedSource, type SpeedEvidence, type CanonicalModelDefinition, type ModelDefinition, type DispatchCandidate, type LocalSpeedSample, type ClientDefinition, type PublicGatewayModel, type ResolvedGatewayModel, type DispatchPlan, type RunSyntaxRef, PUBLIC_CLIENT_KEYS, type ProtocolCapability, type ProviderDefinition, type ProviderReasoningEffortMappings } from './contracts.ts';
+import { isMainstreamModelId, models, REASONING_EFFORTS, resolveReasoningEffort, type ReasoningEffort } from '@wrenyard/models';
+import { GATEWAY_PROTOCOLS, type GatewayProtocol, type IntelligenceTier, INTELLIGENCE_ORDER, type ModelCapability, type ModelPricing, type SpeedSource, type SpeedEvidence, type CanonicalModelDefinition, type ModelDefinition, type DispatchCandidate, type LocalSpeedSample, type ClientDefinition, type PublicGatewayModel, type ResolvedGatewayModel, type DispatchPlan, type RunSyntaxRef, PUBLIC_CLIENT_KEYS, type ProtocolCapability, type ProviderDefinition, type ProviderReasoningEffortMappings, type GatewayModelSelector } from './contracts.ts';
 export * from './contracts.ts';
 
 const REASONING_EFFORT_SET: ReadonlySet<string> = new Set(REASONING_EFFORTS);
@@ -113,6 +113,44 @@ function requireID(kind: string, value: string): void {
   }
 }
 
+/**
+ * Validate one offering snapshot against the shared model registry. Every
+ * active offering must carry an exact registered model id, resolve to a
+ * registration with a legal intelligence tier and a positive default speed, and
+ * declare its own legal tier and positive speed. A snapshot may never publish
+ * one identity twice. This applies to both the initial registration and every
+ * provider-published replacement snapshot, so a discovery refresh cannot
+ * bypass the identity or metadata contract.
+ */
+export function validateOfferingSnapshot(providerID: string, offerings: readonly ModelDefinition[]): void {
+  const seen = new Set<string>();
+  for (const model of offerings) {
+    if (!model.id.trim()) throw new Error(`provider ${providerID} has an empty model id`);
+    if (seen.has(model.id)) throw new Error(`provider ${providerID} has duplicate model ${model.id}`);
+    const registered = models.get(model.id);
+    if (!registered) {
+      throw new Error(`provider ${providerID} model ${model.id} must be a registered model id`);
+    }
+    // The registered identity is the metadata authority: an incomplete
+    // registration can never become a usable offering.
+    if (!CURRENT_INTELLIGENCE_TIERS.has(registered.defaults.intelligence)) {
+      throw new Error(`provider ${providerID} model ${model.id} must resolve a valid registered intelligence tier`);
+    }
+    validateSpeed(registered.defaults.speed, `provider ${providerID} model ${model.id} registry default`);
+    // The resolved offering carries the same required facts.
+    if (!CURRENT_INTELLIGENCE_TIERS.has(model.intelligence)) {
+      throw new Error(`provider ${providerID} model ${model.id} must declare a valid intelligence tier`);
+    }
+    validateSpeed(model.speed, `provider ${providerID} model ${model.id}`);
+    if (model.canonicalModel !== undefined && model.canonicalModel.id !== model.id) {
+      throw new Error(
+        `provider ${providerID} model ${model.id} must name itself as its canonical model, not ${model.canonicalModel.id}`,
+      );
+    }
+    seen.add(model.id);
+  }
+}
+
 // Every catalog speed must be a positive integer TPS, whether it is a
 // model's required default or a canonical modelSpeedOverride.
 function validateSpeed(speed: number | undefined, label: string): void {
@@ -176,40 +214,26 @@ function isFreshLocalSample(sample: LocalSpeedSample, now: Date): boolean {
 }
 
 /**
- * Ranking floor TPS for a live-confirmed-free model that carries no speed
- * evidence of its own.
- *
- * Such a model still has to be ranked, so a minimal positive floor keeps it
- * last by speed instead of dropping it as unknown. It is a ranking floor, never
- * a measurement, and it never applies to a paid model.
- */
-export const CONFIRMED_FREE_FLOOR_TPS = 1
-
-/**
  * Resolves the single authoritative speed evidence for an exact model in
  * exact precedence order: the first usable exact-provider/model local 31-day
  * TPS sample, then the canonical provider modelSpeedOverride, then the
- * model's catalog default speed. Matching is by exact provider.id/modelDef.id
+ * registered catalog default speed. Matching is by exact provider.id/modelDef.id
  * only — no alias, client, or profile remap — and any sample missing, malformed,
- * future, or older than 31 days is skipped. Returns undefined when NO evidence
- * tier exists (the model declares no catalog default speed and has no sample or
- * override): a genuinely unknown speed omits the evidence object entirely rather
- * than fabricating a 0. Used by resolveConstrainedDispatch and the Foreman
- * failure diagnostics so the precedence logic is never duplicated.
+ * future, or older than 31 days is skipped.
  *
- * `confirmedFreeFloor` applies ONLY to a live-confirmed-free model that has no
- * speed evidence of its own: such a model still has to be ranked, and the floor
- * keeps it last by speed instead of dropping it. The floor is never a fabricated
- * measurement for a paid model — a paid route with no evidence keeps returning
- * undefined.
+ * The registry invariant guarantees a positive default speed for every
+ * registered offering, so this always returns an evidence tier. A provider
+ * override is pair-specific evidence for its own provider only; another
+ * provider's measurement is never borrowed and the default is never reported as
+ * a measurement. Used by resolveConstrainedDispatch and the Foreman failure
+ * diagnostics so the precedence logic is never duplicated.
  */
 export function resolveModelSpeed(
   provider: ProviderDefinition,
   modelDef: ModelDefinition,
   localSpeed?: readonly LocalSpeedSample[],
   now: Date = new Date(),
-  confirmedFreeFloor?: number,
-): SpeedEvidence | undefined {
+): SpeedEvidence {
   const local = localSpeed?.find(
     (sample) => sample.provider === provider.id && sample.model === modelDef.id && isFreshLocalSample(sample, now),
   )
@@ -228,13 +252,6 @@ export function resolveModelSpeed(
     return {
       source: 'provider_override',
       tps: override,
-    }
-  }
-  if (modelDef.speed === undefined) {
-    if (confirmedFreeFloor === undefined) return undefined
-    return {
-      source: 'free_supply_floor',
-      tps: confirmedFreeFloor,
     }
   }
   return {
@@ -289,10 +306,10 @@ function hasMeasuredSpeedProvenance(provider: ProviderDefinition, modelID: strin
  *
  * Free status is decided by the explicit `free: true` flag alone, never by a
  * price. A non-free route passes unchanged. An explicitly free offering is
- * auto-eligible only when its canonical identity (`canonicalModel.id` when
- * declared, else its own id) is in the mainstream list AND the provider records
- * real measured speed provenance for its exact id with a matching override.
- * Every other free offering stays chat-picker-only and is never auto-selected.
+ * auto-eligible only when its registered identity is in the mainstream list AND
+ * the provider records real measured speed provenance for its exact id with a
+ * matching override. Every other free offering stays chat-picker-only and is
+ * never auto-selected.
  *
  * The static mainstream+measured gate applies to a statically-declared free
  * offering. Live upstream confirmed-free evidence is a different fact: when the
@@ -315,9 +332,8 @@ export function explicitFreeAutoEligibility(
   // Live upstream evidence admits the model from its own free pool; the static
   // mainstream id and measured TPS checks describe statically-declared offerings.
   if (liveConfirmedFree === true) return { eligible: true }
-  // Canonical identity resolution matches the shared metadata resolution.
-  const canonicalID = model.canonicalModel?.id ?? model.id
-  if (!isMainstreamModelId(canonicalID)) return { eligible: false, reason: 'free_not_mainstream' }
+  // One identity: the offering's registered id is the only mainstream test.
+  if (!isMainstreamModelId(model.id)) return { eligible: false, reason: 'free_not_mainstream' }
   if (!hasMeasuredSpeedProvenance(provider, model.id)) return { eligible: false, reason: 'free_missing_measured_tps' }
   return { eligible: true }
 }
@@ -330,6 +346,9 @@ export class Catalog {
   registerProvider(provider: ProviderDefinition): void {
     requireID('provider', provider.id);
     if (this.providersByID.has(provider.id)) throw new Error(`duplicate provider: ${provider.id}`);
+    // The initial snapshot obeys the same identity contract as every later
+    // replacement snapshot: registered ids only, no duplicate offering.
+    validateOfferingSnapshot(provider.id, provider.models);
     const modelIDs = new Set<string>();
     // Stage shared identity entries locally. They are committed only after the
     // whole provider (including aliases, speed overrides, and protocols) has
@@ -338,15 +357,14 @@ export class Catalog {
     for (const model of provider.models) {
       if (!model.id.trim()) throw new Error(`provider ${provider.id} has an empty model id`);
       if (modelIDs.has(model.id)) throw new Error(`provider ${provider.id} has duplicate model ${model.id}`);
-      if (model.intelligence !== undefined && !CURRENT_INTELLIGENCE_TIERS.has(model.intelligence)) {
+      if (!CURRENT_INTELLIGENCE_TIERS.has(model.intelligence)) {
         throw new Error(
-          `provider ${provider.id} model ${model.id} has invalid intelligence tier: ${JSON.stringify(model.intelligence)}`,
+          `provider ${provider.id} model ${model.id} must declare a valid intelligence tier`,
         );
       }
-      // Catalog metadata is validated ONLY when it is actually supplied: a route
-      // naming no registered canonical model may leave speed/pricing genuinely
-      // unknown, so a missing value is never rejected nor defaulted here.
-      if (model.speed !== undefined) validateSpeed(model.speed, `provider ${provider.id} model ${model.id}`);
+      // Every offering carries the required catalog default speed and
+      // intelligence resolved from its registered identity.
+      validateSpeed(model.speed, `provider ${provider.id} model ${model.id}`);
       if (model.pricing !== undefined) validateModelPricing(model.pricing, `provider ${provider.id} model ${model.id}`);
       if (model.free !== undefined && typeof model.free !== 'boolean') {
         throw new Error(`provider ${provider.id} model ${model.id} free must be a boolean`);
@@ -534,17 +552,17 @@ export class Catalog {
             provider: provider.id,
             publicId: `${provider.id}/${model.id}`,
             protocols: [...protocols],
-            // Absent catalog metadata is carried through as genuinely absent: the
-            // directory never substitutes a zero price, a zero speed or a made-up
-            // intelligence tier for a route that does not declare one.
-            ...(model.speed === undefined ? {} : { speed: model.speed }),
+            // Speed and intelligence are required registered facts, carried
+            // through verbatim: the directory never substitutes a zero speed or
+            // a made-up intelligence tier.
+            speed: model.speed,
             ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow }),
             ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
             ...(model.family === undefined ? {} : { family: model.family }),
             ...(model.claudeTier === undefined ? {} : { claudeTier: model.claudeTier }),
             ...(model.supports1MContext === undefined ? {} : { supports1MContext: model.supports1MContext }),
             ...(model.supportsFast === true ? { supportsFast: true } : {}),
-            ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
+            intelligence: model.intelligence,
             reasoningEfforts: model.reasoningEfforts,
             ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens }),
             ...(model.capabilities === undefined ? {} : { capabilities: model.capabilities }),
@@ -560,33 +578,88 @@ export class Catalog {
     return this.gatewayModels(credentialAvailable).filter((model) => model.protocols.includes(protocol));
   }
 
-  resolveGatewayModel(protocol: GatewayProtocol, publicID: string): ResolvedGatewayModel {
-    const separator = publicID.indexOf('/');
-    if (separator <= 0 || separator === publicID.length - 1) {
-      throw new Error(`model must use provider/model form: ${publicID}`);
+  /**
+   * Resolve one Gateway request. `selector` carries the bare registered model
+   * id and an optional provider; a caller may also pass the two parts directly.
+   *
+   * An explicit provider always wins. Without one, the provider is inferred only
+   * when exactly one provider offers the registered id on this protocol —
+   * ambiguity is rejected instead of guessing. Qualified ids (`provider/model`)
+   * and historical wire aliases are not accepted as new request identities:
+   * both describe a different namespace and must be migrated by the caller.
+   *
+   * The returned `publicId` stays provider-qualified because it is the internal
+   * route key for health, quota and statistics; the public identity of the
+   * resolved model is always `model.id`.
+   */
+  resolveGatewayModel(
+    protocol: GatewayProtocol,
+    selector: string | GatewayModelSelector,
+    providerID?: string,
+    credentialAvailableProviderIDs: ReadonlySet<string> = new Set(),
+  ): ResolvedGatewayModel {
+    const requestedModelID = (typeof selector === 'string' ? selector : selector.model).trim();
+    const requestedProviderID = (typeof selector === 'string' ? providerID : selector.provider)?.trim();
+    if (requestedModelID === '') throw new Error('model must be a registered model id');
+    // A registered id never contains the provider separator; a qualified value
+    // belongs to the old public-route namespace and is rejected explicitly.
+    if (requestedModelID.includes('/')) {
+      throw new Error(
+        `model must be a registered model id, not a provider-qualified id: ${requestedModelID}; send X-Wrenyard-Provider to select the provider`,
+      );
     }
-    const providerID = publicID.slice(0, separator);
-    const requestedModelID = publicID.slice(separator + 1);
-    const provider = this.providersByID.get(providerID);
-    if (!provider) throw new Error(`unknown provider: ${providerID}`);
-    const modelID = provider.modelAliases?.[requestedModelID] ?? requestedModelID;
-    const model = provider.models.find((entry) => entry.id === modelID && !entry.taskOnly);
-    if (!model) throw new Error(`unknown model: ${publicID}`);
+    const provider = requestedProviderID === undefined || requestedProviderID === ''
+      ? this.inferGatewayProvider(protocol, requestedModelID, credentialAvailableProviderIDs)
+      : this.providersByID.get(requestedProviderID);
+    if (!provider) throw new Error(`unknown provider: ${requestedProviderID}`);
+    // Wire aliases stay private: a new request names the registered id only.
+    if (provider.modelAliases?.[requestedModelID] !== undefined) {
+      throw new Error(
+        `model ${requestedModelID} is a wire alias, not a registered model id for provider ${provider.id}`,
+      );
+    }
+    const model = provider.models.find((entry) => entry.id === requestedModelID && !entry.taskOnly);
+    if (!model) throw new Error(`provider ${provider.id} does not offer registered model ${requestedModelID}`);
     // The public gateway is client-agnostic: only a NON-EMPTY client
     // restriction forbids resolution here. An empty list (no external client for
     // a task run) is still served for direct, client-agnostic session turns.
     if ((model.supportedClients?.length ?? 0) > 0) {
-      throw new Error(`model ${publicID} is not available through the gateway`);
+      throw new Error(`model ${requestedModelID} is not available through the gateway`);
     }
     const capability = provider.protocols?.find((entry) => entry.protocol === protocol);
-    if (!capability) throw new Error(`model ${publicID} does not support ${protocol}`);
+    if (!capability) throw new Error(`model ${requestedModelID} does not support ${protocol}`);
     return {
       provider,
       model,
       capability,
-      publicId: `${providerID}/${modelID}`,
-      upstreamModel: capability.upstreamModels?.[modelID] ?? modelID,
+      publicId: `${provider.id}/${model.id}`,
+      // The exact private binding wins; a route without one sends its
+      // registered id verbatim.
+      upstreamModel: capability.upstreamModels?.[model.id] ?? model.upstreamId ?? model.id,
     };
+  }
+
+  /**
+   * The single provider that offers one registered id on a protocol. A
+   * registered id served by several providers is genuinely ambiguous: the
+   * caller must name the provider instead of relying on declaration order.
+   */
+  private inferGatewayProvider(
+    protocol: GatewayProtocol,
+    modelID: string,
+    credentialAvailableProviderIDs: ReadonlySet<string>,
+  ): ProviderDefinition {
+    const candidates = this.providers()
+      .filter((provider) => credentialAvailableProviderIDs.has(provider.id))
+      .filter((provider) => provider.protocols?.some((entry) => entry.protocol === protocol))
+      .filter((provider) => provider.modelAliases?.[modelID] === undefined)
+      .filter((provider) => provider.models.some((model) =>
+        model.id === modelID && !model.taskOnly && (model.supportedClients?.length ?? 0) === 0));
+    if (candidates.length === 1) return candidates[0]!;
+    if (candidates.length === 0) throw new Error(`no available provider offers registered model ${modelID}`);
+    throw new Error(
+      `model ${modelID} is offered by several providers (${candidates.map((entry) => entry.id).join(', ')}); select one with the provider selector`,
+    );
   }
 
   /**

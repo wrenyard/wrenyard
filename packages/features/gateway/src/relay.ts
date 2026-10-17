@@ -8,8 +8,11 @@ export interface RelayOptions {
   module: GatewayProtocolModule;
   provider: ProviderDefinition;
   providers: ProviderRuntime;
+  /** Registered model id the request was resolved for. */
   modelId: string;
+  /** Exact private upstream wire model (or effort UID) sent outbound. */
   upstreamModel: string;
+  /** Requested registered model id, restored on every response `model` field. */
   publicModel: string;
   observer: ResponseObserver;
   /** The protocol-neutral TPS bridge; receives the translator's generation signals. */
@@ -18,7 +21,7 @@ export interface RelayOptions {
   translator: TpsTranslator;
 }
 
-/** Rewrite every response `model` field to the requested public model id. */
+/** Rewrite every response `model` field to the requested registered model id. */
 function modelRewriter(options: RelayOptions): (model: string) => string {
   return (model) => options.providers.publicResponseModel(
     options.provider, model, options.upstreamModel, options.publicModel,

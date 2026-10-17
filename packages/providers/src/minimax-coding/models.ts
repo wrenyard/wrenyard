@@ -4,11 +4,11 @@ import { defineProvider, model, openAI, anthropic, effortLadder } from '../base/
 const REASONING_LOW_MAX = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 export const definition = defineProvider({
-  id: 'minimax-coding', displayName: 'MiniMax Coding Plan', credentialResolver: 'managed', defaultModel: 'MiniMax-M3.1-Flash-Preview',
+  id: 'minimax-coding', displayName: 'MiniMax Coding Plan', credentialResolver: 'managed', defaultModel: 'minimax-m3.1-flash-preview',
   // M3.1 Flash Preview is subscription-only; the pay-as-you-go provider keeps M3.
-  models: [model('MiniMax-M3.1-Flash-Preview', undefined, undefined, 'minimax-m3.1-flash-preview', REASONING_LOW_MAX)],
+  models: [model('minimax-m3.1-flash-preview', undefined, undefined, 'MiniMax-M3.1-Flash-Preview', REASONING_LOW_MAX)],
   reasoningEffortMappings: {
-    'MiniMax-M3.1-Flash-Preview': {
+    'minimax-m3.1-flash-preview': {
       claude: effortLadder(REASONING_LOW_MAX),
       codebuddy: effortLadder(REASONING_LOW_MAX),
       grok: effortLadder(REASONING_LOW_MAX),

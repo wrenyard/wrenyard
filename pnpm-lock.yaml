@@ -94,6 +94,9 @@ importers:
       '@wrenyard/gateway':
         specifier: workspace:*
         version: link:../../packages/features/gateway
+      '@wrenyard/models':
+        specifier: workspace:*
+        version: link:../../packages/models
       '@wrenyard/paths':
         specifier: workspace:*
         version: link:../../packages/paths

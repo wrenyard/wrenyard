@@ -458,7 +458,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
             `Task '${target.name}' declares a constrained dispatch but no taskDispatchResolver was supplied to the daemon execution kernel.`,
           )
         }
-        const resolution = options.taskDispatchResolver.resolve({
+        const resolution = await options.taskDispatchResolver.resolve({
           taskName: target.name,
           requirements: { ...config.dispatch, inputTokens },
         })

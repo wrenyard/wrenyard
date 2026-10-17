@@ -70,7 +70,7 @@ import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../ev
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
 import { createModelGateway, type ModelGateway, type RouteStatus } from '@wrenyard/gateway'
-import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen } from '@wrenyard/providers'
+import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen, resolveHistoricalOfferedModelId } from '@wrenyard/providers'
 import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { PROVIDER_DEFAULT_REASONING } from '@wrenyard/providers/base'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
@@ -1271,6 +1271,16 @@ async function createForemanDaemonResources(
     resolveExecRequest: (params) => {
       const provider = params.provider ?? catalog.clients().find(client => client.id === params.client)?.nativeProvider
       if (!provider) throw new Error('Execution requires a provider')
+      // Historical identity migration for the execution plan: a legacy model
+      // spelling resolves only through a verified unique mapping of this exact
+      // provider. An unknown or ambiguous spelling fails actionably instead of
+      // being guessed, and the client/route stays the request's own.
+      const providerDefinition = catalog.provider(provider)
+      if (!providerDefinition) throw new Error(`Unknown provider '${provider}'`)
+      const model = resolveHistoricalOfferedModelId(providerDefinition, params.model)
+      if (model === undefined) {
+        throw new Error(`Model '${params.model}' is not a uniquely registered offering of provider '${provider}'`)
+      }
       // A precise execution reasoning effort is an EXACT combination request: it
       // must be a legal public level AND be supported verbatim by the exact
       // client/provider/model route (catalog.reasoningEfforts), never silently
@@ -1281,24 +1291,23 @@ async function createForemanDaemonResources(
       if (params.reasoningEffort !== undefined) {
         if (!(REASONING_EFFORTS as readonly string[]).includes(params.reasoningEffort)) {
           throw new Error('Invalid reasoning effort')
-        }        const supported = catalog.reasoningEfforts(params.client, provider, params.model)
+        }        const supported = catalog.reasoningEfforts(params.client, provider, model)
         // A provider-default-only ladder accepts any valid request: resolveRun
         // adapts every effort to the route's provider default.
         const providerDefaultOnly = supported.length === 1 && supported[0] === PROVIDER_DEFAULT_REASONING
         if (!supported.includes(expectedReasoningEffort) && !providerDefaultOnly) {
-          throw new Error(`Reasoning effort '${expectedReasoningEffort}' is not supported by ${provider}/${params.model}`)
+          throw new Error(`Reasoning effort '${expectedReasoningEffort}' is not supported by ${provider}/${model}`)
         }
       }
-      const plan = catalog.resolveRun(params.client, provider, params.model, expectedReasoningEffort)
+      const plan = catalog.resolveRun(params.client, provider, model, expectedReasoningEffort)
       if (params.mode && params.mode !== plan.mode) throw new Error('Requested mode does not match the selected client/provider')
       // The native wire spelling is owned by the provider, not by this request:
       // resolve it through the provider runtime so an explicit exec launches the
       // exact product id (e.g. canonical Claude 5 -> its `-1m` row) in every
       // environment. An explicit reasoning-effort-mapped substitution still wins,
       // and the public canonical id is preserved for the gateway/id surfaces.
-      const providerDefinition = catalog.provider(provider)
       const upstreamModel = plan.upstreamModel
-        ?? (providerDefinition ? providerRuntime.resolveUpstreamModel(providerDefinition, plan.model) : plan.model)
+        ?? providerRuntime.resolveUpstreamModel(providerDefinition, plan.model)
       return {
         ...params, provider, canonicalModel: plan.model,
         model: upstreamModel, mode: plan.mode, protocol: plan.protocol,
@@ -1309,33 +1318,37 @@ async function createForemanDaemonResources(
     },
     // Display-name lookup for stats rows. The persisted provider id arrives
     // already normalized by the stats source; the persisted model id is first
-    // normalized through the provider's own registry alias map (the same map the
-    // Catalog uses to build public ids) so a recognized historical alias still
-    // resolves to its current definition when offerings move. When the current
-    // offerings no longer list the exact recorded route — for example a provider
-    // that dropped an alias — the exact recorded provider/model ids are returned
-    // with the best available provider label, so a historical row is never left
-    // blank, a missing provider/model identity is never invented, and no client
-    // or upstream identifier is consulted.
+    // migrated through the verified unique-match identity resolver (registered
+    // id, private upstream binding, explicit alias or exact effort UID) so a
+    // recognized historical spelling still resolves to its current definition
+    // when offerings move. When the current offerings no longer list the exact
+    // recorded route — for example a provider that dropped an alias — the exact
+    // recorded provider/model ids are returned with the best available provider
+    // label, so a historical row is never left blank, a missing provider/model
+    // identity is never invented, and no client or upstream identifier is
+    // consulted.
     resolveTaskRunDisplayNames: (providerId, modelId) => {
       const recordedProvider = typeof providerId === 'string' ? providerId.trim() : ''
       const recordedModel = typeof modelId === 'string' ? modelId.trim() : ''
       if (recordedProvider === '' || recordedModel === '') return undefined
       const provider = catalog.provider(recordedProvider)
-      const normalizedModelId = provider?.modelAliases?.[recordedModel] ?? recordedModel
+      const normalizedModelId = provider === undefined
+        ? recordedModel
+        : (resolveHistoricalOfferedModelId(provider, recordedModel) ?? recordedModel)
       const model = provider?.models.find((candidate) => candidate.id === normalizedModelId)
       const providerDisplayName = provider?.displayName?.trim()
       const modelDisplayName = model?.displayName?.trim()
       if (model && providerDisplayName && modelDisplayName) {
-        const canonicalModel = model.canonicalModel
-        const statsModelId = canonicalModel?.id ?? `${recordedProvider}/${normalizedModelId}`
-        const statsModelDisplayName = canonicalModel?.displayName ?? modelDisplayName
+        // Statistics keep the provider-scoped identity: one registered model id
+        // measured through two providers is two routes with independent
+        // evidence, so the key is never collapsed to the model id alone.
+        const statsModelId = `${recordedProvider}/${model.id}`
         return {
           provider_display_name: providerDisplayName,
           model_display_name: modelDisplayName,
-          stats_model_key: canonicalModel ? `canonical:${statsModelId}` : `provider-local:${statsModelId}`,
+          stats_model_key: `provider-local:${statsModelId}`,
           stats_model_id: statsModelId,
-          stats_model_display_name: statsModelDisplayName.trim(),
+          stats_model_display_name: modelDisplayName.trim(),
         }
       }
       // Truthful, exact recorded fallback: the identity is known, only the
@@ -2178,6 +2191,11 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
       refresh: (credential, signal) => refreshCodexGatewayCredential(credential, { signal }),
     },
   })
+  // The dispatch resolver re-enumerates task candidates and derives their
+  // runtime plans from the live catalog on every resolution, so a model added or
+  // removed by a later discovery refresh becomes task-usable without a daemon
+  // restart. This startup dictionary only seeds the launched-client environment
+  // contract; it is never the resolver's task-routing snapshot.
   const dispatchPlans = deriveTaskDispatchPlans(catalog)
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,

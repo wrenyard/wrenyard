@@ -12,10 +12,12 @@ export {
   canonicalizeBuiltinPublicModelId,
   deriveTaskDispatchPlans,
   isBuiltinClientGatewayProviderSupported,
+  resolveHistoricalOfferedModelId,
+  resolveHistoricalProviderModelId,
 } from './catalog.ts';
 export { createBuiltinCatalog } from './registry.ts';
-export { resolveModelSpeed } from './base/catalog.ts';
-export type { DispatchCandidate, IntelligenceTier, LocalSpeedSample, ModelPricing, SpeedEvidence, SpeedSource } from './base/catalog.ts';
+export { resolveModelSpeed, validateOfferingSnapshot } from './base/catalog.ts';
+export type { DispatchCandidate, GatewayModelSelector, IntelligenceTier, LocalSpeedSample, ModelDefinition, ModelPricing, PublicGatewayModel, ResolvedGatewayModel, SpeedEvidence, SpeedSource } from './base/catalog.ts';
 export { applyChatGptPromptCacheKey, canonicalizeObservedProviderModelId, createBuiltinProviderRuntime, isCredentialFreeNativeRoute, resolveRuntimeTaskPlans, upstreamAuthHeaders } from './runtime.ts';
 export type { BuiltinProviderRuntimeOptions, ChatGptGatewayAuthAdapter, ChatGptGatewayCredential, CodeBuddyClientIdentity, ProviderCredential, ProviderRuntime } from './runtime.ts';
 export { findProviderQuotaBinding, findProviderQuotaBindingForSupply, findProviderQuotaPool, freePoolFor, freeQuotaPool, providerQuotaPoolLabel, PROVIDER_QUOTA_BINDINGS } from './provider-quota-metadata.ts';

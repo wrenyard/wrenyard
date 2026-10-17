@@ -45,7 +45,9 @@ function catalogModelLabel(quota: QuotaSnapshot | undefined, publicId: string): 
   const providerId = publicId.slice(0, separator);
   const modelId = publicId.slice(separator + 1);
   const provider = quota?.catalog?.find((catalog) => catalog.id === providerId);
-  return provider?.models?.find((candidate) => candidate.id === modelId || candidate.canonicalId === modelId)?.displayName;
+  // The projection has exactly one identity: the registered model id. A
+  // historical spelling is never silently resolved through a canonical fallback.
+  return provider?.models?.find((candidate) => candidate.id === modelId)?.displayName;
 }
 
 export function useContextBudget(

@@ -96,14 +96,21 @@ export async function launchGrok(request: AgentRequest, env: NodeJS.ProcessEnv):
     const modelId = request.mode === 'gateway' && request.provider
         ? `wrenyard-${request.provider}--${request.model.replace(/[^A-Za-z0-9_]/gu, '-')}`
         : request.model;
-    // The Gateway owns effort conversion and reads the public effort level
-    // only from this header; Grok sends extra_headers verbatim with every
-    // request to the endpoint. The header name matches gateway-wire.ts.
-    const effortHeader = request.mode === 'gateway' && request.reasoningEffort
-        ? `extra_headers = { ${tomlKey('x-wrenyard-reasoning-effort')} = ${tomlString(request.reasoningEffort)} }\n`
+    const gatewayModel = request.mode === 'gateway'
+        ? (request.canonicalModel?.trim() ?? request.model)
+        : request.model;
+    // Grok forwards extra_headers verbatim with each chat-completions request.
+    const gatewayHeaders = request.mode === 'gateway'
+        ? [
+            ...(request.provider ? [`${tomlKey('x-wrenyard-provider')} = ${tomlString(request.provider)}`] : []),
+            ...(request.reasoningEffort ? [`${tomlKey('x-wrenyard-reasoning-effort')} = ${tomlString(request.reasoningEffort)}`] : []),
+        ]
+        : [];
+    const gatewayHeadersToml = gatewayHeaders.length > 0
+        ? `extra_headers = { ${gatewayHeaders.join(', ')} }\n`
         : '';
     const config = (request.mode === 'gateway' && gateway
-        ? `models.default = ${JSON.stringify(modelId)}\n[model.${JSON.stringify(modelId).slice(1, -1)}]\nname = "Wrenyard"\nmodel = ${JSON.stringify(request.model)}\nbase_url = ${JSON.stringify(gateway)}\nenv_key = "WRENYARD_GATEWAY_TOKEN"\napi_backend = "chat_completions"\nsupports_backend_search = false\n${effortHeader}`
+        ? `models.default = ${JSON.stringify(modelId)}\n[model.${JSON.stringify(modelId).slice(1, -1)}]\nname = "Wrenyard"\nmodel = ${JSON.stringify(gatewayModel)}\nbase_url = ${JSON.stringify(gateway)}\nenv_key = "WRENYARD_GATEWAY_TOKEN"\napi_backend = "chat_completions"\nsupports_backend_search = false\n${gatewayHeadersToml}`
         : '') + mcpToml;
     const args = ['--permission-mode', 'bypassPermissions', '--always-approve', ...mcpPermissionArgs, '--model', modelId];
     if (request.clientReasoningEffort)

@@ -130,7 +130,10 @@ export function modelListEntry(model: PublicGatewayModel): Record<string, unknow
   const nextProbeAt = (model as { routeNextProbeAt?: unknown }).routeNextProbeAt;
   const faultKind = (model as { faultKind?: unknown }).faultKind;
   return {
-    id: model.publicId,
+    // The model identity in every protocol listing is the bare registered id.
+    // Provider selection is a separate dimension (the X-Wrenyard-Provider
+    // request header); `publicId` is only the internal route key.
+    id: model.id,
     object: 'model',
     owned_by: model.provider,
     display_name: model.displayName,

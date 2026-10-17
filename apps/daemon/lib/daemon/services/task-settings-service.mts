@@ -1,7 +1,8 @@
 import { deepSeekAutomaticPricingOf, withDeepSeekAttemptPricing, toAutomaticCandidateInput, effectiveRoutingCap, type AutomaticSelectionContext, type DeepSeekAutomaticPricing } from './model-routing-inputs.mts'
 import { assessRequiredQuota } from '@wrenyard/auto-routing';
 import { createHash } from 'node:crypto'
-import { INTELLIGENCE_ORDER, type IntelligenceTier, type ReasoningEffort } from '@wrenyard/providers/catalog';
+import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, type IntelligenceTier, type ReasoningEffort } from '@wrenyard/providers/catalog';
+import { resolveHistoricalProviderModelId } from '@wrenyard/providers';
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { rankAutoRoutingCandidates, type RankedCandidate } from '@wrenyard/auto-routing';
 import type { CandidateInput } from '@wrenyard/auto-routing';
@@ -703,7 +704,7 @@ export class TaskSettingsService {
   async modelStatus(): Promise<Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>> {
     const status = new Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>()
     try {
-      const baseline = this.resolver.diagnose({ taskName: 'model-status', requirements: {} })
+      const baseline = await this.resolver.diagnose({ taskName: 'model-status', requirements: {} })
       const baselineChoices: TaskDispatchDiagnosticChoice[] = baseline.ok
         ? baseline.choices.filter((choice) => choice.available)
         : []
@@ -776,7 +777,19 @@ export class TaskSettingsService {
    *  and callers never fall back to another runtime or to automatic mode. */
   private async resolveReference(reference: TaskSettingsExplicitReference): Promise<string> {
     const resolved = await this.aliases.resolve(reference)
-    return resolved.target
+    // Historical identity migration: a stored target may still carry a legacy
+    // model spelling. Only a verified unique provider-scoped mapping is
+    // accepted; the client suffix is preserved exactly, and an unknown or
+    // ambiguous model fails with an actionable error instead of being guessed.
+    const parsed = parseRunSyntax(resolved.target)
+    const registeredModel = resolveHistoricalProviderModelId(parsed.provider, parsed.model)
+    if (registeredModel === undefined) {
+      throw new TaskSettingsInvalidSettingsError(
+        undefined,
+        `explicit runtime '${resolved.target}' names model '${parsed.model}', which is not a uniquely registered offering of provider '${parsed.provider}'`,
+      )
+    }
+    return formatRunSyntax({ ...parsed, model: registeredModel })
   }
 
   /** Client/provider/model/mode target of an already-resolved dispatch snapshot,
@@ -884,7 +897,7 @@ export class TaskSettingsService {
       // unknown/deleted alias throws here and never falls back to automatic.
       const target = await this.resolveReference(reference)
       const capabilities = effective.dispatch.requiredCapabilities
-      const explicitResolution = this.resolver.resolveExplicit({
+      const explicitResolution = await this.resolver.resolveExplicit({
         taskName: params.taskName,
         exactRuntime: target,
         inputTokens: params.inputTokens,
@@ -1097,7 +1110,7 @@ export class TaskSettingsService {
     // exact pair's availability against empty requirements (so a pair rejected
     // by a submitted gate still reports available) and independently replays
     // the submitted form to attach its first closed rejection code.
-    const baseline = this.resolver.diagnose({ taskName: ROUTING_FORM_TASK_NAME, requirements })
+    const baseline = await this.resolver.diagnose({ taskName: ROUTING_FORM_TASK_NAME, requirements })
     const baselineChoices: TaskDispatchDiagnosticChoice[] = baseline.ok ? baseline.choices.filter((choice) => choice.available) : []
 
     // Production automatic selection over the submitted form, instrumented with
@@ -1241,7 +1254,7 @@ export class TaskSettingsService {
     const requirements = rawDefinitionDispatch(summary.dispatch ?? detail?.dispatch)
     const requiredCapabilities = requirements.requiredCapabilities
 
-    const listing = this.resolver.listExactRuntimes({
+    const listing = await this.resolver.listExactRuntimes({
       taskName: summary.name,
       ...(requiredCapabilities !== undefined && requiredCapabilities.length > 0 ? { requiredCapabilities } : {}),
       ...(requirements.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
@@ -1440,7 +1453,7 @@ export class TaskSettingsService {
         // fails the save with no automatic fallback.
         const target = await this.resolveReference(reference)
         const capabilities = effective.dispatch.requiredCapabilities
-        const explicitResolution = this.resolver.resolveExplicit({
+        const explicitResolution = await this.resolver.resolveExplicit({
           taskName,
           exactRuntime: target,
           ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
@@ -1563,7 +1576,7 @@ export class TaskSettingsService {
         try {
           const target = await this.resolveReference(reference)
           const capabilities = effective.dispatch.requiredCapabilities
-          const explicitResolution = this.resolver.resolveExplicit({
+          const explicitResolution = await this.resolver.resolveExplicit({
             taskName: summary.name,
             exactRuntime: target,
             ...(capabilities !== undefined && capabilities.length > 0 ? { requiredCapabilities: capabilities } : {}),
@@ -1966,7 +1979,7 @@ export class TaskSettingsService {
     // DeepSeek tariff replace stale Catalog metadata; every non-DeepSeek
     // candidate is still checked against the same static reference by policy.
     const { maxOutputUsdPerMillion: _catalogPriceCeiling, ...intrinsicRequirements } = params.requirements
-    const eligible = this.resolver.eligible({ taskName: params.taskName, requirements: intrinsicRequirements })
+    const eligible = await this.resolver.eligible({ taskName: params.taskName, requirements: intrinsicRequirements })
     if (!eligible.ok) {
       if (trace !== undefined) {
         trace.eligibleFailure = {

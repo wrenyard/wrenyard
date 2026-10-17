@@ -175,6 +175,23 @@ export interface ModelCallOutput {
 /** One ranked auxiliary route and the level it is called at. */
 export interface AuxiliaryRoute { model: string; reasoningEffort: ReasoningEffort; }
 
+/**
+ * Internal provider-scoped route key of one model selection. The model is the
+ * bare registered id and the provider is a separate dimension; a qualified
+ * public id is never accepted as a model, because a registered id never
+ * contains `/` and a provider name is not part of the model identity.
+ */
+function routeKeyOf(provider: string, model: string): string {
+  const providerID = provider.trim();
+  const modelID = model.trim();
+  if (providerID === '') throw new Error('A model selection requires a resolved provider');
+  if (modelID === '') throw new Error('A model selection requires a registered model id');
+  if (modelID.includes('/')) {
+    throw new Error(`Model selection must use the registered model id, not a provider-qualified id: ${modelID}`);
+  }
+  return `${providerID}/${modelID}`;
+}
+
 export interface CallRunnerOptions {
   resolveProvider?: (providerId: string) => ProviderDefinition | undefined;
   /** The one unified transport every role calls. */
@@ -997,7 +1014,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         if (input.role === 'reason') {
           const selection = input.reason;
           if (!selection) return await fail('The reason role requires a model selection');
-          model = `${selection.provider}/${selection.model}`;
+          model = routeKeyOf(selection.provider, selection.model);
           requestedReasoningEffort = selection.reasoningEffort;
         } else {
           auxiliaryRole = input.role;

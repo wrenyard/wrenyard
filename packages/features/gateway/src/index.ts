@@ -84,10 +84,30 @@ const ROUTES: ReadonlyMap<string, GatewayRoute> = new Map(
   ]),
 );
 
-/** Split a public `provider/model` id; a malformed id yields no route. */
+/** Split a provider-qualified internal route key; a malformed id yields no route. */
 function splitModel(publicModel: string): { provider: string; model: string } | undefined {
   const separator = publicModel.indexOf('/');
   return separator > 0 ? { provider: publicModel.slice(0, separator), model: publicModel.slice(separator + 1) } : undefined;
+}
+
+/**
+ * Normalize one route identity onto the provider-qualified internal key.
+ *
+ * A bare registered model id is accepted only when exactly one provider offers
+ * it; a model offered by several providers is ambiguous and yields no route
+ * rather than silently selecting the first declaration. The route key stays the
+ * internal identity for health, quota and statistics.
+ */
+export function gatewayRouteKey(
+  catalog: Catalog,
+  identity: string,
+): { provider: string; model: string } | undefined {
+  const qualified = splitModel(identity);
+  if (qualified !== undefined) return qualified;
+  if (identity.trim() === '') return undefined;
+  const matches = catalog.providers().filter((provider) =>
+    provider.models.some((model) => model.id === identity));
+  return matches.length === 1 ? { provider: matches[0]!.id, model: identity } : undefined;
 }
 
 /**
@@ -104,22 +124,22 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     event => { void Promise.resolve().then(() => options.onRouteStateChanged?.(event)).catch(() => undefined); });
 
   const routeStatus = (publicModel: string): RouteStatus | undefined => {
-    const split = splitModel(publicModel);
+    const split = gatewayRouteKey(options.catalog, publicModel);
     return split === undefined ? undefined : routeStates.status(split.provider, split.model);
   };
 
   const beginRouteAttempt = (publicModel: string, attemptId: string): void => {
-    const split = splitModel(publicModel);
+    const split = gatewayRouteKey(options.catalog, publicModel);
     if (split !== undefined) routeStates.beginAttempt(split.provider, split.model, attemptId);
   };
 
   const reportRouteFault = (publicModel: string, attemptId: string, kind: ClientFaultKind): void => {
-    const split = splitModel(publicModel);
+    const split = gatewayRouteKey(options.catalog, publicModel);
     if (split !== undefined) routeStates.reportAttemptFault(split.provider, split.model, attemptId, kind, kind === 'timeout' ? 504 : 502);
   };
 
   const completeRouteAttempt = (publicModel: string, attemptId: string): void => {
-    const split = splitModel(publicModel);
+    const split = gatewayRouteKey(options.catalog, publicModel);
     if (split !== undefined) routeStates.completeAttempt(split.provider, split.model, attemptId);
   };
 
@@ -151,7 +171,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
    * half-open route stays visible with its state and retry time rather than
    * being hidden or excluded.
    */
-  const availableModels = async (protocol?: GatewayProtocol): Promise<PublicGatewayModel[]> => {
+  const availableProviderIDs = async (): Promise<ReadonlySet<string>> => {
     const available = new Set<string>();
     await Promise.all(options.catalog.providers().map(async (provider) => {
       const credential = await options.providers.credential(provider);
@@ -159,6 +179,11 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
       routeStates.observeCredential(provider.id, credential.value);
       available.add(provider.id);
     }));
+    return available;
+  };
+
+  const availableModels = async (protocol?: GatewayProtocol): Promise<PublicGatewayModel[]> => {
+    const available = await availableProviderIDs();
     return options.catalog.gatewayModels((provider) => available.has(provider.id))
       .filter((model) => protocol === undefined || model.protocols.includes(protocol))
       .map((model) => {
@@ -189,6 +214,7 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     active,
     isClosed: () => closed,
     emit,
+    availableProviderIDs,
     availableModels,
   });
 

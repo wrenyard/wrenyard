@@ -24,7 +24,7 @@ export const INTELLIGENCE_ORDER: Readonly<Record<IntelligenceTier, number>> = {
   premium: 3,
 };
 
-export type SpeedSource = 'local_31d' | 'provider_override' | 'catalog_default' | 'free_supply_floor';
+export type SpeedSource = 'local_31d' | 'provider_override' | 'catalog_default';
 
 export interface SpeedEvidence {
   source: SpeedSource;
@@ -48,10 +48,46 @@ export interface CanonicalModelDefinition {
   displayName: string;
 }
 
+/**
+ * The identity of one Gateway request: the bare registered model id plus an
+ * optional, separate provider selector. The two dimensions are never collapsed
+ * into a qualified string — `model` is always a registered id, and the provider
+ * is chosen independently (explicitly, or by unambiguous inference).
+ */
+export interface GatewayModelSelector {
+  /** Exact registered model id (`models.require(id).id`). Never `provider/model`. */
+  model: string;
+  /** Exact provider id. Absent means "the single provider that offers this
+   * registered id on the requested protocol"; an ambiguous set is rejected. */
+  provider?: string;
+}
+
 export interface ModelDefinition {
+  /** The public offering identity. Always an exact registered model id
+   * (`models.require(id).id`); a provider never publishes a wire spelling or a
+   * locally synthesized identity here. */
   id: string;
   displayName: string;
+  /** Exact upstream wire model name for the outbound request. This is private
+   * transport data: consumers branch on `id`, and only the provider transport
+   * translates `id` into this value. Absent means the upstream accepts the
+   * registered id verbatim. */
+  upstreamId?: string;
+  /** The registered identity this offering names. It always equals `id`; it is
+   * retained as a read-only echo for consumers that still read the canonical
+   * reference directly. */
   canonicalModel?: CanonicalModelDefinition;
+  /**
+   * Opt-in, per-declaration ownership of the source-provided upstream metadata.
+   * When true, `contextWindow`, `maxTokens`/`maxOutputTokens`, `pricing`,
+   * `capabilities` and `free` describe only what this declaration's source
+   * actually reported: a field the source omits stays absent instead of being
+   * refilled from the registered defaults. Absent (or false) keeps the normal
+   * field-by-field registry fallback. Speed and intelligence are always
+   * registry-owned and cannot be overridden either way; there is no
+   * provider-wide metadata suppression.
+   */
+  ownsMetadata?: boolean;
   contextWindow?: number;
   maxTokens?: number;
   taskOnly?: boolean;
@@ -62,14 +98,14 @@ export interface ModelDefinition {
    * standard gateway mapping or native client passthrough. Absent means no
    * Fast mode is known, and capability is never inferred from an alias or id. */
   supportsFast?: boolean;
-  /** Catalog intelligence tier. Required and complete for a registered canonical
-   * model. A route whose model names no registered canonical model leaves this
-   * absent: the tier is genuinely unknown and is never defaulted or invented. */
-  intelligence?: IntelligenceTier;
+  /** Catalog intelligence tier. Required for every registered offering: a
+   * route with no legal tier is not a usable offering and registration rejects
+   * it. There is no unknown-tier fallback and a provider cannot override the
+   * identity-owned tier. */
+  intelligence: IntelligenceTier;
   /** Route-owned reasoning efforts this model can materialize. Required array:
-   * every registered route declares its own ladder, and a route whose model
-   * names no registered canonical model declares an EMPTY array, meaning
-   * "unknown / no selectable ladder" — an absent ladder is never inferred from
+   * every offering declares its own ladder. An EMPTY array means the route
+   * materializes no selectable level; an absent ladder is never inferred from
    * the registry or a model id. */
   reasoningEfforts: readonly ReasoningEffort[];
   maxOutputTokens?: number;
@@ -88,10 +124,12 @@ export interface ModelDefinition {
    * Consumers must branch on `(supportedClients?.length ?? 0)`, never on mere
    * definedness. */
   supportedClients?: readonly string[];
-  /** Catalog default TPS. Required for a registered canonical model. A route
-   * whose model names no registered canonical model leaves this absent: the
-   * speed is genuinely unknown and is never reported as 0. */
-  speed?: number;
+  /** Catalog default TPS. Required for every registered offering and always a
+   * positive integer. It is the mandatory fallback when no measured evidence
+   * exists for the provider/model pair; it is never reported as a measurement.
+   * A provider cannot override it here — measured provider speed stays in the
+   * separate override/provenance evidence path. */
+  speed: number;
   /** Catalog list price. Required for a registered canonical model. A route
    * whose model names no registered canonical model leaves this absent: the
    * price is genuinely unknown and is never defaulted to zero. */
@@ -158,6 +196,9 @@ export interface UpstreamRouteErrorInput {
 
 export type PublicGatewayModel = Omit<ModelDefinition, 'canonicalModel'> & {
   provider: string;
+  /** Internal, provider-qualified route key (`provider/id`). It is the key for
+   * route health, quota and statistics and is never the model's public
+   * identity: the entry's `id` is the registered model id. */
   publicId: string;
   /** Entry protocols this exact model is served on. Required and non-empty:
    * the public directory is protocol-independent and every entry declares where
@@ -178,7 +219,9 @@ export interface ResolvedGatewayModel {
   provider: ProviderDefinition;
   model: ModelDefinition;
   capability: ProtocolCapability;
+  /** Internal provider-qualified route key (`provider/model.id`). */
   publicId: string;
+  /** The exact private upstream wire model for the outbound request. */
   upstreamModel: string;
 }
 
@@ -411,15 +454,6 @@ export interface ProviderDefinition {
   defaultModel?: string;
   quotaProvider?: string;
   useClientBinary?: boolean;
-  /**
-   * Opt out of the registered-canonical metadata fallback. When true, every
-   * model keeps exactly the metadata its declaration supplies: no registered
-   * canonical speed/intelligence/pricing/context default is filled in. Used by
-   * the generic models.dev-derived providers, whose canonical identities are
-   * identity-only and whose missing or tiered source metadata must stay
-   * genuinely undefined rather than silently regaining a registry value.
-   */
-  skipCanonicalMetadataFallback?: boolean;
   /**
    * Provider-level opt-in to the single provider-default reasoning ladder. When
    * true, every route of this provider that declares no explicit

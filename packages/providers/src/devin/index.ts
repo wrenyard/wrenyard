@@ -1,5 +1,6 @@
-import type { ModelDefinition, ProviderDefinition, Provider, ProviderCredential, ProviderContext } from '../base/index.ts';
+import type { ModelDefinition, ProviderDefinition, Provider, ProviderCredential, ProviderContext, ProtocolCapability } from '../base/index.ts';
 import { effortLadder } from '../base/model-defaults.ts';
+import { validateOfferingSnapshot } from '../base/catalog.ts';
 import { readDevinCredentials, type DevinCredentials } from './credentials.ts';
 import { fetchDevinModels, type DevinModel } from './models.ts';
 import { executeDevin, CHAT_RPC, jsonError } from './protocol.ts';
@@ -16,26 +17,47 @@ export function createDevin(options: DevinOptions = {}): DevinProvider {
   let retryAt = 0;
   let pending: { fingerprint: string; request: Promise<Snapshot> } | undefined;
   const bound = new WeakMap<ProviderCredential, Snapshot>();
-  // Models and effort mappings publish together from one snapshot, and the last
-  // good snapshot keeps serving across refresh failures, so a transient catalog
-  // refresh can never blank the published gateway catalog mid-session.
-  const clearCatalog = () => { definition.models = []; definition.reasoningEffortMappings = undefined; };
+  const chatProtocol: ProtocolCapability = {
+    protocol: 'openai_chat',
+    endpoint: 'https://server.codeium.com' + CHAT_RPC,
+    authScheme: 'bearer',
+  };
+  // Models, upstream bindings and effort mappings publish together from one
+  // snapshot, and the last good snapshot keeps serving across refresh failures,
+  // so a transient catalog refresh can never blank the published gateway catalog
+  // mid-session.
+  const clearCatalog = () => {
+    definition.models = [];
+    definition.reasoningEffortMappings = undefined;
+    chatProtocol.upstreamModels = undefined;
+  };
   const publish = (snapshot: Snapshot) => {
+    // A replacement snapshot obeys the same identity contract as startup:
+    // registered ids only, one offering per identity.
+    validateOfferingSnapshot('devin', snapshot.models);
     const mappings: Record<string, { codebuddy: ReturnType<typeof effortLadder>; grok: ReturnType<typeof effortLadder> }> = {};
+    const upstreamModels: Record<string, string> = {};
     for (const group of snapshot.models) {
       // Native settings serialize real effort levels; the gateway disable
       // switch ('none') and the provider-default sentinel stay unmapped.
       const levels = group.reasoningEfforts.filter((effort) => effort !== 'none' && effort !== 'default');
-      if (levels.length === 0) continue;
-      mappings[group.id] = { codebuddy: effortLadder(levels), grok: effortLadder(levels) };
+      if (levels.length > 0) {
+        mappings[group.id] = { codebuddy: effortLadder(levels), grok: effortLadder(levels) };
+      }
+      // The registered identity is the public id; the exact UID the account
+      // reported stays a private request binding.
+      if (group.upstreamId !== undefined && group.upstreamId !== group.id) {
+        upstreamModels[group.id] = group.upstreamId;
+      }
     }
     definition.models = snapshot.models;
     definition.reasoningEffortMappings = mappings;
+    chatProtocol.upstreamModels = Object.freeze(upstreamModels);
   };
   const definition: ProviderDefinition = {
     id: 'devin', displayName: 'Devin', setupHint: 'Run devin auth login, then refresh model supply.',
-    credentialResolver: 'devin', models: [], skipCanonicalMetadataFallback: true,
-    protocols: [{ protocol: 'openai_chat', endpoint: 'https://server.codeium.com' + CHAT_RPC, authScheme: 'bearer' }],
+    credentialResolver: 'devin', models: [],
+    protocols: [chatProtocol],
     convertReasoningEffort(model, effort) {
       const variant = current?.models.find(m => m.id === model)?.variants[effort];
       if (!variant) throw new Error(`Devin model ${model} does not support reasoning effort ${effort}`);

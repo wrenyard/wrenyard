@@ -159,7 +159,9 @@ async function resolveExecTarget(client: IpcForemanClient, target: string): Prom
   return {
     client: syntax.client,
     provider: syntax.provider,
-    model: model.canonicalId ?? model.id,
+    // The provider already owns its own selection: the model is the exact
+    // registered id, never a canonical alias of it.
+    model: model.id,
   }
 }
 

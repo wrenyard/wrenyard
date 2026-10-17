@@ -1,22 +1,37 @@
-import { builtinModelDisplayName, models, PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
-import type { ProviderDefinition, IntelligenceTier, ModelDefinition, ModelPricing } from './catalog.ts';
+import { models, PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/models';
+import type { ProviderDefinition, ModelDefinition, ProtocolCapability } from './catalog.ts';
 
-type RawModelDefinition = Omit<ModelDefinition, 'speed' | 'intelligence' | 'pricing' | 'reasoningEfforts'> & {
-  speed?: number;
-  intelligence?: IntelligenceTier;
-  pricing?: ModelPricing;
+/**
+ * One provider-side model declaration.
+ *
+ * `id` is the registered model identity and is required: a declaration can
+ * never introduce a provider-local public model. `upstreamId` is the exact
+ * private wire name the upstream expects when it differs from the registered
+ * id; `defineProvider` derives the protocol `upstreamModels` table from it.
+ *
+ * Field ownership is explicit:
+ * - intelligence and speed are identity-owned and always come from the
+ *   registry; a provider declaration cannot override either one;
+ * - pricing, context/output limits, capabilities and free status fall back to
+ *   the registered defaults field by field when the declaration omits them,
+ *   unless the declaration opts in to `ownsMetadata`, in which case those
+ *   fields describe only what its source reported and an omitted value stays
+ *   absent. No value is ever fabricated either way.
+ */
+type RawModelDefinition = Omit<ModelDefinition, 'displayName' | 'canonicalModel' | 'speed' | 'intelligence' | 'reasoningEfforts'> & {
+  displayName?: string;
   reasoningEfforts?: readonly ReasoningEffort[];
 };
 
 /**
  * Provider-only differences for a registered canonical model. The registered
- * canonical model supplies its exact id, its display name, its canonical
- * identity and every field not listed here, so an override is only legitimate
+ * model supplies its exact id, its display name, its canonical identity, its
+ * intelligence tier and its default speed, so an override is only legitimate
  * when the provider genuinely differs (a free entitlement, verified
- * context/output metadata, Claude family metadata, a route-owned effort
- * ladder, …).
+ * context/output metadata, Claude family metadata, a route-owned effort ladder,
+ * a private upstream wire id, …).
  */
-export type CanonicalModelOverrides = Omit<RawModelDefinition, 'id' | 'displayName' | 'canonicalModel'>;
+export type CanonicalModelOverrides = Omit<RawModelDefinition, 'id'>;
 
 /** A registered canonical model selected by its exact id, plus only the
  * provider differences that actually exist. */
@@ -32,38 +47,30 @@ export interface CanonicalModelSelection {
  *   every field comes from the registry.
  * - `{ canonical, overrides }`: that same registry-backed offering plus only the
  *   differences this provider actually has.
- * - a raw definition: a model with no registered canonical model. It carries
- *   only what the route actually knows; metadata it cannot supply stays
- *   genuinely absent, because no default is invented for it.
+ * - a raw definition: a registered id plus the provider-owned fields directly.
  *
  * A route that declares a `reasoningEfforts` ladder owns it: it is never
- * inferred from the registry or a model id. A route whose model names no
- * registered canonical model may declare none, and its capabilities then stay
- * unknown rather than fabricated.
+ * inferred from the registry or a model id.
  */
 export type ProviderModel = string | CanonicalModelSelection | RawModelDefinition;
 
-type RawProviderDefinition = Omit<ProviderDefinition, 'models'> & { models: readonly ProviderModel[] };
+type RawProviderDefinition = Omit<ProviderDefinition, 'models'> & {
+  models: readonly ProviderModel[];
+};
 
 export const model = (
   id: string,
   contextWindow?: number,
   maxTokens?: number,
-  canonicalId?: string,
+  upstreamId?: string,
   reasoningEfforts?: readonly ReasoningEffort[],
-): RawModelDefinition => {
-  const canonical = canonicalId === undefined
-    ? undefined
-    : { id: canonicalId, displayName: builtinModelDisplayName(canonicalId) };
-  return {
-    id,
-    displayName: canonical?.displayName ?? builtinModelDisplayName(id),
-    ...(contextWindow ? { contextWindow } : {}),
-    ...(maxTokens ? { maxTokens } : {}),
-    ...(canonical ? { canonicalModel: canonical } : {}),
-    ...(reasoningEfforts ? { reasoningEfforts } : {}),
-  };
-};
+): RawModelDefinition => ({
+  id,
+  ...(upstreamId === undefined || upstreamId === id ? {} : { upstreamId }),
+  ...(contextWindow ? { contextWindow } : {}),
+  ...(maxTokens ? { maxTokens } : {}),
+  ...(reasoningEfforts ? { reasoningEfforts } : {}),
+});
 
 export const openAI = (endpoint: string, authScheme: 'bearer' | 'x-api-key' = 'bearer') =>
   ({ protocol: 'openai_chat' as const, endpoint, authScheme });
@@ -87,28 +94,30 @@ export const REASONING_MEDIUM_HIGH: readonly ReasoningEffort[] = ['medium', 'hig
 export const effortLadder = (levels: readonly ReasoningEffort[]): Readonly<Record<string, { effort: string }>> =>
   Object.fromEntries(levels.map((level) => [level, { effort: level }]));
 
-/** A registered canonical model declared verbatim: the registry identity is the
- * public id, the display name and the canonical identity at once. */
-function canonicalDefinition(id: string): RawModelDefinition {
-  return model(id, undefined, undefined, id);
-}
-
 function isCanonicalSelection(declaration: ProviderModel): declaration is CanonicalModelSelection {
   return typeof declaration === 'object'
     && declaration !== null
     && typeof (declaration as CanonicalModelSelection).canonical === 'string';
 }
 
-/** Resolve canonical defaults first; provider fields are explicit overrides.
- * When `skipCanonicalMetadata` is set the canonical defaults are never merged:
- * a declaration keeps exactly the metadata it supplies, so a missing (or
- * tiered-price) value stays genuinely undefined. An explicitly declared
- * canonical identity is still validated as a real reference. */
+/**
+ * Resolve one declaration onto its registered model. The reference is
+ * mandatory: an unregistered id is a broken declaration, never a new provider
+ * model. Intelligence and speed are identity-owned and always come from the
+ * registry; a provider declaration cannot override either, and the registry
+ * invariant guarantees both are present.
+ *
+ * Pricing, limits, capabilities and free status fall back to the registered
+ * defaults field by field when the declaration omits them, unless the
+ * declaration owns its upstream metadata: then an omitted field stays absent
+ * and is never refilled from an unrelated registry default, and neither source
+ * can fabricate a value the other does not supply.
+ */
 function resolveModelDefaults(
   def: RawModelDefinition,
-  skipCanonicalMetadata: boolean,
   usesProviderDefaultReasoning: boolean,
 ): ModelDefinition {
+  const registered = models.require(def.id);
   // A route that declares its own effort ladder owns it. A route that declares
   // none resolves to an EMPTY ladder (unknown / no selectable level) unless its
   // provider opted in to the provider-default sentinel, in which case the
@@ -116,72 +125,76 @@ function resolveModelDefaults(
   // from the registry or a model id.
   const reasoningEfforts = def.reasoningEfforts
     ?? (usesProviderDefaultReasoning ? PROVIDER_DEFAULT_LADDER : []);
-  if (skipCanonicalMetadata) {
-    if (def.canonicalModel && !models.get(def.canonicalModel.id)) {
-      throw new Error(`model ${def.id} references unknown canonical model ${def.canonicalModel.id}`);
-    }
-    return { ...def, reasoningEfforts };
-  }
-  const registered = models.get(def.canonicalModel?.id ?? def.id);
-  if (!registered) return completeDefinition(def, reasoningEfforts);
   const { defaults } = registered;
+  // A declaration that owns its upstream metadata never regains a value its
+  // source omitted: only identity-owned speed and intelligence come from the
+  // registry.
+  const fallback = def.ownsMetadata === true ? undefined : defaults;
   return {
     ...def,
+    displayName: def.displayName ?? registered.displayName,
+    canonicalModel: { id: registered.id, displayName: registered.displayName },
     reasoningEfforts,
-    intelligence: def.intelligence ?? defaults.intelligence,
-    capabilities: def.capabilities ?? defaults.capabilities,
-    contextWindow: def.contextWindow ?? defaults.contextWindow,
-    maxTokens: def.maxTokens ?? def.maxOutputTokens ?? defaults.maxOutputTokens,
-    maxOutputTokens: def.maxOutputTokens ?? def.maxTokens ?? defaults.maxOutputTokens,
-    speed: def.speed ?? defaults.speed,
-    pricing: def.pricing ?? defaults.pricing,
+    // Identity-owned metadata: never sourced from the declaration.
+    intelligence: registered.defaults.intelligence,
+    speed: registered.defaults.speed,
+    capabilities: def.capabilities ?? fallback?.capabilities,
+    contextWindow: def.contextWindow ?? fallback?.contextWindow,
+    maxTokens: def.maxTokens ?? def.maxOutputTokens ?? fallback?.maxOutputTokens,
+    maxOutputTokens: def.maxOutputTokens ?? def.maxTokens ?? fallback?.maxOutputTokens,
+    pricing: def.pricing ?? fallback?.pricing,
     // Free status is an explicit classification carried from the provider
     // override or, failing that, the canonical registry default. It is never
     // derived from `pricing`.
-    free: def.free ?? defaults.free,
+    free: def.free ?? fallback?.free,
   };
-}
-
-/** A definition with no registered canonical model keeps exactly the metadata
- * the route declares. Whatever the route cannot supply stays genuinely
- * absent/unknown; it is never defaulted to a placeholder or invented. The
- * effort ladder is always present, empty when the route declares none. */
-function completeDefinition(
-  def: RawModelDefinition,
-  reasoningEfforts: readonly ReasoningEffort[],
-): ModelDefinition {
-  // An explicitly declared canonical identity is a reference, never a custom
-  // model: an unknown canonical id is a broken reference and stays an error.
-  if (def.canonicalModel) throw new Error(`model ${def.id} references unknown canonical model ${def.canonicalModel.id}`);
-  return { ...def, reasoningEfforts };
 }
 
 /** Resolve one provider model declaration into a complete definition. */
 export function resolveProviderModel(
   declaration: ProviderModel,
-  skipCanonicalMetadata = false,
   usesProviderDefaultReasoning = false,
 ): ModelDefinition {
   if (typeof declaration === 'string') {
-    return resolveModelDefaults(canonicalDefinition(declaration), skipCanonicalMetadata, usesProviderDefaultReasoning);
+    return resolveModelDefaults({ id: declaration }, usesProviderDefaultReasoning);
   }
   if (isCanonicalSelection(declaration)) {
     const { canonical, overrides } = declaration;
-    return resolveModelDefaults(
-      { ...canonicalDefinition(canonical), ...overrides },
-      skipCanonicalMetadata,
-      usesProviderDefaultReasoning,
-    );
+    return resolveModelDefaults({ ...overrides, id: canonical }, usesProviderDefaultReasoning);
   }
-  return resolveModelDefaults(declaration, skipCanonicalMetadata, usesProviderDefaultReasoning);
+  return resolveModelDefaults(declaration, usesProviderDefaultReasoning);
+}
+
+/**
+ * Derive each protocol capability's private `upstreamModels` table from the
+ * resolved offerings. Translation is keyed by the registered model id, so the
+ * outbound request still carries the exact upstream spelling while every
+ * public identity stays registered. An explicit per-protocol mapping wins over
+ * the model-level binding.
+ */
+function deriveProtocols(
+  protocols: readonly ProtocolCapability[] | undefined,
+  offerings: readonly ModelDefinition[],
+): readonly ProtocolCapability[] | undefined {
+  if (protocols === undefined) return undefined;
+  const derived = Object.fromEntries(
+    offerings.flatMap((entry) =>
+      entry.upstreamId === undefined || entry.upstreamId === entry.id ? [] : [[entry.id, entry.upstreamId] as const]),
+  );
+  if (Object.keys(derived).length === 0) return protocols;
+  return protocols.map((capability) => ({
+    ...capability,
+    upstreamModels: { ...derived, ...capability.upstreamModels },
+  }));
 }
 
 export function defineProvider(provider: RawProviderDefinition): ProviderDefinition {
-  const skipCanonicalMetadata = provider.skipCanonicalMetadataFallback === true;
   const usesProviderDefaultReasoning = provider.usesProviderDefaultReasoning === true;
+  const offerings = provider.models.map((declaration) =>
+    resolveProviderModel(declaration, usesProviderDefaultReasoning));
   return {
     ...provider,
-    models: provider.models.map((declaration) =>
-      resolveProviderModel(declaration, skipCanonicalMetadata, usesProviderDefaultReasoning)),
+    models: offerings,
+    protocols: deriveProtocols(provider.protocols, offerings),
   };
 }

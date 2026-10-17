@@ -1,8 +1,9 @@
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { rankAutoRoutingCandidates, type CandidateInput } from '@wrenyard/auto-routing';
-import { CONFIRMED_FREE_FLOOR_TPS, INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, routingReferencePriceOf, explicitFreeAutoEligibility, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
+import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, routingReferencePriceOf, explicitFreeAutoEligibility, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
 import { ROLE_REQUIREMENTS, AUXILIARY_TIMEOUT_MS, supportsSession, type AuxiliaryCallRole, type AuxiliaryRoute, type RoleReasoningRequirement } from '@wrenyard/session';
 import type { IntelligenceTier } from '@wrenyard/providers/catalog';
+import { isMainstreamModelId } from '@wrenyard/models';
 import { JsonForemanConfigStore } from '../../config/manager.mts';
 import { readGlobalTaskSettings, type TasksConfigSettingsInput, type TaskSettingsLayer } from '../../config/task-settings.mts';
 import type { AutoRoutingQuotaSnapshotService } from './auto-routing-snapshot-service.mts';
@@ -110,6 +111,10 @@ function createSelector(
         }
       }
       if (!availability[index]!.available || availability[index]!.providerCredential !== 'available') return reject('provider not configured/available');
+      // Universal application admission: auxiliary selection is an application
+      // surface, so every candidate must be a mainstream registered identity.
+      // The gate is independent of free supply and has no provider exception.
+      if (!isMainstreamModelId(model.id)) return reject('not a mainstream registered model');
       // Live upstream free evidence attached to this admitted route: the model
       // is free right now from its own pool, independent of the static baseline.
       const confirmedFree = availability[index]?.freeSupply?.confirmedFree === true;
@@ -119,12 +124,9 @@ function createSelector(
       // intelligence, price, speed or an empty effort ladder excludes it here
       // rather than being substituted with a zero, so the existing ranking is
       // kept unchanged for every metadata-complete model.
-      // A live-confirmed-free model may declare no intelligence tier: the
-      // lowest tier keeps it ranked last by intelligence instead of excluding
-      // it from a pool the upstream already confirmed as free. A tier-less
-      // paid model still fails closed.
-      const effectiveIntelligence = model.intelligence ?? (confirmedFree ? 'low' : undefined);
-      if (effectiveIntelligence === undefined) return reject('intelligence unknown');
+      const effectiveIntelligence = model.intelligence;
+      if (effectiveIntelligence === undefined
+        || !Number.isFinite(INTELLIGENCE_ORDER[effectiveIntelligence])) return reject('intelligence unknown');
       if (INTELLIGENCE_ORDER[effectiveIntelligence] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) return reject('intelligence below minimum');
       if (model.reasoningEfforts.length === 0) return reject('no reasoning-effort ladder');
       // Explicit-free automatic eligibility, decided by the shared helper before
@@ -144,14 +146,15 @@ function createSelector(
       if (referencePrice?.kind !== 'free' && referencePrice?.outputUsdPerMillion === undefined)
         return reject('pricing unknown');
       if ((model.contextWindow ?? 0) < requirements.minimumContextWindow) return reject('context below minimum');
-      // A live-confirmed-free model with no speed evidence keeps the free-pool
-      // floor so it is ranked last by speed instead of being rejected as unknown.
+      // Speed evidence follows the shared precedence: pair-specific local
+      // sample, then provider override, then the registered catalog default.
+      // A live-confirmed-free model without its own evidence uses that same
+      // registry default, never a fabricated floor.
       const speed = resolveModelSpeed(
         provider,
         model,
         localSpeed,
         new Date(nowMs),
-        confirmedFree ? CONFIRMED_FREE_FLOOR_TPS : undefined,
       );
       if (speed === undefined) return reject('speed unknown');
       entries.push({

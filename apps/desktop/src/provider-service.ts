@@ -69,7 +69,6 @@ export class ProviderService {
           // The CodeBuddy credit multiplier copied through verbatim; omitted when
           // the catalog declares none rather than defaulted.
           ...(model.credits === undefined ? {} : { credits: model.credits }),
-          ...(model.canonicalId === undefined ? {} : { canonicalId: model.canonicalId }),
           ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
           ...(model.speedSource === undefined ? {} : { speedSource: model.speedSource }),
           ...(model.available === undefined ? {} : { available: model.available }),

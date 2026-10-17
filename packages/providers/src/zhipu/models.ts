@@ -7,8 +7,8 @@ export const definition = defineProvider({
   // it after the Coding plan dropped it; GLM-5.3-FlashX is deliberately absent
   // until its throughput is measured rather than vendor-claimed.
   models: [
-    model('glm-5.3', 1_048_576, 32_768, 'glm-5.3', REASONING_LOW_HIGH_MAX),
-    model('glm-5.3-flash', 1_048_576, 32_768, 'glm-5.3-flash', REASONING_LOW_HIGH_MAX),
+    model('glm-5.3', 1_048_576, 32_768, undefined, REASONING_LOW_HIGH_MAX),
+    model('glm-5.3-flash', 1_048_576, 32_768, undefined, REASONING_LOW_HIGH_MAX),
     model('glm-5.2', 1_048_576, 32_768, undefined, ['none', 'high', 'max']),
   ],
   protocols: [openAI('https://open.bigmodel.cn/api/paas/v4/chat/completions')],

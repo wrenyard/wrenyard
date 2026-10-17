@@ -50,7 +50,11 @@ export type WrenyardGatewayModelPricing = readonly [number, number, number];
 export type WrenyardGatewayProtocol = 'openai_chat' | 'openai_responses' | 'anthropic_messages';
 
 export interface WrenyardGatewayModel {
+  /** The registered model identity. It is never a provider-qualified id and
+   * never an upstream wire spelling. */
   id: string;
+  /** Internal provider-scoped route key (`provider/id`) used for route health,
+   * quota and statistics. Provider selection is a separate dimension. */
   publicId: string;
   provider: string;
   /**

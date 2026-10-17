@@ -190,7 +190,6 @@ export class ProviderService {
       // A genuinely unknown speed has no evidence at all: both facts are omitted
       // together rather than reported as a zero or a dangling catalog_default source.
       ...(speed === undefined ? {} : { effectiveTps: speed.tps, speedSource: speed.source }),
-      canonicalId: model.canonicalModel?.id ?? model.id,
       ...(model.intelligence === undefined ? {} : { intelligence: model.intelligence }),
       ...(model.pricing === undefined ? {} : { pricing: model.pricing }),
       // Availability is a fact about the current credential AND the resolver's

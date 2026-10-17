@@ -6,7 +6,7 @@ import { findExecutable, type AgentRequest } from '@wrenyard/agent-client';
 import { resolveMcpServers, type ResolvedMcpServer } from '@wrenyard/agent-client/mcp';
 import { assertLaunch, stringEnv } from '@wrenyard/agent-client/native';
 import { spawnProcess, type ProcessSpec } from '@wrenyard/execution';
-import { writeLoaderPatch, type DshMcpServer, type DshModelRoute } from './patch.ts';
+import { DSH_PROVIDER_ENV, writeLoaderPatch, type DshMcpServer, type DshModelRoute } from './patch.ts';
 import { DSH_REASONING_EFFORT_ENV, DSH_REASONING_EFFORT_URL_ENV } from './reasoning-effort-asset.ts';
 
 /** DSH profile used for a one-shot background agent invocation. */
@@ -144,16 +144,18 @@ export async function prepareDshLaunch(
   let gatewayToken: string | undefined;
   try {
     if (request.mode === 'gateway') {
-      // `canonicalModel` is the provider-local declared id and is what the
-      // public Gateway directory publishes as `provider/model`; `request.model`
-      // may be an upstream wire id, so it is only the fallback.
+      // The Gateway route is published by the bare registered model id, so
+      // `canonicalModel` (the registered identity) is the model and `request.model`
+      // (a possible upstream wire id) is only the fallback. The provider is a
+      // separate selector carried by the generated forwarder's header.
       const model = (request.canonicalModel?.trim() || request.model.trim());
       // A Gateway route forwards the PUBLIC effort level unchanged: the
-      // Gateway owns provider-owned conversion. The generated forwarder plugin
-      // adds the internal header only for this route's exact chat-completions
-      // URL, so no body/field rewrite happens in the adapter.
+      // Gateway owns provider-owned conversion. The generated forwarder plugins
+      // add the internal effort and provider headers only for this route's exact
+      // chat-completions URL, so no body/field rewrite happens in the adapter.
       route = {
-        publicModelId: `${request.provider}/${model}`,
+        modelId: model,
+        provider: request.provider,
         baseUrl: chatBaseUrl(env),
         reasoningEffort: request.reasoningEffort,
       };
@@ -172,7 +174,7 @@ export async function prepareDshLaunch(
       const model = (request.canonicalModel?.trim() || request.model.trim());
       const nativeProvider = request.provider === 'deepseek' ? 'deepseek-official' : request.provider;
       const nativeModel = request.provider === 'deepseek' ? nativeDeepseekModel(model) : model;
-      route = { publicModelId: `${nativeProvider}/${nativeModel}` };
+      route = { modelId: nativeModel, provider: nativeProvider };
     }
 
     let patchPath: string;
@@ -199,6 +201,12 @@ export async function prepareDshLaunch(
           [DSH_REASONING_EFFORT_URL_ENV]: `${route.baseUrl}/chat/completions`,
         }
       : {};
+    // The Gateway route carries the provider separately from the bare registered
+    // model id: the generated forwarder adds it as the Gateway's provider
+    // header so the exact offering is resolved without a qualified model id.
+    const providerEnv: Record<string, string> = route?.baseUrl && route.provider
+      ? { [DSH_PROVIDER_ENV]: route.provider }
+      : {};
     // The launch's own values are applied afterwards and always win. Only the
     // explicitly selected gateway credential survives the scrub; every other
     // inherited Gateway secret was already dropped.
@@ -211,6 +219,7 @@ export async function prepareDshLaunch(
         DSH_PERMISSION_MODE,
         ...(gatewayToken ? { [GATEWAY_TOKEN_ENV]: gatewayToken } : {}),
         ...effortEnv,
+        ...providerEnv,
       }),
     };
 

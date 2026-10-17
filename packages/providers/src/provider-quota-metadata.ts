@@ -1,4 +1,4 @@
-import { BUILTIN_PROVIDERS } from './catalog.js';
+import { BUILTIN_PROVIDERS, resolveHistoricalOfferedModelId } from './catalog.js';
 import { providerQuotas } from './builtins.ts';
 import { binding, freeQuotaPool } from './base/quota-helpers.ts';
 import type { ProviderQuotaBinding, ProviderQuotaPool } from './base/quota.ts';
@@ -52,7 +52,11 @@ function defaultBinding(providerId: string): ProviderQuotaBinding | undefined {
 
 /**
  * Returns the quota binding for a provider model, or undefined when the
- * provider is unknown or owns no quota source. A registered provider with a
+ * provider is unknown or owns no quota source. A stored historical model
+ * spelling is first migrated through the verified unique-match resolver, so an
+ * old key lands on its registered binding while the provider identity (and
+ * therefore the pool scope) stays intact; an unknown or ambiguous spelling is
+ * never remapped onto another model's binding. A registered provider with a
  * quota source always gets a non-empty binding: an exact catalog binding when
  * one exists, otherwise that provider's own-default pool.
  */
@@ -60,7 +64,17 @@ export function findProviderQuotaBinding(
   providerId: string,
   modelId: string,
 ): ProviderQuotaBinding | undefined {
-  return exactBinding(providerId, modelId) ?? defaultBinding(providerId);
+  const exact = exactBinding(providerId, modelId);
+  if (exact) return exact;
+  const provider = BUILTIN_PROVIDERS.find((entry) => entry.id === providerId);
+  const registeredModelId = provider === undefined
+    ? undefined
+    : resolveHistoricalOfferedModelId(provider, modelId);
+  if (registeredModelId !== undefined && registeredModelId !== modelId) {
+    const migrated = exactBinding(providerId, registeredModelId);
+    if (migrated) return migrated;
+  }
+  return defaultBinding(providerId);
 }
 
 /**

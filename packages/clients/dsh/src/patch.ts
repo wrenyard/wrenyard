@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { DSH_BRIDGE_PLUGIN_FILENAME, DSH_BRIDGE_PLUGIN_SOURCE, DSH_BRIDGE_ROW_ID } from './bridge-asset.ts';
 import { DSH_YOLO_PLUGIN_FILENAME, DSH_YOLO_PLUGIN_SOURCE, DSH_YOLO_ROW_ID } from './yolo-asset.ts';
-import { DSH_REASONING_EFFORT_PLUGIN_FILENAME, DSH_REASONING_EFFORT_PLUGIN_SOURCE, DSH_REASONING_EFFORT_ROW_ID } from './reasoning-effort-asset.ts';
+import { DSH_REASONING_EFFORT_PLUGIN_FILENAME, DSH_REASONING_EFFORT_PLUGIN_SOURCE, DSH_REASONING_EFFORT_ROW_ID, DSH_REASONING_EFFORT_URL_ENV } from './reasoning-effort-asset.ts';
 
 /** File name of the generated loader overlay inside the per-run DSH home. */
 export const DSH_LOADER_PATCH_FILENAME = 'wrenyard-loader-patch.yaml';
@@ -17,6 +17,84 @@ const DSH_GATEWAY_TOKEN_ENV = 'WRENYARD_GATEWAY_TOKEN';
 
 /** Loader overlay insert id the native DSH loader uses for injected MCP clients. */
 const DSH_MCP_CLIENT_ROW_ID = '@deepseek-ai/dsh-mcp-client';
+
+/** Loader row and file of the generated provider-selector forwarder. */
+export const DSH_PROVIDER_HEADER_ROW_ID = 'wrenyard-dsh-provider-header';
+export const DSH_PROVIDER_HEADER_PLUGIN_FILENAME = 'wrenyard-dsh-provider-header.mjs';
+
+/**
+ * The provider the forwarder selects for every Gateway request. The body's
+ * model id is the bare registered model id, so the provider is a separate
+ * dimension and must travel in the Gateway's own header.
+ */
+export const DSH_PROVIDER_ENV = 'WRENYARD_GATEWAY_PROVIDER';
+
+/**
+ * The provider-header forwarder plugin source. DSH's `llm-pi-ai` provider has
+ * no per-request header config, so — exactly like the effort forwarder — this
+ * wraps the child's `globalThis.fetch` and adds the Gateway's provider header to
+ * requests for the configured chat-completions URL only. Every other request,
+ * and a launch with no provider, passes through untouched.
+ */
+export const DSH_PROVIDER_HEADER_PLUGIN_SOURCE = String.raw`export const name = 'wrenyard-dsh-provider-header';
+export const inject = [];
+
+const HEADER = 'x-wrenyard-provider';
+const URL_ENV = '${DSH_REASONING_EFFORT_URL_ENV}';
+const PROVIDER_ENV = '${DSH_PROVIDER_ENV}';
+const WRAPPER = Symbol.for('wrenyard.dsh.provider-header.fetch-wrapped');
+
+function sameEndpoint(target, candidate) {
+  if (!candidate) return false;
+  try {
+    const left = new URL(target);
+    const right = new URL(candidate);
+    return left.href === right.href;
+  } catch {
+    return target === candidate;
+  }
+}
+
+export function apply() {
+  const target = process.env[URL_ENV];
+  const provider = process.env[PROVIDER_ENV];
+  if (!target || !provider) return;
+  const scope = globalThis;
+  if (scope[WRAPPER] === true) return;
+  const original = scope.fetch;
+  if (typeof original !== 'function') return;
+  const wrapped = function fetchWithProviderHeader(input, init) {
+    const isRequest = typeof input === 'object' && input !== null
+      && typeof input.url === 'string' && typeof input.clone === 'function';
+    if (isRequest) {
+      if (!sameEndpoint(target, input.url)) return original.call(this, input, init);
+      const headers = new Headers(init && init.headers !== undefined ? init.headers : input.headers);
+      headers.set(HEADER, provider);
+      const request = new Request(input, { ...(init || {}), headers });
+      return original.call(this, request);
+    }
+    const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : '');
+    if (!sameEndpoint(target, url)) return original.call(this, input, init);
+    const headers = new Headers(init && init.headers ? init.headers : undefined);
+    headers.set(HEADER, provider);
+    return original.call(this, input, { ...(init || {}), headers });
+  };
+  Object.defineProperty(scope, 'fetch', {
+    value: wrapped,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  Object.defineProperty(scope, WRAPPER, {
+    value: true,
+    writable: false,
+    configurable: true,
+    enumerable: false,
+  });
+}
+
+export default { name, inject, apply };
+`;
 
 /** The two MCP transports the DSH loader overlay can represent. */
 export type DshMcpTransport = 'stdio' | 'streamable-http';
@@ -56,8 +134,18 @@ function yamlValue(value: string): string {
 
 /** Secret-free description of the single model route the overlay declares. */
 export interface DshModelRoute {
-  /** Selected model id, always exactly `provider/model`. */
-  readonly publicModelId: string;
+  /**
+   * The model id selected for the run. For a Gateway route this is the bare
+   * registered model id; for a native route it is the exact native model id.
+   */
+  readonly modelId: string;
+  /**
+   * Provider selector. For a Gateway route the forwarder sends it in the
+   * X-Wrenyard-Provider header, because the model id alone is the registered
+   * identity; for a native route it names the provider the default model is
+   * declared against.
+   */
+  readonly provider?: string;
   /**
    * OpenAI-compatible chat base URL of the local Gateway. Present only for a
    * Wrenyard Gateway route; absent for a native route, which declares no
@@ -95,16 +183,16 @@ export interface DshModelRoute {
  * `mcpServers` are projected as `@deepseek-ai/dsh-mcp-client` insert rows after
  * the plugin rows, sorted by server name, matching the retired Go projection.
  */
-export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath: string, bridgePluginPath: string, reasoningPluginPath: string, mcpServers: readonly DshMcpServer[] = []): string {
+export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath: string, bridgePluginPath: string, reasoningPluginPath: string, mcpServers: readonly DshMcpServer[] = [], providerPluginPath = ''): string {
   const lines: string[] = ['# wrenyard dsh patch (generated; secret-free)'];
 
   if (route) {
-    const separator = route.publicModelId.indexOf('/');
-    if (separator <= 0 || separator === route.publicModelId.length - 1)
-      throw new Error(`dsh: model id must be provider/model: ${route.publicModelId}`);
-    const providerId = route.publicModelId.slice(0, separator);
-    const modelId = route.publicModelId.slice(separator + 1);
+    const modelId = route.modelId.trim();
+    if (modelId === '' || modelId.includes('/'))
+      throw new Error(`dsh: model id must be a bare model id: ${route.modelId}`);
     if (route.baseUrl) {
+      if (!route.provider)
+        throw new Error('dsh: a gateway route requires a provider selector');
       lines.push(
         `- id: ${yamlStr(DSH_GATEWAY_PROVIDER_ROW_ID)}`,
         '  config:',
@@ -115,7 +203,7 @@ export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath:
         `        apiKeyEnv: ${yamlStr(DSH_GATEWAY_TOKEN_ENV)}`,
         `        baseURL: ${yamlStr(route.baseUrl)}`,
         '        models:',
-        `          - id: ${yamlStr(route.publicModelId)}`,
+        `          - id: ${yamlStr(modelId)}`,
         `            name: ${yamlStr(modelId)}`,
       );
       if (route.contextWindow && route.contextWindow > 0)
@@ -124,8 +212,8 @@ export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath:
     lines.push(
       `- id: ${yamlStr(DSH_DEFAULT_MODEL_ROW_ID)}`,
       '  config:',
-      `    provider: ${yamlStr(route.baseUrl ? DSH_GATEWAY_ROUTE_KEY : providerId)}`,
-      `    model: ${yamlStr(route.baseUrl ? route.publicModelId : modelId)}`,
+      `    provider: ${yamlStr(route.baseUrl ? DSH_GATEWAY_ROUTE_KEY : route.provider ?? '')}`,
+      `    model: ${yamlStr(modelId)}`,
     );
   }
 
@@ -165,6 +253,15 @@ export function renderDshPatch(route: DshModelRoute | undefined, yoloPluginPath:
       '- insert:',
       `    - id: ${yamlStr(DSH_REASONING_EFFORT_ROW_ID)}`,
       `      name: ${yamlStr(reasoningPluginPath)}`,
+    );
+  // The provider-selector forwarder mounts for every Gateway route: the request
+  // body names only the registered model id, so the provider must be selected
+  // by the Gateway's own header.
+  if (route?.baseUrl && route.provider && providerPluginPath)
+    lines.push(
+      '- insert:',
+      `    - id: ${yamlStr(DSH_PROVIDER_HEADER_ROW_ID)}`,
+      `      name: ${yamlStr(providerPluginPath)}`,
     );
 
   // MCP servers are inserted after the plugins, sorted by name. A transport the
@@ -223,10 +320,12 @@ export async function writeLoaderPatch(home: string, route?: DshModelRoute, mcpS
   const bridgePath = join(home, DSH_BRIDGE_PLUGIN_FILENAME);
   const yoloPath = join(home, DSH_YOLO_PLUGIN_FILENAME);
   const reasoningPath = join(home, DSH_REASONING_EFFORT_PLUGIN_FILENAME);
+  const providerPath = join(home, DSH_PROVIDER_HEADER_PLUGIN_FILENAME);
   await fs.writeFile(bridgePath, DSH_BRIDGE_PLUGIN_SOURCE, { encoding: 'utf8', mode: 0o600 });
   await fs.writeFile(yoloPath, DSH_YOLO_PLUGIN_SOURCE, { encoding: 'utf8', mode: 0o600 });
   await fs.writeFile(reasoningPath, DSH_REASONING_EFFORT_PLUGIN_SOURCE, { encoding: 'utf8', mode: 0o600 });
+  await fs.writeFile(providerPath, DSH_PROVIDER_HEADER_PLUGIN_SOURCE, { encoding: 'utf8', mode: 0o600 });
   const target = join(home, DSH_LOADER_PATCH_FILENAME);
-  await fs.writeFile(target, renderDshPatch(route, yoloPath, bridgePath, reasoningPath, mcpServers), { encoding: 'utf8', mode: 0o600 });
+  await fs.writeFile(target, renderDshPatch(route, yoloPath, bridgePath, reasoningPath, mcpServers, providerPath), { encoding: 'utf8', mode: 0o600 });
   return target;
 }

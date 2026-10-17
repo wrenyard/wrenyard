@@ -33,8 +33,6 @@ export interface ProviderListModel {
    * declares none. A display-only multiplier, never a balance or USD price. */
   credits?: string
   taskOnly?: boolean
-  /** Provider-independent canonical model id; falls back to the model id. */
-  canonicalId?: string
   /** Catalog intelligence tier for the model; absent when genuinely unknown. */
   intelligence?: 'low' | 'mid' | 'high' | 'premium'
   /** Catalog list price as [cached, input, output] USD per million tokens;

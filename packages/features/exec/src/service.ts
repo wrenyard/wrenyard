@@ -322,11 +322,11 @@ export class ExecService {
     };
 
     const { client: _client, ...nativeRequest } = request;
-    const agentRequest: AgentRequest = {
-      ...nativeRequest,
-      model: request.mode === 'gateway' && request.provider && request.canonicalModel
-        ? `${request.provider}/${request.canonicalModel}` : request.model,
-    };
+    // Gateway requests use the registered identity and keep provider selection
+    // separate; native requests retain their exact upstream wire model.
+    const agentRequest: AgentRequest = request.mode === 'gateway' && request.canonicalModel !== undefined
+      ? { ...nativeRequest, model: request.canonicalModel.trim() }
+      : { ...nativeRequest };
     return { entry, request: agentRequest };
   }
 

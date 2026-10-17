@@ -28,19 +28,22 @@ function protocolFor(entry: ModelsDevCatalogProvider): ProtocolCapability {
 }
 
 /**
- * One route model built from a catalog row: the exact upstream wire id is
- * preserved for the request, the canonical registry identity and its hyphen-free
- * SSOT display name are carried as data, and only the metadata the source
- * actually supplies is attached (numeric context/output limits, input-modality
- * capabilities and a complete, flat [cached, input, output] price). No speed,
- * intelligence tier or pricing is invented, and the provider below opts out of
- * the canonical metadata fallback so a missing or tiered value stays undefined.
+ * One route model built from a catalog row: the row adopts its registered
+ * canonical identity as the public offering id, and the exact upstream wire id
+ * becomes a private `upstreamId` binding that `defineProvider` turns into the
+ * protocol `upstreamModels` table. The row owns its upstream metadata: only the
+ * metadata the source actually supplies is attached (numeric context/output
+ * limits, input-modality capabilities and a complete, flat
+ * [cached, input, output] price), and a missing or tiered value stays absent
+ * instead of regaining an unrelated registry default. Speed and intelligence
+ * always come from that identity.
  */
 function modelFor(source: ModelsDevCatalogModel) {
   return {
-    id: source.id,
+    id: source.canonicalId,
     displayName: source.displayName,
-    canonicalModel: { id: source.canonicalId, displayName: source.displayName },
+    ownsMetadata: true,
+    ...(source.id === source.canonicalId ? {} : { upstreamId: source.id }),
     ...(source.contextWindow !== undefined ? { contextWindow: source.contextWindow } : {}),
     ...(source.maxOutputTokens !== undefined
       ? { maxTokens: source.maxOutputTokens, maxOutputTokens: source.maxOutputTokens }
@@ -70,13 +73,6 @@ function publicProviderIdentity(
  * static data: there is no runtime catalog fetch, no new auth mechanism and no
  * per-provider special case beyond the single `xai` identity mapping above.
  *
- * `skipCanonicalMetadataFallback` is the explicit opt-out of the registered-
- * canonical metadata fallback: because the canonical identities introduced for
- * these sourced rows are identity-only (no speed/intelligence/pricing), a row
- * whose source leaves a value absent — or whose source price is tiered — must
- * stay genuinely undefined instead of silently regaining a value from the
- * registry.
- *
  * `usesProviderDefaultReasoning` is the provider-level opt-in to the single
  * provider-default sentinel ladder: the snapshot declares no reasoning ladder
  * for any row, so every route is materialized with the singleton `['default']`
@@ -94,7 +90,6 @@ export const modelsDevProviders: readonly ProviderDefinition[] = MODELS_DEV_CATA
       credentialResolver: 'managed',
       models: entry.models.map(modelFor),
       protocols: [protocolFor(entry)],
-      skipCanonicalMetadataFallback: true,
       usesProviderDefaultReasoning: true,
       // The provider default sends no upstream reasoning fields at all: it is
       // neither `none` nor a fabricated effort.

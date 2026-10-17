@@ -231,9 +231,14 @@ export function readExecutionTpsSamples(
     // Validate the persisted identity before the one-time provider rename.
     if (row.modelId?.trim() !== `${row.provider?.trim()}/${row.model?.trim()}`) continue
     const provider = safeIdentity(row.provider, (value) => migrateProviderId(value))
-    const model = safeIdentity(row.model)
+    const rawModel = safeIdentity(row.model)
     const modelId = safeIdentity(row.modelId)
-    if (provider === undefined || model === undefined || modelId === undefined) continue
+    if (provider === undefined || rawModel === undefined || modelId === undefined) continue
+    // Historical sample keys are migrated through the verified unique-match
+    // resolver so a legacy spelling groups under its registered identity while
+    // provider attribution stays intact. The persisted ledger text (modelId) is
+    // never rewritten.
+    const model = normalizeSampleModel(provider, rawModel)
     const endedMs = parseTimestampMs(row.endedAt)
     if (endedMs === undefined) continue
 

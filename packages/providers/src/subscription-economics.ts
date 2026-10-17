@@ -62,8 +62,8 @@ const GO_SUBSCRIPTION_USD = 10;
 const GO_MODELS: Record<string, { monthlyLimit: number; input: number; cached: number; output: number }> = {
   'glm-5.3-flash': { monthlyLimit: 60, input: 0.15, cached: 0.03, output: 0.5 },
   'glm-5.3': { monthlyLimit: 15, input: 1.4, cached: 0.26, output: 4.4 },
-  'deepseek-flash': { monthlyLimit: 15, input: 0.3, cached: 0.006, output: 1.2 },
-  hy3: { monthlyLimit: 60, input: 0.14, cached: 0.035, output: 0.58 },
+  'deepseek-v4.1-flash': { monthlyLimit: 15, input: 0.3, cached: 0.006, output: 1.2 },
+  'hunyuan-hy3': { monthlyLimit: 60, input: 0.14, cached: 0.035, output: 0.58 },
 };
 
 function clamp01(v: number): number {

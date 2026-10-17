@@ -51,10 +51,10 @@ export interface DeepSeekAutomaticPricing {
 }
 
 function deepSeekModelOf(dispatch: { provider: string; model: string }): DeepSeekPricingModel | undefined {
-  // Only the active deepseek-flash tariff applies. Match exact CodeBuddy and
-  // TokenHub model identities; retired ids must not resolve to a price.
+  // Only the active deepseek-flash tariff applies. Match the exact registered
+  // model identities; retired or wire spellings must not resolve to a price.
   if (dispatch.provider === 'codebuddy' && dispatch.model === 'deepseek-v4.1-flash') return 'deepseek-flash'
-  if (dispatch.provider === 'tokenhub' && dispatch.model === 'deepseek/deepseek-flash') return 'deepseek-flash'
+  if (dispatch.provider === 'tokenhub' && dispatch.model === 'deepseek-v4.1-flash') return 'deepseek-flash'
   return undefined
 }
 
@@ -144,15 +144,7 @@ export function toAutomaticCandidateInput(
   const choice = entry.choice
   const freeFact = entry.availability?.freeSupply
   const confirmedFree = freeFact?.confirmedFree === true
-  const declaredIntelligenceRank = INTELLIGENCE_ORDER[choice.intelligence as keyof typeof INTELLIGENCE_ORDER]
-  // A live-confirmed-free model carries no declared intelligence tier. The
-  // lowest tier keeps it last by intelligence rather than dropping it; the
-  // substitution is a ranking floor for supply the upstream already confirmed
-  // as free, never a fabricated capability claim. Without confirmed-free
-  // evidence an unknown tier still fails closed.
-  const intelligenceRank = (declaredIntelligenceRank === undefined || !Number.isFinite(declaredIntelligenceRank)) && confirmedFree
-    ? INTELLIGENCE_ORDER.low
-    : declaredIntelligenceRank
+  const intelligenceRank = INTELLIGENCE_ORDER[choice.intelligence as keyof typeof INTELLIGENCE_ORDER]
   if (intelligenceRank === undefined || !Number.isFinite(intelligenceRank)) return null
   // A confirmed-free model binds to its provider's own free pool only, so an
   // exhausted paid pool can never reject it while the live supply fact holds.

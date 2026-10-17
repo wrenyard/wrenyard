@@ -1,3 +1,4 @@
+import { models } from '@wrenyard/models';
 import type {
   ProviderCatalogSnapshot,
   ProviderModelSnapshot,
@@ -11,12 +12,12 @@ import { FAMILY_ORDER, classifyFamily, type ModelFamily } from '@/renderer/lib/m
  * this module derives from a quota snapshot.
  */
 
-/** Evidence tiers ordered strongest-first; a measured tier always outranks a catalog default. */
-const SPEED_SOURCE_RANK: Record<string, number> = {
-  local_31d: 0,
-  provider_override: 0,
-  catalog_default: 2,
-};
+/**
+ * Evidence tiers that are real pair measurements. `catalog_default` is the
+ * registry fallback for a pair without evidence and `free_supply_floor` is a
+ * ranking floor; neither is a measurement, so neither contributes a sample.
+ */
+const MEASURED_SPEED_SOURCES: ReadonlySet<string> = new Set(['local_31d', 'provider_override']);
 
 /** One provider-attributed credit multiplier declared for a unified model row. */
 export interface ModelListCredit {
@@ -47,7 +48,7 @@ export interface ModelListRow {
   providers: ModelListProvider[];
   /** True when at least one backing provider is available. */
   active: boolean;
-  /** Equal-weight mean TPS over provider measurements; `null` when unmeasured. */
+  /** Equal-weight mean TPS over provider measurements; the registered default when unmeasured. */
   tps: number | null;
   inputLabel: string;
   outputLabel: string;
@@ -68,29 +69,26 @@ export function formatPriceRange(values: number[]): string {
  * one provider value must not double-weight it, and an unmeasured provider
  * never contributes a zero. Returns `null` when nothing measured the model.
  */
+/**
+ * Equal-provider-weight average of genuinely measured pair TPS.
+ *
+ * Only `local_31d` and `provider_override` rows are measurements; a registry
+ * default and a free-supply ranking floor are not samples and never contribute.
+ * The caller passes one row per provider, so a provider declares its weight
+ * exactly once and an unmeasured provider never contributes a zero. Returns
+ * `null` when no provider measured the model.
+ */
 export function averageMeasuredTps(models: ProviderModelSnapshot[]): number | null {
   const values: number[] = [];
   for (const model of models) {
+    if (!MEASURED_SPEED_SOURCES.has(model.speedSource ?? '')) continue;
     const tps = model.effectiveTps;
-    if (typeof tps === 'number' && Number.isFinite(tps)) values.push(tps);
+    if (typeof tps === 'number' && Number.isFinite(tps) && tps > 0) values.push(tps);
   }
   if (values.length === 0) return null;
   let total = 0;
   for (const value of values) total += value;
   return total / values.length;
-}
-
-/** Strongest (lowest-rank) speed source among rows that actually carry a numeric TPS. */
-function measuredRank(models: ProviderModelSnapshot[]): number {
-  let rank = Number.POSITIVE_INFINITY;
-  for (const model of models) {
-    if (typeof model.effectiveTps !== 'number' || !Number.isFinite(model.effectiveTps)) continue;
-    rank = Math.min(
-      rank,
-      SPEED_SOURCE_RANK[model.speedSource ?? 'catalog_default'] ?? SPEED_SOURCE_RANK.catalog_default,
-    );
-  }
-  return rank;
 }
 
 function familyRank(family: ModelFamily): number {
@@ -127,8 +125,9 @@ function compareModelVersions(left: string, right: string): number {
 
 /**
  * Flattens `QuotaSnapshot.catalog` into one row per exact unified model, grouping
- * by `canonicalId ?? id`. Model labels are never treated as equivalence proof:
- * only the canonical identity unifies rows. Rows sort active families first (in
+ * by the registered model id. Model labels are never treated as equivalence
+ * proof, and there is no secondary canonical identity: one registered id is the
+ * only grouping key. Rows sort active families first (in
  * `FAMILY_ORDER`), then by series and descending numeric version, and every
  * supported catalog model is kept even when no provider is available.
  */
@@ -147,7 +146,7 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
 
   for (const entry of catalog) {
     for (const model of entry.models ?? []) {
-      const key = model.canonicalId ?? model.id;
+      const key = model.id;
       let group = groups.get(key);
       if (!group) {
         group = {
@@ -192,13 +191,11 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
   for (const group of groups.values()) {
     const family = classifyFamily(group.key);
     const active = group.providers.some((provider) => provider.available);
-    // Measured providers contribute equally to the average: catalog predictions
-    // are a global fallback, not an equal partner to a measured observation.
-    const rank = measuredRank(group.models);
-    const preferred = group.models.filter((model) => {
-      if (typeof model.effectiveTps !== 'number' || !Number.isFinite(model.effectiveTps)) return false;
-      return (SPEED_SOURCE_RANK[model.speedSource ?? 'catalog_default'] ?? SPEED_SOURCE_RANK.catalog_default) === rank;
-    });
+    // Measured providers contribute equally. `group.models` carries at most one
+    // row per provider, so this is the equal-provider-weight average of real
+    // pair measurements; no provider's source rank excludes another provider,
+    // and a registry default copy is not counted as a measurement.
+    const preferred = group.models;
     const intelligence = group.models.find((model) => model.intelligence !== undefined)?.intelligence;
     const providers = group.providers.map((provider): ModelListProvider => {
       const byValue = group.credits.get(provider.id);
@@ -217,7 +214,9 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
       intelligence,
       providers,
       active,
-      tps: averageMeasuredTps(preferred),
+      // Measured providers contribute equally when any measured the model;
+      // otherwise the registered identity's default speed is the fallback.
+      tps: averageMeasuredTps(preferred) ?? models.require(group.key).defaults.speed,
       // A model with no declared price contributes no price point at all; the
       // range falls back to the em dash instead of a fabricated zero.
       inputLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[1]])),

@@ -13,11 +13,11 @@ export const definition = defineProvider({
     { ...model('composer-2.5', 200_000), pricing: [0.2, 0.5, 2.5], reasoningEfforts: ['high'] },
     // Cursor Grok Fast is unsupported: the official Cursor Grok CLI Fast
     // contract (a bracket fast selector for grok-4.7) is unverified.
-    { ...model('grok-4.7', 256_000, undefined, 'grok-4.7', REASONING_UP_TO_XHIGH) },
-    model('kimi-k3', 1_048_576, undefined, 'kimi-k3', REASONING_LOW_HIGH_MAX),
+    { ...model('grok-4.7', 256_000, undefined, undefined, REASONING_UP_TO_XHIGH) },
+    model('kimi-k3', 1_048_576, undefined, undefined, REASONING_LOW_HIGH_MAX),
     { canonical: 'claude-opus-5-5', overrides: { contextWindow: 300_000, supports1MContext: true, reasoningEfforts: FIVE_LEVELS } },
-    { ...model('gpt-5.6-luna', 272_000, undefined, 'gpt-5.6-luna', REASONING_FULL), capabilities: ['text', 'image'], pricing: [0.02, 0.2, 1.2] },
-    { ...model('gpt-5.6-sol', 272_000, undefined, 'gpt-5.6-sol', REASONING_FULL), capabilities: ['text', 'image'], pricing: [0.4, 4, 20] },
+    { ...model('gpt-5.6-luna', 272_000, undefined, undefined, REASONING_FULL), capabilities: ['text', 'image'], pricing: [0.02, 0.2, 1.2] },
+    { ...model('gpt-5.6-sol', 272_000, undefined, undefined, REASONING_FULL), capabilities: ['text', 'image'], pricing: [0.4, 4, 20] },
     { canonical: 'claude-sonnet-5-5', overrides: { contextWindow: 200_000, supports1MContext: true, reasoningEfforts: FIVE_LEVELS } },
     model('muse-spark-1.3', 300_000, undefined, undefined, FIVE_LEVELS),
     model('gemini-3.8-flash', 1_000_000, undefined, undefined, ['low', 'medium', 'high']),

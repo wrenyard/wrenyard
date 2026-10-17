@@ -82,6 +82,8 @@ export interface GatewayPipelineOptions {
   active: Set<AbortController>;
   isClosed: () => boolean;
   emit: (event: GatewayRequestCompletedEvent) => Promise<void>;
+  /** Credential-backed provider ids used for headerless Gateway inference. */
+  availableProviderIDs: () => Promise<ReadonlySet<string>>;
   /** Credential-backed public models, annotated with route state. */
   availableModels: (protocol?: GatewayProtocol) => Promise<PublicGatewayModel[]>;
 }
@@ -263,14 +265,35 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         const tooLarge = error instanceof Error && error.message === 'request_too_large';
         return reject(tooLarge ? 413 : 400, tooLarge ? 'Request body too large' : 'Request body must be a JSON object');
       }
-      if (typeof body.model !== 'string') return reject(400, 'model must be a provider/model string');
+      if (typeof body.model !== 'string') return reject(400, 'model must be a registered model id string');
 
-      let publicModel = body.model;
-      let resolved;
-      try { resolved = options.catalog.resolveGatewayModel(protocol, publicModel); } catch (error) {
-        return reject(404, error instanceof Error ? error.message : 'Unknown model', { publicModel });
+      // The request identity is the bare registered model id; the provider is a
+      // separate dimension carried by X-Wrenyard-Provider. A qualified id from
+      // the retired route namespace and a wire alias are both refused with an
+      // actionable message instead of being guessed.
+      const requestedModel = body.model.trim();
+      const providerHeader = localHeader(request, GATEWAY_HEADERS.provider);
+      if (request.headers[GATEWAY_HEADERS.provider] !== undefined && providerHeader === undefined) {
+        return reject(400, 'Invalid provider selector');
       }
-      publicModel = resolved.publicId;
+      const credentialAvailableProviderIDs = providerHeader === undefined
+        ? await options.availableProviderIDs()
+        : new Set<string>();
+      let resolved;
+      try {
+        resolved = options.catalog.resolveGatewayModel(
+          protocol,
+          { model: requestedModel, ...(providerHeader === undefined ? {} : { provider: providerHeader }) },
+          undefined,
+          credentialAvailableProviderIDs,
+        );
+      } catch (error) {
+        return reject(404, error instanceof Error ? error.message : 'Unknown model', { publicModel: requestedModel });
+      }
+      // The internal route key stays provider-qualified for health, quota and
+      // statistics; the response identity is the requested registered id.
+      const publicModel = resolved.publicId;
+      const registeredModel = resolved.model.id;
       const target = { publicModel, provider: resolved.provider.id };
 
       // A resolved public reasoning effort arrives in a request header, never as
@@ -284,7 +307,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         const normalized = normalizeReasoningEffort(effortHeader);
         if (normalized === undefined) return reject(400, `Invalid reasoning effort: ${effortHeader}`, target);
         if (!resolved.model.reasoningEfforts.includes(normalized)) {
-          return reject(400, `Model ${publicModel} does not support reasoning effort "${normalized}"`, target);
+          return reject(400, `Model ${registeredModel} does not support reasoning effort "${normalized}"`, target);
         }
         reasoningEffort = normalized;
       }
@@ -339,7 +362,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       const hookContext = () => ({
         protocol,
         modelId: resolved.model.id,
-        publicModel,
+        publicModel: registeredModel,
         ...(executionId === undefined ? {} : { executionId }),
         requestHeaders: request.headers,
         headers,
@@ -363,7 +386,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
       const admission = options.routeStates.admit(resolved.provider.id, resolved.model.id, attemptId);
       if (admission.kind === 'blocked') {
         const retryAt = admission.status.nextProbeAt ?? admission.status.until;
-        const message = `Route ${publicModel} is unavailable (fault ${admission.status.faultKind ?? admission.status.state}, circuit ${admission.status.phase}); retry after ${retryAt}`;
+        const message = `Route ${registeredModel} is unavailable (fault ${admission.status.faultKind ?? admission.status.state}, circuit ${admission.status.phase}); retry after ${retryAt}`;
         const retrySeconds = Math.max(0, Math.ceil((Date.parse(retryAt) - options.now()) / 1000));
         // The admission refusal carries a structured, Gateway-local marker so a
         // caller can distinguish the local circuit refusing the request from a
@@ -462,7 +485,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
             executionUpstreamFact = undefined;
             const execution = resolved.provider.executeRequest
               ? options.providers.executeRequest?.(resolved.provider, {
-                  protocol, modelId: resolved.model.id, publicModel,
+                  protocol, modelId: resolved.model.id, publicModel: registeredModel,
                   credential: activeCredential,
                   body, signal: controller.signal, fetch: fetchImpl,
                   reportUpstreamError: fact => { executionUpstreamFact = fact; },
@@ -536,7 +559,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           let finalBytes: Uint8Array<ArrayBufferLike> = errorBytes;
           if (options.providers.afterResponse) {
             const corrected = await options.providers.afterResponse(resolved.provider, {
-              protocol, modelId: resolved.model.id, publicModel,
+              protocol, modelId: resolved.model.id, publicModel: registeredModel,
               status: upstream.status, headers: upstream.headers, errorBytes, errorBody,
             });
             if (corrected?.status !== undefined) finalStatus = corrected.status;
@@ -572,18 +595,18 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         const originalHeaders = new Headers(upstream.headers);
         const repaired = await repairUpstreamResponse(upstream, {
           module, provider: resolved.provider, providers: options.providers,
-          modelId: resolved.model.id, publicModel,
+          modelId: resolved.model.id, publicModel: registeredModel,
         });
         response.writeHead(repaired.status, allowedResponseHeaders(repaired.headers));
         // The selected protocol module translates its own generation events
         // into protocol-neutral signals for the shared TPS sampler; the sample
         // model is the requested canonical public model.
-        const sampler = new ResponseSampler({ now: options.now, model: publicModel });
+        const sampler = new ResponseSampler({ now: options.now, model: registeredModel });
         const observer = module.createObserver();
         const translator = module.createTpsTranslator();
         const relayed = await raceAbort(relayResponse(repaired, response, {
           module, provider: resolved.provider, providers: options.providers,
-          modelId: resolved.model.id, upstreamModel, publicModel, observer, sampler, translator,
+          modelId: resolved.model.id, upstreamModel, publicModel: registeredModel, observer, sampler, translator,
         }), controller.signal);
         // Only a validated completed response restores health. An observed
         // in-stream error is classified first: a genuine fault fails a probe (with

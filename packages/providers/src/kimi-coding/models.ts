@@ -2,14 +2,16 @@ import { defineProvider, model, openAI, anthropic, REASONING_LOW_HIGH_MAX, effor
 
 export const definition = defineProvider({
   id: 'kimi-coding', displayName: 'Kimi Coding', credentialResolver: 'managed',
-  defaultModel: 'k3', quotaProvider: 'kimi-coding',
+  defaultModel: 'kimi-k3', quotaProvider: 'kimi-coding',
   models: [
-    model('k3', 1_048_576, 32_768, 'kimi-k3', REASONING_LOW_HIGH_MAX),
+    model('kimi-k3', 1_048_576, 32_768, 'k3', REASONING_LOW_HIGH_MAX),
     // K2.8 Preview context is 1M; no official max-output or reference token
     // price is published, so neither is registered. `kimi-for-coding` is the
     // exact official wire id clients send for this canonical model.
-    model('kimi-k2.8', 1_048_576, undefined, 'kimi-k2.8', ['none', 'low', 'high', 'max']),
+    model('kimi-k2.8', 1_048_576, undefined, 'kimi-for-coding', ['none', 'low', 'high', 'max']),
   ],
+  // Migration-only: a selection written before the public identity was the
+  // registered id still resolves onto the offered model.
   modelAliases: { 'kimi-for-coding': 'kimi-k2.8' },
   protocols: [
     openAI('https://api.kimi.com/coding/v1/chat/completions'),
@@ -20,7 +22,7 @@ export const definition = defineProvider({
   // `none` (it swaps to K2.8 upstream); K2.8 Preview supports `none` through
   // the disabled-thinking switch; native clients map only their documented effort levels.
   reasoningEffortMappings: {
-    k3: {
+    'kimi-k3': {
       codex: effortLadder(REASONING_LOW_HIGH_MAX),
       claude: effortLadder(REASONING_LOW_HIGH_MAX),
       codebuddy: effortLadder(REASONING_LOW_HIGH_MAX),

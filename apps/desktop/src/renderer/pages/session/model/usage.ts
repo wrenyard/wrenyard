@@ -218,8 +218,10 @@ interface ModelPricing {
 }
 
 /**
- * Catalog price for a gateway public id (`provider/model`, ledger spec).
- * Providers expose `[cached, input, output]` USD per million tokens. A model
+ * Catalog price for a provider-scoped ledger route key (`provider/model`).
+ * Providers expose `[cached, input, output]` USD per million tokens. The model
+ * is matched by its exact registered id only: there is no canonical fallback,
+ * so a historical spelling never borrows another identity's price. A model
  * without a catalog row has unknown price.
  */
 function pricingFor(publicId: string, quota: QuotaSnapshot | null | undefined): ModelPricing | undefined {
@@ -228,7 +230,7 @@ function pricingFor(publicId: string, quota: QuotaSnapshot | null | undefined): 
   const providerId = publicId.slice(0, separator);
   const modelId = publicId.slice(separator + 1);
   const entry = quota?.catalog?.find((catalog) => catalog.id === providerId);
-  const model = entry?.models?.find((candidate) => candidate.id === modelId || candidate.canonicalId === modelId);
+  const model = entry?.models?.find((candidate) => candidate.id === modelId);
   if (!model) return undefined;
   const pricing = model.pricing;
   if (!pricing || pricing.length !== 3 || !pricing.every((value) => Number.isFinite(value))) return undefined;

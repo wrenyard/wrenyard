@@ -1,4 +1,11 @@
-import { defineProvider, model, openAI, anthropic, REASONING_LOW_HIGH_MAX } from '../base/model-defaults.ts';
+import {
+  defineProvider,
+  model,
+  openAI,
+  anthropic,
+  resolveProviderModel,
+  REASONING_LOW_HIGH_MAX,
+} from '../base/model-defaults.ts';
 import type { ProviderModel } from '../base/model-defaults.ts';
 import type {
   ModelDefinition,
@@ -54,7 +61,7 @@ const FREE_SEEDS: readonly FreeSeed[] = [
  */
 function freeRow(seed: FreeSeed): ModelDefinition {
   return {
-    ...model(seed.id, seed.context, seed.output, seed.canonical),
+    ...resolveProviderModel(model(seed.id, seed.context, seed.output, seed.canonical)),
     free: true,
     supportedClients: ['opencode'],
     reasoningEfforts: seed.efforts ?? ['default'],

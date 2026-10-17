@@ -19,10 +19,10 @@ export const definition = defineProvider({
   // Supplier hook: the OpenCode identity and session-header forwarding.
   beforeRequest: forwardOpenCodeSession,
   models: [
-    { ...model('glm-5.3-flash', undefined, undefined, 'glm-5.3-flash'), capabilities: ['text'], pricing: [0.03, 0.15, 0.50], reasoningEfforts: ['high'] },
-    { ...model('glm-5.3', undefined, undefined, 'glm-5.3'), capabilities: ['text'], pricing: [0.26, 1.4, 4.4], reasoningEfforts: ['high'] },
-    { ...model('deepseek-flash', 1_000_000, 384_000, 'deepseek-v4.1-flash'), capabilities: ['text', 'image'], intelligence: 'mid', pricing: [0.006, 0.3, 1.2], reasoningEfforts: ['high'] },
-    { ...model('hy3', undefined, undefined, 'hunyuan-hy3'), capabilities: ['text'], pricing: [0.035, 0.14, 0.58], reasoningEfforts: ['high'] },
+    { ...model('glm-5.3-flash'), capabilities: ['text'], pricing: [0.03, 0.15, 0.50], reasoningEfforts: ['high'] },
+    { ...model('glm-5.3'), capabilities: ['text'], pricing: [0.26, 1.4, 4.4], reasoningEfforts: ['high'] },
+    { ...model('deepseek-v4.1-flash', 1_000_000, 384_000, 'deepseek-flash'), capabilities: ['text', 'image'], pricing: [0.006, 0.3, 1.2], reasoningEfforts: ['high'] },
+    { ...model('hunyuan-hy3', undefined, undefined, 'hy3'), capabilities: ['text'], pricing: [0.035, 0.14, 0.58], reasoningEfforts: ['high'] },
   ],
   protocols: [openAI('https://opencode.ai/zen/go/v1/chat/completions')],
   convertReasoningEffort: (_modelId, effort, protocol) => {

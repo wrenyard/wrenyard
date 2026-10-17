@@ -7,7 +7,10 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { resolveWrenyardConfigRoot } from '@wrenyard/paths';
 import type { Catalog, DispatchPlan } from './base/catalog.ts';
-import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans } from './catalog.ts';
+import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans, resolveHistoricalProviderModelId } from './catalog.ts';
+// The verified provider-scoped migration helper lives at the catalog boundary so
+// quota/metadata consumers can use it without importing this runtime module.
+export { resolveHistoricalOfferedModelId, resolveHistoricalProviderModelId } from './catalog.ts';
 import { codeBuddy, providerImplementations, providerQuotas } from './builtins.ts';
 import type { CodeBuddyActiveSnapshot } from './codebuddy/index.ts';
 import type { Provider } from './base/index.ts';
@@ -95,21 +98,20 @@ export interface BuiltinProviderRuntimeOptions {
 
 /** Reverse only explicit, unambiguous wire identities from the provider SSOT. */
 export function canonicalizeObservedProviderModelId(provider: string, model: string): string {
+  const implementation = providerImplementations.get(provider);
+  // Verified reverse mappings (a registered id, a private upstream binding, an
+  // explicit alias, or an exact reasoning-effort UID) are merged first for every
+  // provider, so a provider callback can never skip a mapping the provider
+  // itself declares. The live implementation definition is used when one exists,
+  // so a dynamically discovered Devin/OpenCode Zen catalog is canonicalized
+  // rather than the static seed; unknown and ambiguous spellings keep their own
+  // text.
+  const verified = resolveHistoricalProviderModelId(provider, model, implementation?.definition);
+  if (verified !== undefined) return verified;
   // Historical wire identities do not depend on the currently installed offerings.
   if (provider === 'codebuddy') return resolveCodeBuddyProductModelId(model) ?? model;
-  const implementation = providerImplementations.get(provider);
   if (implementation) return implementation.canonicalizeModel(model);
-  const definition = BUILTIN_PROVIDERS.find((entry) => entry.id === provider);
-  if (!definition) return model;
-  const matches = new Set<string>();
-  const alias = definition.modelAliases?.[model];
-  if (alias) matches.add(alias);
-  for (const [canonical, clients] of Object.entries(definition.reasoningEffortMappings ?? {})) {
-    for (const levels of Object.values(clients)) {
-      if (Object.values(levels).some((mapping) => mapping?.model === model)) matches.add(canonical);
-    }
-  }
-  return matches.size === 1 ? [...matches][0]! : model;
+  return model;
 }
 
 /**
@@ -313,9 +315,18 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       // unconditionally: the mapping depends only on the model, never on which
       // credential is active, so it must not be gated on a credential.
       if (provider.id === 'kimi-coding') return kimiCodingUpstreamWireModel(model);
-      return implementations.get(provider.id)?.resolveModel(model, credential) ?? model;
+      const resolved = implementations.get(provider.id)?.resolveModel(model, credential);
+      if (resolved !== undefined && resolved !== model) return resolved;
+      // The registered id is the public identity; the exact upstream spelling is
+      // the offering's private binding. A provider implementation that returns
+      // its input unchanged is not evidence against a declared wire id.
+      const offering = provider.models.find((entry) => entry.id === model);
+      return offering?.upstreamId ?? resolved ?? model;
     },
     publicResponseModel(provider, model, upstreamModel, publicModel) {
+      // `publicModel` is the requested registered id; a historical qualified
+      // route key is accepted only so an in-flight response can still be
+      // normalized onto the same identity.
       const logicalModel = publicModel.startsWith(`${provider.id}/`)
         ? publicModel.slice(provider.id.length + 1)
         : publicModel;

@@ -16,7 +16,7 @@ const KIMI_5H_POOL = quotaPool('kimi-coding/5h', [
 export const quota = {
   read: async (source: QuotaSource) => normalizeKimiQuota(await source.read()),
   bindings: [
-    binding('kimi-coding', 'k3', [KIMI_5H_POOL, KIMI_7D_POOL]),
+    binding('kimi-coding', 'kimi-k3', [KIMI_5H_POOL, KIMI_7D_POOL]),
     // K2.8 Preview draws on the same Kimi Coding subscription as K3.
     binding('kimi-coding', 'kimi-k2.8', [KIMI_5H_POOL, KIMI_7D_POOL]),
   ],

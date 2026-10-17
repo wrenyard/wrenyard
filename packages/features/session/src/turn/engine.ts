@@ -18,8 +18,13 @@ import {
   type WorkspaceSnapshot,
 } from '../ledger/store.ts';
 import { ModelCallError, resolveModelMetadata, type CallRole } from '../model/request.ts';
-import { PROVIDER_DEFAULT_REASONING, REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
-import type { ProviderDefinition } from '@wrenyard/providers';
+import {
+  PROVIDER_DEFAULT_REASONING,
+  REASONING_EFFORTS,
+  isMainstreamModelId,
+  type ReasoningEffort,
+} from '@wrenyard/models';
+import { resolveHistoricalOfferedModelId, type ProviderDefinition } from '@wrenyard/providers';
 import { ContextInspector, findCreated, type ContextInspectRequest, type ContextInspection } from '../context/inspect.ts';
 import { type ToolCall } from '../transport/index.ts';
 import { isInside, type AttachmentInput, type FileStore } from '../media.ts';
@@ -214,10 +219,29 @@ class Engine implements Session, SessionCallHost {
     },
   ): Promise<{ turn: number }> {
     this.assertOpen();
-    const model = `${input.model.provider}/${input.model.model}`;
-    const effort = input.model.reasoningEffort;
-    const fast = input.model.fast;
-    const attachmentsKey = attachmentKey(input.attachments);
+    // Historical identity migration, before admission, deduplication and the
+    // ledger write: a restored or saved selection may still name a legacy model
+    // spelling. Only a verified unique provider-scoped mapping is accepted, so
+    // an unknown or ambiguous selection fails here instead of being guessed.
+    // The provider, effort and Fast preference are preserved exactly and the
+    // registered id is what the new turn persists; historical ledger events are
+    // never rewritten.
+    const providerDefinition = this.host.resolveInferenceProvider(input.model.provider);
+    const registeredModel = providerDefinition === undefined
+      ? undefined
+      : resolveHistoricalOfferedModelId(providerDefinition, input.model.model);
+    if (registeredModel === undefined) {
+      throw new Error(
+        `Model ${input.model.provider}/${input.model.model} is unavailable for sessions: it is not a uniquely registered offering of provider '${input.model.provider}'`,
+      );
+    }
+    const admitted = registeredModel === input.model.model
+      ? input
+      : { ...input, model: { ...input.model, model: registeredModel } };
+    const model = `${admitted.model.provider}/${admitted.model.model}`;
+    const effort = admitted.model.reasoningEffort;
+    const fast = admitted.model.fast;
+    const attachmentsKey = attachmentKey(admitted.attachments);
 
     // A turn already waiting in bounded recovery owns the exchange: a repeated
     // continue of the same selected model, effort and Fast preference — or a
@@ -230,7 +254,7 @@ class Engine implements Session, SessionCallHost {
     if (waiting !== undefined
       && waiting.model === model
       && waiting.effort === effort
-      && this.isWaitingResubmission(sessionId, waiting, input.text, attachmentsKey, fast)) {
+      && this.isWaitingResubmission(sessionId, waiting, admitted.text, attachmentsKey, fast)) {
       return { turn: waiting.turn };
     }
 
@@ -243,13 +267,13 @@ class Engine implements Session, SessionCallHost {
       && pending.model === model
       && pending.effort === effort
       && pending.fast === fast
-      && pending.text === input.text
+      && pending.text === admitted.text
       && pending.attachmentsKey === attachmentsKey) {
       return pending.result;
     }
 
-    const result = this.admitTurn(sessionId, input, model);
-    this.pendingSends.set(sessionId, { model, effort, fast, text: input.text, attachmentsKey, result });
+    const result = this.admitTurn(sessionId, admitted, model);
+    this.pendingSends.set(sessionId, { model, effort, fast, text: admitted.text, attachmentsKey, result });
     try {
       return await result;
     } finally {
@@ -298,6 +322,14 @@ class Engine implements Session, SessionCallHost {
     },
     publicId: string,
   ): Promise<{ turn: number }> {
+    // Universal application admission, evaluated before the session is even
+    // resolved: every admitted turn — a new session, a resume or a restored
+    // selection — runs on a mainstream registered model identity. There is no
+    // provider exception and no unknown-intelligence fallback, so an unresolved
+    // or non-mainstream selection is refused before any session begin/resume.
+    if (!isMainstreamModelId(input.model.model)) {
+      throw new Error(`Model ${publicId} is not available for sessions; choose a mainstream registered model`);
+    }
     // Resolve (recovering if needed) the session before any import, copy or append.
     const session = await this.ensureSession(sessionId);
     this.assertOpen();

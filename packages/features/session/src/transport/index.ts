@@ -119,13 +119,20 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
       if (!request.reasoningEffort) throw new ModelError('Model request requires reasoningEffort', { kind: 'invalid_request' });
       if (request.signal.aborted) throw new ModelError('Model request was aborted', { kind: 'aborted' });
       const connection = await options.gateway();
-      const model = findModel(connection, request.model);
+      // The application's route identity is the provider-scoped key
+      // `provider/registeredModelId`; the Gateway wire carries the bare
+      // registered id plus the provider in its own header.
+      const identity = routeIdentity(connection, request.model);
+      const model = identity === undefined ? undefined : findModel(connection, identity.provider, identity.model);
       if (!model) throw new ModelError(`Unknown gateway model: ${request.model}`, { kind: 'model_unavailable' });
       const protocol = selectSessionProtocol(model.protocols);
       if (protocol === undefined) throw new ModelError(`Model ${request.model} has no supported session protocol`, { kind: 'model_unavailable' });
       const adapter = ADAPTERS[protocol];
 
-      const body = adapter.serialize(request);
+      // The serialized body names only the registered model id; the provider is
+      // selected separately so one provider's wire spelling never becomes a
+      // public model identity.
+      const body = adapter.serialize({ ...request, model: model.id });
       const actualBytes = Buffer.byteLength(body, 'utf8');
       if (actualBytes > adapter.maxBytes) throw new ModelError(`${adapter.label} exceeds ${adapter.maxBytes} bytes: ${actualBytes}`, { kind: 'invalid_request' });
 
@@ -138,6 +145,7 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
           ? { 'x-api-key': connection.token, 'anthropic-version': '2023-06-01' }
           : { authorization: `Bearer ${connection.token}` }),
         [GATEWAY_HEADERS.reasoningEffort]: request.reasoningEffort,
+        [GATEWAY_HEADERS.provider]: model.provider,
       };
       if (request.attribution?.role !== undefined) headers[GATEWAY_HEADERS.callRole] = request.attribution.role;
       if (request.attribution?.sessionId !== undefined) headers[GATEWAY_HEADERS.sessionId] = request.attribution.sessionId;
@@ -322,7 +330,30 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
   };
 }
 
-/** Resolve the Gateway model row for a `provider/model` public id. */
-function findModel(connection: WrenyardGatewayConnection, publicId: string): WrenyardGatewayConnection['models'][number] | undefined {
-  return connection.models.find((entry) => entry.publicId === publicId || `${entry.provider}/${entry.id}` === publicId);
+/**
+ * Split the application's provider-scoped route key into its two independent
+ * dimensions. A registered model id never contains `/`, so the first separator
+ * is unambiguous; a bare id is accepted only when exactly one Gateway model
+ * offers it.
+ */
+function routeIdentity(
+  connection: WrenyardGatewayConnection,
+  route: string,
+): { provider: string; model: string } | undefined {
+  const separator = route.indexOf('/');
+  if (separator > 0 && separator < route.length - 1) {
+    return { provider: route.slice(0, separator), model: route.slice(separator + 1) };
+  }
+  if (separator !== -1 || route === '') return undefined;
+  const matches = connection.models.filter((entry) => entry.id === route);
+  return matches.length === 1 ? { provider: matches[0]!.provider, model: route } : undefined;
+}
+
+/** Resolve the Gateway model row for one provider plus registered model id. */
+function findModel(
+  connection: WrenyardGatewayConnection,
+  provider: string,
+  model: string,
+): WrenyardGatewayConnection['models'][number] | undefined {
+  return connection.models.find((entry) => entry.provider === provider && entry.id === model);
 }

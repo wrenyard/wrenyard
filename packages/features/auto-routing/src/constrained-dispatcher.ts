@@ -1,7 +1,8 @@
-import { CONFIRMED_FREE_FLOOR_TPS, type Catalog, type ModelDefinition, explicitFreeAutoEligibility, resolveModelSpeed, routingReferencePriceOf } from '@wrenyard/providers/catalog';
+import { type Catalog, type ModelDefinition, explicitFreeAutoEligibility, resolveModelSpeed, routingReferencePriceOf } from '@wrenyard/providers/catalog';
+import { resolveHistoricalOfferedModelId } from '@wrenyard/providers';
 import type { DispatchCandidate, LocalSpeedSample, DispatchPlan } from '@wrenyard/providers/base';
 import type { TaskDispatchRequirements, ConstrainedDispatch, DispatchResolution } from './types.ts';
-import { INTELLIGENCE_TIERS, type IntelligenceTier } from '@wrenyard/models';
+import { INTELLIGENCE_TIERS, isMainstreamModelId, type IntelligenceTier } from '@wrenyard/models';
 const INTELLIGENCE_ORDER = Object.fromEntries(INTELLIGENCE_TIERS.map((tier, rank) => [tier, rank])) as Record<IntelligenceTier, number>;
 export function isDynamicFast(tps: number): boolean {
   return tps > 80;
@@ -24,16 +25,31 @@ function comparableReferencePrice(model: ModelDefinition): number | undefined {
 export class ConstrainedDispatcher {
   constructor(private readonly catalog: Catalog) { }
   resolve(candidates: readonly DispatchCandidate[], requirements: TaskDispatchRequirements, localSpeed?: readonly LocalSpeedSample[]): ConstrainedDispatch {
-    const excludedModels = new Set(requirements.excludeModelIds ?? []);
+    const excludedModels = requirements.excludeModelIds ?? [];
     const excludedProfiles = new Set(requirements.excludeProfileIds ?? []);
     const excludedClients = new Set(requirements.excludeClientIds ?? []);
     const excludedProviders = new Set(requirements.excludeProviderIds ?? []);
     const requiredCaps = requirements.requiredCapabilities ?? [];
     const eligible: DispatchResolution[] = [];
+    // A bare exclusion id carries no provider, so it is migrated only through the
+    // candidate's own provider: a historical spelling of this exact model is
+    // excluded, while an unknown or ambiguous spelling is never globally
+    // remapped and can therefore never bypass exclusion through another route.
+    const excludedModelsFor = (providerId: string): ReadonlySet<string> => {
+      const provider = this.catalog.provider(providerId);
+      if (!provider) return new Set(excludedModels);
+      const resolved = new Set(excludedModels);
+      for (const excluded of excludedModels) {
+        const registered = resolveHistoricalOfferedModelId(provider, excluded);
+        if (registered !== undefined) resolved.add(registered);
+      }
+      return resolved;
+    };
     let considered = 0;
     for (const candidate of candidates) {
       considered++;
-      if (excludedModels.has(candidate.model))
+      const excludedForProvider = excludedModelsFor(candidate.provider);
+      if (excludedForProvider.has(candidate.model))
         continue;
       if (excludedProfiles.has(candidate.profileId))
         continue;
@@ -78,7 +94,12 @@ export class ConstrainedDispatcher {
       // bypass exclusion of its resolved canonical model (e.g. legacy-glm ->
       // glm-5.3). GLM-5.3-Flash remains a distinct id and is excluded only by
       // its own id, never by a glm-5.3 exclusion.
-      if (excludedModels.has(plan.model))
+      if (excludedForProvider.has(plan.model))
+        continue;
+      // Universal application admission, independent of free supply: an
+      // automatic candidate must be a mainstream registered identity. There is
+      // no provider-specific exception and no unregistered or alias identity.
+      if (!isMainstreamModelId(modelDef.id))
         continue;
       // Explicit-free automatic eligibility, decided by the shared helper and
       // applied in addition to every gate below: a statically-declared free
@@ -132,16 +153,15 @@ export class ConstrainedDispatcher {
       }
       // Speed evidence tiers in exact precedence order via the shared resolver:
       // the first usable exact-provider/model local 31-day TPS sample,
-      // then the canonical provider modelSpeedOverride, then the model default
-      // speed. Matching is by exact provider.id/modelDef.id — no alias or client remap.
-      // A live-confirmed-free model with no evidence keeps the free-pool floor
-      // so it is ranked last by speed instead of being dropped.
+      // then the canonical provider modelSpeedOverride, then the registered
+      // catalog default. Matching is by exact provider.id/modelDef.id — no alias
+      // or client remap. A live-confirmed-free model without its own evidence
+      // falls back to that same registry default, never to a fabricated floor.
       const speed = resolveModelSpeed(
         provider,
         modelDef,
         localSpeed,
         undefined,
-        liveConfirmedFree ? CONFIRMED_FREE_FLOOR_TPS : undefined,
       );
       // A candidate with NO speed evidence cannot be ranked or dispatched: a
       // genuinely unknown speed is excluded rather than substituted with a zero.

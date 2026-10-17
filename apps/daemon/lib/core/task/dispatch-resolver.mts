@@ -2,7 +2,8 @@ import type { Catalog, DispatchCandidate, DispatchPlan, LocalSpeedSample, ModelD
 import type { TaskDispatchRequirements } from '@wrenyard/auto-routing';
 import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveModelSpeed, routingReferencePriceOf, explicitFreeAutoEligibility } from '@wrenyard/providers/catalog';
 import { resolveConstrainedDispatch } from '@wrenyard/auto-routing';
-import { resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
+import { resolveHistoricalOfferedModelId, resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
+import { isMainstreamModelId } from '@wrenyard/models'
 import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts'
 import {
   selectTaskResolutionFailure,
@@ -25,9 +26,11 @@ import {
  * values.
  *
  * Every runtime identity is a canonical dynamic target
- * (`<provider>/<model>:<client>`) resolved once through the Catalog. Automatic
+ * (`<provider>/<model>:<client>`) resolved through the live Catalog. Automatic
  * selection is driven solely by `catalog.enumerateTaskCandidates` and the
- * resolved runtime task plans. Targets use canonical provider/model:client identities.
+ * derived runtime plans; both are re-enumerated once per resolution so a
+ * discovery refresh becomes task-usable without a daemon restart, while a
+ * single resolution keeps one consistent snapshot.
  */
 
 export class NoEligiblePlanError extends Error {
@@ -228,14 +231,14 @@ export interface TaskDispatchDisplayLabels {
 }
 
 export interface TaskDispatchResolver {
-  resolve(input: ResolveTaskDispatchInput): TaskDispatchResolution
+  resolve(input: ResolveTaskDispatchInput): Promise<TaskDispatchResolution>
   /**
    * Enumerates every exact runtime choice currently satisfying the same
    * declared-runtime semantics and hard requirements as `resolve`. A policy
    * or absent declared runtime evaluates every exact canonical candidate.
    * Eligibility is never relaxed against resolve admission.
    */
-  eligible(input: TaskDispatchEligibleInput): TaskDispatchEligibleResult
+  eligible(input: TaskDispatchEligibleInput): Promise<TaskDispatchEligibleResult>
 
   /**
    * Read-only per-exact-candidate diagnostic over the same candidate pool and
@@ -247,7 +250,7 @@ export interface TaskDispatchResolver {
    * `evaluate`/gate-replay path `resolve` and `eligible` use — no duplicate
    * filter, scorer, or probe. Pure and side-effect free.
    */
-  diagnose(input: TaskDispatchEligibleInput): TaskDispatchDiagnosticResult
+  diagnose(input: TaskDispatchEligibleInput): Promise<TaskDispatchDiagnosticResult>
 
   /**
    * Resolves one EXACT canonical dynamic target, bypassing every automatic
@@ -258,13 +261,13 @@ export interface TaskDispatchResolver {
    * target returns `ExplicitRuntimeUnavailableError` and never falls back to
    * another candidate.
    */
-  resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution
+  resolveExplicit(input: ResolveExplicitDispatchInput): Promise<TaskDispatchExplicitResolution>
   /**
    * Enumerates every existing canonical dynamic target with its explicit-mode
    * availability, attaching resolved metadata only when it can be produced
-   * truthfully. Synchronous and side-effect free: no inference and no network.
+   * truthfully. Side-effect free: no inference and no network.
    */
-  listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult
+  listExactRuntimes(input: TaskDispatchExactRuntimeListInput): Promise<TaskDispatchExactRuntimeListResult>
 
   /**
    * Read-only Catalog-backed display-label projection for an already-resolved
@@ -336,25 +339,52 @@ function toResolvedDispatch(
 export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps): Promise<TaskDispatchResolver> {
   const catalog = deps.catalog
 
-  // Auto candidates come only from the Catalog's task-capable enumeration. Each
-  // candidate's profileId IS its canonical provider/model:client identity; no
-  // source preset table, profile registry, or user alias participates here.
-  const allCandidates: DispatchCandidate[] = catalog.enumerateTaskCandidates()
-
-  // Runtime execution plans are compiled up front and keyed by the same
-  // canonical targets. They validate that the selected target has a trusted
-  // execution plan, but internal route labels (e.g. the CodeBuddy iOA remap)
-  // are runtime-owned and never exposed through the public identity.
-  const runtimePlans = await resolveRuntimeTaskPlans(catalog, deps.runtime)
+  // One consistent snapshot per public resolution. Candidates and their runtime
+  // plans are re-enumerated from the live Catalog on every call, so a provider
+  // discovery refresh (Devin/OpenCode Zen additions or removals) becomes
+  // task-usable without a daemon restart. The runtime plans are compiled through
+  // the injected ProviderRuntime, so the active credential/discovery state is
+  // consulted before any resolution rather than reading a startup copy. A
+  // snapshot is captured once per resolve/eligible/diagnose call and never
+  // re-read mid-resolution.
+  const currentSnapshot = async (): Promise<{
+    candidates: DispatchCandidate[]
+    runtimePlans: Readonly<Record<string, DispatchPlan>>
+  }> => ({
+    // Auto candidates come only from the Catalog's task-capable enumeration. Each
+    // candidate's profileId IS its canonical provider/model:client identity; no
+    // source preset table, profile registry, or user alias participates here.
+    candidates: catalog.enumerateTaskCandidates(),
+    // Runtime execution plans are derived for the same canonical targets and
+    // carry the exact provider wire/effort binding. They validate that the
+    // selected target has a trusted execution plan; internal route labels (e.g.
+    // the CodeBuddy iOA remap) are applied by the transport and never exposed
+    // through the public identity.
+    runtimePlans: await resolveRuntimeTaskPlans(catalog, deps.runtime),
+  })
 
   // Automatic selection uses all candidates; an explicit target narrows it.
-  const selectCandidatePool = (input: ResolveTaskDispatchInput): DispatchCandidate[] | NoEligiblePlanError => {
-    if (!input.target) return allCandidates
+  // A historical model spelling in an explicit target is migrated only through
+  // a verified unique provider-scoped mapping; the client suffix is preserved
+  // exactly, and an unknown or ambiguous model fails closed.
+  const selectCandidatePool = (
+    input: ResolveTaskDispatchInput,
+    candidates: DispatchCandidate[],
+  ): DispatchCandidate[] | NoEligiblePlanError => {
+    if (!input.target) return candidates
     try {
-      const target = formatRunSyntax(parseRunSyntax(input.target))
-      return allCandidates.filter(candidate => candidate.profileId === target)
+      const parsed = parseRunSyntax(input.target)
+      const provider = catalog.provider(parsed.provider)
+      const registeredModel = provider === undefined
+        ? undefined
+        : resolveHistoricalOfferedModelId(provider, parsed.model)
+      if (registeredModel === undefined) {
+        return new NoEligiblePlanError(input.taskName, candidates, input.requirements)
+      }
+      const target = formatRunSyntax({ ...parsed, model: registeredModel })
+      return candidates.filter(candidate => candidate.profileId === target)
     } catch {
-      return new NoEligiblePlanError(input.taskName, allCandidates, input.requirements)
+      return new NoEligiblePlanError(input.taskName, candidates, input.requirements)
     }
   }
   // Canonical identity of a candidate equals its catalog profileId (the public
@@ -379,8 +409,19 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     const excludedProfiles = requirements.excludeProfileIds ?? []
     const excludedClients = requirements.excludeClientIds ?? []
     const excludedProviders = requirements.excludeProviderIds ?? []
+    // A bare exclusion id names no provider, so it is migrated only through this
+    // candidate's own provider. A historical spelling of this model excludes it,
+    // while an ambiguous provider-less spelling is never globally remapped.
+    const candidateProvider = catalog.provider(candidate.provider)
+    const excludedForProvider = new Set(excludedModels)
+    if (candidateProvider) {
+      for (const excluded of excludedModels) {
+        const registered = resolveHistoricalOfferedModelId(candidateProvider, excluded)
+        if (registered !== undefined) excludedForProvider.add(registered)
+      }
+    }
     // First-real-gate order, matching the authoritative pre-poll gate order.
-    if (excludedModels.includes(candidate.model)) {
+    if (excludedForProvider.has(candidate.model)) {
       return { code: 'no_available_provider', detail: 'model_excluded' }
     }
     if (excludedProfiles.includes(candidate.profileId)) {
@@ -391,6 +432,13 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
     if (excludedProviders.includes(candidate.provider)) {
       return { code: 'no_available_provider', detail: 'provider_excluded' }
+    }
+    // Universal application admission: a candidate must be a mainstream
+    // registered identity. It applies before every supply gate and has no
+    // provider exception, so a non-mainstream or unregistered target can never
+    // be admitted through an explicit or automatic route.
+    if (!isMainstreamModelId(candidate.model)) {
+      return { code: 'no_available_provider' }
     }
 
     let plan: { client: string; provider: string; model: string; supportsWebSearch?: boolean }
@@ -430,7 +478,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       detail === undefined ? { code, priceUsdPerMillion } : { code, priceUsdPerMillion, detail }
 
     // Canonical-alias model exclusion mirrors the same post-resolution gate.
-    if (excludedModels.includes(plan.model)) {
+    if (excludedForProvider.has(plan.model)) {
       return atGate('no_available_provider', 'model_excluded')
     }
 
@@ -523,6 +571,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   const evaluate = (
     input: ResolveTaskDispatchInput,
     candidatePool: DispatchCandidate[],
+    snapshot: { candidates: DispatchCandidate[]; runtimePlans: Readonly<Record<string, DispatchPlan>> },
     // Immutable sample set preloaded by a multi-candidate caller (e.g. eligible)
     // that wants one localSpeed source read shared by every candidate. When
     // absent, each evaluation reads the lazy source once itself.
@@ -543,7 +592,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         if (elimination) eliminations.push(elimination)
       }
       const failure = selectTaskResolutionFailure(eliminations)
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, failure?.code) }
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, snapshot.candidates, req, failure?.code) }
     }
 
     const selected = constrained.selected
@@ -562,9 +611,9 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // Require a compiled runtime plan for the selected canonical target. The
     // public snapshot retains canonical identity; Wrenyard consumes the exact
     // target and any upstream alias stays runtime-internal.
-    const runtimePlan = runtimePlans[canonicalTarget]
+    const runtimePlan = snapshot.runtimePlans[canonicalTarget]
     if (!runtimePlan) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'no_available_provider') }
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, snapshot.candidates, req, 'no_available_provider') }
     }
 
     // Fail-closed. Constrained tasks always set speed, intelligence, and
@@ -577,17 +626,17 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // TPS-only; checkedAt is required only for local samples.
     const speed = selected.speed
     if (!Number.isFinite(speed.tps) || speed.tps <= 0) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'speed_requirement') }
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, snapshot.candidates, req, 'speed_requirement') }
     }
     const verifiedSpeed = speed
     const model = selected.model
     const selectedProvider = catalog.provider(selected.plan.provider)
-    // A live-confirmed-free model carries no fabricated intelligence tier: the
-    // unconditional unknown-intelligence fail-closed applies to paid/unknown
-    // supply, while live confirmed-free evidence (which already passed its own
-    // free-pool admission) is not held to a metadata tier it never declared.
-    if (!model.intelligence && !(selectedProvider !== undefined && catalog.confirmedFreeSupply(selectedProvider.id, model.id))) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'intelligence_requirement') }
+    // Mandatory registry metadata: a model without a declared intelligence tier
+    // is not a usable offering. Free supply is orthogonal to identity, so a
+    // confirmed-free row is held to the same registry invariant as a paid row;
+    // no unknown-tier fallback is substituted here.
+    if (!model.intelligence) {
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, snapshot.candidates, req, 'intelligence_requirement') }
     }
     // Explicit free vs priced, decided by the free marker: an explicitly free
     // route is admitted whether or not it declares a reference price, and a
@@ -596,7 +645,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // absent or zero price.
     const referencePrice = routingReferencePriceOf(model)
     if (referencePrice?.kind !== 'free' && referencePrice?.outputUsdPerMillion === undefined) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'price_limit') }
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, snapshot.candidates, req, 'price_limit') }
     }
     // Conservative re-assertion of the explicit-free automatic-eligibility gate
     // for the selected offering: the authoritative dispatcher already enforces
@@ -604,7 +653,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     // catalog-level free flag is passed exactly as the dispatcher received it.
     if (selectedProvider
       && !explicitFreeAutoEligibility(selectedProvider, model, catalog.confirmedFreeSupply(selectedProvider.id, model.id)).eligible) {
-      return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'no_available_provider') }
+      return { ok: false, error: new NoEligiblePlanError(input.taskName, snapshot.candidates, req, 'no_available_provider') }
     }
 
     const resolved = toResolvedDispatch(
@@ -632,6 +681,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     taskName: string,
     exactAgentRuntime: string,
     candidate: DispatchCandidate,
+    snapshot: { candidates: DispatchCandidate[]; runtimePlans: Readonly<Record<string, DispatchPlan>> },
     requiredCapabilities?: TaskDispatchRequirements['requiredCapabilities'],
     requiresWebSearch?: boolean,
     intelligenceMin?: TaskDispatchRequirements['intelligenceMin'],
@@ -650,7 +700,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         ),
       }
     }
-    const runtimePlan = runtimePlans[canonicalTarget]
+    const runtimePlan = snapshot.runtimePlans[canonicalTarget]
     if (!runtimePlan) {
       return {
         ok: false,
@@ -658,6 +708,20 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
           taskName,
           exactAgentRuntime,
           `target '${canonicalTarget}' has no compiled runtime plan or credential route`,
+        ),
+      }
+    }
+
+    // Application admission is universal: an explicitly pinned target must also
+    // be a mainstream registered model. This is not a free-supply rule and has
+    // no provider exception, so an explicit request cannot bypass the picker.
+    if (!isMainstreamModelId(candidate.model)) {
+      return {
+        ok: false,
+        error: new ExplicitRuntimeUnavailableError(
+          taskName,
+          exactAgentRuntime,
+          `target '${canonicalTarget}' is not a mainstream registered model`,
         ),
       }
     }
@@ -726,6 +790,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       const probed = evaluate(
         { taskName, requirements: { intelligenceMin }, target: exactAgentRuntime },
         [candidate],
+        snapshot,
       )
       if (!probed.ok) {
         return {
@@ -742,6 +807,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     const probe = (requirements: TaskDispatchRequirements): TaskDispatchResolution => evaluate(
       { taskName, requirements, target: exactAgentRuntime },
       [candidate],
+      snapshot,
     )
 
     // Explicit Fast is a materializability requirement, not a preference: the
@@ -802,14 +868,18 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
   }
 
   return {
-    resolve(input): TaskDispatchResolution {
-      const pool = selectCandidatePool(input)
+    async resolve(input): Promise<TaskDispatchResolution> {
+      // One catalog snapshot for this resolution: candidates and their runtime
+      // plans are read from the live Catalog, never from a startup copy.
+      const snapshot = await currentSnapshot()
+      const pool = selectCandidatePool(input, snapshot.candidates)
       if (pool instanceof NoEligiblePlanError) return { ok: false, error: pool }
-      return evaluate(input, pool)
+      return evaluate(input, pool, snapshot)
     },
 
-    eligible(input): TaskDispatchEligibleResult {
-      const pool = selectCandidatePool(input)
+    async eligible(input): Promise<TaskDispatchEligibleResult> {
+      const snapshot = await currentSnapshot()
+      const pool = selectCandidatePool(input, snapshot.candidates)
       if (pool instanceof NoEligiblePlanError) return { ok: false, error: pool }
 
       // Every candidate in the pool is an exact canonical target, so each
@@ -827,6 +897,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         const outcome = evaluate(
           { taskName: input.taskName, requirements: input.requirements, target: input.target },
           [candidate],
+          snapshot,
           localSpeed,
         )
         if (outcome.ok) {
@@ -858,8 +929,9 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       }
     },
 
-    diagnose(input: TaskDispatchEligibleInput): TaskDispatchDiagnosticResult {
-      const pool = selectCandidatePool(input)
+    async diagnose(input: TaskDispatchEligibleInput): Promise<TaskDispatchDiagnosticResult> {
+      const snapshot = await currentSnapshot()
+      const pool = selectCandidatePool(input, snapshot.candidates)
       if (pool instanceof NoEligiblePlanError) return { ok: false, error: pool }
 
       // One immutable local speed sample read shared by every candidate's
@@ -872,11 +944,13 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         const baseline = evaluate(
           { taskName: input.taskName, requirements: {}, target: input.target },
           [candidate],
+          snapshot,
           localSpeed,
         )
         const admitted = evaluate(
           { taskName: input.taskName, requirements: input.requirements, target: input.target },
           [candidate],
+          snapshot,
           localSpeed,
         )
         const rejection = admitted.ok
@@ -894,7 +968,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       return { ok: true, choices }
     },
 
-    resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution {
+    async resolveExplicit(input: ResolveExplicitDispatchInput): Promise<TaskDispatchExplicitResolution> {
       const { taskName, exactRuntime, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort, fast } = input
       const unavailable = (reason: string): TaskDispatchExplicitResolution => ({
         ok: false,
@@ -911,6 +985,22 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         return unavailable(`'${exactRuntime}' is not a parseable canonical dynamic target (${message})`)
       }
 
+      // Migrate a historical model spelling through the verified unique-match
+      // resolver before any comparison or admission. The client suffix is kept
+      // exactly; an unknown or ambiguous model fails closed with this
+      // actionable unavailable error instead of guessing a target.
+      const explicitProvider = catalog.provider(parsed.provider)
+      if (explicitProvider === undefined) {
+        return unavailable(`provider '${parsed.provider}' is not a registered provider`)
+      }
+      const registeredModel = resolveHistoricalOfferedModelId(explicitProvider, parsed.model)
+      if (registeredModel === undefined) {
+        return unavailable(
+          `model '${parsed.model}' is not a registered offering of provider '${parsed.provider}'; it is unknown or matches more than one registered model`,
+        )
+      }
+      parsed = { ...parsed, model: registeredModel }
+
       // Resolve through the Catalog (canonicalizing model aliases) and require
       // the exact canonical target to exist in the task-capable candidate set.
       let resolvedPlan: { client: string; provider: string; model: string; reasoningEffort?: string }
@@ -920,8 +1010,9 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
         const message = error instanceof Error ? error.message : String(error)
         return unavailable(`cannot resolve '${exactRuntime}' through the Catalog: ${message}`)
       }
+      const snapshot = await currentSnapshot()
       const canonicalTarget = formatRunSyntax(resolvedPlan)
-      const candidate = allCandidates.find(
+      const candidate = snapshot.candidates.find(
         (entry) => entry.client === resolvedPlan.client
           && entry.provider === resolvedPlan.provider
           && entry.model === resolvedPlan.model,
@@ -929,17 +1020,19 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       if (!candidate) {
         return unavailable(`canonical target '${canonicalTarget}' is not a task-capable candidate or runtime plan`)
       }
-      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort, input.inputTokens, fast)
+      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, snapshot, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort, input.inputTokens, fast)
     },
 
-    listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult {
+    async listExactRuntimes(input: TaskDispatchExactRuntimeListInput): Promise<TaskDispatchExactRuntimeListResult> {
+      const snapshot = await currentSnapshot()
       const items: TaskDispatchExactRuntimeListItem[] = []
-      for (const candidate of allCandidates) {
+      for (const candidate of snapshot.candidates) {
         const exactAgentRuntime = canonicalTargetOf(candidate)
         const outcome = evaluateExplicitTarget(
           input.taskName,
           exactAgentRuntime,
           candidate,
+          snapshot,
           input.requiredCapabilities,
           input.requiresWebSearch,
           input.intelligenceMin,
