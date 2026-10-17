@@ -9,9 +9,10 @@
  * where P is the continuous price-factor from fixed anchors,
  * S = min(TPS / (SPEED_SATURATION_BASE_TPS + expectedTps), 1),
  * Q is quota headroom quality, and I is the intelligence factor. Every factor is
- * bounded in [0, 1], so the score is always within [0, 1]. Ranking is one global
- * deterministic descending-score pass; supply class and quota tier are retained
- * only as diagnostic fields and never as sort keys.
+ * bounded in [0, 1], so the score is always within [0, 1]. Ranking is
+ * deterministic: confirmed-free supply forms a priority tier ahead of standard
+ * supply, and within each tier candidates sort by descending score; quota tier
+ * is retained only as a diagnostic field and is never a sort key.
  *
  * Note: ranking fixtures use synthetic labels ("ds-flash-like",
  * "glm-flash-like") purely to make canonical/snapshot ids readable. No real
@@ -1230,10 +1231,11 @@ test("quota tiers can cross by score while blocked remains rejected", () => {
   );
 });
 
-test("verified-free changes routing price/P only and has no priority bucket", () => {
-  // A confirmed-free candidate routes for free (P=1) but is still ranked by its
-  // overall score; a higher-scoring standard candidate outranks it, proving
-  // there is no free-supply priority bucket.
+test("confirmed-free candidates form a priority tier ranked by score", () => {
+  // A confirmed-free candidate routes for free (P=1) and forms a priority tier
+  // ahead of standard supply; inside that tier candidates are still ordered by
+  // overall score. The standard candidate keeps the higher score yet ranks
+  // second because the confirmed-free tier comes first.
   const free = cand({
     canonicalId: "free-a",
     requiredQuota: [q("rolling", rollingEv(50))], // unknown -> Q 0.5
@@ -1251,10 +1253,13 @@ test("verified-free changes routing price/P only and has no priority bucket", ()
   assert.equal(f.priceFactor, 1);
   assert.equal(s.routingPriceUsdPerM, 0);
   assert.equal(s.priceFactor, 1);
-  assert.ok(s.score > f.score, "standard outranks free by score, not priority");
-    const result = rankAutoRoutingCandidates([free, standard]);
-    assert.deepEqual(rankedIds(result), ["std-a", "free-a"]);
-  })
+  assert.ok(
+    s.score > f.score,
+    "standard candidate still has the higher score, but the free candidate ranks first due to the confirmed-free tier"
+  );
+  const result = rankAutoRoutingCandidates([free, standard]);
+  assert.deepEqual(rankedIds(result), ["free-a", "std-a"]);
+})
 
 test("recommendation contributes to total score without overriding a cheaper faster high", () => {
   const premium = cand({

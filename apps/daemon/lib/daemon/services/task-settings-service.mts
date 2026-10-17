@@ -520,7 +520,7 @@ function buildRoutingFormRows(
         intelligence_score: ranked.weights.I * ranked.intelligenceFactor,
         score: ranked.score,
         rank: ranked.rank,
-        reason: null,
+        reason: ranked.supplyClass === 'confirmed_free' ? '确认免费路线，优先于付费路线' : null,
       })
       continue
     }

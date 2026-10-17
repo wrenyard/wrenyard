@@ -3,6 +3,10 @@ import { type CandidateAssessment, type RankedCandidate, type CandidateInput, ty
 import { snapshotScoreWeights } from './weights.ts';
 import { SCORE_WEIGHTS } from './constants.ts';
 import { compareLex } from './numeric.ts';
+/** Confirmed-free supply ranks ahead of standard supply as a priority tier. */
+function supplyTier(assessment: CandidateAssessment): number {
+  return assessment.supplyClass === 'confirmed_free' ? 0 : 1;
+}
 /** Evaluates one immutable candidate set and applies deterministic ranking. */
 export class AutoRouter {
   constructor(private readonly evaluator = new CandidateEvaluator()) { }
@@ -76,10 +80,14 @@ export class AutoRouter {
     }
     excluded.sort((a, b) => compareLex(a.canonicalId, b.canonicalId) ||
       compareLex(a.snapshotId, b.snapshotId));
-    // Rank solely by the weighted total score, then stable identity for ties.
-    // Recommendation affects the intelligence factor; shortfall remains a
-    // diagnostic and is never an independent ranking priority.
-    const rankedAssessments = accepted.slice().sort((a, b) => b.score - a.score ||
+    // Confirmed-free supply forms its own priority tier ahead of standard
+    // supply; inside each tier the weighted total score ranks candidates, then
+    // stable identity breaks ties. Recommendation affects the intelligence
+    // factor; shortfall remains a diagnostic and is never an independent
+    // ranking priority.
+    const rankedAssessments = accepted.slice().sort((a, b) =>
+      supplyTier(a) - supplyTier(b) ||
+      b.score - a.score ||
       compareLex(a.canonicalId, b.canonicalId) ||
       compareLex(a.snapshotId, b.snapshotId));
     const selected = rankedAssessments[0];

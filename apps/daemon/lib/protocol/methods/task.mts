@@ -921,7 +921,9 @@ export interface TaskRoutingTestParams {
 
 /** One provider+model routing diagnostic row. Qualified rows carry the
  *  production rank and the actual weighted scorer contributions (which sum to
- *  `score`); rejected rows carry null rank/score and a short Chinese reason.
+ *  `score`); a qualified confirmed-free row also carries a short Chinese
+ *  free-tier note in `reason`, while a qualified paid row keeps `reason` null.
+ *  Rejected rows carry null rank/score and a short Chinese rejection reason.
  *  No client, runtime identity, trace, or internal diagnostic is exposed. */
 export interface TaskRoutingTestRow {
   provider: string
@@ -941,7 +943,8 @@ export interface TaskRoutingTestRow {
   score: number | null
   /** Production rank (1-based) for qualified rows; null when rejected. */
   rank: number | null
-  /** Short Chinese reason for a rejected row; null for a qualified row. */
+  /** Short Chinese reason: a free-tier note on a qualified confirmed-free row,
+   *  null on a qualified paid row, and the rejection reason on a rejected row. */
   reason: string | null
 }
 
