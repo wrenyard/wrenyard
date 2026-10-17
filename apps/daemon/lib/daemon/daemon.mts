@@ -77,7 +77,27 @@ import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/t
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
 import { resolveWrenyardConfigRoot } from '@wrenyard/paths'
-import { mkdir, statfs } from 'node:fs/promises'
+import { mkdir, readFile, statfs, writeFile } from 'node:fs/promises'
+
+/**
+ * Best-effort broadcast of one real condition change to every known session
+ * ledger. A session that cannot record the event is skipped: a diagnostic
+ * trigger must never fail the operation that observed the change.
+ */
+async function broadcastConditionChange(session: Session | undefined, message: string): Promise<void> {
+  if (session === undefined) return
+  try {
+    for (const summary of session.listSessions()) {
+      try {
+        await session.recordConditionChange(summary.sessionId, message)
+      } catch {
+        // Per-session failure is expected and ignored.
+      }
+    }
+  } catch {
+    // An unreadable session list is also a non-fatal diagnostic miss.
+  }
+}
 
 export interface RunningForemanDaemon {
   db: ForemanDatabase
@@ -348,7 +368,45 @@ export class ForemanDaemon implements RunningForemanDaemon {
       throw error
     }
     const resources = this.resources
+    if (resources) void this.broadcastSuiteVersionChange().catch(() => {})
     if (resources && this.onStarted) this.onStarted({ ipcPath: resources.ipcPath })
+  }
+
+  /**
+   * Best-effort startup record of a suite-version change. The first start on a
+   * state root only writes the baseline; a later start on a different version
+   * broadcasts a real condition change before rewriting the stamp.
+   */
+  private async broadcastSuiteVersionChange(): Promise<void> {
+    const resources = this.resources
+    if (!resources) return
+    const version = readProcessIdentity().version
+    const stampPath = join(foremanStateRoot(), 'dispatch-condition', 'suite-version')
+    let previous: string | undefined
+    try {
+      previous = (await readFile(stampPath, 'utf8')).trim()
+    } catch {
+      previous = undefined
+    }
+    if (previous === undefined || previous === '') {
+      try {
+        await mkdir(dirname(stampPath), { recursive: true, mode: 0o700 })
+        await writeFile(stampPath, `${version}\n`, { mode: 0o600 })
+      } catch (error) {
+        writeDaemonLog('warn', 'suite version baseline write failed', error)
+      }
+      return
+    }
+    if (previous === version) return
+    await broadcastConditionChange(
+      resources.session,
+      `Daemon restarted on a new suite version (${previous} → ${version}).`,
+    )
+    try {
+      await writeFile(stampPath, `${version}\n`, { mode: 0o600 })
+    } catch (error) {
+      writeDaemonLog('warn', 'suite version stamp write failed', error)
+    }
   }
 
   /**
@@ -757,6 +815,10 @@ async function createForemanDaemonResources(
   // for this process and never logged.
   const gatewayToken = config.gateway.token ?? persistGeneratedGatewayToken(authoritativeConfigPath)
   const runtimeAvailability = createRoutingAvailability({ catalog, providerRuntime, loadNativeProviderReadiness, loadCurrentCodeBuddySnapshot })
+  // The current workspace's session surface, used to record real condition
+  // changes for later dispatch gates. It is assigned once bindings exist and
+  // re-pointed on a workspace switch.
+  let conditionSession: Session | undefined
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
     catalog,
@@ -788,6 +850,12 @@ async function createForemanDaemonResources(
       }
       gatewayEventStore.append(foremanEvent)
       await getForemanEventBus().publish(foremanEvent)
+      if (event.state === 'available') {
+        void broadcastConditionChange(
+          conditionSession,
+          `Route recovered to available: ${event.provider}/${event.publicModel}.`,
+        )
+      }
     },
     onRequestCompleted: async (event) => {
       const foremanEvent: ForemanEvent = {
@@ -901,6 +969,7 @@ async function createForemanDaemonResources(
       }
     })
     const snapshot = await gatewaySettingsSnapshot()
+    void broadcastConditionChange(conditionSession, 'Gateway routing settings changed.')
     return {
       ok: true,
       ...snapshot,
@@ -1227,6 +1296,7 @@ async function createForemanDaemonResources(
     coreOptions.taskSettings = bindings.taskSettingsService
     coreOptions.workspaceDocService = bindings.workspaceDocService
     coreOptions.workspaceTodoService = bindings.workspaceTodoService
+    conditionSession = bindings.session
   }
 
   /**
@@ -1245,6 +1315,7 @@ async function createForemanDaemonResources(
 
   let coreOptions: CoreRpcHandlerOptions
   let workspaceScoped = await createBindings(config.workspaceRoot)
+  conditionSession = workspaceScoped.session
   const providerService = new ProviderService({
     catalog, runtime: providerRuntime,
     // Live indirection: provider.list always reports the CURRENT workspace's

@@ -220,6 +220,12 @@ export interface Session {
   hasRunningTurns(): boolean;
   readLedger(sessionId: string): LedgerEvent[];
   /**
+   * Record a real condition change on the session's timeline so a later
+   * dispatch can be told apart from a blind repeat. It is not part of a turn,
+   * so the event carries no turn or step.
+   */
+  recordConditionChange(sessionId: string, message: string): Promise<void>;
+  /**
    * Read-only, forward-looking inspection of the next main reasoning view.
    * Omitted `sessionId` inspects a new session (resident layers plus snapshot).
    */

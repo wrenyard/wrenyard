@@ -434,6 +434,22 @@ class Engine implements Session, SessionCallHost {
   }
 
   /**
+   * Record a real condition change on the session's timeline. This happens
+   * outside any turn, so the event carries neither a turn nor a step.
+   */
+  async recordConditionChange(sessionId: string, message: string): Promise<void> {
+    this.assertOpen();
+    await this.ready;
+    await this.ensureSession(sessionId);
+    await this.ports.ledger.append(sessionId, {
+      type: 'system.info',
+      source: 'system',
+      code: 'dispatch.condition-change',
+      message,
+    });
+  }
+
+  /**
    * Record that a session's active turn is waiting in bounded recovery. The
    * turn/call path calls this when a wait starts; the value only gates duplicate
    * continuations of the same selected model and effort in {@link send}.

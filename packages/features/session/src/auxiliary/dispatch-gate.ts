@@ -97,7 +97,8 @@ export function evaluateDispatchGate(
   for (const event of events) {
     if (event.type !== 'action.finished') continue;
     if (!matchingParents.has(event.id)) continue;
-    if (event.status === 'failed' && (latestFailure === undefined || event.seq > latestFailure.seq)) {
+    if (event.status === 'failed' && (event.taskStatus === undefined || event.taskStatus === 'failed')
+      && (latestFailure === undefined || event.seq > latestFailure.seq)) {
       latestFailure = event;
     }
   }

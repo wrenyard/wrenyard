@@ -507,7 +507,7 @@ export async function runDispatchAction(
   const status: ActionStatus = waited === undefined
     ? (aborted ? 'cancelled' : 'failed')
     : mapTaskStatus(waited.status, aborted);
-  const taskStatus = waited?.status ?? (status === 'failed' ? 'failed' : 'cancelled');
+  const taskStatus = waited?.status ?? (aborted ? 'cancelled' : 'executor-fault');
   const deferred: LedgerEventDraft[] = [];
   let result = waited === undefined ? `waitTaskRun failed: ${messageOf(waitError)}` : renderTaskResult(waited.output);
 
