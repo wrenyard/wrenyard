@@ -15,10 +15,10 @@
  * component is installed on this computer and may require operating-system
  * permissions.
  *
- * The constructor performs no I/O and never throws, so daemon startup cannot
- * fail because of a missing or broken component. Every check is bounded and
- * isolated: a missing, slow or failing executable becomes a snapshot state, not
- * an exception crossing the daemon boundary.
+ * The constructor never throws and starts no work that can fail startup: its
+ * only I/O is a best-effort sweep of stale per-run login copies. Every check is
+ * bounded and isolated: a missing, slow or failing executable becomes a snapshot
+ * state, not an exception crossing the daemon boundary.
  *
  * Platform/installation policy:
  *
@@ -37,7 +37,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, statSync } from 'node:fs'
-import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, hostname } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { McpServer } from '@wrenyard/exec'
@@ -558,6 +558,7 @@ export class OperationComponents {
   readonly #settingsPath: string
   readonly #loginProfileDir: string
   readonly #loginStatePath: string
+  readonly #runStateDir: string
   readonly #env: NodeJS.ProcessEnv
   readonly #log?: (message: string) => void
 
@@ -572,6 +573,7 @@ export class OperationComponents {
     this.#settingsPath = join(this.#componentsRoot, 'settings.json')
     this.#loginProfileDir = join(this.#browserDir, 'login-profile')
     this.#loginStatePath = join(this.#browserDir, 'login-state.json')
+    this.#runStateDir = join(this.#browserDir, 'run-state')
     this.#env = options.env ?? process.env
     this.#log = options.log
     if (this.#env.WRENYARD_BROWSER_USE_MCP?.trim()) {
@@ -579,6 +581,9 @@ export class OperationComponents {
         'WRENYARD_BROWSER_USE_MCP is no longer used; browser operations use the agent-browser CLI managed in Settings > Operation components.',
       )
     }
+    // Daemon start implies no run is live, so any per-run login copy left behind
+    // is stale. The sweep is best effort and never reports a failure.
+    void rm(this.#runStateDir, { recursive: true, force: true }).catch(() => undefined)
   }
 
   /** Current snapshots, in component order. The first call runs both checks. */
@@ -640,11 +645,28 @@ export class OperationComponents {
   }
 
   /**
-   * Absolute path of the managed browser login store. The run adapter copies it
-   * into each run read-only; runs never write it.
+   * Stage a read-only copy of the managed login store for one run.
+   *
+   * The copy lives under Wrenyard's own state home instead of a shared temporary
+   * directory, so the daemon owns the only location where authentication
+   * material is written. A run reads it and deletes it on release; it never
+   * writes the store itself. A missing store or any staging defect yields
+   * `undefined`, which leaves that run signed out instead of failing it.
    */
-  loginStorePath(): string {
-    return this.#loginStatePath
+  async stageLoginStateCopy(session: string): Promise<string | undefined> {
+    const name = session.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64)
+    if (!name) return undefined
+    if (!existsSync(this.#loginStatePath)) return undefined
+    try {
+      await mkdir(this.#runStateDir, { recursive: true })
+      const copy = join(this.#runStateDir, `${name}.json`)
+      await copyFile(this.#loginStatePath, copy)
+      await chmod(copy, 0o400)
+      return copy
+    } catch {
+      // Signed out is better than failing a run when the copy cannot be staged.
+      return undefined
+    }
   }
 
   #base(id: OperationComponentId): OperationComponentSnapshot {
@@ -840,6 +862,7 @@ export class OperationComponents {
         entry === 'config.json' ||
         entry === 'login-state.json' ||
         entry === 'login-profile' ||
+        entry === 'run-state' ||
         entry.includes('.partial-')
       if (preserved) continue
       await rm(join(this.#browserDir, entry), { recursive: true, force: true }).catch(() => undefined)

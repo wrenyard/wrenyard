@@ -21,9 +21,9 @@
  */
 
 import { execFile } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, rmSync } from 'node:fs'
-import { hostname, tmpdir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { rm } from 'node:fs/promises'
+import { hostname } from 'node:os'
+import { delimiter, dirname } from 'node:path'
 import type { McpServer } from '@wrenyard/exec'
 import type {
   OperationComponentId,
@@ -315,19 +315,7 @@ export class OperationAdapter {
           const baseEnv = launch.env
           // Each run gets its own read-only copy of the managed login store; the
           // store itself is never written by a run and the copy dies with the run.
-          let stateCopy: string | undefined
-          const storePath = this.#components.loginStorePath()
-          if (existsSync(storePath)) {
-            const candidate = join(tmpdir(), `wy-browser-state-${session}.json`)
-            try {
-              copyFileSync(storePath, candidate)
-              chmodSync(candidate, 0o400)
-              stateCopy = candidate
-            } catch {
-              // Signed out is better than failing the run when the copy fails.
-              stateCopy = undefined
-            }
-          }
+          const stateCopy = await this.#components.stageLoginStateCopy(session)
           envModifiers.push((env) => applyBrowserEnv(env, directory, baseEnv, session, stateCopy))
           cleanups.push(() =>
             runQuietly(launch.executable, ['--session', session, 'close'], {
@@ -337,13 +325,7 @@ export class OperationAdapter {
           )
           if (stateCopy !== undefined) {
             const copy = stateCopy
-            cleanups.push(async () => {
-              try {
-                rmSync(copy, { force: true })
-              } catch {
-                // Best effort: the per-run copy is deleted with the run.
-              }
-            })
+            cleanups.push(() => rm(copy, { force: true }))
           }
           instructions.push(
             stateCopy === undefined
