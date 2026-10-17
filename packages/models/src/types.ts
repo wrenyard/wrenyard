@@ -110,19 +110,28 @@ export interface ModelNativeAttributes {
 }
 
 /**
- * Catalog defaults for a registered canonical model. `capabilities` and
- * `contextWindow` are always known. `intelligence`, `speed` and `pricing` are
- * optional: a canonical identity registered from raw upstream data (identity
- * and display name only) leaves them absent, and no placeholder value is ever
- * invented to satisfy a required field.
+ * Catalog defaults for a registered canonical model.
+ *
+ * `intelligence` and `speed` are mandatory for every registered model: a model
+ * must declare a legal tier and a positive integer default speed to be a usable
+ * offering. There is no unknown-intelligence tier, no "unknown counts as low"
+ * rule and no absent-speed placeholder — a registration that leaves either
+ * value out is incomplete and is rejected. `pricing`, `maxOutputTokens` and
+ * `free` remain genuinely optional, and a missing value is never invented.
  */
 export interface ModelDefaults {
-  intelligence?: IntelligenceTier;
+  intelligence: IntelligenceTier;
   capabilities: readonly ModelCapability[];
   contextWindow: number;
   maxOutputTokens?: number;
   pricing?: ModelPricing;
-  speed?: number;
+  /**
+   * Default generation throughput after the first token, in tokens per second.
+   * Always a positive integer. It is a catalog default, not a provider
+   * measurement: measured evidence stays provider-scoped and overrides this
+   * value for its exact provider/model pair only.
+   */
+  speed: number;
   /**
    * Explicit free-status classification: the identity is genuinely free to
    * use, independent of any list price. Free status is authoritative in its own

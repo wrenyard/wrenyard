@@ -18,6 +18,7 @@ import { nvidiaModels } from './definitions/nvidia.ts';
 import { openaiModels } from './definitions/openai.ts';
 import { opencodeModels } from './definitions/opencode.ts';
 import { poolsideModels } from './definitions/poolside.ts';
+import { reflectionModels } from './definitions/reflection.ts';
 import { spacexaiModels } from './definitions/spacexai.ts';
 import { tencentModels } from './definitions/tencent.ts';
 import { thinkingmachinesModels } from './definitions/thinkingmachines.ts';
@@ -47,11 +48,13 @@ function validateModel(model: RegisteredModel, seen: Set<string>): void {
   if (!model.lab.trim()) {
     throw new Error(`registered model ${model.id} lab must be a non-empty string`);
   }
-  if (model.defaults.intelligence !== undefined && !INTELLIGENCE_SET.has(model.defaults.intelligence)) {
-    throw new Error(`registered model ${model.id} has invalid intelligence tier`);
+  // Intelligence and default speed are mandatory registration facts: a model
+  // without a legal tier or a positive integer speed is not a usable offering.
+  // There is no unknown tier and no absent-speed placeholder.
+  if (!INTELLIGENCE_SET.has(model.defaults.intelligence)) {
+    throw new Error(`registered model ${model.id} must declare a valid intelligence tier`);
   }
-  if (model.defaults.speed !== undefined
-    && (!Number.isInteger(model.defaults.speed) || model.defaults.speed <= 0)) {
+  if (!Number.isInteger(model.defaults.speed) || model.defaults.speed <= 0) {
     throw new Error(`registered model ${model.id} speed must be a positive integer`);
   }
   // Free status is an explicit classification, never derived from pricing: it
@@ -121,37 +124,212 @@ export function builtinModelDisplayName(id: string): string {
  *
  * Each entry is an identity: the exact canonical id, its hyphen-free SSOT
  * display name, the origin lab, the source context window and the source input
- * modalities. `intelligence`, `speed` and `pricing` are deliberately absent —
- * models.dev supplies none of them for these rows (and its pricing is tiered
- * for some), so no placeholder value is invented here. Providers that publish
- * these identities opt out of the canonical metadata fallback and carry exactly
- * the metadata their own snapshot supplies.
+ * modalities. Every entry also declares a deliberate intelligence tier and a
+ * seeded default speed, because a registered identity without both is not a
+ * usable offering and registration rejects it.
+ *
+ * The seeded speeds are catalog defaults, not provider measurements: each is a
+ * floored positive integer from a public provider throughput source, and a
+ * provider-pair measurement or override still takes precedence for that exact
+ * pair. `pricing` stays absent here because models.dev supplies none for these
+ * rows (and its pricing is tiered for some), so no placeholder price is
+ * invented. Consumers read speed and intelligence from the registered identity;
+ * provider snapshots own their own pricing, limits and capabilities.
  */
 const modelsDevCanonicalModels: readonly RegisteredModel[] = [
-  defineModel('gemini-3.1-pro-preview', 'Gemini 3.1 Pro Preview', { capabilities: ['text', 'image'], contextWindow: 1_048_576 }, { lab: 'google', family: 'gemini' }),
-  defineModel('gemini-3.5-flash', 'Gemini 3.5 Flash', { capabilities: ['text', 'image'], contextWindow: 1_048_576 }, { lab: 'google', family: 'gemini' }),
-  defineModel('gemini-3.1-flash-lite', 'Gemini 3.1 Flash Lite', { capabilities: ['text', 'image'], contextWindow: 1_048_576 }, { lab: 'google', family: 'gemini' }),
-  defineModel('mistral-large-4', 'Mistral Large 4', { capabilities: ['text', 'image'], contextWindow: 1_048_576 }, { lab: 'mistral' }),
-  defineModel('mistral-medium-3.5', 'Mistral Medium 3.5', { capabilities: ['text', 'image'], contextWindow: 262_144 }, { lab: 'mistral' }),
-  defineModel('mistral-small-latest', 'Mistral Small', { capabilities: ['text', 'image'], contextWindow: 262_144 }, { lab: 'mistral' }),
-  defineModel('devstral-2', 'Devstral 2', { capabilities: ['text'], contextWindow: 262_144 }, { lab: 'mistral' }),
-  defineModel('codestral-latest', 'Codestral', { capabilities: ['text'], contextWindow: 256_000 }, { lab: 'mistral' }),
-  defineModel('gpt-oss-120b', 'GPT OSS 120B', { capabilities: ['text'], contextWindow: 131_072 }, { lab: 'openai' }),
-  defineModel('gpt-oss-20b', 'GPT OSS 20B', { capabilities: ['text'], contextWindow: 131_072 }, { lab: 'openai' }),
-  defineModel('llama-3.3-70b', 'Llama 3.3 70B', { capabilities: ['text'], contextWindow: 131_072 }, { lab: 'meta' }),
-  defineModel('groq-compound', 'Groq Compound', { capabilities: ['text'], contextWindow: 131_072 }, { lab: 'groq' }),
-  defineModel('deepseek-v4-pro-0813', 'DeepSeek V4 Pro 0813', { capabilities: ['text'], contextWindow: 1_048_576 }, { lab: 'deepseek', family: 'deepseek-v4' }),
-  defineModel('deepseek-v3.2', 'DeepSeek V3.2', { capabilities: ['text'], contextWindow: 32_768 }, { lab: 'deepseek', family: 'deepseek-v3' }),
-  defineModel('qwen3.7-max', 'Qwen3.7 Max', { capabilities: ['text'], contextWindow: 1_000_000 }, { lab: 'alibaba', family: 'qwen' }),
-  defineModel('qwen3.8-2.4t-a95b', 'Qwen3.8 2.4T A95B', { capabilities: ['text'], contextWindow: 262_144 }, { lab: 'alibaba', family: 'qwen' }),
-  defineModel('command-a-plus', 'Command A Plus', { capabilities: ['text', 'image'], contextWindow: 128_000 }, { lab: 'cohere', family: 'command' }),
-  defineModel('command-a-reasoning', 'Command A Reasoning', { capabilities: ['text'], contextWindow: 256_000 }, { lab: 'cohere', family: 'command' }),
-  defineModel('command-a', 'Command A', { capabilities: ['text'], contextWindow: 256_000 }, { lab: 'cohere', family: 'command' }),
-  defineModel('command-a-vision', 'Command A Vision', { capabilities: ['text', 'image'], contextWindow: 128_000 }, { lab: 'cohere', family: 'command' }),
-  defineModel('sonar', 'Sonar', { capabilities: ['text'], contextWindow: 128_000 }, { lab: 'perplexity', family: 'sonar' }),
-  defineModel('sonar-pro', 'Sonar Pro', { capabilities: ['text', 'image'], contextWindow: 200_000 }, { lab: 'perplexity', family: 'sonar' }),
-  defineModel('sonar-reasoning-pro', 'Sonar Reasoning Pro', { capabilities: ['text', 'image'], contextWindow: 128_000 }, { lab: 'perplexity', family: 'sonar' }),
-  defineModel('sonar-deep-research', 'Sonar Deep Research', { capabilities: ['text'], contextWindow: 128_000 }, { lab: 'perplexity', family: 'sonar' }),
+  // Seed speed 139: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('gemini-3.1-pro-preview', 'Gemini 3.1 Pro Preview', {
+    intelligence: 'high',
+    capabilities: ['text', 'image'],
+    contextWindow: 1_048_576,
+    speed: 139,
+  }, { lab: 'google', family: 'gemini' }),
+  // Seed speed 213: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('gemini-3.5-flash', 'Gemini 3.5 Flash', {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    contextWindow: 1_048_576,
+    speed: 213,
+  }, { lab: 'google', family: 'gemini' }),
+  // Seed speed 363: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('gemini-3.1-flash-lite', 'Gemini 3.1 Flash Lite', {
+    intelligence: 'low',
+    capabilities: ['text', 'image'],
+    contextWindow: 1_048_576,
+    speed: 363,
+  }, { lab: 'google', family: 'gemini' }),
+  // Seed speed 71: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('mistral-large-4', 'Mistral Large 4', {
+    intelligence: 'high',
+    capabilities: ['text', 'image'],
+    contextWindow: 1_048_576,
+    speed: 71,
+  }, { lab: 'mistral' }),
+  // Seed speed 160: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('mistral-medium-3.5', 'Mistral Medium 3.5', {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    contextWindow: 262_144,
+    speed: 160,
+  }, { lab: 'mistral' }),
+  // Seed speed 153: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('mistral-small-latest', 'Mistral Small', {
+    intelligence: 'low',
+    capabilities: ['text', 'image'],
+    contextWindow: 262_144,
+    speed: 153,
+  }, { lab: 'mistral' }),
+  // Seed speed 121: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('devstral-2', 'Devstral 2', {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    contextWindow: 262_144,
+    speed: 121,
+  }, { lab: 'mistral' }),
+  // Seed speed 141: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('codestral-latest', 'Codestral', {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    contextWindow: 256_000,
+    speed: 141,
+  }, { lab: 'mistral' }),
+  // Seed speed 214: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('gpt-oss-120b', 'GPT OSS 120B', {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    contextWindow: 131_072,
+    speed: 214,
+  }, { lab: 'openai' }),
+  // Seed speed 228: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('gpt-oss-20b', 'GPT OSS 20B', {
+    intelligence: 'low',
+    capabilities: ['text'],
+    contextWindow: 131_072,
+    speed: 228,
+  }, { lab: 'openai' }),
+  // Seed speed 92: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('llama-3.3-70b', 'Llama 3.3 70B', {
+    intelligence: 'low',
+    capabilities: ['text'],
+    contextWindow: 131_072,
+    speed: 92,
+  }, { lab: 'meta' }),
+  // Speed 450 is the historical advertised TPS from the archived Groq table for
+  // the now-decommissioned (2026-09-21) Groq Compound endpoint: a vendor claim,
+  // not a controlled measurement, retained as the identity default only.
+  defineModel('groq-compound', 'Groq Compound', {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    contextWindow: 131_072,
+    speed: 450,
+  }, { lab: 'groq' }),
+  // Seed speed 78: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('deepseek-v4-pro-0813', 'DeepSeek V4 Pro 0813', {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    contextWindow: 1_048_576,
+    speed: 78,
+  }, { lab: 'deepseek', family: 'deepseek-v4' }),
+  // Speed 93 is the DigitalOcean provider's non-reasoning after-first-chunk
+  // output rate: a provider-specific seed, not an identity-wide benchmark.
+  defineModel('deepseek-v3.2', 'DeepSeek V3.2', {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    contextWindow: 32_768,
+    speed: 93,
+  }, { lab: 'deepseek', family: 'deepseek-v3' }),
+  // Seed speed 206: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('qwen3.7-max', 'Qwen3.7 Max', {
+    intelligence: 'high',
+    capabilities: ['text'],
+    contextWindow: 1_000_000,
+    speed: 206,
+  }, { lab: 'alibaba', family: 'qwen' }),
+  // Seed speed 38: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('qwen3.8-2.4t-a95b', 'Qwen3.8 2.4T A95B', {
+    intelligence: 'high',
+    capabilities: ['text'],
+    contextWindow: 262_144,
+    speed: 38,
+  }, { lab: 'alibaba', family: 'qwen' }),
+  // Seed speed 174: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('command-a-plus', 'Command A Plus', {
+    intelligence: 'high',
+    capabilities: ['text', 'image'],
+    contextWindow: 128_000,
+    speed: 174,
+  }, { lab: 'cohere', family: 'command' }),
+  // Speed 60 comes from a STATIC reference listing, not a measured TPS sample.
+  defineModel('command-a-reasoning', 'Command A Reasoning', {
+    intelligence: 'high',
+    capabilities: ['text'],
+    contextWindow: 256_000,
+    speed: 60,
+  }, { lab: 'cohere', family: 'command' }),
+  // Seed speed 63: public provider throughput catalog, floored; not an identity-wide benchmark.
+  defineModel('command-a', 'Command A', {
+    intelligence: 'mid',
+    capabilities: ['text'],
+    contextWindow: 256_000,
+    speed: 63,
+  }, { lab: 'cohere', family: 'command' }),
+  // Speed 46 is ModelCap Hugging Face Router telemetry observed 2026-10-17: a
+  // router-side observation, not a controlled benchmark.
+  defineModel('command-a-vision', 'Command A Vision', {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    contextWindow: 128_000,
+    speed: 46,
+  }, { lab: 'cohere', family: 'command' }),
+  // Speed 87: one-week P50 from the OpenRouter provider page, not a controlled benchmark.
+  defineModel('sonar', 'Sonar', {
+    intelligence: 'low',
+    capabilities: ['text'],
+    contextWindow: 128_000,
+    speed: 87,
+  }, { lab: 'perplexity', family: 'sonar' }),
+  // Speed 84: one-week P50 from the OpenRouter provider page, not a controlled benchmark.
+  defineModel('sonar-pro', 'Sonar Pro', {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    contextWindow: 200_000,
+    speed: 84,
+  }, { lab: 'perplexity', family: 'sonar' }),
+  // Speed 25: one-week P50 from the OpenRouter provider page, not a controlled benchmark.
+  defineModel('sonar-reasoning-pro', 'Sonar Reasoning Pro', {
+    intelligence: 'mid',
+    capabilities: ['text', 'image'],
+    contextWindow: 128_000,
+    speed: 25,
+  }, { lab: 'perplexity', family: 'sonar' }),
+  // Speed 49: one-week P50 from the OpenRouter provider page, not a controlled benchmark.
+  defineModel('sonar-deep-research', 'Sonar Deep Research', {
+    intelligence: 'high',
+    capabilities: ['text'],
+    contextWindow: 128_000,
+    speed: 49,
+  }, { lab: 'perplexity', family: 'sonar' }),
+];
+
+/**
+ * Registered identities whose metadata comes from first-party measurement
+ * rather than a public provider catalog.
+ *
+ * `speed` is generation throughput after the first token, the convention every
+ * other registry default follows; whole-turn wall-clock throughput is never
+ * used as a registry default.
+ */
+const devinModels: readonly RegisteredModel[] = [
+  // Speed 185 is the median generation throughput after the first token of
+  // three streaming runs (239.1, 185.0 and 166.7 TPS). Provenance: coordinator
+  // measurement 2026-10-17, Devin, 3 streaming runs, median. Pricing and
+  // maxOutputTokens stay absent because they were not established.
+  defineModel('swe-2', 'SWE-2', {
+    intelligence: 'high',
+    capabilities: ['text'],
+    contextWindow: 262_144,
+    speed: 185,
+  }, { lab: 'cognition', family: 'swe' }),
 ];
 
 const BUILTIN_MODELS: readonly RegisteredModel[] = [
@@ -177,6 +355,8 @@ const BUILTIN_MODELS: readonly RegisteredModel[] = [
   ...liquidModels,
   ...thinkingmachinesModels,
   ...poolsideModels,
+  ...reflectionModels,
+  ...devinModels,
   ...modelsDevCanonicalModels,
 ];
 

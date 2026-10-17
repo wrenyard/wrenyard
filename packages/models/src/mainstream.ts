@@ -38,6 +38,7 @@ export const MAINSTREAM_MODEL_IDS = [
   'nemotron-3-ultra',
   'nemotron-3.5-lightning',
   'nemotron-3-super-120b-a12b',
+  'swe-2',
 ] as const;
 
 export type MainstreamModelId = (typeof MAINSTREAM_MODEL_IDS)[number];
