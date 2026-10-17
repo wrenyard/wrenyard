@@ -240,20 +240,31 @@ function payloadNeedles(buildTmp, worktree) {
   return { build: collect([buildTmp, worktree]), home: collect([os.homedir(), process.env.HOME, process.env.USERPROFILE]) };
 }
 // A checkout root such as `/workspace` is a prefix of source paths like
-// `src/workspace.ts`. Require a path-token boundary on both sides so a real
-// leak (`/workspace/apps/...`, `"\/workspace"`) still matches.
+// `src/workspace.ts` and of identifiers like `workspace/workspaceFolders`.
+// Require a path-token boundary on both sides. Single-component roots
+// (`/workspace`, `/tmp`) must also be followed by a separator so a real leak
+// (`/workspace/apps/...`) still matches while a Unix `/tmp` literal or an
+// example `cwd: '/workspace'` does not.
 function isPathTokenBoundary(bytes, index) {
   if (index < 0 || index >= bytes.length) return true;
   const c = bytes[index];
   return !((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 45 || c === 46 || c === 95);
 }
+function pathComponentCount(text) {
+  return text.replaceAll('\\', '/').replace(/\/+$/u, '').split('/').filter(Boolean).length;
+}
 function containsPathNeedle(bytes, needle) {
   if (needle.length === 0 || needle.length > bytes.length) return false;
+  const requireChild = pathComponentCount(needle.toString('utf8')) <= 1;
   let from = 0;
   while (from <= bytes.length - needle.length) {
     const index = bytes.indexOf(needle, from);
     if (index === -1) return false;
-    if (isPathTokenBoundary(bytes, index - 1) && isPathTokenBoundary(bytes, index + needle.length)) return true;
+    if (isPathTokenBoundary(bytes, index - 1) && isPathTokenBoundary(bytes, index + needle.length)) {
+      if (!requireChild) return true;
+      const after = bytes[index + needle.length];
+      if (after === 47 || after === 92) return true;
+    }
     from = index + 1;
   }
   return false;
