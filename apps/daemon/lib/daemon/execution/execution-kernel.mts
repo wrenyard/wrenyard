@@ -35,7 +35,7 @@ import {
 } from '../../workspace/schema-loader.mts'
 import { collectStructuredOutput, firstPrompt, type StructuredOutputAgent } from '../../core/task/structured-output.mts'
 import { requireClient } from '@wrenyard/clients'
-import { parseRunSyntax } from '@wrenyard/providers/catalog'
+import { parseRunSyntax, recordRouteCooldown } from '@wrenyard/providers/catalog'
 import type { ProbeLease, RouteGuard } from '@wrenyard/gateway'
 import {
   createTaskArtifactDirectory,
@@ -720,14 +720,23 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         break
       } catch (error) {
         const identity = exactAgentRuntime !== undefined ? routeIdentityOf(exactAgentRuntime) : undefined
+        // Route health keys on the canonical model id, while `identity.model`
+        // stays client-qualified on purpose to scope the shared circuit.
+        const canonicalModel = exactAgentRuntime !== undefined
+          ? parseRunSyntax(exactAgentRuntime).model
+          : undefined
         const faultKind = identity !== undefined
           ? options.taskRouteState?.faultState(identity.provider, identity.model)
           : undefined
+        const timedOut = taskFailureCategory(error) === 'agent_timeout'
+        if (timedOut && identity !== undefined) {
+          recordRouteCooldown(identity.provider, canonicalModel ?? identity.model)
+        }
         const retryable = options.taskSettingsResolver !== undefined
           && resolution?.mode === 'automatic'
           && identity !== undefined
           && structuredSummary === undefined
-          && (faultKind === 'quota_exhausted' || faultKind === 'rate_limited')
+          && (faultKind === 'quota_exhausted' || faultKind === 'rate_limited' || timedOut)
           && routeAttempt < MAX_ROUTE_ATTEMPTS
         if (!retryable) throw error
         attemptError = error

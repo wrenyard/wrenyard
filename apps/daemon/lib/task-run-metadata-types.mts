@@ -17,7 +17,7 @@ export function isReasoningEffort(value: unknown): value is ReasoningEffort {
 
 export interface TaskResolvedSpeed {
   effective_tps: number
-  source: 'local_31d' | 'provider_override' | 'catalog_default' | 'free_supply_floor'
+  source: 'local_31d' | 'provider_override' | 'catalog_default' | 'free_supply_floor' | 'cooldown'
   sample_count: number
   checked_at?: string
   expected_tps_met: boolean

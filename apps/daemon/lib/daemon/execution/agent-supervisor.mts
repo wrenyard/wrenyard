@@ -48,6 +48,14 @@ const STDERR_TAIL_MAX_LEN = 4_000
  * cancelled.
  */
 const CANCEL_SETTLEMENT_TIMEOUT_MS = 5_000
+/**
+ * Default bound on how long an attempt may run without processing a mapped
+ * stream event before it is treated as a stalled route and terminalized as a
+ * timeout. Mirrors the wall-clock attempt deadline but measures progress
+ * instead of elapsed time, so a route that never streams is abandoned without
+ * waiting for the full attempt timeout.
+ */
+const DEFAULT_IDLE_TIMEOUT_MS = 180_000
 
 /**
  * Fixed value written to the INERT `executions.permission` DB legacy column.
@@ -68,6 +76,13 @@ export interface AgentExecutionSupervisorOptions {
    * Defaults to CANCEL_SETTLEMENT_TIMEOUT_MS.
    */
   cancelSettlementTimeoutMs?: number
+  /**
+   * Injectable idle-without-stream-progress bound. An attempt that launches and
+   * then processes no mapped stream event for this long is terminalized as a
+   * timeout, using the same terminal path as the wall-clock attempt deadline.
+   * Defaults to DEFAULT_IDLE_TIMEOUT_MS.
+   */
+  idleTimeoutMs?: number
   /**
    * Injectable process-tree kill implementation. Defaults to killProcessTree.
    * Tests inject throwing or no-op implementations to prove that a
@@ -141,6 +156,7 @@ interface RegistryEntry {
   pid?: number
   pgid?: number
   timeoutTimer?: ReturnType<typeof setTimeout>
+  idleTimer?: ReturnType<typeof setTimeout>
   cancelRequested: boolean
   shutdownRequested: boolean
   timedOut: boolean
@@ -189,6 +205,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly repoWriteLocks: RepoWriteLocks
   private readonly logger?: SupervisorLogger
   private readonly cancelSettlementTimeoutMs: number
+  private readonly idleTimeoutMs: number
   private readonly killProcessTreeFn: (pid: number, pgid?: number) => Promise<void>
   private readonly isProcessLiveFn: (pid: number) => boolean
   private readonly catalog: ReturnType<typeof createBuiltinCatalog>
@@ -203,11 +220,12 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private promoting = false
   private readonly canStartExecution?: AgentExecutionSupervisorOptions['canStartExecution']
 
-  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution }: AgentExecutionSupervisorOptions) {
+  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, idleTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution }: AgentExecutionSupervisorOptions) {
     this.db = db
     this.repoWriteLocks = repoWriteLocks
     this.logger = logger
     this.cancelSettlementTimeoutMs = cancelSettlementTimeoutMs ?? CANCEL_SETTLEMENT_TIMEOUT_MS
+    this.idleTimeoutMs = idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS
     this.killProcessTreeFn = killProcessTreeImpl ?? killProcessTree
     this.isProcessLiveFn = isProcessLiveImpl ?? defaultIsProcessLive
     this.catalog = catalog ?? createBuiltinCatalog()
@@ -628,6 +646,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
     for (const entry of [...this.registry.values()]) {
       if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
+      this.clearIdleTimer(entry)
       this.resolveAndForget(entry, {
         executionId: entry.executionId,
         status: 'interrupted',
@@ -911,7 +930,38 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       }, opts.timeoutMs)
     }
 
+    this.armIdleTimer(entry)
+
     this.attachChildObservers(entry)
+  }
+
+  /**
+   * Arms the per-attempt idle bound. The timer is refreshed by every mapped
+   * stream event, so it only fires when the route stops making observable
+   * progress. Expiry commits the same terminal intent as the wall-clock
+   * attempt deadline; a committed terminal state is never overridden.
+   */
+  private armIdleTimer(entry: RegistryEntry): void {
+    if (this.idleTimeoutMs <= 0) return
+    this.clearIdleTimer(entry)
+    entry.idleTimer = setTimeout(() => {
+      entry.idleTimer = undefined
+      if (entry.terminalGeneration > 0) return
+      entry.terminalIntent = { kind: 'timeout' }
+      entry.timedOut = true
+      entry.attemptDeadlineResolve?.()
+      void this.requestKillOnce(entry).catch((error: unknown) => {
+        this.log('warn', `[foreman] Idle-timeout kill failed for ${entry.executionId}: ${errorMessage(error)}`)
+      })
+      void this.settleAttemptTimeout(entry)
+    }, this.idleTimeoutMs)
+  }
+
+  private clearIdleTimer(entry: RegistryEntry): void {
+    if (entry.idleTimer) {
+      clearTimeout(entry.idleTimer)
+      entry.idleTimer = undefined
+    }
   }
 
   private attachChildObservers(entry: RegistryEntry): void {
@@ -990,6 +1040,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       }
 
       for (const mapped of mapStreamEventToBClass(event)) {
+        // Observable progress resets the idle bound.
+        entry.idleTimer?.refresh()
         if (mapped.type === 'message' && typeof mapped.data.text === 'string') {
           entry.outputParts.push(mapped.data.text)
         }
@@ -1770,12 +1822,14 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
   private resolveAndForget(entry: RegistryEntry, result: ExecutionResult): void {
     if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
+    this.clearIdleTimer(entry)
     this.registry.delete(entry.executionId)
     entry.resolveWait(result)
   }
 
   private rejectAndForget(entry: RegistryEntry, error: unknown): void {
     if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer)
+    this.clearIdleTimer(entry)
     // A terminal transaction that threw rolled back together with its
     // in-transaction repo-lock release, so release again here as a guaranteed
     // fallback on the error path (releaseByExecution is idempotent).

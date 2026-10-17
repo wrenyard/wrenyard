@@ -39,7 +39,7 @@ export interface ProviderListModel {
    * absent when the price is genuinely unknown (never defaulted to zero). */
   pricing?: ProviderListModelPricing
   /** Which evidence tier produced `effectiveTps`. */
-  speedSource?: 'local_31d' | 'provider_override' | 'catalog_default' | 'free_supply_floor'
+  speedSource?: 'local_31d' | 'provider_override' | 'catalog_default' | 'free_supply_floor' | 'cooldown'
   /** True when a credential is configured AND the resolver admits provider/model. */
   available?: boolean
 }
