@@ -563,7 +563,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         const entry = this.createRegistryEntry(row.id, entryOpts, false, this.maxSeq(row.id))
         this.registry.set(row.id, entry)
         entry.wasQueued = true
-        await this.launchExecution(entry, optsFromRow(row, entry), true)
+        await this.launchExecution(entry, optsFromRow(row, entry), true, { skipAdmissionCheck: true })
         if (row.task_id) resumedTaskIds.add(row.task_id)
       } catch (error: unknown) {
         this.log('warn', `[foreman] Failed to resume queued execution ${stale.id} on startup`, {
@@ -730,11 +730,21 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     }
   }
 
-  private async launchExecution(entry: RegistryEntry, opts: StartExecutionOpts, fromQueue: boolean): Promise<void> {
-    const disk = this.canStartExecution?.()
-    if (disk && disk.status !== 'ok') {
-      await this.terminalizeQueued(entry, 'failed', 'crash', `low_disk_space: state-volume status is ${disk.status}; free space and retry`)
-      return
+  private async launchExecution(
+    entry: RegistryEntry,
+    opts: StartExecutionOpts,
+    fromQueue: boolean,
+    launchOptions: { skipAdmissionCheck?: boolean } = {},
+  ): Promise<void> {
+    // Startup resume skips admission only: the row was admitted when it was
+    // created, the low-disk sampler has not run yet during bootstrap, and the
+    // desktop lane still serializes the actual start.
+    if (!launchOptions.skipAdmissionCheck) {
+      const disk = this.canStartExecution?.()
+      if (disk && disk.status !== 'ok') {
+        await this.terminalizeQueued(entry, 'failed', 'crash', `low_disk_space: state-volume status is ${disk.status}; free space and retry`)
+        return
+      }
     }
     if (entry.terminalGeneration > 0) return
 
