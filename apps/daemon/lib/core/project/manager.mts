@@ -1247,6 +1247,13 @@ export class ProjectManager {
     target: { project: string; worktree_id?: string },
     input: { message: string; files: string[] },
   ): Promise<GitCommitFilesResult> {
+    const project = target.project?.trim() ?? ''
+    if (project && !target.worktree_id?.trim()) {
+      const entry = this.getProject(project)
+      if (entry.noWorktree !== true) {
+        throw new Error(`commit must target a managed worktree for project '${entry.name}'`)
+      }
+    }
     return new GitRepository(this.resolveCheckoutCwd(target)).commitFiles(input)
   }
 
