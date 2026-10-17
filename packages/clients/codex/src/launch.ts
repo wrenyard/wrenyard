@@ -57,6 +57,12 @@ export async function launchCodex(request: AgentRequest, env: NodeJS.ProcessEnv,
             '-c', `model_providers.wrenyard.base_url=${JSON.stringify(gateway)}`,
             '-c', 'model_providers.wrenyard.env_key="WRENYARD_GATEWAY_TOKEN"',
             '-c', 'model_providers.wrenyard.wire_api="responses"',
+            // The gateway resolves bare model ids using the provider named
+            // here; without it models offered by more than one credentialed
+            // provider fail closed.
+            ...(request.provider
+                ? ['-c', `model_providers.wrenyard.http_headers.x-wrenyard-provider=${tomlLiteral(request.provider)}`]
+                : []),
         );
     }
     if (request.clientReasoningEffort)

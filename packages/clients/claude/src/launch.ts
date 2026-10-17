@@ -33,6 +33,10 @@ export async function launchClaude(request: AgentRequest, env: NodeJS.ProcessEnv
                 ANTHROPIC_AUTH_TOKEN: env.WRENYARD_GATEWAY_TOKEN,
                 ANTHROPIC_API_KEY: env.WRENYARD_GATEWAY_TOKEN,
                 ANTHROPIC_MODEL: request.model,
+                // The gateway resolves bare model ids using the provider named
+                // here; without it models offered by more than one credentialed
+                // provider fail closed.
+                ANTHROPIC_CUSTOM_HEADERS: JSON.stringify({ 'x-wrenyard-provider': request.provider }),
             } : {}),
         }),
         stdin: JSON.stringify({ type: 'user', message: { role: 'user', content: request.prompt }, parent_tool_use_id: null }) + '\n',

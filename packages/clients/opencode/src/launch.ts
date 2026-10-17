@@ -79,10 +79,19 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
                             // reasoning-effort field the client
                             // writes into the request body.
                             'x-wrenyard-reasoning-effort': request.reasoningEffort,
+                            // The Gateway resolves bare model ids to a provider
+                            // from this header; without it a model offered by
+                            // more than one credentialed provider fails closed.
+                            'x-wrenyard-provider': request.provider,
                         },
                     },
                 },
             },
+            // Every client launches unrestricted, so carry the full permission
+            // set (edit, bash, webfetch, and external directories such as /tmp)
+            // in the per-run config. This keeps the OpenCode client from
+            // auto-rejecting actions outside the task cwd.
+            permission: { edit: 'allow', bash: 'allow', webfetch: 'allow', external_directory: 'allow' },
         };
     }
     else if (request.provider === 'opencode-zen') {
@@ -98,11 +107,19 @@ export async function launchOpenCode(request: AgentRequest, env: NodeJS.ProcessE
                     models: { [model]: variant ? { variants: { [variant]: { reasoningEffort: variant } } } : {} },
                 },
             },
+            // Every client launches unrestricted; see the gateway-mode base for
+            // the rationale behind the permission block.
+            permission: { edit: 'allow', bash: 'allow', webfetch: 'allow', external_directory: 'allow' },
         };
     }
     else {
         selector = model;
-        base = { model };
+        base = {
+            model,
+            // Every client launches unrestricted; see the gateway-mode base for
+            // the rationale behind the permission block.
+            permission: { edit: 'allow', bash: 'allow', webfetch: 'allow', external_directory: 'allow' },
+        };
     }
     const mcp = openCodeMcpConfig(resolveMcpServers(request.mcpServers));
     const config = JSON.stringify(mcp ? { ...base, mcp } : base);
