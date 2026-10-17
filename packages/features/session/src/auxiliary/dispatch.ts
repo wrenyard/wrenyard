@@ -261,7 +261,7 @@ function boundCompileEvents(
       kept.add(index);
       continue;
     }
-    if (tokens.length > 0 && tokens.some((token) => text.includes(token))) {
+    if (tokens.some((token) => text.includes(token))) {
       if (!pinned) {
         pinned = true;
         focusChars += text.length;
