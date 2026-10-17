@@ -207,13 +207,13 @@ export async function runCliEntrypoint(): Promise<void> {
   const command = resolveCliArgs()[0]
   const code = await runForemanCli()
   if (command === 'daemon' && code === 0) return
-  process.exit(code)
+  process.exitCode = code
 }
 
 // Run only when this module is the CLI entrypoint (or the SEA bundle); importing it is inert.
 if (isCliEntrypoint()) {
   runCliEntrypoint().catch((error) => {
     console.error(errorMessage(error))
-    process.exit(1)
+    process.exitCode = 1
   })
 }
