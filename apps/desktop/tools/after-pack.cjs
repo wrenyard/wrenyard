@@ -62,8 +62,39 @@ function genericHomeNeedles() {
   return pathNeedles([homedir(), tmpdir()]);
 }
 
+function isPathTokenBoundary(bytes, index) {
+  if (index < 0 || index >= bytes.length) return true;
+  const c = bytes[index];
+  return !((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 45 || c === 46 || c === 95);
+}
+
+function pathComponentCount(text) {
+  return text.replaceAll('\\', '/').replace(/\/+$/u, '').split('/').filter(Boolean).length;
+}
+
+// Match checkout/home roots as path tokens, not filename substrings
+// (`src/workspace.ts`, `workspace/workspaceFolders`). Single-component roots
+// (`/workspace`, `/tmp`) must be followed by a separator so Unix `/tmp`
+// literals and example `cwd: '/workspace'` are not treated as leaks.
+function containsPathNeedle(bytes, needle) {
+  if (needle.length === 0 || needle.length > bytes.length) return false;
+  const requireChild = pathComponentCount(needle.toString('utf8')) <= 1;
+  let from = 0;
+  while (from <= bytes.length - needle.length) {
+    const index = bytes.indexOf(needle, from);
+    if (index === -1) return false;
+    if (isPathTokenBoundary(bytes, index - 1) && isPathTokenBoundary(bytes, index + needle.length)) {
+      if (!requireChild) return true;
+      const after = bytes[index + needle.length];
+      if (after === 47 || after === 92) return true;
+    }
+    from = index + 1;
+  }
+  return false;
+}
+
 function containsLocalPath(buffer, needles) {
-  return needles.some((needle) => buffer.includes(Buffer.from(needle)));
+  return needles.some((needle) => containsPathNeedle(buffer, Buffer.from(needle)));
 }
 
 /** node_modules members are third-party unless vendor-scoped to @wrenyard,
