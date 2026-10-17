@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowUp, ChevronRight, ChevronUp, Gauge, Info, Plug, Plus, Server, Unplug, WalletCards } from 'lucide-react';
+import { ArrowUp, BookOpen, ChevronRight, ChevronUp, Gauge, Info, Plug, Plus, Server, Unplug, WalletCards } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/renderer/components/ui/button';
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from '@/renderer/components/ui/popover';
@@ -37,6 +37,8 @@ const DISCONNECTED_STATES: ReadonlySet<DaemonProcessState> = new Set<DaemonProce
   'failed',
   'unavailable',
 ]);
+
+const DOCS_URL = 'https://github.com/wrenyard/wrenyard/blob/main/docs/README.md';
 
 /** True while the daemon is absent or in a terminal non-running state. */
 export function isDaemonDisconnected(snapshot: DaemonLifecycleSnapshot | undefined): boolean {
@@ -189,6 +191,11 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
   const openAbout = (): void => {
     setOpen(false);
     executeCommand('settings.open', 'about');
+  };
+
+  const openDocs = (): void => {
+    setOpen(false);
+    void shell.openExternal(DOCS_URL);
   };
 
   const openUpdate = (): void => {
@@ -360,6 +367,16 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
           >
             <Info />
             <span>关于</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="justify-start gap-2"
+            onClick={openDocs}
+          >
+            <BookOpen />
+            <span>文档</span>
           </Button>
           <Button
             type="button"
