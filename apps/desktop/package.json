@@ -1,6 +1,7 @@
 {
   "name": "@wrenyard/desktop",
   "version": "1.0.89",
+  "desktopName": "wrenyard-desktop",
   "private": true,
   "description": "Wrenyard Desktop product shell for daemon features and its in-process Pet companion.",
   "license": "MIT",

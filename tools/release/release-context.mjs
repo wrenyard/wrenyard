@@ -47,12 +47,12 @@ export function releaseTagFromEnv(env = process.env) {
 export function validateNativeTarget(target, platform = process.platform, arch = process.arch) {
   const actual = entryFor(platform, arch).triplet;
   if (target !== actual) throw new Error(`expected build target ${target}, got ${actual}`);
-  if (!['darwin-arm64', 'win32-x64'].includes(target)) {
+  if (!['darwin-arm64', 'win32-x64', 'linux-x64'].includes(target)) {
     throw new Error(`target ${target} is not a maintained public release target`);
   }
   return actual;
 }
 
 export function signingSummary() {
-  return 'macOS ad-hoc; Windows unsigned';
+  return 'macOS ad-hoc; Windows unsigned; Linux unsigned';
 }

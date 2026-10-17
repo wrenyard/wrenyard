@@ -60,6 +60,8 @@ import {
 } from './workspace.js';
 import { assertDaemonIdle } from './workspace-activation.js';
 import { bootstrapRemoteDaemon } from './main/remote/bootstrap.js';
+import { readLinuxOpenAtLogin, setLinuxOpenAtLogin } from './linux-autostart.js';
+import { armLinuxGpuFallback, enableLinuxSoftwareRenderingIfNeeded } from './linux-gpu.js';
 import { ActiveConnectionContext, ConnectionBusyError, type ActiveConnectionSnapshot } from './main/remote/context.js';
 import {
   appendSshHostStanza,
@@ -78,12 +80,20 @@ import { SshRelay, type RemotePlatform } from './main/remote/ssh-relay.js';
 // single-instance lock is created when a private state root is requested.
 // `setPath` requires the target to exist, so create it first. `sessionData`
 // must be relocated explicitly: Chromium cache/network storage is not moved
-// by setting `userData` alone. Absent/blank leaves the installed defaults.
-if (process.env.WRENYARD_STATE_HOME?.trim()) {
+// by setting `userData` alone. Linux always shares the daemon state root
+// (`<state>/desktop`); other platforms keep Electron defaults unless
+// `WRENYARD_STATE_HOME` is set.
+if (process.env.WRENYARD_STATE_HOME?.trim() || process.platform === 'linux') {
   const desktopDataDir = resolveWrenyardDesktopDataDir();
   mkdirSync(desktopDataDir, { recursive: true });
   app.setPath('userData', desktopDataDir);
   app.setPath('sessionData', desktopDataDir);
+}
+
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('class', 'wrenyard-desktop');
+  enableLinuxSoftwareRenderingIfNeeded(app.getPath('userData'));
+  armLinuxGpuFallback(app.getPath('userData'));
 }
 
 const SMOKE = process.env.WRENYARD_DESKTOP_SMOKE === '1' || process.argv.includes('--smoke');
@@ -1371,9 +1381,14 @@ async function bootstrap(): Promise<void> {
   preferencesController = new DesktopPreferencesController({
     store: settingsStore,
     saveAppearance: (patch) => { appearanceController?.save(patch); },
-    readOpenAtLogin: () => app.getLoginItemSettings().openAtLogin,
+    readOpenAtLogin: () => process.platform === 'linux'
+      ? readLinuxOpenAtLogin()
+      : app.getLoginItemSettings().openAtLogin,
     setOpenAtLogin: (value) => {
-      // The login item is a macOS/Windows native concept; other platforms ignore it.
+      if (process.platform === 'linux') {
+        setLinuxOpenAtLogin(value);
+        return;
+      }
       if (process.platform !== 'darwin' && process.platform !== 'win32') return;
       app.setLoginItemSettings({ openAtLogin: value });
     },
@@ -1528,15 +1543,16 @@ async function bootstrap(): Promise<void> {
       : join(dirname(ipcPath), `wrenyard-relay-${process.pid}-${relaySequence}.sock`);
   };
 
-  /** The first-version install matrix: macOS ARM64 and Windows x64 only. */
-  const supportedTriplet = (platform: string | null, arch: string | null): 'darwin-arm64' | 'win32-x64' | null => {
+  /** Public remote install matrix: macOS ARM64, Windows x64 and Linux x64. */
+  const supportedTriplet = (platform: string | null, arch: string | null): 'darwin-arm64' | 'win32-x64' | 'linux-x64' | null => {
     if (platform === 'darwin' && arch === 'arm64') return 'darwin-arm64';
     if (platform === 'win32' && arch === 'x64') return 'win32-x64';
+    if (platform === 'linux' && arch === 'x64') return 'linux-x64';
     return null;
   };
 
   const unsupportedPlatformMessage = (platform: string | null, arch: string | null): string =>
-    `不支持的目标平台（${platform ?? '未知'}-${arch ?? '未知'}）；首版仅支持 macOS ARM64 与 Windows x64`;
+    `不支持的目标平台（${platform ?? '未知'}-${arch ?? '未知'}）；仅支持 macOS ARM64、Windows x64 与 Linux x64`;
 
   /** Bounded projection of a renderer-supplied candidate into typed fields. */
   const normalizeRemoteInput = (value: unknown): RemoteConnectionTestInput => {

@@ -1,9 +1,9 @@
 name: Release
 
-# CI lints the repository once, builds the two native public targets and, for an
-# explicit tag, publishes their three installers, the per-target remote daemon
-# bootstrap payloads and the update feed. Manual dispatch lints and builds
-# without publishing.
+# CI lints the repository once, builds the three native public targets
+# (darwin-arm64, win32-x64, linux-x64) and, for an explicit tag, publishes their
+# four installers, the per-target remote daemon bootstrap payloads and the
+# update feed. Manual dispatch lints and builds without publishing.
 
 on:
   push:
@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, windows-latest]
+        os: [macos-15, windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -62,6 +62,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*-setup.exe
+            release/*.AppImage
             release/wrenyard-remote-*.tar.gz
             release/wrenyard-remote-*.tar.gz.sha256
             release/wrenyard-remote-*.json

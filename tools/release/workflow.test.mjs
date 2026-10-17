@@ -18,9 +18,9 @@ const OBSOLETE = [
   'install-dev.mjs',
 ];
 
-test('release workflow builds exactly the two maintained native targets', () => {
-  assert.match(workflow, /os: \[macos-15, windows-latest\]/);
-  assert.ok(!workflow.includes('linux-x64'));
+test('release workflow builds exactly the three maintained native targets', () => {
+  assert.match(workflow, /os: \[macos-15, windows-latest, ubuntu-latest\]/);
+  assert.ok(workflow.includes('linux-x64'));
   assert.ok(!workflow.includes('darwin-x64'));
 });
 
@@ -39,6 +39,7 @@ test('build job installs frozen dependencies and runs the single pack script', (
   assert.ok(build.includes('release/*.dmg'));
   assert.ok(build.includes('release/*.zip'));
   assert.ok(build.includes('release/*-setup.exe'));
+  assert.ok(build.includes('release/*.AppImage'));
   assert.ok(!build.includes('build-local-release.mjs'));
   assert.ok(build.includes('if-no-files-found: error'));
   for (const forbidden of [

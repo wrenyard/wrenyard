@@ -290,7 +290,7 @@ Exports:
 | Export | Purpose |
 | --- | --- |
 | `UPDATE_FEED_SCHEMA_VERSION` | schema id carried by every published document |
-| `PlatformTriplet` | host triplets that publish Desktop assets (`darwin-arm64`, `win32-x64`) |
+| `PlatformTriplet` | host triplets that publish Desktop assets (`darwin-arm64`, `win32-x64`, `linux-x64`) |
 | `isSemver`, `compareVersions`, `normalizeVersion` | SemVer validation and numeric ordering |
 | `desktopAssetStem`, `installerAssetName`, `updateAssetName` | canonical Desktop asset names per version and triplet |
 | `latestDocumentUrl`, `resolveUpdateBaseUrl` | canonical `latest.json` head URL and base-URL resolution |
