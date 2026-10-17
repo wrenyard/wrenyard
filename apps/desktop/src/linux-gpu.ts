@@ -63,7 +63,7 @@ export function armLinuxGpuFallback(userDataPath: string): void {
   const inspectWebgl = (): void => {
     if (already || relaunching) return;
     try {
-      const status = app.getGPUFeatureStatus() as Record<string, string>;
+      const status = app.getGPUFeatureStatus() as unknown as Record<string, string>;
       if (webglUnavailable(status)) persistAndRelaunch(userDataPath);
     } catch {
       // Feature status is best-effort; a later GPU crash still arms the flag.
