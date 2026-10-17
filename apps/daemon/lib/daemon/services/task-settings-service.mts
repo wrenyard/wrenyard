@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, type IntelligenceTier, type ReasoningEffort } from '@wrenyard/providers/catalog';
 import { resolveHistoricalProviderModelId } from '@wrenyard/providers';
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
-import { rankAutoRoutingCandidates, type RankedCandidate } from '@wrenyard/auto-routing';
+import { isAbundantSupply, rankAutoRoutingCandidates, type RankedCandidate } from '@wrenyard/auto-routing';
 import type { CandidateInput } from '@wrenyard/auto-routing';
 import {
   NoEligiblePlanError,
@@ -521,7 +521,7 @@ function buildRoutingFormRows(
         intelligence_score: ranked.weights.I * ranked.intelligenceFactor,
         score: ranked.score,
         rank: ranked.rank,
-        reason: ranked.supplyClass === 'confirmed_free' ? '确认免费路线，优先于付费路线' : null,
+        reason: isAbundantSupply(ranked) ? '额度充足，优先于受限路线' : null,
       })
       continue
     }

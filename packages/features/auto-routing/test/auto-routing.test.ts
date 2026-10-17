@@ -10,8 +10,9 @@
  * S = min(TPS / (SPEED_SATURATION_BASE_TPS + expectedTps), 1),
  * Q is quota headroom quality, and I is the intelligence factor. Every factor is
  * bounded in [0, 1], so the score is always within [0, 1]. Ranking is
- * deterministic: confirmed-free supply forms a priority tier ahead of standard
- * supply, and within each tier candidates sort by descending score; quota tier
+ * deterministic: abundant supply (confirmed free, or healthy quota with trusted
+ * headroom) forms a priority tier ahead of every other eligible route, and
+ * within each tier candidates sort by descending score; quota tier
  * is retained only as a diagnostic field and is never a sort key.
  *
  * Note: ranking fixtures use synthetic labels ("ds-flash-like",
@@ -1205,9 +1206,10 @@ test("DS prices 1.2 vs 0.6 produce a score delta of 0.044 with other inputs equa
   close(eb.score - ea.score, 0.044, 1e-9, "delta 0.044");
 });
 
-test("quota tiers can cross by score while blocked remains rejected", () => {
-  // A healthy candidate with a low score can rank below an unknown candidate
-  // with a higher score: tier is no longer an outer sort key.
+test("healthy quota with trusted headroom shares the abundant tier and crosses by score", () => {
+  // A healthy candidate and an unknown candidate are in different supply
+  // tiers: the healthy (abundant) route ranks first even though the unknown
+  // candidate has a higher score, and blocked stays rejected.
   const healthyLow = cand({
     canonicalId: "healthy-low",
     referenceUsdPerM: 30, // P(30)=0.05
@@ -1223,19 +1225,19 @@ test("quota tiers can cross by score while blocked remains rejected", () => {
     requiredQuota: [q("z", rollingEv(0))],
   });
   const result = rankAutoRoutingCandidates([healthyLow, unknownHigh, blocked]);
-  // The cheaper unknown candidate still wins by total score with Q = 0.
-  assert.deepEqual(rankedIds(result), ["unknown-high", "healthy-low"]);
+  // The abundant healthy candidate leads; within the remaining tier score order
+  // applies.
+  assert.deepEqual(rankedIds(result), ["healthy-low", "unknown-high"]);
   assert.deepEqual(
     result.excluded.map((entry) => [entry.canonicalId, entry.reason]),
     [["blocked-x", "quota_blocked"]]
   );
 });
 
-test("confirmed-free candidates form a priority tier ranked by score", () => {
-  // A confirmed-free candidate routes for free (P=1) and forms a priority tier
-  // ahead of standard supply; inside that tier candidates are still ordered by
-  // overall score. The standard candidate keeps the higher score yet ranks
-  // second because the confirmed-free tier comes first.
+test("confirmed-free candidates share the abundant tier ranked by score", () => {
+  // A confirmed-free candidate routes for free (P=1) and belongs to the
+  // abundant tier; a healthy-quota route with trusted headroom joins the same
+  // tier, so the higher score ranks first.
   const free = cand({
     canonicalId: "free-a",
     requiredQuota: [q("rolling", rollingEv(50))], // unknown -> Q 0.5
@@ -1255,10 +1257,10 @@ test("confirmed-free candidates form a priority tier ranked by score", () => {
   assert.equal(s.priceFactor, 1);
   assert.ok(
     s.score > f.score,
-    "standard candidate still has the higher score, but the free candidate ranks first due to the confirmed-free tier"
+    "the healthy-quota route keeps the higher score and both share the abundant tier"
   );
   const result = rankAutoRoutingCandidates([free, standard]);
-  assert.deepEqual(rankedIds(result), ["free-a", "std-a"]);
+  assert.deepEqual(rankedIds(result), ["std-a", "free-a"]);
 })
 
 test("recommendation contributes to total score without overriding a cheaper faster high", () => {

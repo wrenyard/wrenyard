@@ -1,7 +1,7 @@
 export * from './types.ts';
 export { SCORE_WEIGHTS, PRICE_FACTOR_ANCHORS, SPEED_SATURATION_BASE_TPS, ZERO_QUOTA_HEADROOM, FULL_CYCLE_MIN_REMAINING, FULL_CYCLE_RESET_PACE, FULL_CYCLE_HEADROOM_WEIGHT, FULL_CYCLE_RESET_WEIGHT, HEALTHY_ROLLING_REMAINING, STRAINED_ROLLING_REMAINING } from './constants.ts';
 export { validateScoreWeights } from './weights.ts';
-export { AutoRouter } from './auto-router.ts';
+export { AutoRouter, isAbundantSupply } from './auto-router.ts';
 export { QuotaPolicy } from './quota-policy.ts';
 export { SupplyEvidencePolicy } from './supply-evidence-policy.ts';
 export { CandidateScorer } from './candidate-scorer.ts';

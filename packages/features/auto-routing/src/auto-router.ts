@@ -3,9 +3,14 @@ import { type CandidateAssessment, type RankedCandidate, type CandidateInput, ty
 import { snapshotScoreWeights } from './weights.ts';
 import { SCORE_WEIGHTS } from './constants.ts';
 import { compareLex } from './numeric.ts';
-/** Confirmed-free supply ranks ahead of standard supply as a priority tier. */
+/** Abundant supply: confirmed free, or healthy quota carrying trusted headroom. */
+export function isAbundantSupply(assessment: Pick<CandidateAssessment, 'supplyClass' | 'quota' | 'headroomTrusted'>): boolean {
+  return assessment.supplyClass === 'confirmed_free' ||
+    (assessment.quota.state === 'healthy' && assessment.headroomTrusted);
+}
+/** Abundant supply ranks ahead of every other eligible route as a priority tier. */
 function supplyTier(assessment: CandidateAssessment): number {
-  return assessment.supplyClass === 'confirmed_free' ? 0 : 1;
+  return isAbundantSupply(assessment) ? 0 : 1;
 }
 /** Evaluates one immutable candidate set and applies deterministic ranking. */
 export class AutoRouter {
@@ -80,11 +85,11 @@ export class AutoRouter {
     }
     excluded.sort((a, b) => compareLex(a.canonicalId, b.canonicalId) ||
       compareLex(a.snapshotId, b.snapshotId));
-    // Confirmed-free supply forms its own priority tier ahead of standard
-    // supply; inside each tier the weighted total score ranks candidates, then
-    // stable identity breaks ties. Recommendation affects the intelligence
-    // factor; shortfall remains a diagnostic and is never an independent
-    // ranking priority.
+    // Abundant supply (confirmed free or healthy quota with trusted headroom)
+    // forms its own priority tier ahead of every other eligible route; inside
+    // each tier the weighted total score ranks candidates, then stable identity
+    // breaks ties. Recommendation affects the intelligence factor; shortfall
+    // remains a diagnostic and is never an independent ranking priority.
     const rankedAssessments = accepted.slice().sort((a, b) =>
       supplyTier(a) - supplyTier(b) ||
       b.score - a.score ||
