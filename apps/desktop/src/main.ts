@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification as ElectronNotification, powerMonitor, screen, session, shell, type MessageBoxOptions, type WebContents } from 'electron';
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { createServer as createNetServer, connect as connectNet, type Server as NetServer, type Socket as NetSocket } from 'node:net';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import { registerSession, type SessionRegistration } from './session/ipc.js';
 import { SessionSeenStore } from './session/seen-store.js';
@@ -81,11 +81,10 @@ import { SshRelay, type RemotePlatform } from './main/remote/ssh-relay.js';
 // `setPath` requires the target to exist, so create it first. `sessionData`
 // must be relocated explicitly: Chromium cache/network storage is not moved
 // by setting `userData` alone. Linux always shares the daemon state root
-// (`<state>/desktop`); other platforms keep Electron defaults unless an
-// override is set.
-const explicitDesktopData = process.env.WRENYARD_DESKTOP_USER_DATA?.trim();
-if (explicitDesktopData || process.env.WRENYARD_STATE_HOME?.trim() || process.platform === 'linux') {
-  const desktopDataDir = explicitDesktopData ? resolve(explicitDesktopData) : resolveWrenyardDesktopDataDir();
+// (`<state>/desktop`); other platforms keep Electron defaults unless
+// `WRENYARD_STATE_HOME` is set.
+if (process.env.WRENYARD_STATE_HOME?.trim() || process.platform === 'linux') {
+  const desktopDataDir = resolveWrenyardDesktopDataDir();
   mkdirSync(desktopDataDir, { recursive: true });
   app.setPath('userData', desktopDataDir);
   app.setPath('sessionData', desktopDataDir);

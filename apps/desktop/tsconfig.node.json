@@ -27,8 +27,5 @@
     "src/pet/main/**/*.ts",
     "src/pet/shared/**/*.ts",
     "src/session/**/*.ts"
-  ],
-  "exclude": [
-    "src/**/*.test.ts"
   ]
 }

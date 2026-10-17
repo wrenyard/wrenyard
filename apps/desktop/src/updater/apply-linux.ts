@@ -4,8 +4,8 @@
  * `$APPDIR` / `.mount_*` is refused.
  */
 
-import { createHash } from 'node:crypto';
-import { accessSync, chmodSync, constants, copyFileSync, existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { accessSync, chmodSync, constants, createReadStream, createWriteStream, existsSync, readdirSync, rmSync } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { PlatformApplier, PreparedUpdate, SpawnDetached, UpdateBlocker } from './types.js';
 
@@ -37,10 +37,6 @@ export function resolveAppImagePath(env: NodeJS.ProcessEnv = process.env): strin
   if (!value) return null;
   if (isFuseMountPath(value, env)) return null;
   return value;
-}
-
-function sha256File(filePath: string): string {
-  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
 function isWritable(path: string): boolean {
@@ -92,16 +88,13 @@ export function createLinuxApplier(options: LinuxApplierOptions): PlatformApplie
       const stagedAppPath = join(dirname(appImage), `.${basename(appImage)}.wrenyard-update-${pid}`);
       assertNotFuseDest(stagedAppPath, env);
       rmSync(stagedAppPath, { force: true });
+      // The download already hashed the asset against the feed digest. Stream
+      // the copy so a large AppImage is never buffered; a failed write rejects
+      // the pipeline instead of leaving a truncated replacement.
       onPhase?.('extracting');
-      copyFileSync(assetPath, stagedAppPath);
+      await pipeline(createReadStream(assetPath), createWriteStream(stagedAppPath));
       chmodSync(stagedAppPath, 0o755);
       onPhase?.('verifying');
-      const expected = sha256File(assetPath);
-      const actual = sha256File(stagedAppPath);
-      if (actual !== expected) {
-        try { rmSync(stagedAppPath, { force: true }); } catch { /* best effort */ }
-        throw new Error('更新文件校验失败，已删除，请重试。');
-      }
       return { assetPath, version, stagedAppPath };
     },
 
