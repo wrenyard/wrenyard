@@ -136,16 +136,19 @@ Download the installer for your platform from the
 | --- | --- |
 | macOS (Apple Silicon) | `wrenyard-desktop-<version>-darwin-arm64.dmg` |
 | Windows (x64) | `wrenyard-desktop-<version>-win32-x64-setup.exe` |
+| Linux (x64) | `wrenyard-desktop-<version>-linux-x64.AppImage` |
 
 The app bundles everything it needs: the `wrenyard` CLI, a Node runtime and the
 daemon.
 
 **First launch.** Preview builds are ad-hoc signed on macOS and unsigned on
-Windows, so the OS asks once:
+Windows and Linux, so the OS may ask once:
 
 - **macOS** — open *System Settings → Privacy & Security* and choose
   *Open Anyway*.
 - **Windows** — on the SmartScreen prompt choose *More info → Run anyway*.
+- **Linux** — `chmod +x` the AppImage, then run it. Some distributions need
+  `libfuse2` to mount AppImages.
 
 Then follow [Getting started](docs/guides/getting-started.md) to pick a
 workspace, connect a provider and register your first project.
@@ -224,8 +227,8 @@ Read more in [docs/architecture.md](docs/architecture.md).
 
 ## Status
 
-Wrenyard publishes rolling `1.0.x` patch releases for macOS (Apple Silicon) and
-Windows (x64). Each release is a normal GitHub release, and the update feed
+Wrenyard publishes rolling `1.0.x` patch releases for macOS (Apple Silicon),
+Windows (x64) and Linux (x64). Each release is a normal GitHub release, and the update feed
 head is `latest.json` on the `updates` branch, with a continuing `dev.json`
 compatibility alias. Before it is production-ready it still needs trusted code
 signing ([signing notes](docs/release/signing.md)), wider clean-machine testing

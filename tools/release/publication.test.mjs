@@ -31,7 +31,7 @@ function withTempDir(fn) {
 // that target's installer(s).
 function createDownloadedArtifacts(root) {
   for (const name of canonicalAssetNames(VERSION)) {
-    const target = name.includes('darwin-arm64') ? 'darwin-arm64' : 'win32-x64';
+    const target = name.includes('darwin-arm64') ? 'darwin-arm64' : name.includes('linux-x64') ? 'linux-x64' : 'win32-x64';
     const dir = join(root, 'artifacts', `wrenyard-release-${target}`);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, name), `content:${name}`);
@@ -53,14 +53,16 @@ test('tag and native platform validation fail closed', () => {
   assert.throws(() => validateReleaseTag('v1.2.3-dev.4', '1.2.3-dev.4'), /not a plain x\.y\.z release version/);
   assert.equal(validateNativeTarget('darwin-arm64', 'darwin', 'arm64'), 'darwin-arm64');
   assert.equal(validateNativeTarget('win32-x64', 'win32', 'x64'), 'win32-x64');
+  assert.equal(validateNativeTarget('linux-x64', 'linux', 'x64'), 'linux-x64');
   assert.throws(() => validateNativeTarget('win32-x64', 'darwin', 'arm64'), /got darwin-arm64/);
-  assert.throws(() => validateNativeTarget('linux-x64', 'linux', 'x64'), /not a maintained/);
+  assert.throws(() => validateNativeTarget('darwin-x64', 'darwin', 'x64'), /not a maintained/);
 });
 
 test('canonical assets are confirmed in memory before any publication', () => {
   withTempDir((dir) => {
     const artifactsDir = createDownloadedArtifacts(dir);
     const assets = confirmCanonicalAssets({ artifactsDir, version: VERSION });
+    assert.equal(canonicalAssetNames(VERSION)[3], `wrenyard-desktop-${VERSION}-linux-x64.AppImage`);
     assert.deepEqual(assets.map((asset) => asset.name), canonicalAssetNames(VERSION));
     assert.ok(assets.every((asset) => asset.path.endsWith(asset.name)));
 
@@ -75,7 +77,7 @@ test('canonical assets are confirmed in memory before any publication', () => {
   });
 });
 
-test('GitHub publication creates a draft, uploads three assets, then publishes', () => {
+test('GitHub publication creates a draft, uploads four assets, then publishes', () => {
   withTempDir((dir) => {
     const assetsDir = createFlatAssets(dir);
     const assets = canonicalAssetNames(VERSION).map((name) => join(assetsDir, name));
@@ -93,6 +95,7 @@ test('GitHub publication creates a draft, uploads three assets, then publishes',
       'gh release upload',
       'gh release upload',
       'gh release upload',
+      'gh release upload',
       'gh release edit',
     ]);
     assert.ok(calls[1].includes('--draft'));
@@ -100,7 +103,7 @@ test('GitHub publication creates a draft, uploads three assets, then publishes',
     assert.ok(calls.at(-1).includes('--draft=false'));
     assert.ok(calls.at(-1).includes('--prerelease=false'));
     assert.ok(!calls.flat().some((arg) => arg === '--prerelease'));
-    assert.ok(calls.flat().some((arg) => String(arg).includes('Signing status: macOS ad-hoc; Windows unsigned.')));
+    assert.ok(calls.flat().some((arg) => String(arg).includes('Signing status: macOS ad-hoc; Windows unsigned; Linux unsigned.')));
     assert.ok(!calls.flat().some((arg) => String(arg).includes('--clobber')));
   });
 });
@@ -184,7 +187,8 @@ test('feed publication pushes the feed documents in one commit', () => {
     assert.ok(!staged.includes('install.ps1'));
 
     const feed = JSON.parse(readFileSync(join(dir, 'updates-publication', 'latest.json'), 'utf8'));
-    assert.equal(feed.assets.length, 3);
+    assert.equal(feed.assets.length, 4);
+    assert.ok(feed.assets.some((asset) => asset.name.includes('linux-x64.AppImage')));
     assert.ok(feed.assets.every((asset) => /^[0-9a-f]{64}$/.test(asset.sha256)));
     // The dev.json compatibility alias is byte-identical to the latest.json head.
     assert.equal(

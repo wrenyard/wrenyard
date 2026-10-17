@@ -58,7 +58,7 @@ export interface DesktopPreferencesControllerOptions {
   saveAppearance?: (patch: Partial<AppearanceSettings>) => void;
   /** Reads the native login-item state for the general projection. */
   readOpenAtLogin?: () => boolean;
-  /** Writes the native login-item state; macOS/Windows only. */
+  /** Writes the native login-item / XDG autostart state. */
   setOpenAtLogin?: (value: boolean) => void;
   /** The persisted `tray.showQuota` flag changed; e.g. rebuild the tray menu. */
   onMenuBarQuotaChanged?: () => void;

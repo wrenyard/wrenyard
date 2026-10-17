@@ -253,7 +253,9 @@ export async function probeSshHost(
 
   const posix = await runSsh(
     binary,
-    [...prefix, alias, `-- uname -s; uname -m`],
+    // `--` terminates ssh options and must precede the destination. It is not
+    // part of the remote command (a leading `--` would be executed as `--`).
+    [...prefix, '--', alias, 'uname -s; uname -m'],
     timeoutMs,
   );
   if (posix.code === 0) {

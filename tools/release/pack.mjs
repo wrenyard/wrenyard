@@ -308,19 +308,34 @@ export function stageDaemon(stage) {
 }
 // Build the Desktop bundle, then let electron-builder produce this platform's
 // installer(s). The artifact names are driven by WRENYARD_RELEASE_TRIPLET so no
-// Chinese product name ever appears in a public asset.
+// Chinese product name ever appears in a public asset. afterPack stays enabled
+// (never swapped for a stub pack): it is the Desktop package safety gate on
+// every target, restores Linux execute bits, and ad-hoc signs macOS bundles.
+function electronBuilderFlag() {
+  if (process.platform === 'darwin') return '--mac';
+  if (process.platform === 'linux') return '--linux';
+  return '--win';
+}
 function buildInstaller() {
   run('pnpm', ['--filter', '@wrenyard/desktop', 'run', 'build']);
-  const flag = process.platform === 'darwin' ? '--mac' : '--win';
-  run('pnpm', ['--filter', '@wrenyard/desktop', 'exec', 'electron-builder', flag, '--publish', 'never'], {
+  run('pnpm', ['--filter', '@wrenyard/desktop', 'exec', 'electron-builder', electronBuilderFlag(), '--publish', 'never'], {
     env: { WRENYARD_RELEASE_TRIPLET: target.triplet },
   });
 }
 // The installers this platform's pack run must produce.
 export function expectedArtifactNames(version, triplet = target.triplet) {
-  return triplet === 'win32-x64'
-    ? [`wrenyard-desktop-${version}-win32-x64-setup.exe`]
-    : [`wrenyard-desktop-${version}-darwin-arm64.dmg`, `wrenyard-desktop-${version}-darwin-arm64.zip`];
+  if (triplet === 'win32-x64') return [`wrenyard-desktop-${version}-win32-x64-setup.exe`];
+  if (triplet === 'linux-x64') return [`wrenyard-desktop-${version}-linux-x64.AppImage`];
+  return [`wrenyard-desktop-${version}-darwin-arm64.dmg`, `wrenyard-desktop-${version}-darwin-arm64.zip`];
+}
+/** Full SEA/daemon staging is required; a `.pack-stub` placeholder is forbidden. */
+export function assertFullStagedRuntime(stage, label = 'resources/wrenyard') {
+  if (!fs.existsSync(stage) || !fs.statSync(stage).isDirectory()) {
+    throw new Error(`${label} must be a full staged runtime directory`);
+  }
+  if (fs.existsSync(path.join(stage, '.pack-stub'))) {
+    throw new Error(`${label} is a .pack-stub; full SEA/daemon staging is required`);
+  }
 }
 function assertArtifacts(outputDir, version) {
   for (const name of expectedArtifactNames(version)) {
@@ -330,9 +345,10 @@ function assertArtifacts(outputDir, version) {
 // Locate the unpacked application electron-builder assembled before packaging.
 function findAssembledApp(releaseDir, triplet = target.triplet) {
   const dirs = fs.readdirSync(releaseDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-  if (triplet === 'win32-x64') {
-    const unpacked = dirs.find((entry) => entry.name === 'win-unpacked');
-    if (!unpacked) throw new Error('Desktop build produced no win-unpacked application');
+  if (triplet === 'win32-x64' || triplet === 'linux-x64') {
+    const expected = triplet === 'win32-x64' ? 'win-unpacked' : 'linux-unpacked';
+    const unpacked = dirs.find((entry) => entry.name === expected);
+    if (!unpacked) throw new Error(`Desktop build produced no ${expected} application`);
     return path.join(releaseDir, unpacked.name);
   }
   for (const entry of dirs) {
@@ -498,6 +514,7 @@ async function main() {
     const sea = buildSea(tmp);
     stageDaemon(STAGE_DIR);
     writeStage(STAGE_DIR, version, sea);
+    assertFullStagedRuntime(STAGE_DIR, 'staged resources/wrenyard');
     assertNoSymlinks(STAGE_DIR, 'payload');
     assertSingleSuiteMarker(STAGE_DIR);
     const measured = assertSuitePathLengths(STAGE_DIR);
@@ -517,6 +534,10 @@ async function main() {
     });
     console.log(`[pack] remote payload ${remote.name} (${remote.bytes} bytes)`);
     const appDir = findAssembledApp(OUTPUT_DIR);
+    const packagedResources = target.triplet === 'darwin-arm64'
+      ? path.join(appDir, 'Contents', 'Resources')
+      : path.join(appDir, 'resources');
+    assertFullStagedRuntime(path.join(packagedResources, 'wrenyard'), 'resources/wrenyard');
     // The final assembled app must be symlink-free too, not only the stage tree.
     if (target.triplet === 'win32-x64') assertNoSymlinks(appDir, 'assembled app');
     await smokeAssembledApp(packagedSeaPath(appDir), version, path.join(tmp, 'smoke-home'));

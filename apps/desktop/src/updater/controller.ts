@@ -16,6 +16,7 @@ import {
 } from '@wrenyard/protocol/update-feed';
 import type { UpdateInstallReason, UpdateProgress, UpdateSnapshot } from '../shell-contract.js';
 import { createDarwinApplier } from './apply-darwin.js';
+import { createLinuxApplier } from './apply-linux.js';
 import { createWin32Applier } from './apply-win32.js';
 import { DigestMismatchError, DownloadTimeoutError, downloadFile, type FetchLike } from './download.js';
 import { clearPendingUpdate, readPendingUpdate, writePendingUpdate, type PendingUpdate } from './pending.js';
@@ -103,6 +104,7 @@ export function installUnavailableMessage(reason: UpdateInstallReason | undefine
 export function releaseTarget(platform: NodeJS.Platform, arch: string): PlatformTriplet | null {
   if (platform === 'darwin' && arch === 'arm64') return 'darwin-arm64';
   if (platform === 'win32' && arch === 'x64') return 'win32-x64';
+  if (platform === 'linux' && arch === 'x64') return 'linux-x64';
   return null;
 }
 
@@ -295,6 +297,7 @@ export class DesktopUpdateController {
       });
     }
     if (this.platform === 'win32') return createWin32Applier({ spawnDetached });
+    if (this.platform === 'linux') return createLinuxApplier({ spawnDetached });
     return null;
   }
 
@@ -476,10 +479,15 @@ export class DesktopUpdateController {
       this.installing = false;
       return this.fail(error instanceof Error ? error.message : '无法停止 daemon，请重试。');
     }
-    if (daemonMode === 'connected' && this.platform === 'win32' && (await this.isDaemonRunning?.()) !== false) {
+    if (
+      daemonMode === 'connected'
+      && (this.platform === 'win32' || this.platform === 'linux')
+      && (await this.isDaemonRunning?.()) !== false
+    ) {
       // Windows: a daemon Desktop did not start holds node.exe inside the
-      // install directory. Surface an error snapshot (never the fatal
-      // `onBlocker`, which quits Desktop) so the user can stop it and retry.
+      // install directory. Linux: a CLI-started daemon keeps the AppImage FUSE
+      // mount busy. Surface an error snapshot (never the fatal `onBlocker`,
+      // which quits Desktop) so the user can stop it and retry.
       this.installing = false;
       return this.fail('请先停止在终端中运行的 daemon（Ctrl+C 或 wrenyard daemon stop）。');
     }
