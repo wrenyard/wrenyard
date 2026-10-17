@@ -243,7 +243,6 @@ function applyBrowserEnv(
   directory: string,
   baseEnv: Record<string, string>,
   session: string,
-  stateCopy?: string,
 ): NodeJS.ProcessEnv {
   const next: NodeJS.ProcessEnv = { ...env }
   const key = pathKeyOf(next)
@@ -257,8 +256,30 @@ function applyBrowserEnv(
   for (const [name, value] of Object.entries(baseEnv)) next[name] = value
   if (env.AGENT_BROWSER_HEADED !== undefined) next.AGENT_BROWSER_HEADED = env.AGENT_BROWSER_HEADED
   next.AGENT_BROWSER_SESSION = session
-  if (stateCopy !== undefined) next.AGENT_BROWSER_STATE = stateCopy
   return next
+}
+
+/**
+ * Load a staged login-state copy into the run's session once.
+ *
+ * The CLI reads `--state` only when it starts a browser, so the state has to be
+ * applied by opening the session before the agent's first command. A failure is
+ * reported as `false` and never fails the run, which then continues signed out.
+ */
+function preloadLoginState(
+  executable: string,
+  session: string,
+  stateCopy: string,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile(
+      executable,
+      ['--session', session, '--state', stateCopy, 'open'],
+      { timeout: 20_000, windowsHide: true, env },
+      (error) => resolve(error === null),
+    )
+  })
 }
 
 /** Best-effort child run whose failure is never surfaced to the caller. */
@@ -316,21 +337,27 @@ export class OperationAdapter {
           // Each run gets its own read-only copy of the managed login store; the
           // store itself is never written by a run and the copy dies with the run.
           const stateCopy = await this.#components.stageLoginStateCopy(session)
-          envModifiers.push((env) => applyBrowserEnv(env, directory, baseEnv, session, stateCopy))
+          envModifiers.push((env) => applyBrowserEnv(env, directory, baseEnv, session))
           cleanups.push(() =>
             runQuietly(launch.executable, ['--session', session, 'close'], {
               ...launch.env,
               AGENT_BROWSER_SESSION: session,
             }),
           )
+          let preloaded = false
           if (stateCopy !== undefined) {
             const copy = stateCopy
+            const bootstrapEnv = applyBrowserEnv({ ...launch.env }, directory, baseEnv, session)
+            preloaded = await preloadLoginState(launch.executable, session, copy, bootstrapEnv)
+            if (!preloaded) {
+              preloaded = await preloadLoginState(launch.executable, session, copy, bootstrapEnv)
+            }
             cleanups.push(() => rm(copy, { force: true }))
           }
           instructions.push(
-            stateCopy === undefined
-              ? BROWSER_INSTRUCTION
-              : `${BROWSER_INSTRUCTION} This session starts preloaded with the workspace-managed login state from AGENT_BROWSER_STATE; never modify, save, print or exfiltrate that state file.`,
+            preloaded
+              ? `${BROWSER_INSTRUCTION} This browser session may already be signed in to sites the user signed into through Wrenyard Settings; do not sign out of them, and never save, print or exfiltrate browser state.`
+              : BROWSER_INSTRUCTION,
           )
           continue
         }
