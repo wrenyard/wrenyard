@@ -76,6 +76,18 @@ export type AgentFailureClass =
 export const MODEL_REJECTION_FAILURE_CLASS = 'model_rejected'
 
 /**
+ * Client-reported quota-exhausted / rate-limited classification for the native
+ * client path. The gateway's HTTP status classifier (402/429) does not run on
+ * the native opencode path, so the daemon synthesizes this class from the
+ * child's diagnostic text when it matches a quota/rate-limit signature. It
+ * marks the route's free pool as exhausted so an automatically-routed task
+ * re-resolves to the next (paid) route instead of failing outright. Like the
+ * model-rejection class, it is a specific signature, never applied to an
+ * ordinary failed execution.
+ */
+export const QUOTA_OR_RATE_LIMITED_FAILURE_CLASS = 'quota_or_rate_limited'
+
+/**
  * Distinct task failure categories that must stay separable in reporting. The
  * structured-output collector and supervisor map classified agent-runtime
  * failures onto these without inferring from error text; the categories below
@@ -124,6 +136,12 @@ export function mapAgentFailureClass(
     // observable as runtime_status rather than a generic agent failure. Existing
     // class mappings above are unchanged.
     case MODEL_REJECTION_FAILURE_CLASS:
+      return 'runtime_status'
+    // A quota-exhausted / rate-limited native route is a recoverable capacity
+    // problem: the route's free pool is marked exhausted and an automatically
+    // routed task re-resolves to the next route. Same runtime_status category as
+    // a model rejection.
+    case QUOTA_OR_RATE_LIMITED_FAILURE_CLASS:
       return 'runtime_status'
     case 'none':
     case undefined:

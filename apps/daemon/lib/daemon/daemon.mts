@@ -927,7 +927,22 @@ async function createForemanDaemonResources(
       return gateway.admitRoute(provider, model)
     },
     success: (provider, model, guard, lease) => gateway.completeRouteSuccess(provider, model, guard, lease),
-    fault: (provider, model, guard, kind, lease) => gateway.reportNativeRouteFault(provider, model, kind, guard, lease),
+    fault: (provider, model, guard, kind, lease) => {
+      // The native task route key is client-qualified (`provider/model:client`),
+      // but the shared circuit store keys pools by the bare model. The pool-scoped
+      // `quota_or_rate_limited` fault must land on the bare-model pool key that
+      // `sharedRouteFaultState` and the automatic re-resolution read, so strip the
+      // client suffix for that kind alone. Other native faults (`structured_output`,
+      // `model_rejected`) stay client-qualified exactly as before — their route
+      // keys are not duplicated by the shared bare-model pool store.
+      let resolved = model
+      if (kind === 'quota_or_rate_limited') {
+        try {
+          resolved = parseRunSyntax(`${provider}/${model}`).model
+        } catch {}
+      }
+      return gateway.reportNativeRouteFault(provider, resolved, kind, guard, lease)
+    },
     cancel: (lease) => gateway.releaseNativeProbe(lease),
     faultState: (provider, model) => sharedRouteFaultState(gateway, provider, model),
   }

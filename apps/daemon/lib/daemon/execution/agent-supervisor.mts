@@ -11,7 +11,7 @@ import { assertValidTimeoutMs } from '../../task-timeouts.mts'
 import { killProcessTree } from '../../adapters/shell/process.mts'
 import { redactDiagnosticText, redactEvent, redactJsonString } from './redaction.mts'
 import { extractForemanTaskOutputSummary } from '../../core/task/delivery-protocol.mts'
-import { MODEL_REJECTION_FAILURE_CLASS } from '../../core/task/failure.mts'
+import { MODEL_REJECTION_FAILURE_CLASS, QUOTA_OR_RATE_LIMITED_FAILURE_CLASS } from '../../core/task/failure.mts'
 import { RepoWriteLocks } from './repo-write-locks.mts'
 import { desktopLane, DesktopLaneClosedError, toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
@@ -1073,6 +1073,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if (entry.pendingFailureClass) return entry.pendingFailureClass
     if (failureDiagnostic !== null && isModelRejectionText(failureDiagnostic)) {
       return MODEL_REJECTION_FAILURE_CLASS
+    }
+    if (failureDiagnostic !== null && isQuotaOrRateLimitText(failureDiagnostic)) {
+      return QUOTA_OR_RATE_LIMITED_FAILURE_CLASS
     }
     return null
   }
@@ -2198,6 +2201,35 @@ const MODEL_REJECTION_PATTERNS: readonly RegExp[] = [
 /** True when a captured diagnostic text matches a specific model-rejection signature. */
 function isModelRejectionText(text: string): boolean {
   return MODEL_REJECTION_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+/**
+ * Signatures of a provider quota-exhausted or rate-limited response surfaced
+ * through the native client path (the opencode child exits non-zero with an
+ * HTTP 402/429 or a quota/rate-limit message in its stderr). The gateway's
+ * HTTP status classifier does not run on the native path, so the daemon must
+ * recognize the signature from the child's diagnostic text instead.
+ *
+ * These are deliberately narrow: every pattern requires a billing/quota/rate
+ * keyword (or the literal 402/429 status) so an ordinary model error is never
+ * misclassified as a recoverable quota condition. The bare token "exceeded" is
+ * never matched on its own — it is only a quota signal when it is anchored to a
+ * billing/quota/rate keyword within the same short message fragment.
+ */
+const QUOTA_OR_RATE_LIMIT_PATTERNS: readonly RegExp[] = [
+  /\b402\b/iu,
+  /\b429\b/iu,
+  /\bquota\b/iu,
+  /\binsufficient_quota\b/iu,
+  /\brate[ _-]?limit/iu,
+  /\busage[ _-]?limit/iu,
+  /\bbilling\b/iu,
+  /\bexceed(?:ed|s)?[^.]{0,40}\b(?:quota|rate[ _-]?limit|usage[ _-]?limit|billing)\b/i,
+]
+
+/** True when a captured diagnostic text indicates a quota-exhausted or rate-limited condition. */
+function isQuotaOrRateLimitText(text: string): boolean {
+  return QUOTA_OR_RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(text))
 }
 
 function extractFinalResult(event: StreamEventRecord): { isError: boolean; output?: string } | undefined {

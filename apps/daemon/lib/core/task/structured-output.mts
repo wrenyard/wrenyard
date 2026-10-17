@@ -5,7 +5,7 @@ import {
   assertValidTimeoutMs,
   effectiveTaskTimeoutMs,
 } from '../../task-timeouts.mts'
-import { GateFailureError, MODEL_REJECTION_FAILURE_CLASS, mapAgentFailureClass } from './failure.mts'
+import { GateFailureError, MODEL_REJECTION_FAILURE_CLASS, QUOTA_OR_RATE_LIMITED_FAILURE_CLASS, mapAgentFailureClass } from './failure.mts'
 import type { NativeRouteFaultKind } from '@wrenyard/gateway'
 import {
   DELIVERY_END,
@@ -375,6 +375,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       // never touches route health.
       if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.('structured_output')
       if (terminal.failureClass === MODEL_REJECTION_FAILURE_CLASS) opts.onRouteFault?.('model_rejected')
+      if (terminal.failureClass === QUOTA_OR_RATE_LIMITED_FAILURE_CLASS) opts.onRouteFault?.('quota_or_rate_limited')
       throw agentFailedError(
         terminal.executionId ?? lastExecutionId ?? 'unknown',
         terminal.error ?? terminal.output,

@@ -119,7 +119,7 @@ export type ClientFaultKind = 'timeout' | 'transport';
  * product/account. Both are route-scoped: they never claim a provider or a
  * shared pool.
  */
-export type NativeRouteFaultKind = 'structured_output' | 'model_rejected';
+export type NativeRouteFaultKind = 'structured_output' | 'model_rejected' | 'quota_or_rate_limited';
 
 /** One in-flight attempt, correlated by the client so a duplicate report is dropped. */
 interface Attempt {
@@ -174,6 +174,15 @@ function nativeRouteFailure(kind: NativeRouteFaultKind): MarkableFailure {
       // model-not-found response). It is route-scoped like a 404 model-missing
       // fault and is recorded under the route's `model_unavailable` state.
       return { state: 'model_unavailable', scope: 'route', faultKind: 'model_unavailable' };
+    case 'quota_or_rate_limited':
+      // A native client reported a quota-exhausted or rate-limited response
+      // (HTTP 402/429, or a quota/rate-limit message). The native path never
+      // runs the gateway's HTTP status classifier, so this fault is synthesized
+      // from the child diagnostic. It is pool-scoped: the route's free quota pool
+      // is marked exhausted so an automatically-routed task re-resolves to the
+      // next route, but other routes that draw from a different pool are
+      // untouched. The pool id is resolved by the store from the provider/model.
+      return { state: 'quota_exhausted', scope: 'pool', faultKind: 'quota_exhausted' };
   }
 }
 
