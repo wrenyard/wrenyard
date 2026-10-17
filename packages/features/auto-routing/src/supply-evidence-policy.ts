@@ -104,7 +104,13 @@ export class SupplyEvidencePolicy {
     if (!confirmedFreeSupplyApplied && candidate.referenceUsdPerM * quotaPoolDiscountRate > candidate.effectiveCapUsdPerM) {
       return { kind: "rejected", snapshotId: candidate.snapshotId, canonicalId: candidate.canonicalId, reason: "reference_above_cap", detail: "effective routing price exceeds the effective cap" };
     }
-    const headroom = quota.headroom ?? ZERO_QUOTA_HEADROOM;
+    // A confirmed-free route with a windowless pool (every required constraint
+    // missing) has no measurable quota evidence, so it routes from abundant free
+    // headroom instead of the zero-score unknown-window default. Real window
+    // evidence (unknown/strained/healthy) keeps governing the quota factor, and
+    // blocked pools are already rejected before this policy runs.
+    const freeEvidenceMissing = quota.constraints.length > 0 && quota.constraints.every((constraint) => constraint.state === "missing");
+    const headroom = confirmedFreeSupplyApplied && freeEvidenceMissing ? 1 : quota.headroom ?? ZERO_QUOTA_HEADROOM;
     return { notes, supplyClass, confirmedFreeSupplyApplied, confirmedFreeSupplyEvidence, routingPriceUsdPerM, marginalApplied, headroom };
   }
 }
