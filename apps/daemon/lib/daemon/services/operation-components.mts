@@ -559,6 +559,7 @@ export class OperationComponents {
   readonly #loginProfileDir: string
   readonly #loginStatePath: string
   readonly #runStateDir: string
+  readonly #runStateSweep: Promise<void>
   readonly #env: NodeJS.ProcessEnv
   readonly #log?: (message: string) => void
 
@@ -582,8 +583,9 @@ export class OperationComponents {
       )
     }
     // Daemon start implies no run is live, so any per-run login copy left behind
-    // is stale. The sweep is best effort and never reports a failure.
-    void rm(this.#runStateDir, { recursive: true, force: true }).catch(() => undefined)
+    // is stale. The sweep is best effort, never reports a failure, and staging
+    // waits for it so a fresh copy cannot be deleted by it.
+    this.#runStateSweep = rm(this.#runStateDir, { recursive: true, force: true }).catch(() => undefined)
   }
 
   /** Current snapshots, in component order. The first call runs both checks. */
@@ -654,6 +656,7 @@ export class OperationComponents {
    * `undefined`, which leaves that run signed out instead of failing it.
    */
   async stageLoginStateCopy(session: string): Promise<string | undefined> {
+    await this.#runStateSweep
     const name = session.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64)
     if (!name) return undefined
     if (!existsSync(this.#loginStatePath)) return undefined
