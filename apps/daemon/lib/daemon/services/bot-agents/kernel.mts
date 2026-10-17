@@ -919,14 +919,13 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
     routineBusy(routine: RoutineRecord): boolean {
       const bot = state.bots[routine.botId]
-      if (bot !== undefined) {
-        if (bot.inflight?.routineId === routine.id) return true
-        if (bot.queue.some(wake => wake.routineId === routine.id)) return true
-      }
-      for (const round of Object.values(state.rounds)) {
-        if (round.botId === routine.botId && round.routineId === routine.id) return true
-      }
-      return false
+      if (bot === undefined) return false
+      // A session-result continuation wake carries its round without a
+      // routineId, so resolve it through the round it belongs to.
+      const matches = (wake: Wake): boolean => wake.routineId === routine.id
+        || (wake.round !== undefined && state.rounds[wake.round]?.routineId === routine.id)
+      if (bot.inflight !== undefined && matches(bot.inflight)) return true
+      return bot.queue.some(matches)
     },
   }
 }

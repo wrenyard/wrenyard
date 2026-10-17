@@ -71,7 +71,9 @@ export interface CreateSchedulerOptions {
   /**
    * Optional per-bot busy gate. When it returns true for a due routine, the
    * tick skips that routine without touching its nextRunAt or runCount, so it
-   * fires on a later tick once the bot is free. `run(id)` does not consult it.
+   * fires on a later tick once the routine has no wake being processed or
+   * queued. Open rounds waiting on watched sessions do not count as busy.
+   * Manual `run(id)` also honors this gate.
    */
   busy?: (routine: RoutineRecord) => boolean
 }
@@ -337,9 +339,11 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
           || Date.parse(record.nextRunAt) > now) {
           continue
         }
-        // Busy gate: a bot that is already running a turn is not woken again
-        // this tick. The record keeps its past nextRunAt and its runCount, so
-        // it stays due and fires on a later tick once the bot is free.
+        // Busy gate: skip while this same routine already has a wake being
+        // processed or queued. An open round waiting on watched sessions is
+        // not busy, so unrelated routines are not blocked. The record keeps
+        // its past nextRunAt and its runCount, so it stays due and fires on a
+        // later tick once the routine is free.
         if (busy?.(record)) continue
         const fireAt = new Date()
         let wakeError: unknown
@@ -512,6 +516,9 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       delete record.lastError
       record.nextRunAt = new Date().toISOString()
       persist()
+      // Fire the due record right away; tick enforces the stopped, ticking,
+      // canRun and busy gates itself.
+      void tick()
       return copyRecord(record)
     },
     remove(id: string): void {
