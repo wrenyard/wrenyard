@@ -45,7 +45,9 @@ function resolveRegisteredId(uid: string, family: string): string | undefined {
 
 /** The effort an upstream row names, or the provider-default sentinel. */
 function effortOf(uid: string, name: string): ReasoningEffort {
-  const suffix = /(?:-|_)(none|low|medium|high|xhigh|max)$/i.exec(uid);
+  // The effort is its own UID segment, possibly followed by qualifiers such as
+  // `-lightning` or `-1m` (`swe-2-high-lightning`, `glm-5-2-max-1m`).
+  const suffix = /(?:-|_)(none|low|medium|high|xhigh|max)(?=$|[-_])/i.exec(uid);
   const label = /\s+(No Thinking|None|Low|Medium|High|XHigh|Max)(?: Thinking)?$/i.exec(name);
   const level = (suffix?.[1] ?? label?.[1])?.toLowerCase().replace('no thinking', 'none');
   return (level ?? 'default') as ReasoningEffort;
@@ -120,7 +122,10 @@ export async function fetchDevinModels(credentials: DevinCredentials, fetcher: t
   // declaration order.
   const byIdentity = new Map<string, Map<ReasoningEffort, DiscoveredRow>>();
   const ambiguous = new Set<string>();
-  for (const row of rows) {
+  // A row whose effort segment is followed by a qualifier (`-lightning`, `-1m`)
+  // is a sibling variant: it yields to the plain row at the same effort.
+  const qualified = (uid: string) => /(?:-|_)(?:none|low|medium|high|xhigh|max)[-_]/i.test(uid);
+  for (const row of [...rows].sort((a, b) => Number(qualified(a.uid)) - Number(qualified(b.uid)))) {
     const registeredId = resolveRegisteredId(row.uid, row.family);
     if (registeredId === undefined) continue;
     const effort = effortOf(row.uid, row.name);
@@ -129,7 +134,10 @@ export async function fetchDevinModels(credentials: DevinCredentials, fetcher: t
       variants = new Map();
       byIdentity.set(registeredId, variants);
     }
-    if (variants.has(effort)) { ambiguous.add(registeredId); continue; }
+    if (variants.has(effort)) {
+      if (!qualified(row.uid)) ambiguous.add(registeredId);
+      continue;
+    }
     variants.set(effort, row);
   }
 
@@ -137,9 +145,10 @@ export async function fetchDevinModels(credentials: DevinCredentials, fetcher: t
   for (const [registeredId, variants] of byIdentity) {
     if (ambiguous.has(registeredId)) continue;
     const efforts = REASONING_EFFORTS.filter((effort) => variants.has(effort));
-    // The base request needs one unambiguous outbound UID: the provider-default
-    // row, or the only row when the identity materializes a single effort.
-    const defaultRow = variants.get('default') ?? (efforts.length === 1 ? variants.get(efforts[0]) : undefined);
+    // The base request needs one outbound UID: the provider-default row, or
+    // the middle declared effort when every row names an effort
+    // (`swe-2-{medium,high,max}-lightning` serves `medium`).
+    const defaultRow = variants.get('default') ?? variants.get(efforts[Math.floor((efforts.length - 1) / 2)]);
     if (defaultRow === undefined) continue;
     const declaredRows = [...variants.values()];
     const cached = agreed(declaredRows.map((row) => row.prices.get('Cached input')));
