@@ -11,7 +11,9 @@ export const definition = defineProvider({
   defaultModel: 'composer-2.5', quotaProvider: 'cursor', useClientBinary: true,
   models: [
     { ...model('composer-2.5', 200_000), pricing: [0.2, 0.5, 2.5], reasoningEfforts: ['high'] },
-    { ...model('grok-4.7', 256_000, undefined, 'grok-4.7', REASONING_UP_TO_XHIGH), supportsFast: true },
+    // Cursor Grok Fast is unsupported: the official Cursor Grok CLI Fast
+    // contract (a bracket fast selector for grok-4.7) is unverified.
+    { ...model('grok-4.7', 256_000, undefined, 'grok-4.7', REASONING_UP_TO_XHIGH) },
     model('kimi-k3', 1_048_576, undefined, 'kimi-k3', REASONING_LOW_HIGH_MAX),
     { canonical: 'claude-opus-5-5', overrides: { contextWindow: 300_000, supports1MContext: true, reasoningEfforts: FIVE_LEVELS } },
     { ...model('gpt-5.6-luna', 272_000, undefined, 'gpt-5.6-luna', REASONING_FULL), capabilities: ['text', 'image'], pricing: [0.02, 0.2, 1.2] },
@@ -37,18 +39,6 @@ export const definition = defineProvider({
     'gemini-4-argon': { cursor: { medium: { model: 'gemini-4-argon' } } },
     'claude-fable-5-1': { cursor: suffixMappings('claude-fable-5-1-thinking', FIVE_LEVELS) },
     'grok-4.7': { cursor: suffixMappings('grok-4.7', REASONING_UP_TO_XHIGH) },
-  },
-  // Cursor's documented bracket override combines the base Grok model with the
-  // unchanged effort and an explicit Fast state. Grok Fast entitlement and the
-  // actual upstream effect are unverified.
-  fastMapping: {
-    model: (resolvedModel, modelId, fast) => {
-      const prefix = `${modelId}-`;
-      const effort = resolvedModel.startsWith(prefix) ? resolvedModel.slice(prefix.length) : undefined;
-      return effort === undefined
-        ? `${modelId}[fast=${fast}]`
-        : `${modelId}[effort=${effort},fast=${fast}]`;
-    },
   },
   convertReasoningEffort: () => { throw new Error('Cursor only supports native model substitutions'); },
   description: 'Cursor 提供 Composer、Grok 以及 GPT、Claude、Muse 与 Gemini 等多厂商模型服务。',

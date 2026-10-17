@@ -665,10 +665,12 @@ export class Catalog {
       throw new Error(`invalid reasoning effort: ${JSON.stringify(expected)}`);
     }
     if (provider.nativeClients?.includes(clientID)) {
-      // An explicit Fast request is admitted only when this exact
-      // client/provider/model pair owns a verified native Fast mapping.
-      if (fast === true && !this.supportsFast(clientID, providerID, modelID)) {
-        throw new Error(`model ${providerID}/${modelID} does not support Fast mode on client ${clientID}`);
+      // An explicitly defined Fast preference is admitted only when this exact
+      // client/provider/model pair owns a verified native Fast mapping. Both
+      // true and false fail closed here instead of being silently dropped or
+      // passed through; an absent preference keeps the unchanged behavior.
+      if (fast !== undefined && !this.supportsFast(clientID, providerID, modelID)) {
+        throw new Error(`Fast mode is unavailable for model ${providerID}/${modelID} on client ${clientID}`);
       }
       const effortFields = this.resolveReasoning(provider, modelDef, clientID, expected);
       // Fast combines with the unchanged reasoning-effort mapping: the native
