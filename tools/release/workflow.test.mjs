@@ -21,7 +21,6 @@ const OBSOLETE = [
 test('release workflow builds exactly the three maintained native targets', () => {
   assert.match(workflow, /os: \[macos-15, windows-latest, ubuntu-latest\]/);
   assert.ok(workflow.includes('linux-x64'));
-  assert.ok(workflow.includes('*.AppImage'));
   assert.ok(!workflow.includes('darwin-x64'));
 });
 

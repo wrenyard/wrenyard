@@ -239,6 +239,25 @@ function payloadNeedles(buildTmp, worktree) {
   };
   return { build: collect([buildTmp, worktree]), home: collect([os.homedir(), process.env.HOME, process.env.USERPROFILE]) };
 }
+// A checkout root such as `/workspace` is a prefix of source paths like
+// `src/workspace.ts`. Require a path-token boundary on both sides so a real
+// leak (`/workspace/apps/...`, `"\/workspace"`) still matches.
+function isPathTokenBoundary(bytes, index) {
+  if (index < 0 || index >= bytes.length) return true;
+  const c = bytes[index];
+  return !((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 45 || c === 46 || c === 95);
+}
+function containsPathNeedle(bytes, needle) {
+  if (needle.length === 0 || needle.length > bytes.length) return false;
+  let from = 0;
+  while (from <= bytes.length - needle.length) {
+    const index = bytes.indexOf(needle, from);
+    if (index === -1) return false;
+    if (isPathTokenBoundary(bytes, index - 1) && isPathTokenBoundary(bytes, index + needle.length)) return true;
+    from = index + 1;
+  }
+  return false;
+}
 // Bounded staged-payload gate; it reports only the path and rule, never a value.
 export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
   const root = path.resolve(stage);
@@ -263,7 +282,7 @@ export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
         && /^\s*-----BEGIN CERTIFICATE-----[\s\S]*-----END CERTIFICATE-----\s*$/.test(text) && !text.includes('PRIVATE KEY');
       if (FORBIDDEN_PAYLOAD_EXTENSIONS.has(ext) && !publicCertificate) { report(file, 'forbidden credential/secret/database/log file'); continue; }
       if (ext === '.map' && !dependency) report(file, 'source map payload forbidden');
-      if (build.some((needle) => bytes.includes(needle)) || (!dependency && home.some((needle) => bytes.includes(needle)))) report(file, 'embeds a local developer/home/checkout absolute path');
+      if (build.some((needle) => containsPathNeedle(bytes, needle)) || (!dependency && home.some((needle) => containsPathNeedle(bytes, needle)))) report(file, 'embeds a local developer/home/checkout absolute path');
       if (!text) continue;
       const findings = scanText(text).filter((finding) => !dependency || (finding.detector === 'pem-private-key' && PRIVATE_KEY_BLOCK.test(text)));
       if (findings.length) report(file, `secret signature detected (${[...new Set(findings.map((f) => f.detector))].join(', ')})`);
@@ -329,7 +348,7 @@ export function expectedArtifactNames(version, triplet = target.triplet) {
   return [`wrenyard-desktop-${version}-darwin-arm64.dmg`, `wrenyard-desktop-${version}-darwin-arm64.zip`];
 }
 /** Full SEA/daemon staging is required; a `.pack-stub` placeholder is forbidden. */
-export function assertFullStagedRuntime(stage, label = 'resources/wrenyard') {
+function assertFullStagedRuntime(stage, label = 'resources/wrenyard') {
   if (!fs.existsSync(stage) || !fs.statSync(stage).isDirectory()) {
     throw new Error(`${label} must be a full staged runtime directory`);
   }

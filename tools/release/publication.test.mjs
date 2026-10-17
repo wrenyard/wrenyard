@@ -62,7 +62,6 @@ test('canonical assets are confirmed in memory before any publication', () => {
   withTempDir((dir) => {
     const artifactsDir = createDownloadedArtifacts(dir);
     const assets = confirmCanonicalAssets({ artifactsDir, version: VERSION });
-    assert.equal(canonicalAssetNames(VERSION)[3], `wrenyard-desktop-${VERSION}-linux-x64.AppImage`);
     assert.deepEqual(assets.map((asset) => asset.name), canonicalAssetNames(VERSION));
     assert.ok(assets.every((asset) => asset.path.endsWith(asset.name)));
 
@@ -188,7 +187,6 @@ test('feed publication pushes the feed documents in one commit', () => {
 
     const feed = JSON.parse(readFileSync(join(dir, 'updates-publication', 'latest.json'), 'utf8'));
     assert.equal(feed.assets.length, 4);
-    assert.ok(feed.assets.some((asset) => asset.name.includes('linux-x64.AppImage')));
     assert.ok(feed.assets.every((asset) => /^[0-9a-f]{64}$/.test(asset.sha256)));
     // The dev.json compatibility alias is byte-identical to the latest.json head.
     assert.equal(

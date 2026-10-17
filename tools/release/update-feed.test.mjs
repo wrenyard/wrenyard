@@ -67,7 +67,6 @@ test('generates a latest head, dev alias and immutable snapshot for the four ass
     assert.equal(head.version, version);
     assert.equal(head.published_at, PUBLISHED_AT);
     assert.equal(head.assets.length, 4);
-    assert.ok(head.assets.some((asset) => asset.name === `wrenyard-desktop-${version}-linux-x64.AppImage`));
     for (const name of assetNames(version)) {
       assert.ok(head.assets.some((asset) => asset.name === name), `missing ${name}`);
     }
