@@ -64,6 +64,10 @@ function buildResponsesBody(request: ModelRequest): Record<string, unknown> {
     store: false,
   };
   if (systems.length === 1) body.instructions = plainText(systems[0]!.content);
+  // An explicit Fast preference maps onto the official service tier. An absent
+  // preference leaves the body untouched, so reasoning and cache fields below
+  // are unaffected.
+  if (request.fast !== undefined) body.service_tier = request.fast ? 'priority' : 'default';
   // The summary is the only reasoning text the protocol exposes; request it so
   // the thinking channel is filled whenever the model reasons. The reasoning
   // level itself travels in the request header, never as a body `effort`.

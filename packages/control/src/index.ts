@@ -66,6 +66,8 @@ export interface WrenyardGatewayModel {
   family?: 'claude';
   claudeTier?: 'haiku' | 'sonnet' | 'opus';
   supports1MContext?: boolean;
+  /** True when a verified, distinct upstream Fast mode exists for this route. */
+  supportsFast?: boolean;
   /** Catalog intelligence tier; absent when genuinely unknown (a route naming
    * no registered canonical model). */
   intelligence?: 'low' | 'mid' | 'high' | 'premium';

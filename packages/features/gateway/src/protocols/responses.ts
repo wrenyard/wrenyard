@@ -133,6 +133,14 @@ export const responsesProtocol: GatewayProtocolModule = {
   // No protocol-fixed request field: the stream/store contract is supplier-owned.
   prepareRequest() {},
 
+  readFast(body) {
+    // Official Responses tiers: priority and fast mean on, default means off.
+    // Any other tier is unrelated to Fast and is forwarded unchanged.
+    if (body.service_tier === 'priority' || body.service_tier === 'fast') return true;
+    if (body.service_tier === 'default') return false;
+    return undefined;
+  },
+
   stripReasoningFields,
 
   createObserver(): ResponseObserver {

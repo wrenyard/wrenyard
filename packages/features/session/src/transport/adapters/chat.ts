@@ -51,6 +51,9 @@ export function serializeChatRequest(request: ModelRequest): string {
     stream_options: { include_usage: true },
   };
   if (request.maxOutputTokens !== undefined) body.max_tokens = request.maxOutputTokens;
+  // An explicit Fast preference maps onto the official service tier. An absent
+  // preference leaves the body untouched so the upstream default applies.
+  if (request.fast !== undefined) body.service_tier = request.fast ? 'priority' : 'default';
   if (request.tools !== undefined && request.tools.length > 0) {
     body.tools = request.tools.map(chatTool);
     // Serialize the caller's tool choice in the Chat wire shape; an unspecified

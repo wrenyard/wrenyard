@@ -170,6 +170,9 @@ export interface ResolveExplicitDispatchInput {
    *  reasoning effort at all when the target has no usable level. It never
    *  fails admission and never falls back to another target. */
   expectedReasoningEffort?: TaskDispatchRequirements['expectedReasoningEffort']
+  /** Explicit Fast preference for the exact target. True fails closed when the
+   *  target has no verified Fast mode; false is an explicit off, never undefined. */
+  fast?: TaskDispatchRequirements['fast']
 }
 
 export type TaskDispatchExplicitResolution =
@@ -392,7 +395,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
 
     let plan: { client: string; provider: string; model: string; supportsWebSearch?: boolean }
     try {
-      plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, requirements.expectedReasoningEffort)
+      plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model, requirements.expectedReasoningEffort, requirements.fast)
     } catch {
       // Unresolvable plan mirrors the authoritative continue: no truthful path.
       return { code: 'no_available_provider', detail: 'runtime_unresolved' }
@@ -634,6 +637,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     intelligenceMin?: TaskDispatchRequirements['intelligenceMin'],
     expectedReasoningEffort?: TaskDispatchRequirements['expectedReasoningEffort'],
     inputTokens?: number,
+    fast?: TaskDispatchRequirements['fast'],
   ): TaskDispatchExplicitResolution => {
     const canonicalTarget = canonicalTargetOf(candidate)
     if (canonicalTarget !== exactAgentRuntime) {
@@ -735,13 +739,33 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       [candidate],
     )
 
+    // Explicit Fast is a materializability requirement, not a preference: the
+    // Catalog owns the verified native/gateway boundary, so surface its exact
+    // rejection instead of the generic resolved-metadata failure below. Absent
+    // Fast adds no validation path and keeps the existing behavior unchanged.
+    if (fast !== undefined) {
+      try {
+        catalog.resolveRun(candidate.client, candidate.provider, candidate.model, expectedReasoningEffort, fast)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return {
+          ok: false,
+          error: new ExplicitRuntimeUnavailableError(
+            taskName,
+            exactAgentRuntime,
+            `target '${canonicalTarget}' cannot materialize the requested Fast mode: ${message}`,
+          ),
+        }
+      }
+    }
+
     // Availability probe. The pool is exactly this candidate. Reasoning effort
     // is an optional runtime parameter adapted by the Catalog (requested levels
     // are adapted to the nearest usable level, or withheld when the exact runtime
     // has no usable level), never an eligibility constraint. It is forwarded only to adapt the
     // selected plan parameters. Admission means the target can
     // produce a truthful resolved snapshot — never a fabricated one.
-    const availability = probe({ expectedReasoningEffort, inputTokens })
+    const availability = probe({ expectedReasoningEffort, inputTokens, ...(fast === undefined ? {} : { fast }) })
     if (!availability.ok) {
       return {
         ok: false,
@@ -758,7 +782,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     if (!requiredCapabilities || requiredCapabilities.length === 0) return availability
 
     // Capability compatibility is the only remaining eligibility constraint.
-    const capable = probe({ requiredCapabilities, expectedReasoningEffort })
+    const capable = probe({ requiredCapabilities, expectedReasoningEffort, inputTokens, ...(fast === undefined ? {} : { fast }) })
     if (!capable.ok) {
       return {
         ok: false,
@@ -866,7 +890,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     },
 
     resolveExplicit(input: ResolveExplicitDispatchInput): TaskDispatchExplicitResolution {
-      const { taskName, exactRuntime, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort } = input
+      const { taskName, exactRuntime, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort, fast } = input
       const unavailable = (reason: string): TaskDispatchExplicitResolution => ({
         ok: false,
         error: new ExplicitRuntimeUnavailableError(taskName, exactRuntime, reason),
@@ -900,7 +924,7 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
       if (!candidate) {
         return unavailable(`canonical target '${canonicalTarget}' is not a task-capable candidate or runtime plan`)
       }
-      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort, input.inputTokens)
+      return evaluateExplicitTarget(taskName, canonicalTarget, candidate, requiredCapabilities, requiresWebSearch, intelligenceMin, expectedReasoningEffort, input.inputTokens, fast)
     },
 
     listExactRuntimes(input: TaskDispatchExactRuntimeListInput): TaskDispatchExactRuntimeListResult {

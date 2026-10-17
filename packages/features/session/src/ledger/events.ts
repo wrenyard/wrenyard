@@ -111,6 +111,12 @@ export interface TurnModel {
   model: string;
   /** Explicit public reasoning level this turn runs at. */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * The Fast preference the turn was explicitly started with: true for Fast on
+   * and false for Fast off. Absent when no preference was requested; an inferred
+   * or effective value is never recorded here.
+   */
+  fast?: boolean;
 }
 
 export interface TaskBrief {

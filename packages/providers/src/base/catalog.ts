@@ -618,6 +618,26 @@ export class Catalog {
     return subset;
   }
 
+  /**
+   * True when the exact client/provider/model combination has a verified Fast
+   * capability on the transport a task run would actually use. A task run can
+   * only materialize Fast through a provider-owned native model mapping: the
+   * gateway protocol-field mapping is an entry-protocol surface that the task's
+   * native client never injects, so it is not evidence of task Fast support.
+   * The model itself must declare `supportsFast`, and absence is never inferred
+   * as support.
+   */
+  supportsFast(clientID: string, providerID: string, modelID: string): boolean {
+    const client = this.clientsByID.get(clientID);
+    if (!client) return false;
+    const provider = this.providersByID.get(providerID);
+    if (!provider) return false;
+    const resolvedModelID = provider.modelAliases?.[modelID] ?? modelID;
+    const modelDef = provider.models.find((model) => model.id === resolvedModelID);
+    if (modelDef?.supportsFast !== true) return false;
+    return provider.nativeClients?.includes(clientID) === true && provider.fastMapping?.model !== undefined;
+  }
+
   resolveRun(clientID: string, providerID: string, modelID: string, expected?: ReasoningEffort, fast?: boolean): DispatchPlan {
     const client = this.clientsByID.get(clientID);
     if (!client) throw new Error(`unknown client: ${clientID}`);
@@ -645,12 +665,32 @@ export class Catalog {
       throw new Error(`invalid reasoning effort: ${JSON.stringify(expected)}`);
     }
     if (provider.nativeClients?.includes(clientID)) {
+      // An explicit Fast request is admitted only when this exact
+      // client/provider/model pair owns a verified native Fast mapping.
+      if (fast === true && !this.supportsFast(clientID, providerID, modelID)) {
+        throw new Error(`model ${providerID}/${modelID} does not support Fast mode on client ${clientID}`);
+      }
       const effortFields = this.resolveReasoning(provider, modelDef, clientID, expected);
+      // Fast combines with the unchanged reasoning-effort mapping: the native
+      // mapping transforms the model the effort mapping already resolved, so
+      // the effort itself is never altered. Both true and false are explicit.
+      const fastModel = provider.fastMapping?.model;
+      const mappedModel = fast === undefined || modelDef.supportsFast !== true || fastModel === undefined
+        ? effortFields.upstreamModel
+        : fastModel(effortFields.upstreamModel ?? modelDef.id, modelDef.id, fast);
       // Native web search is admitted ONLY for an explicitly supported native
       // client/provider pair: the client must declare supportsNativeWebSearch and
       // the resolved provider must be that client's exact nativeProvider. This is
       // native-provider capability alone — never third-party gateway support.
-      const plan: DispatchPlan = { client: clientID, provider: providerID, model: modelID, mode: 'native', ...effortFields, ...(fast === true ? { fast: true } : {}) };
+      const plan: DispatchPlan = {
+        client: clientID,
+        provider: providerID,
+        model: modelID,
+        mode: 'native',
+        ...effortFields,
+        ...(mappedModel === undefined ? {} : { upstreamModel: mappedModel }),
+        ...(fast === undefined ? {} : { fast }),
+      };
       if (client.supportsNativeWebSearch === true && client.nativeProvider === providerID) {
         plan.supportsWebSearch = true;
       }
@@ -662,8 +702,23 @@ export class Catalog {
     const protocol = client.gatewayProtocols.find((candidate) =>
       provider.protocols?.some((capability) => capability.protocol === candidate));
     if (!protocol) throw new Error(`provider ${providerID} cannot serve client ${clientID}`);
+    // A gateway task run has no body injection: neither an on nor an off Fast
+    // request can reach the upstream, because only a provider-owned native
+    // model mapping carries it and gateway mode does not use one. Any explicit
+    // preference fails closed instead of dispatching while ignoring it; an
+    // absent preference keeps Fast off the plan.
+    if (fast !== undefined) {
+      throw new Error(`Fast mode for ${providerID}/${modelID} on client ${clientID} is not injectable by a gateway task run; only a verified native Fast mapping is supported`);
+    }
     const effortFields = this.resolveReasoning(provider, modelDef, clientID, expected);
-    return { client: clientID, provider: providerID, model: modelID, mode: 'gateway', protocol, ...effortFields, ...(fast === true ? { fast: true } : {}) };
+    return {
+      client: clientID,
+      provider: providerID,
+      model: modelID,
+      mode: 'gateway',
+      protocol,
+      ...effortFields,
+    };
   }
 
   // Enumeration resolves compatibility only; operational callers supply an expectation.

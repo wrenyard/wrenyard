@@ -10,8 +10,6 @@
 export const GATEWAY_HEADERS = {
   /** Request: unified public reasoning effort the Gateway translates per provider. */
   reasoningEffort: 'x-wrenyard-reasoning-effort',
-  /** Request: Fast mode; consumed by the Gateway and never forwarded upstream. */
-  fast: 'x-wrenyard-fast',
   /** Request: call role, recorded on the Gateway event for attribution. */
   callRole: 'x-wrenyard-call-role',
   /** Request: session id, recorded on the Gateway event for attribution. */

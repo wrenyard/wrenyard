@@ -4,10 +4,18 @@ export const definition = defineProvider({
   id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'managed',
   defaultModel: 'claude-sonnet-5-5', quotaProvider: 'anthropic',
   models: [
-    { canonical: 'claude-opus-5-5', overrides: { family: 'claude', claudeTier: 'opus', supports1MContext: true, reasoningEfforts: REASONING_FULL.filter(e => e !== 'none') } },
+    { canonical: 'claude-opus-5-5', overrides: { family: 'claude', claudeTier: 'opus', supports1MContext: true, reasoningEfforts: REASONING_FULL.filter(e => e !== 'none'), supportsFast: true } },
     { canonical: 'claude-sonnet-5-5', overrides: { family: 'claude', claudeTier: 'sonnet', supports1MContext: true, reasoningEfforts: REASONING_FULL.filter(e => e !== 'none') } },
     { canonical: 'claude-haiku-5-5', overrides: { family: 'claude', claudeTier: 'haiku', supports1MContext: true, reasoningEfforts: REASONING_FULL.filter(e => e !== 'none') } },
   ],
+  // Messages `speed` is the only Fast surface: fast means on, standard means
+  // explicitly off. Reasoning effort and the thinking configuration stay
+  // untouched.
+  fastMapping: {
+    request: (_modelId, fast, protocol) => protocol === 'anthropic_messages'
+      ? { speed: fast ? 'fast' : 'standard' }
+      : {},
+  },
   reasoningEffortMappings: {
     'claude-opus-5-5': { claude: Object.fromEntries(REASONING_FULL.filter(e => e !== 'none').map(e => [e,{effort:e}])) },
     'claude-sonnet-5-5': { claude: Object.fromEntries(REASONING_FULL.filter(e => e !== 'none').map(e => [e,{effort:e}])) },

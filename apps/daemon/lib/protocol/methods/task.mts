@@ -43,6 +43,9 @@ export interface TaskDispatchRequirements {
   /** Hidden dispatch requirement: the dispatched plan must admit native web
    *  search. Enforced as a hard gate; never surfaced in any search settings UI. */
   requiresWebSearch?: boolean
+  /** Requests the provider's verified Fast mode for the dispatched runtime.
+   *  Independent from reasoning effort; explicit false means Fast is off. */
+  fast?: boolean
   /** The expected reasoning-effort level for the dispatched runtime. It is a
    *  resolved runtime parameter adapted to the nearest usable level; the catalog
    *  omits it only for enumeration. Every task declares one. */
@@ -282,6 +285,7 @@ const taskDispatchRequirementsSchema = {
     excludeClientIds: { type: 'array', items: { type: 'string', minLength: 1 } },
     excludeProviderIds: { type: 'array', items: { type: 'string', minLength: 1 } },
     requiresWebSearch: { type: 'boolean' },
+    fast: { type: 'boolean' },
     expectedReasoningEffort: { enum: REASONING_EFFORTS },
   },
   additionalProperties: false,
@@ -648,6 +652,8 @@ export interface TaskSettingsAutomaticDispatch {
   exclude_provider_ids?: readonly string[]
   /** Hidden web search requirement; mirrors TaskDispatchRequirements.requiresWebSearch. Not a UI control. */
   requires_web_search?: boolean
+  /** Requests verified Fast mode; mirrors TaskDispatchRequirements.fast. */
+  fast?: boolean
   /** Expected reasoning-effort level; mirrors TaskDispatchRequirements.expectedReasoningEffort.
    *  Every task declares one; inherited declarations may inherit it. */
   expected_reasoning_effort?: TaskSettingsReasoningEffort
@@ -1066,6 +1072,7 @@ export const taskSettingsAutomaticDispatchSchema = {
     exclude_client_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     exclude_provider_ids: { type: 'array', items: { type: 'string', minLength: 1 } },
     requires_web_search: { type: 'boolean' },
+    fast: { type: 'boolean' },
     expected_reasoning_effort: { enum: REASONING_EFFORTS },
   },
   additionalProperties: false,
@@ -1086,6 +1093,7 @@ const taskSettingsAutomaticPatchSchema = {
     max_output_usd_per_million: { anyOf: [{ type: 'number', exclusiveMinimum: 0 }, { type: 'null' }] },
     required_capabilities: { anyOf: [{ type: 'array', items: taskSettingsCapabilitySchema }, { type: 'null' }] },
     requires_web_search: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+    fast: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
     expected_reasoning_effort: { anyOf: [{ enum: REASONING_EFFORTS }, { type: 'null' }] },
     exclude_model_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },
     exclude_profile_ids: { anyOf: [{ type: 'array', items: { type: 'string', minLength: 1 } }, { type: 'null' }] },

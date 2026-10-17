@@ -19,6 +19,7 @@ import {
 } from '../ledger/store.ts';
 import { ModelCallError, resolveModelMetadata, type CallRole } from '../model/request.ts';
 import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
+import type { ProviderDefinition } from '@wrenyard/providers';
 import { ContextInspector, findCreated, type ContextInspectRequest, type ContextInspection } from '../context/inspect.ts';
 import { type ToolCall } from '../transport/index.ts';
 import { isInside, type AttachmentInput, type FileStore } from '../media.ts';
@@ -93,6 +94,7 @@ class Engine implements Session, SessionCallHost {
   private readonly pendingSends = new Map<string, {
     model: string;
     effort: ReasoningEffort;
+    fast: boolean | undefined;
     text: string;
     attachmentsKey: string;
     result: Promise<{ turn: number }>;
@@ -201,45 +203,53 @@ class Engine implements Session, SessionCallHost {
     input: {
       text: string;
       /** Explicit public reasoning level; required for every turn. */
-      model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+      model: {
+        provider: string;
+        model: string;
+        reasoningEffort: ReasoningEffort;
+        /** Explicit Fast preference: true on, false off, absent no preference. */
+        fast?: boolean;
+      };
       attachments?: AttachmentInput[];
     },
   ): Promise<{ turn: number }> {
     this.assertOpen();
     const model = `${input.model.provider}/${input.model.model}`;
     const effort = input.model.reasoningEffort;
+    const fast = input.model.fast;
     const attachmentsKey = attachmentKey(input.attachments);
 
     // A turn already waiting in bounded recovery owns the exchange: a repeated
-    // continue of the same selected model and effort — or a double click — must
-    // not create a second turn or dispatch. Decided synchronously, before any
-    // await, so two continuations in the same tick cannot both admit a turn. A
-    // continue after a prior terminal failure still creates exactly one waiting
-    // turn; an explicit model or effort change, an unrelated message or a
-    // different attachment set is always admitted.
+    // continue of the same selected model, effort and Fast preference — or a
+    // double click — must not create a second turn or dispatch. Decided
+    // synchronously, before any await, so two continuations in the same tick
+    // cannot both admit a turn. A continue after a prior terminal failure still
+    // creates exactly one waiting turn; an explicit model, effort or Fast change,
+    // an unrelated message or a different attachment set is always admitted.
     const waiting = this.recoveryWaits.get(sessionId);
     if (waiting !== undefined
       && waiting.model === model
       && waiting.effort === effort
-      && this.isWaitingResubmission(sessionId, waiting, input.text, attachmentsKey)) {
+      && this.isWaitingResubmission(sessionId, waiting, input.text, attachmentsKey, fast)) {
       return { turn: waiting.turn };
     }
 
     // Two rapid identical sends before any recovery marker exists share one
     // turn: the narrow latch is set before any async send work. The fingerprint
-    // includes the effort and the stable attachment identity, so a changed
-    // level or attachment is never swallowed.
+    // includes the effort, the Fast preference and the stable attachment
+    // identity, so a changed level, mode or attachment is never swallowed.
     const pending = this.pendingSends.get(sessionId);
     if (pending !== undefined
       && pending.model === model
       && pending.effort === effort
+      && pending.fast === fast
       && pending.text === input.text
       && pending.attachmentsKey === attachmentsKey) {
       return pending.result;
     }
 
     const result = this.admitTurn(sessionId, input, model);
-    this.pendingSends.set(sessionId, { model, effort, text: input.text, attachmentsKey, result });
+    this.pendingSends.set(sessionId, { model, effort, fast, text: input.text, attachmentsKey, result });
     try {
       return await result;
     } finally {
@@ -249,19 +259,22 @@ class Engine implements Session, SessionCallHost {
 
   /**
    * Whether a new send is the same continuation of a turn already waiting in
-   * bounded recovery: the exact original text with an identical attachment set,
-   * or a plain attachment-free manual continue (`继续` / `continue`) on the same
-   * selected model. Anything else — different text, a different attachment set
-   * — is a genuinely new message and must not be swallowed.
+   * bounded recovery: the exact original text with an identical attachment set
+   * and Fast preference, or a plain attachment-free manual continue (`继续` /
+   * `continue`) on the same selected model. Anything else — different text, a
+   * different attachment set, a changed Fast preference — is a genuinely new
+   * message and must not be swallowed.
    */
   private isWaitingResubmission(
     sessionId: string,
     waiting: RecoveryWait,
     text: string,
     attachmentsKey: string,
+    fast: boolean | undefined,
   ): boolean {
     const ongoing = this.sessions.get(sessionId)?.turns.get(waiting.turn);
     if (ongoing === undefined) return false;
+    if (ongoing.model.fast !== fast) return false;
     if (text === ongoing.userText && attachmentsKey === waiting.attachmentsKey) return true;
     return attachmentsKey === '' && isPlainContinue(text);
   }
@@ -275,7 +288,12 @@ class Engine implements Session, SessionCallHost {
     sessionId: string,
     input: {
       text: string;
-      model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+      model: {
+        provider: string;
+        model: string;
+        reasoningEffort: ReasoningEffort;
+        fast?: boolean;
+      };
       attachments?: AttachmentInput[];
     },
     publicId: string,
@@ -292,6 +310,11 @@ class Engine implements Session, SessionCallHost {
       throw new Error(
         `reasoningEffort '${effort}' is not supported by ${publicId}; expected one of ${metadata.reasoningEfforts.join(', ')}`,
       );
+    }
+    // Fast is admitted only for a route that declares a verified Fast mode; the
+    // request must fail before the turn starts rather than silently ignoring it.
+    if (input.model.fast === true && !declaresFast(this.host.resolveInferenceProvider(input.model.provider), input.model.model)) {
+      throw new Error(`Fast is not supported by ${publicId}`);
     }
 
     // A deletion that completed while this send was waiting on the session lock
@@ -898,7 +921,7 @@ class Engine implements Session, SessionCallHost {
     turn: number,
     userText: string,
     attachmentsKey: string,
-    model: { provider: string; model: string; reasoningEffort: ReasoningEffort },
+    model: TurnRuntime['model'],
     publicId: string,
     contextWindow: number | undefined,
   ): TurnRuntime {
@@ -994,7 +1017,13 @@ class Engine implements Session, SessionCallHost {
     extra: {
       spanId?: string;
       parent?: string;
-      reason?: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+      reason?: {
+        provider: string;
+        model: string;
+        reasoningEffort: ReasoningEffort;
+        /** Explicit Fast preference forwarded to the main reasoning call. */
+        fast?: boolean;
+      };
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
@@ -1110,6 +1139,17 @@ function assertStorageSegment(value: string): void {
   if (value === '.' || value === '..' || value === '' || /[/\\\u0000]/u.test(value)) {
     throw new Error(`invalid storage segment: ${value}`);
   }
+}
+
+/**
+ * True only when the resolved model declares a verified Fast mode. An unknown
+ * provider or model is not Fast-capable, so a requested Fast is refused instead
+ * of being silently dropped.
+ */
+function declaresFast(provider: ProviderDefinition | undefined, modelId: string): boolean {
+  if (provider === undefined) return false;
+  const resolved = provider.modelAliases?.[modelId] ?? modelId;
+  return provider.models.find((entry) => entry.id === resolved)?.supportsFast === true;
 }
 
 /** The main model (`provider/model`) of the latest turn before `turn`, if any. */

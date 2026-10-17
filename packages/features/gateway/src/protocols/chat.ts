@@ -139,6 +139,14 @@ export const chatProtocol: GatewayProtocolModule = {
     body.stream_options = { ...object(body.stream_options), include_usage: true };
   },
 
+  readFast(body) {
+    // Official Chat tiers: priority and fast mean on, default means off.
+    // Any other tier is unrelated to Fast and is forwarded unchanged.
+    if (body.service_tier === 'priority' || body.service_tier === 'fast') return true;
+    if (body.service_tier === 'default') return false;
+    return undefined;
+  },
+
   stripReasoningFields,
 
   createObserver(): ResponseObserver {

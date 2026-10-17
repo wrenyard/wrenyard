@@ -27,17 +27,27 @@ export function retainReasoningEffort(current: unknown, supported: readonly Reas
 export interface FirstRequest {
   model: string;
   effort: ReasoningEffort;
-  /** Fast mode is remembered only when it was actually enabled. */
+  /** The Fast value used for the first request; `false` is a real choice. */
   fast?: boolean;
 }
 
 const FIRST_REQUEST_KEY = 'session:first-request';
 
-export function readFirstRequest(): FirstRequest | undefined {
+/**
+ * Read the previous session's first request. `supportsFast` decides whether the
+ * remembered model still declares the Fast capability; a record for a model
+ * without it carries no Fast preference, so a stale `true` is never restored.
+ */
+export function readFirstRequest(
+  supportsFast?: (modelId: string) => boolean,
+): FirstRequest | undefined {
   try {
     const value = JSON.parse(localStorage.getItem(FIRST_REQUEST_KEY) ?? '') as Partial<FirstRequest> | null;
     if (typeof value?.model !== 'string' || value.model === '' || !isReasoningEffort(value.effort)) return undefined;
-    return { model: value.model, effort: value.effort, ...(value.fast === true ? { fast: true } : {}) };
+    const fast = typeof value.fast === 'boolean' && (supportsFast === undefined || supportsFast(value.model))
+      ? { fast: value.fast }
+      : {};
+    return { model: value.model, effort: value.effort, ...fast };
   } catch {
     return undefined;
   }

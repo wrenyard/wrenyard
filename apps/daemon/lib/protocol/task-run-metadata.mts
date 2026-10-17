@@ -101,6 +101,7 @@ export const taskResolvedDispatchSchema = {
     mode: { enum: ['native', 'gateway'] },
     protocol: { type: 'string' },
     reasoningEffort: { enum: REASONING_EFFORTS },
+    fast: { type: 'boolean' },
     clientReasoningEffort: { type: 'string' },
     auto_routing: taskAutoRoutingDecisionSchema,
     speed: {

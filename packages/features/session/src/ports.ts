@@ -109,6 +109,8 @@ export interface SessionHost {
     worktree?: string;
     input: unknown;
     ctx?: Record<string, unknown>;
+    /** Explicit Fast preference for the main reasoning path; absent means no preference. */
+    fast?: boolean;
   }): Promise<{ taskRunId: string }>;
   waitTaskRun(taskRunId: string, signal: AbortSignal): Promise<{
     status: string;
@@ -176,7 +178,13 @@ export interface Session {
     input: {
       text: string;
       /** Explicit public reasoning level; required for every turn. */
-      model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+      model: {
+        provider: string;
+        model: string;
+        reasoningEffort: ReasoningEffort;
+        /** Explicit Fast preference: true on, false off, absent no preference. */
+        fast?: boolean;
+      };
       /** Optional user attachments imported before the turn starts. */
       attachments?: AttachmentInput[];
     },
@@ -313,7 +321,13 @@ export interface CallRunRequest {
   messages: readonly ModelMessage[];
   layers: Record<string, number>;
   /** Required for the `reason` role; ignored for every other role. */
-  reason?: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+  reason?: {
+    provider: string;
+    model: string;
+    reasoningEffort: ReasoningEffort;
+    /** Explicit Fast preference for the main reasoning call. */
+    fast?: boolean;
+  };
   /** Output-token cap forwarded to the wire `max_tokens` when the driver supports it. */
   maxTokens?: number;
   /** Tools declared on this call; forwarded to the driver for every role. */
@@ -418,7 +432,13 @@ export interface SessionCallHost {
       spanId?: string;
       /** Span parent; defaults to the step id for `reason`, the turn id otherwise. */
       parent?: string;
-      reason?: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+      reason?: {
+        provider: string;
+        model: string;
+        reasoningEffort: ReasoningEffort;
+        /** Explicit Fast preference forwarded to the main reasoning call. */
+        fast?: boolean;
+      };
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;

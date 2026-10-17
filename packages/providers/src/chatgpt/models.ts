@@ -8,6 +8,10 @@ export const definition = defineProvider({
   // contract and the missing Content-Type repair on its SSE response.
   beforeRequest: chatGptBeforeRequest,
   afterResponse: chatGptAfterResponse,
+  // Fast is intentionally not declared here: honoring `service_tier` on the
+  // subscription endpoint is not verified, so every ChatGPT subscription
+  // offering stays non-Fast and a Fast request must fail before any upstream
+  // call. The pinned Responses request contract above is unchanged.
   models: [
     { canonical: 'gpt-6-astra', overrides: { contextWindow: 1_050_000, reasoningEfforts: REASONING_FULL } },
     // Client eligibility is not pinned here; it comes from the installed Codex

@@ -23,7 +23,10 @@ export async function launchCursor(request: AgentRequest, env: NodeJS.ProcessEnv
     const status = await findExecutable(['cursor-agent'], { env });
     if (status.installation.state !== 'installed')
         throw new Error('cursor is not installed');
-    const model = request.fast === true ? `${request.model}[fast=true]` : request.model;
+    // The request already carries the provider-resolved upstream model,
+    // including any Fast model mapping. The client never applies its own Fast
+    // transformation.
+    const model = request.model;
     const args = ['--force', '--sandbox', 'disabled', '-p', '--output-format', 'stream-json', '--stream-partial-output', '--trust', '--model', model];
     if (request.resumeSessionId)
         args.push('--resume', request.resumeSessionId);

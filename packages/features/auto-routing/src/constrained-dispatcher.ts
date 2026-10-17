@@ -47,8 +47,11 @@ export class ConstrainedDispatcher {
         // reasoning effort: reasoning effort is a selected runtime parameter
         // that adapts through the Catalog, so it must never change which
         // candidates are eligible or how they rank. The expected level is
-        // applied only to the chosen resolution below.
-        plan = this.catalog.resolveRun(candidate.client, candidate.provider, candidate.model);
+        // applied only to the chosen resolution below. Fast is different: the
+        // candidate's real transport must materialize it, so the requested
+        // state is resolved here and disqualifies routes that cannot inject it
+        // before ranking.
+        plan = this.catalog.resolveRun(candidate.client, candidate.provider, candidate.model, undefined, requirements.fast);
       }
       catch {
         continue;
@@ -224,7 +227,7 @@ export class ConstrainedDispatcher {
     // eligibility and ranking are already fixed: it adapts the selected target's
     // runtime parameters and can never change which candidate wins.
     const winner = collapsed[0];
-    if (requirements.expectedReasoningEffort !== undefined || requirements.fast === true) {
+    if (requirements.expectedReasoningEffort !== undefined || requirements.fast !== undefined) {
       winner.plan = this.catalog.resolveRun(winner.plan.client, winner.plan.provider, winner.plan.model, requirements.expectedReasoningEffort, requirements.fast);
     }
     return { ok: true, selected: winner, considered };

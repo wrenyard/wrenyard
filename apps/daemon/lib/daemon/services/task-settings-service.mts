@@ -892,6 +892,7 @@ export class TaskSettingsService {
         ...(effective.dispatch.requiresWebSearch === true ? { requiresWebSearch: true } : {}),
         ...(effective.dispatch.intelligenceMin !== undefined ? { intelligenceMin: effective.dispatch.intelligenceMin } : {}),
         ...(effective.dispatch.expectedReasoningEffort !== undefined ? { expectedReasoningEffort: effective.dispatch.expectedReasoningEffort } : {}),
+        ...(effective.dispatch.fast !== undefined ? { fast: effective.dispatch.fast } : {}),
       })
       if (!explicitResolution.ok) {
         // Explicit mode bypasses automatic ranking and never falls back.

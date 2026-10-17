@@ -107,7 +107,8 @@ export interface ComposerProps {
   /** Changes on session switch (or `'draft'`), resetting the model. */
   sessionKey: string;
   disabled?: boolean;
-  onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, fast: boolean, attachments: DraftAttachment[]): void | Promise<void>;
+  /** `undefined` means the selected model has no Fast capability, so no Fast field is sent. */
+  onSend(text: string, model: ModelEntry, reasoningEffort: ReasoningEffort, fast: boolean | undefined, attachments: DraftAttachment[]): void | Promise<void>;
   injectedText?: { text: string; attachments?: DraftAttachment[]; nonce: number };
   /** Bumped to request an explicit input focus (e.g. the new-conversation shortcut). */
   focusRequest?: number;
@@ -321,7 +322,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     // never replaced by another model. Its effort is that model's own remembered
     // level when it has one, else the recorded level when the route still
     // supports it, else the level as recorded.
-    const first = readFirstRequest();
+    const first = readFirstRequest((modelId) => models.find((entry) => entry.publicId === modelId)?.supportsFast === true);
     if (first !== undefined) {
       const supported = models.find((entry) => entry.publicId === first.model)?.reasoningEfforts ?? [];
       setModelId(first.model);
@@ -329,7 +330,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         resolveModelEffort(memory, first.model, supported)
         ?? (supported.length > 0 ? retainReasoningEffort(first.effort, supported) : first.effort),
       );
-      setFast(first.fast === true && models.find((entry) => entry.publicId === first.model)?.supportsFast === true);
+      setFast(first.fast === true);
       return;
     }
     // No remembered selection: start at the first selectable model, which may
@@ -356,6 +357,12 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // The catalog entry behind the current selection, when a filter has not
   // removed it, and whether that selection is usable right now.
   const selected = models.find((entry) => entry.publicId === modelId);
+  // A model (or a refreshed endpoint list) that does not declare Fast drops any
+  // stale local Fast choice instead of carrying it to an unsupported route. An
+  // as-yet unresolved selection is not evidence, so it never clears the choice.
+  useEffect(() => {
+    if (selected !== undefined && selected.supportsFast !== true) setFast(false);
+  }, [selected]);
   const selectionUsable = selected !== undefined && isRouteCallable(selected);
   const selectionUnusable = modelId !== '' && !selectionUsable;
 
@@ -445,7 +452,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     // Call `onSend` inside the chain so a synchronous throw becomes a
     // rejection and the latch is always released.
     void Promise.resolve()
-      .then(() => onSend(body, selected, effort, fast && selected.supportsFast === true, submitted))
+      .then(() => onSend(body, selected, effort, selected.supportsFast === true ? fast : undefined, submitted))
       .then(
         () => {
           // Clear the sent draft (and only the sent one) independently for text
@@ -473,7 +480,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
             void getSessionBridge().discardDraftAttachments(releasable).catch(() => undefined);
           }
           // Only a session's first request is remembered for the next new session.
-          if (firstInSession) writeFirstRequest({ model: selected.publicId, effort, ...(fast && selected.supportsFast === true ? { fast: true } : {}) });
+          if (firstInSession) writeFirstRequest({ model: selected.publicId, effort, ...(selected.supportsFast === true ? { fast } : {}) });
         },
         () => {
           // A rejected send keeps the text and every attachment so the user can retry.

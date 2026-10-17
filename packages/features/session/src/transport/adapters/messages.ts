@@ -68,6 +68,9 @@ function buildMessagesBody(request: ModelRequest): Record<string, unknown> {
     stream: true,
   };
   if (systemText.length > 0) body.system = systemText.join('\n\n');
+  // An explicit Fast preference maps onto the official speed. An absent
+  // preference leaves the body untouched, including thinking and effort fields.
+  if (request.fast !== undefined) body.speed = request.fast ? 'fast' : 'standard';
   if (request.tools !== undefined && request.tools.length > 0) {
     body.tools = request.tools.map(messagesTool);
     // An unspecified choice defaults to `auto`; the supported internal forms map

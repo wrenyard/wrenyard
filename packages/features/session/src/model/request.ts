@@ -84,6 +84,8 @@ export interface ReasonSelection {
   model: string;
   /** Explicit public reasoning level; required for the `reason` role. */
   reasoningEffort: ReasoningEffort;
+  /** Explicit Fast preference: true on, false off, absent no preference. */
+  fast?: boolean;
 }
 
 /** Structured failure fact recorded on a failed span and handed to reply. */
@@ -989,6 +991,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             model,
             messages,
             reasoningEffort: actualReasoningEffort,
+            // The main reasoning path carries the user's explicit Fast
+            // preference, including an explicit false; an absent preference
+            // sends no field at all. Auxiliary requests never set it.
+            ...(selection.fast === undefined ? {} : { fast: selection.fast }),
             attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
             ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
             ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),

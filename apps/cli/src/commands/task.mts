@@ -104,7 +104,7 @@ export async function handleTaskDescribe(args: string[]): Promise<number> {
 
 export async function handleTaskRun(args: string[]): Promise<number> {
   if (isHelpRequest(args)) {
-    console.log('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--settings-json json] [--json] <json-input>')
+    console.log('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--fast | --no-fast] [--settings-json json] [--json] <json-input>')
     return 0
   }
 
@@ -114,6 +114,8 @@ export async function handleTaskRun(args: string[]): Promise<number> {
       config: { type: 'string' },
       project: { type: 'string', short: 'p' },
       worktree: { type: 'string' },
+      fast: { type: 'boolean' },
+      'no-fast': { type: 'boolean' },
       'settings-json': { type: 'string' },
       json: { type: 'boolean' },
     },
@@ -124,13 +126,19 @@ export async function handleTaskRun(args: string[]): Promise<number> {
   const project = typeof values.project === 'string' ? values.project : undefined
   const worktree = typeof values.worktree === 'string' ? values.worktree : undefined
   if (!taskId || !project || positionals.length !== 2) {
-    console.error('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--settings-json json] [--json] <json-input>')
+    console.error('Usage: wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--fast | --no-fast] [--settings-json json] [--json] <json-input>')
     if (taskId && project && positionals.length < 2) await printTaskInputRequiredHint(taskId, project, values.config)
     return 1
   }
 
+  if (values.fast === true && values['no-fast'] === true) {
+    console.error('--fast and --no-fast cannot be used together')
+    return 1
+  }
+  const fast = values.fast === true ? true : values['no-fast'] === true ? false : undefined
+
   const input = parseJsonInput(positionals[1])
-  const invocationSettings = parseOptionalInvocationSettings(values['settings-json'])
+  const invocationSettings = withFastSelection(parseOptionalInvocationSettings(values['settings-json']), fast)
   const client = await connectConfiguredForemanClient(values.config)
   try {
     const accepted = servicePayload(await client.task.run.create({
@@ -418,4 +426,20 @@ function parseOptionalInvocationSettings(raw: string | undefined): TaskSettingsL
     throw new Error('--settings-json must be a JSON object')
   }
   return value as TaskSettingsLayer
+}
+
+/**
+ * Merge an explicit --fast/--no-fast selection into the invocation settings
+ * automatic layer. `undefined` leaves the parsed settings untouched; an
+ * explicit false is preserved so it reaches the resolver as an off value.
+ */
+function withFastSelection(
+  settings: TaskSettingsLayer | undefined,
+  fast: boolean | undefined,
+): TaskSettingsLayer | undefined {
+  if (fast === undefined) return settings
+  return {
+    ...(settings ?? {}),
+    automatic: { ...(settings?.automatic ?? {}), fast },
+  }
 }

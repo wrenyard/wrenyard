@@ -28,6 +28,7 @@ export function bootstrapSchema(database: ForemanDatabase): void {
   reconcileTaskRunAttemptDispatchCacheWriteColumn(database)
   reconcileTaskRunAttemptDispatchAutoRoutingColumn(database)
   reconcileTaskRunAttemptDispatchReasoningEffortColumn(database)
+  reconcileTaskRunAttemptDispatchFastColumn(database)
   recreateTaskIndexes(database)
   recreateWorkflowJournalIndexes(database)
   recreateWorkflowStepSnapshotIndexes(database)
@@ -622,6 +623,7 @@ const TASK_RUN_ATTEMPT_DISPATCH_TABLE_SQL = `CREATE TABLE task_run_attempt_dispa
   speed_degradation_reason TEXT,
   intelligence        TEXT,
   reasoning_effort    TEXT,
+  fast                INTEGER,
   reference_pricing_input     REAL,
   reference_pricing_output    REAL,
   reference_pricing_cache     REAL,
@@ -1247,6 +1249,22 @@ function reconcileTaskRunAttemptDispatchReasoningEffortColumn(database: ForemanD
     .map((column) => column.name))
   if (!columns.has('reasoning_effort')) {
     database.prepare('ALTER TABLE task_run_attempt_dispatch ADD COLUMN reasoning_effort TEXT').run()
+  }
+}
+
+/**
+ * Idempotent migration adding the nullable fast INTEGER column to
+ * task_run_attempt_dispatch so each attempt durably carries the requested Fast
+ * preference (1 = on, 0 = off). Only adds the column when absent; legacy rows
+ * keep NULL and remain readable — an absent preference is never invented.
+ */
+function reconcileTaskRunAttemptDispatchFastColumn(database: ForemanDatabase): void {
+  const columns = new Set(database
+    .prepare<[], { name: string }>('PRAGMA table_info(task_run_attempt_dispatch)')
+    .all()
+    .map((column) => column.name))
+  if (!columns.has('fast')) {
+    database.prepare('ALTER TABLE task_run_attempt_dispatch ADD COLUMN fast INTEGER').run()
   }
 }
 

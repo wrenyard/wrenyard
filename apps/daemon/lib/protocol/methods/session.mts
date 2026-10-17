@@ -34,7 +34,13 @@ export interface SessionCreateResult { sessionId: string }
 export interface SessionSendParams {
   sessionId: string
   text: string
-  model: { provider: string; model: string; reasoningEffort: ReasoningEffort }
+  model: {
+    provider: string
+    model: string
+    reasoningEffort: ReasoningEffort
+    /** Explicit Fast preference: true on, false off, absent no preference. */
+    fast?: boolean
+  }
   /** Optional user attachments, bounded to the session media batch limit. */
   attachments?: AttachmentInput[]
 }

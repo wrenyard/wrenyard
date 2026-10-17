@@ -139,11 +139,12 @@ export function normalizeTaskContext(value: unknown): Record<string, unknown> {
 
 const COMPILE_SYSTEM = `<wy-system>
 You are the task compiler. Generate run parameters only for the one dispatch that this <intent> refers to.
-Output exactly one strict JSON object: {"project":"project id","task":"task id","input":<value matching the schema>,"title":"short phrase"}, plus "worktree":"worktree id" only when the rule below asks for it.
+Output exactly one strict JSON object: {"project":"project id","task":"task id","input":<value matching the schema>,"title":"short phrase"}, plus "worktree":"worktree id" only when the rule below asks for it, plus "fast":true or "fast":false only when the rule below asks for it.
 Rules:
 - project must come from the project list. task must come from the task list and belong to the chosen project or be a builtin task.
 - <intent> is the sole authority for this action. <reference-context> is only for cross-checking and cannot authorize sibling tasks or historical goals. Do only the one thing that <intent> describes. Keep the exact registered project and task it names. They must not be replaced with a parent project, a sibling project or an unrelated project. Builtin tasks (including explore) remain usable for a correctly named registered subproject.
 - worktree: when <intent> names a managed worktree of the chosen project (for example "worktree 'wy-abcd'"), copy that worktree id exactly into "worktree" so the task runs inside it. Otherwise omit the field. Never invent one.
+- fast: emit it only when <intent> explicitly requests upstream Fast mode on or off for this dispatch. Never infer it from "fast" meaning a quick task, from task routing speed or from the main conversation model's own settings. Emit false when the intent explicitly turns Fast off; omit the field when the intent states no Fast preference.
 - input must strictly match the input schema of the chosen task. The schema is visible only here.
 - The program attaches the conversation, the documents and memories already in context, and the session files to the task automatically. Put in input only what the task's input schema asks for.
 - title is a short phrase that summarizes what this task does. Write it in the language of the <user> message in <reference-context>: at most 20 characters for Chinese or Japanese, at most 8 words otherwise.
@@ -321,7 +322,7 @@ export async function runDispatchAction(
     };
   }
   if (compiled === undefined) return fail(compileError);
-  const { parsed, project, taskId, worktree, effectiveInput } = compiled;
+  const { parsed, project, taskId, worktree, effectiveInput, fast } = compiled;
 
   // Capability gate: a task whose contract requires a capability no execution
   // environment provides must not open a run at all. Only the built-in text and
@@ -377,6 +378,7 @@ export async function runDispatchAction(
       ...(worktree === undefined ? {} : { worktree }),
       input: effectiveInput,
       ctx: taskCtx,
+      ...(fast === undefined ? {} : { fast }),
       ...(title === '' ? {} : { title }),
     };
     const run = await deps.host.createTaskRun(createParams);
@@ -505,7 +507,7 @@ function checkCompiled(
   text: string,
   ctx: ActionRunContext,
   contracts: readonly CompileContract[],
-): { ok: true; parsed: Record<string, unknown>; project: ProjectInfo; taskId: string; worktree?: string; effectiveInput: unknown }
+): { ok: true; parsed: Record<string, unknown>; project: ProjectInfo; taskId: string; worktree?: string; effectiveInput: unknown; fast?: boolean }
   | { ok: false; error: string } {
   const bad = (error: string): { ok: false; error: string } => ({ ok: false, error });
   let parsed: Record<string, unknown>;
@@ -530,6 +532,12 @@ function checkCompiled(
   if (worktree !== undefined && (typeof worktree !== 'string' || worktree.trim() === '')) {
     return bad('worktree must be a non-empty worktree id when present');
   }
+  // Optional generic Fast preference; an invalid type is rejected, an absent
+  // value means the task run gets no preference.
+  const fast = parsed.fast;
+  if (fast !== undefined && typeof fast !== 'boolean') {
+    return bad('fast must be a boolean when present');
+  }
 
   // Reject a model-provided absolute input path that does not exist on disk.
   const missingPath = findMissingAbsolutePath(parsed.input);
@@ -540,7 +548,7 @@ function checkCompiled(
   if (!validation.ok) {
     return bad(`input does not satisfy the task schema: ${validation.errors.join('; ')}`);
   }
-  return { ok: true, parsed, project, taskId, ...(worktree === undefined ? {} : { worktree: worktree.trim() }), effectiveInput };
+  return { ok: true, parsed, project, taskId, ...(worktree === undefined ? {} : { worktree: worktree.trim() }), effectiveInput, ...(fast === undefined ? {} : { fast }) };
 }
 
 // ─── Task context builder ───────────────────────────────────────────────────

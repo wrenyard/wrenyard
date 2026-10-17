@@ -157,7 +157,11 @@ export interface ModelRequest {
   messages: readonly Message[];
   /** Required public reasoning level; forwarded as a Gateway request header. */
   reasoningEffort: ReasoningEffort;
-  /** Fast mode; forwarded as a Gateway request header when true. */
+  /**
+   * Explicit Fast preference: true requests Fast on, false requests Fast off,
+   * and `undefined` means no preference at all. Optional on purpose, so an
+   * absent preference stays distinguishable from an explicit off.
+   */
   fast?: boolean;
   /** Tools the model may call. */
   tools?: readonly ToolSpec[];

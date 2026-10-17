@@ -28,7 +28,13 @@ export interface TurnRuntime {
   userText: string;
   /** Stable identity of this turn's attachment inputs, for the recovery dedup. */
   attachmentsKey: string;
-  model: { provider: string; model: string; reasoningEffort: ReasoningEffort };
+  model: {
+    provider: string;
+    model: string;
+    reasoningEffort: ReasoningEffort;
+    /** Explicit Fast preference for this turn; absent means no preference. */
+    fast?: boolean;
+  };
   publicId: string;
   contextWindow?: number;
   /** True when this turn carried images the reasoning model cannot see. */

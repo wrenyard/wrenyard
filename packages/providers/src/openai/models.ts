@@ -4,10 +4,17 @@ import { defineProvider, REASONING_FULL, effortLadder } from '../base/model-defa
 export const definition = defineProvider({
   id: 'openai', displayName: 'OpenAI', credentialResolver: 'managed', defaultModel: 'gpt-6.1-sol',
   models: [
-    { canonical: 'gpt-6-astra', overrides: { reasoningEfforts: REASONING_FULL } },
-    { canonical: 'gpt-6.1-sol', overrides: { reasoningEfforts: REASONING_FULL } },
-    { canonical: 'gpt-6-luna', overrides: { reasoningEfforts: REASONING_FULL } },
+    { canonical: 'gpt-6-astra', overrides: { reasoningEfforts: REASONING_FULL, supportsFast: true } },
+    { canonical: 'gpt-6.1-sol', overrides: { reasoningEfforts: REASONING_FULL, supportsFast: true } },
+    { canonical: 'gpt-6-luna', overrides: { reasoningEfforts: REASONING_FULL, supportsFast: true } },
   ],
+  // The official service tier is the only Fast surface: priority means Fast on
+  // and default means explicitly off, on both OpenAI entry protocols.
+  fastMapping: {
+    request: (_modelId, fast, protocol) => protocol === 'openai_chat' || protocol === 'openai_responses'
+      ? { service_tier: fast ? 'priority' : 'default' }
+      : {},
+  },
   reasoningEffortMappings: {
     'gpt-6-astra': { codex: effortLadder(REASONING_FULL) },
     'gpt-6.1-sol': { codex: effortLadder(REASONING_FULL) },

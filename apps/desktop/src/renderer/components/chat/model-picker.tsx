@@ -383,7 +383,7 @@ export function ModelPicker({ models, value, effort, onChange, fast, onFastChang
                               <span>Fast</span>
                               {isCurrent && fast && (
                                 <span className="text-xs text-muted-foreground">
-                                  Fast 使用 OpenAI priority 服务档，可能更快消耗订阅额度
+                                  Fast 可能消耗更多额度或按更高单价计费，并需要上游已开通该能力
                                 </span>
                               )}
                             </span>

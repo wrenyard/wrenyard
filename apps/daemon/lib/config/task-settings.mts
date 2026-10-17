@@ -89,6 +89,7 @@ export const TASK_DISPATCH_FIELDS = [
   'excludeProviderIds',
   'requiredCapabilities',
   'requiresWebSearch',
+  'fast',
   'expectedReasoningEffort',
 ] as const
 
@@ -108,6 +109,7 @@ const DISPATCH_FIELD_ALIASES: Record<TaskDispatchField, readonly string[]> = {
   excludeProviderIds: ['excludeProviderIds', 'exclude_provider_ids'],
   requiredCapabilities: ['requiredCapabilities', 'required_capabilities'],
   requiresWebSearch: ['requiresWebSearch', 'requires_web_search'],
+  fast: ['fast'],
   expectedReasoningEffort: ['expectedReasoningEffort', 'expected_reasoning_effort'],
 }
 
@@ -132,6 +134,7 @@ const STRING_LIST_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
 
 const BOOLEAN_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
   'requiresWebSearch',
+  'fast',
 ])
 
 const REASONING_EFFORT_FIELDS: ReadonlySet<TaskDispatchField> = new Set(['expectedReasoningEffort'])

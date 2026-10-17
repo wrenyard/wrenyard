@@ -38,6 +38,18 @@ export const definition = defineProvider({
     'claude-fable-5-1': { cursor: suffixMappings('claude-fable-5-1-thinking', FIVE_LEVELS) },
     'grok-4.7': { cursor: suffixMappings('grok-4.7', REASONING_UP_TO_XHIGH) },
   },
+  // Cursor's documented bracket override combines the base Grok model with the
+  // unchanged effort and an explicit Fast state. Grok Fast entitlement and the
+  // actual upstream effect are unverified.
+  fastMapping: {
+    model: (resolvedModel, modelId, fast) => {
+      const prefix = `${modelId}-`;
+      const effort = resolvedModel.startsWith(prefix) ? resolvedModel.slice(prefix.length) : undefined;
+      return effort === undefined
+        ? `${modelId}[fast=${fast}]`
+        : `${modelId}[effort=${effort},fast=${fast}]`;
+    },
+  },
   convertReasoningEffort: () => { throw new Error('Cursor only supports native model substitutions'); },
   description: 'Cursor 提供 Composer、Grok 以及 GPT、Claude、Muse 与 Gemini 等多厂商模型服务。',
   setupHint: '请在 Cursor Desktop 中完成登录，返回啾啾工坊后刷新状态。',

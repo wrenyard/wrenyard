@@ -281,12 +281,12 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
               execution_id, task_run_id, requested_agent_runtime,
               profile, client, provider, model, model_id, mode, protocol,
               speed_effective_tps, speed_source, speed_sample_count, speed_checked_at,
-              speed_expected_tps_met, speed_degradation_reason, intelligence, reasoning_effort,
+              speed_expected_tps_met, speed_degradation_reason, intelligence, reasoning_effort, fast,
               reference_pricing_input, reference_pricing_output, reference_pricing_cache,
               reference_pricing_cache_write, reference_pricing_source, reference_pricing_checked_at,
               auto_routing,
               created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             executionId,
             opts.taskId,
             snap.requested_agent_runtime ?? null,
@@ -305,6 +305,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             snap.speed.degradation_reason ?? null,
             snap.intelligence ?? null,
             snap.reasoningEffort ?? null,
+            snap.fast === undefined ? null : (snap.fast ? 1 : 0),
             snap.reference_pricing.input_usd_per_million ?? null,
             snap.reference_pricing.output_usd_per_million ?? null,
             snap.reference_pricing.cached_input_usd_per_million ?? null,
@@ -705,7 +706,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         cwd: opts.cwd,
         ...(opts.resume === undefined ? {} : { resumeSessionId: opts.resume }),
         reasoningEffort: plan.reasoningEffort,
-        ...(plan.fast === true ? { fast: true } : {}),
+        ...(plan.fast === undefined ? {} : { fast: plan.fast }),
         ...(plan.clientReasoningEffort === undefined ? {} : { clientReasoningEffort: plan.clientReasoningEffort }),
         ...(plan.clientReasoningEnvironment === undefined ? {} : { clientReasoningEnvironment: plan.clientReasoningEnvironment }),
       };
@@ -1618,7 +1619,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
    */
   private buildReasoningEffortPlanEnv(executionId: string, fast?: boolean): ReasoningEffortPlanEnvOverride | undefined {
     const row = this.get<AttemptReasoningEffortRow>(
-      `SELECT reasoning_effort, provider, model, profile, mode, requested_agent_runtime, client
+      `SELECT reasoning_effort, fast, provider, model, profile, mode, requested_agent_runtime, client
        FROM task_run_attempt_dispatch WHERE execution_id = ?`,
       executionId,
     )
@@ -1627,7 +1628,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     if ((row.mode !== 'native' && row.mode !== 'gateway') || !row.client || !row.provider || !row.model || !row.profile) {
       throw new Error('Persisted reasoning-effort dispatch is incomplete')
     }
-    const plan = this.catalog.resolveRun(row.client, row.provider, row.model, reasoningEffort, fast)
+    // A queued execution promoted later has no in-memory snapshot, so the
+    // persisted Fast preference is authoritative unless this launch carries one.
+    const effectiveFast = fast !== undefined ? fast : toPersistedFast(row.fast)
+    const plan = this.catalog.resolveRun(row.client, row.provider, row.model, reasoningEffort, effectiveFast)
     return { profile: row.profile, plan }
   }
 
@@ -1736,12 +1740,19 @@ interface ReasoningEffortPlanEnvOverride {
 
 interface AttemptReasoningEffortRow {
   reasoning_effort: string | null
+  fast: number | null
   provider: string | null
   model: string | null
   profile: string | null
   mode: string | null
   requested_agent_runtime: string | null
   client: string | null
+}
+
+function toPersistedFast(raw: number | null): boolean | undefined {
+  if (raw === 1) return true
+  if (raw === 0) return false
+  return undefined
 }
 
 function toPersistedReasoningEffort(raw: string | null): ReasoningEffort | undefined {

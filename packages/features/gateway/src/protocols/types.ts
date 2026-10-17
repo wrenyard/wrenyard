@@ -82,6 +82,13 @@ export interface GatewayProtocolModule {
   normalizeResponseModel(payload: unknown, toPublic: (upstreamModel: string) => string): void;
   /** Protocol-fixed request fields, independent of any supplier. */
   prepareRequest(body: Record<string, unknown>): void;
+  /**
+   * The requested Fast state carried by this protocol's own official body
+   * fields: `true` means on, `false` means explicitly off. Any unrelated
+   * official value, or an absent field, yields `undefined` so the request is
+   * forwarded unmodified.
+   */
+  readFast(body: Record<string, unknown>): boolean | undefined;
   /** Remove every raw reasoning spelling from a request body. */
   stripReasoningFields(body: Record<string, unknown>): void;
   createObserver(): ResponseObserver;

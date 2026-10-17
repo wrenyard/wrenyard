@@ -289,11 +289,14 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         reasoningEffort = normalized;
       }
 
-      // Fast mode arrives in a request header, never as a raw body field. It is
-      // a dimension separate from reasoning effort; it is validated against this
-      // route's own verified Fast capability here, before any upstream call.
-      const fastRequested = request.headers[GATEWAY_HEADERS.fast] === 'true';
-      if (fastRequested && resolved.model.supportsFast !== true) {
+      // Fast mode is carried only by the entry protocol's own official body
+      // fields; there is no private Fast header. It is a dimension separate
+      // from reasoning effort and is validated against this route's verified
+      // capability here, before any upstream call. An unrelated official value
+      // yields no Fast preference and is forwarded unchanged.
+      const fastRequested = module.readFast(body);
+      if (fastRequested === true
+        && (resolved.model.supportsFast !== true || resolved.provider.fastMapping?.request === undefined)) {
         return reject(400, `Model ${resolved.model.id} does not support Fast mode`, target);
       }
 
@@ -317,11 +320,17 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         applyReasoningFields(body, fields);
       }
 
-      // Fast is a validated capability only: this route's verified support was
-      // checked above, and Fast never alters the resolved reasoning effort. No
-      // provider hook merges additional upstream fields, so no Fast parameters
-      // are recorded on the completed event.
+      // The provider materializes Fast with its own official protocol fields,
+      // merged after the reasoning fields so the resolved effort is never
+      // changed. An explicit false writes the protocol's own off value.
       let fastParameters: Record<string, unknown> | undefined;
+      if (fastRequested !== undefined && resolved.model.supportsFast === true) {
+        const fields = resolved.provider.fastMapping?.request?.(resolved.model.id, fastRequested, protocol);
+        if (fields !== undefined) {
+          fastParameters = structuredClone(fields);
+          Object.assign(body, fields);
+        }
+      }
 
       // Protocol-fixed request fields (e.g. Chat streaming usage reporting).
       module.prepareRequest(body);
@@ -397,7 +406,7 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
         ...target,
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
         ...(reasoningParameters === undefined ? {} : { reasoningParameters }),
-        ...(fastRequested ? { fast: true } : {}),
+        ...(fastRequested === undefined ? {} : { fast: fastRequested }),
         ...(fastParameters === undefined ? {} : { fastParameters }),
         ...(attemptId === undefined ? {} : { attemptId }),
       };

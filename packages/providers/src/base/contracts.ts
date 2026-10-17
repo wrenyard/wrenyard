@@ -203,7 +203,8 @@ export interface DispatchPlan {
   // Upstream model substitution produced ONLY by an explicit effort mapping.
   // The public model id is always propagated unchanged.
   upstreamModel?: string;
-  // Fast mode requested for this plan.
+  // Fast mode requested for this plan. `true` and an explicit `false` are both
+  // preserved; absence means no Fast preference at all.
   fast?: boolean;
 }
 
@@ -250,6 +251,29 @@ export interface ReasoningEffortMapping {
 export type ProviderReasoningEffortMappings = Readonly<
   Record<string, Readonly<Record<string, Partial<Record<ReasoningEffort, ReasoningEffortMapping>>>>>
 >;
+
+/**
+ * Provider-owned materialization of Fast mode. Declared only when the provider
+ * has a verified Fast capability for at least one exact route. Fast is always a
+ * dimension separate from reasoning effort: a native mapping transforms the
+ * model this runtime already resolved (including any effort substitution)
+ * without changing the effort, and a gateway mapping adds only the official
+ * entry-protocol fields for the requested state.
+ */
+export interface ProviderFastMapping {
+  /**
+   * Native transport: the exact upstream model for the requested Fast state,
+   * derived from the already-resolved model. Both `true` and `false` are
+   * materialized explicitly because a native product may default Fast on.
+   */
+  readonly model?: (resolvedModel: string, modelId: string, fast: boolean) => string;
+  /**
+   * Gateway transport: the official entry-protocol request fields for the
+   * requested Fast state (for example OpenAI `service_tier` or Messages
+   * `speed`). Protocols this provider does not serve materialize nothing.
+   */
+  readonly request?: (modelId: string, fast: boolean, protocol: GatewayProtocol) => Record<string, unknown>;
+}
 
 export interface ProtocolCapability {
   protocol: GatewayProtocol;
@@ -354,6 +378,12 @@ export interface ProviderDefinition {
   // and no transport is ever invented. Keys and values are validated at
   // registration against the exact declared model ids and legal levels.
   reasoningEffortMappings?: ProviderReasoningEffortMappings;
+  /**
+   * Provider-owned Fast materialization, declared only when a verified Fast
+   * mode exists. Absent means Fast is unsupported for every route of this
+   * provider, so an explicit Fast request must fail instead of passing through.
+   */
+  fastMapping?: ProviderFastMapping;
   // Protocol-aware translation of a resolved public effort into the exact
   // upstream request fields (e.g. `reasoning_effort`, `thinking`, `reasoning`).
   // Declared by each provider module; the shared layer never branches on

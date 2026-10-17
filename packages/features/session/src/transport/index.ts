@@ -129,11 +129,15 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
       const actualBytes = Buffer.byteLength(body, 'utf8');
       if (actualBytes > adapter.maxBytes) throw new ModelError(`${adapter.label} exceeds ${adapter.maxBytes} bytes: ${actualBytes}`, { kind: 'invalid_request' });
 
+      // Gateway authentication follows the selected protocol: the Anthropic
+      // Messages entry authenticates with the official `x-api-key` header (plus
+      // the required protocol version), while both OpenAI protocols keep Bearer.
       const headers: Record<string, string> = {
         'content-type': 'application/json',
-        authorization: `Bearer ${connection.token}`,
+        ...(protocol === 'anthropic_messages'
+          ? { 'x-api-key': connection.token, 'anthropic-version': '2023-06-01' }
+          : { authorization: `Bearer ${connection.token}` }),
         [GATEWAY_HEADERS.reasoningEffort]: request.reasoningEffort,
-        ...(request.fast ? { [GATEWAY_HEADERS.fast]: 'true' } : {}),
       };
       if (request.attribution?.role !== undefined) headers[GATEWAY_HEADERS.callRole] = request.attribution.role;
       if (request.attribution?.sessionId !== undefined) headers[GATEWAY_HEADERS.sessionId] = request.attribution.sessionId;

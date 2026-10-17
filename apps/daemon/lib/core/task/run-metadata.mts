@@ -51,6 +51,7 @@ interface AttemptDispatchRow {
   speed_degradation_reason: string | null
   intelligence: string | null
   reasoning_effort: string | null
+  fast: number | null
   reference_pricing_input: number | null
   reference_pricing_output: number | null
   reference_pricing_cache: number | null
@@ -81,6 +82,7 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
             speed_checked_at, speed_expected_tps_met, speed_degradation_reason,
             intelligence,
             reasoning_effort,
+            fast,
             reference_pricing_input, reference_pricing_output, reference_pricing_cache,
             reference_pricing_cache_write,
             reference_pricing_source, reference_pricing_checked_at,
@@ -306,6 +308,10 @@ function toResolvedDispatch(row: AttemptDispatchRow): TaskResolvedDispatch | und
   // metadata. NULL (legacy rows) or any unknown value is omitted rather than invented.
   const reasoningEffort = toReasoningEffort(row.reasoning_effort)
   if (reasoningEffort) resolved.reasoningEffort = reasoningEffort
+  // Explicit false must stay distinct from an absent preference, so only 1/0
+  // are projected; NULL (legacy rows) and unknown values are omitted.
+  if (row.fast === 1) resolved.fast = true
+  else if (row.fast === 0) resolved.fast = false
   // Automatic attempts carry an optional routing decision. A missing, NULL,
   // malformed, incomplete, or tampered auto_routing payload is omitted without
   // invalidating the otherwise complete resolved dispatch.

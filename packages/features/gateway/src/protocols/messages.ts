@@ -136,6 +136,14 @@ export const messagesProtocol: GatewayProtocolModule = {
   // No protocol-fixed request field for Messages.
   prepareRequest() {},
 
+  readFast(body) {
+    // The official Messages speed field: fast is Fast on, standard is Fast off.
+    // An absent speed is no Fast preference and is forwarded unchanged.
+    if (body.speed === 'fast') return true;
+    if (body.speed === 'standard') return false;
+    return undefined;
+  },
+
   stripReasoningFields,
 
   createObserver(): ResponseObserver {
