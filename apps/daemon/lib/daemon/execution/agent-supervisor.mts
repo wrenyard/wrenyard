@@ -1070,6 +1070,14 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
    * unclassified (null).
    */
   private classifyClientFailure(entry: RegistryEntry, failureDiagnostic: string | null): string | null {
+    // A client-supplied class normally wins, but a generic missing-terminal-result
+    // delivery failure must not mask an upstream quota/rate-limit diagnostic:
+    // those CLIs print the quota error and exit without a result record, and the
+    // quota class is the actionable one for route health and automatic retry.
+    if (entry.pendingFailureClass === 'protocol_missing_terminal_result' &&
+        failureDiagnostic !== null && isQuotaOrRateLimitText(failureDiagnostic)) {
+      return QUOTA_OR_RATE_LIMITED_FAILURE_CLASS
+    }
     if (entry.pendingFailureClass) return entry.pendingFailureClass
     if (failureDiagnostic !== null && isModelRejectionText(failureDiagnostic)) {
       return MODEL_REJECTION_FAILURE_CLASS
