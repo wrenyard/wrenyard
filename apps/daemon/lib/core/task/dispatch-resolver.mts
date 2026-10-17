@@ -431,10 +431,12 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
 
     // Explicit-free automatic eligibility, mirroring the authoritative
-    // dispatcher gate: a free offering that is not mainstream or lacks recorded
-    // measured speed provenance is not auto-eligible. The closed detail set has
-    // no free-eligibility member, so no cause is invented here.
-    if (!explicitFreeAutoEligibility(provider, modelDef).eligible) {
+    // dispatcher gate: a statically-declared free offering that is not
+    // mainstream or lacks recorded measured speed provenance is not
+    // auto-eligible, while a live-confirmed-free offering is admitted from its
+    // own free pool. The closed detail set has no free-eligibility member, so no
+    // cause is invented here.
+    if (!explicitFreeAutoEligibility(provider, modelDef, catalog.confirmedFreeSupply(provider.id, modelDef.id)).eligible) {
       return atGate('no_available_provider')
     }
 
@@ -575,7 +577,12 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
     const verifiedSpeed = speed
     const model = selected.model
-    if (!model.intelligence) {
+    const selectedProvider = catalog.provider(selected.plan.provider)
+    // A live-confirmed-free model carries no fabricated intelligence tier: the
+    // unconditional unknown-intelligence fail-closed applies to paid/unknown
+    // supply, while live confirmed-free evidence (which already passed its own
+    // free-pool admission) is not held to a metadata tier it never declared.
+    if (!model.intelligence && !(selectedProvider !== undefined && catalog.confirmedFreeSupply(selectedProvider.id, model.id))) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'intelligence_requirement') }
     }
     // Explicit free vs priced, decided by the free marker: an explicitly free
@@ -589,9 +596,10 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
     }
     // Conservative re-assertion of the explicit-free automatic-eligibility gate
     // for the selected offering: the authoritative dispatcher already enforces
-    // it, and selection must never admit a free route that fails it.
-    const selectedProvider = catalog.provider(selected.plan.provider)
-    if (selectedProvider && !explicitFreeAutoEligibility(selectedProvider, model).eligible) {
+    // it, and selection must never admit a free route that fails it. The live
+    // catalog-level free flag is passed exactly as the dispatcher received it.
+    if (selectedProvider
+      && !explicitFreeAutoEligibility(selectedProvider, model, catalog.confirmedFreeSupply(selectedProvider.id, model.id)).eligible) {
       return { ok: false, error: new NoEligiblePlanError(input.taskName, allCandidates, req, 'no_available_provider') }
     }
 

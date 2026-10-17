@@ -176,6 +176,16 @@ function isFreshLocalSample(sample: LocalSpeedSample, now: Date): boolean {
 }
 
 /**
+ * Ranking floor TPS for a live-confirmed-free model that carries no speed
+ * evidence of its own.
+ *
+ * Such a model still has to be ranked, so a minimal positive floor keeps it
+ * last by speed instead of dropping it as unknown. It is a ranking floor, never
+ * a measurement, and it never applies to a paid model.
+ */
+export const CONFIRMED_FREE_FLOOR_TPS = 1
+
+/**
  * Resolves the single authoritative speed evidence for an exact model in
  * exact precedence order: the first usable exact-provider/model local 31-day
  * TPS sample, then the canonical provider modelSpeedOverride, then the
@@ -186,12 +196,19 @@ function isFreshLocalSample(sample: LocalSpeedSample, now: Date): boolean {
  * override): a genuinely unknown speed omits the evidence object entirely rather
  * than fabricating a 0. Used by resolveConstrainedDispatch and the Foreman
  * failure diagnostics so the precedence logic is never duplicated.
+ *
+ * `confirmedFreeFloor` applies ONLY to a live-confirmed-free model that has no
+ * speed evidence of its own: such a model still has to be ranked, and the floor
+ * keeps it last by speed instead of dropping it. The floor is never a fabricated
+ * measurement for a paid model — a paid route with no evidence keeps returning
+ * undefined.
  */
 export function resolveModelSpeed(
   provider: ProviderDefinition,
   modelDef: ModelDefinition,
   localSpeed?: readonly LocalSpeedSample[],
   now: Date = new Date(),
+  confirmedFreeFloor?: number,
 ): SpeedEvidence | undefined {
   const local = localSpeed?.find(
     (sample) => sample.provider === provider.id && sample.model === modelDef.id && isFreshLocalSample(sample, now),
@@ -213,7 +230,13 @@ export function resolveModelSpeed(
       tps: override,
     }
   }
-  if (modelDef.speed === undefined) return undefined
+  if (modelDef.speed === undefined) {
+    if (confirmedFreeFloor === undefined) return undefined
+    return {
+      source: 'free_supply_floor',
+      tps: confirmedFreeFloor,
+    }
+  }
   return {
     source: 'catalog_default',
     tps: modelDef.speed,
@@ -270,6 +293,12 @@ function hasMeasuredSpeedProvenance(provider: ProviderDefinition, modelID: strin
  * declared, else its own id) is in the mainstream list AND the provider records
  * real measured speed provenance for its exact id with a matching override.
  * Every other free offering stays chat-picker-only and is never auto-selected.
+ *
+ * The static mainstream+measured gate applies to a statically-declared free
+ * offering. Live upstream confirmed-free evidence is a different fact: when the
+ * provider reports the model free right now (`liveConfirmedFree`), the model is
+ * admitted from its own free pool without the static gate, because that pool —
+ * not the static list — is what bounds its cost.
  */
 export type ExplicitFreeAutoEligibility =
   | { readonly eligible: true }
@@ -278,10 +307,14 @@ export type ExplicitFreeAutoEligibility =
 export function explicitFreeAutoEligibility(
   provider: ProviderDefinition,
   model: ModelDefinition,
+  liveConfirmedFree: boolean = false,
 ): ExplicitFreeAutoEligibility {
   // Non-free routes carry no free-offering restriction: this gate never adds a
   // new constraint to a paid route.
   if (model.free !== true) return { eligible: true }
+  // Live upstream evidence admits the model from its own free pool; the static
+  // mainstream id and measured TPS checks describe statically-declared offerings.
+  if (liveConfirmedFree === true) return { eligible: true }
   // Canonical identity resolution matches the shared metadata resolution.
   const canonicalID = model.canonicalModel?.id ?? model.id
   if (!isMainstreamModelId(canonicalID)) return { eligible: false, reason: 'free_not_mainstream' }
@@ -457,6 +490,20 @@ export class Catalog {
 
   provider(id: string): ProviderDefinition | undefined {
     return this.providersByID.get(id);
+  }
+
+  /**
+   * Live catalog-level free flag of one exact provider/model row. This reads the
+   * same definition object the provider republishes when its upstream catalog
+   * refreshes, so it follows the live `free` value rather than any static list.
+   * It is not an authoritative authenticated check: the runtime `freeSupply`
+   * fact downstream remains the confirmation that a route is actually free.
+   */
+  confirmedFreeSupply(providerId: string, modelId: string): boolean {
+    const provider = this.providersByID.get(providerId);
+    if (!provider) return false;
+    const model = provider.models.find((m) => m.id === modelId);
+    return model?.free === true;
   }
 
   /**

@@ -1,6 +1,6 @@
 import { BUILTIN_PROVIDERS } from './catalog.js';
 import { providerQuotas } from './builtins.ts';
-import { binding } from './base/quota-helpers.ts';
+import { binding, freeQuotaPool } from './base/quota-helpers.ts';
 import type { ProviderQuotaBinding, ProviderQuotaPool } from './base/quota.ts';
 export type * from './base/quota.ts';
 
@@ -61,6 +61,33 @@ export function findProviderQuotaBinding(
   modelId: string,
 ): ProviderQuotaBinding | undefined {
   return exactBinding(providerId, modelId) ?? defaultBinding(providerId);
+}
+
+/**
+ * The synthesized free pool of one provider. Free models draw on this pool
+ * alone, so exhausting a paid daily/weekly/monthly pool never makes a
+ * confirmed-free model unavailable. It carries no windows: a windowless quota
+ * pool contributes an unknown (never blocked) constraint.
+ */
+export function freePoolFor(providerId: string): ProviderQuotaPool {
+  return freeQuotaPool(providerId);
+}
+
+export { freeQuotaPool };
+
+/**
+ * The binding selected by live supply evidence. Confirmed-free supply binds the
+ * model to its provider's own free pool only; every other candidate keeps the
+ * declared binding verbatim, including its paid default pools.
+ */
+export function findProviderQuotaBindingForSupply(
+  providerId: string,
+  modelId: string,
+  confirmedFree: boolean,
+): ProviderQuotaBinding | undefined {
+  return confirmedFree
+    ? binding(providerId, modelId, [freePoolFor(providerId)])
+    : findProviderQuotaBinding(providerId, modelId);
 }
 
 /**

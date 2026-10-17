@@ -36,6 +36,16 @@ export function balancePool(
   return Object.freeze({ quotaPoolId, kind: 'balance' as const, windows: Object.freeze([]), balanceId: quotaPoolId, routingDiscountRate: 1, evidenceRef, checkedAt });
 }
 
+/**
+ * Builds the generic per-provider free pool. Free models with live
+ * confirmed-free supply draw on it alone, so an exhausted paid pool never
+ * applies to them. It is windowless, so it contributes an unknown (never
+ * blocked) constraint.
+ */
+export function freeQuotaPool(providerId: string): ProviderQuotaPool {
+  return quotaPool(`${providerId}/free`, []);
+}
+
 /** Builds one frozen binding, guaranteeing a non-empty pools array. */
 export function binding(
   providerId: string,

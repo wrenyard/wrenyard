@@ -24,7 +24,7 @@ export const INTELLIGENCE_ORDER: Readonly<Record<IntelligenceTier, number>> = {
   premium: 3,
 };
 
-export type SpeedSource = 'local_31d' | 'provider_override' | 'catalog_default';
+export type SpeedSource = 'local_31d' | 'provider_override' | 'catalog_default' | 'free_supply_floor';
 
 export interface SpeedEvidence {
   source: SpeedSource;

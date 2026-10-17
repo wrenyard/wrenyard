@@ -1,4 +1,4 @@
-import { type Catalog, type ModelDefinition, explicitFreeAutoEligibility, resolveModelSpeed, routingReferencePriceOf } from '@wrenyard/providers/catalog';
+import { CONFIRMED_FREE_FLOOR_TPS, type Catalog, type ModelDefinition, explicitFreeAutoEligibility, resolveModelSpeed, routingReferencePriceOf } from '@wrenyard/providers/catalog';
 import type { DispatchCandidate, LocalSpeedSample, DispatchPlan } from '@wrenyard/providers/base';
 import type { TaskDispatchRequirements, ConstrainedDispatch, DispatchResolution } from './types.ts';
 import { INTELLIGENCE_TIERS, type IntelligenceTier } from '@wrenyard/models';
@@ -59,6 +59,10 @@ export class ConstrainedDispatcher {
       const modelDef = provider.models.find((entry) => entry.id === plan.model);
       if (!modelDef)
         continue;
+      // Live catalog-level free evidence for this exact route: the provider
+      // republishes `free` from its own upstream catalog, so this follows the
+      // live promotion rather than a static list.
+      const liveConfirmedFree = this.catalog.confirmedFreeSupply(provider.id, modelDef.id);
       // Hard constraint: native web search requirement, enforced before any
       // capability/intelligence/price scoring. Admitted only when the resolved
       // plan explicitly supports native web search; gateway and unknown
@@ -72,11 +76,12 @@ export class ConstrainedDispatcher {
       if (excludedModels.has(plan.model))
         continue;
       // Explicit-free automatic eligibility, decided by the shared helper and
-      // applied in addition to every gate below: a free offering is admitted
-      // only with a mainstream canonical identity plus code-recorded measured
-      // speed provenance. Every other free offering stays chat-picker-only.
-      // Non-free routes pass unchanged.
-      if (!explicitFreeAutoEligibility(provider, modelDef).eligible)
+      // applied in addition to every gate below: a statically-declared free
+      // offering is admitted only with a mainstream canonical identity plus
+      // code-recorded measured speed provenance; a live-confirmed-free offering
+      // is admitted from its own free pool. Every other free offering stays
+      // chat-picker-only. Non-free routes pass unchanged.
+      if (!explicitFreeAutoEligibility(provider, modelDef, liveConfirmedFree).eligible)
         continue;
       if (requirements.inputTokens !== undefined &&
         (!Number.isFinite(modelDef.contextWindow) || requirements.inputTokens + (modelDef.maxOutputTokens ?? 0) > modelDef.contextWindow!))
@@ -124,7 +129,15 @@ export class ConstrainedDispatcher {
       // the first usable exact-provider/model local 31-day TPS sample,
       // then the canonical provider modelSpeedOverride, then the model default
       // speed. Matching is by exact provider.id/modelDef.id — no alias or client remap.
-      const speed = resolveModelSpeed(provider, modelDef, localSpeed);
+      // A live-confirmed-free model with no evidence keeps the free-pool floor
+      // so it is ranked last by speed instead of being dropped.
+      const speed = resolveModelSpeed(
+        provider,
+        modelDef,
+        localSpeed,
+        undefined,
+        liveConfirmedFree ? CONFIRMED_FREE_FLOOR_TPS : undefined,
+      );
       // A candidate with NO speed evidence cannot be ranked or dispatched: a
       // genuinely unknown speed is excluded rather than substituted with a zero.
       if (speed === undefined)

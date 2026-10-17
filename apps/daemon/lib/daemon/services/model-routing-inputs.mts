@@ -1,6 +1,6 @@
 import type { CandidateInput, RequiredQuotaConstraint } from '@wrenyard/auto-routing';
 import { INTELLIGENCE_ORDER } from '@wrenyard/providers/catalog';
-import { findProviderQuotaBinding, resolveDeepSeekReferencePricing, type DeepSeekPricingModel, type DeepSeekReferencePricing } from '@wrenyard/providers';
+import { findProviderQuotaBindingForSupply, resolveDeepSeekReferencePricing, type DeepSeekPricingModel, type DeepSeekReferencePricing, type ProviderQuotaBinding } from '@wrenyard/providers';
 import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts';
 import type { AutoRoutingQuotaSnapshot } from './auto-routing-snapshot-service.mts';
 
@@ -115,18 +115,17 @@ export function withDeepSeekAttemptPricing(
     : { ...dispatch, reference_pricing: pricing.attemptReferencePricing }
 }
 
-/** Builds explicit null quota constraints for every pool bound to a provider
- *  model that has no snapshot entry. Uses the unified exported provider
- *  metadata (`findProviderQuotaBinding`) so each bound `quota`/`balance` pool
+/** Builds explicit null quota constraints for one resolved binding. Uses the
+ *  unified exported provider metadata so each bound `quota`/`balance` pool
  *  contributes one null constraint keyed by its normalized pool id — an unbound
- *  candidate is never silently admitted. An unknown provider yields no pools. */
-function missingEntryRequiredQuota(
+ *  candidate is never silently admitted. An absent binding keeps the legacy
+ *  provider-wide `usage` placeholder. */
+function requiredQuotaForBinding(
   providerId: string,
-  modelId: string,
+  bucket: ProviderQuotaBinding | undefined,
 ): RequiredQuotaConstraint[] {
-  const binding = findProviderQuotaBinding(providerId, modelId)
-  if (binding === undefined) return [{ id: `${providerId}/usage`, evidence: null }]
-  return binding.pools.map((pool) =>
+  if (bucket === undefined) return [{ id: `${providerId}/usage`, evidence: null }]
+  return bucket.pools.map((pool) =>
     pool.kind === 'balance'
       ? { id: pool.quotaPoolId, evidence: null, kind: 'balance' as const, balance: null }
       : { id: pool.quotaPoolId, evidence: null },
@@ -143,9 +142,21 @@ export function toAutomaticCandidateInput(
   deepSeekPricing?: DeepSeekAutomaticPricing,
 ): CandidateInput | null {
   const choice = entry.choice
-  const intelligenceRank = INTELLIGENCE_ORDER[choice.intelligence as keyof typeof INTELLIGENCE_ORDER]
-  if (intelligenceRank === undefined || !Number.isFinite(intelligenceRank)) return null
   const freeFact = entry.availability?.freeSupply
+  const confirmedFree = freeFact?.confirmedFree === true
+  const declaredIntelligenceRank = INTELLIGENCE_ORDER[choice.intelligence as keyof typeof INTELLIGENCE_ORDER]
+  // A live-confirmed-free model carries no declared intelligence tier. The
+  // lowest tier keeps it last by intelligence rather than dropping it; the
+  // substitution is a ranking floor for supply the upstream already confirmed
+  // as free, never a fabricated capability claim. Without confirmed-free
+  // evidence an unknown tier still fails closed.
+  const intelligenceRank = (declaredIntelligenceRank === undefined || !Number.isFinite(declaredIntelligenceRank)) && confirmedFree
+    ? INTELLIGENCE_ORDER.low
+    : declaredIntelligenceRank
+  if (intelligenceRank === undefined || !Number.isFinite(intelligenceRank)) return null
+  // A confirmed-free model binds to its provider's own free pool only, so an
+  // exhausted paid pool can never reject it while the live supply fact holds.
+  const binding = findProviderQuotaBindingForSupply(choice.provider, choice.model, confirmedFree)
   // Authenticated confirmed-free supply (`freeFact.confirmedFree === true`) is
   // the only evidence that lets a free route with no published price reach
   // ranking: the routing-only reference becomes a numeric zero, used solely as
@@ -165,18 +176,27 @@ export function toAutomaticCandidateInput(
   )
   // When the snapshot carries an explicit entry its required constraints are
   // authoritative, including an upstream-declared empty list (no applicable
-  // quota). A missing entry must never silently bypass quota: build explicit
-  // null constraints for every bound pool from the unified provider metadata
-  // (both usage `quota` and `balance` kinds), so policy sees incomplete/unknown
-  // coverage rather than an unbound candidate.
-  const requiredQuota = quotaEntry !== undefined
-    ? quotaEntry.requiredQuota
-    : missingEntryRequiredQuota(choice.provider, choice.model)
+  // quota) — except for confirmed-free supply, which must reference its own
+  // free pool: a blocked paid pool can never reject a confirmed-free model
+  // while SupplyEvidencePolicy zeroes its price. A missing entry must never
+  // silently bypass quota: build explicit null constraints for every bound
+  // pool from the unified provider metadata (both usage `quota` and `balance`
+  // kinds), so policy sees incomplete/unknown coverage rather than an unbound
+  // candidate.
+  const snapshotRequiredQuota = quotaEntry?.requiredQuota
+  const freeRequiredQuota = confirmedFree
+    ? requiredQuotaForBinding(choice.provider, binding)
+    : undefined
+  const requiredQuota = freeRequiredQuota !== undefined
+    ? (snapshotRequiredQuota?.some((constraint) => constraint.id === freeRequiredQuota[0].id) === true
+        ? snapshotRequiredQuota
+        : freeRequiredQuota)
+    : (snapshotRequiredQuota ?? requiredQuotaForBinding(choice.provider, binding))
   // Fixed base-pool automatic-routing discount, resolved from the bound pools.
   // The conservative rate is the maximum across pools and is applied ONCE, never
   // multiplied/compounded across multiple 5h/7d pools. A balance pool is always
   // 1; a missing/empty binding defaults to 1.
-  const boundPools = findProviderQuotaBinding(choice.provider, choice.model)?.pools ?? []
+  const boundPools = binding?.pools ?? []
   const quotaPoolDiscountRate = boundPools.length === 0
     ? 1
     : Math.max(...boundPools.map((pool) => pool.kind === 'balance' ? 1 : (pool.routingDiscountRate ?? 1)))

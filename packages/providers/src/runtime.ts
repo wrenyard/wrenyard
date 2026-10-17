@@ -23,6 +23,7 @@ export type { CodeBuddyActiveSnapshot, CodeBuddyClientIdentity, CodeBuddyEnviron
 export type { ChatGptGatewayAuthAdapter, ChatGptGatewayCredential } from './chatgpt/runtime.ts';
 export { applyChatGptPromptCacheKey } from './chatgpt/runtime.ts';
 
+import { freeQuotaPool } from './base/quota-helpers.ts';
 import type { ProviderCredential, RoutingFreeSupplyFact } from './base/provider.ts';
 export type { ProviderCredential, RoutingFreeSupplyFact } from './base/provider.ts';
 
@@ -207,10 +208,29 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
   const implementations = new Map(providerImplementations);
   implementations.set(activeCodeBuddy.id, activeCodeBuddy);
   for (const provider of options.providers ?? []) implementations.set(provider.id, provider);
+  const lastCredentials = new Map<string, ProviderCredential>();
   return {
+    /**
+     * Pools a provider model should be admitted against. A confirmed-free model
+     * draws on its provider's free pool only, so a paid-pool fault never
+     * applies to its route; when the live evidence ends, the model falls back
+     * to its declared paid bindings.
+     */
     quotaPools(provider, model) {
-      const quota = implementations.get(provider)?.quota ?? providerQuotas.get(provider);
-      return (quota?.bindings.find(binding => binding.modelId === model)?.pools ?? quota?.defaultPools ?? []).map(pool => pool.quotaPoolId);
+      const implementation = implementations.get(provider);
+      const quota = implementation?.quota ?? providerQuotas.get(provider);
+      const declared = (quota?.bindings.find(binding => binding.modelId === model)?.pools ?? quota?.defaultPools ?? [])
+        .map(pool => pool.quotaPoolId);
+      const credential = lastCredentials.get(provider);
+      if (credential === undefined) return declared;
+      try {
+        const definition = implementation?.definition ?? BUILTIN_PROVIDERS.find((entry) => entry.id === provider);
+        const freeFact = implementation?.freeSupply(model, credential)
+          ?? (definition !== undefined ? evaluateManagedFreeSupply(definition, model, credential) : undefined);
+        return freeFact?.confirmedFree === true ? [freeQuotaPool(provider).quotaPoolId] : declared;
+      } catch {
+        return declared;
+      }
     },
     async credential(provider) {
       // ChatGPT/Codex is the only provider whose gateway credential comes from
@@ -219,7 +239,10 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
       // existing implementation or managed-store path unchanged.
       if (provider.id === 'chatgpt' && provider.credentialResolver === 'codex') {
         const adapter = options.codexGatewayAuth;
-        if (!adapter) return undefined;
+        if (!adapter) {
+          lastCredentials.delete(provider.id);
+          return undefined;
+        }
         // An absent, malformed, or rejected native login is simply an
         // unavailable credential, exactly like an empty managed store. The
         // gateway probes credential() for every provider, so a thrown error
@@ -228,19 +251,29 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
         try {
           gateway = await adapter.read();
         } catch {
+          lastCredentials.delete(provider.id);
           return undefined;
         }
         const accessToken = nonEmptyString(gateway?.accessToken);
         const accountId = nonEmptyString(gateway?.accountId);
-        if (accessToken === undefined || accountId === undefined) return undefined;
+        if (accessToken === undefined || accountId === undefined) {
+          lastCredentials.delete(provider.id);
+          return undefined;
+        }
         const credential = Object.freeze({ value: accessToken });
         bindChatGptGatewayCredential(credential, accountId);
+        lastCredentials.set(provider.id, credential);
         return credential;
       }
       const implementation = implementations.get(provider.id);
       if (implementation) {
         const credential = await implementation.credential();
-        if (credential) credentialProviders.set(credential, implementation);
+        if (credential) {
+          credentialProviders.set(credential, implementation);
+          lastCredentials.set(provider.id, credential);
+        } else {
+          lastCredentials.delete(provider.id);
+        }
         return credential;
       }
       if (provider.credentialResolver === 'managed') {
@@ -252,17 +285,27 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
         } catch {
           managed = undefined;
         }
-        if (managed !== undefined) return { value: managed };
+        if (managed !== undefined) {
+          const credential = { value: managed };
+          lastCredentials.set(provider.id, credential);
+          return credential;
+        }
         // DeepSeek keeps an existing environment-configured key working even
         // before auth.json is written. A managed configure always stores the
         // canonical entry, which the lookup above returns first, so this is a
         // read-only compatibility fallback and never masks a managed key.
         if (provider.id === 'deepseek') {
           const envKey = deepSeekEnvApiKey(env);
-          if (envKey !== undefined) return { value: envKey };
+          if (envKey !== undefined) {
+            const credential = { value: envKey };
+            lastCredentials.set(provider.id, credential);
+            return credential;
+          }
         }
+        lastCredentials.delete(provider.id);
         return undefined;
       }
+      lastCredentials.delete(provider.id);
       return undefined;
     },
     resolveUpstreamModel(provider, model, credential) {

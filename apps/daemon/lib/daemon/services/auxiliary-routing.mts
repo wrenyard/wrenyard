@@ -1,6 +1,6 @@
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { rankAutoRoutingCandidates, type CandidateInput } from '@wrenyard/auto-routing';
-import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, routingReferencePriceOf, explicitFreeAutoEligibility, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
+import { CONFIRMED_FREE_FLOOR_TPS, INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, routingReferencePriceOf, explicitFreeAutoEligibility, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
 import { ROLE_REQUIREMENTS, AUXILIARY_TIMEOUT_MS, supportsSession, type AuxiliaryCallRole, type AuxiliaryRoute, type RoleReasoningRequirement } from '@wrenyard/session';
 import type { IntelligenceTier } from '@wrenyard/providers/catalog';
 import { JsonForemanConfigStore } from '../../config/manager.mts';
@@ -110,20 +110,30 @@ function createSelector(
         }
       }
       if (!availability[index]!.available || availability[index]!.providerCredential !== 'available') return reject('provider not configured/available');
+      // Live upstream free evidence attached to this admitted route: the model
+      // is free right now from its own pool, independent of the static baseline.
+      const confirmedFree = availability[index]?.freeSupply?.confirmedFree === true;
       if (snapshot.hardBlockedProviderIds.includes(provider.id)) return reject('quota blocked');
       if (!requirements.requiredCapabilities.every(capability => model.capabilities?.includes(capability))) return reject('text capability missing');
       // A model with no declared metadata cannot be ranked truthfully. Unknown
       // intelligence, price, speed or an empty effort ladder excludes it here
       // rather than being substituted with a zero, so the existing ranking is
       // kept unchanged for every metadata-complete model.
-      if (model.intelligence === undefined) return reject('intelligence unknown');
-      if (INTELLIGENCE_ORDER[model.intelligence] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) return reject('intelligence below minimum');
+      // A live-confirmed-free model may declare no intelligence tier: the
+      // lowest tier keeps it ranked last by intelligence instead of excluding
+      // it from a pool the upstream already confirmed as free. A tier-less
+      // paid model still fails closed.
+      const effectiveIntelligence = model.intelligence ?? (confirmedFree ? 'low' : undefined);
+      if (effectiveIntelligence === undefined) return reject('intelligence unknown');
+      if (INTELLIGENCE_ORDER[effectiveIntelligence] < INTELLIGENCE_ORDER[requirements.intelligenceMin]) return reject('intelligence below minimum');
       if (model.reasoningEfforts.length === 0) return reject('no reasoning-effort ladder');
       // Explicit-free automatic eligibility, decided by the shared helper before
-      // ranking: a free offering is admitted only with a mainstream canonical
-      // identity plus code-recorded measured speed provenance. Every other free
-      // offering stays chat-picker-only. Non-free routes pass unchanged.
-      const freeEligibility = explicitFreeAutoEligibility(provider, model);
+      // ranking: a statically-declared free offering is admitted only with a
+      // mainstream canonical identity plus code-recorded measured speed
+      // provenance; a live-confirmed-free offering is admitted from its own free
+      // pool. Every other free offering stays chat-picker-only. Non-free routes
+      // pass unchanged.
+      const freeEligibility = explicitFreeAutoEligibility(provider, model, confirmedFree);
       if (!freeEligibility.eligible) return reject(`free route not auto-eligible (${freeEligibility.reason})`);
       // Routing-only reference price, explicit free vs priced: an explicitly
       // free route (kind 'free') is admitted whether or not it declares a price,
@@ -134,12 +144,20 @@ function createSelector(
       if (referencePrice?.kind !== 'free' && referencePrice?.outputUsdPerMillion === undefined)
         return reject('pricing unknown');
       if ((model.contextWindow ?? 0) < requirements.minimumContextWindow) return reject('context below minimum');
-      const speed = resolveModelSpeed(provider, model, localSpeed, new Date(nowMs));
+      // A live-confirmed-free model with no speed evidence keeps the free-pool
+      // floor so it is ranked last by speed instead of being rejected as unknown.
+      const speed = resolveModelSpeed(
+        provider,
+        model,
+        localSpeed,
+        new Date(nowMs),
+        confirmedFree ? CONFIRMED_FREE_FLOOR_TPS : undefined,
+      );
       if (speed === undefined) return reject('speed unknown');
       entries.push({
         levels: model.reasoningEfforts,
         entry: {
-          choice: { provider: provider.id, model: model.id, client: 'gateway', exactAgentRuntime: `${provider.id}/${model.id}`, intelligence: model.intelligence,
+          choice: { provider: provider.id, model: model.id, client: 'gateway', exactAgentRuntime: `${provider.id}/${model.id}`, intelligence: effectiveIntelligence,
             reference_pricing: referencePrice.kind === 'priced'
               // A priced route carries its declared reference price verbatim.
               ? { output_usd_per_million: referencePrice.outputUsdPerMillion }

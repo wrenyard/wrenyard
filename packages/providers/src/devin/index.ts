@@ -41,6 +41,20 @@ export function createDevin(options: DevinOptions = {}): DevinProvider {
       if (!variant) throw new Error(`Devin model ${model} does not support reasoning effort ${effort}`);
       return { model: variant.id };
     },
+    // Devin reports paid quota exhaustion as a Connect `failed_precondition`
+    // whose message names the exhausted quota. That failure owns the paid pools
+    // only, never a route or the provider, so the free pool stays usable. Every
+    // other body falls through to the generic status classification.
+    classifyUpstreamError({ body }) {
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) return undefined;
+      const root = body as Record<string, unknown>;
+      const error = root.error !== null && typeof root.error === 'object' && !Array.isArray(root.error)
+        ? root.error as Record<string, unknown>
+        : root;
+      if (error.code !== 'failed_precondition') return undefined;
+      if (typeof error.message !== 'string' || !/quota|exhausted/i.test(error.message)) return undefined;
+      return { state: 'quota_exhausted', scope: 'pool' };
+    },
     async executeRequest(context) {
       const snapshot = bound.get(context.credential);
       const group = snapshot?.models.find(m => m.id === context.modelId);
