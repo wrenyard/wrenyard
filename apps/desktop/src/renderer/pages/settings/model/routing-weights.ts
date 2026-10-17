@@ -1,4 +1,4 @@
-import { SCORE_WEIGHTS } from '@wrenyard/auto-routing';
+import { SCORE_WEIGHTS } from '@wrenyard/auto-routing/constants';
 import type { TaskSettingsRoutingWeights } from '@/shell-contract';
 
 /**
