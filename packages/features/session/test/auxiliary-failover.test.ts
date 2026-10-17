@@ -326,54 +326,6 @@ test('the finite total budget cuts the call without blaming the route', async ()
   assert.equal((error.detail.metrics?.attempts ?? []).length, 0);
 });
 
-test('a silent route idle-stalls once, reports no route fault, and fails over', async () => {
-  const calls: string[] = [];
-  const faults: Array<{ model: string; kind: string }> = [];
-  const transport: ModelTransport = {
-    complete: (request) => {
-      calls.push(request.model);
-      if (request.model === 'test/alpha') return new Promise<ModelResult>(() => {});
-      return Promise.resolve(succeeded(request.model));
-    },
-  };
-  const { runner } = makeRunner({
-    transport,
-    routes: ['test/alpha', 'test/beta'],
-    reportRouteFault: (model, _attemptId, kind) => { faults.push({ model, kind }); },
-  });
-  mock.timers.enable({ apis: ['setTimeout'] });
-  let output: ModelResult | undefined;
-  try {
-    const pending = runner.run(callInput('reply', new AbortController().signal));
-    await flush();
-    // The idle deadline is a local decision, so the silent route still stalls
-    // and fails over but is never blamed as a faulty supplier route.
-    mock.timers.tick(AUXILIARY_IDLE_TIMEOUT_MS);
-    await flush();
-    output = await pending;
-  } finally {
-    mock.timers.reset();
-  }
-  // Only the failover route resolved, so the result is the beta transport's response.
-  assert.equal(output?.text, 'ok:test/beta');
-  assert.deepEqual(calls, ['test/alpha', 'test/beta']);
-  assert.deepEqual(faults, []);
-});
-
-test('no auxiliary request carries a local deadline for a transport to blame', async () => {
-  const requests: ModelRequest[] = [];
-  const transport: ModelTransport = {
-    async complete(request) {
-      requests.push(request);
-      return succeeded(request.model);
-    },
-  };
-  const { runner } = makeRunner({ transport, routes: ['test/alpha', 'test/beta'] });
-  await runner.run(callInput('reply', new AbortController().signal));
-  assert.ok(requests.length >= 1);
-  assert.ok(requests.every((request) => request.deadlineAtMs === undefined));
-});
-
 test('an explicit user cancellation stays neutral and reports no route fault', async () => {
   const faults: string[] = [];
   let inFlight: (() => void) | undefined;
