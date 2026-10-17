@@ -52,7 +52,10 @@ package or app you changed.
 - Keep the change focused on one concern.
 - Describe the user-visible effect; include screenshots for UI changes.
 - Make sure `pnpm lint` passes.
-- Update the documentation when behaviour changes.
+- Update the documentation when behaviour changes; [docs/README.md](docs/README.md)
+  lists every guide. For UI changes, keep the showcase demo data in
+  `apps/desktop/tools/showcase/` rendering (see the
+  [development guide](docs/development.md#screenshots-and-the-product-tour)).
 
 ## Releases
 

@@ -15,7 +15,7 @@ Under `<stateRoot>/session/<sha256(workspaceRoot)>/`:
 - `index.json` — the session list (`sessionId`, `title`, `createdAt`,
   `updatedAt`), written atomically and derived from the timelines.
 
-Auxiliary calls select a Gateway route freshly for each role using the shared Task routing evidence and weights. Role requirements and ordered effort preferences live in `src/role-requirements.ts`; the call ledger records the route, rank, ordered candidates, requested effort and actual effort.
+Auxiliary calls select a Gateway route freshly for each role using the shared Task routing evidence and weights. Role requirements and ordered effort preferences live in `src/model/roles.ts`; each span records the route, rank, ordered candidates, requested effort and the effort actually sent.
 
 The daemon supplies its state root and configured workspace root. Desktop restart
 does not interrupt turns; daemon shutdown drains them or interrupts with `shutdown`.
@@ -23,15 +23,36 @@ Old Desktop preview ledgers are not imported.
 
 Attached files are stored outside the ledger at
 `<stateRoot>/sessions/<sessionId>/files`; Task artifacts stay in their run
-directory `<stateRoot>/artifacts/<runId>`. The ledger records them as `files`
+directory `<stateRoot>/artifacts/<runId>`. The ledger records them as `files.attached`
 events that carry metadata and paths only, never file bytes. `session.delete`
 removes a session together with its files and run artifacts.
+
+## Ledger events
+
+Every event has one timestamp and names its place by ids: a start event names
+its `parent`, the matching finish repeats its `id`, and content events name a
+`parent`. There are three families:
+
+- **Structure** — `session.created`, `turn.*`, `step.*` and `action.*`: what the
+  session decided to do. A turn is one user message; each step is one main
+  reasoning request and the actions it declared.
+- **Execution** — `span.started`, `span.context` and `span.finished`: what
+  actually ran. A span is one reasoning request, one whole auxiliary task or one
+  dispatched agent task, with its request facts, route, usage and timing. Spans
+  never enter the model context.
+- **Content** — reasoning text, recalled memories, found and loaded documents,
+  attached files, workspace changes, replies and system notices: the material
+  the model and the user read.
+
+`src/ledger/events.ts` declares which event types may enter the rendered model
+context.
 
 ## Context
 
 Every main reasoning request is the previous request with a segment appended. A
-`cycle.started` event records each inference's turn, cycle, model, context
-window and the previous request's input tokens. Volatile text sits in one short
+`step.started` event records each step's model, context window and the previous
+request's input tokens, and is rendered as that step's info line, so per-request
+facts are part of the append-only context. Volatile text sits in one short
 closing message after the appended context, and the session id is the prompt
 cache key. Main reasoning requests of one session are queued, so the history
 stays linear.
@@ -44,40 +65,32 @@ is corruption and throws instead of being silently dropped.
 
 ## Modules
 
-- `src/ledger.ts` — event types, JSONL storage, serialized durable append and
-  the atomic derived index.
-- `src/workspace.ts` — read-only file source, path validation, the frozen
-  `WorkspaceSnapshot`, recent-doc scan and the project instruction chain.
-- `src/views.ts` — prompt assembly, event rendering/escaping, layer statistics.
-- `src/driver.ts` — the `ModelDriver` port and the OpenAI-compatible chat
-  adapter: one stateless streaming completion with text, reasoning, native tool
-  calls and usage.
-- `src/responses-driver.ts` — the same port on the OpenAI Responses protocol.
-- `src/inference.ts`, `src/inference-mode.ts` — transport selection. Auxiliary
-  calls always use chat; a main reasoning call uses the one runtime its
-  provider's declared protocols select (`openai_chat` before
-  `openai_responses`).
-- `src/calls.ts` — role→model resolution, model metadata, budget check,
-  timeouts and `call` event writing.
-- `src/actions.ts` — conversion of native `wy_action` tool calls into typed
-  `read`, `write` and `dispatch` actions, task input validation and the action
-  executors.
-- `src/result-text.ts` — Task results laid out as Markdown text for the model.
-- `src/media.ts` — attachment import (images resized and re-encoded once, text
-  capped per file), in-place artifact description and preview reads.
-- `src/documents.ts` — the document view of the ledger: one full entry, then
-  unified diff hunks.
-- `src/replies.ts` — progress replies, the final reply and the session title.
-- `src/context-inspect.ts` — the forward-looking size of the next reasoning
-  request (`session.context.inspect`).
-- `src/engine.ts` — the work-turn state machine over the ports in
-  `src/ports.ts`, with in-memory turn state in `src/runtime.ts` and streaming
-  call snapshots in `src/live.ts`.
-  snapshot projected from the live Gateway connection.
+- `src/ledger/` — event types (`events.ts`), JSONL storage, serialized durable
+  append and the atomic derived index (`store.ts`).
+- `src/workspace.ts`, `src/snapshot.ts` — read-only file source, path
+  validation, the frozen `WorkspaceSnapshot`, recent-doc scan and the project
+  instruction chain.
+- `src/reasoning/` — the main reasoning request and its prompt layers
+  (`prompt.ts`), the one native `wy_action` tool and its parser (`tool.ts`), and
+  the router from a parsed action to its auxiliary task (`actions.ts`).
+- `src/auxiliary/` — the cheap-model roles: `search`, `dispatch`, `document`,
+  `vcs` and `project` actions, plus `reply`, `title`, `memory` search, `status`
+  judgement and the next-prompt `suggestion`.
+- `src/loop/` — the shared multi-round tool loop every auxiliary task runs on,
+  and span recording (`span.ts`).
+- `src/model/` — auxiliary role requirements, model metadata and request
+  budgets.
+- `src/transport/` — one inference port over the Gateway with the Chat
+  Completions, Responses and Anthropic Messages adapters, shared SSE reading,
+  error classification and the bounded retry and circuit policy.
+- `src/turn/` — session lifecycle (`engine.ts`), the work-turn and step loop
+  (`turn.ts`), in-memory turn state (`runtime.ts`) and streaming snapshots of
+  running reasoning calls (`live.ts`).
+- `src/context/` — event rendering and the forward-looking size of the next
+  reasoning request (`session.context.inspect`).
+- `src/media.ts`, `src/documents.ts`, `src/memory-write.ts` — attachment import,
+  the document view of the ledger and durable memory writes.
 - `src/index.ts` — the composition root and the frozen `createSession` surface.
-
-Dependencies point `engine → actions / calls / views / workspace / ledger`, and
-`calls → driver`. `ledger` replay and `views` are pure functions.
 
 ## Durable workspace memories
 
@@ -104,13 +117,28 @@ without discarding the accepted reply.
 ## Actions
 
 The main model declares actions through the single native `wy_action` tool;
-there is no text marker parsing. Its output is replayed as an assistant message
-with tool calls followed by tool results. Document writes are dispatched to the
-`doc` Task.
+there is no text marker parsing. Each call names an action type and a
+natural-language intent:
+
+| Action | What its auxiliary task does |
+| --- | --- |
+| `search` | Find and load workspace documents and memories for the model. |
+| `dispatch` | Compile the intent into one Task run (task, project, input) and start it. |
+| `document` | Create or edit a workspace document or a project `AGENTS.md`. |
+| `vcs` | Inspect, commit, push or pull the workspace or a project. |
+| `project` | Register projects and manage their worktrees. |
+
+A host may also expose native tools by name (bots use this for their `session`,
+`todo` and `message` tools); those calls are recorded as `tool` actions. The
+model's output is replayed as an assistant message with tool calls followed by
+tool results.
 
 ## Provider notes
 
-The chat driver speaks the gateway's OpenAI-compatible chat path
+A call uses the first protocol the model declares, in the order Chat
+Completions, Responses, Anthropic Messages.
+
+The chat adapter speaks the gateway's OpenAI-compatible chat path
 (`POST {openaiChatBaseUrl}/chat/completions`, `Authorization: Bearer <token>`).
 Explicit Anthropic cache breakpoints are **not** supported on this path: the
 request body is the plain OpenAI-chat shape with
@@ -118,7 +146,11 @@ request body is the plain OpenAI-chat shape with
 are injected. Caching information is reported only through the upstream usage
 frame (`prompt_tokens_details.cached_tokens`); absent fields stay absent.
 
-The Responses driver speaks `POST {openaiResponsesBaseUrl}/responses`. The
+The Responses adapter speaks `POST {openaiResponsesBaseUrl}/responses`. The
 system message becomes `instructions`, and the per-request closing message is
 sent as a `developer` item so the implicit cache point stays at the end of the
 appended context.
+
+The Messages adapter speaks `POST {anthropicBaseUrl}/messages`. System messages
+become the top-level `system` field and every declared tool becomes an
+`input_schema` tool.

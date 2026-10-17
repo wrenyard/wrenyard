@@ -14,8 +14,8 @@ updates. There is no separate agent runtime binary or Go build.
   `apps/desktop/src/pet` (windows, renderer and resource layout are all
   Desktop-owned). It also supervises the daemon while it runs (tray-resident;
   closing the window does not quit) and applies its own updates.
-- `apps/daemon` owns durable tasks and scheduling and composes feature services
-  behind owner-only IPC handlers. It has one run entry point,
+- `apps/daemon` owns durable tasks, sessions, bots and routines and composes
+  feature services behind owner-only IPC handlers. It has one run entry point,
   `wrenyard daemon run`; the terminal runs it directly, and the packaged
   Desktop and the daemon dev script (`apps/daemon/scripts/dev.ts`) use
   `@wrenyard/daemon/supervisor`.
@@ -24,10 +24,18 @@ updates. There is no separate agent runtime binary or Go build.
   `@wrenyard/session` and exposes the `session.*` IPC methods, with Desktop as
   the conversation client. Exec and provider have daemon handlers.
 - `packages/features/session` is the conversation core. Each main reasoning
-  request appends to the previous one, the main model declares typed `read`,
-  `write` and `dispatch` actions through one native tool, and the request runs
-  over Chat Completions or Responses depending on the protocols the provider
-  declares. See the [session feature](../packages/features/session/README.md).
+  request appends to the previous one, the main model declares typed `search`,
+  `dispatch`, `document`, `vcs` and `project` actions through one native tool,
+  cheap auxiliary models carry them out, and the request runs over Chat
+  Completions, Responses or Anthropic Messages depending on the protocols the
+  model declares. See the [session feature](../packages/features/session/README.md).
+- Bots are daemon-hosted agents defined by `<config root>/bot-agents/<id>.json`.
+  The bot kernel queues wakes per bot, runs one turn at a time per bot over the
+  session engine with the bot's own system prompt and its enabled native tools
+  (`session`, `todo`, `message`), and watches the sessions a bot starts. The
+  scheduler fires routines owned by bots. Workspace todos are Markdown files in
+  `<workspace>/todos/` behind the `todo.*` methods. See the
+  [bots guide](guides/bots.md).
 - `packages/features/exec` runs raw prompts, owns bounded event replay and
   cancellation. Structured tasks translate their input into this execution API.
 - `packages/features/provider` implements provider listing, configuration and
@@ -39,10 +47,6 @@ updates. There is no separate agent runtime binary or Go build.
   account reads and token/TPS statistics.
 - `packages/execution` owns subprocess lifetime, stdio RPC and native credential
   primitives (read-only SQLite and macOS keychain), without provider knowledge.
-- Browser operations use the daemon-managed `agent-browser` CLI and desktop
-  operations use the Cua Driver MCP; both are managed by the daemon's
-  operation-component service (Settings > 操作组件) and attached per run by one
-  execution adapter. Task-declared `mcpServers` are unaffected.
 - `packages/themes` holds pure theme tokens, metadata and icons consumed by
   Desktop.
 
@@ -52,7 +56,10 @@ The daemon's only external interface is owner-only NDJSON JSON-RPC over a unix
 socket (macOS) or a named pipe (Windows). There is no MCP, REST or message HTTP
 surface and no listener for external clients. `health.ping` carries an integer
 `protocolVersion`; the client validates it and refuses a mismatched daemon
-instead of negotiating compatibility.
+instead of negotiating compatibility. Desktop can instead connect to a daemon on
+another machine: it reaches that daemon's IPC endpoint through an SSH tunnel,
+provisions a compatible daemon there when needed, and keeps exactly one active
+endpoint (local or one remote host) at a time.
 
 The gateway is an internal daemon-process-tree feature that listens only on
 `127.0.0.1`; it never binds a public interface. Its port is a persisted setting:
@@ -108,8 +115,9 @@ Dispatch aliases live in that config root under `wrenyard/dispatch/config.json`.
 Managed client data lives in `<XDG_DATA_HOME or ~/.local/share>/wrenyard/clients`.
 Quota observations live in `<XDG_STATE_HOME or ~/.local/state>/wrenyard/quota`.
 In that state root, session ledgers live under `session/`, a session's attached
-files under `sessions/<sessionId>/files` and each task run's output files under
-`artifacts/<runId>`.
+files under `sessions/<sessionId>/files`, each task run's output files under
+`artifacts/<runId>` and bot state and conversations under `bot-agents/`. Bot
+definitions live in the config root under `wrenyard/bot-agents/`.
 Official native client credential stores remain owned by those clients.
 No runtime migration or dual-read fallback is shipped.
 

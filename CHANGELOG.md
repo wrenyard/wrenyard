@@ -1,5 +1,77 @@
 # Changelog
 
+## 1.0.57 and later
+
+Since `1.0.57` Wrenyard ships rolling plain `1.0.x` releases instead of
+`1.0.0-dev.N` previews. This section summarises what changed from
+`1.0.0-dev.46` up to the current release.
+
+### Bots, routines and todos
+
+- Bots are agents defined by a JSON file in the `bot-agents` config directory:
+  instructions plus the `session`, `todo` and `message` tools they may use.
+  They are woken by routines, by messages, and by the sessions they started
+  finishing a turn, and get their own page with a conversation, a composer and
+  their routines.
+- Routines replace scheduled prompts: recurring or one-shot, owned by a bot,
+  with an optional delivery of the final reply to another bot.
+- Built-in workspace todos (`wrenyard todo`), stored as Markdown files in the
+  workspace and shared by bots, the CLI and the app.
+- The earlier inbox-driven bot mode remains available as the legacy bot page.
+
+### Session
+
+- The main model declares `search`, `dispatch`, `document`, `vcs` and `project`
+  actions; cheap auxiliary models carry them out, each role routed separately.
+- Sessions can commit, push and pull, register projects, create and merge
+  worktrees, and revise a project's `AGENTS.md`. A session's worktrees are
+  locked to it.
+- Durable memories are saved after accepted final replies and recalled by later
+  sessions.
+- Turns that end on a question or need the user are marked as waiting.
+- Fast mode for routes with a verified upstream fast tier, including ChatGPT
+  subscription models.
+- Main reasoning over the Anthropic Messages protocol in addition to Chat
+  Completions and Responses, with one retry and circuit policy.
+
+### Desktop
+
+- New sidebar with grouped, sortable and filterable conversations, pinning,
+  archiving and status dots for working, waiting, failed and unread sessions.
+- A one-row composer with a combined model and reasoning picker, next-prompt
+  suggestions and Mermaid diagrams in replies.
+- The detailed view replaces the inspector: every step, call, action and task
+  of a turn in ledger order. A trace page shows the same tree for any session.
+- The status bar shows activity, context occupancy, generation speed, cache
+  hits, tokens and quota, with a session usage panel.
+- Mini mode: frameless conversation cards that can stay on top and follow the
+  theme.
+- Settings are split into pages, with providers, models, routing tests,
+  operation components, runtime, storage usage and updates of their own.
+- Gateway access settings: a fixed or random loopback port and a persistent
+  token for external clients.
+- Remote connections to a daemon on another machine over SSH.
+- A documentation entry in the connection menu.
+- Pet: one redrawn worker crew, native client mascots and a Mini-style task
+  transcript.
+
+### Tasks and execution
+
+- Browser and desktop operations use managed operation components
+  (`agent-browser` and Cua Driver), installed and health-checked by the app.
+- Task dispatch checks that the execution environment has the tools a task
+  needs.
+- `wrenyard session`, `wrenyard workspace` and `wrenyard storage` commands;
+  storage cleanup previews before it applies.
+
+### Providers
+
+- 15 more API-key providers, including Google, Mistral, Groq, Together AI,
+  Fireworks AI and Vercel AI Gateway, for 38 built-in providers in total.
+- Devin, Claude Haiku 5.5 and Gemini 4 Argon support.
+- Verified free models on OpenCode Zen and OpenRouter, in their own quota pool.
+- CodeBuddy credit multipliers in the model list.
+
 ## 1.0.0-dev.46
 
 Attachments in the conversation, a session context that only ever appends, and

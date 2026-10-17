@@ -1,6 +1,10 @@
-# Bot mode configuration guide
+# Legacy bot mode configuration guide
 
-Bot mode is Wrenyard's autonomous dispatcher: a daemon-owned agent that polls a
+> This guide covers the legacy bot mode, shown as **旧版机器人** in the desktop
+> app. For new automation use [bots and routines](bots.md), which are agents
+> with their own instructions and tools.
+
+Legacy bot mode is Wrenyard's deterministic autonomous dispatcher: a daemon-owned agent that polls a
 user-local inbox, confirms each request is real, dispatches it to its own session
 and managed worktree, supervises progress, runs real-machine acceptance, delivers
 one item at a time (rebase → accept → merge → push), completes the source item
@@ -34,7 +38,8 @@ adapter paths belong in your own file.
   "name": "dev-bot",                  // required; display name
   "mode": "dryRun",                   // "live" | "dryRun"; default "dryRun"
 
-  "inbox": {                          // required; where work items come from
+  "inbox": {                          // where work items come from; omit it to use
+                                      // the built-in workspace todos
     "kind": "command",
     "argv": ["/path/to/inbox-adapter", "--filter", "bot"],
     "timeoutMs": 20000                // default 20000, max 300000
@@ -161,6 +166,11 @@ above, and a mismatch is reported as `adapter.invalid_response` naming the
 operation only.
 
 ## 4. Command adapters vs MCP adapters
+
+An inbox can also be `{ "kind": "workspace" }`, which is the default when
+`inbox` is omitted: work items are the built-in workspace todos (`wrenyard
+todo`, see [bots and routines](bots.md#workspace-todos)), and no adapter is
+needed. The notifier is always an adapter.
 
 - `command`: `{ "kind": "command", "argv": [...], "cwd"?, "env"?, "timeoutMs" }`.
   Implemented and recommended; it is what the demo scripts use.
@@ -398,13 +408,12 @@ stopped gracefully on any exit, or on `SIGINT`/`SIGTERM` at any point: the IPC
 `daemon.shutdown` method first, then `SIGTERM` to the daemon's own process
 group, then `SIGKILL` after 15 s. The demo never leaves an orphaned daemon.
 
-## 13. Watching an 8-hour unattended run
+## 13. Watching a long unattended run
 
-The acceptance criterion for Bot mode as a whole is at least **8 hours of
-continuous unattended operation on the installed app**. `bot.health { botId }`
-is what makes that measurable; watch these numbers on the Bot page:
+`bot.health { botId }` makes a long unattended run measurable; watch these
+numbers on the 旧版机器人 page:
 
-| Field | What a healthy 8-hour run looks like |
+| Field | What a healthy long run looks like |
 | --- | --- |
 | `uptimeSince` | Older than the intended run window; it resets only when the host restarts. |
 | `ticks` | Timer passes that advanced **this bot**, so it keeps advancing at that bot's configured `cadence.tickSeconds`. |

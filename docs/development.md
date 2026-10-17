@@ -74,7 +74,9 @@ store. On the native route the canonical `deepseek` provider maps to upstream
 ## Screenshots and the product tour
 
 `apps/desktop/tools/showcase/` renders the built Desktop renderer against
-fictional demo data and drives scripted scenarios:
+fictional, deterministic demo data — sessions, models, quota, statistics, bots
+and routines — and drives scripted scenarios. No daemon, workspace or account
+is involved, so every capture is free of personal data.
 
 ```sh
 pnpm build
@@ -82,8 +84,15 @@ pnpm --filter @wrenyard/desktop exec electron tools/showcase/run.mjs \
   --scenario tools/showcase/scenarios/screenshots.mjs --out .showcase --scale 2
 ```
 
-`scenarios/promo.mjs` records short scripted clips for release notes and demos;
-the recordings are not kept in the repository.
+`scenarios/screenshots.mjs` writes the README and guide images with the same
+names as `docs/images/`; copy them over after review. `scenarios/promo.mjs`
+records short clips (with `ffmpeg` on `PATH`) for release notes and demos; the
+recordings are not kept in the repository.
+
+The demo bridges implement the same `WrenyardShellApi` and session bridge as
+the real preload, and the demo ledgers use the real ledger event types. When a
+shell method or ledger event changes, update `demo-shell.ts` and
+`demo-session.ts` with it so the tour keeps rendering.
 
 ## Releases
 
