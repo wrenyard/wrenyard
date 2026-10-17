@@ -79,13 +79,44 @@ function message(role: number, text: string, calls: Array<{ id: string; name: st
   for (const c of calls) w.bytes(6, new Writer().string(1, c.id).string(2, c.name).bytes(3, encoder.encode(c.args)).done());
   if (callID) w.string(7, callID); return w.done();
 }
+function plainObjectRoot(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('tool parameters must be an object schema');
+  const schema = { ...(value as Record<string, unknown>) };
+  for (const keyword of ['allOf', 'anyOf', 'oneOf'] as const) {
+    const branches = schema[keyword];
+    if (!Array.isArray(branches) || !branches.length) {
+      if (branches !== undefined && !Array.isArray(branches)) throw new Error('tool parameters must have a plain object root');
+      continue;
+    }
+    if (schema.type !== undefined && schema.type !== 'object') throw new Error('tool parameters must have a plain object root');
+    const properties = { ...(schema.properties as Record<string, unknown> | undefined) };
+    let required = Array.isArray(schema.required) ? schema.required.filter((entry): entry is string => typeof entry === 'string') : [];
+    const branchRequired: string[][] = [];
+    for (const branch of branches) {
+      if (!branch || typeof branch !== 'object' || Array.isArray(branch)) throw new Error('tool parameters must have a plain object root');
+      const object = branch as Record<string, unknown>;
+      if ((object.type !== undefined && object.type !== 'object') || object.$ref || object.oneOf || object.anyOf || object.allOf) throw new Error('tool parameters must have a plain object root');
+      for (const [key, property] of Object.entries((object.properties as Record<string, unknown> | undefined) ?? {})) if (!(key in properties)) properties[key] = property;
+      branchRequired.push(Array.isArray(object.required) ? object.required.filter((entry): entry is string => typeof entry === 'string') : []);
+    }
+    const merged = keyword === 'allOf'
+      ? branchRequired.flat()
+      : branchRequired.reduce((keys, branch) => keys.filter((key) => branch.includes(key)), branchRequired[0] ?? []);
+    required = [...new Set([...required, ...merged])];
+    delete schema[keyword];
+    schema.type = 'object';
+    schema.properties = properties;
+    if (required.length) schema.required = required; else delete schema.required;
+  }
+  return schema;
+}
 function schemaSupported(value: unknown): void {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('tool parameters must be an object schema');
   const walk = (obj: Record<string, unknown>) => {
     if (obj.$ref || obj.$defs || obj.definitions) throw new Error('tool schema references are unsupported');
     for (const v of Object.values(obj)) if (v && typeof v === 'object' && !Array.isArray(v)) walk(v as Record<string, unknown>);
   }; const root = value as Record<string, unknown>;
-  if (root.type !== 'object' || root.oneOf || root.anyOf || root.allOf) throw new Error('tool parameters must have a plain object root');
+  if (root.type !== 'object') throw new Error('tool parameters must have a plain object root');
   walk(root);
 }
 
@@ -146,8 +177,9 @@ export function encodeChatRequest(chat: Record<string, unknown>, uid: string, ke
     const fn = tool.function as Record<string, unknown> | undefined; const name = String(fn?.name ?? ''); const schema = fn?.parameters;
     if (!name) throw new Error('tool function name is required');
     if (fn?.strict === true) throw new Error('strict tool schemas are unsupported');
-    schemaSupported(schema);
-    request.bytes(10, new Writer().string(1, name).string(2, fn?.description ? 'Described in <tool_descriptions> in the instructions.' : name).bytes(3, encoder.encode(JSON.stringify(schema))).done());
+    const parameters = plainObjectRoot(schema);
+    schemaSupported(parameters);
+    request.bytes(10, new Writer().string(1, name).string(2, fn?.description ? 'Described in <tool_descriptions> in the instructions.' : name).bytes(3, encoder.encode(JSON.stringify(parameters))).done());
   }
   const declared = new Set<string>();
   if (choice !== 'none') for (const tool of tools) { const fn = tool.function as Record<string, unknown> | undefined; declared.add(String(fn?.name ?? '')); }
