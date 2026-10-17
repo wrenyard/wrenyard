@@ -2472,8 +2472,11 @@ function defaultIsProcessLive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
-  } catch {
-    return false
+  } catch (error: unknown) {
+    // EPERM means the process exists but is not signalable by this user, so only
+    // ESRCH proves absence. Any other unknown failure is treated as live too, so
+    // an owner we cannot inspect is never mistaken for a dead one.
+    return (error as NodeJS.ErrnoException | undefined)?.code !== 'ESRCH'
   }
 }
 
