@@ -141,8 +141,24 @@ export function turnStatusText(turn: TurnModel): string {
       return `第 ${Math.max(1, turn.cycle)} 次推理…`;
     case 'acting': {
       const running = turn.actions.filter((action) => action.status === 'running');
-      if (running.length === 1) return `执行 ${running[0]!.title}…`;
-      if (running.length > 1) return `执行 ${running.length} 个行动…`;
+      if (running.length === 1) {
+        const action = running[0]!;
+        // A dispatch is only executing once its task run exists; before that it
+        // is still being prepared, so say so instead of claiming execution.
+        if (action.kind === 'dispatch') {
+          return action.taskRunId === undefined
+            ? `准备任务 ${action.title}…`
+            : `执行任务 ${action.title}…`;
+        }
+        return `执行 ${action.title}…`;
+      }
+      if (running.length > 1) {
+        const preparing = running.every(
+          (action) => action.kind === 'dispatch' && action.taskRunId === undefined,
+        );
+        if (preparing) return `准备 ${running.length} 个任务…`;
+        return `执行 ${running.length} 个行动…`;
+      }
       return '执行行动…';
     }
     case 'replying':

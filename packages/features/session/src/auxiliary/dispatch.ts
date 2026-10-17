@@ -12,6 +12,8 @@ import { existsSync } from 'node:fs';
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 
 import { renderTaskResult } from './dispatch-result.ts';
+import { evaluateDispatchGate } from './dispatch-gate.ts';
+import { renderToolContracts, toolContractsFor } from './tool-contract.ts';
 import { fail, isObject, renderRunFiles } from './shared.ts';
 import { messageOf } from '../errors.ts';
 import {
@@ -165,6 +167,8 @@ export interface CompileViewInput {
   workspaceRoot: string;
   projects: { id: string; displayName?: string; workspaceDir: string; checkoutPath?: string }[];
   tasks: CompileTaskInput[];
+  /** Rendered verified tool contracts, inserted right before the <intent> tag. */
+  contracts?: string;
 }
 
 function buildCompile(input: CompileViewInput): BuiltView {
@@ -198,6 +202,7 @@ function buildCompile(input: CompileViewInput): BuiltView {
     tag('user', [], escapeBody(input.userText)),
     renderEventsBlock(input.events),
     '</reference-context>',
+    ...(input.contracts === undefined || input.contracts === '' ? [] : [input.contracts]),
     tag('intent', [], escapeBody(input.intent)),
   ].join('\n');
   return twoPartView(COMPILE_SYSTEM, tag('wy-compile', [], body), 'wy-compile');
@@ -316,7 +321,7 @@ export async function runDispatchAction(
     if (action.intent.includes(contract.id)) focus.add(contract.id);
   }
 
-  const view = buildCompile({
+  const compileInput: CompileViewInput = {
     kind: 'dispatch',
     intent: action.intent,
     userText: ctx.userText,
@@ -329,7 +334,8 @@ export async function runDispatchAction(
       ...(project.checkoutPath === undefined ? {} : { checkoutPath: project.checkoutPath }),
     })),
     tasks: contracts,
-  });
+  };
+  const view = buildCompile(compileInput);
   // A failed call or unusable output is a system fault, not a decision of
   // the reasoning model. The compiler is asked again with its own output and
   // the reason it was rejected, so each attempt corrects the previous one.
@@ -366,6 +372,26 @@ export async function runDispatchAction(
     };
   }
   if (compiled === undefined) return fail(compileError);
+
+  // A verified contract gets one extra compilation outside the bounded repair
+  // loop. Its failure cannot discard the already-valid compile result.
+  const renderedContracts = renderToolContracts(toolContractsFor({
+    project: compiled.project.id,
+    task: compiled.taskId,
+    ...(compiled.worktree === undefined ? {} : { worktree: compiled.worktree }),
+  }));
+  if (renderedContracts !== '') {
+    const contractOutcome = await runCompileCall(
+      deps,
+      buildCompile({ ...compileInput, contracts: renderedContracts }),
+      ctx,
+    );
+    if (contractOutcome.ok) {
+      const contractCompile = checkCompiled(contractOutcome.text, ctx, contracts);
+      if (contractCompile.ok) compiled = contractCompile;
+    }
+  }
+
   const { parsed, project, taskId, worktree, effectiveInput, fast } = compiled;
 
   // Capability gate: a task whose contract requires a capability no execution
@@ -400,6 +426,16 @@ export async function runDispatchAction(
       );
     }
   }
+
+  // The convergence gate: refuse a repeat full implementation dispatch for the
+  // same target while it is still in flight or its failure has neither new
+  // evidence nor a condition change behind it.
+  const decision = evaluateDispatchGate(ctx.currentEvents(), {
+    project: project.id,
+    task: taskId,
+    ...(worktree === undefined ? {} : { worktree }),
+  });
+  if (!decision.allowed) return { status: 'failed', result: decision.message, deferred: [] };
 
   const rawTitle = typeof parsed.title === 'string' ? parsed.title.trim() : '';
   const title = rawTitle !== '' && rawTitle.length <= 40 ? rawTitle : '';
@@ -441,7 +477,12 @@ export async function runDispatchAction(
     kind: 'task',
     turn: ctx.turn,
     step: ctx.step,
-    request: { task: taskId, project: project.id, taskRunId },
+    request: {
+      task: taskId,
+      project: project.id,
+      ...(worktree === undefined ? {} : { worktree }),
+      taskRunId,
+    },
   });
 
   await ctx.onTaskRun(taskRunId);

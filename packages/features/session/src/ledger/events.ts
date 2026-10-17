@@ -336,6 +336,7 @@ export interface ModelSpanRequest {
 export interface TaskSpanRequest {
   task: string;
   project?: string;
+  worktree?: string;
   taskRunId: string;
 }
 

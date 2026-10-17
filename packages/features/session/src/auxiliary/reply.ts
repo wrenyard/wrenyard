@@ -493,6 +493,7 @@ Identity and tone:
 - Do not raise questions or proposals that the reasoning model did not raise.
 - Do not mention internal names, paths or identifiers unless the user needs to open them.
 - The states in infos and actions are facts from the program. They take priority over the plans of the reasoning model.
+- A dispatch counts as implementation only once its task run exists, and an asset change may be stated only when the attachments list shows it.
 
 How to write: follow about 80% of the ASD-STE100 Simplified Technical English writing rules, applied to the language you write in.
 - One sentence says one thing. Keep sentences short: usually no more than 20 words, or 30 characters in Chinese or Japanese.
@@ -614,7 +615,10 @@ function attachmentLines(events: readonly LedgerEvent[]): string[] {
 function buildReply(input: ReplyViewInput): BuiltView {
   const conversation: string[] = [];
   const memories: string[] = [];
-  const running = new Map<string, string>();
+  const running = new Map<string, { type: string; name: string }>();
+  // The parent action of every task span seen so far: a dispatch that has one
+  // is already executing; one that does not is still being compiled.
+  const taskSpans = new Set<string>();
   const finishedActions: string[] = [];
   let worker: Extract<LedgerEvent, { type: 'reasoning.completed' }> | undefined;
   for (const event of input.events) {
@@ -626,13 +630,15 @@ function buildReply(input: ReplyViewInput): BuiltView {
         if (event.turn === input.turn && event.step === input.step) worker = event;
         break;
       case 'action.started':
-        running.set(event.id, event.action.type);
+        running.set(event.id, { type: event.action.type, name: event.action.type });
         break;
-      case 'action.titled':
-        if (running.has(event.id)) running.set(event.id, event.title);
+      case 'action.titled': {
+        const entry = running.get(event.id);
+        if (entry !== undefined) entry.name = event.title;
         break;
+      }
       case 'action.finished': {
-        const title = running.get(event.id) ?? event.action.type;
+        const title = running.get(event.id)?.name ?? event.action.type;
         running.delete(event.id);
         // A result that arrived after the turn was interrupted stays out of
         // the context; it is only removed from the running set.
@@ -642,6 +648,9 @@ function buildReply(input: ReplyViewInput): BuiltView {
         }
         break;
       }
+      case 'span.started':
+        if (event.kind === 'task') taskSpans.add(event.parent);
+        break;
       case 'reply.sent':
         conversation.push(tag('message', [['role', 'assistant'], ['turn', event.turn]], escapeReplyBody(event.text)));
         break;
@@ -664,7 +673,11 @@ function buildReply(input: ReplyViewInput): BuiltView {
     ...failureInfo(input.failure),
     ...(input.imageUnsupported === true ? ['The reasoning model cannot see the images the user sent.'] : []),
   ];
-  const actions = [...running.values()].map((name) => `- ${name}`);
+  const actions = [...running.entries()].map(([id, entry]) => {
+    if (entry.type !== 'dispatch') return `- ${entry.name}`;
+    const stage = taskSpans.has(id) ? ' (task run created)' : ' (compiling, no task run yet)';
+    return `- ${entry.name}${stage}`;
+  });
   const attachments = attachmentLines(input.events);
 
   const ctx = [
