@@ -94,7 +94,6 @@ export interface PrepareOperationInput {
   /** Resolved agent client id; selects the per-client discovery hint. */
   clientId?: string
   signal?: AbortSignal
-  environment?: NodeJS.ProcessEnv
   onQueued?: (position: number | undefined) => void
 }
 
@@ -304,21 +303,14 @@ export class OperationAdapter {
         snapshots.set(id, launch.snapshot)
 
         if (id === 'browser') {
-          const headedValue = input.environment?.AGENT_BROWSER_HEADED ?? process.env.AGENT_BROWSER_HEADED
-          if (isTruthyEnvironmentValue(headedValue) && !desktopHeld) {
+          if (isTruthyEnvironmentValue(process.env.AGENT_BROWSER_HEADED) && !desktopHeld) {
             await desktopLane.acquire(owner, runId, input.signal, input.onQueued)
             desktopHeld = true
           }
           const session = browserSessionName(runId)
           const directory = dirname(launch.executable)
           const baseEnv = launch.env
-          envModifiers.push((env) => {
-            const next = applyBrowserEnv(env, directory, baseEnv, session)
-            if (input.environment?.AGENT_BROWSER_HEADED !== undefined) {
-              next.AGENT_BROWSER_HEADED = input.environment.AGENT_BROWSER_HEADED
-            }
-            return next
-          })
+          envModifiers.push((env) => applyBrowserEnv(env, directory, baseEnv, session))
           cleanups.push(() =>
             runQuietly(launch.executable, ['--session', session, 'close'], {
               ...launch.env,

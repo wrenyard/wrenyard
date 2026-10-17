@@ -796,7 +796,6 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
             owner: opts.taskId ?? entry.executionId,
             clientId,
             signal: laneAbort.signal,
-            environment: opts.env,
             onQueued: () => {
               if (opts.taskId) this.taskRuns().markWaiting(opts.taskId, nowIso())
             },

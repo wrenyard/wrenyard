@@ -78,8 +78,6 @@ export interface StartAgentExecutionOptions {
   codeBuddyExecution?: CodeBuddyExecutionBinding
   /** Canonical agent-runtime failure class, when supplied by the resolver. */
   failureClass?: AgentFailureClass | string | null
-  /** The run's own incoming environment, used to detect headed browser runs via AGENT_BROWSER_HEADED. */
-  env?: NodeJS.ProcessEnv
 }
 
 export interface ExecutionResult {
