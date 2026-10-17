@@ -21,6 +21,7 @@ export type CustomControlKey =
   | 'autoPriceCap'
   | 'daemon'
   | 'endpoint'
+  | 'gateway'
   | 'logs'
   | 'operationComponents'
   | 'petBottomOffset'
@@ -383,6 +384,16 @@ const COMPONENTS_CATEGORY: SettingDefinition[] = [
 ];
 
 const RUNTIME_CATEGORY: SettingDefinition[] = [
+  {
+    id: 'runtime.gateway',
+    category: 'runtime',
+    title: 'Gateway 接入',
+    description: '查看本机 Gateway 连接信息并设置下次绑定使用的端口与 Token。',
+    keywords: ['gateway', '端口', 'token', '外部客户端', '接入'],
+    control: custom('gateway'),
+    readonly: true,
+    source: { kind: 'readonly' },
+  },
   {
     id: 'runtime.daemon',
     category: 'runtime',

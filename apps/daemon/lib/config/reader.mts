@@ -5,7 +5,7 @@ import {
   resolveDefaultWrenyardConfigPath as resolveDefaultForemanConfigPath,
   resolveWrenyardConfigRoot as resolveForemanConfigDir,
 } from '@wrenyard/paths'
-import type { ForemanServiceConfig } from './types.mts'
+import type { ForemanGatewayConfig, ForemanServiceConfig } from './types.mts'
 
 export { resolveForemanConfigPath, resolveDefaultForemanConfigPath, resolveForemanConfigDir }
 
@@ -20,6 +20,19 @@ export function loadForemanServiceConfig(
 ): ForemanServiceConfig {
   const manager = new ForemanConfigManager(options.env ? { env: options.env } : undefined)
   return manager.loadServiceConfig(configPath ?? options.configPath).config
+}
+
+/**
+ * Read the normalized top-level gateway settings (port mode/choice and the
+ * persisted token). `random` is the default, so a config without any gateway
+ * fields reads back as random mode; callers that need the effective connection
+ * combine this with the running daemon's bind-time state.
+ */
+export function loadForemanGatewayConfig(
+  configPath?: string,
+  options: LoadForemanServiceConfigOptions = {},
+): ForemanGatewayConfig {
+  return loadForemanServiceConfig(configPath, options).gateway
 }
 
 export function loadForemanConfigData(

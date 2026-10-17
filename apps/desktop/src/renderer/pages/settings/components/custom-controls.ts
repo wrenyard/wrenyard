@@ -25,6 +25,7 @@ import {
 import { RoutingWeightsControl } from './RoutingWeightsSettings.js';
 import {
   DaemonControl,
+  GatewayControl,
   EndpointControl,
   LogsControl,
   ServiceControl,
@@ -50,6 +51,7 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   autoPriceCap: AutoPriceCapControl,
   daemon: DaemonControl,
   endpoint: EndpointControl,
+  gateway: GatewayControl,
   logs: LogsControl,
   operationComponents: OperationComponentsControl,
   petBottomOffset: PetBottomOffsetControl,

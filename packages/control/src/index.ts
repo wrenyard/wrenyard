@@ -97,6 +97,65 @@ export interface WrenyardGatewayConnection {
   models: WrenyardGatewayModel[];
 }
 
+/** How the gateway chooses the loopback port it binds. */
+export type WrenyardGatewayPortMode = 'random' | 'fixed';
+
+/** The gateway connection the running daemon currently serves (bind-time). */
+export interface WrenyardGatewayEffectiveConnection {
+  host: string;
+  port: number;
+  openaiChatBaseUrl: string;
+  openaiResponsesBaseUrl: string;
+  anthropicBaseUrl: string;
+  /** The token the running daemon accepts right now. */
+  token: string;
+}
+
+/**
+ * Persisted gateway access settings plus the effective connection. The saved
+ * port choice is what the next bind will use; `effective` is what the running
+ * daemon serves right now. `tokenSaved` reports whether a token is persisted
+ * without returning its value, and the pending flags say whether a saved port
+ * or token change has not yet taken effect.
+ */
+export interface WrenyardGatewaySettings {
+  savedPortMode: WrenyardGatewayPortMode;
+  savedPort?: number;
+  tokenSaved: boolean;
+  portChangePending: boolean;
+  tokenChangePending: boolean;
+  effective: WrenyardGatewayEffectiveConnection;
+}
+
+/** Port choice for a save; `fixed` requires a validated 1–65535 TCP port. */
+export type WrenyardGatewayPortChoice =
+  | { mode: 'random' }
+  | { mode: 'fixed'; port: number };
+
+/** Persisted-token replacement: a caller-supplied value or a fresh generated one. */
+export type WrenyardGatewayTokenReplacement =
+  | { kind: 'custom'; token: string }
+  | { kind: 'generate' };
+
+export interface WrenyardGatewaySettingsSaveInput {
+  /** Omit to keep the saved port choice unchanged. */
+  port?: WrenyardGatewayPortChoice;
+  /** Omit to keep the persisted token unchanged. */
+  token?: WrenyardGatewayTokenReplacement;
+  /** Explicit acknowledgement required before any token replacement. */
+  confirmTokenReplacement?: boolean;
+}
+
+export interface WrenyardGatewaySettingsSaveResult extends WrenyardGatewaySettings {
+  ok: true;
+  /**
+   * Present when a token replacement was persisted: the running gateway keeps
+   * the previous token until the next bind, after which existing external
+   * clients must update their credentials.
+   */
+  warning?: string;
+}
+
 /**
  * Terminal result returned by `task.run.wait`. This reuses the same completion
  * envelope as the Foreman `TaskRunOutputResult` protocol type; do not invent a
@@ -266,6 +325,29 @@ export class WrenyardIpcClient {
   /** Resolve the daemon-local Model Gateway connection. Available over IPC only. */
   gatewayConnection(options?: WrenyardIpcRequestOptions): Promise<WrenyardGatewayConnection> {
     return this.request<WrenyardGatewayConnection>('gateway.connection', {}, options);
+  }
+
+  /**
+   * Read the persisted gateway access settings and the effective connection.
+   * Available over IPC only. The saved port choice is separate from the
+   * effective host/port/base URLs, and a persisted token is reported as a
+   * boolean rather than returned.
+   */
+  gatewaySettings(options?: WrenyardIpcRequestOptions): Promise<WrenyardGatewaySettings> {
+    return this.request<WrenyardGatewaySettings>('gateway.settings', {}, options);
+  }
+
+  /**
+   * Persist a gateway port/token change through the daemon's local IPC channel.
+   * The running gateway is not rebound: the change applies at the next bind.
+   * Replacing the token requires `confirmTokenReplacement: true` and the result
+   * carries a warning that existing external clients must update credentials.
+   */
+  gatewaySettingsSave(
+    input: WrenyardGatewaySettingsSaveInput,
+    options?: WrenyardIpcRequestOptions,
+  ): Promise<WrenyardGatewaySettingsSaveResult> {
+    return this.request<WrenyardGatewaySettingsSaveResult>('gateway.settings.save', input, options);
   }
 
   /** Read the daemon-owned provider Catalog and authentication state. */

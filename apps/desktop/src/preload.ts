@@ -17,6 +17,9 @@ import {
   type DaemonLifecycleSnapshot,
   type ShellPage,
   type WrenyardShellApi,
+  type WrenyardGatewaySettings,
+  type WrenyardGatewaySettingsSaveInput,
+  type WrenyardGatewaySettingsSaveResult,
   type TaskSettingsSaveRequest,
   type TaskSettingsSnapshot,
   type RuntimeAliasPutRequest,
@@ -147,6 +150,12 @@ const api: WrenyardShellApi = {
   },
   getSettings(): Promise<SettingsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.settingsSnapshot) as Promise<SettingsSnapshot>;
+  },
+  getGatewaySettings(): Promise<WrenyardGatewaySettings> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.gatewaySettings) as Promise<WrenyardGatewaySettings>;
+  },
+  saveGatewaySettings(input: WrenyardGatewaySettingsSaveInput): Promise<WrenyardGatewaySettingsSaveResult> {
+    return ipcRenderer.invoke(SHELL_CHANNELS.gatewaySettingsSave, input) as Promise<WrenyardGatewaySettingsSaveResult>;
   },
   getStats(): Promise<StatsSnapshot> {
     return ipcRenderer.invoke(SHELL_CHANNELS.statsSnapshot) as Promise<StatsSnapshot>;

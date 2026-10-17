@@ -5,6 +5,7 @@ import {
   type ConfigRecord,
   createDefaultForemanConfigData,
   type ForemanConfigData,
+  type GatewayConfigData,
   mergeForemanConfigData,
 } from './data.mts'
 import {
@@ -173,5 +174,20 @@ export class ForemanConfigManager {
     const { data } = this.loadUserData(configPathValue)
     updater(data)
     this.store.write(this.resolveWritePath(configPathValue), data as ConfigRecord)
+  }
+
+  /**
+   * Apply one mutation to the persisted top-level gateway settings. The write
+   * goes through the same atomic mode-0600 store as every other config change
+   * and preserves unrelated user configuration. The data is never logged and no
+   * helper returns the token value.
+   */
+  updateGatewayData(
+    configPathValue: unknown,
+    updater: (gateway: GatewayConfigData) => GatewayConfigData,
+  ): void {
+    this.updateUserData(configPathValue, (data: ForemanConfigData) => {
+      data.gateway = updater(data.gateway ?? {})
+    })
   }
 }

@@ -11,8 +11,9 @@ import { dropTaskRunTelemetryRetiredColumns } from '../db/schema.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { WorkflowRunStore } from '../db/stores/workflow-run-store.mts'
 import type { OperationHost } from '../core/operations/types.mts'
-import type { ForemanServiceConfig } from '../config/index.mts'
-import { updateForemanConfigData } from '../config/writer.mts'
+import type { ForemanServiceConfig, GatewayPortMode } from '../config/index.mts'
+import { loadForemanGatewayConfig } from '../config/reader.mts'
+import { updateForemanConfigData, updateForemanGatewayConfig } from '../config/writer.mts'
 import { RpcRouter } from '../server/rpc-router.mts'
 import { registerCoreHandlers, readProcessIdentity, type CoreRpcHandlerOptions } from '../server/handlers/core.mts'
 import { createIpcServer, type IpcServer } from '../control/ipc-server.mts'
@@ -21,9 +22,15 @@ import { registerRoutineHandlers } from '../server/handlers/routine.mts'
 import { registerAgentHandlers } from '../server/handlers/agent.mts'
 import { registerBotHandlers } from '../server/handlers/bot.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
+import { GATEWAY_TOKEN_REPLACEMENT_WARNING } from '../protocol/methods/gateway.mts'
 import type { TaskSettingsLayer } from '../protocol/methods/task.mts'
-import type { WorkspaceSwitchResult } from '../protocol/registry.mts'
 import { runManagedCleanup } from '../core/storage/cleanup.mts'
+import type {
+  GatewaySettingsResult,
+  GatewaySettingsSaveParams,
+  GatewaySettingsSaveResult,
+  WorkspaceSwitchResult,
+} from '../protocol/registry.mts'
 import { TaskService, isTaskRunRejection } from '../core/task/service.mts'
 import { createSession, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
@@ -643,11 +650,18 @@ async function createForemanDaemonResources(
   }
 
   const startedAt = Date.now()
-  // The gateway listens on a random loopback port assigned at bind time; the URL
-  // and every injected value derive from that actual bound port.
+  // The gateway listens on loopback only. A random port is assigned by the OS at
+  // bind time; a fixed port comes from the persisted gateway setting. Both the
+  // bind choice and the effective token are captured here, once, and never
+  // change for this process: saving a new setting persists it for the next bind
+  // and does not move the running listener or rotate the live token.
   let boundPort = 0
-  // Per-start in-memory gateway token. Random, never written to disk, no helper.
-  const gatewayToken = randomBytes(32).toString('hex')
+  const gatewaySavedFixedPort = config.gateway.portMode === 'fixed' ? config.gateway.port : undefined
+  if (config.gateway.portMode === 'fixed' && (!Number.isInteger(gatewaySavedFixedPort) || gatewaySavedFixedPort! < 1 || gatewaySavedFixedPort! > 65535)) {
+    throw new Error('Gateway fixed port must be an integer between 1 and 65535. Choose a valid fixed port or switch the gateway port mode to random.')
+  }
+  const gatewayBindPort = gatewaySavedFixedPort ?? 0
+  const gatewayBindMode: GatewayPortMode = gatewaySavedFixedPort === undefined ? 'random' : 'fixed'
   // Catalog / provider runtime / canonical task plans / deterministic resolver
   // are constructed once in bootstrap (see bootstrapForemanDaemonRuntime) and
   // reused here so the gateway, RPC surface, and the running daemon all share
@@ -728,6 +742,15 @@ async function createForemanDaemonResources(
   // authoritative config path; no second catalog/resolver/alias store is
   // constructed.
   const authoritativeConfigPath = new ForemanConfigManager().resolvePath(options.configPath)
+  if (config.gateway.portMode === 'fixed' && (!Number.isInteger(config.gateway.port) || config.gateway.port! < 1 || config.gateway.port! > 65535)) {
+    throw new Error('Gateway fixed port must be an integer between 1 and 65535. Choose a valid fixed port or switch the gateway port mode to random.')
+  }
+  // The persisted gateway token. On the first start none is stored yet: generate
+  // a CSPRNG token once, persist it through the same atomic mode-0600 config
+  // write as every other setting, and reuse that exact value on later starts so
+  // a restart does not invalidate existing credentials. The value is captured
+  // for this process and never logged.
+  const gatewayToken = config.gateway.token ?? persistGeneratedGatewayToken(authoritativeConfigPath)
   const runtimeAvailability = createRoutingAvailability({ catalog, providerRuntime, loadNativeProviderReadiness, loadCurrentCodeBuddySnapshot })
   const gatewayEventStore = new ForemanEventStore(runtime.db)
   const gateway = createModelGateway({
@@ -810,6 +833,73 @@ async function createForemanDaemonResources(
     ...await gateway.connection(gatewayOrigin(boundPort)),
     token: gatewayToken,
   })
+
+  // IPC-only read/update of the persisted gateway access settings. Reading
+  // reports the saved choice (freshly re-read, so a save is visible at once) and
+  // the effective bind-time connection side by side. A save only persists: it
+  // never rebinds, restarts, rotates the effective token or rewrites the
+  // injected WRENYARD_GATEWAY_* environment this process already published.
+  const gatewaySettingsSnapshot = async (): Promise<GatewaySettingsResult> => {
+    const saved = loadForemanGatewayConfig(authoritativeConfigPath)
+    const savedFixedPort = saved.portMode === 'fixed' ? saved.port : undefined
+    const connection = await gateway.connection(gatewayOrigin(boundPort))
+    return {
+      savedPortMode: saved.portMode,
+      ...(savedFixedPort === undefined ? {} : { savedPort: savedFixedPort }),
+      tokenSaved: saved.token !== undefined,
+      portChangePending:
+        saved.portMode !== gatewayBindMode
+        || (savedFixedPort !== undefined && savedFixedPort !== gatewayBindPort),
+      tokenChangePending: saved.token !== undefined && saved.token !== gatewayToken,
+      effective: {
+        host: '127.0.0.1',
+        port: boundPort,
+        openaiChatBaseUrl: connection.openaiChatBaseUrl,
+        openaiResponsesBaseUrl: connection.openaiResponsesBaseUrl,
+        anthropicBaseUrl: connection.anthropicBaseUrl,
+        token: gatewayToken,
+      },
+    }
+  }
+
+  const saveGatewaySettings = async (
+    update: GatewaySettingsSaveParams,
+  ): Promise<GatewaySettingsSaveResult> => {
+    // A generated replacement is minted here, never supplied by the caller; a
+    // custom replacement is the caller's already-validated value.
+    const tokenUpdate = update.token
+    const replacementToken = tokenUpdate === undefined
+      ? undefined
+      : tokenUpdate.kind === 'generate'
+        ? randomBytes(32).toString('hex')
+        : tokenUpdate.token
+    updateForemanGatewayConfig(authoritativeConfigPath, (current) => {
+      const portChoice = update.port
+      let portMode = current.portMode
+      let port = current.port
+      if (portChoice !== undefined) {
+        if (portChoice.mode === 'random') {
+          portMode = 'random'
+          port = undefined
+        } else {
+          portMode = 'fixed'
+          port = portChoice.port
+        }
+      }
+      const token = replacementToken ?? current.token
+      return {
+        portMode,
+        ...(portMode === 'fixed' && port !== undefined ? { port } : {}),
+        ...(token === undefined ? {} : { token }),
+      }
+    })
+    const snapshot = await gatewaySettingsSnapshot()
+    return {
+      ok: true,
+      ...snapshot,
+      ...(replacementToken === undefined ? {} : { warning: GATEWAY_TOKEN_REPLACEMENT_WARNING }),
+    }
+  }
 
   // The task path reuses this same gateway/circuit (no second circuit and no
   // new persistence): a native task attempt admits its exact route once before
@@ -1153,6 +1243,8 @@ async function createForemanDaemonResources(
     workspaceDocService: workspaceScoped.workspaceDocService,
     workspaceTodoService: workspaceScoped.workspaceTodoService,
     gatewayConnection: gatewayConnectionSnapshot,
+    gatewaySettings: gatewaySettingsSnapshot,
+    gatewaySettingsSave: (params) => saveGatewaySettings(params),
     providerList: () => providerService.list(),
     providerConfigure: (params) => providerService.configure(params),
     providerQuota: (params) => providerService.quotaSnapshot(params),
@@ -1361,12 +1453,23 @@ async function createForemanDaemonResources(
     response.writeHead(404, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ ok: false, error: 'not_found' }))
   })
-  // Bind one random loopback port. There is no port configuration and no
-  // EADDRINUSE retry: the OS assigns a free port on 127.0.0.1:0.
+  // Bind one loopback port: an OS-assigned free port in random mode, or the
+  // exact saved fixed port. A fixed port that is already in use fails loud with
+  // an actionable message; the daemon never silently falls back to another port.
   await new Promise<void>((resolve, reject) => {
-    httpServer.once('error', reject)
-    httpServer.listen(0, '127.0.0.1', () => {
-      httpServer.off('error', reject)
+    const onError = (error: Error): void => {
+      httpServer.off('error', onError)
+      if (gatewayBindMode === 'fixed' && (error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+        reject(new Error(
+          `Gateway port ${gatewayBindPort} is already in use on 127.0.0.1. Choose another fixed port or switch the gateway port mode to random.`,
+        ))
+        return
+      }
+      reject(error)
+    }
+    httpServer.once('error', onError)
+    httpServer.listen(gatewayBindPort, '127.0.0.1', () => {
+      httpServer.off('error', onError)
       resolve()
     })
   })
@@ -1872,6 +1975,17 @@ function closeHttpServerIfListening(httpServer: Server): Promise<void> {
       resolve()
     })
   })
+}
+
+/**
+ * Generate and persist the first gateway token exactly once. The token is a
+ * fresh CSPRNG value written through the same atomic mode-0600 config store as
+ * every other setting, then reused verbatim on later starts. Never logged.
+ */
+function persistGeneratedGatewayToken(configPath: string): string {
+  const token = randomBytes(32).toString('hex')
+  updateForemanGatewayConfig(configPath, (gateway) => ({ ...gateway, token }))
+  return token
 }
 
 function gatewayOrigin(port: number): string {

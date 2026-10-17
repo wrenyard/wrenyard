@@ -166,10 +166,25 @@ import {
 import {
   gatewayConnectionParamsSchema,
   gatewayConnectionResultSchema,
+  gatewaySettingsParamsSchema,
+  gatewaySettingsResultSchema,
+  gatewaySettingsSaveParamsSchema,
+  gatewaySettingsSaveResultSchema,
   type GatewayConnectionParams,
   type GatewayConnectionResult,
+  type GatewaySettingsParams,
+  type GatewaySettingsResult,
+  type GatewaySettingsSaveParams,
+  type GatewaySettingsSaveResult,
 } from './methods/gateway.mts'
-export type { GatewayConnectionParams, GatewayConnectionResult } from './methods/gateway.mts'
+export type {
+  GatewayConnectionParams,
+  GatewayConnectionResult,
+  GatewaySettingsParams,
+  GatewaySettingsResult,
+  GatewaySettingsSaveParams,
+  GatewaySettingsSaveResult,
+} from './methods/gateway.mts'
 import {
   providerConfigureParamsSchema,
   providerConfigureResultSchema,
@@ -941,6 +956,8 @@ export interface ForemanMethodParams {
   'daemon.status': DaemonStatusParams
   'health.ping': HealthPingParams
   'gateway.connection': GatewayConnectionParams
+  'gateway.settings': GatewaySettingsParams
+  'gateway.settings.save': GatewaySettingsSaveParams
   'provider.list': ProviderListParams
   'provider.configure': ProviderConfigureParams
   'provider.quota': ProviderQuotaParams
@@ -1060,6 +1077,8 @@ export interface ForemanMethodResults {
   'daemon.status': DaemonStatusResult
   'health.ping': HealthPingResult
   'gateway.connection': GatewayConnectionResult
+  'gateway.settings': GatewaySettingsResult
+  'gateway.settings.save': GatewaySettingsSaveResult
   'provider.list': ProviderListResult
   'provider.configure': ProviderConfigureResult
   'provider.quota': ProviderQuotaResult
@@ -1199,6 +1218,16 @@ export const methodRegistry: {
   'gateway.connection': {
     params: gatewayConnectionParamsSchema,
     result: gatewayConnectionResultSchema,
+  },
+  'gateway.settings': {
+    params: gatewaySettingsParamsSchema,
+    result: gatewaySettingsResultSchema,
+    description: 'Read the persisted gateway access settings and the connection the running daemon currently serves. IPC-only; never returns a saved token value that differs from the effective one.',
+  },
+  'gateway.settings.save': {
+    params: gatewaySettingsSaveParamsSchema,
+    result: gatewaySettingsSaveResultSchema,
+    description: 'Validate and persist a gateway port/token change. Never rebinds, restarts or rotates the running gateway; the saved change takes effect at the next bind. IPC-only.',
   },
   'provider.list': {
     params: providerListParamsSchema,

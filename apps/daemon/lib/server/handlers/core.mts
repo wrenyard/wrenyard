@@ -46,6 +46,9 @@ import type {
   TaskGraphWaitResult,
   TaskGraphSlipResult,
   GatewayConnectionResult,
+  GatewaySettingsResult,
+  GatewaySettingsSaveParams,
+  GatewaySettingsSaveResult,
   ExecCancelResult,
   ExecEventsResult,
   ExecGetResult,
@@ -166,6 +169,13 @@ export interface CoreRpcHandlerOptions {
   workspaceTodoService?: WorkspaceTodoHandlerService
   /** IPC-only model Gateway connection descriptor for local clients. */
   gatewayConnection?: () => Promise<GatewayConnectionResult>
+  /** IPC-only read of the persisted + effective gateway access settings. */
+  gatewaySettings?: () => Promise<GatewaySettingsResult>
+  /**
+   * IPC-only persistence of a validated gateway settings change. It only writes
+   * the config: it never rebinds, restarts or rotates the running gateway.
+   */
+  gatewaySettingsSave?: (params: GatewaySettingsSaveParams) => Promise<GatewaySettingsSaveResult>
   /** Daemon-owned TaskSettingsService backing task.settings.snapshot/save. */
   taskSettings?: TaskSettingsService
   /** Daemon-owned RuntimeAliasService backing runtime.alias.snapshot/put/remove. */
@@ -264,6 +274,30 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         )
       }
       return options.gatewayConnection!()
+    })
+  }
+  if (options.gatewaySettings) {
+    router.register('gateway.settings', async (_params, _message, context) => {
+      const rpcContext = coreRpcContextFromUnknown(context)
+      if (rpcContext.transport !== 'ipc') {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'gateway.settings is only available over IPC' },
+          { code: 'gateway_settings_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+        )
+      }
+      return options.gatewaySettings!()
+    })
+  }
+  if (options.gatewaySettingsSave) {
+    router.register('gateway.settings.save', async (params, _message, context) => {
+      const rpcContext = coreRpcContextFromUnknown(context)
+      if (rpcContext.transport !== 'ipc') {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'gateway.settings.save is only available over IPC' },
+          { code: 'gateway_settings_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
+        )
+      }
+      return options.gatewaySettingsSave!(validateGatewaySettingsSave(params))
     })
   }
   if (options.providerList && options.providerConfigure) {
@@ -986,6 +1020,98 @@ function coreRpcContextFromUnknown(value: unknown): CoreRpcContext {
 
 function isCoreRpcTransport(value: unknown): value is CoreRpcTransport {
   return value === 'ipc'
+}
+
+/**
+ * Validate one `gateway.settings.save` payload before any write. The schema
+ * pins the wire shape; this adds the semantic rules it cannot express: a fixed
+ * mode requires an integer port in 1–65535, a custom token must survive an HTTP
+ * header verbatim (no whitespace, control characters or non-ASCII), and any
+ * token replacement needs explicit confirmation. Invalid input is refused with
+ * a bounded message and the raw input is never echoed back.
+ */
+function validateGatewaySettingsSave(params: GatewaySettingsSaveParams): GatewaySettingsSaveParams {
+  if (params === null || typeof params !== 'object' || Array.isArray(params)) {
+    throw new ProtocolError(
+      { code: INVALID_PARAMS.code, message: 'Gateway settings must be an object with only supported fields' },
+      { code: 'gateway_invalid_settings', method: 'gateway.settings.save' },
+    )
+  }
+  const root = params as GatewaySettingsSaveParams & Record<string, unknown>
+  if (Object.keys(root).some((key) => !['port', 'token', 'confirmTokenReplacement'].includes(key))) {
+    throw new ProtocolError(
+      { code: INVALID_PARAMS.code, message: 'Gateway settings contain unsupported fields' },
+      { code: 'gateway_invalid_settings', method: 'gateway.settings.save' },
+    )
+  }
+  const portChoice = params.port
+  if (portChoice !== undefined) {
+    const choice = portChoice as unknown as Record<string, unknown>
+    if (choice.mode === 'random') {
+      if (Object.keys(choice).some((key) => key !== 'mode')) {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'Random gateway port choice must not include a port' },
+          { code: 'gateway_invalid_port', method: 'gateway.settings.save' },
+        )
+      }
+    } else if (choice.mode === 'fixed') {
+      const port: unknown = choice.port
+      if (Object.keys(choice).some((key) => !['mode', 'port'].includes(key)) || typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new ProtocolError(
+          { code: INVALID_PARAMS.code, message: 'Gateway fixed port is required and must be an integer between 1 and 65535' },
+          { code: 'gateway_invalid_port', method: 'gateway.settings.save' },
+        )
+      }
+    } else {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'Gateway port mode must be fixed or random' },
+        { code: 'gateway_invalid_port', method: 'gateway.settings.save' },
+      )
+    }
+  }
+  const token = params.token
+  if (token !== undefined) {
+    const tokenChoice = token as unknown as Record<string, unknown>
+    if (params.confirmTokenReplacement !== true) {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'Replacing the gateway token requires confirmation; existing external clients must be updated after the next bind' },
+        { code: 'gateway_token_confirmation_required', method: 'gateway.settings.save' },
+      )
+    }
+    if (tokenChoice.kind === 'generate' && Object.keys(tokenChoice).some((key) => key !== 'kind')) {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'Generated gateway token choice must not include a token' },
+        { code: 'gateway_invalid_token', method: 'gateway.settings.save' },
+      )
+    }
+    if (tokenChoice.kind === 'custom' && (Object.keys(tokenChoice).some((key) => !['kind', 'token'].includes(key)) || !isHeaderSafeGatewayToken(tokenChoice.token))) {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'Gateway token must be non-empty and safe in an HTTP header (no whitespace, control characters or non-ASCII)' },
+        { code: 'gateway_invalid_token', method: 'gateway.settings.save' },
+      )
+    }
+    if (tokenChoice.kind !== 'generate' && tokenChoice.kind !== 'custom') {
+      throw new ProtocolError(
+        { code: INVALID_PARAMS.code, message: 'Gateway token replacement kind must be custom or generate' },
+        { code: 'gateway_invalid_token', method: 'gateway.settings.save' },
+      )
+    }
+  } else if (params.confirmTokenReplacement !== undefined) {
+    throw new ProtocolError(
+      { code: INVALID_PARAMS.code, message: 'Token replacement confirmation requires a token replacement' },
+      { code: 'gateway_invalid_token', method: 'gateway.settings.save' },
+    )
+  }
+  return params
+}
+
+/**
+ * A token that survives `Authorization: Bearer <token>` and `x-api-key:
+ * <token>` verbatim: non-empty printable ASCII with no whitespace or control
+ * characters. Never echoes the value.
+ */
+function isHeaderSafeGatewayToken(value: unknown): value is string {
+  return typeof value === 'string' && /^[\x21-\x7e]+$/.test(value)
 }
 
 function serviceRunResult<T>(

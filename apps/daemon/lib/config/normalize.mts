@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from 'node:path'
-import type { ConfigRecord, ForemanServiceConfig } from './types.mts'
+import type { ConfigRecord, ForemanGatewayConfig, ForemanServiceConfig, GatewayPortMode } from './types.mts'
 
 export interface NormalizeForemanConfigOptions {
   configDir: string
@@ -18,6 +18,7 @@ export function normalizeForemanServiceConfig(
   }
   const workspace = record(config.workspace)
   const workspaceRoot = resolveWorkspaceRoot(workspace.root, options.configDir, env)
+  const gateway = normalizeForemanGatewayConfig(config.gateway)
 
   // Legacy delivery/principal/grants/message fields are ignored on purpose so an
   // existing config keeps loading after the message subsystem was removed.
@@ -26,8 +27,32 @@ export function normalizeForemanServiceConfig(
       enabled: booleanValue(service.enabled, true),
       ...(serviceIpc ? { ipc: serviceIpc } : {}),
     },
+    gateway,
     workspaceRoot,
   }
+}
+
+/**
+ * Normalize the persisted top-level gateway settings. Absent settings default to
+ * `random` mode; a valid fixed port and token are preserved. An explicitly
+ * saved `fixed` mode stays fixed even if its port is unusable; startup rejects
+ * that configuration rather than silently choosing a random port.
+ */
+export function normalizeForemanGatewayConfig(value: unknown): ForemanGatewayConfig {
+  const raw = record(value)
+  const port = normalizeGatewayPort(raw.port)
+  const token = stringValue(raw.token, '')
+  const portMode: GatewayPortMode = raw.portMode === 'fixed' ? 'fixed' : 'random'
+  return {
+    portMode,
+    ...(port !== undefined ? { port } : {}),
+    ...(token ? { token } : {}),
+  }
+}
+
+function normalizeGatewayPort(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) return undefined
+  return value
 }
 
 function normalizeServiceIpcConfig(raw: ConfigRecord): ForemanServiceConfig['service']['ipc'] | undefined {

@@ -23,6 +23,17 @@ import type {
   ContextLayerId,
   LedgerEvent,
 } from '@wrenyard/session';
+import type { WrenyardGatewaySettings, WrenyardGatewaySettingsSaveInput, WrenyardGatewaySettingsSaveResult } from '@wrenyard/control';
+
+// The gateway access DTOs are owned by the control client; the shell contract
+// re-exports them so the preload facade and the renderer resolve them from
+// `@/shell-contract` without importing `@wrenyard/control` directly.
+export type {
+  WrenyardGatewaySettings,
+  WrenyardGatewaySettingsSaveInput,
+  WrenyardGatewaySettingsSaveResult,
+  WrenyardGatewayPortChoice,
+} from '@wrenyard/control';
 
 // The Pet module keeps its public DTOs under `src/pet`. Desktop code outside
 // that module reads the text of the contract here (types) and the runtime
@@ -195,6 +206,8 @@ export const SHELL_CHANNELS = {
   appearanceSnapshot: 'wrenyard-shell:appearance-snapshot',
   appearanceChanged: 'wrenyard-shell:appearance-changed',
   settingsSnapshot: 'wrenyard-shell:settings-snapshot',
+  gatewaySettings: 'wrenyard-shell:gateway-settings',
+  gatewaySettingsSave: 'wrenyard-shell:gateway-settings-save',
   statsSnapshot: 'wrenyard-shell:stats-snapshot',
   quotaSnapshot: 'wrenyard-shell:quota-snapshot',
   saveProviderOrder: 'wrenyard-shell:save-provider-order',
@@ -1906,6 +1919,8 @@ export interface WrenyardShellApi {
   closeWindow(): Promise<void>;
   onWindowStateChanged(listener: (state: WindowStateSnapshot) => void): () => void;
   getSettings(): Promise<SettingsSnapshot>;
+  getGatewaySettings(): Promise<WrenyardGatewaySettings>;
+  saveGatewaySettings(input: WrenyardGatewaySettingsSaveInput): Promise<WrenyardGatewaySettingsSaveResult>;
   getStats(): Promise<StatsSnapshot>;
   getQuota(forceRefresh?: boolean): Promise<QuotaSnapshot>;
   /** Read-only data-directory usage from the connected daemon; `refresh` starts a new scan. */

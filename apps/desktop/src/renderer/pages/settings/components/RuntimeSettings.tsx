@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Copy, FolderOpen } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Copy, Eye, EyeOff, FolderOpen, RefreshCw } from 'lucide-react';
 import { QueryError } from '@/renderer/components/query-error';
 import { Button } from '@/renderer/components/ui/button';
 import { Input } from '@/renderer/components/ui/input';
@@ -41,7 +41,7 @@ import {
   type DaemonLifecycleAction,
 } from '../model/settings.js';
 import { daemonQueryKey, settingsQueryKey, useDaemonQuery, useSettingsQuery } from '../queries.js';
-import type { SettingsSnapshot } from '@/shell-contract';
+import type { SettingsSnapshot, WrenyardGatewayPortChoice, WrenyardGatewaySettings } from '@/shell-contract';
 
 /** Local service connection state. */
 export function ServiceControl() {
@@ -202,6 +202,92 @@ export function EndpointControl() {
         <Copy />
         {RUNTIME_ENDPOINT_COPY_LABEL}
       </Button>
+    </div>
+  );
+}
+
+/** Gateway settings use the daemon's bind-time snapshot; saves never rebind it. */
+export function GatewayControl() {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const [portMode, setPortMode] = useState<'random' | 'fixed' | null>(null);
+  const [portText, setPortText] = useState<string | undefined>(undefined);
+  const [tokenText, setTokenText] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState('');
+  const query = useQuery({ queryKey: ['gateway-settings'], queryFn: () => shell.getGatewaySettings() });
+  const mutation = useMutation({
+    mutationFn: (input: Parameters<typeof shell.saveGatewaySettings>[0]) => shell.saveGatewaySettings(input),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['gateway-settings'], result);
+      setPortMode(result.savedPortMode);
+      setPortText(undefined);
+      setTokenText('');
+      setSaved('已保存；所有更改将在 Gateway 下次绑定时生效。');
+      setError('');
+    },
+    onError: (cause) => { setSaved(''); setError(errorMessage(cause) || '保存 Gateway 设置失败。'); },
+  });
+  const data = query.data;
+  if (query.isPending || data === undefined) return <Skeleton className="h-8 w-full" />;
+  const mode = portMode ?? data.savedPortMode;
+  const portDraft = portText ?? (data.savedPort === undefined ? '' : String(data.savedPort));
+  const fixedPort = mode === 'fixed' ? Number(portDraft) : undefined;
+  const portInvalid = mode === 'fixed' && (portDraft.trim() === '' || !Number.isInteger(fixedPort) || fixedPort! < 1 || fixedPort! > 65535);
+  const portChoice: WrenyardGatewayPortChoice = mode === 'random' ? { mode: 'random' } : { mode: 'fixed', port: fixedPort ?? 0 };
+  const savePort = (): void => {
+    if (portInvalid) { setSaved(''); setError('请输入 1–65535 之间的整数端口。'); return; }
+    mutation.mutate({ port: portChoice });
+  };
+  const replaceToken = (replacement: { kind: 'custom'; token: string } | { kind: 'generate' }): void => {
+    const description = '替换 Token 后，现有外部客户端必须更新凭据。新 Token 只会在 Gateway 下次绑定时生效。';
+    void confirm({ title: '替换 Gateway Token？', description, confirmLabel: '确认替换', destructive: true })
+      .then((accepted) => { if (accepted) mutation.mutate({ token: replacement, confirmTokenReplacement: true }); });
+  };
+  const effective = data.effective;
+  const masked = '•'.repeat(Math.min(effective.token.length, 32));
+  return (
+    <div className="flex flex-col gap-4">
+      <section className="flex flex-col gap-2">
+        <strong>当前生效连接</strong>
+        <p className="text-sm text-muted-foreground">仅监听本机 127.0.0.1。随机端口由操作系统在 Daemon 启动并绑定时分配。</p>
+        <div className="grid gap-1 text-sm">
+          <div>主机：<code>{effective.host}</code>　端口：<code>{effective.port}</code></div>
+          <div>OpenAI Chat：<code>{effective.openaiChatBaseUrl}</code></div>
+          <div>OpenAI Responses：<code>{effective.openaiResponsesBaseUrl}</code></div>
+          <div>Anthropic：<code>{effective.anthropicBaseUrl}</code></div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <code>{showToken ? effective.token : masked}</code>
+          <Button variant="outline" onClick={() => setShowToken((value) => !value)}>{showToken ? <EyeOff /> : <Eye />}{showToken ? '隐藏' : '显示 Token'}</Button>
+          <Button variant="outline" onClick={() => { void copyText(effective.token); }}><Copy />复制当前 Token</Button>
+        </div>
+      </section>
+      <section className="flex flex-col gap-2">
+        <strong>下次绑定使用的设置</strong>
+        <p className="text-sm text-muted-foreground">保存不会重启或改变当前连接。端口和 Token 的更改都只在 Gateway 下次绑定时生效。</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="h-9 rounded-md border bg-background px-3 text-sm" value={mode} disabled={mutation.isPending} onChange={(event) => setPortMode(event.target.value as 'random' | 'fixed')}>
+            <option value="random">随机端口</option><option value="fixed">固定端口</option>
+          </select>
+          {mode === 'fixed' && <Input className="w-32" inputMode="numeric" aria-label="固定端口" value={portDraft} onChange={(event) => { setPortText(event.target.value); setError(''); }} placeholder="1–65535" />}
+          <Button disabled={mutation.isPending} onClick={savePort}>{mutation.isPending ? '保存中…' : '保存端口设置'}</Button>
+        </div>
+        {mode === 'fixed' && portInvalid && <p role="alert" className="text-sm text-destructive">请输入 1–65535 之间的整数端口。</p>}
+        <p className="text-sm">已保存：{data.savedPortMode === 'fixed' ? `固定端口 ${data.savedPort ?? '无效'}` : '随机端口'}；当前生效端口：{effective.port}{data.portChangePending ? '（等待下次绑定）' : ''}</p>
+        {data.tokenChangePending && <p className="text-sm">Token 替换等待下次绑定生效。</p>}
+      </section>
+      <section className="flex flex-col gap-2">
+        <strong>替换 Token</strong>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input className="max-w-80" type="password" autoComplete="new-password" value={tokenText} onChange={(event) => setTokenText(event.target.value)} placeholder="输入自定义 Token" />
+          <Button variant="outline" disabled={mutation.isPending || tokenText.length === 0} onClick={() => replaceToken({ kind: 'custom', token: tokenText })}>保存自定义 Token</Button>
+          <Button variant="outline" disabled={mutation.isPending} onClick={() => replaceToken({ kind: 'generate' })}><RefreshCw />生成新 Token</Button>
+        </div>
+        {saved !== '' && <p className="text-sm text-muted-foreground">{saved}</p>}
+        {error !== '' && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      </section>
     </div>
   );
 }

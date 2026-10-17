@@ -54,12 +54,26 @@ surface and no listener for external clients. `health.ping` carries an integer
 `protocolVersion`; the client validates it and refuses a mismatched daemon
 instead of negotiating compatibility.
 
-The gateway is an internal daemon-process-tree feature: the daemon binds
-`127.0.0.1:0` (a random loopback port) and mints a fresh in-memory token on
-every start. Only daemon-launched agents (through `WRENYARD_GATEWAY_*_URL`
-environment variables) and Desktop's embedded DSH sessions (through the
-`gateway.connection` IPC method) consume it, and its listener serves only
-`/gateway/*` and returns 404 elsewhere. ChatGPT subscription models are
+The gateway is an internal daemon-process-tree feature that listens only on
+`127.0.0.1`; it never binds a public interface. Its port is a persisted setting:
+`random` (the default) lets the OS assign a free loopback port at bind time,
+while `fixed` uses a validated user-chosen port 1–65535. A saved change only
+takes effect the next time the gateway binds (daemon start); saving never
+rebinds, restarts or rotates the running listener, and a fixed port that is
+already taken fails with an actionable conflict instead of falling back to
+another port. The gateway token is generated once with a CSPRNG and persisted
+with the same restricted-permission config write as every other setting, then
+reused across restarts, so restarting the daemon does not invalidate existing
+credentials; replacing the token likewise takes effect at the next bind, after
+which the previous token is rejected. The connection actually in effect (host,
+bound port, the three `http://127.0.0.1:<port>/gateway/...` base URLs and the
+effective token) is shown under Settings > 运行环境 > Gateway 接入 and exposed to local clients
+over the IPC-only `gateway.connection` / `gateway.settings` methods; external
+clients such as Zed are configured manually by copying those details, and
+Wrenyard never writes another application's configuration. Only daemon-launched
+agents (through `WRENYARD_GATEWAY_*_URL` environment variables) and Desktop's
+embedded DSH sessions consume it, and its listener serves only `/gateway/*` and
+returns 404 elsewhere. ChatGPT subscription models are
 forwarded over the Responses protocol with the Codex client's existing ChatGPT
 login, which the daemon reads and refreshes through that client. Browser
 operations use the daemon-managed `agent-browser` CLI and desktop operations

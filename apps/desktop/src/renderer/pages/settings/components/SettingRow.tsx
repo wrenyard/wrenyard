@@ -67,6 +67,7 @@ function HighlightedText({ text, terms }: { text: string; terms: readonly string
 const STACKED_CUSTOM_CONTROLS: ReadonlySet<CustomControlKey> = new Set([
   'themeCards',
   'workspace',
+  'gateway',
   'routingWeights',
   'runtimeAliases',
   'updateStatus',

@@ -1,6 +1,20 @@
 import type { TaskSettingsLayer } from './task-settings.mts'
+import type { GatewayPortMode } from './types.mts'
 
 export type ConfigRecord = Record<string, unknown>
+
+/**
+ * Persisted top-level gateway settings. `portMode` defaults to `random`; a
+ * `fixed` mode carries the validated TCP port the next bind must use, while
+ * `token` (when present) is the persisted gateway credential. The raw on-disk
+ * shape stays open to unknown/forward-compatible keys like every other layer;
+ * the read and write paths both re-normalize it.
+ */
+export type GatewayConfigData = ConfigRecord & {
+  portMode?: GatewayPortMode
+  port?: number
+  token?: string
+}
 
 export type ServiceConfigData = ConfigRecord & {
   enabled?: boolean
@@ -61,6 +75,7 @@ export type RemoteConfigData = ConfigRecord & {
 
 export type ForemanConfigData = {
   service?: ServiceConfigData
+  gateway?: GatewayConfigData
   workspace?: WorkspaceConfigData
   tasks?: TasksConfigData
   remote?: RemoteConfigData
@@ -73,6 +88,11 @@ export function createDefaultForemanConfigData(
   return {
     service: {
       enabled: true,
+    },
+    // The gateway defaults to an OS-assigned random loopback port. No token is
+    // defaulted: the daemon generates and persists one once, then reuses it.
+    gateway: {
+      portMode: 'random',
     },
     workspace: {
       root: env.WRENYARD_WORKSPACE,

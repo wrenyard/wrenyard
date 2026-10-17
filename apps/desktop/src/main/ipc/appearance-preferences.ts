@@ -34,6 +34,14 @@ export function registerAppearancePreferencesIpc(ipcMain: IpcMain, deps: ShellIp
     if (!isPreferenceId(id)) throw new Error('未知偏好');
     return options.setPreference(id, value);
   });
+  ipcMain.handle(SHELL_CHANNELS.gatewaySettings, async (event) => {
+    assertShellSender(event.sender);
+    return options.request('gateway.settings', {});
+  });
+  ipcMain.handle(SHELL_CHANNELS.gatewaySettingsSave, async (event, input: unknown) => {
+    assertShellSender(event.sender);
+    return options.request('gateway.settings.save', input);
+  });
 
   return () => {
     for (const channel of [
@@ -41,6 +49,8 @@ export function registerAppearancePreferencesIpc(ipcMain: IpcMain, deps: ShellIp
       SHELL_CHANNELS.settingsSnapshot,
       SHELL_CHANNELS.preferencesSnapshot,
       SHELL_CHANNELS.setPreference,
+      SHELL_CHANNELS.gatewaySettings,
+      SHELL_CHANNELS.gatewaySettingsSave,
     ]) ipcMain.removeHandler(channel);
   };
 }
