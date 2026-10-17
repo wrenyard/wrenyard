@@ -458,6 +458,12 @@ export function BotPage() {
                     {currentTodo.acceptance === '' ? NONE : currentTodo.acceptance}
                   </p>
                 </div>
+                {currentTodo.resultSummary !== undefined && currentTodo.resultSummary !== '' ? (
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-xs text-muted-foreground">结果摘要</span>
+                    <p className="whitespace-pre-wrap text-sm">{currentTodo.resultSummary}</p>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

@@ -41,6 +41,7 @@ const todoSchema = {
     request: { type: 'string', description: 'The request section body.' },
     acceptance: { type: 'string', description: 'The acceptance criteria section body.' },
     attachments: { type: 'array', items: { type: 'string' }, description: 'Relative-path attachments.' },
+    resultSummary: { type: 'string' },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema

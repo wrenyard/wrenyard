@@ -1687,6 +1687,7 @@ export interface Todo {
   request: string;
   acceptance: string;
   attachments: string[];
+  resultSummary?: string;
 }
 
 /** Input for creating one workspace todo; the daemon generates the id. */
