@@ -1,6 +1,7 @@
 import type { PublicGatewayModel } from '@wrenyard/providers/catalog';
 import { ResponseUsageObserver, type UsageAdapter } from '../response-usage.ts';
 import {
+  completeUsage,
   count,
   errorIdentityOf,
   modelListEntry,
@@ -131,6 +132,33 @@ export const messagesProtocol: GatewayProtocolModule = {
     if (typeof root.model === 'string') root.model = toPublic(root.model);
     const nested = object(root.message);
     if (nested && typeof nested.model === 'string') nested.model = toPublic(nested.model);
+  },
+
+  normalizeResponseUsage(payload) {
+    // Complete the usage object wherever the protocol carries it: a top-level
+    // `usage`, or the `usage` nested inside the `message` snapshot.
+    const apply = (parent: Record<string, unknown> | undefined): void => {
+      const usage = parent && object(parent.usage);
+      if (!usage) return;
+      const inputTokens = count(usage.input_tokens);
+      const read = count(usage.cache_read_input_tokens);
+      const created = count(usage.cache_creation_input_tokens);
+      const input = inputTokens === undefined && read === undefined && created === undefined
+        ? undefined
+        : (inputTokens ?? 0) + (read ?? 0) + (created ?? 0);
+      const completed = completeUsage(usage, input, count(usage.output_tokens));
+      const normalizedUsage: Record<string, unknown> = { ...completed };
+      delete normalizedUsage.prompt_tokens;
+      delete normalizedUsage.completion_tokens;
+      delete normalizedUsage.total_tokens;
+      parent!.usage = {
+        ...normalizedUsage,
+        input_tokens: completed.prompt_tokens,
+        output_tokens: completed.completion_tokens,
+      };
+    };
+    apply(payload);
+    apply(object(payload.message));
   },
 
   // No protocol-fixed request field for Messages.

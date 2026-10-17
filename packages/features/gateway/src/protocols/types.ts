@@ -80,6 +80,14 @@ export interface GatewayProtocolModule {
   errorTypeForStatus(status: number): string;
   /** Rewrite every response `model` field to the public model id, in place. */
   normalizeResponseModel(payload: unknown, toPublic: (upstreamModel: string) => string): void;
+  /**
+   * Complete every upstream `usage` object in place so strict clients always
+   * receive `prompt_tokens`, `completion_tokens` and `total_tokens`. A field
+   * the upstream omitted is emitted as `0`, and `total_tokens` is derived from
+   * the present input/output when the upstream did not supply it. Non-usage
+   * bodies are left untouched.
+   */
+  normalizeResponseUsage(payload: Record<string, unknown>): void;
   /** Protocol-fixed request fields, independent of any supplier. */
   prepareRequest(body: Record<string, unknown>): void;
   /**
@@ -101,6 +109,29 @@ export const object = (value: unknown): Record<string, unknown> | undefined =>
 
 export const count = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+/**
+ * Return a usage object that always carries `prompt_tokens`, `completion_tokens`
+ * and `total_tokens`. A field the upstream omitted is filled with `0`; when the
+ * upstream did not report `total_tokens` it is derived from the present
+ * input/output. Every other field the upstream supplied (cached tokens,
+ * reasoning details, …) is preserved.
+ */
+export function completeUsage(
+  raw: Record<string, unknown>,
+  input: number | undefined,
+  output: number | undefined,
+): Record<string, unknown> {
+  const promptTokens = input ?? 0;
+  const completionTokens = output ?? 0;
+  const totalTokens = (count(raw.total_tokens) ?? 0) || (promptTokens + completionTokens);
+  return {
+    ...raw,
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens,
+  };
+}
 
 /**
  * The `{type, code}` strings an official error object carries, if any. Only

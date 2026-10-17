@@ -1,6 +1,7 @@
 import type { PublicGatewayModel } from '@wrenyard/providers/catalog';
 import { ResponseUsageObserver, type UsageAdapter } from '../response-usage.ts';
 import {
+  completeUsage,
   count,
   errorIdentityOf,
   modelListEntry,
@@ -128,6 +129,12 @@ export const chatProtocol: GatewayProtocolModule = {
   normalizeResponseModel(payload, toPublic) {
     const root = object(payload);
     if (root && typeof root.model === 'string') root.model = toPublic(root.model);
+  },
+
+  normalizeResponseUsage(payload) {
+    const usage = object(payload.usage);
+    if (!usage) return;
+    payload.usage = completeUsage(usage, count(usage.prompt_tokens), count(usage.completion_tokens));
   },
 
   prepareRequest(body) {

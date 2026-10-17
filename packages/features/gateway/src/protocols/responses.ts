@@ -1,6 +1,7 @@
 import type { PublicGatewayModel } from '@wrenyard/providers/catalog';
 import { ResponseUsageObserver, type UsageAdapter } from '../response-usage.ts';
 import {
+  completeUsage,
   count,
   errorIdentityOf,
   modelListEntry,
@@ -128,6 +129,27 @@ export const responsesProtocol: GatewayProtocolModule = {
     if (typeof root.model === 'string') root.model = toPublic(root.model);
     const nested = object(root.response);
     if (nested && typeof nested.model === 'string') nested.model = toPublic(nested.model);
+  },
+
+  normalizeResponseUsage(payload) {
+    // Complete the usage object wherever the protocol carries it: a top-level
+    // `usage`, or the `usage` nested inside the `response` snapshot.
+    const apply = (parent: Record<string, unknown> | undefined): void => {
+      const usage = parent && object(parent.usage);
+      if (!usage) return;
+      const completed = completeUsage(usage, count(usage.input_tokens), count(usage.output_tokens));
+      const normalizedUsage: Record<string, unknown> = { ...completed };
+      delete normalizedUsage.prompt_tokens;
+      delete normalizedUsage.completion_tokens;
+      parent!.usage = {
+        ...normalizedUsage,
+        input_tokens: completed.prompt_tokens,
+        output_tokens: completed.completion_tokens,
+        total_tokens: completed.total_tokens,
+      };
+    };
+    apply(payload);
+    apply(object(payload.response));
   },
 
   // No protocol-fixed request field: the stream/store contract is supplier-owned.

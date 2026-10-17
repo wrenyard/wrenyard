@@ -3,6 +3,7 @@ import type { ProviderRuntime } from '@wrenyard/providers';
 import type { ServerResponse } from 'node:http';
 import type { ResponseSampler } from './response-tps.ts';
 import type { GatewayProtocolModule, ResponseObserver, TpsTranslator } from './protocols/types.ts';
+import { object } from './protocols/types.ts';
 
 export interface RelayOptions {
   module: GatewayProtocolModule;
@@ -93,6 +94,7 @@ function relayFrame(frame: string, options: RelayOptions): string {
   }
   options.translator.translate(parsed, options.sampler);
   if (options.module.isOfficialStreamError(parsed)) return frame;
+  options.module.normalizeResponseUsage(parsed);
   options.module.normalizeResponseModel(parsed, modelRewriter(options));
   return rebuildFrame(frame, JSON.stringify(parsed));
 }
@@ -120,6 +122,7 @@ export async function relayResponse(
       if (options.module.isOfficialStreamError(parsed)) {
         response.write(text);
       } else {
+        if (object(parsed) !== undefined) options.module.normalizeResponseUsage(parsed as Record<string, unknown>);
         options.module.normalizeResponseModel(parsed, modelRewriter(options));
         response.write(JSON.stringify(parsed));
       }
