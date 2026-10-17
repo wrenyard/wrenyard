@@ -834,6 +834,19 @@ function rejectWhitespace(label: string, value: string): void {
   }
 }
 
+/**
+ * The model part of a client-qualified model key. A native task route carries
+ * the resolved client as a `:<client>` suffix (`deepseek-v4.1-flash-free:oc`),
+ * while an upstream model id may itself end in a `:free` variant. Only a known
+ * public client key is treated as a suffix; any other colon-bearing id is
+ * returned unchanged, so a `:free` variant keeps its exact identity.
+ */
+export function bareModelId(model: string): string {
+  const colon = model.lastIndexOf(':');
+  if (colon <= 0) return model;
+  return PUBLIC_CLIENT_KEYS[model.slice(colon + 1)] === undefined ? model : model.slice(0, colon);
+}
+
 export function parseRunSyntax(input: string): RunSyntaxRef {
   if (input.length === 0) {
     throw new Error(`run syntax must be a non-empty string: ${JSON.stringify(input)}`);

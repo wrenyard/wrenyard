@@ -116,8 +116,9 @@ export type ClientFaultKind = 'timeout' | 'transport';
  * delivery/protocol failure of an attempt that produced no usable output
  * (`structured_output`), or a client-reported model rejection
  * (`model_rejected`) where the client refuses the resolved model for its
- * product/account. Both are route-scoped: they never claim a provider or a
- * shared pool.
+ * product/account, or a quota-exhausted/rate-limited response
+ * (`quota_or_rate_limited`). The first two are route-scoped and never claim a
+ * provider or a shared pool; the quota kind claims the route's free pool only.
  */
 export type NativeRouteFaultKind = 'structured_output' | 'model_rejected' | 'quota_or_rate_limited';
 
@@ -164,7 +165,7 @@ function clientFailure(kind: ClientFaultKind): MarkableFailure {
 }
 
 /** The exact route fault a native task attempt's fault kind maps to. */
-function nativeRouteFailure(kind: NativeRouteFaultKind): MarkableFailure {
+function nativeRouteFailure(kind: NativeRouteFaultKind, until?: string): MarkableFailure {
   switch (kind) {
     case 'structured_output':
       return structuredOutputFailure();
@@ -182,7 +183,14 @@ function nativeRouteFailure(kind: NativeRouteFaultKind): MarkableFailure {
       // is marked exhausted so an automatically-routed task re-resolves to the
       // next route, but other routes that draw from a different pool are
       // untouched. The pool id is resolved by the store from the provider/model.
-      return { state: 'quota_exhausted', scope: 'pool', faultKind: 'quota_exhausted' };
+      // An upstream-stated reset instant, when the caller could extract one,
+      // becomes the block's `until` instead of the fixed fallback cooldown.
+      return {
+        state: 'quota_exhausted',
+        scope: 'pool',
+        faultKind: 'quota_exhausted',
+        ...(until === undefined ? {} : { until }),
+      };
   }
 }
 
@@ -272,11 +280,11 @@ export class RouteStateStore {
    * A held half-open probe lease is settled with the classified fault so the
    * probe backoff is preserved; without one the fault goes through the
    * generation-fenced `mark`, so a stale in-flight report can never rebuild a
-   * cleared fault. The fault is route-scoped only: it never claims a provider
-   * or a shared pool.
+   * cleared fault. A delivery/rejection fault is route-scoped; the quota kind
+   * claims the route's pool only and never the provider.
    */
-  reportNativeRouteFault(provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease): RouteStatus | undefined {
-    const failure = nativeRouteFailure(kind);
+  reportNativeRouteFault(provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease, until?: string): RouteStatus | undefined {
+    const failure = nativeRouteFailure(kind, until);
     const status = 502;
     if (lease !== undefined) {
       this.releaseProbe(lease, 'failure', failure, status);
@@ -458,8 +466,10 @@ export class RouteStateStore {
     }
     const boundMs = failure?.until === undefined ? undefined : resetInstant(failure.until);
     if (boundMs !== undefined) block.boundUntil = Math.max(block.boundUntil ?? 0, boundMs);
-    const floor = Math.max(this.now() + this.backoffMs(block.probeFailures), block.boundUntil ?? 0);
-    block.until = new Date(floor).toISOString();
+    // A reset instant stated by the upstream replaces the fixed backoff; without
+    // one the bounded exponential backoff is preserved so the scope is re-probed.
+    const floor = boundMs ?? Math.max(this.now() + this.backoffMs(block.probeFailures), block.boundUntil ?? 0);
+    block.until = new Date(Math.max(this.now() + 1, floor)).toISOString();
     clearTimeout(block.timer);
     block.timer = this.schedule(key, block.until);
     this.emitEvent(block, { state: block.state, reason: 'upstream_error', probe: 'failure' });
@@ -503,7 +513,10 @@ export class RouteStateStore {
     if (previous?.leaseTimer !== undefined) clearTimeout(previous.leaseTimer);
     const boundMs = failure.until === undefined ? undefined : resetInstant(failure.until);
     const computed = now + initialCooldownMs(faultKind);
-    const until = new Date(boundMs === undefined ? computed : Math.max(computed, boundMs)).toISOString();
+    // A caller-supplied reset instant overrides the fixed cooldown: the block
+    // cools exactly until the upstream says the scope recovers. Without one the
+    // fixed bounded cooldown applies and the scope is re-probed afterwards.
+    const until = new Date(boundMs === undefined ? computed : Math.max(now + 1, boundMs)).toISOString();
     const generation = current + 1;
     this.generations.set(key, generation);
     const block: Block = {

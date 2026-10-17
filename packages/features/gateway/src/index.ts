@@ -68,7 +68,7 @@ export interface ModelGateway {
    * A held half-open probe lease is settled with the classified fault so the
    * probe backoff is preserved.
    */
-  reportNativeRouteFault(provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease): void;
+  reportNativeRouteFault(provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease, until?: string): void;
   /** Release a held native-task probe lease as cancelled; it never silently expires. */
   releaseNativeProbe(lease: ProbeLease): void;
   close(): Promise<void>;
@@ -156,8 +156,8 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     routeStates.success(provider, model, guard);
   };
 
-  const reportNativeRouteFault = (provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease): void => {
-    routeStates.reportNativeRouteFault(provider, model, kind, guard, lease);
+  const reportNativeRouteFault = (provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease, until?: string): void => {
+    routeStates.reportNativeRouteFault(provider, model, kind, guard, lease, until);
   };
 
   const releaseNativeProbe = (lease: ProbeLease): void => {

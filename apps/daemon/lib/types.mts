@@ -33,7 +33,7 @@ export interface TaskRouteStateHooks {
   success: (provider: string, model: string, guard?: GatewayRouteGuard, lease?: GatewayProbeLease) => void
   /** Report a route-local fault for a launched attempt that failed terminally,
    *  settling a held probe lease with the classified fault. */
-  fault: (provider: string, model: string, guard: GatewayRouteGuard | undefined, kind: TaskRouteFaultKind, lease: GatewayProbeLease | undefined) => void
+  fault: (provider: string, model: string, guard: GatewayRouteGuard | undefined, kind: TaskRouteFaultKind, lease: GatewayProbeLease | undefined, until?: string) => void
   /** Release a held probe lease as cancelled, so a throw or cancel never lets
    *  the lease silently expire. */
   cancel: (lease: GatewayProbeLease) => void

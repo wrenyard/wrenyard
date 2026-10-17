@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { resolveWrenyardConfigRoot } from '@wrenyard/paths';
 import type { Catalog, DispatchPlan } from './base/catalog.ts';
+import { bareModelId } from './base/catalog.ts';
 import { BUILTIN_PROVIDERS, deriveTaskDispatchPlans, resolveHistoricalProviderModelId } from './catalog.ts';
 // The verified provider-scoped migration helper lives at the catalog boundary so
 // quota/metadata consumers can use it without importing this runtime module.
@@ -221,14 +222,22 @@ export function createBuiltinProviderRuntime(options: BuiltinProviderRuntimeOpti
     quotaPools(provider, model) {
       const implementation = implementations.get(provider);
       const quota = implementation?.quota ?? providerQuotas.get(provider);
-      const declared = (quota?.bindings.find(binding => binding.modelId === model)?.pools ?? quota?.defaultPools ?? [])
-        .map(pool => pool.quotaPoolId);
+      // Pool membership belongs to the model, not to the route key. A native task
+      // route is client-qualified (`model:client`), so the client suffix must be
+      // stripped before the binding and free-supply lookups: otherwise a paid
+      // model under a client-qualified key inherits the provider's default (free)
+      // pools and an exhausted free pool blocks it too, while a free model cannot
+      // be recognized as free. Only a known client key is stripped, so an
+      // upstream `:free` model variant keeps its exact identity.
+      const modelId = bareModelId(model);
+      const bound = quota?.bindings.find(binding => binding.modelId === modelId);
+      const declared = (bound?.pools ?? quota?.defaultPools ?? []).map(pool => pool.quotaPoolId);
       const credential = lastCredentials.get(provider);
       if (credential === undefined) return declared;
       try {
         const definition = implementation?.definition ?? BUILTIN_PROVIDERS.find((entry) => entry.id === provider);
-        const freeFact = implementation?.freeSupply(model, credential)
-          ?? (definition !== undefined ? evaluateManagedFreeSupply(definition, model, credential) : undefined);
+        const freeFact = implementation?.freeSupply(modelId, credential)
+          ?? (definition !== undefined ? evaluateManagedFreeSupply(definition, modelId, credential) : undefined);
         return freeFact?.confirmedFree === true ? [freeQuotaPool(provider).quotaPoolId] : declared;
       } catch {
         return declared;

@@ -137,7 +137,10 @@ export interface StructuredOutputOptions {
    *  (`model_rejected`). Cancellation, time budget, functional and post-gate
    *  failures never fault the route. */
   onRouteSuccess?: () => void
-  onRouteFault?: (kind: NativeRouteFaultKind) => void
+  /** `until` is the upstream-stated reset instant (ISO) for a quota/rate-limit
+   *  fault, when the diagnostic carried one; omitted means the route-state
+   *  store's fixed bounded cooldown applies. */
+  onRouteFault?: (kind: NativeRouteFaultKind, until?: string) => void
 }
 
 export type StructuredOutputAgentStatus = 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
@@ -150,6 +153,76 @@ export type StructuredOutputAgentStatus = 'queued' | 'starting' | 'running' | 'd
  * emits the same identifier from `packages/clients/codebuddy/src/events.ts`.
  */
 const MISSING_TERMINAL_RESULT_FAILURE_CLASS = 'protocol_missing_terminal_result'
+
+/**
+ * A reset instant stated by an upstream quota/rate-limit diagnostic. The
+ * recognizer is provider-agnostic and deliberately tolerant: it accepts the
+ * common English shapes (`resets at …`, `reset at …`, `try again after …`,
+ * including a relative delay) and localized phrasing such as
+ * `将在 2026-10-18 22:29:13 UTC+8 重置`. It parses nothing when the text states
+ * no trustworthy instant, so the caller keeps the fixed bounded cooldown.
+ */
+const RESET_TIME_PATTERNS: readonly RegExp[] = [
+  /(?:resets?|resetting)\s+(?:at|after|on)\s+([^.,;，。；\n]{3,64})/iu,
+  /try\s+again\s+(?:after|at)\s+([^.,;，。；\n]{3,64})/iu,
+  /(?:将在|将于|预计|在)\s*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?(?:\s*(?:UTC|GMT)?\s*[+-][0-9]{1,2}(?::?[0-9]{2})?)?)[^\n]{0,16}?(?:重置|恢复)/u,
+  /([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?(?:\s*(?:UTC|GMT)?\s*[+-][0-9]{1,2}(?::?[0-9]{2})?)?)\s*(?:重置|恢复)/u,
+]
+
+const RELATIVE_UNIT_MS: Readonly<Record<string, number>> = {
+  ms: 1,
+  s: 1_000,
+  sec: 1_000,
+  secs: 1_000,
+  second: 1_000,
+  seconds: 1_000,
+  m: 60_000,
+  min: 60_000,
+  mins: 60_000,
+  minute: 60_000,
+  minutes: 60_000,
+  h: 3_600_000,
+  hr: 3_600_000,
+  hrs: 3_600_000,
+  hour: 3_600_000,
+  hours: 3_600_000,
+  d: 86_400_000,
+  day: 86_400_000,
+  days: 86_400_000,
+}
+
+/** Normalize one captured instant or delay into an absolute ISO timestamp. */
+function normalizeResetInstant(raw: string): string | undefined {
+  const value = raw.trim().replace(/\s+/gu, ' ')
+  const delay = /^(\d+(?:\.\d+)?)\s*([a-z]+)$/iu.exec(value)
+  if (delay !== null) {
+    const unit = RELATIVE_UNIT_MS[delay[2]!.toLowerCase()]
+    if (unit !== undefined) return new Date(Date.now() + Number(delay[1]) * unit).toISOString()
+  }
+  const normalized = value
+    .replace(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/u, (_match, year: string, month: string, day: string) => (
+      `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+    ))
+    .replace(/^(\d{4}-\d{2}-\d{2})[ T]/u, '$1T')
+    .replace(/\s*(?:UTC|GMT)\s*([+-])(\d{1,2})(?::?(\d{2}))?$/iu, (_match, sign: string, hours: string, minutes?: string) => (
+      `${sign}${hours.padStart(2, '0')}:${minutes ?? '00'}`
+    ))
+    .replace(/\s*(?:UTC|GMT)$/iu, 'Z')
+  const ms = Date.parse(normalized)
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined
+}
+
+/** The upstream-stated reset instant in a failure diagnostic, if any. */
+export function parseResetInstant(text: string | null | undefined): string | undefined {
+  if (text === null || text === undefined || text.length === 0) return undefined
+  for (const pattern of RESET_TIME_PATTERNS) {
+    const match = pattern.exec(text)
+    if (match?.[1] === undefined) continue
+    const instant = normalizeResetInstant(match[1])
+    if (instant !== undefined) return instant
+  }
+  return undefined
+}
 
 export interface StructuredOutputAgentOptions {
   workingDirectory?: string
@@ -375,7 +448,9 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
       // never touches route health.
       if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.('structured_output')
       if (terminal.failureClass === MODEL_REJECTION_FAILURE_CLASS) opts.onRouteFault?.('model_rejected')
-      if (terminal.failureClass === QUOTA_OR_RATE_LIMITED_FAILURE_CLASS) opts.onRouteFault?.('quota_or_rate_limited')
+      if (terminal.failureClass === QUOTA_OR_RATE_LIMITED_FAILURE_CLASS) {
+        opts.onRouteFault?.('quota_or_rate_limited', parseResetInstant(terminal.error ?? terminal.output))
+      }
       throw agentFailedError(
         terminal.executionId ?? lastExecutionId ?? 'unknown',
         terminal.error ?? terminal.output,
