@@ -131,10 +131,28 @@ export function storeToolContract(record: ToolContractRecord): void {
   else existing[index] = record;
 }
 
-/** The verified contracts recorded for one target, in insertion order. */
-export function toolContractsFor(target: { project: string; task: string; worktree?: string }): ToolContractRecord[] {
-  const existing = contracts.get(targetKeyOf(target));
-  return existing === undefined ? [] : [...existing];
+/**
+ * The verified contracts recorded for one target, in insertion order. A record
+ * matches when it has the same project, the same worktree (`''` when absent),
+ * the same task or an empty-string project-wide task, and, when an environment
+ * is supplied, exactly that environment: a contract is never reused on a device
+ * where it was not verified.
+ */
+export function toolContractsFor(
+  target: { project: string; task: string; worktree?: string },
+  environment?: string,
+): ToolContractRecord[] {
+  const matched: ToolContractRecord[] = [];
+  for (const records of contracts.values()) {
+    for (const record of records) {
+      if (record.target.project !== target.project) continue;
+      if (record.target.task !== target.task && record.target.task !== '') continue;
+      if ((record.target.worktree ?? '') !== (target.worktree ?? '')) continue;
+      if (environment !== undefined && record.environment !== environment) continue;
+      matched.push(record);
+    }
+  }
+  return matched;
 }
 
 /** The single write API: record one verified, successful tool call. */

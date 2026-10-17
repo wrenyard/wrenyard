@@ -379,7 +379,7 @@ export async function runDispatchAction(
     project: compiled.project.id,
     task: compiled.taskId,
     ...(compiled.worktree === undefined ? {} : { worktree: compiled.worktree }),
-  }));
+  }, ctx.snapshot.deviceName));
   if (renderedContracts !== '') {
     const contractOutcome = await runCompileCall(
       deps,

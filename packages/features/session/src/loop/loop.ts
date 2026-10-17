@@ -24,6 +24,7 @@ import type {
 import type { LedgerEventDraft, WorkspaceChangedEvent } from '../ledger/store.ts';
 import { escapeBody, renderEventsBlock } from '../context/render.ts';
 import { messageOf } from '../errors.ts';
+import { diagnoseToolObservation, recordSuccessfulToolCall } from '../auxiliary/tool-contract.ts';
 
 /** Re-exported so auxiliary tasks (e.g. document) reuse the shared error text. */
 export { messageOf };
@@ -307,10 +308,12 @@ export interface LoopRecord {
   updates: LedgerEventDraft[];
   /** Deferred `document.content` drafts, in the order the writes happened. */
   documents: LedgerEventDraft[];
+  /** Evidence-backed tool diagnoses worth surfacing in the action result. */
+  notes: string[];
 }
 
 export function createLoopRecord(): LoopRecord {
-  return { changes: [], updates: [], documents: [] };
+  return { changes: [], updates: [], documents: [], notes: [] };
 }
 
 /** One recorded workspace change, independent of the ledger's own fields. */
@@ -350,7 +353,7 @@ export function toActionOutcome(
   record: LoopRecord,
   extraDrafts: readonly LedgerEventDraft[] = [],
 ): ActionExecutionOutcome {
-  const lines = [result.summary, ...record.changes].filter((line) => line.trim() !== '');
+  const lines = [result.summary, ...record.changes, ...record.notes].filter((line) => line.trim() !== '');
   return {
     status: result.status === 'done' ? 'done' : 'failed',
     result: lines.join('\n'),
@@ -396,6 +399,14 @@ export async function protocolTools(
   effects: Readonly<Record<string, MethodEffect>>,
 ): Promise<LoopTool[]> {
   const infos = await deps.host.methods(methods);
+  const enumerated = infos.map((info) => info.name);
+  for (const name of methods) {
+    if (!enumerated.includes(name)) {
+      const diagnosis = diagnoseToolObservation({ kind: 'enumeration', tools: enumerated, wanted: name });
+      record.notes.push(diagnosis.message);
+    }
+  }
+  const environment = ctx.snapshot.deviceName;
   return infos.map((info) => {
     const effect = effects[info.name];
     return {
@@ -409,7 +420,29 @@ export async function protocolTools(
         try {
           result = await deps.host.call(info.name, args, { sessionId: ctx.sessionId });
         } catch (error) {
-          return errorResult(errorCodeOf(error), messageOf(error));
+          const message = messageOf(error);
+          if (TOOL_NOT_FOUND.test(message) || NO_MCP.test(message)) {
+            const diagnosis = diagnoseToolObservation({
+              kind: 'call',
+              tool: info.name,
+              arguments: args,
+              environment,
+              result: message,
+            });
+            return errorResult(diagnosis.code, diagnosis.message);
+          }
+          return errorResult(errorCodeOf(error), message);
+        }
+        const project = readProjectField(args) ?? readProjectField(result);
+        if (project !== undefined) {
+          recordSuccessfulToolCall({
+            target: { project, task: '' },
+            tool: info.name,
+            arguments: args,
+            environment,
+            evidence: jsonResult(result).slice(0, 200),
+            at: ctx.snapshot.takenAt,
+          });
         }
         if (effect !== undefined && effectApplies(effect, result)) {
           recordMethodEffect(record, ctx, args, result, effect);
@@ -425,6 +458,17 @@ export async function protocolTools(
       },
     };
   });
+}
+
+/** A call result whose own text reports the tool was never found. */
+const TOOL_NOT_FOUND = /tool not found/i;
+/** A call result whose own text reports no MCP server is available. */
+const NO_MCP = /no mcp/i;
+
+/** A non-empty string `project` field of a plain object, or undefined. */
+function readProjectField(source: unknown): string | undefined {
+  const value = readStringField(source, 'project');
+  return value === undefined || value.trim() === '' ? undefined : value;
 }
 
 /** Whether the effect's `when` guard (if any) holds for the call result. */
