@@ -42,7 +42,7 @@ import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent
 import { setTaskWorkflowRunner } from '../core/operations/primitives/runner.mts'
 import { AgentExecutionSupervisor, type SupervisorLogger } from './execution/agent-supervisor.mts'
 import { TaskWorkflowRunner } from './execution/task-workflow-runner.mts'
-import type { TaskRouteStateHooks } from '../types.mts'
+import type { TaskRouteFaultState, TaskRouteStateHooks } from '../types.mts'
 import { RepoWriteLocks } from './execution/repo-write-locks.mts'
 import { acquireInstanceLock, releaseInstanceLock } from './instance-lock.mts'
 import { createTaskGraphService } from './services/taskgraph-service.mts'
@@ -929,6 +929,7 @@ async function createForemanDaemonResources(
     success: (provider, model, guard, lease) => gateway.completeRouteSuccess(provider, model, guard, lease),
     fault: (provider, model, guard, kind, lease) => gateway.reportNativeRouteFault(provider, model, kind, guard, lease),
     cancel: (lease) => gateway.releaseNativeProbe(lease),
+    faultState: (provider, model) => sharedRouteFaultState(gateway, provider, model),
   }
 
   /**
@@ -2067,6 +2068,30 @@ function blockedSharedTaskRoute(
   if (mode !== 'gateway') return shared
   const probeMs = Date.parse(shared.nextProbeAt ?? shared.until)
   return Number.isFinite(probeMs) && probeMs > Date.now() ? shared : undefined
+}
+
+/**
+ * Read-only projection of the shared route circuit's currently open fault for
+ * one exact route/pool: the two pool states an automatic submission may retry
+ * on, `other` for every other open state, and undefined when the route is
+ * healthy. It never admits, probes or mutates route health; it only reads the
+ * fault the failed attempt already left in the one shared circuit.
+ */
+function sharedRouteFaultState(
+  gateway: ModelGateway,
+  provider: string,
+  model: string,
+): TaskRouteFaultState | undefined {
+  let parsed: ReturnType<typeof parseRunSyntax>
+  try {
+    parsed = parseRunSyntax(`${provider}/${model}`)
+  } catch {
+    return undefined
+  }
+  const shared = gateway.routeStatus(`${provider}/${parsed.model}`)
+  if (shared === undefined || shared.phase === 'closed') return undefined
+  if (shared.state === 'quota_exhausted' || shared.state === 'rate_limited') return shared.state
+  return 'other'
 }
 
 type DaemonGatewayConnection = import('@wrenyard/gateway').GatewayConnection & { token: string }

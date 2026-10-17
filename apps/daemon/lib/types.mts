@@ -10,6 +10,14 @@ import type {
 export type { TaskRouteFaultKind }
 
 /**
+ * The read-only shared-circuit fault state of a just-used route/pool: the two
+ * pool states an automatic submission may retry on, plus a catch-all for every
+ * other open circuit state. `other` covers auth/model/delivery faults, which
+ * must not trigger a retry.
+ */
+export type TaskRouteFaultState = 'quota_exhausted' | 'rate_limited' | 'other'
+
+/**
  * Optional daemon-owned native-task route-state port. The daemon binds it to
  * the single shared Gateway circuit; isolated/legacy callers omit it and then
  * never touch route health. Identities are the route's provider on its own plus
@@ -29,6 +37,13 @@ export interface TaskRouteStateHooks {
   /** Release a held probe lease as cancelled, so a throw or cancel never lets
    *  the lease silently expire. */
   cancel: (lease: GatewayProbeLease) => void
+  /** Read-only reduction of the shared circuit's currently open fault for one
+   *  exact route/pool: the two retryable pool states, or `other` for every
+   *  other open state, and undefined when the route is healthy. Never admits,
+   *  probes or mutates route health; the kernel uses it to retry an
+   *  automatically routed attempt on the next eligible route without any
+   *  error-text matching. */
+  faultState: (provider: string, model: string) => TaskRouteFaultState | undefined
 }
 
 export type JsonSchema = boolean | Record<string, unknown>

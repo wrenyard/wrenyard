@@ -19,6 +19,7 @@ import type {
   TaskDefinition,
   TaskExecutionResult,
   TaskGate,
+  TaskRunSettingsResolution,
 } from '../../types.mts'
 import type { ZodType } from 'zod'
 import {
@@ -473,31 +474,39 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       }
     }
 
-    // Resolve task settings exactly once, after pre-gates and before the
-    // first agent attempt. The daemon TaskSettingsService owns field
-    // merging and readiness; its result is authoritative: the canonical exact
-    // target (automatic or explicit) is the only launched runtime, the
-    // dispatch snapshot feeds telemetry, and the effective timeout is the
-    // single total task_execution deadline. exactAgentRuntime is optional on
-    // the resolution contract; a null target terminates the run here with no
+    // Resolve task settings once per route attempt. The daemon TaskSettingsService
+    // owns field merging and readiness; its result is authoritative: the
+    // canonical exact target (automatic or explicit) is the only launched
+    // runtime, the dispatch snapshot feeds telemetry, and the effective timeout
+    // is the single total task_execution deadline. exactAgentRuntime is optional
+    // on the resolution contract; a null target terminates the run with no
     // fallback runtime or stale agentRuntime pin.
-    if (options.taskSettingsResolver) {
+    //
+    // Automatic submissions may retry the next eligible route when the selected
+    // route is still circuit-open with a quota/rate-limit fault before any
+    // structured output: the shared circuit already refuses that route, so a
+    // fresh resolution ranks the next eligible one. Explicit pins, every other
+    // fault state and every other failure keep the single-launch behavior, and
+    // each launch produces its own dispatch row.
+    const taskConfig = config
+    let resolution: TaskRunSettingsResolution | undefined
+    const resolveRunSettings = async (): Promise<void> => {
       // Legacy recovery must never reach a new model launch through current
       // settings: refuse before the settings service can auto/alias-resolve a
       // fresh runtime for a scheduling:'legacy' definition.
-      if (config.scheduling === 'legacy') {
+      if (taskConfig.scheduling === 'legacy') {
         throw new Error(
           `Legacy task '${target.name}' cannot be launched through task settings resolution: legacy recovery must reattach an already persisted task_run_id/exact execution and cannot re-resolve a current definition.`,
         )
       }
-      const settingsResolution = await options.taskSettingsResolver({
+      const settingsResolution = await options.taskSettingsResolver!({
         taskName: target.name,
         inputTokens,
         kind: target.source,
         project: target.project,
         defaults: {
-          timeoutMs: config.timeoutMs,
-          ...(config.dispatch ? { dispatch: config.dispatch as unknown as Record<string, unknown> } : {}),
+          timeoutMs: taskConfig.timeoutMs,
+          ...(taskConfig.dispatch ? { dispatch: taskConfig.dispatch as unknown as Record<string, unknown> } : {}),
         },
         ...(options.invocationSettings ? { invocation: options.invocationSettings } : {}),
       })
@@ -516,13 +525,14 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       if (settingsResolution.timeoutMs !== undefined && settingsResolution.timeoutMs !== null) {
         resolvedTimeoutMs = settingsResolution.timeoutMs
       }
+      resolution = settingsResolution
     }
 
     assertTaskStillActive(taskId)
     let structuredSummary: string | undefined
     let truncatedByTimeLimit = false
 
-    try {
+    const launchAttempt = async (): Promise<void> => {
       // ── Native-task route state ──
       // Only a launched attempt is accounted, and only once per collected run:
       // the first real launch acquires the shared circuit handle and every
@@ -581,7 +591,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
         // the same bounded in-session output correction (three corrections after
         // the initial attempt). A correction continues the original native
         // session on the resolved model/profile and never replays the task.
-        timeoutMs: resolvedTimeoutMs ?? config.timeoutMs,
+        timeoutMs: resolvedTimeoutMs ?? taskConfig.timeoutMs,
         features: selectedFeatures,
         writePaths,
         requestedAgentRuntime: requestedAgentRuntime,
@@ -677,11 +687,49 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
       } else {
         record.status = readTaskStatus(taskId) ?? record.status
       }
-    } catch (error) {
-      record.status = 'failed'
-      record.error = errorMessage(error)
-      record.finishedAt = new Date().toISOString()
-      throw error
+    }
+
+    // Bounded route retry: an automatic submission whose just-used route/pool is
+    // still circuit-open with a quota/rate-limit fault and which produced no
+    // structured output advances to the next eligible route, up to the cap.
+    // Every other outcome — explicit pins, any other fault state, cancellation,
+    // an unresolvable or unchanged re-resolution, an exhausted budget — keeps
+    // today's terminal behavior and surfaces the attempt's own error.
+    const MAX_ROUTE_ATTEMPTS = 3
+    let routeAttempt = 0
+    let attemptError: unknown = undefined
+    for (;;) {
+      routeAttempt += 1
+      // Cancellation/deadline check between attempts: a stop observed after one
+      // route's failure refuses the next launch instead of retrying it.
+      assertTaskStillActive(taskId)
+      if (options.taskSettingsResolver) {
+        const previousTarget = exactAgentRuntime
+        await resolveRunSettings()
+        // A re-resolution that cannot leave the failed route makes no progress;
+        // surface the attempt's own error instead of relaunching that route.
+        if (routeAttempt > 1 && exactAgentRuntime === previousTarget) throw attemptError
+      } else if (routeAttempt > 1) {
+        // An isolated/legacy launch never resolves a second route.
+        throw attemptError
+      }
+      try {
+        await launchAttempt()
+        break
+      } catch (error) {
+        const identity = exactAgentRuntime !== undefined ? routeIdentityOf(exactAgentRuntime) : undefined
+        const faultKind = identity !== undefined
+          ? options.taskRouteState?.faultState(identity.provider, identity.model)
+          : undefined
+        const retryable = options.taskSettingsResolver !== undefined
+          && resolution?.mode === 'automatic'
+          && identity !== undefined
+          && structuredSummary === undefined
+          && (faultKind === 'quota_exhausted' || faultKind === 'rate_limited')
+          && routeAttempt < MAX_ROUTE_ATTEMPTS
+        if (!retryable) throw error
+        attemptError = error
+      }
     }
 
     // `truncatedByTimeLimit` marks a result produced by the time-limit warning
