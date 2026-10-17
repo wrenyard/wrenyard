@@ -77,15 +77,22 @@ function q(id: string, evidence: QuotaEvidence | null): RequiredQuotaConstraint 
   return { id, evidence };
 }
 
-/** Full-cycle healthy quota carrying a headroom close to targetH (0.05..1). */
+/**
+ * Full-cycle healthy quota carrying a headroom close to targetH (0.05..1).
+ *
+ * Headroom is the even blend of the remaining ratio and the cycle pace term:
+ *   H = 0.5*remaining + 0.5*pace, pace = clamp((remaining - expected) / 0.1, 0, 1).
+ * A high target rests on a saturated pace term — remaining leads the cycle pace
+ * by twenty points, twice the ten-point saturation — while a low target takes
+ * no pace credit at all and tracks a full-window horizon exactly.
+ */
 function hQ(targetH: number): QuotaEvidence {
-  if (targetH >= 0.8) {
-    // reset horizon == window => healthyThreshold 0.8, headroom == remainingRatio.
-    return fullCycleEv(targetH * 100, 1);
+  if (targetH >= 0.6) {
+    const remaining = 2 * targetH - 1;
+    return fullCycleEv(remaining * 100, remaining - 0.2);
   }
-  // pace term saturates at 1 for r >= e: headroom = 0.75*r + 0.25.
-  const remaining = (targetH - 0.25) / 0.75;
-  return fullCycleEv(remaining * 100, Math.min(0.3, remaining / 2));
+  // reset horizon == window => pace term 0, headroom == 0.5*remainingRatio.
+  return fullCycleEv(targetH * 2 * 100, 1);
 }
 
 function cand(over: Partial<CandidateInput> = {}): CandidateInput {
@@ -140,15 +147,16 @@ test("rolling_partial healthy/strained/unknown/blocked bands and H", () => {
   assert.equal(healthy.state, "healthy");
   assert.equal(healthy.coverageComplete, true);
   assert.equal(healthy.headroomTrusted, true);
-  close(healthy.headroom!, 0.9, 1e-12, "healthy rolling H");
+  // A rolling pool carries no pace credit: H = 0.5 * remainingRatio.
+  close(healthy.headroom!, 0.45, 1e-12, "healthy rolling H");
   assert.equal(healthy.constraints[0].state, "healthy");
-  close(healthy.constraints[0].headroom!, 0.9, 1e-12, "constraint H");
+  close(healthy.constraints[0].headroom!, 0.45, 1e-12, "constraint H");
 
   const strained = assessRequiredQuota(NOW, [q("s", rollingEv(4))]);
   assert.equal(strained.state, "strained");
-  close(strained.headroom!, 0.04, 1e-12, "strained rolling H");
+  close(strained.headroom!, 0.02, 1e-12, "strained rolling H");
   assert.equal(strained.constraints[0].state, "strained");
-  close(strained.constraints[0].headroom!, 0.04, 1e-12, "strained constraint H");
+  close(strained.constraints[0].headroom!, 0.02, 1e-12, "strained constraint H");
 
   const unknownMid = assessRequiredQuota(NOW, [q("u", rollingEv(50))]);
   assert.equal(unknownMid.state, "unknown");
@@ -195,23 +203,25 @@ test("empty required quota is unknown with incomplete coverage", () => {
 });
 
 test("full_cycle legal reset/window math and headroom values", () => {
-  // resetAt - now == window => expectedRemaining 1, threshold 0.8, H == ratio.
+  // resetAt - now == window => expectedRemaining 1, threshold 0.8. Remaining
+  // trails that pace, so the pace term floors at 0 and H = 0.5 * ratio.
   const atWindow = assessRequiredQuota(NOW, [q("w", fullCycleEv(85, 1))]);
   assert.equal(atWindow.state, "healthy");
   assert.equal(atWindow.coverageComplete, true);
   assert.equal(atWindow.headroomTrusted, true);
-  close(atWindow.headroom!, 0.85, 1e-9, "full-cycle H=ratio");
+  close(atWindow.headroom!, 0.425, 1e-9, "full-cycle H=half ratio");
 
-  // Partial-cycle pace blend: remaining 0.05 with horizon fraction 1/17 gives
-  // pace 0.85 and headroom 0.75*0.05 + 0.25*0.85 = 0.25.
+  // Remaining 0.05 against a 1/17-of-window horizon still trails the pace
+  // (0.0588), so no pace credit is earned: H = 0.5*0.05 = 0.025.
   const low = assessRequiredQuota(NOW, [q("l", fullCycleEv(5, 1 / 17))]);
   assert.equal(low.state, "healthy");
-  close(low.headroom!, 0.25, 1e-6, "full-cycle low H");
+  close(low.headroom!, 0.025, 1e-6, "full-cycle low H");
 
-  // 60% with a 0.3-of-window horizon: pace saturates, H = 0.75*0.6 + 0.25.
+  // 60% with a 0.3-of-window horizon leads the pace by thirty points, so the
+  // pace term saturates: H = 0.5*0.6 + 0.5.
   const mid = assessRequiredQuota(NOW, [q("m", fullCycleEv(60, 0.3))]);
   assert.equal(mid.state, "healthy");
-  close(mid.headroom!, 0.7, 1e-9, "full-cycle mid H");
+  close(mid.headroom!, 0.8, 1e-9, "full-cycle mid H");
 
   // Slow replenishment that cannot reach healthy stays strained.
   const strainedSlow = assessRequiredQuota(NOW, [q("r", fullCycleEv(30, 0.95))]);
@@ -221,7 +231,7 @@ test("full_cycle legal reset/window math and headroom values", () => {
 
 test("equal arithmetic mean is taken across joint healthy full-cycle constraints", () => {
   // Each constraint is one pool resource and participates equally:
-  // (0.90 + 0.70 + 0.85) / 3 = 0.816666...
+  // (0.45 + 0.80 + 0.425) / 3 = 0.558333...
   const joint = assessRequiredQuota(NOW, [
     q("wide", fullCycleEv(90, 1)),
     q("tight", fullCycleEv(60, 0.3)),
@@ -230,7 +240,7 @@ test("equal arithmetic mean is taken across joint healthy full-cycle constraints
   assert.equal(joint.state, "healthy");
   assert.equal(joint.coverageComplete, true);
   assert.equal(joint.headroomTrusted, true);
-  close(joint.headroom!, (0.9 + 0.7 + 0.85) / 3, 1e-9, "mean across healthy headrooms");
+  close(joint.headroom!, (0.45 + 0.8 + 0.425) / 3, 1e-9, "mean across healthy headrooms");
 });
 
 test("complete full-cycle weekly evidence at 28% remaining with ~84% expected remaining is strained, never unknown", () => {
@@ -238,9 +248,11 @@ test("complete full-cycle weekly evidence at 28% remaining with ~84% expected re
   assert.equal(weekly.state, "strained");
   assert.equal(weekly.coverageComplete, true);
   assert.equal(weekly.headroomTrusted, true);
+  // 28% remaining trails the 84% cycle pace, so the pace term floors at 0 and
+  // only the remaining allowance counts: H = 0.5 * 0.28.
   close(
     weekly.headroom!,
-    0.75 * 0.28 + 0.25 * (0.28 / 0.84),
+    0.5 * 0.28,
     1e-9,
     "weekly blended H"
   );
@@ -256,7 +268,9 @@ test("complete kimi-shaped evidence (rolling 5h 100% + full-cycle 7d 96%) is hea
   assert.equal(result.state, "healthy");
   assert.equal(result.coverageComplete, true);
   assert.equal(result.headroomTrusted, true);
-  close(result.headroom!, (1 + 0.96) / 2, 1e-9, "mean healthy H");
+  // Rolling 100% -> 0.5*1 = 0.5; full-cycle 96% at a full-window horizon earns
+  // no pace credit -> 0.5*0.96 = 0.48.
+  close(result.headroom!, (0.5 + 0.48) / 2, 1e-9, "mean healthy H");
   assert.deepEqual(
     result.constraints.map((constraint) => constraint.state),
     ["healthy", "healthy"]
@@ -445,7 +459,7 @@ test("strained + missing averages in the zero unknown contribution", () => {
   assert.equal(result.state, "strained");
   assert.equal(result.coverageComplete, false);
   assert.equal(result.headroomTrusted, false);
-  close(result.headroom!, (0.04 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "strained + missing mean H");
+  close(result.headroom!, (0.02 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "strained + missing mean H");
 });
 
 test("strained + unknown averages in the zero unknown contribution", () => {
@@ -456,7 +470,7 @@ test("strained + unknown averages in the zero unknown contribution", () => {
   assert.equal(result.state, "strained");
   assert.equal(result.coverageComplete, true);
   assert.equal(result.headroomTrusted, false);
-  close(result.headroom!, (0.04 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "strained + unknown mean H");
+  close(result.headroom!, (0.02 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "strained + unknown mean H");
 });
 
 // ---------------------------------------------------------------------------
@@ -548,7 +562,7 @@ test("zero remaining blocks the candidate", () => {
 // Equal arithmetic-mean aggregation of required quota constraints
 // ---------------------------------------------------------------------------
 
-test("two healthy constraints average equally: 0.8 and 1.0 mean to 0.9", () => {
+test("two healthy constraints average equally: 0.4 and 0.5 mean to 0.45", () => {
   const result = assessRequiredQuota(NOW, [
     q("a", rollingEv(80)),
     q("b", rollingEv(100)),
@@ -556,13 +570,13 @@ test("two healthy constraints average equally: 0.8 and 1.0 mean to 0.9", () => {
   assert.equal(result.state, "healthy");
   assert.equal(result.coverageComplete, true);
   assert.equal(result.headroomTrusted, true);
-  close(result.headroom!, 0.9, 1e-12, "mean of 0.8 and 1.0");
-  close(result.constraints[0].headroom!, 0.8, 1e-12, "constraint a H");
-  close(result.constraints[1].headroom!, 1, 1e-12, "constraint b H");
+  close(result.headroom!, 0.45, 1e-12, "mean of 0.4 and 0.5");
+  close(result.constraints[0].headroom!, 0.4, 1e-12, "constraint a H");
+  close(result.constraints[1].headroom!, 0.5, 1e-12, "constraint b H");
 });
 
 test("three constraints average equally regardless of order", () => {
-  const expected = (0.9 + 0.04 + ZERO_QUOTA_HEADROOM) / 3;
+  const expected = (0.45 + 0.02 + ZERO_QUOTA_HEADROOM) / 3;
   const forward = assessRequiredQuota(NOW, [
     q("h", rollingEv(90)),
     q("s", rollingEv(4)),
@@ -587,8 +601,8 @@ test("unknown 0 contributes nothing without discarding a healthy peer", () => {
   assert.equal(result.state, "unknown");
   assert.equal(result.coverageComplete, true);
   assert.equal(result.headroomTrusted, false);
-  // Equal mixed pool: (0.8 + 0) / 2 === 0.4 exactly.
-  assert.equal(result.headroom, 0.4);
+  // Equal mixed pool: (0.4 + 0) / 2 === 0.2 exactly.
+  assert.equal(result.headroom, 0.2);
 });
 
 test("positive balance contributes zero 0 alongside a healthy peer", () => {
@@ -603,8 +617,8 @@ test("positive balance contributes zero 0 alongside a healthy peer", () => {
   ]);
   assert.equal(result.state, "healthy");
   assert.equal(result.coverageComplete, true);
-  // Equal mixed pool: (0.8 + 0) / 2 === 0.4 exactly.
-  assert.equal(result.headroom, 0.4);
+  // Equal mixed pool: (0.4 + 0) / 2 === 0.2 exactly.
+  assert.equal(result.headroom, 0.2);
 });
 
 test("any exhausted (zero) constraint rejects the candidate even alongside a healthy peer", () => {
@@ -759,7 +773,7 @@ test("incomplete-strained reference is accepted at any listed price", () => {
   assert.equal(accepted!.tier, "strained");
   assert.equal(accepted!.coverageComplete, false);
   assert.equal(accepted!.headroomTrusted, false);
-  close(accepted!.headroom, (0.04 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "incomplete-strained H");
+  close(accepted!.headroom, (0.02 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "incomplete-strained H");
 
   // An unknown/incomplete quota is not price-gated: a high listed reference
   // price no longer rejects it.
@@ -784,15 +798,15 @@ test("healthy tiers compute quota metrics and normalized score exactly", () => {
     canonicalId: "healthy-a",
     referenceUsdPerM: 2,
     effectiveCapUsdPerM: 20,
-    requiredQuota: [q("q", fullCycleEv(60, 0.5))], // H 0.70
+    requiredQuota: [q("q", fullCycleEv(60, 0.5))], // H 0.80
   });
   const a = expectAccepted(input);
   assert.equal(a!.tier, "healthy");
   assert.equal(a!.coverageComplete, true);
   assert.equal(a!.headroomTrusted, true);
   assert.equal(a!.quotaQuality, a!.headroom);
-  close(a!.headroom, 0.7, 1e-9, "healthy H");
-  close(a!.quotaQuality, 0.7, 1e-9, "Q without efficiency");
+  close(a!.headroom, 0.8, 1e-9, "healthy H");
+  close(a!.quotaQuality, 0.8, 1e-9, "Q without efficiency");
   assert.equal(a!.marginalApplied, false);
   assert.equal(a!.routingPriceUsdPerM, 2);
   close(a!.speedFactor, clamp01(25 / SPEED_SATURATION_BASE_TPS), 1e-12, "diagnostic S saturated at the bare base with no expectation");
@@ -1018,7 +1032,7 @@ test("valid covered discount applies to routingPrice/P only, never H/tier", () =
       canonicalId: "marginal-1",
       referenceUsdPerM: 5,
       effectiveCapUsdPerM: 20,
-      requiredQuota: [q("q", fullCycleEv(60, 0.5))], // H 0.70
+      requiredQuota: [q("q", fullCycleEv(60, 0.5))], // H 0.80
       marginalPrice: coveredMarginal(4),
     })
   );
@@ -1027,8 +1041,8 @@ test("valid covered discount applies to routingPrice/P only, never H/tier", () =
   assert.equal(withMargin!.referenceUsdPerM, 5);
   assert.equal(withMargin!.tier, "healthy");
   assert.equal(withMargin!.coverageComplete, true);
-  close(withMargin!.headroom, 0.7, 1e-9, "H untouched by discount");
-  close(withMargin!.quotaQuality, 0.7, 1e-9, "Q untouched");
+  close(withMargin!.headroom, 0.8, 1e-9, "H untouched by discount");
+  close(withMargin!.quotaQuality, 0.8, 1e-9, "Q untouched");
   assert.equal(withMargin!.routingPriceUsdPerM, 4);
   assert.ok(withMargin!.notes.includes("marginal_price_applied"));
 
@@ -1037,7 +1051,7 @@ test("valid covered discount applies to routingPrice/P only, never H/tier", () =
       canonicalId: "marginal-1",
       referenceUsdPerM: 5,
       effectiveCapUsdPerM: 20,
-      requiredQuota: [q("q", fullCycleEv(60, 0.5))],
+      requiredQuota: [q("q", fullCycleEv(60, 0.5))], // H 0.80
     })
   );
   close(noMargin!.routingPriceUsdPerM, 5, 1e-12, "reference routing");
@@ -1052,23 +1066,23 @@ test("a marginal discount only feeds the normalized score; Q advantage can outwe
     canonicalId: "cheap-2",
     referenceUsdPerM: 2,
     effectiveCapUsdPerM: 6,
-    requiredQuota: [q("q", fullCycleEv(5, 1 / 17))], // H ~0.25
+    requiredQuota: [q("q", fullCycleEv(5, 1 / 17))], // H 0.025
   });
   const discounted = cand({
     canonicalId: "marg-3",
     referenceUsdPerM: 5,
     effectiveCapUsdPerM: 6,
-    requiredQuota: [q("q", fullCycleEv(60, 0.3))], // H 0.70
+    requiredQuota: [q("q", fullCycleEv(60, 0.3))], // H 0.80
     marginalPrice: coveredMarginal(2.9), // big discount, still above baseline
   });
   const d = expectAccepted(discounted);
   assert.equal(d!.marginalApplied, true);
   close(d!.routingPriceUsdPerM, 2.9, 1e-12, "routing after discount");
-  close(d!.headroom, 0.7, 1e-9, "H unchanged by discount");
+  close(d!.headroom, 0.8, 1e-9, "H unchanged by discount");
 
   const result = rankAutoRoutingCandidates([baseline, discounted]);
-  // Baseline P(2)=0.6, Q=0.25; discounted P(2.9)=0.54375, Q=0.70. The Q
-  // advantage (0.70 vs 0.25, weighted 0.2 => +0.09) outweighs the P premium
+  // Baseline P(2)=0.6, Q=0.025; discounted P(2.9)=0.54375, Q=0.80. The Q
+  // advantage (0.80 vs 0.025, weighted 0.2 => +0.155) outweighs the P premium
   // (weighted 0.4 => -0.0225), so the discounted candidate ranks first.
   assert.deepEqual(rankedIds(result), ["marg-3", "cheap-2"]);
 });
@@ -1408,7 +1422,9 @@ test("all factors and the score stay within [0,1]", () => {
       referenceUsdPerM: 0,
       effectiveTps: 1000,
       intelligenceRank: 3,
-      requiredQuota: [q("q", rollingEv(100))],
+      // A full pool that also leads its cycle pace earns the pace credit too,
+      // so the quota factor saturates: H = 0.5*1 + 0.5*1 = 1.
+      requiredQuota: [q("q", fullCycleEv(100, 0.5))],
     })
   )!;
   for (const factor of [best.priceFactor, best.speedFactor, best.quotaQuality, best.intelligenceFactor, best.score]) {
@@ -1563,21 +1579,21 @@ test("original inputs mutated after ranking never change returned results", () =
     canonicalId: "ds-a",
     referenceUsdPerM: 2,
     effectiveCapUsdPerM: 10,
-    requiredQuota: [q("q", fullCycleEv(60, 0.5))], // H 0.70
+    requiredQuota: [q("q", fullCycleEv(60, 0.5))], // H 0.80
     marginalPrice: coveredMarginal(1.5), // discount below the $2 reference (1.5 < 2) applies
   });
   const dsB = cand({
     canonicalId: "ds-b",
     referenceUsdPerM: 1,
     effectiveCapUsdPerM: 10,
-    requiredQuota: [q("q", fullCycleEv(85, 1))], // H 0.85
+    requiredQuota: [q("q", fullCycleEv(85, 1))], // H 0.425
   });
   const inputs = [dsA, dsB];
 
   const first = rankAutoRoutingCandidates(inputs);
   const firstJson = JSON.stringify(first);
   const firstHeadroomA = first.ranked.find((r) => r.canonicalId === "ds-a")!.headroom;
-  close(firstHeadroomA, 0.7, 1e-9, "original ds-a H");
+  close(firstHeadroomA, 0.8, 1e-9, "original ds-a H");
 
   // Mutate the caller-owned inputs deeply after ranking returned.
   dsA.requiredQuota[0].evidence!.remainingPercent = 0; // now blocks ds-a
@@ -1590,7 +1606,7 @@ test("original inputs mutated after ranking never change returned results", () =
     first.ranked.find((r) => r.canonicalId === "ds-a")!.headroom,
     firstHeadroomA
   );
-  close(firstHeadroomA, 0.7, 1e-9, "snapshotted H survives caller mutation");
+  close(firstHeadroomA, 0.8, 1e-9, "snapshotted H survives caller mutation");
 
   // A fresh call re-snapshots the (mutated) inputs and differs accordingly.
   const second = rankAutoRoutingCandidates(inputs);
@@ -1611,7 +1627,7 @@ test("evaluateCandidate returns fresh independent results per call", () => {
 
   const assessment = first.kind === "accepted" ? first.assessment : null;
   assert.ok(assessment);
-  close(assessment!.headroom, 0.7, 1e-9, "headroom snapshot");
+  close(assessment!.headroom, 0.8, 1e-9, "headroom snapshot");
 
   // Mutating the caller-owned input leaves the earlier result intact, and a
   // fresh call reflects the mutated quota.

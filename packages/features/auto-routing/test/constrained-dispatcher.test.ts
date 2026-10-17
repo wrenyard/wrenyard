@@ -25,11 +25,13 @@ function registerProvider(catalog: Catalog, provider: unknown): void {
 }
 
 test('registration rejects missing or invalid model list prices', () => {
-  for (const pricing of [undefined, [0.1, 1, Number.NaN], [0.1, -1, 2], [0.1, 1]]) {
+  // A route that publishes no price at all is legal: its price is unknown and
+  // is never inferred as free or as zero. Only a malformed tuple is rejected.
+  for (const pricing of [[0.1, 1, Number.NaN], [0.1, -1, 2], [0.1, 1]]) {
     const catalog = new Catalog();
     assert.throws(() => registerProvider(catalog, {
       id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
-      models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing } as unknown as ModelDefinition],
+      models: [{ id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing } as unknown as ModelDefinition],
     }), /pricing/);
   }
 });
@@ -50,10 +52,10 @@ test('native routing wins over a shared gateway protocol', () => {
   catalog.registerClient({ id: 'native', gatewayProtocols: ['openai_chat'] });
   registerProvider(catalog, {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
-    nativeClients: ['native'], models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
+    nativeClients: ['native'], models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://example.com/v1/chat/completions', authScheme: 'bearer' }],
   });
-  assert.equal(catalog.resolveRun('native', 'vendor', 'm').mode, 'native');
+  assert.equal(catalog.resolveRun('native', 'vendor', 'glm-5.3').mode, 'native');
 });
 
 test('gateway models use provider/model ids and resolve to an exact dispatch plan', () => {
@@ -62,19 +64,19 @@ test('gateway models use provider/model ids and resolve to an exact dispatch pla
   registerProvider(catalog, {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     models: [{ pricing: pricingFixture(),
-      id: 'm',
+      id: 'glm-5.3',
       displayName: 'M',
       intelligence: 'mid',
-      canonicalModel: { id: 'shared-m', displayName: 'Shared M' },
+      canonicalModel: { id: 'glm-5.3', displayName: 'Shared M' },
       speed: speedFixture(),
     }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://secret.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   const gatewayModel = catalog.listGatewayModels('openai_chat')[0];
-  assert.equal(gatewayModel?.publicId, 'vendor/m');
+  assert.equal(gatewayModel?.publicId, 'vendor/glm-5.3');
   assert.equal(gatewayModel && 'canonicalModel' in gatewayModel, false);
-  assert.deepEqual(catalog.resolveRun('client', 'vendor', 'm'), {
-    client: 'client', provider: 'vendor', model: 'm', mode: 'gateway', protocol: 'openai_chat',
+  assert.deepEqual(catalog.resolveRun('client', 'vendor', 'glm-5.3'), {
+    client: 'client', provider: 'vendor', model: 'glm-5.3', mode: 'gateway', protocol: 'openai_chat',
       });
 });
 
@@ -86,25 +88,25 @@ test('model-level supportedClients restricts resolution and hides gateway public
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     nativeClients: ['opencode'],
     models: [
-      { pricing: pricingFixture(), id: 'free-m', displayName: 'Free M', intelligence: 'mid', speed: speedFixture(), free: true, supportedClients: ['opencode'] },
-      { pricing: pricingFixture(), id: 'paid-m', displayName: 'Paid M', intelligence: 'mid', speed: speedFixture() },
+      { pricing: pricingFixture(), id: 'glm-5.3-flash', displayName: 'Free M', intelligence: 'mid', speed: speedFixture(), free: true, supportedClients: ['opencode'] },
+      { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'Paid M', intelligence: 'mid', speed: speedFixture() },
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
 
   // A restricted model resolves only for its exact declared client, and only
   // through that client's native transport.
-  const native = catalog.resolveRun('opencode', 'vendor', 'free-m');
+  const native = catalog.resolveRun('opencode', 'vendor', 'glm-5.3-flash');
   assert.equal(native.mode, 'native');
-  assert.throws(() => catalog.resolveRun('codebuddy', 'vendor', 'free-m'), /is not available on client codebuddy/);
+  assert.throws(() => catalog.resolveRun('codebuddy', 'vendor', 'glm-5.3-flash'), /is not available on client codebuddy/);
 
   // Restricted models never appear in the client-agnostic gateway directory nor
   // resolve through a gateway protocol.
   const listed = catalog.listGatewayModels('openai_chat').map((entry) => entry.id);
-  assert.ok(!listed.includes('free-m'));
-  assert.ok(listed.includes('paid-m'));
-  assert.throws(() => catalog.resolveGatewayModel('openai_chat', 'vendor/free-m'), /not available through the gateway/);
-  assert.equal(catalog.resolveGatewayModel('openai_chat', 'vendor/paid-m').model.id, 'paid-m');
+  assert.ok(!listed.includes('glm-5.3-flash'));
+  assert.ok(listed.includes('glm-5.3'));
+  assert.throws(() => catalog.resolveGatewayModel('openai_chat', 'glm-5.3-flash', 'vendor'), /not available through the gateway/);
+  assert.equal(catalog.resolveGatewayModel('openai_chat', 'glm-5.3', 'vendor').model.id, 'glm-5.3');
 
   // An EMPTY supportedClients list is a valid declaration: registration succeeds
   // and the model stays resolvable through the client-agnostic gateway directory,
@@ -116,18 +118,18 @@ test('model-level supportedClients restricts resolution and hides gateway public
     catalog.registerClient({ id: 'codex', gatewayProtocols: ['openai_chat'], taskCapable: true });
     registerProvider(catalog, {
       id: 'p', displayName: 'P', credentialResolver: 'managed',
-      models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), supportedClients }],
+      models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), supportedClients }],
       protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
     });
     return catalog;
   };
   const emptyList = register([]);
-  assert.ok(emptyList.listGatewayModels('openai_chat').map((entry) => entry.id).includes('m'));
-  assert.equal(emptyList.resolveGatewayModel('openai_chat', 'p/m').model.id, 'm');
+  assert.ok(emptyList.listGatewayModels('openai_chat').map((entry) => entry.id).includes('glm-5.3'));
+  assert.equal(emptyList.resolveGatewayModel('openai_chat', 'glm-5.3', 'p').model.id, 'glm-5.3');
   for (const client of ['codebuddy', 'codex']) {
-    assert.throws(() => emptyList.resolveRun(client, 'p', 'm'), /not supported by this client/);
+    assert.throws(() => emptyList.resolveRun(client, 'p', 'glm-5.3'), /not supported by this client/);
   }
-  assert.ok(!emptyList.enumerateTaskCandidates().some((candidate) => candidate.provider === 'p' && candidate.model === 'm'));
+  assert.ok(!emptyList.enumerateTaskCandidates().some((candidate) => candidate.provider === 'p' && candidate.model === 'glm-5.3'));
   assert.throws(() => register(['c1', 'c1']), /duplicate supported client c1/);
   assert.throws(() => register(['   ']), /empty supported client id/);
   assert.doesNotThrow(() => register(['c1']));
@@ -152,31 +154,31 @@ function buildDispatchCatalog(): { catalog: Catalog; candidates: DispatchCandida
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
     models: [
-      mk('mfast', 'mid', 50, 2),
-      mk('mpremium', 'premium', 20, 50, ['text']),
-      mk('mmid', 'high', 30, 5),
-      mk('mslow', 'mid', 5, 1),
-      mk('mlow', 'low', 40, 3),
-      mk('mlisted', 'mid', 50, undefined),
-      mk('mtextonly', 'mid', 50, 2, ['text']),
-      mk('mvision', 'mid', 50, 4, ['text', 'image']),
+      mk('deepseek-v4.1-flash', 'mid', 50, 2),
+      mk('claude-opus-5', 'premium', 20, 50, ['text']),
+      mk('glm-5.3', 'high', 30, 5),
+      mk('deepseek-v4-pro', 'mid', 5, 1),
+      mk('hunyuan-hy3', 'low', 40, 3),
+      mk('glm-5.3-flash', 'mid', 50, undefined),
+      mk('qwen3.8-max', 'mid', 50, 2, ['text']),
+      mk('kimi-k2.8', 'mid', 50, 4, ['text', 'image']),
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   registerProvider(catalog, {
     id: 'p2', displayName: 'P2', credentialResolver: 'managed',
-    models: [mk('z', 'mid', 50, 2)],
+    models: [mk('hunyuan-hy4-preview', 'mid', 50, 2)],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p2.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   const candidates: DispatchCandidate[] = [
-    { profileId: 'fast', client: 'c1', provider: 'p', model: 'mfast' },
-    { profileId: 'premium', client: 'c1', provider: 'p', model: 'mpremium' },
-    { profileId: 'mid', client: 'c1', provider: 'p', model: 'mmid' },
-    { profileId: 'slow', client: 'c1', provider: 'p', model: 'mslow' },
-    { profileId: 'low', client: 'c1', provider: 'p', model: 'mlow' },
-    { profileId: 'noprice', client: 'c1', provider: 'p', model: 'mlisted' },
-    { profileId: 'textonly', client: 'c1', provider: 'p', model: 'mtextonly' },
-    { profileId: 'vision', client: 'c1', provider: 'p', model: 'mvision' },
+    { profileId: 'fast', client: 'c1', provider: 'p', model: 'deepseek-v4.1-flash' },
+    { profileId: 'premium', client: 'c1', provider: 'p', model: 'claude-opus-5' },
+    { profileId: 'mid', client: 'c1', provider: 'p', model: 'glm-5.3' },
+    { profileId: 'slow', client: 'c1', provider: 'p', model: 'deepseek-v4-pro' },
+    { profileId: 'low', client: 'c1', provider: 'p', model: 'hunyuan-hy3' },
+    { profileId: 'noprice', client: 'c1', provider: 'p', model: 'glm-5.3-flash' },
+    { profileId: 'textonly', client: 'c1', provider: 'p', model: 'qwen3.8-max' },
+    { profileId: 'vision', client: 'c1', provider: 'p', model: 'kimi-k2.8' },
   ];
   return { catalog, candidates };
 }
@@ -185,8 +187,8 @@ test('hard max output price excludes over-budget candidates', () => {
   const { catalog, candidates } = buildDispatchCatalog();
   const result = resolveConstrainedDispatch(catalog, candidates, { maxOutputUsdPerMillion: 4 });
   assert.equal(result.ok, true);
-  assert.notEqual(result.selected.plan.model, 'mpremium');
-  assert.notEqual(result.selected.plan.model, 'mmid');
+  assert.notEqual(result.selected.plan.model, 'claude-opus-5');
+  assert.notEqual(result.selected.plan.model, 'glm-5.3');
   assert.ok((result.selected.model.pricing?.[2] ?? Infinity) <= 4);
   const none = resolveConstrainedDispatch(catalog, candidates, { maxOutputUsdPerMillion: 0.5 });
   assert.equal(none.ok, false);
@@ -197,14 +199,14 @@ test('intelligence minimum excludes below-min tiers but admits any tier at or ab
   const { catalog, candidates } = buildDispatchCatalog();
   const result = resolveConstrainedDispatch(catalog, candidates, { intelligenceMin: 'mid' });
   assert.equal(result.ok, true);
-  assert.notEqual(result.selected.plan.model, 'mlow');
+  assert.notEqual(result.selected.plan.model, 'hunyuan-hy3');
   const intel = result.selected.model.intelligence;
   assert.ok(intel === 'mid' || intel === 'high' || intel === 'premium');
   // A premium candidate above the old high ceiling stays eligible: there is no
   // configurable maximum intelligence band.
-  const premiumModel = catalog.provider('p')?.models.find(model => model.id === 'mpremium');
+  const premiumModel = catalog.provider('p')?.models.find(model => model.id === 'claude-opus-5');
   assert.ok(premiumModel);
-  const premium = resolveConstrainedDispatch(catalog, candidates.filter(candidate => candidate.model === 'mpremium'), { intelligenceMin: 'mid', intelligenceExpected: 'mid' });
+  const premium = resolveConstrainedDispatch(catalog, candidates.filter(candidate => candidate.model === 'claude-opus-5'), { intelligenceMin: 'mid', intelligenceExpected: 'mid' });
   assert.equal(premium.ok, true);
   assert.equal(premium.selected.model.intelligence, 'premium');
 });
@@ -224,13 +226,13 @@ test('explicit exclusions across all candidates yield no eligible result', () =>
 
 test('local 31-day agent_turn_v1 speed overrides catalog default truthfully', () => {
   const { catalog, candidates } = buildDispatchCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates, { expectedTps: 60 }, [{ provider: 'p', model: 'mfast', tps: 99, sampleCount: 31, checkedAt: recentIso(5) }]);
+  const result = resolveConstrainedDispatch(catalog, candidates, { expectedTps: 60 }, [{ provider: 'p', model: 'deepseek-v4.1-flash', tps: 99, sampleCount: 31, checkedAt: recentIso(5) }]);
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'mfast');
+  assert.equal(result.selected.plan.model, 'deepseek-v4.1-flash');
   assert.equal(result.selected.speed.source, 'local_31d');
   assert.equal(result.selected.speed.tps, 99);
   assert.equal(result.selected.speed.provider, 'p');
-  assert.equal(result.selected.speed.model, 'mfast');
+  assert.equal(result.selected.speed.model, 'deepseek-v4.1-flash');
   assert.equal(result.selected.speed.sampleCount, 31);
 });
 
@@ -238,7 +240,7 @@ test('falls back to catalog_default speed when no local sample is provided', () 
   const { catalog, candidates } = buildDispatchCatalog();
   const result = resolveConstrainedDispatch(catalog, candidates, {});
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'mslow');
+  assert.equal(result.selected.plan.model, 'deepseek-v4-pro');
   assert.equal(result.selected.speed.source, 'catalog_default');
   assert.equal(result.selected.speed.tps, 5);
 });
@@ -247,7 +249,7 @@ test('minimum TPS is a hard filter and expected TPS drives satisfaction ordering
   const { catalog, candidates } = buildDispatchCatalog();
   const result = resolveConstrainedDispatch(catalog, candidates, { expectedTps: 40, minimumTps: 10 });
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'mfast');
+  assert.equal(result.selected.plan.model, 'deepseek-v4.1-flash');
   assert.equal(result.selected.satisfaction, 1);
   const tooHigh = resolveConstrainedDispatch(catalog, candidates, { minimumTps: 60 });
   assert.equal(tooHigh.ok, false);
@@ -258,12 +260,12 @@ test('deterministic ordering: same expected-speed group orders lower price befor
   const { catalog, candidates } = buildDispatchCatalog();
   const tied: DispatchCandidate[] = [
     ...candidates,
-    { profileId: 'alt', client: 'c1', provider: 'p2', model: 'z' },
+    { profileId: 'alt', client: 'c1', provider: 'p2', model: 'hunyuan-hy4-preview' },
   ];
-  // Both mfast (p, out 2) and z (p2, out 2) have tps 50; identity tie-break favours p/mfast.
-  const result = resolveConstrainedDispatch(catalog, tied, { expectedTps: 40 }, [{ provider: 'p2', model: 'z', tps: 50, sampleCount: 10, checkedAt: recentIso(5) }]);
+  // Both deepseek-v4.1-flash (p, out 2) and hunyuan-hy4-preview (p2, out 2) have tps 50; identity tie-break favours p/deepseek-v4.1-flash.
+  const result = resolveConstrainedDispatch(catalog, tied, { expectedTps: 40 }, [{ provider: 'p2', model: 'hunyuan-hy4-preview', tps: 50, sampleCount: 10, checkedAt: recentIso(5) }]);
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'mfast');
+  assert.equal(result.selected.plan.model, 'deepseek-v4.1-flash');
 });
 
 test('a premium floor is satisfied by the configured premium tier', () => {
@@ -289,26 +291,26 @@ test('compatibility normalizer accepts only the four current tiers and rejects f
 
 test('low eligibility is satisfied by the configured tier', () => {
   const { catalog, candidates } = buildDispatchCatalog();
-  const result = resolveConstrainedDispatch(catalog, candidates.filter((candidate) => candidate.model === 'mlow'), { intelligenceMin: 'low' });
+  const result = resolveConstrainedDispatch(catalog, candidates.filter((candidate) => candidate.model === 'hunyuan-hy3'), { intelligenceMin: 'low' });
   assert.equal(result.ok, true);
   assert.equal(result.selected.model.intelligence, 'low');
 });
 
 test('high dispatch is admitted by the configured high tier', () => {
   const { catalog, candidates } = buildDispatchCatalog();
-  const high = resolveConstrainedDispatch(catalog, candidates.filter((candidate) => candidate.model === 'mmid'), { intelligenceMin: 'high' });
+  const high = resolveConstrainedDispatch(catalog, candidates.filter((candidate) => candidate.model === 'glm-5.3'), { intelligenceMin: 'high' });
   assert.equal(high.ok, true);
   assert.equal(high.selected.model.intelligence, 'high');
 });
 
 test('a high-tier model fails a premium minimum while a premium tier qualifies', () => {
   const { catalog, candidates } = buildDispatchCatalog();
-  const highOnly: DispatchCandidate[] = [{ profileId: 'mid', client: 'c1', provider: 'p', model: 'mmid' }];
+  const highOnly: DispatchCandidate[] = [{ profileId: 'mid', client: 'c1', provider: 'p', model: 'glm-5.3' }];
   const high = resolveConstrainedDispatch(catalog, highOnly, { intelligenceMin: 'premium' });
   assert.equal(high.ok, false);
   assert.equal(high.reason, 'no-eligible-candidate');
 
-  const premiumOnly: DispatchCandidate[] = [{ profileId: 'premium', client: 'c1', provider: 'p', model: 'mpremium' }];
+  const premiumOnly: DispatchCandidate[] = [{ profileId: 'premium', client: 'c1', provider: 'p', model: 'claude-opus-5' }];
   const premium = resolveConstrainedDispatch(catalog, premiumOnly, { intelligenceMin: 'premium' });
   assert.equal(premium.ok, true);
   assert.equal(premium.selected.model.intelligence, 'premium');
@@ -319,26 +321,26 @@ test('registerProvider rejects missing, null, and invalid intelligence atomicall
   const catalog = new Catalog();
   const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
   const invalidModels: Array<[string, object]> = [
-    ['missing', { pricing: pricingFixture(), id: 'm', displayName: 'M', speed: speedFixture() }],
-    ['null', { pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: null, speed: speedFixture() }],
-    ['invalid', { pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'frontier', speed: speedFixture() }],
+    ['missing', { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', speed: speedFixture() }],
+    ['null', { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: null, speed: speedFixture() }],
+    ['invalid', { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'frontier', speed: speedFixture() }],
   ];
   for (const [providerID, model] of invalidModels) {
     assert.throws(
       () => registerProvider(catalog, {
         id: providerID, displayName: providerID, credentialResolver: 'managed',
-        models: [{ ...model, canonicalModel: { id: 'atomic-intelligence', displayName: 'Bad Name' } } as ModelDefinition],
+        models: [{ ...model, canonicalModel: { id: 'glm-5.3', displayName: 'Bad Name' } } as ModelDefinition],
         protocols,
       }),
-      new RegExp(`provider ${providerID} model m.*intelligence`),
+      new RegExp(`provider ${providerID} model glm-5.3.*intelligence`),
     );
     assert.equal(catalog.provider(providerID), undefined);
   }
   registerProvider(catalog, {
     id: 'valid', displayName: 'Valid', credentialResolver: 'managed',
     models: [{ pricing: pricingFixture(),
-      id: 'm', displayName: 'M', intelligence: 'mid',
-      canonicalModel: { id: 'atomic-intelligence', displayName: 'Good Name' },
+      id: 'glm-5.3', displayName: 'M', intelligence: 'mid',
+      canonicalModel: { id: 'glm-5.3', displayName: 'Good Name' },
       speed: speedFixture(),
     }],
     protocols,
@@ -353,7 +355,7 @@ test('registerProvider rejects a model missing its required speed default', () =
   assert.throws(
     () => registerProvider(catalog, {
       id: 'p', displayName: 'P', credentialResolver: 'managed',
-      models: [{ id: 'm', displayName: 'M', intelligence: 'mid' } as ModelDefinition],
+      models: [{ id: 'glm-5.3', displayName: 'M', intelligence: 'mid' } as ModelDefinition],
       protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
     }),
     /speed/,
@@ -368,7 +370,7 @@ test('registerProvider rejects non-positive, non-finite, and non-integer default
     assert.throws(
       () => registerProvider(catalog, {
         id: 'p', displayName: 'P', credentialResolver: 'managed',
-        models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed }],
+        models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed }],
         protocols,
       }),
       /speed/,
@@ -388,10 +390,10 @@ test('registerProvider validates shared canonical model identity atomically', ()
     displayName,
     credentialResolver: 'managed' as const,
     models: [{ pricing: pricingFixture(),
-      id: 'route-model',
+      id: 'grok-4.7',
       displayName: `${displayName} route`,
       intelligence: 'mid' as const,
-      canonicalModel: { id: 'shared-model-v1', displayName: canonicalDisplayName },
+      canonicalModel: { id: 'grok-4.7', displayName: canonicalDisplayName },
       speed: speedFixture(),
     }],
     protocols: [{ protocol: 'openai_chat' as const, endpoint, authScheme: 'bearer' as const }],
@@ -411,10 +413,10 @@ test('registerProvider validates shared canonical model identity atomically', ()
     () => registerProvider(catalog, {
       ...provider('invalid', 'Invalid', 'Shared Model V1', 'http://invalid.example/v1'),
       models: [{ pricing: pricingFixture(),
-        id: 'other-route',
+        id: 'glm-5.3',
         displayName: 'Other route',
         intelligence: 'mid',
-        canonicalModel: { id: 'atomic-model-v1', displayName: 'Staged Bad Name' },
+        canonicalModel: { id: 'glm-5.3', displayName: 'Staged Bad Name' },
         speed: speedFixture(),
       }],
     }),
@@ -423,10 +425,10 @@ test('registerProvider validates shared canonical model identity atomically', ()
   registerProvider(catalog, {
     ...provider('valid', 'Valid', 'Shared Model V1'),
     models: [{ pricing: pricingFixture(),
-      id: 'other-route',
+      id: 'glm-5.3',
       displayName: 'Other route',
       intelligence: 'mid',
-      canonicalModel: { id: 'atomic-model-v1', displayName: 'Committed Good Name' },
+      canonicalModel: { id: 'glm-5.3', displayName: 'Committed Good Name' },
       speed: speedFixture(),
     }],
   });
@@ -467,23 +469,23 @@ test('per-profile local 31-day samples are accepted individually with sample cou
   const { catalog, candidates } = buildDispatchCatalog();
   const fastCheckedAt = recentIso(5);
   const midCheckedAt = recentIso(6);
-  const fastOnly: DispatchCandidate[] = [{ profileId: 'fast', client: 'c1', provider: 'p', model: 'mfast' }];
-  const fastResult = resolveConstrainedDispatch(catalog, fastOnly, {}, [{ provider: 'p', model: 'mfast', tps: 99, sampleCount: 31, checkedAt: fastCheckedAt }]);
+  const fastOnly: DispatchCandidate[] = [{ profileId: 'fast', client: 'c1', provider: 'p', model: 'deepseek-v4.1-flash' }];
+  const fastResult = resolveConstrainedDispatch(catalog, fastOnly, {}, [{ provider: 'p', model: 'deepseek-v4.1-flash', tps: 99, sampleCount: 31, checkedAt: fastCheckedAt }]);
   assert.equal(fastResult.ok, true);
   assert.equal(fastResult.selected.speed.source, 'local_31d');
   assert.equal(fastResult.selected.speed.tps, 99);
   assert.equal(fastResult.selected.speed.provider, 'p');
-  assert.equal(fastResult.selected.speed.model, 'mfast');
+  assert.equal(fastResult.selected.speed.model, 'deepseek-v4.1-flash');
   assert.equal(fastResult.selected.speed.sampleCount, 31);
   assert.equal(fastResult.selected.speed.checkedAt, fastCheckedAt);
 
-  const midOnly: DispatchCandidate[] = [{ profileId: 'mid', client: 'c1', provider: 'p', model: 'mmid' }];
-  const midResult = resolveConstrainedDispatch(catalog, midOnly, {}, [{ provider: 'p', model: 'mmid', tps: 120, sampleCount: 20, checkedAt: midCheckedAt }]);
+  const midOnly: DispatchCandidate[] = [{ profileId: 'mid', client: 'c1', provider: 'p', model: 'glm-5.3' }];
+  const midResult = resolveConstrainedDispatch(catalog, midOnly, {}, [{ provider: 'p', model: 'glm-5.3', tps: 120, sampleCount: 20, checkedAt: midCheckedAt }]);
   assert.equal(midResult.ok, true);
   assert.equal(midResult.selected.speed.source, 'local_31d');
   assert.equal(midResult.selected.speed.tps, 120);
   assert.equal(midResult.selected.speed.provider, 'p');
-  assert.equal(midResult.selected.speed.model, 'mmid');
+  assert.equal(midResult.selected.speed.model, 'glm-5.3');
   assert.equal(midResult.selected.speed.sampleCount, 20);
   assert.equal(midResult.selected.speed.checkedAt, midCheckedAt);
 });
@@ -494,23 +496,23 @@ function buildSpeedTierCatalog(): { catalog: Catalog; overrideModel: DispatchCan
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
     models: [
-      { pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(30) },
-      { pricing: pricingFixture(), id: 'n', displayName: 'N', intelligence: 'mid', speed: speedFixture(20) },
+      { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(30) },
+      { pricing: pricingFixture(), id: 'glm-5.3-flash', displayName: 'N', intelligence: 'mid', speed: speedFixture(20) },
     ],
-    modelSpeedOverrides: { m: 60 },
+    modelSpeedOverrides: { 'glm-5.3': 60 },
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   return {
     catalog,
-    overrideModel: { profileId: 'p/m:c1', client: 'c1', provider: 'p', model: 'm' },
-    defaultModel: { profileId: 'p/n:c1', client: 'c1', provider: 'p', model: 'n' },
+    overrideModel: { profileId: 'p/glm-5.3:c1', client: 'c1', provider: 'p', model: 'glm-5.3' },
+    defaultModel: { profileId: 'p/glm-5.3-flash:c1', client: 'c1', provider: 'p', model: 'glm-5.3-flash' },
   };
 }
 
 test('exact speed precedence is local_31d over provider_override over catalog_default', () => {
   const { catalog, overrideModel, defaultModel } = buildSpeedTierCatalog();
 
-  // No local sample and no override for n: the required model default is used.
+  // No local sample and no override for glm-5.3-flash: the required model default is used.
   const catalogDefault = resolveConstrainedDispatch(catalog, [defaultModel], {});
   assert.equal(catalogDefault.ok, true);
   assert.equal(catalogDefault.selected.speed.source, 'catalog_default');
@@ -524,13 +526,13 @@ test('exact speed precedence is local_31d over provider_override over catalog_de
 
   // A usable exact-profile local sample outranks the provider override.
   const localSample = resolveConstrainedDispatch(catalog, [overrideModel], {}, [
-    { provider: 'p', model: 'm', tps: 90, sampleCount: 31, checkedAt: recentIso(3) },
+    { provider: 'p', model: 'glm-5.3', tps: 90, sampleCount: 31, checkedAt: recentIso(3) },
   ]);
   assert.equal(localSample.ok, true);
   assert.equal(localSample.selected.speed.source, 'local_31d');
   assert.equal(localSample.selected.speed.tps, 90);
   assert.equal(localSample.selected.speed.provider, 'p');
-  assert.equal(localSample.selected.speed.model, 'm');
+  assert.equal(localSample.selected.speed.model, 'glm-5.3');
 });
 
 test('invalid local samples fall through to the canonical speed tiers', () => {
@@ -547,13 +549,13 @@ test('invalid local samples fall through to the canonical speed tiers', () => {
   ];
   for (const sample of invalid) {
     // An unusable exact-profile sample is skipped; the provider override applies.
-    const viaOverride = resolveConstrainedDispatch(catalog, [overrideModel], {}, [{ provider: 'p', model: 'm', ...sample }]);
+    const viaOverride = resolveConstrainedDispatch(catalog, [overrideModel], {}, [{ provider: 'p', model: 'glm-5.3', ...sample }]);
     assert.equal(viaOverride.ok, true);
     assert.equal(viaOverride.selected.speed.source, 'provider_override');
     assert.equal(viaOverride.selected.speed.tps, 60);
 
     // A model without an override falls through to its required default speed.
-    const viaDefault = resolveConstrainedDispatch(catalog, [defaultModel], {}, [{ provider: 'p', model: 'n', ...sample }]);
+    const viaDefault = resolveConstrainedDispatch(catalog, [defaultModel], {}, [{ provider: 'p', model: 'glm-5.3-flash', ...sample }]);
     assert.equal(viaDefault.ok, true);
     assert.equal(viaDefault.selected.speed.source, 'catalog_default');
     assert.equal(viaDefault.selected.speed.tps, 20);
@@ -567,15 +569,15 @@ test('exact provider/model local samples are isolated across models and stale sa
     id: 'p', displayName: 'P', credentialResolver: 'managed',
     models: [
       { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: speedFixture(40) },
-      { pricing: pricingFixture(), id: 'other', displayName: 'Other', intelligence: 'mid', speed: speedFixture(20) },
+      { pricing: pricingFixture(), id: 'glm-5.3-flash', displayName: 'Other', intelligence: 'mid', speed: speedFixture(20) },
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   const canonicalCandidate: DispatchCandidate = { profileId: 'glm-5.3:cc', client: 'c1', provider: 'p', model: 'glm-5.3' };
-  const otherCandidate: DispatchCandidate = { profileId: 'other:cc', client: 'c1', provider: 'p', model: 'other' };
+  const otherCandidate: DispatchCandidate = { profileId: 'glm-5.3-flash:cc', client: 'c1', provider: 'p', model: 'glm-5.3-flash' };
   const local = [
     { provider: 'p', model: 'glm-5.3', tps: 95, sampleCount: 10, checkedAt: recentIso(2) },
-    { provider: 'p', model: 'other', tps: 0, sampleCount: 10, checkedAt: recentIso(2) },
+    { provider: 'p', model: 'glm-5.3-flash', tps: 0, sampleCount: 10, checkedAt: recentIso(2) },
   ];
   // The canonical candidate matches its own exact-provider/model sample.
   const viaCanonical = resolveConstrainedDispatch(catalog, [canonicalCandidate], {}, local);
@@ -603,16 +605,16 @@ test('strict dynamic-fast boundary is tps greater than 80, not 80', () => {
   assert.equal(isDynamicFast(81), true);
   assert.equal(isDynamicFast(0), false);
   const { catalog, candidates } = buildDispatchCatalog();
-  const fast80: DispatchCandidate[] = [{ profileId: 'f80', client: 'c1', provider: 'p', model: 'mfast' }];
-  const fast81: DispatchCandidate[] = [{ profileId: 'f81', client: 'c1', provider: 'p', model: 'mmid' }];
+  const fast80: DispatchCandidate[] = [{ profileId: 'f80', client: 'c1', provider: 'p', model: 'deepseek-v4.1-flash' }];
+  const fast81: DispatchCandidate[] = [{ profileId: 'f81', client: 'c1', provider: 'p', model: 'glm-5.3' }];
   // Override speeds to exactly 80 and 81 for the boundary check.
   const local = [
-    { provider: 'p', model: 'mfast', tps: 80, sampleCount: 5, checkedAt: recentIso(5) },
-    { provider: 'p', model: 'mmid', tps: 81, sampleCount: 5, checkedAt: recentIso(5) },
+    { provider: 'p', model: 'deepseek-v4.1-flash', tps: 80, sampleCount: 5, checkedAt: recentIso(5) },
+    { provider: 'p', model: 'glm-5.3', tps: 81, sampleCount: 5, checkedAt: recentIso(5) },
   ];
   const result = resolveConstrainedDispatch(catalog, [...fast80, ...fast81], { minimumTps: 81 }, local);
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'mmid');
+  assert.equal(result.selected.plan.model, 'glm-5.3');
 });
 
 test('vision capability is a hard gate', () => {
@@ -621,22 +623,22 @@ test('vision capability is a hard gate', () => {
     requiredCapabilities: ['image'],
   });
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'mvision');
-  assert.notEqual(result.selected.plan.model, 'mtextonly');
+  assert.equal(result.selected.plan.model, 'kimi-k2.8');
+  assert.notEqual(result.selected.plan.model, 'qwen3.8-max');
 });
 
 test('same-speed-group lower price wins deterministically', () => {
   const { catalog, candidates } = buildDispatchCatalog();
   const subset: DispatchCandidate[] = [
-    { profileId: 'textonly', client: 'c1', provider: 'p', model: 'mtextonly' },
-    { profileId: 'vision', client: 'c1', provider: 'p', model: 'mvision' },
+    { profileId: 'textonly', client: 'c1', provider: 'p', model: 'qwen3.8-max' },
+    { profileId: 'vision', client: 'c1', provider: 'p', model: 'kimi-k2.8' },
   ];
   const result = resolveConstrainedDispatch(catalog, subset, {
     expectedTps: 40,
   });
-  // mtextonly (out 2) and mvision (out 4) both meet expectedTps 40; lower price wins.
+  // kimi-k2.6 (out 2) and kimi-k2.8 (out 4) both meet expectedTps 40; lower price wins.
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'mtextonly');
+  assert.equal(result.selected.plan.model, 'qwen3.8-max');
 });
 
 test('combined capability and price constraints admit only compliant candidates', () => {
@@ -646,12 +648,12 @@ test('combined capability and price constraints admit only compliant candidates'
     maxOutputUsdPerMillion: 10,
   });
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'mvision');
+  assert.equal(result.selected.plan.model, 'kimi-k2.8');
   assert.ok(result.selected.model.capabilities?.includes('image'));
   assert.ok((result.selected.model.pricing?.[2] ?? Infinity) <= 10);
 });
 
-test('canonical alias cannot bypass canonical model exclusion while GLM-5.3-Flash stays eligible', () => {
+test('canonical alias cannot bypass canonical model exclusion while glm-5.3-flash stays eligible', () => {
   const catalog = new Catalog();
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   registerProvider(catalog, {
@@ -659,17 +661,17 @@ test('canonical alias cannot bypass canonical model exclusion while GLM-5.3-Flas
     modelAliases: { 'legacy-glm': 'glm-5.3' },
     models: [
       { id: 'glm-5.3', displayName: 'GLM 5.3', intelligence: 'mid', speed: 50, pricing: [1, 1, 1] },
-      { id: 'GLM-5.3-Flash', displayName: 'GLM 5.3 Flash', intelligence: 'mid', speed: 50, pricing: [1, 1, 2] },
+      { id: 'glm-5.3-flash', displayName: 'GLM 5.3 Flash', intelligence: 'mid', speed: 50, pricing: [1, 1, 2] },
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   const candidates: DispatchCandidate[] = [
     { profileId: 'legacy', client: 'c1', provider: 'p', model: 'legacy-glm' },
-    { profileId: 'flash', client: 'c1', provider: 'p', model: 'GLM-5.3-Flash' },
+    { profileId: 'flash', client: 'c1', provider: 'p', model: 'glm-5.3-flash' },
   ];
   const result = resolveConstrainedDispatch(catalog, candidates, { excludeModelIds: ['glm-5.3'] }, []);
   assert.equal(result.ok, true);
-  assert.equal(result.selected.plan.model, 'GLM-5.3-Flash');
+  assert.equal(result.selected.plan.model, 'glm-5.3-flash');
   assert.notEqual(result.selected.plan.model, 'glm-5.3');
   assert.notEqual(result.selected.plan.model, 'legacy-glm');
 });
@@ -688,7 +690,7 @@ function buildDualRouteCatalog(): {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     nativeClients: ['claude'],
     models: [{
-      id: 'm', displayName: 'M', intelligence: 'mid',
+      id: 'glm-5.3', displayName: 'M', intelligence: 'mid',
       speed: 30,
       pricing: [1, 1, 2],
     }],
@@ -699,31 +701,31 @@ function buildDualRouteCatalog(): {
   });
   return {
     catalog,
-    native: { profileId: 'vendor/m:cc', client: 'claude', provider: 'vendor', model: 'm' },
-    codebuddyGateway: { profileId: 'vendor/m:cb', client: 'codebuddy', provider: 'vendor', model: 'm' },
-    grokGateway: { profileId: 'vendor/m:gk', client: 'grok', provider: 'vendor', model: 'm' },
+    native: { profileId: 'vendor/glm-5.3:cc', client: 'claude', provider: 'vendor', model: 'glm-5.3' },
+    codebuddyGateway: { profileId: 'vendor/glm-5.3:cb', client: 'codebuddy', provider: 'vendor', model: 'glm-5.3' },
+    grokGateway: { profileId: 'vendor/glm-5.3:gk', client: 'grok', provider: 'vendor', model: 'glm-5.3' },
   };
 }
 
 test('automatic dispatch collapses the same provider/model to the Catalog-native client after hard gates', () => {
   const { catalog, native, codebuddyGateway, grokGateway } = buildDualRouteCatalog();
   // The gateway and grok candidates are declared first; collapse must still pick
-  // the eligible native claude plan as the single representative of vendor/m.
+  // the eligible native claude plan as the single representative of vendor/glm-5.3.
   const result = resolveConstrainedDispatch(catalog, [grokGateway, codebuddyGateway, native], {});
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.client, 'claude');
   assert.equal(result.selected.plan.mode, 'native');
   assert.equal(result.selected.plan.provider, 'vendor');
-  assert.equal(result.selected.plan.model, 'm');
+  assert.equal(result.selected.plan.model, 'glm-5.3');
 });
 
 test('hard gates run before client collapse: an unusable native path falls back to the grok gateway', () => {
   const { catalog, native, codebuddyGateway, grokGateway } = buildDualRouteCatalog();
   // The exact provider/model local sample is shared identically by every client
-  // of vendor/m. With the shared sample above the floor, all clients pass the
+  // of vendor/glm-5.3. With the shared sample above the floor, all clients pass the
   // speed gate and collapse picks the eligible native claude plan.
   const result = resolveConstrainedDispatch(catalog, [codebuddyGateway, grokGateway, native], { minimumTps: 60 }, [
-    { provider: 'vendor', model: 'm', tps: 90, sampleCount: 5, checkedAt: recentIso(5) },
+    { provider: 'vendor', model: 'glm-5.3', tps: 90, sampleCount: 5, checkedAt: recentIso(5) },
   ]);
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.client, 'claude');
@@ -734,7 +736,7 @@ test('hard gates run before client collapse: an unusable native path falls back 
   // When the shared sample is below the floor, the same speed gate filters every
   // client of the model; client collapse cannot rescue any route.
   const tooSlow = resolveConstrainedDispatch(catalog, [codebuddyGateway, grokGateway, native], { minimumTps: 60 }, [
-    { provider: 'vendor', model: 'm', tps: 20, sampleCount: 5, checkedAt: recentIso(5) },
+    { provider: 'vendor', model: 'glm-5.3', tps: 20, sampleCount: 5, checkedAt: recentIso(5) },
   ]);
   assert.equal(tooSlow.ok, false);
   assert.equal(tooSlow.reason, 'no-eligible-candidate');
@@ -747,7 +749,7 @@ test('with no native route the grok client beats claude for the same provider/mo
   registerProvider(catalog, {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     models: [{
-      id: 'm', displayName: 'M', intelligence: 'mid',
+      id: 'glm-5.3', displayName: 'M', intelligence: 'mid',
       speed: 30,
       pricing: [1, 1, 2],
     }],
@@ -756,8 +758,8 @@ test('with no native route the grok client beats claude for the same provider/mo
       { protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' },
     ],
   });
-  const claudeGateway: DispatchCandidate = { profileId: 'vendor/m:cc', client: 'claude', provider: 'vendor', model: 'm' };
-  const grokGateway: DispatchCandidate = { profileId: 'vendor/m:gk', client: 'grok', provider: 'vendor', model: 'm' };
+  const claudeGateway: DispatchCandidate = { profileId: 'vendor/glm-5.3:cc', client: 'claude', provider: 'vendor', model: 'glm-5.3' };
+  const grokGateway: DispatchCandidate = { profileId: 'vendor/glm-5.3:gk', client: 'grok', provider: 'vendor', model: 'glm-5.3' };
   const result = resolveConstrainedDispatch(catalog, [claudeGateway, grokGateway], {});
   assert.equal(result.ok, true);
   assert.equal(result.selected.plan.client, 'grok');
@@ -847,12 +849,12 @@ test('a compatible target resolves exactly through Catalog.resolveRun with no fa
   registerProvider(catalog, {
     id: 'anthropic', displayName: 'Anthropic', credentialResolver: 'claude',
     nativeClients: ['claude'],
-    models: [{ pricing: pricingFixture(), id: 'claude-sonnet-4', displayName: 'Claude Sonnet 4', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'claude-sonnet-5', displayName: 'Claude Sonnet 4', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
   });
-  const viaSyntax = resolveRunSyntax(catalog, 'anthropic/claude-sonnet-4:cc');
+  const viaSyntax = resolveRunSyntax(catalog, 'anthropic/claude-sonnet-5:cc');
   assert.equal(viaSyntax.mode, 'native');
-  assert.deepEqual(viaSyntax, catalog.resolveRun('claude', 'anthropic', 'claude-sonnet-4'));
+  assert.deepEqual(viaSyntax, catalog.resolveRun('claude', 'anthropic', 'claude-sonnet-5'));
 });
 
 function buildTaskCatalog(): Catalog {
@@ -866,13 +868,13 @@ function buildTaskCatalog(): Catalog {
     modelAliases: { 'sonnet-legacy': 'claude-sonnet-5' },
     models: [
       { pricing: pricingFixture(), id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', intelligence: 'mid', speed: speedFixture() },
-      { pricing: pricingFixture(), id: 'claude-task', displayName: 'Claude Task', taskOnly: true, intelligence: 'mid', speed: speedFixture() },
+      { pricing: pricingFixture(), id: 'claude-sonnet-5-5', displayName: 'Claude Task', taskOnly: true, intelligence: 'mid', speed: speedFixture() },
     ],
     protocols: [{ protocol: 'anthropic_messages', endpoint: 'https://api.anthropic.example/v1/messages', authScheme: 'x-api-key' }],
   });
   registerProvider(catalog, {
     id: 'vendor-api', displayName: 'Vendor', credentialResolver: 'managed',
-    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'hunyuan-hy3', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   return catalog;
@@ -884,9 +886,9 @@ test('task candidate enumeration is deterministic with canonical dynamic syntax 
   const second = catalog.enumerateTaskCandidates();
   assert.deepEqual(second, first);
   assert.deepEqual(first.map((candidate) => candidate.profileId), [
+    'anthropic-api/claude-sonnet-5-5:cc',
     'anthropic-api/claude-sonnet-5:cc',
-    'anthropic-api/claude-task:cc',
-    'vendor-api/m:cb',
+    'vendor-api/hunyuan-hy3:cb',
   ]);
   for (const candidate of first) {
     const plan = catalog.resolveRun(candidate.client, candidate.provider, candidate.model);
@@ -897,10 +899,10 @@ test('task candidate enumeration is deterministic with canonical dynamic syntax 
 test('task candidate enumeration includes compatible taskOnly models', () => {
   const catalog = buildTaskCatalog();
   const keys = catalog.enumerateTaskCandidates().map((candidate) => candidate.profileId);
-  assert.ok(keys.includes('anthropic-api/claude-task:cc'));
+  assert.ok(keys.includes('anthropic-api/claude-sonnet-5-5:cc'));
   assert.ok(keys.includes('anthropic-api/claude-sonnet-5:cc'));
   // taskOnly hides the model from the public Gateway /models listing but not from Tasks.
-  assert.ok(!catalog.listGatewayModels('anthropic_messages').some((entry) => entry.id === 'claude-task'));
+  assert.ok(!catalog.listGatewayModels('anthropic_messages').some((entry) => entry.id === 'claude-sonnet-5-5'));
 });
 
 test('task candidate enumeration excludes parseable but non-task-capable dsh', () => {
@@ -909,17 +911,17 @@ test('task candidate enumeration excludes parseable but non-task-capable dsh', (
   assert.ok(!candidates.some((candidate) => candidate.client === 'dsh'));
   assert.ok(!candidates.some((candidate) => candidate.profileId.endsWith(':dsh')));
   // dsh stays a parseable public key and a compatible gateway route; capability is separate.
-  assert.equal(catalog.resolveRun('dsh', 'vendor-api', 'm').mode, 'gateway');
-  assert.deepEqual(parseRunSyntax('vendor-api/m:dsh'), { client: 'dsh', provider: 'vendor-api', model: 'm' });
+  assert.equal(catalog.resolveRun('dsh', 'vendor-api', 'hunyuan-hy3').mode, 'gateway');
+  assert.deepEqual(parseRunSyntax('vendor-api/hunyuan-hy3:dsh'), { client: 'dsh', provider: 'vendor-api', model: 'hunyuan-hy3' });
 });
 
 test('task candidate enumeration excludes incompatible client/provider pairs', () => {
   const catalog = buildTaskCatalog();
   const keys = catalog.enumerateTaskCandidates().map((candidate) => candidate.profileId);
-  assert.ok(!keys.includes('vendor-api/m:cc'));
+  assert.ok(!keys.includes('vendor-api/hunyuan-hy3:cc'));
   assert.ok(!keys.some((key) => key.endsWith(':codex')));
-  assert.throws(() => catalog.resolveRun('claude', 'vendor-api', 'm'), /cannot serve client claude/);
-  assert.throws(() => catalog.resolveRun('codex', 'vendor-api', 'm'), /cannot serve client codex/);
+  assert.throws(() => catalog.resolveRun('claude', 'vendor-api', 'hunyuan-hy3'), /cannot serve client claude/);
+  assert.throws(() => catalog.resolveRun('codex', 'vendor-api', 'hunyuan-hy3'), /cannot serve client codex/);
 });
 
 test('client gateway provider boundaries reject protocol-compatible but unexecutable pairs', () => {
@@ -932,11 +934,11 @@ test('client gateway provider boundaries reject protocol-compatible but unexecut
   });
   registerProvider(catalog, {
     id: 'codebuddy', displayName: 'CodeBuddy', credentialResolver: 'codebuddy',
-    models: [{ pricing: pricingFixture(), id: 'hy3', displayName: 'HY3', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'hunyuan-hy3', displayName: 'HY3', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://codebuddy.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  assert.throws(() => catalog.resolveRun('grok', 'codebuddy', 'hy3'), /cannot serve client grok/);
-  assert.ok(!catalog.enumerateTaskCandidates().some((candidate) => candidate.profileId === 'codebuddy/hy3:gk'));
+  assert.throws(() => catalog.resolveRun('grok', 'codebuddy', 'hunyuan-hy3'), /cannot serve client grok/);
+  assert.ok(!catalog.enumerateTaskCandidates().some((candidate) => candidate.profileId === 'codebuddy/hunyuan-hy3:gk'));
 });
 
 test('client gateway provider boundaries reject duplicate declarations', () => {
@@ -972,30 +974,30 @@ test('native web search is admitted only for a supported native client/provider 
   registerProvider(catalog, {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     nativeClients: ['nsearch', 'nplain'],
-    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   registerProvider(catalog, {
     id: 'other', displayName: 'Other', credentialResolver: 'managed',
-    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
+    models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture() }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://other.example/v1/chat/completions', authScheme: 'bearer' }],
   });
 
   // Supported native pair: flag true AND provider === nativeProvider AND mode native.
-  const supported = catalog.resolveRun('nsearch', 'vendor', 'm');
+  const supported = catalog.resolveRun('nsearch', 'vendor', 'glm-5.3');
   assert.equal(supported.mode, 'native');
   assert.equal(supported.supportsWebSearch, true);
 
   // Unmarked native client: never marked supported.
-  assert.equal(catalog.resolveRun('nplain', 'vendor', 'm').supportsWebSearch, undefined);
+  assert.equal(catalog.resolveRun('nplain', 'vendor', 'glm-5.3').supportsWebSearch, undefined);
 
   // Gateway route from a flag-claiming client to a non-native provider: not supported.
-  const gw = catalog.resolveRun('gwclaim', 'other', 'm');
+  const gw = catalog.resolveRun('gwclaim', 'other', 'glm-5.3');
   assert.equal(gw.mode, 'gateway');
   assert.equal(gw.supportsWebSearch, undefined);
 
   // The same model reached through a non-native gateway client must not be trusted.
-  const nonNativeGw = catalog.resolveRun('gwclaim', 'vendor', 'm');
+  const nonNativeGw = catalog.resolveRun('gwclaim', 'vendor', 'glm-5.3');
   assert.equal(nonNativeGw.supportsWebSearch, undefined);
 });
 
@@ -1006,11 +1008,11 @@ test('requiresWebSearch filters unsupported combinations but keeps supported dis
   registerProvider(catalog, {
     id: 'vendor', displayName: 'Vendor', credentialResolver: 'managed',
     nativeClients: ['nsearch'],
-    models: [{ id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing: [1, 1, 1] }],
+    models: [{ id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), pricing: [1, 1, 1] }],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://vendor.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  const nativeCand: DispatchCandidate = { profileId: 'vendor/m:nsearch', client: 'nsearch', provider: 'vendor', model: 'm' };
-  const gwCand: DispatchCandidate = { profileId: 'vendor/m:gw', client: 'gw', provider: 'vendor', model: 'm' };
+  const nativeCand: DispatchCandidate = { profileId: 'vendor/glm-5.3:nsearch', client: 'nsearch', provider: 'vendor', model: 'glm-5.3' };
+  const gwCand: DispatchCandidate = { profileId: 'vendor/glm-5.3:gw', client: 'gw', provider: 'vendor', model: 'glm-5.3' };
 
   // Without the requirement both are eligible; collapse prefers the native route.
   const noReq = resolveConstrainedDispatch(catalog, [gwCand, nativeCand], {});
@@ -1032,7 +1034,7 @@ test('requiresWebSearch filters unsupported combinations but keeps supported dis
   // A normal task (no requirement) is unaffected by the web search metadata.
   const normal = resolveConstrainedDispatch(catalog, [nativeCand], {});
   assert.equal(normal.ok, true);
-  assert.equal(normal.selected.plan.model, 'm');
+  assert.equal(normal.selected.plan.model, 'glm-5.3');
 });
 
 // ---------------------------------------------------------------------------
@@ -1044,9 +1046,9 @@ function buildThinkingCatalog(levels?: readonly ReasoningEffort[]): Catalog {
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
-    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), ...(levels === undefined ? {} : { reasoningEfforts: levels }) }],
+    models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), ...(levels === undefined ? {} : { reasoningEfforts: levels }) }],
     reasoningEffortMappings: {
-      m: {
+      'glm-5.3': {
         c1: {
           ...Object.fromEntries((levels ?? []).filter(level => ['low', 'medium', 'high'].includes(level)).map(level => [level, { effort: level }])),
         },
@@ -1069,8 +1071,8 @@ test('normalizeReasoningEffort rejects midium and unknown values', () => {
 test('diagnostic enumeration without an expectation carries no run effort', () => {
   // xhigh/max are declared but unmapped; high is the highest mapped level.
   const catalog = buildThinkingCatalog(['low', 'medium', 'high', 'xhigh', 'max']);
-  assert.deepEqual(catalog.resolveRun('c1', 'p', 'm'), {
-    client: 'c1', provider: 'p', model: 'm', mode: 'gateway', protocol: 'openai_chat',
+  assert.deepEqual(catalog.resolveRun('c1', 'p', 'glm-5.3'), {
+    client: 'c1', provider: 'p', model: 'glm-5.3', mode: 'gateway', protocol: 'openai_chat',
     });
 });
 
@@ -1078,13 +1080,13 @@ test('a requested level adapts to the smallest supported level at or above it', 
   // Medium and high are usable: a low request resolves medium, and
   // a request above the usable ceiling resolves the highest usable level.
   const catalog = buildThinkingCatalog(['medium', 'high']);
-  assert.deepEqual(catalog.resolveRun('c1', 'p', 'm', 'low'), {
-    client: 'c1', provider: 'p', model: 'm', mode: 'gateway', protocol: 'openai_chat',
+  assert.deepEqual(catalog.resolveRun('c1', 'p', 'glm-5.3', 'low'), {
+    client: 'c1', provider: 'p', model: 'glm-5.3', mode: 'gateway', protocol: 'openai_chat',
     reasoningEffort: 'medium', clientReasoningEffort: 'medium',
   });
   // xhigh is a legal public level but is not usable here: it clamps to the
   // highest usable level rather than rejecting the request.
-  const clamped = catalog.resolveRun('c1', 'p', 'm', 'xhigh');
+  const clamped = catalog.resolveRun('c1', 'p', 'glm-5.3', 'xhigh');
   assert.equal(clamped.reasoningEffort, 'high');
   assert.equal(clamped.clientReasoningEffort, 'high');
 });
@@ -1095,17 +1097,17 @@ test('a request above the mapped maximum clamps to the highest usable level', ()
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
-    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high', 'max'] }],
+    models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high', 'max'] }],
     reasoningEffortMappings: {
-      m: { c1: { low: { effort: 'low' }, high: { effort: 'high' } } },
+      'glm-5.3': { c1: { low: { effort: 'low' }, high: { effort: 'high' } } },
     },
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  const max = catalog.resolveRun('c1', 'p', 'm', 'max');
+  const max = catalog.resolveRun('c1', 'p', 'glm-5.3', 'max');
   assert.equal(max.reasoningEffort, 'high');
   assert.equal(max.clientReasoningEffort, 'high');
   // Diagnostic enumeration does not select an operational effort.
-  assert.equal(catalog.resolveRun('c1', 'p', 'm').reasoningEffort, undefined);
+  assert.equal(catalog.resolveRun('c1', 'p', 'glm-5.3').reasoningEffort, undefined);
 });
 
 test('declaration order never decides the selected level', () => {
@@ -1115,14 +1117,14 @@ test('declaration order never decides the selected level', () => {
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
-    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['high', 'low', 'medium'] }],
+    models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['high', 'low', 'medium'] }],
     reasoningEffortMappings: {
-      m: { c1: { low: { effort: 'low' }, medium: { effort: 'medium' }, high: { effort: 'high' } } },
+      'glm-5.3': { c1: { low: { effort: 'low' }, medium: { effort: 'medium' }, high: { effort: 'high' } } },
     },
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  assert.equal(catalog.resolveRun('c1', 'p', 'm', 'low').reasoningEffort, 'low');
-  assert.equal(catalog.resolveRun('c1', 'p', 'm', 'xhigh').reasoningEffort, 'high');
+  assert.equal(catalog.resolveRun('c1', 'p', 'glm-5.3', 'low').reasoningEffort, 'low');
+  assert.equal(catalog.resolveRun('c1', 'p', 'glm-5.3', 'xhigh').reasoningEffort, 'high');
 });
 
 test('a runtime with no exact client mapping is not dispatchable', () => {
@@ -1132,16 +1134,16 @@ test('a runtime with no exact client mapping is not dispatchable', () => {
   unmapped.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   registerProvider(unmapped, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
-    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high'] }],
+    models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high'] }],
     reasoningEffortMappings: {},
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  assert.throws(() => unmapped.resolveRun('c1', 'p', 'm', 'low'), /no reasoning-effort mapping/);
+  assert.throws(() => unmapped.resolveRun('c1', 'p', 'glm-5.3', 'low'), /no reasoning-effort mapping/);
 
   // A model without any declared levels never carries thinking, even when the
   // client has a mapping for that model id.
   const plain = buildThinkingCatalog(undefined);
-  assert.throws(() => plain.resolveRun('c1', 'p', 'm', 'low'), /no reasoning-effort mapping/);
+  assert.throws(() => plain.resolveRun('c1', 'p', 'glm-5.3', 'low'), /no reasoning-effort mapping/);
 });
 
 test('a client without an exact mapping for the model id gets no thinking', () => {
@@ -1149,12 +1151,12 @@ test('a client without an exact mapping for the model id gets no thinking', () =
   // is unusable and no effort is invented.
   const catalog = buildThinkingCatalog(['low', 'medium', 'high']);
   catalog.registerClient({ id: 'c2', gatewayProtocols: ['openai_chat'] });
-  assert.throws(() => catalog.resolveRun('c2', 'p', 'm', 'high'), /no reasoning-effort mapping/);
+  assert.throws(() => catalog.resolveRun('c2', 'p', 'glm-5.3', 'high'), /no reasoning-effort mapping/);
 });
 
 test('an invalid public thinking enum value is still rejected', () => {
   const catalog = buildThinkingCatalog(['low', 'medium', 'high']);
-  assert.throws(() => catalog.resolveRun('c1', 'p', 'm', 'ultra' as never), /invalid reasoning effort/);
+  assert.throws(() => catalog.resolveRun('c1', 'p', 'glm-5.3', 'ultra' as never), /invalid reasoning effort/);
 });
 
 test('provider thinking mapping may substitute an upstream model and keeps the public model unchanged', () => {
@@ -1162,9 +1164,9 @@ test('provider thinking mapping may substitute an upstream model and keeps the p
   catalog.registerClient({ id: 'c1', gatewayProtocols: ['openai_chat'] });
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
-    models: [{ pricing: pricingFixture(), id: 'public-m', displayName: 'Public M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high'] }],
+    models: [{ pricing: pricingFixture(), id: 'gpt-6-luna', displayName: 'Public M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high'] }],
     reasoningEffortMappings: {
-      'public-m': {
+      'gpt-6-luna': {
         c1: {
           low: { model: 'upstream-low' },
           high: { model: 'upstream-high', effort: 'high' },
@@ -1173,14 +1175,14 @@ test('provider thinking mapping may substitute an upstream model and keeps the p
     },
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  const plan = catalog.resolveRun('c1', 'p', 'public-m', 'high');
-  assert.equal(plan.model, 'public-m');
+  const plan = catalog.resolveRun('c1', 'p', 'gpt-6-luna', 'high');
+  assert.equal(plan.model, 'gpt-6-luna');
   assert.equal(plan.reasoningEffort, 'high');
   assert.equal(plan.upstreamModel, 'upstream-high');
   assert.equal(plan.clientReasoningEffort, 'high');
   // An explicit model-only variant propagates the substitution without effort.
-  const low = catalog.resolveRun('c1', 'p', 'public-m', 'low');
-  assert.equal(low.model, 'public-m');
+  const low = catalog.resolveRun('c1', 'p', 'gpt-6-luna', 'low');
+  assert.equal(low.model, 'gpt-6-luna');
   assert.equal(low.upstreamModel, 'upstream-low');
   assert.equal(low.clientReasoningEffort, undefined);
   assert.equal(low.reasoningEffort, 'low');
@@ -1188,39 +1190,40 @@ test('provider thinking mapping may substitute an upstream model and keeps the p
 
 test('independent thinking resolutions never mutate each other or the registered model', () => {
   const catalog = buildThinkingCatalog(['low', 'medium', 'high']);
-  const first = catalog.resolveRun('c1', 'p', 'm', 'low');
-  const second = catalog.resolveRun('c1', 'p', 'm', 'high');
-  const third = catalog.resolveRun('c1', 'p', 'm', 'high');
+  const first = catalog.resolveRun('c1', 'p', 'glm-5.3', 'low');
+  const second = catalog.resolveRun('c1', 'p', 'glm-5.3', 'high');
+  const third = catalog.resolveRun('c1', 'p', 'glm-5.3', 'high');
   assert.equal(first.reasoningEffort, 'low');
   assert.equal(second.reasoningEffort, 'high');
   assert.equal(third.reasoningEffort, 'high');
   // The declared model definition is untouched by resolution.
   assert.deepEqual(catalog.provider('p')?.models[0]?.reasoningEfforts, ['low', 'medium', 'high']);
-  assert.equal(catalog.resolveRun('c1', 'p', 'm', 'low').reasoningEffort, 'low');
+  assert.equal(catalog.resolveRun('c1', 'p', 'glm-5.3', 'low').reasoningEffort, 'low');
 });
 
 test('registerProvider rejects invalid and duplicate thinking levels and bad mapping references', () => {
   const protocols = [{ protocol: 'openai_chat' as const, endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' as const }];
   const register = (extra: object, levels?: readonly unknown[]) => registerProvider(new Catalog(), {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
-    models: [{ pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), ...(levels === undefined ? {} : { reasoningEfforts: levels as readonly ReasoningEffort[] }) }],
+    models: [{ pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), ...(levels === undefined ? {} : { reasoningEfforts: levels as readonly ReasoningEffort[] }) }],
     protocols,
     ...extra,
   });
 
-  assert.throws(() => register({}, []), /non-empty/);
+  // An empty ladder is a legal declaration: the route materializes no effort
+  // level, so it is never rejected. Only malformed ladders are rejected.
   assert.throws(() => register({}, ['low', 'low']), /duplicate reasoning effort/);
   assert.throws(() => register({}, ['low', 'ultra']), /invalid reasoning effort/);
   // Mapping for an unknown model id is rejected.
   assert.throws(() => register({ reasoningEffortMappings: { nope: { c1: { low: { effort: 'low' } } } } }, ['low']), /exact declared model id/);
   // Mapping with an illegal level is rejected.
-  assert.throws(() => register({ reasoningEffortMappings: { m: { c1: { ultra: { effort: 'ultra' } } as never } } }, ['low']), /invalid reasoning effort/);
+  assert.throws(() => register({ reasoningEffortMappings: { 'glm-5.3': { c1: { ultra: { effort: 'ultra' } } as never } } }, ['low']), /invalid reasoning effort/);
   // Mapping with an empty effort value is rejected.
-  assert.throws(() => register({ reasoningEffortMappings: { m: { c1: { low: { effort: '   ' } } } } }, ['low']), /effort must be a non-empty string/);
+  assert.throws(() => register({ reasoningEffortMappings: { 'glm-5.3': { c1: { low: { effort: '   ' } } } } }, ['low']), /effort must be a non-empty string/);
   // Mapping with an empty model value is rejected.
-  assert.throws(() => register({ reasoningEffortMappings: { m: { c1: { low: { model: '' } } } } }, ['low']), /model must be a non-empty string/);
+  assert.throws(() => register({ reasoningEffortMappings: { 'glm-5.3': { c1: { low: { model: '' } } } } }, ['low']), /model must be a non-empty string/);
   // A valid mapping registers.
-  assert.doesNotThrow(() => register({ reasoningEffortMappings: { m: { c1: { low: { effort: 'low' } } } } }, ['low']));
+  assert.doesNotThrow(() => register({ reasoningEffortMappings: { 'glm-5.3': { c1: { low: { effort: 'low' } } } } }, ['low']));
 });
 
 test('resolveConstrainedDispatch adapts requirements.reasoningEffort into the selected plan parameters', () => {
@@ -1231,12 +1234,12 @@ test('resolveConstrainedDispatch adapts requirements.reasoningEffort into the se
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
     models: [
-      { id: 'thinking-model', displayName: 'Thinking', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high'], pricing: pricing(1) },
-      { id: 'plain-model', displayName: 'Plain', intelligence: 'mid', speed: speedFixture(), pricing: pricing(2) },
+      { id: 'kimi-k3', displayName: 'Thinking', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high'], pricing: pricing(1) },
+      { id: 'qwen3.8-max', displayName: 'Plain', intelligence: 'mid', speed: speedFixture(), pricing: pricing(2) },
     ],
     reasoningEffortMappings: {
-      'plain-model': { c1: { none: { effort: 'none' } }, c2: { none: { effort: 'none' } } },
-      'thinking-model': {
+      'qwen3.8-max': { c1: { none: { effort: 'none' } }, c2: { none: { effort: 'none' } } },
+      'kimi-k3': {
         c1: { low: { effort: 'low' }, high: { effort: 'high' } },
         // c2 explicitly only supports low; a high request must adapt to low.
         c2: { low: { effort: 'low' } },
@@ -1244,15 +1247,15 @@ test('resolveConstrainedDispatch adapts requirements.reasoningEffort into the se
     },
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
-  const candidates: DispatchCandidate[] = ['c1', 'c2'].flatMap(client => ['thinking-model', 'plain-model'].map(model => ({profileId: `${client}-${model}`, client, provider: 'p', model})));
+  const candidates: DispatchCandidate[] = ['c1', 'c2'].flatMap(client => ['kimi-k3', 'qwen3.8-max'].map(model => ({profileId: `${client}-${model}`, client, provider: 'p', model})));
   const high = resolveConstrainedDispatch(catalog, candidates, { expectedReasoningEffort: 'high' });
   assert.equal(high.ok, true);
-  assert.equal(high.selected.plan.model, 'thinking-model');
+  assert.equal(high.selected.plan.model, 'kimi-k3');
   assert.equal(high.selected.plan.client, 'c1');
   // The selected runtime parameter reflects the adapted level and its mapping.
   assert.equal(high.selected.plan.reasoningEffort, 'high');
   assert.equal(high.selected.plan.clientReasoningEffort, 'high');
-  assert.deepEqual(high.selected.plan, catalog.resolveRun('c1', 'p', 'thinking-model', 'high'));
+  assert.deepEqual(high.selected.plan, catalog.resolveRun('c1', 'p', 'kimi-k3', 'high'));
 
   // With no explicit request the plain model has no thinking capability and the
   // thinking model defaults to its highest mapped level.
@@ -1262,16 +1265,16 @@ test('resolveConstrainedDispatch adapts requirements.reasoningEffort into the se
 
   // A request against a model with no usable level at all is still eligible:
   // the resolution is selected and simply carries no invented wire effort.
-  const plain = resolveConstrainedDispatch(catalog, [{ profileId: 'plain', client: 'c1', provider: 'p', model: 'plain-model' }], { expectedReasoningEffort: 'low' });
+  const plain = resolveConstrainedDispatch(catalog, [{ profileId: 'plain', client: 'c1', provider: 'p', model: 'qwen3.8-max' }], { expectedReasoningEffort: 'low' });
   assert.equal(plain.ok, true);
-  assert.equal(plain.selected.plan.model, 'plain-model');
+  assert.equal(plain.selected.plan.model, 'qwen3.8-max');
   assert.equal(plain.selected.plan.reasoningEffort, 'none');
   assert.equal(plain.selected.plan.clientReasoningEffort, 'none');
 });
 
 test('thinking never changes candidate ranking or admission', () => {
-  // Two models differ only in how they map the requested level: mcheap clamps a
-  // low request to medium, mexpensive honors it exactly. Ranking is price-first,
+  // Two models differ only in how they map the requested level: glm-5.3-flash clamps a
+  // low request to medium, grok-4.7 honors it exactly. Ranking is price-first,
   // so the thinking request must not reorder them and the winner's downstream
   // mapping must remain its own.
   const catalog = new Catalog();
@@ -1280,18 +1283,18 @@ test('thinking never changes candidate ranking or admission', () => {
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
     models: [
-      { id: 'mcheap', displayName: 'Cheap', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['medium', 'high'], pricing: pricing(1) },
-      { id: 'mexpensive', displayName: 'Expensive', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high'], pricing: pricing(3) },
+      { id: 'glm-5.3-flash', displayName: 'Cheap', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['medium', 'high'], pricing: pricing(1) },
+      { id: 'grok-4.7', displayName: 'Expensive', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'high'], pricing: pricing(3) },
     ],
     reasoningEffortMappings: {
-      mcheap: { c1: { medium: { effort: 'medium' }, high: { effort: 'high' } } },
-      mexpensive: { c1: { low: { effort: 'low' }, high: { effort: 'high' } } },
+      'glm-5.3-flash': { c1: { medium: { effort: 'medium' }, high: { effort: 'high' } } },
+      'grok-4.7': { c1: { low: { effort: 'low' }, high: { effort: 'high' } } },
     },
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   const candidates: DispatchCandidate[] = [
-    { profileId: 'cheap', client: 'c1', provider: 'p', model: 'mcheap' },
-    { profileId: 'expensive', client: 'c1', provider: 'p', model: 'mexpensive' },
+    { profileId: 'cheap', client: 'c1', provider: 'p', model: 'glm-5.3-flash' },
+    { profileId: 'expensive', client: 'c1', provider: 'p', model: 'grok-4.7' },
   ];
 
   const withoutThinking = resolveConstrainedDispatch(catalog, candidates, {});
@@ -1320,12 +1323,12 @@ test('gateway model listing includes reasoningEfforts', () => {
   registerProvider(catalog, {
     id: 'p', displayName: 'P', credentialResolver: 'managed',
     models: [
-      { pricing: pricingFixture(), id: 'm', displayName: 'M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'medium'] },
-      { pricing: pricingFixture(), id: 'n', displayName: 'N', intelligence: 'mid', speed: speedFixture() },
+      { pricing: pricingFixture(), id: 'glm-5.3', displayName: 'M', intelligence: 'mid', speed: speedFixture(), reasoningEfforts: ['low', 'medium'] },
+      { pricing: pricingFixture(), id: 'glm-5.3-flash', displayName: 'N', intelligence: 'mid', speed: speedFixture() },
     ],
     protocols: [{ protocol: 'openai_chat', endpoint: 'https://p.example/v1/chat/completions', authScheme: 'bearer' }],
   });
   const listed = catalog.listGatewayModels('openai_chat');
-  assert.deepEqual(listed.find((entry) => entry.id === 'm')?.reasoningEfforts, ['low', 'medium']);
-  assert.deepEqual(listed.find((entry) => entry.id === 'n')?.reasoningEfforts, ['none']);
+  assert.deepEqual(listed.find((entry) => entry.id === 'glm-5.3')?.reasoningEfforts, ['low', 'medium']);
+  assert.deepEqual(listed.find((entry) => entry.id === 'glm-5.3-flash')?.reasoningEfforts, ['none']);
 });
