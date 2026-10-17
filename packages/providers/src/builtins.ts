@@ -16,21 +16,23 @@ import * as tokenhub from './tokenhub/index.ts';
 import * as volcengine from './volcengine/index.ts';
 import * as zhipu from './zhipu/index.ts';
 import * as zhipuCoding from './zhipu-coding/index.ts';
-import * as opencodeZen from './opencode-zen/index.ts';
 import * as openrouter from './openrouter/index.ts';
 import * as opencodeGo from './opencode-go/index.ts';
 import type { Provider, ProviderDefinition } from './base/index.ts';
 import type { ProviderQuota } from './base/provider-quota.ts';
 import { createCodeBuddy } from './codebuddy/index.ts';
 import { createDevin } from './devin/index.ts';
+import { createOpenCodeZen } from './opencode-zen/provider.ts';
 import { modelsDevProviders } from './models-dev.ts';
 
 // The composition root owns default discovery. Leaf modules perform no I/O on import.
 export const codeBuddy = createCodeBuddy();
 export const devinProvider = createDevin();
+export const opencodeZenProvider = createOpenCodeZen();
 export const providerImplementations: ReadonlyMap<string, Provider> = new Map<string, Provider>([
   [codeBuddy.id, codeBuddy],
   [devinProvider.id, devinProvider],
+  [opencodeZenProvider.id, opencodeZenProvider],
 ]);
 
 /** A builtin module owns its provider definition and, when one exists, its quota source. */
@@ -56,7 +58,7 @@ const builtins: readonly BuiltinModule[] = [
   volcengine,
   zhipu,
   zhipuCoding,
-  opencodeZen,
+  opencodeZenProvider,
   openrouter,
   opencodeGo,
   devinProvider,

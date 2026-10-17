@@ -70,8 +70,9 @@ import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../ev
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
 import { createModelGateway, type ModelGateway, type RouteStatus } from '@wrenyard/gateway'
-import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin } from '@wrenyard/providers'
+import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen } from '@wrenyard/providers'
 import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
+import { PROVIDER_DEFAULT_REASONING } from '@wrenyard/providers/base'
 import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
@@ -1272,7 +1273,10 @@ async function createForemanDaemonResources(
         if (!(REASONING_EFFORTS as readonly string[]).includes(params.reasoningEffort)) {
           throw new Error('Invalid reasoning effort')
         }        const supported = catalog.reasoningEfforts(params.client, provider, params.model)
-        if (!supported.includes(expectedReasoningEffort)) {
+        // A provider-default-only ladder accepts any valid request: resolveRun
+        // adapts every effort to the route's provider default.
+        const providerDefaultOnly = supported.length === 1 && supported[0] === PROVIDER_DEFAULT_REASONING
+        if (!supported.includes(expectedReasoningEffort) && !providerDefaultOnly) {
           throw new Error(`Reasoning effort '${expectedReasoningEffort}' is not supported by ${provider}/${params.model}`)
         }
       }
@@ -2146,9 +2150,17 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   })
   const devin = createDevin()
   try { await devin.refreshModels() } catch { /* Missing auth or discovery must not stop daemon startup. */ }
-  const catalog = createBuiltinCatalog([codeBuddy, devin])
+  const opencodeZen = createOpenCodeZen()
+  try { await opencodeZen.refreshModels() } catch { /* catalog refresh must not stop startup */ }
+  // Unregistered live free rows are diagnostics only; registration is owned by
+  // the unified registry and an unregistered promotion is never callable.
+  const unregisteredFreeIds = opencodeZen.unregisteredFreeIds()
+  if (unregisteredFreeIds.length > 0) {
+    writeDaemonLog('info', `opencode-zen: unregistered free catalog rows kept for diagnostics only: ${unregisteredFreeIds.join(', ')}`)
+  }
+  const catalog = createBuiltinCatalog([codeBuddy, devin, opencodeZen])
   const providerRuntime = createBuiltinProviderRuntime({
-    providers: [codeBuddy, devin],
+    providers: [codeBuddy, devin, opencodeZen],
     // The ChatGPT subscription gateway credential is read and refreshed through
     // the existing Codex native auth path (honoring the native CODEX_HOME or the
     // user home); the providers package authors no login of its own.

@@ -1757,7 +1757,9 @@ function toPersistedFast(raw: number | null): boolean | undefined {
 }
 
 function toPersistedReasoningEffort(raw: string | null): ReasoningEffort | undefined {
-  return raw === 'none' || raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh' || raw === 'max'
+  // 'default' is a legal persisted resolution for a provider-default-only
+  // route; dropping it here would make a valid plan look unresolved on read-back.
+  return raw === 'none' || raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh' || raw === 'max' || raw === 'default'
     ? raw
     : undefined
 }
@@ -2077,6 +2079,10 @@ const MODEL_REJECTION_PATTERNS: readonly RegExp[] = [
   /\bmodel_(?:not_found|not_supported|unavailable)\b/iu,
   /\b(?:unknown|no such|invalid) model\b/iu,
   /(?:do(?:es)? not|don't) have access to (?:the )?model/iu,
+  // The free promotion ending is reported as a free-tier rejection or as an
+  // explicit promotion end; both mean this exact route no longer serves.
+  /\bFreeTierError\b/iu,
+  /free[ _-]?(?:tier|promotion)\b[^.]{0,60}\b(?:end|expir|no longer|unavailable|exhaust)/iu,
 ]
 
 /** True when a captured diagnostic text matches a specific model-rejection signature. */

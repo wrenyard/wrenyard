@@ -18,7 +18,7 @@ import {
   type WorkspaceSnapshot,
 } from '../ledger/store.ts';
 import { ModelCallError, resolveModelMetadata, type CallRole } from '../model/request.ts';
-import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
+import { PROVIDER_DEFAULT_REASONING, REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import type { ProviderDefinition } from '@wrenyard/providers';
 import { ContextInspector, findCreated, type ContextInspectRequest, type ContextInspection } from '../context/inspect.ts';
 import { type ToolCall } from '../transport/index.ts';
@@ -306,7 +306,11 @@ class Engine implements Session, SessionCallHost {
     if (effort === undefined || !REASONING_EFFORTS.includes(effort)) {
       throw new Error(`reasoningEffort '${effort ?? ''}' is not a valid reasoning effort`);
     }
-    if (metadata.reasoningEfforts !== undefined && !metadata.reasoningEfforts.includes(effort)) {
+    // A provider-default-only ladder accepts any valid request: the request
+    // layer adapts every effort to the route's provider default.
+    const providerDefaultOnly = metadata.reasoningEfforts?.length === 1
+      && metadata.reasoningEfforts[0] === PROVIDER_DEFAULT_REASONING;
+    if (metadata.reasoningEfforts !== undefined && !metadata.reasoningEfforts.includes(effort) && !providerDefaultOnly) {
       throw new Error(
         `reasoningEffort '${effort}' is not supported by ${publicId}; expected one of ${metadata.reasoningEfforts.join(', ')}`,
       );

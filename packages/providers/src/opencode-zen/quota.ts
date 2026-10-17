@@ -7,17 +7,9 @@ const ZEN_FREE_POOL = quotaPool('opencode-zen/free', []);
 
 export const quota = {
   bindings: [
-    // OpenCode Zen free models draw on the shared free pool; paid models draw on
-    // the account balance pool. No balance endpoint is invented: the balance pool
-    // is evidence-free and resolves incomplete until a real row exists.
-    binding('opencode-zen', 'mimo-v2.5-free', [ZEN_FREE_POOL]),
-    binding('opencode-zen', 'ling-3.0-flash-fin-free', [ZEN_FREE_POOL]),
-    binding('opencode-zen', 'big-pickle', [ZEN_FREE_POOL]),
-    binding('opencode-zen', 'union-alpha', [ZEN_FREE_POOL]),
-    binding('opencode-zen', 'nemotron-3-ultra-free', [ZEN_FREE_POOL]),
-    binding('opencode-zen', 'nemotron-3.5-lightning-free', [ZEN_FREE_POOL]),
-    // The free DeepSeek route belongs to the free pool only, never the balance pool.
-    binding('opencode-zen', 'deepseek-v4.1-flash-free', [ZEN_FREE_POOL]),
+    // Free membership is live from the public catalog, so it is never hard-coded
+    // here: a free row binds to the default free pool and its confirmed-free
+    // synthesis, never to a paid balance. Only paid rows keep explicit bindings.
     binding('opencode-zen', 'glm-5.3', [ZEN_BALANCE_POOL]),
     binding('opencode-zen', 'kimi-k3', [ZEN_BALANCE_POOL]),
     binding('opencode-zen', 'gpt-6.1-sol', [ZEN_BALANCE_POOL]),
