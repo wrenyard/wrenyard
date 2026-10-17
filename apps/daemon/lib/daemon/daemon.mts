@@ -997,12 +997,14 @@ async function createForemanDaemonResources(
       localSpeed: readLocalSpeedSamples,
       readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath),
     }
-    // Bot agents run on a hard-coded high/premium intelligence rule; each ranked
-    // `provider/model` route is split into the explicit model session.send needs.
+    // Bot agents run on a hard-coded high/premium intelligence rule at a high
+    // reasoning level; each ranked `provider/model` route is split into the
+    // explicit model session.send needs.
     const selectModels = async (): Promise<readonly AgentModelRoute[]> => {
       const routes = await createRequirementSelector(auxiliaryRoutingOptions)({
         intelligenceMin: 'high',
         intelligenceExpected: 'premium',
+        expectedReasoningEffort: ['high'],
       })
       return routes.map(route => {
         const separator = route.model.indexOf('/')

@@ -379,7 +379,7 @@ async function stopSession(sessions: Session, sessionId: string): Promise<{ stop
  * denies it, then the model the session's newest started turn already used
  * unless the bot denies that too, then the first ranked route the bot allows.
  * The reasoning level is the explicit argument, then the chosen route's own
- * level, then `medium`; with no allowed route the send fails.
+ * level, then `high`; with no allowed route the send fails.
  */
 async function resolveSessionModel(
   sessions: Session,
@@ -411,7 +411,7 @@ async function resolveSessionModel(
     return {
       provider: split.provider,
       model: split.model,
-      reasoningEffort: explicitEffort ?? ownEffort ?? 'medium',
+      reasoningEffort: explicitEffort ?? ownEffort ?? 'high',
     }
   }
 
@@ -420,13 +420,13 @@ async function resolveSessionModel(
     return {
       provider: current.provider,
       model: current.model,
-      reasoningEffort: explicitEffort ?? current.reasoningEffort ?? (await allowedRoute())?.reasoningEffort ?? 'medium',
+      reasoningEffort: explicitEffort ?? current.reasoningEffort ?? (await allowedRoute())?.reasoningEffort ?? 'high',
     }
   }
 
   const route = await allowedRoute()
   if (route === undefined) throw new Error('no allowed model available')
-  return route
+  return explicitEffort === undefined ? route : { ...route, reasoningEffort: explicitEffort }
 }
 
 /**

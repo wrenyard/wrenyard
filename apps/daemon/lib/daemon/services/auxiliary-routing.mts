@@ -48,6 +48,8 @@ export interface AuxiliaryRoutingOptions {
 export interface AuxiliaryIntelligenceRequirements {
   intelligenceMin: IntelligenceTier;
   intelligenceExpected: IntelligenceTier;
+  /** Ordered reasoning-level preference; when absent the base role's preference applies. */
+  expectedReasoningEffort?: RoleReasoningRequirement['expectedReasoningEffort'];
 }
 
 function createSelector(
@@ -212,6 +214,9 @@ export function createRequirementSelector(options: AuxiliaryRoutingOptions) {
       ...base,
       intelligenceMin: requirements.intelligenceMin,
       intelligenceExpected: requirements.intelligenceExpected,
+      ...(requirements.expectedReasoningEffort === undefined
+        ? {}
+        : { expectedReasoningEffort: requirements.expectedReasoningEffort }),
     };
     return createSelector(options, profile, `requirements(${requirements.intelligenceMin}/${requirements.intelligenceExpected})`, false)();
   };
