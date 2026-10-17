@@ -664,12 +664,17 @@ export async function createTaskDispatchResolver(deps: TaskDispatchResolverDeps)
 
     // Conservative explicit-target gate for an explicitly free offering: the
     // exact pin must still carry the same automatic-eligibility evidence
-    // (mainstream identity plus recorded measurement provenance). A free pin
-    // that lacks it is rejected rather than admitted.
+    // (live free-supply confirmation, otherwise mainstream identity plus
+    // recorded measurement provenance). A free pin that lacks it is rejected
+    // rather than admitted.
     const pinnedProvider = catalog.provider(candidate.provider)
     const pinnedModel = pinnedProvider?.models.find((entry) => entry.id === candidate.model)
     if (pinnedProvider && pinnedModel) {
-      const freeEligibility = explicitFreeAutoEligibility(pinnedProvider, pinnedModel)
+      const freeEligibility = explicitFreeAutoEligibility(
+        pinnedProvider,
+        pinnedModel,
+        catalog.confirmedFreeSupply(pinnedProvider.id, pinnedModel.id),
+      )
       if (!freeEligibility.eligible) {
         return {
           ok: false,
