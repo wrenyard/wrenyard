@@ -113,13 +113,15 @@
 | --- | --- |
 | macOS（Apple Silicon） | `wrenyard-desktop-<version>-darwin-arm64.dmg` |
 | Windows（x64） | `wrenyard-desktop-<version>-win32-x64-setup.exe` |
+| Linux（x64） | `wrenyard-desktop-<version>-linux-x64.AppImage` |
 
 应用自带所需的一切：`wrenyard` CLI、Node 运行时和 daemon。
 
-**首次启动。** 预览版在 macOS 上是 ad-hoc 签名，在 Windows 上未签名，系统会询问一次：
+**首次启动。** 预览版在 macOS 上是 ad-hoc 签名，在 Windows 与 Linux 上未签名，系统可能会询问一次：
 
 - **macOS**——打开*系统设置 → 隐私与安全性*，选择*仍要打开*。
 - **Windows**——在 SmartScreen 提示中选择*更多信息 → 仍要运行*。
+- **Linux**——先 `chmod +x` 再运行 AppImage。部分发行版需要 `libfuse2` 才能挂载 AppImage。
 
 然后按[快速开始](docs/guides/getting-started.md)选择工作区、连接供应商并注册第一个项目。
 
@@ -193,7 +195,7 @@ docs/            用户指南、架构、开发与发布说明
 
 ## 状态
 
-啾啾工坊为 macOS（Apple Silicon）和 Windows（x64）滚动发布 `1.0.x` 补丁版本。每个
+啾啾工坊为 macOS（Apple Silicon）、Windows（x64）和 Linux（x64）滚动发布 `1.0.x` 补丁版本。每个
 版本都是普通的 GitHub Release，更新源的入口是 `updates` 分支上的 `latest.json`，并
 保留 `dev.json` 兼容别名。在达到生产可用之前，还需要可信的代码签名
 （[签名说明](docs/release/signing.md)）、更多干净环境测试，以及成文的兼容性策略。

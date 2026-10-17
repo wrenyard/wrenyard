@@ -27,6 +27,7 @@ function assetNames(version) {
     `wrenyard-desktop-${version}-darwin-arm64.dmg`,
     `wrenyard-desktop-${version}-darwin-arm64.zip`,
     `wrenyard-desktop-${version}-win32-x64-setup.exe`,
+    `wrenyard-desktop-${version}-linux-x64.AppImage`,
   ];
 }
 
@@ -43,7 +44,7 @@ function expectedSha(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-test('generates a latest head, dev alias and immutable snapshot for the three assets', () => {
+test('generates a latest head, dev alias and immutable snapshot for the four assets', () => {
   withTempDir((dir) => {
     const version = '1.2.10';
     const assetsDir = writeAssets(dir, version);
@@ -65,7 +66,8 @@ test('generates a latest head, dev alias and immutable snapshot for the three as
     assert.equal(head.schema_version, 'wrenyard.update.v1');
     assert.equal(head.version, version);
     assert.equal(head.published_at, PUBLISHED_AT);
-    assert.equal(head.assets.length, 3);
+    assert.equal(head.assets.length, 4);
+    assert.ok(head.assets.some((asset) => asset.name === `wrenyard-desktop-${version}-linux-x64.AppImage`));
     for (const name of assetNames(version)) {
       assert.ok(head.assets.some((asset) => asset.name === name), `missing ${name}`);
     }

@@ -99,7 +99,7 @@ const GENERAL_CATEGORY: SettingDefinition[] = [
     title: '登录时启动',
     description: '登录系统后自动启动啾啾工坊。',
     keywords: ['登录时启动', '开机', '自启', 'login', 'startup'],
-    platform: ['darwin', 'win32'],
+    platform: ['darwin', 'win32', 'linux'],
     control: { kind: 'boolean' },
     default: false,
     source: { kind: 'preference', preference: 'general.openAtLogin' },

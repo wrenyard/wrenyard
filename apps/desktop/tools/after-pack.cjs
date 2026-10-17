@@ -2,7 +2,7 @@ const { execFileSync } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { homedir, tmpdir } = require('node:os');
 const { pathToFileURL } = require('node:url');
-const { existsSync, writeFileSync } = require('node:fs');
+const { chmodSync, existsSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -145,6 +145,15 @@ async function assertSafeDesktopPackage(context) {
  */
 exports.default = async function afterPack(context) {
   await assertSafeDesktopPackage(context);
+  if (context.electronPlatformName === 'linux') {
+    const bundledRuntime = path.join(resourcesPath(context), 'wrenyard');
+    for (const relative of ['wrenyard', path.join('runtime', 'node')]) {
+      const binary = path.join(bundledRuntime, relative);
+      if (!existsSync(binary)) continue;
+      chmodSync(binary, 0o755);
+    }
+    return;
+  }
   if (context.electronPlatformName !== 'darwin') return;
   const appPath = path.join(
     context.appOutDir,

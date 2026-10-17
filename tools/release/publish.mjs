@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Single publish entry point. It validates the tag, confirms the three canonical
+// Single publish entry point. It validates the tag, confirms the four canonical
 // installers plus the target-specific remote daemon payload archives and their
 // metadata, publishes them as a normal release, commits the update feed to the
 // `updates` branch, then removes this run's transient workflow artifacts. Every
@@ -16,7 +16,7 @@ import { assertAssetNames, canonicalAssetNames, prepareMetadata, remotePayloadAs
 
 const MAX_FEED_ATTEMPTS = 5;
 
-// Confirm the three canonical installers exist in the downloaded artifacts
+// Confirm the four canonical installers exist in the downloaded artifacts
 // before anything is published. The map is built in memory and validated
 // against the version-derived names, so a missing or mislabeled installer fails
 // closed. Additional remote payload artifacts are validated separately.
@@ -61,7 +61,7 @@ export function confirmRemotePayloadAssets({ artifactsDir, version = packageVers
   });
 }
 
-// Create a draft release, upload the three installers, then publish it as a
+// Create a draft release, upload the four installers, then publish it as a
 // normal (non-prerelease) release. An existing release is refused outright and
 // assets are never clobbered.
 export function publishGitHubRelease({ assets, repository, tag, sha, version = packageVersion(), run = runCommand }) {

@@ -187,7 +187,9 @@ function launchDesktop(args: string[]): number {
   }
   const executable = process.platform === 'win32'
     ? join(bundledSuiteRoot, '..', '..', 'wrenyard-desktop.exe')
-    : join(bundledSuiteRoot, '..', '..', 'MacOS', '啾啾工坊')
+    : process.platform === 'linux'
+      ? (process.env.APPIMAGE?.trim() || join(bundledSuiteRoot, '..', '..', 'wrenyard-desktop'))
+      : join(bundledSuiteRoot, '..', '..', 'MacOS', '啾啾工坊')
   if (!existsSync(executable)) {
     console.error(`Unable to locate the Desktop application at ${executable}.`)
     return 1

@@ -42,11 +42,12 @@ import {
 // `remote_payloads` is optional and omitted when a release has no remote daemon
 // bootstrap payloads.
 //
-// Every release publishes exactly three Desktop assets: the macOS installer
-// (DMG), the macOS in-app update (ZIP) and the Windows installer/update (NSIS
-// setup.exe). A release may additionally carry target-specific remote daemon
-// bootstrap payloads; when present they are listed, hashed, in the optional
-// `remote_payloads` field, which clients that predate it simply ignore.
+// Every release publishes exactly four Desktop assets: the macOS installer
+// (DMG), the macOS in-app update (ZIP), the Windows installer/update (NSIS
+// setup.exe) and the Linux installer/update (AppImage). A release may
+// additionally carry target-specific remote daemon bootstrap payloads; when
+// present they are listed, hashed, in the optional `remote_payloads` field,
+// which clients that predate it simply ignore.
 //
 // Everything in this module is pure generation/preparation. It never reads
 // credentials, never talks to git, and never publishes anything: the release
@@ -56,7 +57,7 @@ import {
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
-// The three canonical public asset names are derived from the requested
+// The four canonical public asset names are derived from the requested
 // version, so a wrong-version asset (e.g. dev25 names staged for a dev26
 // release) or a missing/mislabeled installer can never be published.
 export function canonicalAssetNames(version) {
@@ -64,6 +65,7 @@ export function canonicalAssetNames(version) {
     installerAssetName(version, 'darwin-arm64'),
     updateAssetName(version, 'darwin-arm64'),
     installerAssetName(version, 'win32-x64'),
+    installerAssetName(version, 'linux-x64'),
   ];
 }
 
@@ -151,7 +153,7 @@ function collectRemotePayloads({ version, repository, assetsDir }) {
 }
 
 // Build one immutable version document from local release assets. `assetsDir`
-// holds the three installers, which are hashed here so the manifest can never
+// holds the four installers, which are hashed here so the manifest can never
 // disagree with what was uploaded, and every asset URL is derived from the
 // validated version/repository rather than being accepted from the caller. Any
 // remote daemon payload archives present are recorded in `remote_payloads`.

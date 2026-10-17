@@ -42,6 +42,7 @@ function feed({ version = VERSION, assets, schema = UPDATE_FEED_SCHEMA_VERSION }
         asset(installerAssetName(version, 'darwin-arm64'), INSTALLER_SHA),
         asset(updateAssetName(version, 'darwin-arm64'), UPDATE_SHA),
         asset(installerAssetName(version, 'win32-x64'), 'c'.repeat(64)),
+        asset(installerAssetName(version, 'linux-x64'), 'd'.repeat(64)),
       ],
   });
 }
@@ -76,6 +77,7 @@ test('rejects a missing host asset', () => {
     assets: [
       asset(installerAssetName(VERSION, 'darwin-arm64'), INSTALLER_SHA),
       asset(installerAssetName(VERSION, 'win32-x64'), 'c'.repeat(64)),
+      asset(installerAssetName(VERSION, 'linux-x64'), 'd'.repeat(64)),
     ],
   });
   assert.throws(() => parseUpdateFeedJson(withoutUpdate, { triplet: TRIPLET }), /has no asset/);
@@ -96,6 +98,18 @@ test('derives canonical asset names and normalizes a leading v', () => {
   assert.equal(updateAssetName(VERSION, TRIPLET), `wrenyard-desktop-${VERSION}-darwin-arm64.zip`);
   assert.equal(installerAssetName(`v${VERSION}`, 'win32-x64'), `wrenyard-desktop-${VERSION}-win32-x64-setup.exe`);
   assert.equal(updateAssetName(VERSION, 'win32-x64'), installerAssetName(VERSION, 'win32-x64'));
+  assert.equal(installerAssetName(VERSION, 'linux-x64'), `wrenyard-desktop-${VERSION}-linux-x64.AppImage`);
+  assert.equal(updateAssetName(VERSION, 'linux-x64'), installerAssetName(VERSION, 'linux-x64'));
+});
+
+test('resolves the linux-x64 AppImage as both installer and update', () => {
+  const linuxSha = 'd'.repeat(64);
+  const parsed = parseUpdateFeedJson(feed(), { triplet: 'linux-x64' });
+  assert.equal(parsed.triplet, 'linux-x64');
+  assert.equal(parsed.installer.name, `wrenyard-desktop-${VERSION}-linux-x64.AppImage`);
+  assert.equal(parsed.update.name, parsed.installer.name);
+  assert.equal(parsed.installer.sha256, linuxSha);
+  assert.equal(parsed.update.sha256, linuxSha);
 });
 
 test('orders prereleases numerically: dev.9 is older than dev.10', () => {

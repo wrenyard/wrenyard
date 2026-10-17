@@ -68,6 +68,21 @@ win:
   artifactName: wrenyard-desktop-${version}-${env.WRENYARD_RELEASE_TRIPLET}-setup.${ext}
   icon: resources/icon.png
 
+linux:
+  executableName: wrenyard-desktop
+  desktopName: wrenyard-desktop
+  target:
+    - AppImage
+  artifactName: wrenyard-desktop-${version}-${env.WRENYARD_RELEASE_TRIPLET}.${ext}
+  category: Development
+  icon: resources/icon.png
+  mimeTypes:
+    - x-scheme-handler/wrenyard
+  desktop:
+    Name: 啾啾工坊
+    StartupWMClass: wrenyard-desktop
+    MimeType: x-scheme-handler/wrenyard;
+
 nsis:
   # Assisted installer with pages, current-user only. The install scope is not
   # user-selectable; the optional PATH opt-in lives in build/installer.nsh.

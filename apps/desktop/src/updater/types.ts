@@ -1,7 +1,7 @@
 /**
  * Shared Desktop updater contracts.
  *
- * The updater has one cross-platform flow (controller) and two platform
+ * The updater has one cross-platform flow (controller) and three platform
  * appliers. Only "apply the verified asset to the system" differs, so every
  * applier implements this interface and the controller stays platform-agnostic.
  */
@@ -33,10 +33,10 @@ export interface UpdateBlocker {
 
 /** A verified download prepared by an applier, ready to be switched in. */
 export interface PreparedUpdate {
-  /** Absolute path of the verified asset (NSIS setup.exe / macOS update zip). */
+  /** Absolute path of the verified asset (NSIS setup.exe / macOS zip / Linux AppImage). */
   assetPath: string;
   version: string;
-  /** macOS only: absolute path of the extracted, verified `.app` to swap in. */
+  /** macOS: extracted `.app`. Linux: staged AppImage beside `$APPIMAGE`. */
   stagedAppPath?: string;
 }
 
