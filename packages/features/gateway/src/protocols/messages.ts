@@ -1,7 +1,6 @@
 import type { PublicGatewayModel } from '@wrenyard/providers/catalog';
 import { ResponseUsageObserver, type UsageAdapter } from '../response-usage.ts';
 import {
-  completeUsage,
   count,
   errorIdentityOf,
   modelListEntry,
@@ -136,25 +135,17 @@ export const messagesProtocol: GatewayProtocolModule = {
 
   normalizeResponseUsage(payload) {
     // Complete the usage object wherever the protocol carries it: a top-level
-    // `usage`, or the `usage` nested inside the `message` snapshot.
+    // `usage`, or the `usage` nested inside the `message` snapshot. Messages
+    // reports input and output as separate required fields (cache counters are
+    // their own), so only an omitted required field is filled in and a reported
+    // value is never re-derived.
     const apply = (parent: Record<string, unknown> | undefined): void => {
       const usage = parent && object(parent.usage);
       if (!usage) return;
-      const inputTokens = count(usage.input_tokens);
-      const read = count(usage.cache_read_input_tokens);
-      const created = count(usage.cache_creation_input_tokens);
-      const input = inputTokens === undefined && read === undefined && created === undefined
-        ? undefined
-        : (inputTokens ?? 0) + (read ?? 0) + (created ?? 0);
-      const completed = completeUsage(usage, input, count(usage.output_tokens));
-      const normalizedUsage: Record<string, unknown> = { ...completed };
-      delete normalizedUsage.prompt_tokens;
-      delete normalizedUsage.completion_tokens;
-      delete normalizedUsage.total_tokens;
       parent!.usage = {
-        ...normalizedUsage,
-        input_tokens: completed.prompt_tokens,
-        output_tokens: completed.completion_tokens,
+        ...usage,
+        input_tokens: count(usage.input_tokens) ?? 0,
+        output_tokens: count(usage.output_tokens) ?? 0,
       };
     };
     apply(payload);

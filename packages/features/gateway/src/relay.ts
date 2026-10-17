@@ -94,7 +94,8 @@ function relayFrame(frame: string, options: RelayOptions): string {
   }
   options.translator.translate(parsed, options.sampler);
   if (options.module.isOfficialStreamError(parsed)) return frame;
-  options.module.normalizeResponseUsage(parsed);
+  const record = object(parsed);
+  if (record !== undefined) options.module.normalizeResponseUsage(record);
   options.module.normalizeResponseModel(parsed, modelRewriter(options));
   return rebuildFrame(frame, JSON.stringify(parsed));
 }

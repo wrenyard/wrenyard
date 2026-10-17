@@ -133,8 +133,21 @@ export const chatProtocol: GatewayProtocolModule = {
 
   normalizeResponseUsage(payload) {
     const usage = object(payload.usage);
-    if (!usage) return;
-    payload.usage = completeUsage(usage, count(usage.prompt_tokens), count(usage.completion_tokens));
+    if (usage) {
+      payload.usage = completeUsage(usage, count(usage.prompt_tokens), count(usage.completion_tokens));
+      return;
+    }
+    // Chat carries the final usage on the terminal choice (a non-null
+    // `finish_reason`) or on the usage-only chunk (`choices: []`). An upstream
+    // that reports none still owes strict clients a complete object, so those
+    // two payloads get a zeroed one; intermediate delta chunks stay untouched.
+    const choices = payload.choices;
+    if (!Array.isArray(choices)) return;
+    const terminal = choices.length === 0 || choices.some((choice) => {
+      const row = object(choice);
+      return row !== undefined && row.finish_reason !== null && row.finish_reason !== undefined;
+    });
+    if (terminal) payload.usage = completeUsage({}, undefined, undefined);
   },
 
   prepareRequest(body) {
