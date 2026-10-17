@@ -172,6 +172,8 @@ export interface BotAgentKernel {
   get(id: string): { bot: AgentBotSummary; config: string }
   context(id: string): { session: Session; sessionId: string } | undefined
   wake(id: string, text: string): { queued: number }
+  /** Drop every watch of one session, in memory and in the persisted state. */
+  removeWatches(sessionId: string): void
   wakeRoutine(routine: RoutineRecord): Promise<void>
   routineBusy(routine: RoutineRecord): boolean
 }
@@ -347,6 +349,30 @@ function lastReplyOf(session: Session, sessionId: string, turn: number): string 
   return final ?? last
 }
 
+/**
+ * The answer one exact turn of one ledger ended on. A turn that published a
+ * closing reply answers with it; a turn that published none still carries its
+ * answer as the terminal reasoning step's worker output, which is what a turn
+ * ends on when it hands the result to the session instead of speaking it. Only
+ * a turn with neither falls back to its last published reply.
+ */
+function turnAnswerOf(session: Session, sessionId: string, turn: number): string | undefined {
+  let last: string | undefined
+  let final: string | undefined
+  let reasoning: string | undefined
+  for (const event of session.readLedger(sessionId)) {
+    if (event.turn !== turn) continue
+    if (event.type === 'reply.sent') {
+      last = event.text
+      if (event.kind === 'final') final = event.text
+    } else if (event.type === 'reasoning.completed') {
+      // Every step of the turn reports one, so the last one is its terminal.
+      reasoning = event.workerOutput ?? event.text
+    }
+  }
+  return final ?? reasoning ?? last
+}
+
 export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotAgentKernel {
   const log = options.log
   const statePath = join(options.stateDir, 'kernel.json')
@@ -415,6 +441,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       denyModels: entries.get(botId)?.config?.denyModels ?? [],
       watch: (sessionId, afterTurn, todoIds) => addWatch(botId, sessionId, afterTurn, todoIds),
       message: (to, text) => sendMessage(botId, to, text),
+      removeWatches: sessionId => removeWatches(sessionId),
       selectModels: () => options.selectModels(),
     }
   }
@@ -537,6 +564,19 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     persist()
   }
 
+  /**
+   * Drop every watch of one session, whoever created it. Removing the records
+   * also releases the ledger subscription, so a session about to be stopped can
+   * no longer wake a bot.
+   */
+  function removeWatches(sessionId: string): void {
+    const removed = state.watches.filter(watch => watch.sessionId === sessionId)
+    if (removed.length === 0) return
+    state.watches = state.watches.filter(watch => watch.sessionId !== sessionId)
+    for (const watch of removed) releaseWatch(watch.botId, sessionId)
+    persist()
+  }
+
   function onWatchedTurn(botId: string, sessionId: string, event: LedgerEvent): void {
     if (event.type !== 'turn.finished') return
     const turn = event.turn
@@ -549,7 +589,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const watch = state.watches[index]
     state.watches.splice(index, 1)
     releaseWatch(botId, sessionId)
-    const reply = lastReplyOf(options.sessions, sessionId, turn)
+    const reply = turnAnswerOf(options.sessions, sessionId, turn)
     enqueue(botId, {
       source: 'session',
       text: `[wake:session ${sessionId} ${event.status}] ${truncate(reply ?? '', SESSION_REPLY_CHARS)}`,
@@ -961,7 +1001,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         kept.push(watch)
         continue
       }
-      const reply = lastReplyOf(options.sessions, watch.sessionId, finished.turn)
+      const reply = turnAnswerOf(options.sessions, watch.sessionId, finished.turn)
       enqueue(watch.botId, {
         source: 'session',
         text: `[wake:session ${watch.sessionId} ${finished.status}] ${truncate(reply ?? '', SESSION_REPLY_CHARS)}`,
@@ -1064,6 +1104,10 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       pump(id)
       const bot = state.bots[id]
       return { queued: (bot?.queue.length ?? 0) + (bot?.inflight === undefined ? 0 : 1) }
+    },
+
+    removeWatches(sessionId: string): void {
+      removeWatches(sessionId)
     },
 
     async wakeRoutine(routine: RoutineRecord): Promise<void> {

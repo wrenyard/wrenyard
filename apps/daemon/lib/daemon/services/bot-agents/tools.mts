@@ -36,6 +36,8 @@ export interface AgentToolContext {
   watch(sessionId: string, afterTurn: number, todoIds?: string[]): void
   /** Wake another bot with a message; throws when the target cannot be woken. */
   message(to: string, text: string): void
+  /** Drop every watch of one session, so its turns can no longer wake this bot. */
+  removeWatches(sessionId: string): void
   /** Models this bot may not run a session on, as configured. */
   denyModels: readonly string[]
   /** The ranked model routes this bot may run on, best first. */
@@ -283,6 +285,8 @@ interface SessionReadResult {
   running: boolean
   lastTurn: string | null
   messages: { role: 'user' | 'reply'; text: string }[]
+  /** The answer each finished turn ended on, oldest turn first. */
+  answers: { turn: number; text: string }[]
 }
 
 async function runSessionTool(
@@ -324,7 +328,7 @@ async function runSessionTool(
     }
     case 'stop': {
       const sessionId = requireString(args, 'sessionId', 'stop requires sessionId')
-      return done(await stopSession(deps.sessions, sessionId))
+      return done(await stopSession(deps.sessions, sessionId, ctx))
     }
     default:
       return failed(`unsupported session op: ${String(args.op)}`)
@@ -347,24 +351,47 @@ function listSessions(sessions: Session): SessionListRow[] {
 }
 
 /**
- * Status plus the tail of one session's conversation. Whether the session is
- * running is derived from the ledger the same way the session feature derives a
- * turn's number: a `turn.started` whose number has no matching `turn.finished`
- * is still in flight, and the newest such number is the turn to stop.
+ * Status plus the tail of one session's conversation, and the answer each
+ * finished turn ended on. Whether the session is running is derived from the
+ * ledger the same way the session feature derives a turn's number: a
+ * `turn.started` whose number has no matching `turn.finished` is still in
+ * flight, and the newest such number is the turn to stop.
+ *
+ * A turn's answer is what it published last, not what it opened with: its
+ * closing reply, else the worker output of its terminal reasoning step, else
+ * its last published reply.
  */
 function readSession(sessions: Session, sessionId: string): SessionReadResult {
   const events = sessions.readLedger(sessionId)
   const started = new Set<number>()
   const finished = new Set<number>()
   const messages: { role: 'user' | 'reply'; text: string }[] = []
+  /** Per turn: the closing reply, the terminal reasoning output, the last reply. */
+  const lastReply = new Map<number, string>()
+  const finalReply = new Map<number, string>()
+  const reasoning = new Map<number, string>()
   for (const event of events) {
-    if (event.type === 'turn.started') {
-      if (event.turn !== undefined) started.add(event.turn)
-      messages.push({ role: 'user', text: truncate(event.text) })
-    } else if (event.type === 'turn.finished') {
-      if (event.turn !== undefined) finished.add(event.turn)
-    } else if (event.type === 'reply.sent') {
-      messages.push({ role: 'reply', text: truncate(event.text) })
+    switch (event.type) {
+      case 'turn.started':
+        if (event.turn !== undefined) started.add(event.turn)
+        messages.push({ role: 'user', text: truncate(event.text) })
+        break
+      case 'turn.finished':
+        if (event.turn !== undefined) finished.add(event.turn)
+        break
+      case 'reply.sent':
+        messages.push({ role: 'reply', text: truncate(event.text) })
+        if (event.turn === undefined) break
+        lastReply.set(event.turn, event.text)
+        if (event.kind === 'final') finalReply.set(event.turn, event.text)
+        break
+      case 'reasoning.completed':
+        if (event.turn === undefined) break
+        // Every step of a turn reports one, so the last one is its terminal.
+        reasoning.set(event.turn, event.workerOutput ?? event.text)
+        break
+      default:
+        break
     }
   }
   let running = false
@@ -374,16 +401,33 @@ function readSession(sessions: Session, sessionId: string): SessionReadResult {
       break
     }
   }
+  const answers = [...finished]
+    .sort((left, right) => left - right)
+    .map(turn => ({
+      turn,
+      text: truncate(finalReply.get(turn) ?? reasoning.get(turn) ?? lastReply.get(turn) ?? ''),
+    }))
+    .filter(answer => answer.text !== '')
   const summary = sessions.listSessions().find(candidate => candidate.sessionId === sessionId)
   return {
     running,
     lastTurn: summary?.lastTurn === undefined ? null : summary.lastTurn.status,
     messages: messages.slice(-MAX_READ_MESSAGES),
+    answers,
   }
 }
 
-/** Interrupt the newest turn that started and never finished. */
-async function stopSession(sessions: Session, sessionId: string): Promise<{ stopped: boolean }> {
+/**
+ * Interrupt the newest turn that started and never finished. Every watch of the
+ * session is dropped first: a stopped session must not wake the bot afterwards,
+ * and the interrupted turn therefore never arrives as a `[wake:session]`.
+ */
+async function stopSession(
+  sessions: Session,
+  sessionId: string,
+  ctx: AgentToolContext,
+): Promise<{ stopped: boolean }> {
+  ctx.removeWatches(sessionId)
   const started = new Set<number>()
   const finished = new Set<number>()
   for (const event of sessions.readLedger(sessionId)) {
