@@ -32,7 +32,7 @@ import type {
   WorkspaceSwitchResult,
 } from '../protocol/registry.mts'
 import { TaskService, isTaskRunRejection } from '../core/task/service.mts'
-import { createSession, type Session } from '@wrenyard/session'
+import { createSession, resolveModelMetadata, type Session } from '@wrenyard/session'
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
@@ -1022,10 +1022,15 @@ async function createForemanDaemonResources(
       return routes.map(route => {
         const separator = route.model.indexOf('/')
         if (separator <= 0) return { provider: route.model, model: route.model, reasoningEffort: route.reasoningEffort }
+        const provider = route.model.slice(0, separator)
+        const model = route.model.slice(separator + 1)
+        const metadata = resolveModelMetadata(`${provider}/${model}`)
         return {
-          provider: route.model.slice(0, separator),
-          model: route.model.slice(separator + 1),
+          provider,
+          model,
           reasoningEffort: route.reasoningEffort,
+          ...(metadata.contextWindow === undefined ? {} : { contextWindow: metadata.contextWindow }),
+          ...(metadata.maxOutputTokens === undefined ? {} : { maxOutputTokens: metadata.maxOutputTokens }),
         }
       })
     }

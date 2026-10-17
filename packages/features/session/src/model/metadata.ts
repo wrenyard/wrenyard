@@ -63,7 +63,8 @@ export function resolveModelMetadata(publicId: string, resolveProvider: (provide
   // model id), and the registry defaults are read under that same id. A row
   // that owns its upstream metadata never regains a field its source omitted;
   // there is no separate canonical join and no metadata-suppression opt-out.
-  const defaults = definition?.ownsMetadata === true ? undefined : registeredModels.get(modelId)?.defaults;
+  const ownsMetadata = definition?.ownsMetadata === true;
+  const defaults = ownsMetadata ? undefined : registeredModels.get(modelId)?.defaults;
   const contextWindow = definition?.contextWindow ?? defaults?.contextWindow;
   const maxOutputTokens = definition?.maxOutputTokens ?? defaults?.maxOutputTokens;
   // Reasoning levels are route-owned: only the resolved provider definition
@@ -75,5 +76,6 @@ export function resolveModelMetadata(publicId: string, resolveProvider: (provide
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
     ...(imageInput === undefined ? {} : { imageInput }),
+    ...(ownsMetadata ? { skipCanonicalMetadataFallback: true } : {}),
   };
 }

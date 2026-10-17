@@ -22,6 +22,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   createSession,
+  estimateTokens,
   type AgentToolPort,
   type LedgerEvent,
   type Session,
@@ -78,6 +79,8 @@ interface Watch {
   botId: string
   afterTurn: number
   round?: string
+  /** Workspace todo ids this session works on, kept so a context rotation can recover them. */
+  todoIds?: string[]
 }
 
 /** One routine round: every wake and watch it started inherits its delivery. */
@@ -197,6 +200,37 @@ function truncate(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max)
 }
 
+/**
+ * The context-input threshold above which a bot's own conversation rotates to a
+ * fresh session. It is the smaller of a fixed 100k ceiling and half the
+ * smallest finite positive context window among the routes the bot may run,
+ * so a route is always left enough room for its own output. A route with no
+ * resolved window falls back to the 100k ceiling.
+ */
+function rotationThreshold(routes: readonly AgentModelRoute[]): number {
+  const windows = routes
+    .map(route => route.contextWindow)
+    .filter((window): window is number => typeof window === 'number' && window > 0)
+  const limit = windows.length > 0 ? Math.floor(0.5 * Math.min(...windows)) : 100_000
+  return Math.min(100_000, limit)
+}
+
+/** The output-token reservation one route needs beside the estimated input. */
+function outputReservation(route: AgentModelRoute): number {
+  const max = typeof route.maxOutputTokens === 'number' && route.maxOutputTokens > 0 ? route.maxOutputTokens : undefined
+  return Math.min(8_192, max ?? 8_192)
+}
+
+/**
+ * Whether one route's context window can hold the estimated input plus its
+ * output reservation. An unknown window or an unknown estimate never disqualifies
+ * a route; only a window that is provably too small does.
+ */
+function routeFits(route: AgentModelRoute, estimatedInput: number | undefined): boolean {
+  if (route.contextWindow === undefined || estimatedInput === undefined) return true
+  return route.contextWindow >= estimatedInput + outputReservation(route)
+}
+
 function emptyState(): KernelState {
   return { version: 1, bots: {}, watches: [], rounds: {} }
 }
@@ -222,7 +256,12 @@ function readWatch(value: unknown): Watch | undefined {
   if (!isPlainObject(value)) return undefined
   const { sessionId, botId, afterTurn } = value
   if (typeof sessionId !== 'string' || typeof botId !== 'string' || typeof afterTurn !== 'number') return undefined
-  return { sessionId, botId, afterTurn, ...(typeof value.round === 'string' ? { round: value.round } : {}) }
+  const watch: Watch = { sessionId, botId, afterTurn, ...(typeof value.round === 'string' ? { round: value.round } : {}) }
+  if (Array.isArray(value.todoIds)) {
+    const ids = value.todoIds.filter((id): id is string => typeof id === 'string')
+    if (ids.length > 0) watch.todoIds = ids
+  }
+  return watch
 }
 
 function readRound(value: unknown): Round | undefined {
@@ -374,7 +413,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     return {
       botId,
       denyModels: entries.get(botId)?.config?.denyModels ?? [],
-      watch: (sessionId, afterTurn) => addWatch(botId, sessionId, afterTurn),
+      watch: (sessionId, afterTurn, todoIds) => addWatch(botId, sessionId, afterTurn, todoIds),
       message: (to, text) => sendMessage(botId, to, text),
       selectModels: () => options.selectModels(),
     }
@@ -482,10 +521,18 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     watchSubs.delete(key)
   }
 
-  function addWatch(botId: string, sessionId: string, afterTurn: number): void {
+  function addWatch(botId: string, sessionId: string, afterTurn: number, todoIds?: readonly string[]): void {
     // A watch created by the running turn inherits that turn's round.
     const round = state.bots[botId]?.inflight?.round
-    state.watches.push({ sessionId, botId, afterTurn, ...(round === undefined ? {} : { round }) })
+    // A re-watch of a session the bot already follows keeps the prior todo
+    // association when the caller omits one, so rotation recovery is stable.
+    const inherited = todoIds === undefined
+      ? state.watches.find(watch => watch.botId === botId && watch.sessionId === sessionId && watch.todoIds !== undefined)
+      : undefined
+    const next: Watch = { sessionId, botId, afterTurn, ...(round === undefined ? {} : { round }) }
+    if (todoIds !== undefined && todoIds.length > 0) next.todoIds = [...todoIds]
+    else if (inherited !== undefined) next.todoIds = inherited.todoIds
+    state.watches.push(next)
     subscribeWatch(botId, sessionId)
     persist()
   }
@@ -510,6 +557,82 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     })
     persist()
     pump(botId)
+  }
+
+  // ─── Context rotation ────────────────────────────────────────────────
+
+  /**
+   * Estimate the token size of one bot context session's next main-reasoning
+   * view, using the inspection instrument the session feature exposes, plus the
+   * pending wake text the next turn will actually send on top of it. A failed
+   * inspect is reported as unknown rather than blocking a wake.
+   */
+  async function estimateInput(sessionId: string, modelId: string, wakeText?: string): Promise<number | undefined> {
+    try {
+      const inspection = await contextSession().inspectContext({ sessionId, model: modelId })
+      if (wakeText === undefined || wakeText === '') return inspection.totalTokens
+      // The next turn sends the wake text on top of the inspected prompt
+      // layers; add its token cost with the same o200k estimator the session
+      // feature uses, so a large wake can never overflow an admitted route's
+      // window.
+      return inspection.totalTokens + estimateTokens(wakeText)
+    } catch (error) {
+      log('warn', `bot agent kernel could not inspect context of session ${sessionId}: ${errorText(error)}`)
+      return undefined
+    }
+  }
+
+  /** The first user message of one workspace session, bounded for a projection. */
+  function shortBriefOf(sessionId: string): string {
+    try {
+      for (const event of options.sessions.readLedger(sessionId)) {
+        if (event.type !== 'turn.started' || typeof event.text !== 'string') continue
+        return event.text.length <= 200 ? event.text : `${event.text.slice(0, 200)}…`
+      }
+    } catch {
+      // The session may be gone; fall through to the unavailable marker.
+    }
+    return '(brief unavailable)'
+  }
+
+  /** A bounded title/request summary of one workspace todo, when it still exists. */
+  async function todoBriefOf(todoId: string): Promise<string | undefined> {
+    try {
+      const todo = await options.todos.getTodo(todoId)
+      const base = todo.title ?? todoId
+      const request = typeof todo.request === 'string' && todo.request !== '' ? ` — ${todo.request}` : ''
+      const text = `${base}${request}`
+      return text.length <= 200 ? text : `${text.slice(0, 200)}…`
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Seed a freshly rotated bot context with a compact, deterministic projection
+   * of the work still in flight: every session the bot watches, its associated
+   * todo ids and a bounded original brief of each. Nothing is deleted or
+   * archived — the old context ledger, the watches, rounds, routines and queued
+   * wakes all remain; only the bot's own context pointer moves.
+   */
+  async function seedRotatedContext(newSessionId: string, route: AgentModelRoute, botId: string): Promise<void> {
+    const lines = [
+      '[context-rotation] This is a fresh context session. The following work is still in progress and being watched; continue it as before.',
+    ]
+    for (const watch of state.watches.filter(watch => watch.botId === botId)) {
+      const todoIds = watch.todoIds ?? []
+      const todoText = todoIds.length > 0 ? ` (todos: ${todoIds.join(', ')})` : ''
+      lines.push(`- session ${watch.sessionId}${todoText}: ${shortBriefOf(watch.sessionId)}`)
+      for (const todoId of todoIds) {
+        const brief = await todoBriefOf(todoId)
+        if (brief !== undefined) lines.push(`  - todo ${todoId}: ${brief}`)
+      }
+    }
+    try {
+      await runTurn(newSessionId, lines.join('\n'), route)
+    } catch (error) {
+      log('warn', `bot agent kernel could not seed rotated context for bot ${botId}: ${errorText(error)}`)
+    }
   }
 
   // ─── Rounds ──────────────────────────────────────────────────────────────
@@ -658,11 +781,12 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     if (wake.round !== undefined) closeRound(wake.round)
   }
 
-  /** Run one wake to completion: one turn, with a single retry on another route. */
+  /** Run one wake to completion: one turn, with a bounded fallback on another route. */
   async function runWake(botId: string, wake: Wake): Promise<void> {
     const outcome: WakeOutcome = {}
     try {
       if (entries.get(botId)?.config?.enabled === true) {
+        const bot = ensureBotState(botId)
         const sessionId = await ensureContext(botId)
         outcome.sessionId = sessionId
         // Shutdown begun: start no model call, and let finally keep the wake.
@@ -677,14 +801,53 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
           // it may not use.
           outcome.error = 'no allowed high-intelligence model available'
         } else {
-          let result = await runTurn(sessionId, wake.text, routes[0])
-          if (result.status === 'failed' && routes[1] !== undefined && !stopped) {
-            result = await runTurn(sessionId, wake.text, routes[1])
+          const primary = routes[0]
+          const modelId = `${primary.provider}/${primary.model}`
+          // Estimate the active context input before any dispatch decision. A
+          // failed inspect is treated as unknown and never blocks a wake. The
+          // wake text is included so the estimate reflects the input the next
+          // turn will actually send.
+          const estimatedInput = await estimateInput(sessionId, modelId, wake.text)
+          // Rotate the bot's own context when its input outgrows the room the
+          // routes can offer, seeding the fresh session with what is still in
+          // flight. The old ledger and every watch/round/routine stays intact.
+          let activeSessionId = sessionId
+          if (estimatedInput !== undefined && estimatedInput > rotationThreshold(routes) && !stopped) {
+            const fresh = await contextSession().createSession()
+            await seedRotatedContext(fresh.sessionId, primary, botId)
+            bot.sessionId = fresh.sessionId
+            activeSessionId = fresh.sessionId
+            persist()
           }
-          outcome.status = result.status
-          outcome.turn = result.turn
-          if (result.status !== 'completed') {
-            outcome.error = result.error ?? `turn ${result.status}`
+          // The route-fit check runs against the input of the session that will
+          // actually run the turn. After a rotation the fresh session has a
+          // different (seeded) ledger, so re-inspect it once seeding has
+          // finished; otherwise reuse the pre-rotation estimate. The wake text
+          // is again included so a large wake cannot overflow an admitted route.
+          const fittingInput = activeSessionId === sessionId
+            ? estimatedInput
+            : await estimateInput(activeSessionId, modelId, wake.text)
+          // Admit only routes whose window can hold that input plus an output
+          // reservation; iterate them in rank order and fall back one step on a
+          // genuine model failure. Too-small routes are skipped, not retried,
+          // and when none fit the wake reports the truth.
+          const fitting = routes.filter(route => routeFits(route, fittingInput))
+          if (fitting.length === 0) {
+            outcome.error = 'no allowed route fits the bot context within its context window'
+          } else {
+            // Record the session the turn will actually run on before dispatch,
+            // so finishWake's round-reply lookup reads the ledger that produced
+            // outcome.turn rather than the pre-rotation session.
+            outcome.sessionId = activeSessionId
+            let result = await runTurn(activeSessionId, wake.text, fitting[0])
+            if (result.status === 'failed' && fitting[1] !== undefined && !stopped) {
+              result = await runTurn(activeSessionId, wake.text, fitting[1])
+            }
+            outcome.status = result.status
+            outcome.turn = result.turn
+            if (result.status !== 'completed') {
+              outcome.error = result.error ?? `turn ${result.status}`
+            }
           }
         }
       }

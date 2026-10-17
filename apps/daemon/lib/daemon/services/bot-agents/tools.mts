@@ -19,6 +19,10 @@ export interface AgentModelRoute {
   model: string
   /** Explicit public reasoning level the route runs at. */
   reasoningEffort: AuxiliaryRoute['reasoningEffort']
+  /** Smallest known context window of the route's model, when resolved. */
+  contextWindow?: number
+  /** Largest output the route's model may produce, when resolved. */
+  maxOutputTokens?: number
 }
 
 /**
@@ -29,7 +33,7 @@ export interface AgentToolContext {
   /** The bot that owns the running turn; the sender of a `message` call. */
   botId: string
   /** Watch one session: its next finished turn after `afterTurn` wakes this bot. */
-  watch(sessionId: string, afterTurn: number): void
+  watch(sessionId: string, afterTurn: number, todoIds?: string[]): void
   /** Wake another bot with a message; throws when the target cannot be woken. */
   message(to: string, text: string): void
   /** Models this bot may not run a session on, as configured. */
@@ -57,6 +61,8 @@ const SESSION_TOOL: ToolSpec = {
     'Sessions you create or message are watched: when such a session finishes its next turn you are woken',
     'with its outcome, so after starting work end your turn instead of polling.',
     'Models on this bot deny list are refused, both when named explicitly and when inherited from the session.',
+    'When a session carries one or more workspace todos, pass their ids in todoIds (a single id or an array)',
+    'so the watch records that association and it survives a context rotation of your own conversation.',
   ].join(' '),
   parameters: {
     type: 'object',
@@ -81,6 +87,13 @@ const SESSION_TOOL: ToolSpec = {
       reasoningEffort: {
         type: 'string',
         description: "Optional reasoning level for the chosen model; defaults to the route's own level.",
+      },
+      todoIds: {
+        anyOf: [
+          { type: 'string' },
+          { type: 'array', items: { type: 'string' } },
+        ],
+        description: "Optional todo id(s) this session works on, as a single id or an array; recorded on the watch so the association survives a context rotation.",
       },
     },
     required: ['op'],
@@ -238,6 +251,20 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
   return value
 }
 
+/**
+ * Optional todo id association for a watched session: a single id string or an
+ * array of id strings. Empty and non-string entries are dropped; when nothing
+ * usable remains the association is left undefined so an existing one is kept.
+ */
+function optionalTodoIds(args: Record<string, unknown>, key: string): string[] | undefined {
+  const value = args[key]
+  if (value === undefined || value === null) return undefined
+  const entries = typeof value === 'string' ? [value] : Array.isArray(value) ? value : undefined
+  if (entries === undefined) throw new Error(`${key} must be a todo id or an array of todo ids`)
+  const ids = entries.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '')
+  return ids.length > 0 ? ids : undefined
+}
+
 function truncate(text: string): string {
   return text.length <= MAX_MESSAGE_CHARS ? text : text.slice(0, MAX_MESSAGE_CHARS)
 }
@@ -273,7 +300,7 @@ async function runSessionTool(
       try {
         const model = await resolveSessionModel(deps.sessions, sessionId, args, ctx)
         const { turn } = await deps.sessions.send(sessionId, { text, model })
-        ctx.watch(sessionId, turn - 1)
+        ctx.watch(sessionId, turn - 1, optionalTodoIds(args, 'todoIds'))
         return done({ sessionId, turn })
       } catch (error) {
         // A create whose first message fails must leave no empty orphan session
@@ -288,7 +315,7 @@ async function runSessionTool(
       const text = requireString(args, 'text', 'send requires text')
       const model = await resolveSessionModel(deps.sessions, sessionId, args, ctx)
       const { turn } = await deps.sessions.send(sessionId, { text, model })
-      ctx.watch(sessionId, turn - 1)
+      ctx.watch(sessionId, turn - 1, optionalTodoIds(args, 'todoIds'))
       return done({ turn })
     }
     case 'read': {
