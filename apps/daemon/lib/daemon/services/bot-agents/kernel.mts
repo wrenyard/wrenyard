@@ -568,13 +568,17 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const inherited = todoIds === undefined
       ? state.watches.find(watch => watch.botId === botId && watch.sessionId === sessionId && watch.todoIds !== undefined)
       : undefined
-    const roundIds = rounds === undefined || rounds.size === 0 ? [undefined] : [...rounds]
-    for (const round of roundIds) {
-      const next: Watch = { sessionId, botId, afterTurn, ...(round === undefined ? {} : { round }) }
-      if (todoIds !== undefined && todoIds.length > 0) next.todoIds = [...todoIds]
-      else if (inherited !== undefined) next.todoIds = inherited.todoIds
-      state.watches.push(next)
-    }
+    // At most one pending watch per bot and session: a new send supersedes the
+    // earlier watch, so only the newest sent turn can wake the bot.
+    const superseded = state.watches.filter(watch => watch.botId === botId && watch.sessionId === sessionId)
+    state.watches = state.watches.filter(watch => watch.botId !== botId || watch.sessionId !== sessionId)
+    const ownRound = rounds !== undefined && rounds.size > 0 ? [...rounds][0] : undefined
+    const lastSuperseded = superseded.length > 0 ? superseded[superseded.length - 1] : undefined
+    const round = ownRound ?? lastSuperseded?.round
+    const next: Watch = { sessionId, botId, afterTurn, ...(round === undefined ? {} : { round }) }
+    if (todoIds !== undefined && todoIds.length > 0) next.todoIds = [...todoIds]
+    else if (inherited !== undefined) next.todoIds = inherited.todoIds
+    state.watches.push(next)
     subscribeWatch(botId, sessionId)
     persist()
   }
@@ -1070,6 +1074,14 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
    * body — is read on a later tick, so readiness is never held behind it.
    */
   async function restoreWatches(): Promise<void> {
+    // At most one pending watch per bot and session survives a restart: the
+    // newest turn wins, and a superseded duplicate cannot fire a second wake.
+    const newest = new Map<string, Watch>()
+    for (const watch of state.watches) {
+      const key = watchKey(watch.botId, watch.sessionId)
+      const current = newest.get(key)
+      if (current === undefined || watch.afterTurn >= current.afterTurn) newest.set(key, watch)
+    }
     const kept: Watch[] = []
     let summaries = new Map<string, SessionSummary>()
     try {
@@ -1081,7 +1093,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const fires: { watch: Watch; status: TurnStatus }[] = []
     /** Watches whose exact turn only the timeline can settle. */
     const unsettled: Watch[] = []
-    for (const watch of state.watches) {
+    for (const watch of newest.values()) {
       const watched = watch.afterTurn + 1
       const summary = summaries.get(watch.sessionId)
       // A summary without a tail position or a pending-turn list is a
