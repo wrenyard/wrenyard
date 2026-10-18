@@ -65,8 +65,8 @@ export function useConfigureProviderKey() {
 }
 
 /**
- * Raw task definitions for the routing-test importer. Disabled until the picker
- * is first opened so entering the page never fetches task definitions.
+ * Raw task definitions for the routing-test importer. Fetched when the
+ * routing-test page is active.
  */
 export const routingTestTasksQuery = queryOptions({
   queryKey: ['quota', 'routingTestTasks'] as const,

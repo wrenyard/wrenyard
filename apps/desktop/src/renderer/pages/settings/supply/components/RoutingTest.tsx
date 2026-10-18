@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryError } from '@/renderer/components/query-error';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
@@ -93,19 +93,19 @@ interface ExclusionOption {
 }
 
 /**
- * Form-first routing test. Imports saved task definitions lazily on first
- * picker open, serializes the typed form, and renders the daemon-owned result.
+ * Form-first routing test. Imports saved task definitions while the panel is
+ * active, serializes the typed form, and renders the daemon-owned result.
  * The run request is sent only from an explicit click; nothing here computes
  * routing, ranking or scores.
  */
 export function RoutingTest({ snapshot, active }: RoutingTestProps) {
   const displayCurrency = useDisplayCurrency();
   const [form, setForm] = useState<RoutingTestFormState>(defaultRoutingTestForm);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState('');
   const [runError, setRunError] = useState('');
+  const defaultTaskApplied = useRef(false);
 
-  const tasks = useRoutingTestTasksQuery(active && pickerOpen);
+  const tasks = useRoutingTestTasksQuery(active);
   const run = useRoutingTestRun();
 
   const taskList = tasks.data?.tasks ?? [];
@@ -143,16 +143,17 @@ export function RoutingTest({ snapshot, active }: RoutingTestProps) {
     setRunError('');
   };
 
-  // Preserve the old default: once the picker first loads, nothing selected, pick explore.
+  // Preserve the old default: when tasks load with nothing selected, pick explore once.
   useEffect(() => {
-    if (!pickerOpen || !tasks.data || selectedTask !== '') return;
+    if (!active || !tasks.data || selectedTask !== '' || defaultTaskApplied.current) return;
     const explore = tasks.data.tasks.find((task) => task.identity === 'builtin:explore');
     if (!explore) return;
+    defaultTaskApplied.current = true;
     setSelectedTask(explore.identity);
     setForm(formFromTask(explore, displayCurrency));
     run.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickerOpen, tasks.data]);
+  }, [active, tasks.data]);
 
   const updateForm = (patch: Partial<RoutingTestFormState>): void => {
     setForm((previous) => ({ ...previous, ...patch }));
@@ -193,10 +194,10 @@ export function RoutingTest({ snapshot, active }: RoutingTestProps) {
             onValueChange={(value) => {
               const next = typeof value === 'string' ? value : '';
               setSelectedTask(next);
-              if (next !== '') applyTask(next);
-            }}
-            onOpenChange={(open) => {
-              if (open) setPickerOpen(true);
+              if (next !== '') {
+                defaultTaskApplied.current = true;
+                applyTask(next);
+              }
             }}
             itemToStringLabel={(item: string) => labelForTask(item)}
           >
