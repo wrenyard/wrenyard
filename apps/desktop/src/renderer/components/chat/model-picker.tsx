@@ -371,7 +371,7 @@ export function ModelPicker({ models, value, effort, onChange, fast, onFastChang
                             </DropdownMenuRadioItem>
                           ))}
                         </DropdownMenuRadioGroup>
-                        {option.supportsFast === true ? (
+                        {option.supportsFast === true && (
                           <DropdownMenuCheckboxItem
                             checked={isCurrent && fast}
                             onCheckedChange={(next) => {
@@ -388,8 +388,6 @@ export function ModelPicker({ models, value, effort, onChange, fast, onFastChang
                               )}
                             </span>
                           </DropdownMenuCheckboxItem>
-                        ) : (
-                          <DropdownMenuItem disabled>Fast（暂不支持：该模型未提供独立快速模式）</DropdownMenuItem>
                         )}
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
