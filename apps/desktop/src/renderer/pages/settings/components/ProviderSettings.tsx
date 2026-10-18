@@ -19,105 +19,12 @@ import {
   ALIAS_SUBMIT_LABEL,
   ALIAS_TARGET_LABEL,
   ALIAS_TARGET_PLACEHOLDER,
-  AUTO_CAP_FIELD_LABEL,
-  AUTO_CAP_LOADING,
-  AUTO_CAP_PLACEHOLDER,
-  AUTO_CAP_UNIT,
-  AUTO_CAP_UNAVAILABLE,
-  CONFLICT_MESSAGE,
-  autoCapEffectiveText,
-  autoCapErrorMessage,
 } from '../model/describe.js';
 import {
-  autoCapDisplayValue,
-  autoCapValuesEqual,
   errorMessage,
-  parseAutoCapInput,
   validateAlias,
 } from '../model/settings.js';
-import { runtimeAliasesQueryKey, useGlobalTaskSettingSave, useRuntimeAliasesQuery } from '../queries.js';
-
-/**
- * The global auto-dispatch reference output cap. Committing on blur writes only
- * the `max_auto_output_usd_per_million` field at global scope; empty clears it.
- */
-export function AutoPriceCapControl() {
-  const cap = useGlobalTaskSettingSave<number | null>({
-    select: (snapshot) => snapshot.user_global.max_auto_output_usd_per_million ?? null,
-    equals: autoCapValuesEqual,
-    patch: (value) => ({ max_auto_output_usd_per_million: value }),
-  });
-
-  const [input, setInput] = useState('');
-  const [status, setStatus] = useState('');
-  const [isError, setIsError] = useState(false);
-
-  useEffect(() => {
-    if (!cap.dirty) setInput(autoCapDisplayValue(cap.value));
-  }, [cap.dirty, cap.value]);
-
-  const commit = (): void => {
-    const parsed = parseAutoCapInput(input);
-    if (!parsed.ok) {
-      setStatus(autoCapErrorMessage(parsed));
-      setIsError(true);
-      return;
-    }
-    setIsError(false);
-    setStatus('');
-    void cap.commit(parsed.value).then((result) => {
-      if (result.status === 'saved') {
-        setStatus('已保存');
-        setIsError(false);
-      } else if (result.status === 'conflict') {
-        setStatus(CONFLICT_MESSAGE);
-        setIsError(true);
-      } else if (result.status === 'failed') {
-        setStatus(`保存失败：${result.message}`);
-        setIsError(true);
-      }
-    });
-  };
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-2">
-        <Input
-          type="number"
-          min={0}
-          step={0.5}
-          className="w-30"
-          placeholder={AUTO_CAP_PLACEHOLDER}
-          aria-label={AUTO_CAP_FIELD_LABEL}
-          aria-invalid={isError}
-          value={input}
-          disabled={cap.isPending || cap.saving}
-          onChange={(event) => {
-            cap.markDirty();
-            setStatus('');
-            setIsError(false);
-            setInput(event.target.value);
-          }}
-          onBlur={commit}
-          onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit(); } }}
-        />
-        <span className="whitespace-nowrap text-sm text-muted-foreground">{AUTO_CAP_UNIT}</span>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        {cap.isPending
-          ? AUTO_CAP_LOADING
-          : cap.isError
-            ? AUTO_CAP_UNAVAILABLE
-            : autoCapEffectiveText(cap.value)}
-      </p>
-      {status !== '' && (
-        <p className={isError ? 'text-sm text-destructive' : 'text-sm text-muted-foreground'} role="status">
-          {status}
-        </p>
-      )}
-    </div>
-  );
-}
+import { runtimeAliasesQueryKey, useRuntimeAliasesQuery } from '../queries.js';
 
 /**
  * The daemon-owned runtime alias store: add an alias, list existing aliases and

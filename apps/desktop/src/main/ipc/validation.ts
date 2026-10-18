@@ -15,7 +15,7 @@ import type {
   TaskSettingsSaveRequest,
 } from '../../shell-contract.js';
 
-export const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'max_auto_output_usd_per_million', 'automatic']);
+export const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'automatic']);
 export const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'expected_tps',
   'minimum_tps',
@@ -155,15 +155,6 @@ export function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSav
   if (!isBoundedPlainObject(patch)) throw new Error('任务设置内容无效');
   for (const key of Object.keys(patch)) {
     if (!TASK_SETTINGS_PATCH_KEYS.has(key)) throw new Error('任务设置内容无效');
-  }
-  const autoOutputCap = patch.max_auto_output_usd_per_million;
-  if (autoOutputCap !== undefined) {
-    // Global-only auto-dispatch reference output cap; null clears, 0 is valid.
-    // The nested per-task automatic max_output_usd_per_million stays strictly positive.
-    if (scope !== 'global') throw new Error('自动派发参考输出单价上限仅支持全局作用域');
-    if (autoOutputCap !== null && (typeof autoOutputCap !== 'number' || !Number.isFinite(autoOutputCap) || autoOutputCap < 0)) {
-      throw new Error('自动派发参考输出单价上限无效');
-    }
   }
   const mode = patch.mode;
   if (mode !== undefined && mode !== null && mode !== 'automatic' && mode !== 'explicit') throw new Error('运行时模式无效');

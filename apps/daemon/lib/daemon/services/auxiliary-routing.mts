@@ -175,7 +175,7 @@ function createSelector(
       });
     });
     const pricings = entries.map(({ entry }) => deepSeekAutomaticPricingOf(entry.choice, nowMs, AUXILIARY_TIMEOUT_MS));
-    const caps = [settings?.dispatch?.maxOutputUsdPerMillion, settings?.maxAutoOutputUsdPerMillion].filter((cap): cap is number => cap !== undefined);
+    const caps = [settings?.dispatch?.maxOutputUsdPerMillion].filter((cap): cap is number => cap !== undefined);
     const capUsdPerM = effectiveRoutingCap(entries.map(({ entry }, index) => pricings[index]?.safetyOutputUsdPerM ?? entry.choice.reference_pricing.output_usd_per_million), caps);
     const inputs: CandidateInput[] = [];
     entries.forEach(({ entry }, index) => {

@@ -1030,8 +1030,6 @@ export interface TaskSettingsLayer {
   mode?: TaskSettingsMode;
   explicit_runtime?: TaskSettingsExplicitReference | null;
   timeout_ms?: number | null;
-  /** Global-only auto-dispatch reference output cap (USD / million output tokens). 0 is valid; null clears; absent falls through. */
-  max_auto_output_usd_per_million?: number | null;
   routing_weights?: TaskSettingsRoutingWeights | null;
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
 }
@@ -1041,8 +1039,6 @@ export interface TaskSettingsPatch {
   mode?: TaskSettingsMode | null;
   explicit_runtime?: TaskSettingsExplicitReference | null;
   timeout_ms?: number | null;
-  /** Global-only reference output cap; null deletes only this field at the selected layer. */
-  max_auto_output_usd_per_million?: number | null;
   routing_weights?: TaskSettingsRoutingWeights | null;
   automatic?: TaskSettingsAutomaticPatch | null;
 }
@@ -1068,8 +1064,6 @@ export interface TaskSettingsEffective {
   mode: TaskSettingsSourcedValue<TaskSettingsMode>;
   explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitReference | null>;
   timeout_ms: TaskSettingsSourcedValue<number | null>;
-  /** Global-only auto cap; effective per task carries its own source layer. */
-  max_auto_output_usd_per_million: TaskSettingsSourcedValue<number | null>;
   automatic: TaskSettingsEffectiveAutomatic;
 }
 

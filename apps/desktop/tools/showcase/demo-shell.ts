@@ -856,7 +856,6 @@ function effectiveSettings(): TaskSettingsEffective {
     mode: { value: 'automatic', source: 'system' },
     explicit_runtime: { value: null, source: 'system' },
     timeout_ms: { value: TASK_TIMEOUT_MS, source: 'system' },
-    max_auto_output_usd_per_million: { value: null, source: 'system' },
     automatic: {
       expected_tps: { value: null, source: 'system' },
       minimum_tps: { value: null, source: 'system' },

@@ -18,7 +18,6 @@ export type CustomControlKey =
   | 'aboutDiagnostics'
   | 'aboutTheme'
   | 'aboutWrenyardVersion'
-  | 'autoPriceCap'
   | 'daemon'
   | 'endpoint'
   | 'gateway'
@@ -248,15 +247,6 @@ const SESSION_CATEGORY: SettingDefinition[] = [
 ];
 
 const MODELS_CATEGORY: SettingDefinition[] = [
-  {
-    id: 'models.autoPriceCap',
-    category: 'models',
-    title: '自动派发参考输出单价上限',
-    description: '收紧自动选择的候选范围；留空表示沿用各 Task 默认值。',
-    keywords: ['单价', 'price', 'cap', '上限', '自动派发'],
-    control: custom('autoPriceCap'),
-    source: { kind: 'daemon' },
-  },
   {
     id: 'models.routingWeights',
     category: 'models',

@@ -178,49 +178,8 @@ export function workspaceSwitchErrorMessage(cause: unknown): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* Global auto output cap                                              */
-/* ------------------------------------------------------------------ */
-
-/** Input text for a persisted global auto cap: the number verbatim (0 stays), unset → empty. */
-export function autoCapDisplayValue(value: number | null | undefined): string {
-  if (value === undefined || value === null) return '';
-  return String(value);
-}
-
-export type AutoCapParseResult =
-  | { ok: true; value: number | null }
-  | { ok: false; reason: 'not-number' | 'negative' };
-
-/** Parse the raw cap input; empty clears with `null`, zero is preserved. */
-export function parseAutoCapInput(raw: string): AutoCapParseResult {
-  const trimmed = raw.trim();
-  if (trimmed === '') return { ok: true, value: null };
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) return { ok: false, reason: 'not-number' };
-  if (parsed < 0) return { ok: false, reason: 'negative' };
-  return { ok: true, value: parsed };
-}
-
-/* ------------------------------------------------------------------ */
 /* Global task-setting semantic equality                               */
 /* ------------------------------------------------------------------ */
-
-/**
- * Semantic equality for the global auto cap. `null` and `undefined` are the
- * same unset value, finite numbers compare numerically so `0.5`, `0.50` and
- * `5e-1` are equal, and a set `0` stays distinct from an unset cap. Only a real
- * difference returns false, which lets an untouched control skip its write.
- */
-export function autoCapValuesEqual(
-  current: number | null | undefined,
-  next: number | null | undefined,
-): boolean {
-  const left = current ?? null;
-  const right = next ?? null;
-  if (left === null || right === null) return left === right;
-  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
-  return left === right;
-}
 
 /** The default global routing weights as the fraction wire shape. */
 const DEFAULT_ROUTING_WEIGHTS: TaskSettingsRoutingWeights = routingWeightsFromPercent(defaultRoutingWeightsPercent());

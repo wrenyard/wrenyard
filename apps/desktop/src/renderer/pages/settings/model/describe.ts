@@ -6,7 +6,7 @@ import type {
   StorageUsageSnapshot,
   WorkspaceConfigurationSnapshot,
 } from '@/shell-contract';
-import type { AliasValidationReason, AutoCapParseResult } from './settings.js';
+import type { AliasValidationReason } from './settings.js';
 import { isWorkspaceReadOnly } from './settings.js';
 
 /* Central product copy and status mappings for the Settings page. */
@@ -84,15 +84,6 @@ export const SUMMARY_SAVING_LABEL = '正在保存…';
 export const SUMMARY_SAVED_LABEL = '已保存';
 
 export const PROVIDER_TITLE = '提供方';
-export const AUTO_CAP_TITLE = '自动派发参考输出单价上限';
-export const AUTO_CAP_DESCRIPTION = '收紧自动选择的候选范围；留空表示沿用各 Task 默认值。';
-export const AUTO_CAP_FIELD_LABEL = '参考单价上限';
-export const AUTO_CAP_PLACEHOLDER = '沿用各 Task 默认';
-export const AUTO_CAP_UNIT = 'USD / 百万输出 Token';
-export const AUTO_CAP_SAVE_LABEL = '保存';
-export const AUTO_CAP_RESET_LABEL = '恢复默认';
-export const AUTO_CAP_LOADING = '正在读取当前全局上限…';
-export const AUTO_CAP_UNAVAILABLE = '无法读取全局设置，请稍后刷新。';
 
 export const ALIAS_TITLE = '运行时别名';
 export const ALIAS_DESCRIPTION = '保存供任务引用的运行时短别名。';
@@ -185,20 +176,6 @@ export const ALIAS_ERRORS: Record<AliasValidationReason, string> = {
   'empty-target': '目标不能为空；写法为 provider/model:client。',
   'long-target': '目标最长 512 位；写法为 provider/model:client。',
 };
-
-export function autoCapErrorMessage(result: AutoCapParseResult): string {
-  if (result.ok) return '';
-  return result.reason === 'negative'
-    ? '上限需为 ≥ 0 的数值；留空表示清除全局上限并沿用各 Task 默认。'
-    : '请输入有效数值；留空表示清除全局上限并沿用各 Task 默认。';
-}
-
-export function autoCapEffectiveText(value: number | null | undefined): string {
-  if (value === undefined || value === null) {
-    return '当前未设全局上限：自动选择沿用各 Task 自身的默认参考单价。';
-  }
-  return `当前全局上限为 ${value} USD / 百万输出 Token：只收紧“自动选择”的候选模型。`;
-}
 
 export function workspaceSaveLabel(workspace: WorkspaceConfigurationSnapshot, saving: boolean): string {
   if (saving) return '正在保存…';

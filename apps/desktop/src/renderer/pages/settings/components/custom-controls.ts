@@ -18,10 +18,7 @@ import {
   PetShowTaskgraphsControl,
   PetShowWorkersControl,
 } from './PetSettings.js';
-import {
-  AutoPriceCapControl,
-  RuntimeAliasesControl,
-} from './ProviderSettings.js';
+import { RuntimeAliasesControl } from './ProviderSettings.js';
 import { RoutingWeightsControl } from './RoutingWeightsSettings.js';
 import {
   DaemonControl,
@@ -48,7 +45,6 @@ export const CUSTOM_CONTROLS: Readonly<Record<CustomControlKey, ComponentType>> 
   aboutDiagnostics: AboutDiagnosticsControl,
   aboutTheme: AboutThemeControl,
   aboutWrenyardVersion: AboutWrenyardVersionControl,
-  autoPriceCap: AutoPriceCapControl,
   daemon: DaemonControl,
   endpoint: EndpointControl,
   gateway: GatewayControl,

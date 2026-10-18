@@ -598,9 +598,6 @@ function canonicalLayerToRaw(layer?: ConfigTaskSettingsLayer): Record<string, un
   if (layer.selectionMode !== undefined) raw.selection_mode = layer.selectionMode
   if (layer.explicitRuntime !== undefined) raw.explicit_runtime = layer.explicitRuntime
   if (layer.timeoutMs !== undefined) raw.timeout_ms = layer.timeoutMs
-  if (layer.maxAutoOutputUsdPerMillion !== undefined) {
-    raw.max_auto_output_usd_per_million = layer.maxAutoOutputUsdPerMillion
-  }
   if (layer.routingWeights !== undefined) {
     raw.routing_weights = layer.routingWeights
   }
@@ -947,7 +944,6 @@ export class TaskSettingsService {
       taskName: params.taskName,
       requirements: { ...effective.dispatch, inputTokens: params.inputTokens },
       timeoutMs: effective.timeoutMs,
-      maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
       routingWeights: effective.routingWeights,
     })
     if (!selection.ok) throw selection.error
@@ -1119,7 +1115,7 @@ export class TaskSettingsService {
     const previewMemo: AutomaticPreviewMemo = { availability: new Map() }
     // Bind availability for the unconstrained pool before applying the form.
     // Both passes share quota/readiness snapshots and memoized non-billable probes.
-    await this.resolveAutomaticSelection({ taskName: ROUTING_FORM_TASK_NAME, requirements: {}, timeoutMs, maxAutoOutputUsdPerMillion: undefined, routingWeights }, previewMemo)
+    await this.resolveAutomaticSelection({ taskName: ROUTING_FORM_TASK_NAME, requirements: {}, timeoutMs, routingWeights }, previewMemo)
     const bound = await previewMemo.quota
     const native = await previewMemo.nativeProviderReadiness
     const clientSample = await this.clientReadinessSample(previewMemo)
@@ -1155,7 +1151,6 @@ export class TaskSettingsService {
       taskName: ROUTING_FORM_TASK_NAME,
       requirements,
       timeoutMs,
-      maxAutoOutputUsdPerMillion: undefined,
       routingWeights,
     }, previewMemo, trace)
 
@@ -1400,11 +1395,6 @@ export class TaskSettingsService {
     params: TaskSettingsSaveParams,
     summary: TaskSettingsDefinitionSummary,
   ): Promise<TaskSettingsSnapshotResult> {
-    if (params.patch.max_auto_output_usd_per_million !== undefined) {
-      throw new TaskSettingsInvalidSettingsError(
-        'max_auto_output_usd_per_million is global-only and cannot be applied at task scope',
-      )
-    }
     if (params.patch.routing_weights !== undefined) {
       throw new TaskSettingsInvalidSettingsError(
         'routing_weights is global-only and cannot be applied at task scope',
@@ -1631,7 +1621,6 @@ export class TaskSettingsService {
           taskName: summary.name,
           requirements: effective.dispatch,
           timeoutMs: effective.timeoutMs,
-          maxAutoOutputUsdPerMillion: effective.maxAutoOutputUsdPerMillion,
           routingWeights: effective.routingWeights,
         }, previewMemo)
         if (selection.ok) {
@@ -1694,10 +1683,6 @@ export class TaskSettingsService {
           source: toSourceLayer(effective.sources.explicitRuntime),
         },
         timeout_ms: { value: effective.timeoutMs, source: toSourceLayer(effective.sources.timeoutMs) },
-        max_auto_output_usd_per_million: {
-          value: effective.maxAutoOutputUsdPerMillion ?? null,
-          source: toSourceLayer(effective.sources.maxAutoOutputUsdPerMillion),
-        },
         ...(effective.routingWeights !== undefined
           ? {
               routing_weights: {
@@ -2134,9 +2119,6 @@ export class TaskSettingsService {
     if (typeof params.requirements.maxOutputUsdPerMillion === 'number') {
       caps.push(params.requirements.maxOutputUsdPerMillion)
     }
-    if (params.maxAutoOutputUsdPerMillion !== undefined) {
-      caps.push(params.maxAutoOutputUsdPerMillion)
-    }
     const deepSeekPricing = new Map<string, DeepSeekAutomaticPricing>()
     for (const entry of collapsed) {
       const pricing = deepSeekAutomaticPricingOf(entry.choice, nowMs, params.timeoutMs)
@@ -2311,14 +2293,6 @@ export class TaskSettingsService {
       }
     }
 
-    if (patch.max_auto_output_usd_per_million !== undefined) {
-      if (patch.max_auto_output_usd_per_million === null) {
-        delete raw.max_auto_output_usd_per_million
-      } else {
-        raw.max_auto_output_usd_per_million = patch.max_auto_output_usd_per_million
-      }
-    }
-
     if (patch.routing_weights !== undefined) {
       if (patch.routing_weights === null) {
         delete raw.routing_weights
@@ -2373,9 +2347,6 @@ export class TaskSettingsService {
         ? { automatic: toSnakeDispatch(layer.dispatch) }
         : {}),
       ...(layer.explicitRuntime !== undefined ? { explicit_runtime: layer.explicitRuntime } : {}),
-      ...(layer.maxAutoOutputUsdPerMillion !== undefined
-        ? { max_auto_output_usd_per_million: layer.maxAutoOutputUsdPerMillion }
-        : {}),
       ...(layer.routingWeights !== undefined
         ? { routing_weights: layer.routingWeights }
         : {}),
@@ -2420,7 +2391,6 @@ interface AutomaticSelectionParams {
   taskName: string
   requirements: ConfigTaskDispatchRequirements
   timeoutMs: number
-  maxAutoOutputUsdPerMillion: number | undefined
   /** Global routing weights; undefined uses the scorer defaults. */
   routingWeights?: TaskRoutingWeights | undefined
 }

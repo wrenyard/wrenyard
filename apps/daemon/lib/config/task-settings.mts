@@ -160,14 +160,6 @@ export interface TaskSettingsLayer {
   /** Total execution timeout in milliseconds. */
   timeoutMs?: number
   /**
-   * Optional user-global-only ceiling on the automatic reference price in USD
-   * per million output tokens. Accepts finite values >= 0 (zero is an explicit
-   * ceiling); it is independent from `dispatch.maxOutputUsdPerMillion` and,
-   * during effective resolution, is sourced exclusively from the normalized
-   * user-global layer.
-   */
-  maxAutoOutputUsdPerMillion?: number
-  /**
    * Optional user-global-only scoring weights for automatic routing, mapped to
    * the catalog scorer keys P/S/Q/I. All four keys are required finite numbers
    * in [0, 1] summing to 1 (validated against the catalog SSOT). `null` is an
@@ -206,7 +198,6 @@ export interface EffectiveTaskSettingsSources {
   selectionMode?: TaskSettingsSourceTag
   explicitRuntime?: TaskSettingsSourceTag
   timeoutMs?: TaskSettingsSourceTag
-  maxAutoOutputUsdPerMillion?: TaskSettingsSourceTag
   routingWeights?: TaskSettingsSourceTag
   dispatch?: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>>
 }
@@ -216,8 +207,6 @@ export interface EffectiveTaskSettings {
   explicitRuntime: TaskExplicitRuntime | undefined
   timeoutMs: number
   dispatch: TaskDispatchRequirements
-  /** User-global auto reference-price ceiling; undefined when never set. */
-  maxAutoOutputUsdPerMillion: number | undefined
   /** User-global routing score weights; undefined falls back to scorer defaults. */
   routingWeights?: TaskRoutingWeights
   /** Winning source per field; dispatch sources are per dispatch field. */
@@ -269,13 +258,6 @@ function resolveAliased(
 function assertSafeIntegerTimeout(value: unknown, scope: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
     fail(scope, `timeoutMs must be a positive safe integer, got ${String(value)}`)
-  }
-  return value
-}
-
-function assertFiniteNonNegativeNumber(value: unknown, scope: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    fail(scope, `maxAutoOutputUsdPerMillion must be a finite number >= 0, got ${String(value)}`)
   }
   return value
 }
@@ -457,7 +439,6 @@ const LAYER_FIELD_ALIASES = {
   selectionMode: ['selectionMode', 'selection_mode'],
   explicitRuntime: ['explicitRuntime', 'explicit_runtime'],
   timeoutMs: ['timeoutMs', 'timeout_ms'],
-  maxAutoOutputUsdPerMillion: ['maxAutoOutputUsdPerMillion', 'max_auto_output_usd_per_million'],
   routingWeights: ['routingWeights', 'routing_weights'],
   environmentTools: ['environmentTools', 'environment_tools'],
   dispatch: ['dispatch'],
@@ -467,8 +448,8 @@ const LAYER_FIELD_ALIASES = {
  * Validates and normalizes one persisted/config layer. Unknown keys are
  * tolerated and dropped (so legacy `agentRuntime`/`agent_runtime` pins are
  * ignored, never honored); `null` values behave as unset fields. The
- * user-global-only keys (`maxAutoOutputUsdPerMillion`, `routingWeights`,
- * `environmentTools`) are only accepted when `globalLayer` is set, so a
+ * user-global-only keys (`routingWeights`, `environmentTools`) are only
+ * accepted when `globalLayer` is set, so a
  * per-task `byTask` entry drops them like any unknown key. Returns a new
  * canonical layer; the input is never mutated.
  */
@@ -499,11 +480,6 @@ export function normalizeTaskSettingsLayer(
   const timeout = resolveAliased(record, LAYER_FIELD_ALIASES.timeoutMs)
   if (timeout.value !== undefined) {
     layer.timeoutMs = assertSafeIntegerTimeout(timeout.value, scope)
-  }
-
-  const maxAutoOutput = resolveAliased(record, LAYER_FIELD_ALIASES.maxAutoOutputUsdPerMillion)
-  if (maxAutoOutput.value !== undefined) {
-    layer.maxAutoOutputUsdPerMillion = assertFiniteNonNegativeNumber(maxAutoOutput.value, scope)
   }
 
   const routingWeights = resolveAliased(record, LAYER_FIELD_ALIASES.routingWeights)
@@ -699,17 +675,10 @@ export function resolveEffectiveTaskSettings(
   const timeoutMs = timeoutLeaf.value ?? SYSTEM_DEFAULT_TIMEOUT_MS
   const timeoutSource = timeoutLeaf.source ?? 'system_global'
 
-  // The user-global auto reference-price ceiling is global-only by design: it
-  // is sourced exclusively from the normalized userGlobal layer. The same
-  // field on system, builtin, user-task, or invocation layers is structurally
-  // ignored so a stale lower-layer pin can never leak into automatic
-  // admission, and an undefined value exposes "no ceiling set".
+  // Routing score weights are global-only: sourced exclusively from the
+  // normalized userGlobal layer. Absence lets the catalog scorer use its own
+  // defaults.
   const userGlobalEntry = entries.find((entry) => entry.tag === 'user_global')
-  const maxAutoOutputUsdPerMillion = userGlobalEntry?.layer.maxAutoOutputUsdPerMillion
-
-  // Routing score weights are global-only the same way: sourced exclusively
-  // from the normalized userGlobal layer. Absence lets the catalog scorer use
-  // its own defaults.
   const routingWeights = userGlobalEntry?.layer.routingWeights
 
   const dispatch: TaskDispatchRequirements = {}
@@ -786,7 +755,6 @@ export function resolveEffectiveTaskSettings(
     timeoutMs: timeoutSource,
   }
   if (explicitRuntimeSource !== undefined) sources.explicitRuntime = explicitRuntimeSource
-  if (maxAutoOutputUsdPerMillion !== undefined) sources.maxAutoOutputUsdPerMillion = 'user_global'
   if (routingWeights !== undefined) sources.routingWeights = 'user_global'
   sources.dispatch = dispatchSources
 
@@ -795,7 +763,6 @@ export function resolveEffectiveTaskSettings(
     explicitRuntime: effectiveExplicitRuntime,
     timeoutMs,
     dispatch,
-    maxAutoOutputUsdPerMillion,
     routingWeights,
     sources,
   }

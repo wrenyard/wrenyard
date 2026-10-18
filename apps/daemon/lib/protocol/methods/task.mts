@@ -669,9 +669,6 @@ export interface TaskSettingsLayer {
   explicit_runtime?: TaskSettingsExplicitReference | null
   timeout_ms?: number | null
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null
-  /** Global-only auto reference-price ceiling (finite USD per million output
-   *  tokens >= 0); null clears it. Never valid inside `automatic`. */
-  max_auto_output_usd_per_million?: number | null
   /** Global-only automatic scoring weights; null clears them. All four numeric
    *  fields are required, bounded [0, 1], and must sum to 1. */
   routing_weights?: TaskSettingsRoutingWeights | null
@@ -692,8 +689,6 @@ export interface TaskSettingsPatch {
   explicit_runtime?: TaskSettingsExplicitReference | null
   timeout_ms?: number | null
   automatic?: TaskSettingsAutomaticPatch | null
-  /** Global-only: set (>= 0) or clear (null) the auto reference-price ceiling. */
-  max_auto_output_usd_per_million?: number | null
   /** Global-only: set (full four-key object) or clear (null) routing weights. */
   routing_weights?: TaskSettingsRoutingWeights | null
 }
@@ -727,8 +722,6 @@ export interface TaskSettingsEffective {
   explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitReference | null>
   timeout_ms: TaskSettingsSourcedValue<number | null>
   automatic: TaskSettingsEffectiveAutomatic
-  /** Global-only auto ceiling; sourced exclusively from the user_global layer. */
-  max_auto_output_usd_per_million: TaskSettingsSourcedValue<number | null>
   /** Global-only routing weights; sourced exclusively from the user_global
    *  layer; a null value means the scorer defaults apply. */
   routing_weights?: TaskSettingsSourcedValue<TaskSettingsRoutingWeights | null>
@@ -1137,7 +1130,6 @@ export const taskSettingsLayerSchema = {
     explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
     timeout_ms: taskSettingsNullableNumberSchema,
     automatic: taskSettingsNullableAutomaticSchema,
-    max_auto_output_usd_per_million: taskSettingsNullableNonNegativeNumberSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
   additionalProperties: true,
@@ -1150,7 +1142,6 @@ export const taskSettingsLayerInputSchema = {
     explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
     timeout_ms: taskSettingsNullableNumberSchema,
     automatic: taskSettingsNullableAutomaticSchema,
-    max_auto_output_usd_per_million: taskSettingsNullableNonNegativeNumberSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
   additionalProperties: true,
@@ -1163,7 +1154,6 @@ export const taskSettingsPatchSchema = {
     explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
     timeout_ms: taskSettingsNullableNumberSchema,
     automatic: { anyOf: [taskSettingsAutomaticPatchSchema, { type: 'null' }] },
-    max_auto_output_usd_per_million: taskSettingsNullableNonNegativeNumberSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
   additionalProperties: true,
@@ -1312,7 +1302,6 @@ const taskSettingsEffectiveSchema = {
     explicit_runtime: taskSettingsSourcedExplicitReferenceSchema,
     timeout_ms: taskSettingsSourcedNullableNumberSchema,
     automatic: taskSettingsEffectiveAutomaticSchema,
-    max_auto_output_usd_per_million: taskSettingsSourcedNullableNonNegativeNumberSchema,
     routing_weights: taskSettingsSourcedNullableRoutingWeightsSchema,
   },
   additionalProperties: true,
