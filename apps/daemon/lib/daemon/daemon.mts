@@ -18,7 +18,7 @@ import { loadForemanGatewayConfig } from '../config/reader.mts'
 import { updateForemanConfigData, updateForemanGatewayConfig } from '../config/writer.mts'
 import { RpcRouter } from '../server/rpc-router.mts'
 import { startEventLoopDelayMonitor } from '../server/event-loop-monitor.mts'
-import { registerCoreHandlers, readProcessIdentity, type CoreRpcHandlerOptions } from '../server/handlers/core.mts'
+import { registerCoreHandlers, readProcessIdentity, type CoreRpcHandlerOptions, type DaemonActiveWorkCounts } from '../server/handlers/core.mts'
 import { createIpcServer, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
 import { registerRoutineHandlers } from '../server/handlers/routine.mts'
@@ -428,7 +428,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
       this.resources = await createForemanDaemonResources(this.config, runtime, {
         configPath: this.configPath,
         requestShutdown: this.requestShutdown,
-        isIdle: () => this.isIdle(),
+        isIdle: (counts) => this.isIdle(counts),
         isShuttingDown: () => this.shutdownRequestedFlag,
         isSwitching: () => this.switching,
         workspaceSwitch: (root) => this.switchWorkspace(root),
@@ -541,22 +541,14 @@ export class ForemanDaemon implements RunningForemanDaemon {
    * already closed) count as not idle. Never throws; each authoritative check
    * runs sequentially so a slow check cannot race a sibling.
    */
-  async isIdle(): Promise<boolean> {
+  async isIdle(counts?: DaemonActiveWorkCounts): Promise<boolean> {
     const resources = this.resources
     if (!resources) return false
-    const counts = readDaemonActiveCounts()
-    const activeGraphs = dbQuery<{ id: string }>(
-      `SELECT DISTINCT r.id FROM taskgraph_run r
-       LEFT JOIN taskgraph_node_state n ON n.taskgraph_id = r.id
-       WHERE r.state = 'running' OR r.cancel_requested = 1
-          OR (r.state = 'paused' AND n.state = 'running')
-          OR (r.state = 'paused' AND r.on_node_failure = 'cancel' AND n.state = 'failed')
-       LIMIT 1`,
-    )
-    return counts.activeTaskCount === 0
-      && counts.activeWorkflowCount === 0
-      && counts.activeExecutionCount === 0
-      && activeGraphs.length === 0
+    const activeCounts = counts ?? readDaemonActiveCounts()
+    return activeCounts.activeTaskCount === 0
+      && activeCounts.activeWorkflowCount === 0
+      && activeCounts.activeExecutionCount === 0
+      && (activeCounts.activeTaskGraphCount ?? 0) === 0
       && !resources.session.hasRunningTurns()
       // An in-flight scheduler tick is work in progress: a switch must not stage
       // over a schedule that is mid-fire. A bot tick or reconciliation is the
@@ -798,7 +790,7 @@ async function createForemanDaemonResources(
   options: {
     configPath?: string
     requestShutdown: (reason: string, force: boolean) => void
-    isIdle?: () => Promise<boolean>
+    isIdle?: (counts?: DaemonActiveWorkCounts) => Promise<boolean>
     isShuttingDown: () => boolean
     /** True while a workspace hot switch holds the gate; refuses new work. */
     isSwitching?: () => boolean
@@ -2563,25 +2555,25 @@ function readDaemonActiveCounts(): {
   activeExecutionCount: number
   activeTaskGraphCount: number
 } {
-  const tasks = dbQuery<{ id: string }>(`SELECT id FROM tasks WHERE status IN ('queued', 'running')`)
-  const workflows = dbQuery<{ id: string }>(`SELECT id FROM workflows WHERE status IN ('running')`)
-  const executions = dbQuery<{ id: string }>(`SELECT id FROM executions WHERE status IN ('queued', 'starting', 'running')`)
+  const tasks = dbQuery<{ count: number }>(`SELECT COUNT(*) AS count FROM tasks WHERE status IN ('queued', 'running')`)
+  const workflows = dbQuery<{ count: number }>(`SELECT COUNT(*) AS count FROM workflows WHERE status IN ('running')`)
+  const executions = dbQuery<{ count: number }>(`SELECT COUNT(*) AS count FROM executions WHERE status IN ('queued', 'starting', 'running')`)
   // The real taskgraph count, not the legacy workflow count above. Uses the
   // exact same condition isIdle() applies to decide a taskgraph run is still
   // active: running, cancel requested, paused on a running node, or paused and
   // about to fail-cancel.
-  const taskgraphs = dbQuery<{ id: string }>(
-    `SELECT DISTINCT r.id FROM taskgraph_run r
+  const taskgraphs = dbQuery<{ count: number }>(
+    `SELECT COUNT(DISTINCT r.id) AS count FROM taskgraph_run r
      LEFT JOIN taskgraph_node_state n ON n.taskgraph_id = r.id
      WHERE r.state = 'running' OR r.cancel_requested = 1
         OR (r.state = 'paused' AND n.state = 'running')
         OR (r.state = 'paused' AND r.on_node_failure = 'cancel' AND n.state = 'failed')`,
   )
   return {
-    activeTaskCount: tasks.length,
-    activeWorkflowCount: workflows.length,
-    activeExecutionCount: executions.length,
-    activeTaskGraphCount: taskgraphs.length,
+    activeTaskCount: tasks[0]?.count ?? 0,
+    activeWorkflowCount: workflows[0]?.count ?? 0,
+    activeExecutionCount: executions[0]?.count ?? 0,
+    activeTaskGraphCount: taskgraphs[0]?.count ?? 0,
   }
 }
 

@@ -109,7 +109,7 @@ export interface CoreRpcHandlerOptions {
    * Reports whether the daemon has no admitted work. Optional so a context
    * without a live daemon fails closed (`idle: false`).
    */
-  isIdle?: () => Promise<boolean>
+  isIdle?: (counts: DaemonActiveWorkCounts) => Promise<boolean>
   /**
    * Reports whether a shutdown has been requested. The only admission rule now
    * is `shutting_down`: no new top-level work is accepted once the daemon is
@@ -505,7 +505,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     return {
       ok: true as const,
       shutting_down: options.isShuttingDown?.() === true,
-      idle: options.isIdle ? await options.isIdle() : false,
+      idle: options.isIdle ? await options.isIdle(counts) : false,
       ...counts,
       activeTaskGraphCount: counts.activeTaskGraphCount ?? 0,
       lowDisk: options.lowDiskState?.() ?? { status: 'unavailable' as const, availableBytes: null, minimumBytes: 3 * 1024 ** 3, error: 'Low-disk monitor unavailable' },

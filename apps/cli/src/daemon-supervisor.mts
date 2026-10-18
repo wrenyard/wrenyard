@@ -30,7 +30,7 @@ export function resolveDaemonLockPath(): string {
  */
 export interface DaemonSupervisorStatus {
   running: boolean
-  status: 'running' | 'stopped'
+  status: 'running' | 'not responding' | 'stopped'
   pid?: number
   startedAt?: string
   mode?: 'source' | 'installed'
@@ -40,9 +40,10 @@ export async function readDaemonSupervisorStatus(options: DaemonLifecycleOptions
   const ipcPath = resolveWrenyardIpcPath(process.env, { config: options.config })
   const lock = readLiveInstanceLock(resolveDaemonLockPath())
   const reachable = await isIpcReachable(ipcPath)
+  const running = reachable || lock !== undefined
   return {
-    running: reachable,
-    status: reachable ? 'running' : 'stopped',
+    running,
+    status: reachable ? 'running' : running ? 'not responding' : 'stopped',
     ...(lock ? { pid: lock.pid, startedAt: lock.startedAt, mode: lock.mode } : {}),
   }
 }

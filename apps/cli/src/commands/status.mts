@@ -39,7 +39,11 @@ export async function handleStatus(args: string[]): Promise<number> {
 
   if (!status.ok) {
     if (!status.ipc.ok) console.error(`Wrenyard daemon IPC is not reachable at ${status.ipc.path}.`)
-    console.error('Wrenyard daemon 未运行。请打开啾啾工坊，或在终端运行 `wrenyard daemon run`。')
+    if (status.daemon.running) {
+      console.error('Wrenyard daemon is running but not responding.')
+    } else {
+      console.error('Wrenyard daemon 未运行。请打开啾啾工坊，或在终端运行 `wrenyard daemon run`。')
+    }
     return 1
   }
   return 0
@@ -129,7 +133,10 @@ export async function checkDaemonStatus(ipcPath: string): Promise<StatusCheck> {
 
 export function printForemanStatus(status: ForemanStatus): void {
   console.log('Wrenyard status')
-  console.log(`  daemon: ${status.daemon.running ? 'running' : 'not running'}${status.daemon.pid ? ` (pid ${status.daemon.pid})` : ''}`)
+  const daemonLabel = status.daemon.status === 'not responding'
+    ? 'running but not responding'
+    : status.daemon.running ? 'running' : 'not running'
+  console.log(`  daemon: ${daemonLabel}${status.daemon.pid ? ` (pid ${status.daemon.pid})` : ''}`)
   if (status.daemon.mode) console.log(`  mode:   ${status.daemon.mode}`)
   if (status.daemon.startedAt) console.log(`  since:  ${status.daemon.startedAt}`)
   if (status.shutting_down !== undefined) {
