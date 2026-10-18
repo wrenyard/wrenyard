@@ -26,9 +26,24 @@ export function resolveLinuxAutostartExec(
   return execPath;
 }
 
+/**
+ * Quote a single Exec argument per the Desktop Entry spec: always wrap in
+ * double quotes, then escape `\`, `"`, `` ` `` and `$` inside the quotes.
+ * Double remaining backslashes so GKeyFile unescape still yields those
+ * Exec escapes. Paths with CR/LF are refused; `$APPIMAGE` is used, not the
+ * FUSE mount.
+ */
 function quoteDesktopExec(filePath: string): string {
-  if (/[\s"'\\]/.test(filePath)) return `"${filePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-  return filePath;
+  if (filePath === '' || /[\n\r]/.test(filePath)) {
+    throw new Error('开机启动路径无效');
+  }
+  const execEscaped = filePath
+    .replace(/%/g, '%%')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/`/g, '\\`')
+    .replace(/\$/g, '\\$');
+  return `"${execEscaped}"`.replace(/\\/g, '\\\\');
 }
 
 export function readLinuxOpenAtLogin(env: NodeJS.ProcessEnv = process.env, home?: string): boolean {

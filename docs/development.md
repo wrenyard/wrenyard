@@ -40,7 +40,11 @@ Source development and an installed app share the same user configuration and
 daemon state under `~/.config/wrenyard` and `~/.local/state/wrenyard`. On Linux
 the Desktop `userData` directory is always `<state root>/desktop`, matching the
 daemon. Other platforms keep Electron's default unless you set
-`WRENYARD_STATE_HOME`. Quit the installed app
+`WRENYARD_STATE_HOME`. On Linux a GPU process crash or WebGL `unavailable_off`
+writes `gpu-software-rendering` under that directory and relaunches once onto
+ANGLE/SwiftShader (`--enable-unsafe-swiftshader` is Chromium's required gate).
+Later starts skip the broken GPU path; this is an availability fallback, not a
+security boundary. Quit the installed app
 fully from the menu bar or tray before `pnpm dev`; closing the window is not
 enough.
 

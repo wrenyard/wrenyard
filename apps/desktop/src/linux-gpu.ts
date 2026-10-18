@@ -20,6 +20,11 @@ function applySoftwareRenderingSwitches(): void {
   app.disableHardwareAcceleration();
   app.commandLine.appendSwitch('disable-gpu');
   app.commandLine.appendSwitch('disable-gpu-compositing');
+  // Chromium gates SwiftShader behind this switch (larger attack surface than
+  // a working GPU path). Called only after a GPU crash or WebGL
+  // `unavailable_off`, persisted in userData, and used for one relaunch plus
+  // later starts. `--disable-gpu` alone leaves WebGL unavailable; no safer
+  // software-GL switch in this Electron still provides WebGL.
   app.commandLine.appendSwitch('enable-unsafe-swiftshader');
   app.commandLine.appendSwitch('use-gl', 'angle');
   app.commandLine.appendSwitch('use-angle', 'swiftshader');

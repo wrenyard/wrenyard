@@ -435,13 +435,19 @@ export class DesktopUpdateController {
       delete preparing.progress;
       this.setSnapshot(preparing);
       prepared = await applier.prepare(assetPath, version, (phase) => {
+        const verifyingMessage = this.platform === 'darwin'
+          ? '正在校验应用签名和版本…'
+          : '正在校验更新文件完整性…';
+        const extractingMessage = this.platform === 'linux'
+          ? '正在准备更新文件…'
+          : '正在解压更新…';
         this.setSnapshot({
           ...this.snapshotValue,
           state: 'installing',
-          message: phase === 'verifying' ? '正在校验应用签名和版本…' : '正在解压更新…',
+          message: phase === 'verifying' ? verifyingMessage : extractingMessage,
           progress: { phase },
         });
-      });
+      }, this.updateAsset?.sha256);
     } catch (error) {
       this.installing = false;
       if (signal.aborted) return this.snapshot();

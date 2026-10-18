@@ -48,11 +48,15 @@ export interface PlatformApplier {
    * Turns the verified asset into a state that can be switched in directly.
    * The optional `onPhase` callback lets a platform report its own preparation
    * steps (e.g. extraction) without changing the returned {@link PreparedUpdate}.
+   * `verifying` is codesign plus bundle version on macOS, and a streamed
+   * sha256 of the staged AppImage against the feed digest on Linux.
+   * Windows does not report prepare phases.
    */
   prepare(
     assetPath: string,
     version: string,
     onPhase?: (phase: 'extracting' | 'verifying') => void,
+    expectedSha256?: string,
   ): Promise<PreparedUpdate>;
   /** Starts the detached follow-up; the caller then quits Desktop. */
   apply(prepared: PreparedUpdate): void;

@@ -95,6 +95,7 @@ export function createDarwinApplier(options: DarwinApplierOptions): PlatformAppl
       assetPath: string,
       version: string,
       onPhase?: (phase: 'extracting' | 'verifying') => void,
+      _expectedSha256?: string,
     ): Promise<PreparedUpdate> {
       // Extract beside the running app so the later rename stays on one volume
       // and is atomic.

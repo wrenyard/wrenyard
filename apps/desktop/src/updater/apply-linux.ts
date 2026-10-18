@@ -4,8 +4,9 @@
  * `$APPDIR` / `.mount_*` is refused.
  */
 
+import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, constants, createReadStream, createWriteStream, existsSync, readdirSync, rmSync } from 'node:fs';
-import { pipeline } from 'node:stream/promises';
+import { finished, pipeline } from 'node:stream/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { PlatformApplier, PreparedUpdate, SpawnDetached, UpdateBlocker } from './types.js';
 
@@ -58,6 +59,17 @@ function assertNotFuseDest(filePath: string, env: NodeJS.ProcessEnv): void {
   }
 }
 
+/** Streamed sha256 so a large AppImage is never buffered whole. */
+async function sha256FileStream(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  const stream = createReadStream(filePath);
+  stream.on('data', (chunk: Buffer | string) => {
+    hash.update(chunk);
+  });
+  await finished(stream);
+  return hash.digest('hex');
+}
+
 export function createLinuxApplier(options: LinuxApplierOptions): PlatformApplier {
   const env = options.env ?? process.env;
   const pid = options.pid ?? process.pid;
@@ -81,6 +93,7 @@ export function createLinuxApplier(options: LinuxApplierOptions): PlatformApplie
       assetPath: string,
       version: string,
       onPhase?: (phase: 'extracting' | 'verifying') => void,
+      expectedSha256?: string,
     ): Promise<PreparedUpdate> {
       const appImage = resolveAppImagePath(env);
       if (!appImage) throw new Error('未找到 APPIMAGE 路径');
@@ -88,13 +101,24 @@ export function createLinuxApplier(options: LinuxApplierOptions): PlatformApplie
       const stagedAppPath = join(dirname(appImage), `.${basename(appImage)}.wrenyard-update-${pid}`);
       assertNotFuseDest(stagedAppPath, env);
       rmSync(stagedAppPath, { force: true });
-      // The download already hashed the asset against the feed digest. Stream
-      // the copy so a large AppImage is never buffered; a failed write rejects
-      // the pipeline instead of leaving a truncated replacement.
+      // Stream the copy so a large AppImage is never buffered; a failed write
+      // rejects the pipeline instead of leaving a truncated replacement.
       onPhase?.('extracting');
       await pipeline(createReadStream(assetPath), createWriteStream(stagedAppPath));
       chmodSync(stagedAppPath, 0o755);
+      // Re-hash the staged file against the feed digest the download trusted.
+      // This is integrity of the copy, not OS code-signing (Linux has none).
       onPhase?.('verifying');
+      const digest = expectedSha256?.trim().toLowerCase();
+      if (!digest) {
+        try { rmSync(stagedAppPath, { force: true }); } catch { /* best effort */ }
+        throw new Error('缺少更新文件摘要，已中止。');
+      }
+      const actual = (await sha256FileStream(stagedAppPath)).toLowerCase();
+      if (actual !== digest) {
+        try { rmSync(stagedAppPath, { force: true }); } catch { /* best effort */ }
+        throw new Error('更新文件校验失败，已删除，请重试。');
+      }
       return { assetPath, version, stagedAppPath };
     },
 
