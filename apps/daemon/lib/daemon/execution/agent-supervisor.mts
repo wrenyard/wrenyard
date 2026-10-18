@@ -361,7 +361,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           taskId: opts.taskId,
           seq: 1,
           type: hasRepoLock || !requiresLock ? initialEventType : 'queue-waiting',
-          data: {},
+          data: dropUndefined({
+            profile: opts.profile,
+            cwd: opts.cwd,
+            client_family: opts.clientFamily,
+          }),
           timestamp: createdAt,
         })
       })
@@ -904,7 +908,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         taskId: entry.taskId,
         seq: nextSeq(entry),
         type: fromQueue ? 'queue-acquired' : 'child-start',
-        data: {},
+        data: dropUndefined({
+          profile: opts.profile,
+          cwd: opts.cwd,
+          client_family: opts.clientFamily,
+        }),
         timestamp,
       })
     })
