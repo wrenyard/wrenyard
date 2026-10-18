@@ -45,13 +45,18 @@ export function formatServiceDuration(uptimeMs: number | undefined): string {
 
 /** Human description of the local service row. */
 export function serviceDescription(service: Pick<ServiceSnapshot, 'status' | 'uptimeMs'>): string {
+  if (service.status === 'unresponsive') {
+    return 'Daemon 已连接，但暂未响应；正在运行的操作可能仍在继续。';
+  }
   return service.status === 'connected'
     ? formatServiceDuration(service.uptimeMs)
     : '未能连接本地 Wrenyard 服务';
 }
 
 export function serviceTone(status: ServiceSnapshot['status']): StatusTone {
-  return status === 'connected' ? 'success' : 'danger';
+  if (status === 'connected') return 'success';
+  if (status === 'unresponsive') return 'warning';
+  return 'danger';
 }
 
 /* ------------------------------------------------------------------ */
@@ -63,6 +68,7 @@ export type DaemonLifecycleAction = 'start' | 'restart';
 export function daemonStateTone(state: DaemonProcessState): StatusTone {
   if (state === 'running') return 'success';
   if (state === 'starting') return 'running';
+  if (state === 'unresponsive') return 'warning';
   return 'danger';
 }
 
@@ -81,6 +87,8 @@ export function daemonLifecycleDescription(snapshot: DaemonLifecycleSnapshot): s
         : '已连接到外部启动的本地 Daemon。';
     case 'starting':
       return '本地 Daemon 正在启动…';
+    case 'unresponsive':
+      return '本地 Daemon 已连接，但暂未响应；无需重启，稍后会自动恢复。';
     case 'stopped':
       return snapshot.mode === 'supervised'
         ? '本地 Daemon 已停止，可由啾啾工坊重新启动。'

@@ -78,7 +78,10 @@ export class DesktopDaemonSupervisor {
     this.options = options;
     this.connectionMode = options.initialProbe.connected || !options.launch ? 'connected' : 'supervised';
     const canStart = this.canStart();
-    if (options.initialProbe.compatible) {
+    // A late reply on an open socket is neither a version mismatch nor a spawn reason.
+    if (options.initialProbe.unresponsive) {
+      this.state = 'unresponsive';
+    } else if (options.initialProbe.compatible) {
       this.state = 'running';
     } else if (options.initialProbe.connected) {
       this.state = 'unavailable';
@@ -189,6 +192,11 @@ export class DesktopDaemonSupervisor {
   private async doStart(): Promise<DaemonLifecycleSnapshot> {
     if (this.proc !== null) return this.snapshot();
     const probe = await this.options.probe();
+    // Already reachable: never spawn a duplicate just because a reply is late.
+    if (probe.unresponsive) {
+      this.setState('unresponsive');
+      return this.snapshot();
+    }
     if (probe.connected && !probe.compatible) {
       this.setState('unavailable', incompatibleDaemonMessage(probe, this.options.desktopVersion));
       return this.snapshot();
@@ -270,6 +278,12 @@ export class DesktopDaemonSupervisor {
       // module also rejects on spawn error, early exit or timeout.
       await launchPromise;
       const probe = await this.options.probe();
+      // Keep a late-replying child we just started instead of reaping it.
+      if (probe.unresponsive) {
+        this.starting = false;
+        this.setState('unresponsive');
+        return;
+      }
       if (!probe.compatible) throw new Error(incompatibleDaemonMessage(probe, this.options.desktopVersion));
     } catch (error) {
       this.failStart(proc, `daemon 启动失败：${errorMessage(error)}`);
@@ -336,17 +350,25 @@ export class DesktopDaemonSupervisor {
 
   private startConnectivityMonitor(): void {
     this.connectivityTimer = setInterval(() => {
-      if (this.disposed || this.owned || this.proc !== null || this.restartTimer || this.probing) return;
+      // Owned children are driven by process lifecycle events except while they
+      // are already projected as unreachable, where re-probing is the recovery.
+      if (this.disposed || this.state === 'starting' || this.stopping || this.restartTimer || this.probing) return;
+      if ((this.owned || this.proc !== null) && this.state !== 'unresponsive' && this.state !== 'unavailable') return;
       this.probing = true;
       void this.options.probe().then((probe) => {
-        if (this.disposed || this.owned || this.proc !== null || this.restartTimer) return;
+        if (this.disposed || this.state === 'starting' || this.stopping || this.restartTimer) return;
+        if ((this.owned || this.proc !== null) && this.state !== 'unresponsive' && this.state !== 'unavailable') return;
+        if (probe.unresponsive) {
+          if (this.state !== 'unresponsive') this.setState('unresponsive');
+          return;
+        }
         if (probe.compatible) {
           if (this.state !== 'running') this.setState('running');
           return;
         }
         // Only a live projection may be downgraded: an owned stop/failure
         // reason and a pending restart must survive the poll unchanged.
-        if (this.state !== 'running' && this.state !== 'unavailable') return;
+        if (this.state !== 'running' && this.state !== 'unresponsive' && this.state !== 'unavailable') return;
         const message = probe.connected ? incompatibleDaemonMessage(probe, this.options.desktopVersion)
           : this.canStart() ? 'daemon 已停止，可重新启动' : this.unavailableMessage();
         if (this.state !== 'unavailable' || this.message !== message) {

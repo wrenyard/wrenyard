@@ -19,6 +19,7 @@ import {
   RUNTIME_LOGS_OPEN_LABEL,
   RUNTIME_SETTINGS_FILE_OPEN_LABEL,
   SERVICE_CONNECTED_LABEL,
+  SERVICE_UNRESPONSIVE_LABEL,
   SERVICE_UNAVAILABLE_LABEL,
   SESSION_WORKSPACE_REVEAL_LABEL,
   SESSION_WORKSPACE_UNAVAILABLE,
@@ -54,7 +55,9 @@ export function ServiceControl() {
       <div>
         <StatusBadge
           tone={serviceTone(service.status)}
-          label={service.status === 'connected' ? SERVICE_CONNECTED_LABEL : SERVICE_UNAVAILABLE_LABEL}
+          label={service.status === 'connected'
+            ? SERVICE_CONNECTED_LABEL
+            : service.status === 'unresponsive' ? SERVICE_UNRESPONSIVE_LABEL : SERVICE_UNAVAILABLE_LABEL}
         />
       </div>
     </div>

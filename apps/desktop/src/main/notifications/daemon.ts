@@ -11,6 +11,11 @@ export interface DaemonNotifierDeps {
   notifier: Notifier;
 }
 
+/** `running` and `unresponsive` both mean the transport is connected. */
+function isConnected(state: DaemonProcessState): boolean {
+  return state === 'running' || state === 'unresponsive';
+}
+
 export function createDaemonNotifier(deps: DaemonNotifierDeps): DaemonNotifier {
   let lastState: DaemonProcessState | undefined;
   let disconnectNotified = false;
@@ -27,7 +32,7 @@ export function createDaemonNotifier(deps: DaemonNotifierDeps): DaemonNotifier {
       const previous = lastState;
       lastState = state;
 
-      if (previous === 'running' && state !== 'running') {
+      if (isConnected(previous) && !isConnected(state)) {
         sequence += 1;
         const notification: AppNotification = {
           id: `daemon:${sequence}`,
@@ -40,7 +45,7 @@ export function createDaemonNotifier(deps: DaemonNotifierDeps): DaemonNotifier {
         return;
       }
 
-      if (previous !== 'running' && state === 'running' && disconnectNotified) {
+      if (state === 'running' && disconnectNotified) {
         sequence += 1;
         disconnectNotified = false;
         deps.notifier.notify(

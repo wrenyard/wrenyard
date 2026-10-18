@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, Notification as ElectronNoti
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { createServer as createNetServer, connect as connectNet, type Server as NetServer, type Socket as NetSocket } from 'node:net';
 import { dirname, join } from 'node:path';
-import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
+import { WrenyardIpcClient, resolveWrenyardIpcPath, WrenyardRpcError, WrenyardRpcTimeoutError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import { registerSession, type SessionRegistration } from './session/ipc.js';
 import { SessionSeenStore } from './session/seen-store.js';
 import { createDesktopTray, type DesktopTrayHandle } from './desktop-tray.js';
@@ -177,7 +177,11 @@ async function readWrenyardHealth(path: string): Promise<HealthSnapshot> {
       return { connected: true, ...(runtimeMode ? { runtimeMode } : {}), ...(uptimeMs !== undefined ? { uptimeMs } : {}) };
     }
     return { connected: true };
-  } catch {
+  } catch (error) {
+    // A deadline on an open socket means a busy daemon, not a lost transport.
+    if (error instanceof WrenyardRpcTimeoutError && error.transportConnected) {
+      return { connected: true, unresponsive: true };
+    }
     return { connected: false };
   } finally {
     await client?.close?.();
@@ -413,7 +417,10 @@ let updateController: DesktopUpdateController | null = null;
 let daemonSupervisor: DesktopDaemonSupervisor | null = null;
 /** Latest known product workspace; refreshed when a save activates a new root. */
 let workspaceConfiguration: WorkspaceConfigurationSnapshot | null = null;
-let daemonRunning = false;
+/** True while the endpoint is connected: `running`, or `unresponsive` over an open transport. */
+let daemonLive = false;
+/** True once this connection era was confirmed healthy; gates the one-time reconnect. */
+let daemonHealthy = false;
 /**
  * Business requests are allowed only against a committed endpoint: the local
  * daemon while it supervises/runs, or a fully switched remote. `connecting` and
@@ -433,14 +440,20 @@ const canConnectDaemon = (): boolean =>
 function requireDaemonRunning(): void {
   if (!canConnectDaemon()) throw new Error('daemon 不可用');
 }
-function reconcileDaemonConnection(running: boolean): void {
-  if (daemonRunning === running) return;
-  daemonRunning = running;
-  if (!running) {
+/** Keep subscriptions while connected, including a late-replying daemon; only a healthy state reconnects them. */
+function reconcileDaemonConnection(state: DaemonLifecycleSnapshot['state']): void {
+  const live = state === 'running' || state === 'unresponsive';
+  if (!live) {
+    if (!daemonLive) return;
+    daemonLive = false;
+    daemonHealthy = false;
     desktopSubscriptions?.pause();
     sessionRegistration?.disconnect();
     return;
   }
+  daemonLive = true;
+  if (state !== 'running' || daemonHealthy) return;
+  daemonHealthy = true;
   desktopSubscriptions?.reconnect();
   taskgraphWindowOwner?.reconnect();
   void refreshQuotaProjectionAfterGatewayRestart();
@@ -1254,7 +1267,7 @@ async function bootstrap(): Promise<void> {
       finally { client.close(); }
     },
     onChanged: (snapshot) => {
-      reconcileDaemonConnection(snapshot.state === 'running');
+      reconcileDaemonConnection(snapshot.state);
       notifyDaemonChanged();
       daemonNotifier.observe(snapshot);
       void finalizeWhenHealthy();
@@ -1896,7 +1909,16 @@ async function bootstrap(): Promise<void> {
     desktopVersion: version,
     wrenyardVersion: version,
     buildTime,
-    readHealth: () => canConnectDaemon() ? readWrenyardHealth(activeEndpointPath) : Promise.resolve({ connected: false }),
+    readHealth: () => {
+      if (canConnectDaemon()) return readWrenyardHealth(activeEndpointPath);
+      // A committed remote is never probed through the local socket, and only
+      // an unresponsive local supervisor inherits this projection.
+      if (allowsBusinessOperations() && !isCommittedRemote()
+        && daemonSupervisor?.snapshot().state === 'unresponsive') {
+        return Promise.resolve({ connected: true, unresponsive: true });
+      }
+      return Promise.resolve({ connected: false });
+    },
     readGatewayModels: async () => { requireDaemonRunning(); return readGatewayConnection(activeEndpointPath).then((connection) => connection.models); },
     readPet: async () => petController!.snapshot(),
     readUpdate: () => updateController!.snapshot(),

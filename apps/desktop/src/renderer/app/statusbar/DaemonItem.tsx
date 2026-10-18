@@ -53,6 +53,8 @@ const MODE_LABEL: Readonly<Record<DaemonConnectionMode, string>> = {
 const STATE_LABEL: Readonly<Record<DaemonProcessState, string>> = {
   starting: '启动中',
   running: '运行中',
+  // Connected but a reply is overdue: neither offline nor a version mismatch.
+  unresponsive: '暂未响应',
   stopped: '已停止',
   failed: '失败',
   unavailable: '不可用',
@@ -62,6 +64,7 @@ function connectionLabel(
   snapshot: DaemonLifecycleSnapshot | undefined,
   runtimeMode: ServiceSnapshot['runtimeMode'],
 ): string {
+  if (snapshot?.state === 'unresponsive') return '暂未响应';
   if (snapshot?.state !== 'running') {
     return snapshot?.state === 'starting' ? '连接中' : '离线';
   }
@@ -74,11 +77,12 @@ function lifecycleLabel(snapshot: DaemonLifecycleSnapshot | undefined): string {
 }
 
 /** Connectivity dot tone, derived from the same state as the environment label. */
-type ConnectivityTone = 'online' | 'starting' | 'offline' | 'unknown';
+type ConnectivityTone = 'online' | 'starting' | 'warning' | 'offline' | 'unknown';
 
 const DOT_CLASS: Readonly<Record<ConnectivityTone, string>> = {
   online: 'bg-success',
   starting: 'bg-warning',
+  warning: 'bg-warning',
   offline: 'bg-destructive',
   unknown: 'bg-muted-foreground',
 };
@@ -160,9 +164,11 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
         ? 'starting'
         : disconnected
           ? 'offline'
-          : snapshot?.state === 'running'
-            ? 'online'
-            : 'unknown';
+          : snapshot?.state === 'unresponsive'
+            ? 'warning'
+            : snapshot?.state === 'running'
+              ? 'online'
+              : 'unknown';
 
   const updateState = update.data?.state;
   const updateVisible =
@@ -262,7 +268,7 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
             <Server className="size-4 shrink-0" />
           ) : starting ? (
             <Spinner className="size-4 shrink-0" />
-          ) : snapshot?.state === 'running' ? (
+          ) : snapshot?.state === 'running' || snapshot?.state === 'unresponsive' ? (
             <Plug className="size-4 shrink-0" />
           ) : (
             <Unplug className="size-4 shrink-0" />
@@ -313,8 +319,9 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
           ) : null}
         </dl>
         {/* The restart action is a local-supervisor action: while remote it must
-            never be routed to the local daemon. */}
-        {snapshot?.canStart && remoteStateValue === 'local' ? (
+            never be routed to the local daemon, and an unresponsive daemon is
+            not a reason to restart it. */}
+        {snapshot?.canStart && snapshot.state !== 'unresponsive' && remoteStateValue === 'local' ? (
           <Button type="button" variant="outline" size="sm" onClick={() => void handleRestart()}>
             重启
           </Button>

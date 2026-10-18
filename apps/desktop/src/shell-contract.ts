@@ -561,7 +561,7 @@ export function validatePreferenceValue(id: PreferenceId, value: unknown): boole
 }
 
 export interface ServiceSnapshot {
-  status: 'connected' | 'unavailable';
+  status: 'connected' | 'unresponsive' | 'unavailable';
   endpoint: string;
   workspace: WorkspaceConfigurationSnapshot;
   /** Runtime mode reported by the connected daemon's health projection. */
@@ -635,6 +635,8 @@ export type DaemonConnectionMode = 'supervised' | 'connected';
 export type DaemonProcessState =
   | 'starting'
   | 'running'
+  /** Socket connected, but the health reply missed its deadline. */
+  | 'unresponsive'
   | 'stopped'
   | 'failed'
   | 'unavailable';

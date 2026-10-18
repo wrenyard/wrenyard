@@ -1,9 +1,15 @@
-import { WrenyardIpcClient, WrenyardRpcError } from '@wrenyard/control';
+import { WrenyardIpcClient, WrenyardRpcError, WrenyardRpcTimeoutError } from '@wrenyard/control';
 
 export interface DaemonProbe {
   connected: boolean;
   compatible: boolean;
   daemonVersion?: string;
+  /**
+   * The transport was open when the health reply deadline elapsed: the daemon
+   * is reachable but did not answer in time. Never set for a failed transport
+   * or a version mismatch.
+   */
+  unresponsive?: boolean;
 }
 
 /** Product compatibility is separate from the transport's protocol handshake. */
@@ -14,6 +20,11 @@ export async function probeWrenyard(path: string, version: string): Promise<Daem
     const daemonVersion = health?.identity?.version;
     return { connected: true, compatible: health?.ok === true && daemonVersion === version, daemonVersion };
   } catch (error) {
+    // A deadline on an open socket is not a disconnect: the process is alive
+    // and listening, it just missed this reply. It says nothing about version.
+    if (error instanceof WrenyardRpcTimeoutError && error.transportConnected) {
+      return { connected: true, compatible: false, unresponsive: true };
+    }
     // A protocol rejection still proves that another daemon occupies the endpoint.
     const connected = error instanceof WrenyardRpcError
       || (error instanceof Error && error.message.startsWith('CLI 与 daemon 协议版本不一致'));

@@ -284,6 +284,22 @@ export class WrenyardRpcError extends Error {
 }
 
 /**
+ * Error raised when a request's transport deadline elapses before a reply.
+ * `transportConnected` records whether the socket was still open at that
+ * moment: an open socket means the peer is reachable but did not answer in
+ * time, which is distinct from a lost transport.
+ */
+export class WrenyardRpcTimeoutError extends Error {
+  readonly transportConnected: boolean;
+
+  constructor(timeoutMs: number, method: string, transportConnected: boolean) {
+    super(`Wrenyard RPC request timed out after ${timeoutMs}ms (method: ${method})`);
+    this.name = "WrenyardRpcTimeoutError";
+    this.transportConnected = transportConnected;
+  }
+}
+
+/**
  * Dependency-free NDJSON JSON-RPC 2.0 client over a node:net socket.
  * Frames are newline-delimited; partial frames are buffered until complete.
  */
@@ -473,9 +489,13 @@ export class WrenyardIpcClient {
         ? undefined
         : setTimeout(() => {
           this.pending.delete(id);
+          // Read the socket before the handshake's failClosed path can destroy
+          // it, so a stalled-but-connected peer is not reported as a disconnect.
           reject(
-            new Error(
-              `Wrenyard RPC request timed out after ${timeoutMs}ms (method: ${method})`,
+            new WrenyardRpcTimeoutError(
+              timeoutMs,
+              method,
+              this.socket.readyState === "open",
             ),
           );
         }, timeoutMs);

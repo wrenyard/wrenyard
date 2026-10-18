@@ -6,6 +6,8 @@ import type { WorkspaceConfigurationSnapshot } from './shell-contract.js';
 
 export interface HealthSnapshot {
   connected: boolean;
+  /** The transport was open but the health reply missed its deadline. */
+  unresponsive?: boolean;
   runtimeMode?: 'source' | 'installed';
   uptimeMs?: number;
 }
@@ -36,7 +38,7 @@ export async function buildSettingsSnapshot(options: SettingsSnapshotOptions): P
 
   return {
     service: {
-      status: health.connected ? 'connected' : 'unavailable',
+      status: health.unresponsive ? 'unresponsive' : health.connected ? 'connected' : 'unavailable',
       endpoint: options.endpoint,
       workspace: options.workspace,
       ...(health.connected && health.runtimeMode ? { runtimeMode: health.runtimeMode } : {}),

@@ -140,6 +140,7 @@ export const ABOUT_THEME_LABEL = '当前主题';
 export const DAEMON_STATE_LABEL: Record<DaemonProcessState, string> = {
   starting: '启动中',
   running: '运行中',
+  unresponsive: '暂未响应',
   stopped: '已停止',
   failed: '启动失败',
   unavailable: '不可用',
@@ -150,6 +151,7 @@ export const DAEMON_RESTART_LABEL = '重启';
 export const DAEMON_STARTING_LABEL = '启动中…';
 
 export const SERVICE_CONNECTED_LABEL = '已连接';
+export const SERVICE_UNRESPONSIVE_LABEL = '暂未响应';
 export const SERVICE_UNAVAILABLE_LABEL = '不可用';
 
 /** Pet lifecycle label for the section status pill. */
