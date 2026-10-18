@@ -6,7 +6,6 @@
     <path id="wy-bird-beak" d="M 80 -26 L 80 2 L 122 -12 Z"/>
     <circle id="wy-bird-eye" cx="32" cy="-42" r="16"/>
   </defs>
-  <rect width="1024" height="1024" fill="#fafafa"/>
   <path d="M 150 566 C 340 548 530 580 700 650 C 780 688 840 748 878 838" fill="none" stroke="#262626" stroke-width="34" stroke-linecap="round"/>
   <path d="M 700 650 L 744 574" fill="none" stroke="#737373" stroke-width="12" stroke-linecap="round"/>
   <path d="M 744 574 C 798.8 568.3 845.2 529.1 860 476 C 805.2 481.7 758.8 520.9 744 574 Z" fill="#737373"/>

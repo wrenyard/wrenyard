@@ -2,11 +2,12 @@
 /**
  * Theme icon pipeline.
  *
- * - paper: crop of the reference illustration (cream square, no page, no
- *   caption). The cropped 1024/256 PNGs feed the theme package and the Windows
- *   icons. macOS shows an image verbatim, so a separate `icon-mac-1024.png`
- *   bakes the squircle and the transparent margin; the same macOS composition
- *   drives the native installer `.icns`.
+ * - paper: crop of the reference illustration (no page, no caption). The baked
+ *   cream plate is flood-filled away so the 1024/256 PNGs that feed the theme
+ *   package and the Windows icons have a transparent surround; the original
+ *   opaque crop is kept for the macOS art. macOS shows an image verbatim, so a
+ *   separate `icon-mac-1024.png` bakes the squircle and the transparent margin;
+ *   the same macOS composition drives the native installer `.icns`.
  * - neutral: hand-authored SVG (`packages/themes/src/neutral/assets/icon.svg`)
  *   captured through an Electron offscreen window at 1024 and 256, then given
  *   the same macOS squircle treatment.
@@ -35,6 +36,14 @@ const CAPTURE_FALLBACK_MS = 400;
 const MAC_CANVAS_SIZE = 1024;
 const MAC_RECT_SIZE = 824;
 const MAC_CORNER_RADIUS = 185;
+
+// The paper crop is baked on an opaque cream plate. Windows has no plate, so
+// the plate is removed with an edge-connected flood fill. The plate color is
+// exact (±1 noise) and the artwork edge is a sharp 1–2px ramp, so this
+// conservative per-channel tolerance clears the plate without eating the
+// antialiased mark or the enclosed light eye dots.
+const PAPER_BACKGROUND = [250, 243, 239];
+const BACKGROUND_TOLERANCE = 8;
 
 function paeth(a, b, c) {
   const p = a + b - c;
@@ -157,6 +166,77 @@ function writePng(path, size, rgba) {
   writeFileSync(path, encodePng(size, rgba));
 }
 
+/**
+ * Remove a baked background plate. Starting from the image border, clear every
+ * region-connected pixel that matches `background` within a conservative
+ * per-channel tolerance, writing each removed pixel as fully transparent black.
+ * Only edge-connected background is cleared, so enclosed light pixels (for
+ * example the birds' eyes) and any interior artwork are preserved. Mutates and
+ * returns `img`.
+ */
+function stripBackground(img, background, tolerance) {
+  const { w, h, rgba } = img;
+  const visited = new Uint8Array(w * h);
+  const stack = [];
+  const matches = (p) => {
+    const i = p * 4;
+    return (
+      rgba[i + 3] !== 0 &&
+      Math.abs(rgba[i] - background[0]) <= tolerance &&
+      Math.abs(rgba[i + 1] - background[1]) <= tolerance &&
+      Math.abs(rgba[i + 2] - background[2]) <= tolerance
+    );
+  };
+  const consider = (x, y) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    const p = y * w + x;
+    if (visited[p]) return;
+    visited[p] = 1;
+    if (matches(p)) stack.push(p);
+  };
+  for (let x = 0; x < w; x++) {
+    consider(x, 0);
+    consider(x, h - 1);
+  }
+  for (let y = 0; y < h; y++) {
+    consider(0, y);
+    consider(w - 1, y);
+  }
+  while (stack.length) {
+    const p = stack.pop();
+    const i = p * 4;
+    rgba[i] = 0;
+    rgba[i + 1] = 0;
+    rgba[i + 2] = 0;
+    rgba[i + 3] = 0;
+    const x = p % w;
+    const y = (p - x) / w;
+    consider(x - 1, y);
+    consider(x + 1, y);
+    consider(x, y - 1);
+    consider(x, y + 1);
+  }
+  return img;
+}
+
+/**
+ * Composite a straight-alpha image over an opaque background color, returning a
+ * fully opaque image. Feeds the neutral macOS squircle the same #fafafa plate
+ * the SVG used to paint, so that asset does not change.
+ */
+function compositeOnBackground(img, r, g, b) {
+  const rgba = Buffer.alloc(img.w * img.h * 4);
+  for (let p = 0; p < img.w * img.h; p++) {
+    const i = p * 4;
+    const a = img.rgba[i + 3] / 255;
+    rgba[i] = Math.round(img.rgba[i] * a + r * (1 - a));
+    rgba[i + 1] = Math.round(img.rgba[i + 1] * a + g * (1 - a));
+    rgba[i + 2] = Math.round(img.rgba[i + 2] * a + b * (1 - a));
+    rgba[i + 3] = 255;
+  }
+  return { w: img.w, h: img.h, rgba };
+}
+
 function sample(img, x, y) {
   const ix = Math.max(0, Math.min(img.w - 1, x));
   const iy = Math.max(0, Math.min(img.h - 1, y));
@@ -171,6 +251,11 @@ function lanczos(x, a = 2) {
   return (a * Math.sin(px) * Math.sin(px / a)) / (px * px);
 }
 
+/**
+ * Lanczos-resample an RGBA image in premultiplied-alpha space so transparent
+ * pixels do not bleed their (meaningless) color into the result. A fully opaque
+ * input still reproduces the previous opaque result exactly.
+ */
 function scaleRgba(img, size) {
   const rgba = Buffer.alloc(size * size * 4);
   const a = 2;
@@ -181,6 +266,7 @@ function scaleRgba(img, size) {
       let r = 0;
       let g = 0;
       let b = 0;
+      let asum = 0;
       let wsum = 0;
       const x0 = Math.floor(sx) - a + 1;
       const y0 = Math.floor(sy) - a + 1;
@@ -194,17 +280,22 @@ function scaleRgba(img, size) {
           const w = wx * wy;
           if (w === 0) continue;
           const p = sample(img, ix, iy);
-          r += p[0] * w;
-          g += p[1] * w;
-          b += p[2] * w;
+          const pa = p[3] / 255;
+          r += p[0] * pa * w;
+          g += p[1] * pa * w;
+          b += p[2] * pa * w;
+          asum += pa * w;
           wsum += w;
         }
       }
       const i = (y * size + x) * 4;
-      rgba[i] = Math.max(0, Math.min(255, Math.round(r / wsum)));
-      rgba[i + 1] = Math.max(0, Math.min(255, Math.round(g / wsum)));
-      rgba[i + 2] = Math.max(0, Math.min(255, Math.round(b / wsum)));
-      rgba[i + 3] = 255;
+      const alpha = asum / wsum;
+      if (alpha > 0) {
+        rgba[i] = Math.max(0, Math.min(255, Math.round(r / wsum / alpha)));
+        rgba[i + 1] = Math.max(0, Math.min(255, Math.round(g / wsum / alpha)));
+        rgba[i + 2] = Math.max(0, Math.min(255, Math.round(b / wsum / alpha)));
+        rgba[i + 3] = Math.max(0, Math.min(255, Math.round(alpha * 255)));
+      }
     }
   }
   return rgba;
@@ -310,6 +401,14 @@ function renderPaper() {
     throw new Error(`icon-source.png must be square, got ${source.w}×${source.h}`);
   }
 
+  // Windows has no plate: clear the baked cream background from a copy of the
+  // crop, keeping the original opaque image for the macOS squircle below.
+  const transparent = stripBackground(
+    { w: source.w, h: source.h, rgba: Buffer.from(source.rgba) },
+    PAPER_BACKGROUND,
+    BACKGROUND_TOLERANCE,
+  );
+
   writeFileSync(
     join(resourcesDir, 'icon.svg'),
     `<?xml version="1.0" encoding="UTF-8"?>
@@ -318,14 +417,15 @@ function renderPaper() {
 </svg>
 `,
   );
-  writePng(join(resourcesDir, 'icon.png'), 1024, scaleRgba(source, 1024));
-  writePng(join(resourcesDir, 'icon-256.png'), 256, scaleRgba(source, 256));
+  writePng(join(resourcesDir, 'icon.png'), 1024, scaleRgba(transparent, 1024));
+  writePng(join(resourcesDir, 'icon-256.png'), 256, scaleRgba(transparent, 256));
 
-  // Feed the paper theme package with the same crop plus the macOS squircle
-  // variant that the Dock renders verbatim.
+  // Feed the paper theme package with the transparent crop plus the macOS
+  // squircle variant that the Dock renders verbatim, still composed from the
+  // original opaque crop so its pixels are unchanged.
   mkdirSync(paperAssetsDir, { recursive: true });
-  writePng(join(paperAssetsDir, 'icon-1024.png'), 1024, scaleRgba(source, 1024));
-  writePng(join(paperAssetsDir, 'icon-256.png'), 256, scaleRgba(source, 256));
+  writePng(join(paperAssetsDir, 'icon-1024.png'), 1024, scaleRgba(transparent, 1024));
+  writePng(join(paperAssetsDir, 'icon-256.png'), 256, scaleRgba(transparent, 256));
   writePng(join(paperAssetsDir, 'icon-mac-1024.png'), MAC_CANVAS_SIZE, composeMacIcon(source, MAC_CANVAS_SIZE));
 
   if (process.platform === 'darwin') {
@@ -409,12 +509,16 @@ async function renderNeutral() {
   const captured = await captureSvg(neutralSvgPath, 1024);
   mkdirSync(neutralAssetsDir, { recursive: true });
   const icon1024 = captured.resize({ width: 1024, height: 1024, quality: 'best' });
+  // The SVG no longer paints a full-canvas plate, so the Windows/general
+  // artwork is transparent.
   writeFileSync(join(neutralAssetsDir, 'icon-1024.png'), icon1024.toPNG());
   writeFileSync(join(neutralAssetsDir, 'icon-256.png'), icon1024.resize({ width: 256, height: 256, quality: 'best' }).toPNG());
+  // The macOS squircle keeps the original opaque #fafafa plate.
   const scene = decodePngBuffer(icon1024.toPNG(), 'neutral capture');
+  const macScene = compositeOnBackground(scene, 0xfa, 0xfa, 0xfa);
   writeFileSync(
     join(neutralAssetsDir, 'icon-mac-1024.png'),
-    encodePng(MAC_CANVAS_SIZE, composeMacIcon(scene, MAC_CANVAS_SIZE)),
+    encodePng(MAC_CANVAS_SIZE, composeMacIcon(macScene, MAC_CANVAS_SIZE)),
   );
   return join(neutralAssetsDir, 'icon-256.png');
 }
