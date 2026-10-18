@@ -50,8 +50,10 @@ export class DaemonSubscriptions {
   private disposed = false;
   /**
    * Durable owner copy of the last observed event cursor. The poller is
-   * disposable, so only this survives reconnect, endpoint and workspace
-   * switches; a new poller resumes from it instead of replaying history.
+   * disposable, so only this survives restarts on the same endpoint; a new
+   * poller resumes from it instead of replaying history. Switching to a
+   * different endpoint clears it, because the next daemon numbers its events
+   * with an independent id sequence.
    */
   private eventCursor: string | undefined;
   /** Last observed rounds, replayed to a newly attached subscriber. */
@@ -137,14 +139,21 @@ export class DaemonSubscriptions {
    * committed. Restarting unconditionally also resumes pollers that a previous
    * unsettled period paused. A round that resolves after the restart is dropped
    * by the poller generation guard and by the shared client's generation fence.
+   * A switch to a different endpoint also drops the event cursor: resuming from
+   * the old daemon's cursor would stall above the new daemon's head or replay
+   * its history, while a restart on the same endpoint keeps resuming from the
+   * preserved cursor.
    */
   setEndpoint(path: string): void {
     if (this.disposed) return;
+    const endpointChanged = path !== this.ipcPath;
     this.ipcPath = path;
     this.client.setPath(path);
     this.lastStats = undefined;
     this.lastActivity = undefined;
-    this.reconnect();
+    this.pause();
+    if (endpointChanged) this.eventCursor = undefined;
+    this.start();
   }
 
   /** Current shared activity round, when one has been observed. */
