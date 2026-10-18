@@ -169,13 +169,17 @@ export function turnStatusText(turn: TurnModel): string {
   }
 }
 
-/** The live bounded-recovery waiting state of one turn, projected from its `turn.waiting` event. */
+/**
+ * The live recovery waiting state of one turn, projected from its
+ * `turn.waiting` event. `retryAt` is optional so a wait without a real expected
+ * time stays explicitly unknown rather than borrowing a fallback recheck delay.
+ */
 export type TurnWaitingState = Pick<Extract<LedgerEvent, { type: 'turn.waiting' }>, 'reason' | 'retryAt'>;
 
 /** Short phase name for the waiting lane, alongside the existing phase labels. */
 export const WAITING_PHASE_LABEL = '等待恢复';
 
-/** Chinese label for why the active turn is waiting in bounded recovery. */
+/** Chinese label for why the active turn is waiting for recovery. */
 export const WAITING_REASON_LABEL: Record<TurnWaitingState['reason'], string> = {
   admission: '等待线路允许探测',
   recovery: '等待线路恢复',
@@ -186,17 +190,17 @@ function pad2(value: number): string {
 }
 
 /**
- * Chinese status for a turn waiting in bounded recovery: whether it is waiting
- * for permission to probe a locally blocked route or for a guaranteed
- * recovery, the exact local-time next probe instant, and that the turn can
- * still be interrupted.
+ * Chinese status for a turn waiting for recovery, distinct from generating,
+ * stalled and error-correction states: the real local next-attempt time when
+ * one is known, otherwise an explicit unknown. A fallback recheck delay is
+ * never presented as the expected recovery time, and the turn stays
+ * interruptible.
  */
 export function waitingStatusText(state: TurnWaitingState): string {
-  const parsed = Date.parse(state.retryAt);
-  const time = Number.isFinite(parsed)
-    ? `，约 ${pad2(new Date(parsed).getHours())}:${pad2(new Date(parsed).getMinutes())}:${pad2(new Date(parsed).getSeconds())} 可重试`
-    : '';
-  return `${WAITING_REASON_LABEL[state.reason]}${time}（可中断）`;
+  const parsed = state.retryAt === undefined ? Number.NaN : Date.parse(state.retryAt);
+  if (!Number.isFinite(parsed)) return '正在等待恢复，预计重试时间：未知';
+  const at = new Date(parsed);
+  return `正在等待恢复，预计 ${pad2(at.getHours())}:${pad2(at.getMinutes())}:${pad2(at.getSeconds())} 重试`;
 }
 
 export interface NoFinalReply {

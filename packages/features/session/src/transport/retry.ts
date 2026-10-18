@@ -9,21 +9,29 @@
  * distinguished. A genuine upstream failure retries with exponential backoff,
  * bounded by the caller's own deadline.
  *
- * Two things are not upstream retries and are handled as a bounded recovery
- * wait in this same loop: a local Gateway admission refusal (the circuit
- * declined to admit the request before any upstream call) and an adopted
- * upstream hint that names a not-before instant. Neither replays after output
- * started or after cancellation; an admission refusal never consumes the
- * upstream retry count, and a hint of any length (a minute or longer) is
- * honoured exactly. A caller-supplied route-health read is re-checked before
- * every actual attempt, so a cooling-down route is waited out here instead of
- * probed early and refused. The recovery wait is bounded to a cumulative
- * {@link MAX_RECOVERY_WAIT_MS} per logical main model call and is never reset by
- * repeated admission refusals; when the advertised wait would exceed the
- * remaining bound the call stops with one explicit recoverable failure carrying
- * `retryAt` instead of probing early.
+ * Two things are not upstream retries and are handled as a recovery wait in
+ * this same loop: a local Gateway admission refusal (the circuit declined to
+ * admit the request before any upstream call) and an adopted upstream hint that
+ * names a not-before instant. Neither replays after output started or after
+ * cancellation; an admission refusal never consumes the upstream retry count,
+ * and a hint of any length (a minute or longer) is honoured exactly. A
+ * caller-supplied route-health read is re-checked before every actual attempt,
+ * so a cooling-down route is waited out here instead of probed early and
+ * refused.
+ *
+ * Recovery waiting has no cumulative budget: a route that stays in cooldown is
+ * waited out for as long as its real not-before instant requires. One wait
+ * owner refreshes the route's preflight state on a short bounded cadence while
+ * it sleeps, so a cooldown that is extended or shortened is reflected in the
+ * published retry instant and no upstream request is issued before it is due.
+ * A wait whose real instant is missing, invalid or already past publishes no
+ * retry instant at all and takes the abortable minimum local recheck, so an
+ * unknown recovery time stays unknown and no fallback delay is ever published
+ * as an ETA. A real upstream hint remains a separate not-before floor that a
+ * refreshed route may only move later, never earlier. Every wait is abortable,
+ * and long waits are chunked so a timer cannot overflow.
  */
-import { ModelError, abortError, isQuotaCode } from './errors.ts';
+import { ModelError, abortError, isQuotaCode, type ModelErrorKind } from './errors.ts';
 import type { ModelWaitReason, RetryAfterHint } from './protocol.ts';
 
 /** Failed attempts after the first, so one call issues at most five requests. */
@@ -33,13 +41,20 @@ export const MAX_RETRIES = 4;
 export const BASE_DELAY_MS = 2_000;
 
 /**
- * Cumulative bounded recovery wait for one logical main model call. Repeated
- * admission refusals draw on the same budget and never reset it.
+ * Safe minimum recheck applied to a recovery without an advertised instant, so
+ * the caller never spins. It is a local recheck delay, never an ETA.
  */
-export const MAX_RECOVERY_WAIT_MS = 5 * 60_000;
-
-/** Bounded minimum wait applied to a recovery, so the caller never spins. */
 export const MIN_RECOVERY_DELAY_MS = 1_000;
+
+/**
+ * How often an in-progress recovery wait re-reads the route's local preflight
+ * state. This bounded cadence notices an extended or shortened cooldown
+ * promptly without polling upstream or busy-looping.
+ */
+export const RECOVERY_RECHECK_MS = 1_000;
+
+/** The largest delay `setTimeout` accepts; any longer wait is chunked. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 /** Jitter multiplier range applied to the exponential backoff. */
 const JITTER_MIN = 0.75;
@@ -60,12 +75,15 @@ export interface RetryDecision {
    */
   retryAfter?: RetryAfterHint;
   /**
-   * Present when this wait is a bounded recovery wait rather than an ordinary
-   * upstream retry: `reason` distinguishes waiting for permission to probe a
-   * locally blocked route (`admission`) from a guaranteed recovery, and
-   * `retryAt` is the absolute instant the next probe/recovery is due.
+   * Present when this wait is a recovery wait rather than an ordinary upstream
+   * retry: `reason` distinguishes waiting for permission to probe a locally
+   * blocked route (`admission`) from a guaranteed recovery, and `retryAt` is the
+   * absolute instant the next probe/recovery is due, taken only from real route
+   * state or a real upstream hint. It is absent when no real instant is known —
+   * missing, invalid or already past — so an unknown recovery time is published
+   * as unknown instead of as a fabricated `now + delay` ETA.
    */
-  wait?: { reason: ModelWaitReason; retryAt: string };
+  wait?: { reason: ModelWaitReason; retryAt?: string };
 }
 
 /** Context the retry loop reports through and observes. */
@@ -83,11 +101,11 @@ export interface RetryContext {
    * Optional route-health check, run before every actual attempt inside this
    * same loop: it returns the absolute instant (epoch ms) the route may next be
    * probed, or `undefined` when the route is callable now. It is re-read before
-   * the initial attempt and again after every wait, so a route that entered or
-   * extended its cooldown between attempts is waited out in this one budget
-   * instead of probed early and refused. This keeps the route-health wait in the
-   * single retry budget — there is no second nested retry owner. Cancellation,
-   * not `outputStarted`, gates it.
+   * the initial attempt, after every wait, and on the wait's own recheck
+   * cadence, so a route that entered, extended or shortened its cooldown is
+   * waited out here instead of probed early and refused. This keeps the
+   * route-health wait in the single retry loop — there is no second nested retry
+   * owner. Cancellation, not `outputStarted`, gates it.
    */
   preflight?: () => number | undefined;
 }
@@ -131,38 +149,89 @@ export function retryDelayMs(attempt: number, retryAfterMs: number | undefined, 
 }
 
 /**
- * The absolute instant (epoch ms) before which no next attempt may start, or
- * `undefined` when the failure is an ordinary one that uses exponential
- * backoff. An admission refusal always yields an instant — its advertised
- * probe time, or a bounded minimum — so it never spins and never consumes an
- * upstream retry.
+ * The absolute instant a real advertised not-before names, or `undefined` when
+ * the failure carries none and therefore uses exponential backoff. Only a real
+ * route instant or a real upstream hint is returned: a local admission refusal
+ * without one is never assigned a made-up time, so observers keep it unknown.
  */
-function notBeforeMs(failure: ModelError, admission: boolean, now: () => number): number | undefined {
+function advertisedNotBeforeMs(failure: ModelError, now: () => number): number | undefined {
   if (failure.retryAt !== undefined) {
     const parsed = Date.parse(failure.retryAt);
     if (Number.isFinite(parsed)) return parsed;
   }
   if (failure.retryAfter !== undefined) return failure.retryAfter.retryAt;
   if (failure.retryAfterMs !== undefined) return now() + failure.retryAfterMs;
-  return admission ? now() + MIN_RECOVERY_DELAY_MS : undefined;
+  return undefined;
 }
 
-/** Carry the absolute not-before instant on a terminal bounded-wait failure. */
-function recoverableFailure(failure: ModelError, retryAt: string): ModelError {
-  if (failure.retryAt !== undefined) return failure;
-  return new ModelError(failure.message, {
-    kind: failure.kind,
-    ...(failure.status === undefined ? {} : { status: failure.status }),
-    ...(failure.retryAfterMs === undefined ? {} : { retryAfterMs: failure.retryAfterMs }),
-    ...(failure.retryAfter === undefined ? {} : { retryAfter: failure.retryAfter }),
-    ...(failure.source === undefined ? {} : { source: failure.source }),
-    ...(failure.upstream === undefined ? {} : { upstream: failure.upstream }),
-    ...(failure.shouldRetry === undefined ? {} : { shouldRetry: failure.shouldRetry }),
-    ...(failure.outputStarted ? { outputStarted: true } : {}),
-    ...(failure.metrics === undefined ? {} : { metrics: failure.metrics }),
-    retryAt,
-    cause: failure,
-  });
+/** One recovery wait, owned by the single retry loop. */
+interface RecoveryWait {
+  attempt: number;
+  kind: ModelErrorKind;
+  status?: number;
+  reason: ModelWaitReason;
+  /**
+   * A real advertised instant a refreshed route may only move later, never
+   * earlier. An upstream hint sets it; a preflight-derived cooldown does not.
+   */
+  floorMs?: number;
+  /**
+   * Absolute instant the next attempt is currently due, or `undefined` when no
+   * real instant is known — missing, invalid or already past. An unknown
+   * instant is published as unknown and waited out with the abortable minimum
+   * local recheck; it is never replaced by a fabricated `now + delay` ETA.
+   */
+  untilMs: number | undefined;
+  retryAfter?: RetryAfterHint;
+}
+
+/**
+ * Sleep until a recovery is due, re-reading the route's local preflight state
+ * on a short bounded cadence. Every change in the real not-before instant is
+ * published as a fresh wait decision, so observers see an updated retry time
+ * without a fabricated ETA and without an early upstream request. A wait with
+ * no known instant publishes no `retryAt` at all and then sleeps the abortable
+ * minimum local recheck, so an unknown recovery time stays unknown. The wait is
+ * abortable at every step and is chunked by the cadence, so even an
+ * astronomically long cooldown cannot overflow a timer.
+ */
+async function waitForRecovery(wait: RecoveryWait, context: RetryContext, now: () => number): Promise<void> {
+  const publish = (untilMs: number | undefined, initial: boolean): void => {
+    context.onRetry({
+      attempt: wait.attempt,
+      kind: wait.kind,
+      ...(wait.status === undefined ? {} : { status: wait.status }),
+      delayMs: untilMs === undefined ? MIN_RECOVERY_DELAY_MS : Math.max(0, untilMs - now()),
+      wait: {
+        reason: wait.reason,
+        ...(untilMs === undefined ? {} : { retryAt: new Date(untilMs).toISOString() }),
+      },
+      ...(initial && wait.retryAfter !== undefined ? { retryAfter: wait.retryAfter } : {}),
+    });
+  };
+  let untilMs = wait.untilMs;
+  publish(untilMs, true);
+  // No real instant: one abortable minimum local recheck, never an upstream
+  // probe and never a published fallback ETA.
+  if (untilMs === undefined) {
+    await waitChunk(MIN_RECOVERY_DELAY_MS, context.signal);
+    return;
+  }
+  for (;;) {
+    const remaining = untilMs - now();
+    if (remaining <= 0) return;
+    await waitChunk(Math.min(remaining, RECOVERY_RECHECK_MS), context.signal);
+    // A local read only: nothing is sent upstream before the due instant.
+    if (context.preflight === undefined) continue;
+    const observed = context.preflight();
+    const effective = Math.max(wait.floorMs ?? 0, observed ?? 0);
+    if (effective === untilMs) continue;
+    untilMs = effective;
+    // A shortened cooldown may already be due; the loop then returns so the
+    // caller's next attempt starts right away. Otherwise publish the new time.
+    if (effective <= now()) return;
+    publish(effective, false);
+  }
 }
 
 /**
@@ -171,42 +240,29 @@ function recoverableFailure(failure: ModelError, retryAt: string): ModelError {
  *
  * A genuine retryable upstream failure consumes the retry budget and waits the
  * exponential backoff, or an adopted hint's not-before instant. A local
- * admission refusal and a hint wait are bounded recovery waits in the same
- * loop: they never replay after output started, a cancellation aborts any wait
- * immediately, and an admission refusal never spends an upstream retry.
+ * admission refusal and a hint wait are recovery waits in the same loop: they
+ * never replay after output started, a cancellation aborts any wait
+ * immediately, and an admission refusal never spends an upstream retry. The
+ * wait itself has no cumulative budget; it ends only when the real route state
+ * allows the next attempt or when the caller aborts.
  */
 export async function runWithRetry<T>(run: () => Promise<T>, context: RetryContext): Promise<T> {
   const random = context.random ?? Math.random;
   const now = context.now ?? Date.now;
   let attempt = 1;
-  /** Cumulative bounded recovery wait of this logical call; never reset. */
-  let recoveryWaitedMs = 0;
   for (;;) {
     // A cancellation stops the loop before the route-health read and, below,
     // before the request itself.
     if (context.signal.aborted) throw abortError();
     // Re-read route health before every actual attempt — the initial one and
     // each one that follows a wait — so a route that entered (or extended) its
-    // cooldown is waited out inside this one budget rather than probed early and
-    // rejected by the Gateway. Same loop, same cumulative budget: no second
-    // nested retry owner and no separate preflight budget.
+    // cooldown is waited out in the same loop instead of probed early and
+    // rejected by the Gateway. One wait owner; no nested retry loop.
     const blockedUntil = context.preflight?.();
     if (blockedUntil !== undefined && blockedUntil > now()) {
-      const delayMs = Math.max(MIN_RECOVERY_DELAY_MS, blockedUntil - now());
-      if (recoveryWaitedMs + delayMs > MAX_RECOVERY_WAIT_MS) {
-        throw recoverableFailure(
-          new ModelError('Route is cooling down beyond the recovery budget', { kind: 'server', source: 'admission' }),
-          new Date(blockedUntil).toISOString(),
-        );
-      }
-      context.onRetry({
-        attempt,
-        kind: 'server',
-        delayMs,
-        wait: { reason: 'admission', retryAt: new Date(blockedUntil).toISOString() },
-      });
-      await wait(delayMs, context.signal);
-      recoveryWaitedMs += delayMs;
+      // No advertised floor here: this instant is live route state, so the wait
+      // may be shortened as well as extended while it sleeps.
+      await waitForRecovery({ attempt, kind: 'server', reason: 'admission', untilMs: blockedUntil }, context, now);
       continue;
     }
     // A cancellation that landed while reading route health is honoured before
@@ -225,8 +281,10 @@ export async function runWithRetry<T>(run: () => Promise<T>, context: RetryConte
       } else if (attempt > MAX_RETRIES || !isRetryable(failure, context.outputStarted())) {
         throw failure;
       }
-      const notBefore = notBeforeMs(failure, admission, now);
-      if (notBefore === undefined) {
+      const advertised = advertisedNotBeforeMs(failure, now);
+      // Only a genuine upstream failure without an advertised instant falls
+      // back to exponential backoff; an admission refusal never spins one.
+      if (advertised === undefined && !admission) {
         const delayMs = retryDelayMs(attempt, undefined, random);
         context.onRetry({
           attempt,
@@ -238,24 +296,25 @@ export async function runWithRetry<T>(run: () => Promise<T>, context: RetryConte
         attempt += 1;
         continue;
       }
-      const delayMs = Math.max(MIN_RECOVERY_DELAY_MS, notBefore - now());
-      if (recoveryWaitedMs + delayMs > MAX_RECOVERY_WAIT_MS) {
-        // The advertised wait exceeds the remaining bounded budget: one
-        // explicit recoverable failure carrying `retryAt`, never an early probe.
-        throw recoverableFailure(failure, new Date(notBefore).toISOString());
-      }
-      context.onRetry({
+      // A missing, invalid or already-past instant is an unknown-time recovery
+      // wait: it is published with no `retryAt` and slept with the abortable
+      // minimum local recheck, so a past or absent time is never published as
+      // an ETA and no upstream request is issued before the wait is over.
+      const knownMs = advertised !== undefined && advertised > now() ? advertised : undefined;
+      await waitForRecovery({
         attempt,
         kind: failure.kind,
         ...(failure.status === undefined ? {} : { status: failure.status }),
-        delayMs,
-        wait: { reason: admission ? 'admission' : 'recovery', retryAt: new Date(notBefore).toISOString() },
+        reason: admission ? 'admission' : 'recovery',
+        // A real upstream hint is a floor the refreshed route may only move
+        // later; a refusal's own route state is refreshed freely. No floor is
+        // kept for an unknown wait, so nothing obsolete blocks a shorter one.
+        ...(admission || knownMs === undefined ? {} : { floorMs: knownMs }),
+        untilMs: knownMs,
         // Only a hint that was actually adopted is reported; a pure backoff
         // decision carries no retryAfter.
         ...(failure.retryAfter === undefined ? {} : { retryAfter: failure.retryAfter }),
-      });
-      await wait(delayMs, context.signal);
-      recoveryWaitedMs += delayMs;
+      }, context, now);
       // Only a real upstream try spends the retry budget; an admission refusal
       // waits without consuming one.
       if (!admission) attempt += 1;
@@ -263,12 +322,17 @@ export async function runWithRetry<T>(run: () => Promise<T>, context: RetryConte
   }
 }
 
+/** Wait at most one timer-safe chunk, rejecting immediately when aborted. */
+function waitChunk(ms: number, signal: AbortSignal): Promise<void> {
+  return wait(Math.min(ms, MAX_TIMER_MS), signal);
+}
+
 /** Wait `ms`, rejecting immediately when the signal aborts. */
 function wait(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.reject(abortError());
   return new Promise<void>((resolve, reject) => {
     const onAbort = (): void => { clearTimeout(timer); reject(abortError()); };
-    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, Math.min(ms, MAX_TIMER_MS));
     signal.addEventListener('abort', onAbort, { once: true });
   });
 }

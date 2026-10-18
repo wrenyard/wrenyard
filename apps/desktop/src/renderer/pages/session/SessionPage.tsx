@@ -424,6 +424,10 @@ export function SessionPage() {
                           sessionId={state.selectedId}
                           onInterrupt={onInterrupt}
                           onCancelTask={cancelTask}
+                          waiting={new Map(model.turns.flatMap((turn) => {
+                            const waiting = waitingStateOf(turn.id, state.events);
+                            return waiting === undefined ? [] : [[turn.id, waiting] as const];
+                          }))}
                         />
                       ) : (
                         <>

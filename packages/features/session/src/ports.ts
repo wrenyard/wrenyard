@@ -364,11 +364,13 @@ export interface CallRunRequest {
   /** Completed native wy_action tool calls, delivered as each one is parsed. */
   onToolCall?: (call: ToolCall) => void;
   /**
-   * The `reason` role's bounded-recovery wait lifecycle: the absolute next
-   * probe/recovery instant and the wait reason when a wait begins, `null` when
-   * it is cleared. Ignored for other roles.
+   * The `reason` role's recovery wait lifecycle: the wait reason and, when one
+   * is really known, the absolute next probe/recovery instant, reported when a
+   * wait begins or its real retry time changes, `null` when the wait is
+   * cleared. A running wait with an unknown recovery time reports no
+   * `retryAt`, which is distinct from `null`. Ignored for other roles.
    */
-  onWait?: (state: { reason: ModelWaitReason; retryAt: string } | null) => void;
+  onWait?: (state: { reason: ModelWaitReason; retryAt?: string } | null) => void;
 }
 
 export interface CallRunResult {
@@ -468,7 +470,7 @@ export interface SessionCallHost {
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
       /** Forwarded to the call runner for the `reason` role's wait lifecycle. */
-      onWait?: (state: { reason: ModelWaitReason; retryAt: string } | null) => void;
+      onWait?: (state: { reason: ModelWaitReason; retryAt?: string } | null) => void;
       tools?: readonly ToolSpec[];
       toolChoice?: ToolChoice;
       maxTokens?: number;
@@ -483,9 +485,10 @@ export interface SessionCallHost {
   ): Promise<InvokedCall>;
   safeCancelTask(taskRunId: string): Promise<void>;
   /**
-   * Mark the session's active turn as waiting in bounded recovery: the one live
-   * waiting state the engine exposes and the send guard reads, so a repeated
-   * continue while a turn waits starts no extra turn. It carries the selected
+   * Mark the session's active turn as waiting for recovery: the one live waiting
+   * state the engine exposes and the send guard reads, so a repeated continue
+   * while a turn waits starts no extra turn. The wait is nonterminal and has no
+   * budget; it is cleared by {@link clearRecoveryWait}. It carries the selected
    * model, effort and attachment identity a resubmission must match.
    */
   setRecoveryWait(sessionId: string, waiting: RecoveryWait): void;

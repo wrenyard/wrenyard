@@ -89,12 +89,15 @@ class Engine implements Session, SessionCallHost {
    */
   private readonly suggestionRequests = new Map<string, { requestId: string; controller: AbortController }>();
   /**
-   * Sessions whose active turn is currently waiting in bounded recovery, mapped
-   * to that turn's number plus its selected model, effort and attachment
-   * identity. A repeated 'continue' of the same selected model and effort while
-   * a turn is waiting must not create a second turn or dispatch, so this is read
-   * synchronously before any async send work. Independent concurrent turns, an
-   * explicit model or effort change and an unrelated message stay unaffected.
+   * Sessions whose active turn is currently waiting for recovery, mapped to that
+   * turn's number plus its selected model, effort and attachment identity. The
+   * wait is nonterminal and unbounded: it lasts until the route really recovers,
+   * is cleared on the next actual attempt, on completion and on cancel, and
+   * never fails the turn by itself. A repeated 'continue' of the same selected
+   * model and effort while a turn is waiting must not create a second turn or
+   * dispatch, so this is read synchronously before any async send work.
+   * Independent concurrent turns, an explicit model or effort change and an
+   * unrelated message stay unaffected.
    */
   private readonly recoveryWaits = new Map<string, RecoveryWait>();
   /**
@@ -411,13 +414,13 @@ class Engine implements Session, SessionCallHost {
     const fast = admitted.model.fast;
     const attachmentsKey = attachmentKey(admitted.attachments);
 
-    // A turn already waiting in bounded recovery owns the exchange: a repeated
-    // continue of the same selected model, effort and Fast preference — or a
-    // double click — must not create a second turn or dispatch. Decided
-    // synchronously, before any await, so two continuations in the same tick
-    // cannot both admit a turn. A continue after a prior terminal failure still
-    // creates exactly one waiting turn; an explicit model, effort or Fast change,
-    // an unrelated message or a different attachment set is always admitted.
+    // A turn already waiting for recovery owns the exchange: a repeated continue
+    // of the same selected model, effort and Fast preference — or a double
+    // click — must not create a second turn or dispatch. Decided synchronously,
+    // before any await, so two continuations in the same tick cannot both admit
+    // a turn. A continue after a prior terminal failure still creates exactly
+    // one waiting turn; an explicit model, effort or Fast change, an unrelated
+    // message or a different attachment set is always admitted.
     const waiting = this.recoveryWaits.get(sessionId);
     if (waiting !== undefined
       && waiting.model === model
@@ -450,8 +453,8 @@ class Engine implements Session, SessionCallHost {
   }
 
   /**
-   * Whether a new send is the same continuation of a turn already waiting in
-   * bounded recovery: the exact original text with an identical attachment set
+   * Whether a new send is the same continuation of a turn already waiting for
+   * recovery: the exact original text with an identical attachment set
    * and Fast preference, or a plain attachment-free manual continue (`继续` /
    * `continue`) on the same selected model. Anything else — different text, a
    * different attachment set, a changed Fast preference — is a genuinely new
@@ -618,9 +621,13 @@ class Engine implements Session, SessionCallHost {
   }
 
   /**
-   * Record that a session's active turn is waiting in bounded recovery. The
-   * turn/call path calls this when a wait starts; the value only gates duplicate
-   * continuations of the same selected model and effort in {@link send}.
+   * Record that a session's active turn is waiting for recovery. The turn/call
+   * path calls this whenever the wait is reported — at its start and whenever
+   * its real expected retry time changes — and clears it on the next actual
+   * attempt, on completion and on cancel. The wait has no cumulative budget: it
+   * is nonterminal and lasts as long as the route really needs. The value only
+   * gates duplicate continuations of the same selected model and effort in
+   * {@link send}, so the original logical call continues exactly once.
    */
   setRecoveryWait(sessionId: string, waiting: RecoveryWait): void {
     this.recoveryWaits.set(sessionId, waiting);
@@ -1405,8 +1412,8 @@ class Engine implements Session, SessionCallHost {
       onText?: (delta: string) => void;
       onReasoning?: (delta: string) => void;
       onToolCall?: (call: ToolCall) => void;
-      /** Forwarded for the `reason` role's bounded-recovery wait lifecycle. */
-      onWait?: (state: { reason: import('../transport/index.ts').ModelWaitReason; retryAt: string } | null) => void;
+      /** Forwarded for the `reason` role's recovery wait lifecycle. */
+      onWait?: (state: { reason: import('../transport/index.ts').ModelWaitReason; retryAt?: string } | null) => void;
       tools?: readonly import('../transport/index.ts').ToolSpec[];
       toolChoice?: import('../transport/index.ts').ToolChoice;
       maxTokens?: number;

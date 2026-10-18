@@ -49,21 +49,33 @@ export interface TurnActivityProps {
   turn: TurnModel;
   onInterrupt: (turn: number) => void;
   /**
-   * The turn's current bounded-recovery waiting state, from its `turn.waiting`
-   * event. Present while the turn waits for permission to probe or for a
-   * guaranteed recovery; omitted on the next upstream attempt, at completion
-   * or after a cancel, which clears the waiting display.
+   * The turn's current recovery waiting state, from its `turn.waiting` event.
+   * Present while the turn waits for permission to probe or for a guaranteed
+   * recovery, including a wait with no known recovery time; omitted on the next
+   * upstream attempt, at completion or after a cancel, which clears the waiting
+   * display.
    */
   waiting?: TurnWaitingState;
 }
 
 /**
- * Shows the live phase, running auxiliary calls, the bounded-recovery waiting
- * status, and the interrupt control for a turn. The interrupt control stays
- * available while the turn is waiting.
+ * Shows the live phase, running auxiliary calls and the interrupt control for
+ * a turn. While the turn is waiting for recovery it shows that distinct
+ * nonterminal status instead, with the interrupt control still available.
  */
 export function TurnActivity({ turn, onInterrupt, waiting }: TurnActivityProps) {
   if (turn.status !== 'running') return null;
+  // Waiting for recovery replaces the generating/reasoning status and the
+  // auxiliary chips; it is never presented as generating and stays interruptible.
+  if (waiting !== undefined) {
+    return (
+      <div role="status" className="flex flex-wrap items-center gap-2 pl-1 text-sm text-muted-foreground">
+        <Spinner className="size-3.5" />
+        <span className="shimmer">{waitingStatusText(waiting)}</span>
+        <InterruptButton turn={turn} onInterrupt={onInterrupt} />
+      </div>
+    );
+  }
   // The implementation phase is timed from the task run it opened, separate
   // from the compile call's own duration; it is never shown as compiling.
   const taskRun = runningTaskAction(turn);
@@ -72,11 +84,6 @@ export function TurnActivity({ turn, onInterrupt, waiting }: TurnActivityProps) 
       <Spinner className="size-3.5" />
       <span className="shimmer">{taskRun === undefined ? turnStatusText(turn) : `${TASK_RUN_PHASE_LABEL}…`}</span>
       {taskRun !== undefined && <Elapsed start={taskRun.startedAt} className="tabular-nums" />}
-      {waiting !== undefined && (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/5 px-2 py-0.5 text-xs text-foreground">
-          {waitingStatusText(waiting)}
-        </span>
-      )}
       {runningAuxCalls(turn).map((call) => (
         <span
           key={call.id}

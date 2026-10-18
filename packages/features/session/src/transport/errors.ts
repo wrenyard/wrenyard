@@ -50,7 +50,8 @@ export interface ModelErrorOptions {
   /**
    * The absolute earliest instant (ISO 8601) the failed call may be retried:
    * the local admission refusal's probe time, or an adopted recoverable wait.
-   * Set on a terminal bounded-wait failure so the caller reports `retryAt`.
+   * It is set only when a real instant is known and stays absent otherwise, so
+   * an unknown recovery is never reported with a fabricated time.
    */
   retryAt?: string;
   upstream?: UpstreamErrorIdentity;
@@ -185,7 +186,7 @@ export function describeFailure(failure: unknown, fallback: string): string {
  * is floored to a bounded minimum delay so the caller never spins.
  *
  * A syntactically numeric value that overflows to positive infinity is kept as
- * a conservatively beyond-budget delay rather than treated as a 1-second hint or
+ * a conservatively far-future delay rather than treated as a 1-second hint or
  * dropped to the exponential-backoff path, and no adopted instant may exceed the
  * representable `Date` range, so an extreme hint can never produce an invalid
  * `Date` or a `RangeError`.
@@ -198,7 +199,7 @@ export function retryAfterHintFromHeaders(headers: Headers): RetryAfterHint | un
     const ms = Number(rawMs.trim());
     if (Number.isFinite(ms) && ms >= 0) return hint('retry-after-ms', rawMs, ms);
     // A syntactically numeric value that overflowed to positive infinity is a
-    // conservatively beyond-budget delay, never a 1-second one.
+    // conservatively far-future delay, never a 1-second one.
     if (ms === Number.POSITIVE_INFINITY) return hint('retry-after-ms', rawMs, ms);
   }
   const raw = headers.get('retry-after');
@@ -231,8 +232,9 @@ const MAX_TIME_MS = 8_640_000_000_000_000;
  * Headroom kept below {@link MAX_TIME_MS} when clamping an adopted hint's
  * absolute instant, so a later `epoch + delayMs` read (the attempt record's
  * `routeUntil`) still lands on a valid `Date`. One day is far more than any read
- * needs and still leaves the instant astronomically beyond any recovery budget,
- * so a conservatively beyond-budget hint stays beyond budget.
+ * needs and still leaves the instant astronomically far in the future, so a hint
+ * normalized to the ceiling stays finite and representable and is never
+ * collapsed to a one-second wait.
  */
 const HINT_CEILING_HEADROOM_MS = 86_400_000;
 

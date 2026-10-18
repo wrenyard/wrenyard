@@ -80,7 +80,7 @@ export {
   retryAfterMsFromHeaders,
   shouldRetryFromHeaders,
 } from './errors.ts';
-export { MAX_RETRIES, BASE_DELAY_MS, MAX_RECOVERY_WAIT_MS, MIN_RECOVERY_DELAY_MS, isRetryable, retryDelayMs, runWithRetry, type RetryDecision, type RetryContext } from './retry.ts';
+export { MAX_RETRIES, BASE_DELAY_MS, MIN_RECOVERY_DELAY_MS, isRetryable, retryDelayMs, runWithRetry, type RetryDecision, type RetryContext } from './retry.ts';
 
 const ADAPTERS: Readonly<Record<SessionProtocol, ProtocolAdapter>> = {
   openai_chat: chatAdapter,
@@ -197,8 +197,8 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
         const attemptStartMs = Date.now();
         const wait = pendingWait;
         pendingWait = {};
-        // The wait (a backoff retry or a bounded recovery wait) is over and a
-        // real upstream request is about to start. Reporting it as `activity`
+        // The wait (a backoff retry or a recovery wait) is over and a real
+        // upstream request is about to start. Reporting it as `activity`
         // re-arms the caller's idle deadline for this attempt and lets it clear
         // its live waiting state right before the attempt, with no timer. The
         // auxiliary noRetry path never sets `pendingWait`, so it is unchanged.
@@ -263,9 +263,11 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
               waitedMs: decision.delayMs,
               ...(decision.retryAfter === undefined ? {} : { retryAfter: decision.retryAfter }),
             };
-            // A bounded recovery wait is its own event: it says whether the
-            // call is waiting for permission to probe or for a guaranteed
-            // recovery, and carries the absolute instant the next attempt is due.
+            // A recovery wait is its own event: it says whether the call is
+            // waiting for permission to probe or for a guaranteed recovery, and
+            // carries the absolute instant the next attempt is due whenever a
+            // real instant is known. A wait with no known instant carries no
+            // `retryAt`, so its recovery time stays observably unknown.
             if (decision.wait !== undefined) {
               request.onEvent?.({
                 type: 'wait',
@@ -274,7 +276,7 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
                 ...(decision.status === undefined ? {} : { status: decision.status }),
                 delayMs: decision.delayMs,
                 reason: decision.wait.reason,
-                retryAt: decision.wait.retryAt,
+                ...(decision.wait.retryAt === undefined ? {} : { retryAt: decision.wait.retryAt }),
                 ...(decision.retryAfter === undefined ? {} : { retryAfter: decision.retryAfter }),
               });
               return;

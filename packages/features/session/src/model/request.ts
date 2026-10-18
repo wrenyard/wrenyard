@@ -148,12 +148,15 @@ export interface ModelCallInput {
   /** Forwarded to the driver for every role. */
   onToolCall?: (call: ToolCall) => void;
   /**
-   * The bounded-recovery wait lifecycle for the `reason` role: the absolute
-   * next probe/recovery instant and the wait reason when a wait begins, `null`
-   * when it is cleared — on the next actual upstream attempt, on completion and
-   * on cancel. Ignored for every other role.
+   * The recovery wait lifecycle for the `reason` role: the wait reason, and the
+   * absolute next probe/recovery instant when one is really known, reported when
+   * a wait begins or its real retry time changes; `null` when the wait is
+   * cleared — on the next actual upstream attempt, on completion and on cancel.
+   * A wait whose real instant is missing, invalid or already past reports no
+   * `retryAt`, which is distinct from `null`: the wait is still running, only
+   * its recovery time is unknown. Ignored for every other role.
    */
-  onWait?: (state: { reason: ModelWaitReason; retryAt: string } | null) => void;
+  onWait?: (state: { reason: ModelWaitReason; retryAt?: string } | null) => void;
   /** Tools declared on this call; forwarded to the driver for every role. */
   tools?: readonly ToolSpec[];
   toolChoice?: ToolChoice;
@@ -484,8 +487,8 @@ function errorFactOf(error: unknown): CallErrorFact {
     return {
       kind: typed.kind,
       ...(typed.status === undefined ? {} : { status: typed.status }),
-      // A terminal bounded-wait failure carries the absolute instant its route
-      // may recover, so the ledger and the reply view report `retryAt` for main
+      // A failure that still carries the absolute instant its route may recover
+      // reports it, so the ledger and the reply view report `retryAt` for main
       // reasoning exactly as an auxiliary exhaustion already does.
       ...(typed.retryAt === undefined ? {} : { retryAt: typed.retryAt }),
       message: typed.message,
@@ -659,16 +662,19 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         idleTimer = setTimeout(() => abort('idle'), REASON_IDLE_TIMEOUT_MS);
       };
       /**
-       * Suspend the reason idle deadline across a bounded intentional wait, then
-       * re-arm it so a genuinely stalled attempt after the wait is still
-       * detected. A scheduled recovery wait is activity, not upstream
-       * inactivity, so it must not trip the idle timer; no periodic fake
-       * activity is emitted that could mask a real upstream hang.
+       * Suspend the reason idle deadline for the whole recovery wait. A
+       * scheduled wait is activity, not upstream silence, and it can be
+       * extended while it runs, so no single delay-based timer is armed. The
+       * deadline is re-armed on real request activity or cleared on exit, so a
+       * genuinely stalled attempt after the wait is still detected and no
+       * periodic fake activity can mask a real upstream hang.
        */
-      const waitThroughIdle = (delayMs: number): void => {
+      const suspendIdle = (): void => {
         if (input.role !== 'reason') return;
-        if (idleTimer !== undefined) clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => abort('idle'), delayMs + REASON_IDLE_TIMEOUT_MS);
+        if (idleTimer !== undefined) {
+          clearTimeout(idleTimer);
+          idleTimer = undefined;
+        }
       };
       resetIdle();
 
@@ -690,21 +696,27 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         input.onReasoning?.(delta);
       };
       /**
-       * The main reasoning call's bounded-recovery wait lifecycle. A wait start
-       * reports the absolute next probe/recovery instant and the reason; every
-       * other event — including the transport's attempt-start `activity` — ends
-       * the wait, so the live waiting state is cleared right before the next
-       * actual upstream attempt, and the call's own settle clears it on
-       * completion or cancel. No timer approximates the clear.
+       * The main reasoning call's recovery-wait lifecycle. A wait start or a
+       * changed real retry instant reports the reason and, when one is really
+       * known, the absolute next probe/recovery time; an identical reason and
+       * instant is dropped, while a known instant that becomes unknown is an
+       * update so a stale ETA is never silently retained. A running wait with
+       * no known instant is not the same as no wait: it reports no `retryAt`
+       * and is only cleared by `null`. Every other event — including the
+       * transport's attempt-start `activity` — ends the wait, so the live
+       * waiting state is cleared right before the next actual upstream attempt,
+       * and the call's own settle clears it on completion or cancel. No timer
+       * approximates the clear.
        */
-      let waiting = false;
-      const reportWait = (state: { reason: ModelWaitReason; retryAt: string } | null): void => {
+      let waiting: { reason: ModelWaitReason; retryAt?: string } | null = null;
+      const reportWait = (state: { reason: ModelWaitReason; retryAt?: string } | null): void => {
         if (input.role !== 'reason') return;
         if (state === null) {
-          if (!waiting) return;
-          waiting = false;
+          if (waiting === null) return;
+          waiting = null;
         } else {
-          waiting = true;
+          if (waiting !== null && waiting.reason === state.reason && waiting.retryAt === state.retryAt) return;
+          waiting = { reason: state.reason, ...(state.retryAt === undefined ? {} : { retryAt: state.retryAt }) };
         }
         input.onWait?.(state);
       };
@@ -719,17 +731,21 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           // follows a wait, so this is the precise pre-attempt clear.
           case 'activity': reportWait(null); resetIdle(); resetAttemptIdle?.(); return;
           case 'retry':
-            // A plain backoff retry is not a bounded recovery wait: clear any
-            // waiting state and treat the wait as activity.
+            // A plain backoff retry is not a recovery wait: clear any waiting
+            // state and treat the wait as activity.
             reportWait(null);
             resetIdle();
             resetAttemptIdle?.();
             return;
           case 'wait':
-            // A bounded recovery wait is scheduled, not upstream inactivity:
-            // suspend the idle deadline across it and re-arm afterwards.
-            reportWait({ reason: event.reason, retryAt: event.retryAt });
-            waitThroughIdle(event.delayMs);
+            // A recovery wait is scheduled, not upstream inactivity: suspend the
+            // idle deadline for the whole wait (including any extension) and
+            // re-arm it on the next real request activity.
+            reportWait({
+              reason: event.reason,
+              ...(event.retryAt === undefined ? {} : { retryAt: event.retryAt }),
+            });
+            suspendIdle();
             return;
         }
       };
@@ -1106,7 +1122,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           ...(metrics === undefined ? {} : { metrics }),
         });
       } finally {
-        // Completion or cancel ends any bounded-recovery wait.
+        // Completion or cancel ends any recovery wait.
         reportWait(null);
         if (totalTimer !== undefined) clearTimeout(totalTimer);
         if (idleTimer !== undefined) clearTimeout(idleTimer);

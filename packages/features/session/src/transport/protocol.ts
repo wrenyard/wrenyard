@@ -197,8 +197,8 @@ export interface ModelRequest {
    * transport runs it inside its own bounded retry loop, before the first
    * attempt: it returns the absolute instant (epoch ms) the route may next be
    * probed, or `undefined` when the route is callable now. This keeps a
-   * route-health wait in the one retry budget instead of a second nested one,
-   * so a route known to be cooling down is not probed early.
+   * route-health wait in the one retry loop instead of a second nested one, so
+   * a route known to be cooling down is not probed early.
    */
   preflight?: () => number | undefined;
   signal: AbortSignal;
@@ -213,12 +213,14 @@ export interface ModelRequest {
  * only when an upstream hint was actually adopted for that retry; an ordinary
  * exponential-backoff retry never carries it.
  *
- * `wait` is the bounded recovery wait: the transport is not retrying an
- * upstream failure but waiting until an absolute not-before instant — a local
- * Gateway admission refusal (never counted as an upstream retry) or a guaranteed
+ * `wait` is the recovery wait: the transport is not retrying an upstream
+ * failure but waiting until an absolute not-before instant — a local Gateway
+ * admission refusal (never counted as an upstream retry) or a guaranteed
  * recovery after an adopted hint. `wait.reason` distinguishes waiting for
  * permission to probe from a granted recovery and `wait.retryAt` is the exact
- * instant the next probe/recovery is due.
+ * instant the next probe/recovery is due. It is absent when no real instant is
+ * known, so an unknown recovery time is reported as unknown rather than as a
+ * fallback recheck delay.
  */
 export type ModelEvent =
   | { type: 'text'; delta: string }
@@ -227,7 +229,7 @@ export type ModelEvent =
   | { type: 'usage'; usage: Usage }
   | { type: 'activity' }
   | { type: 'retry'; attempt: number; kind: ModelErrorKind; status?: number; delayMs: number; retryAfter?: RetryAfterHint }
-  | { type: 'wait'; attempt: number; kind: ModelErrorKind; status?: number; delayMs: number; reason: ModelWaitReason; retryAt: string; retryAfter?: RetryAfterHint };
+  | { type: 'wait'; attempt: number; kind: ModelErrorKind; status?: number; delayMs: number; reason: ModelWaitReason; retryAt?: string; retryAfter?: RetryAfterHint };
 
 /** One request actually issued during a call, in order. */
 export interface ModelAttempt {

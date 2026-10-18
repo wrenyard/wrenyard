@@ -198,13 +198,17 @@ export interface TurnAttentionEvent extends LedgerEventBase {
 
 /**
  * Live waiting status of the active turn: the turn is not calling upstream
- * right now but is waiting, inside the one bounded recovery loop, for its route
- * to be admitted. `retryAt` is the absolute instant the next probe/recovery is
- * due and `reason` distinguishes waiting for permission to probe a locally
- * blocked route (`admission`) from a guaranteed recovery after an adopted hint.
- * Observational, like `turn.finished`. It is cleared only by an explicit
- * `turn.waiting.cleared` event or the turn's own terminal event; an unrelated
- * later same-turn event never clears it. Never enters the model context.
+ * right now but is waiting, inside the one recovery loop, for its route to be
+ * admitted. It is a distinct nonterminal state, never a completion or a
+ * failure. `reason` distinguishes waiting for permission to probe a locally
+ * blocked route (`admission`) from a guaranteed recovery after an adopted hint,
+ * and `retryAt` is the absolute instant the next probe/recovery is due. A wait
+ * with no real instant is recorded without `retryAt`, so an unknown recovery
+ * time stays a visible, distinct waiting state instead of being dropped or
+ * given a fallback recheck delay. Observational, like
+ * `turn.finished`. It is cleared only by an explicit `turn.waiting.cleared`
+ * event or the turn's own terminal event; an unrelated later same-turn event
+ * never clears it. Never enters the model context.
  */
 export interface TurnWaitingEvent extends LedgerEventBase {
   type: 'turn.waiting';
@@ -212,8 +216,11 @@ export interface TurnWaitingEvent extends LedgerEventBase {
   parent: string;
   /** Why the turn is waiting. */
   reason: 'admission' | 'recovery';
-  /** Absolute instant the next probe/recovery is due (ISO 8601). */
-  retryAt: string;
+  /**
+   * Absolute instant the next probe/recovery is due (ISO 8601); absent when no
+   * real instant is known, so the wait is recorded as unknown-time.
+   */
+  retryAt?: string;
 }
 
 /**

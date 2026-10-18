@@ -7,6 +7,7 @@ import { memo } from 'react';
 import { cn } from 'cn';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { MessageScrollerItem } from '@/renderer/components/ui/message-scroller';
+import type { TurnWaitingState } from '../../model/describe.js';
 import type { TurnModel } from '../../model/types.js';
 import type { PendingTurn } from '../../state/session-reducer.js';
 import { TranscriptTurn } from './TranscriptTurn.js';
@@ -22,6 +23,8 @@ export interface TranscriptViewProps {
   onInterrupt: (turn: number) => void;
   /** Cancel one dispatched task run. */
   onCancelTask: (taskRunId: string) => Promise<void>;
+  /** Per-turn live recovery waiting state, keyed by turn id. */
+  waiting?: ReadonlyMap<number, TurnWaitingState>;
 }
 
 /** The transcript view: the ledger rendered inline as chronological turn cards. */
@@ -31,6 +34,7 @@ export const TranscriptView = memo(function TranscriptView({
   sessionId,
   onInterrupt,
   onCancelTask,
+  waiting,
 }: TranscriptViewProps) {
   return (
     <>
@@ -46,6 +50,7 @@ export const TranscriptView = memo(function TranscriptView({
             sessionId={sessionId}
             onInterrupt={onInterrupt}
             onCancelTask={onCancelTask}
+            waiting={waiting?.get(turn.id)}
           />
         </MessageScrollerItem>
       ))}

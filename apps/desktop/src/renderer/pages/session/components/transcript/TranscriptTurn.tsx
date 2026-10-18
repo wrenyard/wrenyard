@@ -22,7 +22,9 @@ import {
   runningTaskAction,
   statusView,
   turnStatusText,
+  waitingStatusText,
 } from '../../model/describe.js';
+import type { TurnWaitingState } from '../../model/describe.js';
 import type { ActionModel, CallModel, CycleModel, ErrorItem, ReplyModel, TurnModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
 import { InterruptButton } from '../conversation/TurnActivity.js';
@@ -39,6 +41,8 @@ export interface TranscriptTurnProps {
   onInterrupt: (turn: number) => void;
   /** Cancel one dispatched task run; rejects when the daemon refuses. */
   onCancelTask: (taskRunId: string) => Promise<void>;
+  /** Live recovery waiting state of this turn, when it has one. */
+  waiting?: TurnWaitingState;
 }
 
 function parseStamp(value: string): number {
@@ -159,7 +163,7 @@ function CycleBlock({ turn, cycle, position, sessionId, onCancelTask }: CycleBlo
 }
 
 /** One turn as an inline, chronological transcript. */
-export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask }: TranscriptTurnProps) {
+export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask, waiting }: TranscriptTurnProps) {
   const attachments = (turn.user.attachments ?? []).map(fromSessionFile);
   // Turn-level auxiliary calls carry no cycle (or cycle 0) and are not run by
   // an action; the fold leaves them on the turn.
@@ -237,7 +241,11 @@ export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask }: T
       {turn.status === 'running' ? (
         <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
           <Spinner className="size-3.5" />
-          <span className="shimmer">{taskRun === undefined ? turnStatusText(turn) : `${TASK_RUN_PHASE_LABEL}…`}</span>
+          <span className={waiting === undefined ? 'shimmer' : undefined}>
+            {waiting !== undefined
+              ? waitingStatusText(waiting)
+              : taskRun === undefined ? turnStatusText(turn) : `${TASK_RUN_PHASE_LABEL}…`}
+          </span>
           {taskRun !== undefined && <Elapsed start={taskRun.startedAt} className="tabular-nums" />}
         </div>
       ) : turn.final === undefined ? (
