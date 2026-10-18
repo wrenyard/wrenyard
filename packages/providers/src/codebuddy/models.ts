@@ -1,7 +1,7 @@
 import { codeBuddyRouteFailure } from './route-errors.ts';
 import type { ClientDefinition, ModelDefinition, ProviderDefinition, ReasoningEffort } from '../base/index.ts';
 import { resolveProviderModel, REASONING_LOW_HIGH_MAX, type CanonicalModelOverrides } from '../base/model-defaults.ts';
-import { models } from '@wrenyard/models';
+import { models, isMainstreamModelId } from '@wrenyard/models';
 import {
   codeBuddyCanonicalModelId,
   productCreditsAreFree,
@@ -31,6 +31,22 @@ const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
 
 const ONE_MILLION_TOKENS = 1_000_000;
 const CLAUDE_TIERS = ['haiku', 'sonnet', 'opus'] as const;
+
+/**
+ * Retired Claude gen-5 identities are withheld from selectable offerings. Their
+ * observed spellings keep resolving to the exact identity and are never
+ * aliased forward onto the 5.5 generation.
+ */
+const RETIRED_CLAUDE_FIVE_MODEL_IDS: ReadonlySet<string> = new Set(['claude-opus-5', 'claude-sonnet-5']);
+
+/**
+ * Selectable CodeBuddy offerings must be mainstream; the retired Claude gen-5
+ * identities are exempted from offering even though `claude-opus-5` remains in
+ * the global mainstream list.
+ */
+function isSelectableCodeBuddyModelId(canonicalId: string): boolean {
+  return isMainstreamModelId(canonicalId) && !RETIRED_CLAUDE_FIVE_MODEL_IDS.has(canonicalId);
+}
 
 /** Unify numeric version separators; only separators between digits are touched. */
 const normalizeNumericSeparators = (id: string): string => id.replace(/(?<=\d)\.(?=\d)/gu, '-');
@@ -113,8 +129,9 @@ function lookupUnifiedModelId(productId: string): string | undefined {
  * Map a product id onto the registered model it names, or return undefined for
  * an unknown registry identity. A `/v3/config` cli row that resolves adopts that
  * model's registered identity, so its registry metadata and aliases are
- * retained. Resolution is identity-only: rows are published from the actual
- * endpoint capability, never pruned here by application selection policy.
+ * retained. Resolution is identity-only: parsing and identity resolution stay
+ * untouched by selection policy. The mainstream plus retired-Claude gate is
+ * applied separately when the selectable offerings are built.
  */
 export function resolveCodeBuddyProductModelId(productId: string): string | undefined {
   return lookupUnifiedModelId(productId);
@@ -199,10 +216,11 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
   models: ModelDefinition[];
   upstreamByCanonical: Record<string, string>;
 } {
-  // Every actual `/v3/config` cli row whose id resolves onto a registered
-  // identity is an offering, in endpoint order. No application-selection
-  // pruning happens here: registered non-mainstream models remain available
-  // through the Gateway, and application admission decides what a user selects.
+  // Every actual `/v3/config` cli row whose id resolves onto a selectable
+  // registered identity is an offering, in endpoint order. The mainstream plus
+  // retired-Claude gate applies here, at offering-build time: rows whose
+  // canonical id fails it are skipped, while parsing and identity resolution
+  // stay untouched.
   //
   // An entry adopts the registered identity as its public id; its raw endpoint
   // id becomes the private `upstreamId` wire binding. Two distinct endpoint
@@ -216,7 +234,7 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
     if (seen.has(entry.id)) continue;
     seen.add(entry.id);
     const canonicalId = resolveCodeBuddyProductModelId(entry.id);
-    if (canonicalId === undefined || models.get(canonicalId) === undefined) continue;
+    if (canonicalId === undefined || models.get(canonicalId) === undefined || !isSelectableCodeBuddyModelId(canonicalId)) continue;
     resolved.push({ canonicalId, entry });
     counts.set(canonicalId, (counts.get(canonicalId) ?? 0) + 1);
   }
