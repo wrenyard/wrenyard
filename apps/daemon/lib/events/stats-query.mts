@@ -306,7 +306,7 @@ export function readStatsSummary(
   const allEventsRows = dbQuery<StatsEventRow>(
     `SELECT e.type, e.data, e.created_at, ex.profile, ex.resolved_profile, COALESCE(t.template, ex_t.template) AS template,
             tra.provider AS provider, tra.model AS model, tra.model_id AS model_id
-     FROM events e INDEXED BY idx_event_created_at
+     FROM events e
      LEFT JOIN executions ex ON e.execution_id = ex.id
      LEFT JOIN tasks t ON e.task_id = t.id
      LEFT JOIN tasks ex_t ON ex.task_id = ex_t.id

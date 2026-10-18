@@ -65,7 +65,7 @@ import { createWorkspaceControl } from './services/workspace-control.mts'
 import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
-import { readLocalSpeedSamples } from '../events/tps.mts'
+import { readLocalSpeedSamplesCached } from '../events/tps.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
@@ -1092,7 +1092,7 @@ async function createForemanDaemonResources(
       gatewayModels: async () => (await gateway.connection(gatewayOrigin(boundPort))).models,
       routeStatus: model => gateway.routeStatus(model),
       runtimeAvailability: createAuxiliaryAvailability(runtimeAvailability, catalog, providerRuntime),
-      localSpeed: readLocalSpeedSamples,
+      localSpeed: readLocalSpeedSamplesCached,
       readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath),
     }
     // Bot agents run on a hard-coded high/premium intelligence rule at a high
@@ -1220,7 +1220,7 @@ async function createForemanDaemonResources(
       // non-blocking read; a missing run is `unknown`, which the host fails as
       // `task run missing` rather than retrying an effect that may have happened.
       async getTask(runId) {
-        const record = taskService.status(runId)
+        const record = await taskService.status(runId)
         if (record === null) return { status: 'unknown' }
         const raw = typeof record.status === 'string' ? record.status : 'unknown'
         // Keep `queued` distinct from `running` so the bot host can exclude lane
@@ -1228,7 +1228,7 @@ async function createForemanDaemonResources(
         if (raw === 'queued') return { status: 'queued' }
         if (raw === 'running') return { status: 'running' }
         if (raw === 'done') {
-          const finished = taskService.output(runId)
+          const finished = await taskService.output(runId)
           return {
             status: 'done',
             ...(finished === null || finished.output === undefined ? {} : { output: finished.output }),
@@ -1321,7 +1321,7 @@ async function createForemanDaemonResources(
     // Live indirection: provider.list always reports the CURRENT workspace's
     // task settings, so a switch is visible without rebuilding the service.
     modelStatus: () => workspaceScoped.taskSettingsService.modelStatus(),
-    localSpeed: readLocalSpeedSamples,
+    localSpeed: readLocalSpeedSamplesCached,
   })
   // Daemon-owned saved-remote-host registry backing remote.host.list/save/rename.
   // It is independent of the active workspace and persists only to the daemon
@@ -2321,7 +2321,7 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
     catalog,
     runtime: providerRuntime,
     // Share response-paired TPS across statistics and automatic routing.
-    localSpeed: () => readLocalSpeedSamples(),
+    localSpeed: () => readLocalSpeedSamplesCached(),
   })
 
   try {

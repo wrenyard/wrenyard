@@ -420,6 +420,24 @@ export function readLocalSpeedSamples(now: Date = new Date(), database?: Foreman
   return result
 }
 
+/**
+ * Short-TTL memo over `readLocalSpeedSamples`. Provider listing, routing and
+ * dispatch all resolve the same trailing-window speed on the event loop; a few
+ * seconds of reuse keeps repeated/concurrent callers from re-running the TPS
+ * sampling queries for every call while staying fresh enough for routing.
+ * Callers that need an authoritative fresh read use `readLocalSpeedSamples`.
+ */
+const LOCAL_SPEED_CACHE_MS = 5000
+let localSpeedCache: { computedAtMs: number; samples: LocalSpeedSample[] } | null = null
+
+export function readLocalSpeedSamplesCached(now: Date = new Date(), database?: ForemanDatabase): LocalSpeedSample[] {
+  const cached = localSpeedCache
+  if (cached && now.getTime() - cached.computedAtMs < LOCAL_SPEED_CACHE_MS) return cached.samples
+  const samples = readLocalSpeedSamples(now, database)
+  localSpeedCache = { computedAtMs: now.getTime(), samples }
+  return samples
+}
+
 export interface TaskTps {
   tps: number
   outputTokens: number
