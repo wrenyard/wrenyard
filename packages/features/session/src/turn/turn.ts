@@ -77,6 +77,14 @@ export class TurnRunner {
           await this.awaitStepActions(turn);
           if (turn.finished) return;
 
+          const port = this.engine.host.agentTools?.(session.sessionId);
+          if (port !== undefined && turn.portToolCallsThisTurn >= (port.maxToolCalls ?? 24)) {
+            await this.flushResults(session, turn);
+            stepStatus = 'failed';
+            await this.replies.close(session, turn, 'tool call limit reached; turn ended');
+            return;
+          }
+
           const asks = turn.asksThisStep;
           const actionRan = turn.actionsThisStep > 0;
 
