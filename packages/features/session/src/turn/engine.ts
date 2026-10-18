@@ -14,6 +14,7 @@ import {
   stepId,
   turnId,
   type LedgerEvent,
+  type LedgerPage,
   type SessionSummary,
   type WorkspaceSnapshot,
 } from '../ledger/store.ts';
@@ -49,6 +50,13 @@ import type { SessionRuntime, TurnRuntime } from './runtime.ts';
 import { buildSnapshot } from '../snapshot.ts';
 
 // ─── Engine ────────────────────────────────────────────────────────────────
+
+/**
+ * How often the engine looks for session runtimes nothing can reference any
+ * more, and how long such a runtime must stay quiet before it is released.
+ */
+const IDLE_RUNTIME_SWEEP_MS = 30_000;
+const IDLE_RUNTIME_TIMEOUT_MS = 60_000;
 
 export function createEngine(host: SessionHost, ports: EnginePorts): Session {
   return new Engine(host, ports);
@@ -107,6 +115,32 @@ class Engine implements Session, SessionCallHost {
   private ready: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
+  /** Deferred startup recovery of the sessions the index flagged as active. */
+  private startupRecoveryTimer?: ReturnType<typeof setTimeout>;
+  /** Deferred body recovery of sessions whose index metadata is uncertain. */
+  private backgroundRecoveryTimer?: ReturnType<typeof setTimeout>;
+  /** Whether the deferred recovery passes were armed by the host. */
+  private backgroundRecoveryStarted = false;
+  /**
+   * Sessions whose persisted summary carries no reliable pending-turn list — a
+   * legacy entry, an unindexed file, or a placeholder — so only their body can
+   * say whether a turn is unfinished. Their bodies are read by a deferred pass
+   * after startup, never in the constructor.
+   */
+  private readonly uncertainSessions = new Set<string>();
+  /** Whether a deferred body-recovery pass is reading a timeline right now. */
+  private recoveringBodies = false;
+  /** In-progress deferred recovery passes, awaited by close before the ledger closes. */
+  private readonly recoveryPasses = new Set<Promise<void>>();
+  /** When each idle runtime was first seen with no work left, for unloading. */
+  private readonly idleSince = new Map<string, number>();
+  private idleTimer?: ReturnType<typeof setInterval>;
+  /**
+   * The last observed result-flush promise of each turn. A flush chain replaces
+   * `flushPromise` while it runs, so the only safe test is to watch the promise
+   * we last saw: one we have not seen yet counts as still in flight.
+   */
+  private readonly flushStates = new WeakMap<TurnRuntime, { promise: Promise<unknown>; settled: boolean }>();
 
   constructor(host: SessionHost, ports: EnginePorts) {
     this.host = host;
@@ -120,23 +154,26 @@ class Engine implements Session, SessionCallHost {
       now: () => this.now(),
       createSnapshot: () => buildSnapshot(this.host),
     });
+    // Startup is metadata-only: the index records which turns never finished,
+    // so no timeline body is parsed to decide whether anything is active.
     for (const summary of ports.ledger.listSessions()) {
-      let events: LedgerEvent[];
-      try {
-        events = ports.ledger.read(summary.sessionId);
-      } catch {
-        // An unreadable timeline is skipped by recovery too; it must not block startup.
+      if (summary.pendingTurns === undefined) {
+        // A legacy, unindexed or rebuilt summary cannot say which turns are
+        // unfinished. Its body decides, on a deferred pass after startup.
+        this.uncertainSessions.add(summary.sessionId);
         continue;
       }
-      for (const event of events) {
-        const key = `${summary.sessionId}:${event.turn}`;
-        if (event.type === 'turn.started') this.recoveringTurns.add(key);
-        else if (event.type === 'turn.finished') this.recoveringTurns.delete(key);
+      for (const turn of summary.pendingTurns) {
+        this.recoveringTurns.add(`${summary.sessionId}:${turn}`);
       }
     }
     this.turnRunner = new TurnRunner(this, this.replies);
     this.ready = this.initialize();
     void this.ready.catch(() => undefined);
+    // An unref'd sweep releases runtimes whose session has been idle long
+    // enough that nothing can still be working on it.
+    this.idleTimer = setInterval(() => this.sweepIdleSessions(), IDLE_RUNTIME_SWEEP_MS);
+    this.idleTimer.unref();
   }
 
   get ledger(): LedgerPort {
@@ -144,19 +181,150 @@ class Engine implements Session, SessionCallHost {
   }
 
   /**
-   * Recover every stored session at startup, not only the ones a later `send`
-   * touches: a restart must cancel task runs orphaned by any session.
+   * Recover only the sessions the index flagged as having unfinished turns.
+   * Completed timelines are never parsed here, and the recovery runs on a later
+   * tick so a healthy startup is not held behind a large replay. A session that
+   * is touched first is recovered by `ensureSession` and skipped by this pass.
    */
   private async initialize(): Promise<void> {
     await this.ports.ledger.init();
-    for (const summary of this.ports.ledger.listSessions()) {
-      await this.recoverSession(summary.sessionId).catch(() => {
+  }
+
+  /**
+   * Arm the deferred recovery passes. Both run on a later tick so a healthy
+   * startup is never held behind a replay; the host calls this once it is
+   * listening, so no session body is parsed before the daemon is healthy.
+   * Idempotent: a repeated call or a call after close is a no-op.
+   */
+  startBackgroundRecovery(): void {
+    if (this.closed || this.backgroundRecoveryStarted) return;
+    this.backgroundRecoveryStarted = true;
+    if (this.recoveringTurns.size > 0) {
+      this.startupRecoveryTimer = setTimeout(() => {
+        this.startupRecoveryTimer = undefined;
+        void this.trackRecoveryPass(this.recoverFlaggedSessions());
+      }, 0);
+      this.startupRecoveryTimer.unref();
+    }
+    if (this.uncertainSessions.size > 0) {
+      this.backgroundRecoveryTimer = setTimeout(() => {
+        this.backgroundRecoveryTimer = undefined;
+        void this.trackRecoveryPass(this.recoverUncertainSessions());
+      }, 0);
+      this.backgroundRecoveryTimer.unref();
+    }
+  }
+
+  /**
+   * Keep a deferred recovery pass reachable so `close` can wait for it to
+   * observe `closed` and finish before the ledger is closed. The passes
+   * early-return on `closed`, so awaiting them cannot deadlock.
+   */
+  private async trackRecoveryPass(pass: Promise<void>): Promise<void> {
+    this.recoveryPasses.add(pass);
+    try {
+      await pass;
+    } finally {
+      this.recoveryPasses.delete(pass);
+    }
+  }
+
+  private async recoverFlaggedSessions(): Promise<void> {
+    const sessionIds = new Set<string>();
+    for (const key of this.recoveringTurns) {
+      const separator = key.lastIndexOf(':');
+      if (separator > 0) sessionIds.add(key.slice(0, separator));
+    }
+    for (const sessionId of sessionIds) {
+      // Every path drops this session's markers: a marker left behind by a
+      // skip or a failure would keep the session permanently "recovering",
+      // block its deletion and block its runtime from ever being unloaded.
+      if (this.closed) {
+        this.clearRecoveringTurns(sessionId);
+        return;
+      }
+      // A session a concurrent `send` already resolved, or one deleted while
+      // this pass was waiting, owns its own recovery.
+      if (this.sessions.has(sessionId) || this.deletedSessions.has(sessionId)) {
+        this.clearRecoveringTurns(sessionId);
+        continue;
+      }
+      try {
+        // Single-flight with a concurrent `send`; its own recovery wins.
+        await this.ensureSession(sessionId);
+      } catch {
         // Nothing runs for a turn whose recovery failed, so it is not active work.
-        const prefix = `${summary.sessionId}:`;
-        for (const key of this.recoveringTurns) {
-          if (key.startsWith(prefix)) this.recoveringTurns.delete(key);
+      } finally {
+        this.clearRecoveringTurns(sessionId);
+      }
+    }
+  }
+
+  /**
+   * Read the bodies of sessions whose index metadata cannot say whether a turn
+   * is unfinished: a legacy summary, an unindexed file or a placeholder. The
+   * pass runs after startup readiness and yields between sessions, so a large
+   * history is migrated in the background instead of blocking `ready`. It still
+   * performs the normal recovery, so an orphaned turn is closed and its task
+   * runs cancelled exactly as a flagged session's would be.
+   */
+  private async recoverUncertainSessions(): Promise<void> {
+    this.recoveringBodies = true;
+    try {
+      for (const sessionId of [...this.uncertainSessions]) {
+        if (this.closed) return;
+        if (this.sessions.has(sessionId) || this.deletedSessions.has(sessionId)) {
+          // A concurrent `send` or a deletion owns this session's recovery, so
+          // its body is already resolved and the marker can go.
+          this.uncertainSessions.delete(sessionId);
+          continue;
         }
-      });
+        try {
+          // The marker is kept until the replay has been awaited: until then
+          // this session's active state is unknown, so it must still count as
+          // busy rather than let an interrupted turn look idle.
+          await this.ensureSession(sessionId);
+        } catch {
+          // An unreadable timeline is retried on first touch, not at startup.
+        } finally {
+          // Released on the failure path as well, so an unreadable timeline
+          // cannot keep the session counted as active forever.
+          this.uncertainSessions.delete(sessionId);
+        }
+        // A fully replayed session with nothing left to recover is released at
+        // once: keeping every rebuilt runtime resident for the whole pass
+        // would hold ~250 sessions in memory until the idle sweep arrives.
+        this.releaseQuiescentRuntime(sessionId);
+        // Yield between sessions so one body parse never monopolizes the loop.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      }
+    } finally {
+      this.recoveringBodies = false;
+    }
+  }
+
+  /**
+   * Drop one session's runtime when nothing in or around it can still make
+   * progress. Used by the background recovery pass, so it shares every
+   * quiescence gate of `isSessionQuiescent` except the `recoveringBodies`
+   * flag itself, which the pass holds for its whole duration. The ledger
+   * keeps the durable truth, so a later access replays it again.
+   */
+  private releaseQuiescentRuntime(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session === undefined) return;
+    if (!this.isSessionQuiescent(sessionId, session, { ignoreRecoveringBodies: true })) return;
+    this.sessions.delete(sessionId);
+    this.idleSince.delete(sessionId);
+  }
+
+  /** Forget every pending-turn marker of one session. */
+  private clearRecoveringTurns(sessionId: string): void {
+    const prefix = `${sessionId}:`;
+    for (const key of [...this.recoveringTurns]) {
+      if (key.startsWith(prefix)) this.recoveringTurns.delete(key);
     }
   }
 
@@ -546,6 +714,9 @@ class Engine implements Session, SessionCallHost {
     }
     this.sessions.delete(sessionId);
     this.ensuring.delete(sessionId);
+    // The timeline is gone, so nothing is left to recover: drop the uncertain
+    // marker that would otherwise keep this session counted as active.
+    this.uncertainSessions.delete(sessionId);
     this.recoveryWaits.delete(sessionId);
     this.pendingSends.delete(sessionId);
     this.live.drop(sessionId);
@@ -625,7 +796,12 @@ class Engine implements Session, SessionCallHost {
   }
 
   activeTurnCount(): number {
-    let count = this.recoveringTurns.size;
+    // A session with uncertain metadata counts as busy until its deferred body
+    // recovery has replayed it: it can hold an interrupted turn that no
+    // persisted marker records, so treating it as idle would let the daemon
+    // report "no running turns" over work that still has to be recovered and
+    // cancelled. The marker is released as soon as the replay settles.
+    let count = this.recoveringTurns.size + this.uncertainSessions.size;
     for (const session of this.sessions.values()) {
       for (const turn of session.turns.values()) {
         if (!turn.durableTerminal) count += 1;
@@ -640,6 +816,19 @@ class Engine implements Session, SessionCallHost {
 
   readLedger(sessionId: string): LedgerEvent[] {
     return this.ports.ledger.read(sessionId);
+  }
+
+  /**
+   * One bounded page of a timeline. The ledger owns the binary search and the
+   * slice; only a mock ledger without a page read copies the array and pages it
+   * here, so production reads never duplicate a full timeline per request.
+   */
+  readLedgerPage(sessionId: string, afterSeq: number, limit: number): LedgerPage {
+    const readPage = this.ports.ledger.readPage;
+    if (readPage !== undefined) return readPage.call(this.ports.ledger, sessionId, afterSeq, limit);
+    const events = this.ports.ledger.read(sessionId);
+    if (events.length === 0) throw new Error(`Unknown session: ${sessionId}`);
+    return pageLedger(events, afterSeq, limit);
   }
 
   async inspectContext(request: ContextInspectRequest): Promise<ContextInspection> {
@@ -741,6 +930,26 @@ class Engine implements Session, SessionCallHost {
 
   private async doClose(): Promise<void> {
     this.closed = true;
+    if (this.startupRecoveryTimer !== undefined) {
+      clearTimeout(this.startupRecoveryTimer);
+      this.startupRecoveryTimer = undefined;
+    }
+    if (this.backgroundRecoveryTimer !== undefined) {
+      clearTimeout(this.backgroundRecoveryTimer);
+      this.backgroundRecoveryTimer = undefined;
+    }
+    this.uncertainSessions.clear();
+    // Drain a recovery pass already in flight: each pass checks `closed`
+    // between sessions, so it finishes its current session and returns
+    // instead of deadlocking the close.
+    while (this.recoveryPasses.size > 0) {
+      await Promise.allSettled([...this.recoveryPasses]);
+    }
+    if (this.idleTimer !== undefined) {
+      clearInterval(this.idleTimer);
+      this.idleTimer = undefined;
+    }
+    this.idleSince.clear();
     for (const request of this.suggestionRequests.values()) request.controller.abort();
     this.suggestionRequests.clear();
     await this.ready.catch(() => undefined);
@@ -762,6 +971,112 @@ class Engine implements Session, SessionCallHost {
     }
     this.live.clear();
     await this.ports.ledger.close();
+  }
+
+  /**
+   * Release session runtimes that no work can reference any more. A runtime is
+   * only a candidate when every turn reached its durable terminal append and no
+   * parse, action, queued result, admission, send, suggestion, recovery or
+   * pending-work marker is left; it must stay quiet for the timeout, and the
+   * condition is re-checked immediately before it is dropped. The ledger keeps
+   * the durable truth, so a later send recovers the runtime again.
+   */
+  private sweepIdleSessions(): void {
+    if (this.closed) return;
+    for (const [sessionId, session] of [...this.sessions]) {
+      if (!this.isSessionQuiescent(sessionId, session)) {
+        this.idleSince.delete(sessionId);
+        continue;
+      }
+      const since = this.idleSince.get(sessionId);
+      if (since === undefined) {
+        this.idleSince.set(sessionId, Date.now());
+        continue;
+      }
+      if (Date.now() - since < IDLE_RUNTIME_TIMEOUT_MS) continue;
+      if (this.sessions.get(sessionId) !== session || !this.isSessionQuiescent(sessionId, session)) {
+        this.idleSince.delete(sessionId);
+        continue;
+      }
+      this.sessions.delete(sessionId);
+      this.idleSince.delete(sessionId);
+      this.recoveryWaits.delete(sessionId);
+    }
+    this.pruneDeletedSessions();
+  }
+
+  /**
+   * Whether nothing in or around one runtime can still make progress. The
+   * `ignoreRecoveringBodies` option is used only by the background recovery
+   * pass, which holds that flag for its whole run and so could never release
+   * a runtime otherwise; every other gate still applies.
+   */
+  private isSessionQuiescent(
+    sessionId: string,
+    session: SessionRuntime,
+    options?: { ignoreRecoveringBodies?: boolean },
+  ): boolean {
+    // Conservative global gate first. The pipeline holds the turn runs, the
+    // interrupts and the deferred reply, reason, title and status work, and a
+    // tracked promise does not carry the session it belongs to, so nothing is
+    // released while any of it is in flight: an unloaded runtime would still be
+    // referenced by a callback that is about to append to its ledger.
+    if (this.pipeline.size > 0) return false;
+    // A background pass is reading the body of a session whose pending turns
+    // are unknown; a runtime it is about to rebuild must not be dropped.
+    if (this.recoveringBodies && !options?.ignoreRecoveringBodies) return false;
+    if (this.ensuring.has(sessionId)) return false;
+    if (this.pendingSends.has(sessionId)) return false;
+    if (this.suggestionRequests.has(sessionId)) return false;
+    if ((this.pendingAdmissions.get(sessionId) ?? 0) > 0) return false;
+    // A live streaming call still owns this runtime's call port.
+    if (this.live.read(sessionId).length > 0) return false;
+    const prefix = `${sessionId}:`;
+    for (const key of this.recoveringTurns) {
+      if (key.startsWith(prefix)) return false;
+    }
+    for (const turn of session.turns.values()) {
+      if (!turn.durableTerminal) return false;
+      if (turn.parsePromises.size > 0 || turn.actionPromises.size > 0 || turn.resultQueue.length > 0) return false;
+      // Late action results can still be on their way after the queue drained.
+      if (this.flushPending(turn)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether one turn's deferred result flush is still in flight. The chain
+   * replaces the promise it runs on, so the last promise we saw decides: an
+   * unseen one is treated as pending rather than as settled.
+   */
+  private flushPending(turn: TurnRuntime): boolean {
+    const seen = this.flushStates.get(turn);
+    if (seen !== undefined && seen.promise === turn.flushPromise) return !seen.settled;
+    const state = { promise: turn.flushPromise as Promise<unknown>, settled: false };
+    const settle = (): void => {
+      state.settled = true;
+    };
+    void turn.flushPromise.then(settle, settle);
+    this.flushStates.set(turn, state);
+    return true;
+  }
+
+  /** Forget deletion tombstones once no queued send or import can resurrect them. */
+  private pruneDeletedSessions(): void {
+    for (const sessionId of [...this.deletedSessions]) {
+      if (this.pendingSends.has(sessionId)) continue;
+      if (this.ensuring.has(sessionId)) continue;
+      if ((this.pendingAdmissions.get(sessionId) ?? 0) > 0) continue;
+      const prefix = `${sessionId}:`;
+      let recovering = false;
+      for (const key of this.recoveringTurns) {
+        if (key.startsWith(prefix)) {
+          recovering = true;
+          break;
+        }
+      }
+      if (!recovering) this.deletedSessions.delete(sessionId);
+    }
   }
 
   // ── session lifecycle ───────────────────────────────────────────────────
@@ -828,8 +1143,19 @@ class Engine implements Session, SessionCallHost {
     const created = findCreated(events);
     if (!created) throw new Error(`unknown session: ${sessionId}`);
     const session = this.registerSession(sessionId, created.workspaceRoot, created.snapshot);
-    this.replay(session, events);
-    await this.recover(session, events);
+    try {
+      this.replay(session, events);
+      await this.recover(session, events);
+    } catch (error) {
+      // A runtime whose recovery failed is only half built: drop it so the next
+      // access replays the timeline from scratch instead of handing out a
+      // session with unclosed turns and un-cancelled orphan runs.
+      if (this.sessions.get(sessionId) === session) {
+        this.sessions.delete(sessionId);
+        this.idleSince.delete(sessionId);
+      }
+      throw error;
+    }
     return session;
   }
 
@@ -1238,4 +1564,22 @@ function attachmentKey(attachments: readonly AttachmentInput[] | undefined): str
 function isPlainContinue(text: string): boolean {
   const trimmed = text.trim();
   return trimmed === '继续' || trimmed.toLowerCase() === 'continue';
+}
+
+/** Page a copied timeline for a ledger that has no native page read. */
+function pageLedger(events: readonly LedgerEvent[], afterSeq: number, limit: number): LedgerPage {
+  let low = 0;
+  let high = events.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (events[middle]!.seq <= afterSeq) low = middle + 1;
+    else high = middle;
+  }
+  const width = Number.isFinite(limit) ? Math.max(0, Math.trunc(limit)) : events.length;
+  const end = Math.min(events.length, low + width);
+  return {
+    events: events.slice(low, end),
+    lastSeq: events.length > 0 ? events[events.length - 1]!.seq : 0,
+    hasMore: end < events.length,
+  };
 }

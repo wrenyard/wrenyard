@@ -157,7 +157,8 @@ export const sessionEventsParamsSchema = {
   type: 'object', required: ['sessionId', 'afterSeq'], additionalProperties: false,
   properties: {
     sessionId: idSchema, afterSeq: seqSchema,
-    limit: { type: 'integer', minimum: 1 },
+    // One page: 500 events unless the caller asks for more, 1000 at most.
+    limit: { type: 'integer', minimum: 1, maximum: 1000, default: 500 },
     waitMs: { type: 'integer', minimum: 0, maximum: 1000 },
     live: { type: 'boolean' },
   },

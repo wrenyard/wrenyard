@@ -92,7 +92,8 @@ export const agentEventsParamsSchema = {
   properties: {
     id: botIdSchema,
     afterSeq: { type: 'integer', minimum: 0 },
-    limit: { type: 'integer', minimum: 1 },
+    // One page: 500 events unless the caller asks for more, 1000 at most.
+    limit: { type: 'integer', minimum: 1, maximum: 1000, default: 500 },
   },
 } as const satisfies JsonSchema
 export const agentEventsResultSchema = sessionEventsResultSchema

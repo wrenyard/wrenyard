@@ -9,6 +9,7 @@ import type { ProviderDefinition } from '@wrenyard/providers';
 import type {
   LedgerEvent,
   LedgerEventDraft,
+  LedgerPage,
   SessionSummary,
   TaskBrief,
   WorkspaceSnapshot,
@@ -214,11 +215,23 @@ export interface Session {
    * provides neither field.
    */
   updateMetadata(sessionId: string, patch: { archived?: boolean; pinned?: boolean }): Promise<void>;
+  /**
+   * Arm the deferred startup recovery passes (flagged turns, uncertain
+   * session bodies). Idempotent; a no-op once armed or after close. The host
+   * calls it once it is listening so no session body is parsed early.
+   */
+  startBackgroundRecovery(): void;
   /** Admitted turns whose terminal `turn.finished` is not yet durable. */
   activeTurnCount(): number;
   /** True while any admitted turn has not reached its durable terminal append. */
   hasRunningTurns(): boolean;
   readLedger(sessionId: string): LedgerEvent[];
+  /**
+   * One bounded page of one session's timeline after `afterSeq`, without
+   * copying the whole timeline. `lastSeq` is the timeline's tail, not the
+   * page's; `hasMore` says whether another page follows.
+   */
+  readLedgerPage(sessionId: string, afterSeq: number, limit: number): LedgerPage;
   /**
    * Record a real condition change on the session's timeline so a later
    * dispatch can be told apart from a blind repeat. It is not part of a turn,
@@ -259,6 +272,12 @@ export interface LedgerPort {
   init(): Promise<void>;
   append(sessionId: string, draft: LedgerEventDraft): Promise<LedgerEvent>;
   read(sessionId: string): LedgerEvent[];
+  /**
+   * Optional bounded page read. Implementations that provide it let a caller
+   * serve one page without copying the timeline; callers must fall back to
+   * `read` when it is absent, which is what in-memory mocks do.
+   */
+  readPage?(sessionId: string, afterSeq: number, limit: number): LedgerPage;
   listSessions(): SessionSummary[];
   subscribe(sessionId: string, listener: (event: LedgerEvent) => void): () => void;
   deleteSession(sessionId: string): Promise<void>;

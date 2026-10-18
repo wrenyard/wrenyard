@@ -1739,6 +1739,9 @@ async function createForemanDaemonResources(
   // Begin bot polling only after the IPC server is listening too, for the same
   // reason: a bot step must never drive a session no client can reach yet.
   if (!options.isShuttingDown()) await workspaceScoped.botHost.start()
+  // Arm the session's deferred recovery only now that IPC is listening: the
+  // passes replay session bodies, so they must never run before healthy.
+  if (!options.isShuttingDown()) workspaceScoped.session.startBackgroundRecovery()
 
   /**
    * Rebind every workspace-scoped resource to a new root and persist the
@@ -1871,6 +1874,13 @@ async function createForemanDaemonResources(
         await staged.botHost.start()
       } catch (error) {
         writeDaemonLog('warn', 'bot host failed to start after workspace switch', error)
+      }
+      // Arm deferred session recovery on the new binding only after the switch
+      // published and its services started; IPC is already listening here.
+      try {
+        staged.session.startBackgroundRecovery()
+      } catch (error) {
+        writeDaemonLog('warn', 'session background recovery failed to start after workspace switch', error)
       }
     }
     return { ok: true, outcome: 'switched', workspace_root: targetRoot }

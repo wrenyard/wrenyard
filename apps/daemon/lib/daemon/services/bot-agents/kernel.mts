@@ -27,6 +27,7 @@ import {
   type LedgerEvent,
   type Session,
   type SessionHost,
+  type SessionSummary,
   type TurnStatus,
 } from '@wrenyard/session'
 import type { RoutineDeliver, RoutineRecord } from '../../../protocol/methods/routine.mts'
@@ -968,31 +969,100 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────
 
-  /** Fire a persisted watch whose turn already finished, or re-subscribe it. */
+  /** Wake one bot for a finished watched turn: read the answer, then enqueue once. */
+  function wakeWatch(watch: Watch, status: TurnStatus): void {
+    let reply: string | undefined
+    try {
+      reply = turnAnswerOf(options.sessions, watch.sessionId, watch.afterTurn + 1)
+    } catch (error) {
+      log('warn', `bot agent kernel could not read watched session ${watch.sessionId}: ${errorText(error)}`)
+    }
+    enqueue(watch.botId, {
+      source: 'session',
+      text: `[wake:session ${watch.sessionId} ${status}] ${truncate(reply ?? '', SESSION_REPLY_CHARS)}`,
+      ...(watch.round === undefined ? {} : { round: watch.round }),
+    })
+    persist()
+    pump(watch.botId)
+  }
+
+  /**
+   * Fire every persisted watch whose turn already finished, and re-subscribe
+   * the rest. Startup reads index metadata only: the summary records the newest
+   * finished turn, so a watch the index proves finished is recognized without
+   * parsing its timeline, and the reply excerpt — the only part that needs the
+   * body — is read on a later tick, so readiness is never held behind it.
+   */
   async function restoreWatches(): Promise<void> {
     const kept: Watch[] = []
+    let summaries = new Map<string, SessionSummary>()
+    try {
+      summaries = new Map(options.sessions.listSessions().map(summary => [summary.sessionId, summary]))
+    } catch (error) {
+      log('warn', `bot agent kernel could not list sessions while restoring watches: ${errorText(error)}`)
+    }
+    /** Watches the index already proves finished, with that turn's status. */
+    const fires: { watch: Watch; status: TurnStatus }[] = []
+    /** Watches whose exact turn only the timeline can settle. */
+    const unsettled: Watch[] = []
     for (const watch of state.watches) {
-      let finished: TurnOutcome | undefined
-      try {
-        // Only the exact watched turn fires the wake; any other finish leaves
-        // the watch in place for its own turn.
-        finished = finishedTurnOf(options.sessions, watch.sessionId, watch.afterTurn + 1)
-      } catch (error) {
-        log('warn', `bot agent kernel could not read watched session ${watch.sessionId}: ${errorText(error)}`)
+      const watched = watch.afterTurn + 1
+      const summary = summaries.get(watch.sessionId)
+      // A summary without a tail position or a pending-turn list is a
+      // placeholder, a legacy entry or one its timeline outgrew: it cannot
+      // prove the outcome of any turn.
+      const trustworthy = summary !== undefined
+        && summary.lastSeq !== undefined
+        && summary.pendingTurns !== undefined
+      const lastTurn = summary?.lastTurn
+      if (trustworthy && lastTurn !== undefined && lastTurn.turn === watched) {
+        fires.push({ watch, status: lastTurn.status })
+        continue
       }
-      if (finished === undefined) {
+      // A watched turn still ahead of the newest finished one has not finished,
+      // and when the index is trustworthy nothing else can have settled it.
+      if (trustworthy && (lastTurn === undefined || lastTurn.turn < watched)) {
         kept.push(watch)
         continue
       }
-      const reply = turnAnswerOf(options.sessions, watch.sessionId, finished.turn)
-      enqueue(watch.botId, {
-        source: 'session',
-        text: `[wake:session ${watch.sessionId} ${finished.status}] ${truncate(reply ?? '', SESSION_REPLY_CHARS)}`,
-        ...(watch.round === undefined ? {} : { round: watch.round }),
-      })
+      // Missing, stale or later-turn metadata: the index cannot prove this
+      // exact turn's outcome, so the body decides on a later tick. The watch
+      // stays subscribed meanwhile, so a live `turn.finished` is not missed.
+      kept.push(watch)
+      unsettled.push(watch)
     }
+    // Subscribe before any deferred body check, so an event landing while the
+    // check is queued still reaches the watch.
     state.watches = kept
     for (const watch of kept) subscribeWatch(watch.botId, watch.sessionId)
+    for (const fire of fires) {
+      const timer = setImmediate(() => {
+        if (stopped) return
+        wakeWatch(fire.watch, fire.status)
+      })
+      timer.unref()
+    }
+    for (const watch of unsettled) {
+      const timer = setImmediate(() => {
+        if (stopped) return
+        const index = state.watches.indexOf(watch)
+        // A live `turn.finished` already woke this bot; never wake it twice.
+        if (index < 0) return
+        let finished: TurnOutcome | undefined
+        try {
+          finished = finishedTurnOf(options.sessions, watch.sessionId, watch.afterTurn + 1)
+        } catch (error) {
+          log('warn', `bot agent kernel could not read watched session ${watch.sessionId}: ${errorText(error)}`)
+        }
+        // Only the exact watched turn fires the wake; any other finish leaves
+        // the watch in place for its own turn.
+        if (finished === undefined) return
+        state.watches.splice(index, 1)
+        releaseWatch(watch.botId, watch.sessionId)
+        wakeWatch(watch, finished.status)
+      })
+      timer.unref()
+    }
   }
 
   return {

@@ -11,13 +11,26 @@ import type { RpcRouter } from '../rpc-router.mts'
 
 /** Minimum spacing between two normal long-poll returns. */
 const LIVE_MIN_INTERVAL_MS = 150
+/** One session.events/agent.events page: 500 events by default, 1000 at most. */
+const EVENTS_DEFAULT_LIMIT = 500
+const EVENTS_MAX_LIMIT = 1000
+
+/**
+ * Bound a requested page size. The protocol already caps `limit`, but a handler
+ * must not depend on a caller having passed through schema validation.
+ */
+function eventsPageLimit(limit: number | undefined): number {
+  if (limit === undefined) return EVENTS_DEFAULT_LIMIT
+  if (!Number.isFinite(limit)) return EVENTS_DEFAULT_LIMIT
+  return Math.min(EVENTS_MAX_LIMIT, Math.max(1, Math.trunc(limit)))
+}
 
 export function readEvents(session: Session, params: SessionEventsParams): SessionEventsResult {
-  const ledger = session.readLedger(params.sessionId)
-  if (!ledger.some(event => event.type === 'session.created')) throw new Error(`Unknown session: ${params.sessionId}`)
+  // One bounded page straight from the ledger's cached array; no timeline copy.
+  const page = session.readLedgerPage(params.sessionId, params.afterSeq, eventsPageLimit(params.limit))
   return {
-    events: ledger.filter(event => event.seq > params.afterSeq).slice(0, params.limit ?? 500),
-    lastSeq: ledger.at(-1)?.seq ?? 0,
+    events: page.events,
+    lastSeq: page.lastSeq,
     ...(params.live ? { live: session.readLive(params.sessionId) } : {}),
   }
 }
