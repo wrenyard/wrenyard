@@ -143,7 +143,7 @@ function CycleBlock({ turn, cycle, position, sessionId, onCancelTask }: CycleBlo
     <li className="relative flex flex-col gap-1.5">
       <span
         className={cn(
-          'absolute top-1.5 -left-[21px] size-2 rounded-full',
+          'absolute top-1 -left-[21px] size-2 rounded-full',
           runningCycle ? 'bg-primary motion-pulse-slow' : 'bg-border',
         )}
       />
