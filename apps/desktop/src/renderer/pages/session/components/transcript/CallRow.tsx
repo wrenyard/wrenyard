@@ -3,7 +3,9 @@
  * cycle's reasoning card. Both wrap {@link ToolCard} and share the same timing
  * and token metadata, including the time to first token.
  */
-import { Sparkles, Zap } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronRight, Sparkles, Zap } from 'lucide-react';
+import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { Spinner } from '@/renderer/components/ui/spinner';
@@ -92,6 +94,7 @@ export interface ReasoningCardProps {
  * present, then the reasoning text, preferring the live streamed cycle text.
  */
 export function ReasoningCard({ call, reasoning }: ReasoningCardProps) {
+  const [thinkingOpen, setThinkingOpen] = useState(false);
   const running = call.status === 'running';
   // Prefer the live streamed cycle text, then the committed call output.
   const liveText = reasoning?.text ?? '';
@@ -110,8 +113,18 @@ export function ReasoningCard({ call, reasoning }: ReasoningCardProps) {
     >
       {thinking !== undefined && thinking !== '' && (
         <div className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">思考</span>
-          <p className="whitespace-pre-wrap text-xs text-muted-foreground">{thinking}</p>
+          <button
+            type="button"
+            aria-expanded={thinkingOpen}
+            className="flex w-full items-center gap-1 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => setThinkingOpen((value) => !value)}
+          >
+            <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', thinkingOpen && 'rotate-90')} />
+            <span>思考</span>
+          </button>
+          {thinkingOpen && (
+            <p className="whitespace-pre-wrap text-xs text-muted-foreground">{thinking}</p>
+          )}
         </div>
       )}
       {text !== '' && (
