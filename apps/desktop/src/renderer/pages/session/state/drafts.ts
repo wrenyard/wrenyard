@@ -192,13 +192,12 @@ export function clearDraftAttachments(id: string): void {
 // ─── Cross-renderer sync ───────────────────────────────────────────────────
 
 /**
- * Notifies `listener` when another renderer writes this session's draft. Only
- * the cache and pending debounce matching the changed storage entry are
- * invalidated: a text key drops the text draft and its timer, an attachments
- * key drops the attachment draft and its timer, so an unrelated pending edit is
- * left intact instead of being overwritten by a stale value. The listener only
- * observes: it must not write storage back. Returns the unsubscribe used on
- * teardown.
+ * Notifies `listener` when another renderer writes this session's draft. A
+ * pending local edit wins over a remote write: while a debounced write is still
+ * scheduled for a key, its cached value is kept so a never-persisted draft is
+ * never discarded; only a key without a pending write drops its cache entry to
+ * re-read the stored value. The listener only observes: it must not write
+ * storage back. Returns the unsubscribe used on teardown.
  */
 export function subscribeDraft(id: string, listener: () => void): () => void {
   const textKey = storageKey(id);
@@ -206,11 +205,9 @@ export function subscribeDraft(id: string, listener: () => void): () => void {
   const onStorage = (event: StorageEvent): void => {
     if (event.storageArea !== window.localStorage) return;
     if (event.key === textKey) {
-      drafts.delete(id);
-      cancelTimer(id);
+      if (!timers.has(id)) drafts.delete(id);
     } else if (event.key === filesKey) {
-      attachmentDrafts.delete(id);
-      cancelAttachmentTimer(id);
+      if (!attachmentTimers.has(id)) attachmentDrafts.delete(id);
     } else {
       return;
     }

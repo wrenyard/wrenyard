@@ -153,13 +153,24 @@ export function SessionUsageProvider({ sessionKey, models, events, turns, ledger
 
   // A native close never runs the unmount cleanup, so the last debounce window
   // of typing would be lost; the live session is flushed synchronously here.
+  // Hiding the window (switching to another session window) must also flush the
+  // pending debounced draft so the destination window reads the latest text.
   useEffect(() => {
     const onBeforeUnload = (): void => {
       flushDraft(sessionKey);
       flushDraftAttachments(sessionKey);
     };
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState !== 'hidden') return;
+      flushDraft(sessionKey);
+      flushDraftAttachments(sessionKey);
+    };
     window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [sessionKey]);
 
   // The other window of the same session (shell and card are separate
