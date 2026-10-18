@@ -12,6 +12,7 @@ import { validateAnyJsonValue } from '../../workspace/schema-loader.mts'
 import type { ListedDefinition } from '../../workspace/definition-registry.mts'
 import { readTaskRunMetadata } from './run-metadata.mts'
 import { readTaskArtifactErrors } from './artifacts.mts'
+import { resolveFeatures } from './features.mts'
 import {
   TaskContextError,
   splitTaskInputContext,
@@ -188,6 +189,16 @@ export class TaskService {
       throw new TaskServiceError('task_not_found', `Task definition '${taskId}' not found`, 404, { task: taskId })
     }
     return task
+  }
+
+  async mountedFeatures(taskId: string, project: string | undefined, input: unknown): Promise<readonly string[]> {
+    await this.workspace.ensureDiscovered()
+    if (project) this.requireRegisteredProject(project)
+    const target = this.workspace.tasks.resolve(taskId, project)
+    if (!target) {
+      throw new TaskServiceError('task_not_found', `Task definition '${taskId}' not found`, 404, { task: taskId })
+    }
+    return resolveFeatures(target.definition.config.features, input)
   }
 
   async run(params: {

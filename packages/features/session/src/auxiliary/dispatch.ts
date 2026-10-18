@@ -405,11 +405,19 @@ export async function runDispatchAction(
     return fail(`cannot dispatch task '${taskId}': no execution environment provides required capabilities: ${unsupported.join(', ')}`);
   }
 
-  // Execution-environment tool gate: a task whose compiled contract requires an
-  // execution tool this environment does not provide must not open a run. The
-  // declared ids are mapped through the local alias table before comparing, so
-  // for example `computer-use` matches the environment's `desktop`.
-  const requiredTools = resolvedContract?.requiredTools ?? [];
+  // Execution-environment tool gate: the gate requires only the execution tools
+  // this compiled input will mount, resolved from the task's feature selection
+  // by the host. The declared ids are mapped through the local alias table
+  // before comparing, so for example `computer-use` matches the environment's
+  // `desktop`.
+  let requiredTools = resolvedContract?.requiredTools ?? [];
+  if (deps.host.mountedTaskTools !== undefined) {
+    try {
+      requiredTools = await deps.host.mountedTaskTools(taskId, project.id, effectiveInput);
+    } catch (error) {
+      return fail(messageOf(error));
+    }
+  }
   if (requiredTools.length > 0) {
     let available: readonly string[];
     try {

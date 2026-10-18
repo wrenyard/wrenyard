@@ -259,7 +259,6 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     async describeTask(id, project) {
       const definition = await taskService.describe(id, project)
       const requiredCapabilities = definition.dispatch?.requiredCapabilities
-      const requiredTools = definition.features
       return {
         description: definition.description ?? definition.name,
         inputSchema: definition.input_schema,
@@ -267,10 +266,10 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
         ...(requiredCapabilities === undefined || requiredCapabilities.length === 0
           ? {}
           : { requiredCapabilities }),
-        ...(requiredTools === undefined || requiredTools.length === 0
-          ? {}
-          : { requiredTools }),
       }
+    },
+    async mountedTaskTools(id, project, input) {
+      return taskService.mountedFeatures(id, project, input)
     },
     /**
      * Ids of the execution tools this environment actually provides: every

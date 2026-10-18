@@ -62,7 +62,7 @@ export type TaskSpanDraft =
   | Omit<TaskSpanFinishedEvent, 'seq' | 'at'>;
 
 export interface ActionRunnerDeps {
-  host: Pick<SessionHost, 'describeTask' | 'createTaskRun' | 'waitTaskRun' | 'cancelTaskRun' | 'methods' | 'call' | 'environmentTools'>;
+  host: Pick<SessionHost, 'describeTask' | 'mountedTaskTools' | 'createTaskRun' | 'waitTaskRun' | 'cancelTaskRun' | 'methods' | 'call' | 'environmentTools'>;
   files: Pick<FilesPort, 'checkPath' | 'exists' | 'read' | 'instructionChain' | 'listDocuments' | 'readDocumentRules'>;
   calls: CallsPort;
   fileStore: FileStore;

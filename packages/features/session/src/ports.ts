@@ -97,6 +97,8 @@ export interface SessionHost {
     /** Execution tools the task requires, e.g. `['browser']` or a named MCP tool. */
     requiredTools?: readonly string[];
   }>;
+  /** Execution tools the task run will mount for the given input, derived from the task's feature selection. Hosts that omit it fall back to describeTask requiredTools. */
+  mountedTaskTools?(id: string, project: string | undefined, input: unknown): Promise<readonly string[]>;
   /**
    * Ids of the execution tools the current environment actually provides: the
    * ready operation components plus any declared external tools (such as a
