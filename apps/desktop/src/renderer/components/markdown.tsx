@@ -1,5 +1,7 @@
 import {
   createContext,
+  lazy,
+  Suspense,
   useContext,
   useEffect,
   useMemo,
@@ -30,6 +32,14 @@ import {
   MermaidBlock,
   MermaidDarkContext,
 } from '@/renderer/components/mermaid-renderer';
+
+/**
+ * Loaded on demand: the todo link pulls in the shell preload facade, which the
+ * pet windows do not expose. Documents without todo ids (the pet panels) never
+ * import it, so this module keeps loading without shell side effects.
+ */
+const TodoLink = lazy(() =>
+  import('@/renderer/components/todo-link').then((module) => ({ default: module.TodoLink })));
 
 const PLUGINS: PluginConfig = {
   code,
@@ -145,15 +155,6 @@ interface HastLikeNode {
   children?: unknown[];
 }
 
-/**
- * The transformer options: the exact reference URLs of every resolvable
- * directory identity. They are also part of Streamdown's processor cache key,
- * so one message's directory never reuses another message's processor.
- */
-interface AttachmentPreviewOptions {
-  refs: readonly string[];
-}
-
 /** Walk one hast subtree in document order, marking first references. */
 function markFirstReferences(
   node: unknown,
@@ -175,16 +176,121 @@ function markFirstReferences(
 }
 
 /**
- * A rehype transformer appended after Streamdown's default raw/sanitize/harden
- * plugins: it annotates the first document-order anchor of each resolvable
- * reference, and every later anchor of the same identity stays text-only. The
- * `seen` set is local to one traversal, so the decision is a pure function of
- * the parsed tree — no source offsets and no mutable render-time state.
+ * The transformer options: the exact attachment reference URLs plus the known
+ * todo ids. Both are part of Streamdown's processor cache key, so one message's
+ * directory or list never reuses another's processor.
  */
-function attachmentPreviewPlugin(options?: AttachmentPreviewOptions): (tree: unknown) => void {
+interface TodoLinkOptions {
+  refs: readonly string[];
+  ids: readonly string[];
+}
+
+/** Reserved href scheme that marks a known todo id in the parsed tree. */
+const TODO_LINK_SCHEME = 'wrenyard-todo:';
+
+/** Exact 8-hex token; a hex neighbour means the token is part of a longer word. */
+const TODO_ID_PATTERN = /(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])/g;
+
+/**
+ * Whether a matched token belongs to a path or a filename rather than prose:
+ * a slash on either side, or a dot-plus-character suffix (`…/abc12345.md`).
+ */
+function isUrlFragment(text: string, start: number, end: number): boolean {
+  const before = start > 0 ? text[start - 1] : undefined;
+  if (before === '/' || before === '\\') return true;
+  const after = end < text.length ? text[end] : undefined;
+  if (after === '/') return true;
+  if (after === '.') {
+    const next = end + 1 < text.length ? text[end + 1] : undefined;
+    if (next !== undefined && /[\p{L}\p{N}]/u.test(next)) return true;
+  }
+  return false;
+}
+
+/** One hast anchor carrying the reserved href that the `a` override resolves. */
+function todoAnchor(todoId: string): HastLikeNode {
+  return {
+    type: 'element',
+    tagName: 'a',
+    properties: { href: `${TODO_LINK_SCHEME}${todoId}` },
+    children: [{ type: 'text', value: todoId }],
+  };
+}
+
+/** The text of a code element that holds exactly one text child. */
+function exactCodeText(node: HastLikeNode): string | undefined {
+  if (!Array.isArray(node.children) || node.children.length !== 1) return undefined;
+  const child = node.children[0];
+  if (typeof child !== 'object' || child === null) return undefined;
+  const text = child as { type?: unknown; value?: unknown };
+  return text.type === 'text' && typeof text.value === 'string' ? text.value : undefined;
+}
+
+/** Split one text node into text and todo-link pieces; undefined when unchanged. */
+function splitTodoText(value: string, ids: ReadonlySet<string>): unknown[] | undefined {
+  const pieces: unknown[] = [];
+  let cursor = 0;
+  for (const match of value.matchAll(TODO_ID_PATTERN)) {
+    const token = match[0];
+    const start = match.index;
+    if (start === undefined || !ids.has(token)) continue;
+    const end = start + token.length;
+    if (isUrlFragment(value, start, end)) continue;
+    if (start > cursor) pieces.push({ type: 'text', value: value.slice(cursor, start) });
+    pieces.push(todoAnchor(token));
+    cursor = end;
+  }
+  if (pieces.length === 0) return undefined;
+  if (cursor < value.length) pieces.push({ type: 'text', value: value.slice(cursor) });
+  return pieces;
+}
+
+/**
+ * Link exact known todo ids in one element's children. Existing anchors and
+ * fenced or indented code blocks are literal; inline code is handled as a unit
+ * so its own styling survives and only a whole-id value becomes a link.
+ */
+function linkifyTodoChildren(children: unknown[], ids: ReadonlySet<string>): void {
+  for (let index = 0; index < children.length; index += 1) {
+    const child = children[index];
+    if (typeof child !== 'object' || child === null) continue;
+    const node = child as HastLikeNode;
+    if (node.type === 'text') {
+      const value = (node as { value?: unknown }).value;
+      if (typeof value !== 'string') continue;
+      const pieces = splitTodoText(value, ids);
+      if (pieces === undefined) continue;
+      children.splice(index, 1, ...pieces);
+      index += pieces.length - 1;
+      continue;
+    }
+    if (node.type !== 'element') continue;
+    if (node.tagName === 'a' || node.tagName === 'pre') continue;
+    if (node.tagName === 'code') {
+      const text = exactCodeText(node);
+      if (text !== undefined && ids.has(text)) node.children = [todoAnchor(text)];
+      continue;
+    }
+    if (Array.isArray(node.children)) linkifyTodoChildren(node.children, ids);
+  }
+}
+
+/**
+ * A rehype transformer appended after Streamdown's default raw/sanitize/harden
+ * plugins. It first annotates the first document-order anchor of each resolvable
+ * attachment reference (later anchors of the same identity stay text-only), then
+ * links exact known todo ids. The `seen` set is local to one traversal, so the
+ * decision is a pure function of the parsed tree — no source offsets and no
+ * mutable render-time state.
+ */
+function todoLinksPlugin(options?: TodoLinkOptions): (tree: unknown) => void {
   const refs = new Set(options?.refs ?? []);
+  const ids = new Set(options?.ids ?? []);
   return (tree) => {
     markFirstReferences(tree, refs, new Set<string>());
+    if (ids.size === 0) return;
+    const root = tree as HastLikeNode;
+    if (Array.isArray(root.children)) linkifyTodoChildren(root.children, ids);
   };
 }
 
@@ -334,6 +440,15 @@ function createComponents(onOpenExternal: OpenExternal | undefined): Components 
     a: (props) => {
       const context = useContext(AttachmentDirectory);
       const href = props.href;
+      if (typeof href === 'string' && href.startsWith(TODO_LINK_SCHEME)) {
+        return (
+          <Suspense fallback={<span className="text-primary">{props.children}</span>}>
+            <TodoLink todoId={href.slice(TODO_LINK_SCHEME.length)}>
+              {props.children}
+            </TodoLink>
+          </Suspense>
+        );
+      }
       if (typeof href === 'string' && isAttachmentRefHost(href)) {
         return <AttachmentReference href={href} label={props.children} node={props.node} context={context} />;
       }
@@ -363,6 +478,8 @@ export interface MarkdownProps {
   onReadAttachment?: ReadAttachment;
   /** Reveals one attachment in the OS file manager; the embedder binds the session bridge. */
   onRevealAttachment?: RevealAttachment;
+  /** Known todo ids; exact plain-text or inline-code occurrences become todo links. */
+  todoIds?: ReadonlySet<string>;
 }
 
 /**
@@ -379,6 +496,7 @@ export function Markdown({
   attachments,
   onReadAttachment,
   onRevealAttachment,
+  todoIds,
 }: MarkdownProps) {
   // A message without attachments shares one stable empty context, so the
   // streaming path never re-renders settled blocks; a message with attachments
@@ -397,11 +515,20 @@ export function Markdown({
   // text is static Markdown, so force static parsing here (no animation and no
   // caret, which are streaming-only affordances).
   const attachmentStatic = attachments !== undefined && attachments.length > 0;
+  // Sorted once per set identity so the transformer options stay stable across
+  // streaming re-renders; the plugin is rebuilt only when the list changes.
+  const todoIdList = useMemo(
+    () => (todoIds === undefined ? [] : [...todoIds].sort()),
+    [todoIds],
+  );
   const rehypePlugins = useMemo<RehypePlugins | undefined>(() => {
-    if (context.files.size === 0) return undefined;
+    if (context.files.size === 0 && todoIdList.length === 0) return undefined;
     const refs = [...context.files.values()].map(attachmentRefUrl);
-    return [...Object.values(defaultRehypePlugins), [attachmentPreviewPlugin, { refs }]];
-  }, [context]);
+    return [
+      ...Object.values(defaultRehypePlugins),
+      [todoLinksPlugin, { refs, ids: todoIdList }],
+    ];
+  }, [context, todoIdList]);
   const components = useMemo(() => createComponents(onOpenExternal), [onOpenExternal]);
   // Streamdown takes a [light, dark] pair; pin both slots to the active theme so
   // highlighting follows the resolved appearance instead of the CSS `dark:` class.

@@ -4,10 +4,11 @@ import { shell } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
 import { useAppearance } from '@/renderer/lib/theme';
 import { Markdown as PureMarkdown, type MarkdownProps } from '@/renderer/components/markdown';
+import { useTodoLinkIds } from '@/renderer/components/todo-link';
 
 export interface AppMarkdownProps extends Omit<
   MarkdownProps,
-  'dark' | 'onOpenExternal' | 'attachments' | 'onReadAttachment' | 'onRevealAttachment'
+  'dark' | 'onOpenExternal' | 'attachments' | 'onReadAttachment' | 'onRevealAttachment' | 'todoIds'
 > {
   /** Task files the message may reference; only their exact reference URLs render in place. */
   attachments?: readonly SessionFile[];
@@ -22,6 +23,7 @@ export interface AppMarkdownProps extends Omit<
  */
 export function AppMarkdown({ attachments, sessionId, ...props }: AppMarkdownProps) {
   const { dark } = useAppearance();
+  const todoIds = useTodoLinkIds();
   const onOpenExternal = useCallback((href: string) => {
     void shell.openExternal(href);
   }, []);
@@ -44,6 +46,7 @@ export function AppMarkdown({ attachments, sessionId, ...props }: AppMarkdownPro
       {...props}
       {...(attachments === undefined ? {} : { attachments })}
       dark={dark}
+      todoIds={todoIds}
       onOpenExternal={onOpenExternal}
       onReadAttachment={onReadAttachment}
       onRevealAttachment={onRevealAttachment}

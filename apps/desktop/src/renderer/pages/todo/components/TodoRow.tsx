@@ -13,12 +13,13 @@ import {
 } from '../queries';
 import { TodoDetail } from './TodoDetail';
 
-interface StatusMeta {
+export interface StatusMeta {
   Icon: typeof Circle;
   tone: string;
 }
 
-const STATUS_META: Record<Todo['status'], StatusMeta> = {
+/** Status icon and colour, shared with inline todo links. */
+export const STATUS_META: Record<Todo['status'], StatusMeta> = {
   open: { Icon: Circle, tone: 'text-muted-foreground' },
   in_progress: { Icon: CircleDot, tone: 'text-primary' },
   done: { Icon: CircleCheck, tone: 'text-muted-foreground' },
@@ -55,6 +56,8 @@ export interface TodoRowProps {
   excerpt: string | null;
   /** Completed rows add the project prefix and muted title styling. */
   completed?: boolean;
+  /** Transient focus highlight applied after navigating from a todo link. */
+  highlighted?: boolean;
 }
 
 /**
@@ -69,6 +72,7 @@ export function TodoRow({
   searchTerms,
   excerpt,
   completed = false,
+  highlighted = false,
 }: TodoRowProps) {
   const meta = STATUS_META[todo.status];
   const statusLabel = TODO_STATUS_LABEL[todo.status];
@@ -100,6 +104,7 @@ export function TodoRow({
         className={cn(
           'group flex min-h-9 w-full items-center gap-3 rounded-md px-2 py-1.5 text-left hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           expanded && 'bg-muted/40',
+          highlighted && 'bg-primary/10 transition-colors duration-[1500ms]',
         )}
       >
         <Tooltip>

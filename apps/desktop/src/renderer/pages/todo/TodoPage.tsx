@@ -18,6 +18,7 @@ import {
 } from '@/renderer/components/ui/input-group';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { useShellPage } from '@/renderer/lib/desktop';
+import { useNavLocation } from '@/renderer/lib/navigation';
 import {
   bodyExcerpt,
   countActiveTodos,
@@ -25,6 +26,7 @@ import {
   groupCompletedTodos,
   isActiveTodo,
   isCompletedTodo,
+  PROJECTLESS_SECTION_LABEL,
   splitSearchTerms,
   todoMatches,
   todoMatchesSummary,
@@ -42,6 +44,9 @@ import { TodoRow } from './components/TodoRow';
 /** Polled relative times refresh on this cadence while the page is active. */
 const CLOCK_INTERVAL_MS = 60_000;
 
+/** How long a row reached from a todo link stays highlighted. */
+const FOCUS_HIGHLIGHT_MS = 1500;
+
 /**
  * The read-only workspace todo page. It lists active todos in foldable project
  * sections and finished todos in one folded completed section; rows expand in
@@ -57,6 +62,9 @@ export function TodoPage() {
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(readCollapsedSections);
   const [completedOpen, setCompletedOpen] = useState<boolean>(readCompletedOpen);
   const [now, setNow] = useState(() => Date.now());
+  const [focusRequest, setFocusRequest] = useState<string | null>(null);
+  const [pendingScroll, setPendingScroll] = useState<string | null>(null);
+  const [highlight, setHighlight] = useState<{ id: string } | null>(null);
 
   const terms = useMemo(() => splitSearchTerms(search), [search]);
   const searching = terms.length > 0;
@@ -80,6 +88,68 @@ export function TodoPage() {
     ? activeSections.reduce((total, section) => total + section.todos.length, 0) + matchedCompleted.length
     : 0;
   const counts = countActiveTodos(activeTodos);
+
+  // A todo link navigates here with the id to reveal. The restore callback only
+  // records the request; the effect below resolves it against the loaded list,
+  // so arriving before the list resolves still lands on the row.
+  useNavLocation({}, (restored) => {
+    const todoId = restored.todo;
+    if (todoId === undefined || todoId === '') return false;
+    setFocusRequest(todoId);
+    return true;
+  });
+
+  // Expand the requested row and its section (or the completed section), then
+  // arm the scroll and the transient highlight.
+  useEffect(() => {
+    if (focusRequest === null) return;
+    const todo = todos.find((item) => item.id === focusRequest);
+    if (todo === undefined) {
+      if (!query.isPending) setFocusRequest(null);
+      return;
+    }
+    setSearch('');
+    setExpandedRows((current) => {
+      if (current.has(todo.id)) return current;
+      const next = new Set(current);
+      next.add(todo.id);
+      return next;
+    });
+    if (isCompletedTodo(todo)) {
+      setCompletedOpen(true);
+      writeCompletedOpen(true);
+    } else {
+      const project = todo.project === undefined || todo.project === ''
+        ? PROJECTLESS_SECTION_LABEL
+        : todo.project;
+      setCollapsedProjects((current) => {
+        if (!current.has(project)) return current;
+        const next = new Set(current);
+        next.delete(project);
+        writeCollapsedSections(next);
+        return next;
+      });
+    }
+    setHighlight({ id: todo.id });
+    setPendingScroll(todo.id);
+    setFocusRequest(null);
+  }, [focusRequest, query.isPending, todos]);
+
+  // Runs after the expansion commit, so the row is already mounted.
+  useEffect(() => {
+    if (pendingScroll === null) return;
+    const element = document.getElementById(`todo-row-${pendingScroll}`);
+    if (element === null) return;
+    element.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setPendingScroll(null);
+  }, [pendingScroll, collapsedProjects, completedOpen, expandedRows]);
+
+  // The highlight is transient: remove it once the fade has run.
+  useEffect(() => {
+    if (highlight === null) return;
+    const timer = window.setTimeout(() => setHighlight(null), FOCUS_HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [highlight]);
 
   // Relative timestamps stay fresh without re-rendering hidden pages: the
   // shell `Activity` boundary pauses this effect while another page is shown.
@@ -162,6 +232,7 @@ export function TodoPage() {
         searchTerms={terms}
         excerpt={searching && !todoMatchesSummary(todo, terms) ? bodyExcerpt(todo, terms) : null}
         completed={isCompletedTodo(todo)}
+        highlighted={highlight?.id === todo.id}
       />
     ));
 
