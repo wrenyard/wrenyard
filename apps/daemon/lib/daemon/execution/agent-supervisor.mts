@@ -952,10 +952,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 
   /**
-   * Arms the per-attempt idle bound. The timer is refreshed by every mapped
-   * stream event, so it only fires when the route stops making observable
-   * progress. Expiry commits the same terminal intent as the wall-clock
-   * attempt deadline; a committed terminal state is never overridden.
+   * Arms the per-attempt idle bound. The timer is refreshed only by real model
+   * output as decided by isModelOutputProgress: a tool_call, or a message whose
+   * text is not blank. Heartbeat, status, tool_result and usage events do not
+   * reset it. Expiry commits the same terminal intent as the wall-clock attempt
+   * deadline; a committed terminal state is never overridden.
    */
   private armIdleTimer(entry: RegistryEntry): void {
     if (this.idleTimeoutMs <= 0) return
