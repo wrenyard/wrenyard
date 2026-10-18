@@ -1,6 +1,17 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { initialSessionPageState, sessionReducer, type SessionPageState } from './session-reducer.js';
+import {
+  initialSessionPageState,
+  mergeEvents,
+  sessionReducer,
+  type SessionPageState,
+} from './session-reducer.js';
+import {
+  dropRecentSession,
+  readRecentSession,
+  writeRecentSession,
+  type RecentSessionSlice,
+} from './recent-session-cache.js';
 import type { AttachmentInput, DraftAttachment, LedgerEvent, ModelEntry, SessionApi, SessionBridgeTaskBrief } from '../model/types.js';
 import type { ReasoningEffort } from './reasoning-effort.js';
 import { clearDraft, clearDraftAttachments } from './drafts.js';
@@ -29,6 +40,24 @@ function openTurnOf(events: readonly LedgerEvent[]): number | null {
     else if (event.type === 'turn.started' && !closed.has(event.turn)) return event.turn;
   }
   return null;
+}
+
+/** Tail sequence of a ledger view; 0 when it holds no events. */
+function lastSeqOf(events: readonly LedgerEvent[]): number {
+  return events.reduce((max, event) => Math.max(max, event.seq), 0);
+}
+
+/**
+ * Whether a read that started at `afterSeq` continues the held tail: an empty
+ * page means nothing was appended, otherwise the first event must be the very
+ * next sequence. A later start leaves an unseen hole, and a last sequence at or
+ * below the held tail means the daemon rewound behind the view we hold.
+ */
+function continuesLedger(events: readonly LedgerEvent[], afterSeq: number): boolean {
+  if (events.length === 0) return true;
+  const first = events[0]!.seq;
+  const last = events[events.length - 1]!.seq;
+  return first <= afterSeq + 1 && last > afterSeq;
 }
 
 /** Whether a session survives under the persisted Status filter. */
@@ -84,6 +113,10 @@ export interface SessionController {
 /** Owns selection, ledger merging, optimistic turns and interrupt requests. */
 export function useSessionController(api: SessionApi) {
   const [state, dispatch] = useReducer(sessionReducer, initialSessionState);
+  // Latest committed view, read when a ledger response is folded back into the
+  // recent-session cache without re-subscribing the controller.
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
   const alive = useRef(false);
   const selected = useRef(initialSelectedId);
   const selectionVersion = useRef(0);
@@ -103,46 +136,88 @@ export function useSessionController(api: SessionApi) {
     if (alive.current) dispatch({ type: 'error', message: messageOf(error), sessionId, loading });
   }, []);
 
+  /**
+   * Fold one ledger read into the view and refresh the cached slice. The
+   * response may be only the delta after a cached tail while pushed events
+   * have already reached the reducer, so all three are merged by sequence.
+   */
+  const applyLedger = useCallback((
+    sessionId: string,
+    response: LedgerEvent[],
+    cached: RecentSessionSlice | undefined,
+  ): void => {
+    const view = stateRef.current.selectedId === sessionId ? stateRef.current : undefined;
+    const held = mergeEvents(cached?.events ?? [], view?.events ?? []);
+    const events = mergeEvents(held, response);
+    const lastSeq = lastSeqOf(events);
+    highestSeq.current = Math.max(highestSeq.current, lastSeq);
+    openTurn.current = openTurnOf(events);
+    dispatch({ type: 'events', sessionId, events: response, snapshot: true });
+    writeRecentSession(sessionId, {
+      events,
+      live: view?.live ?? cached?.live ?? [],
+      tasks: view?.tasks ?? cached?.tasks ?? {},
+      pending: view?.pending ?? cached?.pending ?? [],
+      interrupting: view?.interrupting ?? cached?.interrupting ?? [],
+      lastSeq,
+    });
+  }, []);
+
   const selectSession = useCallback(async (sessionId: string): Promise<void> => {
     const version = ++selectionVersion.current;
+    const sameSession = selected.current === sessionId;
     selected.current = sessionId;
-    highestSeq.current = 0;
-    openTurn.current = null;
-    dispatch({ type: 'select', sessionId });
+    // A recently opened session restores its cached conversation and asks only
+    // for the delta; a first open still drains the whole ledger from zero.
+    const cached = sameSession ? undefined : readRecentSession(sessionId);
+    if (cached !== undefined) {
+      highestSeq.current = cached.lastSeq;
+      openTurn.current = openTurnOf(cached.events);
+    } else if (!sameSession) {
+      highestSeq.current = 0;
+      openTurn.current = null;
+    }
+    dispatch(cached === undefined
+      ? { type: 'select', sessionId }
+      : { type: 'restore', sessionId, slice: cached });
+    const afterSeq = highestSeq.current;
     try {
-      const snapshot = await api.ledger(sessionId);
-      if (alive.current && version === selectionVersion.current) {
-        highestSeq.current = snapshot.reduce((max, event) => Math.max(max, event.seq), 0);
-        openTurn.current = openTurnOf(snapshot);
-        dispatch({ type: 'events', sessionId, events: snapshot, snapshot: true });
+      let response = await api.ledger(sessionId, afterSeq === 0 ? undefined : afterSeq);
+      if (afterSeq > 0 && !continuesLedger(response, afterSeq)) {
+        // The cached tail is not a prefix of the daemon ledger: forget the
+        // entry and drain the whole history once from zero.
+        dropRecentSession(sessionId);
+        response = await api.ledger(sessionId);
       }
+      if (alive.current && version === selectionVersion.current) applyLedger(sessionId, response, cached);
     } catch (error) {
       if (version === selectionVersion.current) reportError(error, sessionId, 'ledger');
       throw error;
     }
-  }, [api, reportError]);
+  }, [api, reportError, applyLedger]);
 
-  // Terminal-state calibration: refetch the full ledger for the open session
-  // and re-apply it as a snapshot, so a missed push or reconnect converges the
-  // view back to the daemon ledger.
+  // Terminal-state calibration: refetch the open ledger for the open session
+  // and re-apply it, so a missed push or reconnect converges the view back to
+  // the daemon ledger. Only the events after the held tail are read.
   const resyncLedger = useCallback(async (): Promise<void> => {
     const sessionId = selected.current;
     if (!sessionId || resyncInFlight.current) return;
     const version = selectionVersion.current;
+    const afterSeq = highestSeq.current;
     resyncInFlight.current = true;
     try {
-      const snapshot = await api.ledger(sessionId);
-      if (alive.current && version === selectionVersion.current) {
-        highestSeq.current = snapshot.reduce((max, event) => Math.max(max, event.seq), 0);
-        openTurn.current = openTurnOf(snapshot);
-        dispatch({ type: 'events', sessionId, events: snapshot, snapshot: true });
+      let response = await api.ledger(sessionId, afterSeq === 0 ? undefined : afterSeq);
+      if (afterSeq > 0 && !continuesLedger(response, afterSeq)) {
+        dropRecentSession(sessionId);
+        response = await api.ledger(sessionId);
       }
+      if (alive.current && version === selectionVersion.current) applyLedger(sessionId, response, undefined);
     } catch {
       // Resync is best-effort calibration; the next focus or gap retries.
     } finally {
       resyncInFlight.current = false;
     }
-  }, [api]);
+  }, [api, applyLedger]);
 
   const refreshList = useCallback(async () => {
     const version = ++listVersion.current;

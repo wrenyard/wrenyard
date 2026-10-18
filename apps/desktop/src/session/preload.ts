@@ -183,11 +183,13 @@ export interface SessionBridge {
   /** Create a session; its workspace snapshot is frozen immediately. */
   create(): Promise<{ sessionId: string }>;
   /**
-   * Read a session's complete ledger. The caller is subscribed to that session
-   * before the snapshot is returned, so no event can be missed; later events
-   * arrive through {@link SessionBridge.onEvent}.
+   * Read a session's ledger. The caller is subscribed to that session before
+   * the snapshot is returned, so no event can be missed; later events arrive
+   * through {@link SessionBridge.onEvent}. With `afterSeq` the read starts
+   * after that sequence, so a caller holding a cached tail only receives the
+   * delta.
    */
-  ledger(sessionId: string): Promise<LedgerEvent[]>;
+  ledger(sessionId: string, afterSeq?: number): Promise<LedgerEvent[]>;
   /** Read a complete ledger snapshot without changing the caller's live subscription. */
   ledgerSnapshot(sessionId: string): Promise<LedgerEvent[]>;
   /** Send one user message; resolves with the allocated turn number. */
@@ -290,8 +292,13 @@ const bridge: SessionBridge = {
   create(): Promise<{ sessionId: string }> {
     return ipcRenderer.invoke(SESSION_CHANNELS.create) as Promise<{ sessionId: string }>;
   },
-  ledger(sessionId: string): Promise<LedgerEvent[]> {
-    return ipcRenderer.invoke(SESSION_CHANNELS.ledger, sessionId) as Promise<LedgerEvent[]>;
+  ledger(sessionId: string, afterSeq?: number): Promise<LedgerEvent[]> {
+    // Keep the bare-id payload when no cursor is given so existing callers
+    // stay on the original wire shape.
+    return ipcRenderer.invoke(
+      SESSION_CHANNELS.ledger,
+      afterSeq === undefined ? sessionId : { sessionId, afterSeq },
+    ) as Promise<LedgerEvent[]>;
   },
   ledgerSnapshot(sessionId: string): Promise<LedgerEvent[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.ledgerSnapshot, sessionId) as Promise<LedgerEvent[]>;

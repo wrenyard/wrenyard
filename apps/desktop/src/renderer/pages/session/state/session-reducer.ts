@@ -6,6 +6,7 @@ import type {
   SessionBridgeTaskBrief,
   SessionSummary,
 } from '../model/types.js';
+import type { RecentSessionSlice } from './recent-session-cache.js';
 
 export interface PendingTurn {
   localId: string;
@@ -95,6 +96,7 @@ export type SessionAction =
   | { type: 'sessions'; sessions: SessionSummary[] }
   | { type: 'models'; models: ModelEntry[] }
   | { type: 'select'; sessionId: string }
+  | { type: 'restore'; sessionId: string; slice: RecentSessionSlice }
   | { type: 'draft' }
   | { type: 'events'; sessionId: string; events: LedgerEvent[]; snapshot?: boolean }
   | { type: 'live'; sessionId: string; live: LiveCall[] }
@@ -134,6 +136,24 @@ export function sessionReducer(state: SessionPageState, action: SessionAction): 
         loadingLedger: true,
         ledgerLoaded: false,
         error: '',
+      };
+    case 'restore':
+      // Hydrate a recently opened session from its cached slice so the pane
+      // paints immediately. The ledger stays loading until the incremental
+      // delta lands and confirms the tail; `ledgerLoaded` is already true
+      // because the cached snapshot came from a completed load.
+      return {
+        ...state,
+        selectedId: action.sessionId,
+        events: action.slice.events,
+        live: action.slice.live,
+        tasks: action.slice.tasks,
+        pending: action.slice.pending,
+        interrupting: action.slice.interrupting,
+        loadingLedger: true,
+        ledgerLoaded: true,
+        error: '',
+        sessions: withLedgerTitle(state.sessions, action.slice.events, action.sessionId),
       };
     case 'draft':
       return {

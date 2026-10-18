@@ -113,6 +113,12 @@ interface PollState {
   onDestroyed(): void;
   /** Last live snapshot pushed to the renderer; undefined forces a refresh. */
   lastLive?: LiveCall[];
+  /**
+   * One socket for this subscription, created on first use and shared by the
+   * catch-up drain, every long poll and the shutdown probe. Reusing it removes
+   * a connect + version handshake per history page.
+   */
+  client?: WrenyardIpcClient;
 }
 
 function aborted(): Error { return new Error('Session relay stopped'); }
@@ -151,6 +157,23 @@ function readNumber(value: unknown): number | undefined {
 
 function readStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value as string[] : undefined;
+}
+
+/**
+ * `session:ledger` accepts either the bare session id (the original shape) or
+ * `{ sessionId, afterSeq }` when the renderer already holds a cached tail.
+ */
+function readLedgerRequest(value: unknown): { sessionId: string; afterSeq: number } {
+  if (typeof value === 'string' && value !== '') return { sessionId: value, afterSeq: 0 };
+  if (typeof value !== 'object' || value === null) throw new Error('Invalid sessionId');
+  const record = value as Record<string, unknown>;
+  const sessionId = readString(record.sessionId);
+  const afterSeq = record.afterSeq === undefined ? 0 : readNumber(record.afterSeq);
+  if (sessionId === undefined || afterSeq === undefined
+    || !Number.isInteger(afterSeq) || afterSeq < 0) {
+    throw new Error('Invalid sessionId');
+  }
+  return { sessionId, afterSeq };
 }
 
 /** `{ sessionId, path }` shared by the media read/reveal handlers. */
@@ -273,15 +296,50 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
       client.close();
     }));
   };
+  /** Retire the subscription's shared socket; a later page reconnects lazily. */
+  const closePollClient = (state: PollState): void => {
+    const client = state.client;
+    if (client === undefined) return;
+    state.client = undefined;
+    clients.delete(client);
+    client.close();
+  };
   const stopPoll = (state: PollState): void => {
     state.controller.abort();
     state.target.removeListener('destroyed', state.onDestroyed);
     if (polls.get(state.ownerId) === state) polls.delete(state.ownerId);
+    closePollClient(state);
   };
-  const readPage = (state: PollState, waitMs: number): Promise<EventPage> => request(
+  /**
+   * A request on the subscription's own socket. The socket outlives a single
+   * page: the drain and the long poll share it, so switching sessions no
+   * longer pays one connect and handshake per 500-event page. A failed socket
+   * is dropped and the retry loop reconnects on the next attempt.
+   */
+  const pollRequest = <T,>(state: PollState, method: string, params: unknown): Promise<T> => {
+    const signal = state.controller.signal;
+    if (closed || signal.aborted) return Promise.reject(aborted());
+    if (options.canConnect?.() === false) return Promise.reject(new Error('daemon 不可用'));
+    const generation = options.currentGeneration?.();
+    let client = state.client;
+    if (client === undefined) {
+      client = new WrenyardIpcClient({ path: options.ipcPath, requestTimeoutMs: 30_000 });
+      state.client = client;
+      clients.add(client);
+    }
+    return client.request<T>(method, params).then((result) => {
+      assertCurrentGeneration(generation);
+      return result;
+    }).catch((error: unknown) => {
+      // A closed or failed socket cannot carry another page; reconnect next time.
+      if (state.client === client) closePollClient(state);
+      throw error;
+    });
+  };
+  const readPage = (state: PollState, waitMs: number): Promise<EventPage> => pollRequest<EventPage>(
+    state,
     'session.events',
     { sessionId: state.sessionId, afterSeq: state.afterSeq, waitMs, live: true },
-    state.controller.signal,
   );
   /**
    * Every window a polled event is pushed to: the poll's own target plus the
@@ -329,7 +387,7 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
             for (const recipient of eventRecipients(state)) recipient.send(SESSION_CHANNELS.live, payload);
           }
           if (draining) {
-            const status = await request<{ shutting_down: boolean }>('daemon.status', {}, signal);
+            const status = await pollRequest<{ shutting_down: boolean }>(state, 'daemon.status', {});
             draining = status.shutting_down;
             if (draining) await delay(500, signal);
           }
@@ -357,11 +415,16 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
       stopPoll(state);
     }
   };
-  const openLedger = async (target: WebContents, sessionId: string): Promise<LedgerEvent[]> => {
+  /**
+   * Subscribe `target` to `sessionId` and return the catch-up page. A caller
+   * that already holds the tail of the ledger (a recently opened session) may
+   * pass `afterSeq`, so only the delta is drained and returned.
+   */
+  const openLedger = async (target: WebContents, sessionId: string, afterSeq = 0): Promise<LedgerEvent[]> => {
     const previous = polls.get(target.id);
     if (previous) stopPoll(previous);
     const state: PollState = {
-      ownerId: target.id, target, sessionId, afterSeq: 0, controller: new AbortController(),
+      ownerId: target.id, target, sessionId, afterSeq, controller: new AbortController(),
       onDestroyed: () => stopPoll(state),
     };
     polls.set(target.id, state);
@@ -430,18 +493,30 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     await request('session.prompt.cancel', value);
   });
   handle(SESSION_CHANNELS.ledger, (event, value) => {
-    if (typeof value !== 'string' || !value) throw new Error('Invalid sessionId');
-    return openLedger(event.sender, value);
+    const ledger = readLedgerRequest(value);
+    return openLedger(event.sender, ledger.sessionId, ledger.afterSeq);
   });
   handle(SESSION_CHANNELS.ledgerSnapshot, async (_event, value) => {
     if (typeof value !== 'string' || !value) throw new Error('Invalid sessionId');
-    const events: LedgerEvent[] = [];
-    let afterSeq = 0;
-    while (true) {
-      const page = await request<EventPage>('session.events', { sessionId: value, afterSeq, waitMs: 0 });
-      events.push(...page.events);
-      if (page.events.length) afterSeq = page.events[page.events.length - 1]!.seq;
-      if (afterSeq >= page.lastSeq) return events;
+    if (options.canConnect?.() === false) throw new Error('daemon 不可用');
+    // One client for the whole drain: each page would otherwise pay its own
+    // connect and version handshake on the same read-only snapshot.
+    const generation = options.currentGeneration?.();
+    const client = new WrenyardIpcClient({ path: options.ipcPath, requestTimeoutMs: 30_000 });
+    clients.add(client);
+    try {
+      const events: LedgerEvent[] = [];
+      let afterSeq = 0;
+      while (true) {
+        const page = await client.request<EventPage>('session.events', { sessionId: value, afterSeq, waitMs: 0 });
+        assertCurrentGeneration(generation);
+        events.push(...page.events);
+        if (page.events.length) afterSeq = page.events[page.events.length - 1]!.seq;
+        if (afterSeq >= page.lastSeq) return events;
+      }
+    } finally {
+      clients.delete(client);
+      client.close();
     }
   });
   handle(SESSION_CHANNELS.tasks, async (_event, value) => {
@@ -556,7 +631,13 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
   handle(SESSION_CHANNELS.seenState, () => options.seenStore.snapshot());
 
   return {
-    disconnect(): void { for (const client of clients) client.close(); },
+    disconnect(): void {
+      for (const client of clients) client.close();
+      clients.clear();
+      // The polls stay subscribed: dropping their dead sockets lets the next
+      // page reconnect lazily on the new endpoint.
+      for (const state of polls.values()) state.client = undefined;
+    },
     // Retires the previous workspace's polls only: each stopPoll aborts the poll
     // controller (closing its in-flight request, so a late page is dropped) and
     // removes the ledger-event listeners, then the owner map is cleared so no
