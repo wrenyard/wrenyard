@@ -376,7 +376,12 @@ function buildTurn(
 
   const model: TurnModel = {
     id: turnId,
-    user: { text: started?.text ?? '', at: startedAt, ...(attachments.length === 0 ? {} : { attachments }) },
+    user: {
+      text: started?.text ?? '',
+      at: startedAt,
+      ...(attachments.length === 0 ? {} : { attachments }),
+      ...(started?.sender === undefined ? {} : { sender: started.sender }),
+    },
     model: started?.model ?? { provider: '', model: '' },
     status,
     ...(status === 'running' ? { phase: inferPhase(events, calls, actions) } : {}),

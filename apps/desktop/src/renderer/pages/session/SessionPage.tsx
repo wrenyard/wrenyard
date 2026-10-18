@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, ScrollText, X } from 'lucide-react';
 import { cn } from 'cn';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { LedgerEvent } from '@wrenyard/session';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
@@ -16,7 +16,7 @@ import {
   useMessageScroller,
 } from '@/renderer/components/ui/message-scroller';
 import { Page, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
-import { useShellPage } from '@/renderer/lib/desktop';
+import { agentRequest, useShellPage } from '@/renderer/lib/desktop';
 import { registerPageCommands } from '@/renderer/lib/commands';
 import { openMiniCard, restoreMain, setCurrentSession, useMiniMode } from '@/renderer/lib/mini';
 import { markSessionSeen } from '@/renderer/lib/session-seen';
@@ -112,6 +112,20 @@ export function SessionPage() {
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [retry, setRetry] = useState<{ text: string; attachments: DraftAttachment[]; nonce: number } | undefined>(undefined);
   const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | undefined>(undefined);
+
+  // Resolve a turn's sender id to the bot display name. The roster is polled
+  // only while the session page is active and is read locally per page, so a
+  // conversation switch can never reuse another page's labels.
+  const bots = useQuery({
+    queryKey: ['agents', 'list'],
+    queryFn: () => agentRequest('agent.list'),
+    refetchInterval: 3000,
+    enabled: mini || page === 'session',
+  });
+  const botNames = useMemo(
+    () => new Map((bots.data?.bots ?? []).map((bot) => [bot.id, bot.name] as const)),
+    [bots.data],
+  );
 
   useEffect(() => {
     localStorage.setItem(VIEW_STORAGE_KEY, view);
@@ -436,6 +450,7 @@ export function SessionPage() {
                           timeline={timeline}
                           turns={model.turns}
                           sessionId={state.selectedId}
+                          botNames={botNames}
                           freshMessageKeys={freshMessageKeys}
                           onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
                           onRemove={removePending}

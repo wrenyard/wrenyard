@@ -43,6 +43,8 @@ export interface SessionSendParams {
   }
   /** Optional user attachments, bounded to the session media batch limit. */
   attachments?: AttachmentInput[]
+  /** Optional provenance of a bot-originated send; absent on ordinary sends. */
+  sender?: { botId: string }
 }
 export interface SessionSendResult { turn: number }
 export interface SessionInterruptParams { sessionId: string; turn: number }
@@ -115,6 +117,10 @@ export const sessionSendParamsSchema = {
       properties: { provider: idSchema, model: idSchema, reasoningEffort: reasoningEffortSchema, fast: { type: 'boolean' } },
     },
     attachments: { type: 'array', maxItems: 128, items: attachmentInputSchema },
+    sender: {
+      type: 'object', required: ['botId'], additionalProperties: false,
+      properties: { botId: idSchema },
+    },
   },
 } as const satisfies JsonSchema
 export const sessionSendResultSchema = {

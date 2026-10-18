@@ -570,6 +570,8 @@ class Engine implements Session, SessionCallHost {
         fast?: boolean;
       };
       attachments?: AttachmentInput[];
+      /** Optional provenance of a bot-originated send; absent on ordinary sends. */
+      sender?: { botId: string };
     },
     /** Original turn id when this send is the restart continuation for it. */
     resumedFrom?: string,
@@ -685,6 +687,8 @@ class Engine implements Session, SessionCallHost {
         fast?: boolean;
       };
       attachments?: AttachmentInput[];
+      /** Optional provenance of a bot-originated send; absent on ordinary sends. */
+      sender?: { botId: string };
     },
     publicId: string,
     /** Original turn id when this admission is its restart continuation. */
@@ -782,6 +786,7 @@ class Engine implements Session, SessionCallHost {
         text: input.text,
         model: input.model,
         ...(resumedFrom === undefined ? {} : { resumedFrom }),
+        ...(input.sender === undefined ? {} : { sender: input.sender }),
       });
     } catch (error) {
       // A turn whose start never reached the timeline was never admitted:

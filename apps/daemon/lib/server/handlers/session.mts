@@ -128,6 +128,7 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
       text: params.text,
       model: params.model,
       ...(params.attachments === undefined ? {} : { attachments: params.attachments }),
+      ...(params.sender === undefined ? {} : { sender: params.sender }),
     })))
   router.register('session.interrupt', (params, _message, context) =>
     call(context, 'session.interrupt', async () => {

@@ -290,7 +290,7 @@ async function runSessionTool(
       if (text === undefined) return done({ sessionId })
       try {
         const model = await resolveSessionModel(deps.sessions, sessionId, args, ctx)
-        const { turn } = await deps.sessions.send(sessionId, { text, model })
+        const { turn } = await deps.sessions.send(sessionId, { text, model, sender: { botId: ctx.botId } })
         ctx.watch(sessionId, turn - 1, optionalTodoIds(args, 'todoIds'))
         return done({ sessionId, turn })
       } catch (error) {
@@ -305,7 +305,7 @@ async function runSessionTool(
       const sessionId = requireString(args, 'sessionId', 'send requires sessionId')
       const text = requireString(args, 'text', 'send requires text')
       const model = await resolveSessionModel(deps.sessions, sessionId, args, ctx)
-      const { turn } = await deps.sessions.send(sessionId, { text, model })
+      const { turn } = await deps.sessions.send(sessionId, { text, model, sender: { botId: ctx.botId } })
       ctx.watch(sessionId, turn - 1, optionalTodoIds(args, 'todoIds'))
       return done({ turn })
     }

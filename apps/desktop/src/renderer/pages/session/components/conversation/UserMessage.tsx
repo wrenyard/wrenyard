@@ -38,10 +38,12 @@ export interface UserMessageProps {
   /** Play the entry animation; only set for genuinely new appends. */
   enter?: boolean;
   onReply?: () => void;
+  /** Resolved speaker label shown as muted metadata beside the bubble. */
+  speaker?: string;
 }
 
 /** The user's own message: a right-aligned primary bubble with a hover time. */
-export function UserMessage({ text, at, attachments, sessionId, pending, onRetry, enter, onReply }: UserMessageProps) {
+export function UserMessage({ text, at, attachments, sessionId, pending, onRetry, enter, onReply, speaker }: UserMessageProps) {
   const animate = useEnterAnimation(enter === true);
   const { quote, body } = splitReplyQuote(text);
   return (
@@ -58,19 +60,24 @@ export function UserMessage({ text, at, attachments, sessionId, pending, onRetry
           />
         )}
         {(body !== '' || quote !== undefined) && (
-          <div className="flex items-end justify-end gap-2">
-            <HoverTime value={at} />
-            <ReplyMenu text={text} onReply={onReply}>
-              <Bubble variant="default" align="end">
-                <BubbleContent className="rounded-2xl px-3 py-1.5">
-                  {quote !== undefined && (
-                    <div className="mb-1 line-clamp-2 rounded-lg bg-primary-foreground/15 px-2 py-1 text-xs opacity-80">{quote}</div>
-                  )}
-                  <span className="block whitespace-pre-wrap text-pretty">{body}</span>
-                </BubbleContent>
-              </Bubble>
-            </ReplyMenu>
-          </div>
+          <>
+            {speaker !== undefined && (
+              <span className="self-end px-1 text-xs text-muted-foreground">{speaker}</span>
+            )}
+            <div className="flex items-end justify-end gap-2">
+              <HoverTime value={at} />
+              <ReplyMenu text={text} onReply={onReply}>
+                <Bubble variant="default" align="end">
+                  <BubbleContent className="rounded-2xl px-3 py-1.5">
+                    {quote !== undefined && (
+                      <div className="mb-1 line-clamp-2 rounded-lg bg-primary-foreground/15 px-2 py-1 text-xs opacity-80">{quote}</div>
+                    )}
+                    <span className="block whitespace-pre-wrap text-pretty">{body}</span>
+                  </BubbleContent>
+                </Bubble>
+              </ReplyMenu>
+            </div>
+          </>
         )}
         {pending !== undefined && (pending.failed === undefined ? (
           <MessageFooter className="gap-2">

@@ -190,6 +190,11 @@ export interface Session {
       };
       /** Optional user attachments imported before the turn starts. */
       attachments?: AttachmentInput[];
+      /**
+       * Optional provenance of a bot-originated send. Absent on ordinary user
+       * sends, so their turns carry no speaker attribution.
+       */
+      sender?: { botId: string };
     },
   ): Promise<{ turn: number }>;
   interrupt(sessionId: string, turn: number): Promise<void>;

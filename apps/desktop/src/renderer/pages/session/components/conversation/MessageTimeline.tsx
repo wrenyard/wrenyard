@@ -5,6 +5,7 @@ import { formatDivider } from '@/renderer/lib/format';
 import { prefersReducedMotion } from '@/renderer/lib/motion';
 import { attachmentFileIdentity } from '@/renderer/components/markdown';
 import { DIVIDER_GAP_MS } from '../../model/dividers.js';
+import { userSpeakerLabel } from '../../model/describe.js';
 import type { DraftAttachment, ReplyModel, SessionFile, TurnModel } from '../../model/types.js';
 import type { PendingTurn } from '../../state/session-reducer.js';
 import { fromDraftAttachment, fromSessionFile } from '../MediaAttachments.js';
@@ -181,6 +182,7 @@ function dividerLabelFor(at: string, previousAt: string | undefined, now: number
 interface EntryContext {
   sessionId?: string;
   attachmentFiles: readonly SessionFile[];
+  botNames: ReadonlyMap<string, string>;
   enter: boolean;
   onRetry: (text: string, attachments: DraftAttachment[]) => void;
   onRemove: (localId: string) => void;
@@ -189,7 +191,7 @@ interface EntryContext {
 }
 
 /** The body of one timeline row, without its scroller item or divider. */
-function EntryContent({ entry, sessionId, attachmentFiles, enter, onRetry, onRemove, onJump, onReply }: EntryContext & { entry: MessageTimelineEntry }) {
+function EntryContent({ entry, sessionId, attachmentFiles, botNames, enter, onRetry, onRemove, onJump, onReply }: EntryContext & { entry: MessageTimelineEntry }) {
   switch (entry.kind) {
     case 'user': {
       const attachments = (entry.turn.user.attachments ?? []).map(fromSessionFile);
@@ -198,6 +200,7 @@ function EntryContent({ entry, sessionId, attachmentFiles, enter, onRetry, onRem
           text={entry.turn.user.text}
           at={entry.turn.user.at}
           enter={enter}
+          speaker={userSpeakerLabel(entry.turn.user.sender, botNames)}
           onReply={() => onReply(excerpt(userText(entry.turn)))}
           {...(attachments.length > 0 ? { attachments } : {})}
           {...(sessionId === undefined ? {} : { sessionId })}
@@ -212,6 +215,7 @@ function EntryContent({ entry, sessionId, attachmentFiles, enter, onRetry, onRem
           at={entry.pending.at}
           pending={entry.pending}
           enter={enter}
+          speaker={userSpeakerLabel(undefined, botNames)}
           {...(attachments.length > 0 ? { attachments } : {})}
           onRetry={() => { onRetry(entry.pending.text, entry.pending.attachments ?? []); onRemove(entry.pending.localId); }}
         />
@@ -247,6 +251,9 @@ function EntryContent({ entry, sessionId, attachmentFiles, enter, onRetry, onRem
   }
 }
 
+/** Used when a caller has no bot roster: every bot falls back to its raw id. */
+const EMPTY_BOT_NAMES: ReadonlyMap<string, string> = new Map();
+
 export interface MessageTimelineProps {
   /** Independent message rows, already ordered chronologically. */
   timeline: readonly MessageTimelineEntry[];
@@ -254,6 +261,8 @@ export interface MessageTimelineProps {
   turns: readonly TurnModel[];
   /** Ledger session id, used to resolve attachment media. */
   sessionId?: string;
+  /** Bot id to display name roster; absent entries fall back to the raw id. */
+  botNames?: ReadonlyMap<string, string>;
   /** Entry ids appended after the conversation settled, for enter animations. */
   freshMessageKeys: ReadonlySet<string>;
   onRetry: (text: string, attachments: DraftAttachment[]) => void;
@@ -272,6 +281,7 @@ export const MessageTimeline = memo(function MessageTimeline({
   timeline,
   turns,
   sessionId,
+  botNames = EMPTY_BOT_NAMES,
   freshMessageKeys,
   onRetry,
   onRemove,
@@ -306,6 +316,7 @@ export const MessageTimeline = memo(function MessageTimeline({
               entry={entry}
               sessionId={sessionId}
               attachmentFiles={attachmentFiles}
+              botNames={botNames}
               enter={freshMessageKeys.has(entry.id)}
               onRetry={onRetry}
               onRemove={onRemove}

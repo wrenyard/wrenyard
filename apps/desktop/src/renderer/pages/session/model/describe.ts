@@ -132,6 +132,19 @@ export function cycleLabel(index: number): string {
 }
 
 /**
+ * Speaker label of a user-side message: 你 when the human user authored it,
+ * otherwise the bot's display name, falling back to the raw bot id when the
+ * roster has no entry. Product copy stays in the model layer.
+ */
+export function userSpeakerLabel(
+  sender: { botId: string } | undefined,
+  botNames?: ReadonlyMap<string, string>,
+): string {
+  if (sender === undefined) return '你';
+  return botNames?.get(sender.botId) ?? sender.botId;
+}
+
+/**
  * One-line status for a running turn, shown under the streaming assistant
  * message. Kept exact so both session views and screenshots agree.
  */

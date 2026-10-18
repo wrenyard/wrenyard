@@ -170,6 +170,11 @@ export interface TurnStartedEvent extends LedgerEventBase {
    * original turn this follow-up resumes. Absent on every normal turn.
    */
   resumedFrom?: string;
+  /**
+   * Bot provenance of the send that opened this turn. Absent on ordinary user
+   * sends; existing ledgers therefore keep their exact event shape.
+   */
+  sender?: { botId: string };
 }
 
 /**
