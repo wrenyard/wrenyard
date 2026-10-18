@@ -9,8 +9,11 @@ import { addUsageTokens, nonnegativeInt } from '@wrenyard/agent-client/statistic
  * Decode the OpenCode native stream-json transcript.
  *
  * One `step_finish` record is emitted per model step, so per-step usage is
- * summed across the invocation and exactly one canonical turn_usage is
- * emitted. The tool lifecycle lives in a nested `part.state` object in current
+ * summed across the invocation. Each token partition is tracked separately and
+ * the canonical turn_usage carries only the partitions the native transcript
+ * actually measured; an absent or invalid partition is never emitted as an
+ * initialized zero or a partial sum. The tool lifecycle lives in a nested
+ * `part.state` object in current
  * OpenCode and in flattened fields in earlier shapes; both normalize
  * identically, with a stable call_id from the native part id or a
  * deterministic content-derived fallback.
@@ -26,22 +29,36 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
     let completedStep = false;
     const usage = {
         input: 0, output: 0, reasoning: 0, total: 0,
-        seen: false, invalid: false,
+        seen: false, inputIncomplete: false, outputIncomplete: false,
     };
     const flushUsage = (): AgentEvent | undefined => {
         if (!usage.seen)
             return undefined;
+        // Each required partition is emitted only when every observed step
+        // reported it. A missing, invalid or overflowed partition is never
+        // replaced by an initialized zero or by the partial sum accumulated so
+        // far; a genuinely measured zero remains a measured value.
+        const inputComplete = !usage.inputIncomplete;
+        const outputComplete = !usage.outputIncomplete;
+        if (!inputComplete && !outputComplete)
+            return undefined;
         const data: Record<string, unknown> = {
-            input_tokens: usage.input,
-            output_tokens: usage.output,
             // A per-step record has no measured full-turn interval, so the
             // canonical emission carries the truthful non-positive placeholder.
             duration_ms: 0,
         };
-        if (usage.reasoning > 0)
-            data.reasoning_output_tokens = usage.reasoning;
-        if (usage.total > 0)
-            data.total_tokens = usage.total;
+        if (inputComplete)
+            data.input_tokens = usage.input;
+        if (outputComplete)
+            data.output_tokens = usage.output;
+        // Optional partitions are only truthful invocation totals when both
+        // required partitions were measured.
+        if (inputComplete && outputComplete) {
+            if (usage.reasoning > 0)
+                data.reasoning_output_tokens = usage.reasoning;
+            if (usage.total > 0)
+                data.total_tokens = usage.total;
+        }
         return { type: 'output', record: turnUsageRecord(data) };
     };
     for await (const item of readNativeRecords(events)) {
@@ -90,27 +107,35 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
     }
 }
 
-/** Sums one native step's tokens into the invocation aggregate. */
-function observeStepUsage(usage: { input: number; output: number; reasoning: number; total: number; seen: boolean; invalid: boolean }, record: Record<string, unknown>): void {
+/** Sums one native step's tokens into the invocation aggregate, per partition. */
+function observeStepUsage(usage: { input: number; output: number; reasoning: number; total: number; seen: boolean; inputIncomplete: boolean; outputIncomplete: boolean }, record: Record<string, unknown>): void {
+    // A step_finish that reports no tokens still proves neither partition was
+    // measured for this invocation; skipping it would leave earlier partial
+    // sums looking complete.
+    usage.seen = true;
     const part = recordOf(record, 'part');
     const tokens = part ? recordOf(part, 'tokens') : undefined;
-    if (!tokens)
+    if (!tokens) {
+        usage.inputIncomplete = true;
+        usage.outputIncomplete = true;
         return;
-    usage.seen = true;
+    }
     const input = nonnegativeInt(tokens.input);
+    if (input === undefined) {
+        usage.inputIncomplete = true;
+    } else {
+        const sum = addUsageTokens(usage.input, input);
+        if (sum === undefined) usage.inputIncomplete = true;
+        else usage.input = sum;
+    }
     const output = nonnegativeInt(tokens.output);
-    if (input === undefined || output === undefined) {
-        usage.invalid = true;
-        return;
+    if (output === undefined) {
+        usage.outputIncomplete = true;
+    } else {
+        const sum = addUsageTokens(usage.output, output);
+        if (sum === undefined) usage.outputIncomplete = true;
+        else usage.output = sum;
     }
-    const sumInput = addUsageTokens(usage.input, input);
-    const sumOutput = addUsageTokens(usage.output, output);
-    if (sumInput === undefined || sumOutput === undefined) {
-        usage.invalid = true;
-        return;
-    }
-    usage.input = sumInput;
-    usage.output = sumOutput;
     const reasoning = nonnegativeInt(tokens.reasoning);
     if (reasoning !== undefined) {
         const sum = addUsageTokens(usage.reasoning, reasoning);

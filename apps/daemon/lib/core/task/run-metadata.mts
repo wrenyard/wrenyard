@@ -28,8 +28,23 @@ import { isReasoningEffort } from '../../task-run-metadata-types.mts'
  * historical incomplete dispatches are represented by omitting `resolved`
  * entirely rather than emitting a partial snapshot object.
  */
+export interface TaskRecordedModelIdentity {
+  provider: string
+  model: string
+}
+
 export interface TaskRunResolvedUsage {
   resolved?: TaskResolvedDispatch
+  /**
+   * Internal recorded provider/model, independent of the strict resolved
+   * snapshot. Present whenever an attempt persisted both identity fields, even
+   * when pricing/speed made `resolved` unavailable. It is read from the
+   * persisted dispatch row, or — only when no attempt recorded a dispatch
+   * identity — from a successfully attributed gateway completion whose public
+   * model is exactly `<provider>/<model>`. A requested policy/profile is never
+   * a source.
+   */
+  recorded?: TaskRecordedModelIdentity
   usage: TaskUsage
 }
 
@@ -94,9 +109,14 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   // Read every persisted turn_usage row for each execution attempt, ordered by
   // seq. A row is kept as a record even when its JSON or numerics are invalid,
   // so it can force coverage to incomplete rather than be silently dropped.
+  const executionIds = attemptRows.map((a) => a.execution_id)
+  const gatewayByExecution = readGatewayEvidence(executionIds)
   const eventsByExecution = new Map<string, TurnUsageEvent[]>()
   for (const a of attemptRows) {
-    eventsByExecution.set(a.execution_id, readExecutionEvents(a.execution_id))
+    eventsByExecution.set(
+      a.execution_id,
+      omitUnmeasuredInput(readExecutionEvents(a.execution_id), gatewayByExecution.get(a.execution_id)),
+    )
   }
 
   const taskTps = readTaskTps(taskRunId)
@@ -105,6 +125,7 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
     dispatchRows,
     usageEventCount: telemetry?.usage_event_count ?? 0,
     eventsByExecution,
+    gatewayByExecution,
     taskTps,
   })
 }
@@ -164,6 +185,7 @@ export function readTaskRunMetadataBatch(taskRunIds: string[]): Map<string, Task
   }
 
   const executionIds = attemptRows.map((row) => row.execution_id)
+  const gatewayByExecution = readGatewayEvidence(executionIds)
   const eventsByExecution = new Map<string, TurnUsageEvent[]>()
   if (executionIds.length > 0) {
     const eventPlaceholders = executionIds.map(() => '?').join(', ')
@@ -175,6 +197,10 @@ export function readTaskRunMetadataBatch(taskRunIds: string[]): Map<string, Task
       bucket.push(parseTurnUsage(row.data))
       eventsByExecution.set(row.execution_id, bucket)
     }
+  }
+  for (const [executionId, events] of eventsByExecution) {
+    const evidence = gatewayByExecution.get(executionId)
+    if (evidence?.inputUnmeasured) eventsByExecution.set(executionId, omitUnmeasuredInput(events, evidence))
   }
 
   // Same sum/rate semantics as readTaskTps: aggregate each task's samples and
@@ -202,10 +228,113 @@ export function readTaskRunMetadataBatch(taskRunIds: string[]): Map<string, Task
       dispatchRows: dispatchByTask.get(taskRunId) ?? [],
       usageEventCount: telemetryByTask.get(taskRunId) ?? 0,
       eventsByExecution,
+      gatewayByExecution,
       taskTps: tpsByTask.get(taskRunId),
     }))
   }
   return result
+}
+
+/**
+ * Successful gateway completion facts used by both readers. `inputUnmeasured`
+ * latches when a status-200 completion carried no usable `usage.input`, which
+ * proves the upstream never measured it; `identity` keeps the persisted event
+ * id so the latest attributed identity can be selected deterministically.
+ */
+interface GatewayEvidence {
+  inputUnmeasured: boolean
+  identity?: { provider: string; model: string; eventId: number }
+}
+
+/**
+ * Reads the successful gateway completions attributed to the given execution
+ * ids in one bounded query. The predicate mirrors the partial expression index
+ * (`likely(type = ...)` plus `json_extract(data, '$.data.executionId')`), so the
+ * lookup stays indexed without naming the index.
+ */
+function readGatewayEvidence(executionIds: string[]): Map<string, GatewayEvidence> {
+  const result = new Map<string, GatewayEvidence>()
+  if (executionIds.length === 0) return result
+  const placeholders = executionIds.map(() => '?').join(', ')
+  for (const row of dbQuery<{ id: number; data: string | null }>(
+    `SELECT id, data FROM events
+     WHERE likely(type = 'gateway.request.completed') AND json_extract(data, '$.data.executionId') IN (${placeholders})
+     ORDER BY id ASC`,
+    ...executionIds,
+  )) {
+    const parsed = parseGatewayCompletion(row.data, row.id)
+    if (!parsed) continue
+    const evidence = result.get(parsed.executionId) ?? { inputUnmeasured: false }
+    if (parsed.inputUnmeasured) evidence.inputUnmeasured = true
+    if (parsed.identity) evidence.identity = parsed.identity
+    result.set(parsed.executionId, evidence)
+  }
+  return result
+}
+
+/**
+ * Classifies one persisted gateway completion. Only a `foreman.event.v1`
+ * envelope with a successful status (200) carries attributed facts; failed or
+ * unparseable records are ignored rather than treated as unmeasured. A missing
+ * or non-integer `usage.input` means input was not measured, while an explicit
+ * numeric zero stays a genuine measurement.
+ */
+function parseGatewayCompletion(
+  value: string | null,
+  eventId: number,
+): { executionId: string; inputUnmeasured: boolean; identity?: { provider: string; model: string; eventId: number } } | undefined {
+  if (value === null) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    return undefined
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+  const envelope = parsed as Record<string, unknown>
+  if (envelope.schema_version !== 'foreman.event.v1') return undefined
+  const rawData = envelope.data
+  if (!rawData || typeof rawData !== 'object' || Array.isArray(rawData)) return undefined
+  const data = rawData as Record<string, unknown>
+  if (data.status !== 200) return undefined
+  const executionId = typeof data.executionId === 'string' ? data.executionId.trim() : ''
+  if (executionId === '') return undefined
+
+  const rawUsage = data.usage
+  const usage = rawUsage && typeof rawUsage === 'object' && !Array.isArray(rawUsage)
+    ? rawUsage as Record<string, unknown>
+    : undefined
+  const inputMeasured = readNonNegativeInteger(usage?.input) !== undefined
+
+  const provider = typeof data.provider === 'string' ? data.provider.trim() : ''
+  const publicModel = typeof data.publicModel === 'string' ? data.publicModel.trim() : ''
+  let identity: { provider: string; model: string; eventId: number } | undefined
+  if (provider !== '' && publicModel.startsWith(`${provider}/`)) {
+    const model = publicModel.slice(provider.length + 1).trim()
+    if (model !== '') identity = { provider, model, eventId }
+  }
+  return { executionId, inputUnmeasured: !inputMeasured, identity }
+}
+
+/**
+ * Drops a parsed input partition when the gateway proved it was never
+ * measured. A client compatibility zero is then indistinguishable from a real
+ * zero, so the truthful projection is an absent input; output and every other
+ * partition are untouched.
+ */
+function omitUnmeasuredInput(events: TurnUsageEvent[], evidence: GatewayEvidence | undefined): TurnUsageEvent[] {
+  if (!evidence?.inputUnmeasured) return events
+  let changed = false
+  const next = events.map((event) => {
+    if (event.input === undefined) return event
+    changed = true
+    return { ...event, input: undefined }
+  })
+  return changed ? next : events
+}
+
+function isNonBlank(value: string | null): value is string {
+  return value !== null && value.trim() !== ''
 }
 
 /** Pure projection shared by the single-run and batch readers. */
@@ -214,9 +343,10 @@ function projectTaskRunMetadata(input: {
   dispatchRows: AttemptDispatchRow[]
   usageEventCount: number
   eventsByExecution: Map<string, TurnUsageEvent[]>
+  gatewayByExecution: Map<string, GatewayEvidence>
   taskTps: TaskTps | undefined
 }): TaskRunResolvedUsage {
-  const { attemptRows, dispatchRows, usageEventCount, eventsByExecution, taskTps } = input
+  const { attemptRows, dispatchRows, usageEventCount, eventsByExecution, gatewayByExecution, taskTps } = input
   const dispatchByExecution = new Map<string, AttemptDispatchRow>()
   for (const d of dispatchRows) dispatchByExecution.set(d.execution_id, d)
 
@@ -373,6 +503,31 @@ function projectTaskRunMetadata(input: {
   }
   usage.reference_cost_complete = costTrustComplete && costFullyPriced
 
+  // --- Recorded identity ------------------------------------------------
+  // Internal display identity, independent of the strict resolved snapshot.
+  // A persisted dispatch row is authoritative; when no attempt recorded both
+  // fields, only a successfully attributed gateway completion may supply the
+  // pair, and only for an exact `<provider>/<model>` public model. Requested
+  // policy/profile text is never consulted.
+  let recorded: TaskRecordedModelIdentity | undefined
+  for (let i = dispatchRows.length - 1; i >= 0; i--) {
+    const row = dispatchRows[i]
+    if (isNonBlank(row.provider) && isNonBlank(row.model)) {
+      recorded = { provider: row.provider.trim(), model: row.model.trim() }
+      break
+    }
+  }
+  if (!recorded) {
+    let latestEventId = -1
+    for (const a of attemptRows) {
+      const identity = gatewayByExecution.get(a.execution_id)?.identity
+      if (identity !== undefined && identity.eventId > latestEventId) {
+        latestEventId = identity.eventId
+        recorded = { provider: identity.provider, model: identity.model }
+      }
+    }
+  }
+
   // Resolved dispatch: the most recent attempt whose captured snapshot is
   // schema-valid and complete (all required identity/speed/intelligence/
   // pricing fields present). Historical incomplete dispatches are omitted
@@ -386,7 +541,7 @@ function projectTaskRunMetadata(input: {
     }
   }
 
-  return { resolved, usage }
+  return { resolved, recorded, usage }
 }
 
 function toResolvedDispatch(row: AttemptDispatchRow): TaskResolvedDispatch | undefined {

@@ -80,12 +80,13 @@ export interface TaskRunLedgerRow {
    */
   resolved_profile?: string
   /**
-   * Additive paired labels for the run's persisted canonical `resolved.provider`
-   * and `resolved.model`. Both are always emitted together for a resolvable
+   * Additive paired labels for the run's recorded provider/model identity
+   * (falling back to `resolved.provider`/`resolved.model` only when no recorded
+   * identity exists). Both are always emitted together for a resolvable
    * identity: the injected resolver supplies current-Catalog labels when the
    * route is still known, otherwise the exact recorded provider/model ids are
    * emitted so a historical row is never blank. No label is invented when the
-   * identity is unknown, and both are omitted when `resolved` is absent.
+   * identity is unknown, and both are omitted when no identity is available.
    */
   provider_display_name?: string
   model_display_name?: string
@@ -618,15 +619,19 @@ function readRecentTaskRunLedger(
     if (row.started_at) ledger.started_at = row.started_at
     if (row.ended_at) ledger.finished_at = row.ended_at
     if (meta.resolved) ledger.resolved = meta.resolved
-    // Additive paired human display labels. The persisted canonical provider is
+    // Additive paired human display labels. The recorded identity is preferred:
+    // it survives an incomplete pricing/speed snapshot, while the strict
+    // resolved dispatch is only a fallback. The persisted canonical provider is
     // normalized through the same legacy migration the model rankings use, then
     // resolved once by the injected resolver. When the current offerings no
     // longer label the historical route (or no resolver is injected) the exact
     // recorded provider/model ids are emitted verbatim: a historical row is
     // never blank, and a missing identity is never invented.
-    if (meta.resolved) {
-      const recordedProvider = migrateProviderId(meta.resolved.provider)
-      const displayNames = resolveDisplayNames?.(recordedProvider, meta.resolved.model)
+    const identity = meta.recorded
+      ?? (meta.resolved ? { provider: meta.resolved.provider, model: meta.resolved.model } : undefined)
+    if (identity) {
+      const recordedProvider = migrateProviderId(identity.provider)
+      const displayNames = resolveDisplayNames?.(recordedProvider, identity.model)
       const pairedProvider = nonBlankString(displayNames?.provider_display_name)
       const pairedModel = nonBlankString(displayNames?.model_display_name)
       if (pairedProvider && pairedModel) {
@@ -634,7 +639,7 @@ function readRecentTaskRunLedger(
         ledger.model_display_name = pairedModel
       } else {
         const fallbackProvider = nonBlankString(recordedProvider)
-        const fallbackModel = nonBlankString(meta.resolved.model)
+        const fallbackModel = nonBlankString(identity.model)
         if (fallbackProvider && fallbackModel) {
           ledger.provider_display_name = fallbackProvider
           ledger.model_display_name = fallbackModel
