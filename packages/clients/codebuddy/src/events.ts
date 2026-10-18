@@ -1,7 +1,7 @@
 import { turnUsageRecord } from '@wrenyard/agent-client/native';
 import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
-    finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, runFinishedRecord, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
+    finishedEvent, jsonStringValue, messageEvent, readNativeRecords, reasoningRecord, recordOf, runFinishedRecord, sessionIdOf, stringOf, textOf, toolCallRecord, toolResultRecord,
 } from '@wrenyard/agent-client/native';
 import { ResponseTpsSampler, completeUsageTokens, hasNormalizedFailureField } from '@wrenyard/agent-client/statistics';
 
@@ -126,6 +126,11 @@ function* assistantEvents(record: Record<string, unknown>): Generator<AgentEvent
             const text = stringOf(block, 'text');
             if (text)
                 yield messageEvent(text);
+        }
+        else if (blockType === 'thinking') {
+            const thinking = stringOf(block, 'thinking');
+            if (thinking)
+                yield { type: 'output', record: reasoningRecord(thinking) };
         }
         else if (blockType === 'tool_use') {
             const callId = stringOf(block, 'id');

@@ -163,6 +163,9 @@ interface RegistryEntry {
   pgid?: number
   timeoutTimer?: ReturnType<typeof setTimeout>
   idleTimer?: ReturnType<typeof setTimeout>
+  /** Tool calls seen but not yet answered by their tool_result. While this set
+   *  is non-empty the idle bound is suspended, not refreshed. */
+  outstandingToolCalls?: Set<string>
   cancelRequested: boolean
   shutdownRequested: boolean
   timedOut: boolean
@@ -204,7 +207,10 @@ type TerminalIntent =
   | { kind: 'timeout' }
   | { kind: 'shutdown' }
 type StreamEventRecord = Record<string, unknown>
-type BClassEvent = { type: 'message' | 'tool_call' | 'tool_result' | 'turn_usage'; data: Record<string, unknown> }
+type BClassEvent = {
+  type: 'message' | 'reasoning' | 'tool_call' | 'tool_result' | 'turn_usage'
+  data: Record<string, unknown>
+}
 
 export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly db: ForemanDatabase
@@ -952,11 +958,13 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 
   /**
-   * Arms the per-attempt idle bound. The timer is refreshed only by real model
-   * output as decided by isModelOutputProgress: a tool_call, or a message whose
-   * text is not blank. Heartbeat, status, tool_result and usage events do not
-   * reset it. Expiry commits the same terminal intent as the wall-clock attempt
-   * deadline; a committed terminal state is never overridden.
+   * Arms the per-attempt idle bound. The timer is suspended while a tool call is
+   * outstanding and re-armed when its tool_result arrives; otherwise it is
+   * refreshed only by real model output as decided by isModelOutputProgress: a
+   * tool_call, a tool_result, or a message/reasoning event whose text is not
+   * blank. Heartbeat, status and usage events do not reset it. Expiry commits
+   * the same terminal intent as the wall-clock attempt deadline; a committed
+   * terminal state is never overridden.
    */
   private armIdleTimer(entry: RegistryEntry): void {
     if (this.idleTimeoutMs <= 0) return
@@ -1057,8 +1065,20 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       }
 
       for (const mapped of mapStreamEventToBClass(event)) {
-        // Only real model output resets the idle bound; tool results, token
-        // accounting and whitespace-only message text are not progress.
+        // A tool call suspends the idle bound until its tool_result arrives, so
+        // a legitimately long-running tool cannot be killed while it runs. The
+        // wall-clock attempt deadline still applies.
+        if (mapped.type === 'tool_call') {
+          entry.outstandingToolCalls ??= new Set()
+          entry.outstandingToolCalls.add(typeof mapped.data.call_id === 'string' ? mapped.data.call_id : '')
+          if (entry.outstandingToolCalls.size === 1) this.clearIdleTimer(entry)
+        } else if (mapped.type === 'tool_result') {
+          entry.outstandingToolCalls?.delete(typeof mapped.data.call_id === 'string' ? mapped.data.call_id : '')
+          if (entry.outstandingToolCalls && entry.outstandingToolCalls.size === 0) this.armIdleTimer(entry)
+        }
+        // With no tool outstanding, only real model output resets the idle
+        // bound: a tool_call, a tool_result, or non-blank message/reasoning text.
+        // Status, heartbeat, token accounting and blank text are not progress.
         if (isModelOutputProgress(mapped)) {
           entry.idleTimer?.refresh()
         }
@@ -2088,13 +2108,15 @@ function parseDispatchPlans(raw: string | undefined): Record<string, unknown> {
 }
 
 /**
- * Reports whether a mapped stream event is real model output: a tool call, or
- * a message carrying non-whitespace text. Tool results, usage accounting and
- * empty messages must not count as idle-watchdog progress.
+ * Reports whether a mapped stream event is real model output: a tool call, a
+ * tool result, or a message/reasoning event carrying non-whitespace text. Usage
+ * accounting, blank text and status noise are not idle-watchdog progress; a
+ * tool that is still running is handled by the outstanding-call suspension
+ * rather than by refreshing the idle bound.
  */
 function isModelOutputProgress(mapped: BClassEvent): boolean {
-  if (mapped.type === 'tool_call') return true
-  if (mapped.type === 'message') {
+  if (mapped.type === 'tool_call' || mapped.type === 'tool_result') return true
+  if (mapped.type === 'message' || mapped.type === 'reasoning') {
     return typeof mapped.data.text === 'string' && mapped.data.text.trim().length > 0
   }
   return false
@@ -2174,6 +2196,9 @@ export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] 
         },
       })
     }
+  } else if (type === 'reasoning') {
+    const text = stringProp(event, 'text')
+    if (text) mapped.push({ type: 'reasoning', data: { text } })
   } else if (type === 'tool_call') {
     mapped.push({
       type: 'tool_call',

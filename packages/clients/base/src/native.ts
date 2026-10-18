@@ -239,6 +239,11 @@ export function messageRecord(text: string, role = 'assistant'): Record<string, 
     return { type: 'message', role, text };
 }
 
+/** A normalized reasoning record. */
+export function reasoningRecord(text: string): Record<string, unknown> {
+    return { type: 'reasoning', text };
+}
+
 /** A normalized token-accounting record. */
 export function turnUsageRecord(data: Record<string, unknown>): Record<string, unknown> {
     return { type: 'turn_usage', ...data };

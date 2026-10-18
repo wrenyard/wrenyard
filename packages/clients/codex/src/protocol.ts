@@ -2,7 +2,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { CodexStatistics } from './statistics.ts';
 import { startProcess, type ProcessSpec } from '@wrenyard/execution';
 import type { AgentEvent, AgentRequest, AgentSession, OperationOptions } from '@wrenyard/agent-client';
-import { finishedEvent, jsonStringValue, messageEvent, recordOf, stringOf, toolCallRecord, toolResultRecord, turnUsageRecord } from '@wrenyard/agent-client/native';
+import { finishedEvent, jsonStringValue, messageEvent, reasoningRecord, recordOf, stringOf, toolCallRecord, toolResultRecord, turnUsageRecord } from '@wrenyard/agent-client/native';
 import { applyTrustedAgentTurnContract, completeUsageTokens, nonnegativeInt, positiveInt } from '@wrenyard/agent-client/statistics';
 import { refreshCodexAuth, type CodexAuth } from './readiness.ts';
 
@@ -185,6 +185,9 @@ async function* protocol(
         statistics.observe(method, params);
         if (method === 'item/agentMessage/delta' && typeof params.delta === 'string' && params.delta) {
             output += params.delta;
+        }
+        else if ((method === 'item/reasoning/textDelta' || method === 'item/reasoning/summaryTextDelta') && typeof params.delta === 'string' && params.delta) {
+            yield { type: 'output', record: reasoningRecord(params.delta) };
         }
         else if (method === 'item/started' || method === 'item/completed') {
             const item = recordOf(params, 'item');

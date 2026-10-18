@@ -1,7 +1,7 @@
 import { turnUsageRecord } from '@wrenyard/agent-client/native';
 import type { AgentEvent, StreamChunk } from '@wrenyard/agent-client';
 import {
-    finishedEvent, jsonStringValue, messageEvent, readNativeRecords, recordOf, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
+    finishedEvent, jsonStringValue, messageEvent, readNativeRecords, reasoningRecord, recordOf, sessionIdOf, stringOf, toolCallRecord, toolResultRecord,
 } from '@wrenyard/agent-client/native';
 import {
     CursorAssistantTextDeduper, CursorTpsSampler, attachTpsSamples, completeUsageTokens, nonnegativeInt, positiveInt,
@@ -66,6 +66,12 @@ export async function* decodeCursor(events: AsyncIterable<StreamChunk>, model: s
         if (id)
             sessionId = id;
         const type = stringOf(record, 'type').toLowerCase();
+        if (type === 'thinking') {
+            const text = stringOf(record, 'text');
+            if (text)
+                yield { type: 'output', record: reasoningRecord(text) };
+            continue;
+        }
         // Real deltas accumulate; only events that end a response boundary
         // flush the aggregate message, so the transcript carries one card per
         // response rather than one per delta.
