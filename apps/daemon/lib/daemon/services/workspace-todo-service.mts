@@ -4,10 +4,10 @@
  * Each todo is one Markdown file at `<workspaceRoot>/todos/<id>.md`. The file
  * is authoritative: YAML front matter carries the structured fields and the
  * body carries the Request and Acceptance criteria. A disposable SQLite index
- * mirrors the parsed front-matter fields; it is rebuilt from the files on every
- * read and after every write, so an externally edited or deleted index can
- * never disagree with the files for long and deleting it is recovered by a
- * rebuild. There is deliberately no deletion of todos (cancel is a status).
+ * mirrors the parsed front-matter fields; it is reconciled incrementally with
+ * per-record writes, and an unchanged scan reuses cached parses and touches no
+ * database. An externally edited index is repaired by a rebuild. There is
+ * deliberately no deletion of todos (cancel is a status).
  * Every write is validated and atomic, `done` (execution finished) and
  * `accepted` (acceptance passed) remain distinct stored states, and dependency
  * existence plus acyclicity are checked on writes only so reads can still
@@ -15,7 +15,8 @@
  */
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { lstat, readdir, readFile, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import Database from 'better-sqlite3'
 import type { Database as DatabaseInstance } from 'better-sqlite3'
@@ -29,7 +30,7 @@ const TODO_EXT = '.md'
 
 /**
  * The disposable index schema: only the parsed front-matter fields are mirrored,
- * never the Markdown body. The whole snapshot is replaced in one transaction.
+ * never the Markdown body. Rows are reconciled individually.
  */
 const INDEX_SCHEMA = `
 CREATE TABLE IF NOT EXISTS todo_index (
@@ -43,13 +44,29 @@ CREATE TABLE IF NOT EXISTS todo_index (
 )
 `
 
-/** Insert one indexed row; the snapshot is replaced row by row inside one transaction. */
-const INDEX_INSERT_SQL =
-  'INSERT INTO todo_index (id, title, status, project, depends_on, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?)'
+/** Insert or update one indexed row without disturbing other rows. */
+const INDEX_UPSERT_SQL = `INSERT INTO todo_index (id, title, status, project, depends_on, created, updated)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  title = excluded.title,
+  status = excluded.status,
+  project = excluded.project,
+  depends_on = excluded.depends_on,
+  created = excluded.created,
+  updated = excluded.updated`
+
+/** Delete one stale indexed row. */
+const INDEX_DELETE_SQL = 'DELETE FROM todo_index WHERE id = ?'
 
 /** Read the indexed snapshot in a stable, deterministic order. */
 const INDEX_SELECT_SQL =
   'SELECT id, title, status, project, depends_on, created, updated FROM todo_index ORDER BY id'
+
+/** Index rows applied per transaction before yielding to the event loop. */
+const INDEX_WRITE_BATCH = 500
+
+/** Todo files scanned between yields while a large directory is processed. */
+const FILE_SCAN_BATCH = 200
 
 /** A short, path-safe, lowercase id used verbatim as the file stem. */
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/u
@@ -92,6 +109,29 @@ export interface TodoIndexRecord {
   updated: string
 }
 
+/** The filesystem facts that decide whether a cached parse is still valid. */
+interface FileSignature {
+  mtimeMs: number
+  ctimeMs: number
+  size: number
+  ino: number
+}
+
+/** One cached parse plus the file signature it was produced from. */
+interface CachedTodo {
+  signature: FileSignature
+  todo: Todo
+}
+
+/**
+ * The index database and its WAL sidecar. A missing file is represented by
+ * `null` because an absent sidecar is normal and must not be an error.
+ */
+interface IndexFileSignature {
+  db: FileSignature | null
+  wal: FileSignature | null
+}
+
 /** Input for {@link WorkspaceTodoService.createTodo}. */
 export interface TodoCreateInput {
   title: string
@@ -131,6 +171,17 @@ export class WorkspaceTodoService {
   private readonly todosDir: string
   /** The disposable index path, or undefined when only the files are consulted. */
   private readonly indexDbPath: string | undefined
+  /** Parsed todos keyed by file name, reused while the file signature holds. */
+  private readonly parseCache = new Map<string, CachedTodo>()
+  /** The last index rows this instance wrote, or null until reconciled once. */
+  private indexSnapshot: Map<string, TodoIndexRecord> | null = null
+  /**
+   * The database/WAL signature observed after this instance's own last
+   * reconcile, or null until then. Another instance can change the shared index
+   * without touching this instance's snapshot, so the signature decides whether
+   * that snapshot is still a trustworthy diff baseline.
+   */
+  private indexSignature: IndexFileSignature | null = null
 
   constructor(workspaceRoot: string, indexDbPath?: string) {
     // Resolve the supplied root once, ensure it exists, then canonicalize to
@@ -146,79 +197,81 @@ export class WorkspaceTodoService {
 
   /** Every todo currently on disk, ordered by id. Malformed files are errors. */
   async listTodos(): Promise<Todo[]> {
-    const todos = this.readAllTodos()
-    this.writeIndex(todos)
-    return todos
+    const todos = await this.withLock(async () => {
+      const scanned = await this.scanLocked()
+      await this.reconcileIndexLocked(scanned)
+      return scanned
+    })
+    return todos.map(cloneTodo)
   }
 
   /** One todo by id; a missing or non-regular target is an error. */
   async getTodo(id: string): Promise<Todo> {
-    const filePath = this.todoPath(id)
-    if (!existsSync(filePath)) throw new WorkspaceTodoError('missing', `Todo not found: ${id}`)
-    if (!lstatSync(filePath).isFile()) throw new WorkspaceTodoError('not_a_file', `Todo is not a regular file: ${id}`)
-    const todo = parseTodoFile(filePath, readFileSync(filePath, 'utf-8'))
-    this.refreshIndex()
+    const todo = await this.readTodoFile(this.todoPath(id), id)
+    await this.refreshIndex()
     return todo
   }
 
   /** Create a new todo with a freshly generated immutable id. */
   async createTodo(input: TodoCreateInput): Promise<Todo> {
-    const id = this.nextId()
-    const now = new Date().toISOString()
-    const project = input.project === undefined ? undefined : requireProject(input.project, id)
-    const todo: Todo = {
-      id,
-      title: requireTitle(input.title, id),
-      status: input.status === undefined ? 'open' : requireStatus(input.status, id),
-      ...(project !== undefined ? { project } : {}),
-      depends_on: requireDependencies(input.depends_on, id),
-      created: now,
-      updated: now,
-      request: input.request ?? '',
-      acceptance: input.acceptance ?? '',
-      attachments: requireAttachments(input.attachments, id),
-    }
-    this.assertDependenciesKnown(todo)
-    const filePath = this.todoPath(id)
-    if (existsSync(filePath)) throw new WorkspaceTodoError('exists', `Todo already exists: ${id}`)
-    this.writeTodo(filePath, todo)
-    this.refreshIndex()
-    return todo
+    return this.withLock(async () => {
+      const id = this.nextId()
+      const now = new Date().toISOString()
+      const project = input.project === undefined ? undefined : requireProject(input.project, id)
+      const todo: Todo = {
+        id,
+        title: requireTitle(input.title, id),
+        status: input.status === undefined ? 'open' : requireStatus(input.status, id),
+        ...(project !== undefined ? { project } : {}),
+        depends_on: requireDependencies(input.depends_on, id),
+        created: now,
+        updated: now,
+        request: input.request ?? '',
+        acceptance: input.acceptance ?? '',
+        attachments: requireAttachments(input.attachments, id),
+      }
+      await this.assertDependenciesKnownLocked(todo)
+      const filePath = this.todoPath(id)
+      if (existsSync(filePath)) throw new WorkspaceTodoError('exists', `Todo already exists: ${id}`)
+      this.writeTodo(filePath, todo)
+      await this.refreshIndexLocked()
+      return todo
+    })
   }
 
   /** Update an existing todo; id and created are preserved, updated refreshed. */
   async updateTodo(input: TodoUpdateInput): Promise<Todo> {
-    const filePath = this.todoPath(input.id)
-    if (!existsSync(filePath)) throw new WorkspaceTodoError('missing', `Todo not found: ${input.id}`)
-    if (!lstatSync(filePath).isFile()) throw new WorkspaceTodoError('not_a_file', `Todo is not a regular file: ${input.id}`)
-    const current = parseTodoFile(filePath, readFileSync(filePath, 'utf-8'))
-    const next: Todo = {
-      ...current,
-      title: input.title === undefined ? current.title : requireTitle(input.title, current.id),
-      status: input.status === undefined ? current.status : requireStatus(input.status, current.id),
-      depends_on: input.depends_on === undefined ? current.depends_on : requireDependencies(input.depends_on, current.id),
-      request: input.request === undefined ? current.request : input.request,
-      acceptance: input.acceptance === undefined ? current.acceptance : input.acceptance,
-      attachments: input.attachments === undefined ? current.attachments : requireAttachments(input.attachments, current.id),
-      updated: new Date().toISOString(),
-    }
-    if (input.project !== undefined) next.project = requireProject(input.project, current.id)
-    this.assertDependenciesKnown(next)
-    this.writeTodo(filePath, next)
-    this.refreshIndex()
-    return next
+    return this.withLock(async () => {
+      const filePath = this.todoPath(input.id)
+      const current = await this.readTodoFile(filePath, input.id)
+      const next: Todo = {
+        ...current,
+        title: input.title === undefined ? current.title : requireTitle(input.title, current.id),
+        status: input.status === undefined ? current.status : requireStatus(input.status, current.id),
+        depends_on: input.depends_on === undefined ? current.depends_on : requireDependencies(input.depends_on, current.id),
+        request: input.request === undefined ? current.request : input.request,
+        acceptance: input.acceptance === undefined ? current.acceptance : input.acceptance,
+        attachments: input.attachments === undefined ? current.attachments : requireAttachments(input.attachments, current.id),
+        updated: new Date().toISOString(),
+      }
+      if (input.project !== undefined) next.project = requireProject(input.project, current.id)
+      await this.assertDependenciesKnownLocked(next)
+      this.writeTodo(filePath, next)
+      await this.refreshIndexLocked()
+      return next
+    })
   }
 
   /** Persist an execution summary without changing todo metadata or timestamps. */
   async annotateTodo(id: string, resultSummary: string): Promise<Todo> {
-    const filePath = this.todoPath(id)
-    if (!existsSync(filePath)) throw new WorkspaceTodoError('missing', `Todo not found: ${id}`)
-    if (!lstatSync(filePath).isFile()) throw new WorkspaceTodoError('not_a_file', `Todo is not a regular file: ${id}`)
-    const todo = parseTodoFile(filePath, readFileSync(filePath, 'utf-8'))
-    const annotated = { ...todo, resultSummary }
-    this.writeTodo(filePath, annotated)
-    this.refreshIndex()
-    return annotated
+    return this.withLock(async () => {
+      const filePath = this.todoPath(id)
+      const todo = await this.readTodoFile(filePath, id)
+      const annotated = { ...todo, resultSummary }
+      this.writeTodo(filePath, annotated)
+      await this.refreshIndexLocked()
+      return annotated
+    })
   }
 
   /**
@@ -227,15 +280,18 @@ export class WorkspaceTodoService {
    * here and can never leave a partially rebuilt index behind.
    */
   async rebuildIndex(): Promise<TodoIndexRecord[]> {
-    const todos = this.readAllTodos()
-    this.writeIndex(todos)
-    return todos.map(toIndexRecord)
+    return this.withLock(async () => {
+      const todos = await this.scanLocked()
+      this.indexSnapshot = null
+      await this.reconcileIndexLocked(todos)
+      return todos.map(toIndexRecord)
+    })
   }
 
   /** The current index snapshot, read without touching the Markdown files. */
   async readIndex(): Promise<TodoIndexRecord[]> {
     const path = this.indexDbPath
-    if (path === undefined) return this.readAllTodos().map(toIndexRecord)
+    if (path === undefined) return (await this.scan()).map(toIndexRecord)
     const db = openIndex(path)
     try {
       return readIndexRows(db)
@@ -244,30 +300,98 @@ export class WorkspaceTodoService {
     }
   }
 
-  /** Rebuild the index from disk after a read; a no-op without a configured path. */
-  private refreshIndex(): void {
+  /** Reconcile the index from disk after a read; a no-op without a configured path. */
+  private async refreshIndex(): Promise<void> {
     if (this.indexDbPath === undefined) return
-    this.writeIndex(this.readAllTodos())
+    await this.withLock(() => this.refreshIndexLocked())
+  }
+
+  /** Reconcile the index from disk while the caller already holds the lock. */
+  private async refreshIndexLocked(): Promise<void> {
+    if (this.indexDbPath === undefined) return
+    await this.reconcileIndexLocked(await this.scanLocked())
   }
 
   /**
-   * Replace the whole indexed snapshot with `todos` in one transaction. A no-op
-   * when no index path was configured, and the connection is always closed
-   * before returning so nothing is retained between calls.
+   * Apply only the rows that differ from a trusted snapshot. The snapshot is
+   * trusted only while the database/WAL signature still matches the one
+   * recorded after this instance's own last reconcile; otherwise the current
+   * rows are re-read, so another instance's write can never be masked by a
+   * stale baseline. An unchanged scan with a matching snapshot therefore opens
+   * no database and runs no SQL beyond the stat calls.
    */
-  private writeIndex(todos: Todo[]): void {
+  private async reconcileIndexLocked(todos: Todo[]): Promise<void> {
     const path = this.indexDbPath
     if (path === undefined) return
-    const records = todos.map(toIndexRecord)
+    const next = new Map(todos.map((todo) => [todo.id, toIndexRecord(todo)] as const))
+    const observed = await indexFileSignature(path)
+    let current = this.indexSnapshot
+    if (
+      current === null ||
+      observed.db === null ||
+      this.indexSignature === null ||
+      !sameIndexSignature(observed, this.indexSignature)
+    ) {
+      current = this.readIndexSnapshot(path)
+    }
+    const removed: string[] = []
+    const changed: TodoIndexRecord[] = []
+    for (const [id, record] of next) {
+      const prior = current.get(id)
+      if (prior === undefined || !sameIndexRecord(prior, record)) changed.push(record)
+    }
+    for (const id of current.keys()) {
+      if (!next.has(id)) removed.push(id)
+    }
+    if (removed.length > 0 || changed.length > 0) {
+      try {
+        await this.writeIndexChanges(path, removed, changed)
+      } catch (error) {
+        // A failed batch may have applied partially, so neither the rows nor
+        // the signature can be trusted as a baseline after this point.
+        this.indexSnapshot = null
+        this.indexSignature = null
+        throw error
+      }
+    }
+    this.indexSnapshot = next
+    this.indexSignature = await indexFileSignature(path)
+  }
+
+  /** Read the current index rows without touching the Markdown files. */
+  private readIndexSnapshot(path: string): Map<string, TodoIndexRecord> {
     const db = openIndex(path)
     try {
-      db.transaction((rows: TodoIndexRecord[]) => {
-        db.prepare('DELETE FROM todo_index').run()
-        const insert = db.prepare(INDEX_INSERT_SQL)
-        for (const row of rows) {
-          insert.run(row.id, row.title, row.status, row.project ?? null, JSON.stringify(row.depends_on), row.created, row.updated)
-        }
-      })(records)
+      return new Map(readIndexRows(db).map((record) => [record.id, record]))
+    } finally {
+      db.close()
+    }
+  }
+
+  /**
+   * Delete and upsert the given rows in bounded transactions, yielding between
+   * batches so a large first reconciliation cannot block the event loop.
+   */
+  private async writeIndexChanges(path: string, removed: string[], changed: TodoIndexRecord[]): Promise<void> {
+    const db = openIndex(path)
+    try {
+      const remove = db.prepare(INDEX_DELETE_SQL)
+      const upsert = db.prepare(INDEX_UPSERT_SQL)
+      const total = removed.length + changed.length
+      for (let start = 0; start < total; start += INDEX_WRITE_BATCH) {
+        const end = Math.min(start + INDEX_WRITE_BATCH, total)
+        db.transaction(() => {
+          for (let index = start; index < end; index += 1) {
+            if (index < removed.length) {
+              remove.run(removed[index])
+            } else {
+              const row = changed[index - removed.length]
+              upsert.run(row.id, row.title, row.status, row.project ?? null, JSON.stringify(row.depends_on), row.created, row.updated)
+            }
+          }
+        })()
+        if (end < total) await yieldToEventLoop()
+      }
     } finally {
       db.close()
     }
@@ -283,27 +407,94 @@ export class WorkspaceTodoService {
     return absolute
   }
 
-  /** Read and parse every todo file; a missing directory is simply empty. */
-  private readAllTodos(): Todo[] {
-    if (!existsSync(this.todosDir)) return []
-    const todos: Todo[] = []
-    for (const entry of readdirSync(this.todosDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(TODO_EXT)) continue
-      const filePath = join(this.todosDir, entry.name)
-      todos.push(parseTodoFile(filePath, readFileSync(filePath, 'utf-8')))
+  /**
+   * Scan every todo file, reusing cached parses while a file's signature holds.
+   * The cache is replaced only after all present files parsed, so a malformed
+   * file rejects the scan without changing the previous snapshot.
+   */
+  private async scanLocked(): Promise<Todo[]> {
+    let names: string[]
+    try {
+      const entries = await readdir(this.todosDir, { withFileTypes: true })
+      names = entries.filter((entry) => entry.isFile() && entry.name.endsWith(TODO_EXT)).map((entry) => entry.name)
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      names = []
     }
+    const next = new Map<string, CachedTodo>()
+    const todos: Todo[] = []
+    let processed = 0
+    for (const name of names) {
+      const filePath = join(this.todosDir, name)
+      let info
+      try {
+        info = await lstat(filePath)
+      } catch (error) {
+        if (isNotFound(error)) continue
+        throw error
+      }
+      if (!info.isFile()) continue
+      const signature: FileSignature = { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, ino: info.ino }
+      const cached = this.parseCache.get(name)
+      let todo: Todo
+      if (cached !== undefined && sameSignature(cached.signature, signature)) {
+        todo = cached.todo
+      } else {
+        try {
+          todo = parseTodoFile(filePath, await readFile(filePath, 'utf-8'))
+        } catch (error) {
+          if (isNotFound(error)) continue
+          throw error
+        }
+      }
+      next.set(name, { signature, todo })
+      todos.push(todo)
+      processed += 1
+      if (processed % FILE_SCAN_BATCH === 0) await yieldToEventLoop()
+    }
+    this.parseCache.clear()
+    for (const [name, entry] of next) this.parseCache.set(name, entry)
     todos.sort((a, b) => a.id.localeCompare(b.id))
     return todos
+  }
+
+  /** Run a scan under the workspace lock so concurrent callers cannot interleave. */
+  private scan(): Promise<Todo[]> {
+    return this.withLock(() => this.scanLocked())
+  }
+
+  /**
+   * Serialize one complete read-modify-write cycle against every other operation
+   * on the same todos directory, in this process and in any other service
+   * instance sharing it. A caller that already holds the lock must call the
+   * `…Locked` helpers instead of re-entering this method.
+   */
+  private withLock<T>(operation: () => Promise<T>): Promise<T> {
+    return withWorkspaceLock(this.todosDir, operation)
+  }
+
+  /** Read and parse one todo file, mapping absence to the documented errors. */
+  private async readTodoFile(filePath: string, id: string): Promise<Todo> {
+    let info
+    try {
+      info = await lstat(filePath)
+    } catch (error) {
+      if (isNotFound(error)) throw new WorkspaceTodoError('missing', `Todo not found: ${id}`)
+      throw error
+    }
+    if (!info.isFile()) throw new WorkspaceTodoError('not_a_file', `Todo is not a regular file: ${id}`)
+    return parseTodoFile(filePath, await readFile(filePath, 'utf-8'))
   }
 
   /**
    * A write-time dependency check: every dependency must resolve to a known
    * todo and the combined graph must be acyclic. Reads skip this so a file with
-   * an externally missing dependency can still be inspected.
+   * an externally missing dependency can still be inspected. The caller holds
+   * the workspace lock, so this uses the unlocked scan.
    */
-  private assertDependenciesKnown(todo: Todo): void {
+  private async assertDependenciesKnownLocked(todo: Todo): Promise<void> {
     const graph = new Map<string, string[]>()
-    for (const other of this.readAllTodos()) {
+    for (const other of await this.scanLocked()) {
       if (other.id !== todo.id) graph.set(other.id, other.depends_on)
     }
     graph.set(todo.id, todo.depends_on)
@@ -341,6 +532,34 @@ export class WorkspaceTodoService {
 }
 
 // Module-level helpers (no instance state needed)
+
+/**
+ * Process-wide serialization keyed by the canonical todos directory. Separate
+ * service instances (the daemon RPC host and the bot host) share one workspace
+ * and one index file, so an instance-local queue alone cannot stop one instance
+ * from applying a stale snapshot over another's newer write.
+ */
+const workspaceLocks = new Map<string, Promise<void>>()
+
+/**
+ * Run `operation` after every earlier operation on the same key has settled. A
+ * failure reaches only its own caller: the stored chain always continues
+ * resolved, so later operations are never blocked by an earlier error.
+ */
+function withWorkspaceLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = workspaceLocks.get(key) ?? Promise.resolve()
+  const result = previous.then(operation, operation)
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  workspaceLocks.set(key, settled)
+  void settled.then(() => {
+    // Drop the entry only while it is still the tail of the chain.
+    if (workspaceLocks.get(key) === settled) workspaceLocks.delete(key)
+  })
+  return result
+}
 
 /**
  * The disposable index location for one workspace, under the daemon's local
@@ -382,6 +601,70 @@ function toIndexRecord(todo: Todo): TodoIndexRecord {
     created: todo.created,
     updated: todo.updated,
   }
+}
+
+/** Whether two file signatures describe the same unchanged content. */
+function sameSignature(a: FileSignature, b: FileSignature): boolean {
+  return a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.size === b.size && a.ino === b.ino
+}
+
+/** Stat one index file without opening it; absence is represented by null. */
+async function statFileSignature(path: string): Promise<FileSignature | null> {
+  try {
+    const info = await stat(path)
+    return { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, ino: info.ino }
+  } catch (error) {
+    if (isNotFound(error)) return null
+    throw error
+  }
+}
+
+/**
+ * The signature of the index database plus its `-wal` sidecar. Computing it
+ * never opens the database, and a missing sidecar is a normal null signature.
+ */
+async function indexFileSignature(path: string): Promise<IndexFileSignature> {
+  const [db, wal] = await Promise.all([statFileSignature(path), statFileSignature(`${path}-wal`)])
+  return { db, wal }
+}
+
+/** Whether two database/WAL signatures describe the same files. */
+function sameIndexSignature(a: IndexFileSignature, b: IndexFileSignature): boolean {
+  return sameNullableSignature(a.db, b.db) && sameNullableSignature(a.wal, b.wal)
+}
+
+function sameNullableSignature(a: FileSignature | null, b: FileSignature | null): boolean {
+  if (a === null || b === null) return a === b
+  return sameSignature(a, b)
+}
+
+/** Whether two indexed records carry identical values. */
+function sameIndexRecord(a: TodoIndexRecord, b: TodoIndexRecord): boolean {
+  return (
+    a.id === b.id &&
+    a.title === b.title &&
+    a.status === b.status &&
+    a.project === b.project &&
+    a.created === b.created &&
+    a.updated === b.updated &&
+    a.depends_on.length === b.depends_on.length &&
+    a.depends_on.every((entry, index) => entry === b.depends_on[index])
+  )
+}
+
+/** Copy a todo so callers never share a mutable object with the parse cache. */
+function cloneTodo(todo: Todo): Todo {
+  return { ...todo, depends_on: [...todo.depends_on], attachments: [...todo.attachments] }
+}
+
+/** Whether a filesystem error means the target is absent. */
+function isNotFound(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'ENOENT'
+}
+
+/** Yield to the event loop between bounded batches of blocking work. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
 }
 
 /** Read the indexed snapshot in its stable order. */
