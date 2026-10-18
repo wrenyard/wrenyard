@@ -1,47 +1,47 @@
 {
   "schema_version": "wrenyard.update.v1",
-  "version": "1.0.98",
-  "published_at": "2026-10-18T16:27:07.000Z",
+  "version": "1.0.99",
+  "published_at": "2026-10-18T17:20:37.000Z",
   "assets": [
     {
-      "name": "wrenyard-desktop-1.0.98-darwin-arm64.dmg",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.98/wrenyard-desktop-1.0.98-darwin-arm64.dmg",
-      "sha256": "1c94f1a2bbb0c2a98a261ad47d3ffc5438a6049874518821631cc2149121f426"
+      "name": "wrenyard-desktop-1.0.99-darwin-arm64.dmg",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.99/wrenyard-desktop-1.0.99-darwin-arm64.dmg",
+      "sha256": "39ba15c1bb0ef72ee616308f0ecb55d84f2ba527d704fb94a3e8fcf3b22f0bb6"
     },
     {
-      "name": "wrenyard-desktop-1.0.98-darwin-arm64.zip",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.98/wrenyard-desktop-1.0.98-darwin-arm64.zip",
-      "sha256": "cdb6f6584a5e54e342447b5634258336f44771860b1f51ca8b27b880063acf5d"
+      "name": "wrenyard-desktop-1.0.99-darwin-arm64.zip",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.99/wrenyard-desktop-1.0.99-darwin-arm64.zip",
+      "sha256": "f5eb2d9b50d8e946773a2b7d288f61548ea2e87f035a0d8a8e31e7c37d73a396"
     },
     {
-      "name": "wrenyard-desktop-1.0.98-win32-x64-setup.exe",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.98/wrenyard-desktop-1.0.98-win32-x64-setup.exe",
-      "sha256": "ec0f68dd9591d30439ea10182102e13be922073c423726f07b040f365cbc1702"
+      "name": "wrenyard-desktop-1.0.99-win32-x64-setup.exe",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.99/wrenyard-desktop-1.0.99-win32-x64-setup.exe",
+      "sha256": "1a3df51d14f209cbe7534340ca8d19ddc084d2a13e5b8eafe751dc9cacd935ea"
     },
     {
-      "name": "wrenyard-desktop-1.0.98-linux-x64.AppImage",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.98/wrenyard-desktop-1.0.98-linux-x64.AppImage",
-      "sha256": "f2a9047388421f56068ad02febffa219f62f3220314579dec7daa2627d78ce1a"
+      "name": "wrenyard-desktop-1.0.99-linux-x64.AppImage",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.99/wrenyard-desktop-1.0.99-linux-x64.AppImage",
+      "sha256": "9ad3ca27600c46b896c80890c11627aa1690de7233ee4174ff103e56477a6c47"
     }
   ],
   "remote_payloads": [
     {
       "target": "darwin-arm64",
-      "name": "wrenyard-remote-1.0.98-darwin-arm64.tar.gz",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.98/wrenyard-remote-1.0.98-darwin-arm64.tar.gz",
-      "sha256": "f12bfc5acded9dc6efb9ddf2510233e249cb32b3ba0c5ab6446a58c3e8984727"
+      "name": "wrenyard-remote-1.0.99-darwin-arm64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.99/wrenyard-remote-1.0.99-darwin-arm64.tar.gz",
+      "sha256": "2c067baf52051736e3e61c43bb9f3b984a401b5ffdfce8151a06d91be673b5be"
     },
     {
       "target": "win32-x64",
-      "name": "wrenyard-remote-1.0.98-win32-x64.tar.gz",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.98/wrenyard-remote-1.0.98-win32-x64.tar.gz",
-      "sha256": "656449649c3ecc61fb08bbf946e606c73b3e862c144bfa11d237ada4dfe10f3d"
+      "name": "wrenyard-remote-1.0.99-win32-x64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.99/wrenyard-remote-1.0.99-win32-x64.tar.gz",
+      "sha256": "c7845ae0d08be33a821e830037a11f01eb1da6fee782f474cc0801a721b06dde"
     },
     {
       "target": "linux-x64",
-      "name": "wrenyard-remote-1.0.98-linux-x64.tar.gz",
-      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.98/wrenyard-remote-1.0.98-linux-x64.tar.gz",
-      "sha256": "21445c1858697b0849e5123bbe83322292b95ccdbe71caae0268e07241156663"
+      "name": "wrenyard-remote-1.0.99-linux-x64.tar.gz",
+      "url": "https://github.com/wrenyard/wrenyard/releases/download/v1.0.99/wrenyard-remote-1.0.99-linux-x64.tar.gz",
+      "sha256": "ac8db8b9985139613815e83e233e246b6f6df18592e6467482bdb048da75e384"
     }
   ]
 }
