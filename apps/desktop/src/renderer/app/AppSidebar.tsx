@@ -1,4 +1,4 @@
-import { Search, SquarePen } from 'lucide-react';
+import { Check, Ellipsis, ListTodo, Search, SquarePen } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { SESSION_STATUS_FILTER_DEFAULT, type ShellPage, type SessionStatusFilter } from '@/shell-contract';
 import { shell } from '@/renderer/lib/desktop';
@@ -12,6 +12,12 @@ import { toast } from '@/renderer/lib/notify';
 import { SessionSidebar } from '@/renderer/pages/session/components/SessionSidebar';
 import { DaemonItem } from '@/renderer/app/statusbar/DaemonItem';
 import { Button } from '@/renderer/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/renderer/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { usePreferencesQuery } from '@/renderer/pages/settings/queries';
 import {
@@ -157,6 +163,29 @@ export function AppSidebar({ page, onOpenUpdate }: AppSidebarProps) {
             </SidebarMenuButton>
           </SidebarMenuItem>
         ))}
+        <SidebarMenuItem>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <SidebarMenuButton
+                  tooltip={page === 'todo' ? '待办' : '更多'}
+                  isActive={page === 'todo'}
+                  aria-current={page === 'todo' ? 'page' : undefined}
+                />
+              }
+            >
+              <Ellipsis />
+              <span>{page === 'todo' ? '待办' : '更多'}</span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="right" align="start" sideOffset={8} className="min-w-44">
+              <DropdownMenuItem onClick={() => { void shell.navigate('todo'); }}>
+                <ListTodo className="size-4" />
+                待办
+                {page === 'todo' ? <Check className="ml-auto size-4" /> : null}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </SidebarMenuItem>
       </SidebarMenu>
     </SidebarHeader>
   );

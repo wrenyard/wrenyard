@@ -21,10 +21,11 @@ import { StatsPage } from '@/renderer/pages/stats';
 import { TasksPage } from '@/renderer/pages/tasks';
 import { AgentsPage } from '@/renderer/pages/agents';
 import { BotPage } from '@/renderer/pages/bot/BotPage';
+import { TodoPage } from '@/renderer/pages/todo';
 import { SettingsPage } from '@/renderer/pages/settings';
 
 /** Dispatch order for the shell pages; also the first-visit mount order. */
-const PAGE_ORDER: readonly ShellPage[] = ['session', 'trace', 'stats', 'tasks', 'agents', 'bot', 'settings'];
+const PAGE_ORDER: readonly ShellPage[] = ['session', 'trace', 'stats', 'tasks', 'agents', 'bot', 'todo', 'settings'];
 
 /** The session page is the only page gated on a usable workspace. */
 function WorkspaceGatedSessionPage() {
@@ -65,6 +66,7 @@ const PAGES: Record<Exclude<ShellPage, 'settings'>, ComponentType> = {
   tasks: TasksPage,
   agents: AgentsPage,
   bot: BotPage,
+  todo: TodoPage,
 };
 
 /**

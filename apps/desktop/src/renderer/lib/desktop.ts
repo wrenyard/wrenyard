@@ -1,6 +1,6 @@
 /** The only renderer module that reads the typed preload shell facade. */
 import { useSyncExternalStore } from 'react';
-import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi, AgentMethod, AgentMethodMap, BotMethod, BotMethodMap, TodoMethod, TodoMethodMap } from '@/shell-contract';
+import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi, AgentMethod, AgentMethodMap, BotMethod, BotMethodMap, TodoMethod, TodoMethodMap, BotTodoMethod, BotTodoMethodMap } from '@/shell-contract';
 
 declare global {
   interface Window {
@@ -61,16 +61,26 @@ export function agentRequest<M extends AgentMethod>(
 /* ------------------------------------------------------------------ */
 
 /**
- * Forward one allowlisted `todo.*` call through the shell bridge. The main
- * process rejects any method outside `TODO_METHODS`, and the daemon addresses
- * todos only inside the configured workspace, so every renderer todo read and
- * write goes through this typed facade instead of the preload object directly.
+ * Forward one allowlisted read-only todo call through the shell bridge. This
+ * channel accepts only `todo.list`.
  */
 export function todoRequest<M extends TodoMethod>(
   method: M,
   params?: TodoMethodMap[M]['params'],
 ): Promise<TodoMethodMap[M]['result']> {
   return shell.todo(method, params);
+}
+
+/**
+ * Forward one allowlisted bot-todo mutation (`todo.create` / `todo.update`)
+ * through the shell bridge. Mutations have their own channel and allowlist,
+ * separate from the read-only todo facade.
+ */
+export function botTodoRequest<M extends BotTodoMethod>(
+  method: M,
+  params?: BotTodoMethodMap[M]['params'],
+): Promise<BotTodoMethodMap[M]['result']> {
+  return shell.botTodo(method, params);
 }
 
 /* ------------------------------------------------------------------ */

@@ -23,7 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/u
 import { useConfirm } from '@/renderer/hooks/use-confirm';
 import { executeCommand } from '@/renderer/lib/commands';
 import { toast } from '@/renderer/lib/notify';
-import { useRemoteConnection, todoRequest } from '@/renderer/lib/desktop';
+import { useRemoteConnection, todoRequest, botTodoRequest } from '@/renderer/lib/desktop';
 import { formatElapsedMs } from '@/renderer/lib/format';
 import type {
   BotAcceptanceCheck,
@@ -143,7 +143,7 @@ function useTodosQuery(enabled: boolean) {
 function useTodoCreateMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: TodoCreateInput) => todoRequest('todo.create', input),
+    mutationFn: (input: TodoCreateInput) => botTodoRequest('todo.create', input),
     onSuccess: () => { void queryClient.invalidateQueries({ queryKey: TODO_KEYS.list }); },
   });
 }
@@ -152,7 +152,7 @@ function useTodoCreateMutation() {
 function useTodoUpdateMutation() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: TodoUpdateInput) => todoRequest('todo.update', input),
+    mutationFn: (input: TodoUpdateInput) => botTodoRequest('todo.update', input),
     onSuccess: () => { void queryClient.invalidateQueries({ queryKey: TODO_KEYS.list }); },
   });
 }

@@ -53,6 +53,7 @@ import {
   type TaskSettingsInstructionTemplate,
   type TaskSettingsSnapshot,
   type TaskSettingsTaskRow,
+  type Todo,
   type UpdateSnapshot,
   type WorkspaceConfigurationSnapshot,
   type WrenyardShellApi,
@@ -1170,6 +1171,99 @@ const OPERATION_COMPONENTS: OperationComponentSnapshot[] = [
 const REMOTE_CONNECTION: RemoteConnectionSnapshot = { state: 'local', generation: 1, host: null };
 
 /* ------------------------------------------------------------------ */
+/* Workspace todos (synthetic, in-memory)                              */
+/* ------------------------------------------------------------------ */
+
+/** Synthetic read-only sample todos for the showcase todo page. */
+const demoTodos: Todo[] = [
+  {
+    id: 'a1b2c3d4',
+    title: '整理待办页面的折叠状态',
+    status: 'in_progress',
+    project: 'wrenyard',
+    depends_on: [],
+    created: iso(NOW - 3 * DAY),
+    updated: iso(NOW - 20 * MINUTE),
+    request: '为每个项目分区记住折叠状态。\n\n- 使用 `localStorage`\n- 存储不可用时页面照常工作',
+    acceptance: '刷新后折叠状态保持不变。',
+    attachments: [],
+    resultSummary: '分区折叠状态持久化完成。',
+  },
+  {
+    id: 'e5f6a7b8',
+    title: '补充搜索高亮',
+    status: 'in_progress',
+    project: 'wrenyard',
+    depends_on: [],
+    created: iso(NOW - 2 * DAY),
+    updated: iso(NOW - 2 * HOUR),
+    request: '在标题中高亮匹配的文本。\n\n<!-- things-sync -->',
+    acceptance: '匹配片段使用 `<mark>` 高亮。',
+    attachments: [],
+  },
+  {
+    id: '11223344',
+    title: '阅读只读页面的验收清单',
+    status: 'open',
+    project: 'wrenyard',
+    depends_on: ['a1b2c3d4'],
+    created: iso(NOW - DAY),
+    updated: iso(NOW - 26 * HOUR),
+    request: '逐条核对验收清单并记录结果。',
+    acceptance: '',
+    attachments: [],
+  },
+  {
+    id: '55667788',
+    title: '记录一次性能采样',
+    status: 'open',
+    project: 'demo',
+    depends_on: [],
+    created: iso(NOW - 5 * DAY),
+    updated: iso(NOW - 3 * DAY),
+    request: '在普通数据量下采样一次首屏时间。',
+    acceptance: '',
+    attachments: [],
+  },
+  {
+    id: '99aabbcc',
+    title: '设计稿评审',
+    status: 'open',
+    depends_on: [],
+    created: iso(NOW - 6 * DAY),
+    updated: iso(NOW - 4 * DAY),
+    request: '评审完成后同步结论。',
+    acceptance: '',
+    attachments: [],
+  },
+  {
+    id: 'ddeeff00',
+    title: '收尾折叠动画',
+    status: 'done',
+    project: 'wrenyard',
+    depends_on: [],
+    created: iso(NOW - 8 * DAY),
+    updated: iso(NOW - DAY),
+    request: '动画时长控制在 150ms 以内。',
+    acceptance: '',
+    attachments: [],
+    resultSummary: '已使用 `Collapsible` 的高度过渡。',
+  },
+  {
+    id: '0a1b2c3d',
+    title: '移除旧版列表',
+    status: 'cancelled',
+    project: 'demo',
+    depends_on: [],
+    created: iso(NOW - 9 * DAY),
+    updated: iso(NOW - 2 * DAY),
+    request: '旧版列表不再维护。',
+    acceptance: '',
+    attachments: [],
+  },
+];
+
+/* ------------------------------------------------------------------ */
 /* Exec (in-memory, non-persistent)                                    */
 /* ------------------------------------------------------------------ */
 
@@ -1226,9 +1320,10 @@ export function createDemoShell(control?: DemoControl): DemoShell {
     bot: async () => {
       throw new Error('The legacy bot is not part of the showcase.');
     },
-    todo: async () => {
-      throw new Error('Workspace todos are not part of the showcase.');
-    },
+    todo: async () => ({ todos: demoTodos }),
+    botTodo: (async () => {
+      throw new Error('Bot todo mutations are not part of the showcase.');
+    }) as WrenyardShellApi['botTodo'],
     agent: (async (method: string, params?: { id?: string; botId?: string; afterSeq?: number }) => {
       switch (method) {
         case 'agent.list':

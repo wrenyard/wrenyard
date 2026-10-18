@@ -270,10 +270,11 @@ export const SHELL_CHANNELS = {
   operationComponentAction: 'wrenyard-shell:operation-component-action',
   botRequest: 'wrenyard-shell:bot-request',
   todoRequest: 'wrenyard-shell:todo-request',
+  botTodoRequest: 'wrenyard-shell:bot-todo-request',
   agentRequest: 'wrenyard-shell:agent-request',
 } as const;
 
-export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'agents' | 'bot';
+export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'agents' | 'bot' | 'todo';
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */
@@ -1751,22 +1752,20 @@ export interface TodoUpdateInput {
   attachments?: string[];
 }
 
-/**
- * The exact daemon methods the shell bridge forwards. Any other method is
- * rejected before it can reach the daemon.
- */
-export const TODO_METHODS = [
-  'todo.list',
-  'todo.get',
-  'todo.create',
-  'todo.update',
-] as const;
+/** The bounded, read-only daemon surface the shell `todo` bridge forwards. */
+export const TODO_METHODS = ['todo.list'] as const;
 
 export type TodoMethod = (typeof TODO_METHODS)[number];
 
+/**
+ * The mutation methods the separate bot-todo bridge forwards. They use their
+ * own channel and allowlist, apart from the read-only `todo` facade.
+ */
+export const BOT_TODO_METHODS = ['todo.create', 'todo.update'] as const;
+
+export type BotTodoMethod = (typeof BOT_TODO_METHODS)[number];
+
 export interface TodoListResult { todos: Todo[] }
-export interface TodoGetParams { id: string }
-export interface TodoGetResult { todo: Todo }
 export type TodoCreateParams = TodoCreateInput;
 export interface TodoCreateResult { todo: Todo }
 export type TodoUpdateParams = TodoUpdateInput;
@@ -1775,7 +1774,10 @@ export interface TodoUpdateResult { todo: Todo }
 /** Params and result of each forwarded todo method, used to type the facade. */
 export interface TodoMethodMap {
   'todo.list': { params: undefined; result: TodoListResult };
-  'todo.get': { params: TodoGetParams; result: TodoGetResult };
+}
+
+/** Params and result of each forwarded bot-todo method, used to type the facade. */
+export interface BotTodoMethodMap {
   'todo.create': { params: TodoCreateParams; result: TodoCreateResult };
   'todo.update': { params: TodoUpdateParams; result: TodoUpdateResult };
 }
@@ -2013,14 +2015,23 @@ export interface WrenyardShellApi {
     params?: BotMethodMap[M]['params'],
   ): Promise<BotMethodMap[M]['result']>;
   /**
-   * Forward one allowlisted `todo.*` call to the daemon. The main-process
-   * registrar rejects any method outside {@link TODO_METHODS} before it reaches
-   * the daemon, so this facade is the renderer's only path to workspace todos.
+   * Forward one allowlisted `todo.*` read call to the daemon. The main-process
+   * registrar rejects any method outside {@link TODO_METHODS}, so this facade
+   * exposes only the bounded read-only `todo.list` method.
    */
   todo<M extends TodoMethod>(
     method: M,
     params?: TodoMethodMap[M]['params'],
   ): Promise<TodoMethodMap[M]['result']>;
+  /**
+   * Forward one allowlisted bot-todo mutation to the daemon. The main-process
+   * registrar rejects any method outside {@link BOT_TODO_METHODS}; mutations
+   * have their own channel and allowlist.
+   */
+  botTodo<M extends BotTodoMethod>(
+    method: M,
+    params?: BotTodoMethodMap[M]['params'],
+  ): Promise<BotTodoMethodMap[M]['result']>;
   /**
    * Forward one allowlisted `agent.*`/`routine.*` call to the daemon. The
    * main-process registrar rejects any method outside {@link AGENT_METHODS}
@@ -2093,7 +2104,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'agents' || value === 'bot';
+  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'agents' || value === 'bot' || value === 'todo';
 }
 
 /**
