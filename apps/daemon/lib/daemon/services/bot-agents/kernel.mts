@@ -408,7 +408,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       system: botSystemPrompt(config),
       tools: agentToolSpecs(config.tools),
       maxToolCalls: MAX_TOOL_CALLS,
-      run: call => runTools(call, toolContext(botId)),
+      run: (call, ctx) => runTools(call, toolContext(botId), ctx),
     }
   }
 

@@ -192,12 +192,28 @@ export function agentToolSpecs(tools: readonly AgentToolName[]): ToolSpec[] {
 export function createAgentToolRunner(deps: {
   sessions: Session
   todos: WorkspaceTodoService
-}): (call: { name: string; arguments: string }, ctx: AgentToolContext) => Promise<ToolOutcome> {
-  return async (call, ctx) => {
+}): (
+  call: { name: string; arguments: string },
+  ctx: AgentToolContext,
+  caller?: { sessionId: string; turn: number },
+) => Promise<ToolOutcome> {
+  /** Per-bot running-session reads already granted, scoped to one caller turn. */
+  const runningReads = new Map<string, { sessionId: string; turn: number; read: Set<string> }>()
+  return async (call, ctx, caller) => {
+    let runningRead: Set<string> | undefined
+    if (caller !== undefined) {
+      const entry = runningReads.get(ctx.botId)
+      if (entry === undefined || entry.sessionId !== caller.sessionId || entry.turn !== caller.turn) {
+        runningRead = new Set()
+        runningReads.set(ctx.botId, { sessionId: caller.sessionId, turn: caller.turn, read: runningRead })
+      } else {
+        runningRead = entry.read
+      }
+    }
     try {
       switch (call.name) {
         case 'session':
-          return await runSessionTool(parseArguments(call.arguments), deps, ctx)
+          return await runSessionTool(parseArguments(call.arguments), deps, ctx, runningRead)
         case 'todo':
           return await runTodoTool(parseArguments(call.arguments), deps)
         case 'message':
@@ -288,12 +304,15 @@ interface SessionReadResult {
   messages: { role: 'user' | 'reply'; text: string }[]
   /** The answer each finished turn ended on, oldest turn first. */
   answers: { turn: number; text: string }[]
+  /** Set on a still-running session read: the bot must end its turn now. */
+  hint?: string
 }
 
 async function runSessionTool(
   args: Record<string, unknown>,
   deps: { sessions: Session },
   ctx: AgentToolContext,
+  runningRead?: Set<string>,
 ): Promise<ToolOutcome> {
   switch (args.op) {
     case 'list':
@@ -325,7 +344,12 @@ async function runSessionTool(
     }
     case 'read': {
       const sessionId = requireString(args, 'sessionId', 'read requires sessionId')
-      return done(readSession(deps.sessions, sessionId))
+      const result = readSession(deps.sessions, sessionId)
+      if (!result.running || runningRead === undefined) return done(result)
+      const hint = `session ${sessionId} is still running; you will be woken when its turn finishes. End your turn now.`
+      if (runningRead.has(sessionId)) return failed(hint)
+      runningRead.add(sessionId)
+      return done({ ...result, hint })
     }
     case 'stop': {
       const sessionId = requireString(args, 'sessionId', 'stop requires sessionId')
