@@ -2,10 +2,10 @@
  * Bot agent kernel.
  *
  * A bot is an LLM agent assembled from one JSON config file. The kernel owns
- * everything around it: one wake queue per bot, one turn at a time per bot, the
- * watches that wake a bot when a work session finishes a turn, the rounds a
- * routine fire opens, and the persisted state that lets all of it survive a
- * daemon restart. Bots run concurrently and know nothing about each other
+ * everything around it: immediate message delivery, the watches that wake a
+ * bot when a work session finishes a turn, the rounds a routine fire opens,
+ * and the persisted state that lets admission survive a daemon restart. Bots
+ * run concurrently and know nothing about each other
  * except the `message` tool.
  *
  * Each bot talks to its own context: a private session engine rooted in the
@@ -70,8 +70,6 @@ interface Wake {
   round?: string
   /** The routine that fired this wake, read by the per-routine busy gate. */
   routineId?: string
-  /** Delivery attempts so far; a restart retries a wake that has only one. */
-  attempts: number
   createdAt: string
 }
 
@@ -90,6 +88,8 @@ interface Round {
   botId: string
   routineId: string
   deliver: RoutineDeliver
+  /** Turns to which this round has been admitted. */
+  turns?: { sessionId: string; turn: number }[]
   /** The round's last final reply, delivered to `deliver` when the round closes. */
   lastReply?: string
 }
@@ -98,8 +98,8 @@ interface Round {
 interface BotState {
   /** Ledger session of this bot's private context. */
   sessionId?: string
+  /** Wakes awaiting session.send admission; admitted messages live in the ledger. */
   queue: Wake[]
-  inflight?: Wake
   lastWakeAt?: string
   lastError?: string
 }
@@ -119,13 +119,13 @@ interface TurnOutcome {
   error?: string
 }
 
-/** What one wake produced, for the last-wake bookkeeping. */
-interface WakeOutcome {
-  sessionId?: string
-  turn?: number
-  /** Final status of the turn, so a stop can tell a finished turn from a cut one. */
-  status?: TurnStatus
-  error?: string
+interface TrackedTurn {
+  sessionId: string
+  turn: number
+  botId: string
+  handlers: Set<(outcome: TurnOutcome) => void>
+  timer?: ReturnType<typeof setTimeout>
+  unsubscribe?: () => void
 }
 
 export interface AgentBotSummary {
@@ -184,10 +184,14 @@ export interface BotAgentKernel {
 function botSystemPrompt(config: BotAgentConfig): string {
   const fixed = [
     `You are the Wrenyard bot "${config.name}" (${config.id}).`,
-    'Each user message is a wake event tagged [wake:user], [wake:routine <id>], [wake:session <sessionId> <status>] or [wake:message from <bot>].',
-    'Handle it, then end the turn with a short text reply.',
-    'You have no file or shell access and act only through the listed tools; with no tools, answer in text only.',
-    'After starting work in a session, end the turn: its completion wakes you.',
+    'You are driven by messages: routine triggers, user input, other bots\' messages and work-session updates.',
+    'One message may carry several [wake:user], [wake:routine <id>], [wake:session <sessionId> <status>] or [wake:message from <bot>] entries; handle every one of them in this turn.',
+    'Your only levers are the bot tools (session create/send/interrupt, todo, message).',
+    'You never run code, searches, documents or tasks yourself; you delegate them to work sessions in natural language.',
+    'Starting or messaging a session never waits for it, and sessions run in parallel.',
+    'Reply briefly right away, start or steer sessions, then end the turn.',
+    'Never wait for anything: session updates arrive later as new messages.',
+    'You have no file or shell access; with no tools, answer in text only.',
   ].join(' ')
   return `${fixed}\n\n${config.instructions}`
 }
@@ -252,7 +256,6 @@ function readWake(value: unknown): Wake | undefined {
     text,
     ...(typeof value.round === 'string' ? { round: value.round } : {}),
     ...(typeof value.routineId === 'string' ? { routineId: value.routineId } : {}),
-    attempts: typeof value.attempts === 'number' ? value.attempts : 0,
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString(),
   }
 }
@@ -273,10 +276,15 @@ function readRound(value: unknown): Round | undefined {
   if (!isPlainObject(value)) return undefined
   const { botId, routineId, deliver } = value
   if (typeof botId !== 'string' || typeof routineId !== 'string' || typeof deliver !== 'string') return undefined
+  const turns = Array.isArray(value.turns)
+    ? value.turns.filter((turn): turn is { sessionId: string; turn: number } =>
+      isPlainObject(turn) && typeof turn.sessionId === 'string' && typeof turn.turn === 'number')
+    : []
   return {
     botId,
     routineId,
     deliver: deliver as RoutineDeliver,
+    ...(turns.length === 0 ? {} : { turns }),
     ...(typeof value.lastReply === 'string' ? { lastReply: value.lastReply } : {}),
   }
 }
@@ -297,11 +305,18 @@ function parseState(raw: string): KernelState {
       const queue = Array.isArray(value.queue)
         ? value.queue.map(readWake).filter((wake): wake is Wake => wake !== undefined)
         : []
-      const inflight = readWake(value.inflight)
+      // One-shot migration of a legacy HEAD `inflight` entry: replay it only
+      // while its raw attempts are below HEAD's replay cap of 2.
+      if (isPlainObject(value.inflight)) {
+        const attempts = typeof value.inflight.attempts === 'number' ? value.inflight.attempts : 0
+        const inflight = readWake(value.inflight)
+        if (attempts < 2 && inflight !== undefined && !queue.some(wake => wake.id === inflight.id)) {
+          queue.unshift(inflight)
+        }
+      }
       state.bots[id] = {
         queue,
         ...(typeof value.sessionId === 'string' ? { sessionId: value.sessionId } : {}),
-        ...(inflight === undefined ? {} : { inflight }),
         ...(typeof value.lastWakeAt === 'string' ? { lastWakeAt: value.lastWakeAt } : {}),
         ...(typeof value.lastError === 'string' ? { lastError: value.lastError } : {}),
       }
@@ -359,10 +374,16 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   const entries = new Map<string, BotAgentEntry>()
   /** `path -> mtimeMs` of the last applied load, for the 5 second poll. */
   let appliedMtimes = new Map<string, number>()
-  /** Bots whose pump loop is currently running. */
-  const pumping = new Set<string>()
-  /** Live pump chains, awaited by stop() so an interrupted wake can settle. */
-  const pumps = new Set<Promise<void>>()
+  /** Wakes currently resolving session.send admission, awaited only at shutdown. */
+  const admissions = new Set<Promise<void>>()
+  /** Avoid dispatching the same persisted pending wake twice in this process. */
+  const admitting = new Set<string>()
+  /** Active context turns used for status and routine watch association. */
+  const activeTurns = new Map<string, Set<number>>()
+  const trackedTurns = new Map<string, TrackedTurn>()
+  /** Pending seed-turn waits, settled by stop() before it awaits admissions. */
+  const seedWaits = new Set<() => void>()
+  const turnRounds = new Map<string, Set<string>>()
   /** Live ledger subscriptions, keyed by bot and watched session. */
   const watchSubs = new Map<string, () => void>()
   const runTools = createAgentToolRunner({ sessions: options.sessions, todos: options.todos })
@@ -409,15 +430,28 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       system: botSystemPrompt(config),
       tools: agentToolSpecs(config.tools),
       maxToolCalls: MAX_TOOL_CALLS,
-      run: (call, ctx) => runTools(call, toolContext(botId), ctx),
+      // The invoking context session and turn decide which routine round a
+      // watch inherits; a turn admitted before a rotation keeps its own round.
+      run: (call, ctx) => runTools(call, toolContext(botId, ctx.sessionId, ctx.turn), ctx),
     }
   }
 
-  function toolContext(botId: string): AgentToolContext {
+  function turnKey(sessionId: string, turn: number): string {
+    return `${sessionId}\n${turn}`
+  }
+
+  /**
+   * The per-call context of one bot tool call. `invokingSessionId` and
+   * `invokingTurn` identify the bot context turn that invoked the call,
+   * reported by the port host; a watch created here inherits that turn's
+   * routine round, even after a rotation moved the bot to a new session.
+   */
+  function toolContext(botId: string, invokingSessionId?: string, invokingTurn?: number): AgentToolContext {
     return {
       botId,
       denyModels: entries.get(botId)?.config?.denyModels ?? [],
-      watch: (sessionId, afterTurn, todoIds) => addWatch(botId, sessionId, afterTurn, todoIds),
+      watch: (sessionId, afterTurn, todoIds) =>
+        addWatch(botId, sessionId, afterTurn, todoIds, invokingSessionId, invokingTurn),
       message: (to, text) => sendMessage(botId, to, text),
       removeWatches: sessionId => removeWatches(sessionId),
       selectModels: () => options.selectModels(),
@@ -450,7 +484,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     let status: AgentBotSummary['status']
     if (config !== undefined && !config.enabled) status = 'disabled'
     else if (config === undefined || bot?.lastError !== undefined) status = 'error'
-    else if (bot?.inflight !== undefined) status = 'running'
+    else if (bot?.sessionId !== undefined && (activeTurns.get(entry.id)?.size ?? 0) > 0) status = 'running'
     else status = 'idle'
     return {
       id: entry.id,
@@ -475,7 +509,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       botId,
       source: input.source,
       text: input.text,
-      attempts: 0,
       createdAt: new Date().toISOString(),
       ...(input.round === undefined ? {} : { round: input.round }),
       ...(input.routineId === undefined ? {} : { routineId: input.routineId }),
@@ -526,18 +559,31 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     watchSubs.delete(key)
   }
 
-  function addWatch(botId: string, sessionId: string, afterTurn: number, todoIds?: readonly string[]): void {
-    // A watch created by the running turn inherits that turn's round.
-    const round = state.bots[botId]?.inflight?.round
+  function addWatch(
+    botId: string,
+    sessionId: string,
+    afterTurn: number,
+    todoIds?: readonly string[],
+    invokingSessionId?: string,
+    invokingTurn?: number,
+  ): void {
+    // The round is the one of the session and turn that actually ran the tool
+    // call; a turn still running on a pre-rotation session keeps its round.
+    const rounds = invokingSessionId === undefined || invokingTurn === undefined
+      ? undefined
+      : turnRounds.get(turnKey(invokingSessionId, invokingTurn))
     // A re-watch of a session the bot already follows keeps the prior todo
     // association when the caller omits one, so rotation recovery is stable.
     const inherited = todoIds === undefined
       ? state.watches.find(watch => watch.botId === botId && watch.sessionId === sessionId && watch.todoIds !== undefined)
       : undefined
-    const next: Watch = { sessionId, botId, afterTurn, ...(round === undefined ? {} : { round }) }
-    if (todoIds !== undefined && todoIds.length > 0) next.todoIds = [...todoIds]
-    else if (inherited !== undefined) next.todoIds = inherited.todoIds
-    state.watches.push(next)
+    const roundIds = rounds === undefined || rounds.size === 0 ? [undefined] : [...rounds]
+    for (const round of roundIds) {
+      const next: Watch = { sessionId, botId, afterTurn, ...(round === undefined ? {} : { round }) }
+      if (todoIds !== undefined && todoIds.length > 0) next.todoIds = [...todoIds]
+      else if (inherited !== undefined) next.todoIds = inherited.todoIds
+      state.watches.push(next)
+    }
     subscribeWatch(botId, sessionId)
     persist()
   }
@@ -568,13 +614,13 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     state.watches.splice(index, 1)
     releaseWatch(botId, sessionId)
     const reply = turnAnswerOf(options.sessions, sessionId, turn)
-    enqueue(botId, {
+    const wake = enqueue(botId, {
       source: 'session',
       text: `[wake:session ${sessionId} ${event.status}] ${truncate(reply ?? '', SESSION_REPLY_CHARS)}`,
       ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()
-    pump(botId)
+    dispatchWake(botId, wake)
   }
 
   // ─── Context rotation ────────────────────────────────────────────────
@@ -647,7 +693,15 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       }
     }
     try {
-      await runTurn(newSessionId, lines.join('\n'), route)
+      const { turn } = await contextSession().send(newSessionId, { text: lines.join('\n'), model: route })
+      await new Promise<void>(resolve => {
+        const settle = (): void => {
+          if (!seedWaits.delete(settle)) return
+          resolve()
+        }
+        seedWaits.add(settle)
+        trackTurn(botId, newSessionId, turn, settle)
+      })
     } catch (error) {
       log('warn', `bot agent kernel could not seed rotated context for bot ${botId}: ${errorText(error)}`)
     }
@@ -661,42 +715,41 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     if (round === undefined) return
     if (state.watches.some(watch => watch.round === roundId)) return
     const bot = state.bots[round.botId]
-    if (bot !== undefined && (bot.inflight?.round === roundId || bot.queue.some(wake => wake.round === roundId))) return
+    if ((round.turns?.length ?? 0) > 0 || bot?.queue.some(wake => wake.round === roundId)) return
     // The target's wake is enqueued before the round is dropped, so the delivery
     // and the round removal reach the file in one transition. A target that
     // cannot be woken is reported as an error: its reply is never silently lost
     // and no delivery is fabricated.
-    let target: string | undefined
+    let delivery: Wake | undefined
     if (round.deliver !== 'none') {
       const reply = round.lastReply
       if (reply === undefined || reply === '') {
         log('warn', `bot agent round ${roundId} of bot ${round.botId} closed without a reply to deliver to ${round.deliver}`)
       } else {
         try {
-          target = round.deliver.slice('bot:'.length)
-          enqueueMessage(round.botId, target, reply)
+          const target = round.deliver.slice('bot:'.length)
+          delivery = enqueueMessage(round.botId, target, reply)
         } catch (error) {
-          target = undefined
           log('error', `bot agent round ${roundId} could not deliver its reply to ${round.deliver}: ${errorText(error)}`)
         }
       }
     }
     delete state.rounds[roundId]
     persist()
-    if (target !== undefined) pump(target)
+    if (delivery !== undefined) dispatchWake(delivery.botId, delivery)
   }
 
   /** Enqueue one message wake on the target bot; throws unless it is runnable. */
-  function enqueueMessage(from: string, to: string, text: string): void {
+  function enqueueMessage(from: string, to: string, text: string): Wake {
     if (to === from) throw new BotAgentError('agent_invalid', 'a bot cannot message itself')
     requireBot(to)
-    enqueue(to, { source: 'message', text: `[wake:message from ${from}] ${text}` })
+    return enqueue(to, { source: 'message', text: `[wake:message from ${from}] ${text}` })
   }
 
   function sendMessage(from: string, to: string, text: string): void {
-    enqueueMessage(from, to, text)
+    const wake = enqueueMessage(from, to, text)
     persist()
-    pump(to)
+    dispatchWake(to, wake)
   }
 
   // ─── Turn loop ───────────────────────────────────────────────────────────
@@ -711,210 +764,237 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     return sessionId
   }
 
-  /**
-   * Send one wake text into the bot context and wait for exactly that turn's
-   * `turn.finished`. The subscription is armed before the send so a finish is
-   * never missed, but every event is ignored until `send` has returned the turn
-   * number: a cold or restarted context session appends `turn.finished` for a
-   * dangling prior turn while `send` is still awaiting. After the send the
-   * ledger is read back for that exact turn, so a finish that landed in between
-   * is not lost either. The timeout and the subscription are released only once
-   * that turn settles.
-   */
-  async function runTurn(sessionId: string, text: string, route: AgentModelRoute): Promise<TurnOutcome> {
-    const session = contextSession()
-    let settled = false
-    let target: number | undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let resolve: (outcome: TurnOutcome) => void = () => {}
-    const finished = new Promise<TurnOutcome>(settle => { resolve = settle })
-    const done = (outcome: TurnOutcome): void => {
-      if (settled) return
-      settled = true
-      resolve(outcome)
+  function trackTurn(
+    botId: string,
+    sessionId: string,
+    turn: number,
+    onFinished: (outcome: TurnOutcome) => void,
+  ): void {
+    const key = turnKey(sessionId, turn)
+    const existing = trackedTurns.get(key)
+    if (existing !== undefined) {
+      existing.handlers.add(onFinished)
+      return
     }
-    const unsubscribe = session.subscribe(sessionId, event => {
-      if (target === undefined) return
-      if (event.type !== 'turn.finished' || event.turn === undefined) return
-      if (event.turn !== target) return
-      done({
-        turn: event.turn,
+    const tracked: TrackedTurn = { sessionId, turn, botId, handlers: new Set([onFinished]) }
+    const settle = (outcome: TurnOutcome): void => {
+      if (trackedTurns.get(key) !== tracked) return
+      trackedTurns.delete(key)
+      if (tracked.timer !== undefined) clearTimeout(tracked.timer)
+      tracked.unsubscribe?.()
+      const turns = activeTurns.get(botId)
+      turns?.delete(turn)
+      if (turns?.size === 0) activeTurns.delete(botId)
+      for (const handler of tracked.handlers) handler(outcome)
+    }
+    tracked.unsubscribe = contextSession().subscribe(sessionId, event => {
+      if (event.type !== 'turn.finished' || event.turn !== turn) return
+      settle({
+        turn,
         status: event.status,
         ...(event.error === undefined ? {} : { error: event.error }),
       })
     })
-    try {
-      const { turn } = await session.send(sessionId, { text, model: route })
-      target = turn
-      const recorded = finishedTurnOf(session, sessionId, turn)
-      if (recorded !== undefined) done(recorded)
-      timer = setTimeout(() => {
-        void session.interrupt(sessionId, turn).catch(error => {
-          log('warn', `bot agent could not interrupt turn ${turn} of session ${sessionId}: ${errorText(error)}`)
-        })
-        timer = setTimeout(() => {
-          done({ turn, status: 'interrupted', error: 'turn timed out after 20 minutes' })
-        }, INTERRUPT_GRACE_MS)
-        timer.unref()
-      }, TURN_TIMEOUT_MS)
-      timer.unref()
-      return await finished
-    } finally {
-      if (timer !== undefined) clearTimeout(timer)
-      unsubscribe()
-    }
-  }
-
-  function finishWake(botId: string, wake: Wake, outcome: WakeOutcome): void {
-    const bot = ensureBotState(botId)
-    // Graceful shutdown interrupts the running turn. Leave the wake in-flight so
-    // the next start() requeues it once (attempts < 2), and do not touch the
-    // round: a wake that shutdown cut short must neither be consumed nor deliver
-    // a partial result. A turn that already completed keeps normal bookkeeping,
-    // so finished work is never duplicated on the restart.
-    if (stopped && outcome.status !== 'completed') {
-      persist()
+    trackedTurns.set(key, tracked)
+    const turns = activeTurns.get(botId) ?? new Set<number>()
+    turns.add(turn)
+    activeTurns.set(botId, turns)
+    const recorded = finishedTurnOf(contextSession(), sessionId, turn)
+    if (recorded !== undefined) {
+      settle(recorded)
       return
     }
-    bot.inflight = undefined
+    if (trackedTurns.get(key) !== tracked) return
+    tracked.timer = setTimeout(() => {
+      void contextSession().interrupt(sessionId, turn).catch(error => {
+        log('warn', `bot agent could not interrupt turn ${turn} of session ${sessionId}: ${errorText(error)}`)
+      })
+      tracked.timer = setTimeout(() => {
+        settle({ turn, status: 'interrupted', error: 'turn timed out after 20 minutes' })
+      }, INTERRUPT_GRACE_MS)
+      tracked.timer.unref()
+    }, TURN_TIMEOUT_MS)
+    tracked.timer.unref()
+  }
+
+  function recordRoundTurn(wake: Wake, sessionId: string, turn: number): void {
+    if (wake.round === undefined) return
+    const round = state.rounds[wake.round]
+    if (round === undefined) return
+    const ref = { sessionId, turn }
+    round.turns ??= []
+    if (!round.turns.some(item => item.sessionId === sessionId && item.turn === turn)) round.turns.push(ref)
+    const key = turnKey(sessionId, turn)
+    const rounds = turnRounds.get(key) ?? new Set<string>()
+    rounds.add(wake.round)
+    turnRounds.set(key, rounds)
+  }
+
+  function removeRoundTurn(roundId: string, sessionId: string, turn: number): void {
+    const round = state.rounds[roundId]
+    if (round?.turns !== undefined) {
+      round.turns = round.turns.filter(item => item.sessionId !== sessionId || item.turn !== turn)
+      if (round.turns.length === 0) delete round.turns
+    }
+    const key = turnKey(sessionId, turn)
+    const rounds = turnRounds.get(key)
+    rounds?.delete(roundId)
+    if (rounds?.size === 0) turnRounds.delete(key)
+  }
+
+  function finishRoundTurn(botId: string, roundId: string, sessionId: string, outcome: TurnOutcome): void {
+    const round = state.rounds[roundId]
+    if (round === undefined) return
+    const reply = turnAnswerOf(contextSession(), sessionId, outcome.turn)
+    if (reply === undefined || reply === '') {
+      delete round.lastReply
+      log('warn', `bot agent round ${roundId} of bot ${botId} turn ${outcome.turn} published no reply`)
+    } else {
+      round.lastReply = reply
+    }
+    removeRoundTurn(roundId, sessionId, outcome.turn)
+    persist()
+    closeRound(roundId)
+  }
+
+  function finishWakeTurn(botId: string, wake: Wake, sessionId: string, outcome: TurnOutcome): void {
+    const bot = ensureBotState(botId)
     bot.lastWakeAt = new Date().toISOString()
     if (outcome.error === undefined) delete bot.lastError
     else bot.lastError = outcome.error
-    if (wake.round !== undefined && outcome.sessionId !== undefined && outcome.turn !== undefined) {
-      const round = state.rounds[wake.round]
-      if (round !== undefined) {
-        // The round's reply is always exactly the reply of the turn that just
-        // ended. A turn that published none clears the record instead of leaving
-        // an earlier turn's text behind: a stale reply must never be delivered.
-        const reply = turnAnswerOf(contextSession(), outcome.sessionId, outcome.turn)
-        if (reply === undefined || reply === '') {
-          delete round.lastReply
-          log('warn', `bot agent round ${wake.round} of bot ${botId} turn ${outcome.turn} published no reply`)
-        } else {
-          round.lastReply = reply
-        }
-      }
-    }
     persist()
-    if (wake.round !== undefined) closeRound(wake.round)
+    if (wake.round !== undefined) finishRoundTurn(botId, wake.round, sessionId, outcome)
   }
 
-  /** Run one wake to completion: one turn, with a bounded fallback on another route. */
-  async function runWake(botId: string, wake: Wake): Promise<void> {
-    const outcome: WakeOutcome = {}
+  function pendingWake(botId: string, wake: Wake): void {
+    const bot = ensureBotState(botId)
+    if (!bot.queue.some(item => item.id === wake.id)) bot.queue.push(wake)
+    persist()
+  }
+
+  function removePendingWake(botId: string, wakeId: string): void {
+    const bot = ensureBotState(botId)
+    bot.queue = bot.queue.filter(wake => wake.id !== wakeId)
+  }
+
+  async function retryWake(
+    botId: string,
+    wake: Wake,
+    sessionId: string,
+    failedTurn: number,
+    route: AgentModelRoute,
+  ): Promise<void> {
+    // Hold the wake id while it is re-queued and sent again: the first
+    // admission released it from `admitting`, so without this the periodic
+    // pending-wake poll would dispatch the same wake a second time.
+    admitting.add(wake.id)
     try {
-      if (entries.get(botId)?.config?.enabled === true) {
-        const bot = ensureBotState(botId)
-        const sessionId = await ensureContext(botId)
-        outcome.sessionId = sessionId
-        // Shutdown begun: start no model call, and let finally keep the wake.
-        if (stopped) return
-        const denyModels = entries.get(botId)?.config?.denyModels ?? []
-        const routes = (await options.selectModels()).filter(route => !isDenied(route, denyModels))
-        // The route ranking is awaited too: check again before the first send.
-        if (stopped) return
-        if (routes.length === 0) {
-          // No high-intelligence model this bot may use is available right now:
-          // drop the wake and surface it, instead of running a bot on a model
-          // it may not use.
-          outcome.error = 'no allowed high-intelligence model available'
-        } else {
-          const primary = routes[0]
-          const modelId = `${primary.provider}/${primary.model}`
-          // Estimate the active context input before any dispatch decision. A
-          // failed inspect is treated as unknown and never blocks a wake. The
-          // wake text is included so the estimate reflects the input the next
-          // turn will actually send.
-          const estimatedInput = await estimateInput(sessionId, modelId, wake.text)
-          // Rotate the bot's own context when its input outgrows the room the
-          // routes can offer, seeding the fresh session with what is still in
-          // flight. The old ledger and every watch/round/routine stays intact.
-          let activeSessionId = sessionId
-          // The threshold covers only the routes a turn can run: the primary
-          // and the single fallback runWake tries below.
-          if (estimatedInput !== undefined && estimatedInput > rotationThreshold(routes.slice(0, 2)) && !stopped) {
-            const fresh = await contextSession().createSession()
-            // Bind and persist the fresh session before seeding so the seed
-            // turn resolves the bot's tool port like every other bot turn.
-            bot.sessionId = fresh.sessionId
-            activeSessionId = fresh.sessionId
-            persist()
-            // Let the queued write reach disk before the seed turn starts.
-            await persistChain
-            await seedRotatedContext(fresh.sessionId, primary, botId)
-          }
-          // The route-fit check runs against the input of the session that will
-          // actually run the turn. After a rotation the fresh session has a
-          // different (seeded) ledger, so re-inspect it once seeding has
-          // finished; otherwise reuse the pre-rotation estimate. The wake text
-          // is again included so a large wake cannot overflow an admitted route.
-          const fittingInput = activeSessionId === sessionId
-            ? estimatedInput
-            : await estimateInput(activeSessionId, modelId, wake.text)
-          // Admit only routes whose window can hold that input plus an output
-          // reservation; iterate them in rank order and fall back one step on a
-          // genuine model failure. Too-small routes are skipped, not retried,
-          // and when none fit the wake reports the truth.
-          const fitting = routes.filter(route => routeFits(route, fittingInput))
-          if (fitting.length === 0) {
-            outcome.error = 'no allowed route fits the bot context within its context window'
-          } else {
-            // Record the session the turn will actually run on before dispatch,
-            // so finishWake's round-reply lookup reads the ledger that produced
-            // outcome.turn rather than the pre-rotation session.
-            outcome.sessionId = activeSessionId
-            let result = await runTurn(activeSessionId, wake.text, fitting[0])
-            if (result.status === 'failed' && fitting[1] !== undefined && !stopped) {
-              result = await runTurn(activeSessionId, wake.text, fitting[1])
-            }
-            outcome.status = result.status
-            outcome.turn = result.turn
-            if (result.status !== 'completed') {
-              outcome.error = result.error ?? `turn ${result.status}`
-            }
-          }
-        }
-      }
+      pendingWake(botId, wake)
+      await persistChain
+      if (stopped) return
+      const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route })
+      removePendingWake(botId, wake.id)
+      recordRoundTurn(wake, sessionId, turn)
+      if (wake.round !== undefined) removeRoundTurn(wake.round, sessionId, failedTurn)
+      persist()
+      trackTurn(botId, sessionId, turn, outcome => finishWakeTurn(botId, wake, sessionId, outcome))
     } catch (error) {
-      outcome.error = errorText(error)
-      log('error', `bot agent wake ${wake.id} of bot ${botId} failed: ${outcome.error}`)
+      removePendingWake(botId, wake.id)
+      finishWakeTurn(botId, wake, sessionId, { turn: failedTurn, status: 'failed', error: errorText(error) })
     } finally {
-      finishWake(botId, wake, outcome)
+      admitting.delete(wake.id)
     }
   }
 
-  /** Process a bot's queue one wake at a time until it is empty or unfit to run. */
-  async function pumpLoop(botId: string): Promise<void> {
-    for (;;) {
+  async function sendWake(
+    botId: string,
+    wake: Wake,
+    sessionId: string,
+    route: AgentModelRoute,
+    fallback?: AgentModelRoute,
+  ): Promise<void> {
+    const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route })
+    removePendingWake(botId, wake.id)
+    recordRoundTurn(wake, sessionId, turn)
+    persist()
+    trackTurn(botId, sessionId, turn, outcome => {
+      if (outcome.status === 'failed' && fallback !== undefined && !stopped) {
+        const retry = retryWake(botId, wake, sessionId, turn, fallback)
+        admissions.add(retry)
+        void retry.finally(() => admissions.delete(retry))
+        return
+      }
+      finishWakeTurn(botId, wake, sessionId, outcome)
+    })
+  }
+
+  /** Prepare context and admit one wake without awaiting its turn to finish. */
+  async function runWake(botId: string, wake: Wake): Promise<void> {
+    try {
+      await persistChain
       if (stopped || entries.get(botId)?.config?.enabled !== true) return
       const bot = ensureBotState(botId)
-      if (bot.inflight !== undefined || bot.queue.length === 0) return
-      const wake = bot.queue.shift()
-      if (wake === undefined) return
-      wake.attempts += 1
-      bot.inflight = wake
+      const sessionId = await ensureContext(botId)
+      if (stopped) return
+      const denyModels = entries.get(botId)?.config?.denyModels ?? []
+      const routes = (await options.selectModels()).filter(route => !isDenied(route, denyModels))
+      if (stopped) return
+      if (routes.length === 0) throw new Error('no allowed high-intelligence model available')
+      const primary = routes[0]
+      const modelId = `${primary.provider}/${primary.model}`
+      // Estimate the active context input before any dispatch decision. A
+      // failed inspect is treated as unknown and never blocks a wake. The
+      // wake text is included so the estimate reflects the input the next
+      // turn will actually send.
+      const estimatedInput = await estimateInput(sessionId, modelId, wake.text)
+      // Rotate the bot's own context when its input outgrows the room the
+      // routes can offer, seeding the fresh session with what is still in
+      // flight. The old ledger and every watch/round/routine stays intact.
+      let activeSessionId = sessionId
+      // The threshold covers only the routes a turn can run: the primary
+      // and the single fallback runWake tries below.
+      if (estimatedInput !== undefined && estimatedInput > rotationThreshold(routes.slice(0, 2)) && !stopped) {
+        const fresh = await contextSession().createSession()
+        // Bind and persist the fresh session before seeding so the seed
+        // turn resolves the bot's tool port like every other bot turn.
+        bot.sessionId = fresh.sessionId
+        activeSessionId = fresh.sessionId
+        persist()
+        // Let the queued write reach disk before the seed turn starts.
+        await persistChain
+        await seedRotatedContext(fresh.sessionId, primary, botId)
+      }
+      // The route-fit check runs against the input of the session that will
+      // actually run the turn. After a rotation the fresh session has a
+      // different (seeded) ledger, so re-inspect it once seeding has
+      // finished; otherwise reuse the pre-rotation estimate. The wake text
+      // is again included so a large wake cannot overflow an admitted route.
+      const fittingInput = activeSessionId === sessionId
+        ? estimatedInput
+        : await estimateInput(activeSessionId, modelId, wake.text)
+      const fitting = routes.filter(route => routeFits(route, fittingInput))
+      if (fitting.length === 0) throw new Error('no allowed route fits the bot context within its context window')
+      if (stopped) return
+      await sendWake(botId, wake, activeSessionId, fitting[0], fitting[1])
+    } catch (error) {
+      if (stopped) return
+      removePendingWake(botId, wake.id)
+      ensureBotState(botId).lastError = errorText(error)
+      log('error', `bot agent wake ${wake.id} of bot ${botId} failed: ${errorText(error)}`)
       persist()
-      await runWake(botId, wake)
+      if (wake.round !== undefined) closeRound(wake.round)
     }
   }
 
-  function pump(botId: string): void {
-    if (stopped || pumping.has(botId)) return
-    pumping.add(botId)
-    const running = pumpLoop(botId)
-      .catch(error => { log('error', `bot agent pump of ${botId} failed: ${errorText(error)}`) })
-      .finally(() => {
-        pumping.delete(botId)
-        pumps.delete(running)
-        // A wake enqueued while this loop was winding down must not be lost.
-        const bot = state.bots[botId]
-        if (!stopped && entries.get(botId)?.config?.enabled === true
-          && bot !== undefined && bot.inflight === undefined && bot.queue.length > 0) {
-          pump(botId)
-        }
-      })
-    // Track the settling chain so stop() can wait for an interrupted wake.
-    pumps.add(running)
+  function dispatchWake(botId: string, wake: Wake): void {
+    if (stopped || admitting.has(wake.id) || entries.get(botId)?.config?.enabled !== true) return
+    admitting.add(wake.id)
+    let task: Promise<void>
+    task = runWake(botId, wake).finally(() => {
+      admitting.delete(wake.id)
+      admissions.delete(task)
+    })
+    admissions.add(task)
   }
 
   // ─── Config ──────────────────────────────────────────────────────────────
@@ -964,7 +1044,12 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const previous = appliedMtimes
     appliedMtimes = next
     await applyConfigs(loaded, previous)
-    for (const id of entries.keys()) pump(id)
+  }
+
+  function dispatchPendingWakes(): void {
+    for (const [id, bot] of Object.entries(state.bots)) {
+      for (const wake of bot.queue) dispatchWake(id, wake)
+    }
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────
@@ -977,13 +1062,13 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     } catch (error) {
       log('warn', `bot agent kernel could not read watched session ${watch.sessionId}: ${errorText(error)}`)
     }
-    enqueue(watch.botId, {
+    const wake = enqueue(watch.botId, {
       source: 'session',
       text: `[wake:session ${watch.sessionId} ${status}] ${truncate(reply ?? '', SESSION_REPLY_CHARS)}`,
       ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()
-    pump(watch.botId)
+    dispatchWake(watch.botId, wake)
   }
 
   /**
@@ -1065,6 +1150,25 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     }
   }
 
+  function restoreRoundTurns(): void {
+    for (const [roundId, round] of Object.entries(state.rounds)) {
+      for (const ref of [...(round.turns ?? [])]) {
+        const outcome = finishedTurnOf(contextSession(), ref.sessionId, ref.turn)
+        if (outcome !== undefined) {
+          finishRoundTurn(round.botId, roundId, ref.sessionId, outcome)
+          continue
+        }
+        const key = turnKey(ref.sessionId, ref.turn)
+        const rounds = turnRounds.get(key) ?? new Set<string>()
+        rounds.add(roundId)
+        turnRounds.set(key, rounds)
+        trackTurn(round.botId, ref.sessionId, ref.turn, finished => {
+          finishRoundTurn(round.botId, roundId, ref.sessionId, finished)
+        })
+      }
+    }
+  }
+
   return {
     async start(): Promise<void> {
       if (started || stopped) return
@@ -1079,21 +1183,13 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       } catch {
         // No state yet (or an unreadable one): every bot starts with an empty queue.
       }
-      // A wake interrupted by the restart is retried once; after that it is
-      // dropped, so one poisoned wake can never spin forever.
-      for (const [botId, bot] of Object.entries(state.bots)) {
-        const inflight = bot.inflight
-        if (inflight === undefined) continue
-        bot.inflight = undefined
-        if (inflight.attempts < 2) bot.queue.unshift(inflight)
-        else log('warn', `bot agent kernel dropped interrupted wake ${inflight.id} of bot ${botId}`)
-      }
       await reloadConfigs()
       await restoreWatches()
+      restoreRoundTurns()
       persist()
-      for (const id of entries.keys()) pump(id)
+      dispatchPendingWakes()
       pollTimer = setInterval(() => {
-        void reloadConfigs().catch(error => {
+        void reloadConfigs().then(dispatchPendingWakes).catch(error => {
           log('warn', `bot agent kernel could not reload bot configs: ${errorText(error)}`)
         })
       }, CONFIG_POLL_MS)
@@ -1112,19 +1208,22 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         }
         for (const unsubscribe of watchSubs.values()) unsubscribe()
         watchSubs.clear()
-        // Close the private context before waiting on the pumps: closing it
-        // interrupts a running turn, which is what releases the awaiting pump
-        // instead of leaving it stuck on an in-flight model call. The reference
-        // is kept until the pumps settle, because finishWake still reads a
-        // completed turn's reply out of that same context.
         const session = context
         if (session !== undefined) {
           await session.close().catch(error => {
             log('warn', `bot agent kernel could not close its bot context: ${errorText(error)}`)
           })
         }
-        // An interrupted wake has now run its finally and been kept in-flight.
-        await Promise.allSettled([...pumps])
+        for (const tracked of trackedTurns.values()) {
+          if (tracked.timer !== undefined) clearTimeout(tracked.timer)
+          tracked.unsubscribe?.()
+        }
+        trackedTurns.clear()
+        activeTurns.clear()
+        // A rotation seed may still be waiting for its turn; resolve it now so
+        // shutdown cannot deadlock on an admission that never finishes.
+        for (const settle of [...seedWaits]) settle()
+        await Promise.allSettled([...admissions])
         persist()
         await persistChain
         // Only now drop the context: nothing may create or recreate a private
@@ -1152,11 +1251,10 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
     wake(id: string, text: string): { queued: number } {
       requireBot(id)
-      enqueue(id, { source: 'user', text: `[wake:user] ${text}` })
+      const wake = enqueue(id, { source: 'user', text: `[wake:user] ${text}` })
       persist()
-      pump(id)
-      const bot = state.bots[id]
-      return { queued: (bot?.queue.length ?? 0) + (bot?.inflight === undefined ? 0 : 1) }
+      dispatchWake(id, wake)
+      return { queued: state.bots[id]?.queue.length ?? 0 }
     },
 
     removeWatches(sessionId: string): void {
@@ -1167,25 +1265,19 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       const entry = requireBot(routine.botId)
       const roundId = randomUUID()
       state.rounds[roundId] = { botId: entry.id, routineId: routine.id, deliver: routine.deliver }
-      enqueue(entry.id, {
+      const wake = enqueue(entry.id, {
         source: 'routine',
         text: `[wake:routine ${routine.id}] ${routine.prompt}`,
         round: roundId,
         routineId: routine.id,
       })
       persist()
-      pump(entry.id)
+      dispatchWake(entry.id, wake)
     },
 
     routineBusy(routine: RoutineRecord): boolean {
-      const bot = state.bots[routine.botId]
-      if (bot === undefined) return false
-      // A session-result continuation wake carries its round without a
-      // routineId, so resolve it through the round it belongs to.
-      const matches = (wake: Wake): boolean => wake.routineId === routine.id
-        || (wake.round !== undefined && state.rounds[wake.round]?.routineId === routine.id)
-      if (bot.inflight !== undefined && matches(bot.inflight)) return true
-      return bot.queue.some(matches)
+      return Object.values(state.rounds).some(round =>
+        round.botId === routine.botId && round.routineId === routine.id)
     },
   }
 }
