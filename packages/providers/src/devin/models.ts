@@ -179,6 +179,7 @@ export async function fetchDevinModels(credentials: DevinCredentials, fetcher: t
     for (const [effort, row] of variants) {
       exactVariants[effort] = {
         ...row.definition,
+        displayName: identity.displayName,
         ownsMetadata: true,
         intelligence: identity.defaults.intelligence,
         speed: identity.defaults.speed,

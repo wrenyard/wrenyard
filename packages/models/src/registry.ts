@@ -324,7 +324,7 @@ const devinModels: readonly RegisteredModel[] = [
   // three streaming runs (239.1, 185.0 and 166.7 TPS). Provenance: coordinator
   // measurement 2026-10-17, Devin, 3 streaming runs, median. Pricing and
   // maxOutputTokens stay absent because they were not established.
-  defineModel('swe-2', 'SWE-2', {
+  defineModel('swe-2', 'SWE 2', {
     intelligence: 'high',
     capabilities: ['text'],
     contextWindow: 262_144,
