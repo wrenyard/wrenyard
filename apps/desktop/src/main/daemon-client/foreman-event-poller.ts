@@ -11,6 +11,7 @@ import {
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_LIMIT = 200;
 const STARTUP_DRAIN_LIMIT = 1000;
+const MAX_CATCHUP_PAGES = 50;
 
 const SUPPORTED_EVENT_TYPES = new Set<string>([
   'task.started',
@@ -167,53 +168,62 @@ export class ForemanEventPoller {
     this.inFlight = true;
 
     try {
-      const prevCursor = this.cursor;
-      const params = this.buildParams();
-      const payload = await this.request('event.list', params);
-      if (this.isStoppedGeneration(expectedGeneration)) return;
-
+      let params = this.buildParams();
+      let payload = await this.request('event.list', params);
       if (this.lastPollErrorSignature !== null) {
         this.logger?.info('foreman_events_poll_recovered', {
           previousError: this.lastPollErrorSignature,
         });
         this.lastPollErrorSignature = null;
       }
+      let catchupPages = 0;
 
-      const parsed = parseEventsPayload(payload, this.logger);
-      if (!parsed) {
-        this.logger?.warn('foreman_events_invalid_payload');
-        return;
-      }
-
-      const countsByType: Record<string, number> = {};
-      const startupReplayCountsByType: Record<string, number> = {};
-      let startupReplaySkipped = 0;
-      for (const event of parsed.events) {
-        countsByType[event.type] = (countsByType[event.type] ?? 0) + 1;
+      while (true) {
         if (this.isStoppedGeneration(expectedGeneration)) return;
-        if (this.isStartupReplay(event, expectedGeneration)) {
-          startupReplaySkipped++;
-          startupReplayCountsByType[event.type] = (startupReplayCountsByType[event.type] ?? 0) + 1;
-          continue;
+        const prevCursor = this.cursor;
+        const rawPageCount = rawEventsCount(payload);
+        const parsed = parseEventsPayload(payload, this.logger);
+        if (!parsed) {
+          this.logger?.warn('foreman_events_invalid_payload');
+          return;
         }
-        await this.ingestEvent(event);
-      }
 
-      if (this.isStoppedGeneration(expectedGeneration)) return;
-      const nextCursor = parsed.cursor ?? parsed.fallbackCursor ?? this.cursor;
-      if (nextCursor !== undefined) {
-        this.advanceCursor(nextCursor);
-      }
-      if (parsed.events.length > 0 || prevCursor !== this.cursor) {
-        this.logger?.info('foreman_events_poll_success', {
-          prevCursor,
-          nextCursor: this.cursor,
-          eventCount: parsed.events.length,
-          countsByType,
-          startupReplaySkipped,
-          startupReplayCountsByType,
-          usedFallbackCursor: parsed.cursor === undefined && parsed.fallbackCursor !== undefined,
-        });
+        const countsByType: Record<string, number> = {};
+        const startupReplayCountsByType: Record<string, number> = {};
+        let startupReplaySkipped = 0;
+        for (const event of parsed.events) {
+          countsByType[event.type] = (countsByType[event.type] ?? 0) + 1;
+          if (this.isStoppedGeneration(expectedGeneration)) return;
+          if (this.isStartupReplay(event, expectedGeneration)) {
+            startupReplaySkipped++;
+            startupReplayCountsByType[event.type] = (startupReplayCountsByType[event.type] ?? 0) + 1;
+            continue;
+          }
+          await this.ingestEvent(event);
+        }
+
+        if (this.isStoppedGeneration(expectedGeneration)) return;
+        const nextCursor = parsed.cursor ?? parsed.fallbackCursor ?? this.cursor;
+        if (nextCursor !== undefined) {
+          this.advanceCursor(nextCursor);
+        }
+        if (parsed.events.length > 0 || prevCursor !== this.cursor) {
+          this.logger?.info('foreman_events_poll_success', {
+            prevCursor,
+            nextCursor: this.cursor,
+            eventCount: parsed.events.length,
+            countsByType,
+            startupReplaySkipped,
+            startupReplayCountsByType,
+            usedFallbackCursor: parsed.cursor === undefined && parsed.fallbackCursor !== undefined,
+          });
+        }
+
+        if (rawPageCount < params.limit || this.isStoppedGeneration(expectedGeneration)) return;
+        if (catchupPages >= MAX_CATCHUP_PAGES || this.cursor === prevCursor) return;
+        params = { since: Number(this.cursor), limit: STARTUP_DRAIN_LIMIT };
+        payload = await this.request('event.list', params);
+        catchupPages++;
       }
     } catch (err) {
       const error = pollErrorDetails(err);
@@ -388,6 +398,10 @@ export class ForemanEventPoller {
     const eventMs = eventTimestampMs(event);
     return eventMs !== null && eventMs < this.startedAtMs;
   }
+}
+
+function rawEventsCount(payload: unknown): number {
+  return isRecord(payload) && Array.isArray(payload.events) ? payload.events.length : 0;
 }
 
 function metaForEvent(
