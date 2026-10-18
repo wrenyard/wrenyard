@@ -4,6 +4,7 @@ import { createDiagnosticLogger, type DiagnosticLogger } from './diagnostic-logg
 import { ActivitySnapshotPoller } from './activity-snapshot-poller';
 import { ForemanEventPoller } from './foreman-event-poller';
 import { ForemanStatsPoller } from './foreman-stats-poller';
+import { EventCursorStore } from './event-cursor-store';
 import { WrenyardDaemonClient, type DaemonClient } from './client';
 
 /** A transient one-shot Pet animation signal observed from the daemon stream. */
@@ -28,6 +29,14 @@ export interface DaemonSubscriptionsOptions {
   /** Ids of terminal graphs still held so the daemon returns each one once. */
   getTrackedTaskgraphIds?: () => string[];
   logger?: DiagnosticLogger;
+  /**
+   * Durable cursor store mirroring the in-memory event cursor so a process
+   * restart resumes from the last observed cursor instead of skipping events
+   * emitted while Desktop was closed.
+   */
+  cursorStore?: EventCursorStore;
+  /** Key under which this endpoint's cursor is recorded in `cursorStore`. */
+  endpointKey?: string;
 }
 
 /**
@@ -42,6 +51,8 @@ export class DaemonSubscriptions {
   private ipcPath: string;
   private readonly getTrackedTaskgraphIds: () => string[];
   private readonly logger: DiagnosticLogger;
+  private readonly cursorStore: EventCursorStore | undefined;
+  private readonly endpointKey: string | undefined;
   private readonly handlers = new Set<DaemonSubscriptionHandlers>();
   private eventPoller: ForemanEventPoller | null = null;
   private statsPoller: ForemanStatsPoller | null = null;
@@ -65,6 +76,8 @@ export class DaemonSubscriptions {
     this.ipcPath = options.ipcPath;
     this.getTrackedTaskgraphIds = options.getTrackedTaskgraphIds ?? (() => []);
     this.logger = options.logger ?? createDiagnosticLogger('desktop-daemon-events');
+    this.cursorStore = options.cursorStore;
+    this.endpointKey = options.endpointKey;
   }
 
   /** Start the shared pollers once for the process lifetime. */
@@ -72,13 +85,16 @@ export class DaemonSubscriptions {
     if (this.started || this.disposed) return;
     this.started = true;
 
+    const initialCursor = this.eventCursor
+      ?? (this.cursorStore && this.endpointKey ? this.cursorStore.lookup(this.endpointKey) : undefined);
     this.eventPoller = new ForemanEventPoller({
       ipcPath: this.ipcPath,
       client: this.client,
       logger: this.logger,
-      ...(this.eventCursor !== undefined ? { initialCursor: this.eventCursor } : {}),
+      ...(initialCursor !== undefined ? { initialCursor } : {}),
       onCursor: (next) => {
         this.eventCursor = next;
+        if (this.cursorStore && this.endpointKey) this.cursorStore.record(this.endpointKey, next);
       },
       onSignal: (workerKey, signal, meta) => {
         for (const handler of this.handlers) handler.onSignal?.({ workerKey, signal, meta });
@@ -152,7 +168,12 @@ export class DaemonSubscriptions {
     this.lastStats = undefined;
     this.lastActivity = undefined;
     this.pause();
-    if (endpointChanged) this.eventCursor = undefined;
+    if (endpointChanged) {
+      // Drop the durable entry before the memory cursor so a switched endpoint
+      // can never resume from a stale cursor.
+      if (this.cursorStore && this.endpointKey) this.cursorStore.clear(this.endpointKey);
+      this.eventCursor = undefined;
+    }
     this.start();
   }
 
@@ -166,6 +187,9 @@ export class DaemonSubscriptions {
     this.started = false;
     if (this.eventPoller) {
       this.eventCursor = this.eventPoller.getCursor();
+      if (this.cursorStore && this.endpointKey && this.eventCursor !== undefined) {
+        this.cursorStore.record(this.endpointKey, this.eventCursor);
+      }
     }
     this.eventPoller?.stop();
     this.statsPoller?.stop();

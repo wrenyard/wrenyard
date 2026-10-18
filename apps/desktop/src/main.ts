@@ -19,6 +19,7 @@ import { DesktopPreferencesController } from './main/settings/preferences.js';
 import { DesktopAppearanceController } from './main/appearance.js';
 import { WrenyardDaemonClient } from './main/daemon-client/client.js';
 import { DaemonSubscriptions } from './main/daemon-client/subscriptions.js';
+import { EventCursorStore } from './main/daemon-client/event-cursor-store.js';
 import { reorderProviders } from './provider-order.js';
 import { DesktopQuotaController } from './quota-controller.js';
 import { DesktopQuotaSource } from './quota-service.js';
@@ -1444,9 +1445,15 @@ async function bootstrap(): Promise<void> {
     logger: console,
   });
   taskgraphWindowOwner = windowOwner;
+  // Durable event cursor keyed by the stable daemon IPC path (not the
+  // pid-embedded active endpoint path) so it survives process restart while
+  // endpoint switches still clear it.
+  const eventCursorStore = new EventCursorStore(join(app.getPath('userData'), 'event-cursor.json'));
   desktopSubscriptions = new DaemonSubscriptions({
     client: daemonClient,
     ipcPath: activeEndpointPath,
+    cursorStore: eventCursorStore,
+    endpointKey: ipcPath,
     getTrackedTaskgraphIds: () => windowOwner.getTrackedTaskgraphIds(),
   });
   if (canConnectDaemon()) desktopSubscriptions.start();

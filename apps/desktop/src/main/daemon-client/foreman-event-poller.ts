@@ -105,6 +105,7 @@ export class ForemanEventPoller {
   private generation = 0;
   private startedAtMs: number | undefined;
   private lastPollErrorSignature: string | null = null;
+  private headProbed = false;
 
   constructor(opts: ForemanEventPollerOptions) {
     this.ipcPath = opts.ipcPath ?? resolveDaemonIpcPath();
@@ -168,6 +169,7 @@ export class ForemanEventPoller {
     this.inFlight = true;
 
     try {
+      await this.probeStaleCursorOnce();
       let params = this.buildParams();
       let payload = await this.request('event.list', params);
       if (this.lastPollErrorSignature !== null) {
@@ -247,6 +249,34 @@ export class ForemanEventPoller {
     const since = Number(this.cursor);
     if (!Number.isFinite(since)) return { tail: true, limit: STARTUP_DRAIN_LIMIT };
     return { since, limit: this.limit };
+  }
+
+  /**
+   * One-shot guard for a resumed poller whose durable cursor may sit ahead of
+   * the daemon head (the daemon returns empty pages with cursor=since when
+   * since exceeds head, which would stall forever). On the very first poll a
+   * resumed poller requests the head cursor via {tail:true, limit:1} and, if
+   * head is lower, rewinds to it so the durable copy is corrected. Probe
+   * failures are non-fatal and fall through to normal polling.
+   */
+  private async probeStaleCursorOnce(): Promise<void> {
+    if (this.headProbed) return;
+    this.headProbed = true;
+    if (!this.resumedFromCursor || this.cursor === undefined) return;
+    try {
+      const payload = await this.request('event.list', { tail: true, limit: 1 });
+      const parsed = parseEventsPayload(payload, this.logger);
+      const head = parsed?.cursor ?? parsed?.fallbackCursor;
+      if (head !== undefined && Number.isFinite(Number(head)) && Number(head) < Number(this.cursor)) {
+        this.logger?.info('foreman_events_cursor_reset_behind_head', {
+          cursor: this.cursor,
+          head,
+        });
+        this.advanceCursor(head);
+      }
+    } catch {
+      // Probe failure must not break polling; the normal since-poll follows.
+    }
   }
 
   private advanceCursor(next: string): void {
