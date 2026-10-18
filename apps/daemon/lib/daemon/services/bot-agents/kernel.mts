@@ -206,9 +206,10 @@ function truncate(text: string, max: number): string {
 /**
  * The context-input threshold above which a bot's own conversation rotates to a
  * fresh session. It is the smaller of a fixed 100k ceiling and half the
- * smallest finite positive context window among the routes the bot may run,
- * so a route is always left enough room for its own output. A route with no
- * resolved window falls back to the 100k ceiling.
+ * smallest finite positive context window among the routes a wake may run on
+ * (the primary and the single fallback runWake tries), so a route is always
+ * left enough room for its own output. A route with no resolved window falls
+ * back to the 100k ceiling.
  */
 function rotationThreshold(routes: readonly AgentModelRoute[]): number {
   const windows = routes
@@ -828,12 +829,18 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
           // routes can offer, seeding the fresh session with what is still in
           // flight. The old ledger and every watch/round/routine stays intact.
           let activeSessionId = sessionId
-          if (estimatedInput !== undefined && estimatedInput > rotationThreshold(routes) && !stopped) {
+          // The threshold covers only the routes a turn can run: the primary
+          // and the single fallback runWake tries below.
+          if (estimatedInput !== undefined && estimatedInput > rotationThreshold(routes.slice(0, 2)) && !stopped) {
             const fresh = await contextSession().createSession()
-            await seedRotatedContext(fresh.sessionId, primary, botId)
+            // Bind and persist the fresh session before seeding so the seed
+            // turn resolves the bot's tool port like every other bot turn.
             bot.sessionId = fresh.sessionId
             activeSessionId = fresh.sessionId
             persist()
+            // Let the queued write reach disk before the seed turn starts.
+            await persistChain
+            await seedRotatedContext(fresh.sessionId, primary, botId)
           }
           // The route-fit check runs against the input of the session that will
           // actually run the turn. After a rotation the fresh session has a
