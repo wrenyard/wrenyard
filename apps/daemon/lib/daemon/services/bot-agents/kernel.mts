@@ -272,9 +272,10 @@ function botSystemPrompt(config: BotAgentConfig, all: Iterable<BotAgentEntry>): 
     `You are the Wrenyard bot "${config.name}" (${config.id}).`,
     'You are driven by messages: routine triggers, user input, other bots\' messages and work-session updates.',
     'One message may carry several [wake:user], [wake:routine <id>], [wake:session <sessionId> <status>] or [wake:message from <bot>] entries; handle every one of them in this turn.',
-    'Your only levers are the bot tools (session list/create/send/interrupt, todo, message).',
-    'You never run code, searches, documents or tasks yourself; you delegate them to work sessions in natural language.',
-    'You have no file or shell access; with no tools, answer in text only.',
+    'Your levers are the bot tools (session list/create/send/interrupt, todo, message).',
+    'Answer directly in text when no work is needed: acknowledgements, status from this conversation, and questions you can answer without running anything.',
+    'You never run code, searches, documents or tasks yourself; delegate such work to a work session in natural language and create one only for it.',
+    'You have no file or shell access.',
   ].join(' ')
   const peers: BotAgentConfig[] = []
   for (const entry of all) {
@@ -821,7 +822,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()
-    dispatchWake(botId, wake)
+    dispatchAfterPersist([wake])
   }
 
   // ─── Group conversation ──────────────────────────────────────────────────
@@ -1007,8 +1008,14 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   function noteGroupEvent(botId: string, sessionId: string, event: LedgerEvent): GroupEventNote {
     noteGroupCursor(botId, sessionId, event.seq)
     let wakes: Wake[] | undefined
-    if (event.type === 'reply.sent') wakes = publishBotReply(botId, sessionId, event)
-    else if (event.type === 'turn.finished' && event.status === 'completed' && event.turn !== undefined) {
+    if (event.type === 'reply.sent') {
+      // Intermediate process updates are not group messages: one turn may emit
+      // several of them, each with its own seq, so publishing them would
+      // defeat the per-event dedup. Only the closing reply is published; a
+      // record without `kind` predates the field and stays publishable.
+      if (event.kind === 'progress') return { published: false, wakes: [] }
+      wakes = publishBotReply(botId, sessionId, event)
+    } else if (event.type === 'turn.finished' && event.status === 'completed' && event.turn !== undefined) {
       wakes = publishTurnFallback(botId, sessionId, event.turn)
     }
     return wakes === undefined ? { published: false, wakes: [] } : { published: true, wakes }
@@ -1376,6 +1383,19 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     // pending-wake poll would dispatch the same wake a second time.
     admitting.add(wake.id)
     try {
+      // A turn that already published its final answer is never re-sent: the
+      // retry would produce a fresh reply and publish it to the group again.
+      const alreadyPublished = contextSession().readLedger(sessionId)
+        .some(event => event.type === 'reply.sent' && event.turn === failedTurn && event.kind !== 'progress')
+      if (alreadyPublished) {
+        removePendingWake(botId, wake.id)
+        finishWakeTurn(botId, wake, sessionId, {
+          turn: failedTurn,
+          status: 'failed',
+          error: 'the failed turn already published its final reply',
+        })
+        return
+      }
       pendingWake(botId, wake)
       await persistChain
       if (stopped) return
@@ -1579,7 +1599,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()
-    dispatchWake(watch.botId, wake)
+    dispatchAfterPersist([wake])
   }
 
   /**
