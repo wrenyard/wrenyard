@@ -12,6 +12,7 @@
 import type { AuxiliaryRoute, Session, ToolSpec, TurnModel } from '@wrenyard/session'
 import type { TodoStatus, WorkspaceTodoService } from '../workspace-todo-service.mts'
 import type { AgentToolName } from './config.mts'
+import { TurnAnswerIndex } from './turn-answer.mts'
 
 /** One ranked model route a bot may run a session on. */
 export interface AgentModelRoute {
@@ -366,10 +367,8 @@ function readSession(sessions: Session, sessionId: string): SessionReadResult {
   const started = new Set<number>()
   const finished = new Set<number>()
   const messages: { role: 'user' | 'reply'; text: string }[] = []
-  /** Per turn: the closing reply, the terminal reasoning output, the last reply. */
-  const lastReply = new Map<number, string>()
-  const finalReply = new Map<number, string>()
-  const reasoning = new Map<number, string>()
+  /** What every turn of this ledger ended on, read the shared way. */
+  const answerIndex = new TurnAnswerIndex()
   for (const event of events) {
     switch (event.type) {
       case 'turn.started':
@@ -381,14 +380,10 @@ function readSession(sessions: Session, sessionId: string): SessionReadResult {
         break
       case 'reply.sent':
         messages.push({ role: 'reply', text: truncate(event.text) })
-        if (event.turn === undefined) break
-        lastReply.set(event.turn, event.text)
-        if (event.kind === 'final') finalReply.set(event.turn, event.text)
+        answerIndex.feed(event)
         break
       case 'reasoning.completed':
-        if (event.turn === undefined) break
-        // Every step of a turn reports one, so the last one is its terminal.
-        reasoning.set(event.turn, event.workerOutput ?? event.text)
+        answerIndex.feed(event)
         break
       default:
         break
@@ -405,7 +400,7 @@ function readSession(sessions: Session, sessionId: string): SessionReadResult {
     .sort((left, right) => left - right)
     .map(turn => ({
       turn,
-      text: truncate(finalReply.get(turn) ?? reasoning.get(turn) ?? lastReply.get(turn) ?? ''),
+      text: truncate(answerIndex.answerOf(turn) ?? ''),
     }))
     .filter(answer => answer.text !== '')
   const summary = sessions.listSessions().find(candidate => candidate.sessionId === sessionId)

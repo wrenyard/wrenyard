@@ -33,6 +33,7 @@ import type { RoutineDeliver, RoutineRecord } from '../../../protocol/methods/ro
 import type { Scheduler } from '../scheduler.mts'
 import type { WorkspaceTodoService } from '../workspace-todo-service.mts'
 import { loadBotAgentConfigs, type BotAgentConfig, type BotAgentEntry } from './config.mts'
+import { TurnAnswerIndex } from './turn-answer.mts'
 import {
   agentToolSpecs,
   createAgentToolRunner,
@@ -336,41 +337,16 @@ function finishedTurnOf(session: Session, sessionId: string, turn: number): Turn
   return undefined
 }
 
-/** The reply one exact turn of one ledger ended on, preferring the closing reply. */
-function lastReplyOf(session: Session, sessionId: string, turn: number): string | undefined {
-  let last: string | undefined
-  let final: string | undefined
-  for (const event of session.readLedger(sessionId)) {
-    // Every content event carries its own `turn`; no turn cursor is tracked.
-    if (event.type !== 'reply.sent' || event.turn !== turn) continue
-    last = event.text
-    if (event.kind === 'final') final = event.text
-  }
-  return final ?? last
-}
-
 /**
- * The answer one exact turn of one ledger ended on. A turn that published a
- * closing reply answers with it; a turn that published none still carries its
- * answer as the terminal reasoning step's worker output, which is what a turn
- * ends on when it hands the result to the session instead of speaking it. Only
- * a turn with neither falls back to its last published reply.
+ * The answer one exact turn of one ledger ended on, as the shared index reads
+ * it: the turn's closing reply, else the worker output of its terminal
+ * reasoning step, else its last published reply.
  */
 function turnAnswerOf(session: Session, sessionId: string, turn: number): string | undefined {
-  let last: string | undefined
-  let final: string | undefined
-  let reasoning: string | undefined
-  for (const event of session.readLedger(sessionId)) {
-    if (event.turn !== turn) continue
-    if (event.type === 'reply.sent') {
-      last = event.text
-      if (event.kind === 'final') final = event.text
-    } else if (event.type === 'reasoning.completed') {
-      // Every step of the turn reports one, so the last one is its terminal.
-      reasoning = event.workerOutput ?? event.text
-    }
-  }
-  return final ?? reasoning ?? last
+  const index = new TurnAnswerIndex()
+  // Every content event carries its own `turn`; no turn cursor is tracked.
+  for (const event of session.readLedger(sessionId)) index.feed(event)
+  return index.answerOf(turn)
 }
 
 export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotAgentKernel {
@@ -808,7 +784,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         // The round's reply is always exactly the reply of the turn that just
         // ended. A turn that published none clears the record instead of leaving
         // an earlier turn's text behind: a stale reply must never be delivered.
-        const reply = lastReplyOf(contextSession(), outcome.sessionId, outcome.turn)
+        const reply = turnAnswerOf(contextSession(), outcome.sessionId, outcome.turn)
         if (reply === undefined || reply === '') {
           delete round.lastReply
           log('warn', `bot agent round ${wake.round} of bot ${botId} turn ${outcome.turn} published no reply`)
