@@ -22,6 +22,10 @@ interface Marker {
   state: 'active' | 'done' | 'failed'
   created_at: string
   finished_at?: string
+  owner_pid?: number
+  launch_phase?: 'prepared' | 'spawning' | 'running'
+  child_pid?: number
+  child_pgid?: number
 }
 
 interface Candidate {
@@ -105,7 +109,7 @@ async function handleClientsPrune(args: string[]): Promise<number> {
     if (values.json) console.log(JSON.stringify(payload, null, 2))
     else {
       for (const candidate of payload.candidates) {
-        console.log(`${values.apply ? 'Removed' : 'Would remove'} ${candidate.path} (${candidate.family}, ${candidate.bytes} bytes, finished ${candidate.finished_at})`)
+        console.log(`${values.apply ? 'Removed' : 'Would remove'} ${candidate.path} (${candidate.family}, ${candidate.bytes} bytes, ended ${candidate.finished_at})`)
       }
       console.log(`${values.apply ? 'Removed' : 'Eligible'} total: ${values.apply ? removedBytes : eligibleBytes} bytes`)
       for (const skipped of result.skipped) console.log(`Skipped ${skipped.path}: ${skipped.reason}`)
@@ -162,7 +166,8 @@ async function scanRuns(stateRoot: string, cutoff: number): Promise<ScanResult> 
         const markerPath = join(runPath, '.wrenyard-run.json')
         const marker = await readMarker(markerPath)
         const bytes = await sumRegularFileBytes(runPath)
-        candidates.push({ path: runPath, family, finished_at: marker.finished_at!, bytes, markerPath })
+        // Abnormal-exit runs have no finished_at; created_at is their age basis.
+        candidates.push({ path: runPath, family, finished_at: marker.finished_at ?? marker.created_at, bytes, markerPath })
       } catch (error) {
         skipped.push({ path: runPath, reason: `cannot account for run: ${errorMessage(error)}` })
       }
@@ -193,6 +198,67 @@ async function collectNonRunChildren(stateRoot: string, family: typeof FAMILIES[
   }
 }
 
+type Liveness = 'alive' | 'dead' | 'unknown'
+
+// Only ESRCH proves death; any other probe outcome stays protected.
+function probeLiveness(pid: number, group = false): Liveness {
+  if (!Number.isInteger(pid) || pid <= 0) return 'unknown'
+  if (group && process.platform === 'win32') return 'unknown'
+  try {
+    process.kill(group ? -pid : pid, 0)
+    return 'alive'
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unknown'
+  }
+}
+
+function describeLiveness(value: Liveness): string {
+  return value === 'unknown' ? 'unknown' : value
+}
+
+/**
+ * Decide whether a run with this marker may still be executing.
+ *
+ * `prepared` never had a child, so only its recorded owner can keep it alive.
+ * `running` is reclaimable only when its owner and child (and optional child
+ * process group) are all proven dead. `spawning` or a missing launch phase is
+ * an ambiguous crash window that is never reclaimed.
+ */
+function runStillInUse(marker: Marker): string | null {
+  if (marker.state === 'done' || marker.state === 'failed') {
+    if (typeof marker.finished_at !== 'string') return 'terminal run has no finished_at; protected'
+    if (marker.child_pid !== undefined) {
+      const liveness = probeLiveness(marker.child_pid)
+      if (liveness !== 'dead') return `recorded child process is ${describeLiveness(liveness)}; protected`
+    }
+    if (marker.child_pgid !== undefined) {
+      const liveness = probeLiveness(marker.child_pgid, true)
+      if (liveness !== 'dead') return `recorded child process group is ${describeLiveness(liveness)}; protected`
+    }
+    return null
+  }
+  if (marker.launch_phase === 'prepared') {
+    if (typeof marker.owner_pid !== 'number') return 'active run has no owner identity; protected'
+    const liveness = probeLiveness(marker.owner_pid)
+    if (liveness === 'dead') return null
+    return `active run: owning process is ${describeLiveness(liveness)}`
+  }
+  if (marker.launch_phase === 'running') {
+    if (process.platform === 'win32') return 'active run: running marker cannot be proven ended on this platform; protected'
+    if (typeof marker.owner_pid !== 'number' || typeof marker.child_pid !== 'number') return 'active run has incomplete process provenance; protected'
+    const owner = probeLiveness(marker.owner_pid)
+    if (owner !== 'dead') return `active run: owning process is ${describeLiveness(owner)}`
+    const child = probeLiveness(marker.child_pid)
+    if (child !== 'dead') return `active run: child process is ${describeLiveness(child)}`
+    if (marker.child_pgid !== undefined) {
+      const group = probeLiveness(marker.child_pgid, true)
+      if (group !== 'dead') return `active run: child process group is ${describeLiveness(group)}`
+    }
+    return null
+  }
+  return 'active run is in an ambiguous crash window (spawning or no launch phase); protected'
+}
+
 async function validateCandidate(stateRoot: string, runPath: string, family: string, cutoff: number): Promise<string | null> {
   const ancestryReason = await validateDirectoryAncestry(stateRoot, runPath)
   if (ancestryReason) return ancestryReason
@@ -205,11 +271,12 @@ async function validateCandidate(stateRoot: string, runPath: string, family: str
     return `unproven/unknown: ${errorMessage(error)}`
   }
   if (marker.run_id !== runName || marker.client_family !== family) return 'invalid identity: marker family or run_id does not match its path'
-  if (marker.state === 'active') return 'active run'
-  if (marker.state !== 'done' && marker.state !== 'failed') return 'unproven/unknown: marker has no terminal state'
-  const finished = Date.parse(marker.finished_at ?? '')
-  if (!Number.isFinite(finished)) return 'invalid timestamp: finished_at is missing or invalid'
-  if (finished >= cutoff) return 'too recent: finished_at is not older than the cutoff'
+  const inUse = runStillInUse(marker)
+  if (inUse) return inUse
+  // Terminal runs age from finished_at; abnormal-exit survivors keep state 'active', so they age from created_at.
+  const ended = Date.parse(marker.state === 'active' ? marker.created_at : (marker.finished_at ?? ''))
+  if (!Number.isFinite(ended)) return 'invalid timestamp: run end evidence is missing or invalid'
+  if (ended >= cutoff) return 'too recent: run end is not older than the cutoff'
   return null
 }
 
