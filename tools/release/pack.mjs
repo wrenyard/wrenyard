@@ -239,6 +239,36 @@ function payloadNeedles(buildTmp, worktree) {
   };
   return { build: collect([buildTmp, worktree]), home: collect([os.homedir(), process.env.HOME, process.env.USERPROFILE]) };
 }
+// A checkout root such as `/workspace` is a prefix of source paths like
+// `src/workspace.ts` and of identifiers like `workspace/workspaceFolders`.
+// Require a path-token boundary on both sides. Single-component roots
+// (`/workspace`, `/tmp`) must also be followed by a separator so a real leak
+// (`/workspace/apps/...`) still matches while a Unix `/tmp` literal or an
+// example `cwd: '/workspace'` does not.
+function isPathTokenBoundary(bytes, index) {
+  if (index < 0 || index >= bytes.length) return true;
+  const c = bytes[index];
+  return !((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 45 || c === 46 || c === 95);
+}
+function pathComponentCount(text) {
+  return text.replaceAll('\\', '/').replace(/\/+$/u, '').split('/').filter(Boolean).length;
+}
+function containsPathNeedle(bytes, needle) {
+  if (needle.length === 0 || needle.length > bytes.length) return false;
+  const requireChild = pathComponentCount(needle.toString('utf8')) <= 1;
+  let from = 0;
+  while (from <= bytes.length - needle.length) {
+    const index = bytes.indexOf(needle, from);
+    if (index === -1) return false;
+    if (isPathTokenBoundary(bytes, index - 1) && isPathTokenBoundary(bytes, index + needle.length)) {
+      if (!requireChild) return true;
+      const after = bytes[index + needle.length];
+      if (after === 47 || after === 92) return true;
+    }
+    from = index + 1;
+  }
+  return false;
+}
 // Bounded staged-payload gate; it reports only the path and rule, never a value.
 export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
   const root = path.resolve(stage);
@@ -263,7 +293,7 @@ export function assertSafeReleasePayload(stage, label, buildTmp, worktree) {
         && /^\s*-----BEGIN CERTIFICATE-----[\s\S]*-----END CERTIFICATE-----\s*$/.test(text) && !text.includes('PRIVATE KEY');
       if (FORBIDDEN_PAYLOAD_EXTENSIONS.has(ext) && !publicCertificate) { report(file, 'forbidden credential/secret/database/log file'); continue; }
       if (ext === '.map' && !dependency) report(file, 'source map payload forbidden');
-      if (build.some((needle) => bytes.includes(needle)) || (!dependency && home.some((needle) => bytes.includes(needle)))) report(file, 'embeds a local developer/home/checkout absolute path');
+      if (build.some((needle) => containsPathNeedle(bytes, needle)) || (!dependency && home.some((needle) => containsPathNeedle(bytes, needle)))) report(file, 'embeds a local developer/home/checkout absolute path');
       if (!text) continue;
       const findings = scanText(text).filter((finding) => !dependency || (finding.detector === 'pem-private-key' && PRIVATE_KEY_BLOCK.test(text)));
       if (findings.length) report(file, `secret signature detected (${[...new Set(findings.map((f) => f.detector))].join(', ')})`);
@@ -308,19 +338,34 @@ export function stageDaemon(stage) {
 }
 // Build the Desktop bundle, then let electron-builder produce this platform's
 // installer(s). The artifact names are driven by WRENYARD_RELEASE_TRIPLET so no
-// Chinese product name ever appears in a public asset.
+// Chinese product name ever appears in a public asset. afterPack stays enabled
+// (never swapped for a stub pack): it is the Desktop package safety gate on
+// every target, restores Linux execute bits, and ad-hoc signs macOS bundles.
+function electronBuilderFlag() {
+  if (process.platform === 'darwin') return '--mac';
+  if (process.platform === 'linux') return '--linux';
+  return '--win';
+}
 function buildInstaller() {
   run('pnpm', ['--filter', '@wrenyard/desktop', 'run', 'build']);
-  const flag = process.platform === 'darwin' ? '--mac' : '--win';
-  run('pnpm', ['--filter', '@wrenyard/desktop', 'exec', 'electron-builder', flag, '--publish', 'never'], {
+  run('pnpm', ['--filter', '@wrenyard/desktop', 'exec', 'electron-builder', electronBuilderFlag(), '--publish', 'never'], {
     env: { WRENYARD_RELEASE_TRIPLET: target.triplet },
   });
 }
 // The installers this platform's pack run must produce.
 export function expectedArtifactNames(version, triplet = target.triplet) {
-  return triplet === 'win32-x64'
-    ? [`wrenyard-desktop-${version}-win32-x64-setup.exe`]
-    : [`wrenyard-desktop-${version}-darwin-arm64.dmg`, `wrenyard-desktop-${version}-darwin-arm64.zip`];
+  if (triplet === 'win32-x64') return [`wrenyard-desktop-${version}-win32-x64-setup.exe`];
+  if (triplet === 'linux-x64') return [`wrenyard-desktop-${version}-linux-x64.AppImage`];
+  return [`wrenyard-desktop-${version}-darwin-arm64.dmg`, `wrenyard-desktop-${version}-darwin-arm64.zip`];
+}
+/** Full SEA/daemon staging is required; a `.pack-stub` placeholder is forbidden. */
+function assertFullStagedRuntime(stage, label = 'resources/wrenyard') {
+  if (!fs.existsSync(stage) || !fs.statSync(stage).isDirectory()) {
+    throw new Error(`${label} must be a full staged runtime directory`);
+  }
+  if (fs.existsSync(path.join(stage, '.pack-stub'))) {
+    throw new Error(`${label} is a .pack-stub; full SEA/daemon staging is required`);
+  }
 }
 function assertArtifacts(outputDir, version) {
   for (const name of expectedArtifactNames(version)) {
@@ -330,9 +375,10 @@ function assertArtifacts(outputDir, version) {
 // Locate the unpacked application electron-builder assembled before packaging.
 function findAssembledApp(releaseDir, triplet = target.triplet) {
   const dirs = fs.readdirSync(releaseDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-  if (triplet === 'win32-x64') {
-    const unpacked = dirs.find((entry) => entry.name === 'win-unpacked');
-    if (!unpacked) throw new Error('Desktop build produced no win-unpacked application');
+  if (triplet === 'win32-x64' || triplet === 'linux-x64') {
+    const expected = triplet === 'win32-x64' ? 'win-unpacked' : 'linux-unpacked';
+    const unpacked = dirs.find((entry) => entry.name === expected);
+    if (!unpacked) throw new Error(`Desktop build produced no ${expected} application`);
     return path.join(releaseDir, unpacked.name);
   }
   for (const entry of dirs) {
@@ -498,6 +544,7 @@ async function main() {
     const sea = buildSea(tmp);
     stageDaemon(STAGE_DIR);
     writeStage(STAGE_DIR, version, sea);
+    assertFullStagedRuntime(STAGE_DIR, 'staged resources/wrenyard');
     assertNoSymlinks(STAGE_DIR, 'payload');
     assertSingleSuiteMarker(STAGE_DIR);
     const measured = assertSuitePathLengths(STAGE_DIR);
@@ -517,6 +564,10 @@ async function main() {
     });
     console.log(`[pack] remote payload ${remote.name} (${remote.bytes} bytes)`);
     const appDir = findAssembledApp(OUTPUT_DIR);
+    const packagedResources = target.triplet === 'darwin-arm64'
+      ? path.join(appDir, 'Contents', 'Resources')
+      : path.join(appDir, 'resources');
+    assertFullStagedRuntime(path.join(packagedResources, 'wrenyard'), 'resources/wrenyard');
     // The final assembled app must be symlink-free too, not only the stage tree.
     if (target.triplet === 'win32-x64') assertNoSymlinks(appDir, 'assembled app');
     await smokeAssembledApp(packagedSeaPath(appDir), version, path.join(tmp, 'smoke-home'));

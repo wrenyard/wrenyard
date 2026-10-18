@@ -36,12 +36,17 @@ After a manifest or lockfile change, stop the dev scripts, run
 
 ## Shared data
 
-Source development and an installed app share the same user configuration,
-state and Desktop `userData` directory (keyed to the package identity
-`@wrenyard/desktop`). Quit the installed app fully from the menu bar or tray
-before `pnpm dev`; closing the window is not enough. Set
-`WRENYARD_DESKTOP_USER_DATA` to give source development its own Desktop data
-directory.
+Source development and an installed app share the same user configuration and
+daemon state under `~/.config/wrenyard` and `~/.local/state/wrenyard`. On Linux
+the Desktop `userData` directory is always `<state root>/desktop`, matching the
+daemon. Other platforms keep Electron's default unless you set
+`WRENYARD_STATE_HOME`. On Linux a GPU process crash or WebGL `unavailable_off`
+writes `gpu-software-rendering` under that directory and relaunches once onto
+ANGLE/SwiftShader (`--enable-unsafe-swiftshader` is Chromium's required gate).
+Later starts skip the broken GPU path; this is an availability fallback, not a
+security boundary. Quit the installed app
+fully from the menu bar or tray before `pnpm dev`; closing the window is not
+enough.
 
 ## Checks
 
@@ -100,7 +105,7 @@ Versions live in the root `package.json` (mirrored in
 `apps/desktop/package.json`). `pnpm release <x.y.z>` accepts a plain version
 (no prerelease), writes it, packs and smoke-tests this platform's installer, and
 commits `release: <x.y.z>`. Pushing a `v*.*.*` tag runs
-`.github/workflows/release.yml`, which lints, builds macOS and Windows
+`.github/workflows/release.yml`, which lints, builds macOS, Windows and Linux
 installers and publishes a normal release together with the update feed on the
 `updates` branch. The feed head is `latest.json`; a byte-identical `dev.json`
 compatibility alias and the immutable `versions/<v>.json` snapshots are

@@ -68,13 +68,14 @@ import { buildRemoteCommand, SshRelayError, type RemotePlatform } from './ssh-re
  *  5. `relay.commitSshConfig()`, then switch the active context last.
  */
 
-/** A single supported first-version remote install target. */
-export type RemoteBootstrapTriplet = 'darwin-arm64' | 'win32-x64';
+/** A single supported public remote install target. */
+export type RemoteBootstrapTriplet = 'darwin-arm64' | 'win32-x64' | 'linux-x64';
 
 /** The remote install matrix, mirrored from the release payload builder. */
 export const REMOTE_BOOTSTRAP_TARGETS: readonly RemoteBootstrapTriplet[] = Object.freeze([
   'darwin-arm64',
   'win32-x64',
+  'linux-x64',
 ]);
 
 /** Stable failure codes surfaced to the caller (and shown to the user). */
@@ -114,7 +115,7 @@ export interface RemoteSshConnection {
 
 export interface RemoteBootstrapTarget {
   readonly alias: string;
-  /** Verified remote platform. Only `darwin`/`win32` are install targets. */
+  /** Verified remote platform. `darwin`/`win32`/`linux` x64 are install targets. */
   readonly platform: RemotePlatform;
   /** Verified remote architecture. */
   readonly arch: string;
@@ -262,11 +263,20 @@ function nativeWriteStdinArgv(platform: RemotePlatform, file: string): string[] 
   return ['sh', '-c', 'cat > "$1"', 'sh', file];
 }
 
-/** Hash a file with native tooling (`shasum` on macOS, `Get-FileHash` on Windows). */
+/** Hash a file with native tooling (`sha256sum`/`shasum` on POSIX, `Get-FileHash` on Windows). */
 function nativeHashArgv(platform: RemotePlatform, file: string): string[] {
-  return platform === 'win32'
-    ? powershellArgv(`(Get-FileHash -Algorithm SHA256 -LiteralPath ${psQuote(file)}).Hash.ToLower()`)
-    : ['shasum', '-a', '256', file];
+  if (platform === 'win32') {
+    return powershellArgv(`(Get-FileHash -Algorithm SHA256 -LiteralPath ${psQuote(file)}).Hash.ToLower()`);
+  }
+  // Linux typically ships `sha256sum`; macOS ships `shasum`. Prefer whichever
+  // exists so a missing tool never produces a false digest.
+  return [
+    'sh',
+    '-c',
+    'if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi',
+    'hash',
+    file,
+  ];
 }
 
 /** Remove a directory this bootstrap owns, with native tooling only. */
@@ -281,13 +291,13 @@ function digestOf(stdout: string): string {
   return (stdout.trim().split(/\s+/)[0] ?? '').toLowerCase();
 }
 
-/** First-version install support; anything else fails `unsupported_platform`. */
+/** Public install support; anything else fails `unsupported_platform`. */
 function assertSupportedTarget(platform: RemotePlatform, arch: string): RemoteBootstrapTriplet {
   const triplet = `${platform}-${arch}`;
   if (!REMOTE_BOOTSTRAP_TARGETS.includes(triplet as RemoteBootstrapTriplet)) {
     throw new RemoteBootstrapError(
       'unsupported_platform',
-      `不支持的目标平台（${platform}-${arch}）；首版仅支持 macOS ARM64 与 Windows x64`,
+      `不支持的目标平台（${platform}-${arch}）；仅支持 macOS ARM64、Windows x64 与 Linux x64`,
     );
   }
   return triplet as RemoteBootstrapTriplet;

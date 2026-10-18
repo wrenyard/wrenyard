@@ -14,8 +14,12 @@ publisher identity.
 
 - macOS: Desktop `.app` bundles are re-signed ad-hoc with `codesign --sign -`
   and then verified with `codesign --verify`.
-- Windows: unsigned by default; artifacts are signed only when signtool
-  credentials are available (see below).
+- Windows: unsigned by default (no Authenticode). Trust is the update-feed
+  SHA-256 over HTTPS from the official channel; artifacts are signed only
+  when signtool credentials are available (see below).
+- Linux: unsigned AppImage (no OS code signature). Trust is the same as
+  Windows: the update-feed SHA-256 over HTTPS from the official download
+  channel, not codesign or Authenticode.
 
 ## Trusted release (future)
 
@@ -45,13 +49,15 @@ step that never runs in this repository.
 ## Unified release, state, and paths
 
 Release artifacts, local state, and install paths are consolidated under the
-unified `wrenyard` identity. Each release publishes exactly three Desktop
+unified `wrenyard` identity. Each release publishes exactly four Desktop
 artifacts:
 
 - `wrenyard-desktop-<v>-win32-x64-setup.exe` — Windows first install and
   in-app update
 - `wrenyard-desktop-<v>-darwin-arm64.dmg` — macOS first install
 - `wrenyard-desktop-<v>-darwin-arm64.zip` — macOS in-app update
+- `wrenyard-desktop-<v>-linux-x64.AppImage` — Linux first install and
+  in-app update (unsigned; feed SHA-256 over HTTPS is the trust root)
 
 The CLI, Node runtime and daemon bundle ship inside the Desktop app resources,
 so there is no suite archive, install engine or bootstrap script. Releases are

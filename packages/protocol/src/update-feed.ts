@@ -36,7 +36,8 @@
  *
  * Each platform publishes a first-install asset (`installer`) and an in-app
  * update asset (`update`). On Windows both resolve to the same NSIS
- * `setup.exe`; on macOS the installer is a DMG and the updater consumes a ZIP.
+ * `setup.exe`; on Linux both resolve to the same AppImage; on macOS the
+ * installer is a DMG and the updater consumes a ZIP.
  *
  * Asset URLs are deliberately NOT required to be canonical GitHub download
  * URLs. The URL and digest come from the same document, so a canonical-URL
@@ -52,7 +53,7 @@ const DEFAULT_UPDATE_BASE_URL =
   'https://raw.githubusercontent.com/wrenyard/wrenyard/updates';
 
 /** Host triplets that publish Desktop installer and update assets. */
-export type PlatformTriplet = 'darwin-arm64' | 'win32-x64';
+export type PlatformTriplet = 'darwin-arm64' | 'win32-x64' | 'linux-x64';
 
 /** One downloadable release asset as advertised by the feed. */
 interface UpdateFeedAsset {
@@ -67,7 +68,7 @@ interface UpdateFeedAsset {
  * omits the whole `remote_payloads` array.
  */
 interface RemotePayloadAsset {
-  /** Host triplet the payload runs on (`darwin-arm64` / `win32-x64`). */
+  /** Host triplet the payload runs on (`darwin-arm64` / `win32-x64` / `linux-x64`). */
   readonly target: string;
   readonly name: string;
   readonly url: string;
@@ -90,9 +91,9 @@ interface UpdateFeedDocument {
 
 /** The two resolved assets for one host triplet. */
 interface PlatformAssets {
-  /** First-install asset (DMG on macOS, setup.exe on Windows). */
+  /** First-install asset (DMG on macOS, setup.exe on Windows, AppImage on Linux). */
   readonly installer: UpdateFeedAsset;
-  /** In-app update asset (ZIP on macOS, setup.exe on Windows). */
+  /** In-app update asset (ZIP on macOS, setup.exe on Windows, AppImage on Linux). */
   readonly update: UpdateFeedAsset;
 }
 
@@ -199,20 +200,25 @@ export function desktopAssetStem(version: string, triplet: PlatformTriplet): str
 
 /**
  * The canonical first-install asset name for a version and host triplet: the
- * NSIS `setup.exe` on Windows, the DMG on macOS.
+ * NSIS `setup.exe` on Windows, the AppImage on Linux, the DMG on macOS.
  */
 export function installerAssetName(version: string, triplet: PlatformTriplet): string {
   const stem = desktopAssetStem(version, triplet);
-  return triplet === 'win32-x64' ? `${stem}-setup.exe` : `${stem}.dmg`;
+  if (triplet === 'win32-x64') return `${stem}-setup.exe`;
+  if (triplet === 'linux-x64') return `${stem}.AppImage`;
+  return `${stem}.dmg`;
 }
 
 /**
  * The canonical in-app update asset name for a version and host triplet: the
- * applier reuses the same NSIS `setup.exe` on Windows and a ZIP on macOS.
+ * applier reuses the same NSIS `setup.exe` on Windows, the same AppImage on
+ * Linux, and a ZIP on macOS.
  */
 export function updateAssetName(version: string, triplet: PlatformTriplet): string {
   const stem = desktopAssetStem(version, triplet);
-  return triplet === 'win32-x64' ? `${stem}-setup.exe` : `${stem}.zip`;
+  if (triplet === 'win32-x64') return `${stem}-setup.exe`;
+  if (triplet === 'linux-x64') return `${stem}.AppImage`;
+  return `${stem}.zip`;
 }
 
 /** URL of the canonical `latest.json` feed head, independent of the running version. */
@@ -315,8 +321,9 @@ function parseUpdateFeed(input: unknown, options: ParseUpdateFeedOptions): Parse
     }
     byName.set(asset.name, asset);
   }
-  // On Windows the installer and the update asset are the same setup.exe, so a
-  // single lookup resolves both without duplicating the record.
+  // On Windows the installer and the update asset are the same setup.exe, and
+  // on Linux they are the same AppImage, so a single lookup resolves both
+  // without duplicating the record.
   const installerName = installerAssetName(version, triplet);
   const installer = byName.get(installerName);
   if (installer === undefined) {

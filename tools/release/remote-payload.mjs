@@ -6,8 +6,8 @@
 // DSH closure, exactly as `pack.mjs` stages them) into a minimal, versioned,
 // checksummed per-user bootstrap payload for a remote host.
 //
-// First-version install targets are `darwin-arm64` and `win32-x64` only. Linux
-// x64/ARM64 and macOS x64 are explicit future work and are refused here rather
+// Public remote install targets are `darwin-arm64`, `win32-x64` and `linux-x64`.
+// Linux ARM64 and macOS x64 are explicit future work and are refused here rather
 // than silently supported.
 //
 // This is NOT the historical suite/CLI installer: it produces a per-user
@@ -24,15 +24,15 @@ import { fileURLToPath } from 'node:url';
 import { entryFor } from './platform.mjs';
 import { requirePlainVersion } from './release-context.mjs';
 
-/** The only remote install targets in the first version. */
-export const REMOTE_TARGETS = Object.freeze(['darwin-arm64', 'win32-x64']);
+/** The public remote install targets. */
+export const REMOTE_TARGETS = Object.freeze(['darwin-arm64', 'win32-x64', 'linux-x64']);
 
 /** Resolve a target entry, refusing anything outside the first-version matrix. */
 export function remoteTarget(triplet) {
   if (!REMOTE_TARGETS.includes(triplet)) {
     throw new Error(
-      `${triplet} is not a first-version remote target; supported: ${REMOTE_TARGETS.join(', ')} `
-      + '(Linux x64/ARM64 and macOS x64 are future work)',
+      `${triplet} is not a public remote target; supported: ${REMOTE_TARGETS.join(', ')} `
+      + '(Linux ARM64 and macOS x64 are future work)',
     );
   }
   return entryFor(triplet.split('-')[0], triplet.split('-')[1]);
@@ -145,7 +145,7 @@ function sha256File(file) {
  * @param {object} options
  * @param {string} options.stageDir   staged `resources/wrenyard` closure for the target
  * @param {string} options.version    plain x.y.z product version
- * @param {string} options.targetTriplet  the remote target (darwin-arm64|win32-x64)
+ * @param {string} options.targetTriplet  the remote target (darwin-arm64|win32-x64|linux-x64)
  * @param {string} options.sourceTriplet  the build host triplet the stage came from
  * @param {string} options.outDir     directory to write the payload into
  * @returns {object} the matching-version distribution metadata

@@ -29,6 +29,7 @@ export function createWin32Applier(options: Win32ApplierOptions): PlatformApplie
       // run, not as observed extraction. Progress is limited to the shared
       // download/checksum reporting.
       _onPhase?: (phase: 'extracting' | 'verifying') => void,
+      _expectedSha256?: string,
     ): Promise<PreparedUpdate> {
       return { assetPath, version };
     },
