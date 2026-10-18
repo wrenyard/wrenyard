@@ -54,6 +54,31 @@ OpenCode Zen and OpenRouter include free models. Free models are marked in the
 picker and form their own quota pool, so automatic routing can prefer them
 without spending paid quota.
 
+### DeepSeek API models
+
+`deepseek-v4.1-flash` is the canonical identity for the rolling
+DeepSeek-V4.1-Flash-1017 release. That release is not a new API ID: the route
+keeps the provider-owned upstream binding `deepseek-flash`. The route supports
+1,048,576 context tokens and up to 393,216 output tokens per request (hard
+ceilings, not a default output budget).
+
+Prices are per million tokens in USD. Peak rates are $0.006 for cache-hit
+input, $0.30 for cache-miss input and $1.20 for output; off-peak rates are half
+of that ($0.003 / $0.15 / $0.60). Peak runs 01:00–04:00 and 06:00–10:00 UTC,
+Monday to Friday, excluding Chinese public holidays; weekends and Chinese
+public holidays are off-peak all day.
+
+The route exposes `none`, `low`, `medium`, `high`, `xhigh` and `max` reasoning
+effort. `medium` and `xhigh` both map to the upstream `high` effort, and `none`
+disables thinking. Thinking is enabled by default at `high`.
+
+DeepSeek V4 Pro remains a separate model.
+
+- Release: https://api-docs.deepseek.com/news/news261017/
+- Model limits: https://api-docs.deepseek.com/api/list-models/
+- Pricing: https://api-docs.deepseek.com/quick_start/pricing/
+- Thinking mode and effort: https://api-docs.deepseek.com/guides/thinking_mode/
+
 ## Other API-key providers
 
 These OpenAI-compatible providers take an API key and serve a curated set of

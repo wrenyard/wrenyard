@@ -1,11 +1,14 @@
 import { defineModel } from './define.ts';
 
 export const deepseekModels = [
+  // Rolling DeepSeek-V4.1-Flash-1017: https://api-docs.deepseek.com/news/news261017/
+  // Limits: https://api-docs.deepseek.com/api/list-models/
+  // Peak USD/1M pricing (off-peak is half): https://api-docs.deepseek.com/quick_start/pricing/
   defineModel('deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', {
     intelligence: 'mid',
     capabilities: ['text', 'image'],
-    contextWindow: 1_000_000,
-    maxOutputTokens: 50_000,
+    contextWindow: 1_048_576,
+    maxOutputTokens: 393_216,
     pricing: [0.006, 0.3, 1.2],
     speed: 201,
   }, { lab: 'deepseek', family: 'deepseek-v4.1' }),
