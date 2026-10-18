@@ -21,10 +21,10 @@
  */
 
 import { execFile } from 'node:child_process'
-import { rm } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { delimiter, dirname } from 'node:path'
 import type { McpServer } from '@wrenyard/exec'
+import { removeWritable } from '../services/operation-components.mts'
 import type {
   OperationComponentId,
   OperationComponentLaunch,
@@ -378,7 +378,7 @@ export class OperationAdapter {
             if (!preloaded) {
               preloaded = await preloadLoginState(launch.executable, session, copy, bootstrapEnv)
             }
-            cleanups.push(() => rm(copy, { force: true }))
+            cleanups.push(() => removeWritable(copy))
           }
           instructions.push(
             preloaded

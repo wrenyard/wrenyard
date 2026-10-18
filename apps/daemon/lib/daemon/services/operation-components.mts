@@ -37,7 +37,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, statSync } from 'node:fs'
-import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, hostname } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type { McpServer } from '@wrenyard/exec'
@@ -77,6 +77,32 @@ export type OperationComponentHint =
   | 'no-gui-session'
 
 export const OPERATION_COMPONENT_IDS: readonly OperationComponentId[] = ['browser', 'desktop']
+
+/**
+ * Delete a path that may hold read-only copies.
+ *
+ * A run stages its login state as a read-only copy (mode `0o400`; the read-only
+ * attribute on Windows). `rm(..., { force: true })` deletes such entries on
+ * POSIX but fails with `EPERM` on Windows, which leaves session cookies behind.
+ * Restoring write access first makes the delete work on both platforms.
+ */
+export async function removeWritable(
+  path: string,
+  { recursive = false }: { recursive?: boolean } = {},
+): Promise<void> {
+  const info = await lstat(path).catch(() => undefined)
+  if (info?.isDirectory()) {
+    await chmod(path, 0o700).catch(() => undefined)
+    if (recursive) {
+      for (const entry of await readdir(path)) {
+        await removeWritable(join(path, entry), { recursive: true })
+      }
+    }
+  } else if (info) {
+    await chmod(path, 0o600).catch(() => undefined)
+  }
+  await rm(path, { force: true, recursive })
+}
 
 export const OPERATION_COMPONENT_ACTIONS: readonly OperationComponentAction[] = [
   'refresh',
@@ -585,7 +611,7 @@ export class OperationComponents {
     // Daemon start implies no run is live, so any per-run login copy left behind
     // is stale. The sweep is best effort, never reports a failure, and staging
     // waits for it so a fresh copy cannot be deleted by it.
-    this.#runStateSweep = rm(this.#runStateDir, { recursive: true, force: true }).catch(() => undefined)
+    this.#runStateSweep = removeWritable(this.#runStateDir, { recursive: true }).catch(() => undefined)
   }
 
   /** Current snapshots, in component order. The first call runs both checks. */
@@ -1004,6 +1030,9 @@ export class OperationComponents {
     }
     await rm(this.#loginStatePath, { force: true }).catch(() => undefined)
     await rm(this.#loginProfileDir, { recursive: true, force: true }).catch(() => undefined)
+    // Clearing the login must also remove the read-only per-run copies staged
+    // under the run-state directory; a plain rm cannot delete them on Windows.
+    await removeWritable(this.#runStateDir, { recursive: true }).catch(() => undefined)
     return this.#check(id)
   }
 
