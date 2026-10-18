@@ -495,6 +495,10 @@ export class ForemanDaemon implements RunningForemanDaemon {
     this.scheduler?.stop()
     this.botHost?.stop()
     void this.botAgents?.stop()
+    // With every producer stopped, opt the session service into restart
+    // recovery before teardown closes it, so each shutdown interrupt persists
+    // its resume token ahead of the terminating turn.finished.
+    this.resources?.session.prepareForRestart?.()
     // Runs still queued for the desktop lane must not start while the drain
     // finalises: close the lane so their admission fails instead of handing
     // them ownership when the current holder releases.

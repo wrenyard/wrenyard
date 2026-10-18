@@ -19,6 +19,7 @@ import {
   renderEventText,
   renderEventsBlock,
   renderFiles,
+  resumedOriginalTurns,
   tag,
 } from '../context/render.ts';
 import type { BuiltView } from '../ports.ts';
@@ -102,6 +103,9 @@ Wrenyard orchestrator: understand the user's goal and direct the system to get t
 function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
   const images = input.allowImages === false ? {} : (input.images ?? {});
   const events = input.events;
+  // A restart continuation keeps its linked original turn's post-interrupt
+  // results; an ordinary user-interrupted turn keeps them hidden.
+  const resumedTurns = resumedOriginalTurns(events);
 
   // Index the ledger by occurrence, not by raw action id: a recovered session
   // can reuse an id, and each reuse is its own call with its own result.
@@ -162,7 +166,9 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
       startByIndex.set(index, start);
       const key = occurrenceKey(event.id, event.turn, event.step);
       if (key !== undefined) awaiting.set(key, [...(awaiting.get(key) ?? []), start]);
-    } else if (event.type === 'action.finished' && event.afterInterrupt !== true) {
+    } else if (event.type === 'action.finished'
+      && (event.afterInterrupt !== true
+        || (event.turn !== undefined && resumedTurns.has(event.turn)))) {
       const finish: FinishOccurrence = { index, event };
       finishByIndex.set(index, finish);
       const key = occurrenceKey(event.id, event.turn, event.step);
@@ -221,7 +227,7 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
         // An action whose reasoning step never completed has no assistant
         // message to hang on: it stays record text. Each occurrence is judged
         // on its own, so a reused id is never dropped.
-        if (start === undefined || !isNative(start)) pushText(renderEventText(event)!);
+        if (start === undefined || !isNative(start)) pushText(renderEventText(event, resumedTurns)!);
         break;
       }
       case 'reasoning.completed': {
@@ -251,21 +257,22 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
         break;
       }
       case 'action.finished': {
-        if (event.afterInterrupt === true) break;
+        if (event.afterInterrupt === true
+          && (event.turn === undefined || !resumedTurns.has(event.turn))) break;
         // Delivered as the action's own tool result unless the pair is
         // unresolved or the result arrived late; a late or orphaned result
         // stays an <action-result> record.
         const start = finishByIndex.get(index)?.start;
         if (start !== undefined && isNative(start) && !arrivedLate(start)) break;
-        pushText(renderEventText(event)!);
+        pushText(renderEventText(event, resumedTurns)!);
         break;
       }
       case 'step.started':
-        pushText(renderEventText(event)!);
+        pushText(renderEventText(event, resumedTurns)!);
         endUserMessage();
         break;
       default: {
-        const text = renderEventText(event);
+        const text = renderEventText(event, resumedTurns);
         if (text !== undefined) pushText(text);
       }
     }

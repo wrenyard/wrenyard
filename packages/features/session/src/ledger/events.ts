@@ -165,6 +165,26 @@ export interface TurnStartedEvent extends LedgerEventBase {
   id: string;
   text: string;
   model: TurnModel;
+  /**
+   * Set only on a restart continuation: the id (`t<turn>`) of the interrupted
+   * original turn this follow-up resumes. Absent on every normal turn.
+   */
+  resumedFrom?: string;
+}
+
+/**
+ * What a restart continuation needs to resume an interrupted turn once: the
+ * original turn id and the exact route facts it was running with. Present only
+ * on an opted-in shutdown interrupt, never on a user interrupt.
+ */
+export interface TurnResumeMarker {
+  /** The interrupted original turn, as `t<turn>`. */
+  turnId: string;
+  provider: string;
+  model: string;
+  reasoningEffort: ReasoningEffort;
+  /** Explicit Fast preference of the original turn; absent means no preference. */
+  fast?: boolean;
 }
 
 export interface TurnFinishedEvent extends LedgerEventBase {
@@ -178,6 +198,11 @@ export interface TurnInterruptedEvent extends LedgerEventBase {
   type: 'turn.interrupted';
   parent: string;
   reason: 'user' | 'shutdown' | 'restart';
+  /**
+   * Present only when this shutdown interrupt must be resumed once after the
+   * daemon restarts. A user interrupt never carries it.
+   */
+  resume?: TurnResumeMarker;
 }
 
 /**

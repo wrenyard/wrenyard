@@ -223,6 +223,13 @@ export interface Session {
    * calls it once it is listening so no session body is parsed early.
    */
   startBackgroundRecovery(): void;
+  /**
+   * Opt the whole session service into restart recovery. Called only by the
+   * host's shutdown-for-upgrade path, before teardown; every turn the later
+   * `close` interrupts then persists a resume token. An ordinary `close`
+   * without it keeps its nonresuming behaviour.
+   */
+  prepareForRestart?(): void;
   /** Admitted turns whose terminal `turn.finished` is not yet durable. */
   activeTurnCount(): number;
   /** True while any admitted turn has not reached its durable terminal append. */
