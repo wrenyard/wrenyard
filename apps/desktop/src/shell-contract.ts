@@ -1379,6 +1379,8 @@ export const AGENT_METHODS = [
   'agent.get',
   'agent.events',
   'agent.wake',
+  'agent.group.events',
+  'agent.group.send',
   'routine.list',
   'routine.create',
   'routine.update',
@@ -1396,6 +1398,26 @@ export interface AgentEventsParams { id: string; afterSeq: number; limit?: numbe
 export interface AgentEventsResult { events: LedgerEvent[]; lastSeq: number }
 export interface AgentWakeParams { id: string; text: string }
 export interface AgentWakeResult { queued: number }
+
+/**
+ * One entry of the shared group transcript, mirrored from the daemon
+ * `group.mts` wire type. `seq` is the monotonic transcript cursor Desktop pages
+ * with; a bot entry names the bot that spoke at publish time.
+ */
+export interface GroupMessage {
+  seq: number
+  at: string
+  author: 'user' | 'bot'
+  botId?: string
+  name?: string
+  text: string
+}
+
+export interface AgentGroupEventsParams { afterSeq: number; limit?: number }
+export interface AgentGroupEventsResult { messages: GroupMessage[]; lastSeq: number }
+export interface AgentGroupSendParams { text: string }
+export interface AgentGroupSendResult { message: GroupMessage; awakened: string[] }
+
 export interface RoutineListParams { botId?: string }
 export interface RoutineListResult { routines: Routine[] }
 export interface RoutineCreateParams {
@@ -1419,6 +1441,8 @@ export interface AgentMethodMap {
   'agent.get': { params: AgentGetParams; result: AgentGetResult };
   'agent.events': { params: AgentEventsParams; result: AgentEventsResult };
   'agent.wake': { params: AgentWakeParams; result: AgentWakeResult };
+  'agent.group.events': { params: AgentGroupEventsParams; result: AgentGroupEventsResult };
+  'agent.group.send': { params: AgentGroupSendParams; result: AgentGroupSendResult };
   'routine.list': { params: RoutineListParams; result: RoutineListResult };
   'routine.create': { params: RoutineCreateParams; result: RoutineCreateResult };
   'routine.update': { params: RoutineUpdateParams; result: RoutineUpdateResult };

@@ -2,7 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { LedgerEvent } from '@wrenyard/session';
 import { agentRequest, useRemoteConnection } from '@/renderer/lib/desktop';
-import type { RoutineCreateParams, RoutineDeliver, RoutineState, RoutineUpdateParams } from '@/shell-contract';
+import type {
+  AgentGroupEventsResult,
+  GroupMessage,
+  RoutineCreateParams,
+  RoutineDeliver,
+  RoutineState,
+  RoutineUpdateParams,
+} from '@/shell-contract';
 
 /**
  * Agent projections are only meaningful while an endpoint is committed: a
@@ -70,6 +77,117 @@ function useAgentInvalidator(): () => void {
 export function useWakeMutation() {
   return useMutation({
     mutationFn: ({ id, text }: { id: string; text: string }) => agentRequest('agent.wake', { id, text }),
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared group transcript                                             */
+/* ------------------------------------------------------------------ */
+
+/** One catch-up page; the daemon caps the page size at 500 entries. */
+const GROUP_PAGE_LIMIT = 200;
+/** Bounded catch-up burst: a long absence appends at most this many pages per tick. */
+const GROUP_CATCH_UP_PAGES = 5;
+/** The transcript poll; replies land through the daemon, never by local replay. */
+const GROUP_POLL_MS = 1000;
+
+export interface GroupTranscript {
+  /** Canonical transcript entries in `seq` order, de-duplicated by sequence. */
+  messages: readonly GroupMessage[];
+  /** Last poll failure, cleared by the next successful page. */
+  error: string | null;
+  /** Whether at least one page has been read since the endpoint was committed. */
+  ready: boolean;
+  /** Fetch the next page now, e.g. right after a send, without waiting for the timer. */
+  refresh: () => void;
+}
+
+/** Read one bounded transcript page after a sequence cursor. */
+export function fetchGroupEvents(
+  afterSeq: number,
+  limit: number = GROUP_PAGE_LIMIT,
+): Promise<AgentGroupEventsResult> {
+  return agentRequest('agent.group.events', { afterSeq, limit });
+}
+
+/**
+ * Poll the daemon's persistent group transcript with a sequence cursor. Every
+ * tick catches up through consecutive pages, appends entries in order and drops
+ * anything at or below the last seen sequence, so a repeated or late page can
+ * never duplicate a message. A serialized in-flight guard and a per-effect
+ * cancellation token keep a slow request from overlapping the next tick or
+ * arriving after a bot/endpoint switch or unmount.
+ */
+export function useGroupEvents(): GroupTranscript {
+  const connection = useRemoteConnection();
+  const enabled = useAgentEnabled();
+  const [messages, setMessages] = useState<readonly GroupMessage[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  const cursorRef = useRef(0);
+  const refreshRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    setMessages([]);
+    setError(null);
+    setReady(false);
+    cursorRef.current = 0;
+    if (!enabled) {
+      refreshRef.current = () => {};
+      return;
+    }
+
+    let cancelled = false;
+    let inFlight = false;
+
+    const poll = async (): Promise<void> => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        for (let page = 0; page < GROUP_CATCH_UP_PAGES; page += 1) {
+          const before = cursorRef.current;
+          const result = await fetchGroupEvents(before);
+          if (cancelled) return;
+          cursorRef.current = Math.max(before, result.lastSeq);
+          setMessages((previous) => {
+            const last = previous.length === 0 ? 0 : previous[previous.length - 1]!.seq;
+            const additions = result.messages.filter((message) => message.seq > last);
+            return additions.length === 0 ? previous : [...previous, ...additions];
+          });
+          // Stop when the page was short or the cursor did not advance.
+          if (result.messages.length < GROUP_PAGE_LIMIT || result.lastSeq <= before) break;
+        }
+        if (cancelled) return;
+        setReady(true);
+        setError(null);
+      } catch (cause) {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    refreshRef.current = () => { void poll(); };
+    void poll();
+    const timer = window.setInterval(() => { void poll(); }, GROUP_POLL_MS);
+    return () => {
+      cancelled = true;
+      refreshRef.current = () => {};
+      window.clearInterval(timer);
+    };
+  }, [enabled, connection.state, connection.generation]);
+
+  return { messages, error, ready, refresh: () => { refreshRef.current(); } };
+}
+
+/**
+ * Post one user entry to the group. The daemon publishes it once and wakes
+ * mentioned bots; the returned `awakened` list is the only success signal the
+ * UI reports, so an unknown or disabled mention never looks like a wake.
+ */
+export function useGroupSendMutation() {
+  return useMutation({
+    mutationFn: (text: string) => agentRequest('agent.group.send', { text }),
   });
 }
 

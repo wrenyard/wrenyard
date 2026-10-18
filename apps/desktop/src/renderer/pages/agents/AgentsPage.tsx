@@ -1,16 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { KeyboardEvent } from 'react';
-import { Page, PageContent, PageDescription, PageHeader, PageTitle } from '@/renderer/components/page';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AppMarkdown } from '@/renderer/components/app-markdown';
+import { PromptInput } from '@/renderer/components/chat/prompt-input';
+import { Page, PageActions, PageContent, PageHeader, PageTitle } from '@/renderer/components/page';
 import { QueryError } from '@/renderer/components/query-error';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import type { StatusTone } from '@/renderer/components/status-badge';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { Button } from '@/renderer/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/renderer/components/ui/card';
-import { Checkbox } from '@/renderer/components/ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
-import { Field, FieldLabel } from '@/renderer/components/ui/field';
-import { Input } from '@/renderer/components/ui/input';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -18,31 +15,20 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/renderer/components/ui/message-scroller';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/renderer/components/ui/table';
-import { Textarea } from '@/renderer/components/ui/textarea';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { useConfirm } from '@/renderer/hooks/use-confirm';
-import type { AgentStatus, Routine } from '@/shell-contract';
+import { useRemoteConnection } from '@/renderer/lib/desktop';
+import type { AgentBot, AgentStatus, GroupMessage } from '@/shell-contract';
 import { fold } from '../session/model/fold.js';
 import { MessageTimeline, buildMessageTimeline } from '../session/components/conversation/MessageTimeline.js';
+import type { GroupTranscript } from './queries.js';
 import {
-  ROUTINE_STATE_VIEW,
-  deliverText,
-  frequencyText,
-  useAgentConfigQuery,
   useAgentEvents,
   useAgentsQuery,
-  useCreateRoutineMutation,
-  useDeleteRoutineMutation,
-  useRunRoutineMutation,
-  useRoutinesQuery,
-  useUpdateRoutineMutation,
+  useGroupEvents,
+  useGroupSendMutation,
   useWakeMutation,
 } from './queries.js';
-
-/** One-line placeholder for an absent time. */
-const NONE = '—';
 
 const PAGE_TITLE = '机器人';
 
@@ -54,411 +40,478 @@ const STATUS_VIEW: Record<AgentStatus, { label: string; tone: StatusTone }> = {
   disabled: { label: '已停用', tone: 'warning' },
 };
 
-/** The three tool switches a bot config may declare. */
-const TOOL_IDS = ['session', 'todo', 'message'] as const;
+type ConversationMode = 'group' | 'private';
 
-/** Left column: the bot list with status, last wake and queue depth. */
-function BotList(props: { selectedId: string | null; onSelect: (id: string) => void }) {
-  const agents = useAgentsQuery();
-  const bots = agents.data?.bots ?? [];
-
-  if (agents.isError) return <QueryError query={agents} title={PAGE_TITLE} />;
-  if (agents.isPending) {
-    return (
-      <div className="flex flex-col gap-3" role="status" aria-label="加载机器人">
-        <Skeleton className="h-16 w-full" />
-        <Skeleton className="h-16 w-full" />
-      </div>
-    );
-  }
-  if (bots.length === 0) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>没有机器人配置</EmptyTitle>
-          <EmptyDescription>在配置目录的 bot-agents/ 下添加 &lt;id&gt;.json。</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
-  }
+/** The group/private switch in the compact header. */
+function ModeSwitch(props: { mode: ConversationMode; onChange: (mode: ConversationMode) => void }) {
   return (
-    <div className="flex flex-col gap-2">
-      {bots.map((bot) => {
-        const view = STATUS_VIEW[bot.status];
-        return (
-          <button
-            key={bot.id}
-            type="button"
-            onClick={() => props.onSelect(bot.id)}
-            className={`rounded-lg border p-3 text-left transition-colors ${
-              props.selectedId === bot.id ? 'border-primary bg-accent' : 'hover:bg-accent/50'
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate font-medium">{bot.name}</span>
-              <StatusBadge tone={view.tone} label={view.label} />
-            </div>
-            <div className="mt-1 text-xs text-muted-foreground">{bot.id}</div>
-            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
-              <span>
-                上次唤醒 {bot.lastWakeAt === undefined ? NONE : <Timestamp value={bot.lastWakeAt} />}
-              </span>
-              <span>{`排队 ${bot.queued}`}</span>
-            </div>
-            {bot.error !== undefined && <div className="mt-1 text-xs text-destructive">{bot.error}</div>}
-          </button>
-        );
-      })}
+    <div className="flex items-center gap-0.5 rounded-full border p-0.5" role="group" aria-label="对话模式">
+      <Button
+        variant={props.mode === 'group' ? 'secondary' : 'ghost'}
+        size="xs"
+        aria-pressed={props.mode === 'group'}
+        onClick={() => props.onChange('group')}
+      >
+        群聊
+      </Button>
+      <Button
+        variant={props.mode === 'private' ? 'secondary' : 'ghost'}
+        size="xs"
+        aria-pressed={props.mode === 'private'}
+        onClick={() => props.onChange('private')}
+      >
+        私聊
+      </Button>
     </div>
   );
 }
 
-/** The bot conversation: the folded context ledger rendered as messages. */
-function Conversation(props: { id: string }) {
+/** Author line shared by every group entry. */
+function GroupMessageView(props: { message: GroupMessage }) {
+  const message = props.message;
+  const fromUser = message.author === 'user';
+  const author = fromUser ? '你' : message.name ?? message.botId ?? '机器人';
+  return (
+    <article className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-baseline gap-2 text-xs text-muted-foreground">
+        <span className={fromUser ? 'font-medium text-foreground' : 'font-medium text-primary'}>{author}</span>
+        {!fromUser && message.botId !== undefined && (
+          <span className="rounded bg-muted px-1 tabular-nums">{message.botId}</span>
+        )}
+        <Timestamp value={message.at} precision="second" />
+      </div>
+      <div className={`rounded-xl border px-3 py-2 text-sm ${fromUser ? 'bg-muted/40' : 'bg-card'}`}>
+        <AppMarkdown>{message.text}</AppMarkdown>
+      </div>
+    </article>
+  );
+}
+
+/** The canonical group transcript, rendered from the daemon's sequence cursor. */
+function GroupTranscriptView(props: { transcript: GroupTranscript }) {
+  const { messages, error, ready } = props.transcript;
+
+  const header = error !== null && (
+    <div className="mx-4 mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+      {`群聊加载失败：${error}`}
+    </div>
+  );
+
+  if (!ready && messages.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {header}
+        <div className="flex flex-col gap-3 p-4" role="status" aria-label="加载群聊">
+          <Skeleton className="h-14 w-3/4" />
+          <Skeleton className="h-14 w-2/3" />
+        </div>
+      </div>
+    );
+  }
+
+  if (messages.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {header}
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>还没有群聊消息</EmptyTitle>
+              <EmptyDescription>在下方发言，用 @机器人 唤醒它。</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {header}
+      <MessageScrollerProvider autoScroll>
+        <MessageScroller className="min-h-0 flex-1">
+          <MessageScrollerViewport className="scroll-fade-y">
+            <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-5 px-4 py-4">
+              {messages.map((message) => (
+                <GroupMessageView key={message.seq} message={message} />
+              ))}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton />
+        </MessageScroller>
+      </MessageScrollerProvider>
+    </div>
+  );
+}
+
+/**
+ * Aliases in the draft that name no enabled bot. The daemon resolves mentions
+ * itself; this list only lets the composer say plainly that an unknown or
+ * disabled alias woke nobody.
+ */
+function unrecognizedMentions(text: string, bots: readonly AgentBot[]): string[] {
+  const enabled = bots.filter((bot) => bot.enabled);
+  const nameCounts = new Map<string, number>();
+  for (const bot of enabled) {
+    const key = bot.name.trim().toLowerCase();
+    if (key === '') continue;
+    nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
+  }
+  const aliases = new Set<string>();
+  for (const bot of enabled) aliases.add(bot.id.toLowerCase());
+  for (const bot of enabled) {
+    const key = bot.name.trim().toLowerCase();
+    if (key !== '' && nameCounts.get(key) === 1) aliases.add(key);
+  }
+  const unknown: string[] = [];
+  const seen = new Set<string>();
+  for (const match of text.matchAll(/@([\p{L}\p{N}_-]+)/gu)) {
+    const token = match[1]!;
+    const key = token.toLowerCase();
+    if (aliases.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    unknown.push(token);
+  }
+  return unknown;
+}
+
+/** Room in the draft for one unambiguous alias; the caret controls the spot. */
+function insertMention(
+  draft: string,
+  id: string,
+  textarea: HTMLTextAreaElement | null,
+  onDraftChange: (value: string) => void,
+): void {
+  const token = `@${id} `;
+  const start = textarea?.selectionStart ?? draft.length;
+  const end = textarea?.selectionEnd ?? draft.length;
+  const before = draft.slice(0, start);
+  const previous = before.at(-1);
+  const separator = before !== '' && previous !== undefined && !/\s/u.test(previous) ? ' ' : '';
+  const next = `${before}${separator}${token}${draft.slice(end)}`;
+  onDraftChange(next);
+  const caret = before.length + separator.length + token.length;
+  window.requestAnimationFrame(() => {
+    textarea?.focus();
+    textarea?.setSelectionRange(caret, caret);
+  });
+}
+
+/** The group composer, roster chips and explicit wake feedback. */
+function GroupComposer(props: {
+  bots: readonly AgentBot[];
+  transcript: GroupTranscript;
+  draft: string;
+  onDraftChange: (value: string) => void;
+}) {
+  const connection = useRemoteConnection();
+  const connected = connection.state === 'local' || connection.state === 'remote';
+  const send = useGroupSendMutation();
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [feedback, setFeedback] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null);
+
+  const enabledBots = props.bots.filter((bot) => bot.enabled);
+  const unknown = unrecognizedMentions(props.draft, props.bots);
+
+  const submit = (): void => {
+    const text = props.draft.trim();
+    if (text === '' || send.isPending || !connected) return;
+    setFeedback(null);
+    send.mutate(text, {
+      onSuccess: (result) => {
+        // Only a confirmed daemon post clears the draft; a failure keeps it.
+        props.onDraftChange('');
+        const names = result.awakened.map((id) => {
+          const name = props.bots.find((bot) => bot.id === id)?.name;
+          return name !== undefined && name !== id ? `${name}（${id}）` : id;
+        });
+        if (result.awakened.length === 0) {
+          setFeedback({
+            tone: 'warn',
+            text: unknown.length > 0
+              ? `没有机器人被唤醒：未识别或已停用的提及 ${unknown.map((token) => `@${token}`).join('、')}。`
+              : '没有机器人被唤醒：只有 @id 或 @名称 才会唤醒机器人。',
+          });
+        } else if (unknown.length > 0) {
+          setFeedback({
+            tone: 'warn',
+            text: `已唤醒 ${names.join('、')}；未识别或已停用的提及 ${unknown.map((token) => `@${token}`).join('、')}。`,
+          });
+        } else {
+          setFeedback({ tone: 'ok', text: `已唤醒 ${names.join('、')}` });
+        }
+        // Read the canonical transcript now instead of waiting for the tick.
+        props.transcript.refresh();
+      },
+    });
+  };
+
+  return (
+    <div className="mx-auto w-full max-w-3xl">
+      <PromptInput
+        value={props.draft}
+        onValueChange={props.onDraftChange}
+        onSubmit={submit}
+        sendKey="mod-enter"
+        submitDisabled={send.isPending || !connected}
+        placeholder="在群聊里发言；用 @机器人 唤醒它（Cmd/Ctrl+Enter 发送）"
+        textareaRef={textareaRef}
+      />
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <span>提及</span>
+        {enabledBots.length === 0 ? (
+          <span>没有启用的机器人</span>
+        ) : (
+          enabledBots.map((bot) => (
+            <button
+              key={bot.id}
+              type="button"
+              title={`唤醒 ${bot.name}`}
+              className="rounded-full border px-2 py-0.5 text-foreground transition-colors hover:bg-muted"
+              onClick={() => insertMention(props.draft, bot.id, textareaRef.current, props.onDraftChange)}
+            >
+              {`@${bot.id}`}
+            </button>
+          ))
+        )}
+        <span className="basis-full">提及会唤醒机器人；未提及的发言只进入群聊，不会唤醒任何机器人。</span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
+        {!connected && <span className="text-destructive">尚未连接，暂时不能发送。</span>}
+        {send.isPending && <span className="text-muted-foreground">发送中…</span>}
+        {send.isError && (
+          <span className="text-destructive">{`发送失败：${String(send.error)}（草稿已保留）`}</span>
+        )}
+        {feedback !== null && (
+          <span className={feedback.tone === 'ok' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+            {feedback.text}
+          </span>
+        )}
+        {unknown.length > 0 && !send.isPending && (
+          <span className="text-amber-600 dark:text-amber-400">
+            {`未识别或已停用的提及：${unknown.map((token) => `@${token}`).join('、')}`}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Group mode: canonical transcript plus the group composer. */
+function GroupView(props: {
+  bots: readonly AgentBot[];
+  draft: string;
+  onDraftChange: (value: string) => void;
+}) {
+  const transcript = useGroupEvents();
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <GroupTranscriptView transcript={transcript} />
+      <div className="shrink-0 border-t bg-background px-4 py-3">
+        <GroupComposer
+          bots={props.bots}
+          transcript={transcript}
+          draft={props.draft}
+          onDraftChange={props.onDraftChange}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Private mode: one bot's own context ledger, folded as before. */
+function PrivateConversation(props: { id: string }) {
   const events = useAgentEvents(props.id);
   const model = useMemo(() => fold(events, [], {}, {}), [events]);
   const timeline = useMemo(() => buildMessageTimeline(model.turns, []), [model.turns]);
   const freshKeys = useMemo(() => new Set<string>(), []);
-  return (
-    <div className="h-[28rem] max-h-[60vh] overflow-hidden rounded-lg border">
-      {timeline.length === 0 ? (
+  if (timeline.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center">
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>暂无对话</EmptyTitle>
-            <EmptyDescription>发送一条消息唤醒机器人。</EmptyDescription>
+            <EmptyTitle>暂无私聊</EmptyTitle>
+            <EmptyDescription>发送一条消息唤醒这个机器人。</EmptyDescription>
           </EmptyHeader>
         </Empty>
-      ) : (
-        <MessageScrollerProvider key={props.id} autoScroll>
-          <MessageScroller className="min-h-0 flex-1">
-            <MessageScrollerViewport className="scroll-fade-y">
-              <MessageScrollerContent className="w-full px-3 py-3">
-                <MessageTimeline
-                  timeline={timeline}
-                  turns={model.turns}
-                  freshMessageKeys={freshKeys}
-                  onRetry={() => {}}
-                  onRemove={() => {}}
-                  onReply={() => {}}
-                />
-              </MessageScrollerContent>
-            </MessageScrollerViewport>
-            <MessageScrollerButton />
-          </MessageScroller>
-        </MessageScrollerProvider>
-      )}
-    </div>
+      </div>
+    );
+  }
+  return (
+    <MessageScrollerProvider key={props.id} autoScroll>
+      <MessageScroller className="min-h-0 flex-1">
+        <MessageScrollerViewport className="scroll-fade-y">
+          <MessageScrollerContent className="w-full px-4 py-4">
+            <MessageTimeline
+              timeline={timeline}
+              turns={model.turns}
+              freshMessageKeys={freshKeys}
+              onRetry={() => {}}
+              onRemove={() => {}}
+              onReply={() => {}}
+            />
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
+        <MessageScrollerButton />
+      </MessageScroller>
+    </MessageScrollerProvider>
   );
 }
 
-/** Composer: textarea plus a send button that wakes the bot. */
-function Composer(props: { botId: string; botEnabled: boolean }) {
-  const [text, setText] = useState('');
+/** Private composer: wakes only the selected bot. */
+function PrivateComposer(props: {
+  botId: string;
+  enabled: boolean;
+  draft: string;
+  onDraftChange: (value: string) => void;
+}) {
   const wake = useWakeMutation();
-  const canSend = props.botEnabled && text.trim().length > 0 && !wake.isPending;
-
   const send = (): void => {
-    if (!canSend) return;
+    const text = props.draft.trim();
+    if (text === '' || !props.enabled || wake.isPending) return;
     wake.mutate(
-      { id: props.botId, text: text.trim() },
-      {
-        onSuccess: () => setText(''),
-        // The error is rendered inline below; keep it out of the console.
-        onError: () => {},
-      },
+      { id: props.botId, text },
+      { onSuccess: () => props.onDraftChange('') },
     );
   };
-
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-      event.preventDefault();
-      send();
-    }
-  };
-
   return (
-    <div className="flex flex-col gap-2">
-      <Textarea
-        value={text}
-        rows={3}
-        placeholder="发送消息唤醒机器人（Cmd/Ctrl+Enter 发送）"
-        disabled={!props.botEnabled}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={onKeyDown}
+    <div className="mx-auto w-full max-w-3xl">
+      <PromptInput
+        value={props.draft}
+        onValueChange={props.onDraftChange}
+        onSubmit={send}
+        sendKey="mod-enter"
+        disabled={!props.enabled}
+        submitDisabled={wake.isPending}
+        placeholder={props.enabled
+          ? '给这个机器人发私信（Cmd/Ctrl+Enter 发送）'
+          : '机器人已停用，私聊历史仅可查看'}
       />
-      <div className="flex items-center justify-between gap-2">
-        {wake.isError ? (
-          <span className="text-xs text-destructive">{String(wake.error)}</span>
-        ) : (
-          <span />
+      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
+        {wake.isPending && <span className="text-muted-foreground">发送中…</span>}
+        {wake.isError && (
+          <span className="text-destructive">{`发送失败：${String(wake.error)}（草稿已保留）`}</span>
         )}
-        <Button size="sm" disabled={!canSend} onClick={send}>
-          发送
-        </Button>
       </div>
     </div>
   );
 }
 
-/** Routines section: the bot's routine table with row actions and a create form. */
-function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
-  const routines = useRoutinesQuery(props.botId);
-  const update = useUpdateRoutineMutation();
-  const run = useRunRoutineMutation();
-  const remove = useDeleteRoutineMutation();
-  const create = useCreateRoutineMutation();
-  const confirm = useConfirm();
-
-  const [prompt, setPrompt] = useState('');
-  const [interval, setIntervalMinutes] = useState('5');
-  const [recurring, setRecurring] = useState(true);
-  const [deliver, setDeliver] = useState<string>('none');
-
-  const items: Routine[] = routines.data?.routines ?? [];
-
-  const requestDelete = (item: Routine): void => {
-    void confirm({
-      title: '删除例行任务？',
-      description: '删除后不会再触发。',
-      confirmLabel: '删除',
-      destructive: true,
-    }).then((confirmed) => {
-      if (confirmed) remove.mutate(item.id);
-    });
-  };
-
-  const submit = (): void => {
-    const minutes = Math.floor(Number(interval));
-    if (prompt.trim().length === 0 || !Number.isFinite(minutes) || minutes < 1 || create.isPending) return;
-    create.mutate(
-      {
-        botId: props.botId,
-        prompt: prompt.trim(),
-        intervalMinutes: minutes,
-        recurring,
-        deliver: recurring ? (deliver as Routine['deliver']) : undefined,
-      },
-      {
-        onSuccess: () => {
-          setPrompt('');
-          setIntervalMinutes('5');
-          setRecurring(true);
-          setDeliver('none');
-        },
-      },
-    );
-  };
-
+/** Private mode: the selected bot's header, history and composer. */
+function PrivateView(props: {
+  bot: AgentBot;
+  draft: string;
+  onDraftChange: (value: string) => void;
+}) {
+  const status = STATUS_VIEW[props.bot.status];
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>例行任务</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">暂无例行任务。</p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>提示词</TableHead>
-                <TableHead>频率</TableHead>
-                <TableHead>投递</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>下次运行</TableHead>
-                <TableHead>上次错误</TableHead>
-                <TableHead className="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((item) => {
-                const view = ROUTINE_STATE_VIEW[item.state];
-                return (
-                  <TableRow key={item.id}>
-                    <TableCell>
-                      <Tooltip>
-                        <TooltipTrigger render={<span className="block max-w-[16rem] truncate font-medium" />}>
-                          {item.prompt}
-                        </TooltipTrigger>
-                        <TooltipContent>{item.prompt}</TooltipContent>
-                      </Tooltip>
-                      {item.name !== undefined && (
-                        <span className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
-                          {item.name}
-                          <span className="rounded bg-muted px-1">配置</span>
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground tabular-nums">
-                      {frequencyText(item.intervalMinutes, item.recurring)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{deliverText(item.deliver)}</TableCell>
-                    <TableCell>
-                      {item.state === 'failed' && item.lastError !== undefined ? (
-                        <Tooltip>
-                          <TooltipTrigger render={<span className="inline-flex" />}>
-                            <StatusBadge tone={view.tone} label={view.label} />
-                          </TooltipTrigger>
-                          <TooltipContent>{item.lastError}</TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <StatusBadge tone={view.tone} label={view.label} />
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground tabular-nums">
-                      {item.nextRunAt === undefined ? NONE : <Timestamp value={item.nextRunAt} />}
-                    </TableCell>
-                    <TableCell className="max-w-[10rem] truncate text-xs text-destructive">
-                      {item.lastError ?? NONE}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex shrink-0 items-center justify-end gap-1">
-                        {item.state === 'active' && (
-                          <Button variant="ghost" size="xs" disabled={update.isPending} onClick={() => update.mutate({ id: item.id, state: 'paused' })}>
-                            暂停
-                          </Button>
-                        )}
-                        {item.state === 'paused' && (
-                          <Button variant="ghost" size="xs" disabled={update.isPending} onClick={() => update.mutate({ id: item.id, state: 'active' })}>
-                            恢复
-                          </Button>
-                        )}
-                        <Button variant="outline" size="xs" disabled={run.isPending} onClick={() => run.mutate(item.id)}>
-                          立即运行
-                        </Button>
-                        <Button variant="ghost" size="xs" className="text-destructive" disabled={remove.isPending} onClick={() => requestDelete(item)}>
-                          删除
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2 text-sm">
+        <span className="font-medium">{props.bot.name}</span>
+        <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{props.bot.id}</span>
+        <StatusBadge tone={status.tone} label={status.label} />
+        {!props.bot.enabled && (
+          <span className="text-xs text-muted-foreground">已停用，仅可查看历史。</span>
         )}
-        <div className="flex flex-col gap-2 rounded-lg border p-3">
-          <Textarea value={prompt} rows={2} placeholder="例行任务提示词" onChange={(event) => setPrompt(event.target.value)} />
-          <div className="flex flex-wrap items-center gap-4">
-            <Field className="flex items-center gap-2">
-              <FieldLabel>间隔（分钟）</FieldLabel>
-              <Input
-                type="number"
-                min={1}
-                value={interval}
-                className="w-24"
-                onChange={(event) => setIntervalMinutes(event.target.value)}
-              />
-            </Field>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox checked={recurring} onCheckedChange={(checked) => setRecurring(checked === true)} />
-              重复
-            </label>
-            <Field className="flex items-center gap-2">
-              <FieldLabel>投递</FieldLabel>
-              <select
-                value={deliver}
-                disabled={!recurring}
-                className="rounded-md border bg-transparent px-2 py-1 text-sm"
-                onChange={(event) => setDeliver(event.target.value)}
-              >
-                <option value="none">不投递</option>
-                {props.otherBotIds.map((id) => (
-                  <option key={id} value={`bot:${id}`}>{id}</option>
-                ))}
-              </select>
-            </Field>
-            <Button size="sm" className="ml-auto" disabled={create.isPending} onClick={submit}>
-              新建
-            </Button>
-          </div>
-          {create.isError && <span className="text-xs text-destructive">{String(create.error)}</span>}
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <PrivateConversation id={props.bot.id} />
+      </div>
+      <div className="shrink-0 border-t bg-background px-4 py-3">
+        <PrivateComposer
+          botId={props.bot.id}
+          enabled={props.bot.enabled}
+          draft={props.draft}
+          onDraftChange={props.onDraftChange}
+        />
+      </div>
+    </div>
   );
 }
 
-/** Config section: path, tool chips and the read-only config JSON. */
-function ConfigSection(props: { botId: string; configPath: string; tools: readonly string[] }) {
-  const config = useAgentConfigQuery(props.botId);
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>配置</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <div className="text-xs text-muted-foreground">{props.configPath}</div>
-        <div className="flex items-center gap-2">
-          {TOOL_IDS.map((tool) => {
-            const on = props.tools.includes(tool);
-            return (
-              <span key={tool} className={`rounded-full px-2 py-0.5 text-xs ${on ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}`}>
-                {`${tool} ${on ? '开' : '关'}`}
-              </span>
-            );
-          })}
-        </div>
-        <pre className="max-h-64 overflow-auto rounded-lg bg-muted p-3 text-xs">
-          {config.data?.config ?? '…'}
-        </pre>
-      </CardContent>
-    </Card>
-  );
-}
-
-/** The 机器人 page: bot list, conversation, composer, routines and config. */
+/**
+ * The 机器人 page: a full-height group conversation by default, with a
+ * per-bot private conversation alongside it. Both modes read the daemon's own
+ * records — the shared transcript through `agent.group.events` and one bot's
+ * context ledger through `agent.events` — so the page never reconstructs
+ * history. Settings (routines and config) moved to Settings → 机器人.
+ */
 export function AgentsPage() {
   const agents = useAgentsQuery();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mode, setMode] = useState<ConversationMode>('group');
+  const [privateId, setPrivateId] = useState<string | null>(null);
+  const [groupDraft, setGroupDraft] = useState('');
+  const [privateDrafts, setPrivateDrafts] = useState<Record<string, string>>({});
 
-  // Keep a valid selection as the polled list changes.
+  const bots = agents.data?.bots ?? [];
+
+  // Keep a valid private selection as the polled list changes.
   useEffect(() => {
-    const bots = agents.data?.bots ?? [];
-    if (bots.length === 0) {
-      if (selectedId !== null) setSelectedId(null);
+    const list = agents.data?.bots ?? [];
+    if (list.length === 0) {
+      if (privateId !== null) setPrivateId(null);
       return;
     }
-    if (selectedId === null || !bots.some((bot) => bot.id === selectedId)) setSelectedId(bots[0]!.id);
-  }, [agents.data, selectedId]);
+    if (privateId === null || !list.some((bot) => bot.id === privateId)) setPrivateId(list[0]!.id);
+  }, [agents.data, privateId]);
 
   const selected = useMemo(
-    () => (agents.data?.bots ?? []).find((bot) => bot.id === selectedId),
-    [agents.data, selectedId],
-  );
-  const otherBotIds = useMemo(
-    () => (agents.data?.bots ?? []).filter((bot) => bot.id !== selectedId).map((bot) => bot.id),
-    [agents.data, selectedId],
+    () => bots.find((bot) => bot.id === privateId),
+    [bots, privateId],
   );
 
   return (
     <Page data-page="agents">
       <PageHeader>
         <PageTitle>{PAGE_TITLE}</PageTitle>
-        <PageDescription>{`共 ${agents.data?.bots.length ?? 0} 个机器人`}</PageDescription>
-      </PageHeader>
-      <PageContent>
-        <div className="grid min-w-0 gap-4 lg:grid-cols-[18rem_1fr]">
-          <BotList selectedId={selectedId} onSelect={setSelectedId} />
-          {selected === undefined ? (
-            <Empty>
-              <EmptyHeader>
-                <EmptyTitle>选择一个机器人</EmptyTitle>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            <div className="flex min-w-0 flex-col gap-4">
-              <Card>
-                <CardContent className="flex flex-col gap-3">
-                  <Conversation id={selected.id} />
-                  <Composer botId={selected.id} botEnabled={selected.enabled} />
-                </CardContent>
-              </Card>
-              <Routines botId={selected.id} otherBotIds={otherBotIds} />
-              <ConfigSection botId={selected.id} configPath={selected.configPath} tools={selected.tools} />
-            </div>
+        <PageActions>
+          <ModeSwitch mode={mode} onChange={setMode} />
+          {mode === 'private' && bots.length > 0 && (
+            <Select value={privateId ?? bots[0]?.id ?? ''} onValueChange={(value) => setPrivateId(String(value))}>
+              <SelectTrigger size="sm" className="w-44" aria-label="选择机器人">
+                <SelectValue>
+                  {(value) => bots.find((bot) => bot.id === value)?.name ?? String(value)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {bots.map((bot) => (
+                  <SelectItem key={bot.id} value={bot.id}>
+                    {bot.enabled ? bot.name : `${bot.name}（已停用）`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
-        </div>
+        </PageActions>
+      </PageHeader>
+      <PageContent fill className="gap-0 p-0">
+        {agents.isError && mode === 'private' ? (
+          <QueryError query={agents} title={PAGE_TITLE} />
+        ) : mode === 'group' ? (
+          <GroupView
+            bots={bots}
+            draft={groupDraft}
+            onDraftChange={setGroupDraft}
+          />
+        ) : agents.isPending ? (
+          <div className="flex flex-col gap-3 p-4" role="status" aria-label="加载机器人">
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+          </div>
+        ) : selected === undefined ? (
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>选择一个机器人</EmptyTitle>
+              <EmptyDescription>没有可用的机器人配置。</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <PrivateView
+            bot={selected}
+            draft={privateDrafts[selected.id] ?? ''}
+            onDraftChange={(value) => setPrivateDrafts((previous) => ({ ...previous, [selected.id]: value }))}
+          />
+        )}
       </PageContent>
     </Page>
   );
