@@ -1,6 +1,6 @@
 {
   "name": "@wrenyard/desktop",
-  "version": "1.0.95",
+  "version": "1.0.96",
   "desktopName": "wrenyard-desktop",
   "private": true,
   "description": "Wrenyard Desktop product shell for daemon features and its in-process Pet companion.",
