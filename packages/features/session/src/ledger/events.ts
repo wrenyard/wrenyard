@@ -52,7 +52,8 @@ export type LedgerEventType =
   | 'session.metadata'
   | 'system.info'
   | 'system.warning'
-  | 'system.error';
+  | 'system.error'
+  | 'context.compacted';
 
 /**
  * Event types that may enter the rendered model context. Everything else is
@@ -75,6 +76,7 @@ export const CONTEXT_EVENT_TYPES: ReadonlySet<LedgerEventType> = new Set<LedgerE
   'system.info',
   'system.warning',
   'system.error',
+  'context.compacted',
 ]);
 
 /** Fields common to every ledger event; `seq` and `at` are assigned on append. */
@@ -616,6 +618,34 @@ export interface SessionMetadataEvent extends LedgerEventBase {
 }
 
 /**
+ * One context compaction: the rendered model context starts after this event
+ * instead of at the beginning of the ledger. Every covered event stays durable
+ * and readable; only the request view is bounded.
+ *
+ * `throughSeq` is the highest ledger sequence the summary covers, so the latest
+ * compaction event is the single floor later requests apply. The event itself
+ * renders as one context block carrying `summary`. A missing `failure` means the
+ * summary was written by the model; a present one names why the deterministic
+ * fallback was used instead.
+ */
+export interface ContextCompactedEvent extends LedgerEventBase {
+  type: 'context.compacted';
+  /** Highest ledger sequence covered by the summary. */
+  throughSeq: number;
+  /**
+   * Markdown handover note with the fixed sections `work_so_far`,
+   * `worktree_state`, `open_tasks`, `decisions` and `pending_followups`.
+   */
+  summary: string;
+  /** Input-token estimate of the request whose size triggered the compaction. */
+  estimatedInputTokens?: number;
+  /** The model's context window when the compaction ran. */
+  contextWindow?: number;
+  /** Why the summary is a deterministic fallback instead of a model-written one. */
+  failure?: string;
+}
+
+/**
  * An out-of-band notice the model should read: a system fault that no content
  * event already reports (`system.error`), a degraded but continuing condition
  * (`system.warning`), or a state change (`system.info`). A failed action that
@@ -660,6 +690,7 @@ export type LedgerEvent =
   | ReplySentEvent
   | SessionTitledEvent
   | SessionMetadataEvent
+  | ContextCompactedEvent
   | SystemNoticeEvent;
 
 /** An event body without the `seq` / `at` the ledger assigns on append. */

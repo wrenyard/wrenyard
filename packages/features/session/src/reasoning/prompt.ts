@@ -22,6 +22,7 @@ import {
   resumedOriginalTurns,
   tag,
 } from '../context/render.ts';
+import { renderCompactionBlock } from '../context/compaction.ts';
 import type { BuiltView } from '../ports.ts';
 
 const REASON_SYSTEM = `<wy-system>
@@ -75,6 +76,19 @@ Wrenyard orchestrator: understand the user's goal and direct the system to get t
 // ─── Reasoning context assembly ─────────────────────────────────────────────
 
 /**
+ * The latest compaction on the timeline, when one exists. Its `throughSeq` is
+ * the floor: every context event at or below it is already summarised by the
+ * compaction event itself, which stays in the view as the handover block.
+ */
+function latestCompaction(events: readonly LedgerEvent[]): Extract<LedgerEvent, { type: 'context.compacted' }> | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type === 'context.compacted') return event;
+  }
+  return undefined;
+}
+
+/**
  * Render the reasoning context as an append-only message sequence.
  *
  * Each finished reasoning output becomes an `assistant` message (its text plus
@@ -102,7 +116,13 @@ Wrenyard orchestrator: understand the user's goal and direct the system to get t
  */
 function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
   const images = input.allowImages === false ? {} : (input.images ?? {});
-  const events = input.events;
+  const compaction = latestCompaction(input.events);
+  // The compaction floor drops every summarised event, including any earlier
+  // compaction event; the latest compaction event itself survives because its
+  // own sequence is above the range it covers.
+  const events = compaction === undefined
+    ? input.events
+    : input.events.filter((event) => event.seq > compaction.throughSeq);
   // A restart continuation keeps its linked original turn's post-interrupt
   // results; an ordinary user-interrupted turn keeps them hidden.
   const resumedTurns = resumedOriginalTurns(events);
@@ -270,6 +290,10 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
       case 'step.started':
         pushText(renderEventText(event, resumedTurns)!);
         endUserMessage();
+        break;
+      case 'context.compacted':
+        // The handover note replaces every summarised event as one block.
+        pushText(renderCompactionBlock(event));
         break;
       default: {
         const text = renderEventText(event, resumedTurns);

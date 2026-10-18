@@ -401,6 +401,51 @@ export function checkContextBudget(
 }
 
 /**
+ * The budget facts compaction and the turn need, resolved exactly as
+ * {@link checkContextBudget} resolves them. `threshold` is the input size above
+ * which a request compacts before sending: 80% of the room left after the
+ * output reservation.
+ */
+export interface ContextBudgetFacts {
+  contextWindow?: number;
+  estimatedInputTokens: number;
+  /** Output tokens the request reserves; absent when nothing is reserved. */
+  outputReservation?: number;
+  /** Input-token compaction threshold; absent when the window is unknown. */
+  threshold?: number;
+}
+
+/** Metadata and budget facts of one assembled request, without mutating it. */
+export function contextBudgetOf(
+  publicId: string,
+  messages: readonly import('../transport/index.ts').Message[],
+  resolveProvider?: (providerId: string) => ProviderDefinition | undefined,
+  requestedMaxOutputTokens?: number,
+): ContextBudgetFacts {
+  const metadata = resolveModelMetadata(publicId, resolveProvider);
+  const estimatedInputTokens = estimateInputTokens(messages);
+  const { contextWindow, maxOutputTokens: sourceMax } = metadata;
+  const outputReservation = metadata.skipCanonicalMetadataFallback === true
+    ? sourceMax === undefined
+      ? requestedMaxOutputTokens
+      : Math.min(requestedMaxOutputTokens ?? sourceMax, sourceMax)
+    : requestedMaxOutputTokens === undefined
+      ? sourceMax
+      : sourceMax === undefined
+        ? undefined
+        : Math.min(requestedMaxOutputTokens, sourceMax);
+  const threshold = contextWindow === undefined || outputReservation === undefined
+    ? undefined
+    : Math.floor(0.8 * (contextWindow - outputReservation));
+  return {
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    estimatedInputTokens,
+    ...(outputReservation === undefined ? {} : { outputReservation }),
+    ...(threshold === undefined ? {} : { threshold }),
+  };
+}
+
+/**
  * True only when the route declares the level as a legal reasoning effort. An
  * undeclared list is not a licence to accept an arbitrary level.
  */

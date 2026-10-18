@@ -12,10 +12,11 @@ import {
   type LedgerEventDraft,
   type StepStatus,
 } from '../ledger/store.ts';
-import { resolveModelMetadata } from '../model/request.ts';
+import { contextBudgetOf, resolveModelMetadata } from '../model/request.ts';
 import { type ToolCall } from '../transport/index.ts';
 import { ACTION_TOOL, parseActionCall } from '../reasoning/tool.ts';
 import { buildReason } from '../reasoning/prompt.ts';
+import { compactContext } from '../context/compaction.ts';
 import {
   type ActionExecutionOutcome,
   type ActionRunContext,
@@ -231,16 +232,74 @@ export class TurnRunner {
     // orchestrator prompt and the single wy_action tool.
     const port = this.engine.host.agentTools?.(session.sessionId);
     const tools = port === undefined ? [ACTION_TOOL] : port.tools;
-    const view = buildReason({
+    const buildView = (currentEvents: LedgerEvent[]) => buildReason({
       deviceName: this.engine.host.deviceName,
       snapshot: session.snapshot,
-      events,
+      events: currentEvents,
       userText: turn.userText,
       session: this.sessionInfo(session, turn),
       images,
       allowImages,
       ...(port === undefined ? {} : { systemOverride: port.system }),
     });
+    let view = buildView(events);
+
+    // A request that would cross the compaction threshold is summarised once
+    // before it is sent. The ledger keeps every event; the `context.compacted`
+    // floor bounds only the rendered view. A rebuilt view that is still over
+    // the hard budget falls through to the send-time guard, which refuses it
+    // without ever resending the unchanged request.
+    const budget = contextBudgetOf(
+      turn.publicId,
+      view.messages,
+      (id) => this.engine.host.resolveInferenceProvider(id),
+      maxTokens,
+    );
+    if (!turn.finished && !turn.abort.signal.aborted
+      && budget.threshold !== undefined && budget.estimatedInputTokens > budget.threshold) {
+      const compacted = await compactContext({
+        events,
+        metadata,
+        ...(maxTokens === undefined ? {} : { outputReservation: maxTokens }),
+        estimatedInputTokens: budget.estimatedInputTokens,
+        title: session.title,
+        summarize: async (messages, maxOutputTokens) => {
+          const outcome = await this.engine.invoke(session, turn, 'reason', { messages: [...messages], layers: {} }, {
+            parent: stepKey,
+            step,
+            reason: {
+              provider: turn.model.provider,
+              model: turn.model.model,
+              reasoningEffort: turn.model.reasoningEffort,
+              fast: turn.model.fast,
+            },
+            maxTokens: maxOutputTokens,
+          });
+          return outcome.ok
+            ? { ok: true, text: outcome.text }
+            : { ok: false, error: outcome.error ?? 'compaction summary call failed' };
+        },
+      });
+      if (compacted.throughSeq > 0) {
+        await this.engine.ledger.append(session.sessionId, {
+          type: 'context.compacted',
+          turn: turn.turn,
+          step,
+          throughSeq: compacted.throughSeq,
+          summary: compacted.summary,
+          ...(compacted.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: compacted.estimatedInputTokens }),
+          ...(compacted.contextWindow === undefined ? {} : { contextWindow: compacted.contextWindow }),
+          ...(compacted.failure === undefined ? {} : { failure: compacted.failure }),
+        });
+        view = buildView(this.engine.ledger.read(session.sessionId));
+        contextBudgetOf(
+          turn.publicId,
+          view.messages,
+          (id) => this.engine.host.resolveInferenceProvider(id),
+          maxTokens,
+        );
+      }
+    }
 
     // The reason call declares the wy_action tool; completed calls are started
     // as they arrive, while the visible text keeps streaming to the UI. Their

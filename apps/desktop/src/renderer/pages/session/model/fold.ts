@@ -678,6 +678,26 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
         source: 'read',
         ...(record.parent === undefined ? {} : { actionId: record.parent }),
       });
+    } else if (type === 'context.compacted') {
+      // A compaction is a context marker, not a fault: it shows the handover
+      // note and the window facts that made it necessary.
+      const record = event as Extract<LedgerEvent, { type: 'context.compacted' }>;
+      const usage = record.contextWindow === undefined
+        ? undefined
+        : record.estimatedInputTokens === undefined
+          ? `${record.contextWindow} window`
+          : `${record.estimatedInputTokens}/${record.contextWindow} tokens`;
+      items.push({
+        key: String(event.seq),
+        kind: 'thinking',
+        path: '',
+        title: `Context compacted · #${record.throughSeq}`,
+        ...(usage === undefined ? {} : { reason: usage }),
+        content: record.failure === undefined
+          ? record.summary
+          : `${record.summary}\n\ncompaction failed: ${record.failure}`,
+        source: 'read',
+      });
     } else if (type === 'system.info' && (event as SystemNoticeEvent).code === 'memory.saved') {
       // A memory the session wrote to the workspace. It is a write, explicitly
       // not a `memory.recalled` read.
@@ -854,7 +874,10 @@ function buildCycles(
       | undefined;
     const reasonCalls = calls.filter((call) => call.role === 'reason' && call.cycle === index);
     const running = reasonCalls.find((call) => call.status === 'running');
-    const committed = reasonCalls.find((call) => call.status !== 'running');
+    // A compaction runs its summary request as an extra `reason` span in the
+    // same step, before the turn's own reasoning request. The newest completed
+    // span is the turn's reasoning; with one span per step this is unchanged.
+    const committed = [...reasonCalls].reverse().find((call) => call.status !== 'running');
     const thinkingEvent = [...cycleEvents]
       .reverse()
       .find((event): event is ReasoningThinkingEvent => eventType(event) === 'reasoning.thinking');
