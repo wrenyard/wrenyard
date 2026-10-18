@@ -56,6 +56,13 @@ export interface ForemanEventPollerOptions {
   /** Shared Desktop daemon client; used when no explicit `request` is given. */
   client?: DaemonClient;
   logger?: DiagnosticLogger;
+  /**
+   * Cursor the owner already holds. The poller resumes from it and never
+   * treats a missing cursor as event id 0, so a restart cannot replay history.
+   */
+  initialCursor?: string | number;
+  /** Reports every cursor advance so the owner keeps the durable copy. */
+  onCursor?: (cursor: string) => void;
   onSignal: (workerKey: string, signal: AgentEventSignal, meta: SessionMetaData) => void;
 }
 
@@ -80,8 +87,10 @@ export class ForemanEventPoller {
   private readonly limit: number;
   private readonly request: ForemanRpcRequest;
   private readonly onSignal: ForemanEventPollerOptions['onSignal'];
+  private readonly onCursor: ForemanEventPollerOptions['onCursor'];
   private readonly logger: DiagnosticLogger | undefined;
   private readonly ownedClient: DaemonClient | undefined;
+  private readonly resumedFromCursor: boolean;
   private readonly workerKeyAliases = new Map<string, string>();
   private readonly hasSpawnByWorker = new Map<string, boolean>();
   private readonly metadataByWorker = new Map<string, SessionMetaData>();
@@ -108,10 +117,18 @@ export class ForemanEventPoller {
     }
     this.logger = opts.logger;
     this.onSignal = opts.onSignal;
+    this.onCursor = opts.onCursor;
+    this.cursor = normalizeCursor(opts.initialCursor);
+    this.resumedFromCursor = this.cursor !== undefined;
   }
 
   getIpcPath(): string {
     return this.ipcPath;
+  }
+
+  /** Last cursor this poller observed, for the owner to resume from. */
+  getCursor(): string | undefined {
+    return this.cursor;
   }
 
   start(): void {
@@ -151,7 +168,8 @@ export class ForemanEventPoller {
 
     try {
       const prevCursor = this.cursor;
-      const payload = await this.request('event.list', this.buildParams(expectedGeneration));
+      const params = this.buildParams();
+      const payload = await this.request('event.list', params);
       if (this.isStoppedGeneration(expectedGeneration)) return;
 
       if (this.lastPollErrorSignature !== null) {
@@ -164,10 +182,6 @@ export class ForemanEventPoller {
       const parsed = parseEventsPayload(payload, this.logger);
       if (!parsed) {
         this.logger?.warn('foreman_events_invalid_payload');
-        return;
-      }
-      if (this.shouldDrainStartupBacklog(expectedGeneration, prevCursor)) {
-        await this.drainStartupBacklog(parsed, expectedGeneration);
         return;
       }
 
@@ -188,7 +202,7 @@ export class ForemanEventPoller {
       if (this.isStoppedGeneration(expectedGeneration)) return;
       const nextCursor = parsed.cursor ?? parsed.fallbackCursor ?? this.cursor;
       if (nextCursor !== undefined) {
-        this.cursor = nextCursor;
+        this.advanceCursor(nextCursor);
       }
       if (parsed.events.length > 0 || prevCursor !== this.cursor) {
         this.logger?.info('foreman_events_poll_success', {
@@ -213,57 +227,22 @@ export class ForemanEventPoller {
     }
   }
 
-  private buildParams(expectedGeneration?: number): { since?: number; limit: number } {
-    const since = this.cursor === undefined ? undefined : Number(this.cursor);
-    const limit = since === undefined && expectedGeneration !== undefined
-      ? STARTUP_DRAIN_LIMIT
-      : this.limit;
-    return {
-      ...(since !== undefined && Number.isFinite(since) ? { since } : {}),
-      limit,
-    };
+  /**
+   * A poller with no cursor asks the daemon for the tail, which answers from
+   * the current maximum event id instead of replaying history from id 0. The
+   * first page is then short or empty, so no further backlog paging happens.
+   */
+  private buildParams(): { since: number; limit: number } | { tail: true; limit: number } {
+    if (this.cursor === undefined) return { tail: true, limit: STARTUP_DRAIN_LIMIT };
+    const since = Number(this.cursor);
+    if (!Number.isFinite(since)) return { tail: true, limit: STARTUP_DRAIN_LIMIT };
+    return { since, limit: this.limit };
   }
 
-  private async drainStartupBacklog(
-    initial: ForemanEventsPayload,
-    expectedGeneration: number | undefined,
-  ): Promise<void> {
-    let parsed = initial;
-    let cursor = parsed.cursor ?? parsed.fallbackCursor ?? this.cursor;
-    let scanned = parsed.events.length;
-    const countsByType: Record<string, number> = {};
-    addEventCounts(countsByType, parsed.events);
-
-    while (
-      !this.isStoppedGeneration(expectedGeneration)
-      && cursor !== undefined
-      && parsed.events.length >= STARTUP_DRAIN_LIMIT
-    ) {
-      const since = Number(cursor);
-      if (!Number.isFinite(since)) break;
-      const payload = await this.request('event.list', { since, limit: STARTUP_DRAIN_LIMIT });
-      const next = parseEventsPayload(payload, this.logger);
-      if (!next) break;
-      const nextCursor = next.cursor ?? next.fallbackCursor ?? cursor;
-      scanned += next.events.length;
-      addEventCounts(countsByType, next.events);
-      parsed = next;
-      if (nextCursor === cursor) break;
-      cursor = nextCursor;
-    }
-
-    if (cursor !== undefined) {
-      this.cursor = cursor;
-    }
-    this.logger?.info('foreman_events_startup_backlog_drained', {
-      nextCursor: this.cursor,
-      eventCount: scanned,
-      countsByType,
-    });
-  }
-
-  private shouldDrainStartupBacklog(expectedGeneration: number | undefined, prevCursor: string | undefined): boolean {
-    return expectedGeneration !== undefined && prevCursor === undefined;
+  private advanceCursor(next: string): void {
+    if (next === this.cursor) return;
+    this.cursor = next;
+    this.onCursor?.(next);
   }
 
   private async ingestEvent(event: ForemanEventRecord): Promise<void> {
@@ -402,6 +381,9 @@ export class ForemanEventPoller {
   }
 
   private isStartupReplay(event: ForemanEventRecord, expectedGeneration: number | undefined): boolean {
+    // A resumed poller continues from the owner's cursor, so everything the
+    // daemon returns after it is genuinely new and must be ingested.
+    if (this.resumedFromCursor) return false;
     if (expectedGeneration === undefined || this.startedAtMs === undefined) return false;
     const eventMs = eventTimestampMs(event);
     return eventMs !== null && eventMs < this.startedAtMs;
@@ -607,6 +589,12 @@ function cursorToString(value: unknown): string | undefined {
   return undefined;
 }
 
+function normalizeCursor(value: string | number | undefined): string | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? String(value) : undefined;
+  if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  return undefined;
+}
+
 function stringIdentity(value: unknown): string | null {
   if (typeof value === 'string' && value.length > 0) return value;
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
@@ -650,12 +638,6 @@ function taskRunInfoFromStatus(value: unknown): TaskRunInfo | null {
     taskId,
     ...(stringField(meta?.qualified_name) ? { qualifiedName: stringField(meta?.qualified_name) } : {}),
   };
-}
-
-function addEventCounts(target: Record<string, number>, events: ForemanEventRecord[]): void {
-  for (const event of events) {
-    target[event.type] = (target[event.type] ?? 0) + 1;
-  }
 }
 
 function candidateIdentity(field: string, value: unknown): { alias: string; value: string } | null {

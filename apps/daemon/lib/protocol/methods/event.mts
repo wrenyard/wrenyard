@@ -3,6 +3,8 @@ import type { JsonRecord, JsonSchema } from '../jsonrpc.mts'
 export interface EventListParams {
   since?: number
   limit?: number
+  /** Start at the current maximum event id when since is omitted. */
+  tail?: boolean
 }
 
 export interface EventListResult {
@@ -16,6 +18,7 @@ export const eventListParamsSchema = {
   properties: {
     since: { type: 'integer', minimum: 0 },
     limit: { type: 'integer', minimum: 1, maximum: 1000 },
+    tail: { type: 'boolean' },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema

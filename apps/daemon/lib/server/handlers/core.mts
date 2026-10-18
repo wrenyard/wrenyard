@@ -3,7 +3,7 @@ import { bundledSuiteRoot, readSuiteVersion, runningFromBundle } from '../../lay
 import type { OperationHost } from '../../core/operations/types.mts'
 import { TaskService, TaskServiceError } from '../../core/task/service.mts'
 import { ActivitySnapshotError, buildActivitySnapshot } from '../../core/activity/index.mts'
-import { listDbEvents } from '../../events/event-query.mts'
+import { listDbEvents, maxEventId } from '../../events/event-query.mts'
 import { readTodayStats, readStatsSummary } from '../../events/stats-query.mts'
 import type { StatsSummaryResult } from '../../protocol/registry.mts'
 import { MAX_STATS_SUMMARY_DAYS } from '../../protocol/methods/stats.mts'
@@ -340,8 +340,10 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
     })
   }
   router.register('event.list', (params) => {
-    const since = params.since ?? 0
     const limit = params.limit ?? 100
+    // A caller that asks for the tail without a cursor starts at the current
+    // maximum event id instead of replaying history from id 0.
+    const since = params.tail === true && params.since === undefined ? maxEventId() : (params.since ?? 0)
     const events = listDbEvents(since, limit)
     const lastEvent = events.at(-1)
     return {

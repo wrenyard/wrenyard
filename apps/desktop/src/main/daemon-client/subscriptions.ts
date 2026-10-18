@@ -48,6 +48,12 @@ export class DaemonSubscriptions {
   private activityPoller: ActivitySnapshotPoller | null = null;
   private started = false;
   private disposed = false;
+  /**
+   * Durable owner copy of the last observed event cursor. The poller is
+   * disposable, so only this survives reconnect, endpoint and workspace
+   * switches; a new poller resumes from it instead of replaying history.
+   */
+  private eventCursor: string | undefined;
   /** Last observed rounds, replayed to a newly attached subscriber. */
   private lastStats: DailyStatsSnapshot | undefined;
   private lastActivity: ActivityPresence | undefined;
@@ -68,6 +74,10 @@ export class DaemonSubscriptions {
       ipcPath: this.ipcPath,
       client: this.client,
       logger: this.logger,
+      ...(this.eventCursor !== undefined ? { initialCursor: this.eventCursor } : {}),
+      onCursor: (next) => {
+        this.eventCursor = next;
+      },
       onSignal: (workerKey, signal, meta) => {
         for (const handler of this.handlers) handler.onSignal?.({ workerKey, signal, meta });
       },
@@ -145,6 +155,9 @@ export class DaemonSubscriptions {
   pause(): void {
     const presence = this.lastActivity;
     this.started = false;
+    if (this.eventPoller) {
+      this.eventCursor = this.eventPoller.getCursor();
+    }
     this.eventPoller?.stop();
     this.statsPoller?.stop();
     this.activityPoller?.stop();
