@@ -199,6 +199,13 @@ interface RegistryEntry {
 }
 
 type ExecutionRecordWithFeatures = ExecutionRecord & { features: string | null }
+/** Lightweight queued-row projection used only to identify launch candidates. */
+type QueuedCandidateRow = Pick<ExecutionRecord, 'id' | 'cwd'>
+/** Columns a queue promotion actually needs before handing off to launch. */
+type LaunchFieldRow = Pick<
+  ExecutionRecord,
+  'id' | 'cwd' | 'task_id' | 'profile' | 'prompt' | 'native_session_id' | 'timeout_ms' | 'client_family'
+> & { features: string | null }
 type TerminalStatus = 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
 type KillReason = 'cancel' | 'timeout' | 'shutdown' | 'crash' | 'spawn-error' | null
 type TerminalIntent =
@@ -1763,27 +1770,49 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
 
     try {
       while (this.runningCount() < MAX_CONCURRENT_EXECUTIONS) {
-        const rows = this.query<ExecutionRecordWithFeatures>(
-          `SELECT id, task_id, profile, cwd, prompt, status,
-            native_session_id, client_family, pid, pgid, output, raw_result, error, exit_code,
-            kill_reason, timeout_ms, requested_agent_runtime, resolved_profile, features
+        // An idle queue promotion must not touch SQL: only an in-memory registry
+        // entry that has not launched and is not terminal can be promoted.
+        if (!this.hasQueuedPromotableEntry()) return
+
+        const candidates = this.query<QueuedCandidateRow>(
+          `SELECT id, cwd
           FROM executions
           WHERE status = 'queued'
           ORDER BY created_at ASC, id ASC`,
         )
 
         let promoted = false
-        for (const row of rows) {
+        for (const candidate of candidates) {
           if (this.runningCount() >= MAX_CONCURRENT_EXECUTIONS) break
 
-          const entry = this.registry.get(row.id)
+          const entry = this.registry.get(candidate.id)
           if (!entry) continue
           if (entry.terminalGeneration > 0) continue
 
+          let acquiredLock = false
           if (entry.repoWriteLock && !entry.hasRepoLock) {
-            const lock = this.repoWriteLocks.tryAcquire(row.cwd, row.id, repoWriteLockMode(entry.writePaths), entry.writePaths)
+            const lock = this.repoWriteLocks.tryAcquire(candidate.cwd, candidate.id, repoWriteLockMode(entry.writePaths), entry.writePaths)
             if (!lock.acquired) continue
             entry.hasRepoLock = true
+            acquiredLock = true
+          }
+
+          // Re-read only the launch fields, and only for the candidate whose
+          // registry entry, concurrency slot and repo lock are already settled.
+          // The status predicate covers a candidate that disappeared or left
+          // the queue between the light scan and this fetch.
+          const row = this.get<LaunchFieldRow>(
+            `SELECT id, cwd, task_id, profile, prompt, native_session_id, timeout_ms, client_family, features
+            FROM executions
+            WHERE id = ? AND status = 'queued'`,
+            candidate.id,
+          )
+          if (!row) {
+            if (acquiredLock) {
+              this.repoWriteLocks.releaseByExecution(candidate.id)
+              entry.hasRepoLock = false
+            }
+            continue
           }
 
           const opts = optsFromRow(row, entry)
@@ -1797,6 +1826,19 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     } finally {
       this.promoting = false
     }
+  }
+
+  /**
+   * True when at least one registry entry is queued and still launchable: it has
+   * no session yet and has not reached a terminal generation. Mirrors the
+   * promotion loop's own candidate predicate so the SQL-free idle path never
+   * skips an entry that could genuinely launch.
+   */
+  private hasQueuedPromotableEntry(): boolean {
+    for (const entry of this.registry.values()) {
+      if (!entry.session && entry.terminalGeneration === 0) return true
+    }
+    return false
   }
 
   promoteQueuedAfterGuardChange(): void { void this.promoteQueued() }
@@ -2478,7 +2520,7 @@ function validCodeBuddyExecutionBinding(
   return ['internal', 'ioa', 'cloudhosted', 'external', 'unknown'].includes(binding.expectedEnvironment)
 }
 
-function optsFromRow(row: ExecutionRecordWithFeatures, entry: RegistryEntry): StartExecutionOpts {
+function optsFromRow(row: LaunchFieldRow, entry: RegistryEntry): StartExecutionOpts {
   return {
     taskId: row.task_id ?? undefined,
     profile: row.profile,
