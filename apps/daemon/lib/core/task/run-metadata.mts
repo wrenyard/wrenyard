@@ -1,5 +1,5 @@
 import { get as dbGet, query as dbQuery } from '../../db/connection.mts'
-import { readTaskTps } from '../../events/tps.mts'
+import { readExecutionTpsSamples, readTaskTps, type TaskTps } from '../../events/tps.mts'
 import type {
   TaskAutoRoutingDecision,
   TaskReferencePricing,
@@ -90,8 +90,6 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
      FROM task_run_attempt_dispatch WHERE task_run_id = ? ORDER BY created_at ASC, execution_id ASC`,
     taskRunId,
   )
-  const dispatchByExecution = new Map<string, AttemptDispatchRow>()
-  for (const d of dispatchRows) dispatchByExecution.set(d.execution_id, d)
 
   // Read every persisted turn_usage row for each execution attempt, ordered by
   // seq. A row is kept as a record even when its JSON or numerics are invalid,
@@ -101,7 +99,126 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
     eventsByExecution.set(a.execution_id, readExecutionEvents(a.execution_id))
   }
 
-  const usageEventCount = telemetry?.usage_event_count ?? 0
+  const taskTps = readTaskTps(taskRunId)
+  return projectTaskRunMetadata({
+    attemptRows,
+    dispatchRows,
+    usageEventCount: telemetry?.usage_event_count ?? 0,
+    eventsByExecution,
+    taskTps,
+  })
+}
+
+/**
+ * Batch variant of `readTaskRunMetadata`. Runs one bounded query per backing
+ * table for the whole id set — telemetry counts, execution attempts (same
+ * created_at/id ordering), dispatch snapshots, and turn_usage events ordered
+ * by seq — groups rows by task/execution in memory, obtains every task's TPS
+ * with a single readExecutionTpsSamples({taskIds}) call, then applies the same
+ * projection per run. Returns a Map keyed by task run id; every requested id
+ * is present, including tasks with no executions.
+ */
+export function readTaskRunMetadataBatch(taskRunIds: string[]): Map<string, TaskRunResolvedUsage> {
+  const result = new Map<string, TaskRunResolvedUsage>()
+  if (taskRunIds.length === 0) return result
+  const placeholders = taskRunIds.map(() => '?').join(', ')
+
+  const telemetryByTask = new Map<string, number>()
+  for (const row of dbQuery<{ task_run_id: string; usage_event_count: number }>(
+    `SELECT task_run_id, usage_event_count FROM task_run_telemetry WHERE task_run_id IN (${placeholders})`,
+    ...taskRunIds,
+  )) {
+    telemetryByTask.set(row.task_run_id, row.usage_event_count)
+  }
+
+  const attemptsByTask = new Map<string, { execution_id: string }[]>()
+  const attemptRows = dbQuery<{ execution_id: string; task_id: string }>(
+    `SELECT id AS execution_id, task_id FROM executions WHERE task_id IN (${placeholders}) ORDER BY created_at ASC, id ASC`,
+    ...taskRunIds,
+  )
+  for (const row of attemptRows) {
+    const bucket = attemptsByTask.get(row.task_id) ?? []
+    bucket.push({ execution_id: row.execution_id })
+    attemptsByTask.set(row.task_id, bucket)
+  }
+
+  const dispatchByTask = new Map<string, AttemptDispatchRow[]>()
+  for (const row of dbQuery<AttemptDispatchRow & { task_run_id: string }>(
+    `SELECT task_run_id, execution_id, requested_agent_runtime, profile, client, provider,
+            model, model_id, mode, protocol,
+            speed_effective_tps, speed_source, speed_sample_count,
+            speed_checked_at, speed_expected_tps_met, speed_degradation_reason,
+            intelligence,
+            reasoning_effort,
+            fast,
+            reference_pricing_input, reference_pricing_output, reference_pricing_cache,
+            reference_pricing_cache_write,
+            reference_pricing_source, reference_pricing_checked_at,
+            auto_routing
+     FROM task_run_attempt_dispatch WHERE task_run_id IN (${placeholders}) ORDER BY created_at ASC, execution_id ASC`,
+    ...taskRunIds,
+  )) {
+    const bucket = dispatchByTask.get(row.task_run_id) ?? []
+    bucket.push(row)
+    dispatchByTask.set(row.task_run_id, bucket)
+  }
+
+  const executionIds = attemptRows.map((row) => row.execution_id)
+  const eventsByExecution = new Map<string, TurnUsageEvent[]>()
+  if (executionIds.length > 0) {
+    const eventPlaceholders = executionIds.map(() => '?').join(', ')
+    for (const row of dbQuery<{ execution_id: string; data: string | null }>(
+      `SELECT execution_id, data FROM events WHERE execution_id IN (${eventPlaceholders}) AND type = 'turn_usage' ORDER BY seq ASC`,
+      ...executionIds,
+    )) {
+      const bucket = eventsByExecution.get(row.execution_id) ?? []
+      bucket.push(parseTurnUsage(row.data))
+      eventsByExecution.set(row.execution_id, bucket)
+    }
+  }
+
+  // Same sum/rate semantics as readTaskTps: aggregate each task's samples and
+  // keep only a finite positive tokens-per-second rate.
+  const tpsByTask = new Map<string, TaskTps>()
+  const samplesByTask = new Map<string, { outputTokens: number; durationMs: number }>()
+  for (const sample of readExecutionTpsSamples({ taskIds: taskRunIds })) {
+    const totals = samplesByTask.get(sample.taskId) ?? { outputTokens: 0, durationMs: 0 }
+    totals.outputTokens += sample.outputTokens
+    totals.durationMs += sample.durationMs
+    samplesByTask.set(sample.taskId, totals)
+  }
+  for (const [taskId, totals] of samplesByTask) {
+    if (!Number.isSafeInteger(totals.outputTokens) || totals.outputTokens <= 0) continue
+    if (!Number.isFinite(totals.durationMs) || totals.durationMs <= 0) continue
+    const tps = (1000 * totals.outputTokens) / totals.durationMs
+    if (Number.isFinite(tps) && tps > 0) {
+      tpsByTask.set(taskId, { tps, outputTokens: totals.outputTokens, durationMs: totals.durationMs })
+    }
+  }
+
+  for (const taskRunId of taskRunIds) {
+    result.set(taskRunId, projectTaskRunMetadata({
+      attemptRows: attemptsByTask.get(taskRunId) ?? [],
+      dispatchRows: dispatchByTask.get(taskRunId) ?? [],
+      usageEventCount: telemetryByTask.get(taskRunId) ?? 0,
+      eventsByExecution,
+      taskTps: tpsByTask.get(taskRunId),
+    }))
+  }
+  return result
+}
+
+/** Pure projection shared by the single-run and batch readers. */
+function projectTaskRunMetadata(input: {
+  attemptRows: { execution_id: string }[]
+  dispatchRows: AttemptDispatchRow[]
+  usageEventCount: number
+  eventsByExecution: Map<string, TurnUsageEvent[]>
+  taskTps: TaskTps | undefined
+}): TaskRunResolvedUsage {
+  const { attemptRows, dispatchRows, usageEventCount, eventsByExecution, taskTps } = input
+  const dispatchByExecution = new Map<string, AttemptDispatchRow>()
+  for (const d of dispatchRows) dispatchByExecution.set(d.execution_id, d)
 
   // --- Token projection -------------------------------------------------
   // A persisted row is TRUSTED only when it carries token_scope ===
@@ -206,7 +323,6 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   // carries a measurable speed sample, so an attempt without observable
   // timing omits only its own contribution instead of hiding the run's speed.
   // There is no second metric.
-  const taskTps = readTaskTps(taskRunId)
   if (taskTps) {
     usage.generation_ms = taskTps.durationMs
     usage.output_tps = taskTps.tps

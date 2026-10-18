@@ -1,8 +1,8 @@
 import { get as dbGet, query as dbQuery } from '../db/connection.mts'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
 import { MAX_STATS_SUMMARY_DAYS } from '../protocol/methods/stats.mts'
-import { readTaskRunMetadata } from '../core/task/run-metadata.mts'
-import { estimateTps, readExecutionTpsSamples, type ExecutionTpsSample } from './tps.mts'
+import { readTaskRunMetadataBatch } from '../core/task/run-metadata.mts'
+import { estimateTps, readCachedExecutionTpsSamples, type ExecutionTpsSample } from './tps.mts'
 import type {
   StatsTodayItem,
   ProfileRankingItem,
@@ -538,10 +538,10 @@ export function readStatsSummary(
   const byTaskDuration = rankTaskDuration(durationByTask, limit)
 
   // --- FIXED PERIOD WINDOWS: project 24h/7d/1mo in memory from the same scans.
-  // Execution-based TPS samples are read once for the largest requested window
-  // and reused (filtered by endedAt) for every narrower window, so stats and
-  // local routing share the same measured rate and median calculation.
-  const tpsSamples = readExecutionTpsSamples({ startAt: fullStartIso, endAt: now.toISOString() })
+  // Execution-based TPS samples come from the cached vector shared with local
+  // routing (local calendar window, no SQL); narrower windows reuse the same
+  // samples filtered by endedAt, so stats and routing share one measured rate.
+  const tpsSamples = readCachedExecutionTpsSamples(now)
   const windows = buildWindows({
     todayWindow,
     windowsStartIso,
@@ -602,8 +602,10 @@ function readRecentTaskRunLedger(
     recentLimit,
   )
 
+  const metadataById = readTaskRunMetadataBatch(rows.map((row) => row.id))
+
   return rows.map((row) => {
-    const meta = readTaskRunMetadata(row.id)
+    const meta = metadataById.get(row.id) ?? { usage: { completeness: 'unavailable' as const, attempt_count: 0, usage_event_count: 0, reference_cost_complete: false } }
     const ledger: TaskRunLedgerRow = {
       task_run_id: row.id,
       task: normalizeTaskName(row.template),

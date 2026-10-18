@@ -304,6 +304,10 @@ const EXECUTIONS_TABLE_SQL = `CREATE TABLE executions (
 const EXECUTION_INDEX_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_exec_status ON executions(status)',
   'CREATE INDEX IF NOT EXISTS idx_exec_task   ON executions(task_id)',
+  // Execution metadata shares rows with large prompt text stored before these
+  // columns, so metadata scans must be index-only to avoid reading table pages.
+  'CREATE INDEX IF NOT EXISTS idx_exec_status_ended ON executions(status, ended_at, id, task_id, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_exec_task_meta ON executions(task_id, created_at, id, started_at, status, ended_at)',
 ] as const
 
 const EVENTS_TABLE_SQL = `CREATE TABLE events (

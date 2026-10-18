@@ -95,6 +95,12 @@ function normalizeSampleModel(provider: string | null, model: string): string {
 
 /** Trailing freshness window for local speed aggregation (31 days). */
 const LOCAL_SPEED_WINDOW_MS = 31 * 24 * 60 * 60 * 1000
+/**
+ * Statistics window: local midnight 30 calendar days before `now` through
+ * `now`. Local calendar days can be 23, 24 or 25 hours long, so this is not
+ * interchangeable with the rolling 31-day window.
+ */
+const STATS_CALENDAR_WINDOW_DAYS = 30
 /** Minimum observable generation window: first to last nonempty delta. */
 const MIN_WINDOW_MS = TPS_MIN_SAMPLE_WINDOW_MS
 /** Maximum newest executions considered for the speed estimate. */
@@ -108,6 +114,12 @@ export interface ReadExecutionTpsOptions {
   startAt?: string
   endAt?: string
   taskId?: string
+  /**
+   * Restricts the scan to these task ids. An empty array selects nothing and
+   * short-circuits before any query runs; omitting the option keeps the
+   * unrestricted behavior.
+   */
+  taskIds?: string[]
 }
 
 /**
@@ -148,6 +160,11 @@ export function readExecutionTpsSamples(
     conditions.push('e.task_id = ?')
     params.push(options.taskId)
   }
+  if (options.taskIds !== undefined) {
+    if (options.taskIds.length === 0) return []
+    conditions.push(`e.task_id IN (${options.taskIds.map(() => '?').join(', ')})`)
+    params.push(...options.taskIds)
+  }
 
   const executionRows = dbQueryOn<ExecutionSampleRow>(
     database,
@@ -171,7 +188,7 @@ export function readExecutionTpsSamples(
   const executionIds = executionRows.map((row) => row.executionId)
   const usageRows = dbQueryOn<UsageDataRow>(
     database,
-    `SELECT execution_id, data FROM events INDEXED BY idx_event_exec
+    `SELECT execution_id, data FROM events
      WHERE type = 'turn_usage' AND execution_id IN (${executionIds.map(() => '?').join(', ')})`,
     executionIds,
   )
@@ -204,14 +221,19 @@ export function readExecutionTpsSamples(
   // any client-recorded usage for the same execution: the gateway sample is
   // paired with the exact upstream response. The event payload carries only the
   // execution id — never the supervisor's private cached sequence state.
-  // The partial expression index `idx_event_gateway_exec` on
-  // json_extract(data, '$.data.executionId') WHERE type='gateway.request.completed'
-  // attributes these lookups to executions; `created_at >= ?` applies the time
-  // filter, so no full historical JSON scan of gateway completion events occurs.
+  // Gateway attribution events carry `execution_id` NULL, so the id index
+  // cannot narrow them; without a `created_at` window this query json-parses
+  // every gateway event in history and stalls the event loop. `events.created_at`
+  // is indexed (idx_event_created_at) and every attributed gateway event occurs
+  // after its execution was created, so bounding by `eventsSince` is exact.
+  // The event type is the most common type in the table, so it is not
+  // selective; `likely()` lets the planner pick the `json_extract` expression
+  // predicate — backed by a partial expression index — to drive the lookup,
+  // without naming the index via INDEXED BY.
   const gatewayRows = dbQueryOn<GatewayDataRow>(
     database,
-    `SELECT execution_id, data FROM events INDEXED BY idx_event_gateway_exec
-     WHERE type = 'gateway.request.completed' AND created_at >= ? AND json_extract(data, '$.data.executionId') IN (${executionIds.map(() => '?').join(', ')})`,
+    `SELECT execution_id, data FROM events
+     WHERE likely(type = 'gateway.request.completed') AND created_at >= ? AND json_extract(data, '$.data.executionId') IN (${executionIds.map(() => '?').join(', ')})`,
     [eventsSince, ...executionIds],
   )
   const gatewayByExecution = new Map<string, { samples: ResponseSample[]; invalid: boolean }>()
@@ -400,9 +422,10 @@ export function estimateTps(samples: readonly ExecutionTpsSample[]): TpsEstimate
  * excluded). The injected resolver reads these directly; it never guesses
  * identity from a profile string.
  *
- * This remains the authoritative read for statistics and explicit reads. The
- * routing/list/dispatch path serves the in-memory window instead
- * (`readLocalSpeedSamplesCached`).
+ * This remains the authoritative historical read for explicit callers and the
+ * bootstrap fill. The routing/list/dispatch path serves the in-memory window
+ * instead (`readLocalSpeedSamplesCached`), and statistics reads the cached
+ * calendar view (`readCachedExecutionTpsSamples`).
  */
 export function readLocalSpeedSamples(now: Date = new Date(), database?: ForemanDatabase): LocalSpeedSample[] {
   const startAt = new Date(now.getTime() - LOCAL_SPEED_WINDOW_MS).toISOString()
@@ -446,11 +469,32 @@ function aggregateLocalSpeedSamples(samples: readonly ExecutionTpsSample[], now:
 }
 
 /**
+ * Local midnight `daysAgo` calendar days before `now`, in epoch milliseconds.
+ * Built from local calendar fields so a DST transition cannot shift the day
+ * boundary.
+ */
+function localMidnightMs(now: Date, daysAgo: number): number {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo).getTime()
+}
+
+/**
+ * Earliest retained sample start: the earlier of the rolling routing window and
+ * the statistics calendar window. Retaining the union keeps a sample visible to
+ * statistics even when a DST transition leaves it outside one of the two
+ * windows.
+ */
+function retainedWindowStartMs(now: Date): number {
+  return Math.min(now.getTime() - LOCAL_SPEED_WINDOW_MS, localMidnightMs(now, STATS_CALENDAR_WINDOW_DAYS))
+}
+
+/**
  * In-memory trailing-window speed samples keyed by the daemon database. The
  * window is filled once at bootstrap and then maintained per execution, so
  * provider listing, routing and dispatch never run the historical TPS queries
- * on the event loop. Keying by the database keeps an isolated database (tests,
- * a reopened state DB) from inheriting another database's samples.
+ * on the event loop. It retains the union of the rolling routing window and
+ * the statistics calendar window. Keying by the database keeps an isolated
+ * database (tests, a reopened state DB) from inheriting another database's
+ * samples.
  */
 const localSpeedSamples = new WeakMap<ForemanDatabase, Map<string, ExecutionTpsSample>>()
 
@@ -460,7 +504,7 @@ const localSpeedSamples = new WeakMap<ForemanDatabase, Map<string, ExecutionTpsS
  * resolver can serve a request.
  */
 export function initializeLocalSpeedSamples(database: ForemanDatabase = getDb(), now: Date = new Date()): void {
-  const startAt = new Date(now.getTime() - LOCAL_SPEED_WINDOW_MS).toISOString()
+  const startAt = new Date(retainedWindowStartMs(now)).toISOString()
   const endAt = now.toISOString()
   const byExecution = new Map<string, ExecutionTpsSample>()
   for (const sample of readExecutionTpsSamples({ startAt, endAt }, database)) {
@@ -489,19 +533,43 @@ export function updateLocalSpeedSample(executionId: string, database: ForemanDat
 /**
  * Memory-only view of the local speed window for provider listing, routing and
  * dispatch. It reads the window loaded by `initializeLocalSpeedSamples`,
- * prunes samples that left the trailing window in memory, and aggregates.
- * It never calls the historical reader, not even on the first call, so a cold
- * daemon reports no local speed rather than blocking the event loop.
+ * prunes samples that left both retained windows in memory, and aggregates
+ * over the rolling routing window. It never calls the historical reader, not
+ * even on the first call, so a cold daemon reports no local speed rather than
+ * blocking the event loop.
  */
 export function readLocalSpeedSamplesCached(now: Date = new Date(), database?: ForemanDatabase): LocalSpeedSample[] {
   const byExecution = localSpeedSamples.get(database ?? getDb())
   if (byExecution === undefined) return []
-  const startMs = now.getTime() - LOCAL_SPEED_WINDOW_MS
+  const startMs = retainedWindowStartMs(now)
   for (const [executionId, sample] of byExecution) {
     const endedMs = parseTimestampMs(sample.endedAt)
     if (endedMs === undefined || endedMs < startMs) byExecution.delete(executionId)
   }
   return aggregateLocalSpeedSamples([...byExecution.values()], now)
+}
+
+/**
+ * Read-only statistics view of the cached per-execution speed samples: local
+ * midnight 30 calendar days before `now` through `now` (exclusive upper
+ * bound). It reads only the map maintained for routing — no SQL and no
+ * separate cache — and returns copies so callers cannot mutate the cache.
+ */
+export function readCachedExecutionTpsSamples(
+  now: Date = new Date(),
+  database: ForemanDatabase = getDb(),
+): ExecutionTpsSample[] {
+  const byExecution = localSpeedSamples.get(database)
+  if (byExecution === undefined) return []
+  const startMs = localMidnightMs(now, STATS_CALENDAR_WINDOW_DAYS)
+  const endMs = now.getTime()
+  const samples: ExecutionTpsSample[] = []
+  for (const sample of byExecution.values()) {
+    const endedMs = parseTimestampMs(sample.endedAt)
+    if (endedMs === undefined || endedMs < startMs || endedMs >= endMs) continue
+    samples.push({ ...sample })
+  }
+  return samples
 }
 
 export interface TaskTps {
