@@ -473,9 +473,10 @@ export function initializeLocalSpeedSamples(database: ForemanDatabase = getDb(),
  * Refreshes exactly one execution in the existing window after its terminal
  * commit. The targeted read is bounded by the executions primary key, so a
  * completion costs one row plus that execution's own events. A completion never
- * bootstraps the window: when no window exists (or the execution is outside it)
- * nothing is inserted, and a now-unmeasurable execution is removed so a stale
- * sample cannot linger.
+ * bootstraps the window: when no window exists nothing is inserted, and an
+ * execution that is no longer measurable is removed. Samples whose end time is
+ * not yet inside the trailing window are still kept in the map, so window
+ * exclusion happens on the memory read.
  */
 export function updateLocalSpeedSample(executionId: string, database: ForemanDatabase = getDb()): void {
   const byExecution = localSpeedSamples.get(database)
@@ -496,10 +497,9 @@ export function readLocalSpeedSamplesCached(now: Date = new Date(), database?: F
   const byExecution = localSpeedSamples.get(database ?? getDb())
   if (byExecution === undefined) return []
   const startMs = now.getTime() - LOCAL_SPEED_WINDOW_MS
-  const endMs = now.getTime()
   for (const [executionId, sample] of byExecution) {
     const endedMs = parseTimestampMs(sample.endedAt)
-    if (endedMs === undefined || endedMs < startMs || endedMs >= endMs) byExecution.delete(executionId)
+    if (endedMs === undefined || endedMs < startMs) byExecution.delete(executionId)
   }
   return aggregateLocalSpeedSamples([...byExecution.values()], now)
 }
