@@ -35,6 +35,7 @@ import { ContextItems, ToolCard } from './ToolCard.js';
 const ACTION_ICON: Record<ActionKindModel, LucideIcon> = {
   search: BookOpen,
   document: FilePenLine,
+  todo: ListTodo,
   dispatch: Send,
   vcs: GitBranch,
   project: FolderGit2,

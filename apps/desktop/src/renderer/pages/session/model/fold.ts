@@ -100,6 +100,7 @@ function toActionKind(type: string | undefined): ActionModel['kind'] {
     case 'search':
     case 'dispatch':
     case 'document':
+    case 'todo':
     case 'vcs':
     case 'project':
     case 'schedule':
@@ -448,6 +449,7 @@ function buildUserAttachments(events: LedgerEvent[]): SessionFile[] {
 /** Auxiliary roles whose span holds several model rounds and sums their metrics. */
 const MULTI_ROUND_AUX_ROLES: ReadonlySet<CallModel['role']> = new Set<CallModel['role']>([
   'document',
+  'todo',
   'vcs',
   'project',
   'schedule',

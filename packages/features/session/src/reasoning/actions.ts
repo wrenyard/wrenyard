@@ -21,6 +21,7 @@ import type { FileStore } from '../media.ts';
 import { runSearchAction } from '../auxiliary/search.ts';
 import { runDispatchAction } from '../auxiliary/dispatch.ts';
 import { runDocumentAction } from '../auxiliary/document.ts';
+import { runTodoAction } from '../auxiliary/todo.ts';
 import { runVcsAction } from '../auxiliary/vcs.ts';
 import { runProjectAction } from '../auxiliary/project.ts';
 
@@ -131,6 +132,8 @@ export class ActionRunner {
         return runDispatchAction(workflow, action, ctx);
       case 'document':
         return runDocumentAction(this.deps, action, ctx);
+      case 'todo':
+        return runTodoAction(this.deps, action, ctx);
       case 'vcs':
         return runVcsAction(this.deps, action, ctx);
       case 'project':

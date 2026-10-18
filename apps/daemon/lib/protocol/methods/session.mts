@@ -242,7 +242,7 @@ export const sessionContextInspectResultSchema = {
 
 const auxiliaryRouteRoleSchema = {
   type: 'string',
-  enum: ['reply', 'dispatch', 'document', 'vcs', 'project', 'schedule', 'search', 'memory-search', 'title', 'status', 'suggestion'],
+  enum: ['reply', 'dispatch', 'document', 'todo', 'vcs', 'project', 'schedule', 'search', 'memory-search', 'title', 'status', 'suggestion'],
 } as const
 
 export const sessionRoutesPreviewParamsSchema = {

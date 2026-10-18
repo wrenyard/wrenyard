@@ -271,7 +271,7 @@ export interface StepFinishedEvent extends LedgerEventBase {
  * `schedule` is no longer produced by any action, but is kept so ledgers
  * written before routines moved to bots still render.
  */
-export type ActionType = 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'tool' | 'schedule';
+export type ActionType = 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'tool' | 'schedule';
 export type ActionStatus = 'done' | 'failed' | 'skipped' | 'cancelled' | 'interrupted';
 
 export interface ActionStartedEvent extends LedgerEventBase {

@@ -42,6 +42,10 @@ const SESSION_CALLABLE_METHODS = new Set([
   'workspace.doc.update',
   'workspace.doc.edit',
   'workspace.doc.delete',
+  'todo.list',
+  'todo.get',
+  'todo.create',
+  'todo.update',
 ])
 
 /** Worktree methods whose lock a session carries automatically. */

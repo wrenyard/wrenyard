@@ -30,7 +30,7 @@ import { diagnoseToolObservation, recordSuccessfulToolCall } from '../auxiliary/
 export { messageOf };
 
 /** Which auxiliary task is running; used for ledger call attribution. */
-export type LoopRole = 'document' | 'vcs' | 'project';
+export type LoopRole = 'document' | 'todo' | 'vcs' | 'project';
 
 /**
  * The one tool every auxiliary task declares to finish. `status` is `done`
@@ -81,8 +81,9 @@ export interface AuxiliaryLoopOptions {
   spanIdPrefix: string;
   /**
    * The run's effect record. When present, a `done` claim that recorded no
-   * workspace change and no document draft is returned as a failure: a helper
-   * cannot report successful completion without a recorded effect.
+   * workspace change, no document draft and no authoritative observation is
+   * returned as a failure: a helper cannot report successful completion
+   * without a recorded effect.
    */
   record?: LoopRecord;
 }
@@ -172,13 +173,15 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise
           continue;
         }
         // Close the false-success path: a `done` claim with no recorded
-        // workspace change or document draft is a failure with an explicit
-        // no-change explanation, never a successful completion.
+        // workspace change, no document draft and no recorded observation is a
+        // failure with an explicit no-change explanation, never a successful
+        // completion.
         if (done.status === 'done' && options.record !== undefined
-          && options.record.changes.length === 0 && options.record.documents.length === 0) {
+          && options.record.changes.length === 0 && options.record.documents.length === 0
+          && options.record.observations.length === 0) {
           return {
             status: 'failed',
-            summary: 'The helper reported done, but this run recorded no workspace change and no document draft, so the claimed completion is not confirmed and the result is a failure.',
+            summary: 'The helper reported done, but this run recorded no workspace change, no document draft and no authoritative result, so the claimed completion is not confirmed and the result is a failure.',
           };
         }
         return { status: done.status, summary: done.summary };
@@ -308,12 +311,14 @@ export interface LoopRecord {
   updates: LedgerEventDraft[];
   /** Deferred `document.content` drafts, in the order the writes happened. */
   documents: LedgerEventDraft[];
+  /** Authoritative successful read or write results, in call order. */
+  observations: string[];
   /** Evidence-backed tool diagnoses worth surfacing in the action result. */
   notes: string[];
 }
 
 export function createLoopRecord(): LoopRecord {
-  return { changes: [], updates: [], documents: [], notes: [] };
+  return { changes: [], updates: [], documents: [], observations: [], notes: [] };
 }
 
 /** One recorded workspace change, independent of the ledger's own fields. */
@@ -344,16 +349,17 @@ export function recordWorkspaceUpdate(record: LoopRecord, ctx: ActionRunContext,
 /**
  * Turn a finished loop into the action outcome: `done` maps to a successful
  * action and `failed` to a failed one; the result text is the summary followed
- * by one line per recorded workspace change; the deferred drafts are the
- * recorded `workspace.changed` drafts plus any `document.content` drafts the
- * caller passes.
+ * by one line per recorded workspace change, then every authoritative
+ * observation; the deferred drafts are the recorded `workspace.changed` drafts
+ * plus any `document.content` drafts the caller passes.
  */
 export function toActionOutcome(
   result: AuxiliaryLoopResult,
   record: LoopRecord,
   extraDrafts: readonly LedgerEventDraft[] = [],
 ): ActionExecutionOutcome {
-  const lines = [result.summary, ...record.changes, ...record.notes].filter((line) => line.trim() !== '');
+  const lines = [result.summary, ...record.changes, ...record.observations, ...record.notes]
+    .filter((line) => line.trim() !== '');
   return {
     status: result.status === 'done' ? 'done' : 'failed',
     result: lines.join('\n'),

@@ -52,6 +52,7 @@ export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   reply: '沟通',
   title: '标题',
   document: '文档',
+  todo: '待办',
   vcs: '工作区版本',
   project: '项目',
   schedule: '定时任务',
@@ -287,7 +288,7 @@ export function actionLabel(action: {
   if (title !== '' && taskDisplayName !== '') return `${title} · ${taskDisplayName}`;
   if (title !== '') return title;
   if (taskDisplayName !== '') return taskDisplayName;
-  if (action.kind === 'search' || action.kind === 'document') {
+  if (action.kind === 'search' || action.kind === 'document' || action.kind === 'todo') {
     return [...action.intent].slice(0, 20).join('');
   }
   return '';

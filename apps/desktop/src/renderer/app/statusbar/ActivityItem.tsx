@@ -19,6 +19,7 @@ const ACTION_LABEL: Record<ActionKindModel, string> = {
   // its own phase label and elapsed time instead.
   dispatch: '编译任务输入',
   document: '文档管理',
+  todo: '待办',
   search: '检索资料',
   vcs: '工作区版本',
   project: '项目管理',

@@ -26,7 +26,7 @@ export type { LedgerEvent, SessionSummary, WorkspaceSnapshot, ProjectSnapshot };
 export type TurnStatus = 'running' | 'completed' | 'failed' | 'interrupted';
 export type Phase = 'preparing' | 'reasoning' | 'acting' | 'replying';
 export type ItemStatus = 'running' | 'done' | 'failed' | 'skipped' | 'cancelled' | 'aborted';
-export type ActionKindModel = 'search' | 'dispatch' | 'document' | 'vcs' | 'project' | 'schedule' | 'parse-failed';
+export type ActionKindModel = 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'schedule' | 'parse-failed';
 
 export interface SessionModel {
   snapshot?: { takenAt: string; deviceName: string; projects: ProjectBrief[] };
@@ -143,7 +143,7 @@ export interface ActionModel {
   cycle: number;
 }
 
-export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'vcs' | 'project' | 'schedule' | 'status' | 'suggestion';
+export type CallRoleModel = 'reason' | 'memory-search' | 'search' | 'dispatch' | 'reply' | 'title' | 'document' | 'todo' | 'vcs' | 'project' | 'schedule' | 'status' | 'suggestion';
 
 /**
  * One per-request context snapshot folded from a `span.context` event: the
