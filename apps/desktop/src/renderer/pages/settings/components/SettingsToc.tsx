@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   Bird,
   Blocks,
+  Bot,
   Boxes,
   ChevronRight,
   Download,
@@ -37,6 +38,7 @@ const CATEGORY_ICONS: Readonly<Record<SettingsCategoryId, LucideIcon>> = {
   catalog: Boxes,
   routingTest: FlaskConical,
   models: Route,
+  bot: Bot,
   shortcuts: Keyboard,
   pet: Bird,
   components: Blocks,
@@ -103,7 +105,7 @@ export function SettingsToc({
               >
                 <Icon />
                 <span>{category.label}</span>
-                {countBadge(category.count)}
+                {category.id !== 'bot' && countBadge(category.count)}
               </SidebarMenuButton>
             </SidebarMenuItem>
           );
@@ -133,7 +135,7 @@ export function SettingsToc({
               >
                 <Icon />
                 <span>{category.label}</span>
-                {countBadge(category.count)}
+                {category.id !== 'bot' && countBadge(category.count)}
                 <ChevronRight
                   className={cn('ml-1 transition-transform', open && 'rotate-90')}
                   aria-hidden="true"

@@ -21,6 +21,7 @@ import { preferencesQueryKey } from '@/renderer/lib/queries';
 import type { DesktopPreferences, PreferenceId, ProviderCatalogSnapshot } from '@/shell-contract';
 import { KNOWN_SHORTCUTS, knownShortcutKeys } from '@/shell-contract';
 import { PetSettingsProvider, PetStatusBadge } from './components/PetSettings.js';
+import { BotSettings } from './components/BotSettings.js';
 import { SettingRow, type SettingBinding } from './components/SettingRow.js';
 import { SettingsSearch } from './components/SettingsSearch.js';
 import { SettingsToc, type TocCategory } from './components/SettingsToc.js';
@@ -420,6 +421,11 @@ export function SettingsPage({
   function renderCategoryBody(categoryId: SettingsCategoryId): ReactNode {
     if (categoryId === 'shortcuts') {
       return <ShortcutsTable platform={platform} query={query} />;
+    }
+    if (categoryId === 'bot') {
+      // Routines and the read-only bot config moved here from the chat page;
+      // the chat page is now only the group/private conversation.
+      return <BotSettings />;
     }
     if (categoryId === 'providers') {
       // The merged 供应商 page: provider management (activation, ordering,
