@@ -53,8 +53,6 @@ const TURN_TIMEOUT_MS = 20 * 60_000
 const INTERRUPT_GRACE_MS = 60_000
 /** How often the config directory is polled for new, changed or removed files. */
 const CONFIG_POLL_MS = 5_000
-/** Longest watched-session reply excerpt carried into a wake. */
-const SESSION_REPLY_CHARS = 600
 
 /** Where a wake came from; it decides the tag the bot reads in the text. */
 type WakeSource = 'user' | 'routine' | 'session' | 'message'
@@ -186,11 +184,8 @@ function botSystemPrompt(config: BotAgentConfig): string {
     `You are the Wrenyard bot "${config.name}" (${config.id}).`,
     'You are driven by messages: routine triggers, user input, other bots\' messages and work-session updates.',
     'One message may carry several [wake:user], [wake:routine <id>], [wake:session <sessionId> <status>] or [wake:message from <bot>] entries; handle every one of them in this turn.',
-    'Your only levers are the bot tools (session create/send/interrupt, todo, message).',
+    'Your only levers are the bot tools (session list/create/send/interrupt, todo, message).',
     'You never run code, searches, documents or tasks yourself; you delegate them to work sessions in natural language.',
-    'Starting or messaging a session never waits for it, and sessions run in parallel.',
-    'Reply briefly right away, start or steer sessions, then end the turn.',
-    'Never wait for anything: session updates arrive later as new messages.',
     'You have no file or shell access; with no tools, answer in text only.',
   ].join(' ')
   return `${fixed}\n\n${config.instructions}`
@@ -202,10 +197,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function truncate(text: string, max: number): string {
-  return text.length <= max ? text : text.slice(0, max)
 }
 
 /**
@@ -432,7 +423,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       maxToolCalls: MAX_TOOL_CALLS,
       // The invoking context session and turn decide which routine round a
       // watch inherits; a turn admitted before a rotation keeps its own round.
-      run: (call, ctx) => runTools(call, toolContext(botId, ctx.sessionId, ctx.turn), ctx),
+      run: (call, ctx) => runTools(call, toolContext(botId, ctx.sessionId, ctx.turn)),
     }
   }
 
@@ -616,7 +607,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const reply = turnAnswerOf(options.sessions, sessionId, turn)
     const wake = enqueue(botId, {
       source: 'session',
-      text: `[wake:session ${sessionId} ${event.status}] ${truncate(reply ?? '', SESSION_REPLY_CHARS)}`,
+      text: `[wake:session ${sessionId} ${event.status}] ${reply ?? ''}`,
       ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()
@@ -1064,7 +1055,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     }
     const wake = enqueue(watch.botId, {
       source: 'session',
-      text: `[wake:session ${watch.sessionId} ${status}] ${truncate(reply ?? '', SESSION_REPLY_CHARS)}`,
+      text: `[wake:session ${watch.sessionId} ${status}] ${reply ?? ''}`,
       ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()

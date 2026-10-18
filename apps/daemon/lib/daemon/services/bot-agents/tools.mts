@@ -12,7 +12,6 @@
 import type { AuxiliaryRoute, Session, ToolSpec, TurnModel } from '@wrenyard/session'
 import type { TodoStatus, WorkspaceTodoService } from '../workspace-todo-service.mts'
 import type { AgentToolName } from './config.mts'
-import { TurnAnswerIndex } from './turn-answer.mts'
 
 /** One ranked model route a bot may run a session on. */
 export interface AgentModelRoute {
@@ -50,10 +49,6 @@ type ToolOutcome = { status: 'done' | 'failed'; result: string }
 
 /** How many workspace sessions one `list` call reports. */
 const MAX_LISTED_SESSIONS = 30
-/** How many of the newest conversation entries one `read` call reports. */
-const MAX_READ_MESSAGES = 6
-/** Longest text one `read` entry may carry. */
-const MAX_MESSAGE_CHARS = 1_500
 
 const SESSION_TOOL: ToolSpec = {
   name: 'session',
@@ -62,7 +57,7 @@ const SESSION_TOOL: ToolSpec = {
     'A session is a full work session: it can read registered projects, dispatch tasks and edit code,',
     'so state the project and the worktree you want it to work in inside the message text.',
     'Sessions you create or message are watched: when such a session finishes its next turn you are woken',
-    'with its outcome, so after starting work end your turn instead of polling.',
+    'with its full turn answer.',
     'Models on this bot deny list are refused, both when named explicitly and when inherited from the session.',
     'When a session carries one or more workspace todos, pass their ids in todoIds (a single id or an array)',
     'so the watch records that association and it survives a context rotation of your own conversation.',
@@ -72,12 +67,12 @@ const SESSION_TOOL: ToolSpec = {
     properties: {
       op: {
         type: 'string',
-        enum: ['list', 'create', 'send', 'read', 'stop'],
-        description: 'list the newest sessions, create one, send it a message, read its last messages, or stop its running turn.',
+        enum: ['list', 'create', 'send', 'interrupt'],
+        description: 'list the newest sessions, create one, send it a message, or interrupt its running turn.',
       },
       sessionId: {
         type: 'string',
-        description: 'The session to act on; required for send, read and stop, and returned by list and create.',
+        description: 'The session to act on; required for send and interrupt, and returned by list and create.',
       },
       text: {
         type: 'string',
@@ -195,25 +190,12 @@ export function createAgentToolRunner(deps: {
 }): (
   call: { name: string; arguments: string },
   ctx: AgentToolContext,
-  caller?: { sessionId: string; turn: number },
 ) => Promise<ToolOutcome> {
-  /** Per-bot running-session reads already granted, scoped to one caller turn. */
-  const runningReads = new Map<string, { sessionId: string; turn: number; read: Set<string> }>()
-  return async (call, ctx, caller) => {
-    let runningRead: Set<string> | undefined
-    if (caller !== undefined) {
-      const entry = runningReads.get(ctx.botId)
-      if (entry === undefined || entry.sessionId !== caller.sessionId || entry.turn !== caller.turn) {
-        runningRead = new Set()
-        runningReads.set(ctx.botId, { sessionId: caller.sessionId, turn: caller.turn, read: runningRead })
-      } else {
-        runningRead = entry.read
-      }
-    }
+  return async (call, ctx) => {
     try {
       switch (call.name) {
         case 'session':
-          return await runSessionTool(parseArguments(call.arguments), deps, ctx, runningRead)
+          return await runSessionTool(parseArguments(call.arguments), deps, ctx)
         case 'todo':
           return await runTodoTool(parseArguments(call.arguments), deps)
         case 'message':
@@ -284,10 +266,6 @@ function optionalTodoIds(args: Record<string, unknown>, key: string): string[] |
   return ids.length > 0 ? ids : undefined
 }
 
-function truncate(text: string): string {
-  return text.length <= MAX_MESSAGE_CHARS ? text : text.slice(0, MAX_MESSAGE_CHARS)
-}
-
 // ─── session tool ──────────────────────────────────────────────────────────
 
 interface SessionListRow {
@@ -298,21 +276,10 @@ interface SessionListRow {
   updatedAt: string
 }
 
-interface SessionReadResult {
-  running: boolean
-  lastTurn: string | null
-  messages: { role: 'user' | 'reply'; text: string }[]
-  /** The answer each finished turn ended on, oldest turn first. */
-  answers: { turn: number; text: string }[]
-  /** Set on a still-running session read: the bot must end its turn now. */
-  hint?: string
-}
-
 async function runSessionTool(
   args: Record<string, unknown>,
   deps: { sessions: Session },
   ctx: AgentToolContext,
-  runningRead?: Set<string>,
 ): Promise<ToolOutcome> {
   switch (args.op) {
     case 'list':
@@ -342,17 +309,8 @@ async function runSessionTool(
       ctx.watch(sessionId, turn - 1, optionalTodoIds(args, 'todoIds'))
       return done({ turn })
     }
-    case 'read': {
-      const sessionId = requireString(args, 'sessionId', 'read requires sessionId')
-      const result = readSession(deps.sessions, sessionId)
-      if (!result.running || runningRead === undefined) return done(result)
-      const hint = `session ${sessionId} is still running; you will be woken when its turn finishes. End your turn now.`
-      if (runningRead.has(sessionId)) return failed(hint)
-      runningRead.add(sessionId)
-      return done({ ...result, hint })
-    }
-    case 'stop': {
-      const sessionId = requireString(args, 'sessionId', 'stop requires sessionId')
+    case 'interrupt': {
+      const sessionId = requireString(args, 'sessionId', 'interrupt requires sessionId')
       return done(await stopSession(deps.sessions, sessionId, ctx))
     }
     default:
@@ -373,67 +331,6 @@ function listSessions(sessions: Session): SessionListRow[] {
     }))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, MAX_LISTED_SESSIONS)
-}
-
-/**
- * Status plus the tail of one session's conversation, and the answer each
- * finished turn ended on. Whether the session is running is derived from the
- * ledger the same way the session feature derives a turn's number: a
- * `turn.started` whose number has no matching `turn.finished` is still in
- * flight, and the newest such number is the turn to stop.
- *
- * A turn's answer is what it published last, not what it opened with: its
- * closing reply, else the worker output of its terminal reasoning step, else
- * its last published reply.
- */
-function readSession(sessions: Session, sessionId: string): SessionReadResult {
-  const events = sessions.readLedger(sessionId)
-  const started = new Set<number>()
-  const finished = new Set<number>()
-  const messages: { role: 'user' | 'reply'; text: string }[] = []
-  /** What every turn of this ledger ended on, read the shared way. */
-  const answerIndex = new TurnAnswerIndex()
-  for (const event of events) {
-    switch (event.type) {
-      case 'turn.started':
-        if (event.turn !== undefined) started.add(event.turn)
-        messages.push({ role: 'user', text: truncate(event.text) })
-        break
-      case 'turn.finished':
-        if (event.turn !== undefined) finished.add(event.turn)
-        break
-      case 'reply.sent':
-        messages.push({ role: 'reply', text: truncate(event.text) })
-        answerIndex.feed(event)
-        break
-      case 'reasoning.completed':
-        answerIndex.feed(event)
-        break
-      default:
-        break
-    }
-  }
-  let running = false
-  for (const turn of started) {
-    if (!finished.has(turn)) {
-      running = true
-      break
-    }
-  }
-  const answers = [...finished]
-    .sort((left, right) => left - right)
-    .map(turn => ({
-      turn,
-      text: truncate(answerIndex.answerOf(turn) ?? ''),
-    }))
-    .filter(answer => answer.text !== '')
-  const summary = sessions.listSessions().find(candidate => candidate.sessionId === sessionId)
-  return {
-    running,
-    lastTurn: summary?.lastTurn === undefined ? null : summary.lastTurn.status,
-    messages: messages.slice(-MAX_READ_MESSAGES),
-    answers,
-  }
 }
 
 /**

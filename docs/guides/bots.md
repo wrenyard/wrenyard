@@ -60,7 +60,7 @@ ignored.
 
 | Tool | What the bot can do |
 | --- | --- |
-| `session` | List, create and message work sessions, read their latest messages, and stop a running turn. A work session is a full Wrenyard conversation: it reads registered projects, dispatches tasks and edits code, so the bot names the project and worktree in its message. |
+| `session` | List, create and message work sessions, and interrupt a running turn. A work session is a full Wrenyard conversation: it reads registered projects, dispatches tasks and edits code, so the bot names the project and worktree in its message. |
 | `todo` | List, show and add workspace todos, change their status (`open`, `in_progress`, `done`, `accepted`, `cancelled`) and record a result summary. |
 | `message` | Send a message to another bot by id, which wakes that bot. |
 
