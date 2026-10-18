@@ -128,6 +128,11 @@ export class BotLaneBusyError extends Error {
 export interface BotStore {
   readonly workspaceRoot: string
   listBots(): BotRecord[]
+  /**
+   * True while at least one bot exists for this workspace. Consults only the
+   * in-memory set kept in sync by `createBot`/`deleteBot`, so it runs no SQL.
+   */
+  hasBots(): boolean
   getBot(botId: string): BotRecord
   createBot(input: { name: string; configPath?: string; mode?: BotMode; state?: BotState }): BotRecord
   updateBot(botId: string, patch: BotPatch): BotRecord
@@ -407,6 +412,19 @@ export function createBotStore(options: CreateBotStoreOptions): BotStore {
   const newId = options.idGenerator ?? (() => randomBytes(8).toString('hex'))
   const timestamp = (): string => now().toISOString()
 
+  /**
+   * In-memory presence of this workspace's bot ids, seeded once here so a
+   * restart picks up pre-existing bots and kept accurate by `createBot` and
+   * `deleteBot` — the sole mutations of the bot table — so `hasBots()` never
+   * needs SQL. External writers do not exist: this store is the only bot-table
+   * mutation boundary.
+   */
+  const knownBotIds = new Set<string>(
+    db.prepare<[string], { id: string }>(
+      'SELECT id FROM bot WHERE workspace_root = ?',
+    ).all(workspaceRoot).map(row => row.id),
+  )
+
   function botRow(botId: string): BotRow | undefined {
     return db.prepare<[string, string], BotRow>(
       'SELECT * FROM bot WHERE id = ? AND workspace_root = ?',
@@ -527,6 +545,10 @@ export function createBotStore(options: CreateBotStoreOptions): BotStore {
       ).all(workspaceRoot).map(rowToBot)
     },
 
+    hasBots(): boolean {
+      return knownBotIds.size > 0
+    },
+
     getBot(botId: string): BotRecord {
       return requireBot(botId)
     },
@@ -549,6 +571,7 @@ export function createBotStore(options: CreateBotStoreOptions): BotStore {
         at,
         at,
       )
+      knownBotIds.add(id)
       return requireBot(id)
     },
 
@@ -588,6 +611,7 @@ export function createBotStore(options: CreateBotStoreOptions): BotStore {
         db.prepare<[string], unknown>('DELETE FROM bot_log WHERE bot_id = ?').run(botId)
         db.prepare<[string, string], unknown>('DELETE FROM bot WHERE id = ? AND workspace_root = ?').run(botId, workspaceRoot)
       })()
+      knownBotIds.delete(botId)
     },
 
     findItemBySource(botId: string, sourceId: string): BotItemRecord | undefined {

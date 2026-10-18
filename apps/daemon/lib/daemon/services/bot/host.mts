@@ -3757,6 +3757,9 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
    */
   async function tickPass(scheduledAt?: number, botId?: string, forced = false): Promise<void> {
     if (stopped || canRun?.() === false) return
+    // An untargeted pass with no bots has nothing to advance: return before
+    // the load probe and the bot listing so an idle daemon runs no SQL per tick.
+    if (botId === undefined && !store.hasBots()) return
     const tickStartedAt = clock()
     // Read the daemon load once per pass: it gates new work for every bot.
     const probe = await probeLoad()
