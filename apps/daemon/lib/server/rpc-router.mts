@@ -34,6 +34,11 @@ export class RpcRouter {
   private admissionGate: ((method: string, params: unknown) => void) | undefined
   private readonly activeWorkMethods = new Set<string>()
   private activeWorkRequests = 0
+  private readonly onRequestEnd: ((info: { method: string; durationMs: number; ok: boolean }) => void) | undefined
+
+  constructor(options: { onRequestEnd?: (info: { method: string; durationMs: number; ok: boolean }) => void } = {}) {
+    this.onRequestEnd = options.onRequestEnd
+  }
 
   setAdmissionGate(gate: (method: string, params: unknown) => void, workMethods: Iterable<string>): void {
     this.admissionGate = gate
@@ -92,22 +97,33 @@ export class RpcRouter {
 
   /** The single shared pipeline: validate params, resolve the handler, gate, run, validate the result. */
   private async dispatchMethod(method: string, message: JsonRpcMessage, context: unknown): Promise<unknown> {
-    const params = parseMethodParams(method, message.params)
-    const handler = this.handlers.get(method)
-    if (!handler) {
-      throw new ProtocolError(METHOD_NOT_FOUND, { method })
-    }
-
-    this.admissionGate?.(method, params)
-    const tracksWork = this.activeWorkMethods.has(method)
-    if (tracksWork) this.activeWorkRequests += 1
-    let result: unknown
+    // Time the whole pipeline (params -> handler -> result) so both
+    // handleMessage and internal invoke() attribute every request.
+    const startedAt = performance.now()
+    let ok = false
     try {
-      result = await handler(params, message, context)
+      const params = parseMethodParams(method, message.params)
+      const handler = this.handlers.get(method)
+      if (!handler) {
+        throw new ProtocolError(METHOD_NOT_FOUND, { method })
+      }
+
+      this.admissionGate?.(method, params)
+      const tracksWork = this.activeWorkMethods.has(method)
+      if (tracksWork) this.activeWorkRequests += 1
+      let result: unknown
+      try {
+        result = await handler(params, message, context)
+      } finally {
+        if (tracksWork) this.activeWorkRequests -= 1
+      }
+      const validated = parseMethodResult(method, result)
+      ok = true
+      return validated
     } finally {
-      if (tracksWork) this.activeWorkRequests -= 1
+      // Only method/duration/ok is reported — params and results never leave.
+      this.onRequestEnd?.({ method, durationMs: performance.now() - startedAt, ok })
     }
-    return parseMethodResult(method, result)
   }
 
   private createParseErrorResponse(input: unknown, error: unknown): JsonRpcResponse | undefined {

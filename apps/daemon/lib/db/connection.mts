@@ -9,6 +9,27 @@ import type { ForemanDatabase, RunResult, TransactionCallback } from './types.mt
 let db: ForemanDatabase | undefined
 let openedPath: string | undefined
 
+const SLOW_QUERY_THRESHOLD_MS = 100
+const SLOW_QUERY_SQL_MAX_CHARS = 200
+
+type SlowQueryLogger = (info: { op: 'query' | 'get' | 'run'; sql: string; durationMs: number }) => void
+let slowQueryLogger: SlowQueryLogger | undefined
+
+/** Registers (or, with null, clears) the observer for synchronous queries at or above the slow threshold. */
+export function setSlowQueryLogger(fn: SlowQueryLogger | null): void {
+  slowQueryLogger = fn ?? undefined
+}
+
+function reportSlowQuery(op: 'query' | 'get' | 'run', sql: string, durationMs: number): void {
+  if (!slowQueryLogger || durationMs < SLOW_QUERY_THRESHOLD_MS) return
+  try {
+    // Only op, truncated SQL, and duration — bound params/values never leave.
+    slowQueryLogger({ op, sql: sql.slice(0, SLOW_QUERY_SQL_MAX_CHARS), durationMs })
+  } catch {
+    // A logging failure must never break a query.
+  }
+}
+
 /**
  * Wrenyard application data queries must use query/get/run below so statements
  * are prepared and values are passed as bound parameters. getDb() exists for
@@ -49,15 +70,24 @@ export function getDb(): ForemanDatabase {
 }
 
 export function query<T>(sql: string, ...params: unknown[]): T[] {
-  return getDb().prepare<unknown[], T>(sql).all(...params)
+  const startedAt = performance.now()
+  const rows = getDb().prepare<unknown[], T>(sql).all(...params)
+  reportSlowQuery('query', sql, performance.now() - startedAt)
+  return rows
 }
 
 export function get<T>(sql: string, ...params: unknown[]): T | undefined {
-  return getDb().prepare<unknown[], T>(sql).get(...params)
+  const startedAt = performance.now()
+  const row = getDb().prepare<unknown[], T>(sql).get(...params)
+  reportSlowQuery('get', sql, performance.now() - startedAt)
+  return row
 }
 
 export function run(sql: string, ...params: unknown[]): RunResult {
-  return getDb().prepare<unknown[]>(sql).run(...params)
+  const startedAt = performance.now()
+  const result = getDb().prepare<unknown[]>(sql).run(...params)
+  reportSlowQuery('run', sql, performance.now() - startedAt)
+  return result
 }
 
 export function closeDb(): void {

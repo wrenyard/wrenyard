@@ -6,7 +6,7 @@ import { realpath, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { hostname } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { closeDb, getDb, initDb, query as dbQuery } from '../db/connection.mts'
+import { closeDb, getDb, initDb, query as dbQuery, setSlowQueryLogger } from '../db/connection.mts'
 import { dropTaskRunTelemetryRetiredColumns } from '../db/schema.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { WorkflowRunStore } from '../db/stores/workflow-run-store.mts'
@@ -15,6 +15,7 @@ import type { ForemanServiceConfig, GatewayPortMode } from '../config/index.mts'
 import { loadForemanGatewayConfig } from '../config/reader.mts'
 import { updateForemanConfigData, updateForemanGatewayConfig } from '../config/writer.mts'
 import { RpcRouter } from '../server/rpc-router.mts'
+import { startEventLoopDelayMonitor } from '../server/event-loop-monitor.mts'
 import { registerCoreHandlers, readProcessIdentity, type CoreRpcHandlerOptions } from '../server/handlers/core.mts'
 import { createIpcServer, type IpcServer } from '../control/ipc-server.mts'
 import { registerSessionHandlers } from '../server/handlers/session.mts'
@@ -290,6 +291,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private lockHeld = false
   private lowDiskState: LowDiskState = lowDiskStateForProcess
   private lowDiskTimer: ReturnType<typeof setInterval> | undefined
+  private stopEventLoopMonitor: (() => void) | undefined
 
   private shutdownRequestedFlag = false
   private shutdownForce = false
@@ -367,6 +369,10 @@ export class ForemanDaemon implements RunningForemanDaemon {
       await this.sampleLowDisk()
       this.lowDiskTimer = setInterval(() => { void this.sampleLowDisk() }, 30_000)
       this.lowDiskTimer.unref?.()
+      // Per-method attribution: synchronous slow queries and event-loop delay
+      // are reported through the one daemon log sink until close() clears them.
+      setSlowQueryLogger((info) => writeDaemonLog('warn', 'slow synchronous query', info))
+      this.stopEventLoopMonitor = startEventLoopDelayMonitor({ log: writeDaemonLog })
       this.resources = await createForemanDaemonResources(this.config, runtime, {
         configPath: this.configPath,
         requestShutdown: this.requestShutdown,
@@ -614,6 +620,9 @@ export class ForemanDaemon implements RunningForemanDaemon {
   readonly close = async (): Promise<void> => {
     if (this.lowDiskTimer) clearInterval(this.lowDiskTimer)
     this.lowDiskTimer = undefined
+    if (this.stopEventLoopMonitor) this.stopEventLoopMonitor()
+    this.stopEventLoopMonitor = undefined
+    setSlowQueryLogger(null)
     const resources = this.resources
     this.resources = undefined
     try {
@@ -944,7 +953,17 @@ async function createForemanDaemonResources(
   })
   // The session feature invokes allowlisted workspace methods through this one
   // router, so the router exists before the workspace bindings are assembled.
-  const rpcRouter = new RpcRouter()
+  const rpcRouter = new RpcRouter({
+    // Per-request attribution warns on slow (>200ms) and failed IPC requests;
+    // only method/duration/ok is reported, never params or results.
+    onRequestEnd: ({ method, durationMs, ok }) => {
+      if (!ok) {
+        writeDaemonLog('warn', 'failed IPC request', { method, durationMs })
+      } else if (durationMs >= 200) {
+        writeDaemonLog('warn', 'slow IPC request', { method, durationMs })
+      }
+    },
+  })
   const sessionStateRoot = foremanStateRoot()
   const ipcPath = resolveWrenyardIpcPath(process.env, { config })
   // The single shared gateway connection snapshot, used by the session gateway,
