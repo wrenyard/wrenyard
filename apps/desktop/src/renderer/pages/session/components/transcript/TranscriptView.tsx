@@ -43,7 +43,7 @@ export const TranscriptView = memo(function TranscriptView({
           key={`transcript:${turn.id}`}
           messageId={`transcript:${turn.id}`}
           data-turn-id={turn.id}
-          className="flex flex-col gap-3"
+          className={cn('flex flex-col gap-3', turn.status === 'running' && '[content-visibility:visible]')}
         >
           <TranscriptTurn
             turn={turn}
