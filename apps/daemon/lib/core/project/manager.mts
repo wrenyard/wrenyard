@@ -83,6 +83,7 @@ function lockRefusal(metadata: WorktreeMetadata | null, caller: WorktreeCaller):
 }
 
 const WORKTREE_ID_RE = /^[A-Za-z0-9_-]{8}$/u
+const MANAGED_WORKTREE_BRANCH_PREFIX = 'wrenyard/'
 const PROJECT_ID_SEGMENT_RE = /^[A-Za-z0-9._-]+$/u
 const WORKTREE_METADATA_DIR = '.foreman'
 const DIRTY_TEXT_LIMIT = 64 * 1024
@@ -326,8 +327,10 @@ export class ProjectManager {
 
     const id = this.allocateWorktreeId(project.name)
     const targetPath = this.worktreePath(id)
-    const branchName = branch?.trim() || `wrenyard/${id}`
-    if (!branchName) throw new Error('branch must not be empty')
+    const requestedBranch = branch?.trim()
+    const branchName = requestedBranch
+      ? validateManagedBranchName(requestedBranch, (name) => this.localBranchExists(project.path, name))
+      : `${MANAGED_WORKTREE_BRANCH_PREFIX}${id}`
 
     const owner = options.owner?.trim()
     const lock = options.lock?.trim()
@@ -1880,6 +1883,38 @@ function validateWorktreeId(value: string): string {
     throw new Error('worktree id must be 8 letters, numbers, underscores, or dashes')
   }
   return id
+}
+
+function validateManagedBranchName(value: string, branchExists: (name: string) => boolean): string {
+  const name = value.trim()
+  if (!name) throw new Error('branch must not be empty')
+  if (name.startsWith('origin/') || name.startsWith('refs/')) {
+    throw new Error(`branch '${name}' must not be a remote-tracking or fully qualified ref`)
+  }
+  if (name === 'main' || name === 'master') {
+    throw new Error(`branch '${name}' is protected and cannot be used for a managed worktree`)
+  }
+  if (
+    /\s/u.test(name) ||
+    !/^[A-Za-z0-9._/-]+$/u.test(name) ||
+    name.includes('..') ||
+    name.includes('@{') ||
+    name.startsWith('/') ||
+    name.endsWith('/') ||
+    name.endsWith('.') ||
+    name.endsWith('.lock')
+  ) {
+    throw new Error(`branch '${name}' is not a valid branch name`)
+  }
+  if (!name.startsWith(MANAGED_WORKTREE_BRANCH_PREFIX)) {
+    throw new Error(`branch '${name}' must be under the managed prefix '${MANAGED_WORKTREE_BRANCH_PREFIX}'`)
+  }
+  if (!branchExists(name)) {
+    throw new Error(
+      `branch '${name}' does not exist as a local branch; managed worktree branches must already exist under '${MANAGED_WORKTREE_BRANCH_PREFIX}'`
+    )
+  }
+  return name
 }
 
 function nativeRealpath(path: string): string {
