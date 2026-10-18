@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { hostname as osHostname } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { stringify } from 'yaml'
@@ -8,6 +9,7 @@ import { discoverProjects, findProject as findFmprojProject, invalidateProjectCa
 import {
   GitRepository,
   VcsError,
+  runGit,
   runGitSync,
   type GitCommitFilesResult,
   type GitDiffOptions,
@@ -320,7 +322,7 @@ export class ProjectManager {
       .sort((a, b) => a.id.localeCompare(b.id))
   }
 
-  createWorktree(projectName: string, branch?: string, options: { owner?: string; lock?: string } = {}): WorktreeCreateResult {
+  async createWorktree(projectName: string, branch?: string, options: { owner?: string; lock?: string } = {}): Promise<WorktreeCreateResult> {
     const project = this.getProject(projectName)
     if (project.noWorktree) throw new Error(this.worktreeUnsupportedProjectMessage(project))
     if (!existsSync(project.path)) throw new Error(`Project path does not exist: ${project.path}`)
@@ -340,7 +342,7 @@ export class ProjectManager {
       : ['worktree', 'add', '-b', branchName, targetPath]
 
     try {
-      this.git(project.path, args)
+      await this.gitAsync(project.path, args)
       this.writeWorktreeMetadata({
         id,
         project: project.name,
@@ -349,7 +351,7 @@ export class ProjectManager {
         ...(lock ? { lock } : {}),
       })
     } catch (e) {
-      rmSync(targetPath, { recursive: true, force: true })
+      await rm(targetPath, { recursive: true, force: true })
       this.removeWorktreeMetadata(id)
       throw e
     }
@@ -362,7 +364,7 @@ export class ProjectManager {
     }
   }
 
-  removeWorktree(worktreeId: string, caller: WorktreeCaller = {}): WorktreeRemoveResult {
+  async removeWorktree(worktreeId: string, caller: WorktreeCaller = {}): Promise<WorktreeRemoveResult> {
     const id = validateWorktreeId(worktreeId)
     let canonicalRoot: string
     try {
@@ -427,7 +429,7 @@ export class ProjectManager {
     }
 
     try {
-      this.git(project.path, ['worktree', 'remove', managedPath])
+      await this.gitAsync(project.path, ['worktree', 'remove', managedPath])
     } catch (e) {
       return {
         worktree_id: id,
@@ -502,7 +504,7 @@ export class ProjectManager {
     }
   }
 
-  mergeWorktree(projectName: string, worktreeId: string, caller: WorktreeCaller = {}): WorktreeMergeResult {
+  async mergeWorktree(projectName: string, worktreeId: string, caller: WorktreeCaller = {}): Promise<WorktreeMergeResult> {
     const requestedProject = projectName.trim()
     let id: string
     try {
@@ -743,7 +745,7 @@ export class ProjectManager {
     }
 
     const afterSha = this.revParse(project.path, `refs/heads/${targetBranch}`) ?? undefined
-    const removeResult = this.removeWorktree(id, caller)
+    const removeResult = await this.removeWorktree(id, caller)
     if (!removeResult.removed) {
       return targetBase({
         before_sha: beforeSha,
@@ -1719,6 +1721,14 @@ export class ProjectManager {
 
   private git(cwd: string, args: string[]): string {
     const result = runGitSync(cwd, args, { gitBin: this.gitBin })
+    if (result.code !== 0) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || `git exited with code ${result.code}`)
+    }
+    return result.stdout
+  }
+
+  private async gitAsync(cwd: string, args: string[]): Promise<string> {
+    const result = await runGit(cwd, args, { gitBin: this.gitBin })
     if (result.code !== 0) {
       throw new Error(result.stderr.trim() || result.stdout.trim() || `git exited with code ${result.code}`)
     }

@@ -1709,7 +1709,7 @@ async function removeEligible(
         }
         const referenceReason = activeReferenceReason(db, candidate.id, candidate.path)
         if (referenceReason !== undefined) return protectedOutcome(referenceReason)
-        const result = pm.removeWorktree(candidate.id)
+        const result = await pm.removeWorktree(candidate.id)
         if (!result.removed) {
           return failed(result.error ?? 'worktree removal failed')
         }

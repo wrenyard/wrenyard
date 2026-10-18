@@ -1927,7 +1927,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         return { output: { worktreeId: existing.id, branch: existing.branch, reused: true }, patch: { worktreeId: existing.id, branch: existing.branch } }
       }
       const creator = new ProjectManager({ workspaceRoot, idGenerator: () => id })
-      const created = creator.createWorktree(item.project, undefined, { owner })
+      const created = await creator.createWorktree(item.project, undefined, { owner })
       return {
         output: { worktreeId: created.worktree_id, branch: created.branch, owner },
         patch: { worktreeId: created.worktree_id, branch: created.branch },
@@ -2107,7 +2107,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     }),
     async run({ bot, item }) {
       if (!item.project || !item.worktreeId) throw new Error('item has no project worktree to merge')
-      const result = projectManager.mergeWorktree(item.project, item.worktreeId, { owner: ownerForItem(bot, item) })
+      const result = await projectManager.mergeWorktree(item.project, item.worktreeId, { owner: ownerForItem(bot, item) })
       if (!result.merged) {
         // A non-merged worktree needs a human decision, so the item parks with
         // the reason verbatim instead of silently failing.
@@ -3990,7 +3990,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         throw new Error(`item ${itemId} must be terminal before cleanup (it is ${item.state})`)
       }
       if (item.worktreeId !== undefined) {
-        const removed = projectManager.removeWorktree(item.worktreeId)
+        const removed = await projectManager.removeWorktree(item.worktreeId)
         if (!removed.removed) {
           throw new Error(`worktree ${item.worktreeId} could not be removed: ${removed.error ?? 'unknown'}`)
         }
