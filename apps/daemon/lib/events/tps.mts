@@ -44,6 +44,7 @@ export interface TpsEstimate {
 interface ExecutionSampleRow {
   executionId: string
   taskId: string | null
+  createdAt: string
   endedAt: string | null
   provider: string | null
   model: string | null
@@ -143,7 +144,7 @@ export function readExecutionTpsSamples(
   const executionRows = dbQueryOn<ExecutionSampleRow>(
     database,
     `SELECT e.id AS executionId, e.task_id AS taskId,
-            e.ended_at AS endedAt,
+            e.created_at AS createdAt, e.ended_at AS endedAt,
             tra.provider AS provider, tra.model AS model, tra.model_id AS modelId
      FROM executions e
      INNER JOIN task_run_attempt_dispatch tra ON tra.execution_id = e.id
@@ -151,6 +152,12 @@ export function readExecutionTpsSamples(
     params,
   )
   if (executionRows.length === 0) return []
+
+  const eventsSince = options.startAt
+    ?? executionRows.reduce(
+      (min, row) => (row.createdAt < min ? row.createdAt : min),
+      executionRows[0].createdAt,
+    )
 
   const executionById = new Map(executionRows.map((row) => [row.executionId, row]))
   const executionIds = executionRows.map((row) => row.executionId)
@@ -189,11 +196,16 @@ export function readExecutionTpsSamples(
   // any client-recorded usage for the same execution: the gateway sample is
   // paired with the exact upstream response. The event payload carries only the
   // execution id — never the supervisor's private cached sequence state.
+  // Gateway attribution events carry `execution_id` NULL, so the id index
+  // cannot narrow them; without a `created_at` window this query json-parses
+  // every gateway event in history and stalls the event loop. `events.created_at`
+  // is indexed (idx_event_created_at) and every attributed gateway event occurs
+  // after its execution was created, so bounding by `eventsSince` is exact.
   const gatewayRows = dbQueryOn<GatewayDataRow>(
     database,
     `SELECT execution_id, data FROM events
-     WHERE type = 'gateway.request.completed' AND json_extract(data, '$.data.executionId') IN (${executionIds.map(() => '?').join(', ')})`,
-    executionIds,
+     WHERE type = 'gateway.request.completed' AND created_at >= ? AND json_extract(data, '$.data.executionId') IN (${executionIds.map(() => '?').join(', ')})`,
+    [eventsSince, ...executionIds],
   )
   const gatewayByExecution = new Map<string, { samples: ResponseSample[]; invalid: boolean }>()
   for (const row of gatewayRows) {
