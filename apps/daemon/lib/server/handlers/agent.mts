@@ -53,6 +53,13 @@ export function registerAgentHandlers(router: RpcRouter, options: AgentRpcHandle
     call(context, 'agent.get', () => kernel.get(params.id)))
   router.register('agent.wake', (params, _message, context) =>
     call(context, 'agent.wake', () => kernel.wake(params.id, params.text)))
+  router.register('agent.group.events', (params, _message, context) =>
+    call(context, 'agent.group.events', () => kernel.groupEvents({
+      afterSeq: params.afterSeq,
+      ...(params.limit === undefined ? {} : { limit: params.limit }),
+    })))
+  router.register('agent.group.send', (params, _message, context) =>
+    call(context, 'agent.group.send', () => kernel.groupSend(params.text)))
   router.register('agent.events', (params, _message, context) =>
     call(context, 'agent.events', () => {
       const ctx = kernel.context(params.id)

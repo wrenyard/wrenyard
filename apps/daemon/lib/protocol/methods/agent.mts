@@ -63,6 +63,34 @@ export interface AgentWakeParams {
 }
 export interface AgentWakeResult { queued: number }
 
+/** One entry of the shared group transcript. */
+export interface GroupMessage {
+  seq: number
+  at: string
+  author: 'user' | 'bot'
+  botId?: string
+  name?: string
+  text: string
+}
+
+export interface AgentGroupEventsParams {
+  afterSeq: number
+  limit?: number
+}
+export interface AgentGroupEventsResult {
+  messages: GroupMessage[]
+  lastSeq: number
+}
+
+export interface AgentGroupSendParams {
+  /** 1..20000 characters; posted to the group exactly once. */
+  text: string
+}
+export interface AgentGroupSendResult {
+  message: GroupMessage
+  awakened: string[]
+}
+
 const emptySchema = { type: 'object', properties: {}, additionalProperties: false } as const satisfies JsonSchema
 
 export const agentListParamsSchema = {
@@ -110,4 +138,49 @@ export const agentWakeResultSchema = {
   description: 'The bot wake queue length including any in-flight wake.',
   type: 'object', required: ['queued'], additionalProperties: false,
   properties: { queued: { type: 'integer', minimum: 0 } },
+} as const satisfies JsonSchema
+
+const groupMessageSchema = {
+  type: 'object', required: ['seq', 'at', 'author', 'text'], additionalProperties: false,
+  properties: {
+    seq: { type: 'integer', minimum: 1 },
+    at: { type: 'string', minLength: 1 },
+    author: { type: 'string', enum: ['user', 'bot'] },
+    botId: botIdSchema,
+    name: { type: 'string', minLength: 1 },
+    text: { type: 'string' },
+  },
+} as const satisfies JsonSchema
+
+export const agentGroupEventsParamsSchema = {
+  description: 'Read one bounded page of the shared group transcript after a sequence number.',
+  type: 'object', required: ['afterSeq'], additionalProperties: false,
+  properties: {
+    afterSeq: { type: 'integer', minimum: 0 },
+    limit: { type: 'integer', minimum: 1, maximum: 500 },
+  },
+} as const satisfies JsonSchema
+export const agentGroupEventsResultSchema = {
+  description: 'The requested transcript page and the sequence of its last message.',
+  type: 'object', required: ['messages', 'lastSeq'], additionalProperties: false,
+  properties: {
+    messages: { type: 'array', items: groupMessageSchema },
+    lastSeq: { type: 'integer', minimum: 0 },
+  },
+} as const satisfies JsonSchema
+
+export const agentGroupSendParamsSchema = {
+  description: 'Post one user message to the group; mentioned bots are woken.',
+  type: 'object', required: ['text'], additionalProperties: false,
+  properties: {
+    text: { type: 'string', minLength: 1, maxLength: 20000 },
+  },
+} as const satisfies JsonSchema
+export const agentGroupSendResultSchema = {
+  description: 'The posted group message and the enabled bots that were woken.',
+  type: 'object', required: ['message', 'awakened'], additionalProperties: false,
+  properties: {
+    message: groupMessageSchema,
+    awakened: { type: 'array', items: botIdSchema },
+  },
 } as const satisfies JsonSchema

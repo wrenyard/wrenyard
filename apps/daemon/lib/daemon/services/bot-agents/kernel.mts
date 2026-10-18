@@ -25,6 +25,7 @@ import {
   estimateTokens,
   type AgentToolPort,
   type LedgerEvent,
+  type ReplySentEvent,
   type Session,
   type SessionHost,
   type SessionSummary,
@@ -34,6 +35,13 @@ import type { RoutineDeliver, RoutineRecord } from '../../../protocol/methods/ro
 import type { Scheduler } from '../scheduler.mts'
 import type { WorkspaceTodoService } from '../workspace-todo-service.mts'
 import { loadBotAgentConfigs, type BotAgentConfig, type BotAgentEntry } from './config.mts'
+import {
+  GROUP_PROMPT_GUIDANCE,
+  groupSourceKey,
+  parseMentions,
+  type GroupBot,
+  type GroupMessage,
+} from './group.mts'
 import { TurnAnswerIndex } from './turn-answer.mts'
 import {
   agentToolSpecs,
@@ -53,6 +61,12 @@ const TURN_TIMEOUT_MS = 20 * 60_000
 const INTERRUPT_GRACE_MS = 60_000
 /** How often the config directory is polled for new, changed or removed files. */
 const CONFIG_POLL_MS = 5_000
+/** Default page size of the shared group transcript. */
+const GROUP_PAGE_SIZE = 100
+/** Hard cap on one group transcript page. */
+const GROUP_PAGE_MAX = 500
+/** How many published reply source keys are remembered for deduplication. */
+const GROUP_PUBLISHED_MAX = 2_000
 
 /** Where a wake came from; it decides the tag the bot reads in the text. */
 type WakeSource = 'user' | 'routine' | 'session' | 'message'
@@ -102,12 +116,63 @@ interface BotState {
   lastError?: string
 }
 
+/** One transcript entry as persisted; `sourceKey` is the reply dedup key. */
+export interface GroupTranscriptEntry extends GroupMessage {
+  sourceKey?: string
+}
+
+/**
+ * How far one bot context ledger has been read for group publication. Keyed by
+ * context session id, so a session left behind by a rotation keeps its cursor.
+ */
+interface GroupReplyCursor {
+  botId: string
+  lastSeq: number
+}
+
+/** One mention-derived wake recorded until its queue entry is admitted. */
+interface GroupPeerWake {
+  wakeId: string
+  botId: string
+  text: string
+  createdAt: string
+}
+
+/** One in-memory transcript append and the mention targets it derived. */
+interface AppendedGroupMessage {
+  entry: GroupTranscriptEntry
+  /** Enabled bots the text mentions, in mention order; empty when none. */
+  targets: string[]
+}
+
+/** What one ledger event did to the group state, before it is persisted. */
+interface GroupEventNote {
+  /** Whether the event appended a transcript entry that must reach the file. */
+  published: boolean
+  /** Wakes the published entry derived, to dispatch after the snapshot. */
+  wakes: Wake[]
+}
+
+/** The durable shared group conversation and its publication bookkeeping. */
+export interface GroupState {
+  /** Highest transcript seq already assigned; 0 for an empty transcript. */
+  seq: number
+  messages: GroupTranscriptEntry[]
+  /** Last ledger event read for group publication, by context session id. */
+  cursors: Record<string, GroupReplyCursor>
+  /** Reply source keys already published, oldest first, bounded. */
+  published: string[]
+  /** Peer wakes enqueued from group mentions and not yet admitted. */
+  peerWakes: Record<string, GroupPeerWake>
+}
+
 /** Everything the kernel persists in one file. */
 interface KernelState {
   version: 1
   bots: Record<string, BotState>
   watches: Watch[]
   rounds: Record<string, Round>
+  group: GroupState
 }
 
 /** One finished turn as the kernel reads it back from a ledger. */
@@ -176,10 +241,33 @@ export interface BotAgentKernel {
   removeWatches(sessionId: string): void
   wakeRoutine(routine: RoutineRecord): Promise<void>
   routineBusy(routine: RoutineRecord): boolean
+  /** Read one bounded page of the shared group transcript. */
+  groupEvents(input: GroupEventsInput): GroupEventsPage
+  /** Post one user message to the group and wake the bots it mentions. */
+  groupSend(text: string): GroupSendResult
 }
 
-/** The fixed instruction prefix every bot runs on, before its config text. */
-function botSystemPrompt(config: BotAgentConfig): string {
+export interface GroupEventsInput {
+  afterSeq?: number
+  limit?: number
+}
+
+export interface GroupEventsPage {
+  messages: GroupMessage[]
+  lastSeq: number
+}
+
+export interface GroupSendResult {
+  message: GroupMessage
+  awakened: string[]
+}
+
+/**
+ * The fixed instruction prefix every bot runs on, before its config text, and
+ * the enabled peers it may address in the group. The roster is appended after
+ * the prefix, the group guidance and the config instructions, all verbatim.
+ */
+function botSystemPrompt(config: BotAgentConfig, all: Iterable<BotAgentEntry>): string {
   const fixed = [
     `You are the Wrenyard bot "${config.name}" (${config.id}).`,
     'You are driven by messages: routine triggers, user input, other bots\' messages and work-session updates.',
@@ -188,7 +276,20 @@ function botSystemPrompt(config: BotAgentConfig): string {
     'You never run code, searches, documents or tasks yourself; you delegate them to work sessions in natural language.',
     'You have no file or shell access; with no tools, answer in text only.',
   ].join(' ')
-  return `${fixed}\n\n${config.instructions}`
+  const peers: BotAgentConfig[] = []
+  for (const entry of all) {
+    const peer = entry.config
+    if (peer === undefined || !peer.enabled || peer.id === config.id) continue
+    peers.push(peer)
+  }
+  peers.sort((left, right) => left.id.localeCompare(right.id))
+  const roster = peers.length === 0
+    ? 'No other bot is enabled in this group right now.'
+    : [
+      'Other bots enabled in this group; address one with @id or @name:',
+      ...peers.map(peer => `- @${peer.id} (${peer.name})`),
+    ].join('\n')
+  return `${fixed}\n\n${GROUP_PROMPT_GUIDANCE}\n\n${config.instructions}\n\n${roster}`
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -231,8 +332,12 @@ function routeFits(route: AgentModelRoute, estimatedInput: number | undefined): 
   return route.contextWindow >= estimatedInput + outputReservation(route)
 }
 
+function emptyGroupState(): GroupState {
+  return { seq: 0, messages: [], cursors: {}, published: [], peerWakes: {} }
+}
+
 function emptyState(): KernelState {
-  return { version: 1, bots: {}, watches: [], rounds: {} }
+  return { version: 1, bots: {}, watches: [], rounds: {}, group: emptyGroupState() }
 }
 
 function readWake(value: unknown): Wake | undefined {
@@ -280,6 +385,79 @@ function readRound(value: unknown): Round | undefined {
   }
 }
 
+function readGroupMessage(value: unknown): GroupTranscriptEntry | undefined {
+  if (!isPlainObject(value)) return undefined
+  const { seq, at, author, text } = value
+  if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 1) return undefined
+  if (typeof at !== 'string' || at === '' || typeof text !== 'string') return undefined
+  if (author !== 'user' && author !== 'bot') return undefined
+  return {
+    seq,
+    at,
+    author,
+    text,
+    ...(typeof value.botId === 'string' && value.botId !== '' ? { botId: value.botId } : {}),
+    ...(typeof value.name === 'string' && value.name !== '' ? { name: value.name } : {}),
+    ...(typeof value.sourceKey === 'string' && value.sourceKey !== '' ? { sourceKey: value.sourceKey } : {}),
+  }
+}
+
+function readGroupCursor(value: unknown): GroupReplyCursor | undefined {
+  if (!isPlainObject(value)) return undefined
+  const { botId, lastSeq } = value
+  if (typeof botId !== 'string' || botId === '') return undefined
+  if (typeof lastSeq !== 'number' || !Number.isInteger(lastSeq) || lastSeq < 0) return undefined
+  return { botId, lastSeq }
+}
+
+function readGroupPeerWake(value: unknown): GroupPeerWake | undefined {
+  if (!isPlainObject(value)) return undefined
+  const { wakeId, botId, text, createdAt } = value
+  if (typeof wakeId !== 'string' || wakeId === '') return undefined
+  if (typeof botId !== 'string' || botId === '') return undefined
+  if (typeof text !== 'string' || typeof createdAt !== 'string') return undefined
+  return { wakeId, botId, text, createdAt }
+}
+
+/**
+ * Read the persisted group block. A state file written before the group
+ * existed has no `group` key at all and migrates to an empty transcript.
+ */
+function readGroupState(value: unknown): GroupState {
+  if (!isPlainObject(value)) return emptyGroupState()
+  const group = emptyGroupState()
+  if (Array.isArray(value.messages)) {
+    for (const entry of value.messages) {
+      const message = readGroupMessage(entry)
+      if (message !== undefined) group.messages.push(message)
+    }
+  }
+  let highest = 0
+  for (const message of group.messages) highest = Math.max(highest, message.seq)
+  group.seq = typeof value.seq === 'number' && Number.isInteger(value.seq) && value.seq > highest
+    ? value.seq
+    : highest
+  if (isPlainObject(value.cursors)) {
+    for (const [sessionId, cursor] of Object.entries(value.cursors)) {
+      const read = readGroupCursor(cursor)
+      if (read !== undefined) group.cursors[sessionId] = read
+    }
+  }
+  if (Array.isArray(value.published)) {
+    group.published = value.published.filter((key): key is string => typeof key === 'string' && key !== '')
+    if (group.published.length > GROUP_PUBLISHED_MAX) {
+      group.published = group.published.slice(-GROUP_PUBLISHED_MAX)
+    }
+  }
+  if (isPlainObject(value.peerWakes)) {
+    for (const [wakeId, record] of Object.entries(value.peerWakes)) {
+      const read = readGroupPeerWake(record)
+      if (read !== undefined) group.peerWakes[wakeId] = read
+    }
+  }
+  return group
+}
+
 /** Read a persisted kernel file, dropping every entry that no longer parses. */
 function parseState(raw: string): KernelState {
   const state = emptyState()
@@ -290,6 +468,7 @@ function parseState(raw: string): KernelState {
     return state
   }
   if (!isPlainObject(parsed)) return state
+  state.group = readGroupState(parsed.group)
   if (isPlainObject(parsed.bots)) {
     for (const [id, value] of Object.entries(parsed.bots)) {
       if (!isPlainObject(value)) continue
@@ -357,6 +536,29 @@ function turnAnswerOf(session: Session, sessionId: string, turn: number): string
   return index.answerOf(turn)
 }
 
+/**
+ * The visible answer of one turn for group publication: its closing reply, else
+ * the text of its terminal reasoning step, else its last published reply.
+ * Unlike `turnAnswerOf` it never reads `workerOutput`, so the raw action intents
+ * of a turn can never leak into the shared group. The watch path keeps its
+ * existing worker-output semantics.
+ */
+function visibleTurnAnswerOf(session: Session, sessionId: string, turn: number): string | undefined {
+  let final: string | undefined
+  let reasoning: string | undefined
+  let last: string | undefined
+  for (const event of session.readLedger(sessionId)) {
+    if (event.turn !== turn) continue
+    if (event.type === 'reply.sent') {
+      last = event.text
+      if (event.kind === 'final') final = event.text
+      continue
+    }
+    if (event.type === 'reasoning.completed') reasoning = event.text
+  }
+  return final ?? reasoning ?? last
+}
+
 export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotAgentKernel {
   const log = options.log
   const statePath = join(options.stateDir, 'kernel.json')
@@ -375,6 +577,10 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   const turnRounds = new Map<string, Set<string>>()
   /** Live ledger subscriptions, keyed by bot and watched session. */
   const watchSubs = new Map<string, () => void>()
+  /** Live reply-publication subscriptions, keyed by bot context session. */
+  const replySubs = new Map<string, () => void>()
+  /** Turns that only seed a rotated context and must never reach the group. */
+  const seedTurns = new Set<string>()
   const runTools = createAgentToolRunner({ sessions: options.sessions, todos: options.todos })
   let context: Session | undefined
   let pollTimer: ReturnType<typeof setInterval> | undefined
@@ -418,7 +624,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const config = entries.get(botId)?.config
     if (config === undefined) return undefined
     return {
-      system: botSystemPrompt(config),
+      system: botSystemPrompt(config, entries.values()),
       tools: agentToolSpecs(config.tools),
       maxToolCalls: MAX_TOOL_CALLS,
       // The invoking context session and turn decide which routine round a
@@ -618,6 +824,283 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     dispatchWake(botId, wake)
   }
 
+  // ─── Group conversation ──────────────────────────────────────────────────
+
+  /** Every enabled bot, as mention resolution sees it. */
+  function enabledRoster(): GroupBot[] {
+    const roster: GroupBot[] = []
+    for (const entry of entries.values()) {
+      if (entry.config?.enabled !== true) continue
+      roster.push({ id: entry.id, name: entry.config.name, enabled: true })
+    }
+    return roster
+  }
+
+  /** Advance one context session's reply cursor; it never moves backwards. */
+  function noteGroupCursor(botId: string, sessionId: string, seq: number): void {
+    const existing = state.group.cursors[sessionId]
+    if (existing === undefined) {
+      state.group.cursors[sessionId] = { botId, lastSeq: seq }
+      return
+    }
+    existing.botId = botId
+    if (seq > existing.lastSeq) existing.lastSeq = seq
+  }
+
+  function toWireMessage(entry: GroupTranscriptEntry): GroupMessage {
+    return {
+      seq: entry.seq,
+      at: entry.at,
+      author: entry.author,
+      text: entry.text,
+      ...(entry.botId === undefined ? {} : { botId: entry.botId }),
+      ...(entry.name === undefined ? {} : { name: entry.name }),
+    }
+  }
+
+  /**
+   * Append one transcript entry under the next monotonic seq, entirely in
+   * memory. A bot entry carries a source key; a key already published is
+   * dropped, which is what makes startup and rotation recovery exactly-once.
+   * The entry and the mention targets it derives are returned; the caller owns
+   * the single snapshot that makes them durable.
+   */
+  function appendGroupMessage(input: {
+    author: 'user' | 'bot'
+    text: string
+    at?: string
+    botId?: string
+    name?: string
+    sourceKey?: string
+    /** Resolve `@` mentions against this roster as part of the append. */
+    mentions?: { roster: readonly GroupBot[]; selfId?: string }
+  }): AppendedGroupMessage | undefined {
+    if (input.sourceKey !== undefined) {
+      if (state.group.published.includes(input.sourceKey)) return undefined
+      state.group.published.push(input.sourceKey)
+      if (state.group.published.length > GROUP_PUBLISHED_MAX) {
+        state.group.published.splice(0, state.group.published.length - GROUP_PUBLISHED_MAX)
+      }
+    }
+    const seq = state.group.seq + 1
+    state.group.seq = seq
+    const entry: GroupTranscriptEntry = {
+      seq,
+      at: input.at ?? new Date().toISOString(),
+      author: input.author,
+      text: input.text,
+      ...(input.botId === undefined ? {} : { botId: input.botId }),
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.sourceKey === undefined ? {} : { sourceKey: input.sourceKey }),
+    }
+    state.group.messages.push(entry)
+    const targets = input.mentions === undefined
+      ? []
+      : parseMentions(input.text, input.mentions.roster, {
+        ...(input.mentions.selfId === undefined ? {} : { selfId: input.mentions.selfId }),
+      })
+    return { entry, targets }
+  }
+
+  /**
+   * Enqueue the mentions of one published reply through the existing bot
+   * message path, entirely in memory. Only an enabled sender with the `message`
+   * tool reaches peers, and a target that cannot be woken is logged rather than
+   * allowed to drop the reply or fail the turn that produced it. The returned
+   * wakes are dispatched by the caller after its snapshot is durable.
+   */
+  function deliverMentions(from: string, text: string, targets: readonly string[]): Wake[] {
+    const wakes: Wake[] = []
+    const entry = entries.get(from)
+    if (entry?.config?.enabled !== true) return wakes
+    if (!entry.config.tools.includes('message')) return wakes
+    for (const target of targets) {
+      try {
+        const wake = enqueueMessage(from, target, text)
+        state.group.peerWakes[wake.id] = {
+          wakeId: wake.id,
+          botId: target,
+          text: wake.text,
+          createdAt: wake.createdAt,
+        }
+        wakes.push(wake)
+      } catch (error) {
+        log('warn', `bot agent kernel could not deliver a mention from ${from} to ${target}: ${errorText(error)}`)
+      }
+    }
+    return wakes
+  }
+
+  /**
+   * Dispatch wakes only after the snapshot that carries them has reached disk.
+   * A crash before that leaves them queued in the persisted state instead of
+   * admitting a turn whose publication was never written.
+   */
+  function dispatchAfterPersist(wakes: readonly Wake[]): void {
+    if (wakes.length === 0) return
+    void persistChain.then(() => {
+      if (stopped) return
+      for (const wake of wakes) dispatchWake(wake.botId, wake)
+    })
+  }
+
+  /**
+   * Publish one actual ledger reply, keyed by its session and event seq, and
+   * enqueue the mentions it derives. Everything is in memory; the caller
+   * persists the publication and its wakes in one snapshot. `undefined` means
+   * this event published nothing.
+   */
+  function publishBotReply(botId: string, sessionId: string, event: ReplySentEvent): Wake[] | undefined {
+    if (event.turn !== undefined && seedTurns.has(turnKey(sessionId, event.turn))) return undefined
+    const published = appendGroupMessage({
+      author: 'bot',
+      botId,
+      name: entries.get(botId)?.config?.name ?? botId,
+      text: event.text,
+      at: event.at,
+      sourceKey: groupSourceKey(sessionId, event.seq),
+      mentions: { roster: enabledRoster(), selfId: botId },
+    })
+    if (published === undefined) return undefined
+    return deliverMentions(botId, event.text, published.targets)
+  }
+
+  /**
+   * A completed turn that published no reply still carries visible final text
+   * (its terminal reasoning prose). Publish it once, by turn rather than by
+   * event seq, and never the raw tool intents of the turn. Its mentions are
+   * delivered exactly like an actual reply's, in memory, for the caller's
+   * single snapshot. `undefined` means the turn published nothing.
+   */
+  function publishTurnFallback(botId: string, sessionId: string, turn: number): Wake[] | undefined {
+    const sourceKey = `${sessionId}:turn:${turn}:final`
+    try {
+      if (seedTurns.has(turnKey(sessionId, turn))) return undefined
+      if (state.group.published.includes(sourceKey)) return undefined
+      const events = contextSession().readLedger(sessionId)
+      if (events.some(event => event.type === 'reply.sent' && event.turn === turn)) return undefined
+      const text = visibleTurnAnswerOf(contextSession(), sessionId, turn)
+      if (text === undefined || text.trim() === '') return undefined
+      const published = appendGroupMessage({
+        author: 'bot',
+        botId,
+        name: entries.get(botId)?.config?.name ?? botId,
+        text,
+        sourceKey,
+        mentions: { roster: enabledRoster(), selfId: botId },
+      })
+      if (published === undefined) return undefined
+      return deliverMentions(botId, text, published.targets)
+    } catch (error) {
+      log('warn', `bot agent kernel could not publish the fallback reply of ${botId}: ${errorText(error)}`)
+      return undefined
+    }
+  }
+
+  /**
+   * Read one ledger event into the group state: advance its cursor and, for a
+   * reply or a completed turn's visible answer, append the entry and enqueue
+   * the mentions it derives. Nothing is persisted here; the caller writes one
+   * snapshot so a cursor can never advance past an entry or wake that is not
+   * durable with it.
+   */
+  function noteGroupEvent(botId: string, sessionId: string, event: LedgerEvent): GroupEventNote {
+    noteGroupCursor(botId, sessionId, event.seq)
+    let wakes: Wake[] | undefined
+    if (event.type === 'reply.sent') wakes = publishBotReply(botId, sessionId, event)
+    else if (event.type === 'turn.finished' && event.status === 'completed' && event.turn !== undefined) {
+      wakes = publishTurnFallback(botId, sessionId, event.turn)
+    }
+    return wakes === undefined ? { published: false, wakes: [] } : { published: true, wakes }
+  }
+
+  /** Replay a context ledger after its persisted cursor, publishing only new replies. */
+  function processGroupEvents(botId: string, sessionId: string, events: readonly LedgerEvent[]): void {
+    const from = state.group.cursors[sessionId]?.lastSeq ?? 0
+    let last = from
+    const wakes: Wake[] = []
+    for (const event of events) {
+      if (event.seq <= last) continue
+      last = event.seq
+      for (const wake of noteGroupEvent(botId, sessionId, event).wakes) wakes.push(wake)
+    }
+    if (last === from) return
+    // One snapshot carries the advanced cursor, every publication of the batch
+    // and every wake they derived; the wakes are admitted only afterwards.
+    persist()
+    dispatchAfterPersist(wakes)
+  }
+
+  /**
+   * Follow one bot context ledger. It is attached before a wake is sent so no
+   * reply can be produced before its publication path exists. A pure cursor
+   * advance is not written on its own: replay re-reads it harmlessly. A
+   * publication writes one snapshot holding the cursor, the entry and its
+   * derived wakes, so a live event can never durably move the cursor past an
+   * unpublished reply.
+   */
+  function subscribeGroupReplies(botId: string, sessionId: string): void {
+    if (replySubs.has(sessionId)) return
+    replySubs.set(sessionId, contextSession().subscribe(sessionId, event => {
+      if (event.seq <= (state.group.cursors[sessionId]?.lastSeq ?? 0)) return
+      const note = noteGroupEvent(botId, sessionId, event)
+      if (!note.published) return
+      persist()
+      dispatchAfterPersist(note.wakes)
+    }))
+  }
+
+  function lastLedgerSeq(sessionId: string): number {
+    try {
+      return contextSession().readLedger(sessionId).at(-1)?.seq ?? 0
+    } catch {
+      return 0
+    }
+  }
+
+  /**
+   * Resume every known context ledger after its persisted cursor. A context
+   * that predates the group transcript is primed to its current end instead, so
+   * old private history is never replayed into the group.
+   */
+  function restoreGroupReplies(): void {
+    for (const [botId, bot] of Object.entries(state.bots)) {
+      if (bot.sessionId === undefined) continue
+      if (state.group.cursors[bot.sessionId] === undefined) {
+        noteGroupCursor(botId, bot.sessionId, lastLedgerSeq(bot.sessionId))
+      }
+    }
+    for (const [sessionId, cursor] of Object.entries({ ...state.group.cursors })) {
+      subscribeGroupReplies(cursor.botId, sessionId)
+      try {
+        processGroupEvents(cursor.botId, sessionId, contextSession().readLedger(sessionId))
+      } catch (error) {
+        log('warn', `bot agent kernel could not recover replies of session ${sessionId}: ${errorText(error)}`)
+      }
+    }
+  }
+
+  /**
+   * Peer wakes are already in their bot queues; the record only bridges a
+   * restart that happened between enqueue and admission. Reconstruct a queue
+   * entry that is missing, then let the normal pending-wake dispatch run.
+   */
+  function restorePeerWakes(): void {
+    for (const record of Object.values(state.group.peerWakes)) {
+      const bot = state.bots[record.botId]
+      if (bot === undefined) continue
+      if (bot.queue.some(wake => wake.id === record.wakeId)) continue
+      bot.queue.push({
+        id: record.wakeId,
+        botId: record.botId,
+        source: 'message',
+        text: record.text,
+        createdAt: record.createdAt,
+      })
+    }
+    state.group.peerWakes = {}
+  }
+
   // ─── Context rotation ────────────────────────────────────────────────
 
   /**
@@ -689,6 +1172,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     }
     try {
       const { turn } = await contextSession().send(newSessionId, { text: lines.join('\n'), model: route })
+      seedTurns.add(turnKey(newSessionId, turn))
       await new Promise<void>(resolve => {
         const settle = (): void => {
           if (!seedWaits.delete(settle)) return
@@ -700,6 +1184,11 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     } catch (error) {
       log('warn', `bot agent kernel could not seed rotated context for bot ${botId}: ${errorText(error)}`)
     }
+    // The seed is kernel bookkeeping, not conversation: mark everything it
+    // wrote as already read, then follow the fresh ledger for real replies.
+    noteGroupCursor(botId, newSessionId, lastLedgerSeq(newSessionId))
+    subscribeGroupReplies(botId, newSessionId)
+    persist()
   }
 
   // ─── Rounds ──────────────────────────────────────────────────────────────
@@ -755,6 +1244,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     if (bot.sessionId !== undefined) return bot.sessionId
     const { sessionId } = await contextSession().createSession()
     bot.sessionId = sessionId
+    // Attach the publication path before any turn can run on the new ledger.
+    subscribeGroupReplies(botId, sessionId)
     persist()
     return sessionId
   }
@@ -870,6 +1361,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   function removePendingWake(botId: string, wakeId: string): void {
     const bot = ensureBotState(botId)
     bot.queue = bot.queue.filter(wake => wake.id !== wakeId)
+    if (state.group.peerWakes[wakeId] !== undefined) delete state.group.peerWakes[wakeId]
   }
 
   async function retryWake(
@@ -887,6 +1379,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       pendingWake(botId, wake)
       await persistChain
       if (stopped) return
+      subscribeGroupReplies(botId, sessionId)
       const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route })
       removePendingWake(botId, wake.id)
       recordRoundTurn(wake, sessionId, turn)
@@ -908,6 +1401,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     route: AgentModelRoute,
     fallback?: AgentModelRoute,
   ): Promise<void> {
+    subscribeGroupReplies(botId, sessionId)
     const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route })
     removePendingWake(botId, wake.id)
     recordRoundTurn(wake, sessionId, turn)
@@ -1204,6 +1698,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
           state.bots = loaded.bots
           state.watches = loaded.watches
           state.rounds = loaded.rounds
+          state.group = loaded.group
         })
       } catch {
         // No state yet (or an unreadable one): every bot starts with an empty queue.
@@ -1215,6 +1710,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       await restoreWatches()
       if (stopped) return
       restoreRoundTurns()
+      restoreGroupReplies()
+      restorePeerWakes()
       persist()
       dispatchPendingWakes()
       pollTimer = setInterval(() => {
@@ -1245,6 +1742,9 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
             log('warn', `bot agent kernel could not finish a config reload during stop: ${errorText(error)}`)
           })
         }
+        for (const unsubscribe of replySubs.values()) unsubscribe()
+        replySubs.clear()
+        seedTurns.clear()
         const session = context
         if (session !== undefined) {
           await session.close().catch(error => {
@@ -1292,6 +1792,48 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       persist()
       dispatchWake(id, wake)
       return { queued: state.bots[id]?.queue.length ?? 0 }
+    },
+
+    groupEvents(input: GroupEventsInput): GroupEventsPage {
+      const afterSeq = typeof input.afterSeq === 'number' && Number.isInteger(input.afterSeq) && input.afterSeq > 0
+        ? input.afterSeq
+        : 0
+      const requested = typeof input.limit === 'number' && Number.isInteger(input.limit) && input.limit > 0
+        ? input.limit
+        : GROUP_PAGE_SIZE
+      const limit = Math.min(GROUP_PAGE_MAX, requested)
+      const messages = state.group.messages
+        .filter(message => message.seq > afterSeq)
+        .slice(0, limit)
+        .map(toWireMessage)
+      const lastSeq = messages.length > 0
+        ? messages[messages.length - 1]!.seq
+        : Math.min(afterSeq, state.group.seq)
+      return { messages, lastSeq }
+    },
+
+    groupSend(text: string): GroupSendResult {
+      // The user message and every wake it derives are one in-memory
+      // transition: a single snapshot publishes both, or neither.
+      const published = appendGroupMessage({ author: 'user', text, mentions: { roster: enabledRoster() } })
+      if (published === undefined) {
+        throw new BotAgentError('agent_invalid', 'the group message could not be published')
+      }
+      const awakened: string[] = []
+      const wakes: Wake[] = []
+      for (const target of published.targets) {
+        try {
+          requireBot(target)
+          const wake = enqueue(target, { source: 'user', text: `[wake:user] ${text}` })
+          wakes.push(wake)
+          awakened.push(target)
+        } catch (error) {
+          log('warn', `bot agent kernel could not wake ${target} for a group message: ${errorText(error)}`)
+        }
+      }
+      persist()
+      dispatchAfterPersist(wakes)
+      return { message: toWireMessage(published.entry), awakened }
     },
 
     removeWatches(sessionId: string): void {

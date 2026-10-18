@@ -59,11 +59,16 @@ import {
   agentGetParamsSchema, agentGetResultSchema,
   agentEventsParamsSchema, agentEventsResultSchema,
   agentWakeParamsSchema, agentWakeResultSchema,
+  agentGroupEventsParamsSchema, agentGroupEventsResultSchema,
+  agentGroupSendParamsSchema, agentGroupSendResultSchema,
   type AgentBotSummary,
   type AgentListParams, type AgentListResult,
   type AgentGetParams, type AgentGetResult,
   type AgentEventsParams, type AgentEventsResult,
   type AgentWakeParams, type AgentWakeResult,
+  type AgentGroupEventsParams, type AgentGroupEventsResult,
+  type AgentGroupSendParams, type AgentGroupSendResult,
+  type GroupMessage,
 } from './methods/agent.mts'
 export type {
   AgentBotSummary,
@@ -71,6 +76,9 @@ export type {
   AgentGetParams, AgentGetResult,
   AgentEventsParams, AgentEventsResult,
   AgentWakeParams, AgentWakeResult,
+  AgentGroupEventsParams, AgentGroupEventsResult,
+  AgentGroupSendParams, AgentGroupSendResult,
+  GroupMessage,
 } from './methods/agent.mts'
 export type {
   RoutineState, RoutineDeliver, RoutineRecord,
@@ -1057,6 +1065,8 @@ export interface ForemanMethodParams {
   'agent.get': AgentGetParams
   'agent.events': AgentEventsParams
   'agent.wake': AgentWakeParams
+  'agent.group.events': AgentGroupEventsParams
+  'agent.group.send': AgentGroupSendParams
   'bot.list': BotListParams
   'bot.create': BotCreateParams
   'bot.update': BotUpdateParams
@@ -1178,6 +1188,8 @@ export interface ForemanMethodResults {
   'agent.get': AgentGetResult
   'agent.events': AgentEventsResult
   'agent.wake': AgentWakeResult
+  'agent.group.events': AgentGroupEventsResult
+  'agent.group.send': AgentGroupSendResult
   'bot.list': BotListResult
   'bot.create': BotCreateResult
   'bot.update': BotUpdateResult
@@ -1620,6 +1632,8 @@ export const methodRegistry: {
   'agent.get': { params: agentGetParamsSchema, result: agentGetResultSchema },
   'agent.events': { params: agentEventsParamsSchema, result: agentEventsResultSchema },
   'agent.wake': { params: agentWakeParamsSchema, result: agentWakeResultSchema },
+  'agent.group.events': { params: agentGroupEventsParamsSchema, result: agentGroupEventsResultSchema },
+  'agent.group.send': { params: agentGroupSendParamsSchema, result: agentGroupSendResultSchema },
   'bot.list': { params: botListParamsSchema, result: botListResultSchema },
   'bot.create': { params: botCreateParamsSchema, result: botCreateResultSchema },
   'bot.update': { params: botUpdateParamsSchema, result: botUpdateResultSchema },
