@@ -64,7 +64,7 @@ export const providerListResultSchema = {
               maxItems: 3,
               items: { type: 'number', minimum: 0 },
             },
-            speedSource: { type: 'string', enum: ['local_31d', 'provider_override', 'catalog_default', 'free_supply_floor'] },
+            speedSource: { type: 'string', enum: ['local_31d', 'provider_override', 'catalog_default', 'free_supply_floor', 'cooldown'] },
             available: { type: 'boolean' },
           }, additionalProperties: false,
         } },
