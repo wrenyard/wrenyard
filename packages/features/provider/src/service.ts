@@ -37,6 +37,7 @@ export const PROVIDER_QUOTA_TIMEOUT_MS = 30_000
 
 /** Successful-result cache lifetime; refresh requests never read it. */
 const PROVIDER_QUOTA_CACHE_MS = 60_000
+const PROVIDER_LIST_CACHE_MS = 5_000
 
 export interface ProviderServiceOptions {
   catalog: Catalog
@@ -70,6 +71,9 @@ export class ProviderService {
   private quotaCache?: { key: string; result: ProviderQuotaResult }
   private pending?: { key: string; refresh: boolean; promise: Promise<ProviderQuotaResult> }
   private generation = 0
+  private listCache?: { key: string; result: ProviderListResult; completedAt: number }
+  private listPending?: { key: string; generation: number; promise: Promise<ProviderListResult> }
+  private listGeneration = 0
   constructor(options: ProviderServiceOptions) {
     this.catalog = options.catalog
     this.runtime = options.runtime
@@ -85,15 +89,45 @@ export class ProviderService {
    * exactly from the former daemon implementation.
    */
   async list(): Promise<ProviderListResult> {
+    const localSpeed = this.localSpeed()
+    const key = JSON.stringify([this.catalog.providers(), localSpeed])
+    const now = Date.now()
+    if (this.listCache?.key === key && now - this.listCache.completedAt < PROVIDER_LIST_CACHE_MS) {
+      return this.listCache.result
+    }
+    if (this.listPending?.key === key) return this.listPending.promise
+
+    const generation = this.listGeneration
+    const fill = this.readList(localSpeed).then(({ result, cacheable }) => {
+      if (cacheable && generation === this.listGeneration) {
+        this.listCache = { key, result, completedAt: Date.now() }
+      }
+      return result
+    }).finally(() => {
+      if (this.listPending?.promise === fill) this.listPending = undefined
+    })
+    this.listPending = { key, generation, promise: fill }
+    return fill
+  }
+
+  /** Clear provider-list state; an older fill cannot repopulate it. */
+  invalidateList(): void {
+    this.listGeneration += 1
+    this.listCache = undefined
+    this.listPending = undefined
+  }
+
+  private async readList(localSpeed: ReturnType<ProviderLocalSpeedReader>): Promise<{ result: ProviderListResult; cacheable: boolean }> {
     let modelStatus = new Map<string, ProviderModelStatus>()
+    let cacheable = true
     try {
       modelStatus = await this.modelStatus()
     } catch {
       /* fail closed */
+      cacheable = false
     }
     // One trailing-31-day local sample read per request, shared by every model
     // so the resolver never re-reads the event store per provider/model.
-    const localSpeed = this.localSpeed()
     const providers = await Promise.all(this.catalog.providers().map(async (provider) => {
       const credential = await this.runtime.credential(provider)
       const nativeConfigured = provider.credentialResolver !== 'managed'
@@ -121,7 +155,7 @@ export class ProviderService {
         models: provider.models.map((model) => this.projectModel(provider, model, modelStatus, localSpeed, configured)),
       }
     }))
-    return { providers }
+    return { result: { providers }, cacheable }
   }
 
   /** Business implementation of `provider.configure`. */
@@ -129,6 +163,7 @@ export class ProviderService {
     const provider = this.catalog.provider(params.providerId)
     if (!provider) throw new Error(`unknown provider: ${params.providerId}`)
     await this.runtime.configureApiKey(provider, params.key)
+    this.invalidateList()
     this.generation += 1
     this.quotaCache = undefined
     this.pending = undefined
@@ -137,6 +172,7 @@ export class ProviderService {
 
   /** Coalesce reads; explicit refresh bypasses cached and non-refresh requests. */
   async quotaSnapshot(params: ProviderQuotaParams = {}): Promise<ProviderQuotaResult> {
+    if (params.forceRefresh === true) this.invalidateList()
     const context = await currentCodeBuddyContext()
     const key = JSON.stringify([context?.expectedScope, context?.expectedEnvironment])
     const refresh = params.forceRefresh === true

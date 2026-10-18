@@ -65,7 +65,7 @@ import { createWorkspaceControl } from './services/workspace-control.mts'
 import RuntimeAliasStore from '../runtime-aliases/store.mts'
 import { ForemanConfigManager } from '../config/manager.mts'
 import { getForemanEventBus } from '../events/event-bus.mts'
-import { readLocalSpeedSamplesCached } from '../events/tps.mts'
+import { initializeLocalSpeedSamples, readLocalSpeedSamplesCached, updateLocalSpeedSample } from '../events/tps.mts'
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
@@ -78,6 +78,33 @@ import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
 import { resolveWrenyardConfigRoot } from '@wrenyard/paths'
 import { mkdir, readFile, statfs, writeFile } from 'node:fs/promises'
+
+/** A small single-flight cache whose freshness starts when a fill completes. */
+function createAsyncSnapshotCache<T>(ttlMs: number) {
+  let cached: { value: T; completedAt: number } | undefined
+  let pending: { generation: number; promise: Promise<T> } | undefined
+  let generation = 0
+  return {
+    read(loader: () => Promise<T>): Promise<T> {
+      if (cached !== undefined && Date.now() - cached.completedAt < ttlMs) return Promise.resolve(cached.value)
+      if (pending !== undefined) return pending.promise
+      const fillGeneration = generation
+      const promise = loader().then(value => {
+        if (fillGeneration === generation) cached = { value, completedAt: Date.now() }
+        return value
+      }).finally(() => {
+        if (pending?.promise === promise) pending = undefined
+      })
+      pending = { generation: fillGeneration, promise }
+      return promise
+    },
+    invalidate(): void {
+      generation += 1
+      cached = undefined
+      pending = undefined
+    },
+  }
+}
 
 /**
  * Best-effort broadcast of one real condition change to every known session
@@ -770,7 +797,16 @@ async function createForemanDaemonResources(
   // canonical provider binding and canonicalizes public model ids; no native
   // credential crosses this boundary and native auth is never promoted into
   // Gateway support. Auth unknown stays an absent entry (never false).
-  const loadNativeProviderReadiness = async (): Promise<NativeProviderReadinessSnapshot> => {
+  const nativeProviderReadinessCache = createAsyncSnapshotCache<NativeProviderReadinessSnapshot>(5_000)
+  const clientReadinessCache = createAsyncSnapshotCache<{
+    sampledAtMs: number
+    clientsById: Record<string, { enabled: boolean; installed: boolean }>
+  }>(5_000)
+  const invalidateProviderReadiness = (): void => {
+    nativeProviderReadinessCache.invalidate()
+    clientReadinessCache.invalidate()
+  }
+  const readNativeProviderReadiness = async (): Promise<NativeProviderReadinessSnapshot> => {
     const authByProvider: Record<string, boolean> = {}
     const clients = createAgentClients()
     const codexReadiness = await readClientReadiness(clients.get('codex'))
@@ -792,7 +828,7 @@ async function createForemanDaemonResources(
   }
   // Client installation comes from each AgentClient.inspect. Enabled follows
   // the registered client; installed is the inspect result.
-  const loadClientReadiness = async () => {
+  const readClientReadinessSnapshot = async () => {
     const clientsById: Record<string, { enabled: boolean; installed: boolean }> = {}
     for (const [id, client] of createAgentClients()) {
       const status = await client.inspect()
@@ -800,6 +836,9 @@ async function createForemanDaemonResources(
     }
     return { sampledAtMs: Date.now(), clientsById }
   }
+  const loadNativeProviderReadiness = (): Promise<NativeProviderReadinessSnapshot> =>
+    nativeProviderReadinessCache.read(readNativeProviderReadiness)
+  const loadClientReadiness = () => clientReadinessCache.read(readClientReadinessSnapshot)
   // One daemon-owned TaskSettingsService shares the already-created resolver,
   // the single alias owner, the shared quota snapshot service, and the
   // authoritative config path; no second catalog/resolver/alias store is
@@ -894,6 +933,12 @@ async function createForemanDaemonResources(
         occurredAt: new Date().toISOString(),
       }
       gatewayEventStore.append(foremanEvent)
+      // The completion event is now persisted, so the attributed execution can
+      // be re-read. A still-running execution yields no sample, and a late
+      // completion replaces the client-derived sample with the gateway pair.
+      if (typeof event.executionId === 'string' && event.executionId !== '') {
+        updateLocalSpeedSample(event.executionId, runtime.db)
+      }
       await getForemanEventBus().publish(foremanEvent)
     },
   })
@@ -908,6 +953,9 @@ async function createForemanDaemonResources(
     ...await gateway.connection(gatewayOrigin(boundPort)),
     token: gatewayToken,
   })
+  // Assigned before IPC routes are registered; saves invoked earlier in startup
+  // safely skip list invalidation without touching a temporal-dead-zone binding.
+  let providerServiceForInvalidation: ProviderService | undefined
 
   // IPC-only read/update of the persisted gateway access settings. Reading
   // reports the saved choice (freshly re-read, so a save is visible at once) and
@@ -968,6 +1016,8 @@ async function createForemanDaemonResources(
         ...(token === undefined ? {} : { token }),
       }
     })
+    invalidateProviderReadiness()
+    providerServiceForInvalidation?.invalidateList()
     const snapshot = await gatewaySettingsSnapshot()
     void broadcastConditionChange(conditionSession, 'Gateway routing settings changed.')
     return {
@@ -1323,6 +1373,7 @@ async function createForemanDaemonResources(
     modelStatus: () => workspaceScoped.taskSettingsService.modelStatus(),
     localSpeed: readLocalSpeedSamplesCached,
   })
+  providerServiceForInvalidation = providerService
   // Daemon-owned saved-remote-host registry backing remote.host.list/save/rename.
   // It is independent of the active workspace and persists only to the daemon
   // config, through the same atomic mode-0600 writer as every other config write.
@@ -1356,8 +1407,19 @@ async function createForemanDaemonResources(
     gatewaySettings: gatewaySettingsSnapshot,
     gatewaySettingsSave: (params) => saveGatewaySettings(params),
     providerList: () => providerService.list(),
-    providerConfigure: (params) => providerService.configure(params),
-    providerQuota: (params) => providerService.quotaSnapshot(params),
+    providerConfigure: async (params) => {
+      const result = await providerService.configure(params)
+      invalidateProviderReadiness()
+      providerService.invalidateList()
+      return result
+    },
+    providerQuota: async (params) => {
+      if (params.forceRefresh === true) {
+        invalidateProviderReadiness()
+        providerService.invalidateList()
+      }
+      return providerService.quotaSnapshot(params)
+    },
     taskSettings: workspaceScoped.taskSettingsService,
     runtimeAlias: runtimeAliasService,
     execService: runtime.execService,
@@ -1744,6 +1806,8 @@ async function createForemanDaemonResources(
     // observes a half-switched daemon. The previous scheduler is still alive but
     // its admission callback suppresses ticks while the switch gate is held.
     workspaceScoped = staged
+    invalidateProviderReadiness()
+    providerServiceForInvalidation?.invalidateList()
     applyBindings(staged)
     registerWorkspaceRoutes(staged)
     // The running task runner resolves execution-time settings through the
@@ -2317,6 +2381,11 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
   // restart. This startup dictionary only seeds the launched-client environment
   // contract; it is never the resolver's task-routing snapshot.
   const dispatchPlans = deriveTaskDispatchPlans(catalog)
+  // The local speed window is loaded once here, before the dispatch resolver
+  // can serve routing, provider listing or dispatch. Every later request is
+  // served from memory and refreshed per execution on completion, so no routing
+  // path re-runs the historical TPS queries.
+  initializeLocalSpeedSamples(db)
   const taskDispatchResolver = await createTaskDispatchResolver({
     catalog,
     runtime: providerRuntime,
@@ -2349,6 +2418,9 @@ async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
       execService,
       operations: operationAdapter,
       canStartExecution: () => lowDiskStateForProcess,
+      // A committed `done` execution refreshes exactly its own sample in the
+      // in-memory local speed window.
+      onExecutionCompleted: (executionId) => updateLocalSpeedSample(executionId, db),
     })
     const runner = new TaskWorkflowRunner({
       db,

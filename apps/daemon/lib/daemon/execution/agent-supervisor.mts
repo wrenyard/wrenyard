@@ -114,6 +114,12 @@ export interface AgentExecutionSupervisorOptions {
    * the agent-browser CLI environment or the Cua Driver MCP server.
    */
   operations?: OperationAdapter
+  /**
+   * Best-effort notification that an execution reached a committed `done`
+   * terminal state. The daemon refreshes the in-memory local speed window here;
+   * a throwing callback is logged and never rejects the committed execution.
+   */
+  onExecutionCompleted?: (executionId: string) => void
 }
 
 /**
@@ -211,6 +217,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private readonly catalog: ReturnType<typeof createBuiltinCatalog>
   private readonly execService: ExecService
   private readonly operations?: OperationAdapter
+  private readonly onExecutionCompleted?: (executionId: string) => void
   /** True when this supervisor built its own fallback ExecService and must
    *  close it on shutdown. A shared, externally supplied service is never
    *  closed here. */
@@ -220,7 +227,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   private promoting = false
   private readonly canStartExecution?: AgentExecutionSupervisorOptions['canStartExecution']
 
-  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, idleTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution }: AgentExecutionSupervisorOptions) {
+  constructor({ db, repoWriteLocks, logger, cancelSettlementTimeoutMs, idleTimeoutMs, killProcessTreeImpl, isProcessLiveImpl, catalog, execService, operations, canStartExecution, onExecutionCompleted }: AgentExecutionSupervisorOptions) {
     this.db = db
     this.repoWriteLocks = repoWriteLocks
     this.logger = logger
@@ -237,6 +244,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     this.ownsExecService = execService === undefined
     this.operations = operations
     this.canStartExecution = canStartExecution
+    this.onExecutionCompleted = onExecutionCompleted
   }
 
   private taskRuns(): TaskRunStore {
@@ -1303,6 +1311,17 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           this.log(
             'warn',
             `[foreman] Failed to persist native session for ${entry.executionId}: ${errorMessage(sessionError)}`,
+          )
+        }
+        // The execution's usage is durable at this point, so the local speed
+        // window can pick up its paired sample. This is best-effort: a failure
+        // must never reject an execution that already committed.
+        try {
+          this.onExecutionCompleted?.(entry.executionId)
+        } catch (completionError) {
+          this.log(
+            'warn',
+            `[foreman] Failed to update the local speed sample for ${entry.executionId}: ${errorMessage(completionError)}`,
           )
         }
       }
