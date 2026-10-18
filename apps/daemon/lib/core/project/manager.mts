@@ -329,7 +329,7 @@ export class ProjectManager {
     const targetPath = this.worktreePath(id)
     const requestedBranch = branch?.trim()
     const branchName = requestedBranch
-      ? validateManagedBranchName(requestedBranch, (name) => this.localBranchExists(project.path, name))
+      ? validateManagedBranchName(requestedBranch)
       : `${MANAGED_WORKTREE_BRANCH_PREFIX}${id}`
 
     const owner = options.owner?.trim()
@@ -1885,7 +1885,7 @@ function validateWorktreeId(value: string): string {
   return id
 }
 
-function validateManagedBranchName(value: string, branchExists: (name: string) => boolean): string {
+function validateManagedBranchName(value: string): string {
   const name = value.trim()
   if (!name) throw new Error('branch must not be empty')
   if (name.startsWith('origin/') || name.startsWith('refs/')) {
@@ -1908,11 +1908,6 @@ function validateManagedBranchName(value: string, branchExists: (name: string) =
   }
   if (!name.startsWith(MANAGED_WORKTREE_BRANCH_PREFIX)) {
     throw new Error(`branch '${name}' must be under the managed prefix '${MANAGED_WORKTREE_BRANCH_PREFIX}'`)
-  }
-  if (!branchExists(name)) {
-    throw new Error(
-      `branch '${name}' does not exist as a local branch; managed worktree branches must already exist under '${MANAGED_WORKTREE_BRANCH_PREFIX}'`
-    )
   }
   return name
 }
