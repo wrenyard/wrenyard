@@ -3,7 +3,7 @@ import { lstat, readdir, readFile, realpath } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { resolveWrenyardStateRoot } from '@wrenyard/paths'
-import { getDb } from '../../db/connection.mts'
+import { assertCleanupDbUsable, getDb, runIncrementalVacuum, setSuspendedCleanupFence } from '../../db/connection.mts'
 import type { ForemanDatabase } from '../../db/types.mts'
 import { ProjectManager, foremanWorkspaceFromEnv } from '../project/manager.mts'
 import type { WorktreeInfo } from '../project/manager.mts'
@@ -84,8 +84,23 @@ export const MANAGED_CLEANUP_POLICY: StorageCleanupPolicy = {
     { id: 'clients', retentionDays: 0, minimumRetentionDays: 0, targetBytes: 1024 * MIB, removes: true },
     { id: 'worktrees', retentionDays: 7, minimumRetentionDays: 7, targetBytes: 5 * 1024 * MIB, removes: true },
     { id: 'debug', retentionDays: 7, minimumRetentionDays: 1, targetBytes: 1024 * MIB, removes: true },
+    // Database retention compacts payload rows in place; the byte target is
+    // reported for visibility but never triggers capacity-driven eviction of
+    // rows inside the retention window (see finalize).
+    { id: 'database', retentionDays: 31, minimumRetentionDays: 31, targetBytes: 300 * MIB, removes: true },
   ],
 }
+
+/** Small valid-JSON marker that replaces a compacted event payload. */
+const RETENTION_EVENT_MARKER = JSON.stringify({ schema_version: 'foreman.event.v1', retention: 'compacted' })
+/** Event rows selected per keyset batch during a retention pass. */
+const DB_EVENT_BATCH_ROWS = 25
+/** Execution rows selected per keyset batch during a retention pass. */
+const DB_EXECUTION_BATCH_ROWS = 1
+/** Soft byte budget for one retention batch, when row sizes are measurable. */
+const DB_BATCH_BYTE_BUDGET = 4 * MIB
+/** Freelist pages reclaimed per incremental_vacuum chunk. */
+const DB_VACUUM_PAGE_CHUNK = 64
 
 export interface ManagedCleanupOptions {
   /** Injected clock; defaults to `new Date()`. */
@@ -102,6 +117,12 @@ export interface ManagedCleanupOptions {
   categories?: StorageCleanupCategoryId[]
   /** Audit attribution for an executed run; defaults to `rpc`. */
   trigger?: string
+  /**
+   * Override of the database retention window in days. Only a positive finite
+   * integer is honoured; 0, negative and non-finite values fall back to the
+   * policy default (31).
+   */
+  retentionDays?: number
 }
 
 /**
@@ -612,6 +633,200 @@ function countRows(db: ForemanDatabase | undefined, sql: string, params: string[
     return row?.n ?? 0
   } catch {
     return -1
+  }
+}
+
+/**
+ * The shared retention window, used identically by preview and run so an
+ * automatic scheduled pass and a manual RPC pass agree. Only a positive finite
+ * integer override is honoured; anything else falls back to the policy default.
+ */
+function resolveRetentionDays(options: ManagedCleanupOptions): number {
+  const policy = MANAGED_CLEANUP_POLICY.categories.find((category) => category.id === 'database')
+  const fallback = policy?.retentionDays ?? 31
+  const requested = options.retentionDays
+  if (requested === undefined) return fallback
+  return Number.isFinite(requested) && Number.isInteger(requested) && requested > 0 ? requested : fallback
+}
+
+interface DbPageStats {
+  pageCount: number
+  freelistCount: number
+  pageSize: number
+}
+
+/** Cheap PRAGMA reads describing the database file footprint. */
+function readDbPageStats(db: ForemanDatabase): DbPageStats | undefined {
+  try {
+    const pageCount = Number(db.pragma('page_count', { simple: true }))
+    const freelistCount = Number(db.pragma('freelist_count', { simple: true }))
+    const pageSize = Number(db.pragma('page_size', { simple: true }))
+    if (!Number.isFinite(pageCount) || !Number.isFinite(freelistCount) || !Number.isFinite(pageSize)) return undefined
+    return { pageCount, freelistCount, pageSize }
+  } catch {
+    return undefined
+  }
+}
+
+/** `?, ?, ?` placeholder list for a fixed, small window of bound ids. */
+function bindPlaceholders(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ')
+}
+
+/** True when a cleanup path must stop and must not issue another statement. */
+function cleanupStopped(): boolean {
+  return cleanupStopRequested || !cleanupDbUsable()
+}
+
+interface RetentionInventory {
+  interrupted: boolean
+  eligibleEvents: number
+  eligibleExecutions: number
+  estimatedEligibleBytes: number
+}
+
+/**
+ * Bounded, read-only inventory of retention-eligible rows.
+ *
+ * Every statement is bounded by a fixed raw-row window instead of a
+ * full-table aggregate: the inner selection carries no eligibility predicate
+ * and reads only the key — `SELECT id FROM events WHERE id > ? ORDER BY id
+ * LIMIT n` for events (INTEGER primary key) and `SELECT rowid FROM executions
+ * WHERE rowid > ? ORDER BY rowid LIMIT n` for executions, whose id is text —
+ * and eligibility, counts and byte estimates are computed only inside that
+ * window's keys. Windows advance through raw rows even when nothing in them
+ * matches, and the loop yields to the event loop between windows, honouring
+ * the cooperative stop token and the database fence before and after every
+ * yield. Only lengths and metadata are read; no payload is materialised in JS.
+ *
+ * Eligibility and the cutoff match the retention pass exactly, so preview and
+ * run agree: a NULL event payload carries no payload and is not eligible.
+ * Returns `undefined` when the inventory could not be read at all.
+ */
+async function scanRetentionInventory(db: ForemanDatabase, cutoffIso: string): Promise<RetentionInventory | undefined> {
+  const inventory: RetentionInventory = {
+    interrupted: false,
+    eligibleEvents: 0,
+    eligibleExecutions: 0,
+    estimatedEligibleBytes: 0,
+  }
+  try {
+    let eventCursor = 0
+    for (;;) {
+      if (cleanupStopped()) {
+        inventory.interrupted = true
+        return inventory
+      }
+      const window = db
+        .prepare<[number, number], { id: number }>(`SELECT id FROM events WHERE id > ? ORDER BY id LIMIT ?`)
+        .all(eventCursor, DB_EVENT_BATCH_ROWS)
+      if (window.length === 0) break
+      await yieldToEventLoop()
+      if (cleanupStopped()) {
+        inventory.interrupted = true
+        return inventory
+      }
+      const ids = window.map((row) => row.id)
+      const row = db
+        .prepare<unknown[], { n: number; bytes: number }>(
+          `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(data)), 0) AS bytes FROM events
+             WHERE id IN (${bindPlaceholders(ids.length)}) AND created_at < ?
+               AND type IN ('message','tool_call','tool_result')
+               AND data IS NOT NULL AND data != ?`,
+        )
+        .get(...ids, cutoffIso, RETENTION_EVENT_MARKER)
+      inventory.eligibleEvents += row?.n ?? 0
+      inventory.estimatedEligibleBytes += row?.bytes ?? 0
+      eventCursor = ids[ids.length - 1] as number
+      await yieldToEventLoop()
+    }
+
+    let executionCursor = 0
+    for (;;) {
+      if (cleanupStopped()) {
+        inventory.interrupted = true
+        return inventory
+      }
+      const window = db
+        .prepare<[number, number], { rowid: number }>(`SELECT rowid FROM executions WHERE rowid > ? ORDER BY rowid LIMIT ?`)
+        .all(executionCursor, DB_EXECUTION_BATCH_ROWS)
+      if (window.length === 0) break
+      await yieldToEventLoop()
+      if (cleanupStopped()) {
+        inventory.interrupted = true
+        return inventory
+      }
+      const rowids = window.map((row) => row.rowid)
+      const row = db
+        .prepare<unknown[], { n: number; bytes: number }>(
+          `SELECT COUNT(*) AS n,
+                  COALESCE(SUM(COALESCE(LENGTH(output), 0) + COALESCE(LENGTH(raw_result), 0) + COALESCE(LENGTH(prompt), 0)), 0) AS bytes
+             FROM executions
+             WHERE rowid IN (${bindPlaceholders(rowids.length)})
+               AND status IN ('done','failed','cancelled','timeout','interrupted')
+               AND ended_at IS NOT NULL AND ended_at < ?
+               AND (output IS NOT NULL OR raw_result IS NOT NULL OR prompt != '')`,
+        )
+        .get(...rowids, cutoffIso)
+      inventory.eligibleExecutions += row?.n ?? 0
+      inventory.estimatedEligibleBytes += row?.bytes ?? 0
+      executionCursor = rowids[rowids.length - 1] as number
+      await yieldToEventLoop()
+    }
+    return inventory
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Read-only inventory for the `database` category. Awaits the bounded
+ * windowed scan above, so no statement issued by preview or run visits more
+ * than a small fixed raw-row window; full row payloads are never
+ * materialised.
+ */
+async function assessDatabase(
+  stateRoot: string,
+  db: ForemanDatabase | undefined,
+  retentionDays: number,
+  now: Date,
+): Promise<RawCandidate> {
+  const path = join(stateRoot, 'wrenyard.db')
+  const ownership = 'database/wrenyard.db'
+  if (db === undefined) {
+    return protectedCandidate('wrenyard.db', 'database', path, ownership, 'database is unavailable; protected', { logicalBytes: 0, allocatedBytes: 0 })
+  }
+  const stats = readDbPageStats(db)
+  if (stats === undefined) {
+    return protectedCandidate('wrenyard.db', 'database', path, ownership, 'database page stats could not be read; protected', { logicalBytes: 0, allocatedBytes: 0 })
+  }
+  const allocatedBytes = stats.pageCount * stats.pageSize
+  const measure: Measure = { logicalBytes: allocatedBytes, allocatedBytes }
+  const cutoffIso = new Date(now.getTime() - retentionDays * 86_400_000).toISOString()
+  const inventory = await scanRetentionInventory(db, cutoffIso)
+  if (inventory === undefined) {
+    return protectedCandidate('wrenyard.db', 'database', path, ownership, 'eligible row inventory could not be read; protected', measure)
+  }
+  if (inventory.interrupted) {
+    return protectedCandidate('wrenyard.db', 'database', path, ownership, 'eligible row inventory was interrupted by daemon shutdown; protected', measure)
+  }
+  const { eligibleEvents, eligibleExecutions, estimatedEligibleBytes } = inventory
+  // ageDays is the retention window itself: the candidate is eligible exactly
+  // when rows older than the window exist. finalize treats the database
+  // category as eligible only when ageDays >= retentionDays, so reporting the
+  // window as the age makes "has eligible rows" the decision.
+  const hasEligible = eligibleEvents + eligibleExecutions > 0
+  return {
+    id: 'wrenyard.db',
+    category: 'database',
+    path,
+    ownership,
+    logicalBytes: allocatedBytes,
+    allocatedBytes,
+    isDir: false,
+    safe: true,
+    safeReason: `${eligibleEvents} event payloads and ${eligibleExecutions} execution payloads older than ${retentionDays}d (≈${estimatedEligibleBytes} B)`,
+    ageDays: hasEligible ? retentionDays : 0,
   }
 }
 
@@ -1190,8 +1405,13 @@ async function collectRawCandidates(
   pm: ProjectManager | undefined,
   now: Date,
   selected: ReadonlySet<StorageCleanupCategoryId>,
+  retentionDays: number,
 ): Promise<RawCandidate[]> {
   const raw: RawCandidate[] = []
+
+  if (selected.has('database')) {
+    raw.push(await assessDatabase(stateRoot, db, retentionDays, now))
+  }
 
   if (selected.has('artifacts')) {
     const artifactsDirectory = join(stateRoot, 'artifacts')
@@ -1297,7 +1517,7 @@ interface Finalized {
   candidatesById: Map<string, FinalCandidate>
 }
 
-function finalize(raw: RawCandidate[], policy: StorageCleanupPolicy): Finalized {
+function finalize(raw: RawCandidate[], policy: StorageCleanupPolicy, dbRetentionDays?: number): Finalized {
   const totals = new Map<StorageCleanupCategoryId, number>()
   for (const candidate of raw) {
     totals.set(candidate.category, (totals.get(candidate.category) ?? 0) + candidate.logicalBytes)
@@ -1316,18 +1536,26 @@ function finalize(raw: RawCandidate[], policy: StorageCleanupPolicy): Finalized 
     overCapacityById.set(categoryPolicy.id, totalBytes > categoryPolicy.targetBytes)
     if (!categoryPolicy.removes) continue
 
+    // The database category compares its candidate age against the resolved
+    // (possibly overridden) retention window so preview and run agree.
+    const effectiveRetention = categoryPolicy.id === 'database' && dbRetentionDays !== undefined
+      ? dbRetentionDays
+      : categoryPolicy.retentionDays
     const safeCandidates = categoryCandidates.filter((candidate) => candidate.safe && candidate.ageDays !== undefined)
-    const retentionCandidates = safeCandidates.filter((candidate) => candidate.ageDays! >= categoryPolicy.retentionDays)
+    const retentionCandidates = safeCandidates.filter((candidate) => candidate.ageDays! >= effectiveRetention)
     let remainingBytes = totalBytes
 
     for (const candidate of retentionCandidates) {
       candidate.eligible = true
-      candidate.selectedThreshold = categoryPolicy.retentionDays
-      candidate.reason = `${candidate.safeReason}; ${describeAge(candidate.ageDays)} meets the retention threshold of ${categoryPolicy.retentionDays}d`
+      candidate.selectedThreshold = effectiveRetention
+      candidate.reason = `${candidate.safeReason}; ${describeAge(candidate.ageDays)} meets the retention threshold of ${effectiveRetention}d`
       remainingBytes -= candidate.logicalBytes
     }
 
-    if (remainingBytes > categoryPolicy.targetBytes) {
+    // The database category never fills down under capacity pressure: rows
+    // inside the retention window are never removed just because the DB file
+    // is large.
+    if (categoryPolicy.id !== 'database' && remainingBytes > categoryPolicy.targetBytes) {
       const capacityCandidates = safeCandidates
         .filter((candidate) => !candidate.eligible && candidate.ageDays! >= categoryPolicy.minimumRetentionDays)
         .sort((a, b) => (b.ageDays! - a.ageDays!) || a.id.localeCompare(b.id))
@@ -1455,8 +1683,9 @@ export async function previewManagedCleanup(options: ManagedCleanupOptions = {})
   const pm = resolveProjectManager(options, stateRoot)
   const selected = selectedCategories(options)
   const policy = filteredPolicy(selected)
-  const raw = await collectRawCandidates(stateRoot, configuredRoot, db, pm, now, selected)
-  const finalized = finalize(raw, policy)
+  const retentionDays = resolveRetentionDays(options)
+  const raw = await collectRawCandidates(stateRoot, configuredRoot, db, pm, now, selected, retentionDays)
+  const finalized = finalize(raw, policy, retentionDays)
 
   let totalLogicalBytes = 0
   let totalAllocatedBytes = 0
@@ -1476,6 +1705,37 @@ export async function previewManagedCleanup(options: ManagedCleanupOptions = {})
   }
 }
 
+/**
+ * Cooperative shutdown state for managed cleanup.
+ *
+ * `cleanupStopping` is the admission cutoff: once daemon close begins, no new
+ * run is admitted. `cleanupStopRequested` is the cooperative stop token an
+ * in-flight run checks at every DB batch and vacuum yield boundary, so a
+ * serialized run interrupts instead of running to completion. The hard fence
+ * lives in the connection module and is armed only when the bounded drain
+ * deadline expires; from then on no suspended cleanup path may issue another
+ * statement, including audit finalization.
+ */
+let cleanupStopping = false
+let cleanupStopRequested = false
+
+/** True while a suspended cleanup path may still issue DB statements. */
+function cleanupDbUsable(): boolean {
+  try {
+    assertCleanupDbUsable('continuation')
+    return true
+  } catch {
+    return false
+  }
+}
+
+function delayWithUnref(ms: number): Promise<void> {
+  return new Promise((resolvePromise) => {
+    const timer = setTimeout(resolvePromise, ms)
+    timer.unref?.()
+  })
+}
+
 let activeRun: Promise<CleanupRunResult> | undefined
 
 /**
@@ -1485,6 +1745,10 @@ let activeRun: Promise<CleanupRunResult> | undefined
  * provably safe is protected rather than removed.
  */
 export function runManagedCleanup(options: ManagedCleanupOptions = {}): Promise<CleanupRunResult> {
+  // Admission cutoff: a close in progress must never queue new cleanup work.
+  if (cleanupStopping) {
+    return Promise.reject(new Error('cleanup is stopping; no new cleanup run is admitted'))
+  }
   const previous = activeRun
   const next = (async (): Promise<CleanupRunResult> => {
     if (previous !== undefined) {
@@ -1496,6 +1760,53 @@ export function runManagedCleanup(options: ManagedCleanupOptions = {}): Promise<
   return next.finally(() => {
     if (activeRun === next) activeRun = undefined
   })
+}
+
+/**
+ * Begin cleanup shutdown: refuse admission of any new run and ask the in-flight
+ * serialized run to interrupt itself at its next DB batch or vacuum yield
+ * boundary. Idempotent, and safe to call when nothing is running.
+ */
+export function stopManagedCleanup(): void {
+  cleanupStopping = true
+  cleanupStopRequested = true
+}
+
+/**
+ * Bounded drain of the serialized cleanup chain, awaited by daemon close before
+ * the database is released. Returns true when the chain drained and false when
+ * the deadline expired first.
+ *
+ * The timer only bounds the wait; cancellation is cooperative, driven by the
+ * stop token checked at every DB batch and vacuum yield boundary, so this is
+ * not a race-only pseudo-cancellation. When the deadline wins, the fence is
+ * armed so a suspended run can never resume SQL against a released or closed
+ * database.
+ */
+export async function drainManagedCleanup(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + Math.max(0, timeoutMs)
+  for (;;) {
+    const pending = activeRun
+    if (pending === undefined) return true
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
+    await Promise.race([pending.catch(() => undefined), delayWithUnref(remaining)])
+    // The slot advances when a run settles, or holds a newly chained run.
+    if (activeRun === pending && Date.now() >= deadline) break
+  }
+  setSuspendedCleanupFence(true)
+  return false
+}
+
+/**
+ * Clear cleanup shutdown state so a daemon started later in the same process can
+ * schedule and admit cleanup again. Close leaves cleanup stopping until this
+ * runs.
+ */
+export function resetManagedCleanupShutdown(): void {
+  cleanupStopping = false
+  cleanupStopRequested = false
+  setSuspendedCleanupFence(false)
 }
 
 interface CleanupAuditOutcome {
@@ -1520,6 +1831,9 @@ interface CleanupAuditPayload {
 }
 
 async function runManagedCleanupInner(options: ManagedCleanupOptions): Promise<CleanupRunResult> {
+  // A run already queued behind another one is interrupted before it touches
+  // the database rather than starting work during shutdown.
+  if (cleanupStopRequested) throw new Error('cleanup was interrupted by shutdown before any removal')
   const now = options.now ?? new Date()
   const db = tryGetDb(options.db)
   if (db === undefined) throw new Error('cleanup audit database is unavailable; no paths were removed')
@@ -1531,8 +1845,9 @@ async function runManagedCleanupInner(options: ManagedCleanupOptions): Promise<C
   const trigger = options.trigger ?? 'rpc'
   const startedAt = now.toISOString()
 
-  const raw = await collectRawCandidates(stateRoot, configuredRoot, db, pm, now, selected)
-  const finalized = finalize(raw, policy)
+  const retentionDays = resolveRetentionDays(options)
+  const raw = await collectRawCandidates(stateRoot, configuredRoot, db, pm, now, selected, retentionDays)
+  const finalized = finalize(raw, policy, retentionDays)
   const auditPayload: CleanupAuditPayload = {
     trigger,
     startedAt,
@@ -1559,6 +1874,9 @@ async function runManagedCleanupInner(options: ManagedCleanupOptions): Promise<C
   let currentFinishedAt = startedAt
 
   for (let index = 0; index < finalized.candidates.length; index += 1) {
+    // Cooperative interruption between candidates: shutdown stops the run
+    // instead of letting it continue through the remaining removals.
+    if (cleanupStopRequested) break
     const candidate = finalized.candidates[index] as FinalCandidate
     const auditOutcome = auditPayload.outcomes[index] as CleanupAuditOutcome
     let outcome: StorageCleanupOutcome
@@ -1600,7 +1918,21 @@ async function runManagedCleanupInner(options: ManagedCleanupOptions): Promise<C
 
   currentFinishedAt = new Date().toISOString()
   auditPayload.finishedAt = currentFinishedAt
-  updateRunRecord(db, record.id, auditPayload, currentFinishedAt)
+  // A run interrupted by shutdown records every planned-but-unreached removal
+  // with the existing compatible vocabulary: 'skipped' is a valid outcome
+  // status, and the reason states that the run was interrupted and is partial.
+  if (cleanupStopRequested) {
+    for (const pending of auditPayload.outcomes) {
+      if (pending.status !== 'pending') continue
+      pending.status = 'skipped'
+      pending.reason = 'cleanup interrupted by daemon shutdown; run finalized as partial'
+      pending.finishedAt = currentFinishedAt
+    }
+  }
+  // The database is still live for a cooperative interrupt, so the audit is
+  // finalized here. Once the drain deadline has armed the fence, no statement
+  // is issued at all.
+  if (cleanupDbUsable()) updateRunRecord(db, record.id, auditPayload, currentFinishedAt)
   const finishedRecord = { ...record, finishedAt: currentFinishedAt }
 
   return {
@@ -1765,12 +2097,188 @@ async function removeEligible(
           'removed owned debug directory',
         )
       }
+      case 'database': {
+        if (db === undefined) return protectedOutcome('database is unavailable; protected')
+        const retention = candidate.selectedThreshold ?? resolveRetentionDays({})
+        return removeDatabaseCandidate(db, base, retention, now)
+      }
       default:
         return protectedOutcome('category does not permit removal')
     }
   } catch (error) {
     return failed(error instanceof Error ? error.message : String(error))
   }
+}
+
+const yieldToEventLoop = (): Promise<void> => new Promise((resolvePromise) => setImmediate(resolvePromise))
+
+/**
+ * Bounded, resumable database retention pass. It never routes the database
+ * file through rmSync/isSafePathSynchronously; instead it compacts payload
+ * columns in place using id-keyset scans inside small transactions, yielding
+ * to the event loop between selection and update batches and between
+ * reclamation chunks.
+ *
+ * Events: rows older than the cutoff whose type is exactly 'message',
+ * 'tool_call' or 'tool_result' get `data` rewritten to a small valid-JSON
+ * retention marker; id, execution_id, task_id, seq, type, timestamp, status,
+ * exit_code, is_error and created_at stay untouched so sequence allocation
+ * and telemetry dedupe remain stable. No other type is touched.
+ *
+ * Executions: terminal rows (done/failed/cancelled/timeout/interrupted) with
+ * ended_at < cutoff get output = NULL, raw_result = NULL, prompt = '' (prompt
+ * is NOT NULL); every other column is left alone. Queued/starting/running
+ * rows and completions inside the window are never touched.
+ *
+ * The pass is idempotent (already-compacted rows no longer match) and bounded:
+ * every statement first selects a fixed window of raw rows by key — the
+ * INTEGER `id` primary key for events, the SQLite rowid for executions — so
+ * LIMIT bounds the raw rows visited rather than the rows matched, eligibility
+ * is resolved only inside that window, and updates run in a small transaction
+ * capped by a byte budget. The event cursor stops at the last row actually
+ * compacted, so an eligible row left unprocessed by the budget is re-selected
+ * instead of skipped.
+ *
+ * Shutdown: the cooperative stop token and the DB fence are checked before
+ * every window and after every yield, and reclamation stops at its own yield
+ * boundary, so an in-flight pass interrupts as partial while every committed
+ * window stays transactional. Once the drain deadline has armed the fence, no
+ * further statement is issued.
+ */
+async function removeDatabaseCandidate(
+  db: ForemanDatabase,
+  base: { id: string; category: StorageCleanupCategoryId; path: string },
+  retentionDays: number,
+  now: Date,
+): Promise<RemovalResult> {
+  const interrupted = (): RemovalResult => ({
+    outcome: {
+      ...base,
+      status: 'skipped',
+      reason: 'cleanup interrupted by daemon shutdown; database retention is partial',
+      logicalBytes: 0,
+      allocatedBytes: 0,
+    },
+  })
+  if (cleanupStopped()) return interrupted()
+  const before = readDbPageStats(db)
+  const cutoffIso = new Date(now.getTime() - retentionDays * 86_400_000).toISOString()
+  let compactedEvents = 0
+  let slimmedExecutions = 0
+
+  // Raw-window-first keyset scan: the inner selection carries no eligibility
+  // predicate, so LIMIT bounds the raw rows visited rather than the rows
+  // matched, and the cursor resumes at the last processed raw row so a crash
+  // between windows loses no work and never re-touches a compacted row.
+  let lastEventId = 0
+  for (;;) {
+    if (cleanupStopped()) break
+    const window = db
+      .prepare<[number, number], { id: number }>(`SELECT id FROM events WHERE id > ? ORDER BY id LIMIT ?`)
+      .all(lastEventId, DB_EVENT_BATCH_ROWS)
+    if (window.length === 0) break
+    await yieldToEventLoop()
+    if (cleanupStopped()) break
+    const ids = window.map((row) => row.id)
+    const rows = db
+      .prepare<unknown[], { id: number; bytes: number }>(
+        `SELECT id, COALESCE(LENGTH(data), 0) AS bytes FROM events
+           WHERE id IN (${bindPlaceholders(ids.length)}) AND created_at < ?
+             AND type IN ('message','tool_call','tool_result')
+             AND data IS NOT NULL AND data != ?
+           ORDER BY id`,
+      )
+      .all(...ids, cutoffIso, RETENTION_EVENT_MARKER)
+    let batchBytes = 0
+    let lastUpdatedEventId = lastEventId
+    if (rows.length > 0) {
+      db.transaction(() => {
+        for (const row of rows) {
+          if (batchBytes >= DB_BATCH_BYTE_BUDGET) break
+          batchBytes += row.bytes
+          db.prepare<[string, number]>(`UPDATE events SET data = ? WHERE id = ?`).run(RETENTION_EVENT_MARKER, row.id)
+          compactedEvents += 1
+          lastUpdatedEventId = row.id
+        }
+      })()
+    }
+    // Advance the cursor to the last row actually compacted so an eligible row
+    // left unprocessed by the byte budget is re-selected on the next window;
+    // when the window matched nothing, or produced no update, the cursor still
+    // clears the raw window so the scan always progresses.
+    lastEventId = lastUpdatedEventId > lastEventId ? lastUpdatedEventId : (ids[ids.length - 1] as number)
+    await yieldToEventLoop()
+  }
+
+  // Executions: raw-window-first as well, keyed on SQLite rowid because the
+  // execution id is text, with at most one raw row per window (the payload
+  // columns can be very large).
+  let lastExecutionRowid = 0
+  for (;;) {
+    if (cleanupStopped()) break
+    const window = db
+      .prepare<[number, number], { rowid: number }>(`SELECT rowid FROM executions WHERE rowid > ? ORDER BY rowid LIMIT ?`)
+      .all(lastExecutionRowid, DB_EXECUTION_BATCH_ROWS)
+    if (window.length === 0) break
+    await yieldToEventLoop()
+    if (cleanupStopped()) break
+    const rowids = window.map((row) => row.rowid)
+    const rows = db
+      .prepare<unknown[], { id: string; bytes: number }>(
+        `SELECT id,
+                COALESCE(LENGTH(output), 0) + COALESCE(LENGTH(raw_result), 0) + COALESCE(LENGTH(prompt), 0) AS bytes
+           FROM executions
+           WHERE rowid IN (${bindPlaceholders(rowids.length)})
+             AND status IN ('done','failed','cancelled','timeout','interrupted')
+             AND ended_at IS NOT NULL AND ended_at < ?
+             AND (output IS NOT NULL OR raw_result IS NOT NULL OR prompt != '')`,
+      )
+      .all(...rowids, cutoffIso)
+    if (rows.length > 0) {
+      db.transaction(() => {
+        for (const row of rows) {
+          db.prepare<[string]>(
+            `UPDATE executions SET output = NULL, raw_result = NULL, prompt = '' WHERE id = ?`,
+          ).run(row.id)
+          slimmedExecutions += 1
+        }
+      })()
+    }
+    lastExecutionRowid = rowids[rowids.length - 1] as number
+    await yieldToEventLoop()
+  }
+
+  // Reclaim free pages in yielded chunks; incremental_vacuum is safe under WAL
+  // and a no-op when the database is not in INCREMENTAL mode.
+  try {
+    // Reclamation also honours the cooperative stop and the fence at its own
+    // yield boundary.
+    if (!cleanupStopped()) {
+      await runIncrementalVacuum(db, DB_VACUUM_PAGE_CHUNK, () => cleanupStopped())
+    }
+  } catch {
+    // Reclamation failure leaves compaction intact; report what was measured.
+  }
+  const after = cleanupDbUsable() ? readDbPageStats(db) : undefined
+  const removedAllocatedBytes = before !== undefined && after !== undefined
+    ? Math.max(0, (before.pageCount - after.pageCount) * after.pageSize)
+    : 0
+  const freedFreelistBytes = before !== undefined && after !== undefined
+    ? Math.max(0, (after.freelistCount - before.freelistCount) * after.pageSize)
+    : 0
+
+  if (compactedEvents === 0 && slimmedExecutions === 0) {
+    if (cleanupStopRequested) return interrupted()
+    return {
+      outcome: { ...base, status: 'protected', reason: 'no rows older than the retention window required compaction', logicalBytes: 0, allocatedBytes: 0 },
+    }
+  }
+  const summary = `compacted ${compactedEvents} event payloads and slimmed ${slimmedExecutions} execution payloads older than ${retentionDays}d`
+  return removedOutcome(
+    base,
+    { logicalBytes: removedAllocatedBytes + freedFreelistBytes, allocatedBytes: removedAllocatedBytes },
+    cleanupStopRequested ? `${summary} (interrupted by daemon shutdown; run is partial)` : summary,
+  )
 }
 
 function removedOutcome(

@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import type { Statement } from 'better-sqlite3'
-import { chmodSync, mkdirSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 import { foremanStateRoot } from '../config/state.mts'
@@ -9,6 +9,7 @@ import type { ForemanDatabase, RunResult, TransactionCallback } from './types.mt
 
 let db: ForemanDatabase | undefined
 let openedPath: string | undefined
+let detectedAutoVacuumMode: number | undefined
 
 const PREPARED_STATEMENT_CACHE_LIMIT = 512
 
@@ -52,11 +53,17 @@ export function initDb(path?: string): ForemanDatabase {
 
   ensureDbDirectory(nextPath)
 
+  // A fresh file starts in INCREMENTAL mode so free pages can be reclaimed
+  // gradually. An existing database that reports NONE (0) is left untouched:
+  // converting it requires a full VACUUM, which must not run synchronously on
+  // the daemon main thread — that conversion is the startup-only migration in
+  // auto-vacuum-convert.mts.
+  const freshFile = nextPath === ':memory:' || !existsSync(nextPath)
   const nextDb = new Database(nextPath)
 
   try {
     ensureDbFileMode(nextPath)
-    applyPragmas(nextDb)
+    applyPragmas(nextDb, freshFile)
     bootstrapSchema(nextDb)
   } catch (error) {
     if (nextDb.open) nextDb.close()
@@ -116,6 +123,7 @@ export function closeDb(): void {
   if (db?.open) db.close()
   db = undefined
   openedPath = undefined
+  detectedAutoVacuumMode = undefined
 }
 
 export function tx<T>(fn: TransactionCallback<T>): T {
@@ -158,9 +166,74 @@ function isIgnorableWindowsChmodError(error: unknown): boolean {
   return code === 'EPERM' || code === 'EINVAL'
 }
 
-function applyPragmas(database: ForemanDatabase): void {
+function applyPragmas(database: ForemanDatabase, freshFile: boolean): void {
   database.pragma('journal_mode = WAL')
   database.pragma('synchronous = NORMAL')
   database.pragma('foreign_keys = ON')
   database.pragma('busy_timeout = 5000')
+  if (freshFile) {
+    database.pragma('auto_vacuum = INCREMENTAL')
+  }
+  const mode = database.pragma('auto_vacuum', { simple: true })
+  detectedAutoVacuumMode = typeof mode === 'number' ? mode : undefined
+}
+
+/** The auto_vacuum mode detected when the database was opened (0 = NONE). */
+export function detectedAutoVacuum(): number | undefined {
+  return detectedAutoVacuumMode
+}
+
+/**
+ * Shutdown fence for suspended cleanup work.
+ *
+ * Daemon close drains the serialized cleanup chain cooperatively and releases
+ * the database afterwards. Until the drain deadline expires the database stays
+ * fully usable, so a normal (non-timeout) cleanup always finalizes its audit
+ * row. If the deadline wins, the fence is armed and every later statement from
+ * a suspended cleanup path — audit finalization included — is refused instead
+ * of running against a released or closed connection.
+ */
+let suspendedCleanupFence = false
+
+/** Arm or clear the suspended-cleanup fence. */
+export function setSuspendedCleanupFence(armed: boolean): void {
+  suspendedCleanupFence = armed
+}
+
+/**
+ * Refuse a cleanup statement once the fence is armed or the process database is
+ * already closed. Throws so the caller abandons the suspended run rather than
+ * executing SQL against a released database.
+ */
+export function assertCleanupDbUsable(operation: string): void {
+  if (suspendedCleanupFence || (db !== undefined && !db.open)) {
+    throw new Error(`cleanup ${operation} refused: database is fenced or released during shutdown`)
+  }
+}
+
+const INCREMENTAL_VACUUM_DEFAULT_CHUNK = 64
+
+/**
+ * Reclaim free pages in bounded chunks with an event-loop yield between each
+ * `PRAGMA incremental_vacuum(N)` step so a long reclamation never blocks the
+ * daemon. Safe under WAL: incremental_vacuum only touches the freelist.
+ * Returns the total number of pages reclaimed.
+ */
+export async function runIncrementalVacuum(
+  database: ForemanDatabase,
+  pageChunk: number = INCREMENTAL_VACUUM_DEFAULT_CHUNK,
+  shouldStop?: () => boolean,
+): Promise<number> {
+  let reclaimed = 0
+  for (;;) {
+    const moved = database.pragma(`incremental_vacuum(${pageChunk})`) as unknown[]
+    const count = Array.isArray(moved) ? moved.length : 0
+    reclaimed += count
+    await new Promise((resolvePromise) => setImmediate(resolvePromise))
+    // Cooperative stop at the yield boundary: a shutdown drain deadline can
+    // expire while reclamation is suspended here.
+    if (shouldStop?.() === true) break
+    if (count < pageChunk) break
+  }
+  return reclaimed
 }

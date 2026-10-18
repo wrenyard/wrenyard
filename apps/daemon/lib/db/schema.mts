@@ -30,6 +30,7 @@ export function bootstrapSchema(database: ForemanDatabase): void {
   reconcileTaskRunAttemptDispatchReasoningEffortColumn(database)
   reconcileTaskRunAttemptDispatchFastColumn(database)
   recreateTaskIndexes(database)
+  dropRedundantEventExecIndex(database)
   recreateWorkflowJournalIndexes(database)
   recreateWorkflowStepSnapshotIndexes(database)
 }
@@ -260,6 +261,15 @@ function recreateTaskIndexes(database: ForemanDatabase): void {
   database.prepare('CREATE INDEX IF NOT EXISTS idx_task_workflow ON tasks(workflow_id)').run()
 }
 
+/**
+ * Idempotent upgrade drop: the UNIQUE(execution_id, seq) constraint on events
+ * already serves (execution_id, seq) lookups, so the separate covering index
+ * only costs write time and pages. Fresh databases never create it.
+ */
+function dropRedundantEventExecIndex(database: ForemanDatabase): void {
+  database.prepare('DROP INDEX IF EXISTS idx_event_exec').run()
+}
+
 function recreateWorkflowJournalIndexes(database: ForemanDatabase): void {
   for (const statement of WORKFLOW_JOURNAL_INDEX_STATEMENTS) {
     database.prepare(statement).run()
@@ -389,7 +399,8 @@ const WORKFLOW_STEP_SNAPSHOT_INDEX_STATEMENTS = [
 
 const EVENT_INDEX_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_event_created_at ON events(created_at)',
-  'CREATE INDEX IF NOT EXISTS idx_event_exec       ON events(execution_id, seq)',
+  // idx_event_exec was removed: UNIQUE(execution_id, seq) already serves those
+  // lookups. Existing databases drop it via dropRedundantEventExecIndex below.
   'CREATE INDEX IF NOT EXISTS idx_event_type       ON events(type)',
   "CREATE INDEX IF NOT EXISTS idx_event_gateway_exec ON events(json_extract(data, '$.data.executionId')) WHERE type = 'gateway.request.completed'",
 ] as const

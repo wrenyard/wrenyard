@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { hostname } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { closeDb, getDb, initDb, query as dbQuery, setSlowQueryLogger } from '../db/connection.mts'
+import { ensureIncrementalAutoVacuum } from '../db/auto-vacuum-convert.mts'
 import { dropTaskRunTelemetryRetiredColumns } from '../db/schema.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { WorkflowRunStore } from '../db/stores/workflow-run-store.mts'
@@ -26,7 +27,7 @@ import { registerBotHandlers } from '../server/handlers/bot.mts'
 import { INVALID_PARAMS, ProtocolError } from '../protocol/errors.mts'
 import { GATEWAY_TOKEN_REPLACEMENT_WARNING } from '../protocol/methods/gateway.mts'
 import type { TaskSettingsLayer } from '../protocol/methods/task.mts'
-import { runManagedCleanup } from '../core/storage/cleanup.mts'
+import { drainManagedCleanup, resetManagedCleanupShutdown, runManagedCleanup, stopManagedCleanup } from '../core/storage/cleanup.mts'
 import type {
   GatewaySettingsResult,
   GatewaySettingsSaveParams,
@@ -329,6 +330,7 @@ export class ForemanDaemon implements RunningForemanDaemon {
   private lockHeld = false
   private lowDiskState: LowDiskState = lowDiskStateForProcess
   private lowDiskTimer: ReturnType<typeof setInterval> | undefined
+  private dbCleanupTimer: ReturnType<typeof setInterval> | undefined
   private stopEventLoopMonitor: (() => void) | undefined
 
   private shutdownRequestedFlag = false
@@ -407,6 +409,18 @@ export class ForemanDaemon implements RunningForemanDaemon {
       await this.sampleLowDisk()
       this.lowDiskTimer = setInterval(() => { void this.sampleLowDisk() }, 30_000)
       this.lowDiskTimer.unref?.()
+      // A daemon started again in the same process must be able to admit and
+      // schedule cleanup after a previous close stopped it.
+      resetManagedCleanupShutdown()
+      // Serialized low-frequency database retention pass; runManagedCleanup
+      // serializes concurrent invocations internally, so this can never race
+      // an RPC-triggered run. Failures are logged, never fatal.
+      this.dbCleanupTimer = setInterval(() => {
+        void runManagedCleanup({ categories: ['database'], trigger: 'scheduled' }).catch((error: unknown) => {
+          writeDaemonLog('warn', 'scheduled database cleanup failed', error)
+        })
+      }, DB_CLEANUP_INTERVAL_MS)
+      this.dbCleanupTimer.unref?.()
       // Per-method attribution: synchronous slow queries and event-loop delay
       // are reported through the one daemon log sink until close() clears them.
       setSlowQueryLogger((info) => writeDaemonLog('warn', 'slow synchronous query', info))
@@ -662,6 +676,18 @@ export class ForemanDaemon implements RunningForemanDaemon {
   readonly close = async (): Promise<void> => {
     if (this.lowDiskTimer) clearInterval(this.lowDiskTimer)
     this.lowDiskTimer = undefined
+    if (this.dbCleanupTimer) clearInterval(this.dbCleanupTimer)
+    this.dbCleanupTimer = undefined
+    // Cut off cleanup admission, ask the in-flight serialized run to interrupt
+    // itself at its next DB batch or vacuum yield boundary, and wait for the
+    // chain under the shutdown drain budget before the database is released.
+    // On timeout the cleanup fence keeps any suspended run from resuming SQL
+    // against a released database.
+    stopManagedCleanup()
+    const cleanupDrained = await drainManagedCleanup(SHUTDOWN_DRAIN_TIMEOUT_MS)
+    if (!cleanupDrained) {
+      writeDaemonLog('warn', `cleanup drain exceeded ${SHUTDOWN_DRAIN_TIMEOUT_MS}ms; remaining cleanup is fenced and will not resume SQL`)
+    }
     if (this.stopEventLoopMonitor) this.stopEventLoopMonitor()
     this.stopEventLoopMonitor = undefined
     setSlowQueryLogger(null)
@@ -2378,6 +2404,14 @@ interface ForemanDaemonRuntime {
 }
 
 async function bootstrapForemanDaemonRuntime(): Promise<ForemanDaemonRuntime> {
+  // Startup-only migration: convert a legacy auto_vacuum=NONE database to
+  // INCREMENTAL on a worker thread before initDb opens it and before IPC
+  // serves clients. A failure is logged and never blocks startup.
+  try {
+    await ensureIncrementalAutoVacuum(join(foremanStateRoot(), 'wrenyard.db'))
+  } catch (error) {
+    writeDaemonLog('warn', 'database auto-vacuum conversion failed', error)
+  }
   const db = initDb()
   retainDaemonDb()
 
@@ -2606,6 +2640,12 @@ const MAX_CONCURRENT_EXECUTIONS = 10
  * and teardown proceeds, so a single SIGTERM always leads to exit.
  */
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 20_000
+
+/**
+ * Interval between scheduled database retention passes (6 hours). The timer
+ * is unref'd so it never keeps the daemon alive, and close() clears it.
+ */
+const DB_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 /**
  * Live daemon execution load, read from the database directly with no IPC round

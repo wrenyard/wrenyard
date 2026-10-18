@@ -149,11 +149,12 @@ export const storageUsageResultSchema = {
 /**
  * Managed-artifact categories the cleanup service may inventory and act on.
  * `artifacts`, `logs` (proven closed directories only), `worktrees`, `clients`
- * (owned run homes only) and `debug` (marker-owned `gdbg-*` directories only)
- * may be removed once their ownership and inactivity are proven; every other
- * entry is reported as protected.
+ * (owned run homes only), `debug` (marker-owned `gdbg-*` directories only) and
+ * `database` (retention compaction of old event/execution payload rows) may be
+ * acted on once their ownership and inactivity are proven; every other entry is
+ * reported as protected.
  */
-export type StorageCleanupCategoryId = 'artifacts' | 'logs' | 'clients' | 'worktrees' | 'debug'
+export type StorageCleanupCategoryId = 'artifacts' | 'logs' | 'clients' | 'worktrees' | 'debug' | 'database'
 
 /** One category's retention/capacity policy, reported so protection is visible. */
 export interface StorageCleanupCategoryPolicy {
@@ -210,6 +211,8 @@ export interface CleanupPreviewParams {
   refresh?: boolean
   /** Restrict the scan to these categories; omitted means every category. */
   categories?: StorageCleanupCategoryId[]
+  /** Optional override of the database retention window in days (>= 1). */
+  retentionDays?: number
 }
 
 export interface CleanupPreviewResult {
@@ -222,10 +225,12 @@ export interface CleanupPreviewResult {
   totalAllocatedBytes: number
 }
 
-/** `storage.cleanup.run` takes only the optional category filter. */
+/** `storage.cleanup.run` takes only the optional category filter and window override. */
 export interface CleanupRunParams {
   /** Restrict the run to these categories; omitted means every category. */
   categories?: StorageCleanupCategoryId[]
+  /** Optional override of the database retention window in days (>= 1). */
+  retentionDays?: number
 }
 
 export type StorageCleanupOutcomeStatus = 'removed' | 'protected' | 'skipped' | 'failed'
@@ -270,7 +275,7 @@ const storageCleanupCategoryPolicySchema = {
   type: 'object',
   required: ['id', 'retentionDays', 'minimumRetentionDays', 'targetBytes', 'removes'],
   properties: {
-    id: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+    id: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug', 'database'] },
     retentionDays: { type: 'number', minimum: 0 },
     minimumRetentionDays: { type: 'number', minimum: 0 },
     targetBytes: { type: 'number', minimum: 0 },
@@ -293,7 +298,7 @@ const storageCleanupPathEvidenceSchema = {
   required: ['id', 'category', 'path', 'ownership', 'logicalBytes', 'allocatedBytes', 'eligible', 'reason'],
   properties: {
     id: { type: 'string' },
-    category: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+    category: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug', 'database'] },
     path: { type: 'string' },
     ownership: { type: 'string' },
     logicalBytes: { type: 'number', minimum: 0 },
@@ -308,7 +313,7 @@ const storageCleanupCategorySummarySchema = {
   type: 'object',
   required: ['id', 'totalBytes', 'eligibleBytes', 'protectedBytes', 'candidateCount', 'eligibleCount', 'protectedCount', 'targetBytes', 'overCapacity'],
   properties: {
-    id: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+    id: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug', 'database'] },
     totalBytes: { type: 'number', minimum: 0 },
     eligibleBytes: { type: 'number', minimum: 0 },
     protectedBytes: { type: 'number', minimum: 0 },
@@ -325,7 +330,7 @@ const storageCleanupCategorySummarySchema = {
 const storageCleanupCategoriesSchema = {
   type: 'array',
   minItems: 1,
-  items: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+  items: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug', 'database'] },
 } as const satisfies JsonSchema
 
 export const storageCleanupPreviewParamsSchema = {
@@ -333,6 +338,7 @@ export const storageCleanupPreviewParamsSchema = {
   properties: {
     refresh: { type: 'boolean' },
     categories: storageCleanupCategoriesSchema,
+    retentionDays: { type: 'integer', minimum: 1 },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -356,6 +362,7 @@ export const storageCleanupRunParamsSchema = {
   type: 'object',
   properties: {
     categories: storageCleanupCategoriesSchema,
+    retentionDays: { type: 'integer', minimum: 1 },
   },
   additionalProperties: true,
 } as const satisfies JsonSchema
@@ -365,7 +372,7 @@ const storageCleanupOutcomeSchema = {
   required: ['id', 'category', 'path', 'status', 'reason', 'logicalBytes', 'allocatedBytes'],
   properties: {
     id: { type: 'string' },
-    category: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug'] },
+    category: { enum: ['artifacts', 'logs', 'clients', 'worktrees', 'debug', 'database'] },
     path: { type: 'string' },
     status: { enum: ['removed', 'protected', 'skipped', 'failed'] },
     reason: { type: 'string' },

@@ -9,10 +9,10 @@ import {
   loadServiceConfigForCli,
 } from '../shared.mts'
 
-const STORAGE_USAGE = 'Usage: wrenyard storage [preview] [--category <id>]... [--json] / wrenyard storage run --apply [--category <id>]... [--json]'
+const STORAGE_USAGE = 'Usage: wrenyard storage [preview] [--category <id>]... [--retention-days <n>] [--json] / wrenyard storage run --apply [--category <id>]... [--retention-days <n>] [--json]'
 
 /** Recognized managed-cleanup categories, kept in sync with the daemon schema. */
-const RECOGNIZED_CATEGORIES: readonly StorageCleanupCategoryId[] = ['artifacts', 'logs', 'clients', 'worktrees', 'debug']
+const RECOGNIZED_CATEGORIES: readonly StorageCleanupCategoryId[] = ['artifacts', 'logs', 'clients', 'worktrees', 'debug', 'database']
 
 /**
  * Split repeated and/or comma-separated `--category` values and reject any
@@ -51,6 +51,7 @@ export async function handleStorage(args: string[]): Promise<number> {
       json: { type: 'boolean' },
       apply: { type: 'boolean' },
       category: { type: 'string', multiple: true },
+      'retention-days': { type: 'string' },
     },
     allowPositionals: true,
     strict: true,
@@ -77,7 +78,18 @@ export async function handleStorage(args: string[]): Promise<number> {
     console.error(`${errorMessage(error)}\n${STORAGE_USAGE}`)
     return 1
   }
-  const params = categories === undefined ? {} : { categories }
+  let retentionDays: number | undefined
+  if (values['retention-days'] !== undefined) {
+    const parsed = Number(values['retention-days'])
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      console.error(`--retention-days must be a positive integer\n${STORAGE_USAGE}`)
+      return 1
+    }
+    retentionDays = parsed
+  }
+  const params: { categories?: StorageCleanupCategoryId[]; retentionDays?: number } = {}
+  if (categories !== undefined) params.categories = categories
+  if (retentionDays !== undefined) params.retentionDays = retentionDays
 
   const { config } = loadServiceConfigForCli(values.config)
   const ipcPath = resolveWrenyardIpcPath(process.env, { config })

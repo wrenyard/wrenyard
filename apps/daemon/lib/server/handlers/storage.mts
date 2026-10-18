@@ -34,11 +34,11 @@ export function registerStorageHandlers(router: RpcRouter): void {
 
   router.register('storage.cleanup.preview', async (params, _message, context) => {
     requireIpc(context, 'storage.cleanup.preview', 'storage_cleanup_forbidden')
-    return previewManagedCleanup({ categories: params.categories })
+    return previewManagedCleanup({ categories: params.categories, retentionDays: params.retentionDays })
   })
 
   router.register('storage.cleanup.run', async (params, _message, context) => {
     requireIpc(context, 'storage.cleanup.run', 'storage_cleanup_forbidden')
-    return runManagedCleanup({ categories: params.categories, trigger: 'rpc' })
+    return runManagedCleanup({ categories: params.categories, retentionDays: params.retentionDays, trigger: 'rpc' })
   })
 }
