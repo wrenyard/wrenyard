@@ -12,6 +12,7 @@
  * one bot and never affects the daemon or the other bots.
  */
 
+import type { Stats } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import type { RoutineConfig } from '../scheduler.mts'
@@ -57,18 +58,44 @@ export interface BotAgentConfig {
 }
 
 /**
+ * One config file's change signature. A loader call compares it against the
+ * signature of the file it returned last time and reads the file again only
+ * when it differs.
+ */
+export interface BotAgentSignature {
+  mtimeMs: number
+  ctimeMs: number
+  size: number
+  ino: number
+}
+
+/**
  * One config file as loaded. `config` is present only when the file validated;
  * otherwise `error` explains why and the bot is disabled. `text` is the raw file
- * content and `mtimeMs` its modification time, so a caller can poll the
+ * content and `signature` the file's change signature, so a caller can poll the
  * directory cheaply.
  */
 export interface BotAgentEntry {
   id: string
   path: string
-  mtimeMs: number
+  signature: BotAgentSignature
   text: string
   config?: BotAgentConfig
   error?: string
+}
+
+/** A file whose stat failed carries no usable signature and is never reused. */
+const EMPTY_SIGNATURE: BotAgentSignature = { mtimeMs: 0, ctimeMs: 0, size: 0, ino: 0 }
+
+function signatureOf(info: Stats): BotAgentSignature {
+  return { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, ino: info.ino }
+}
+
+function sameSignature(left: BotAgentSignature, right: BotAgentSignature): boolean {
+  return left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+    && left.size === right.size
+    && left.ino === right.ino
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -203,8 +230,17 @@ function validateConfig(id: string, text: string): BotAgentConfig {
  * Load every `*.json` bot config in one directory, sorted by id. A missing (or
  * unreadable) directory is an empty list and a file that fails to read or
  * validate is reported as an entry with `error` and no config.
+ *
+ * `previous` is the result of the last call: an entry whose file name and
+ * signature still match is returned as the same object, so unchanged files are
+ * neither read nor parsed and a caller can detect changes by identity. Files
+ * that disappeared from the directory are dropped. The cache belongs to the
+ * caller and is never stored globally.
  */
-export async function loadBotAgentConfigs(dir: string): Promise<BotAgentEntry[]> {
+export async function loadBotAgentConfigs(
+  dir: string,
+  previous: readonly BotAgentEntry[] = [],
+): Promise<BotAgentEntry[]> {
   let names: string[]
   try {
     const entries = await readdir(dir, { withFileTypes: true })
@@ -213,23 +249,39 @@ export async function loadBotAgentConfigs(dir: string): Promise<BotAgentEntry[]>
     // No config directory (or one that cannot be listed) simply has no bots.
     return []
   }
+  // Keyed by file name, the name every config lookup below uses.
+  const cached = new Map(previous.map(entry => [basename(entry.path), entry]))
   const loaded: BotAgentEntry[] = []
   for (const name of names.sort()) {
     const path = join(dir, name)
     const id = basename(name, '.json')
-    let mtimeMs = 0
-    let text = ''
+    let signature: BotAgentSignature
     try {
-      mtimeMs = (await stat(path)).mtimeMs
+      signature = signatureOf(await stat(path))
+    } catch (error) {
+      loaded.push({ id, path, signature: EMPTY_SIGNATURE, text: '', error: errorText(error) })
+      continue
+    }
+    const prior = cached.get(name)
+    if (prior !== undefined && prior.signature !== EMPTY_SIGNATURE && sameSignature(prior.signature, signature)) {
+      loaded.push(prior)
+      continue
+    }
+    let text: string
+    try {
       text = await readFile(path, 'utf-8')
     } catch (error) {
-      loaded.push({ id, path, mtimeMs, text, error: errorText(error) })
+      // A failed read is transient (unlike a failed stat, which cannot be
+      // distinguished from a missing file). Marking it with the never-reusable
+      // signature makes the next poll read the file again instead of serving
+      // this error from the cache until the file happens to change.
+      loaded.push({ id, path, signature: EMPTY_SIGNATURE, text: '', error: errorText(error) })
       continue
     }
     try {
-      loaded.push({ id, path, mtimeMs, text, config: validateConfig(id, text) })
+      loaded.push({ id, path, signature, text, config: validateConfig(id, text) })
     } catch (error) {
-      loaded.push({ id, path, mtimeMs, text, error: errorText(error) })
+      loaded.push({ id, path, signature, text, error: errorText(error) })
     }
   }
   return loaded

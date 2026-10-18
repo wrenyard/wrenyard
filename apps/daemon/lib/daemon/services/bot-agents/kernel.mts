@@ -363,8 +363,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   const state = emptyState()
   /** Config files as last applied, by id. */
   const entries = new Map<string, BotAgentEntry>()
-  /** `path -> mtimeMs` of the last applied load, for the 5 second poll. */
-  let appliedMtimes = new Map<string, number>()
   /** Wakes currently resolving session.send admission, awaited only at shutdown. */
   const admissions = new Set<Promise<void>>()
   /** Avoid dispatching the same persisted pending wake twice in this process. */
@@ -380,6 +378,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   const runTools = createAgentToolRunner({ sessions: options.sessions, todos: options.todos })
   let context: Session | undefined
   let pollTimer: ReturnType<typeof setInterval> | undefined
+  /** The config reload in flight, if any; a refresh is single-flight. */
+  let refreshPromise: Promise<void> | undefined
   let persistChain: Promise<void> = Promise.resolve()
   let stopPromise: Promise<void> | undefined
   let started = false
@@ -994,16 +994,18 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
   // ─── Config ──────────────────────────────────────────────────────────────
 
-  function mtimesOf(loaded: readonly BotAgentEntry[]): Map<string, number> {
-    return new Map(loaded.map(entry => [entry.path, entry.mtimeMs]))
-  }
-
-  function sameMtimes(left: Map<string, number>, right: Map<string, number>): boolean {
-    if (left.size !== right.size) return false
-    for (const [path, mtimeMs] of left) {
-      if (right.get(path) !== mtimeMs) return false
-    }
-    return true
+  /**
+   * Whether one loaded entry carries the same signature and error as the entry
+   * applied before. A changed signature includes a file that was unreadable and
+   * now reads, so a recovered error reconciles like an edit.
+   */
+  function sameEntry(previous: BotAgentEntry | undefined, entry: BotAgentEntry): boolean {
+    if (previous === undefined) return false
+    return previous.error === entry.error
+      && previous.signature.mtimeMs === entry.signature.mtimeMs
+      && previous.signature.ctimeMs === entry.signature.ctimeMs
+      && previous.signature.size === entry.signature.size
+      && previous.signature.ino === entry.signature.ino
   }
 
   /**
@@ -1011,12 +1013,15 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
    * bot, drop those of a bot whose file was removed, and leave an invalid file
    * owning only its own error.
    */
-  async function applyConfigs(loaded: BotAgentEntry[], previous: Map<string, number>): Promise<void> {
-    const removed = [...entries.keys()].filter(id => !loaded.some(entry => entry.id === id))
+  async function applyConfigs(loaded: BotAgentEntry[], previous: ReadonlyMap<string, BotAgentEntry>): Promise<void> {
+    const loadedIds = new Set(loaded.map(entry => entry.id))
+    const removed = [...previous.keys()].filter(id => !loadedIds.has(id))
     entries.clear()
     for (const entry of loaded) entries.set(entry.id, entry)
     for (const entry of loaded) {
-      if (entry.config === undefined || previous.get(entry.path) === entry.mtimeMs) continue
+      // A stop that began while this load ran applies no further config.
+      if (stopped) return
+      if (entry.config === undefined || sameEntry(previous.get(entry.id), entry)) continue
       try {
         await options.routines.reconcile(entry.id, entry.config.routines)
       } catch (error) {
@@ -1024,6 +1029,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       }
     }
     for (const id of removed) {
+      if (stopped) return
       try {
         await options.routines.reconcile(id, [])
       } catch (error) {
@@ -1032,13 +1038,29 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     }
   }
 
-  async function reloadConfigs(): Promise<void> {
-    const loaded = await loadBotAgentConfigs(options.configDir)
-    const next = mtimesOf(loaded)
-    if (sameMtimes(next, appliedMtimes)) return
-    const previous = appliedMtimes
-    appliedMtimes = next
-    await applyConfigs(loaded, previous)
+  /**
+   * Reload the config directory once. Concurrent callers share the in-flight
+   * load; the previous entries are handed to the loader so unchanged files are
+   * returned, not read again.
+   */
+  function reloadConfigs(): Promise<void> {
+    if (stopped) return Promise.resolve()
+    if (refreshPromise !== undefined) return refreshPromise
+    const running = (async (): Promise<void> => {
+      const previous = new Map(entries)
+      const loaded = await loadBotAgentConfigs(options.configDir, [...previous.values()])
+      if (stopped) return
+      const unchanged = previous.size === loaded.length
+        && loaded.every(entry => previous.get(entry.id) === entry)
+      if (unchanged) return
+      await applyConfigs(loaded, previous)
+    })()
+    refreshPromise = running
+    const settle = (): void => {
+      if (refreshPromise === running) refreshPromise = undefined
+    }
+    void running.then(settle, settle)
+    return running
   }
 
   function dispatchPendingWakes(): void {
@@ -1187,7 +1209,11 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         // No state yet (or an unreadable one): every bot starts with an empty queue.
       }
       await reloadConfigs()
+      // A stop may have begun while the configs were loading: schedule no
+      // watches, wakes or poll timer after it.
+      if (stopped) return
       await restoreWatches()
+      if (stopped) return
       restoreRoundTurns()
       persist()
       dispatchPendingWakes()
@@ -1211,6 +1237,14 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         }
         for (const unsubscribe of watchSubs.values()) unsubscribe()
         watchSubs.clear()
+        // A reload already reading the directory settles before stop returns;
+        // it starts no reconcile once `stopped` is set.
+        const refresh = refreshPromise
+        if (refresh !== undefined) {
+          await refresh.catch(error => {
+            log('warn', `bot agent kernel could not finish a config reload during stop: ${errorText(error)}`)
+          })
+        }
         const session = context
         if (session !== undefined) {
           await session.close().catch(error => {
