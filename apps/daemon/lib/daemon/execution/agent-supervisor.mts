@@ -1056,8 +1056,11 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       }
 
       for (const mapped of mapStreamEventToBClass(event)) {
-        // Observable progress resets the idle bound.
-        entry.idleTimer?.refresh()
+        // Only real model output resets the idle bound; tool results, token
+        // accounting and whitespace-only message text are not progress.
+        if (isModelOutputProgress(mapped)) {
+          entry.idleTimer?.refresh()
+        }
         if (mapped.type === 'message' && typeof mapped.data.text === 'string') {
           entry.outputParts.push(mapped.data.text)
         }
@@ -2081,6 +2084,19 @@ function parseDispatchPlans(raw: string | undefined): Record<string, unknown> {
     // fall through to an empty map
   }
   return {}
+}
+
+/**
+ * Reports whether a mapped stream event is real model output: a tool call, or
+ * a message carrying non-whitespace text. Tool results, usage accounting and
+ * empty messages must not count as idle-watchdog progress.
+ */
+function isModelOutputProgress(mapped: BClassEvent): boolean {
+  if (mapped.type === 'tool_call') return true
+  if (mapped.type === 'message') {
+    return typeof mapped.data.text === 'string' && mapped.data.text.trim().length > 0
+  }
+  return false
 }
 
 export function mapStreamEventToBClass(event: StreamEventRecord): BClassEvent[] {
