@@ -75,14 +75,6 @@ const SESSION_TOOL: ToolSpec = {
         type: 'string',
         description: 'Message text: the first message for create, or the next message for send.',
       },
-      model: {
-        type: 'string',
-        description: "Optional public model id in 'provider/model' form. Defaults to the model the session already uses, otherwise automatic routing.",
-      },
-      reasoningEffort: {
-        type: 'string',
-        description: "Optional reasoning level for the chosen model; defaults to the route's own level.",
-      },
       todoIds: {
         anyOf: [
           { type: 'string' },
@@ -286,7 +278,7 @@ async function runSessionTool(
       const { sessionId } = await deps.sessions.createSession()
       if (text === undefined) return done({ sessionId })
       try {
-        const model = await resolveSessionModel(deps.sessions, sessionId, args, ctx)
+        const model = await resolveSessionModel(deps.sessions, sessionId, ctx)
         const { turn } = await deps.sessions.send(sessionId, { text, model, sender: { botId: ctx.botId } })
         ctx.watch(sessionId, turn - 1, optionalTodoIds(args, 'todoIds'))
         return done({ sessionId, turn })
@@ -301,7 +293,7 @@ async function runSessionTool(
     case 'send': {
       const sessionId = requireString(args, 'sessionId', 'send requires sessionId')
       const text = requireString(args, 'text', 'send requires text')
-      const model = await resolveSessionModel(deps.sessions, sessionId, args, ctx)
+      const model = await resolveSessionModel(deps.sessions, sessionId, ctx)
       const { turn } = await deps.sessions.send(sessionId, { text, model, sender: { botId: ctx.botId } })
       ctx.watch(sessionId, turn - 1, optionalTodoIds(args, 'todoIds'))
       return done({ turn })
@@ -359,55 +351,28 @@ async function stopSession(
 }
 
 /**
- * The model one send runs on. An explicit `model` argument wins, then the model
- * the session's newest started turn already used, then the first ranked route.
- * The reasoning level is the explicit argument, then the chosen route's own
- * level, then `high`; with no route the send fails.
+ * The model one send runs on. A session that already has a current model keeps
+ * that model and its effort, so later sends stay on the session's model.
+ * Otherwise the first route of the automatic ladder supplies both the model and
+ * its effort; with no route the send fails.
  */
 async function resolveSessionModel(
   sessions: Session,
   sessionId: string,
-  args: Record<string, unknown>,
   ctx: AgentToolContext,
 ): Promise<AgentModelRoute> {
-  const explicitModel = optionalString(args, 'model')
-  const explicitEffort = effortOf(optionalString(args, 'reasoningEffort'))
-  // The ranked routes are fetched at most once, and only when routing is used.
-  let ranked: readonly AgentModelRoute[] | undefined
-  const rankedRoutes = async (): Promise<readonly AgentModelRoute[]> => {
-    if (ranked === undefined) ranked = await ctx.selectModels()
-    return ranked
-  }
-  const firstRoute = async (): Promise<AgentModelRoute | undefined> => (await rankedRoutes())[0]
-
-  if (explicitModel !== undefined) {
-    const split = splitModelId(explicitModel)
-    if (split === undefined) throw new Error("model must be a 'provider/model' id")
-    // The reasoning level belongs to the named model alone: an unrelated route
-    // never lends its level to an explicitly chosen model. When the named model
-    // has no route of its own the neutral default applies.
-    const ownEffort = explicitEffort === undefined
-      ? (await rankedRoutes()).find(route => `${route.provider}/${route.model}` === explicitModel)?.reasoningEffort
-      : undefined
-    return {
-      provider: split.provider,
-      model: split.model,
-      reasoningEffort: explicitEffort ?? ownEffort ?? 'high',
-    }
-  }
-
   const current = currentSessionModel(sessions, sessionId)
   if (current !== undefined) {
     return {
       provider: current.provider,
       model: current.model,
-      reasoningEffort: explicitEffort ?? current.reasoningEffort ?? (await firstRoute())?.reasoningEffort ?? 'high',
+      reasoningEffort: current.reasoningEffort ?? 'high',
     }
   }
 
-  const route = await firstRoute()
-  if (route === undefined) throw new Error('no model available')
-  return explicitEffort === undefined ? route : { ...route, reasoningEffort: explicitEffort }
+  const route = (await ctx.selectModels())[0]
+  if (route === undefined) throw new Error('no model available from automatic routing')
+  return route
 }
 
 /** The model a session's newest started turn ran on, as `turn.started` recorded it. */
@@ -422,18 +387,6 @@ function currentSessionModel(sessions: Session, sessionId: string): TurnModel | 
     }
   }
   return newest
-}
-
-/** Split one public `provider/model` id at its first slash. */
-function splitModelId(value: string): { provider: string; model: string } | undefined {
-  const slash = value.indexOf('/')
-  if (slash <= 0 || slash === value.length - 1) return undefined
-  return { provider: value.slice(0, slash), model: value.slice(slash + 1) }
-}
-
-/** Read an explicit effort argument onto the session effort vocabulary. */
-function effortOf(value: string | undefined): AuxiliaryRoute['reasoningEffort'] | undefined {
-  return value === undefined ? undefined : (value as AuxiliaryRoute['reasoningEffort'])
 }
 
 // ─── todo tool ─────────────────────────────────────────────────────────────

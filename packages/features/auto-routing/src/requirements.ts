@@ -6,8 +6,8 @@ export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch
 
 /** One tier pool in a bot's step-down ladder. */
 export interface BotLadderStep {
-  readonly intelligence: 'premium' | 'high' | 'mid';
-  readonly requireQuotaSufficient?: boolean;
+  readonly intelligence: readonly ('premium' | 'high' | 'mid')[];
+  readonly quotaState?: 'abundant' | 'sufficient' | 'insufficient';
 }
 
 /** The model evidence one routing requirement asks for. */
@@ -46,19 +46,20 @@ export const ROLE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleReasoning
  */
 export const TASK_REQUIREMENT: RoleReasoningRequirement = ROLE_REQUIREMENTS.reply;
 
-/** Bot agents run a tier ladder from premium down to mid, with the reply
- *  profile's remaining gates. Low stays excluded by the minimum gate. */
+/** Bot agents run a four-state tier ladder: premium and high models with
+ *  abundant, then sufficient, then insufficient quota, and finally any mid
+ *  model in a usable state. Exhausted routes are never used. Low stays
+ *  excluded by the minimum gate. */
 export const BOT_REQUIREMENT: RoleReasoningRequirement = {
   ...ROLE_REQUIREMENTS.reply,
   intelligenceMin: 'mid',
   intelligenceExpected: 'premium',
   expectedReasoningEffort: ['high'],
   ladder: [
-    { intelligence: 'premium', requireQuotaSufficient: true },
-    { intelligence: 'high', requireQuotaSufficient: true },
-    { intelligence: 'premium' },
-    { intelligence: 'high' },
-    { intelligence: 'mid' },
+    { intelligence: ['premium', 'high'], quotaState: 'abundant' },
+    { intelligence: ['premium', 'high'], quotaState: 'sufficient' },
+    { intelligence: ['premium', 'high'], quotaState: 'insufficient' },
+    { intelligence: ['mid'] },
   ],
 };
 

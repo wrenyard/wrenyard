@@ -3,6 +3,8 @@ export { SCORE_WEIGHTS, PRICE_FACTOR_ANCHORS, SPEED_SATURATION_BASE_TPS, ZERO_QU
 export { validateScoreWeights } from './weights.ts';
 export { AutoRouter, isAbundantSupply } from './auto-router.ts';
 export { QuotaPolicy } from './quota-policy.ts';
+export { quotaStateOf } from './quota-states.ts';
+export type { QuotaStateName } from './quota-states.ts';
 export { SupplyEvidencePolicy } from './supply-evidence-policy.ts';
 export { CandidateScorer } from './candidate-scorer.ts';
 export { CandidateEvaluator } from './candidate-evaluator.ts';

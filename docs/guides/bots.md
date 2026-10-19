@@ -69,14 +69,18 @@ ends its turn, and continues when the result is in, instead of polling.
 ## How a bot runs
 
 - Each bot handles one wake at a time; several bots run concurrently.
-- Automatic routing ranks the models a bot may use as a ladder. Premium-tier
-  models with sufficient quota (on or behind pace) come first, then high-tier
-  models with sufficient quota, then premium models ahead of pace, then the
-  remaining high-tier models, and finally mid-tier models as a last resort.
-  Each wake re-ranks the ladder, so a bot steps down only while the higher
-  tiers have no available route and steps back up when they do.
-- A bot session without an explicit model uses normal automatic routing. When
-  no model is available, the wake is dropped and the error is shown on the bot.
+- Automatic routing ranks the models a bot may use as a four-step ladder:
+  premium- and high-tier models with abundant quota come first, then premium-
+  and high-tier models with sufficient quota, then premium- and high-tier
+  models that are nearly used up (insufficient), and finally mid-tier models in
+  any usable state. Models whose quota is exhausted are never used. Each step
+  is ranked by score, and each wake re-ranks the ladder, so a bot steps down
+  only while the higher tiers have no available route and steps back up when
+  they do.
+- The session tool takes no model or reasoning-effort parameter. A session a
+  bot opens gets both its model and its reasoning effort from the same ladder,
+  and later sends keep the session's current model. When no model is available,
+  the wake is dropped and the error is shown on the bot.
 - A failed model call keeps the existing single fallback attempt: the wake is
   retried once on the next route the ladder ranked.
 - Queued wakes, watched sessions and routine rounds survive a daemon restart,

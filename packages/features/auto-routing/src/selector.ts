@@ -8,7 +8,8 @@ import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, routingR
 import type { IntelligenceTier } from '@wrenyard/providers/catalog';
 import { isMainstreamModelId, type ReasoningEffort } from '@wrenyard/models';
 import type { CandidateInput, RequiredQuotaConstraint } from './types.ts';
-import { AutoRouter, isAbundantSupply } from './auto-router.ts';
+import { AutoRouter } from './auto-router.ts';
+import { quotaStateOf } from './quota-states.ts';
 import {
   AUXILIARY_TIMEOUT_MS,
   BOT_REQUIREMENT,
@@ -291,6 +292,7 @@ function createSelector(
       }, pricings[index]);
       if (candidate) inputs.push(candidate); else reject('invalid model evidence');
     });
+    const inputsById = new Map(inputs.map(input => [input.canonicalId, input]));
     const weights = settings?.routingWeights;
     const scoreWeights = weights ? { P: weights.price, S: weights.speed, Q: weights.quota, I: weights.intelligence } : undefined;
     // Scores are per candidate, so filtering the ranked list keeps the ranking of any layer.
@@ -299,28 +301,34 @@ function createSelector(
     const levelsOf = new Map(entries.map(({ entry, levels }) => [entry.choice.exactAgentRuntime, levels]));
     const speedsOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.speed.effective_tps]));
     const tiersOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.intelligence]));
-    const admitted = ranked.ranked.map(candidate => ({
-      model: candidate.canonicalId,
-      levels: levelsOf.get(candidate.canonicalId)!,
-      speedTps: speedsOf.get(candidate.canonicalId)!,
-      tier: tiersOf.get(candidate.canonicalId)!,
-      quota: candidate.quota,
-      abundant: isAbundantSupply(candidate),
-    }));
+    const admitted = ranked.ranked.map(candidate => {
+      const input = inputsById.get(candidate.canonicalId);
+      return {
+        model: candidate.canonicalId,
+        levels: levelsOf.get(candidate.canonicalId)!,
+        speedTps: speedsOf.get(candidate.canonicalId)!,
+        tier: tiersOf.get(candidate.canonicalId)!,
+        quotaState: quotaStateOf(input?.requiredQuota ?? [], nowMs, {
+          confirmedFreeSupply: input?.confirmedFreeSupply != null,
+        }),
+      };
+    });
     const preferred = requirements.expectedReasoningEffort;
     const ladder = requirements.ladder;
     if (ladder !== undefined) {
-      // Ladder mode pools the admitted candidates by tier in ladder order,
-      // preserving the AutoRouter ranking inside each pool. A candidate can
-      // match several steps (for example a premium model with sufficient
-      // quota), so each route is emitted at most once, at its first matching
-      // step, keeping the pools disjoint. The global effort layer below is
-      // intentionally skipped: it could drop every mid model that lacks the
-      // preferred effort. Candidates matching no step are dropped defensively.
+      // Ladder mode pools the admitted candidates by the shared four-state
+      // quota model, in ladder order, preserving the AutoRouter ranking inside
+      // each pool. Exhausted routes are never used. A candidate can match only
+      // one step's quotaState, but the mid step has no state restriction, so
+      // each route is emitted at most once, at its first matching step. The
+      // global effort layer below is intentionally skipped: it could drop every
+      // mid model that lacks the preferred effort. Candidates matching no step
+      // are dropped defensively.
       const emitted = new Set<string>();
-      const ladderPool = ladder.flatMap(step => admitted.filter(({ model, tier, quota, abundant }) => {
-        if (tier !== step.intelligence) return false;
-        if (step.requireQuotaSufficient && !(abundant || quota.state === 'healthy')) return false;
+      const ladderPool = ladder.flatMap(step => admitted.filter(({ model, tier, quotaState }) => {
+        if (quotaState === 'exhausted') return false;
+        if (!(step.intelligence as readonly string[]).includes(tier)) return false;
+        if (step.quotaState !== undefined && step.quotaState !== quotaState) return false;
         if (emitted.has(model)) return false;
         emitted.add(model);
         return true;
@@ -328,9 +336,9 @@ function createSelector(
       if (!ladderPool.length) throw new Error(`Auxiliary role ${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
       return ladderPool.map(({ model, levels }) => ({
         model,
-        // Each route carries its own effort: the expected level when the
-        // candidate supports it, otherwise its first declared level.
-        reasoningEffort: preferred.find(effort => levels.includes(effort)) ?? levels[0]!,
+        // The bot rule: high when the model declares it, otherwise the nearest
+        // level above high, otherwise the model's highest level.
+        reasoningEffort: resolveReasoningEffort('high', levels),
       }));
     }
     const selected = preferred.map(effort => admitted.filter(({ levels }) => levels.includes(effort))).find(layer => layer.length > 0) ?? admitted;
