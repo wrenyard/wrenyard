@@ -1298,7 +1298,6 @@ async function createForemanDaemonResources(
       workspaceRoot,
       workspaceBotsDir: join(workspaceRoot, 'bots'),
       deviceBotsDir: join(resolveWrenyardConfigRoot(), 'bot-agents'),
-      dutiesDir: join(resolveWrenyardConfigRoot(), 'bot-duties'),
       stateDir: join(sessionStateRoot, 'bot-agents', sha256hex(workspaceRoot)),
       host: daemonSessionHost,
       sessions: session,

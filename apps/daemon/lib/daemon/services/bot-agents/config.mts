@@ -8,9 +8,14 @@
  *
  * Each directory holds `bot.json` (the user-only switches), `identity.md` (the
  * name, icon, description and role text the bot itself may edit) and a
- * `memory/` directory. What a bot does on this device is its duties file,
- * `<config root>/bot-duties/<id>.md`: never synced, and only the user edits it. Loading never throws: an unreadable or invalid part
- * disables only that bot and keeps the error visible.
+ * `memory/` directory.
+ *
+ * What a bot does on this device is `<config root>/bot-agents/<id>/routines.md`:
+ * never synced, and only the user edits it. For a workspace bot that device
+ * directory holds only `routines.md` and is not a second bot.
+ *
+ * Loading never throws: an unreadable or invalid part disables only that bot
+ * and keeps the error visible.
  */
 
 import { createHash } from 'node:crypto'
@@ -41,8 +46,6 @@ export interface BotAgentRoots {
   workspace: string
   /** `<config root>/bot-agents`. */
   device: string
-  /** `<config root>/bot-duties`: one `<id>.md` per bot, local to this device. */
-  duties: string
 }
 
 /** The only top-level keys `bot.json` may declare. */
@@ -85,7 +88,7 @@ export interface BotAgentChangeSet {
   config: string
   identity: string
   memory: string
-  duties: string
+  routines: string
 }
 
 /**
@@ -111,8 +114,8 @@ export interface BotAgentEntry {
   identityText: string
   config?: BotAgentConfig
   identity?: BotAgentIdentity
-  /** This device's duties for the bot, when its duties file exists. */
-  duties?: string
+  /** The bot's routines on this device, when its routines file exists. */
+  routines?: string
   error?: string
   signature: string
 }
@@ -325,7 +328,7 @@ async function readDefinition(
   id: string,
   location: AgentBotLocation,
   previous: BotAgentEntry | undefined,
-  dutiesDir: string,
+  deviceRoot: string,
 ): Promise<BotAgentEntry> {
   const directory = join(root, id)
   const configPath = join(directory, 'bot.json')
@@ -340,7 +343,7 @@ async function readDefinition(
     memoryDir,
     primary: false,
     warnings: [] as string[],
-    change: { config: 'missing', identity: 'missing', memory: '', duties: 'missing' } satisfies BotAgentChangeSet,
+    change: { config: 'missing', identity: 'missing', memory: '', routines: 'missing' } satisfies BotAgentChangeSet,
   }
   try {
     const info = await lstat(directory)
@@ -383,27 +386,27 @@ async function readDefinition(
     errors.push(`identity.md: ${errorText(error)}`)
   }
 
-  // The duties file is optional: a missing one means no duties on this device.
-  const dutiesPath = join(dutiesDir, `${id}.md`)
-  let dutiesSignature = 'missing'
-  let duties: string | undefined
+  // The routines file is optional: a missing one means no routines on this device.
+  const routinesPath = join(deviceRoot, id, 'routines.md')
+  let routinesSignature = 'missing'
+  let routines: string | undefined
   try {
-    const info = await lstat(dutiesPath)
-    if (!info.isFile()) throw new Error('duties file is a symlink or not a file')
-    dutiesSignature = signatureText(signatureOf(info))
-    duties = (await readFile(dutiesPath, 'utf8')).trim()
+    const info = await lstat(routinesPath)
+    if (!info.isFile()) throw new Error('routines file is a symlink or not a file')
+    routinesSignature = signatureText(signatureOf(info))
+    routines = (await readFile(routinesPath, 'utf8')).trim()
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') errors.push(`duties: ${errorText(error)}`)
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') errors.push(`routines: ${errorText(error)}`)
   }
 
   const change: BotAgentChangeSet = {
     config: configSignature,
     identity: identitySignature,
     memory: await memorySignature(directory),
-    duties: dutiesSignature,
+    routines: routinesSignature,
   }
   const signature = createHash('sha1')
-    .update(`${change.config}|${change.identity}|${change.memory}|${change.duties}`)
+    .update(`${change.config}|${change.identity}|${change.memory}|${change.routines}`)
     .digest('hex')
   if (previous !== undefined && previous.signature === signature) return previous
 
@@ -414,10 +417,14 @@ async function readDefinition(
     identityText,
     ...(config === undefined ? {} : { config }),
     ...(identity === undefined ? {} : { identity }),
-    ...(duties === undefined || duties === '' ? {} : { duties }),
+    ...(routines === undefined || routines === '' ? {} : { routines }),
     ...(errors.length === 0 ? {} : { error: errors.join('; ') }),
     signature,
   }
+}
+
+async function exists(path: string): Promise<boolean> {
+  return lstat(path).then(() => true, () => false)
 }
 
 interface ScannedDirectory {
@@ -463,11 +470,14 @@ export async function loadBotAgents(
   const workspaceIds = new Set(workspace.map(item => item.id))
   for (const item of workspace) {
     loaded.push(await readDefinition(
-      roots.workspace, item.id, 'workspace', cached.get(`workspace\n${item.id}`), roots.duties,
+      roots.workspace, item.id, 'workspace', cached.get(`workspace\n${item.id}`), roots.device,
     ))
   }
   for (const item of device) {
-    const entry = await readDefinition(roots.device, item.id, 'device', cached.get(`device\n${item.id}`), roots.duties)
+    // A device directory without bot.json next to a workspace bot of the same
+    // id only carries that bot's local routines; it is not a second bot.
+    if (workspaceIds.has(item.id) && !(await exists(join(item.directory, 'bot.json')))) continue
+    const entry = await readDefinition(roots.device, item.id, 'device', cached.get(`device\n${item.id}`), roots.device)
     if (workspaceIds.has(item.id)) {
       warnings.push(`bot "${item.id}" exists in both roots; the workspace bot is used and the device bot is disabled`)
       loaded.push({

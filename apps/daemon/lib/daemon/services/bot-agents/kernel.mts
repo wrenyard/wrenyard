@@ -256,8 +256,6 @@ export interface CreateBotAgentKernelOptions {
   workspaceBotsDir: string
   /** `<config root>/bot-agents`: one directory per device-only bot. */
   deviceBotsDir: string
-  /** `<config root>/bot-duties`: each bot's duties on this device. */
-  dutiesDir: string
   /** `<state root>/bot-agents/<sha256(workspaceRoot)>`: state and bot ledgers. */
   stateDir: string
   /** The daemon session host; the kernel derives its private bot host from it. */
@@ -366,7 +364,7 @@ async function readMemoryBlock(entry: BotAgentEntry): Promise<string> {
 
 /**
  * The fixed instruction prefix every bot runs on: its identity role, its
- * duties on this device, the per-bot memory it already has, and the enabled peers it may address in the
+ * routines on this device, the per-bot memory it already has, and the enabled peers it may address in the
  * group. The roster is appended after the prefix, the group guidance, the role
  * text and the memory, all verbatim.
  */
@@ -405,7 +403,7 @@ function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>, mem
   const body = identity?.body ?? ''
   const parts = [fixed, GROUP_PROMPT_GUIDANCE]
   if (body.trim() !== '') parts.push(body)
-  if (entry.duties !== undefined) parts.push(`## Your duties on this device\n\n${entry.duties}`)
+  if (entry.routines !== undefined) parts.push(`## Your routines on this device\n\n${entry.routines}`)
   if (memory.trim() !== '') parts.push(memory)
   parts.push(roster)
   return parts.join('\n\n')
@@ -686,7 +684,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   const roots: BotAgentRoots = {
     workspace: options.workspaceBotsDir,
     device: options.deviceBotsDir,
-    duties: options.dutiesDir,
   }
   /** Active definitions, by id; a workspace bot wins a clash. */
   const entries = new Map<string, BotAgentEntry>()
