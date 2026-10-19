@@ -6,6 +6,6 @@ const SOURCE_DEVELOPMENT_SUFFIX = '（开发模式）';
 export function formatShellWindowTitle(page: ShellPage, appVersion: string, sourceDevelopment: boolean): string {
   const productTitle = `${PRODUCT_TITLE} v${appVersion}${sourceDevelopment ? SOURCE_DEVELOPMENT_SUFFIX : ''}`;
   if (page === 'session') return productTitle;
-  const pageTitle = page === 'trace' ? '追踪' : page === 'stats' ? '工房台账' : page === 'tasks' ? '任务' : page === 'agents' ? '机器人' : page === 'bot' ? '旧版机器人' : '设置';
+  const pageTitle = page === 'trace' ? '追踪' : page === 'stats' ? '工房台账' : page === 'tasks' ? '任务' : page === 'agents' ? '机器人' : page === 'routines' ? '自动化' : page === 'bot' ? '旧版机器人' : '设置';
   return `${pageTitle} — ${productTitle}`;
 }

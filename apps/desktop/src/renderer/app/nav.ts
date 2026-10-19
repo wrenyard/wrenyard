@@ -1,4 +1,4 @@
-import { Bot, ChartColumn, ListChecks, MessagesSquare, Network, Settings } from 'lucide-react';
+import { Bot, CalendarClock, ChartColumn, ListChecks, MessagesSquare, Network, Settings } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ShellPage } from '@/shell-contract';
 
@@ -14,8 +14,9 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
   { id: 'session', label: '会话', icon: MessagesSquare },
   { id: 'trace', label: '追踪', icon: Network },
   { id: 'stats', label: '工房台账', icon: ChartColumn },
-  { id: 'tasks', label: '任务', icon: ListChecks },
+  { id: 'tasks', label: '智能体任务', icon: ListChecks },
   { id: 'agents', label: '机器人', icon: Bot },
+  { id: 'routines', label: '自动化', icon: CalendarClock },
   { id: 'bot', label: '旧版机器人', icon: Bot },
 ];
 

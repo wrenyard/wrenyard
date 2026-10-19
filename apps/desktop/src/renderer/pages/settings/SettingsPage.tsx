@@ -442,8 +442,8 @@ export function SettingsPage({
       return <ShortcutsTable platform={platform} query={query} />;
     }
     if (categoryId === 'bot') {
-      // Routines and the read-only bot config moved here from the chat page;
-      // the chat page is now only the group/private conversation.
+      // The read-only bot config lives here; routines moved to the dedicated
+      // 自动化 page. The chat page is now only the group/private conversation.
       return <BotSettings />;
     }
     if (categoryId === 'supply') {

@@ -266,7 +266,7 @@ export const SHELL_CHANNELS = {
   clientRequest: 'wrenyard-shell:client-request',
 } as const;
 
-export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'agents' | 'bot' | 'todo';
+export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'agents' | 'routines' | 'bot' | 'todo';
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */
@@ -2167,7 +2167,7 @@ export interface WrenyardShellApi {
 }
 
 export function isShellPage(value: unknown): value is ShellPage {
-  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'agents' || value === 'bot' || value === 'todo';
+  return value === 'session' || value === 'trace' || value === 'stats' || value === 'settings' || value === 'tasks' || value === 'agents' || value === 'routines' || value === 'bot' || value === 'todo';
 }
 
 /**

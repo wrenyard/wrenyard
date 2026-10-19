@@ -1040,7 +1040,8 @@ function PrivateView(props: {
  * per-bot private conversation alongside it. Both modes read the daemon's own
  * records — the shared transcript through `agent.group.events` and one bot's
  * context ledger through `agent.events` — so the page never reconstructs
- * history. Settings (routines and config) moved to Settings → 机器人.
+ * history. Routines moved to the dedicated 自动化 page; config remains in
+ * Settings → 机器人.
  */
 export function AgentsPage() {
   const agents = useAgentsQuery();
