@@ -621,6 +621,12 @@ export interface UpdateSnapshot {
   message?: string;
   /** Structured install progress; absent unless an install attempt is running. */
   progress?: UpdateProgress;
+  /**
+   * Note rendered beside the install action, e.g. when the fresh pre-install
+   * check failed and the last known release is installed instead. Carried
+   * through the install phases and cleared by the next check.
+   */
+  installWarning?: string;
 }
 
 /**

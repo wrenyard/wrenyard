@@ -95,6 +95,15 @@ const UNAVAILABLE_MESSAGES: Record<UpdateInstallReason, string> = {
   'source-development': '当前为源码开发模式，不会检查或安装发行版更新。停止 `pnpm dev` 后可再使用已安装的啾啾工坊。',
 };
 
+/**
+ * Note shown when the pre-install check failed and the install falls back to
+ * the last known release: the user must know the version came from an older
+ * check instead of the feed refresh.
+ */
+function staleFallbackNote(version: string): string {
+  return `安装前的最新检查失败，将安装上次检查到的 v${version}。`;
+}
+
 /** Human-readable explanation keyed to the reason code every surface shows. */
 export function installUnavailableMessage(reason: UpdateInstallReason | undefined): string {
   return (reason && UNAVAILABLE_MESSAGES[reason]) || '当前无法应用内更新，请检查本机安装后重试。';
@@ -144,6 +153,11 @@ export class DesktopUpdateController {
   private readonly target: PlatformTriplet | null;
   private snapshotValue: UpdateSnapshot;
   private updateAsset?: UpdateAsset;
+  /**
+   * Newest release the feed last reported. Kept independently of the snapshot
+   * so a failed check (which erases `availableVersion`) cannot lose it.
+   */
+  private lastKnown?: { version: string; asset: UpdateAsset };
   private pendingFinalize: PendingUpdate | null = null;
   private checkPromise?: Promise<UpdateSnapshot>;
   private installing = false;
@@ -344,6 +358,9 @@ export class DesktopUpdateController {
       const feed = parseUpdateFeedJson(await response.text(), { triplet: target });
       const newer = compareVersions(feed.version, this.currentVersion) > 0;
       this.updateAsset = newer ? feed.update : undefined;
+      // A successful check is the only writer: it records the newest release,
+      // and clears the record when the feed reports nothing newer.
+      this.lastKnown = newer ? { version: feed.version, asset: feed.update } : undefined;
       this.setSnapshot(withCapability({
         state: newer ? 'available' : 'up-to-date',
         currentVersion: this.currentVersion,
@@ -391,12 +408,43 @@ export class DesktopUpdateController {
     const applier = this.applier;
     if (applier === null) return this.fail(installUnavailableMessage('unsupported-platform'));
 
-    if (this.snapshotValue.availableVersion === undefined) {
-      await this.checkForUpdates(true);
-      if (this.snapshotValue.availableVersion === undefined) return this.snapshot();
+    // Install the newest release the feed offers, never the candidate an older
+    // check recorded: every attempt (including a retry out of `waiting`)
+    // refreshes the feed first, deduped by `checkPromise`. `waiting` would make
+    // the check skip itself, so it steps back to `idle` for the duration.
+    if (this.snapshotValue.state === 'waiting') {
+      this.setSnapshot({ ...this.snapshotValue, state: 'idle' });
     }
-    const version = this.snapshotValue.availableVersion;
-    if (version === undefined || signal.aborted) return this.snapshot();
+    await this.checkForUpdates(true);
+    if (signal.aborted) return this.snapshot();
+
+    let candidateVersion: string | undefined = this.snapshotValue.availableVersion;
+    let candidateAsset: UpdateAsset | undefined = this.updateAsset;
+    // Never install the running version or an older one.
+    if (candidateVersion !== undefined && compareVersions(candidateVersion, this.currentVersion) <= 0) {
+      candidateVersion = undefined;
+      candidateAsset = undefined;
+    }
+    if (candidateVersion === undefined || candidateAsset === undefined) {
+      const known = this.lastKnown;
+      if (known !== undefined && compareVersions(known.version, this.currentVersion) > 0) {
+        candidateVersion = known.version;
+        candidateAsset = known.asset;
+        this.setSnapshot({
+          ...this.snapshotValue,
+          state: 'available',
+          availableVersion: known.version,
+          installWarning: staleFallbackNote(known.version),
+        });
+      }
+    }
+    // No newer candidate from the feed and none still newer than the running
+    // version: keep the check's own outcome (its error, or up-to-date) and
+    // download nothing.
+    if (candidateVersion === undefined || candidateAsset === undefined) return this.snapshot();
+    // Pinned for this attempt: a reentrant check can never mismatch them.
+    const version = candidateVersion;
+    const asset = candidateAsset;
 
     // Confirm: the daemon must be idle before anything is downloaded.
     if ((await this.probeIdle()) !== true) return this.enterWaiting();
@@ -422,7 +470,7 @@ export class DesktopUpdateController {
       const start: UpdateSnapshot = { ...this.snapshotValue, state: 'installing', message: '正在下载更新…' };
       delete start.progress;
       this.setSnapshot(start);
-      const assetPath = await this.downloadUpdate(version, signal, (progress) => {
+      const assetPath = await this.downloadUpdate(version, asset, signal, (progress) => {
         this.setSnapshot({
           ...this.snapshotValue,
           state: 'installing',
@@ -447,7 +495,7 @@ export class DesktopUpdateController {
           message: phase === 'verifying' ? verifyingMessage : extractingMessage,
           progress: { phase },
         });
-      }, this.updateAsset?.sha256);
+      }, asset.sha256);
     } catch (error) {
       this.installing = false;
       if (signal.aborted) return this.snapshot();
@@ -522,13 +570,16 @@ export class DesktopUpdateController {
     if (mode === 'supervised') await this.stopDaemon();
   }
 
+  /**
+   * Downloads the pinned asset: the version/asset pair is captured by
+   * `runInstall` so a reentrant check can never mismatch them.
+   */
   private async downloadUpdate(
     version: string,
+    asset: UpdateAsset,
     signal: AbortSignal,
     onProgress: (progress: UpdateProgress) => void,
   ): Promise<string> {
-    const asset = this.updateAsset;
-    if (asset === undefined) throw new Error('没有可用的更新文件，请重新检查更新。');
     const dest = join(this.userDataPath, 'updates', version, asset.name);
     try {
       await downloadFile({

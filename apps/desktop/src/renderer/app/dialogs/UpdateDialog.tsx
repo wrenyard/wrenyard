@@ -43,7 +43,9 @@ export function UpdateDialog({ open, onOpenChange }: UpdateDialogProps) {
         </DialogHeader>
 
         <div className={DIALOG_BODY_CLASS}>
-          <UpdatePanel />
+          {/* Mounted only while open, so every closed→open transition runs the
+              panel's own fresh check instead of reusing an earlier result. */}
+          {open && <UpdatePanel />}
         </div>
 
         <DialogFooter>
