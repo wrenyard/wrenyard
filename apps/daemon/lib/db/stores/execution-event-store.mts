@@ -1,3 +1,4 @@
+import { cachedStatement } from '../connection.mts'
 import type { ForemanDatabase } from '../types.mts'
 import { compactJsonRecord, toJsonText } from './json.mts'
 
@@ -42,30 +43,38 @@ export class ExecutionEventStore {
    * produce genuinely new sequence numbers count exactly once.
    */
   insertExecutionEvent(write: ExecutionEventWrite): void {
-    this.db.transaction(() => {
-      const result = this.db.prepare<unknown[]>(
-        `INSERT OR IGNORE INTO events (
-          execution_id, task_id, seq, type, timestamp, data, status, exit_code, is_error, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        write.executionId,
-        write.taskId ?? null,
-        write.seq,
-        write.type,
-        write.timestamp,
-        toJsonText(write.data ?? {}),
-        write.status ?? null,
-        write.exitCode ?? null,
-        write.isError ?? null,
-        write.timestamp,
-      )
-      if (result.changes !== 1) return
-      this.applyTelemetry(write)
-    })()
+    if (this.db.inTransaction) {
+      this.insertEventRow(write)
+      return
+    }
+    this.db.transaction(() => this.insertEventRow(write))()
+  }
+
+  private insertEventRow(write: ExecutionEventWrite): void {
+    const result = cachedStatement<unknown[]>(
+      this.db,
+      `INSERT OR IGNORE INTO events (
+        execution_id, task_id, seq, type, timestamp, data, status, exit_code, is_error, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      write.executionId,
+      write.taskId ?? null,
+      write.seq,
+      write.type,
+      write.timestamp,
+      toJsonText(write.data ?? {}),
+      write.status ?? null,
+      write.exitCode ?? null,
+      write.isError ?? null,
+      write.timestamp,
+    )
+    if (result.changes !== 1) return
+    this.applyTelemetry(write)
   }
 
   maxSequence(executionId: string): number {
-    const row = this.db.prepare<[string], { seq: number }>(
+    const row = cachedStatement<[string], { seq: number }>(
+      this.db,
       `SELECT COALESCE(MAX(seq), 0) AS seq
       FROM events
       WHERE execution_id = ?`,
@@ -91,8 +100,9 @@ export class ExecutionEventStore {
       finished_at: write.finishedAt,
     })
 
-    this.db.transaction(() => {
-      this.db.prepare<unknown[]>(
+    const insertRow = (): void => {
+      cachedStatement<unknown[]>(
+        this.db,
         `INSERT INTO events (
           execution_id, task_id, seq, type, timestamp, data,
           status, exit_code, is_error, created_at
@@ -109,7 +119,13 @@ export class ExecutionEventStore {
       // Every new task run materializes its durable zero/true telemetry row
       // atomically with the task.started lifecycle event.
       this.ensureTelemetryRow(write.taskRunId, write.timestamp)
-    })()
+    }
+
+    if (this.db.inTransaction) {
+      insertRow()
+      return
+    }
+    this.db.transaction(insertRow)()
   }
 
   /**
@@ -118,7 +134,8 @@ export class ExecutionEventStore {
    * lifecycle events and event streaming.
    */
   private ensureTelemetryRow(taskRunId: string, timestamp: string): void {
-    this.db.prepare(
+    cachedStatement(
+      this.db,
       `INSERT OR IGNORE INTO task_run_telemetry (
         task_run_id, tool_call_count, usage_event_count, output_tokens,
         created_at, updated_at
@@ -145,7 +162,8 @@ export class ExecutionEventStore {
     if (!taskRunId) return
     this.ensureTelemetryRow(taskRunId, write.timestamp)
     if (write.type === 'tool_call') {
-      this.db.prepare(
+      cachedStatement(
+        this.db,
         `UPDATE task_run_telemetry
          SET tool_call_count = tool_call_count + 1, updated_at = ?
          WHERE task_run_id = ?`,
@@ -159,7 +177,8 @@ export class ExecutionEventStore {
       // partition, counted exactly once) + output sum, so cached_read/
       // cache_creation splits never double count the cached partition.
       const totalIncrement = usage.inputTokens + usage.cachedInputTokens + usage.outputTokens
-      this.db.prepare(
+      cachedStatement(
+        this.db,
         `UPDATE task_run_telemetry
          SET usage_event_count = usage_event_count + 1,
              input_tokens = input_tokens + ?,
@@ -182,7 +201,8 @@ export class ExecutionEventStore {
       )
       return
     }
-    this.db.prepare(
+    cachedStatement(
+      this.db,
       `UPDATE task_run_telemetry
        SET completeness = 'partial', updated_at = ?
        WHERE task_run_id = ?`,

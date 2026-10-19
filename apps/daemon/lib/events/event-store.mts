@@ -1,10 +1,26 @@
-import { getDb } from '../db/connection.mts'
+import { cachedStatement, getDb } from '../db/connection.mts'
 import type { ForemanDatabase } from '../db/types.mts'
 import { compactJsonRecord, toJsonText } from '../db/stores/json.mts'
 import { getForemanEventBus } from './event-bus.mts'
 import type { ForemanEvent, ForemanEventSeverity } from './event-types.mts'
 
 const FOREMAN_EVENT_SCHEMA_VERSION = 'foreman.event.v1'
+
+// The caches must be keyed by the Database object rather than by event-store
+// instance: ForemanEventStore instances are constructed per call, and test
+// processes re-init the DB with a fresh object, so per-object caches cannot
+// leak sequences or row ids across databases.
+const executionSequences = new WeakMap<ForemanDatabase, Map<string, number>>()
+const knownRowIds = new WeakMap<ForemanDatabase, Map<string, string | null>>()
+
+function cacheFor<K, V>(store: WeakMap<ForemanDatabase, Map<K, V>>, db: ForemanDatabase): Map<K, V> {
+  let map = store.get(db)
+  if (!map) {
+    map = new Map()
+    store.set(db, map)
+  }
+  return map
+}
 
 export interface StoredForemanEvent {
   cursor: number
@@ -55,7 +71,8 @@ export class ForemanEventStore {
     const executionId = this.existingId('executions', event.refs.executionId)
     const taskId = this.existingId('tasks', event.refs.taskId)
     const seq = executionId ? this.nextExecutionSequence(executionId) : 0
-    const result = this.db.prepare<unknown[]>(
+    const result = cachedStatement<unknown[]>(
+      this.db,
       `INSERT INTO events (
         execution_id, task_id, seq, type, timestamp, data,
         status, exit_code, is_error, created_at
@@ -118,18 +135,34 @@ export class ForemanEventStore {
   }
 
   private nextExecutionSequence(executionId: string): number {
-    const row = this.db.prepare<[string], { seq: number }>(
+    const seqs = cacheFor(executionSequences, this.db)
+    const cached = seqs.get(executionId)
+    if (cached !== undefined) {
+      const next = cached + 1
+      seqs.set(executionId, next)
+      return next
+    }
+    const row = cachedStatement<[string], { seq: number }>(
+      this.db,
       `SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM events WHERE execution_id = ?`,
     ).get(executionId)
-    return row?.seq ?? 1
+    const next = row?.seq ?? 1
+    seqs.set(executionId, next)
+    return next
   }
 
   private existingId(table: 'executions' | 'tasks', id: string | undefined): string | null {
     if (!id) return null
-    const row = this.db.prepare<[string], { id: string }>(
+    const known = cacheFor(knownRowIds, this.db)
+    const key = `${table}:${id}`
+    if (known.has(key)) return known.get(key) ?? null
+    const row = cachedStatement<[string], { id: string }>(
+      this.db,
       `SELECT id FROM ${table} WHERE id = ?`,
     ).get(id)
-    return row?.id ?? null
+    const value = row?.id ?? null
+    known.set(key, value)
+    return value
   }
 
   private eventFromRow(row: EventRow): StoredForemanEvent | null {

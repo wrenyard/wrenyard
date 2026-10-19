@@ -1071,37 +1071,40 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
         )
       }
 
-      for (const mapped of mapStreamEventToBClass(event)) {
-        // A tool call suspends the idle bound until its tool_result arrives, so
-        // a legitimately long-running tool cannot be killed while it runs. The
-        // wall-clock attempt deadline still applies.
-        if (mapped.type === 'tool_call') {
-          entry.outstandingToolCalls ??= new Set()
-          entry.outstandingToolCalls.add(typeof mapped.data.call_id === 'string' ? mapped.data.call_id : '')
-          if (entry.outstandingToolCalls.size === 1) this.clearIdleTimer(entry)
-        } else if (mapped.type === 'tool_result') {
-          entry.outstandingToolCalls?.delete(typeof mapped.data.call_id === 'string' ? mapped.data.call_id : '')
-          if (entry.outstandingToolCalls && entry.outstandingToolCalls.size === 0) this.armIdleTimer(entry)
-        }
-        // With no tool outstanding, only real model output resets the idle
-        // bound: a tool_call, a tool_result, or non-blank message/reasoning text.
-        // Status, heartbeat, token accounting and blank text are not progress.
-        if (isModelOutputProgress(mapped)) {
-          entry.idleTimer?.refresh()
-        }
-        if (mapped.type === 'message' && typeof mapped.data.text === 'string') {
-          entry.outputParts.push(mapped.data.text)
-        }
-
-        const redacted = redactEvent(mapped.type, mapped.data)
+      const mappedEvents = mapStreamEventToBClass(event)
+      if (mappedEvents.length > 0) {
         this.tx(() => {
-          this.insertEvent({
-            executionId: entry.executionId,
-            taskId: entry.taskId,
-            seq: nextSeq(entry),
-            type: mapped.type,
-            data: redacted,
-          })
+          for (const mapped of mappedEvents) {
+            // A tool call suspends the idle bound until its tool_result arrives, so
+            // a legitimately long-running tool cannot be killed while it runs. The
+            // wall-clock attempt deadline still applies.
+            if (mapped.type === 'tool_call') {
+              entry.outstandingToolCalls ??= new Set()
+              entry.outstandingToolCalls.add(typeof mapped.data.call_id === 'string' ? mapped.data.call_id : '')
+              if (entry.outstandingToolCalls.size === 1) this.clearIdleTimer(entry)
+            } else if (mapped.type === 'tool_result') {
+              entry.outstandingToolCalls?.delete(typeof mapped.data.call_id === 'string' ? mapped.data.call_id : '')
+              if (entry.outstandingToolCalls && entry.outstandingToolCalls.size === 0) this.armIdleTimer(entry)
+            }
+            // With no tool outstanding, only real model output resets the idle
+            // bound: a tool_call, a tool_result, or non-blank message/reasoning text.
+            // Status, heartbeat, token accounting and blank text are not progress.
+            if (isModelOutputProgress(mapped)) {
+              entry.idleTimer?.refresh()
+            }
+            if (mapped.type === 'message' && typeof mapped.data.text === 'string') {
+              entry.outputParts.push(mapped.data.text)
+            }
+
+            const redacted = redactEvent(mapped.type, mapped.data)
+            this.insertEvent({
+              executionId: entry.executionId,
+              taskId: entry.taskId,
+              seq: nextSeq(entry),
+              type: mapped.type,
+              data: redacted,
+            })
+          }
         })
       }
     }

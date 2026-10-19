@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import type { Statement } from 'better-sqlite3'
 import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
@@ -8,6 +9,10 @@ import type { ForemanDatabase, RunResult, TransactionCallback } from './types.mt
 
 let db: ForemanDatabase | undefined
 let openedPath: string | undefined
+
+const PREPARED_STATEMENT_CACHE_LIMIT = 512
+
+const preparedStatements = new WeakMap<ForemanDatabase, Map<string, Statement>>()
 
 const SLOW_QUERY_THRESHOLD_MS = 100
 const SLOW_QUERY_SQL_MAX_CHARS = 200
@@ -69,23 +74,40 @@ export function getDb(): ForemanDatabase {
   return db
 }
 
+export function cachedStatement<Params extends unknown[] = unknown[], Result = unknown>(
+  database: ForemanDatabase,
+  sql: string,
+): Statement<Params, Result> {
+  let bySql = preparedStatements.get(database)
+  if (!bySql) {
+    bySql = new Map()
+    preparedStatements.set(database, bySql)
+  }
+  const cached = bySql.get(sql)
+  if (cached) return cached as Statement<Params, Result>
+  if (bySql.size >= PREPARED_STATEMENT_CACHE_LIMIT) bySql.clear()
+  const statement = database.prepare(sql) as Statement<Params, Result>
+  bySql.set(sql, statement)
+  return statement
+}
+
 export function query<T>(sql: string, ...params: unknown[]): T[] {
   const startedAt = performance.now()
-  const rows = getDb().prepare<unknown[], T>(sql).all(...params)
+  const rows = cachedStatement<unknown[], T>(getDb(), sql).all(...params)
   reportSlowQuery('query', sql, performance.now() - startedAt)
   return rows
 }
 
 export function get<T>(sql: string, ...params: unknown[]): T | undefined {
   const startedAt = performance.now()
-  const row = getDb().prepare<unknown[], T>(sql).get(...params)
+  const row = cachedStatement<unknown[], T>(getDb(), sql).get(...params)
   reportSlowQuery('get', sql, performance.now() - startedAt)
   return row
 }
 
 export function run(sql: string, ...params: unknown[]): RunResult {
   const startedAt = performance.now()
-  const result = getDb().prepare<unknown[]>(sql).run(...params)
+  const result = cachedStatement<unknown[]>(getDb(), sql).run(...params)
   reportSlowQuery('run', sql, performance.now() - startedAt)
   return result
 }
