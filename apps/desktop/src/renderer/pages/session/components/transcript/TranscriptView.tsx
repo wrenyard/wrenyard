@@ -5,10 +5,11 @@
  */
 import { memo } from 'react';
 import { cn } from 'cn';
+import { MessageFooter } from '@/renderer/components/chat/MessageFooter';
 import { Button } from '@/renderer/components/ui/button';
 import { MessageScrollerItem } from '@/renderer/components/ui/message-scroller';
 import type { TurnWaitingState } from '../../model/describe.js';
-import type { DraftAttachment, TurnModel } from '../../model/types.js';
+import type { DraftAttachment, ModelEntry, TurnModel } from '../../model/types.js';
 import type { PendingTurn } from '../../state/session-reducer.js';
 import { MediaAttachments, fromDraftAttachment } from '../MediaAttachments.js';
 import { TranscriptTurn } from './TranscriptTurn.js';
@@ -20,6 +21,8 @@ export interface TranscriptViewProps {
   pending: readonly PendingTurn[];
   /** Ledger session id, forwarded to attachment media. */
   sessionId?: string;
+  /** Model catalog, forwarded so replies can show a display name. */
+  models?: readonly ModelEntry[];
   /** Cancel one dispatched task run. */
   onCancelTask: (taskRunId: string) => Promise<void>;
   /** Retry one pending send that failed. */
@@ -35,6 +38,7 @@ export const TranscriptView = memo(function TranscriptView({
   turns,
   pending,
   sessionId,
+  models,
   onCancelTask,
   onRetry,
   onRemove,
@@ -42,7 +46,7 @@ export const TranscriptView = memo(function TranscriptView({
 }: TranscriptViewProps) {
   return (
     <>
-      {turns.map((turn, index) => (
+      {turns.map((turn) => (
         <MessageScrollerItem
           key={`transcript:${turn.id}`}
           messageId={`transcript:${turn.id}`}
@@ -52,7 +56,7 @@ export const TranscriptView = memo(function TranscriptView({
           <TranscriptTurn
             turn={turn}
             sessionId={sessionId}
-            latest={index === turns.length - 1}
+            models={models}
             onCancelTask={onCancelTask}
             waiting={waiting?.get(turn.id)}
           />
@@ -64,7 +68,7 @@ export const TranscriptView = memo(function TranscriptView({
           messageId={`transcript-pending:${item.localId}`}
           className="flex flex-col gap-3"
         >
-          <div className="flex flex-col items-end">
+          <div className="group/msg flex flex-col items-end gap-1.5">
             <div className="max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 text-sm whitespace-pre-wrap break-words">
               {item.text}
               {(item.attachments?.length ?? 0) > 0 && (
@@ -75,24 +79,30 @@ export const TranscriptView = memo(function TranscriptView({
                 />
               )}
             </div>
-            <p className={cn('mt-1 flex items-center gap-2 text-xs', item.failed === undefined ? 'text-muted-foreground' : 'text-destructive')}>
-              {item.failed === undefined ? '发送中…' : '发送失败'}
-              {item.failed !== undefined && (
-                <>
-                  <Button
-                    variant="link"
-                    size="xs"
-                    onClick={() => {
-                      onRetry(item.text, item.attachments ?? []);
-                      onRemove(item.localId);
-                    }}
-                  >
-                    重试
-                  </Button>
-                  <Button variant="link" size="xs" onClick={() => onRemove(item.localId)}>移除</Button>
-                </>
-              )}
-            </p>
+            <MessageFooter
+              align="right"
+              at={item.at}
+              className={cn('text-xs', item.failed === undefined ? undefined : 'text-destructive')}
+            >
+              <span className="flex items-center gap-2">
+                {item.failed === undefined ? '发送中…' : '发送失败'}
+                {item.failed !== undefined && (
+                  <>
+                    <Button
+                      variant="link"
+                      size="xs"
+                      onClick={() => {
+                        onRetry(item.text, item.attachments ?? []);
+                        onRemove(item.localId);
+                      }}
+                    >
+                      重试
+                    </Button>
+                    <Button variant="link" size="xs" onClick={() => onRemove(item.localId)}>移除</Button>
+                  </>
+                )}
+              </span>
+            </MessageFooter>
           </div>
         </MessageScrollerItem>
       ))}

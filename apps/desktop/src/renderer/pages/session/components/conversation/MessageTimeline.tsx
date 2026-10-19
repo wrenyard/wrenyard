@@ -6,7 +6,7 @@ import { prefersReducedMotion } from '@/renderer/lib/motion';
 import { attachmentFileIdentity } from '@/renderer/components/markdown';
 import { DIVIDER_GAP_MS } from '../../model/dividers.js';
 import { userSpeakerLabel } from '../../model/describe.js';
-import type { DraftAttachment, ReplyModel, SessionFile, TurnModel } from '../../model/types.js';
+import type { DraftAttachment, ModelEntry, ReplyModel, SessionFile, TurnModel } from '../../model/types.js';
 import type { PendingTurn } from '../../state/session-reducer.js';
 import { fromDraftAttachment, fromSessionFile } from '../MediaAttachments.js';
 import { AssistantMessage } from './AssistantMessage.js';
@@ -91,6 +91,29 @@ function parseStamp(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/** The public id of the call that produced a reply, else the turn's model. */
+function replyModelId(reply: ReplyModel, turn: TurnModel): string | undefined {
+  const producer = turn.calls
+    .filter((call) => call.role === 'reply'
+      && (reply.cycle === undefined || call.cycle === reply.cycle)
+      && call.endedAt !== undefined
+      && parseStamp(call.endedAt) <= parseStamp(reply.at))
+    .at(-1);
+  if (producer !== undefined && producer.model !== '') return producer.model;
+  const { provider, model } = turn.model;
+  if (provider === '') return model === '' ? undefined : model;
+  return `${provider}/${model}`;
+}
+
+/** Catalog display name of a public model id, else its bare model id. */
+function modelDisplayName(publicId: string | undefined, models: readonly ModelEntry[] | undefined): string | undefined {
+  if (publicId === undefined) return undefined;
+  const entry = models?.find((candidate) => candidate.publicId === publicId);
+  if (entry !== undefined) return entry.displayName;
+  const separator = publicId.indexOf('/');
+  return separator === -1 ? publicId : publicId.slice(separator + 1);
+}
+
 /** Global chronological order; equal stamps keep their insertion order. */
 function sortByAt(entries: MessageTimelineEntry[]): MessageTimelineEntry[] {
   return entries
@@ -164,6 +187,7 @@ function dividerLabelFor(at: string, previousAt: string | undefined, now: number
 
 interface EntryContext {
   sessionId?: string;
+  models?: readonly ModelEntry[];
   attachmentFiles: readonly SessionFile[];
   botNames: ReadonlyMap<string, string>;
   enter: boolean;
@@ -174,7 +198,7 @@ interface EntryContext {
 }
 
 /** The body of one timeline row, without its scroller item or divider. */
-function EntryContent({ entry, sessionId, attachmentFiles, botNames, enter, onRetry, onRemove, onJump, onReply }: EntryContext & { entry: MessageTimelineEntry }) {
+function EntryContent({ entry, sessionId, models, attachmentFiles, botNames, enter, onRetry, onRemove, onJump, onReply }: EntryContext & { entry: MessageTimelineEntry }) {
   switch (entry.kind) {
     case 'user': {
       const attachments = (entry.turn.user.attachments ?? []).map(fromSessionFile);
@@ -212,6 +236,7 @@ function EntryContent({ entry, sessionId, attachmentFiles, botNames, enter, onRe
         <AssistantMessage
           turn={entry.turn}
           reply={entry.reply}
+          model={modelDisplayName(replyModelId(entry.reply, entry.turn), models)}
           attachmentFiles={attachmentFiles}
           enter={enter}
           onReply={() => onReply(excerpt(entry.reply.text))}
@@ -234,6 +259,8 @@ export interface MessageTimelineProps {
   turns: readonly TurnModel[];
   /** Ledger session id, used to resolve attachment media. */
   sessionId?: string;
+  /** Model catalog, used to show a reply's model display name. */
+  models?: readonly ModelEntry[];
   /** Bot id to display name roster; absent entries fall back to the raw id. */
   botNames?: ReadonlyMap<string, string>;
   /** Entry ids appended after the conversation settled, for enter animations. */
@@ -254,6 +281,7 @@ export const MessageTimeline = memo(function MessageTimeline({
   timeline,
   turns,
   sessionId,
+  models,
   botNames = EMPTY_BOT_NAMES,
   freshMessageKeys,
   onRetry,
@@ -288,6 +316,7 @@ export const MessageTimeline = memo(function MessageTimeline({
             <EntryContent
               entry={entry}
               sessionId={sessionId}
+              models={models}
               attachmentFiles={attachmentFiles}
               botNames={botNames}
               enter={freshMessageKeys.has(entry.id)}

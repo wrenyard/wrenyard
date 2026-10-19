@@ -1,5 +1,6 @@
 import { RotateCw } from 'lucide-react';
 import { cn } from 'cn';
+import { MessageFooter as ChatFooter } from '@/renderer/components/chat/MessageFooter';
 import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
 import { Button } from '@/renderer/components/ui/button';
 import { Message, MessageContent, MessageFooter } from '@/renderer/components/ui/message';
@@ -8,7 +9,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/u
 import { useEnterAnimation } from '@/renderer/lib/motion';
 import type { PendingTurn } from '../../state/session-reducer.js';
 import { MediaAttachments, type MediaAttachmentItem } from '../MediaAttachments.js';
-import { HoverTime } from './HoverTime.js';
 import { ReplyMenu } from './ReplyMenu.js';
 
 const REPLY_PREFIX = /^> (.*)\n\n/;
@@ -49,7 +49,7 @@ export function UserMessage({ text, at, attachments, sessionId, pending, onRetry
   return (
     <Message
       align="end"
-      className={cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}
+      className={cn('group/msg', animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}
     >
       <MessageContent className="gap-1">
         {attachments !== undefined && attachments.length > 0 && (
@@ -65,7 +65,6 @@ export function UserMessage({ text, at, attachments, sessionId, pending, onRetry
               <span className="self-end px-1 text-xs text-muted-foreground">{speaker}</span>
             )}
             <div className="flex items-end justify-end gap-2">
-              <HoverTime value={at} />
               <ReplyMenu text={text} onReply={onReply}>
                 <Bubble variant="default" align="end">
                   <BubbleContent className="rounded-2xl px-3 py-1.5">
@@ -79,6 +78,7 @@ export function UserMessage({ text, at, attachments, sessionId, pending, onRetry
             </div>
           </>
         )}
+        <ChatFooter align="right" at={at} text={pending === undefined ? body : undefined} />
         {pending !== undefined && (pending.failed === undefined ? (
           <MessageFooter className="gap-2">
             <Spinner />

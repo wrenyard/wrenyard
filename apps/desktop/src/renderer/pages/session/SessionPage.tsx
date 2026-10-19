@@ -366,6 +366,7 @@ export function SessionPage() {
                         turns={model.turns}
                         pending={state.pending}
                         sessionId={state.selectedId}
+                        models={state.models}
                         onCancelTask={cancelTask}
                         onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
                         onRemove={removePending}

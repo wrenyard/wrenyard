@@ -1,15 +1,16 @@
 /**
  * One turn of the session rendered as an agent transcript: the right-aligned
  * user bubble, replies as plain prose, each stretch of agent work folded into
- * one muted summary line, visible errors, the running line and a hover footer.
+ * one muted summary line, visible errors, the running line and a per-message
+ * hover footer.
  */
-import { ArrowDown, ArrowUp, DatabaseZap, ListTodo, TriangleAlert } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { ListTodo, TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
-import { CopyButton } from '@/renderer/components/copy-button';
+import { MessageFooter } from '@/renderer/components/chat/MessageFooter';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { openActivityPanel } from '@/renderer/lib/activity-panel';
-import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
   HIDDEN_CALL_ROLES,
@@ -18,9 +19,9 @@ import {
   waitingStatusText,
 } from '../../model/describe.js';
 import type { TurnWaitingState } from '../../model/describe.js';
-import type { ActionModel, CallModel, ContextItem, ErrorItem, ReplyModel, TurnModel } from '../../model/types.js';
+import type { ActionModel, CallModel, ContextItem, ErrorItem, ModelEntry, ReplyModel, TurnModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
-import { HoverTime } from '../conversation/HoverTime.js';
+import { splitReplyQuote } from '../conversation/UserMessage.js';
 import { Ellipsis, WorkingDots } from '../live-indicators.js';
 import { MorphText } from '../morph-text.js';
 import { ActivityGroup, groupId, type ActivityItem } from './ActivityGroup.js';
@@ -30,8 +31,8 @@ export interface TranscriptTurnProps {
   turn: TurnModel;
   /** Ledger session id, forwarded to attachment media. */
   sessionId?: string;
-  /** The newest turn of the session: its footer stays visible once finished. */
-  latest?: boolean;
+  /** Model catalog, used to show a reply's model display name. */
+  models?: readonly ModelEntry[];
   /** Cancel one dispatched task run; rejects when the daemon refuses. */
   onCancelTask: (taskRunId: string) => Promise<void>;
   /** Live recovery waiting state of this turn, when it has one. */
@@ -43,42 +44,48 @@ function parseStamp(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function sumDefined(a: number | undefined, b: number | undefined): number | undefined {
-  if (a === undefined && b === undefined) return undefined;
-  return (a ?? 0) + (b ?? 0);
-}
-
-/** Input, cached input and output tokens of the turn, each with its icon. */
-function TokenFigures({ turn }: { turn: TurnModel }) {
-  const { expensive, cheap } = turn.stats;
-  const figures = [
-    { key: 'input', icon: ArrowUp, label: '输入', value: sumDefined(expensive.input, cheap.input) },
-    { key: 'cached', icon: DatabaseZap, label: '缓存', value: expensive.cachedInput },
-    { key: 'output', icon: ArrowDown, label: '输出', value: sumDefined(expensive.output, cheap.output) },
-  ];
-  return figures.map(({ key, icon: Icon, label, value }) => value === undefined ? null : (
-    <span key={key} className="inline-flex items-center gap-0.5" title={`${label} ${formatTokenCount(value)}`}>
-      <Icon className="size-3" aria-label={label} />
-      {formatTokenCount(value)}
-    </span>
-  ));
-}
-
-/** What the copy button copies: the turn's final reply, else its last reply. */
-function copyableReply(turn: TurnModel): string | undefined {
-  const reply = turn.replies.filter((item) => item.kind === 'final').at(-1) ?? turn.replies.at(-1);
-  return reply === undefined || reply.text.trim() === '' ? undefined : reply.text;
-}
-
 /** A call belongs to an action when its parent or id prefix names that action. */
 function attachedToAction(call: CallModel, actions: readonly ActionModel[]): boolean {
   return actions.some((action) => call.parent === action.id || call.id.startsWith(`${action.id}.`));
 }
 
+/** The public id of the call that produced a reply, else the turn's model. */
+function replyModelId(reply: ReplyModel, turn: TurnModel): string | undefined {
+  const producer = turn.calls
+    .filter((call) => call.role === 'reply'
+      && (reply.cycle === undefined || call.cycle === reply.cycle)
+      && call.endedAt !== undefined
+      && parseStamp(call.endedAt) <= parseStamp(reply.at))
+    .at(-1);
+  if (producer !== undefined && producer.model !== '') return producer.model;
+  const { provider, model } = turn.model;
+  if (provider === '') return model === '' ? undefined : model;
+  return `${provider}/${model}`;
+}
+
+/** Catalog display name of a public model id, else its bare model id. */
+function modelDisplayName(publicId: string | undefined, models: readonly ModelEntry[] | undefined): string | undefined {
+  if (publicId === undefined) return undefined;
+  const entry = models?.find((candidate) => candidate.publicId === publicId);
+  if (entry !== undefined) return entry.displayName;
+  const separator = publicId.indexOf('/');
+  return separator === -1 ? publicId : publicId.slice(separator + 1);
+}
+
 /** Plain prose block for one committed reply; not a card. */
-function ReplyBlock({ reply }: { reply: ReplyModel }) {
+function ReplyBlock({
+  reply,
+  at,
+  model,
+  children,
+}: {
+  reply: ReplyModel;
+  at?: string;
+  model?: string;
+  children?: ReactNode;
+}) {
   return (
-    <div className="group/reply relative">
+    <div className="group/msg relative flex flex-col gap-1.5">
       <AppMarkdown
         className={cn(
           'text-sm leading-relaxed',
@@ -87,10 +94,9 @@ function ReplyBlock({ reply }: { reply: ReplyModel }) {
       >
         {reply.text}
       </AppMarkdown>
-      <HoverTime
-        value={reply.at}
-        className="absolute -right-1 top-0 translate-x-full opacity-0 transition-opacity group-hover/reply:opacity-100"
-      />
+      <MessageFooter align="left" at={at} text={reply.text} model={model}>
+        {children}
+      </MessageFooter>
     </div>
   );
 }
@@ -233,9 +239,8 @@ function LiveLine({ turn, sessionId, waiting }: { turn: TurnModel; sessionId?: s
 }
 
 /** One turn as a chronological transcript. */
-export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, waiting }: TranscriptTurnProps) {
+export function TranscriptTurn({ turn, sessionId, models, onCancelTask, waiting }: TranscriptTurnProps) {
   const attachments = (turn.user.attachments ?? []).map(fromSessionFile);
-  const reply = copyableReply(turn);
   // Terminal states are told apart only for a turn that dispatched: a compile
   // that never opened a task run reads as 编译失败, not as a running task.
   const terminal = turn.actions.some((action) => action.kind === 'dispatch') ? dispatchTerminal(turn) : undefined;
@@ -259,10 +264,11 @@ export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, 
   }
   flush();
 
-  // The footer describes a finished turn, so it is absent while the turn runs.
-  // It stays in view on the newest turn and on failed or interrupted ones;
-  // elsewhere it shows on hover without reserving height.
-  const footerInFlow = latest || turn.status === 'failed' || turn.status === 'interrupted';
+  let lastReplyIndex = -1;
+  body.forEach((block, index) => {
+    if (block.kind === 'reply') lastReplyIndex = index;
+  });
+  const { body: userBody } = splitReplyQuote(turn.user.text);
 
   // Every context item of the turn, including ones scoped to a span (memory
   // recalls fold onto action.outputs while unscoped ones stay on the cycle);
@@ -273,21 +279,18 @@ export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, 
   ];
 
   return (
-    <div className="group/turn relative flex flex-col gap-3" data-lightbox-root>
-      <div className="group/user flex justify-end">
-        <HoverTime
-          value={turn.user.at}
-          className="mr-2 self-center text-[11px] opacity-0 group-hover/user:opacity-100"
-        />
+    <div className="relative flex flex-col gap-3" data-lightbox-root>
+      <div className="group/msg flex flex-col items-end gap-1.5">
         <div className="max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 text-sm whitespace-pre-wrap break-words">
           {turn.user.text}
           {attachments.length > 0 && (
             <MediaAttachments items={attachments} sessionId={sessionId} className="mt-2" />
           )}
         </div>
+        <MessageFooter align="right" at={turn.user.at} text={userBody} />
       </div>
 
-      {body.map((block) => {
+      {body.map((block, index) => {
         if (block.kind === 'group') {
           return (
             <ActivityGroup
@@ -300,35 +303,25 @@ export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, 
           );
         }
         if (block.kind === 'reply') {
-          return <ReplyBlock key={`${block.reply.at}:${block.reply.cycle ?? 0}`} reply={block.reply} />;
+          // The turn's terminal state and still-running tasks belong to its
+          // last reply, and stay visible even while the footer fades.
+          const tail = index === lastReplyIndex;
+          return (
+            <ReplyBlock
+              key={`${block.reply.at}:${block.reply.cycle ?? 0}`}
+              reply={block.reply}
+              at={block.reply.at || turn.endedAt}
+              model={modelDisplayName(replyModelId(block.reply, turn), models)}
+            >
+              {tail && terminal !== undefined && <span>{DISPATCH_TERMINAL_LABEL[terminal]}</span>}
+              {tail && <RunningTasks tasks={runningTasks(turn)} sessionId={sessionId} />}
+            </ReplyBlock>
+          );
         }
         return <ErrorRow key={`${block.error.at}:${block.error.stage}`} error={block.error} />;
       })}
 
       {turn.status === 'running' && <LiveLine turn={turn} sessionId={sessionId} waiting={waiting} />}
-
-      {turn.status !== 'running' && (
-        <div
-          className={cn(
-            'flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground tabular-nums transition-opacity',
-            // A hidden footer is taken out of the flow so it leaves no empty band
-            // between this turn and the next one.
-            footerInFlow
-              ? undefined
-              : 'pointer-events-none absolute inset-x-0 top-full opacity-0 group-hover/turn:pointer-events-auto group-hover/turn:opacity-100',
-          )}
-        >
-          <span className="font-mono">{turn.model.provider}/{turn.model.model}</span>
-          {turn.model.reasoningEffort !== undefined && <span>{turn.model.reasoningEffort}</span>}
-          <Elapsed start={turn.startedAt} end={turn.endedAt} />
-          <TokenFigures turn={turn} />
-          {terminal !== undefined && <span>{DISPATCH_TERMINAL_LABEL[terminal]}</span>}
-          <RunningTasks tasks={runningTasks(turn)} sessionId={sessionId} />
-          {reply !== undefined && (
-            <CopyButton text={reply} label="复制回复" size="icon-xs" className="-my-1 text-muted-foreground" />
-          )}
-        </div>
-      )}
     </div>
   );
 }

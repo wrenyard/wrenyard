@@ -1,10 +1,10 @@
 import { cn } from 'cn';
 import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
 import { Message, MessageContent } from '@/renderer/components/ui/message';
+import { MessageFooter } from '@/renderer/components/chat/MessageFooter';
 import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { useEnterAnimation } from '@/renderer/lib/motion';
 import type { ReplyModel, SessionFile, TurnModel } from '../../model/types.js';
-import { HoverTime } from './HoverTime.js';
 import { ReplyMenu } from './ReplyMenu.js';
 
 export interface AssistantMessageProps {
@@ -20,6 +20,8 @@ export interface AssistantMessageProps {
   attachmentFiles?: readonly SessionFile[];
   /** Ledger session id, used to authorize attachment media reads and reveals. */
   sessionId?: string;
+  /** Display name of the model that wrote this reply. */
+  model?: string;
 }
 
 /**
@@ -27,11 +29,11 @@ export interface AssistantMessageProps {
  * derived on read. Raw reason/thinking output is never shown here (it lives in
  * the transcript view only).
  */
-export function AssistantMessage({ turn, reply, reference, enter, onReply, attachmentFiles, sessionId }: AssistantMessageProps) {
+export function AssistantMessage({ turn, reply, reference, enter, onReply, attachmentFiles, sessionId, model }: AssistantMessageProps) {
   const animate = useEnterAnimation(enter === true);
   const at = reply.at || turn.endedAt;
   return (
-    <Message className={cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}>
+    <Message className={cn('group/msg', animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}>
       <MessageContent>
         <div className="flex items-end gap-2">
           <ReplyMenu text={reply.text} onReply={onReply}>
@@ -57,8 +59,8 @@ export function AssistantMessage({ turn, reply, reference, enter, onReply, attac
               </BubbleContent>
             </Bubble>
           </ReplyMenu>
-          {at !== undefined && <HoverTime value={at} />}
         </div>
+        <MessageFooter align="left" at={at} text={reply.text} model={model} />
       </MessageContent>
     </Message>
   );
