@@ -27,6 +27,7 @@ import { SessionSearch } from './components/SessionSearch.js';
 import { SessionTitle } from './components/SessionTitle.js';
 import { SessionStatusItems } from './components/status/SessionStatusItems.js';
 import { TranscriptView } from './components/transcript/TranscriptView.js';
+import { buildMessageTimeline } from './components/conversation/MessageTimeline.js';
 import { fold } from './model/fold.js';
 import type { TurnWaitingState } from './model/describe.js';
 import type { ActionModel, DraftAttachment, SessionBridgeTaskBrief } from './model/types.js';
@@ -266,12 +267,26 @@ export function SessionPage() {
     },
   ]), [selectSession, newDraft, deleteSession, state.sessions, queryClient]);
 
+  // Idle-notice inputs come from the shown timeline only, never from session
+  // list activity: the newest row is any message, while only a user or pending
+  // send may mark a dismissal as stale.
+  const timeline = useMemo(
+    () => buildMessageTimeline(model.turns, state.pending),
+    [model.turns, state.pending],
+  );
+  const newestMessageAt = timeline.at(-1)?.at;
+  const latestUserMessageAt = timeline
+    .filter((entry) => entry.kind === 'user' || entry.kind === 'pending')
+    .at(-1)?.at;
+
   const composer = (
     <Composer
       models={state.models}
       turns={model.turns}
       sessionKey={sessionKey}
       disabled={!draft && !state.ledgerLoaded}
+      latestMessageAt={newestMessageAt}
+      latestUserMessageAt={latestUserMessageAt}
       onSend={async (text, entry, effort, fast, attachments) => {
         await sendMessage(text, entry, effort, fast, attachments);
       }}
@@ -283,7 +298,7 @@ export function SessionPage() {
   );
 
   const errorAlert = state.error !== '' ? (
-    <Alert variant="destructive">
+    <Alert variant="destructive" className="mb-2">
       <AlertDescription>{state.error}</AlertDescription>
       <AlertAction>
         <Button variant="ghost" size="icon-sm" aria-label="关闭错误" onClick={clearError}><X /></Button>

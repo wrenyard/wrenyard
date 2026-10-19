@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { REASONING_EFFORTS } from '@wrenyard/models';
 import { AlertTriangle, Plus, Zap } from 'lucide-react';
@@ -7,7 +7,8 @@ import { ModelPicker, modelBadges, type ModelOption } from '@/renderer/component
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
 import { InputGroupButton } from '@/renderer/components/ui/input-group';
 import { getSessionBridge } from '@/renderer/lib/session';
-import { preferencesQuery } from '@/renderer/lib/queries';
+import { preferencesQuery, useDisplayCurrency, useQuotaQuery } from '@/renderer/lib/queries';
+import type { QuotaSnapshot } from '@/shell-contract';
 import type { DraftAttachment, ModelEntry, TurnModel } from '../model/types.js';
 import { readFirstRequest, readModelEfforts, retainReasoningEffort, writeFirstRequest, writeModelEffort, type ReasoningEffort } from '../state/reasoning-effort.js';
 import { defaultModelEffort, resolveModelEffort } from '../state/reasoning-effort-memory.js';
@@ -15,10 +16,25 @@ import { useComposerSelection, useSessionUsage } from '../state/session-usage.js
 import { clearDraftAttachments, isStagedPathRetained, readDraftAttachments, reconcileSentDraft } from '../state/drafts.js';
 import { useContextBudget } from '../state/use-context-budget.js';
 import { InterruptControl } from './InterruptControl.js';
+import { IdleCacheNotice } from './IdleCacheNotice.js';
 import { MediaAttachments, fromDraftAttachment } from './MediaAttachments.js';
 
 /** Input text is token-counted 300ms after typing stops (usage spec 3.3). */
 const INPUT_TOKEN_DEBOUNCE_MS = 300;
+
+/** Fresh-input USD/M from the quota catalog; unknown when the model has no priced row. */
+function inputUsdPerMillion(publicId: string, quota: QuotaSnapshot | undefined): number | undefined {
+  const separator = publicId.indexOf('/');
+  if (separator <= 0 || separator === publicId.length - 1) return undefined;
+  const providerId = publicId.slice(0, separator);
+  const modelId = publicId.slice(separator + 1);
+  const provider = quota?.catalog?.find((entry) => entry.id === providerId);
+  const model = provider?.models?.find((entry) => entry.id === modelId);
+  if (model?.free === true) return 0;
+  const pricing = model?.pricing;
+  if (pricing === undefined || pricing.length !== 3 || !Number.isFinite(pricing[1])) return undefined;
+  return pricing[1];
+}
 
 /**
  * Debounced `o200k_base` count of the composer text, including a paste. The
@@ -118,10 +134,14 @@ export interface ComposerProps {
   onFocusRequestHandled?: () => void;
   /** Interrupt one running turn; the stop control replaces send while turns run. */
   onInterrupt?: (turn: number) => void;
+  /** Newest message of the session, user or assistant; drives the idle notice. */
+  latestMessageAt?: string;
+  /** Newest user send (including an optimistic pending one); scopes a dismissal. */
+  latestUserMessageAt?: string;
 }
 
 /** Bottom composer with a unified model/effort picker, attachments and a send button. */
-export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, onFocusRequestHandled, onInterrupt }: ComposerProps) {
+export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, onFocusRequestHandled, onInterrupt, latestMessageAt, latestUserMessageAt }: ComposerProps) {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
@@ -136,7 +156,12 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   const inputTokens = useInputTokenCount(text);
   const { setInputTokens } = useSessionUsage();
   const { budget } = useContextBudget(sessionKey, modelId, inputTokens);
+  const quota = useQuotaQuery();
   const exceeded = budget?.exceeded ?? false;
+  const idleInputUsdPerMillion = useMemo(
+    () => (modelId === '' ? undefined : inputUsdPerMillion(modelId, quota.data)),
+    [modelId, quota.data],
+  );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
@@ -263,6 +288,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // The submit key still comes from the shared Desktop preferences; the model
   // and effort of a new session come from the client-local first-request record.
   const preferences = useQuery(preferencesQuery);
+  const displayCurrency = useDisplayCurrency();
 
   // The composer owns the local eligibility rule (empty, no attachments, not
   // sending, feature on, this surface visible); the state layer owns
@@ -522,6 +548,14 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
           松开以添加文件
         </div>
       )}
+      <IdleCacheNotice
+        sessionKey={sessionKey}
+        latestMessageAt={latestMessageAt}
+        latestUserMessageAt={latestUserMessageAt}
+        estimatedInputTokens={budget?.total}
+        inputUsdPerMillion={idleInputUsdPerMillion}
+        displayCurrency={displayCurrency}
+      />
       <PromptInput
         value={text}
         onValueChange={handleChange}
