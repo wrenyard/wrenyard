@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { MessageCircle, ScrollText, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { cn } from 'cn';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import type { LedgerEvent } from '@wrenyard/session';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -15,12 +13,11 @@ import {
   MessageScrollerViewport,
   useMessageScroller,
 } from '@/renderer/components/ui/message-scroller';
-import { Page, PageHeader, PageTitle, TitleBarAuxiliary } from '@/renderer/components/page';
-import { agentRequest, useShellPage } from '@/renderer/lib/desktop';
+import { Page, PageHeader, PageTitle } from '@/renderer/components/page';
+import { useShellPage } from '@/renderer/lib/desktop';
 import { registerPageCommands } from '@/renderer/lib/commands';
 import { openMiniCard, restoreMain, setCurrentSession, useMiniMode } from '@/renderer/lib/mini';
 import { markSessionSeen } from '@/renderer/lib/session-seen';
-import { useNewItemKeys } from '@/renderer/lib/motion';
 import { setActiveSession, useNavLocation } from '@/renderer/lib/navigation';
 import { sessionListQueryKey } from '@/renderer/lib/queries';
 import { getSessionApi } from './api.js';
@@ -29,9 +26,6 @@ import { EmptySession } from './components/EmptySession.js';
 import { SessionSearch } from './components/SessionSearch.js';
 import { SessionTitle } from './components/SessionTitle.js';
 import { SessionStatusItems } from './components/status/SessionStatusItems.js';
-import { MessageTimeline, buildMessageTimeline } from './components/conversation/MessageTimeline.js';
-import { TurnActivity } from './components/conversation/TurnActivity.js';
-import { withReplyQuote } from './components/conversation/UserMessage.js';
 import { TranscriptView } from './components/transcript/TranscriptView.js';
 import { fold } from './model/fold.js';
 import type { TurnWaitingState } from './model/describe.js';
@@ -39,11 +33,6 @@ import type { ActionModel, DraftAttachment, SessionBridgeTaskBrief } from './mod
 import { SessionUsageProvider } from './state/session-usage.js';
 import { useSessionController } from './state/use-session-controller.js';
 import { useTaskStatus } from './state/use-task-status.js';
-
-/** The two ways to read the same ledger from the session page. */
-type SessionView = 'chat' | 'transcript';
-/** The chosen view persists across launches. */
-const VIEW_STORAGE_KEY = 'session-view';
 
 /** Accept the `{ sessionId }` object form or a bare id from a routed command. */
 function sessionIdFromArgs(args: unknown): string | undefined {
@@ -100,36 +89,16 @@ function RunningDispatchTasks({ api, turns, setTasks }: {
   return null;
 }
 
-/** The session page: a chat view and a transcript view of the same ledger, switched from the title bar. */
+/** The session page: the agent transcript of the session ledger. */
 export function SessionPage() {
   const api = getSessionApi();
   const mini = useMiniMode();
   const page = useShellPage();
   const queryClient = useQueryClient();
   const { state, selectSession, newDraft, sendMessage, deleteSession, renameSession, removePending, setTasks, clearError, interruptTurn, cancelTask } = useSessionController(api);
-  const [view, setView] = useState<SessionView>(() => localStorage.getItem(VIEW_STORAGE_KEY) === 'transcript' ? 'transcript' : 'chat');
   const [searchOpen, setSearchOpen] = useState(false);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [retry, setRetry] = useState<{ text: string; attachments: DraftAttachment[]; nonce: number } | undefined>(undefined);
-  const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | undefined>(undefined);
-
-  // Resolve a turn's sender id to the bot display name. The roster is polled
-  // only while the session page is active and is read locally per page, so a
-  // conversation switch can never reuse another page's labels.
-  const bots = useQuery({
-    queryKey: ['agents', 'list'],
-    queryFn: () => agentRequest('agent.list'),
-    refetchInterval: 3000,
-    enabled: mini || page === 'session',
-  });
-  const botNames = useMemo(
-    () => new Map((bots.data?.bots ?? []).map((bot) => [bot.id, bot.name] as const)),
-    [bots.data],
-  );
-
-  useEffect(() => {
-    localStorage.setItem(VIEW_STORAGE_KEY, view);
-  }, [view]);
 
   // The conversation fades in on a session switch; the first appearance is not
   // animated. The message scroller remounts per session, so the class replays.
@@ -155,21 +124,6 @@ export function SessionPage() {
   const retryLedger = useCallback((): void => {
     void selectSession(state.selectedId).catch(() => undefined);
   }, [selectSession, state.selectedId]);
-
-  // The running turns' live activity lines, including the bounded-recovery
-  // waiting chip, supplied from the session feed. `TurnActivity` renders the
-  // Chinese waiting label with the next local probe time and keeps the
-  // interrupt control available.
-  const runningActivity = model.turns
-    .filter((turn) => turn.status === 'running')
-    .map((turn) => (
-      <TurnActivity
-        key={`activity:${turn.id}`}
-        turn={turn}
-        onInterrupt={onInterrupt}
-        waiting={waitingStateOf(turn.id, state.events)}
-      />
-    ));
 
   // Publish the shown session so the title bar can open a card for it (shell)
   // or return to it (card), and so the shell sidebar highlights it. No cleanup:
@@ -271,9 +225,9 @@ export function SessionPage() {
     return true;
   });
 
-  // Page commands: session.open (routed here by the command table), the
-  // view switch used by the title bar, and the shell sidebar's search and
-  // delete rows, which reuse this page's search state and delete workflow.
+  // Page commands: session.open (routed here by the command table), and the
+  // shell sidebar's search and delete rows, which reuse this page's search
+  // state and delete workflow.
   useEffect(() => registerPageCommands('session', [
     {
       id: 'session.open',
@@ -282,11 +236,6 @@ export function SessionPage() {
         const sessionId = sessionIdFromArgs(args);
         if (sessionId) void selectSession(sessionId).catch(() => undefined);
       },
-    },
-    {
-      id: 'session.toggleView',
-      title: '切换会话视图',
-      run: () => setView((value) => (value === 'chat' ? 'transcript' : 'chat')),
     },
     {
       id: 'session.newDraft',
@@ -317,19 +266,6 @@ export function SessionPage() {
     },
   ]), [selectSession, newDraft, deleteSession, state.sessions, queryClient]);
 
-  // Entry animation applies only to messages appended after the conversation
-  // settles; history loads are absorbed into the baseline (foundation §2.3).
-  const timeline = useMemo(
-    () => buildMessageTimeline(model.turns, state.pending),
-    [model.turns, state.pending],
-  );
-  const messageKeys = useMemo(() => timeline.map((entry) => entry.id), [timeline]);
-  const freshMessageKeys = useNewItemKeys(messageKeys, {
-    scope: sessionKey,
-    ready: !state.loadingLedger,
-  });
-
-  const reply = replyTo?.sessionKey === sessionKey ? replyTo.quote : undefined;
   const composer = (
     <Composer
       models={state.models}
@@ -337,14 +273,11 @@ export function SessionPage() {
       sessionKey={sessionKey}
       disabled={!draft && !state.ledgerLoaded}
       onSend={async (text, entry, effort, fast, attachments) => {
-        await sendMessage(reply === undefined ? text : withReplyQuote(reply, text), entry, effort, fast, attachments);
-        setReplyTo(undefined);
+        await sendMessage(text, entry, effort, fast, attachments);
       }}
       injectedText={retry}
       focusRequest={composerFocusRequest}
       onFocusRequestHandled={() => setComposerFocusRequest(0)}
-      reply={reply}
-      onCancelReply={() => setReplyTo(undefined)}
     />
   );
 
@@ -373,32 +306,6 @@ export function SessionPage() {
           />
         </PageTitle>
       </PageHeader>
-      <TitleBarAuxiliary>
-        <ToggleGroup
-          aria-label="会话视图"
-          variant="outline"
-          size="sm"
-          spacing={0}
-          value={[view]}
-          onValueChange={(next) => {
-            const value = next[0];
-            if (value === 'chat' || value === 'transcript') setView(value);
-          }}
-        >
-          <Tooltip>
-            <TooltipTrigger render={(<ToggleGroupItem value="chat" aria-label="对话视图" />)}>
-              <MessageCircle />
-            </TooltipTrigger>
-            <TooltipContent>对话视图</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger render={(<ToggleGroupItem value="transcript" aria-label="详细视图" />)}>
-              <ScrollText />
-            </TooltipTrigger>
-            <TooltipContent>详细视图</TooltipContent>
-          </Tooltip>
-        </ToggleGroup>
-      </TitleBarAuxiliary>
       <SessionUsageProvider
         sessionKey={sessionKey}
         models={state.models}
@@ -416,11 +323,11 @@ export function SessionPage() {
             </EmptySession>
           ) : (
             <>
-              <MessageScrollerProvider key={`${sessionKey}:${view}`} autoScroll>
+              <MessageScrollerProvider key={sessionKey} autoScroll>
                 <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
                   {/* The scroller owns follow-bottom, so browser scroll anchoring must not compete during streaming. */}
-                  <MessageScrollerViewport className={cn('scroll-fade-y', view === 'transcript' && '[overflow-anchor:none]')}>
-                    <MessageScrollerContent className={cn('w-full pt-(--header-height) pb-4', view === 'transcript' ? 'gap-6' : 'gap-2', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
+                  <MessageScrollerViewport className="scroll-fade-y [overflow-anchor:none]">
+                    <MessageScrollerContent className={cn('w-full pt-(--header-height) pb-4 gap-8', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
                       {hydrating && (
                         <div role="status" className="py-8 text-center text-sm text-muted-foreground">
                           正在载入对话…
@@ -432,36 +339,19 @@ export function SessionPage() {
                           <Button variant="outline" size="sm" onClick={retryLedger}>重试</Button>
                         </div>
                       )}
-                      {view === 'transcript' ? (
-                        <TranscriptView
-                          turns={model.turns}
-                          pending={state.pending}
-                          sessionId={state.selectedId}
-                          onInterrupt={onInterrupt}
-                          onCancelTask={cancelTask}
-                          waiting={new Map(model.turns.flatMap((turn) => {
-                            const waiting = waitingStateOf(turn.id, state.events);
-                            return waiting === undefined ? [] : [[turn.id, waiting] as const];
-                          }))}
-                        />
-                      ) : (
-                        <>
-                        <MessageTimeline
-                          timeline={timeline}
-                          turns={model.turns}
-                          sessionId={state.selectedId}
-                          botNames={botNames}
-                          freshMessageKeys={freshMessageKeys}
-                          onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
-                          onRemove={removePending}
-                          onReply={(quote) => {
-                            setReplyTo({ sessionKey, quote });
-                            setComposerFocusRequest((value) => value + 1);
-                          }}
-                        />
-                        {runningActivity}
-                        </>
-                      )}
+                      <TranscriptView
+                        turns={model.turns}
+                        pending={state.pending}
+                        sessionId={state.selectedId}
+                        onInterrupt={onInterrupt}
+                        onCancelTask={cancelTask}
+                        onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
+                        onRemove={removePending}
+                        waiting={new Map(model.turns.flatMap((turn) => {
+                          const waiting = waitingStateOf(turn.id, state.events);
+                          return waiting === undefined ? [] : [[turn.id, waiting] as const];
+                        }))}
+                      />
                     </MessageScrollerContent>
                   </MessageScrollerViewport>
                   <FollowSentMessage pendingId={state.pending.at(-1)?.localId} />

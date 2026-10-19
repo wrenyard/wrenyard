@@ -5,11 +5,12 @@
  */
 import { memo } from 'react';
 import { cn } from 'cn';
-import { Timestamp } from '@/renderer/components/timestamp';
+import { Button } from '@/renderer/components/ui/button';
 import { MessageScrollerItem } from '@/renderer/components/ui/message-scroller';
 import type { TurnWaitingState } from '../../model/describe.js';
-import type { TurnModel } from '../../model/types.js';
+import type { DraftAttachment, TurnModel } from '../../model/types.js';
 import type { PendingTurn } from '../../state/session-reducer.js';
+import { MediaAttachments, fromDraftAttachment } from '../MediaAttachments.js';
 import { TranscriptTurn } from './TranscriptTurn.js';
 
 export interface TranscriptViewProps {
@@ -23,6 +24,10 @@ export interface TranscriptViewProps {
   onInterrupt: (turn: number) => void;
   /** Cancel one dispatched task run. */
   onCancelTask: (taskRunId: string) => Promise<void>;
+  /** Retry one pending send that failed. */
+  onRetry: (text: string, attachments: DraftAttachment[]) => void;
+  /** Remove one pending send that failed. */
+  onRemove: (localId: string) => void;
   /** Per-turn live recovery waiting state, keyed by turn id. */
   waiting?: ReadonlyMap<number, TurnWaitingState>;
 }
@@ -34,6 +39,8 @@ export const TranscriptView = memo(function TranscriptView({
   sessionId,
   onInterrupt,
   onCancelTask,
+  onRetry,
+  onRemove,
   waiting,
 }: TranscriptViewProps) {
   return (
@@ -60,13 +67,34 @@ export const TranscriptView = memo(function TranscriptView({
           messageId={`transcript-pending:${item.localId}`}
           className="flex flex-col gap-3"
         >
-          <div className="rounded-xl bg-muted/60 px-4 py-3">
-            <div className="text-xs text-muted-foreground">
-              你 · <Timestamp value={item.at} precision="second" />
+          <div className="flex flex-col items-end">
+            <div className="max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 text-sm whitespace-pre-wrap break-words">
+              {item.text}
+              {(item.attachments?.length ?? 0) > 0 && (
+                <MediaAttachments
+                  items={(item.attachments ?? []).map(fromDraftAttachment)}
+                  sessionId={sessionId}
+                  className="mt-2"
+                />
+              )}
             </div>
-            <div className="mt-1 whitespace-pre-wrap text-sm">{item.text}</div>
-            <p className={cn('mt-1 text-xs', item.failed === undefined ? 'text-muted-foreground' : 'text-destructive')}>
+            <p className={cn('mt-1 flex items-center gap-2 text-xs', item.failed === undefined ? 'text-muted-foreground' : 'text-destructive')}>
               {item.failed === undefined ? '发送中…' : '发送失败'}
+              {item.failed !== undefined && (
+                <>
+                  <Button
+                    variant="link"
+                    size="xs"
+                    onClick={() => {
+                      onRetry(item.text, item.attachments ?? []);
+                      onRemove(item.localId);
+                    }}
+                  >
+                    重试
+                  </Button>
+                  <Button variant="link" size="xs" onClick={() => onRemove(item.localId)}>移除</Button>
+                </>
+              )}
             </p>
           </div>
         </MessageScrollerItem>

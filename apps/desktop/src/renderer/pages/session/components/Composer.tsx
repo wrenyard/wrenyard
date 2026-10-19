@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { REASONING_EFFORTS } from '@wrenyard/models';
-import { AlertTriangle, Plus, X } from 'lucide-react';
+import { AlertTriangle, Plus } from 'lucide-react';
 import { countInputTokens } from '../model/usage.js';
 import { ModelPicker, modelBadges, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
@@ -114,13 +114,10 @@ export interface ComposerProps {
   focusRequest?: number;
   /** Invoked after an explicit focus request has been consumed. */
   onFocusRequestHandled?: () => void;
-  /** Quote of the message being replied to. */
-  reply?: string | undefined;
-  onCancelReply?: () => void;
 }
 
 /** Bottom composer with a unified model/effort picker, attachments and a send button. */
-export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, onFocusRequestHandled, reply, onCancelReply }: ComposerProps) {
+export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, onFocusRequestHandled }: ComposerProps) {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
@@ -263,15 +260,15 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // and effort of a new session come from the client-local first-request record.
   const preferences = useQuery(preferencesQuery);
 
-  // The composer owns the local eligibility rule (empty, no attachments, no
-  // reply, not sending, feature on, this surface visible); the state layer owns
+  // The composer owns the local eligibility rule (empty, no attachments, not
+  // sending, feature on, this surface visible); the state layer owns
   // when a request is made. Focus is deliberately not part of the rule: a
   // completed turn still shows the ghost text without re-focusing the field.
   const surfaceVisible = useSurfaceVisible();
   const promptCompletionEnabled = preferences.data?.session.promptCompletion === true;
   const turnRunning = turns.some((turn) => turn.status === 'running');
   const suggestionEligible = promptCompletionEnabled && !disabled && !sending && surfaceVisible
-    && reply === undefined && text === '' && attachments.length === 0 && !turnRunning;
+    && text === '' && attachments.length === 0 && !turnRunning;
   // Publish the current render's eligibility synchronously, so a turn that
   // completes in this very commit is judged on today's value rather than the
   // one captured while it was still running. Eligibility only gates *new*
@@ -280,15 +277,15 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // Invalidation is separate from, and narrower than, eligibility: a shown
   // suggestion is cleared — and any in-flight request cancelled — only on an
   // explicit invalidation. The feature being explicitly off, a send, a new
-  // running turn, real typed input, attachments or a reply all invalidate. A
+  // running turn, real typed input or attachments all invalidate. A
   // hidden surface, a disabled/loading composer, or preference data that is
   // transiently absent must NOT: they only suppress eligibility above.
   const promptCompletionDisabled = preferences.data?.session.promptCompletion === false;
   useEffect(() => {
-    if (promptCompletionDisabled || sending || turnRunning || text !== '' || attachments.length > 0 || reply !== undefined) {
+    if (promptCompletionDisabled || sending || turnRunning || text !== '' || attachments.length > 0) {
       dismissSuggestion();
     }
-  }, [promptCompletionDisabled, sending, turnRunning, text, attachments.length, reply, dismissSuggestion]);
+  }, [promptCompletionDisabled, sending, turnRunning, text, attachments.length, dismissSuggestion]);
 
   // Seed the model/effort once per session (or per new turn). A nonempty
   // remembered or explicit pick is never overwritten by an availability
@@ -492,16 +489,8 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       });
   };
 
-  const attachmentStrip = attachmentError === '' && attachments.length === 0 && reply === undefined ? undefined : (
+  const attachmentStrip = attachmentError === '' && attachments.length === 0 ? undefined : (
     <div className="flex flex-col gap-1.5">
-      {reply !== undefined && (
-        <div className="flex items-center gap-2 rounded-lg bg-muted px-2 py-1 text-xs text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate">回复：{reply}</span>
-          <InputGroupButton type="button" size="icon-xs" aria-label="取消回复" onClick={onCancelReply}>
-            <X />
-          </InputGroupButton>
-        </div>
-      )}
       {attachmentError !== '' && <p className="text-xs text-destructive">{attachmentError}</p>}
       {attachments.length > 0 && (
         <MediaAttachments
