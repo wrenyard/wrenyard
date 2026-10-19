@@ -5,6 +5,7 @@ import type { ProviderCatalogSnapshot, QuotaSnapshot } from '@/shell-contract';
 import { ProviderSupply } from '../../supply/components/ProviderSupply.js';
 import { ProviderUsage } from '../../supply/components/ProviderUsage.js';
 import { RoutingTest } from '../../supply/components/RoutingTest.js';
+import { RoutingExclusionsSettings } from '../../components/RoutingExclusionsSettings.js';
 import { ClientsSettings } from '../../components/ClientsSettings.js';
 import { SettingRow, type SettingBinding } from '../../components/SettingRow.js';
 import type { SettingDefinition } from '../registry.js';
@@ -126,6 +127,7 @@ export function SupplySettings({
             </div>
           </section>
         )}
+        <RoutingExclusionsSettings />
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-medium text-muted-foreground">路由测试</h3>
           <RoutingTest snapshot={snapshot} active={routingActive && tab === 'routing'} />
