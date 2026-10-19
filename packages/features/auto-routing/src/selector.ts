@@ -311,13 +311,20 @@ function createSelector(
     const ladder = requirements.ladder;
     if (ladder !== undefined) {
       // Ladder mode pools the admitted candidates by tier in ladder order,
-      // preserving the AutoRouter ranking inside each pool. The global effort
-      // layer below is intentionally skipped: it could drop every mid model
-      // that lacks the preferred effort. Candidates matching no step are
-      // dropped defensively.
-      const ladderPool = ladder.flatMap(step => admitted.filter(({ tier, quota, abundant }) =>
-        tier === step.intelligence
-        && (!step.requireQuotaSufficient || abundant || quota.aheadOfPace !== true)));
+      // preserving the AutoRouter ranking inside each pool. A candidate can
+      // match several steps (for example a premium model with sufficient
+      // quota), so each route is emitted at most once, at its first matching
+      // step, keeping the pools disjoint. The global effort layer below is
+      // intentionally skipped: it could drop every mid model that lacks the
+      // preferred effort. Candidates matching no step are dropped defensively.
+      const emitted = new Set<string>();
+      const ladderPool = ladder.flatMap(step => admitted.filter(({ model, tier, quota, abundant }) => {
+        if (tier !== step.intelligence) return false;
+        if (step.requireQuotaSufficient && !(abundant || quota.aheadOfPace !== true)) return false;
+        if (emitted.has(model)) return false;
+        emitted.add(model);
+        return true;
+      }));
       if (!ladderPool.length) throw new Error(`Auxiliary role ${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
       return ladderPool.map(({ model, levels }) => ({
         model,
