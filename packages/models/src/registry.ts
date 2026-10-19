@@ -149,6 +149,8 @@ const modelsDevCanonicalModels: readonly RegisteredModel[] = [
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     contextWindow: 1_048_576,
+    // https://ai.google.dev/gemini-api/docs/pricing.md.txt checked 2026-10-19; Standard tier, deprecated routing note.
+    pricing: [0.15, 1.5, 9],
     speed: 213,
   }, { lab: 'google', family: 'gemini' }),
   // Seed speed 363: public provider throughput catalog, floored; not an identity-wide benchmark.
@@ -156,6 +158,8 @@ const modelsDevCanonicalModels: readonly RegisteredModel[] = [
     intelligence: 'low',
     capabilities: ['text', 'image'],
     contextWindow: 1_048_576,
+    // https://ai.google.dev/gemini-api/docs/pricing.md.txt checked 2026-10-19; the text/image/video rate is used because the audio rate is not representable.
+    pricing: [0.025, 0.25, 1.5],
     speed: 363,
   }, { lab: 'google', family: 'gemini' }),
   // Seed speed 71: public provider throughput catalog, floored; not an identity-wide benchmark.
@@ -163,6 +167,8 @@ const modelsDevCanonicalModels: readonly RegisteredModel[] = [
     intelligence: 'high',
     capabilities: ['text', 'image'],
     contextWindow: 1_048_576,
+    // https://docs.mistral.ai/inference/pricing checked 2026-10-19; current sale price, regular list [0.14, 1.36, 4.18].
+    pricing: [0.07, 0.68, 2.09],
     speed: 71,
   }, { lab: 'mistral' }),
   // Seed speed 160: public provider throughput catalog, floored; not an identity-wide benchmark.
@@ -170,6 +176,8 @@ const modelsDevCanonicalModels: readonly RegisteredModel[] = [
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     contextWindow: 262_144,
+    // https://docs.mistral.ai/models/mistral-medium-3-5-26-04.md and https://docs.mistral.ai/inference/pricing checked 2026-10-19.
+    pricing: [0.15, 1.5, 7.5],
     speed: 160,
   }, { lab: 'mistral' }),
   // Seed speed 153: public provider throughput catalog, floored; not an identity-wide benchmark.
@@ -177,6 +185,8 @@ const modelsDevCanonicalModels: readonly RegisteredModel[] = [
     intelligence: 'low',
     capabilities: ['text', 'image'],
     contextWindow: 262_144,
+    // https://docs.mistral.ai/models/mistral-small-4-0-26-03.md checked 2026-10-19.
+    pricing: [0.015, 0.15, 0.6],
     speed: 153,
   }, { lab: 'mistral' }),
   // Seed speed 121: public provider throughput catalog, floored; not an identity-wide benchmark.
@@ -191,6 +201,8 @@ const modelsDevCanonicalModels: readonly RegisteredModel[] = [
     intelligence: 'mid',
     capabilities: ['text'],
     contextWindow: 256_000,
+    // https://docs.mistral.ai/models/codestral-25-08.md checked 2026-10-19.
+    pricing: [0.03, 0.3, 0.9],
     speed: 141,
   }, { lab: 'mistral' }),
   // Seed speed 214: public provider throughput catalog, floored; not an identity-wide benchmark.
@@ -228,6 +240,9 @@ const modelsDevCanonicalModels: readonly RegisteredModel[] = [
     intelligence: 'mid',
     capabilities: ['text'],
     contextWindow: 1_048_576,
+    // https://api-docs.deepseek.com/quick_start/pricing/ checked 2026-10-20; peak rates, off-peak is half.
+    maxOutputTokens: 393_216,
+    pricing: [0.044, 1.32, 3.96],
     speed: 78,
   }, { lab: 'deepseek', family: 'deepseek-v4' }),
   // Speed 93 is the DigitalOcean provider's non-reasoning after-first-chunk
@@ -243,6 +258,8 @@ const modelsDevCanonicalModels: readonly RegisteredModel[] = [
     intelligence: 'high',
     capabilities: ['text'],
     contextWindow: 1_000_000,
+    // https://help.aliyun.com/zh/model-studio/qwen3-7-max checked 2026-10-20.
+    maxOutputTokens: 131_072,
     speed: 206,
   }, { lab: 'alibaba', family: 'qwen' }),
   // Seed speed 38: public provider throughput catalog, floored; not an identity-wide benchmark.

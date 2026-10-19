@@ -5,6 +5,8 @@ export const googleModels = [
     intelligence: 'mid',
     capabilities: ['text', 'image'],
     contextWindow: 1_000_000,
+    // https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash checked 2026-10-20.
+    maxOutputTokens: 65_536,
     pricing: [0.075, 0.75, 3.5],
     speed: 40,
   }, { lab: 'google', family: 'gemini' }),

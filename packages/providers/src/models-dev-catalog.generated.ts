@@ -146,7 +146,8 @@ export const MODELS_DEV_CATALOG_PROVIDERS: readonly ModelsDevCatalogProvider[] =
     protocol: "openai_chat",
     authScheme: "bearer",
     models: [
-      { id: "gemini-3.1-pro-preview", canonicalId: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro Preview", contextWindow: 1048576, maxOutputTokens: 65536, capabilities: ["text", "image"] },
+      // Google Gemini API pricing Standard <=200k-prompt tier https://ai.google.dev/gemini-api/docs/pricing checked 2026-10-19; the >200k tier doubles and is not representable in the flat tuple.
+      { id: "gemini-3.1-pro-preview", canonicalId: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro Preview", contextWindow: 1048576, maxOutputTokens: 65536, capabilities: ["text", "image"], pricing: [0.2, 2, 12] },
       { id: "gemini-3.5-flash", canonicalId: "gemini-3.5-flash", displayName: "Gemini 3.5 Flash", contextWindow: 1048576, maxOutputTokens: 65536, capabilities: ["text", "image"], pricing: [0.15, 1.5, 9] },
       { id: "gemini-3.1-flash-lite", canonicalId: "gemini-3.1-flash-lite", displayName: "Gemini 3.1 Flash Lite", contextWindow: 1048576, maxOutputTokens: 65536, capabilities: ["text", "image"], pricing: [0.025, 0.25, 1.5] },
       { id: "gemini-3.8-flash", canonicalId: "gemini-3.8-flash", displayName: "Gemini 3.8 Flash", contextWindow: 1048576, maxOutputTokens: 65536, capabilities: ["text", "image"], pricing: [0.075, 0.75, 3.75] },
@@ -165,7 +166,8 @@ export const MODELS_DEV_CATALOG_PROVIDERS: readonly ModelsDevCatalogProvider[] =
       { id: "mistral-large-4", canonicalId: "mistral-large-4", displayName: "Mistral Large 4", contextWindow: 1048576, maxOutputTokens: 262144, capabilities: ["text", "image"], pricing: [0.07, 0.68, 2.09] },
       { id: "mistral-medium-2604", canonicalId: "mistral-medium-3.5", displayName: "Mistral Medium 3.5", contextWindow: 262144, maxOutputTokens: 262144, capabilities: ["text", "image"], pricing: [0.15, 1.5, 7.5] },
       { id: "mistral-small-latest", canonicalId: "mistral-small-latest", displayName: "Mistral Small", contextWindow: 262144, maxOutputTokens: 256000, capabilities: ["text", "image"], pricing: [0.015, 0.15, 0.6] },
-      { id: "devstral-latest", canonicalId: "devstral-2", displayName: "Devstral 2", contextWindow: 262144, maxOutputTokens: 262144, capabilities: ["text"] },
+      // https://docs.mistral.ai/models/devstral-2-25-12.md checked 2026-10-19; no cached rate published, so cached falls back to the input rate.
+      { id: "devstral-latest", canonicalId: "devstral-2", displayName: "Devstral 2", contextWindow: 262144, maxOutputTokens: 262144, capabilities: ["text"], pricing: [0.4, 0.4, 2] },
       { id: "codestral-latest", canonicalId: "codestral-latest", displayName: "Codestral", contextWindow: 256000, maxOutputTokens: 4096, capabilities: ["text"], pricing: [0.03, 0.3, 0.9] },
     ],
   },
@@ -226,7 +228,8 @@ export const MODELS_DEV_CATALOG_PROVIDERS: readonly ModelsDevCatalogProvider[] =
     protocol: "openai_chat",
     authScheme: "bearer",
     models: [
-      { id: "gpt-oss-120b", canonicalId: "gpt-oss-120b", displayName: "GPT OSS 120B", contextWindow: 131072, maxOutputTokens: 40960, capabilities: ["text"] },
+      // https://inference-docs.cerebras.ai/models/openai-oss checked 2026-10-19; cached is billed at the standard input rate per https://inference-docs.cerebras.ai/capabilities/prompt-caching.
+      { id: "gpt-oss-120b", canonicalId: "gpt-oss-120b", displayName: "GPT OSS 120B", contextWindow: 131072, maxOutputTokens: 40960, capabilities: ["text"], pricing: [0.35, 0.35, 0.75] },
       { id: "qwen-3.8-27b", canonicalId: "qwen3.8-27b", displayName: "Qwen3.8 27B", contextWindow: 131072, maxOutputTokens: 40960, capabilities: ["text", "image"], pricing: [0.99, 0.99, 1.49] },
     ],
   },
@@ -305,7 +308,8 @@ export const MODELS_DEV_CATALOG_PROVIDERS: readonly ModelsDevCatalogProvider[] =
       { id: "deepseek-ai/DeepSeek-V4-Pro", canonicalId: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", contextWindow: 1048576, maxOutputTokens: 393216, capabilities: ["text"], pricing: [0.003625, 0.435, 0.87] },
       { id: "moonshotai/Kimi-K3", canonicalId: "kimi-k3", displayName: "Kimi K3", contextWindow: 1000000, maxOutputTokens: 131072, capabilities: ["text", "image"] },
       { id: "zai-org/GLM-5.3", canonicalId: "glm-5.3", displayName: "GLM 5.3", contextWindow: 1048576, maxOutputTokens: 131072, capabilities: ["text"] },
-      { id: "Qwen/Qwen3.8-2.4T-A95B", canonicalId: "qwen3.8-2.4t-a95b", displayName: "Qwen3.8 2.4T A95B", contextWindow: 262144, maxOutputTokens: 131072, capabilities: ["text"] },
+      // HF Inference Providers table https://huggingface.co/inference/models?model=Qwen%2FQwen3.8-2.4T-A95B checked 2026-10-19; no cached column, so cached falls back to the input rate.
+      { id: "Qwen/Qwen3.8-2.4T-A95B", canonicalId: "qwen3.8-2.4t-a95b", displayName: "Qwen3.8 2.4T A95B", contextWindow: 262144, maxOutputTokens: 131072, capabilities: ["text"], pricing: [2, 2, 6] },
       { id: "openai/gpt-oss-120b", canonicalId: "gpt-oss-120b", displayName: "GPT OSS 120B", contextWindow: 131072, maxOutputTokens: 32768, capabilities: ["text"] },
     ],
   },
@@ -336,7 +340,8 @@ export const MODELS_DEV_CATALOG_PROVIDERS: readonly ModelsDevCatalogProvider[] =
     models: [
       { id: "openai/gpt-5.6-sol", canonicalId: "gpt-5.6-sol", displayName: "GPT 5.6 Sol", contextWindow: 1050000, maxOutputTokens: 128000, capabilities: ["text", "image"] },
       { id: "anthropic/claude-opus-5", canonicalId: "claude-opus-5", displayName: "Claude Opus 5", contextWindow: 1000000, maxOutputTokens: 128000, capabilities: ["text", "image"], pricing: [0.5, 5, 25] },
-      { id: "google/gemini-3.1-pro-preview", canonicalId: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro Preview", contextWindow: 1000000, maxOutputTokens: 64000, capabilities: ["text", "image"] },
+      // https://vercel.com/ai-gateway/models/gemini-3.1-pro-preview checked 2026-10-19; base <=200k tier.
+      { id: "google/gemini-3.1-pro-preview", canonicalId: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro Preview", contextWindow: 1000000, maxOutputTokens: 64000, capabilities: ["text", "image"], pricing: [0.2, 2, 12] },
       { id: "moonshotai/kimi-k3", canonicalId: "kimi-k3", displayName: "Kimi K3", contextWindow: 1000000, maxOutputTokens: 131072, capabilities: ["text", "image"], pricing: [0.3, 3, 15] },
       { id: "deepseek/deepseek-v4-pro", canonicalId: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", contextWindow: 1000000, maxOutputTokens: 384000, capabilities: ["text"], pricing: [0.022, 0.66, 1.98] },
     ],
@@ -350,11 +355,14 @@ export const MODELS_DEV_CATALOG_PROVIDERS: readonly ModelsDevCatalogProvider[] =
     protocol: "openai_chat",
     authScheme: "bearer",
     models: [
-      { id: "DeepSeek-V3.2", canonicalId: "deepseek-v3.2", displayName: "DeepSeek V3.2", contextWindow: 32768, maxOutputTokens: 7168, capabilities: ["text"] },
+      // https://cloud.sambanova.ai/plans/pricing checked 2026-10-19; cached published as N/A, so it falls back to the input rate.
+      { id: "DeepSeek-V3.2", canonicalId: "deepseek-v3.2", displayName: "DeepSeek V3.2", contextWindow: 32768, maxOutputTokens: 7168, capabilities: ["text"], pricing: [3, 3, 4.5] },
       { id: "MiniMax-M3", canonicalId: "minimax-m3", displayName: "MiniMax M3", contextWindow: 1048576, maxOutputTokens: 1048576, capabilities: ["text"], pricing: [0.06, 0.6, 2.4] },
-      { id: "gpt-oss-120b", canonicalId: "gpt-oss-120b", displayName: "GPT OSS 120B", contextWindow: 131072, maxOutputTokens: 131072, capabilities: ["text"] },
+      // https://cloud.sambanova.ai/plans/pricing checked 2026-10-19; cached published as N/A, so it falls back to the input rate.
+      { id: "gpt-oss-120b", canonicalId: "gpt-oss-120b", displayName: "GPT OSS 120B", contextWindow: 131072, maxOutputTokens: 131072, capabilities: ["text"], pricing: [0.22, 0.22, 0.59] },
       { id: "gemma-4-31B-it", canonicalId: "gemma-4-31b-it", displayName: "Gemma 4 31B", contextWindow: 131072, maxOutputTokens: 131072, capabilities: ["text", "image"] },
-      { id: "Meta-Llama-3.3-70B-Instruct", canonicalId: "llama-3.3-70b", displayName: "Llama 3.3 70B", contextWindow: 131072, maxOutputTokens: 3072, capabilities: ["text"] },
+      // https://cloud.sambanova.ai/plans/pricing checked 2026-10-19; cached published as N/A, so it falls back to the input rate.
+      { id: "Meta-Llama-3.3-70B-Instruct", canonicalId: "llama-3.3-70b", displayName: "Llama 3.3 70B", contextWindow: 131072, maxOutputTokens: 3072, capabilities: ["text"], pricing: [0.6, 0.6, 1.2] },
     ],
   },
   {

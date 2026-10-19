@@ -5,6 +5,8 @@ export const alibabaModels = [
     intelligence: 'mid',
     capabilities: ['text'],
     contextWindow: 1_000_000,
+    // https://help.aliyun.com/zh/model-studio/qwen3-8-max checked 2026-10-20.
+    maxOutputTokens: 131_072,
     pricing: [0.003, 0.15, 0.6],
     speed: 39,
   }, { lab: 'alibaba', family: 'qwen' }),

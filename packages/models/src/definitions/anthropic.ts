@@ -12,6 +12,8 @@ export const anthropicModels = [
     intelligence: 'premium',
     capabilities: ['text', 'image'],
     contextWindow: 1_000_000,
+    // https://platform.claude.com/docs/en/models/fable-5-1/overview checked 2026-10-20 (128K max output, 1M context).
+    maxOutputTokens: 131_072,
     pricing: [0.25, 10, 50],
     speed: 40,
   }, { lab: 'anthropic', family: 'claude' }),
@@ -19,6 +21,8 @@ export const anthropicModels = [
     intelligence: 'premium',
     capabilities: ['text'],
     contextWindow: 1_000_000,
+    // https://platform.claude.com/docs/en/models/opus-5/overview checked 2026-10-20 (128K max output; the 300K batch-beta header is not the standard limit).
+    maxOutputTokens: 131_072,
     pricing: [0.5, 5, 25],
     speed: 50,
   }, { lab: 'anthropic', family: 'claude' }),

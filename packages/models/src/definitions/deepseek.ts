@@ -40,6 +40,8 @@ export const deepseekModels = [
     intelligence: 'mid',
     capabilities: ['text'],
     contextWindow: 1_000_000,
+    // https://api-docs.deepseek.com/quick_start/pricing/ checked 2026-10-20 (384K maximum output).
+    maxOutputTokens: 393_216,
     pricing: [0.044, 1.32, 3.96],
     speed: 20,
   }, { lab: 'deepseek', family: 'deepseek-v4' }),

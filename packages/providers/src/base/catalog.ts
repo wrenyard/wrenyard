@@ -97,8 +97,7 @@ export function normalizeIntelligenceTier(tier: string | undefined): Intelligenc
   return CURRENT_INTELLIGENCE_TIERS.has(tier) ? (tier as IntelligenceTier) : undefined;
 }
 
-function validateModelPricing(pricing: ModelPricing | undefined, label: string): void {
-  if (!pricing) throw new Error(`${label} is missing required pricing metadata`);
+function validateModelPricing(pricing: ModelPricing, label: string): void {
   if (pricing.length !== 3) throw new Error(`${label} pricing must be [cached, input, output]`);
   for (const [index, value] of pricing.entries()) {
     if (!Number.isFinite(value) || value < 0) {
