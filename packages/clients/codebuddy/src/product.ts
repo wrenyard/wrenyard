@@ -11,6 +11,15 @@ export interface CodeBuddyProductModelEntry {
     readonly maxOutputTokens?: number;
     readonly supportsImages?: boolean;
     readonly supportsReasoning?: boolean;
+    /** The row's `reasoning` declaration: adjustable levels, the disable switch, or one fixed level. */
+    readonly reasoning?: CodeBuddyReasoningDeclaration;
+}
+/** A `/v3/config` row's reasoning declaration, kept as the endpoint states it. */
+export interface CodeBuddyReasoningDeclaration {
+    readonly supportedEfforts?: readonly string[];
+    readonly canDisableThinking?: boolean;
+    /** A single level the row always runs at, when it declares no adjustable ladder. */
+    readonly effort?: string;
 }
 export interface CodeBuddyProductIdentity {
     readonly platform: string;
@@ -415,9 +424,23 @@ function parseModels(value: Record<string, unknown>): CodeBuddyProductModelEntry
             ...(positive(record.maxOutputTokens) ? { maxOutputTokens: record.maxOutputTokens } : {}),
             ...(typeof record.supportsImages === 'boolean' ? { supportsImages: record.supportsImages } : {}),
             ...(typeof record.supportsReasoning === 'boolean' ? { supportsReasoning: record.supportsReasoning } : {}),
+            ...(parseReasoning(record.reasoning) ? { reasoning: parseReasoning(record.reasoning)! } : {}),
         });
     }
     return entries;
+}
+function parseReasoning(value: unknown): CodeBuddyReasoningDeclaration | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    const supportedEfforts = Array.isArray(record.supportedEfforts)
+        ? record.supportedEfforts.filter((level): level is string => typeof level === 'string' && level.trim() !== '').map((level) => level.trim())
+        : [];
+    const declaration = {
+        ...(supportedEfforts.length > 0 ? { supportedEfforts } : {}),
+        ...(typeof record.canDisableThinking === 'boolean' ? { canDisableThinking: record.canDisableThinking } : {}),
+        ...(typeof record.effort === 'string' && record.effort.trim() !== '' ? { effort: record.effort.trim() } : {}),
+    };
+    return Object.keys(declaration).length > 0 ? declaration : undefined;
 }
 function nonEmpty(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;

@@ -1,7 +1,7 @@
 import { codeBuddyRouteFailure } from './route-errors.ts';
 import type { ClientDefinition, ModelDefinition, ProviderDefinition, ReasoningEffort } from '../base/index.ts';
-import { resolveProviderModel, REASONING_LOW_HIGH_MAX, type CanonicalModelOverrides } from '../base/model-defaults.ts';
-import { models, isMainstreamModelId } from '@wrenyard/models';
+import { resolveProviderModel, type CanonicalModelOverrides } from '../base/model-defaults.ts';
+import { models, isMainstreamModelId, REASONING_EFFORTS } from '@wrenyard/models';
 import {
   codeBuddyCanonicalModelId,
   productCreditsAreFree,
@@ -75,27 +75,41 @@ const CODEBUDDY_HISTORICAL_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Listed CodeBuddy routes accept the disable switch, even where the upstream
- * still thinks. Other strengths retain their documented/probed ladders. Only a
- * row matching a registered model uses this map.
+ * Measured corrections to an endpoint row's own `reasoning` declaration, keyed
+ * by registered model id. Only a behaviour observed against the endpoint
+ * belongs here; everything else follows `/v3/config`.
  */
-const CODEBUDDY_REASONING_EFFORTS: Readonly<Record<string, readonly ReasoningEffort[]>> = {
-  'claude-opus-5-5': ['none', ...REASONING_LOW_HIGH_MAX],
-  'gpt-6-astra': ['none', ...REASONING_LOW_HIGH_MAX],
-  'glm-5.3': ['none', ...REASONING_LOW_HIGH_MAX],
-  'glm-5.3-flash': ['none', ...REASONING_LOW_HIGH_MAX],
-  'kimi-k3': ['none', ...REASONING_LOW_HIGH_MAX],
-  // V4.1-Flash-1017 lists low/high/max and can disable thinking.
-  'deepseek-v4.1-flash': ['none', ...REASONING_LOW_HIGH_MAX],
-  'deepseek-v4-pro': ['none', 'high'],
-  'hunyuan-hy3': ['none', 'high'],
-  // Disabling thinking has no effect on HY4 here: it still reasons for most of
-  // its output, so only the level it actually runs at is offered.
-  'hunyuan-hy4-preview': ['high'],
+const CODEBUDDY_MEASURED_EFFORTS: Readonly<Record<string, readonly ReasoningEffort[]>> = {
+  // Measured 2026-10-19 (3 runs each): declared as a fixed high, but disabling
+  // thinking yields 0 reasoning tokens and low/max change the reasoning length.
+  'deepseek-v4-pro': ['none', 'low', 'high', 'max'],
+  // Measured 2026-10-19 (3 runs each): declared as able to disable thinking, but
+  // the disable switch still reasons (84-167 tokens, more than low at 22-40).
+  'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max'],
 };
 
-const codeBuddyReasoningEfforts = (modelId: string): readonly ReasoningEffort[] =>
-  CODEBUDDY_REASONING_EFFORTS[modelId] ?? ['high'];
+/** True when a string names a known reasoning level other than `default`. */
+const isLevel = (value: string): value is ReasoningEffort =>
+  value !== 'default' && (REASONING_EFFORTS as readonly string[]).includes(value);
+
+/**
+ * The effort ladder an endpoint row declares: its adjustable levels in canonical
+ * order, preceded by `none` when it can disable thinking; or the single level it
+ * always runs at; or `high` when it states nothing.
+ */
+function declaredReasoningEfforts(entry: CodeBuddyProductModelEntry): readonly ReasoningEffort[] {
+  const reasoning = entry.reasoning;
+  const levels = (reasoning?.supportedEfforts ?? []).filter(isLevel);
+  if (levels.length > 0) {
+    const ordered = REASONING_EFFORTS.filter((level) => level !== 'none' && levels.includes(level));
+    return reasoning?.canDisableThinking === true ? ['none', ...ordered] : ordered;
+  }
+  if (reasoning?.effort !== undefined && isLevel(reasoning.effort)) return [reasoning.effort];
+  return ['high'];
+}
+
+const codeBuddyReasoningEfforts = (modelId: string, entry: CodeBuddyProductModelEntry): readonly ReasoningEffort[] =>
+  CODEBUDDY_MEASURED_EFFORTS[modelId] ?? declaredReasoningEfforts(entry);
 
 const effortLadder = (levels: readonly ReasoningEffort[]): Readonly<Record<string, { effort: string }>> =>
   Object.fromEntries(levels.map((level) => [level, { effort: level }]));
@@ -254,7 +268,7 @@ function buildCodeBuddyOfferings(productEntries: readonly CodeBuddyProductModelE
           upstreamId: entry.id,
           ...productMetadataOverrides(entry, registered.defaults.contextWindow),
           ...claudeMetadataOverrides(canonicalId),
-          reasoningEfforts: codeBuddyReasoningEfforts(canonicalId),
+          reasoningEfforts: codeBuddyReasoningEfforts(canonicalId, entry),
         },
       }),
     };
