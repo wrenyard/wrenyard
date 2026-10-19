@@ -2251,8 +2251,10 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     },
 
     routineBusy(routine: RoutineRecord): boolean {
-      return Object.values(state.rounds).some(round =>
-        round.botId === routine.botId && round.routineId === routine.id)
+      // Busy only while a wake of this same routine is still queued. A round
+      // that waits on watched sessions never holds the next fire back: its
+      // turns may belong to a context the bot has since rotated away from.
+      return state.bots[routine.botId]?.queue.some(wake => wake.routineId === routine.id) === true
     },
   }
 }
