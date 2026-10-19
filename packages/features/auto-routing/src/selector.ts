@@ -6,7 +6,7 @@
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
 import { INTELLIGENCE_ORDER, resolveModelSpeed, resolveReasoningEffort, routingReferencePriceOf, explicitFreeAutoEligibility, type Catalog, type LocalSpeedSample } from '@wrenyard/providers/catalog';
 import type { IntelligenceTier } from '@wrenyard/providers/catalog';
-import { isMainstreamModelId, type ReasoningEffort } from '@wrenyard/models';
+import { isMainstreamModelId, REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/models';
 import type { CandidateInput, RequiredQuotaConstraint } from './types.ts';
 import { AutoRouter } from './auto-router.ts';
 import {
@@ -153,8 +153,17 @@ export interface SelectorInputPort {
 export interface AuxiliaryIntelligenceRequirements {
   intelligenceMin: IntelligenceTier;
   intelligenceExpected: IntelligenceTier;
-  /** Ordered reasoning-level preference; when absent the base role's preference applies. */
-  expectedReasoningEffort?: RoleReasoningRequirement['expectedReasoningEffort'];
+}
+
+/**
+ * The lowest declared effort level in a model's ladder. Effort is a
+ * post-selection parameter, so the winning route simply runs at its weakest
+ * supported level. Throws on an empty ladder, mirroring `resolveReasoningEffort`.
+ * A singleton `['default']` ladder returns `default`.
+ */
+function lowestReasoningEffort(levels: readonly ReasoningEffort[]): ReasoningEffort {
+  if (levels.length === 0) throw new Error('supported reasoning efforts must not be empty');
+  return [...levels].sort((a, b) => REASONING_EFFORTS.indexOf(a) - REASONING_EFFORTS.indexOf(b))[0]!;
 }
 
 function createSelector(
@@ -162,7 +171,6 @@ function createSelector(
   requirements: RoleReasoningRequirement,
   label: string,
   roleKey: string,
-  suggestion: boolean,
   forcedToolChoice = false,
 ) {
   return async (): Promise<SelectorRoute[]> => {
@@ -207,7 +215,7 @@ function createSelector(
           return [{ provider, model }];
         });
     });
-    const entries: { entry: ModelRoutingEntry; levels: typeof requirements.expectedReasoningEffort }[] = [];
+    const entries: { entry: ModelRoutingEntry; levels: readonly ReasoningEffort[] }[] = [];
     const availability = await Promise.all(models.map(({ provider, model }) => port.runtimeAvailability(
       { provider: provider.id, model: model.id, client: 'gateway', mode: 'gateway' },
       { codeBuddySnapshot: bound.codeBuddySnapshot, nativeProviderReadiness: null },
@@ -300,13 +308,11 @@ function createSelector(
     const ranked = new AutoRouter().rank(inputs, scoreWeights);
     for (const excluded of ranked.excluded) reject(excluded.reason);
     const levelsOf = new Map(entries.map(({ entry, levels }) => [entry.choice.exactAgentRuntime, levels]));
-    const speedsOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.speed.effective_tps]));
     const tiersOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.intelligence]));
     const admitted = ranked.ranked.map(candidate => {
       return {
         model: candidate.canonicalId,
         levels: levelsOf.get(candidate.canonicalId)!,
-        speedTps: speedsOf.get(candidate.canonicalId)!,
         tier: tiersOf.get(candidate.canonicalId)!,
         // The routing tier is the canonical quota state: the evaluator already
         // classified this candidate, so the ladder consumes it instead of
@@ -314,7 +320,6 @@ function createSelector(
         quotaState: candidate.tier,
       };
     });
-    const preferred = requirements.expectedReasoningEffort;
     const ladder = requirements.ladder;
     if (ladder !== undefined) {
       // Ladder mode pools the admitted candidates by the shared four-state
@@ -342,23 +347,12 @@ function createSelector(
         reasoningEffort: resolveReasoningEffort('high', levels),
       }));
     }
-    const selected = preferred.map(effort => admitted.filter(({ levels }) => levels.includes(effort))).find(layer => layer.length > 0) ?? admitted;
-    // The suggestion role wants a hint back quickly, so when the selected pool
-    // admits routes that can actually disable reasoning it favors those, ordered
-    // by the candidate's own effective TPS. Other roles, and the case where no
-    // explicit-`none` route is admitted, keep the existing ranked order.
-    const explicitNone = suggestion ? selected.filter(({ levels }) => levels.includes('none')) : [];
-    const pool = explicitNone.length > 0
-      ? explicitNone
-          .map((candidate, index) => ({ candidate, index }))
-          .sort((a, b) => b.candidate.speedTps - a.candidate.speedTps || a.index - b.index)
-          .map(({ candidate }) => candidate)
-      : selected;
-    if (!pool.length) throw new Error(`Auxiliary role ${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
-    return pool.map(({ model, levels }) => ({
-      model,
-      reasoningEffort: preferred.find(effort => levels.includes(effort)) ?? resolveReasoningEffort(preferred[0]!, levels),
-    }));
+    // Effort is a post-selection parameter: every admitted route is returned at
+    // its own lowest declared level, so the candidate set is no longer narrowed
+    // by reasoning-effort tier. The bot ladder above keeps its own high-or-above
+    // rule.
+    if (!admitted.length) throw new Error(`Auxiliary role ${label}: no candidate qualified (${Object.entries(reasons).map(([reason, count]) => `${reason}: ${count}`).join('; ') || 'no Gateway-available normal models'})`);
+    return admitted.map(({ model, levels }) => ({ model, reasoningEffort: lowestReasoningEffort(levels) }));
   };
 }
 
@@ -385,7 +379,7 @@ export function createAuxiliarySelector(port: SelectorInputPort) {
     input: AuxiliarySelectorInput = {},
   ): Promise<SelectorRoute[]> => {
     const forced = input.forcedToolChoice ?? toolChoiceIsForced(input.toolChoice);
-    return createSelector(port, ROLE_REQUIREMENTS[role], role, role, role === 'suggestion', forced)();
+    return createSelector(port, ROLE_REQUIREMENTS[role], role, role, forced)();
   };
 }
 
@@ -402,11 +396,8 @@ export function createRequirementSelector(port: SelectorInputPort) {
       ...base,
       intelligenceMin: requirements.intelligenceMin,
       intelligenceExpected: requirements.intelligenceExpected,
-      ...(requirements.expectedReasoningEffort === undefined
-        ? {}
-        : { expectedReasoningEffort: requirements.expectedReasoningEffort }),
     };
-    return createSelector(port, profile, `requirements(${requirements.intelligenceMin}/${requirements.intelligenceExpected})`, 'reply', false)();
+    return createSelector(port, profile, `requirements(${requirements.intelligenceMin}/${requirements.intelligenceExpected})`, 'reply')();
   };
 }
 
@@ -425,7 +416,6 @@ export async function selectRoutesByRequirementKey(
       BOT_REQUIREMENT,
       `requirements(${BOT_REQUIREMENT.intelligenceMin}/${BOT_REQUIREMENT.intelligenceExpected})`,
       'bot',
-      false,
     )();
   }
   const prefix = 'auxiliary:';
@@ -433,7 +423,7 @@ export async function selectRoutesByRequirementKey(
     const role = key.slice(prefix.length) as AuxiliaryCallRole;
     const requirements = ROLE_REQUIREMENTS[role];
     if (requirements === undefined) throw new Error(`Unknown auxiliary role in routing requirement key: ${key}`);
-    return createSelector(port, requirements, role, role, role === 'suggestion')();
+    return createSelector(port, requirements, role, role)();
   }
   throw new Error(`Unknown routing requirement key: ${key}`);
 }

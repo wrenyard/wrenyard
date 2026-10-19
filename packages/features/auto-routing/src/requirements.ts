@@ -1,5 +1,5 @@
 /** Auxiliary, task and bot requirements as data; no IO or selection logic. */
-import type { IntelligenceTier, ModelCapability, ReasoningEffort } from '@wrenyard/models';
+import type { IntelligenceTier, ModelCapability } from '@wrenyard/models';
 import type { QuotaState } from './types.ts';
 
 /** Every role that may issue an auxiliary call. */
@@ -19,26 +19,23 @@ export interface RoleReasoningRequirement {
   expectedTps: number;
   minimumContextWindow: number;
   requiredCapabilities: readonly ModelCapability[];
-  /** Ordered preference: selection keeps the routes supporting the first level any route supports. */
-  expectedReasoningEffort: readonly ReasoningEffort[];
   /** Ordered tier pools tried in sequence; absent keeps the plain ranked order. */
   ladder?: readonly BotLadderStep[];
 }
 
 const TEXT: readonly ModelCapability[] = ['text'];
-const NO_THINKING: readonly ReasoningEffort[] = ['none', 'low'];
 export const ROLE_REQUIREMENTS: Readonly<Record<AuxiliaryCallRole, RoleReasoningRequirement>> = {
-  title: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
-  status: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
-  suggestion: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
-  'memory-search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
-  'search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
-  dispatch: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['high'] },
-  document: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['low', 'medium'] },
-  vcs: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['none', 'low'] },
-  todo: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['none', 'low'] },
-  project: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: ['none', 'low'] },
-  reply: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT, expectedReasoningEffort: NO_THINKING },
+  title: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT },
+  status: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT },
+  suggestion: { intelligenceMin: 'low', intelligenceExpected: 'low', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT },
+  'memory-search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 0, requiredCapabilities: TEXT },
+  'search': { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
+  dispatch: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT },
+  document: { intelligenceMin: 'mid', intelligenceExpected: 'high', expectedTps: 100, minimumContextWindow: 131072, requiredCapabilities: TEXT },
+  vcs: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
+  todo: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
+  project: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
+  reply: { intelligenceMin: 'mid', intelligenceExpected: 'mid', expectedTps: 200, minimumContextWindow: 131072, requiredCapabilities: TEXT },
 };
 
 /**
@@ -56,7 +53,6 @@ export const BOT_REQUIREMENT: RoleReasoningRequirement = {
   ...ROLE_REQUIREMENTS.reply,
   intelligenceMin: 'mid',
   intelligenceExpected: 'premium',
-  expectedReasoningEffort: ['high'],
   ladder: [
     { intelligence: ['premium', 'high'], quotaState: 'abundant' },
     { intelligence: ['premium', 'high'], quotaState: 'sufficient' },

@@ -1,6 +1,5 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderDefinition } from '@wrenyard/providers/base';
 import {
   AUXILIARY_IDLE_TIMEOUT_MS,
@@ -13,7 +12,6 @@ import {
   type RouteHealth,
   type SpanEventDraft,
 } from '../src/model/request.ts';
-import { ROLE_REQUIREMENTS } from '@wrenyard/auto-routing';
 import { ModelError, type ModelResult, type ModelRequest, type ModelTransport } from '../src/transport/index.ts';
 
 const MODEL_IDS = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
@@ -51,9 +49,9 @@ function makeRunner(options: {
     ...(options.reportRouteFault === undefined ? {} : { reportRouteFault: options.reportRouteFault }),
     ...(options.beginRouteAttempt === undefined ? {} : { beginRouteAttempt: options.beginRouteAttempt }),
     ...(options.completeRouteAttempt === undefined ? {} : { completeRouteAttempt: options.completeRouteAttempt }),
-    selectAuxiliary: (role) => options.routes.map((model) => ({
+    selectAuxiliary: () => options.routes.map((model) => ({
       model,
-      reasoningEffort: ROLE_REQUIREMENTS[role].expectedReasoningEffort[0] as ReasoningEffort,
+      reasoningEffort: 'low',
     })),
     append: (event) => { events.push(event); },
     now: () => new Date(),

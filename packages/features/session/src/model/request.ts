@@ -38,7 +38,6 @@ import {
   type Usage,
 } from '../transport/index.ts';
 import type { ModelSpanFinishedEvent, ModelSpanStartedEvent } from '../ledger/events.ts';
-import { ROLE_REQUIREMENTS } from '@wrenyard/auto-routing';
 import type { AuxiliaryCallRole } from './roles.ts';
 import { boundedOutputReservation, resolveModelMetadata, type ModelMetadata } from './metadata.ts';
 
@@ -1302,7 +1301,6 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           requestedReasoningEffort = selection.reasoningEffort;
         } else {
           auxiliaryRole = input.role;
-          requestedReasoningEffort = ROLE_REQUIREMENTS[input.role].expectedReasoningEffort[0];
           routes = await settleWithAbort(
             options.selectAuxiliary(input.role, { toolChoice: input.toolChoice }),
             controller.signal,
