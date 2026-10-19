@@ -137,9 +137,10 @@ export interface RetryContext {
   /**
    * True when the caller can replace the held route within the same turn — an
    * automatically selected model. A quota exhaustion with a known reset then
-   * raises {@link RouteReselectError} at once instead of sleeping until the
-   * reset, so the caller can move to the next ranked route. Absent or false
-   * keeps the wait-for-reset behaviour of a user-chosen model.
+   * raises {@link RouteReselectError} at once so the caller can move to the
+   * next ranked route. Absent or false, a user-chosen model still ends the turn
+   * at once with the quota message when a quota exhaustion with a known reset
+   * appears during a wait — it is never slept out to the reset.
    */
   reselect?: boolean;
 }
@@ -269,10 +270,15 @@ async function waitForRecovery(wait: RecoveryWait, context: RetryContext, now: (
     // The route left automatic selection while this wait was open: give up and
     // let the caller re-select instead of sleeping on a route it may not use.
     if (current?.excluded === true) throw new RouteReselectError('excluded');
-    // A quota exhaustion that appeared during an admission wait is not waited
-    // out for an automatically selected route.
-    if (current?.final !== undefined && context.reselect === true) {
-      throw new RouteReselectError('quota_exhausted', instantOf(current.notBeforeMs));
+    // A quota exhaustion that appears during a recovery wait ends the turn at
+    // once for both route kinds: an automatically selected route is handed back
+    // for re-selection, while a user-chosen model ends with the quota message
+    // instead of sleeping out to the reset.
+    if (current?.final !== undefined) {
+      if (context.reselect === true) {
+        throw new RouteReselectError('quota_exhausted', instantOf(current.notBeforeMs));
+      }
+      throw new ModelError(current.final, { kind: 'quota_exhausted', source: 'admission', retryAt: new Date(current.notBeforeMs).toISOString() });
     }
     // The wait only ever extends: a later block moves it, nothing else wakes it early.
     const observed = current?.notBeforeMs;

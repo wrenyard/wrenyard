@@ -125,8 +125,10 @@ export interface ReasonSelection {
   fast?: boolean;
   /**
    * True when automatic routing selected this model (a bot dispatcher turn or a
-   * session a bot opened). Such a turn may move to the next ranked route within
-   * the same turn; a hand-picked model keeps its wait-for-reset behaviour.
+   * session a bot opened). Such a turn moves to the next ranked route within the
+   * same turn; a hand-picked model ends the turn at once with the quota message
+   * when a quota exhaustion with a known reset appears during a wait, rather
+   * than sleeping out to the reset.
    */
   automatic?: boolean;
 }
