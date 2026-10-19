@@ -170,8 +170,12 @@ export function PromptInput({
   // Shared container overrides win over the InputGroup defaults through its own
   // cn merge; the field's focus ring is replaced by a border tint.
   const containerBase = 'h-auto border-border bg-background shadow-none has-[[data-slot=input-group-control]:focus-visible]:ring-0 has-[[data-slot=input-group-control]:focus-visible]:border-foreground/20';
-  const compactLayout = 'flex-row flex-nowrap items-center gap-1 rounded-full p-2';
-  const expandedLayout = 'flex-col items-stretch gap-0 rounded-[18px] p-0';
+  // The 24px leading and send circles sit 9px (1px border + 8px padding) from
+  // every edge, so their arcs are concentric with the pill's: the row is a
+  // fixed 42px tall (the 32px toolbar controls plus 4px above and below) and
+  // the expanded box uses the matching 21px radius.
+  const compactLayout = 'flex-row flex-nowrap items-center gap-1 rounded-full h-[42px] px-2 py-1';
+  const expandedLayout = 'flex-col items-stretch gap-0 rounded-[21px] p-0';
   // Padding, line height and font are shared by the textarea and its ghost mirror.
   const compactText = 'py-0 pl-1 pr-0 leading-6';
   const expandedText = 'px-3 py-2 leading-[22px]';
