@@ -42,7 +42,7 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
     id: definition.id,
     definition,
     clients: [codeBuddyClient],
-    quota: createCodeBuddyQuota(definition),
+    quota: createCodeBuddyQuota(definition, product?.status === 'ready' ? product.environment : undefined),
     credential: runtime.credential,
     resolveModel: (model, credential) => runtime.resolveUpstreamModel(model, credential) ?? model,
     canonicalizeModel: runtime.canonicalizeModel,

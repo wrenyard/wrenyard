@@ -19,6 +19,8 @@ function binding(providerId: string, modelId: string, pools: readonly ReturnType
 
 const HY_FAMILY_POOL = quotaPool('codebuddy/hy-family');
 const MONTHLY_POOL = { ...quotaPool('codebuddy/monthly'), displayName: '1mo' };
+/** iOA exposes no monthly usage: the same monthly resource is pay-as-you-go with unknown usage. */
+const IOA_MONTHLY_POOL = { ...MONTHLY_POOL, usageUnknown: true as const };
 
 /** HY3 and HY4 Preview draw jointly on the family allowance. Offerings carry the
  * canonical registry ids, never the product-file wire spellings. */
@@ -29,25 +31,26 @@ function isHyFamilyModel(modelId: string): boolean {
 /**
  * Exact CodeBuddy quota applicability. HY models draw jointly on the family
  * allowance and the account monthly allowance; remaining models use monthly
- * only. IOA exposes no measured monthly usage, so its month observation is a
- * synthetic budget window derived from the current month's elapsed pace, and
- * the family allowance is excluded.
+ * only. iOA exposes no measured monthly usage, so there the monthly pool is
+ * pay-as-you-go with usage unknown by design, and the family allowance is
+ * excluded.
  */
-export function codeBuddyQuotaBindings(definition: ProviderDefinition) {
+export function codeBuddyQuotaBindings(definition: ProviderDefinition, environment?: string) {
+  const monthly = environment === 'ioa' ? IOA_MONTHLY_POOL : MONTHLY_POOL;
   return definition.models.map((model) => (
     isHyFamilyModel(model.id)
-      ? binding('codebuddy', model.id, [HY_FAMILY_POOL, MONTHLY_POOL])
-      : binding('codebuddy', model.id, [MONTHLY_POOL])
+      ? binding('codebuddy', model.id, [HY_FAMILY_POOL, monthly])
+      : binding('codebuddy', model.id, [monthly])
   ));
 }
 
 /** Provider-default pools covering discovered CodeBuddy models not listed above. */
-export function codeBuddyDefaultPools() {
-  return [MONTHLY_POOL];
+export function codeBuddyDefaultPools(environment?: string) {
+  return [environment === 'ioa' ? IOA_MONTHLY_POOL : MONTHLY_POOL];
 }
 
-export function createCodeBuddyQuota(definition: ProviderDefinition): ProviderQuota {
-    return { bindings: codeBuddyQuotaBindings(definition), defaultPools: codeBuddyDefaultPools(),
+export function createCodeBuddyQuota(definition: ProviderDefinition, environment?: string): ProviderQuota {
+    return { bindings: codeBuddyQuotaBindings(definition, environment), defaultPools: codeBuddyDefaultPools(environment),
       read: async source => normalizeCodeBuddyQuota(await source.read()) };
   }
 
@@ -56,24 +59,15 @@ function normalizeCodeBuddyQuota(raw: unknown, now = Date.now()): QuotaSnapshot 
     const sample = observation(raw);
     const row = object(sample.data), reset = time(row.resets_at);
     if (row.environment === 'ioa') {
-        const offset = 8 * 60 * 60 * 1000;
-        const date = new Date(now + offset);
-        const start = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1) - offset;
-        const end = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) - offset;
         const exhausted = row.exhausted === true && row.reason_code === 'quota_exhausted'
             && reset !== undefined && Date.parse(reset) > now;
-        // Synthetic estimate, not measured provider usage: assume the month is
-        // consumed at 99% of the current elapsed-month pace.
-        const elapsedMonthFraction = (now - start) / (end - start);
         return {
             provider: 'codebuddy', status: 'ok', stale: false,
             source: sample.source, fetched_at: sample.fetched_at,
-            windows: [{ name: 'monthly', pct: exhausted ? 100 : 99 * elapsedMonthFraction,
-                window_minutes: (end - start) / 60000,
-                resets_at: exhausted ? reset : new Date(end).toISOString() }],
+            windows: exhausted ? [{ name: 'monthly', pct: 100, window_minutes: 0, resets_at: reset }] : [],
             message: exhausted
                 ? 'CodeBuddy 本月额度已耗尽，重置后将自动恢复。'
-                : '合成估算：1mo 已用按本月当前配速的 99% 估算，并非服务商实测额度。',
+                : '按量计费 · 用量未知',
             not_applicable_windows: ['hy-family'],
         };
     }
