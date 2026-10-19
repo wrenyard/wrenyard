@@ -30,4 +30,7 @@ config.yaml
 # Managed worktrees.
 worktrees/
 
+# Track the canonical Zod source-of-truth schemas (not generated/legacy dirs).
 schemas/
+!packages/features/task/src/schemas/
+!packages/features/task/src/schemas/*.ts
