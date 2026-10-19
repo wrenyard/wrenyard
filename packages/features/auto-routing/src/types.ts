@@ -79,6 +79,11 @@ export interface RequiredQuotaConstraint {
    * resource, so the constraint is unknown by design and never abundant.
    */
   usageUnknown?: boolean;
+  /**
+   * Gateway observed a quota_exhausted fault on this pool; cleared by a later
+   * successful request on the same pool.
+   */
+  observedExhausted?: boolean;
 }
 /** Discriminated monetary balance evidence for one required balance resource. */
 export interface BalanceEvidence {

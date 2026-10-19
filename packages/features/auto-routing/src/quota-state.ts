@@ -189,6 +189,9 @@ function assessConstraint(nowMs: number, constraint: RequiredQuotaConstraint): C
   }
   const id = typeof constraint.id === 'string' ? constraint.id : '';
   const evidenceStatus = evidenceStatusOf(constraint);
+  if (constraint.observedExhausted === true) {
+    return { id, state: 'exhausted', evidenceStatus, headroom: 0, rejectCode: null };
+  }
   const measured = measuredAssessment(nowMs, constraint);
   // Usage unknown by design is usable but never abundant: only a strictly
   // observed exhaustion is honored, and it is never relaxed.

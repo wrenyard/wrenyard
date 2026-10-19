@@ -845,6 +845,25 @@ async function createForemanDaemonResources(
     if (snapshotLoader === undefined) return undefined
     return snapshotLoader(codebuddyProviderDef)
   }
+  // Gateway pool-scoped quota_exhausted faults observed during routing, keyed
+  // `${provider}|${quotaPoolId}`. Cleared on a pool available event or when stale.
+  const OBSERVED_POOL_EXHAUSTION_TTL_MS = 30 * 60_000
+  const observedPoolExhaustionByPool = new Map<string, { at: number; until?: number }>()
+  const observedPoolExhaustionSnapshot = (): ReadonlyMap<string, number> => {
+    const now = Date.now()
+    const surviving = new Map<string, number>()
+    for (const [key, entry] of observedPoolExhaustionByPool) {
+      const expired = entry.until !== undefined
+        ? now > entry.until
+        : now > entry.at + OBSERVED_POOL_EXHAUSTION_TTL_MS
+      if (expired) {
+        observedPoolExhaustionByPool.delete(key)
+        continue
+      }
+      surviving.set(key, entry.at)
+    }
+    return surviving
+  }
   // One daemon-owned immutable automatic-routing quota snapshot service. All
   // automatic selections (TaskSettingsService run + preview) share this single
   // instance so quota evidence/caching never diverges between paths. The
@@ -854,6 +873,7 @@ async function createForemanDaemonResources(
   // never freezes a CodeBuddy login/environment wire remap at startup.
   const autoRoutingQuotaSnapshots = new AutoRoutingQuotaSnapshotService({
     codeBuddySnapshot: loadCurrentCodeBuddySnapshot,
+    observedPoolExhaustion: observedPoolExhaustionSnapshot,
   })
   // Authoritative, non-inference native auth/model readiness now comes from the
   // clients' own native observations (AgentClient.readReadiness), not a Wrenyard
@@ -927,6 +947,18 @@ async function createForemanDaemonResources(
     catalog,
     providers: providerRuntime,
     onRouteStateChanged: async (event) => {
+      if (event.scope === 'pool' && event.quotaPoolId !== undefined) {
+        const poolKey = `${event.provider}|${event.quotaPoolId}`
+        if (event.state === 'quota_exhausted') {
+          const untilMs = event.until === undefined ? undefined : Date.parse(event.until)
+          observedPoolExhaustionByPool.set(poolKey, {
+            at: Date.now(),
+            ...(Number.isFinite(untilMs) ? { until: untilMs } : {}),
+          })
+        } else if (event.state === 'available') {
+          observedPoolExhaustionByPool.delete(poolKey)
+        }
+      }
       // Only safe structured facts are emitted: the fault reason, circuit phase,
       // the retry/probe instants and the latest probe outcome. No prompt, body,
       // credential or raw upstream text is ever carried on this event.

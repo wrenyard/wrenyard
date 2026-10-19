@@ -164,6 +164,8 @@ export interface AutoRoutingQuotaSnapshotServiceOptions {
    *  missing/throwing snapshot or absent stable scope fails closed with no
    *  CodeBuddy context. */
   codeBuddySnapshot?: () => Promise<CodeBuddyActiveSnapshotView | undefined>;
+  /** Live gateway pool exhaustion observations keyed `${providerId}|${quotaPoolId}`. */
+  observedPoolExhaustion?: () => ReadonlyMap<string, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -484,6 +486,23 @@ function constraintOf(
   return { id: target.id, evidence, evidenceStatus, ...usageUnknown };
 }
 
+function poolExhaustionKey(providerId: string, target: RequiredQuotaTarget): string {
+  const poolId = target.balanceId ?? target.id;
+  return `${providerId}|${poolId}`;
+}
+
+function applyObservedPoolExhaustion(
+  providerId: string,
+  target: RequiredQuotaTarget,
+  constraint: RequiredQuotaConstraint,
+  observedPoolExhaustion: ReadonlyMap<string, number> | undefined,
+): RequiredQuotaConstraint {
+  if (observedPoolExhaustion === undefined || !observedPoolExhaustion.has(poolExhaustionKey(providerId, target))) {
+    return constraint;
+  }
+  return { ...constraint, observedExhausted: true };
+}
+
 /**
  * Builds discriminated monetary balance evidence for one mandatory balance
  * resource from the raw Wrenyard balances array on the same row.
@@ -584,6 +603,7 @@ function buildSnapshot(
   nowMs: number,
   allowCodeBuddyBlock: boolean,
   lastUsableRows: Map<string, RawRow>,
+  observedPoolExhaustion: ReadonlyMap<string, number> | undefined,
 ): AutoRoutingQuotaSnapshot | null {
   const entries: AutoRoutingQuotaSnapshotEntry[] = [];
   const boundaries: number[] = [];
@@ -611,17 +631,20 @@ function buildSnapshot(
       // unrelated raw rows/windows never fabricate a constraint or evidence.
       // The row and the window/reset facts are narrowed together so an absent
       // value is never handed to evidence construction.
+      let constraint: RequiredQuotaConstraint;
       if (target.balanceId !== undefined) {
         const balance = source === null
           ? null
           : balanceEvidence(source, usable ? QUOTA_SNAPSHOT_VALID_FOR_MS : RETAINED_EVIDENCE_VALID_FOR_MS);
-        return constraintOf(target, null, balance, usable && balance !== null ? 'measured' : 'not_obtained');
+        constraint = constraintOf(target, null, balance, usable && balance !== null ? 'measured' : 'not_obtained');
+      } else {
+        const evidence = source !== null && target.windowName !== undefined
+          ? windowEvidence(source, target.windowName, target.resetKind,
+            usable ? QUOTA_SNAPSHOT_VALID_FOR_MS : RETAINED_EVIDENCE_VALID_FOR_MS)
+          : null;
+        constraint = constraintOf(target, evidence, null, usable && evidence !== null ? 'measured' : 'not_obtained');
       }
-      const evidence = source !== null && target.windowName !== undefined
-        ? windowEvidence(source, target.windowName, target.resetKind,
-          usable ? QUOTA_SNAPSHOT_VALID_FOR_MS : RETAINED_EVIDENCE_VALID_FOR_MS)
-        : null;
-      return constraintOf(target, evidence, null, usable && evidence !== null ? 'measured' : 'not_obtained');
+      return applyObservedPoolExhaustion(binding.providerId, target, constraint, observedPoolExhaustion);
     });
     entries.push(entryFields(binding, shape, requiredQuota));
   }
@@ -687,11 +710,13 @@ export class AutoRoutingQuotaSnapshotService {
    * for the last-measured grace period; it never leaves the process.
    */
   private readonly lastUsableRows = new Map<string, RawRow>();
+  private readonly observedPoolExhaustion: (() => ReadonlyMap<string, number>) | undefined;
 
   constructor(options: AutoRoutingQuotaSnapshotServiceOptions = {}) {
     this.queryJson = options.queryJson ?? queryQuotaJson;
     this.now = options.now ?? (() => Date.now());
     this.codeBuddySnapshot = options.codeBuddySnapshot;
+    this.observedPoolExhaustion = options.observedPoolExhaustion;
   }
 
   /**
@@ -786,7 +811,13 @@ export class AutoRoutingQuotaSnapshotService {
       const rows = parseQuotaReport(text);
       // Defense in depth: even an injected/misbehaving query source cannot
       // activate a CodeBuddy negative row without a complete current scope.
-      const snapshot = buildSnapshot(rows, nowMs, context !== undefined, this.lastUsableRows);
+      const snapshot = buildSnapshot(
+        rows,
+        nowMs,
+        context !== undefined,
+        this.lastUsableRows,
+        this.observedPoolExhaustion?.(),
+      );
       if (snapshot === null) return this.failClosed(context, rows);
       this.cachedByContext.set(codeBuddyContextKey(context), snapshot);
       return snapshot;
