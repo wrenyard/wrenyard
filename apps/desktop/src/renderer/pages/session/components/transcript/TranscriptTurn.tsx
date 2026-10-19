@@ -15,7 +15,9 @@ import {
   DISPATCH_TERMINAL_LABEL,
   HIDDEN_CALL_ROLES,
   dispatchTerminal,
+  runningStepName,
   thinkingVerb,
+  turnTokenTotal,
   waitingStatusText,
 } from '../../model/describe.js';
 import type { TurnWaitingState } from '../../model/describe.js';
@@ -210,29 +212,37 @@ function RunningTasks({ tasks, sessionId }: { tasks: readonly ActionModel[]; ses
 }
 
 /**
- * The running turn's bottom line: accent working dots, then the thinking verb
- * while the model reasons, or the turn's elapsed time while steps run, plus
- * the count of task runs still working.
+ * The running turn's bottom line on one row: accent working dots, the step
+ * being run (or the waiting or interrupting notice), its elapsed time and token
+ * total, and the count of task runs still working.
  */
 function LiveLine({ turn, sessionId, waiting }: { turn: TurnModel; sessionId?: string; waiting?: TurnWaitingState }) {
   const thinking = turn.calls.find((call) => call.role === 'reason' && call.status === 'running');
-  let label;
-  if (waiting !== undefined) label = <MorphText className="truncate" text={waitingStatusText(waiting)} />;
-  else if (turn.interrupting) label = <span>正在中断<Ellipsis /></span>;
-  else if (thinking !== undefined) {
-    label = (
-      <span className="inline-flex items-baseline text-primary">
-        <MorphText className="shimmer" text={thinkingVerb(thinking.cycle ?? turn.cycle)} />
-        <Ellipsis />
-      </span>
-    );
-  } else {
-    label = <Elapsed start={turn.startedAt} className="tabular-nums" />;
-  }
+  const step = runningStepName(turn);
+  const total = turnTokenTotal(turn);
   return (
     <div className="wy-rise-in flex items-center gap-2 text-sm text-muted-foreground">
       <WorkingDots />
-      {label}
+      {waiting !== undefined ? (
+        <MorphText className="min-w-0 truncate" text={waitingStatusText(waiting)} />
+      ) : turn.interrupting ? (
+        <span>正在中断<Ellipsis /></span>
+      ) : step !== undefined ? (
+        <MorphText className="shimmer min-w-0 truncate" text={step} />
+      ) : null}
+      <span className="shrink-0">
+        <Elapsed start={turn.startedAt} className="tabular-nums" />
+        {total !== undefined && ` · ${formatTokenCount(total)} tokens`}
+      </span>
+      {waiting === undefined && !turn.interrupting && step === undefined && thinking !== undefined && (
+        <>
+          <span>·</span>
+          <span className="inline-flex items-baseline text-primary">
+            <MorphText className="shimmer" text={thinkingVerb(thinking.cycle ?? turn.cycle)} />
+            <Ellipsis />
+          </span>
+        </>
+      )}
       <RunningTasks tasks={runningTasks(turn)} sessionId={sessionId} />
     </div>
   );

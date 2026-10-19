@@ -2,8 +2,9 @@
  * One collapsed stretch of agent work: a muted header line over the bordered
  * list of its step rows. The header's icon is the step kind when the group
  * holds one step and a list when it holds several. While a step runs, the
- * header names it with an animated ellipsis; once settled it summarises the
- * steps by kind, with a warning when some failed. A new group rises in.
+ * header names it as plain muted text (the animated name lives on the live
+ * line); once settled it summarises the steps by kind, with a warning when some
+ * failed. A new group rises in.
  */
 import { useState, type ComponentType } from 'react';
 import {
@@ -30,8 +31,6 @@ import {
 } from '@/renderer/components/ui/collapsible';
 import { ACTION_KIND_LABEL, CALL_ROLE_LABEL, materialTitle, stepName } from '../../model/describe.js';
 import type { ActionModel, CallModel, ContextItem } from '../../model/types.js';
-import { Ellipsis } from '../live-indicators.js';
-import { MorphText } from '../morph-text.js';
 import { ActionRow } from './ActionCard.js';
 import { ActivityRow } from './ActivityRow.js';
 import { AuxiliaryCallRow, ReasoningRow } from './CallRow.js';
@@ -195,10 +194,7 @@ export function ActivityGroup({ items, contextItems, sessionId, onCancelTask }: 
       >
         <HeaderIcon className="size-3.5 shrink-0" aria-hidden />
         {runningText !== undefined ? (
-          <span className="inline-flex min-w-0 items-baseline">
-            <MorphText className="shimmer truncate" text={runningText} />
-            <Ellipsis />
-          </span>
+          <span className="truncate">{runningText}</span>
         ) : (
           <>
             <span className="truncate">{settledLabel}</span>

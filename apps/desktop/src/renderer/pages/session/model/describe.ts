@@ -209,6 +209,33 @@ export function turnStatusText(turn: TurnModel): string {
 }
 
 /**
+ * Name of the step the turn is running right now: the first running action's
+ * title (or 运行中 before its generated name arrives), else the first running
+ * auxiliary call. Undefined while only reasoning runs or before any step began.
+ */
+export function runningStepName(turn: TurnModel): string | undefined {
+  const action = turn.actions.find((item) => item.status === 'running');
+  if (action !== undefined) return action.title === '' ? '运行中' : action.title;
+  const call = turn.calls.find((item) => item.status === 'running' && item.role !== 'reason');
+  if (call !== undefined) return `正在${CALL_ROLE_LABEL[call.role] ?? call.role}`;
+  return undefined;
+}
+
+/**
+ * Tokens the turn has spent so far: its settled input and output totals plus
+ * the in-flight usage of every running call. Undefined when nothing counted.
+ */
+export function turnTokenTotal(turn: TurnModel): number | undefined {
+  const { expensive, cheap } = turn.stats;
+  let total = (expensive.input ?? 0) + (expensive.output ?? 0) + (cheap.input ?? 0) + (cheap.output ?? 0);
+  for (const call of turn.calls) {
+    if (call.status !== 'running') continue;
+    total += (call.usage?.input ?? 0) + (call.usage?.output ?? 0);
+  }
+  return total > 0 ? total : undefined;
+}
+
+/**
  * The live recovery waiting state of one turn, projected from its
  * `turn.waiting` event. `retryAt` is optional so a wait without a real expected
  * time stays explicitly unknown rather than borrowing a fallback recheck delay.
