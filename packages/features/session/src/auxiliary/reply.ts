@@ -482,7 +482,8 @@ function terminalReasonOutput(
  * The first nonempty candidate wins: the call's own plain text, the turn's
  * last reasoning output, the last finished action's textual result, and a
  * closing line built from turn facts. The closing line is never empty, so a
- * terminal turn always records an answer.
+ * terminal turn always records an answer. The order is `REPLY_FALLBACK_SOURCES`
+ * (ledger/events.ts), the canonical list shared with the Desktop derivation.
  */
 function terminalFallback(
   events: readonly LedgerEvent[],

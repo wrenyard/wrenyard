@@ -195,7 +195,7 @@ export type {
   WorkspaceChangedEvent,
   WorkspaceSnapshot,
 } from './ledger/store.ts';
-export { collectSessionFiles, stepId, turnId } from './ledger/store.ts';
+export { REPLY_FALLBACK_SOURCES, collectSessionFiles, stepId, turnId } from './ledger/store.ts';
 import { SpanRecorder } from './loop/span.ts';
 
 /** Create the session feature over a host. */

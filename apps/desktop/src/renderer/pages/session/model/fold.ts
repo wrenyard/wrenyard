@@ -415,10 +415,18 @@ function buildTurn(
 
 /**
  * The closing reply of an ended turn that recorded none, derived from the
- * folded turn. The first nonempty candidate wins: the last reasoning step's
- * raw text, then the last finished action's textual result, then a closing
- * line built from turn facts, which is never empty. A running turn has no
- * closing reply yet.
+ * folded turn. The first nonempty candidate wins, in the terminal-reply
+ * fallback order shared with the engine — `REPLY_FALLBACK_SOURCES` in
+ * '@wrenyard/session', which `terminalFallback`
+ * (packages/features/session/src/auxiliary/reply.ts) applies after the reply
+ * tool candidate:
+ *   1. `reply-text`: the plain output of the turn's last communication call;
+ *   2. `reasoning`: the last reasoning step's raw text;
+ *   3. `action-result`: the last finished action's textual result;
+ *   4. `closing`: a line built from turn facts, which is never empty.
+ * A running turn has no closing reply yet. The order is documented as a list
+ * rather than imported because the renderer reads '@wrenyard/session' as types
+ * only; keep both lists in sync.
  */
 function derivedFinalReply(turn: {
   status: TurnStatus;
@@ -439,6 +447,8 @@ function derivedFinalReply(turn: {
     ...(tone === undefined ? {} : { tone }),
   });
 
+  const replyText = lastReplyCallText(turn.calls);
+  if (replyText !== undefined) return closing(replyText);
   const reasoning = lastReasoningText(turn.cycles, turn.calls);
   if (reasoning !== undefined) return closing(reasoning);
   const result = lastActionResult(turn.actions);
@@ -447,6 +457,21 @@ function derivedFinalReply(turn: {
   if (turn.status === 'interrupted') return closing('已中断');
   const done = turn.actions.reduce((count, action) => (action.status === 'running' ? count : count + 1), 0);
   return closing(`本轮已完成，执行了 ${done} 个操作，未生成文字说明。`);
+}
+
+/**
+ * The plain output of the turn's last terminal communication call, the first
+ * candidate of the shared fallback order. Only the call's own output counts,
+ * never its reasoning.
+ */
+function lastReplyCallText(calls: readonly CallModel[]): string | undefined {
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const call = calls[index]!;
+    if (call.role !== 'reply') continue;
+    if (call.output.trim() === '') continue;
+    return call.output;
+  }
+  return undefined;
 }
 
 /** The raw text of the turn's last reasoning step, from its cycles or calls. */

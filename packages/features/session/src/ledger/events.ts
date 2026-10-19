@@ -599,6 +599,17 @@ export interface ReplySentEvent extends LedgerEventBase {
   source?: 'tool' | 'reply-text' | 'reasoning' | 'action-result' | 'closing';
 }
 
+/**
+ * The canonical terminal-reply fallback order: the candidates a finished turn
+ * falls back to, in order, when the reply tool sent no text. The engine applies
+ * it in `terminalFallback` (`auxiliary/reply.ts`), after the `tool` candidate,
+ * and records the matching `reply.sent` source; the Desktop derivation
+ * `derivedFinalReply` (`apps/desktop/src/renderer/pages/session/model/fold.ts`)
+ * applies the same order on read for turns recorded before the terminal answer
+ * existed. Both must stay in sync with this constant.
+ */
+export const REPLY_FALLBACK_SOURCES = ['reply-text', 'reasoning', 'action-result', 'closing'] as const;
+
 /** The session title; never part of the model context. */
 export interface SessionTitledEvent extends LedgerEventBase {
   type: 'session.titled';
