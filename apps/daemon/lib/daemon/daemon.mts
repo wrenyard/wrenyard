@@ -1293,12 +1293,12 @@ async function createForemanDaemonResources(
     // wake queues, watches and rounds, and fires through the scheduler above.
     const botAgents = createBotAgentKernel({
       workspaceRoot,
-      configDir: join(resolveWrenyardConfigRoot(), 'bot-agents'),
+      workspaceBotsDir: join(workspaceRoot, 'bots'),
+      deviceBotsDir: join(resolveWrenyardConfigRoot(), 'bot-agents'),
       stateDir: join(sessionStateRoot, 'bot-agents', sha256hex(workspaceRoot)),
       host: daemonSessionHost,
       sessions: session,
       todos: workspaceTodoService,
-      routines: scheduler,
       selectModels,
       log: (level, message) => writeDaemonLog(level, message),
     })

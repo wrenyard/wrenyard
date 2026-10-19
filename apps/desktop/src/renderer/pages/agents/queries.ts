@@ -3,7 +3,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { LedgerEvent } from '@wrenyard/session';
 import { agentRequest, useRemoteConnection } from '@/renderer/lib/desktop';
 import type {
+  AgentCreateParams,
   AgentGroupEventsResult,
+  AgentMemoryFile,
   GroupMessage,
   RoutineCreateParams,
   RoutineDeliver,
@@ -25,6 +27,7 @@ function useAgentEnabled(): boolean {
 export const agentKeys = {
   list: ['agents', 'list'] as const,
   config: (id: string) => ['agents', 'config', id] as const,
+  memory: (id: string) => ['agents', 'memory', id] as const,
   routines: (botId: string) => ['agents', 'routines', botId] as const,
 };
 
@@ -53,6 +56,24 @@ export function useAgentConfigQuery(id: string | null) {
   });
 }
 
+/**
+ * Read-only memory listing of one bot, for the settings view. It is a separate
+ * query from the config so a memory change refetches the listing alone.
+ */
+export function useAgentMemoryQuery(id: string | null) {
+  const enabled = useAgentEnabled();
+  return useQuery({
+    queryKey: agentKeys.memory(id ?? ''),
+    queryFn: async (): Promise<AgentMemoryFile[]> => {
+      if (id === null) throw new Error('no bot selected');
+      const result = await agentRequest('agent.memory.list', { id });
+      return result.files;
+    },
+    enabled: enabled && id !== null,
+    retry: false,
+  });
+}
+
 /** Polled routine list of one bot. An absent botId keeps the query idle. */
 export function useRoutinesQuery(botId: string | null) {
   const enabled = useAgentEnabled();
@@ -71,6 +92,19 @@ export function useRoutinesQuery(botId: string | null) {
 function useAgentInvalidator(): () => void {
   const queryClient = useQueryClient();
   return () => { void queryClient.invalidateQueries({ queryKey: ['agents'] }); };
+}
+
+/**
+ * Create one bot from the built-in onboard template. The daemon owns the id
+ * check across both definition roots, so a clash surfaces as this mutation's
+ * error rather than a local guess.
+ */
+export function useCreateAgentMutation() {
+  const invalidate = useAgentInvalidator();
+  return useMutation({
+    mutationFn: (params: AgentCreateParams) => agentRequest('agent.create', params),
+    onSuccess: invalidate,
+  });
 }
 
 /** Wake one bot with the composer text; the queue count returns in the result. */

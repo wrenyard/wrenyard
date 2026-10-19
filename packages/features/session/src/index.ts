@@ -56,6 +56,13 @@ export type {
   WorkspaceMemoryPort,
 } from './ports.ts';
 export type { CompileViewInput } from './auxiliary/dispatch.ts';
+export {
+  createWorkspaceMemory,
+  type MemoryChange,
+  type MemoryFileEntry,
+  type MemoryFileText,
+  type MemoryRemoval,
+} from './memory-write.ts';
 export type { DocSearchViewInput } from './auxiliary/search.ts';
 export type { MemorySearchViewInput } from './auxiliary/memory.ts';
 export type { ReasonViewInput } from './reasoning/prompt.ts';

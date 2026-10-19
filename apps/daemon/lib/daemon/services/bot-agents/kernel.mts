@@ -1,7 +1,7 @@
 /**
  * Bot agent kernel.
  *
- * A bot is an LLM agent assembled from one JSON config file. The kernel owns
+ * A bot is an LLM agent assembled from one directory definition. The kernel owns
  * everything around it: immediate message delivery, the watches that wake a
  * bot when a work session finishes a turn, the rounds a routine fire opens,
  * and the persisted state that lets admission survive a daemon restart. Bots
@@ -32,9 +32,20 @@ import {
   type TurnStatus,
 } from '@wrenyard/session'
 import type { RoutineDeliver, RoutineRecord } from '../../../protocol/methods/routine.mts'
-import type { Scheduler } from '../scheduler.mts'
 import type { WorkspaceTodoService } from '../workspace-todo-service.mts'
-import { loadBotAgentConfigs, type BotAgentConfig, type BotAgentEntry } from './config.mts'
+import {
+  assertBotIdAvailable,
+  assertRealInside,
+  createBotDirectory,
+  listMemoryFiles,
+  loadBotAgents,
+  type AgentBotLocation,
+  type AgentMemoryFile,
+  type BotAgentConfig,
+  type BotAgentEntry,
+  type BotAgentIdentity,
+  type BotAgentRoots,
+} from './config.mts'
 import {
   GROUP_PROMPT_GUIDANCE,
   groupSourceKey,
@@ -66,6 +77,23 @@ const GROUP_PAGE_SIZE = 100
 const GROUP_PAGE_MAX = 500
 /** How many published reply source keys are remembered for deduplication. */
 const GROUP_PUBLISHED_MAX = 2_000
+/** How many memory files the fixed context carries at most. */
+const MEMORY_BLOCK_FILES = 20
+/** How many characters of one memory body the fixed context carries. */
+const MEMORY_BLOCK_BODY_CHARS = 1_500
+/** How many characters of the memory index the fixed context carries. */
+const MEMORY_BLOCK_INDEX_CHARS = 4_000
+/**
+ * The built-in, private-data-free role of a freshly created bot. It states no
+ * filesystem path: identity and memory are reached only through the tools.
+ */
+const ONBOARD_ROLE = [
+  '你是用户的私人助手。',
+  '先用一两句话介绍自己，然后询问用户希望你叫什么名字、希望如何称呼用户，以及你最应该主要帮助用户做什么（例如：把 workspace 里的待办逐条拆成会话推进）。',
+  '把用户的回答用 memory 工具的 identity 操作写回你的身份（名称、图标、描述和角色文本），并把值得长期记住的偏好保存为记忆；然后告诉用户你记录了什么。',
+  '此后收到请求时，把具体工作交给会话来处理；不确定时先向用户提问。',
+  '不要提及文件系统路径，也不要泄露任何隐私数据。',
+].join('\n')
 
 /** Where a wake came from; it decides the tag the bot reads in the text. */
 type WakeSource = 'user' | 'routine' | 'session' | 'message'
@@ -193,14 +221,20 @@ interface TrackedTurn {
 export interface AgentBotSummary {
   id: string
   name: string
+  icon?: string
+  description?: string
   enabled: boolean
   status: 'idle' | 'running' | 'error' | 'disabled'
   error?: string
-  configPath: string
+  location: AgentBotLocation
+  primary: boolean
+  /** The bot definition directory. */
+  directory: string
   tools: string[]
   lastWakeAt?: string
   queued: number
   sessionId?: string
+  warning?: string
 }
 
 /** A refused bot operation; the code is what the protocol maps to a status. */
@@ -213,8 +247,10 @@ export class BotAgentError extends Error {
 
 export interface CreateBotAgentKernelOptions {
   workspaceRoot: string
-  /** `<config root>/bot-agents`: one `<id>.json` per bot. */
-  configDir: string
+  /** `<workspace>/bots`: one directory per synced bot. */
+  workspaceBotsDir: string
+  /** `<config root>/bot-agents`: one directory per device-only bot. */
+  deviceBotsDir: string
   /** `<state root>/bot-agents/<sha256(workspaceRoot)>`: state and bot ledgers. */
   stateDir: string
   /** The daemon session host; the kernel derives its private bot host from it. */
@@ -222,8 +258,6 @@ export interface CreateBotAgentKernelOptions {
   /** The workspace session service the `session` tool and the watches use. */
   sessions: Session
   todos: WorkspaceTodoService
-  /** The routine store, used only to reconcile config-declared routines. */
-  routines: Pick<Scheduler, 'reconcile'>
   /** The ladder-ranked routes a bot may run on, best first. */
   selectModels(): Promise<readonly AgentModelRoute[]>
   log(level: 'info' | 'warn' | 'error', message: string): void
@@ -233,7 +267,21 @@ export interface BotAgentKernel {
   start(): Promise<void>
   stop(): Promise<void>
   list(): AgentBotSummary[]
-  get(id: string): { bot: AgentBotSummary; config: string }
+  get(id: string): Promise<{
+    bot: AgentBotSummary
+    config: string
+    identity: string
+    memory: AgentMemoryFile[]
+  }>
+  /** Read the memory listing of one bot; never writes anything. */
+  memory(id: string): Promise<AgentMemoryFile[]>
+  /** Create one bot from the built-in onboard template. */
+  create(input: {
+    id: string
+    name: string
+    icon?: string
+    location?: AgentBotLocation
+  }): Promise<AgentBotSummary>
   context(id: string): { session: Session; sessionId: string } | undefined
   wake(id: string, text: string): { queued: number }
   /** Drop every watch of one session, in memory and in the persisted state. */
@@ -262,30 +310,67 @@ export interface GroupSendResult {
 }
 
 /**
- * The fixed instruction prefix every bot runs on, before its config text, and
- * the enabled peers it may address in the group. The roster is appended after
- * the prefix, the group guidance and the config instructions, all verbatim.
+ * The per-bot memory of the fixed context: the memory index followed by the
+ * bounded body of every memory file, read fresh before it is injected so a
+ * change or a removal is visible on the next wake. Every file is checked to
+ * stay inside the bot directory before it is read.
  */
-function botSystemPrompt(config: BotAgentConfig, all: Iterable<BotAgentEntry>): string {
-  const workspaceEnabled = config.tools.includes('workspace')
+async function readMemoryBlock(entry: BotAgentEntry): Promise<string> {
+  const memoryDir = join(entry.directory, 'memory')
+  let files: AgentMemoryFile[]
+  try {
+    files = await listMemoryFiles(entry.directory)
+  } catch {
+    return ''
+  }
+  /** Read one file of the memory directory, refusing any escape. */
+  const read = async (name: string): Promise<string | undefined> => {
+    const path = join(memoryDir, name)
+    try {
+      await assertRealInside(entry.directory, path)
+      return (await readFile(path, 'utf-8')).trim()
+    } catch {
+      return undefined
+    }
+  }
+  const sections: string[] = []
+  const index = await read('INDEX.md')
+  sections.push(index === undefined || index === ''
+    ? '## memory\n(no memory index yet)'
+    : `## memory index\n${index.slice(0, MEMORY_BLOCK_INDEX_CHARS)}`)
+  for (const file of files.filter(file => file.name !== 'INDEX.md').slice(0, MEMORY_BLOCK_FILES)) {
+    const body = await read(file.name)
+    if (body === undefined || body === '') continue
+    sections.push(`### ${file.name}\n${body.slice(0, MEMORY_BLOCK_BODY_CHARS)}`)
+  }
+  return sections.join('\n\n')
+}
+
+/**
+ * The fixed instruction prefix every bot runs on: its identity role, the
+ * per-bot memory it already has, and the enabled peers it may address in the
+ * group. The roster is appended after the prefix, the group guidance, the role
+ * text and the memory, all verbatim.
+ */
+function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>, memory: string): string {
+  const identity = entry.identity
+  const name = identity?.name ?? entry.id
+  const workspaceEnabled = entry.config?.tools.includes('workspace') === true
   const fixed = [
-    `You are the Wrenyard bot "${config.name}" (${config.id}).`,
+    `You are the Wrenyard bot "${name}" (${entry.id}).`,
     'You are driven by messages: routine triggers, user input, other bots\' messages and work-session updates.',
     'One message may carry several [wake:user], [wake:routine <id>], [wake:session <sessionId> <status>] or [wake:message from <bot>] entries; handle every one of them in this turn.',
-    workspaceEnabled
-      ? 'Your levers are the bot tools (session list/create/send/interrupt, todo, message, workspace).'
-      : 'Your levers are the bot tools (session list/create/send/interrupt, todo, message).',
+    'Your levers are the bot tools (session list/create/send/interrupt, todo, message, memory, workspace) that are enabled for you.',
     'Answer directly in text when no work is needed: acknowledgements, status from this conversation, and questions you can answer without running anything.',
     'You never run code, searches, documents or tasks yourself; delegate such work to a work session in natural language and create one only for it.',
-    'You have no file or shell access.',
+    'You have no file or shell access beyond your own memory and identity and the explicit workspace tool.',
     ...(workspaceEnabled
       ? ['With the workspace tool you may commit and push workspace changes you made yourself (your memory, your identity, todos you created or updated); name the exact files and never commit files you did not change.']
       : []),
   ].join(' ')
-  const peers: BotAgentConfig[] = []
-  for (const entry of all) {
-    const peer = entry.config
-    if (peer === undefined || !peer.enabled || peer.id === config.id) continue
+  const peers: BotAgentEntry[] = []
+  for (const peer of all) {
+    if (peer.config === undefined || !peer.config.enabled || peer.id === entry.id) continue
     peers.push(peer)
   }
   peers.sort((left, right) => left.id.localeCompare(right.id))
@@ -293,9 +378,18 @@ function botSystemPrompt(config: BotAgentConfig, all: Iterable<BotAgentEntry>): 
     ? 'No other bot is enabled in this group right now.'
     : [
       'Other bots enabled in this group; address one with @id or @name:',
-      ...peers.map(peer => `- @${peer.id} (${peer.name})`),
+      ...peers.map(peer => {
+        const icon = peer.identity?.icon === undefined ? '' : `${peer.identity.icon} `
+        const description = peer.identity?.description === undefined ? '' : ` — ${peer.identity.description}`
+        return `- @${peer.id} (${icon}${peer.identity?.name ?? peer.id})${description}`
+      }),
     ].join('\n')
-  return `${fixed}\n\n${GROUP_PROMPT_GUIDANCE}\n\n${config.instructions}\n\n${roster}`
+  const body = identity?.body ?? ''
+  const parts = [fixed, GROUP_PROMPT_GUIDANCE]
+  if (body.trim() !== '') parts.push(body)
+  if (memory.trim() !== '') parts.push(memory)
+  parts.push(roster)
+  return parts.join('\n\n')
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -569,8 +663,15 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   const log = options.log
   const statePath = join(options.stateDir, 'kernel.json')
   const state = emptyState()
-  /** Config files as last applied, by id. */
+  /** Both definition roots, polled together every five seconds. */
+  const roots: BotAgentRoots = {
+    workspace: options.workspaceBotsDir,
+    device: options.deviceBotsDir,
+  }
+  /** Active definitions, by id; a workspace bot wins a clash. */
   const entries = new Map<string, BotAgentEntry>()
+  /** Device definitions hidden by an id clash, kept visible but disabled. */
+  const shadowed: BotAgentEntry[] = []
   /** Wakes currently resolving session.send admission, awaited only at shutdown. */
   const admissions = new Set<Promise<void>>()
   /** Avoid dispatching the same persisted pending wake twice in this process. */
@@ -580,6 +681,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   const trackedTurns = new Map<string, TrackedTurn>()
   /** Pending seed-turn waits, settled by stop() before it awaits admissions. */
   const seedWaits = new Set<() => void>()
+  /** Per-bot memory block of the fixed context, keyed by bot id. */
+  const memoryBlocks = new Map<string, string>()
   const turnRounds = new Map<string, Set<string>>()
   /** Live ledger subscriptions, keyed by bot and watched session. */
   const watchSubs = new Map<string, () => void>()
@@ -628,12 +731,13 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
   /**
    * Verbatim kernel facts appended to a bot's context after compaction: the
-   * sessions it watches with their todos, its configured routines, and the
-   * enabled roster. Undefined when every section would be empty.
+   * sessions it watches with their todos and the enabled roster. Routines live
+   * only in the device store and are not part of a definition. Undefined when
+   * every section would be empty.
    */
-  function kernelFactsFor(config: BotAgentConfig): string | undefined {
+  function kernelFactsFor(entry: BotAgentEntry): string | undefined {
     const sections: string[] = []
-    const watches = state.watches.filter(watch => watch.botId === config.id)
+    const watches = state.watches.filter(watch => watch.botId === entry.id)
     if (watches.length > 0) {
       sections.push([
         '## watches',
@@ -642,33 +746,48 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         }`),
       ].join('\n'))
     }
-    if (config.routines.length > 0) {
-      sections.push([
-        '## routines',
-        ...config.routines.map(routine => `- ${routine.name}: every ${routine.intervalMinutes} min; last run unavailable`),
-      ].join('\n'))
-    }
-    const peers: BotAgentConfig[] = []
-    for (const entry of entries.values()) {
-      const peer = entry.config
-      if (peer === undefined || !peer.enabled || peer.id === config.id) continue
+    const peers: BotAgentEntry[] = []
+    for (const peer of entries.values()) {
+      if (peer.config === undefined || !peer.config.enabled || peer.id === entry.id) continue
       peers.push(peer)
     }
     peers.sort((left, right) => left.id.localeCompare(right.id))
     if (peers.length > 0) {
-      sections.push(['## roster', ...peers.map(peer => `- @${peer.id} (${peer.name})`)].join('\n'))
+      sections.push(['## roster', ...peers.map(peer => {
+        const name = peer.identity?.name ?? peer.id
+        const icon = peer.identity?.icon === undefined ? '' : `${peer.identity.icon} `
+        return `- @${peer.id} (${icon}${name})`
+      })].join('\n'))
     }
     return sections.length === 0 ? undefined : sections.join('\n\n')
   }
 
+  /**
+   * The memory block of one bot, cached so the fixed context of every wake
+   * carries it without re-reading the directory mid-turn. A memory tool change
+   * refreshes it at once; a definition reload refreshes every bot.
+   */
+  async function refreshMemoryBlock(botId: string): Promise<void> {
+    const entry = entries.get(botId)
+    if (entry === undefined) {
+      memoryBlocks.delete(botId)
+      return
+    }
+    memoryBlocks.set(botId, await readMemoryBlock(entry))
+  }
+
+  async function refreshMemoryBlocks(): Promise<void> {
+    await Promise.all([...entries.keys()].map(id => refreshMemoryBlock(id)))
+  }
+
   function portFor(botId: string): AgentToolPort | undefined {
-    const config = entries.get(botId)?.config
-    if (config === undefined) return undefined
+    const entry = entries.get(botId)
+    if (entry?.config === undefined || entry.identity === undefined) return undefined
     return {
-      system: botSystemPrompt(config, entries.values()),
-      tools: agentToolSpecs(config.tools),
+      system: botSystemPrompt(entry, entries.values(), memoryBlocks.get(entry.id) ?? ''),
+      tools: agentToolSpecs(entry.config.tools),
       maxToolCalls: MAX_TOOL_CALLS,
-      kernelFacts: () => kernelFactsFor(config),
+      kernelFacts: () => kernelFactsFor(entry),
       auxiliaryTools: { workspace: 'vcs' },
       // The invoking context session and turn decide which routine round a
       // watch inherits; a turn admitted before a rotation keeps its own round.
@@ -687,8 +806,20 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
    * routine round, even after a rotation moved the bot to a new session.
    */
   function toolContext(botId: string, invokingSessionId?: string, invokingTurn?: number): AgentToolContext {
+    const entry = entries.get(botId)
     return {
       botId,
+      directory: entry?.directory ?? '',
+      workspaceRoot: options.workspaceRoot,
+      refreshIdentity: identity => {
+        const current = entries.get(botId)
+        if (current !== undefined) current.identity = identity
+      },
+      refreshMemory: () => {
+        void refreshMemoryBlock(botId).catch(error => {
+          log('warn', `bot agent kernel could not refresh the memory of ${botId}: ${errorText(error)}`)
+        })
+      },
       watch: (sessionId, afterTurn, todoIds) =>
         addWatch(botId, sessionId, afterTurn, todoIds, invokingSessionId, invokingTurn),
       message: (to, text) => sendMessage(botId, to, text),
@@ -707,11 +838,20 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     return created
   }
 
+  /** A definition that may run a turn: valid bot.json, identity and enabled. */
+  function isRunnable(
+    entry: BotAgentEntry | undefined,
+  ): entry is BotAgentEntry & { config: BotAgentConfig; identity: BotAgentIdentity } {
+    return entry?.config?.enabled === true && entry.identity !== undefined
+  }
+
   /** The configured, enabled bot, or the error the caller must surface. */
   function requireBot(id: string): BotAgentEntry {
     const entry = entries.get(id)
     if (entry === undefined) throw new BotAgentError('agent_not_found', `unknown bot: ${id}`)
-    if (entry.config === undefined) throw new BotAgentError('agent_invalid', `bot ${id} has an invalid config`)
+    if (entry.config === undefined || entry.identity === undefined) {
+      throw new BotAgentError('agent_invalid', `bot ${id} has an invalid definition`)
+    }
     if (!entry.config.enabled) throw new BotAgentError('agent_disabled', `bot ${id} is disabled`)
     return entry
   }
@@ -722,20 +862,25 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const error = entry.error ?? bot?.lastError
     let status: AgentBotSummary['status']
     if (config !== undefined && !config.enabled) status = 'disabled'
-    else if (config === undefined || bot?.lastError !== undefined) status = 'error'
+    else if (entry.error !== undefined || config === undefined || bot?.lastError !== undefined) status = 'error'
     else if (bot?.sessionId !== undefined && (activeTurns.get(entry.id)?.size ?? 0) > 0) status = 'running'
     else status = 'idle'
     return {
       id: entry.id,
-      name: config?.name ?? entry.id,
+      name: entry.identity?.name ?? entry.id,
+      ...(entry.identity?.icon === undefined ? {} : { icon: entry.identity.icon }),
+      ...(entry.identity?.description === undefined ? {} : { description: entry.identity.description }),
       enabled: config?.enabled === true,
       status,
       ...(error === undefined ? {} : { error }),
-      configPath: entry.path,
+      location: entry.location,
+      primary: entry.primary,
+      directory: entry.directory,
       tools: config?.tools ?? [],
       ...(bot?.lastWakeAt === undefined ? {} : { lastWakeAt: bot.lastWakeAt }),
       queued: bot?.queue.length ?? 0,
       ...(bot?.sessionId === undefined ? {} : { sessionId: bot.sessionId }),
+      ...(entry.warnings.length === 0 ? {} : { warning: entry.warnings.join('; ') }),
     }
   }
 
@@ -872,8 +1017,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   function enabledRoster(): GroupBot[] {
     const roster: GroupBot[] = []
     for (const entry of entries.values()) {
-      if (entry.config?.enabled !== true) continue
-      roster.push({ id: entry.id, name: entry.config.name, enabled: true })
+      if (!isRunnable(entry)) continue
+      roster.push({ id: entry.id, name: entry.identity?.name ?? entry.id, enabled: true })
     }
     return roster
   }
@@ -954,7 +1099,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   function deliverMentions(from: string, text: string, targets: readonly string[]): Wake[] {
     const wakes: Wake[] = []
     const entry = entries.get(from)
-    if (entry?.config?.enabled !== true) return wakes
+    if (entry === undefined || !isRunnable(entry)) return wakes
     if (!entry.config.tools.includes('message')) return wakes
     for (const target of targets) {
       try {
@@ -997,7 +1142,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const published = appendGroupMessage({
       author: 'bot',
       botId,
-      name: entries.get(botId)?.config?.name ?? botId,
+      name: entries.get(botId)?.identity?.name ?? botId,
       text: event.text,
       at: event.at,
       sourceKey: groupSourceKey(sessionId, event.seq),
@@ -1026,7 +1171,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       const published = appendGroupMessage({
         author: 'bot',
         botId,
-        name: entries.get(botId)?.config?.name ?? botId,
+        name: entries.get(botId)?.identity?.name ?? botId,
         text,
         sourceKey,
         mentions: { roster: enabledRoster(), selfId: botId },
@@ -1482,7 +1627,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   async function runWake(botId: string, wake: Wake): Promise<void> {
     try {
       await persistChain
-      if (stopped || entries.get(botId)?.config?.enabled !== true) return
+      if (stopped || !isRunnable(entries.get(botId))) return
       const bot = ensureBotState(botId)
       const sessionId = await ensureContext(botId)
       if (stopped) return
@@ -1536,7 +1681,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   }
 
   function dispatchWake(botId: string, wake: Wake): void {
-    if (stopped || admitting.has(wake.id) || entries.get(botId)?.config?.enabled !== true) return
+    if (stopped || admitting.has(wake.id) || !isRunnable(entries.get(botId))) return
     admitting.add(wake.id)
     let task: Promise<void>
     task = runWake(botId, wake).finally(() => {
@@ -1549,65 +1694,51 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   // ─── Config ──────────────────────────────────────────────────────────────
 
   /**
-   * Whether one loaded entry carries the same signature and error as the entry
-   * applied before. A changed signature includes a file that was unreadable and
-   * now reads, so a recovered error reconciles like an edit.
+   * Adopt a fresh load of both roots. A clashing device-only bot never wins an
+   * id: it is kept aside so the list still shows it as disabled. Validation
+   * errors stay on their own bot and never affect the daemon.
    */
-  function sameEntry(previous: BotAgentEntry | undefined, entry: BotAgentEntry): boolean {
-    if (previous === undefined) return false
-    return previous.error === entry.error
-      && previous.signature.mtimeMs === entry.signature.mtimeMs
-      && previous.signature.ctimeMs === entry.signature.ctimeMs
-      && previous.signature.size === entry.signature.size
-      && previous.signature.ino === entry.signature.ino
-  }
-
-  /**
-   * Adopt a fresh config load: reconcile the routines of every changed valid
-   * bot, drop those of a bot whose file was removed, and leave an invalid file
-   * owning only its own error.
-   */
-  async function applyConfigs(loaded: BotAgentEntry[], previous: ReadonlyMap<string, BotAgentEntry>): Promise<void> {
-    const loadedIds = new Set(loaded.map(entry => entry.id))
-    const removed = [...previous.keys()].filter(id => !loadedIds.has(id))
+  async function applyConfigs(loaded: BotAgentEntry[], warnings: readonly string[]): Promise<void> {
+    for (const warning of warnings) log('warn', `bot agent kernel: ${warning}`)
     entries.clear()
-    for (const entry of loaded) entries.set(entry.id, entry)
+    shadowed.splice(0, shadowed.length)
+    const byId = new Map<string, BotAgentEntry[]>()
     for (const entry of loaded) {
-      // A stop that began while this load ran applies no further config.
-      if (stopped) return
-      if (entry.config === undefined || sameEntry(previous.get(entry.id), entry)) continue
-      try {
-        await options.routines.reconcile(entry.id, entry.config.routines)
-      } catch (error) {
-        log('warn', `bot agent kernel could not reconcile the routines of ${entry.id}: ${errorText(error)}`)
+      const group = byId.get(entry.id) ?? []
+      group.push(entry)
+      byId.set(entry.id, group)
+    }
+    for (const group of byId.values()) {
+      const active = group.find(entry => entry.location === 'workspace') ?? group[0]
+      if (active === undefined) continue
+      entries.set(active.id, active)
+      for (const entry of group) {
+        if (entry !== active) shadowed.push(entry)
       }
     }
-    for (const id of removed) {
-      if (stopped) return
-      try {
-        await options.routines.reconcile(id, [])
-      } catch (error) {
-        log('warn', `bot agent kernel could not drop the routines of removed bot ${id}: ${errorText(error)}`)
-      }
-    }
+    // Every wake carries the per-bot memory, so it is read with the definition.
+    await refreshMemoryBlocks()
   }
 
   /**
-   * Reload the config directory once. Concurrent callers share the in-flight
-   * load; the previous entries are handed to the loader so unchanged files are
-   * returned, not read again.
+   * Reload both roots once. Concurrent callers share the in-flight load; the
+   * previous entries are handed to the loader so unchanged definitions are
+   * returned, not read again. Polling every five seconds also notices a
+   * `bot.json`, `identity.md` or memory addition/removal.
    */
   function reloadConfigs(): Promise<void> {
     if (stopped) return Promise.resolve()
     if (refreshPromise !== undefined) return refreshPromise
     const running = (async (): Promise<void> => {
-      const previous = new Map(entries)
-      const loaded = await loadBotAgentConfigs(options.configDir, [...previous.values()])
+      const previous = [...entries.values(), ...shadowed]
+      const known = new Map(previous.map(entry => [`${entry.location}\n${entry.id}`, entry.signature]))
+      const { bots, warnings } = await loadBotAgents(roots, previous)
       if (stopped) return
-      const unchanged = previous.size === loaded.length
-        && loaded.every(entry => previous.get(entry.id) === entry)
+      const unchanged = warnings.length === 0
+        && bots.length === previous.length
+        && bots.every(entry => known.get(`${entry.location}\n${entry.id}`) === entry.signature)
       if (unchanged) return
-      await applyConfigs(loaded, previous)
+      await applyConfigs(bots, warnings)
     })()
     refreshPromise = running
     const settle = (): void => {
@@ -1794,8 +1925,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         }
         for (const unsubscribe of watchSubs.values()) unsubscribe()
         watchSubs.clear()
-        // A reload already reading the directory settles before stop returns;
-        // it starts no reconcile once `stopped` is set.
+        // A reload already reading the roots settles before stop returns.
         const refresh = refreshPromise
         if (refresh !== undefined) {
           await refresh.catch(error => {
@@ -1831,13 +1961,77 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     },
 
     list(): AgentBotSummary[] {
-      return [...entries.values()].sort((left, right) => left.id.localeCompare(right.id)).map(summaryOf)
+      return [...entries.values(), ...shadowed]
+        .map(summaryOf)
+        .sort((left, right) => left.primary === right.primary
+          ? left.id.localeCompare(right.id)
+          : left.primary ? -1 : 1)
     },
 
-    get(id: string): { bot: AgentBotSummary; config: string } {
+    async get(id: string): Promise<{
+      bot: AgentBotSummary
+      config: string
+      identity: string
+      memory: AgentMemoryFile[]
+    }> {
+      const entry = entries.get(id) ?? shadowed.find(candidate => candidate.id === id)
+      if (entry === undefined) throw new BotAgentError('agent_not_found', `unknown bot: ${id}`)
+      return {
+        bot: summaryOf(entry),
+        config: entry.configText,
+        identity: entry.identityText,
+        memory: await listMemoryFiles(entry.directory),
+      }
+    },
+
+    async memory(id: string): Promise<AgentMemoryFile[]> {
       const entry = entries.get(id)
       if (entry === undefined) throw new BotAgentError('agent_not_found', `unknown bot: ${id}`)
-      return { bot: summaryOf(entry), config: entry.text }
+      return listMemoryFiles(entry.directory)
+    },
+
+    async create(input: {
+      id: string
+      name: string
+      icon?: string
+      location?: AgentBotLocation
+    }): Promise<AgentBotSummary> {
+      const id = input.id.trim()
+      const name = input.name.trim()
+      if (name === '' || /[\r\n\0]/u.test(name)) {
+        throw new BotAgentError('agent_invalid', 'name must be one nonempty line')
+      }
+      try {
+        await assertBotIdAvailable(roots, id)
+      } catch (error) {
+        throw new BotAgentError('agent_invalid', errorText(error))
+      }
+      const location: AgentBotLocation = input.location ?? 'workspace'
+      const root = location === 'workspace' ? roots.workspace : roots.device
+      const directory = join(root, id)
+      try {
+        await mkdir(root, { recursive: true })
+        // A `bots` symlink that points outside the workspace must never receive
+        // a definition.
+        if (location === 'workspace') await assertRealInside(options.workspaceRoot, root)
+        await createBotDirectory(directory, {
+          name,
+          ...(input.icon === undefined || input.icon.trim() === '' ? {} : { icon: input.icon.trim() }),
+          body: ONBOARD_ROLE,
+        })
+      } catch (error) {
+        throw new BotAgentError('agent_invalid', errorText(error))
+      }
+      await reloadConfigs()
+      if (stopped) throw new BotAgentError('agent_invalid', 'the bot kernel is stopping')
+      const entry = entries.get(id)
+      if (entry?.config === undefined) {
+        throw new BotAgentError('agent_invalid', `bot ${id} did not load after creation`)
+      }
+      const wake = enqueue(id, { source: 'user', text: '[wake:user] 你好' })
+      persist()
+      dispatchWake(id, wake)
+      return summaryOf(entry)
     },
 
     context(id: string): { session: Session; sessionId: string } | undefined {

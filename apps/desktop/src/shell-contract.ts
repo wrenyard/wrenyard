@@ -1313,19 +1313,39 @@ export type {
 /* ------------------------------------------------------------------ */
 
 /**
- * A bot agent assembled from a per-bot JSON config. The daemon kernel owns
+ * A bot agent assembled from one bot directory. The daemon kernel owns
  * wake queues, contexts and model routing; Desktop only forwards allowlisted
  * `agent.*` and `routine.*` calls and renders their results.
  */
 export type AgentStatus = 'idle' | 'running' | 'error' | 'disabled';
 
+/** Where a bot definition lives: synced with the workspace, or this device only. */
+export type AgentBotLocation = 'workspace' | 'device';
+
+/** One file of a bot's memory directory, as listed read-only. */
+export interface AgentMemoryFile {
+  name: string;
+  size: number;
+  updatedAt: string;
+}
+
 export interface AgentBot {
   id: string;
   name: string;
+  /** Identity icon; falls back to the first letter of the name in the UI. */
+  icon?: string;
+  /** One-line identity description. */
+  description?: string;
   enabled: boolean;
   status: AgentStatus;
   error?: string;
-  configPath: string;
+  location: AgentBotLocation;
+  /** The one primary bot: listed first, marked, and never deletable. */
+  primary: boolean;
+  /** The bot definition directory, in place of the old flat config path. */
+  directory: string;
+  /** Why this bot is disabled by a clash, or why its primary claim was refused. */
+  warning?: string;
   tools: string[];
   lastWakeAt?: string;
   queued: number;
@@ -1362,6 +1382,8 @@ export interface Routine {
 export const AGENT_METHODS = [
   'agent.list',
   'agent.get',
+  'agent.create',
+  'agent.memory.list',
   'agent.events',
   'agent.wake',
   'agent.group.events',
@@ -1377,7 +1399,24 @@ export type AgentMethod = (typeof AGENT_METHODS)[number];
 
 export interface AgentListResult { bots: AgentBot[] }
 export interface AgentGetParams { id: string }
-export interface AgentGetResult { bot: AgentBot; config: string }
+/** The bot, its raw `bot.json` and `identity.md`, and its memory listing. */
+export interface AgentGetResult {
+  bot: AgentBot;
+  config: string;
+  identity: string;
+  memory: AgentMemoryFile[];
+}
+/** Create one bot from the built-in onboard template; the id is immutable. */
+export interface AgentCreateParams {
+  id: string;
+  name: string;
+  icon?: string;
+  /** Defaults to `workspace`. */
+  location?: AgentBotLocation;
+}
+export interface AgentCreateResult { bot: AgentBot }
+export interface AgentMemoryListParams { id: string }
+export interface AgentMemoryListResult { files: AgentMemoryFile[] }
 export interface AgentEventsParams { id: string; afterSeq: number; limit?: number }
 /** Same shape as the daemon `session.events` result, for the bot context ledger. */
 export interface AgentEventsResult { events: LedgerEvent[]; lastSeq: number }
@@ -1424,6 +1463,8 @@ export interface RoutineDeleteResult { deleted: true }
 export interface AgentMethodMap {
   'agent.list': { params: undefined; result: AgentListResult };
   'agent.get': { params: AgentGetParams; result: AgentGetResult };
+  'agent.create': { params: AgentCreateParams; result: AgentCreateResult };
+  'agent.memory.list': { params: AgentMemoryListParams; result: AgentMemoryListResult };
   'agent.events': { params: AgentEventsParams; result: AgentEventsResult };
   'agent.wake': { params: AgentWakeParams; result: AgentWakeResult };
   'agent.group.events': { params: AgentGroupEventsParams; result: AgentGroupEventsResult };

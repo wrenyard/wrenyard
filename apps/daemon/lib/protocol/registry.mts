@@ -57,6 +57,8 @@ import {
 import {
   agentListParamsSchema, agentListResultSchema,
   agentGetParamsSchema, agentGetResultSchema,
+  agentCreateParamsSchema, agentCreateResultSchema,
+  agentMemoryListParamsSchema, agentMemoryListResultSchema,
   agentEventsParamsSchema, agentEventsResultSchema,
   agentWakeParamsSchema, agentWakeResultSchema,
   agentGroupEventsParamsSchema, agentGroupEventsResultSchema,
@@ -64,6 +66,8 @@ import {
   type AgentBotSummary,
   type AgentListParams, type AgentListResult,
   type AgentGetParams, type AgentGetResult,
+  type AgentCreateParams, type AgentCreateResult,
+  type AgentMemoryListParams, type AgentMemoryListResult,
   type AgentEventsParams, type AgentEventsResult,
   type AgentWakeParams, type AgentWakeResult,
   type AgentGroupEventsParams, type AgentGroupEventsResult,
@@ -74,6 +78,8 @@ export type {
   AgentBotSummary,
   AgentListParams, AgentListResult,
   AgentGetParams, AgentGetResult,
+  AgentCreateParams, AgentCreateResult,
+  AgentMemoryListParams, AgentMemoryListResult,
   AgentEventsParams, AgentEventsResult,
   AgentWakeParams, AgentWakeResult,
   AgentGroupEventsParams, AgentGroupEventsResult,
@@ -1040,6 +1046,8 @@ export interface ForemanMethodParams {
   'routine.delete': RoutineDeleteParams
   'agent.list': AgentListParams
   'agent.get': AgentGetParams
+  'agent.create': AgentCreateParams
+  'agent.memory.list': AgentMemoryListParams
   'agent.events': AgentEventsParams
   'agent.wake': AgentWakeParams
   'agent.group.events': AgentGroupEventsParams
@@ -1160,6 +1168,8 @@ export interface ForemanMethodResults {
   'routine.delete': RoutineDeleteResult
   'agent.list': AgentListResult
   'agent.get': AgentGetResult
+  'agent.create': AgentCreateResult
+  'agent.memory.list': AgentMemoryListResult
   'agent.events': AgentEventsResult
   'agent.wake': AgentWakeResult
   'agent.group.events': AgentGroupEventsResult
@@ -1592,6 +1602,8 @@ export const methodRegistry: {
   'routine.delete': { params: routineDeleteParamsSchema, result: routineDeleteResultSchema },
   'agent.list': { params: agentListParamsSchema, result: agentListResultSchema },
   'agent.get': { params: agentGetParamsSchema, result: agentGetResultSchema },
+  'agent.create': { params: agentCreateParamsSchema, result: agentCreateResultSchema },
+  'agent.memory.list': { params: agentMemoryListParamsSchema, result: agentMemoryListResultSchema },
   'agent.events': { params: agentEventsParamsSchema, result: agentEventsResultSchema },
   'agent.wake': { params: agentWakeParamsSchema, result: agentWakeResultSchema },
   'agent.group.events': { params: agentGroupEventsParamsSchema, result: agentGroupEventsResultSchema },

@@ -7,7 +7,10 @@ import { StatusBadge } from '@/renderer/components/status-badge';
 import type { StatusTone } from '@/renderer/components/status-badge';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { Button } from '@/renderer/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/renderer/components/ui/card';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
+import { Field, FieldLabel } from '@/renderer/components/ui/field';
+import { Input } from '@/renderer/components/ui/input';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -18,13 +21,14 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { useRemoteConnection } from '@/renderer/lib/desktop';
-import type { AgentBot, AgentStatus, GroupMessage } from '@/shell-contract';
+import type { AgentBot, AgentBotLocation, AgentStatus, GroupMessage } from '@/shell-contract';
 import { fold } from '../session/model/fold.js';
 import { MessageTimeline, buildMessageTimeline } from '../session/components/conversation/MessageTimeline.js';
 import type { GroupTranscript } from './queries.js';
 import {
   useAgentEvents,
   useAgentsQuery,
+  useCreateAgentMutation,
   useGroupEvents,
   useGroupSendMutation,
   useWakeMutation,
@@ -39,6 +43,165 @@ const STATUS_VIEW: Record<AgentStatus, { label: string; tone: StatusTone }> = {
   error: { label: '错误', tone: 'danger' },
   disabled: { label: '已停用', tone: 'warning' },
 };
+
+/** The immutable id rule the daemon enforces, checked live in the wizard. */
+const BOT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/u;
+/** Name a freshly created bot starts with. */
+const DEFAULT_BOT_NAME = '助手';
+/** Where a new bot may live; the workspace is the default. */
+const LOCATION_OPTIONS: ReadonlyArray<{ value: AgentBotLocation; label: string }> = [
+  { value: 'workspace', label: 'Workspace（多设备同步）' },
+  { value: 'device', label: '仅本机' },
+];
+
+/** Where one definition lives, as the list shows it. */
+function locationText(location: AgentBotLocation): string {
+  return location === 'workspace' ? 'Workspace' : '本机';
+}
+
+/** The icon of one bot: its identity icon, else the first character of its name. */
+function botIcon(bot: AgentBot): string {
+  const icon = bot.icon?.trim();
+  if (icon !== undefined && icon !== '') return icon;
+  return [...bot.name.trim()][0] ?? bot.id.slice(0, 1);
+}
+
+/** One list line: icon, name, the 主 marker, location and every warning mark. */
+function botLabel(bot: AgentBot): string {
+  const parts = [botIcon(bot), bot.name];
+  if (bot.primary) parts.push('主');
+  parts.push(locationText(bot.location));
+  if (!bot.enabled) parts.push('已停用');
+  if (bot.warning !== undefined) parts.push('⚠');
+  return parts.join(' · ');
+}
+
+/** The list as Desktop renders it: the primary bot first, then by id. */
+function sortBots(bots: readonly AgentBot[]): AgentBot[] {
+  return [...bots].sort((left, right) => {
+    if (left.primary !== right.primary) return left.primary ? -1 : 1;
+    return left.id.localeCompare(right.id);
+  });
+}
+
+/**
+ * Why the typed id cannot be created. The daemon keeps the authoritative,
+ * race-safe check on `agent.create`; this only keeps the form honest before a
+ * submit and explains the clash the daemon reports.
+ */
+function idProblem(id: string, takenIds: readonly string[]): string | null {
+  const value = id.trim();
+  if (value === '') return '请填写 id';
+  if (!BOT_ID_PATTERN.test(value)) return 'id 只能由小写字母、数字和连字符组成，以字母或数字开头，最长 32 个字符';
+  if (takenIds.includes(value)) return '这个 id 已经被占用';
+  return null;
+}
+
+/**
+ * The onboarding wizard: shown only when both definition roots loaded and
+ * neither holds a bot. It creates one bot through `agent.create` — the renderer
+ * never writes a definition file — and hands the created bot back so the page
+ * can open its private conversation.
+ */
+function OnboardingWizard(props: { takenIds: readonly string[]; onCreated: (bot: AgentBot) => void }) {
+  const create = useCreateAgentMutation();
+  const [id, setId] = useState('');
+  const [name, setName] = useState(DEFAULT_BOT_NAME);
+  const [icon, setIcon] = useState('');
+  const [location, setLocation] = useState<AgentBotLocation>('workspace');
+
+  const problem = idProblem(id, props.takenIds);
+  const nameProblem = name.trim() === '' ? '请填写名称' : null;
+  const blocked = problem !== null || nameProblem !== null;
+
+  const submit = (): void => {
+    // One in-flight create only: a second submit cannot reach the daemon.
+    if (create.isPending || blocked) return;
+    create.mutate(
+      {
+        id: id.trim(),
+        name: name.trim(),
+        ...(icon.trim() === '' ? {} : { icon: icon.trim() }),
+        location,
+      },
+      { onSuccess: (result) => props.onCreated(result.bot) },
+    );
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 items-start justify-center overflow-auto p-6">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>创建第一个机器人</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <p className="text-sm text-muted-foreground">
+            还没有机器人。创建的主机器人会用一段引导对话开始工作；id 创建后不可修改。
+          </p>
+          <Field>
+            <FieldLabel>id</FieldLabel>
+            <Input
+              value={id}
+              placeholder="assistant"
+              aria-invalid={problem !== null}
+              onChange={(event) => setId(event.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">创建后不可修改</span>
+            {id.trim() !== '' && problem !== null && (
+              <span className="text-xs text-destructive">{problem}</span>
+            )}
+          </Field>
+          <Field>
+            <FieldLabel>名称</FieldLabel>
+            <Input
+              value={name}
+              aria-invalid={nameProblem !== null}
+              onChange={(event) => setName(event.target.value)}
+            />
+            {nameProblem !== null && <span className="text-xs text-destructive">{nameProblem}</span>}
+          </Field>
+          <Field>
+            <FieldLabel>图标（可选）</FieldLabel>
+            <Input
+              value={icon}
+              placeholder="🤖"
+              className="w-24"
+              onChange={(event) => setIcon(event.target.value)}
+            />
+          </Field>
+          <Field>
+            <FieldLabel>位置</FieldLabel>
+            <div className="flex flex-col gap-1">
+              {LOCATION_OPTIONS.map((option) => (
+                <label key={option.value} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="bot-location"
+                    value={option.value}
+                    checked={location === option.value}
+                    onChange={() => setLocation(option.value)}
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </Field>
+          <div className="flex items-center gap-2">
+            <Button size="sm" disabled={create.isPending || blocked} onClick={submit}>
+              创建
+            </Button>
+            {create.isPending && <span className="text-xs text-muted-foreground">创建中…</span>}
+          </div>
+          <div className="text-xs" aria-live="polite">
+            {create.isError && (
+              <span className="text-destructive">{`创建失败：${String(create.error)}`}</span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 type ConversationMode = 'group' | 'private';
 
@@ -407,11 +570,21 @@ function PrivateView(props: {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2 text-sm">
+        <span aria-hidden>{botIcon(props.bot)}</span>
         <span className="font-medium">{props.bot.name}</span>
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{props.bot.id}</span>
+        {props.bot.primary && (
+          <span className="rounded bg-primary/15 px-1 text-xs text-primary">主</span>
+        )}
+        <span className="rounded bg-muted px-1 text-xs text-muted-foreground">
+          {locationText(props.bot.location)}
+        </span>
         <StatusBadge tone={status.tone} label={status.label} />
         {!props.bot.enabled && (
           <span className="text-xs text-muted-foreground">已停用，仅可查看历史。</span>
+        )}
+        {props.bot.warning !== undefined && (
+          <span className="text-xs text-amber-600 dark:text-amber-400">{`⚠ ${props.bot.warning}`}</span>
         )}
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -443,7 +616,7 @@ export function AgentsPage() {
   const [groupDraft, setGroupDraft] = useState('');
   const [privateDrafts, setPrivateDrafts] = useState<Record<string, string>>({});
 
-  const bots = agents.data?.bots ?? [];
+  const bots = useMemo(() => sortBots(agents.data?.bots ?? []), [agents.data]);
 
   // Keep a valid private selection as the polled list changes.
   useEffect(() => {
@@ -460,6 +633,10 @@ export function AgentsPage() {
     [bots, privateId],
   );
 
+  // Only a loaded, empty list starts onboarding; a loading or failed list never
+  // does, so a transient daemon state cannot offer a duplicate create.
+  const onboarding = !agents.isError && !agents.isPending && bots.length === 0;
+
   return (
     <Page data-page="agents">
       <PageHeader>
@@ -468,15 +645,18 @@ export function AgentsPage() {
           <ModeSwitch mode={mode} onChange={setMode} />
           {mode === 'private' && bots.length > 0 && (
             <Select value={privateId ?? bots[0]?.id ?? ''} onValueChange={(value) => setPrivateId(String(value))}>
-              <SelectTrigger size="sm" className="w-44" aria-label="选择机器人">
+              <SelectTrigger size="sm" className="w-56" aria-label="选择机器人">
                 <SelectValue>
-                  {(value) => bots.find((bot) => bot.id === value)?.name ?? String(value)}
+                  {(value) => {
+                    const bot = bots.find((entry) => entry.id === value);
+                    return bot === undefined ? String(value) : botLabel(bot);
+                  }}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {bots.map((bot) => (
                   <SelectItem key={bot.id} value={bot.id}>
-                    {bot.enabled ? bot.name : `${bot.name}（已停用）`}
+                    {botLabel(bot)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -485,7 +665,17 @@ export function AgentsPage() {
         </PageActions>
       </PageHeader>
       <PageContent fill className="gap-0 p-0">
-        {agents.isError && mode === 'private' ? (
+        {onboarding ? (
+          <OnboardingWizard
+            takenIds={bots.map((bot) => bot.id)}
+            onCreated={(bot) => {
+              // The daemon already enqueued the onboarding wake; open the new
+              // bot's own conversation instead of repeating it here.
+              setPrivateId(bot.id);
+              setMode('private');
+            }}
+          />
+        ) : agents.isError && mode === 'private' ? (
           <QueryError query={agents} title={PAGE_TITLE} />
         ) : mode === 'group' ? (
           <GroupView

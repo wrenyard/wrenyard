@@ -37,18 +37,6 @@ export function parseRoutineDeliver(value: string | undefined): RoutineDeliver {
   return value as RoutineDeliver
 }
 
-/**
- * One routine declared in a bot config file. The kernel reconciles these into
- * the routine store: they are created, updated or removed to match the config,
- * and unlike Desktop-created routines they are named and never expire.
- */
-export interface RoutineConfig {
-  name: string
-  prompt: string
-  intervalMinutes: number
-  deliver: RoutineDeliver
-}
-
 export interface CreateSchedulerOptions {
   /** JSON state file holding `{ version: 1, routines: [...] }`. */
   statePath: string
@@ -98,16 +86,6 @@ export interface Scheduler {
   update(id: string, state: 'active' | 'paused'): RoutineRecord
   run(id: string): RoutineRecord
   remove(id: string): void
-  /**
-   * Reconcile the config-declared routines of one bot with the store. Among
-   * this workspace's records for the bot that carry a `name`, missing ones are
-   * created (recurring, active, never expiring), changed prompt / interval /
-   * deliver are updated (nextRunAt is recomputed only when the interval
-   * changed, and a finished or failed routine is reactivated), and records
-   * whose name is no longer declared are deleted. Records without a `name` are
-   * left untouched, and the store is persisted once when anything changed.
-   */
-  reconcile(botId: string, routines: readonly RoutineConfig[]): Promise<void>
 }
 
 interface SchedulerStateFile {
@@ -526,101 +504,6 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       routines = routines.filter(candidate => candidate.id !== record.id)
       routineWorkspaces.delete(record.id)
       persist()
-    },
-    async reconcile(botId: string, configs: readonly RoutineConfig[]): Promise<void> {
-      // Validate each declared entry with the same limits create enforces; an
-      // invalid entry is skipped with a warn log and never touches the store.
-      const valid: RoutineConfig[] = []
-      for (const config of configs) {
-        const prompt = config.prompt.trim()
-        if (prompt.length === 0 || prompt.length > MAX_PROMPT_LENGTH) {
-          log?.('warn', `scheduler skipped routine config ${config.name}: prompt must be 1..${MAX_PROMPT_LENGTH} characters`)
-          continue
-        }
-        if (!Number.isInteger(config.intervalMinutes)
-          || config.intervalMinutes < MIN_INTERVAL_MINUTES
-          || config.intervalMinutes > MAX_INTERVAL_MINUTES) {
-          log?.('warn', `scheduler skipped routine config ${config.name}: intervalMinutes must be an integer between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES}`)
-          continue
-        }
-        let deliver: RoutineDeliver
-        try {
-          deliver = parseRoutineDeliver(config.deliver)
-        } catch (error) {
-          log?.('warn', `scheduler skipped routine config ${config.name}: ${error instanceof Error ? error.message : String(error)}`)
-          continue
-        }
-        valid.push({ name: config.name, prompt, intervalMinutes: config.intervalMinutes, deliver })
-      }
-
-      const now = Date.now()
-      let changed = false
-
-      // Create missing and update changed config-declared routines of this bot.
-      for (const config of valid) {
-        const existing = routines.find(candidate =>
-          recordWorkspace(candidate) === workspaceRoot
-          && candidate.botId === botId
-          && candidate.name === config.name)
-        if (!existing) {
-          const record: RoutineRecord = {
-            id: nextId(),
-            botId,
-            name: config.name,
-            prompt: config.prompt,
-            intervalMinutes: config.intervalMinutes,
-            recurring: true,
-            state: 'active',
-            deliver: config.deliver,
-            createdAt: new Date(now).toISOString(),
-            nextRunAt: new Date(now + config.intervalMinutes * 60_000).toISOString(),
-            runCount: 0,
-          }
-          routines.push(record)
-          routineWorkspaces.set(record.id, workspaceRoot)
-          changed = true
-          continue
-        }
-        const intervalChanged = existing.intervalMinutes !== config.intervalMinutes
-        const reactivating = existing.state === 'finished' || existing.state === 'failed'
-        if (existing.prompt === config.prompt
-          && !intervalChanged
-          && existing.deliver === config.deliver
-          && !reactivating) {
-          continue
-        }
-        existing.prompt = config.prompt
-        existing.intervalMinutes = config.intervalMinutes
-        existing.deliver = config.deliver
-        if (reactivating) existing.state = 'active'
-        // Only an interval change reschedules a live routine; a reactivated
-        // routine needs a fresh nextRunAt because finishing cleared it.
-        if (intervalChanged || existing.nextRunAt === undefined) {
-          existing.nextRunAt = new Date(now + config.intervalMinutes * 60_000).toISOString()
-        }
-        changed = true
-      }
-
-      // Delete this bot's config-declared routines whose name is no longer
-      // declared. A name still present in the config — even when that entry was
-      // rejected as invalid above — keeps its routine. Records without a name
-      // (Desktop-created) are never reconciled.
-      const declaredNames = new Set(configs.map(config => config.name))
-      const before = routines.length
-      routines = routines.filter(record =>
-        recordWorkspace(record) !== workspaceRoot
-        || record.botId !== botId
-        || record.name === undefined
-        || declaredNames.has(record.name))
-      if (routines.length !== before) {
-        const live = new Set(routines.map(record => record.id))
-        for (const id of [...routineWorkspaces.keys()]) {
-          if (!live.has(id)) routineWorkspaces.delete(id)
-        }
-        changed = true
-      }
-
-      if (changed) persist()
     },
   }
 }

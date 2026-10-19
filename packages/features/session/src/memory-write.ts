@@ -28,12 +28,43 @@ export interface MemoryChange {
   content: string;
 }
 
+/** One memory file as listed: its name, its file, and its size and write time. */
+export interface MemoryFileEntry {
+  /** Frontmatter name of the memory; the file stem. */
+  name: string;
+  /** File name inside the memory directory. */
+  filename: string;
+  size: number;
+  updatedAt: string;
+}
+
+/** One memory file with its full text, frontmatter included. */
+export interface MemoryFileText {
+  name: string;
+  filename: string;
+  text: string;
+}
+
+/** The memory to remove, with the exact body it must still carry. */
+export interface MemoryRemoval {
+  /** Frontmatter name of the memory. */
+  name: string;
+  /** Exact current body; when supplied a mismatch refuses the removal. */
+  previous?: string;
+}
+
 /** The narrow workspace memory surface the engine may use after a reply. */
 export interface WorkspaceMemoryPort {
   /** Current `memories/INDEX.md` text, or the empty string when unreadable. */
   index(): string;
+  /** Every memory file except the index, ordered by file name. */
+  list(): MemoryFileEntry[];
+  /** Read one memory by its frontmatter name; a missing one fails. */
+  read(name: string): MemoryFileText;
   /** Upsert one memory by frontmatter name; records every real file write. */
   save(candidate: unknown, record: (change: MemoryChange) => Promise<void>): Promise<void>;
+  /** Delete one memory by name and drop its index line; records both. */
+  remove(candidate: unknown, record: (change: MemoryChange) => Promise<void>): Promise<void>;
 }
 
 const TYPES: ReadonlySet<string> = new Set(['user', 'feedback', 'project', 'reference']);
@@ -97,6 +128,20 @@ function parseCandidate(raw: unknown): Memory {
     content: normal(content),
     ...(previous === undefined ? {} : { previous }),
   };
+}
+
+/** Validate one removal: a legal name and an optional exact previous body. */
+function parseRemoval(raw: unknown): MemoryRemoval {
+  if (!isObject(raw)) throw new Error('memory removal must be an object');
+  const name = raw.name;
+  if (typeof name !== 'string' || !NAME.test(name) || name === 'index') {
+    throw new Error('memory name must be a non-reserved kebab-case name');
+  }
+  const previous = raw.previous;
+  if (previous !== undefined && typeof previous !== 'string') {
+    throw new Error('memory previous body must be a string');
+  }
+  return { name, ...(previous === undefined ? {} : { previous }) };
 }
 
 /** `lstat`, with a missing path reported as `undefined` instead of throwing. */
@@ -169,6 +214,17 @@ function references(line: string, name: string, filename: string): boolean {
   return bare === `memories/${filename}` || bare === `./${filename}` || bare === filename;
 }
 
+/** The memory name a file name carries: its stem without the `.md` suffix. */
+function stemOf(filename: string): string {
+  return filename.slice(0, -'.md'.length);
+}
+
+/** Drop every index line that points at one memory; other lines stay as they are. */
+function dropFromIndex(text: string, name: string, filename: string): string {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  return text.split(/\r?\n/u).filter((line) => !references(line, name, filename)).join(eol);
+}
+
 /**
  * Keep exactly one link line for the targeted memory: the first matching line is
  * replaced in place and later duplicates are dropped, so unrelated entries are
@@ -196,10 +252,14 @@ function updateIndex(
   return { text: lines.join(eol), entry };
 }
 
-/** Build the memory store over one workspace root. */
-export function createWorkspaceMemory(workspaceRoot: string): WorkspaceMemoryPort {
+/**
+ * Build the memory store over one root. `directoryName` defaults to the
+ * workspace `memories` store; a bot passes `memory` so its memories live in
+ * `<bot directory>/memory` without changing the workspace default.
+ */
+export function createWorkspaceMemory(workspaceRoot: string, directoryName = 'memories'): WorkspaceMemoryPort {
   const root = realpathSync(workspaceRoot);
-  const directory = join(root, 'memories');
+  const directory = join(root, directoryName);
   const indexPath = join(directory, 'INDEX.md');
 
   const index = (): string => {
@@ -213,30 +273,97 @@ export function createWorkspaceMemory(workspaceRoot: string): WorkspaceMemoryPor
     }
   };
 
+  /**
+   * The stored memory carrying one frontmatter name. Every file in the
+   * directory is validated as a direct regular file first, so a symlink or a
+   * traversal inside the memory directory is refused rather than read.
+   */
+  const findByName = (
+    name: string,
+  ): { filename: string; data: Record<string, unknown>; body: string } | undefined => {
+    if (directDirectory(directory) === undefined) return undefined;
+    const matches: { filename: string; data: Record<string, unknown>; body: string }[] = [];
+    for (const filename of readdirSync(directory).sort()) {
+      if (filename === 'INDEX.md' || !filename.endsWith('.md')) continue;
+      const path = join(directory, filename);
+      directFile(path);
+      let parsed: { data: Record<string, unknown>; body: string };
+      try {
+        parsed = readFrontmatter(readFileSync(path, 'utf8'));
+      } catch {
+        // An unrelated malformed file is left untouched, not repaired.
+        continue;
+      }
+      if (parsed.data.name === name) matches.push({ filename, ...parsed });
+    }
+    if (matches.length > 1) throw new Error('existing memory name is ambiguous');
+    return matches[0];
+  };
+
+  const list = (): MemoryFileEntry[] => {
+    try {
+      if (directDirectory(directory) === undefined) return [];
+    } catch {
+      return [];
+    }
+    const found: MemoryFileEntry[] = [];
+    for (const filename of readdirSync(directory).sort()) {
+      if (filename === 'INDEX.md' || !FILE.test(filename)) continue;
+      const path = join(directory, filename);
+      const stat = lstat(path);
+      if (stat === undefined || !stat.isFile()) continue;
+      found.push({
+        name: stemOf(filename),
+        filename,
+        size: stat.size,
+        updatedAt: new Date(stat.mtimeMs).toISOString(),
+      });
+    }
+    return found;
+  };
+
+  const read = (name: string): MemoryFileText => {
+    if (!NAME.test(name) || name === 'index') {
+      throw new Error('memory name must be a non-reserved kebab-case name');
+    }
+    const filename = `${name}.md`;
+    const path = join(directory, filename);
+    if (directFile(path) === undefined) throw new Error(`memory ${name} does not exist`);
+    return { name, filename, text: readFileSync(path, 'utf8') };
+  };
+
+  const applyRemove = async (
+    raw: unknown,
+    record: (change: MemoryChange) => Promise<void>,
+  ): Promise<void> => {
+    const candidate = parseRemoval(raw);
+    // Prevalidate every path this removal may touch before the first change.
+    directDirectory(directory);
+    const before = findByName(candidate.name);
+    if (before === undefined) throw new Error(`memory ${candidate.name} does not exist`);
+    if (candidate.previous !== undefined && normal(candidate.previous) !== before.body) {
+      throw new Error('memory changed or was not read; supply its exact current body as previous');
+    }
+    const path = join(directory, before.filename);
+    directFile(path);
+    const oldIndex = directFile(indexPath) !== undefined ? readFileSync(indexPath, 'utf8') : '';
+    const nextIndex = dropFromIndex(oldIndex, candidate.name, before.filename);
+
+    rmSync(path);
+    if (nextIndex !== oldIndex) {
+      atomicWrite(indexPath, nextIndex);
+      await record({ path: `${directoryName}/INDEX.md`, content: '' });
+    }
+    await record({ path: `${directoryName}/${before.filename}`, content: '' });
+  };
+
   const apply = async (raw: unknown, record: (change: MemoryChange) => Promise<void>): Promise<void> => {
     const candidate = parseCandidate(raw);
     // Prevalidate every path this save may touch before the first write.
     const directoryExists = directDirectory(directory) !== undefined;
     directFile(indexPath);
 
-    const matches: { filename: string; data: Record<string, unknown>; body: string }[] = [];
-    if (directoryExists) {
-      for (const filename of readdirSync(directory).sort()) {
-        if (filename === 'INDEX.md' || !filename.endsWith('.md')) continue;
-        const path = join(directory, filename);
-        directFile(path);
-        let parsed: { data: Record<string, unknown>; body: string };
-        try {
-          parsed = readFrontmatter(readFileSync(path, 'utf8'));
-        } catch {
-          // An unrelated malformed file is left untouched, not repaired.
-          continue;
-        }
-        if (parsed.data.name === candidate.name) matches.push({ filename, ...parsed });
-      }
-    }
-    if (matches.length > 1) throw new Error('existing memory name is ambiguous');
-    const before = matches[0];
+    const before = findByName(candidate.name);
     // Upsert by name: keep the existing filename, never rename an existing memory.
     const filename = before?.filename ?? `${candidate.name}.md`;
     if (!FILE.test(filename) || filename.toLowerCase() === 'index.md') {
@@ -272,31 +399,41 @@ export function createWorkspaceMemory(workspaceRoot: string): WorkspaceMemoryPor
     if (!directoryExists) mkdirSync(directory, { recursive: true });
     if (changed) {
       atomicWrite(path, content);
-      await record({ path: `memories/${filename}`, content });
+      await record({ path: `${directoryName}/${filename}`, content });
     }
     if (nextIndex.text !== oldIndex) {
       directDirectory(directory);
       directFile(indexPath);
       atomicWrite(indexPath, nextIndex.text);
-      await record({ path: 'memories/INDEX.md', content: nextIndex.entry });
+      await record({ path: `${directoryName}/INDEX.md`, content: nextIndex.entry });
     }
+  };
+
+  /** Run one read-modify-write at a time, so two calls cannot interleave. */
+  const enqueue = (task: () => Promise<void>): Promise<void> => {
+    const previous = queues.get(root) ?? Promise.resolve();
+    const run = previous.then(task);
+    // Keep the queue alive after a failure so later calls still run.
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    queues.set(root, tail);
+    void tail.then(() => {
+      if (queues.get(root) === tail) queues.delete(root);
+    });
+    return run;
   };
 
   return {
     index,
+    list,
+    read,
     save(raw, record) {
-      const previous = queues.get(root) ?? Promise.resolve();
-      const run = previous.then(() => apply(raw, record));
-      // Keep the queue alive after a failure so later saves still run.
-      const tail = run.then(
-        () => undefined,
-        () => undefined,
-      );
-      queues.set(root, tail);
-      void tail.then(() => {
-        if (queues.get(root) === tail) queues.delete(root);
-      });
-      return run;
+      return enqueue(() => apply(raw, record));
+    },
+    remove(raw, record) {
+      return enqueue(() => applyRemove(raw, record));
     },
   };
 }

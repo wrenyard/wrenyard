@@ -14,12 +14,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/renderer/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { useConfirm } from '@/renderer/hooks/use-confirm';
-import type { Routine } from '@/shell-contract';
+import type { AgentBot, Routine } from '@/shell-contract';
 import {
   ROUTINE_STATE_VIEW,
   deliverText,
   frequencyText,
   useAgentConfigQuery,
+  useAgentMemoryQuery,
   useAgentsQuery,
   useCreateRoutineMutation,
   useDeleteRoutineMutation,
@@ -31,8 +32,24 @@ import {
 /** One-line placeholder for an absent time. */
 const NONE = '—';
 
-/** The three tool switches a bot config may declare. */
-const TOOL_IDS = ['session', 'todo', 'message'] as const;
+/** The five tool switches a bot definition may declare. */
+const TOOL_IDS = ['session', 'todo', 'message', 'memory', 'workspace'] as const;
+
+/** The icon of one bot: its identity icon, else the first character of its name. */
+function botIcon(bot: AgentBot): string {
+  const icon = bot.icon?.trim();
+  if (icon !== undefined && icon !== '') return icon;
+  return [...bot.name.trim()][0] ?? bot.id.slice(0, 1);
+}
+
+/** One picker line: icon, name, the 主 marker and where the definition lives. */
+function botOptionLabel(bot: AgentBot): string {
+  const parts = [botIcon(bot), bot.name];
+  if (bot.primary) parts.push('主');
+  parts.push(bot.location === 'workspace' ? 'Workspace' : '本机');
+  if (!bot.enabled) parts.push('已停用');
+  return parts.join(' · ');
+}
 
 /** Routines section: the bot's routine table with row actions and a create form. */
 function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
@@ -86,7 +103,7 @@ function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>例行任务</CardTitle>
+        <CardTitle>例行任务（仅在本机运行）</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {routines.isError && <QueryError query={routines} title="例行任务" />}
@@ -218,16 +235,21 @@ function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
   );
 }
 
-/** Config section: path, tool chips and the read-only config JSON. */
-function ConfigSection(props: { botId: string; configPath: string; tools: readonly string[] }) {
+/**
+ * Config section: the bot directory, the five tool chips, and the read-only
+ * `bot.json`, `identity.md` and memory listing of the definition.
+ */
+function ConfigSection(props: { botId: string; tools: readonly string[] }) {
   const config = useAgentConfigQuery(props.botId);
+  const memory = useAgentMemoryQuery(props.botId);
+  const files = memory.data ?? [];
   return (
     <Card>
       <CardHeader>
         <CardTitle>配置</CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <div className="text-xs text-muted-foreground">{props.configPath}</div>
+        <div className="text-xs text-muted-foreground">{config.data?.bot.directory ?? props.botId}</div>
         <div className="flex items-center gap-2">
           {TOOL_IDS.map((tool) => {
             const on = props.tools.includes(tool);
@@ -238,9 +260,49 @@ function ConfigSection(props: { botId: string; configPath: string; tools: readon
             );
           })}
         </div>
-        <pre className="max-h-64 overflow-auto rounded-lg bg-muted p-3 text-xs">
-          {config.isError ? '配置读取失败。' : config.data?.config ?? '…'}
-        </pre>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium">bot.json</span>
+          <pre className="max-h-48 overflow-auto rounded-lg bg-muted p-3 text-xs">
+            {config.isError ? '配置读取失败。' : config.data?.config ?? '…'}
+          </pre>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium">identity.md</span>
+          <pre className="max-h-48 overflow-auto rounded-lg bg-muted p-3 text-xs">
+            {config.isError ? '身份读取失败。' : config.data?.identity ?? '…'}
+          </pre>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium">记忆</span>
+          {memory.isError ? (
+            <span className="text-xs text-destructive">{String(memory.error)}</span>
+          ) : files.length === 0 ? (
+            <span className="text-xs text-muted-foreground">
+              {memory.isPending ? '正在加载记忆…' : '暂无记忆文件。'}
+            </span>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>文件</TableHead>
+                  <TableHead>大小</TableHead>
+                  <TableHead>更新</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {files.map((file) => (
+                  <TableRow key={file.name}>
+                    <TableCell className="font-medium">{file.name}</TableCell>
+                    <TableCell className="text-muted-foreground tabular-nums">{file.size}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      <Timestamp value={file.updatedAt} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
@@ -282,8 +344,18 @@ export function BotSettings() {
     return (
       <Empty>
         <EmptyHeader>
-          <EmptyTitle>没有机器人配置</EmptyTitle>
-          <EmptyDescription>在配置目录的 bot-agents/ 下添加 &lt;id&gt;.json。</EmptyDescription>
+          <EmptyTitle>没有机器人</EmptyTitle>
+          <EmptyDescription>
+            在机器人页面用引导向导创建一个；也可以自己在工作区的
+            {' '}
+            <code>bots/&lt;id&gt;/</code>
+            {' '}
+            目录（多设备同步）或配置目录的
+            {' '}
+            <code>bot-agents/&lt;id&gt;/</code>
+            {' '}
+            目录（仅本机）下放 bot.json、identity.md 和 memory/。
+          </EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
@@ -294,15 +366,18 @@ export function BotSettings() {
       <div className="flex items-center gap-3">
         <span className="text-sm text-muted-foreground">机器人</span>
         <Select value={selectedId ?? bots[0]?.id ?? ''} onValueChange={(value) => setSelectedId(String(value))}>
-          <SelectTrigger className="w-56" aria-label="选择机器人">
+          <SelectTrigger className="w-64" aria-label="选择机器人">
             <SelectValue>
-              {(value) => bots.find((bot) => bot.id === value)?.name ?? String(value)}
+              {(value) => {
+                const bot = bots.find((entry) => entry.id === value);
+                return bot === undefined ? String(value) : botOptionLabel(bot);
+              }}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {bots.map((bot) => (
               <SelectItem key={bot.id} value={bot.id}>
-                {bot.enabled ? bot.name : `${bot.name}（已停用）`}
+                {botOptionLabel(bot)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -311,7 +386,7 @@ export function BotSettings() {
       {selected !== undefined && (
         <>
           <Routines botId={selected.id} otherBotIds={otherBotIds} />
-          <ConfigSection botId={selected.id} configPath={selected.configPath} tools={selected.tools} />
+          <ConfigSection botId={selected.id} tools={selected.tools} />
         </>
       )}
     </div>

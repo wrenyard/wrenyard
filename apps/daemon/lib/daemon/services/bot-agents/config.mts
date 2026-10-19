@@ -1,30 +1,31 @@
 /**
- * Bot agent config files.
+ * Bot definitions.
  *
- * One JSON file per bot under `<config root>/bot-agents/<id>.json`. The file is
- * the whole definition of one bot: its display name, its instructions, the tool
- * switches it turns on and the routines it owns. Nothing is inherited and
- * nothing is enabled by default, so a bot with no tool switch can only answer
- * in text.
+ * One bot is one directory named by its id, in one of two roots:
  *
- * Loading never throws. An unreadable file, invalid JSON or a failed validation
- * yields an entry that carries `error` and no config, so one bad file disables
- * one bot and never affects the daemon or the other bots.
+ * - `<workspace>/bots/<id>/` for a bot that syncs with the workspace;
+ * - `<config root>/bot-agents/<id>/` for a device-only bot.
+ *
+ * Each directory holds `bot.json` (the user-only switches), `identity.md` (the
+ * name, icon, description and role text the bot itself may edit) and a
+ * `memory/` directory. Loading never throws: an unreadable or invalid part
+ * disables only that bot and keeps the error visible.
  */
 
+import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
-import { readdir, readFile, stat } from 'node:fs/promises'
-import { basename, join } from 'node:path'
-import type { RoutineConfig } from '../scheduler.mts'
+import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { isAbsolute, join, relative, sep } from 'node:path'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 
 /** One tool switch a bot can turn on. */
-export type AgentToolName = 'session' | 'todo' | 'message' | 'workspace'
+export type AgentToolName = 'session' | 'todo' | 'message' | 'memory' | 'workspace'
 
 /** Every known tool switch. */
-const TOOL_NAMES: readonly AgentToolName[] = ['session', 'todo', 'message', 'workspace']
+export const AGENT_TOOL_NAMES: readonly AgentToolName[] = ['session', 'todo', 'message', 'memory', 'workspace']
 
-/** The only top-level keys a bot config file may declare. */
-const CONFIG_KEYS = new Set(['id', 'name', 'enabled', 'instructions', 'tools', 'routines'])
+/** Where a bot definition lives. */
+export type AgentBotLocation = 'workspace' | 'device'
 
 /**
  * Retired top-level keys that older bot files may still carry. They are
@@ -33,74 +34,112 @@ const CONFIG_KEYS = new Set(['id', 'name', 'enabled', 'instructions', 'tools', '
  */
 const LEGACY_IGNORED_KEYS: readonly string[] = [['deny', 'Models'].join('')]
 
-/** A bot id: the config file's basename, lowercase and path safe. */
+/** The two roots a bot may be loaded from. */
+export interface BotAgentRoots {
+  /** `<workspace>/bots`. */
+  workspace: string
+  /** `<config root>/bot-agents`. */
+  device: string
+}
+
+/** The only top-level keys `bot.json` may declare. */
+const CONFIG_KEYS = new Set(['primary', 'enabled', 'tools'])
+
+/** A bot id: a directory name, lowercase and path safe. */
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/
 
-/** A routine's delivery target: nowhere, or one other bot. */
-const DELIVER_PATTERN = /^(none|bot:[a-z0-9][a-z0-9-]{0,31})$/
+/** YAML front matter: `---` fenced metadata, then the body. */
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/u
 
-/** Same interval bounds the routine store enforces. */
-const MIN_INTERVAL_MINUTES = 1
-const MAX_INTERVAL_MINUTES = 10_080
-
-/** Same prompt length bound the routine store enforces. */
-const MAX_PROMPT_LENGTH = 4_000
-
-/** One bot's validated config. */
+/** `bot.json` as validated: only the user's own switches. */
 export interface BotAgentConfig {
-  /** Config file basename; also the bot id. */
-  id: string
-  /** Display name; defaults to the id. */
-  name: string
-  /** False puts the bot out of service without deleting its file. */
+  /** Marks the single primary bot; the first in id order wins. */
+  primary: boolean
+  /** False puts the bot out of service without deleting its directory. */
   enabled: boolean
-  /** Text appended to the bot's fixed kernel prompt. */
-  instructions: string
   /** The tool switches that are on, sorted. Empty means text replies only. */
   tools: AgentToolName[]
-  /** The routines this config declares; managed by the routine store. */
-  routines: RoutineConfig[]
+}
+
+/** `identity.md` as validated: what the bot may change about itself. */
+export interface BotAgentIdentity {
+  /** Display name; required. */
+  name: string
+  /** Optional icon of at most two grapheme clusters. */
+  icon?: string
+  /** Optional one-line description used by the bot roster. */
+  description?: string
+  /** The role text, replacing the old instructions field. */
+  body: string
 }
 
 /**
- * One config file's change signature. A loader call compares it against the
- * signature of the file it returned last time and reads the file again only
- * when it differs.
+ * Per-part change metadata. The kernel polls both roots every five seconds and
+ * compares these values: a `bot.json` edit, an `identity.md` edit or a memory
+ * addition/removal all change the aggregate `signature`.
  */
-export interface BotAgentSignature {
+export interface BotAgentChangeSet {
+  config: string
+  identity: string
+  memory: string
+}
+
+/**
+ * One definition as loaded. `config` and `identity` are present only when the
+ * corresponding part validated; otherwise `error` explains why and the bot is
+ * disabled. `signature` changes when `bot.json`, `identity.md` or the set of
+ * memory files changes, so a caller can poll the roots cheaply.
+ */
+export interface BotAgentEntry {
+  id: string
+  location: AgentBotLocation
+  /** The bot definition directory. */
+  directory: string
+  configPath: string
+  identityPath: string
+  memoryDir: string
+  /** True only for the effective primary bot. */
+  primary: boolean
+  /** Non-fatal findings that must stay visible, such as a primary conflict. */
+  warnings: string[]
+  change: BotAgentChangeSet
+  configText: string
+  identityText: string
+  config?: BotAgentConfig
+  identity?: BotAgentIdentity
+  error?: string
+  signature: string
+}
+
+/** One file of a bot's memory directory. */
+export interface AgentMemoryFile {
+  name: string
+  size: number
+  updatedAt: string
+}
+
+/** One load of both roots. `warnings` carries the skipped directory names. */
+export interface BotAgentScan {
+  bots: BotAgentEntry[]
+  warnings: string[]
+}
+
+/** One file's change signature. */
+interface FileSignature {
   mtimeMs: number
   ctimeMs: number
   size: number
   ino: number
 }
 
-/**
- * One config file as loaded. `config` is present only when the file validated;
- * otherwise `error` explains why and the bot is disabled. `text` is the raw file
- * content and `signature` the file's change signature, so a caller can poll the
- * directory cheaply.
- */
-export interface BotAgentEntry {
-  id: string
-  path: string
-  signature: BotAgentSignature
-  text: string
-  config?: BotAgentConfig
-  error?: string
-}
+const EMPTY_SIGNATURE: FileSignature = { mtimeMs: 0, ctimeMs: 0, size: 0, ino: 0 }
 
-/** A file whose stat failed carries no usable signature and is never reused. */
-const EMPTY_SIGNATURE: BotAgentSignature = { mtimeMs: 0, ctimeMs: 0, size: 0, ino: 0 }
-
-function signatureOf(info: Stats): BotAgentSignature {
+function signatureOf(info: Stats): FileSignature {
   return { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, ino: info.ino }
 }
 
-function sameSignature(left: BotAgentSignature, right: BotAgentSignature): boolean {
-  return left.mtimeMs === right.mtimeMs
-    && left.ctimeMs === right.ctimeMs
-    && left.size === right.size
-    && left.ino === right.ino
+function signatureText(signature: FileSignature): string {
+  return `${signature.mtimeMs}:${signature.ctimeMs}:${signature.size}:${signature.ino}`
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -111,15 +150,48 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** True when `id` is a legal bot directory name. */
+export function isBotId(id: string): boolean {
+  return ID_PATTERN.test(id)
+}
+
+/**
+ * Strict directory containment: `path` is `root` itself or below it, with no
+ * `..` escape and no absolute replacement.
+ */
+export function isContained(root: string, path: string): boolean {
+  const rel = relative(root, path)
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+/**
+ * Resolve `path` and refuse it unless its real target stays inside `root`.
+ * A symlink that points outside the root therefore fails every read and write.
+ */
+export async function assertRealInside(root: string, path: string): Promise<void> {
+  const realRoot = await realpath(root)
+  const realPath = await realpath(path)
+  if (!isContained(realRoot, realPath)) {
+    throw new Error(`path escapes its bot directory: ${path}`)
+  }
+}
+
+/** A regular file that is not a symlink and stays inside `root`. */
+async function readDefinitionFile(root: string, path: string, label: string): Promise<string> {
+  const info = await lstat(path)
+  if (!info.isFile()) throw new Error(`${label} is a symlink or not a regular file`)
+  await assertRealInside(root, path)
+  return readFile(path, 'utf-8')
+}
+
 /** Read one `tools` map into the sorted list of enabled tool names. */
 function validateTools(value: unknown): AgentToolName[] {
   if (value === undefined) return []
   if (!isPlainObject(value)) throw new Error('tools must be an object')
   const enabled: AgentToolName[] = []
   for (const [key, setting] of Object.entries(value)) {
-    if (!(TOOL_NAMES as readonly string[]).includes(key)) throw new Error(`unknown tool: ${key}`)
-    // Absent or false means off; true or an options object means on. The options
-    // object is accepted and ignored, for `session` just like the other tools.
+    if (!(AGENT_TOOL_NAMES as readonly string[]).includes(key)) throw new Error(`unknown tool: ${key}`)
+    // Absent or false means off; true or an options object means on.
     if (setting === false) continue
     if (setting !== true && !isPlainObject(setting)) {
       throw new Error(`tool ${key} must be true, false or an options object`)
@@ -129,148 +201,332 @@ function validateTools(value: unknown): AgentToolName[] {
   return enabled.sort()
 }
 
-/** Read one `routines` array into validated routine configs. */
-function validateRoutines(value: unknown): RoutineConfig[] {
-  if (value === undefined) return []
-  if (!Array.isArray(value)) throw new Error('routines must be an array')
-  const routines: RoutineConfig[] = []
-  const names = new Set<string>()
-  for (const entry of value) {
-    if (!isPlainObject(entry)) throw new Error('every routine must be an object')
-    const name = entry.name
-    if (typeof name !== 'string' || name.trim() === '') {
-      throw new Error('every routine needs a nonempty name')
-    }
-    if (names.has(name)) throw new Error(`duplicate routine name: ${name}`)
-    names.add(name)
-    const prompt = entry.prompt
-    if (typeof prompt !== 'string' || prompt.trim() === '') {
-      throw new Error(`routine ${name}: prompt must be a nonempty string`)
-    }
-    if (prompt.length > MAX_PROMPT_LENGTH) {
-      throw new Error(`routine ${name}: prompt must be at most ${MAX_PROMPT_LENGTH} characters`)
-    }
-    const intervalMinutes = entry.intervalMinutes
-    if (
-      typeof intervalMinutes !== 'number'
-      || !Number.isInteger(intervalMinutes)
-      || intervalMinutes < MIN_INTERVAL_MINUTES
-      || intervalMinutes > MAX_INTERVAL_MINUTES
-    ) {
-      throw new Error(`routine ${name}: intervalMinutes must be an integer between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES}`)
-    }
-    let deliver: RoutineConfig['deliver'] = 'none'
-    const declared = entry.deliver
-    if (declared !== undefined) {
-      if (typeof declared !== 'string' || !DELIVER_PATTERN.test(declared)) {
-        throw new Error(`routine ${name}: deliver must be 'none' or 'bot:<id>'`)
-      }
-      deliver = declared as RoutineConfig['deliver']
-    }
-    routines.push({ name, prompt, intervalMinutes, deliver })
-  }
-  return routines
-}
-
-/**
- * Validate one config file's parsed content. The id must match the file's
- * basename, because the basename is the bot id every other layer uses.
- */
-function validateConfig(id: string, text: string): BotAgentConfig {
+/** Validate one `bot.json` body. Unknown keys, including the old fields, fail. */
+export function validateConfig(text: string): BotAgentConfig {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch (error) {
     throw new Error(`invalid JSON: ${errorText(error)}`)
   }
-  if (!isPlainObject(parsed)) throw new Error('the config must be a JSON object')
+  if (!isPlainObject(parsed)) throw new Error('bot.json must be a JSON object')
   for (const key of LEGACY_IGNORED_KEYS) delete parsed[key]
   for (const key of Object.keys(parsed)) {
     if (!CONFIG_KEYS.has(key)) throw new Error(`unknown field: ${key}`)
   }
-  const declaredId = parsed.id
-  if (typeof declaredId !== 'string' || !ID_PATTERN.test(declaredId)) {
-    throw new Error('id must match ^[a-z0-9][a-z0-9-]{0,31}$')
-  }
-  if (declaredId !== id) {
-    throw new Error(`id "${declaredId}" must equal the file name "${id}"`)
-  }
-  const name = parsed.name
-  if (name !== undefined && typeof name !== 'string') throw new Error('name must be a string')
+  const primary = parsed.primary
+  if (primary !== undefined && typeof primary !== 'boolean') throw new Error('primary must be a boolean')
   const enabled = parsed.enabled
   if (enabled !== undefined && typeof enabled !== 'boolean') throw new Error('enabled must be a boolean')
-  const instructions = parsed.instructions
-  if (instructions !== undefined && typeof instructions !== 'string') {
-    throw new Error('instructions must be a string')
-  }
-  const parsedTools = validateTools(parsed.tools)
   return {
-    id,
-    name: name ?? id,
+    primary: primary ?? false,
     enabled: enabled ?? true,
-    instructions: instructions ?? '',
-    tools: parsedTools,
-    routines: validateRoutines(parsed.routines),
+    tools: validateTools(parsed.tools),
+  }
+}
+
+/** Count user-perceived characters, so an icon is one or two graphemes. */
+function graphemeCount(value: string): number {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  let count = 0
+  for (const _ of segmenter.segment(value)) count += 1
+  return count
+}
+
+/** Validate one `identity.md`: required name, optional icon/description, body role. */
+export function parseIdentity(text: string): BotAgentIdentity {
+  const match = FRONTMATTER.exec(text)
+  if (match === null) throw new Error('identity.md has no YAML front matter')
+  let data: unknown
+  try {
+    data = parseYaml(match[1]!)
+  } catch (error) {
+    throw new Error(`identity.md has invalid YAML: ${errorText(error)}`)
+  }
+  if (!isPlainObject(data)) throw new Error('identity.md front matter must be a mapping')
+  const name = data.name
+  if (typeof name !== 'string' || name.trim() === '' || /[\r\n\0]/u.test(name)) {
+    throw new Error('identity.md needs a one-line name')
+  }
+  let icon: string | undefined
+  if (data.icon !== undefined) {
+    if (typeof data.icon !== 'string' || data.icon.trim() === '') {
+      throw new Error('identity.md icon must be a nonempty string')
+    }
+    if (graphemeCount(data.icon.trim()) > 2) {
+      throw new Error('identity.md icon must be at most two grapheme clusters')
+    }
+    icon = data.icon.trim()
+  }
+  let description: string | undefined
+  if (data.description !== undefined) {
+    if (typeof data.description !== 'string' || data.description.trim() === '' || /[\r\n\0]/u.test(data.description)) {
+      throw new Error('identity.md description must be one nonempty line')
+    }
+    description = data.description.trim()
+  }
+  return {
+    name: name.trim(),
+    ...(icon === undefined ? {} : { icon }),
+    ...(description === undefined ? {} : { description }),
+    body: match[2]!.trim(),
+  }
+}
+
+/** Render one identity with the same field set and body layout the loader reads. */
+export function formatIdentity(identity: BotAgentIdentity): string {
+  const data: Record<string, unknown> = { name: identity.name }
+  if (identity.icon !== undefined) data.icon = identity.icon
+  if (identity.description !== undefined) data.description = identity.description
+  return `---\n${stringifyYaml(data).trimEnd()}\n---\n\n${identity.body.trim()}\n`
+}
+
+/** Read the memory directory listing. A missing directory is empty. */
+export async function listMemoryFiles(directory: string): Promise<AgentMemoryFile[]> {
+  const memoryDir = join(directory, 'memory')
+  let info: Stats
+  try {
+    info = await lstat(memoryDir)
+  } catch {
+    return []
+  }
+  if (!info.isDirectory()) throw new Error('memory is a symlink or not a directory')
+  await assertRealInside(directory, memoryDir)
+  const files: AgentMemoryFile[] = []
+  for (const name of (await readdir(memoryDir)).sort()) {
+    if (!name.endsWith('.md')) continue
+    const path = join(memoryDir, name)
+    const file = await lstat(path)
+    if (!file.isFile()) continue
+    files.push({ name, size: file.size, updatedAt: new Date(file.mtimeMs).toISOString() })
+  }
+  return files
+}
+
+/** The names of the memory files, as change-detection material. */
+async function memorySignature(directory: string): Promise<string> {
+  try {
+    const files = await listMemoryFiles(directory)
+    return files.map(file => `${file.name}:${file.size}:${file.updatedAt}`).join(',')
+  } catch (error) {
+    return `error:${errorText(error)}`
+  }
+}
+
+/** Read one bot definition directory. Every failure becomes `error`. */
+async function readDefinition(
+  root: string,
+  id: string,
+  location: AgentBotLocation,
+  previous: BotAgentEntry | undefined,
+): Promise<BotAgentEntry> {
+  const directory = join(root, id)
+  const configPath = join(directory, 'bot.json')
+  const identityPath = join(directory, 'identity.md')
+  const memoryDir = join(directory, 'memory')
+  const base = {
+    id,
+    location,
+    directory,
+    configPath,
+    identityPath,
+    memoryDir,
+    primary: false,
+    warnings: [] as string[],
+    change: { config: 'missing', identity: 'missing', memory: '' } satisfies BotAgentChangeSet,
+  }
+  try {
+    const info = await lstat(directory)
+    if (!info.isDirectory()) throw new Error('bot directory is a symlink or not a directory')
+    await assertRealInside(root, directory)
+  } catch (error) {
+    const entry: BotAgentEntry = {
+      ...base,
+      configText: '',
+      identityText: '',
+      error: errorText(error),
+      signature: `missing:${id}`,
+    }
+    return entry
+  }
+
+  let configSignature = 'missing'
+  let identitySignature = 'missing'
+  let config: BotAgentConfig | undefined
+  let identity: BotAgentIdentity | undefined
+  let configText = ''
+  let identityText = ''
+  const errors: string[] = []
+
+  try {
+    const info = await lstat(configPath)
+    configSignature = signatureText(signatureOf(info))
+    configText = await readDefinitionFile(directory, configPath, 'bot.json')
+    config = validateConfig(configText)
+  } catch (error) {
+    errors.push(`bot.json: ${errorText(error)}`)
+  }
+
+  try {
+    const info = await lstat(identityPath)
+    identitySignature = signatureText(signatureOf(info))
+    identityText = await readDefinitionFile(directory, identityPath, 'identity.md')
+    identity = parseIdentity(identityText)
+  } catch (error) {
+    errors.push(`identity.md: ${errorText(error)}`)
+  }
+
+  const change: BotAgentChangeSet = {
+    config: configSignature,
+    identity: identitySignature,
+    memory: await memorySignature(directory),
+  }
+  const signature = createHash('sha1')
+    .update(`${change.config}|${change.identity}|${change.memory}`)
+    .digest('hex')
+  if (previous !== undefined && previous.signature === signature) return previous
+
+  return {
+    ...base,
+    change,
+    configText,
+    identityText,
+    ...(config === undefined ? {} : { config }),
+    ...(identity === undefined ? {} : { identity }),
+    ...(errors.length === 0 ? {} : { error: errors.join('; ') }),
+    signature,
+  }
+}
+
+interface ScannedDirectory {
+  id: string
+  directory: string
+  location: AgentBotLocation
+}
+
+/** List the legal bot directories of one root; illegal names are warnings. */
+async function scanRoot(
+  root: string,
+  location: AgentBotLocation,
+  warnings: string[],
+): Promise<ScannedDirectory[]> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  const found: ScannedDirectory[] = []
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory()) continue
+    if (!ID_PATTERN.test(entry.name)) {
+      warnings.push(`ignored bot directory "${entry.name}": id must match ${ID_PATTERN.source}`)
+      continue
+    }
+    found.push({ id: entry.name, directory: join(root, entry.name), location })
+  }
+  return found
+}
+
+/**
+ * Load both roots. A workspace bot wins an id clash; the device duplicate stays
+ * visible with a clash error and its switches off. The effective primary is the
+ * first valid bot in id order that claims it; nothing is promoted automatically.
+ */
+export async function loadBotAgents(
+  roots: BotAgentRoots,
+  previous: readonly BotAgentEntry[] = [],
+): Promise<BotAgentScan> {
+  const warnings: string[] = []
+  const workspace = await scanRoot(roots.workspace, 'workspace', warnings)
+  const device = await scanRoot(roots.device, 'device', warnings)
+  const cached = new Map(previous.map(entry => [`${entry.location}\n${entry.id}`, entry]))
+
+  const loaded: BotAgentEntry[] = []
+  const workspaceIds = new Set(workspace.map(item => item.id))
+  for (const item of workspace) {
+    loaded.push(await readDefinition(
+      roots.workspace, item.id, 'workspace', cached.get(`workspace\n${item.id}`),
+    ))
+  }
+  for (const item of device) {
+    const entry = await readDefinition(roots.device, item.id, 'device', cached.get(`device\n${item.id}`))
+    if (workspaceIds.has(item.id)) {
+      warnings.push(`bot "${item.id}" exists in both roots; the workspace bot is used and the device bot is disabled`)
+      loaded.push({
+        ...entry,
+        ...(entry.config === undefined ? {} : { config: { ...entry.config, enabled: false } }),
+        primary: false,
+        error: `id "${item.id}" clashes with the workspace bot; the device-only bot is disabled`,
+        warnings: [...entry.warnings, 'disabled: id clash with the workspace bot'],
+        signature: `${entry.signature}:clash`,
+      })
+      continue
+    }
+    loaded.push(entry)
+  }
+
+  // The effective primary is the first valid claimant by id, never a survivor
+  // of a removed primary. Warnings are recomputed on every poll, so a cached
+  // entry cannot accumulate duplicate notes.
+  const ordered = [...loaded].sort((left, right) => left.id.localeCompare(right.id))
+  const claimants = ordered.filter(entry =>
+    entry.config?.primary === true && entry.identity !== undefined && entry.error === undefined)
+  const winner = claimants[0]
+  for (const entry of loaded) {
+    entry.primary = winner !== undefined && entry === winner
+    entry.warnings = entry.warnings.filter(warning => !warning.startsWith('primary ignored:'))
+    if (entry.config?.primary === true && entry.primary === false && entry.error === undefined) {
+      entry.warnings.push(`primary ignored: bot "${winner!.id}" is the effective primary`)
+    }
+  }
+  return { bots: loaded.sort((left, right) => left.id.localeCompare(right.id)), warnings }
+}
+
+/**
+ * Race-safe id availability check over both roots. Any existing directory
+ * counts, including an invalid definition; nothing is read or overwritten.
+ */
+export async function assertBotIdAvailable(roots: BotAgentRoots, id: string): Promise<void> {
+  if (!ID_PATTERN.test(id)) throw new Error('id must match ^[a-z0-9][a-z0-9-]{0,31}$')
+  for (const root of [roots.workspace, roots.device]) {
+    const path = join(root, id)
+    const existing = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined
+      throw error
+    })
+    if (existing !== undefined) throw new Error(`bot "${id}" already exists`)
   }
 }
 
 /**
- * Load every `*.json` bot config in one directory, sorted by id. A missing (or
- * unreadable) directory is an empty list and a file that fails to read or
- * validate is reported as an entry with `error` and no config.
- *
- * `previous` is the result of the last call: an entry whose file name and
- * signature still match is returned as the same object, so unchanged files are
- * neither read nor parsed and a caller can detect changes by identity. Files
- * that disappeared from the directory are dropped. The cache belongs to the
- * caller and is never stored globally.
+ * Create one bot directory without overwriting anything. `mkdir` is the
+ * exclusive step, and both files use the exclusive `wx` flag; a partial
+ * failure never replaces an existing definition.
  */
-export async function loadBotAgentConfigs(
-  dir: string,
-  previous: readonly BotAgentEntry[] = [],
-): Promise<BotAgentEntry[]> {
-  let names: string[]
+export async function createBotDirectory(
+  directory: string,
+  identity: BotAgentIdentity,
+): Promise<void> {
+  const identityText = formatIdentity(identity)
+  // Validate exactly what will be written, before the first file exists.
+  parseIdentity(identityText)
+  // `mkdir` is the exclusive step: a concurrent creation fails here and its
+  // directory is never removed by this caller.
+  await mkdir(directory)
   try {
-    const entries = await readdir(dir, { withFileTypes: true })
-    names = entries.filter(entry => entry.isFile() && entry.name.endsWith('.json')).map(entry => entry.name)
-  } catch {
-    // No config directory (or one that cannot be listed) simply has no bots.
-    return []
+    await writeFile(
+      join(directory, 'bot.json'),
+      `${JSON.stringify({
+        primary: true,
+        tools: { session: true, todo: true, memory: true, workspace: true },
+      }, null, 2)}\n`,
+      { encoding: 'utf-8', flag: 'wx', mode: 0o600 },
+    )
+    await writeFile(join(directory, 'identity.md'), identityText, {
+      encoding: 'utf-8',
+      flag: 'wx',
+      mode: 0o600,
+    })
+    await mkdir(join(directory, 'memory'))
+  } catch (error) {
+    // Only this call's own partial directory is cleaned up.
+    await rm(directory, { recursive: true, force: true }).catch(() => {})
+    throw error
   }
-  // Keyed by file name, the name every config lookup below uses.
-  const cached = new Map(previous.map(entry => [basename(entry.path), entry]))
-  const loaded: BotAgentEntry[] = []
-  for (const name of names.sort()) {
-    const path = join(dir, name)
-    const id = basename(name, '.json')
-    let signature: BotAgentSignature
-    try {
-      signature = signatureOf(await stat(path))
-    } catch (error) {
-      loaded.push({ id, path, signature: EMPTY_SIGNATURE, text: '', error: errorText(error) })
-      continue
-    }
-    const prior = cached.get(name)
-    if (prior !== undefined && prior.signature !== EMPTY_SIGNATURE && sameSignature(prior.signature, signature)) {
-      loaded.push(prior)
-      continue
-    }
-    let text: string
-    try {
-      text = await readFile(path, 'utf-8')
-    } catch (error) {
-      // A failed read is transient (unlike a failed stat, which cannot be
-      // distinguished from a missing file). Marking it with the never-reusable
-      // signature makes the next poll read the file again instead of serving
-      // this error from the cache until the file happens to change.
-      loaded.push({ id, path, signature: EMPTY_SIGNATURE, text: '', error: errorText(error) })
-      continue
-    }
-    try {
-      loaded.push({ id, path, signature, text, config: validateConfig(id, text) })
-    } catch (error) {
-      loaded.push({ id, path, signature, text, error: errorText(error) })
-    }
-  }
-  return loaded
 }

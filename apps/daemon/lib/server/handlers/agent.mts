@@ -51,6 +51,17 @@ export function registerAgentHandlers(router: RpcRouter, options: AgentRpcHandle
     call(context, 'agent.list', () => ({ bots: kernel.list() })))
   router.register('agent.get', (params, _message, context) =>
     call(context, 'agent.get', () => kernel.get(params.id)))
+  router.register('agent.create', (params, _message, context) =>
+    call(context, 'agent.create', async () => ({
+      bot: await kernel.create({
+        id: params.id,
+        name: params.name,
+        ...(params.icon === undefined ? {} : { icon: params.icon }),
+        ...(params.location === undefined ? {} : { location: params.location }),
+      }),
+    })))
+  router.register('agent.memory.list', (params, _message, context) =>
+    call(context, 'agent.memory.list', async () => ({ files: await kernel.memory(params.id) })))
   router.register('agent.wake', (params, _message, context) =>
     call(context, 'agent.wake', () => kernel.wake(params.id, params.text)))
   router.register('agent.group.events', (params, _message, context) =>

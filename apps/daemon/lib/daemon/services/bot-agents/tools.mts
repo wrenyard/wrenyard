@@ -9,9 +9,25 @@
  * the model reads and can correct.
  */
 
-import type { AuxiliaryRoute, Session, ToolSpec, TurnModel } from '@wrenyard/session'
+import { randomUUID } from 'node:crypto'
+import { lstat, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import {
+  createWorkspaceMemory,
+  type AuxiliaryRoute,
+  type Session,
+  type ToolSpec,
+  type TurnModel,
+  type WorkspaceMemoryPort,
+} from '@wrenyard/session'
 import type { TodoStatus, WorkspaceTodoService } from '../workspace-todo-service.mts'
-import type { AgentToolName } from './config.mts'
+import {
+  assertRealInside,
+  formatIdentity,
+  parseIdentity,
+  type AgentToolName,
+  type BotAgentIdentity,
+} from './config.mts'
 
 /** One ranked model route a bot may run a session on. */
 export interface AgentModelRoute {
@@ -32,6 +48,14 @@ export interface AgentModelRoute {
 export interface AgentToolContext {
   /** The bot that owns the running turn; the sender of a `message` call. */
   botId: string
+  /** The bot definition directory; identity and memory live inside it. */
+  directory: string
+  /** The workspace root the `workspace` tool operates on. */
+  workspaceRoot: string
+  /** Adopt a freshly written identity in the running kernel. */
+  refreshIdentity(identity: BotAgentIdentity): void
+  /** Re-read the memory injected into the fixed system context after a change. */
+  refreshMemory(): void
   /** Watch one session: its next finished turn after `afterTurn` wakes this bot. */
   watch(sessionId: string, afterTurn: number, todoIds?: string[]): void
   /** Wake another bot with a message; throws when the target cannot be woken. */
@@ -152,6 +176,58 @@ const MESSAGE_TOOL: ToolSpec = {
   },
 }
 
+const MEMORY_TOOL: ToolSpec = {
+  name: 'memory',
+  description: [
+    'Keep your own long-lived memory and identity.',
+    'memories are Markdown files in your private memory directory; `list` and `read` show them,',
+    '`save` creates one by name, `update` replaces an existing one, `remove` deletes one and drops',
+    'its index line, and `identity` reads or rewrites your name, icon, description and role text.',
+    'An updated or removed memory must carry its exact current body as `previous`;',
+    'your switches are not editable here.',
+  ].join(' '),
+  parameters: {
+    type: 'object',
+    properties: {
+      op: {
+        type: 'string',
+        enum: ['list', 'read', 'save', 'update', 'remove', 'identity'],
+        description: 'List memories, read one, create one, replace one, delete one, or read/update your identity.',
+      },
+      name: {
+        type: 'string',
+        description: 'Memory name for read/save/update/remove, or the new identity name for identity.',
+      },
+      description: {
+        type: 'string',
+        description: 'One-line memory description, or the identity description.',
+      },
+      type: {
+        type: 'string',
+        enum: ['user', 'feedback', 'project', 'reference'],
+        description: 'Memory type; save and update only.',
+      },
+      content: {
+        type: 'string',
+        description: 'The memory body; save and update only.',
+      },
+      previous: {
+        type: 'string',
+        description: 'Exact current body of an existing memory; required when updating or removing it.',
+      },
+      icon: {
+        type: 'string',
+        description: 'Identity icon of at most two grapheme clusters.',
+      },
+      body: {
+        type: 'string',
+        description: 'The identity role text.',
+      },
+    },
+    required: ['op'],
+  },
+}
+
 const WORKSPACE_TOOL: ToolSpec = {
   name: 'workspace',
   description: [
@@ -176,6 +252,7 @@ const TOOL_SPECS: Readonly<Record<AgentToolName, ToolSpec>> = {
   session: SESSION_TOOL,
   todo: TODO_TOOL,
   message: MESSAGE_TOOL,
+  memory: MEMORY_TOOL,
   workspace: WORKSPACE_TOOL,
 }
 
@@ -210,6 +287,8 @@ export function createAgentToolRunner(deps: {
           return await runTodoTool(parseArguments(call.arguments), deps)
         case 'message':
           return runMessageTool(parseArguments(call.arguments), ctx)
+        case 'memory':
+          return await runMemoryTool(parseArguments(call.arguments), ctx)
         default:
           return failed(`unknown tool: ${call.name}`)
       }
@@ -479,4 +558,132 @@ function runMessageTool(args: Record<string, unknown>, ctx: AgentToolContext): T
   const text = requireString(args, 'text', 'message requires text')
   ctx.message(to, text)
   return done({ to })
+}
+
+// ─── memory tool ───────────────────────────────────────────────────────────
+
+/**
+ * The memory store of one bot. The shared writer owns containment, symlink
+ * refusal, atomic writes, the exact-previous-body guard and the index; its
+ * `memory` directory name is what places the files inside this bot definition.
+ * Every name is kebab-case, so it can never traverse or overwrite bot.json or
+ * identity.md.
+ */
+function memoryOf(ctx: AgentToolContext): WorkspaceMemoryPort {
+  return createWorkspaceMemory(ctx.directory, 'memory')
+}
+
+async function runMemoryTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
+  switch (args.op) {
+    case 'list':
+      return done(memoryOf(ctx).list())
+    case 'read':
+      return done(memoryOf(ctx).read(requireString(args, 'name', 'read requires name')))
+    case 'save': {
+      const name = requireString(args, 'name', 'save requires name')
+      const description = requireString(args, 'description', 'save requires description')
+      const type = requireString(args, 'type', 'save requires type')
+      const content = requireString(args, 'content', 'save requires content')
+      const previous = optionalString(args, 'previous')
+      await memoryOf(ctx).save(
+        { name, description, type, content, ...(previous === undefined ? {} : { previous }) },
+        async () => {},
+      )
+      ctx.refreshMemory()
+      return done({ name })
+    }
+    case 'update': {
+      const name = requireString(args, 'name', 'update requires name')
+      const description = requireString(args, 'description', 'update requires description')
+      const type = requireString(args, 'type', 'update requires type')
+      const content = requireString(args, 'content', 'update requires content')
+      const previous = optionalString(args, 'previous')
+      const memory = memoryOf(ctx)
+      // An update only rewrites a memory that already exists, and only when its
+      // exact current body was supplied, so a blind write cannot drop content.
+      if (!memory.list().some(entry => entry.name === name)) {
+        throw new Error(`memory ${name} does not exist; use save to create it`)
+      }
+      if (previous === undefined) throw new Error('update requires previous, the exact current body')
+      await memory.save({ name, description, type, content, previous }, async () => {})
+      ctx.refreshMemory()
+      return done({ name })
+    }
+    case 'remove': {
+      const name = requireString(args, 'name', 'remove requires name')
+      const previous = optionalString(args, 'previous')
+      await memoryOf(ctx).remove(
+        { name, ...(previous === undefined ? {} : { previous }) },
+        async () => {},
+      )
+      ctx.refreshMemory()
+      return done({ name })
+    }
+    case 'identity':
+      return await runIdentityTool(args, ctx)
+    default:
+      return failed(`unsupported memory op: ${String(args.op)}`)
+  }
+}
+
+/**
+ * Read identity.md, or atomically rewrite only the supplied fields. It writes
+ * nothing but identity.md and never touches bot.json.
+ */
+async function runIdentityTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
+  const path = join(ctx.directory, 'identity.md')
+  const info = await lstat(path)
+  if (!info.isFile()) throw new Error('identity.md is a symlink or not a regular file')
+  await assertRealInside(ctx.directory, path)
+  const current = parseIdentity(await readFile(path, 'utf-8'))
+
+  const hasName = args.name !== undefined
+  const hasIcon = args.icon !== undefined
+  const hasDescription = args.description !== undefined
+  const hasBody = args.body !== undefined
+  if (!hasName && !hasIcon && !hasDescription && !hasBody) {
+    return done(current)
+  }
+
+  let name = current.name
+  if (hasName) {
+    if (typeof args.name !== 'string' || args.name.trim() === '' || /[\r\n\0]/u.test(args.name)) {
+      throw new Error('identity name must be one nonempty line')
+    }
+    name = args.name.trim()
+  }
+  let icon = current.icon
+  if (hasIcon) {
+    if (typeof args.icon !== 'string') throw new Error('identity icon must be a string')
+    icon = args.icon.trim() === '' ? undefined : args.icon.trim()
+  }
+  let description = current.description
+  if (hasDescription) {
+    if (typeof args.description !== 'string' || /[\r\n\0]/u.test(args.description)) {
+      throw new Error('identity description must be one line')
+    }
+    description = args.description.trim() === '' ? undefined : args.description.trim()
+  }
+  const body = hasBody
+    ? (typeof args.body === 'string' ? args.body.trim() : '')
+    : current.body
+  const next: BotAgentIdentity = {
+    name,
+    ...(icon === undefined ? {} : { icon }),
+    ...(description === undefined ? {} : { description }),
+    body,
+  }
+  const text = formatIdentity(next)
+  // Re-parse what is about to be written so the same validation the loader
+  // applies also guards the write.
+  const validated = parseIdentity(text)
+  const temporary = `${path}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, text, { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+    await rename(temporary, path)
+  } finally {
+    await rm(temporary, { force: true })
+  }
+  ctx.refreshIdentity(validated)
+  return done(validated)
 }
