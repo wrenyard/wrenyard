@@ -39,6 +39,12 @@ export interface ExecServiceOptions {
   readonly maxRetainedBytes?: number;
   /** Maximum terminal executions retained for later `get`/`events`. Defaults to 200. */
   readonly maxCompletedRuns?: number;
+  /**
+   * Maximum aggregate retained bytes across all completed replays. Defaults to
+   * 8 MiB. Oldest terminal executions are evicted first until both this cap
+   * and `maxCompletedRuns` are satisfied.
+   */
+  readonly maxCompletedBytes?: number;
 }
 
 /** Acceptance record for a started execution; extends the neutral agent session. */
@@ -117,6 +123,7 @@ export class ExecService {
   readonly #maxRetainedEvents: number;
   readonly #maxRetainedBytes: number;
   readonly #maxCompletedRuns: number;
+  readonly #maxCompletedBytes: number;
   readonly #runs = new Map<ExecId, ExecEntry>();
   #sequence = 0;
   #closed = false;
@@ -127,6 +134,7 @@ export class ExecService {
     this.#maxRetainedEvents = options.maxRetainedEvents ?? 2_000;
     this.#maxRetainedBytes = options.maxRetainedBytes ?? 4 * 1024 * 1024;
     this.#maxCompletedRuns = Math.max(1, Math.trunc(options.maxCompletedRuns ?? 200));
+    this.#maxCompletedBytes = Math.max(1, Math.trunc(options.maxCompletedBytes ?? 8 * 1024 * 1024));
   }
 
   /**
@@ -463,13 +471,31 @@ export class ExecService {
     void this.#pruneCompleted();
   }
 
-  /** Keep only the newest `maxCompletedRuns` terminal executions. */
+  /**
+   * Keep terminal executions within both retention bounds.
+   *
+   * Oldest-first eviction applies to completed runs only; live and queued
+   * entries are never considered. The byte total comes from each replay
+   * buffer's incremental retained-byte count, so pruning never serialises
+   * events. The newest-run retention rule belongs to the run-count ceiling
+   * only: the aggregate byte cap has no exemption, so a single terminal replay
+   * that alone exceeds the budget is evicted as well.
+   */
   async #pruneCompleted(): Promise<void> {
     const completed = [...this.#runs.values()].filter((entry) => entry.terminal);
-    if (completed.length <= this.#maxCompletedRuns) return;
+    if (completed.length === 0) return;
     completed.sort((left, right) => (left.finishedAt ?? left.createdAt) - (right.finishedAt ?? right.createdAt));
-    for (const entry of completed.slice(0, completed.length - this.#maxCompletedRuns)) {
+    let retainedBytes = 0;
+    for (const entry of completed) retainedBytes += entry.replay.bytes;
+    let index = 0;
+    while (
+      completed.length - index > this.#maxCompletedRuns
+      || retainedBytes > this.#maxCompletedBytes
+    ) {
+      const entry = completed[index]!;
       this.#runs.delete(entry.id);
+      retainedBytes -= entry.replay.bytes;
+      index += 1;
     }
   }
 }

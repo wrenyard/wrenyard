@@ -36,12 +36,20 @@ export interface ExecReplayBufferOptions {
  * This class is deliberately not thread-safe and not synchronised: one
  * execution owns one buffer and the service appends to it from the single
  * drain loop.
+ *
+ * Ownership contract: an appended event object is RETAINED AS-IS, not copied.
+ * The producer hands ownership to the buffer and must never mutate that object
+ * after `append` returns; readers receive the same references and must treat
+ * them as immutable. This is safe because the drain loop is the only producer
+ * and every consumer only serialises or projects the records.
  */
 export class ExecReplayBuffer {
   readonly #maxEvents: number;
   readonly #maxBytes: number;
   readonly #onEvict: ((seq: ExecSeq, reason: ExecReplayEviction) => void) | undefined;
   readonly #records: ExecEventEnvelope[] = [];
+  /** Retained byte size per record, measured once at append time. */
+  readonly #recordBytes: number[] = [];
   #bytes = 0;
   #nextSeq: ExecSeq = 1;
 
@@ -67,18 +75,35 @@ export class ExecReplayBuffer {
   }
 
   /**
+   * Total retained payload bytes, maintained incrementally as records are
+   * appended, evicted and trimmed. The service uses it to bound the aggregate
+   * size of completed replays without serialising their events.
+   */
+  get bytes(): number {
+    return this.#bytes;
+  }
+
+  /**
    * Append one event record under the next sequence number and trim history
    * back within both ceilings. Returns the assigned sequence number.
    *
-   * The record is treated as opaque JSON: it is only measured and retained,
-   * never rewritten.
+   * The event is retained by reference: ownership transfers to the buffer and
+   * the caller must not mutate the object afterwards. Nothing is serialised or
+   * cloned — the byte count is measured once, here, and then maintained
+   * incrementally. Retained records are likewise shared with readers, which
+   * must only read them.
    */
   append(id: string, event: Record<string, unknown>): ExecSeq {
     const seq = this.#nextSeq;
     this.#nextSeq += 1;
-    const envelope: ExecEventEnvelope = { id, seq, event: JSON.parse(JSON.stringify(event)) };
+    // The neutral stream record is JSON-shaped by contract: clients emit only
+    // serialisable frames and the wire type declares `JsonObject`. Assert that
+    // contract at the envelope boundary instead of cloning or validating it.
+    const envelope: ExecEventEnvelope = { id, seq, event: event as ExecEventEnvelope['event'] };
+    const size = estimateBytes(event);
     this.#records.push(envelope);
-    this.#bytes += estimateBytes(envelope.event);
+    this.#recordBytes.push(size);
+    this.#bytes += size;
     this.#trim();
     return seq;
   }
@@ -119,8 +144,9 @@ export class ExecReplayBuffer {
 
   #evictOldest(reason: ExecReplayEviction): void {
     const dropped = this.#records.shift();
+    const droppedBytes = this.#recordBytes.shift() ?? 0;
     if (!dropped) return;
-    this.#bytes -= estimateBytes(dropped.event);
+    this.#bytes -= droppedBytes;
     if (this.#bytes < 0) this.#bytes = 0;
     this.#onEvict?.(dropped.seq, reason);
   }
@@ -131,9 +157,9 @@ export class ExecReplayBuffer {
  *
  * The value is used only to decide when to evict, so it approximates rather
  * than serialises: string payloads (the overwhelming majority of agent output)
- * are measured at their UTF-16 length, and containers contribute a small fixed
- * overhead per entry. A record that cannot be walked contributes one unit so
- * it can never be evicted for free.
+ * are measured as UTF-16 bytes — two bytes per code unit — and containers
+ * contribute a small fixed overhead per entry. A record that cannot be walked
+ * contributes one unit so it can never be evicted for free.
  */
 export function estimateBytes(value: unknown): number {
   return measure(value, 0);
@@ -141,7 +167,7 @@ export function estimateBytes(value: unknown): number {
 
 function measure(value: unknown, depth: number): number {
   if (depth > 8) return 1;
-  if (typeof value === 'string') return value.length;
+  if (typeof value === 'string') return value.length * 2;
   if (typeof value === 'number' || typeof value === 'boolean' || value === null) return 8;
   if (typeof value === 'bigint') return 16;
   if (Array.isArray(value)) {
