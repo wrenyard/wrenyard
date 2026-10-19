@@ -4,13 +4,13 @@ import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, resolveModelSpeed,
 import { excludedModelIdsFor, resolveConstrainedDispatch } from '@wrenyard/auto-routing';
 import { resolveHistoricalOfferedModelId, resolveRuntimeTaskPlans, type ProviderRuntime } from '@wrenyard/providers'
 import { isMainstreamModelId } from '@wrenyard/models'
-import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts'
+import type { TaskResolvedDispatch } from '@wrenyard/protocol'
 import {
   selectTaskResolutionFailure,
   type TaskResolutionElimination,
   type TaskResolutionFailureCode,
   type TaskResolutionFailureDetail,
-} from './task-resolution-failure.mts'
+} from './task-resolution-failure.ts'
 
 /**
  * Canonical daemon-side task dispatch resolver.

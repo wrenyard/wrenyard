@@ -836,7 +836,7 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
         project: params.project,
         worktree: params.worktree,
         input: params.input,
-        ctx: params.ctx as import('../../core/task/context.mts').TaskContext | undefined,
+        ctx: params.ctx as import('@wrenyard/task').TaskContext | undefined,
         connectingId: rpcContext.connectingId,
         invocationSettings: params.invocation_settings,
       }),

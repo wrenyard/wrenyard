@@ -59,7 +59,8 @@
     "@wrenyard/clients": "workspace:*",
     "@wrenyard/exec": "workspace:*",
     "@wrenyard/protocol": "workspace:*",
-    "@wrenyard/provider-service": "workspace:*"
+    "@wrenyard/provider-service": "workspace:*",
+    "@wrenyard/task": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",

@@ -10,7 +10,7 @@ import { ResponseTpsSampler, completeUsageTokens, hasNormalizedFailureField } fr
  * terminal `result` record. It is a protocol/delivery failure of the client
  * route, kept distinct from the functional agent failure classes. The daemon
  * structured-output collector recognises the same identifier in
- * `apps/daemon/lib/core/task/structured-output.mts`.
+ * `packages/features/task/src/structured-output.ts`.
  */
 const MISSING_TERMINAL_RESULT_FAILURE_CLASS = 'protocol_missing_terminal_result';
 

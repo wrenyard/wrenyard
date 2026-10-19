@@ -19,7 +19,7 @@ import {
   generateInputExample,
   normalizeSchema,
   type CompiledSchema,
-} from './schema-loader.mts'
+} from '@wrenyard/task'
 
 export interface ForemanWorkspaceOptions {
   root: string

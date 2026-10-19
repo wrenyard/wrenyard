@@ -133,7 +133,7 @@ export interface TaskGraph {
   id: GraphId;
   revision: number;
   /** Immutable bounded KV context inherited by every task node. */
-  tg_ctx?: import('../task/context.mts').TaskContext;
+  tg_ctx?: import('@wrenyard/task').TaskContext;
   nodes: Record<NodeId, TaskGraphNode>;
 }
 

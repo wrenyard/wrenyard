@@ -4,7 +4,7 @@
  * package so there is exactly one DeepSeek pricing implementation.
  */
 import { deepSeekAutomaticPricingOf } from '@wrenyard/auto-routing'
-import type { TaskResolvedDispatch } from './task-run-metadata-types.mts'
+import type { TaskResolvedDispatch } from '@wrenyard/protocol'
 
 /** Request-time DeepSeek evidence has two deliberately distinct prices: the
  *  applicable official peak/list price for hard admission and the worst

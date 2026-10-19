@@ -31,7 +31,7 @@ import {
   compareTypes,
 } from './schema-tools.mts';
 import { validateConditionParams } from './condition.mts';
-import { validateAnyJsonValue } from '../../workspace/schema-loader.mts';
+import { validateAnyJsonValue } from '@wrenyard/task';
 import type { TaskGraphTaskContractResolver } from './task-contract-resolver.mts';
 import type { JsonSchema } from '../../types.mts';
 

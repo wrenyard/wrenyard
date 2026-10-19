@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve } from 'node:path'
-import type { TaskConfig } from './types.mts'
+import type { TaskConfig } from './types.ts'
 
 const MAX_WRITE_TARGETS = 128
 

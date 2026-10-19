@@ -1,4 +1,4 @@
-import type { TaskDefinition } from '../core/task/types.mts'
+import type { TaskDefinition } from '@wrenyard/task'
 import exploreTask from './tasks/explore.mts'
 import editTask from './tasks/edit.mts'
 import testTask from './tasks/test.mts'

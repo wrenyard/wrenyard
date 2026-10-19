@@ -66,7 +66,7 @@ export interface AgentOpts {
   /** Private non-persistent CodeBuddy admission binding. */
   codeBuddyExecution?: import('./core/operations/types.mts').CodeBuddyExecutionBinding
   /** Canonical agent-runtime failure class, when classified by the runtime. */
-  failureClass?: import('./core/task/failure.mts').AgentFailureClass | string | null
+  failureClass?: import('@wrenyard/task').AgentFailureClass | string | null
 }
 
 export interface AgentResult {
@@ -84,7 +84,7 @@ export interface AgentResult {
   /** Per-attempt dispatch snapshot produced by the daemon resolver. */
   dispatchSnapshot?: import('./core/operations/types.mts').TaskDispatchSnapshot | null
   /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
-  failureClass?: import('./core/task/failure.mts').AgentFailureClass | string | null
+  failureClass?: import('@wrenyard/task').AgentFailureClass | string | null
 }
 
 export interface ShellOpts {
@@ -143,11 +143,11 @@ export interface ExecutionOptions {
   /** MCP connection id that triggered the run (for cc-channel session targeting) */
   connectingId?: string
   /** Bounded JSON-safe context inherited from a direct run or TaskGraph. */
-  taskContext?: import('./core/task/context.mts').TaskContext
+  taskContext?: import('@wrenyard/task').TaskContext
   /** Daemon-side deterministic task dispatch resolver. Optional only for isolated
    *  legacy tests; constrained production definitions require it to resolve an
    *  exact approved plan before the first agent attempt. */
-  taskDispatchResolver?: import('./core/task/dispatch-resolver.mts').TaskDispatchResolver
+  taskDispatchResolver?: import('@wrenyard/task').TaskDispatchResolver
   /** Daemon-owned authoritative settings resolver for task runs. Optional only
    *  for isolated legacy tests; daemon bootstrap attaches the single
    *  TaskSettingsService resolver after constructing the workflow runner. */
@@ -219,13 +219,14 @@ export type TaskRunSettingsResolver = (
 // ── Task-domain types re-export shim ─────────────────────────────────
 //
 // The task-domain types (TaskConfig / TaskDefinition / RegisteredTask /
-// TaskExecutionResult / TaskRunResult / TaskListEntry / TaskGate / GatePass /
-// GateFail / GateContext) now live in `lib/core/task/types.mts` as the
-// single source of truth (Core Concept 7). They are re-exported here so the
-// 14 existing files importing from `lib/types.mts` do not need to change
-// their import paths. New code should import directly from
-// `lib/core/task/types.mts` (or `lib/core/task/concepts.mts` for the
-// General Concepts layer).
+// TaskRunResult / TaskListEntry / TaskGate / GatePass / GateFail /
+// GateContext) now live in the `@wrenyard/task` package as the single source
+// of truth (Core Concept 7). They are re-exported here so the existing files
+// importing from `lib/types.mts` do not need to change their import paths.
+// New code should import directly from `@wrenyard/task`.
+//
+// `TaskExecutionResult` stays daemon-side because it references the
+// daemon-local `AgentResult`.
 //
 // `import type` brings the types into local module scope so the
 // `declare global` block below can reference `TaskConfig` / `TaskDefinition`
@@ -234,9 +235,9 @@ export type TaskRunSettingsResolver = (
 import type {
   TaskConfig,
   TaskDefinition,
-} from './core/task/types.mts'
-import type { TaskDispatchResolver } from './core/task/dispatch-resolver.mts'
-import type { ForemanSchemas } from './core/task/schemas/index.mts'
+  TaskDispatchResolver,
+  ForemanSchemas,
+} from '@wrenyard/task'
 import type { ForemanInstructions } from './standard/instructions/index.mts'
 
 export type {
@@ -247,7 +248,6 @@ export type {
   TaskInheritedDeclaration,
   InheritanceChainEntry,
   RegisteredTask,
-  TaskExecutionResult,
   TaskRunResult,
   TaskListEntry,
   TaskDispatchRequirements,
@@ -255,7 +255,24 @@ export type {
   GateFail,
   GateContext,
   TaskGate,
-} from './core/task/types.mts'
+} from '@wrenyard/task'
+
+/** Daemon-side execution result; references the daemon-local `AgentResult`. */
+export interface TaskExecutionResult {
+  task_id: string
+  name: string
+  project: string
+  status: AgentResult['status'] | 'interrupted'
+  output: unknown
+  summary?: string | null
+  structured: boolean
+  error?: string | null
+  failure_category?: string
+  suggestion?: string
+  error_message?: string
+  agentResult?: AgentResult
+  agentRuntime?: string
+}
 
 /**
  * Authoring global overloads. A complete `TaskConfig` must declare
@@ -266,7 +283,7 @@ export type {
  */
 export interface DefineTask {
   (config: TaskConfig): TaskDefinition
-  (config: import('./core/task/types.mts').TaskInheritedDeclaration): TaskDefinition
+  (config: import('@wrenyard/task').TaskInheritedDeclaration): TaskDefinition
 }
 
 declare global {

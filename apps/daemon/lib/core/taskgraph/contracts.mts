@@ -215,7 +215,7 @@ export interface TaskGraphCreateParams {
    *  outside this scope. Callers may omit it for unrestricted graphs. */
   project?: string;
   /** Immutable bounded KV context inherited by every task node. */
-  tg_ctx?: import('../task/context.mts').TaskContext;
+  tg_ctx?: import('@wrenyard/task').TaskContext;
   /** Optional create-time human-readable title. Immutable after creation,
    *  trimmed by the service layer, and not part of the graph structure. */
   title?: string;

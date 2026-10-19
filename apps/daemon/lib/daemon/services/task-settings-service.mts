@@ -11,7 +11,7 @@ import {
   type TaskDispatchDiagnosticChoice,
   type TaskDispatchDisplayLabels,
   type TaskDispatchResolver,
-} from '../../core/task/dispatch-resolver.mts'
+} from '@wrenyard/task'
 import {
   codeFromCatalogExclusion,
   selectTaskResolutionFailure,
@@ -20,9 +20,9 @@ import {
   type TaskResolutionElimination,
   type TaskResolutionFailureCode,
   type TaskResolutionFailureDetail,
-} from '../../core/task/task-resolution-failure.mts'
+} from '@wrenyard/task'
 import { TaskService } from '../../core/task/service.mts'
-import { getTaskPromptTemplates } from '../../core/task/prompt-template.mts'
+import { getTaskPromptTemplates } from '@wrenyard/task'
 import { resolveTaskTarget, getLoadErrors } from '../../workspace/definition-registry.mts'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
 import { discoverProjects } from '../../core/project/loader.mts'
@@ -38,16 +38,16 @@ import {
   resolveEffectiveTaskSettings,
   SYSTEM_DEFAULT_TIMEOUT_MS,
   type TaskDispatchField,
-  type TaskDispatchRequirements as ConfigTaskDispatchRequirements,
+  type TaskSettingsDispatch as ConfigTaskDispatchRequirements,
   type TaskSettingsLayer as ConfigTaskSettingsLayer,
   type TaskSettingsSourceTag,
   type TaskRoutingWeights,
   type TasksConfigSettingsInput,
-} from '../../config/task-settings.mts'
+} from '@wrenyard/task'
 import type {
   TaskAutoRoutingDecision,
   TaskResolvedDispatch,
-} from '../../task-run-metadata-types.mts'
+} from '@wrenyard/protocol'
 import {
   AutoRoutingQuotaSnapshotService,
   type AutoRoutingBoundQuotaSnapshot,

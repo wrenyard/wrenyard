@@ -1,10 +1,10 @@
-import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '@wrenyard/task'
 import {
   CommitReportSchema,
   CommitRequestSchema,
   type CommitRequest,
-} from '../../core/task/schemas/commit.mts'
-import type { GateContext, GateFail, GatePass } from '../../core/task/types.mts'
+} from '@wrenyard/task'
+import type { GateContext, GateFail, GatePass } from '@wrenyard/task'
 import commitRules from '../instructions/commit-rules.mts'
 import shellUsage from '../instructions/shell-usage.mts'
 import { COMMIT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
@@ -210,7 +210,7 @@ export const originTrackingUnchangedGate = {
  * Commit — structured git commit builtin.
  *
  * Uses the commit domain Zod schemas (`CommitRequestSchema` /
- * `CommitReportSchema`) from `lib/core/task/schemas/commit.mts` and the
+ * `CommitReportSchema`) from `@wrenyard/task` and the
  * migrated commit instructions. The agent stages only declared file
  * changes and creates verified local commits with matching Author/Committer
  * identities. It NEVER pushes — outbound push happens only via

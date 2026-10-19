@@ -59,7 +59,7 @@ export type Target = TargetBase
 // `CoreTargetSchema` lists the universally-known `kind` values for IDE
 // hints and developer convenience. It does **not** constrain `Target` —
 // domain kinds (e.g. `'markdown'`, `'git_commit'`) live in
-// `lib/core/task/targets/` and are only consumed by their domain task.
+// `src/targets/` of this package and are only consumed by their domain task.
 
 export const FileTargetSchema = TargetBaseSchema.extend({
   kind: z.literal('file'),

@@ -74,7 +74,7 @@ import { createModelGateway, type ModelGateway, type RouteStatus } from '@wrenya
 import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen, resolveHistoricalOfferedModelId } from '@wrenyard/providers'
 import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { PROVIDER_DEFAULT_REASONING } from '@wrenyard/providers/base'
-import { createTaskDispatchResolver, type TaskDispatchResolver } from '../core/task/dispatch-resolver.mts'
+import { createTaskDispatchResolver, type TaskDispatchResolver } from '@wrenyard/task'
 import { ForemanEventStore } from '../events/event-store.mts'
 import { foremanStateRoot } from '../config/state.mts'
 import { resolveWrenyardConfigRoot } from '@wrenyard/paths'

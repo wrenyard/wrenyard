@@ -1,4 +1,4 @@
-import type { TaskSettingsLayer } from './task-settings.mts'
+import type { TaskSettingsLayer } from '@wrenyard/task'
 import type { GatewayPortMode } from './types.mts'
 
 export type ConfigRecord = Record<string, unknown>

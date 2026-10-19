@@ -1,7 +1,8 @@
 import AjvClass from 'ajv'
 import type { ErrorObject, ValidateFunction } from 'ajv'
 import { z, type ZodType } from 'zod'
-import type { JsonSchema } from '../types.mts'
+
+export type JsonSchema = boolean | Record<string, unknown>
 
 const ajv = new (AjvClass as any)({
   allErrors: true,

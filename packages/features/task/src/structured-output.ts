@@ -1,12 +1,24 @@
-import { compileSchema, validateAgainstSchema, V2SchemaValidationError, type CompiledSchema } from '../../workspace/schema-loader.mts'
+import { compileSchema, validateAgainstSchema, V2SchemaValidationError, type CompiledSchema } from './schema-validation.ts'
 import type { ZodType } from 'zod'
 import {
   STRUCTURED_OUTPUT_RETRY_TIMEOUT_MS,
   assertValidTimeoutMs,
   effectiveTaskTimeoutMs,
-} from '../../task-timeouts.mts'
-import { GateFailureError, MODEL_REJECTION_FAILURE_CLASS, QUOTA_OR_RATE_LIMITED_FAILURE_CLASS, mapAgentFailureClass } from './failure.mts'
+} from './task-timeouts.ts'
+import { GateFailureError, MODEL_REJECTION_FAILURE_CLASS, QUOTA_OR_RATE_LIMITED_FAILURE_CLASS, mapAgentFailureClass } from './failure.ts'
 import type { NativeRouteFaultKind } from '@wrenyard/gateway'
+import type { TaskResolvedDispatch } from '@wrenyard/protocol'
+
+/**
+ * Private CodeBuddy admission binding. Declared here so the task package stays
+ * free of daemon operation wiring: the daemon's own binding is structurally
+ * identical and satisfies this shape.
+ */
+export interface CodeBuddyExecutionBinding {
+  readonly expectedScope: string
+  readonly expectedEnvironment: string
+  readonly expectedWireModel: string
+}
 import {
   DELIVERY_END,
   DELIVERY_START,
@@ -18,7 +30,7 @@ import {
   protocolDiagnostic,
   type StructuredOutputDiagnostic,
   type StructuredOutputErrorKind,
-} from './delivery-protocol.mts'
+} from './delivery-protocol.ts'
 
 /**
  * Output schema accepted by `collectStructuredOutput`. AC-5 final state:
@@ -126,9 +138,9 @@ export interface StructuredOutputOptions {
   requestedAgentRuntime?: string
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. Forwarded
    *  unchanged on the initial attempt and on every structured retry. */
-  dispatchSnapshot?: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null
+  dispatchSnapshot?: TaskResolvedDispatch | null
   /** Private CodeBuddy admission binding, forwarded unchanged to every attempt. */
-  codeBuddyExecution?: import('../operations/types.mts').CodeBuddyExecutionBinding
+  codeBuddyExecution?: CodeBuddyExecutionBinding
   /** Optional shared-circuit accounting for this structured run. Only the
    *  terminal delivery outcome of actually launched attempts is reported:
    *  `onRouteSuccess` after a schema-validated delivery, `onRouteFault` after
@@ -235,9 +247,9 @@ export interface StructuredOutputAgentOptions {
   /** Original requested agent runtime, carried separately from the exact approved execution target passed as `profile`. */
   requestedAgentRuntime?: string
   /** Full per-attempt dispatch snapshot produced by the daemon resolver. Forwarded unchanged on every structured retry. */
-  dispatchSnapshot?: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null
+  dispatchSnapshot?: TaskResolvedDispatch | null
   /** Private CodeBuddy admission binding, unchanged across retries/resume. */
-  codeBuddyExecution?: import('../operations/types.mts').CodeBuddyExecutionBinding
+  codeBuddyExecution?: CodeBuddyExecutionBinding
 }
 
 export interface StructuredOutputAgentResult {

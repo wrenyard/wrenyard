@@ -16,7 +16,7 @@ import {
 } from '../../types.mts'
 import { DaemonTaskRunner } from './task-runner.mts'
 import type { SupervisorLogger } from './agent-supervisor.mts'
-import type { TaskDispatchResolver } from '../../core/task/dispatch-resolver.mts'
+import type { TaskDispatchResolver } from '@wrenyard/task'
 import { appendForemanEvent } from '../../events/event-store.mts'
 
 export interface TaskWorkflowRunnerOptions {

@@ -1,7 +1,7 @@
-import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '@wrenyard/task'
 import { FREQUENT_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
-import type { TaskDefinition } from '../../core/task/types.mts'
+import type { TaskDefinition } from '@wrenyard/task'
 import shellUsage from '../instructions/shell-usage.mts'
 
 export const TASK_PROMPT_TEMPLATE_1 = { strings: [`

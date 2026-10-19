@@ -1,0 +1,29 @@
+{
+  "name": "@wrenyard/task",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@wrenyard/auto-routing": "workspace:*",
+    "@wrenyard/gateway": "workspace:*",
+    "@wrenyard/models": "workspace:*",
+    "@wrenyard/paths": "workspace:*",
+    "@wrenyard/protocol": "workspace:*",
+    "@wrenyard/providers": "workspace:*",
+    "ajv": "^8.20.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

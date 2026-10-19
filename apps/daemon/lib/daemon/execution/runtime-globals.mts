@@ -1,5 +1,5 @@
 import { createPrimitiveSet } from '../../core/operations/primitives/registry.mts'
-import { foremanSchemas } from '../../core/task/schemas/index.mts'
+import { foremanSchemas } from '@wrenyard/task'
 import { foremanInstructions } from '../../standard/instructions/index.mts'
 import type {
   PrimitiveSet,

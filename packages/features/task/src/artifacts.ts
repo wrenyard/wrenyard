@@ -3,8 +3,8 @@ import { mkdir, open, realpath, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
 import type { ZodType } from 'zod'
-import { foremanStateRoot } from '../../config/state.mts'
-import { MAX_TASK_ARTIFACTS, TaskArtifactSchema } from './schemas/artifacts.mts'
+import { resolveWrenyardStateRoot as foremanStateRoot } from '@wrenyard/paths'
+import { MAX_TASK_ARTIFACTS, TaskArtifactSchema } from './schemas/artifacts.ts'
 
 /**
  * Task artifact runtime.

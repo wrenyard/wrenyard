@@ -1,4 +1,4 @@
-import { renderTaskPromptTemplate, withTaskPromptTemplates } from '../../core/task/prompt-template.mts'
+import { renderTaskPromptTemplate, withTaskPromptTemplates } from '@wrenyard/task'
 import { REVIEW_DISPATCH_REQUIREMENTS } from '../task-dispatch.mts'
 import { z } from 'zod'
 import shellUsage from '../instructions/shell-usage.mts'

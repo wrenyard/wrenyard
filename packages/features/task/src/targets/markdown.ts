@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { TargetBaseSchema, type TargetBase } from '../concepts.mts'
+import { TargetBaseSchema, type TargetBase } from '../concepts.ts'
 
 /**
  * MarkdownTarget — domain Target for documentation context exploration.

@@ -1,12 +1,11 @@
 import type { ZodType } from 'zod'
-import type { AgentResult } from '../../types.mts'
 
 /**
  * Schema accepted for task input and output definitions.
  *
  * AC-5 final state: definition schemas accept ZodType only. They are
  * converted to draft-07 JSON Schema via `z.toJSONSchema(schema, { target:
- * 'draft-07' })` at compile time (see `workspace/schema-loader.mts`). The
+ * 'draft-07' })` at compile time (see `schema-validation.ts`). The
  * legacy `Record<SchemaField>` and raw `JsonSchema` definition paths were
  * retired.
  */
@@ -214,22 +213,6 @@ export interface RegisteredTask {
   /** Base→effective inheritance chain; present only when this entry was
    *  resolved from an inherited declaration. */
   inheritanceChain?: InheritanceChainEntry[]
-}
-
-export interface TaskExecutionResult {
-  task_id: string
-  name: string
-  project: string
-  status: AgentResult['status'] | 'interrupted'
-  output: unknown
-  summary?: string | null
-  structured: boolean
-  error?: string | null
-  failure_category?: string
-  suggestion?: string
-  error_message?: string
-  agentResult?: AgentResult
-  agentRuntime?: string
 }
 
 export interface TaskRunResult {

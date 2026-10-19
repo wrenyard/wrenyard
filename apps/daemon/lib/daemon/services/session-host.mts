@@ -9,10 +9,9 @@ import {
   type SessionHost,
   type TaskArtifact,
 } from '@wrenyard/session'
-import { readGlobalTaskSettings } from '../../config/task-settings.mts'
 import { ProjectManager } from '../../core/project/manager.mts'
 import { runGitSync } from '../../core/vcs/index.mts'
-import type { TaskContext } from '../../core/task/context.mts'
+import { readGlobalTaskSettings, type TaskContext } from '@wrenyard/task'
 import { isTaskRunRejection, type TaskService } from '../../core/task/service.mts'
 import { METHOD_NOT_FOUND, ProtocolError } from '../../protocol/errors.mts'
 import { describeMethod } from '../../protocol/registry.mts'

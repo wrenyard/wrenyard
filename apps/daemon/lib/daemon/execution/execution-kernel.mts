@@ -32,8 +32,8 @@ import {
   normalizeSchema,
   V2SchemaValidationError,
   validateAgainstSchema,
-} from '../../workspace/schema-loader.mts'
-import { collectStructuredOutput, firstPrompt, type StructuredOutputAgent } from '../../core/task/structured-output.mts'
+} from '@wrenyard/task'
+import { collectStructuredOutput, firstPrompt, type StructuredOutputAgent } from '@wrenyard/task'
 import { requireClient } from '@wrenyard/clients'
 import { parseRunSyntax, recordRouteCooldown } from '@wrenyard/providers/catalog'
 import type { ProbeLease, RouteGuard } from '@wrenyard/gateway'
@@ -42,17 +42,17 @@ import {
   outputSchemaDeclaresArtifacts,
   taskArtifactPromptParagraph,
   validateTaskArtifacts,
-} from '../../core/task/artifacts.mts'
-import { resolveFeatures } from '../../core/task/features.mts'
-import { buildTaskPrompt } from '../../core/task/prompt.mts'
-import { splitTaskInputContext } from '../../core/task/context.mts'
-import { resolveTaskWritePaths } from '../../core/task/write-targets.mts'
+} from '@wrenyard/task'
+import { resolveFeatures } from '@wrenyard/task'
+import { buildTaskPrompt } from '@wrenyard/task'
+import { splitTaskInputContext } from '@wrenyard/task'
+import { resolveTaskWritePaths } from '@wrenyard/task'
 import {
   extractGateFailure,
   GateFailureError,
   isGateError,
   type GateFailurePayload,
-} from '../../core/task/failure.mts'
+} from '@wrenyard/task'
 
 type TaskStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
 
@@ -363,7 +363,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     // never runs alongside task settings resolution.
     let requestedAgentRuntime: string | undefined
     let exactAgentRuntime: string | undefined
-    let dispatchSnapshot: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null = null
+    let dispatchSnapshot: import('@wrenyard/protocol').TaskResolvedDispatch | null = null
     let codeBuddyExecution: import('../../core/operations/types.mts').CodeBuddyExecutionBinding | undefined
     let resolvedTimeoutMs: number | undefined
     const effectiveInput = validateInput(config.input, taskInputContext.input, `Invalid input for task '${target.name}'`)
@@ -846,7 +846,7 @@ function routeIdentityOf(exactAgentRuntime: string): { provider: string; model: 
  * this undefined so the structured-output default applies.
  */
 function canResumeNativeSessionForDispatch(
-  snapshot: import('../../task-run-metadata-types.mts').TaskResolvedDispatch | null,
+  snapshot: import('@wrenyard/protocol').TaskResolvedDispatch | null,
 ): boolean | undefined {
   const clientId = snapshot?.client
   if (!clientId) return undefined

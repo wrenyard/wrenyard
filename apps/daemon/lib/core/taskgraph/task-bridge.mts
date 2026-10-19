@@ -5,7 +5,7 @@ import type {
   JsonValue,
   TaskGraphNode,
 } from './model.mts'
-import type { TaskContext } from '../task/context.mts'
+import type { TaskContext } from '@wrenyard/task'
 
 export type TaskGraphTaskTerminalStatus =
   | 'done'

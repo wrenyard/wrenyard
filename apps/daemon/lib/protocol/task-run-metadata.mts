@@ -1,10 +1,10 @@
-import { REASONING_EFFORTS } from '../task-run-metadata-types.mts'
+import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import type { JsonSchema } from './jsonrpc.mts'
 import type {
   TaskAutoRoutingDecision,
   TaskResolvedDispatch,
   TaskUsage,
-} from '../task-run-metadata-types.mts'
+} from '@wrenyard/protocol'
 export type {
   TaskAutoRoutingDecision,
   TaskReferencePricing,
@@ -13,8 +13,13 @@ export type {
   TaskUsage,
   TaskUsageCompleteness,
   ReasoningEffort,
-} from '../task-run-metadata-types.mts'
-export { REASONING_EFFORTS, isReasoningEffort } from '../task-run-metadata-types.mts'
+} from '@wrenyard/protocol'
+export { REASONING_EFFORTS } from '@wrenyard/providers/catalog'
+
+/** Legal reasoning-effort guard for wire values crossing the protocol surface. */
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value)
+}
 
 /**
  * Exclusive shared protocol schema for a task run's resolved dispatch and

@@ -22,7 +22,7 @@ import {
   normalizeTaskContext,
   TaskContextError,
   type TaskContext,
-} from '../task/context.mts'
+} from '@wrenyard/task'
 
 // ─── Compact input types ─────────────────────────────────────────────────────
 

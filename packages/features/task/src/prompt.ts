@@ -1,11 +1,11 @@
-import type { TaskDefinition } from '../../types.mts'
-import { formatTaskContext, type TaskContext } from './context.mts'
+import type { TaskDefinition } from './types.ts'
+import { formatTaskContext, type TaskContext } from './context.ts'
 import {
   getTaskPromptTemplates,
   renderTaskPromptBindings,
   runWithTaskPromptCapture,
   TASK_PROMPT_PLACEHOLDER_NOTICE,
-} from './prompt-template.mts'
+} from './prompt-template.ts'
 
 /** Stable instruction/template prefix first; dynamic documents, bindings and ctx last. */
 export async function buildTaskPrompt(

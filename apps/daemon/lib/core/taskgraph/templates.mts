@@ -7,7 +7,7 @@
 
 import type { TaskGraphCreateParams } from './contracts.mts'
 import type { JsonObject, NodeId, ObjectJsonSchema, TaskGraphNode } from './model.mts'
-import type { TaskContext } from '../task/context.mts'
+import type { TaskContext } from '@wrenyard/task'
 import { compileCompactTaskGraph } from './compile.mts'
 
 export const TASK_GRAPH_TEMPLATE_IDS = [

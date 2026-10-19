@@ -8,16 +8,17 @@ import {
   QualifiedDefinitionIdError,
 } from '../../workspace/definition-registry.mts'
 import { ForemanWorkspace } from '../../workspace/workspace.mts'
-import { validateAnyJsonValue } from '../../workspace/schema-loader.mts'
+import { validateAnyJsonValue } from '@wrenyard/task'
 import type { ListedDefinition } from '../../workspace/definition-registry.mts'
-import { readTaskRunMetadata } from './run-metadata.mts'
-import { readTaskArtifactErrors } from './artifacts.mts'
-import { resolveFeatures } from './features.mts'
+import { readTaskRunMetadata } from '@wrenyard/task'
+import { taskRunMetadataDeps } from './run-metadata-source.mts'
+import { readTaskArtifactErrors } from '@wrenyard/task'
+import { resolveFeatures } from '@wrenyard/task'
 import {
   TaskContextError,
   splitTaskInputContext,
   type TaskContext,
-} from './context.mts'
+} from '@wrenyard/task'
 
 type JsonRecord = Record<string, unknown>
 
@@ -458,7 +459,7 @@ export class TaskService {
 
     const output = row.output ?? row.execution_output ?? ''
     const parsedOutput = row.status === 'done' ? parseJsonValue(output) : undefined
-    const metadata = readTaskRunMetadata(row.id)
+    const metadata = readTaskRunMetadata(row.id, taskRunMetadataDeps)
     const artifactErrors = readTaskArtifactErrors(row.id)
     const meta = taskRowMeta(row)
     return {
@@ -694,7 +695,7 @@ function readTaskStatusRow(taskRunId: string): DbTaskStatusRow | null {
 
 function taskStatusRowToJson(row: DbTaskStatusRow): JsonRecord {
   const output = row.output ?? row.execution_output
-  const metadata = readTaskRunMetadata(row.id)
+  const metadata = readTaskRunMetadata(row.id, taskRunMetadataDeps)
   return {
     task_run_id: row.id,
     task_id: row.template,

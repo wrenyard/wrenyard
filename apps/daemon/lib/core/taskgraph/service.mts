@@ -40,7 +40,7 @@ import type { TaskGraphAutoSchemaResolver } from './materialize.mts'
 import { WorkspaceTaskContractResolver, type TaskGraphTaskContractResolver } from './task-contract-resolver.mts'
 import { buildTaskSlipNode, type TaskSlipNodeOutput } from './task-slip.mts'
 import { findTaskDefinition } from '../../workspace/definition-registry.mts'
-import { normalizeTaskContext, TaskContextError } from '../task/context.mts'
+import { normalizeTaskContext, TaskContextError } from '@wrenyard/task'
 
 export type TaskGraphServiceErrorCode =
   | 'TASKGRAPH_NOT_FOUND'

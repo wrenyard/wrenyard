@@ -1,5 +1,4 @@
-import { get as dbGet, query as dbQuery } from '../../db/connection.mts'
-import { readExecutionTpsSamples, readTaskTps, type TaskTps } from '../../events/tps.mts'
+import { REASONING_EFFORTS } from '@wrenyard/providers/catalog'
 import type {
   TaskAutoRoutingDecision,
   TaskReferencePricing,
@@ -8,8 +7,50 @@ import type {
   TaskUsage,
   TaskUsageCompleteness,
   ReasoningEffort,
-} from '../../task-run-metadata-types.mts'
-import { isReasoningEffort } from '../../task-run-metadata-types.mts'
+} from '@wrenyard/protocol'
+
+/**
+ * Structural store port supplying the two read shapes this module needs. The
+ * daemon injects its database helpers; nothing here opens a connection.
+ */
+export interface TaskRunMetadataStore {
+  get<T>(sql: string, ...params: unknown[]): T | undefined
+  query<T>(sql: string, ...params: unknown[]): T[]
+}
+
+/** One execution speed sample; mirrors only the fields projected here. */
+export interface TaskRunMetadataTpsSample {
+  taskId: string
+  outputTokens: number
+  durationMs: number
+}
+
+/** Task-level TPS aggregate; mirrors only the fields projected here. */
+export interface TaskRunMetadataTps {
+  tps: number
+  outputTokens: number
+  durationMs: number
+}
+
+/**
+ * Injected IO port for every read this module performs: SQL reads through
+ * `store`, plus the two TPS readers. Keeps the projection pure so the task
+ * package never imports daemon database or event code.
+ */
+export interface TaskRunMetadataDeps {
+  store: TaskRunMetadataStore
+  readTaskTps: (taskId: string) => TaskRunMetadataTps | undefined
+  readExecutionTpsSamples: (options: { taskIds: string[] }) => TaskRunMetadataTpsSample[]
+}
+
+/**
+ * Legal reasoning-effort guard. Kept in this module because the shared
+ * metadata vocabulary in `@wrenyard/protocol` is type-only; the level list
+ * itself comes from the provider catalog.
+ */
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value)
+}
 
 /**
  * Canonical, DB-backed projection of a task run's resolved dispatch and
@@ -76,8 +117,8 @@ interface AttemptDispatchRow {
   auto_routing: string | null
 }
 
-export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
-  const telemetry = dbGet<{ usage_event_count: number } | undefined>(
+export function readTaskRunMetadata(taskRunId: string, deps: TaskRunMetadataDeps): TaskRunResolvedUsage {
+  const telemetry = deps.store.get<{ usage_event_count: number } | undefined>(
     `SELECT usage_event_count FROM task_run_telemetry WHERE task_run_id = ?`,
     taskRunId,
   )
@@ -85,12 +126,12 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   // Build the attempt set from every execution for this task. The executions
   // table keys attempts by `id`; alias it to execution_id for a stable join
   // with usage events and dispatch snapshots.
-  const attemptRows = dbQuery<{ execution_id: string }>(
+  const attemptRows = deps.store.query<{ execution_id: string }>(
     `SELECT id AS execution_id FROM executions WHERE task_id = ? ORDER BY created_at ASC, id ASC`,
     taskRunId,
   )
 
-  const dispatchRows = dbQuery<AttemptDispatchRow>(
+  const dispatchRows = deps.store.query<AttemptDispatchRow>(
     `SELECT execution_id, requested_agent_runtime, profile, client, provider,
             model, model_id, mode, protocol,
             speed_effective_tps, speed_source, speed_sample_count,
@@ -110,16 +151,16 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
   // seq. A row is kept as a record even when its JSON or numerics are invalid,
   // so it can force coverage to incomplete rather than be silently dropped.
   const executionIds = attemptRows.map((a) => a.execution_id)
-  const gatewayByExecution = readGatewayEvidence(executionIds)
+  const gatewayByExecution = readGatewayEvidence(executionIds, deps)
   const eventsByExecution = new Map<string, TurnUsageEvent[]>()
   for (const a of attemptRows) {
     eventsByExecution.set(
       a.execution_id,
-      omitUnmeasuredInput(readExecutionEvents(a.execution_id), gatewayByExecution.get(a.execution_id)),
+      omitUnmeasuredInput(readExecutionEvents(a.execution_id, deps), gatewayByExecution.get(a.execution_id)),
     )
   }
 
-  const taskTps = readTaskTps(taskRunId)
+  const taskTps = deps.readTaskTps(taskRunId)
   return projectTaskRunMetadata({
     attemptRows,
     dispatchRows,
@@ -139,13 +180,13 @@ export function readTaskRunMetadata(taskRunId: string): TaskRunResolvedUsage {
  * projection per run. Returns a Map keyed by task run id; every requested id
  * is present, including tasks with no executions.
  */
-export function readTaskRunMetadataBatch(taskRunIds: string[]): Map<string, TaskRunResolvedUsage> {
+export function readTaskRunMetadataBatch(taskRunIds: string[], deps: TaskRunMetadataDeps): Map<string, TaskRunResolvedUsage> {
   const result = new Map<string, TaskRunResolvedUsage>()
   if (taskRunIds.length === 0) return result
   const placeholders = taskRunIds.map(() => '?').join(', ')
 
   const telemetryByTask = new Map<string, number>()
-  for (const row of dbQuery<{ task_run_id: string; usage_event_count: number }>(
+  for (const row of deps.store.query<{ task_run_id: string; usage_event_count: number }>(
     `SELECT task_run_id, usage_event_count FROM task_run_telemetry WHERE task_run_id IN (${placeholders})`,
     ...taskRunIds,
   )) {
@@ -153,7 +194,7 @@ export function readTaskRunMetadataBatch(taskRunIds: string[]): Map<string, Task
   }
 
   const attemptsByTask = new Map<string, { execution_id: string }[]>()
-  const attemptRows = dbQuery<{ execution_id: string; task_id: string }>(
+  const attemptRows = deps.store.query<{ execution_id: string; task_id: string }>(
     `SELECT id AS execution_id, task_id FROM executions WHERE task_id IN (${placeholders}) ORDER BY created_at ASC, id ASC`,
     ...taskRunIds,
   )
@@ -164,7 +205,7 @@ export function readTaskRunMetadataBatch(taskRunIds: string[]): Map<string, Task
   }
 
   const dispatchByTask = new Map<string, AttemptDispatchRow[]>()
-  for (const row of dbQuery<AttemptDispatchRow & { task_run_id: string }>(
+  for (const row of deps.store.query<AttemptDispatchRow & { task_run_id: string }>(
     `SELECT task_run_id, execution_id, requested_agent_runtime, profile, client, provider,
             model, model_id, mode, protocol,
             speed_effective_tps, speed_source, speed_sample_count,
@@ -185,11 +226,11 @@ export function readTaskRunMetadataBatch(taskRunIds: string[]): Map<string, Task
   }
 
   const executionIds = attemptRows.map((row) => row.execution_id)
-  const gatewayByExecution = readGatewayEvidence(executionIds)
+  const gatewayByExecution = readGatewayEvidence(executionIds, deps)
   const eventsByExecution = new Map<string, TurnUsageEvent[]>()
   if (executionIds.length > 0) {
     const eventPlaceholders = executionIds.map(() => '?').join(', ')
-    for (const row of dbQuery<{ execution_id: string; data: string | null }>(
+    for (const row of deps.store.query<{ execution_id: string; data: string | null }>(
       `SELECT execution_id, data FROM events WHERE execution_id IN (${eventPlaceholders}) AND type = 'turn_usage' ORDER BY seq ASC`,
       ...executionIds,
     )) {
@@ -205,9 +246,9 @@ export function readTaskRunMetadataBatch(taskRunIds: string[]): Map<string, Task
 
   // Same sum/rate semantics as readTaskTps: aggregate each task's samples and
   // keep only a finite positive tokens-per-second rate.
-  const tpsByTask = new Map<string, TaskTps>()
+  const tpsByTask = new Map<string, TaskRunMetadataTps>()
   const samplesByTask = new Map<string, { outputTokens: number; durationMs: number }>()
-  for (const sample of readExecutionTpsSamples({ taskIds: taskRunIds })) {
+  for (const sample of deps.readExecutionTpsSamples({ taskIds: taskRunIds })) {
     const totals = samplesByTask.get(sample.taskId) ?? { outputTokens: 0, durationMs: 0 }
     totals.outputTokens += sample.outputTokens
     totals.durationMs += sample.durationMs
@@ -252,11 +293,11 @@ interface GatewayEvidence {
  * (`likely(type = ...)` plus `json_extract(data, '$.data.executionId')`), so the
  * lookup stays indexed without naming the index.
  */
-function readGatewayEvidence(executionIds: string[]): Map<string, GatewayEvidence> {
+function readGatewayEvidence(executionIds: string[], deps: TaskRunMetadataDeps): Map<string, GatewayEvidence> {
   const result = new Map<string, GatewayEvidence>()
   if (executionIds.length === 0) return result
   const placeholders = executionIds.map(() => '?').join(', ')
-  for (const row of dbQuery<{ id: number; data: string | null }>(
+  for (const row of deps.store.query<{ id: number; data: string | null }>(
     `SELECT id, data FROM events
      WHERE likely(type = 'gateway.request.completed') AND json_extract(data, '$.data.executionId') IN (${placeholders})
      ORDER BY id ASC`,
@@ -344,7 +385,7 @@ function projectTaskRunMetadata(input: {
   usageEventCount: number
   eventsByExecution: Map<string, TurnUsageEvent[]>
   gatewayByExecution: Map<string, GatewayEvidence>
-  taskTps: TaskTps | undefined
+  taskTps: TaskRunMetadataTps | undefined
 }): TaskRunResolvedUsage {
   const { attemptRows, dispatchRows, usageEventCount, eventsByExecution, gatewayByExecution, taskTps } = input
   const dispatchByExecution = new Map<string, AttemptDispatchRow>()
@@ -778,8 +819,8 @@ function isDisplayableTurnUsage(event: TurnUsageEvent, eventCount: number): bool
  * whose JSON or scope is invalid is kept as an excluded record so it can force
  * coverage to incomplete rather than be silently dropped.
  */
-function readExecutionEvents(executionId: string): TurnUsageEvent[] {
-  const rows = dbQuery<{ data: string | null }>(
+function readExecutionEvents(executionId: string, deps: TaskRunMetadataDeps): TurnUsageEvent[] {
+  const rows = deps.store.query<{ data: string | null }>(
     `SELECT data FROM events WHERE execution_id = ? AND type = 'turn_usage' ORDER BY seq ASC`,
     executionId,
   )

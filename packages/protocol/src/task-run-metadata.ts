@@ -7,13 +7,8 @@
 
 export type TaskUsageCompleteness = 'complete' | 'partial' | 'unavailable'
 
-import { REASONING_EFFORTS, type ReasoningEffort } from '@wrenyard/providers/catalog'
-export type { ReasoningEffort } from '@wrenyard/providers/catalog'
-export { REASONING_EFFORTS } from '@wrenyard/providers/catalog'
-
-export function isReasoningEffort(value: unknown): value is ReasoningEffort {
-  return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value)
-}
+import type { ReasoningEffort } from '@wrenyard/models'
+export type { ReasoningEffort } from '@wrenyard/models'
 
 export interface TaskResolvedSpeed {
   effective_tps: number

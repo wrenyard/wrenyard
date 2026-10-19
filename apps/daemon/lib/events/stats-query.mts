@@ -1,7 +1,8 @@
 import { get as dbGet, query as dbQuery } from '../db/connection.mts'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
 import { MAX_STATS_SUMMARY_DAYS } from '../protocol/methods/stats.mts'
-import { readTaskRunMetadataBatch } from '../core/task/run-metadata.mts'
+import { readTaskRunMetadataBatch, toTaskRunRecord } from '@wrenyard/task'
+import { taskRunMetadataDeps } from '../core/task/run-metadata-source.mts'
 import { estimateTps, readCachedExecutionTpsSamples, type ExecutionTpsSample } from './tps.mts'
 import type {
   StatsTodayItem,
@@ -589,9 +590,11 @@ function readRecentTaskRunLedger(
     definition_source: string | null
     started_at: string | null
     resolved_profile: string | null
+    summary: string | null
   }>(
     `SELECT t.id AS id, t.template AS template, t.project AS project, t.status AS status,
             t.created_at AS created_at, t.ended_at AS ended_at, t.definition_source AS definition_source,
+            t.summary AS summary,
             ex.started_at AS started_at,
             exe.resolved_profile AS resolved_profile
      FROM tasks t
@@ -603,10 +606,26 @@ function readRecentTaskRunLedger(
     recentLimit,
   )
 
-  const metadataById = readTaskRunMetadataBatch(rows.map((row) => row.id))
+  const metadataById = readTaskRunMetadataBatch(rows.map((row) => row.id), taskRunMetadataDeps)
 
   return rows.map((row) => {
     const meta = metadataById.get(row.id) ?? { usage: { completeness: 'unavailable' as const, attempt_count: 0, usage_event_count: 0, reference_cost_complete: false } }
+    // Shared run-record projection of the same row. Built alongside the ledger
+    // row and not emitted on the wire yet: the recentRuns shape is unchanged.
+    const runRecord = toTaskRunRecord({
+      id: row.id,
+      taskId: row.id,
+      status: row.status,
+      timing: {
+        createdAt: row.created_at,
+        startedAt: row.started_at ?? undefined,
+        finishedAt: row.ended_at ?? undefined,
+      },
+      usage: meta.usage,
+      resolved: meta.resolved,
+      summary: row.summary ?? undefined,
+    })
+    void runRecord
     const ledger: TaskRunLedgerRow = {
       task_run_id: row.id,
       task: normalizeTaskName(row.template),

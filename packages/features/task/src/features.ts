@@ -1,4 +1,4 @@
-import type { TaskFeatureConfig } from './types.mts'
+import type { TaskFeatureConfig } from './types.ts'
 
 /**
  * Resolve selected feature ids from a TaskFeatureConfig.

@@ -19,10 +19,10 @@ import {
   assertValidTimeoutMs,
   effectiveTaskTimeoutMs,
   type TaskTimeoutScope,
-} from '../task-timeouts.mts'
+} from '@wrenyard/task'
 import { installRuntimeGlobals } from '../daemon/execution/runtime-globals.mts'
-import { generateInputExample, normalizeSchema } from './schema-loader.mts'
-import { getTaskPromptTemplates, withTaskPromptTemplates } from '../core/task/prompt-template.mts'
+import { generateInputExample, normalizeSchema } from '@wrenyard/task'
+import { getTaskPromptTemplates, withTaskPromptTemplates } from '@wrenyard/task'
 import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier, normalizeReasoningEffort } from '@wrenyard/providers/catalog'
 import {
   BUILTIN_SOURCE_PATH,
