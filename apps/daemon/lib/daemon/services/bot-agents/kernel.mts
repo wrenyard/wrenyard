@@ -33,6 +33,7 @@ import {
   type WorkspaceMemoryPort,
 } from '@wrenyard/session'
 import type { RoutineRecord } from '../../../protocol/methods/routine.mts'
+import type { Scheduler } from '../scheduler.mts'
 import type { WorkspaceTodoService } from '../workspace-todo-service.mts'
 import {
   assertBotIdAvailable,
@@ -248,6 +249,8 @@ export interface CreateBotAgentKernelOptions {
    * mean the bot has no routines directory on this device yet.
    */
   syncRoutines?: (botId: string, routines: readonly RoutineDefinition[] | undefined, routinesDir: string) => void
+  /** The routine store, read for each routine's last-run value in the kernel facts. */
+  routines?: Pick<Scheduler, 'lastRunAt'>
   /** `<state root>/bot-agents/<sha256(workspaceRoot)>`: state and bot ledgers. */
   stateDir: string
   /** The daemon session host; the kernel derives its private bot host from it. */
@@ -734,9 +737,9 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
   /**
    * Verbatim kernel facts appended to a bot's context after compaction: the
-   * sessions it watches with their todos and the enabled roster. Routines live
-   * only in the device store and are not part of a definition. Undefined when
-   * every section would be empty.
+   * sessions it watches with their todos, its routines on this device with
+   * their last-run timestamps, and the enabled roster. Undefined when every
+   * section would be empty.
    */
   function kernelFactsFor(entry: BotAgentEntry): string | undefined {
     const sections: string[] = []
@@ -747,6 +750,16 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         ...watches.map(watch => `- ${watch.sessionId}${
           watch.todoIds === undefined || watch.todoIds.length === 0 ? '' : ` (todos: ${watch.todoIds.join(', ')})`
         }`),
+      ].join('\n'))
+    }
+    if (entry.routines !== undefined && entry.routines.length > 0) {
+      const lastRunAt = options.routines?.lastRunAt(entry.id)
+      sections.push([
+        '## routines',
+        ...entry.routines.map(routine => {
+          const lastRun = lastRunAt?.get(routine.id)
+          return `- ${routine.id}${routine.name === undefined ? '' : ` (${routine.name})`}: every ${routine.intervalMinutes} min; last run ${lastRun ?? 'unavailable'}`
+        }),
       ].join('\n'))
     }
     const peers: BotAgentEntry[] = []

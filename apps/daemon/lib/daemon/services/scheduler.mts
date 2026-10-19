@@ -90,6 +90,8 @@ export interface Scheduler {
    * as files once, so nothing is lost on the move to files.
    */
   sync(botId: string, definitions: readonly RoutineDefinition[] | undefined): void
+  /** One bot's recorded last-run timestamps, by routine id. */
+  lastRunAt(botId: string): ReadonlyMap<string, string>
 }
 
 interface SchedulerStateFile {
@@ -561,6 +563,13 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     sync(botId: string, files: readonly RoutineDefinition[] | undefined): void {
       definitions.set(botId, files)
       if (prepared && !stopped) applyDefinitions(botId, files)
+    },
+    lastRunAt(botId: string): ReadonlyMap<string, string> {
+      const runs = new Map<string, string>()
+      for (const record of routines) {
+        if (record.botId === botId && record.lastRunAt !== undefined) runs.set(record.id, record.lastRunAt)
+      }
+      return runs
     },
   }
 }

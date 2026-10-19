@@ -1354,6 +1354,7 @@ async function createForemanDaemonResources(
       workspaceBotsDir: join(workspaceRoot, 'bots'),
       deviceBotsDir,
       syncRoutines: (botId, routines) => scheduler.sync(botId, routines),
+      routines: scheduler,
       stateDir: join(sessionStateRoot, 'bot-agents', sha256hex(workspaceRoot)),
       host: daemonSessionHost,
       sessions: session,
