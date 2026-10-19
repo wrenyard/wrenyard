@@ -1313,7 +1313,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     if (item.sessionId === undefined) throw new Error('item has no session for a follow-up')
     const model = resolveSendModel(bot, item, config)
     if (model === undefined) throw new Error('no routed model is available for the follow-up')
-    const result = await session.send(item.sessionId, { text, model })
+    const result = await session.send(item.sessionId, { text, model, sender: { botId: bot.id } })
     store.patchItem(item.id, { sessionModel: model })
     return result
   }
@@ -2073,7 +2073,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       if (model === undefined) throw new Error('no routed model is available for this item')
       const context = await dispatchContext(config, item, dryRun)
       const text = options.buildBrief?.(item, step) ?? dispatchBrief(item, step, context)
-      const result = await session.send(item.sessionId, { text, model })
+      const result = await session.send(item.sessionId, { text, model, sender: { botId: bot.id } })
       // Dispatch starts execution, so a native workspace todo becomes
       // `in_progress`. A dry run records the would-be status instead of touching
       // the file.

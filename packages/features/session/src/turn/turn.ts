@@ -313,6 +313,7 @@ export class TurnRunner {
                 model: turn.model.model,
                 reasoningEffort: turn.model.reasoningEffort,
                 fast: turn.model.fast,
+                ...(turn.model.automatic === true ? { automatic: true } : {}),
               },
               maxTokens: maxOutputTokens,
             });
@@ -387,6 +388,7 @@ export class TurnRunner {
         model: turn.model.model,
         reasoningEffort: turn.model.reasoningEffort,
         fast: turn.model.fast,
+        ...(turn.model.automatic === true ? { automatic: true } : {}),
       },
       ...(maxTokens === undefined ? {} : { maxTokens }),
       // The bounded-recovery wait lifecycle: record the observational waiting

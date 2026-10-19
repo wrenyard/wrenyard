@@ -1,5 +1,5 @@
 import { createRoutingAvailability, createAuxiliaryAvailability } from './services/model-routing-availability.mts'
-import { createAuxiliarySelector, selectRoutesByRequirementKey, type SelectorInputPort } from '@wrenyard/auto-routing'
+import { createAuxiliarySelector, excludedModelIdsFor, selectRoutesByRequirementKey, type SelectorInputPort } from '@wrenyard/auto-routing'
 import { readAuxiliaryRoutingSettings } from '../config/task-settings.mts'
 import { timingSafeEqual, randomBytes, createHash } from 'node:crypto'
 import { appendFileSync, mkdirSync } from 'node:fs'
@@ -1265,6 +1265,20 @@ async function createForemanDaemonResources(
       reportRouteFault: (publicModel, attemptId, kind) => gateway.reportRouteFault(publicModel, attemptId, kind),
       completeRouteAttempt: (publicModel, attemptId) => gateway.completeRouteAttempt(publicModel, attemptId),
       selectAuxiliary: createAuxiliarySelector(auxiliaryRoutingOptions),
+      // A bot-originated turn may move down the same ranked ladder the bot
+      // selects from, and an open wait must observe routing.exclude even when
+      // the Gateway has no fault state for the route.
+      selectBotRoutes: async () => selectModels(),
+      isRouteExcluded: (model: string) => {
+        const settings = readAuxiliaryRoutingSettings(authoritativeConfigPath)
+        const separator = model.indexOf('/')
+        if (separator <= 0) return false
+        const provider = model.slice(0, separator)
+        const modelId = model.slice(separator + 1)
+        if ((settings?.exclude?.providers ?? []).includes(provider)) return true
+        const excludedModels = settings?.exclude?.models ?? []
+        return excludedModelIdsFor(catalog.provider(provider), excludedModels).has(modelId)
+      },
       // The session's main inference validates against the same product-wired
       // catalog already injected into the gateway/provider.list surface, so a
       // CodeBuddy model is only offered after the daemon read the real install.

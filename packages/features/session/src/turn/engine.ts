@@ -64,6 +64,13 @@ export function createEngine(host: SessionHost, ports: EnginePorts): Session {
   return new Engine(host, ports);
 }
 
+/**
+ * Every engine alive in this process. A bot context owns a private engine (its
+ * own state root), so an interrupt addressed to the daemon session service must
+ * be able to find and stop a turn owned by one of those engines.
+ */
+const liveEngines = new Set<Engine>();
+
 class Engine implements Session, SessionCallHost {
   readonly host: SessionHost;
   readonly ports: EnginePorts;
@@ -212,6 +219,7 @@ class Engine implements Session, SessionCallHost {
     // enough that nothing can still be working on it.
     this.idleTimer = setInterval(() => this.sweepIdleSessions(), IDLE_RUNTIME_SWEEP_MS);
     this.idleTimer.unref();
+    liveEngines.add(this);
   }
 
   get ledger(): LedgerPort {
@@ -598,10 +606,17 @@ class Engine implements Session, SessionCallHost {
     const admitted = registeredModel === input.model.model
       ? input
       : { ...input, model: { ...input.model, model: registeredModel } };
-    const model = `${admitted.model.provider}/${admitted.model.model}`;
-    const effort = admitted.model.reasoningEffort;
-    const fast = admitted.model.fast;
-    const attachmentsKey = attachmentKey(admitted.attachments);
+    // Bot provenance: an explicit sender, or a host that binds this session to a
+    // bot tool port. The model of such a turn came from automatic routing and
+    // may be replaced within the turn when its route becomes unusable.
+    const automatic = admitted.sender !== undefined || this.host.agentTools?.(sessionId) !== undefined;
+    const modelInput = automatic
+      ? { ...admitted, model: { ...admitted.model, automatic: true } }
+      : admitted;
+    const model = `${modelInput.model.provider}/${modelInput.model.model}`;
+    const effort = modelInput.model.reasoningEffort;
+    const fast = modelInput.model.fast;
+    const attachmentsKey = attachmentKey(modelInput.attachments);
 
     // A turn already waiting for recovery owns the exchange: a repeated continue
     // of the same selected model, effort and Fast preference — or a double
@@ -614,7 +629,7 @@ class Engine implements Session, SessionCallHost {
     if (waiting !== undefined
       && waiting.model === model
       && waiting.effort === effort
-      && this.isWaitingResubmission(sessionId, waiting, admitted.text, attachmentsKey, fast)) {
+      && this.isWaitingResubmission(sessionId, waiting, modelInput.text, attachmentsKey, fast)) {
       return { turn: waiting.turn };
     }
 
@@ -627,7 +642,7 @@ class Engine implements Session, SessionCallHost {
       && pending.model === model
       && pending.effort === effort
       && pending.fast === fast
-      && pending.text === admitted.text
+      && pending.text === modelInput.text
       && pending.attachmentsKey === attachmentsKey) {
       return pending.result;
     }
@@ -642,8 +657,8 @@ class Engine implements Session, SessionCallHost {
       this.clearRestartContinuation(sessionId);
     }
 
-    const result = this.admitTurn(sessionId, admitted, model, resumedFrom);
-    this.pendingSends.set(sessionId, { model, effort, fast, text: admitted.text, attachmentsKey, result });
+    const result = this.admitTurn(sessionId, modelInput, model, resumedFrom);
+    this.pendingSends.set(sessionId, { model, effort, fast, text: modelInput.text, attachmentsKey, result });
     try {
       return await result;
     } finally {
@@ -873,12 +888,41 @@ class Engine implements Session, SessionCallHost {
 
   async interrupt(sessionId: string, turn: number): Promise<void> {
     this.assertOpen();
+    // A session may belong to another engine in this process — a bot dispatcher
+    // or a bot-opened context runs on its own ledger root. Forward the
+    // interrupt to its owner so a stuck bot turn is stoppable too. An id this
+    // process does not own at all still takes the local path and reports the
+    // same unknown-session failure as before.
+    const owner = this.interruptOwner(sessionId);
+    if (owner !== this) {
+      await owner.interrupt(sessionId, turn);
+      return;
+    }
     // The user-interrupt clear itself runs synchronously inside `interruptTurn`
     // before its first await, so it cancels a pending continuation before any
     // recovery pass can admit it.
     const operation = this.interruptTurn(sessionId, turn, 'user');
     this.track(operation);
     await operation;
+  }
+
+  /** The live engine whose ledger owns a session; this one when it cannot tell. */
+  private interruptOwner(sessionId: string): Engine {
+    if (this.ownsSession(sessionId)) return this;
+    for (const engine of liveEngines) {
+      if (engine === this || engine.closed) continue;
+      if (engine.ownsSession(sessionId)) return engine;
+    }
+    return this;
+  }
+
+  /** True when this engine's ledger is the authority for the session id. */
+  private ownsSession(sessionId: string): boolean {
+    // A session deleted in this process must never be resurrected in another
+    // engine that happens to have a stale ledger entry.
+    if (this.deletedSessions.has(sessionId)) return true;
+    if (this.sessions.has(sessionId)) return true;
+    return this.ports.ledger.listSessions().some((entry) => entry.sessionId === sessionId);
   }
 
   async readMedia(sessionId: string, path: string): Promise<{ path: string; mime: string; dataUrl?: string }> {
@@ -1283,6 +1327,7 @@ class Engine implements Session, SessionCallHost {
       await Promise.allSettled([...this.pipeline]);
     }
     this.live.clear();
+    liveEngines.delete(this);
     await this.ports.ledger.close();
   }
 

@@ -120,6 +120,12 @@ export interface TurnModel {
    * or effective value is never recorded here.
    */
   fast?: boolean;
+  /**
+   * True when automatic routing chose this model (a bot dispatcher or a session
+   * a bot opened). Such a turn may move to another automatic route within the
+   * same turn; absent means the model was hand-picked and is never substituted.
+   */
+  automatic?: boolean;
 }
 
 export interface TaskBrief {

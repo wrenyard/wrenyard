@@ -1381,7 +1381,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       }
     }
     try {
-      const { turn } = await contextSession().send(newSessionId, { text: lines.join('\n'), model: route })
+      const { turn } = await contextSession().send(newSessionId, { text: lines.join('\n'), model: route, sender: { botId } })
       seedTurns.add(turnKey(newSessionId, turn))
       await new Promise<void>(resolve => {
         const settle = (): void => {
@@ -1604,7 +1604,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       if (stopped) return
       subscribeGroupReplies(botId, sessionId)
       holdModel(botId, route)
-      const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route })
+      const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route, sender: { botId } })
       removePendingWake(botId, wake.id)
       recordRoundTurn(wake, sessionId, turn)
       if (wake.round !== undefined) removeRoundTurn(wake.round, sessionId, failedTurn)
@@ -1627,7 +1627,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   ): Promise<void> {
     subscribeGroupReplies(botId, sessionId)
     holdModel(botId, route)
-    const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route })
+    const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route, sender: { botId } })
     removePendingWake(botId, wake.id)
     recordRoundTurn(wake, sessionId, turn)
     persist()

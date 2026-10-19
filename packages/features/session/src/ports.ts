@@ -79,6 +79,13 @@ export interface SessionHost {
     role: import('./model/roles.ts').AuxiliaryCallRole,
     input?: { toolChoice?: ToolChoice },
   ): Promise<readonly import('./model/request.ts').AuxiliaryRoute[]>;
+  /**
+   * The automatic quota-state ladder for bot-originated reasoning turns, best
+   * first. Optional: a host without it keeps the single selected route.
+   */
+  selectBotRoutes?(): Promise<readonly { provider: string; model: string; reasoningEffort: ReasoningEffort }[]>;
+  /** Whether routing.exclude currently names a `provider/model` route. */
+  isRouteExcluded?(model: string): boolean;
   /** Read-only, per-role rank-1 auxiliary route preview; never calls a model. */
   previewAuxiliaryRoutes(): Promise<readonly import('./model/roles.ts').AuxiliaryRoutePreview[]>;
   listProjects(): Promise<ProjectInfo[]>;

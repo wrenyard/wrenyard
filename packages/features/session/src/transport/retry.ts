@@ -60,6 +60,32 @@ const MAX_TIMER_MS = 2_147_483_647;
 const JITTER_MIN = 0.75;
 const JITTER_MAX = 1.0;
 
+/**
+ * Why a held route must be replaced by the caller instead of waited for: its
+ * quota is exhausted until a known reset, or routing.exclude now names it.
+ */
+export type RouteReselectReason = 'quota_exhausted' | 'excluded';
+
+/**
+ * The held route cannot be used any more and the caller can select another one
+ * within the same turn. It is raised instead of sleeping until a quota reset and
+ * as soon as an open wait observes that its route became excluded.
+ */
+export class RouteReselectError extends Error {
+  readonly reason: RouteReselectReason;
+  /** The route's real reset instant, when the quota exhaustion named one. */
+  readonly retryAt?: string;
+
+  constructor(reason: RouteReselectReason, retryAt?: string) {
+    super(reason === 'excluded'
+      ? 'Route is excluded from automatic selection'
+      : 'Route quota is exhausted');
+    this.name = 'RouteReselectError';
+    this.reason = reason;
+    if (retryAt !== undefined) this.retryAt = retryAt;
+  }
+}
+
 /** One retry the transport decided to make. */
 export interface RetryDecision {
   /** 1-based retry ordinal. */
@@ -108,6 +134,14 @@ export interface RetryContext {
    * owner. Cancellation, not `outputStarted`, gates it.
    */
   preflight?: () => ModelPreflightResult | undefined;
+  /**
+   * True when the caller can replace the held route within the same turn — an
+   * automatically selected model. A quota exhaustion with a known reset then
+   * raises {@link RouteReselectError} at once instead of sleeping until the
+   * reset, so the caller can move to the next ranked route. Absent or false
+   * keeps the wait-for-reset behaviour of a user-chosen model.
+   */
+  reselect?: boolean;
 }
 
 /**
@@ -164,6 +198,11 @@ function advertisedNotBeforeMs(failure: ModelError, now: () => number): number |
   return undefined;
 }
 
+/** One real instant as the ISO string a caller may surface or compare. */
+function instantOf(ms: number): string {
+  return new Date(ms).toISOString();
+}
+
 /** One recovery wait, owned by the single retry loop. */
 interface RecoveryWait {
   attempt: number;
@@ -215,6 +254,9 @@ async function waitForRecovery(wait: RecoveryWait, context: RetryContext, now: (
   // probe and never a published fallback ETA.
   if (untilMs === undefined) {
     await waitChunk(MIN_RECOVERY_DELAY_MS, context.signal);
+    // An open wait must notice an exclusion that landed while it slept, even
+    // when it had no known instant to re-read.
+    if (context.preflight?.()?.excluded === true) throw new RouteReselectError('excluded');
     return;
   }
   for (;;) {
@@ -223,8 +265,17 @@ async function waitForRecovery(wait: RecoveryWait, context: RetryContext, now: (
     await waitChunk(Math.min(remaining, RECOVERY_RECHECK_MS), context.signal);
     // A local read only: nothing is sent upstream before the due instant.
     if (context.preflight === undefined) continue;
+    const current = context.preflight();
+    // The route left automatic selection while this wait was open: give up and
+    // let the caller re-select instead of sleeping on a route it may not use.
+    if (current?.excluded === true) throw new RouteReselectError('excluded');
+    // A quota exhaustion that appeared during an admission wait is not waited
+    // out for an automatically selected route.
+    if (current?.final !== undefined && context.reselect === true) {
+      throw new RouteReselectError('quota_exhausted', instantOf(current.notBeforeMs));
+    }
     // The wait only ever extends: a later block moves it, nothing else wakes it early.
-    const observed = context.preflight()?.notBeforeMs;
+    const observed = current?.notBeforeMs;
     if (observed === undefined || observed <= untilMs) continue;
     untilMs = observed;
     publish(observed, false);
@@ -256,7 +307,15 @@ export async function runWithRetry<T>(run: () => Promise<T>, context: RetryConte
     // cooldown is waited out in the same loop instead of probed early and
     // rejected by the Gateway. One wait owner; no nested retry loop.
     const preflight = context.preflight?.();
+    // routing.exclude is authoritative for an open wait too: a route the user
+    // or the coordinator excluded is never waited for.
+    if (preflight?.excluded === true) throw new RouteReselectError('excluded');
     if (preflight?.final !== undefined) {
+      // A user-chosen model keeps the existing end-of-turn behaviour. An
+      // automatically selected route is handed back for re-selection at once.
+      if (context.reselect === true) {
+        throw new RouteReselectError('quota_exhausted', instantOf(preflight.notBeforeMs));
+      }
       throw new ModelError(preflight.final, { kind: 'quota_exhausted', source: 'admission', retryAt: new Date(preflight.notBeforeMs).toISOString() });
     }
     const blockedUntil = preflight?.notBeforeMs;

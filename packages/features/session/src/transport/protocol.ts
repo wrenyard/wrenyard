@@ -150,7 +150,7 @@ export type ModelWaitReason = 'admission' | 'recovery' | 'quota_exhausted';
  * again. `final` is set when the call must not be sent or waited for at all (an
  * exhausted quota with a stated reset) and is the reason the turn ends with.
  */
-export type ModelPreflightResult = { notBeforeMs: number; faultState?: string; final?: string };
+export type ModelPreflightResult = { notBeforeMs: number; faultState?: string; final?: string; excluded?: boolean };
 
 /** Request attribution metadata; never sent to the supplier. */
 export interface ModelAttribution {
@@ -209,6 +209,11 @@ export interface ModelRequest {
    * a route known to be cooling down is not probed early.
    */
   preflight?: () => ModelPreflightResult | undefined;
+  /**
+   * True when the caller can replace the route within the same turn, so an
+   * exhausted quota or an exclusion is surfaced instead of waited for.
+   */
+  reselect?: boolean;
   signal: AbortSignal;
   /** Called for every event of the call, in arrival order. */
   onEvent?: (event: ModelEvent) => void;

@@ -9,9 +9,10 @@
  * never repairs schemas — those belong to `actions.ts` / `engine.ts`.
  *
  * The transport owns the only same-route retry and the protocol adapters. The
- * runner performs no failover: the main reasoning call keeps the user's model,
- * and an auxiliary call keeps the one route it selected after skipping blocked
- * routes, failing on the selected route instead of switching to another.
+ * runner performs no failover for a user-chosen model; an auxiliary call keeps
+ * the one route it selected after skipping blocked routes. A main reasoning
+ * turn whose model was selected automatically may move to the next ranked
+ * automatic route when the held route is exhausted or excluded.
  */
 import { randomUUID } from 'node:crypto';
 import { getEncoding } from 'js-tiktoken';
@@ -20,6 +21,7 @@ import { PROVIDER_DEFAULT_REASONING, type ReasoningEffort } from '@wrenyard/mode
 import {
   abortError,
   isContextOverflowError,
+  RouteReselectError,
   type ModelContentPart,
   type ModelErrorKind,
   type ModelAttempt,
@@ -121,6 +123,12 @@ export interface ReasonSelection {
   reasoningEffort: ReasoningEffort;
   /** Explicit Fast preference: true on, false off, absent no preference. */
   fast?: boolean;
+  /**
+   * True when automatic routing selected this model (a bot dispatcher turn or a
+   * session a bot opened). Such a turn may move to the next ranked route within
+   * the same turn; a hand-picked model keeps its wait-for-reset behaviour.
+   */
+  automatic?: boolean;
 }
 
 /** Structured failure fact recorded on a failed span and handed to reply. */
@@ -245,6 +253,15 @@ export interface CallRunnerOptions {
     role: AuxiliaryCallRole,
     input?: { toolChoice?: ToolChoice },
   ) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
+  /**
+   * The automatic quota-state ladder for the `reason` role, best first. Used
+   * only when the turn's model was selected automatically, to move to the next
+   * ranked route after the held one is exhausted or excluded. Absent keeps the
+   * single explicit route.
+   */
+  selectAutomaticRoutes?: () => readonly ReasonSelection[] | Promise<readonly ReasonSelection[]>;
+  /** Whether routing.exclude currently names a `provider/model` route. */
+  isRouteExcluded?: (model: string) => boolean;
   /** Structural sink: the span events of every attempted invocation, in order. */
   append: (event: SpanEventDraft) => void | Promise<void>;
   /** Forwarded as the request cache key on every call of this runner. */
@@ -844,6 +861,19 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         return health?.until;
       };
       /**
+       * Route health handed to the transport for one main reasoning attempt. An
+       * excluded route is reported as unusable so an open wait gives up and the
+       * turn can re-select, even when the Gateway has no fault state for it.
+       */
+      const reasoningPreflight = (routeModel: string): ModelPreflightResult | undefined => {
+        if (options.isRouteExcluded?.(routeModel) === true) {
+          return { notBeforeMs: Number.MAX_SAFE_INTEGER, excluded: true };
+        }
+        return options.routeStatus === undefined
+          ? undefined
+          : routeNotBeforeMs(routeModel, options.routeStatus(routeModel), Date.now());
+      };
+      /**
        * The failure detail of one auxiliary exhaustion: every attempt tried so
        * far, the route's own retry instant, and the kind of the last real
        * failure. A user cancellation is neutral — it is `aborted` and carries no
@@ -1129,6 +1159,139 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         return await fail(message, auxiliaryFailure(message, earliestRetry, classification));
       };
 
+      /**
+       * One main reasoning turn. A user-chosen model keeps its one route: an
+       * exhausted quota ends the turn and is never substituted. When automatic
+       * routing chose the model, an exhausted or excluded route is left at once
+       * and the same turn continues on the next ranked route of the automatic
+       * ladder; when no candidate remains it fails with `no_route` instead of
+       * waiting for a reset.
+       */
+      const runReasoning = async (): Promise<ModelResult> => {
+        const first = input.reason!;
+        const automatic = first.automatic === true;
+        // The ladder is read only when a reselect really happens, so an ordinary
+        // step never pays for a routing query.
+        const candidates: ReasonSelection[] = [first];
+        let ladderLoaded = false;
+        const addLadder = async (): Promise<void> => {
+          if (ladderLoaded || !automatic || options.selectAutomaticRoutes === undefined) return;
+          ladderLoaded = true;
+          let ladder: readonly ReasonSelection[];
+          try {
+            ladder = await settleWithAbort(options.selectAutomaticRoutes(), controller.signal);
+          } catch (error) {
+            // A cancellation still wins; a routing failure with no ladder just
+            // leaves the turn with no candidate, which fails as `no_route`.
+            if (controller.signal.aborted) throw error;
+            return;
+          }
+          for (const candidate of ladder) {
+            const key = routeKeyOf(candidate.provider, candidate.model);
+            if (candidates.some((known) => routeKeyOf(known.provider, known.model) === key)) continue;
+            candidates.push(candidate);
+          }
+        };
+
+        let started = false;
+        let earliestRetry: string | undefined;
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index]!;
+          const candidateModel = routeKeyOf(candidate.provider, candidate.model);
+          // A later ladder route is skipped when routing already knows it is
+          // exhausted, cooling down or excluded; it never spends the turn.
+          if (candidate !== first) {
+            if (options.isRouteExcluded?.(candidateModel) === true) continue;
+            const health = options.routeStatus?.(candidateModel);
+            if (health?.phase === 'open') {
+              earliestRetry = earliest(earliestRetry, health.until);
+              continue;
+            }
+          }
+          const budget = checkContextBudget(candidateModel, messages, options.resolveProvider, maxTokens);
+          // A route whose whole ladder is the provider-default sentinel has no
+          // selectable level: it accepts any requested effort and is sent at its
+          // own default. Every other route keeps the exact support check.
+          const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
+          if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, candidate.reasoningEffort)) {
+            if (candidate === first) {
+              return await fail(`Model ${candidateModel} does not support reasoning effort "${candidate.reasoningEffort ?? ''}"`);
+            }
+            continue;
+          }
+          if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
+          model = candidateModel;
+          estimatedInputTokens = budget.estimatedInputTokens;
+          actualReasoningEffort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : candidate.reasoningEffort;
+          const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
+          if (!started) {
+            started = true;
+            requestedReasoningEffort = candidate.reasoningEffort;
+            await options.append({
+              type: 'span.started',
+              id: input.spanId,
+              parent: input.parent,
+              kind: spanKind,
+              ...(input.turn === undefined ? {} : { turn: input.turn }),
+              ...(input.step === undefined ? {} : { step: input.step }),
+              request: {
+                model,
+                effort: {
+                  ...(requestedReasoningEffort === undefined ? {} : { requested: requestedReasoningEffort }),
+                  ...(actualReasoningEffort === undefined ? {} : { sent: actualReasoningEffort }),
+                },
+                inputEstimate: estimatedInputTokens,
+                layers: input.layers,
+              },
+            });
+          }
+          try {
+            return await settleWithAbort(options.transport.complete({
+              model: candidateModel,
+              messages,
+              reasoningEffort: actualReasoningEffort,
+              // The main reasoning path carries the user's explicit Fast
+              // preference, including an explicit false; an absent preference
+              // sends no field at all. Auxiliary requests never set it.
+              ...(candidate.fast === undefined ? {} : { fast: candidate.fast }),
+              attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
+              ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
+              ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
+              ...(input.tools === undefined ? {} : { tools: input.tools }),
+              ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
+              // Known route health — including a live routing.exclude — is handed
+              // to the transport so a blocked route is waited out or replaced in
+              // the one retry loop; the Gateway stays the atomic admission
+              // authority for races.
+              ...(options.routeStatus === undefined && options.isRouteExcluded === undefined
+                ? {}
+                : { preflight: () => reasoningPreflight(candidateModel) }),
+              // An automatically selected turn can replace the route within this
+              // same turn; a user-chosen model keeps its wait-for-reset behaviour.
+              ...(automatic ? { reselect: true } : {}),
+              signal: controller.signal,
+              onEvent,
+            }), controller.signal);
+          } catch (error) {
+            // Only the held route being unusable lets an automatic turn move on;
+            // every other failure stays terminal for the turn.
+            if (!automatic || !(error instanceof RouteReselectError)) throw error;
+            earliestRetry = earliest(earliestRetry, error.retryAt);
+            await addLadder();
+          }
+        }
+
+        const message = `no_route: every automatic reasoning route is exhausted, excluded or cooling down${
+          earliestRetry === undefined ? '' : `; earliest retry ${earliestRetry}`}`;
+        return await fail(message, {
+          error: {
+            kind: 'model_unavailable',
+            message,
+            ...(earliestRetry === undefined ? {} : { retryAt: earliestRetry }),
+          },
+        });
+      };
+
       try {
         if (input.role === 'reason') {
           const selection = input.reason;
@@ -1153,61 +1316,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         }
 
         if (input.role === 'reason') {
-          // The main reasoning call is explicit and never switches routes.
-          const selection = input.reason!;
-          const budget = checkContextBudget(model, messages, options.resolveProvider, maxTokens);
-          estimatedInputTokens = budget.estimatedInputTokens;
-          const requestMaxOutputTokens = budget.requestMaxOutputTokens ?? maxTokens;
-          // A route whose whole ladder is the provider-default sentinel has no
-          // selectable level: it accepts any requested effort and is sent at its
-          // own default. Every other route keeps the exact support check.
-          const providerDefaultOnly = isProviderDefaultReasoningOnly(budget.metadata);
-          if (!providerDefaultOnly && !isReasoningEffortSupported(budget.metadata, selection.reasoningEffort)) {
-            return await fail(`Model ${model} does not support reasoning effort "${selection.reasoningEffort ?? ''}"`);
-          }
-          actualReasoningEffort = providerDefaultOnly ? PROVIDER_DEFAULT_REASONING : selection.reasoningEffort;
-          if (!budget.ok) return await fail(`context_overflow: ${budget.reason}`);
-          await options.append({
-            type: 'span.started',
-            id: input.spanId,
-            parent: input.parent,
-            kind: spanKind,
-            ...(input.turn === undefined ? {} : { turn: input.turn }),
-            ...(input.step === undefined ? {} : { step: input.step }),
-            request: {
-              model,
-              effort: {
-                ...(requestedReasoningEffort === undefined ? {} : { requested: requestedReasoningEffort }),
-                ...(actualReasoningEffort === undefined ? {} : { sent: actualReasoningEffort }),
-              },
-              inputEstimate: estimatedInputTokens,
-              layers: input.layers,
-            },
-          });
-          result = await settleWithAbort(options.transport.complete({
-            model,
-            messages,
-            reasoningEffort: actualReasoningEffort,
-            // The main reasoning path carries the user's explicit Fast
-            // preference, including an explicit false; an absent preference
-            // sends no field at all. Auxiliary requests never set it.
-            ...(selection.fast === undefined ? {} : { fast: selection.fast }),
-            attribution: { role: input.role, ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }) },
-            ...(options.cacheKey === undefined ? {} : { cacheKey: options.cacheKey }),
-            ...(requestMaxOutputTokens === undefined ? {} : { maxOutputTokens: requestMaxOutputTokens }),
-            ...(input.tools === undefined ? {} : { tools: input.tools }),
-            ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
-            // The main reasoning route is the user's explicit selection and is
-            // never substituted. Its known route health is handed to the
-            // transport so a cooling-down route is waited out inside the one
-            // retry budget rather than probed early; the Gateway stays the
-            // atomic admission authority for races.
-            ...(options.routeStatus === undefined
-              ? {}
-              : { preflight: () => routeNotBeforeMs(model, options.routeStatus!(model), Date.now()) }),
-            signal: controller.signal,
-            onEvent,
-          }), controller.signal);
+          result = await runReasoning();
         } else {
           result = await runAuxiliary();
         }

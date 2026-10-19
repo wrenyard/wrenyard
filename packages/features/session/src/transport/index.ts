@@ -81,7 +81,7 @@ export {
   retryAfterMsFromHeaders,
   shouldRetryFromHeaders,
 } from './errors.ts';
-export { MAX_RETRIES, BASE_DELAY_MS, MIN_RECOVERY_DELAY_MS, isRetryable, retryDelayMs, runWithRetry, type RetryDecision, type RetryContext } from './retry.ts';
+export { MAX_RETRIES, BASE_DELAY_MS, MIN_RECOVERY_DELAY_MS, isRetryable, retryDelayMs, runWithRetry, RouteReselectError, type RetryDecision, type RetryContext, type RouteReselectReason } from './retry.ts';
 
 const ADAPTERS: Readonly<Record<SessionProtocol, ProtocolAdapter>> = {
   openai_chat: chatAdapter,
@@ -259,6 +259,7 @@ export function createModelTransport(options: ModelTransportOptions): ModelTrans
           // A main-reasoning route-health wait is owned by this same loop, so a
           // blocked route is waited out here rather than probed early.
           ...(request.preflight === undefined ? {} : { preflight: request.preflight }),
+          ...(request.reselect === true ? { reselect: true } : {}),
           onRetry: (decision) => {
             pendingWait = {
               waitedMs: decision.delayMs,

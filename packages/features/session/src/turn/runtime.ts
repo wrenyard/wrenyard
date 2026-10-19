@@ -34,6 +34,8 @@ export interface TurnRuntime {
     reasoningEffort: ReasoningEffort;
     /** Explicit Fast preference for this turn; absent means no preference. */
     fast?: boolean;
+    /** True when automatic routing chose this model; absent for a hand-picked one. */
+    automatic?: boolean;
   };
   publicId: string;
   contextWindow?: number;
