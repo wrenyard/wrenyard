@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { createRequire } from 'node:module';
-import { ExecutionError, type Executor, type ExecutionOptions } from './executor.ts';
+import { ExecutionError, type Executor, type ExecutionOptions, type ExecutionResult } from './executor.ts';
 import { NativeOperationError } from './client-protocol.ts';
 
 /**
@@ -67,7 +67,9 @@ export type CredentialRequest = KeychainCredential | SqliteCredential;
 /**
  * Read one OS keychain value using the platform's native generic-password
  * lookup. Only macOS supports a generic keychain read; every other platform
- * rejects with a stable `NativeOperationError`.
+ * rejects with a stable `NativeOperationError`. An absent item reports
+ * `keychain_item_not_found`, while an unreadable keychain stays
+ * `keychain_unavailable`.
  */
 export async function readKeychain(execution: Executor, service: string, account?: string, options?: ExecutionOptions): Promise<string> {
   const trimmedService = service?.trim();
@@ -94,6 +96,9 @@ export async function readKeychain(execution: Executor, service: string, account
     }
     if (error instanceof ExecutionError && error.kind === 'output-limit') {
       throw new NativeOperationError('keychain_value_too_large');
+    }
+    if (error instanceof ExecutionError && error.kind === 'exit' && keychainItemNotFound(error.result)) {
+      throw new NativeOperationError('keychain_item_not_found');
     }
     throw new NativeOperationError('keychain_unavailable');
   }
@@ -192,4 +197,15 @@ function firstColumn(row: unknown): unknown {
   if (Array.isArray(row)) return row[0];
   if (row !== null && typeof row === 'object') return Object.values(row as Record<string, unknown>)[0];
   return undefined;
+}
+
+/**
+ * `security find-generic-password` exits nonzero both when the item is absent
+ * and when the keychain cannot be read. Absence is a stable outcome — the
+ * documented not-found exit status and message — so callers can distinguish a
+ * missing item from a locked or broken keychain instead of conflating the two.
+ */
+function keychainItemNotFound(result: ExecutionResult | undefined): boolean {
+  if (result?.exitCode === 44) return true;
+  return result !== undefined && /could not be found in the keychain/i.test(result.stderr);
 }
