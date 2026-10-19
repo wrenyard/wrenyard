@@ -2,7 +2,7 @@ import { createRoutingAvailability, createAuxiliaryAvailability } from './servic
 import { createAuxiliarySelector, excludedModelIdsFor, selectRoutesByRequirementKey, type SelectorInputPort } from '@wrenyard/auto-routing'
 import { readAuxiliaryRoutingSettings } from '../config/task-settings.mts'
 import { timingSafeEqual, randomBytes, createHash } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { hostname } from 'node:os'
@@ -1324,18 +1324,10 @@ async function createForemanDaemonResources(
     // routine records `lastError`. The scheduler stays workspace-scoped, so no
     // routine can fire into another workspace's bots. It shares the daemon's
     // single diagnostic sink.
-    // Device bots and every bot's routines on this device live in
-    // `<config root>/bots`; each bot of an older `bot-agents` directory is moved
-    // there once, next to whatever else that directory already holds.
-    const deviceBotsDir = join(resolveWrenyardConfigRoot(), 'bots')
-    const legacyBotsDir = join(resolveWrenyardConfigRoot(), 'bot-agents')
-    if (existsSync(legacyBotsDir)) {
-      mkdirSync(deviceBotsDir, { recursive: true })
-      for (const name of readdirSync(legacyBotsDir)) {
-        if (!existsSync(join(deviceBotsDir, name))) renameSync(join(legacyBotsDir, name), join(deviceBotsDir, name))
-      }
-      if (readdirSync(legacyBotsDir).length === 0) rmdirSync(legacyBotsDir)
-    }
+    // Device-only bot definitions and each bot's routines on this device live in
+    // `<config root>/bot-agents`. Legacy flat `<id>.json` files there are
+    // upgraded into `<id>/` directories when bots are loaded.
+    const deviceBotsDir = join(resolveWrenyardConfigRoot(), 'bot-agents')
     const scheduler = createScheduler({
       statePath: join(sessionStateRoot, 'routines.json'),
       // Late binding: the kernel is constructed right below the scheduler, so a
@@ -1358,6 +1350,9 @@ async function createForemanDaemonResources(
       workspaceRoot,
       workspaceBotsDir: join(workspaceRoot, 'bots'),
       deviceBotsDir,
+      importConfigDeclaredRoutines: (botId, routines) => {
+        scheduler.importConfigDeclaredRoutines(botId, routines)
+      },
       syncRoutines: (botId, routines) => scheduler.sync(botId, routines),
       stateDir: join(sessionStateRoot, 'bot-agents', sha256hex(workspaceRoot)),
       host: daemonSessionHost,
