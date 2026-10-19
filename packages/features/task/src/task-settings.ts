@@ -204,10 +204,26 @@ export interface TaskRoutingWeights {
  * Neutral model/provider exclusions. Their only persisted home is the config
  * root `routing.exclude`; a settings layer carries them as a read projection
  * alongside `dispatch`. Per-task exclusions keep their
- * `dispatch.excludeModelIds` / `dispatch.excludeProviderIds` names.
+ * `dispatch.excludeModelIds` / `dispatch.excludeProviderIds` names. Per-role
+ * entries use the same formats, keyed by an opaque role name.
  */
 export interface RoutingExcludeSettings {
   /** Bare model ids or unified `provider/model` ids no automatic route may use. */
+  models?: readonly string[]
+  providers?: readonly string[]
+  /**
+   * Exclusions applied only when the selector runs for a given role, keyed by
+   * an opaque role name. They are additive to the global lists.
+   */
+  roles?: Readonly<Record<string, RoutingRoleExcludeSettings>>
+}
+
+/**
+ * Per-role exclusion entry, with the same formats as the global lists. Role
+ * names are opaque operator strings; there is no built-in role list.
+ */
+export interface RoutingRoleExcludeSettings {
+  /** Bare model ids or unified `provider/model` ids this role may not use. */
   models?: readonly string[]
   providers?: readonly string[]
 }
@@ -585,9 +601,10 @@ export interface TasksConfigSettingsInput {
 
 /**
  * Strict reader for the neutral global model/provider exclusions at the config
- * root `routing.exclude`. Only `models` and `providers` are read; both must be
- * arrays of non-empty strings when present. A missing section yields
- * `undefined`; a malformed one fails instead of being silently dropped.
+ * root `routing.exclude`. Only `models`, `providers` and `roles` are read; the
+ * lists must be arrays of non-empty strings when present, and every role entry
+ * must be an object whose own lists pass the same validation. A missing section
+ * yields `undefined`; a malformed one fails instead of being silently dropped.
  */
 export function readRoutingExclusions(
   root?: RoutingConfigRootInput | null,
@@ -610,6 +627,31 @@ export function readRoutingExclusions(
   const providers = (exclude as Record<string, unknown>).providers
   if (providers !== undefined && providers !== null) {
     out.providers = normalizeNonEmptyStringList(providers, listScope, 'routing.exclude.providers')
+  }
+  const roles = (exclude as Record<string, unknown>).roles
+  if (roles !== undefined && roles !== null) {
+    if (!isPlainObject(roles)) {
+      fail(scopeOf('routing.exclude.roles', scope), 'routing.exclude.roles must be an object')
+    }
+    const parsedRoles: Record<string, RoutingRoleExcludeSettings> = {}
+    for (const [role, value] of Object.entries(roles)) {
+      if (value === undefined || value === null) continue
+      if (!isPlainObject(value)) {
+        fail(listScope, `routing.exclude.roles.${role} must be an object`)
+      }
+      const roleRecord = value as Record<string, unknown>
+      const entry: RoutingRoleExcludeSettings = {}
+      const roleModels = roleRecord.models
+      if (roleModels !== undefined && roleModels !== null) {
+        entry.models = normalizeNonEmptyStringList(roleModels, listScope, `routing.exclude.roles.${role}.models`)
+      }
+      const roleProviders = roleRecord.providers
+      if (roleProviders !== undefined && roleProviders !== null) {
+        entry.providers = normalizeNonEmptyStringList(roleProviders, listScope, `routing.exclude.roles.${role}.providers`)
+      }
+      parsedRoles[role] = entry
+    }
+    if (Object.keys(parsedRoles).length > 0) out.roles = parsedRoles
   }
   return Object.keys(out).length > 0 ? out : undefined
 }

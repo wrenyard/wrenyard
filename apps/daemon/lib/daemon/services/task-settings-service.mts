@@ -34,6 +34,7 @@ import {
   taskSettingsIdentity,
   readGlobalTaskSettings,
   readPerTaskSettings,
+  readRoutingExclusions,
   normalizeTaskSettingsLayer,
   resolveEffectiveTaskSettings,
   SYSTEM_DEFAULT_TIMEOUT_MS,
@@ -1015,7 +1016,11 @@ export class TaskSettingsService {
     const routingRequirements = applyMountedFeatureRoutingPreferences(effective.dispatch, params.mountedFeatures)
     const selection = await this.resolveAutomaticSelection({
       taskName: params.taskName,
-      requirements: { ...routingRequirements, inputTokens: params.inputTokens },
+      requirements: this.withRoleRoutingExclusions(
+        { ...routingRequirements, inputTokens: params.inputTokens },
+        params.taskName,
+        record,
+      ),
       timeoutMs: effective.timeoutMs,
       routingWeights: effective.routingWeights,
     })
@@ -1702,7 +1707,7 @@ export class TaskSettingsService {
       try {
         const selection = await this.resolveAutomaticSelection({
           taskName: summary.name,
-          requirements: effective.dispatch,
+          requirements: this.withRoleRoutingExclusions(effective.dispatch, summary.name),
           timeoutMs: effective.timeoutMs,
           routingWeights: effective.routingWeights,
         }, previewMemo)
@@ -2027,6 +2032,32 @@ export class TaskSettingsService {
    *  reference output price is used only as non-rejecting score normalization.
    *  rankAutomaticTaskCandidates runs once and the matching exact choice is
    *  selected with no fallback. */
+  /** Adds the per-role exclusions of `routing.exclude.roles.<role>` to the
+   *  requirements handed to automatic selection. The lists are read from the
+   *  neutral config root in memory only and are never written back into any
+   *  settings layer; they extend whatever the requirements already carry, and
+   *  an absent role entry leaves them unchanged. */
+  private withRoleRoutingExclusions(
+    requirements: ConfigTaskDispatchRequirements,
+    role: string,
+    record?: import('../../config/data.mts').ConfigRecord,
+  ): ConfigTaskDispatchRequirements {
+    const roleEntry = readRoutingExclusions(record ?? this.readConfigRecord().record)?.roles?.[role]
+    if (roleEntry === undefined) return requirements
+    const models = roleEntry.models
+    const providers = roleEntry.providers
+    if (models === undefined && providers === undefined) return requirements
+    return {
+      ...requirements,
+      ...(models !== undefined
+        ? { excludeModelIds: [...(requirements.excludeModelIds ?? []), ...models] }
+        : {}),
+      ...(providers !== undefined
+        ? { excludeProviderIds: [...(requirements.excludeProviderIds ?? []), ...providers] }
+        : {}),
+    }
+  }
+
   private async resolveAutomaticSelection(
     params: AutomaticSelectionParams,
     previewMemo?: AutomaticPreviewMemo,

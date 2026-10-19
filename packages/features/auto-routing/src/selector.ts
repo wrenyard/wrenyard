@@ -55,6 +55,13 @@ export interface SelectorSettingsLayer {
     /** Bare model ids or unified `provider/model` ids no automatic route may use. */
     models?: readonly string[];
     providers?: readonly string[];
+    /**
+     * Exclusions applied only when the selector runs for a given role, keyed by
+     * an opaque role name. They are additive to the global lists.
+     */
+    roles?: Readonly<
+      Record<string, { models?: readonly string[]; providers?: readonly string[] }>
+    >;
   };
   /** Routing score weights keyed for config, mapped to scorer P/S/Q/I. */
   routingWeights?: { price: number; speed: number; quota: number; intelligence: number };
@@ -154,6 +161,7 @@ function createSelector(
   port: SelectorInputPort,
   requirements: RoleReasoningRequirement,
   label: string,
+  roleKey: string,
   suggestion: boolean,
   forcedToolChoice = false,
 ) {
@@ -174,9 +182,12 @@ function createSelector(
       gatewayByPublicId.set(`${row.provider}/${row.id}`, row);
     }
     // The global exclusions govern every automatic choice, the same lists task
-    // dispatch honors; an explicit user choice never reaches this selector.
+    // dispatch honors; an explicit user choice never reaches this selector. The
+    // role's own lists are additive to them and apply only to this role key.
+    const roleExclude = settings?.exclude?.roles?.[roleKey];
     const excludedProviders = new Set(settings?.exclude?.providers ?? []);
-    const excludedModels = settings?.exclude?.models ?? [];
+    for (const provider of roleExclude?.providers ?? []) excludedProviders.add(provider);
+    const excludedModels = [...(settings?.exclude?.models ?? []), ...(roleExclude?.models ?? [])];
     const models = port.catalog.providers().flatMap(provider => {
       if (excludedProviders.has(provider.id)) { reject('provider excluded'); return []; }
       // A request that forces a tool choice can only use a provider that can
@@ -374,7 +385,7 @@ export function createAuxiliarySelector(port: SelectorInputPort) {
     input: AuxiliarySelectorInput = {},
   ): Promise<SelectorRoute[]> => {
     const forced = input.forcedToolChoice ?? toolChoiceIsForced(input.toolChoice);
-    return createSelector(port, ROLE_REQUIREMENTS[role], role, role === 'suggestion', forced)();
+    return createSelector(port, ROLE_REQUIREMENTS[role], role, role, role === 'suggestion', forced)();
   };
 }
 
@@ -395,7 +406,7 @@ export function createRequirementSelector(port: SelectorInputPort) {
         ? {}
         : { expectedReasoningEffort: requirements.expectedReasoningEffort }),
     };
-    return createSelector(port, profile, `requirements(${requirements.intelligenceMin}/${requirements.intelligenceExpected})`, false)();
+    return createSelector(port, profile, `requirements(${requirements.intelligenceMin}/${requirements.intelligenceExpected})`, 'reply', false)();
   };
 }
 
@@ -413,6 +424,7 @@ export async function selectRoutesByRequirementKey(
       port,
       BOT_REQUIREMENT,
       `requirements(${BOT_REQUIREMENT.intelligenceMin}/${BOT_REQUIREMENT.intelligenceExpected})`,
+      'bot',
       false,
     )();
   }
@@ -421,7 +433,7 @@ export async function selectRoutesByRequirementKey(
     const role = key.slice(prefix.length) as AuxiliaryCallRole;
     const requirements = ROLE_REQUIREMENTS[role];
     if (requirements === undefined) throw new Error(`Unknown auxiliary role in routing requirement key: ${key}`);
-    return createSelector(port, requirements, role, role === 'suggestion')();
+    return createSelector(port, requirements, role, role, role === 'suggestion')();
   }
   throw new Error(`Unknown routing requirement key: ${key}`);
 }

@@ -130,6 +130,32 @@ configured for one specific task stay in that task's own settings and keep
 their names and behaviour; only the machine-wide exclusions use
 `routing.exclude`.
 
+Per-role exclusions live in the same place, under `routing.exclude.roles`:
+
+```json
+{
+  "routing": {
+    "exclude": {
+      "roles": {
+        "reply": {
+          "models": ["provider/model"],
+          "providers": ["provider"]
+        }
+      }
+    }
+  }
+}
+```
+
+Each role key holds its own `models` and `providers` arrays, with the same
+entry formats as the global lists: `models` accepts bare model ids or unified
+`provider/model` ids, `providers` accepts bare provider ids. A role's lists
+apply only to that role's own automatic selection — the auxiliary roles (for
+example `status`, `title`, `suggestion`, `reply` and `dispatch`), the task
+roles, which are keyed by task name, and bot selection — and they are layered
+on top of the global lists. Explicit user choices and the Gateway are
+unaffected.
+
 Earlier builds stored the machine-wide lists under
 `tasks.settings.global.dispatch.excludeModelIds` / `excludeProviderIds`. On the
 first read after upgrading, the daemon moves those values into
