@@ -147,7 +147,7 @@ export function defaultAppearanceSettings(): AppearanceSettings {
 }
 
 export function defaultGeneralPreferences(): GeneralPreferences {
-  return { startupPage: 'last' };
+  return { startupPage: 'last', displayCurrency: 'CNY' };
 }
 
 export function defaultSessionPreferences(): SessionPreferences {
@@ -370,6 +370,7 @@ function normalizeGeneralPreferences(value: unknown, fallback: GeneralPreference
   const obj = isRecord(value) ? value : {};
   return {
     startupPage: obj.startupPage === 'session' ? 'session' : fallback.startupPage,
+    displayCurrency: obj.displayCurrency === 'USD' ? 'USD' : fallback.displayCurrency,
   };
 }
 

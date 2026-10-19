@@ -2,7 +2,7 @@ import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/r
 import type { SessionSummary } from '@wrenyard/session';
 import { shell } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
-import type { QuotaSnapshot } from '@/shell-contract';
+import type { DisplayCurrency, QuotaSnapshot } from '@/shell-contract';
 
 /**
  * Shared shell snapshot queries. These are the single cache owners for the
@@ -66,6 +66,17 @@ export const preferencesQuery = queryOptions({
   queryFn: () => shell.getPreferences(),
   staleTime: 30_000,
 });
+
+/**
+ * The app-wide display currency from the global preference. It defaults to CNY
+ * when the preference has not been set yet, so every price display falls back to
+ * yuan until the user chooses otherwise. The preferences query is invalidated
+ * on the `preferences-changed` push, so callers re-render live.
+ */
+export function useDisplayCurrency(): DisplayCurrency {
+  const preferences = useQuery(preferencesQuery);
+  return preferences.data?.general.displayCurrency ?? 'CNY';
+}
 
 /**
  * Shared task-settings snapshot used by the tasks and stats pages. The daemon

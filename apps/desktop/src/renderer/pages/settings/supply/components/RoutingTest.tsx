@@ -48,7 +48,7 @@ import {
   MIN_TPS_LABEL,
   OPTIONAL_PLACEHOLDER,
   OUTPUT_CAP_LABEL,
-  OUTPUT_CAP_PLACEHOLDER,
+  outputCapPlaceholder,
   REQUIRE_IMAGE_LABEL,
   REQUIRE_SEARCH_LABEL,
   ROUTING_EMPTY,
@@ -74,6 +74,7 @@ import {
   type RoutingTestFormState,
 } from '../model/routing.js';
 import { useRoutingTestRun, useRoutingTestTasksQuery } from '../queries.js';
+import { useDisplayCurrency } from '@/renderer/lib/queries';
 
 function resultColumnClass(id: string): string {
   return cn('whitespace-nowrap', !['provider', 'model', 'reason'].includes(id) && 'text-right tabular-nums');
@@ -98,6 +99,7 @@ interface ExclusionOption {
  * routing, ranking or scores.
  */
 export function RoutingTest({ snapshot, active }: RoutingTestProps) {
+  const displayCurrency = useDisplayCurrency();
   const [form, setForm] = useState<RoutingTestFormState>(defaultRoutingTestForm);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState('');
@@ -147,7 +149,7 @@ export function RoutingTest({ snapshot, active }: RoutingTestProps) {
     const explore = tasks.data.tasks.find((task) => task.identity === 'builtin:explore');
     if (!explore) return;
     setSelectedTask(explore.identity);
-    setForm(formFromTask(explore));
+    setForm(formFromTask(explore, displayCurrency));
     run.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickerOpen, tasks.data]);
@@ -160,14 +162,14 @@ export function RoutingTest({ snapshot, active }: RoutingTestProps) {
   const applyTask = (identity: string): void => {
     const task = taskById.get(identity);
     if (!task) return;
-    setForm(formFromTask(task));
+    setForm(formFromTask(task, displayCurrency));
     invalidateResult();
   };
 
   const handleRun = (): void => {
     let params: TaskRoutingTestParams;
     try {
-      params = serializeRoutingTestRequest(form);
+      params = serializeRoutingTestRequest(form, displayCurrency);
     } catch (cause) {
       setRunError(errorMessage(cause));
       return;
@@ -299,7 +301,7 @@ export function RoutingTest({ snapshot, active }: RoutingTestProps) {
             type="number"
             min={0}
             step={0.5}
-            placeholder={OUTPUT_CAP_PLACEHOLDER}
+            placeholder={outputCapPlaceholder(displayCurrency)}
             value={form.maxOutputUsdPerMillion}
             onChange={(event) => updateForm({ maxOutputUsdPerMillion: event.target.value })}
           />

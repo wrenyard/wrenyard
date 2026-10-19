@@ -30,6 +30,7 @@ export function preferencesFromDocument(
       ...settings.general,
       openAtLogin: system.openAtLogin,
       menuBarQuota: settings.tray.showQuota ?? DEFAULT_MENU_BAR_QUOTA,
+      displayCurrency: settings.general.displayCurrency ?? 'CNY',
     },
     appearance: { ...settings.appearance },
     // The sidebar list controls resolve their backwards-compatible defaults in

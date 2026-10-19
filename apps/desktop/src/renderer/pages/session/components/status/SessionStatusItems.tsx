@@ -9,7 +9,8 @@ import { UsageRing, usageRingLevel } from '@/renderer/components/usage/UsageRing
 import { AnimatedNumber } from '@/renderer/components/AnimatedNumber';
 import { useStatusBarItem } from '@/renderer/lib/statusbar';
 import { formatCost, formatElapsedMs, formatRatio, formatTokenCount } from '@/renderer/lib/format';
-import { useQuotaQuery } from '@/renderer/lib/queries';
+import { useDisplayCurrency, useQuotaQuery } from '@/renderer/lib/queries';
+import type { DisplayCurrency } from '@/shell-contract';
 import {
   mainSpeed,
   callModelGroups,
@@ -46,6 +47,7 @@ export function SessionStatusItems() {
   const calls = useMemo(() => turns.flatMap((turn) => turn.calls), [turns]);
   const speed = useMemo(() => mainSpeed(calls), [calls]);
   const quota = useQuotaQuery();
+  const currency = useDisplayCurrency();
   const dispatches = useMemo(
     () => turns.flatMap((turn) => turn.actions.filter((action) => action.kind === 'dispatch')),
     [turns],
@@ -105,6 +107,7 @@ export function SessionStatusItems() {
         callGroups={callGroups}
         missingTasks={consumption.missingTasks}
         runningTasks={consumption.runningTasks}
+        currency={currency}
       />
     ),
   });
@@ -176,6 +179,7 @@ interface MetricsStatusItemProps {
   callGroups: { reason: readonly TaskModelGroup[]; aux: readonly TaskModelGroup[] };
   missingTasks: number;
   runningTasks: number;
+  currency: DisplayCurrency;
 }
 
 /**
@@ -186,7 +190,7 @@ interface MetricsStatusItemProps {
  * yellow above 100 t/s and blue above 200 t/s while the label text stays muted.
  * Only the segment values animate, through the shared {@link AnimatedNumber}.
  */
-function MetricsStatusItem({ speed, clusters, taskGroups, callGroups, missingTasks, runningTasks }: MetricsStatusItemProps) {
+function MetricsStatusItem({ speed, clusters, taskGroups, callGroups, missingTasks, runningTasks, currency }: MetricsStatusItemProps) {
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const speedIconClass = speed === undefined ? undefined : speed > 200 ? 'text-sky-500' : speed > 100 ? 'text-warning' : undefined;
@@ -238,7 +242,7 @@ function MetricsStatusItem({ speed, clusters, taskGroups, callGroups, missingTas
       onClick: () => setOpen((value) => !value),
       tooltip: (
         <BriefTip
-          title={`用量 ${formatTokenCount(totals.total)}${approxCost(totals.cost)}`}
+          title={`用量 ${formatTokenCount(totals.total)}${approxCost(totals.cost, currency)}`}
           sub={`缓存 ${formatTokenCount(totals.cached)} · 输入 ${formatTokenCount(totals.fresh)} · 输出 ${formatTokenCount(totals.output)}`}
         />
       ),
@@ -258,6 +262,7 @@ function MetricsStatusItem({ speed, clusters, taskGroups, callGroups, missingTas
           clusters={clusters}
           groups={{ ...callGroups, task: taskGroups }}
           note={taskNoteOf(runningTasks, missingTasks)}
+          currency={currency}
         />
       </PopoverContent>
     </Popover>
@@ -283,9 +288,9 @@ function BriefTip({ title, sub }: { title: string; sub?: string }) {
 }
 
 /** ` ≈ $0.0123` after a figure (`≥` when only partly priced); empty when nothing is priced. */
-function approxCost(cost: SessionCostEstimate): string {
+function approxCost(cost: SessionCostEstimate, currency: DisplayCurrency): string {
   if (cost.value === undefined) return '';
-  return ` ${cost.partial ? '≥' : '≈'} ${formatCost(cost.value)}`;
+  return ` ${cost.partial ? '≥' : '≈'} ${formatCost(cost.value, currency)}`;
 }
 
 /** Colours of the three token kinds, shared by every bar and the legend. */
@@ -340,9 +345,9 @@ const speedText = (speed: number | undefined): string => (speed === undefined ? 
 const elapsedText = (ms: number): string => (ms > 0 ? formatElapsedMs(ms) : '—');
 
 /** `$0.0123`, prefixed with `≥` when part of the row has no known price; an em dash when nothing is priced. */
-function costLabel(cost: SessionCostEstimate): string {
+function costLabel(cost: SessionCostEstimate, currency: DisplayCurrency): string {
   if (cost.value === undefined) return '—';
-  return `${cost.partial ? '≥' : ''}${formatCost(cost.value)}`;
+  return `${cost.partial ? '≥' : ''}${formatCost(cost.value, currency)}`;
 }
 
 /** `chatgpt/gpt-6-astra` → `gpt-6-astra`; other labels are shown as they are. */
@@ -362,6 +367,7 @@ interface SourceSectionProps {
   groups: readonly TaskModelGroup[];
   /** Always list the model rows, with no toggle. */
   alwaysExpanded?: boolean;
+  currency: DisplayCurrency;
 }
 
 /**
@@ -370,7 +376,7 @@ interface SourceSectionProps {
  * output. The title expands the section into one row per model, unless the
  * section always lists them.
  */
-function SourceSection({ label, featured, cluster, groups, alwaysExpanded }: SourceSectionProps) {
+function SourceSection({ label, featured, cluster, groups, alwaysExpanded, currency }: SourceSectionProps) {
   const [toggled, setExpanded] = useState(false);
   const expanded = alwaysExpanded === true || toggled;
   const input = cluster?.input ?? 0;
@@ -393,7 +399,7 @@ function SourceSection({ label, featured, cluster, groups, alwaysExpanded }: Sou
         )}
         <span className="flex-1" />
         <span className={emphasis}>{formatTokenCount(input + output)}</span>
-        <span className="w-16 text-right text-muted-foreground">{costLabel(cluster?.cost ?? NO_COST)}</span>
+        <span className="w-16 text-right text-muted-foreground">{costLabel(cluster?.cost ?? NO_COST, currency)}</span>
       </div>
       <TokenBar segments={tokenSegments(input, output, cluster?.cached ?? 0)} className={featured === true ? 'h-2' : undefined} />
       {expanded ? groups.map((group) => (
@@ -402,7 +408,7 @@ function SourceSection({ label, featured, cluster, groups, alwaysExpanded }: Sou
           <span className="shrink-0 text-muted-foreground">×{group.count}</span>
           <span className="flex-1" />
           <span className="shrink-0">{formatTokenCount(group.input + group.output)}</span>
-          <span className="w-16 shrink-0 text-right text-muted-foreground">{costLabel(group.cost)}</span>
+          <span className="w-16 shrink-0 text-right text-muted-foreground">{costLabel(group.cost, currency)}</span>
         </div>
       )) : null}
     </div>
@@ -416,6 +422,7 @@ interface SessionUsagePanelProps {
   note: string | undefined;
   /** The panel root, focused when the popover opens so no toggle shows a focus ring. */
   rootRef: RefObject<HTMLDivElement | null>;
+  currency: DisplayCurrency;
 }
 
 /**
@@ -425,16 +432,16 @@ interface SessionUsagePanelProps {
  * expandable into one row per model. A legend with the session's three token
  * totals closes the panel.
  */
-function SessionUsagePanel({ clusters, groups, note, rootRef }: SessionUsagePanelProps) {
+function SessionUsagePanel({ clusters, groups, note, rootRef, currency }: SessionUsagePanelProps) {
   const totals = totalsOf(clusters);
   const find = (key: MetricCluster['key']): MetricCluster | undefined => clusters.find((cluster) => cluster.key === key);
 
   return (
     <div ref={rootRef} tabIndex={-1} className="flex flex-col gap-3 p-3 text-xs tabular-nums outline-none" data-slot="session-usage-panel">
-      <SourceSection featured alwaysExpanded label="推理" cluster={find('reason')} groups={groups.reason} />
+      <SourceSection featured alwaysExpanded label="推理" cluster={find('reason')} groups={groups.reason} currency={currency} />
       <Separator />
-      <SourceSection label="辅助" cluster={find('aux')} groups={groups.aux} />
-      <SourceSection label="任务" cluster={find('task')} groups={groups.task} />
+      <SourceSection label="辅助" cluster={find('aux')} groups={groups.aux} currency={currency} />
+      <SourceSection label="任务" cluster={find('task')} groups={groups.task} currency={currency} />
       <Separator />
       <div className="flex items-center gap-3 text-muted-foreground">
         {([['缓存', TOKEN_COLORS.cached, totals.cached], ['输入', TOKEN_COLORS.fresh, totals.fresh], ['输出', TOKEN_COLORS.output, totals.output]] as const).map(([label, color, value]) => (
@@ -445,7 +452,7 @@ function SessionUsagePanel({ clusters, groups, note, rootRef }: SessionUsagePane
           </span>
         ))}
         <span className="flex-1" />
-        <span className="text-foreground">{costLabel(totals.cost)}</span>
+        <span className="text-foreground">{costLabel(totals.cost, currency)}</span>
       </div>
       {note === undefined ? null : <span className="text-muted-foreground">{note}</span>}
     </div>

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import type { NativeImage } from 'electron';
-import type { QuotaProviderSnapshot } from './shell-contract.js';
+import { formatQuotaBalance, type DisplayCurrency, type QuotaProviderSnapshot } from './shell-contract.js';
+import { getDesktopSettingsStore } from './main.js';
 
 const require = createRequire(import.meta.url);
 
@@ -107,7 +108,10 @@ export interface QuotaMenuProviderGroup {
   lines: QuotaMenuLine[];
 }
 
-export function buildQuotaMenuProviderGroup(provider: QuotaProviderSnapshot): QuotaMenuProviderGroup {
+export function buildQuotaMenuProviderGroup(
+  provider: QuotaProviderSnapshot,
+  displayCurrency: DisplayCurrency,
+): QuotaMenuProviderGroup {
   const lines: QuotaMenuLine[] = provider.windows.map((window, index) => ({
     provider: index === 0 ? provider.label : '',
     // Ordinary windows (5h/7d) have a poolLabel equal to their name and keep
@@ -124,7 +128,10 @@ export function buildQuotaMenuProviderGroup(provider: QuotaProviderSnapshot): Qu
     window: '',
     remainingPct: null,
     expectedRemainingPct: null,
-    amount: balance.display || balance.amount,
+    // Convert the persisted balance through the display-currency setting so a
+    // USD balance shows the converted ¥ form under CNY while CNY balances and
+    // unsupported currencies render unchanged; the snapshot is never mutated.
+    amount: formatQuotaBalance(balance, displayCurrency),
   }));
   if (lines.length === 0) {
     lines.push({
@@ -148,7 +155,10 @@ export function renderQuotaMenuProviderBitmap(provider: QuotaProviderSnapshot): 
   scale: number;
   buffer: Buffer;
 } {
-  return renderQuotaMenuGroupBitmap(buildQuotaMenuProviderGroup(provider));
+  // The tray rebuilds on preference changes (main.ts), so reading the display
+  // currency here at build time keeps the bitmap in sync without storing it.
+  const displayCurrency = getDesktopSettingsStore()?.load().general.displayCurrency ?? 'CNY';
+  return renderQuotaMenuGroupBitmap(buildQuotaMenuProviderGroup(provider, displayCurrency));
 }
 
 export function renderQuotaMenuGroupBitmap(group: QuotaMenuProviderGroup): {

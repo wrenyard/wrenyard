@@ -17,7 +17,7 @@ import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { toast } from '@/renderer/lib/notify';
 import { useNavLocation, useSecondarySidebar } from '@/renderer/lib/navigation';
 import { shell } from '@/renderer/lib/desktop';
-import { preferencesQueryKey } from '@/renderer/lib/queries';
+import { preferencesQueryKey, useDisplayCurrency } from '@/renderer/lib/queries';
 import type { DesktopPreferences, PreferenceId, ProviderCatalogSnapshot } from '@/shell-contract';
 import { KNOWN_SHORTCUTS, knownShortcutKeys } from '@/shell-contract';
 import { PetSettingsProvider, PetStatusBadge } from './components/PetSettings.js';
@@ -159,6 +159,7 @@ export function SettingsPage({
   const visiblePageRef = useRef(visiblePage);
 
   const preferences = usePreferencesQuery();
+  const displayCurrency = useDisplayCurrency();
 
   // The supply categories (供应商 / 模型 / 派发测试) read the shared quota
   // snapshot and its provider-order mutation; the same cache entry backs the
@@ -167,7 +168,7 @@ export function SettingsPage({
   const quotaRefresh = useQuotaRefresh();
   const providerOrder = useSaveProviderOrder();
   const snapshot = quota.data ?? null;
-  const modelRows = useMemo(() => buildModelListRows(snapshot), [snapshot]);
+  const modelRows = useMemo(() => buildModelListRows(snapshot, displayCurrency), [snapshot, displayCurrency]);
   const quotaFallback = quota.isPending
     ? <Skeleton className="h-24 w-full" />
     : <QueryError query={quota} title={QUOTA_UNAVAILABLE_FALLBACK} />;

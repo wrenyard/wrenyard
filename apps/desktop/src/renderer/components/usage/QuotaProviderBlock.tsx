@@ -2,9 +2,9 @@ import { BrandIcon } from '@/renderer/components/brand-icon';
 import { QuotaBar, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone } from '@/renderer/components/usage/QuotaBar';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { useQuotaRefresh } from '@/renderer/lib/queries';
+import { useDisplayCurrency, useQuotaRefresh } from '@/renderer/lib/queries';
 import { providerBrand } from '@/renderer/lib/model-brand';
-import type { QuotaProviderSnapshot } from '@/shell-contract';
+import { formatQuotaBalance, type QuotaProviderSnapshot } from '@/shell-contract';
 import { cn } from 'cn';
 
 /**
@@ -44,6 +44,7 @@ export interface QuotaProviderBlockProps {
 
 export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockProps) {
   const refresh = useQuotaRefresh();
+  const currency = useDisplayCurrency();
   const name = provider.label || provider.id;
   const view = providerTone(provider);
   const tooltip = provider.message ? `${view.label} · ${provider.message}` : view.label;
@@ -95,7 +96,7 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
           {provider.balances.map((balance) => (
             <span key={`${balance.currency}:${balance.display}`} className="flex items-baseline gap-1 text-xs">
               <span className="text-muted-foreground">{BALANCE_LABEL}</span>
-              <strong className="tabular-nums">{balance.display}</strong>
+              <strong className="tabular-nums">{formatQuotaBalance(balance, currency)}</strong>
               {balance.state !== undefined && (
                 <span className={cn(quotaPoolStateTone(balance.state) ?? 'text-muted-foreground')}>
                   {QUOTA_POOL_STATE_LABEL[balance.state]}

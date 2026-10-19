@@ -10,16 +10,17 @@ import {
   SelectValue,
 } from '@/renderer/components/ui/select';
 import { familyBrand, providerBrand, type ModelFamily } from '@/renderer/lib/model-brand';
+import { useDisplayCurrency } from '@/renderer/lib/queries';
 import { cn } from 'cn';
 import {
   MODEL_COLUMNS,
   MODEL_FAMILY_FILTER_LABEL,
   MODEL_FILTER_ALL_LABEL,
-  MODEL_PRICE_SUFFIX,
   MODEL_SEARCH_PLACEHOLDER,
   MODEL_SORT_LABEL,
   MODEL_SORT_OPTIONS,
   MODELS_EMPTY,
+  modelPriceSuffix,
 } from '../model/describe.js';
 import {
   MODEL_FAMILY_ALL,
@@ -30,16 +31,17 @@ import {
   type ModelListRow,
   type ModelSort,
 } from '../model/models.js';
+import type { DisplayCurrency } from '@/shell-contract';
 
 /** Row metrics rendered as a definition grid, in heading order. */
 const MODEL_METRIC_IDS = ['cache', 'input', 'output', 'tps'] as const;
 type ModelMetricId = (typeof MODEL_METRIC_IDS)[number];
 
 /** Heading copy for one metric, reusing the table labels and their price unit. */
-function metricLabel(id: ModelMetricId): string {
+function metricLabel(id: ModelMetricId, currency: DisplayCurrency): string {
   const column = MODEL_COLUMNS.find((candidate) => candidate.id === id);
   if (column === undefined) return id;
-  return column.price ? `${column.label}${MODEL_PRICE_SUFFIX}` : column.label;
+  return column.price ? `${column.label}${modelPriceSuffix(currency)}` : column.label;
 }
 
 /**
@@ -53,6 +55,7 @@ export function ModelList({ rows }: { rows: ModelListRow[] }) {
   const [family, setFamily] = useState<ModelFamily | typeof MODEL_FAMILY_ALL>(MODEL_FAMILY_ALL);
   const [sort, setSort] = useState<ModelSort>('default');
   const [query, setQuery] = useState('');
+  const currency = useDisplayCurrency();
 
   const families = useMemo(() => modelFamilyOptions(rows), [rows]);
   const visible = useMemo(
@@ -102,14 +105,14 @@ export function ModelList({ rows }: { rows: ModelListRow[] }) {
         {visible.length === 0 ? (
           <li className="px-4 py-3 text-muted-foreground">{MODELS_EMPTY}</li>
         ) : (
-          visible.map((row) => <ModelRow key={row.key} row={row} />)
+          visible.map((row) => <ModelRow key={row.key} row={row} currency={currency} />)
         )}
       </ul>
     </div>
   );
 }
 
-function ModelRow({ row }: { row: ModelListRow }) {
+function ModelRow({ row, currency }: { row: ModelListRow; currency: DisplayCurrency }) {
   const values: Record<ModelMetricId, string> = {
     cache: row.cacheLabel,
     input: row.inputLabel,
@@ -128,7 +131,7 @@ function ModelRow({ row }: { row: ModelListRow }) {
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 @lg:grid-cols-4">
         {MODEL_METRIC_IDS.map((id) => (
           <div key={id} className="min-w-0">
-            <dt className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{metricLabel(id)}</dt>
+            <dt className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{metricLabel(id, currency)}</dt>
             <dd className="tabular-nums [overflow-wrap:anywhere]">{values[id]}</dd>
           </div>
         ))}

@@ -1,5 +1,7 @@
-import type { QuotaBarRow, QuotaProviderState, QuotaTipLine, QuotaWindowRow } from '../../shell-contract.js';
+import type { DisplayCurrency, QuotaBarRow, QuotaProviderState, QuotaTipLine, QuotaWindowRow } from '../../shell-contract.js';
+import { formatQuotaBalance } from '../../shell-contract.js';
 import { floorQuotaPercentage } from '../../pet/main/controller.js';
+import { getDesktopSettingsStore } from '../../main.js';
 
 function truncateMessage(message: string, maxLength: number): string {
   if (message.length <= maxLength) return message;
@@ -24,6 +26,9 @@ export function buildQuotaTips(
   for (const provider of providers) byId.set(provider.id, provider);
 
   const ids = focus ? [focus.id] : order;
+  // Resolve the display currency at projection time from the live settings
+  // store; the caller (pet runtime) does not inject it.
+  const displayCurrency = getDesktopSettingsStore()?.load().general.displayCurrency ?? 'CNY';
   const tips: QuotaTipLine[] = [];
   for (const id of ids) {
     let provider = byId.get(id);
@@ -83,7 +88,7 @@ export function buildQuotaTips(
       const remainWindows = bar?.provider.windows ?? [];
       displayText = remainWindows.length > 0
         ? formatRemainQuotaLine(provider.id, remainWindows, provider.displayLine)
-        : normalizeDisplayLine(provider);
+        : normalizeDisplayLine(provider, displayCurrency);
     }
 
     const entry: QuotaTipLine = { text: displayText };
@@ -119,10 +124,13 @@ export function formatRemainQuotaLine(
   return `${id} ${parts.join(' · ')}`;
 }
 
-function normalizeDisplayLine(provider: QuotaProviderState): string {
+function normalizeDisplayLine(provider: QuotaProviderState, displayCurrency: DisplayCurrency): string {
   if (provider.displayLine == null) {
     if (provider.status === 'ok') {
-      const detail = provider.balances?.map(balance => balance.display).join(' · ')
+      // Convert each persisted balance through the display-currency setting;
+      // CNY balances and unsupported currencies render unchanged, and the
+      // snapshot balances themselves are never mutated.
+      const detail = provider.balances?.map(balance => formatQuotaBalance(balance, displayCurrency)).join(' · ')
         || provider.error || 'quota available';
       return `${provider.id} ${truncateMessage(detail, 80)}`;
     }

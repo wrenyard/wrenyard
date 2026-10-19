@@ -400,6 +400,15 @@ let shellWindow: ShellWindowController | null = null;
 let miniCards: MiniCardManager | null = null;
 /** Live settings store, read by the notifier's `notifications.enabled` gate. */
 let desktopSettingsStore: DesktopSettingsStore | null = null;
+/**
+ * Live settings store accessor for main-process projections (tray bitmap,
+ * pet tips) that resolve the display currency at build time. Exported so
+ * those modules can read `general.displayCurrency` without threading the
+ * store through every caller; the binding is only dereferenced at runtime.
+ */
+export function getDesktopSettingsStore(): DesktopSettingsStore | null {
+  return desktopSettingsStore;
+}
 let desktopTray: DesktopTrayHandle | null = null;
 let petController: DesktopPetController | null = null;
 let desktopSubscriptions: DaemonSubscriptions | null = null;

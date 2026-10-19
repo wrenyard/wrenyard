@@ -1,6 +1,7 @@
 import { DEFAULT_THEME_ID } from '@wrenyard/themes';
 import {
   APPEARANCE_ZOOM_OPTIONS,
+  DISPLAY_CURRENCY_OPTIONS,
   SESSION_SEND_KEY_OPTIONS,
   STARTUP_PAGE_OPTIONS,
   type PreferenceId,
@@ -112,6 +113,16 @@ const GENERAL_CATEGORY: SettingDefinition[] = [
     control: { kind: 'enum', options: STARTUP_PAGE_OPTIONS.map((option) => ({ ...option })) },
     default: 'last',
     source: { kind: 'preference', preference: 'general.startupPage' },
+  },
+  {
+    id: 'general.displayCurrency',
+    category: 'general',
+    title: '显示货币',
+    description: '价格与费用按所选货币显示，汇率固定 1 美元 = 7 人民币；内部结算与命令行输出仍以美元计。',
+    keywords: ['货币', '人民币', '美元', '汇率', 'currency', 'CNY', 'USD'],
+    control: { kind: 'enum', options: DISPLAY_CURRENCY_OPTIONS.map((option) => ({ ...option })) },
+    default: 'CNY',
+    source: { kind: 'preference', preference: 'general.displayCurrency' },
   },
   {
     id: 'general.menuBarQuota',

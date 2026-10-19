@@ -1,9 +1,11 @@
 import type {
+  DisplayCurrency,
   TaskRoutingTestParams,
   TaskRoutingTestRow,
   TaskRoutingTestTask,
   TaskSettingsAutomaticDispatch,
 } from '@/shell-contract';
+import { CNY_PER_USD } from '@/shell-contract';
 
 /**
  * Pure routing-test form logic for the Model Supply page.
@@ -109,7 +111,7 @@ function unique(values: readonly string[]): string[] {
  * omitted rather than sent as null/zero; imported exclusions and capability
  * requirements are preserved verbatim.
  */
-export function serializeRoutingTestRequest(form: RoutingTestFormState): TaskRoutingTestParams {
+export function serializeRoutingTestRequest(form: RoutingTestFormState, currency: DisplayCurrency = 'CNY'): TaskRoutingTestParams {
   const automatic: Partial<TaskSettingsAutomaticDispatch> = {};
   const expectedTps = parsePositiveNumber(form.expectedTps);
   if (expectedTps !== null) automatic.expected_tps = expectedTps;
@@ -123,7 +125,11 @@ export function serializeRoutingTestRequest(form: RoutingTestFormState): TaskRou
   }
   if (expectedTps !== null && minimumTps !== null && expectedTps < minimumTps) throw new Error('期望 TPS 不能低于最低 TPS');
   const cap = parsePositiveNumber(form.maxOutputUsdPerMillion);
-  if (cap !== null) automatic.max_output_usd_per_million = cap;
+  if (cap !== null) {
+    // The form shows the display currency; store the equivalent USD amount
+    // exactly (no rounding) so the fixed rate never loses precision here.
+    automatic.max_output_usd_per_million = currency === 'CNY' ? cap / CNY_PER_USD : cap;
+  }
 
   const capabilities: Array<'text' | 'image'> = [];
   if (form.requireText) capabilities.push('text');
@@ -156,13 +162,17 @@ export function serializeRoutingTestRequest(form: RoutingTestFormState): TaskRou
  * surfaces image/search checkboxes plus model/provider exclusions, so
  * profile/client exclusions are carried through unchanged.
  */
-export function formFromTask(task: TaskRoutingTestTask): RoutingTestFormState {
+export function formFromTask(task: TaskRoutingTestTask, currency: DisplayCurrency = 'CNY'): RoutingTestFormState {
   const automatic = task.automatic;
   const form = defaultRoutingTestForm();
   if (automatic.expected_tps !== undefined) form.expectedTps = String(automatic.expected_tps);
   if (automatic.minimum_tps !== undefined) form.minimumTps = String(automatic.minimum_tps);
   if (automatic.max_output_usd_per_million !== undefined) {
-    form.maxOutputUsdPerMillion = String(automatic.max_output_usd_per_million);
+    // Display the cap in the chosen currency: CNY shows the converted value,
+    // USD shows the stored amount verbatim.
+    form.maxOutputUsdPerMillion = String(
+      currency === 'CNY' ? automatic.max_output_usd_per_million * CNY_PER_USD : automatic.max_output_usd_per_million,
+    );
   }
   form.intelligenceMin = automatic.intelligence_min ?? '';
   form.intelligenceExpected = automatic.intelligence_expected ?? (['high', 'premium'].includes(form.intelligenceMin) ? form.intelligenceMin : 'mid');

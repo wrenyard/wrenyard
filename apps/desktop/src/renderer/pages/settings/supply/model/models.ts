@@ -1,9 +1,11 @@
 import { models } from '@wrenyard/models';
 import type {
+  DisplayCurrency,
   ProviderCatalogSnapshot,
   ProviderModelSnapshot,
   QuotaSnapshot,
 } from '@/shell-contract';
+import { CNY_PER_USD } from '@/shell-contract';
 import { FAMILY_ORDER, classifyFamily, type ModelFamily } from '@/renderer/lib/model-brand';
 
 /**
@@ -56,11 +58,16 @@ export interface ModelListRow {
 }
 
 /** A rendered price component: `min–max` when the providers disagree, else the shared value. */
-export function formatPriceRange(values: number[]): string {
+export function formatPriceRange(values: number[], currency: DisplayCurrency = 'CNY'): string {
   if (values.length === 0) return '—';
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const format = (value: number) => String(value);
+  const format = (value: number) => {
+    if (currency !== 'CNY') return String(value);
+    const converted = value * CNY_PER_USD;
+    const rounded = Math.round(converted * 100) / 100;
+    return String(rounded).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+  };
   return min === max ? format(min) : `${format(min)}–${format(max)}`;
 }
 
@@ -131,7 +138,10 @@ function compareModelVersions(left: string, right: string): number {
  * `FAMILY_ORDER`), then by series and descending numeric version, and every
  * supported catalog model is kept even when no provider is available.
  */
-export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): ModelListRow[] {
+export function buildModelListRows(
+  snapshot: QuotaSnapshot | null | undefined,
+  currency: DisplayCurrency = 'CNY',
+): ModelListRow[] {
   const catalog: ProviderCatalogSnapshot[] = snapshot?.catalog ?? [];
   interface Accumulator {
     key: string;
@@ -219,9 +229,9 @@ export function buildModelListRows(snapshot: QuotaSnapshot | null | undefined): 
       tps: averageMeasuredTps(preferred) ?? models.require(group.key).defaults.speed,
       // A model with no declared price contributes no price point at all; the
       // range falls back to the em dash instead of a fabricated zero.
-      inputLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[1]])),
-      outputLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[2]])),
-      cacheLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[0]])),
+      inputLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[1]]), currency),
+      outputLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[2]]), currency),
+      cacheLabel: formatPriceRange(group.models.flatMap((model) => model.pricing === undefined ? [] : [model.pricing[0]]), currency),
     });
   }
 

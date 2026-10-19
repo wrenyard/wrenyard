@@ -1,5 +1,5 @@
 import type { StatusTone } from '@/renderer/components/status-badge';
-import type { ProviderAuthMode, QuotaProviderSnapshot } from '@/shell-contract';
+import type { DisplayCurrency, ProviderAuthMode, QuotaProviderSnapshot } from '@/shell-contract';
 
 /**
  * Central product copy and status mappings for the Model Supply page. Code and
@@ -141,7 +141,9 @@ export function providerAuthGuidance(mode: ProviderAuthMode): string {
 /* ---------------------------------------------------------------- */
 
 export const MODELS_EMPTY = '未发现受支持的模型。';
-export const MODEL_PRICE_SUFFIX = '（$/Mtok）';
+export function modelPriceSuffix(currency: DisplayCurrency): string {
+  return currency === 'CNY' ? '（¥/Mtok）' : '（$/Mtok）';
+}
 export const MODEL_FILTER_ALL_LABEL = '全部家族';
 export const MODEL_FAMILY_FILTER_LABEL = '家族';
 export const MODEL_SEARCH_PLACEHOLDER = '搜索模型…';
@@ -186,7 +188,9 @@ export const INTELLIGENCE_ANY_VALUE = '__any__';
 export const MIN_TPS_LABEL = '最低 TPS';
 export const EXPECTED_TPS_LABEL = '期望 TPS';
 export const OUTPUT_CAP_LABEL = '输出单价上限';
-export const OUTPUT_CAP_PLACEHOLDER = '可选，USD / 百万 Token';
+export function outputCapPlaceholder(currency: DisplayCurrency): string {
+  return currency === 'CNY' ? '可选，¥ / 百万 Token' : '可选，USD / 百万 Token';
+}
 export const OPTIONAL_PLACEHOLDER = '可选';
 export const REQUIRE_IMAGE_LABEL = '需要图片输入';
 export const REQUIRE_SEARCH_LABEL = '需要联网搜索';

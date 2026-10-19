@@ -3,10 +3,10 @@ import { QueryError } from '@/renderer/components/query-error';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { QuotaBar, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone } from '@/renderer/components/usage/QuotaBar';
 import { providerBrand } from '@/renderer/lib/model-brand';
-import { useQuotaQuery } from '@/renderer/lib/queries';
+import { useDisplayCurrency, useQuotaQuery } from '@/renderer/lib/queries';
 import { reorderProviders } from '@/provider-order';
 import { cn } from 'cn';
-import type { ProviderCatalogSnapshot, QuotaSnapshot } from '@/shell-contract';
+import { formatQuotaBalance, type ProviderCatalogSnapshot, type QuotaSnapshot } from '@/shell-contract';
 import { QUOTA_EVIDENCE_GRACE_MS } from '@wrenyard/auto-routing/constants';
 import { BALANCE_LABEL } from '../model/describe.js';
 
@@ -47,6 +47,7 @@ function providerStatus(entry: ProviderCatalogSnapshot, now: number): string {
 
 export function ProviderUsage() {
   const quota = useQuotaQuery();
+  const currency = useDisplayCurrency();
 
   if (quota.isPending) {
     return (
@@ -60,10 +61,10 @@ export function ProviderUsage() {
     return <QueryError query={quota} title="供应数据暂不可用" />;
   }
 
-  return <ProviderUsageCards snapshot={quota.data} />;
+  return <ProviderUsageCards snapshot={quota.data} currency={currency} />;
 }
 
-function ProviderUsageCards({ snapshot }: { snapshot: QuotaSnapshot }) {
+function ProviderUsageCards({ snapshot, currency }: { snapshot: QuotaSnapshot; currency: 'CNY' | 'USD' }) {
   const catalog = snapshot.catalog;
   const orderIds = reorderProviders(snapshot.providerOrder ?? [], catalog.map((entry) => entry.id))
     .map((entry) => entry.id);
@@ -78,13 +79,13 @@ function ProviderUsageCards({ snapshot }: { snapshot: QuotaSnapshot }) {
       {activated.length === 0 ? (
         <p className="text-sm text-muted-foreground">还没有已激活的供应商。</p>
       ) : (
-        activated.map((entry) => <ProviderUsageCard key={entry.id} entry={entry} now={now} />)
+        activated.map((entry) => <ProviderUsageCard key={entry.id} entry={entry} now={now} currency={currency} />)
       )}
     </div>
   );
 }
 
-function ProviderUsageCard({ entry, now }: { entry: ProviderCatalogSnapshot; now: number }) {
+function ProviderUsageCard({ entry, now, currency }: { entry: ProviderCatalogSnapshot; now: number; currency: 'CNY' | 'USD' }) {
   const quota = entry.quota;
   const hasDetail = quota !== undefined && (quota.windows.length > 0 || quota.balances.length > 0);
 
@@ -116,7 +117,7 @@ function ProviderUsageCard({ entry, now }: { entry: ProviderCatalogSnapshot; now
               className="flex items-baseline gap-1 text-sm"
             >
               <span className="text-muted-foreground">{BALANCE_LABEL}</span>
-              <strong className="tabular-nums">{balance.display}</strong>
+              <strong className="tabular-nums">{formatQuotaBalance(balance, currency)}</strong>
               {balance.state !== undefined && (
                 <span className={cn(quotaPoolStateTone(balance.state) ?? 'text-muted-foreground')}>
                   {QUOTA_POOL_STATE_LABEL[balance.state]}

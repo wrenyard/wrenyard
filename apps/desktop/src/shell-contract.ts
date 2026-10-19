@@ -350,6 +350,30 @@ export const STARTUP_PAGE_OPTIONS: ReadonlyArray<{ value: StartupPagePreference;
   { value: 'session', label: '会话' },
 ];
 
+/** The currency every price and cost is displayed in. */
+export type DisplayCurrency = 'CNY' | 'USD';
+
+export const DISPLAY_CURRENCY_OPTIONS: ReadonlyArray<{ value: DisplayCurrency; label: string }> = [
+  { value: 'CNY', label: '人民币' },
+  { value: 'USD', label: '美元' },
+];
+
+/** Fixed conversion rate used for display: 1 USD = 7 CNY. */
+export const CNY_PER_USD = 7;
+
+export function formatQuotaBalance(
+  balance: { currency?: string; amount: string; display: string },
+  displayCurrency: DisplayCurrency,
+): string {
+  if (balance.currency === 'USD' && displayCurrency === 'CNY') {
+    return `¥${(Number(balance.amount) * CNY_PER_USD).toFixed(2)}`;
+  }
+  if (balance.currency === 'CNY' && displayCurrency === 'USD') {
+    return `$${(Number(balance.amount) / CNY_PER_USD).toFixed(2)}`;
+  }
+  return balance.display;
+}
+
 export const SESSION_SEND_KEY_OPTIONS: ReadonlyArray<{ value: SessionSendKey; label: string }> = [
   { value: 'enter', label: 'Enter 发送' },
   { value: 'mod-enter', label: 'Cmd/Ctrl+Enter 发送' },
@@ -366,6 +390,7 @@ export interface NotificationPreferences {
 /** Persisted general partition fields. */
 export interface GeneralPreferences {
   startupPage: StartupPagePreference;
+  displayCurrency: DisplayCurrency;
 }
 
 /**
@@ -478,6 +503,7 @@ const BUILTIN_THEME_IDS: ReadonlySet<string> = new Set(BUILTIN_THEMES.map((theme
  */
 export const PREFERENCES = {
   'general.startupPage': { path: ['general', 'startupPage'], validate: (value) => value === 'last' || value === 'session' },
+  'general.displayCurrency': { path: ['general', 'displayCurrency'], validate: (value) => value === 'CNY' || value === 'USD' },
   'general.openAtLogin': { path: ['general', 'openAtLogin'], validate: (value) => typeof value === 'boolean' },
   'general.menuBarQuota': { path: ['general', 'menuBarQuota'], validate: (value) => typeof value === 'boolean' },
   'appearance.theme': { path: ['appearance', 'theme'], validate: (value) => typeof value === 'string' && BUILTIN_THEME_IDS.has(value) },

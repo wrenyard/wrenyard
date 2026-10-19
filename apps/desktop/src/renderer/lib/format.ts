@@ -1,5 +1,8 @@
 /** Formatting helpers shared across the renderer. All output is product UI copy. */
 
+import type { DisplayCurrency } from '@/shell-contract';
+import { CNY_PER_USD } from '@/shell-contract';
+
 function pad2(value: number): string {
   return String(value).padStart(2, '0');
 }
@@ -90,11 +93,19 @@ export function formatRatio(ratio: number | undefined): string {
   return `${Math.round(ratio * 100)}%`;
 }
 
-/** `$0.0123` from a USD amount; unknown renders as an em dash, zero as `$0`. */
-export function formatCost(value: number | undefined): string {
+/**
+ * Currency-aware cost string from a USD-denominated amount. Unknown renders as
+ * an em dash; zero renders as `¥0` (CNY) or `$0` (USD); otherwise the value is
+ * converted by `CNY_PER_USD` and prefixed with `¥` when the display currency is
+ * CNY, or left unconverted and prefixed with `$` when it is USD. Four-decimal
+ * rounding is preserved for both currencies.
+ */
+export function formatCost(value: number | undefined, currency: DisplayCurrency = 'CNY'): string {
   if (value === undefined || !Number.isFinite(value)) return '—';
-  if (value === 0) return '$0';
-  return `$${value.toFixed(4)}`;
+  if (value === 0) return currency === 'CNY' ? '¥0' : '$0';
+  const symbol = currency === 'CNY' ? '¥' : '$';
+  const amount = currency === 'CNY' ? value * CNY_PER_USD : value;
+  return `${symbol}${amount.toFixed(4)}`;
 }
 
 /** Grouped integer, e.g. `1,234`; used for the small counts in the title card. */
