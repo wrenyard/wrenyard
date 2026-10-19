@@ -32,8 +32,8 @@ import {
 /** One-line placeholder for an absent time. */
 const NONE = '—';
 
-/** The five tool switches a bot definition may declare. */
-const TOOL_IDS = ['session', 'todo', 'message', 'memory', 'workspace'] as const;
+/** The tool switches a bot definition may declare. */
+const TOOL_IDS = ['session', 'todo', 'message', 'memory', 'routine', 'workspace'] as const;
 
 /** The icon of one bot: its identity icon, else the first character of its name. */
 function botIcon(bot: AgentBot): string {

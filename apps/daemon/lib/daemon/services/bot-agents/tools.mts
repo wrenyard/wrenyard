@@ -186,9 +186,6 @@ const MEMORY_TOOL: ToolSpec = {
     'memories are Markdown files in your private memory directory; `list` and `read` show them,',
     '`save` creates one by name, `update` replaces an existing one, `remove` deletes one and drops',
     'its index line, and `identity` reads or rewrites your name, icon, description and role text.',
-    '`routines` lists your routines on this device, `routine` creates one (without `routine`) or changes',
-    'one (with its id), and `routine_remove` deletes one. Keep routine text to a short trigger; put',
-    'procedure details in a memory and name that memory in the routine.',
     'An updated or removed memory must carry its exact current body as `previous`;',
     'your switches are not editable here.',
   ].join(' '),
@@ -197,12 +194,12 @@ const MEMORY_TOOL: ToolSpec = {
     properties: {
       op: {
         type: 'string',
-        enum: ['list', 'read', 'save', 'update', 'remove', 'identity', 'routines', 'routine', 'routine_remove'],
-        description: 'List memories, read one, create one, replace one, delete one, read/update your identity, or list/write/delete your routines.',
+        enum: ['list', 'read', 'save', 'update', 'remove', 'identity'],
+        description: 'List memories, read one, create one, replace one, delete one, or read/update your identity.',
       },
       name: {
         type: 'string',
-        description: 'Memory name for read/save/update/remove, the new identity name for identity, or the routine name.',
+        description: 'Memory name for read/save/update/remove, or the new identity name for identity.',
       },
       description: {
         type: 'string',
@@ -215,7 +212,7 @@ const MEMORY_TOOL: ToolSpec = {
       },
       content: {
         type: 'string',
-        description: 'The memory body for save and update, or the routine text for routine.',
+        description: 'The memory body; save and update only.',
       },
       previous: {
         type: 'string',
@@ -229,19 +226,27 @@ const MEMORY_TOOL: ToolSpec = {
         type: 'string',
         description: 'The identity role text.',
       },
-      routine: {
-        type: 'string',
-        description: 'Routine id (8 hex characters) to change or remove; omit to create a routine.',
-      },
-      intervalMinutes: {
-        type: 'integer',
-        description: 'Minutes between runs of a routine (1 to 10080); required when creating one.',
-      },
-      state: {
-        type: 'string',
-        enum: ['active', 'paused'],
-        description: 'Routine state; new routines start active.',
-      },
+    },
+    required: ['op'],
+  },
+}
+
+const ROUTINE_TOOL: ToolSpec = {
+  name: 'routine',
+  description: [
+    'Manage your own routines on this device: each fires on its interval as a [wake:routine <id>] message.',
+    '`list` shows them, `create` adds one, `update` changes the given fields of one, `remove` deletes one.',
+    'Keep the text a short trigger and put procedure details in a memory that the text names.',
+  ].join(' '),
+  parameters: {
+    type: 'object',
+    properties: {
+      op: { type: 'string', enum: ['list', 'create', 'update', 'remove'] },
+      id: { type: 'string', description: 'Routine id (8 hex characters); update and remove only.' },
+      name: { type: 'string', description: 'Short routine name.' },
+      text: { type: 'string', description: 'The trigger text the routine wakes you with.' },
+      intervalMinutes: { type: 'integer', description: 'Minutes between runs (1 to 10080); required to create.' },
+      state: { type: 'string', enum: ['active', 'paused'], description: 'New routines start active.' },
     },
     required: ['op'],
   },
@@ -272,6 +277,7 @@ const TOOL_SPECS: Readonly<Record<AgentToolName, ToolSpec>> = {
   todo: TODO_TOOL,
   message: MESSAGE_TOOL,
   memory: MEMORY_TOOL,
+  routine: ROUTINE_TOOL,
   workspace: WORKSPACE_TOOL,
 }
 
@@ -308,6 +314,8 @@ export function createAgentToolRunner(deps: {
           return runMessageTool(parseArguments(call.arguments), ctx)
         case 'memory':
           return await runMemoryTool(parseArguments(call.arguments), ctx)
+        case 'routine':
+          return await runRoutineTool(parseArguments(call.arguments), ctx)
         default:
           return failed(`unknown tool: ${call.name}`)
       }
@@ -640,36 +648,50 @@ async function runMemoryTool(args: Record<string, unknown>, ctx: AgentToolContex
     }
     case 'identity':
       return await runIdentityTool(args, ctx)
-    case 'routines':
-      return done((await readRoutines(ctx.routinesDir))?.routines ?? [])
-    case 'routine':
-      return done(await writeOwnRoutine(args, ctx))
-    case 'routine_remove': {
-      const id = requireString(args, 'routine', 'routine_remove requires routine')
-      await removeRoutine(ctx.routinesDir, id)
-      return done({ removed: id })
-    }
     default:
       return failed(`unsupported memory op: ${String(args.op)}`)
   }
 }
 
 /**
- * Create a routine, or change the given fields of an existing one. The file is
- * the definition; the scheduler picks the change up on the next poll.
+ * The bot's own routines on this device. Each change writes or removes one
+ * routine file; the scheduler picks it up on the next poll.
  */
-async function writeOwnRoutine(args: Record<string, unknown>, ctx: AgentToolContext): Promise<RoutineDefinition> {
+async function runRoutineTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
   const existing = (await readRoutines(ctx.routinesDir))?.routines ?? []
-  const id = optionalString(args, 'routine')
+  switch (args.op) {
+    case 'list':
+      return done(existing)
+    case 'create':
+    case 'update':
+      return done(await writeOwnRoutine(args, existing, ctx))
+    case 'remove': {
+      const id = requireString(args, 'id', 'remove requires id')
+      if (!existing.some(routine => routine.id === id)) throw new Error(`routine ${id} does not exist`)
+      await removeRoutine(ctx.routinesDir, id)
+      return done({ removed: id })
+    }
+    default:
+      return failed(`unsupported routine op: ${String(args.op)}`)
+  }
+}
+
+/** Create a routine, or change the given fields of an existing one. */
+async function writeOwnRoutine(
+  args: Record<string, unknown>,
+  existing: readonly RoutineDefinition[],
+  ctx: AgentToolContext,
+): Promise<RoutineDefinition> {
+  const id = args.op === 'update' ? requireString(args, 'id', 'update requires id') : undefined
   const name = optionalString(args, 'name')
-  const prompt = optionalString(args, 'content')
+  const prompt = optionalString(args, 'text')
   const interval = args.intervalMinutes
   if (interval !== undefined && typeof interval !== 'number') throw new Error('intervalMinutes must be an integer')
   const state = optionalString(args, 'state')
   if (state !== undefined && state !== 'active' && state !== 'paused') throw new Error('state must be active or paused')
   if (id === undefined) {
-    if (prompt === undefined) throw new Error('creating a routine requires content')
-    if (interval === undefined) throw new Error('creating a routine requires intervalMinutes')
+    if (prompt === undefined) throw new Error('create requires text')
+    if (interval === undefined) throw new Error('create requires intervalMinutes')
     return await writeRoutine(ctx.routinesDir, {
       id: newRoutineId(existing.map(routine => routine.id)),
       ...(name === undefined ? {} : { name }),

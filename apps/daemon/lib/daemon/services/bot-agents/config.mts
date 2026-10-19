@@ -27,10 +27,10 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { readRoutines, type RoutineDefinition } from './routine-files.mts'
 
 /** One tool switch a bot can turn on. */
-export type AgentToolName = 'session' | 'todo' | 'message' | 'memory' | 'workspace'
+export type AgentToolName = 'session' | 'todo' | 'message' | 'memory' | 'routine' | 'workspace'
 
 /** Every known tool switch. */
-export const AGENT_TOOL_NAMES: readonly AgentToolName[] = ['session', 'todo', 'message', 'memory', 'workspace']
+export const AGENT_TOOL_NAMES: readonly AgentToolName[] = ['session', 'todo', 'message', 'memory', 'routine', 'workspace']
 
 /** Where a bot definition lives. */
 export type AgentBotLocation = 'workspace' | 'device'

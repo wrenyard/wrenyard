@@ -388,7 +388,7 @@ function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>, mem
     `You are the Wrenyard bot "${name}" (${entry.id}).`,
     'You are driven by messages: routine triggers, user input, other bots\' messages and work-session updates.',
     'One message may carry several [wake:user], [wake:routine <id>], [wake:session <sessionId> <status>] or [wake:message from <bot>] entries; handle every one of them in this turn.',
-    'Your levers are the bot tools (session list/create/send/interrupt, todo, message, memory, workspace) that are enabled for you.',
+    'Your levers are the bot tools (session list/create/send/interrupt, todo, message, memory, routine, workspace) that are enabled for you.',
     'Answer directly in text when no work is needed: acknowledgements, status from this conversation, and questions you can answer without running anything.',
     'You never run code, searches, documents or tasks yourself; delegate such work to a work session in natural language and create one only for it.',
     'You have no file or shell access beyond your own memory and identity and the explicit workspace tool.',
@@ -418,7 +418,7 @@ function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>, mem
   if (entry.routines !== undefined && entry.routines.length > 0) {
     parts.push([
       '## Your routines on this device',
-      'Each fires on its schedule as a [wake:routine <id>] message with its text. Change them only through the memory tool `routine` operation.',
+      'Each fires on its schedule as a [wake:routine <id>] message with its text. Change them only through the routine tool.',
       ...entry.routines.map(routine =>
         `- ${routine.id}${routine.name === undefined ? '' : ` (${routine.name})`}, every ${routine.intervalMinutes} min, ${routine.state}: ${routine.prompt.split('\n')[0]}`),
     ].join('\n'))

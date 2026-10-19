@@ -61,7 +61,8 @@ You are the reviewer of project aurora. Keep findings short and backed by eviden
 | `session` | List, create and message work sessions, and interrupt a running turn. A work session is a full Wrenyard conversation: it reads registered projects, dispatches tasks and edits code, so the bot names the project and worktree in its message. |
 | `todo` | List, show and add workspace todos, change their status (`open`, `in_progress`, `done`, `accepted`, `cancelled`) and record a result summary. |
 | `message` | Send a message to another bot by id, which wakes that bot. |
-| `memory` | Keep the bot's own memory, edit its identity, and manage its routines on this device. |
+| `memory` | Keep the bot's own memory and edit its identity. |
+| `routine` | List, create, change and delete the bot's own routines on this device. |
 
 Sessions a bot creates or messages are watched: when such a session finishes
 its next turn, the bot is woken with the outcome. A bot therefore starts work,
@@ -104,7 +105,7 @@ Morning review: follow your review-procedure memory.
 ```
 
 The file name is the routine id (8 lowercase hex characters). Routines created
-or paused on the Bots page write these files, and a bot with the `memory` tool
+or paused on the Bots page write these files, and a bot with the `routine` tool
 can list, create, change and delete its own routines. A routine fires into the
 bot's own conversation each time, so keep its text to a trigger and keep the
 procedure in a memory the routine names.
