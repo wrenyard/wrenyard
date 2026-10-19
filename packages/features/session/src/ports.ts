@@ -146,6 +146,12 @@ export interface SessionHost {
    * byte-for-byte unchanged.
    */
   agentTools?(sessionId: string): AgentToolPort | undefined;
+  /**
+   * The memory store of one session, for a host that keeps memory apart per
+   * session (a bot's own memory). When present it replaces the workspace store
+   * for every session of this host; `undefined` means the session has none.
+   */
+  memoryFor?(sessionId: string): WorkspaceMemoryPort | undefined;
   now?(): Date;
 }
 
@@ -563,6 +569,8 @@ export interface EnginePorts {
   ledger: LedgerPort;
   /** Restricted workspace memory upserts, used only after a final reply. */
   memory?: WorkspaceMemoryPort;
+  /** Per-session memory store; see {@link SessionHost.memoryFor}. */
+  memoryFor?(sessionId: string): WorkspaceMemoryPort | undefined;
   files(snapshot: WorkspaceSnapshot, workspaceRoot: string): FilesPort;
   /** Session-scoped so a `call` event lands on the right timeline. */
   calls(sessionId: string): CallsPort;

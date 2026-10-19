@@ -57,8 +57,6 @@ export interface AgentToolContext {
   workspaceRoot: string
   /** Adopt a freshly written identity in the running kernel. */
   refreshIdentity(identity: BotAgentIdentity): void
-  /** Re-read the memory injected into the fixed system context after a change. */
-  refreshMemory(): void
   /** Watch one session: its next finished turn after `afterTurn` wakes this bot. */
   watch(sessionId: string, afterTurn: number, todoIds?: string[]): void
   /** Wake another bot with a message; throws when the target cannot be woken. */
@@ -624,7 +622,6 @@ async function runMemoryTool(args: Record<string, unknown>, ctx: AgentToolContex
         { name, description, type, content, ...(previous === undefined ? {} : { previous }) },
         async () => {},
       )
-      ctx.refreshMemory()
       return done({ name })
     }
     case 'update': {
@@ -641,7 +638,6 @@ async function runMemoryTool(args: Record<string, unknown>, ctx: AgentToolContex
       }
       if (previous === undefined) throw new Error('update requires previous, the exact current body')
       await memory.save({ name, description, type, content, previous }, async () => {})
-      ctx.refreshMemory()
       return done({ name })
     }
     case 'remove': {
@@ -651,7 +647,6 @@ async function runMemoryTool(args: Record<string, unknown>, ctx: AgentToolContex
         { name, ...(previous === undefined ? {} : { previous }) },
         async () => {},
       )
-      ctx.refreshMemory()
       return done({ name })
     }
     case 'identity':

@@ -67,6 +67,17 @@ export interface WorkspaceMemoryPort {
   remove(candidate: unknown, record: (change: MemoryChange) => Promise<void>): Promise<void>;
 }
 
+/**
+ * The memory store one session uses: the host's per-session store when it keeps
+ * one (then `undefined` means none), otherwise the workspace store.
+ */
+export function memoryPortOf(
+  ports: { memory?: WorkspaceMemoryPort; memoryFor?(sessionId: string): WorkspaceMemoryPort | undefined },
+  sessionId: string,
+): WorkspaceMemoryPort | undefined {
+  return ports.memoryFor === undefined ? ports.memory : ports.memoryFor(sessionId);
+}
+
 const TYPES: ReadonlySet<string> = new Set(['user', 'feedback', 'project', 'reference']);
 /** Non-reserved kebab-case: lowercase words joined by single hyphens. */
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;

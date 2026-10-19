@@ -21,6 +21,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   createSession,
+  createWorkspaceMemory,
   estimateTokens,
   type AgentToolPort,
   type LedgerEvent,
@@ -29,6 +30,7 @@ import {
   type SessionHost,
   type SessionSummary,
   type TurnStatus,
+  type WorkspaceMemoryPort,
 } from '@wrenyard/session'
 import type { RoutineRecord } from '../../../protocol/methods/routine.mts'
 import type { WorkspaceTodoService } from '../workspace-todo-service.mts'
@@ -79,12 +81,6 @@ const GROUP_PAGE_MAX = 500
 const GROUP_PUBLISHED_MAX = 2_000
 /** How many delivered session wake keys one bot remembers. */
 const WAKE_KEYS_MAX = 64
-/** How many memory files the fixed context carries at most. */
-const MEMORY_BLOCK_FILES = 20
-/** How many characters of one memory body the fixed context carries. */
-const MEMORY_BLOCK_BODY_CHARS = 1_500
-/** How many characters of the memory index the fixed context carries. */
-const MEMORY_BLOCK_INDEX_CHARS = 4_000
 /**
  * The built-in, private-data-free role of a freshly created bot. It states no
  * filesystem path: identity and memory are reached only through the tools.
@@ -322,49 +318,12 @@ export interface GroupSendResult {
 }
 
 /**
- * The per-bot memory of the fixed context: the memory index followed by the
- * bounded body of every memory file, read fresh before it is injected so a
- * change or a removal is visible on the next wake. Every file is checked to
- * stay inside the bot directory before it is read.
- */
-async function readMemoryBlock(entry: BotAgentEntry): Promise<string> {
-  const memoryDir = join(entry.directory, 'memory')
-  let files: AgentMemoryFile[]
-  try {
-    files = await listMemoryFiles(entry.directory)
-  } catch {
-    return ''
-  }
-  /** Read one file of the memory directory, refusing any escape. */
-  const read = async (name: string): Promise<string | undefined> => {
-    const path = join(memoryDir, name)
-    try {
-      await assertRealInside(entry.directory, path)
-      return (await readFile(path, 'utf-8')).trim()
-    } catch {
-      return undefined
-    }
-  }
-  const sections: string[] = []
-  const index = await read('INDEX.md')
-  sections.push(index === undefined || index === ''
-    ? '## memory\n(no memory index yet)'
-    : `## memory index\n${index.slice(0, MEMORY_BLOCK_INDEX_CHARS)}`)
-  for (const file of files.filter(file => file.name !== 'INDEX.md').slice(0, MEMORY_BLOCK_FILES)) {
-    const body = await read(file.name)
-    if (body === undefined || body === '') continue
-    sections.push(`### ${file.name}\n${body.slice(0, MEMORY_BLOCK_BODY_CHARS)}`)
-  }
-  return sections.join('\n\n')
-}
-
-/**
  * The fixed instruction prefix every bot runs on: its identity role, its
- * routines on this device, the per-bot memory it already has, and the enabled peers it may address in the
- * group. The roster is appended after the prefix, the group guidance, the role
- * text and the memory, all verbatim.
+ * routines on this device, and the enabled peers it may address in the group.
+ * Its memory reaches it like a work session's: the memory search picks the
+ * entries a turn needs from the bot's own memory index.
  */
-function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>, memory: string): string {
+function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>): string {
   const identity = entry.identity
   const name = identity?.name ?? entry.id
   const workspaceEnabled = entry.config?.tools.includes('workspace') === true
@@ -407,7 +366,6 @@ function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>, mem
         `- ${routine.id}${routine.name === undefined ? '' : ` (${routine.name})`}, every ${routine.intervalMinutes} min, ${routine.state}: ${routine.prompt.split('\n')[0]}`),
     ].join('\n'))
   }
-  if (memory.trim() !== '') parts.push(memory)
   parts.push(roster)
   return parts.join('\n\n')
 }
@@ -709,8 +667,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   const trackedTurns = new Map<string, TrackedTurn>()
   /** Pending seed-turn waits, settled by stop() before it awaits admissions. */
   const seedWaits = new Set<() => void>()
-  /** Per-bot memory block of the fixed context, keyed by bot id. */
-  const memoryBlocks = new Map<string, string>()
+  /** Each bot's own memory store, by definition directory. */
+  const memoryStores = new Map<string, WorkspaceMemoryPort>()
   /** Live ledger subscriptions, keyed by bot and watched session. */
   const watchSubs = new Map<string, () => void>()
   /** Live reply-publication subscriptions, keyed by bot context session. */
@@ -738,6 +696,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     get(target, property) {
       if (property === 'stateRoot') return options.stateDir
       if (property === 'agentTools') return (sessionId: string) => portForSession(sessionId)
+      // A bot context reads and saves only its own bot's memory, never the workspace's.
+      if (property === 'memoryFor') return (sessionId: string) => memoryForSession(sessionId)
       const value = Reflect.get(target, property, target) as unknown
       return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value
     },
@@ -746,6 +706,22 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   function contextSession(): Session {
     if (context === undefined) context = createSession(botHost)
     return context
+  }
+
+  /** The memory store of the bot owning one context session, if any. */
+  function memoryForSession(sessionId: string): WorkspaceMemoryPort | undefined {
+    for (const [botId, bot] of Object.entries(state.bots)) {
+      if (bot.sessionId !== sessionId) continue
+      const entry = entries.get(botId)
+      if (entry === undefined) return undefined
+      let store = memoryStores.get(entry.directory)
+      if (store === undefined) {
+        store = createWorkspaceMemory(entry.directory, 'memory')
+        memoryStores.set(entry.directory, store)
+      }
+      return store
+    }
+    return undefined
   }
 
   /** The tool port of the bot owning one context session, if any. */
@@ -789,29 +765,11 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     return sections.length === 0 ? undefined : sections.join('\n\n')
   }
 
-  /**
-   * The memory block of one bot, cached so the fixed context of every wake
-   * carries it without re-reading the directory mid-turn. A memory tool change
-   * refreshes it at once; a definition reload refreshes every bot.
-   */
-  async function refreshMemoryBlock(botId: string): Promise<void> {
-    const entry = entries.get(botId)
-    if (entry === undefined) {
-      memoryBlocks.delete(botId)
-      return
-    }
-    memoryBlocks.set(botId, await readMemoryBlock(entry))
-  }
-
-  async function refreshMemoryBlocks(): Promise<void> {
-    await Promise.all([...entries.keys()].map(id => refreshMemoryBlock(id)))
-  }
-
   function portFor(botId: string): AgentToolPort | undefined {
     const entry = entries.get(botId)
     if (entry?.config === undefined || entry.identity === undefined) return undefined
     return {
-      system: botSystemPrompt(entry, entries.values(), memoryBlocks.get(entry.id) ?? ''),
+      system: botSystemPrompt(entry, entries.values()),
       tools: agentToolSpecs(entry.config.tools),
       maxToolCalls: MAX_TOOL_CALLS,
       kernelFacts: () => kernelFactsFor(entry),
@@ -835,11 +793,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       refreshIdentity: identity => {
         const current = entries.get(botId)
         if (current !== undefined) current.identity = identity
-      },
-      refreshMemory: () => {
-        void refreshMemoryBlock(botId).catch(error => {
-          log('warn', `bot agent kernel could not refresh the memory of ${botId}: ${errorText(error)}`)
-        })
       },
       watch: (sessionId, afterTurn, todoIds) => addWatch(botId, sessionId, afterTurn, todoIds),
       message: (to, text) => sendMessage(botId, to, text),
@@ -1689,8 +1642,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     for (const entry of entries.values()) {
       if (entry.config !== undefined) options.syncRoutines?.(entry.id, entry.routines, entry.routinesDir)
     }
-    // Every wake carries the per-bot memory, so it is read with the definition.
-    await refreshMemoryBlocks()
   }
 
   /**

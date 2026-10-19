@@ -284,6 +284,7 @@ export function createSession(host: SessionHost): Session {
   const ports: EnginePorts = {
     ledger,
     memory: createWorkspaceMemory(host.workspaceRoot),
+    ...(host.memoryFor === undefined ? {} : { memoryFor: (sessionId: string) => host.memoryFor!(sessionId) }),
     files: (_snapshot, workspaceRoot) => new WorkspaceFileSource({ workspaceRoot }),
     calls,
     fileStore: new FileStore({ stateRoot: host.stateRoot }),

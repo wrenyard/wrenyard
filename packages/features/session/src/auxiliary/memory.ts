@@ -13,6 +13,7 @@ import type { BuiltView, InvokedCall, SessionCallHost } from '../ports.ts';
 import type { ToolSpec } from '../transport/index.ts';
 import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
 import { latestReasonText } from './reply.ts';
+import { memoryPortOf, type WorkspaceMemoryPort } from '../memory-write.ts';
 
 /** How much of one action result the memory-search view carries. */
 const ACTION_RESULT_EXCERPT = 200;
@@ -141,7 +142,9 @@ export async function runMemorySearch(
 ): Promise<void> {
   // Read the live index so a memory saved earlier in this session is visible
   // to the next search; fall back to the frozen snapshot when there is no port.
-  const memoryIndex = host.ports.memory?.index() ?? session.snapshot.memoryIndex;
+  // A host that keeps memory per session never falls back to the workspace's.
+  const memory = memoryPortOf(host.ports, session.sessionId);
+  const memoryIndex = memory?.index() ?? (host.ports.memoryFor === undefined ? session.snapshot.memoryIndex : '');
   const targets = [...canonicalMemoryTargets(memoryIndex)];
   if (targets.length === 0) return;
   const events = host.ledger.read(session.sessionId);
@@ -188,7 +191,7 @@ export async function runMemorySearch(
   }
   for (const pick of selection.picks) {
     if (turn.finished || turn.abort.signal.aborted) break;
-    const file = session.files.read(pick.path);
+    const file = memory === undefined ? session.files.read(pick.path) : readMemoryFile(memory, pick.path);
     if (!file) continue;
     const version = contentVersion(file.content);
     if (latestMemoryVersion(events, pick.path) === version) continue;
@@ -203,6 +206,13 @@ export async function runMemorySearch(
       source: 'memory-search',
     });
   }
+}
+
+/** Read one picked `memories/<file>` through the memory store, or undefined when absent. */
+function readMemoryFile(memory: WorkspaceMemoryPort, path: string): { content: string } | undefined {
+  const filename = path.slice(path.indexOf('/') + 1);
+  const entry = memory.list().find((item) => item.filename === filename);
+  return entry === undefined ? undefined : { content: memory.read(entry.name).text };
 }
 
 /** Report a memory search that produced nothing usable; the step continues. */

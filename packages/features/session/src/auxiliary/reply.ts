@@ -14,6 +14,7 @@ import { messageOf } from '../errors.ts';
 import type { BuiltView, CallFailureSummary, SessionCallHost } from '../ports.ts';
 import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
 import { maybeClassifyStatus } from './status.ts';
+import { memoryPortOf } from '../memory-write.ts';
 
 /** Output-token allowance for the single communication reply call. */
 const REPLY_MAX_TOKENS = 800;
@@ -211,7 +212,7 @@ export class ReplyWriter {
     // Memory candidates ride the ordinary terminal reply call. They are offered
     // only on a successful non-ask terminal reply, and only with a memory port;
     // no separate inference is ever added.
-    const memory = this.host.ports.memory;
+    const memory = memoryPortOf(this.host.ports, session.sessionId);
     const canSave = request.terminal && request.status === 'completed'
       && turn.asksThisStep.length === 0 && memory !== undefined;
     const input: ReplyViewInput = {
@@ -345,7 +346,7 @@ export class ReplyWriter {
    * candidate or a write failure only adds a `system.warning`.
    */
   private async saveMemories(session: SessionRuntime, turn: TurnRuntime, calls: readonly ToolCall[]): Promise<void> {
-    const memory = this.host.ports.memory;
+    const memory = memoryPortOf(this.host.ports, session.sessionId);
     if (memory === undefined) return;
     try {
       // The reply run is a single completion with tool choice auto: the model
