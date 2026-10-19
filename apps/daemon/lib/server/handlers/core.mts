@@ -64,6 +64,7 @@ import { registerStorageHandlers } from './storage.mts'
 import { registerWorkspaceVcsHandlers } from './workspace-vcs.mts'
 import { registerWorkspaceDocHandlers, type WorkspaceDocHandlerService } from './workspace-doc.mts'
 import { registerWorkspaceTodoHandlers, type WorkspaceTodoHandlerService } from './workspace-todo.mts'
+import { registerClientHandlers, type ClientHandlerService } from './client.mts'
 import {
   TaskSettingsContentConflictError,
   TaskSettingsInvalidSettingsError,
@@ -159,6 +160,8 @@ export interface CoreRpcHandlerOptions {
   workspaceDocService?: WorkspaceDocHandlerService
   /** Workspace todo service for todo.list/get/create/update RPC methods. */
   workspaceTodoService?: WorkspaceTodoHandlerService
+  /** Daemon-wide agent-client listing backing client.list. */
+  clientService?: ClientHandlerService
   /** IPC-only model Gateway connection descriptor for local clients. */
   gatewayConnection?: () => Promise<GatewayConnectionResult>
   /** IPC-only read of the persisted + effective gateway access settings. */
@@ -876,6 +879,8 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
   registerWorkspaceDocHandlers(router, options.workspaceDocService)
 
   registerWorkspaceTodoHandlers(router, options.workspaceTodoService)
+
+  registerClientHandlers(router, options.clientService)
 
   router.register('taskgraph.create', async (params) => {
     return taskgraphResult<TaskGraphCreateResult>(async () => {

@@ -12,6 +12,7 @@ export type SettingsCategoryId =
   | 'catalog'
   | 'routingTest'
   | 'models'
+  | 'clients'
   | 'bot'
   | 'shortcuts'
   | 'pet'
@@ -37,6 +38,7 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
   { id: 'catalog', label: '模型', description: '已激活供应商提供的模型、价格与点数倍率。' },
   { id: 'routingTest', label: '派发测试', description: '按条件预览自动派发会选中的模型。' },
   { id: 'models', label: '模型与路由', description: '自动派发参考与路由权重。' },
+  { id: 'clients', label: '客户端', description: '各客户端的安装状态与可用性检测结果（只读）。' },
   { id: 'bot', label: '机器人', description: '机器人配置与例行任务；群聊和私聊在机器人页面。' },
   { id: 'shortcuts', label: '快捷键', description: '当前平台生效的全部快捷键；暂不支持自定义。' },
   { id: 'pet', label: '桌宠', description: '桌宠的显示内容与行为，由啾啾工坊直接管理生命周期。' },

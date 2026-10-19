@@ -108,6 +108,7 @@ export function printUsage(): void {
 
 Usage:
   wrenyard quota [provider] [--json] [--refresh]
+  wrenyard clients list [--json]
   wrenyard clients prune [--dry-run | --apply] [--older-than-days N] [--json]
   wrenyard task run <task_id> -p <project> [--config path] [--worktree id] [--json] <json-input>
   wrenyard task cancel <task_run_id> [--config path] [--json]

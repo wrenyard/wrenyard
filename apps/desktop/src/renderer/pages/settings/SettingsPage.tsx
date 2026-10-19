@@ -22,6 +22,7 @@ import type { DesktopPreferences, PreferenceId, ProviderCatalogSnapshot } from '
 import { KNOWN_SHORTCUTS, knownShortcutKeys } from '@/shell-contract';
 import { PetSettingsProvider, PetStatusBadge } from './components/PetSettings.js';
 import { BotSettings } from './components/BotSettings.js';
+import { ClientsSettings } from './components/ClientsSettings.js';
 import { SettingRow, type SettingBinding } from './components/SettingRow.js';
 import { SettingsSearch } from './components/SettingsSearch.js';
 import { SettingsToc, type TocCategory } from './components/SettingsToc.js';
@@ -457,6 +458,10 @@ export function SettingsPage({
           active={!searchActive && activeCategory === 'routingTest'}
         />
       );
+    }
+    if (categoryId === 'clients') {
+      // Read-only client detection page; it fetches client.list when mounted.
+      return <ClientsSettings />;
     }
     if (categoryId === 'storage') {
       // Read-only usage page: it only queries (and the daemon only scans) while

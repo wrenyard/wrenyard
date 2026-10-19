@@ -33,6 +33,8 @@ import {
   type BotTodoMethodMap,
   type AgentMethod,
   type AgentMethodMap,
+  type ClientMethod,
+  type ClientMethodMap,
   type ExecStartRequest,
   type ExecSnapshotDto,
   type ExecEventsRequest,
@@ -287,6 +289,16 @@ const api: WrenyardShellApi = {
       method,
       params,
     ) as Promise<BotTodoMethodMap[M]['result']>;
+  },
+  client<M extends ClientMethod>(
+    method: M,
+    params?: ClientMethodMap[M]['params'],
+  ): Promise<ClientMethodMap[M]['result']> {
+    return ipcRenderer.invoke(
+      SHELL_CHANNELS.clientRequest,
+      method,
+      params,
+    ) as Promise<ClientMethodMap[M]['result']>;
   },
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> {
     return ipcRenderer.invoke(SHELL_CHANNELS.taskRoutingTest, params) as Promise<TaskRoutingTestResult>;

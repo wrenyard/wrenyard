@@ -270,6 +270,7 @@ export const SHELL_CHANNELS = {
   todoRequest: 'wrenyard-shell:todo-request',
   botTodoRequest: 'wrenyard-shell:bot-todo-request',
   agentRequest: 'wrenyard-shell:agent-request',
+  clientRequest: 'wrenyard-shell:client-request',
 } as const;
 
 export type ShellPage = 'session' | 'trace' | 'stats' | 'settings' | 'tasks' | 'agents' | 'bot' | 'todo';
@@ -1801,6 +1802,40 @@ export interface BotTodoMethodMap {
 }
 
 /* ------------------------------------------------------------------ */
+/* Agent clients                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The agent clients the daemon supports on its host, as reported by the
+ * read-only `client.list` method. These wire types mirror the daemon's
+ * client DTOs exactly; Desktop never detects a client itself.
+ */
+export type ClientReadiness = 'ready' | 'not_installed' | 'disabled' | 'error';
+
+export interface ClientListEntry {
+  id: string;
+  name: string;
+  installed: boolean;
+  version?: string;
+  path?: string;
+  enabled: boolean;
+  readiness: ClientReadiness;
+  reason?: string;
+}
+
+export interface ClientListResult { clients: ClientListEntry[] }
+
+/** The bounded, read-only daemon surface the shell `client` bridge forwards. */
+export const CLIENT_METHODS = ['client.list'] as const;
+
+export type ClientMethod = (typeof CLIENT_METHODS)[number];
+
+/** Params and result of each forwarded client method, used to type the facade. */
+export interface ClientMethodMap {
+  'client.list': { params: undefined; result: ClientListResult };
+}
+
+/* ------------------------------------------------------------------ */
 /* WY Remote: SSH connection and single active context                 */
 /* ------------------------------------------------------------------ */
 
@@ -2060,6 +2095,15 @@ export interface WrenyardShellApi {
     method: M,
     params?: AgentMethodMap[M]['params'],
   ): Promise<AgentMethodMap[M]['result']>;
+  /**
+   * Forward one allowlisted `client.*` read call to the daemon. The
+   * main-process registrar rejects any method outside {@link CLIENT_METHODS},
+   * so this facade exposes only the read-only `client.list` method.
+   */
+  client<M extends ClientMethod>(
+    method: M,
+    params?: ClientMethodMap[M]['params'],
+  ): Promise<ClientMethodMap[M]['result']>;
   requestTaskRoutingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult>;
   requestRoutingTestTasks(): Promise<TaskRoutingTestTasksResult>;
   execStart(request: ExecStartRequest): Promise<ExecSnapshotDto>;

@@ -59,6 +59,7 @@ import {
   type NativeProviderReadinessSnapshot,
 } from './execution/native-provider-readiness.mts'
 import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refreshCodexGatewayCredential, readCodexModels, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
+import type { ClientListEntry, ClientReadiness } from '../protocol/methods/client.mts'
 import { ExecService } from '@wrenyard/exec'
 import { ProviderService } from '@wrenyard/provider-service'
 import { OperationComponents } from './services/operation-components.mts'
@@ -1518,6 +1519,74 @@ async function createForemanDaemonResources(
     isShuttingDown: options.isShuttingDown,
     isSwitching: () => options.isSwitching?.() === true,
   })
+  // Daemon-wide agent-client listing backing client.list. Detection runs each
+  // supported client's inspect() plus the optional native readReadiness();
+  // the enabled flag comes from the same loadClientReadiness() snapshot the
+  // task admission gate uses, which currently reports every registered client
+  // as enabled.
+  const clientDisplayNames: Record<string, string> = {
+    claude: 'Claude',
+    codebuddy: 'CodeBuddy',
+    codex: 'Codex',
+    cursor: 'Cursor',
+    dsh: 'DSH',
+    grok: 'Grok',
+    opencode: 'OpenCode',
+  }
+  const clientService = {
+    listClients: async (): Promise<ClientListEntry[]> => {
+      const snapshot = await loadClientReadiness()
+      const entries: ClientListEntry[] = []
+      for (const [id, client] of createAgentClients()) {
+        const enabled = snapshot.clientsById[id]?.enabled ?? true
+        let installed = false
+        let version: string | undefined
+        let path: string | undefined
+        let readiness: ClientReadiness = 'ready'
+        let reason: string | undefined
+        let status
+        let inspectFailed = false
+        try {
+          status = await client.inspect()
+        } catch (error) {
+          inspectFailed = true
+          reason = error instanceof Error ? error.message : String(error)
+        }
+        if (status !== undefined && status.installation.state === 'installed') {
+          installed = true
+          version = status.installation.version
+          path = status.installation.executable
+        }
+        if (!enabled) {
+          readiness = 'disabled'
+        } else if (inspectFailed || status?.installation.state === 'unknown') {
+          readiness = 'error'
+          if (reason === undefined && status?.installation.state === 'unknown') {
+            reason = status.installation.reason
+          }
+        } else if (status?.installation.state === 'missing') {
+          readiness = 'not_installed'
+        } else {
+          const nativeReadiness = await readClientReadiness(client)
+          if (nativeReadiness?.authentication === 'missing') {
+            readiness = 'error'
+            reason = 'authentication missing'
+          }
+        }
+        entries.push({
+          id,
+          name: clientDisplayNames[id] ?? id,
+          installed,
+          ...(version === undefined ? {} : { version }),
+          ...(path === undefined ? {} : { path }),
+          enabled,
+          readiness,
+          ...(reason === undefined ? {} : { reason }),
+        })
+      }
+      return entries
+    },
+  }
   coreOptions = {
     startedAt,
     workspaceRoot: config.workspaceRoot,
@@ -1533,6 +1602,7 @@ async function createForemanDaemonResources(
     taskgraphService: workspaceScoped.taskgraphService,
     workspaceDocService: workspaceScoped.workspaceDocService,
     workspaceTodoService: workspaceScoped.workspaceTodoService,
+    clientService,
     gatewayConnection: gatewayConnectionSnapshot,
     gatewaySettings: gatewaySettingsSnapshot,
     gatewaySettingsSave: (params) => saveGatewaySettings(params),

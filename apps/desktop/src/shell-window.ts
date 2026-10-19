@@ -53,6 +53,7 @@ import { registerTasksStatsIpc } from './main/ipc/tasks-stats.js';
 import { registerAgentIpc } from './main/ipc/agent.js';
 import { registerBotIpc } from './main/ipc/bot.js';
 import { registerBotTodoIpc, registerTodoIpc } from './main/ipc/todo.js';
+import { registerClientIpc } from './main/ipc/client.js';
 import { registerUpdateDaemonIpc } from './main/ipc/update-daemon.js';
 import { formatShellWindowTitle } from './shell-window-title.js';
 import { TITLE_BAR_HEIGHT, platformWindowChrome } from './window-chrome.js';
@@ -385,6 +386,7 @@ export class ShellWindowController {
       registerBotIpc(ipcMain, deps),
       registerTodoIpc(ipcMain, deps),
       registerBotTodoIpc(ipcMain, deps),
+      registerClientIpc(ipcMain, deps),
       registerUpdateDaemonIpc(ipcMain, deps),
     ];
   }

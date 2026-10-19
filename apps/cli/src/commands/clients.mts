@@ -3,9 +3,11 @@ import { join, relative, resolve, sep } from 'node:path'
 import { parseArgs } from 'node:util'
 import { foremanStateRoot as resolveWrenyardStateRoot } from '@wrenyard/daemon/config/state'
 import { requireNoPositionals } from '../helpers.mts'
-import { errorMessage } from '../shared.mts'
+import { connectConfiguredForemanClient, errorMessage } from '../shared.mts'
 
-const USAGE = 'Usage: wrenyard clients prune [--dry-run | --apply] [--older-than-days N] [--config path] [--json]'
+const USAGE = `Usage: wrenyard clients <list | prune>
+  list    [--config path] [--json]
+  prune   [--dry-run | --apply] [--older-than-days N] [--config path] [--json]`
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 const FAMILIES = ['opencode', 'codebuddy'] as const
 
@@ -47,11 +49,54 @@ export async function handleClients(args: string[]): Promise<number> {
     console.error(USAGE)
     return subcommand ? 0 : 1
   }
-  if (subcommand !== 'prune') {
-    console.error(USAGE)
+  if (subcommand === 'list') return handleClientsList(args.slice(1))
+  if (subcommand === 'prune') return handleClientsPrune(args.slice(1))
+  console.error(USAGE)
+  return 1
+}
+
+const CLIENT_READINESS_LABELS: Record<string, string> = {
+  ready: 'ready',
+  not_installed: 'not installed',
+  disabled: 'disabled',
+  error: 'error',
+}
+
+async function handleClientsList(args: string[]): Promise<number> {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(USAGE)
+    return 0
+  }
+  try {
+    const { values, positionals } = parseArgs({
+      args,
+      options: {
+        config: { type: 'string' },
+        json: { type: 'boolean' },
+      },
+      allowPositionals: true,
+      strict: true,
+    })
+    requireNoPositionals(positionals, USAGE)
+    const client = await connectConfiguredForemanClient(values.config)
+    try {
+      const { clients } = await client.clients.list()
+      if (values.json) console.log(JSON.stringify(clients, null, 2))
+      else for (const entry of clients) {
+        const version = entry.version ?? 'unknown'
+        const state = CLIENT_READINESS_LABELS[entry.readiness] ?? entry.readiness
+        const path = entry.path ?? '-'
+        const reason = entry.reason === undefined ? '' : ` (${entry.reason})`
+        console.log(`${entry.name} ${version} [${state}] ${path}${reason}`)
+      }
+      return 0
+    } finally {
+      client.close()
+    }
+  } catch (error) {
+    console.error(errorMessage(error))
     return 1
   }
-  return handleClientsPrune(args.slice(1))
 }
 
 async function handleClientsPrune(args: string[]): Promise<number> {

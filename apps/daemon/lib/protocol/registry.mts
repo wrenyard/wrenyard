@@ -490,6 +490,18 @@ import {
   type ComponentsListResult,
 } from './methods/components.mts'
 import {
+  clientListParamsSchema,
+  clientListResultSchema,
+  type ClientListParams,
+  type ClientListResult,
+} from './methods/client.mts'
+export type {
+  ClientListEntry,
+  ClientListParams,
+  ClientListResult,
+  ClientReadiness,
+} from './methods/client.mts'
+import {
   storageUsageParamsSchema,
   storageUsageResultSchema,
   storageCleanupPreviewParamsSchema,
@@ -1022,6 +1034,7 @@ export interface ForemanMethodParams {
   'exec.cancel': ExecCancelParams
   'components.list': ComponentsListParams
   'components.action': ComponentsActionParams
+  'client.list': ClientListParams
   'session.list': SessionListParams
   'session.create': SessionCreateParams
   'session.send': SessionSendParams
@@ -1144,6 +1157,7 @@ export interface ForemanMethodResults {
   'exec.cancel': ExecCancelResult
   'components.list': ComponentsListResult
   'components.action': ComponentsActionResult
+  'client.list': ClientListResult
   'session.list': SessionListResult
   'session.create': SessionCreateResult
   'session.send': SessionSendResult
@@ -1550,6 +1564,11 @@ export const methodRegistry: {
     params: componentsActionParamsSchema,
     result: componentsActionResultSchema,
     description: 'User-triggered operation component action: refresh, install, update, repair, authorize, uninstall, enable or disable.',
+  },
+  'client.list': {
+    params: clientListParamsSchema,
+    result: clientListResultSchema,
+    description: 'Read-only listing of every supported agent client with its detected installation, version, executable path and derived readiness.',
   },
   'session.list': { params: sessionListParamsSchema, result: sessionListResultSchema },
   'session.create': { params: sessionCreateParamsSchema, result: sessionCreateResultSchema },

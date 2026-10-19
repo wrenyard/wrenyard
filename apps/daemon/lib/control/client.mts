@@ -141,6 +141,8 @@ import type {
   TodoUpdateResult,
   ProviderListParams,
   ProviderListResult,
+  ClientListParams,
+  ClientListResult,
 } from '../protocol/registry.mts'
 
 export interface ForemanRequestOptions {
@@ -439,6 +441,12 @@ export class ForemanClient {
     },
     delete: (params: WorkspaceDocDeleteParams): Promise<WorkspaceDocDeleteResult> => {
       return this.rpc.request<WorkspaceDocDeleteResult>('workspace.doc.delete', params)
+    },
+  }
+
+  readonly clients = {
+    list: (params: ClientListParams = {}): Promise<ClientListResult> => {
+      return this.rpc.request<ClientListResult>('client.list', params)
     },
   }
 

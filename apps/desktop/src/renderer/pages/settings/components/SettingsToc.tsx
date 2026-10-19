@@ -15,6 +15,7 @@ import {
   Palette,
   Route,
   Server,
+  Terminal,
   WalletCards,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -38,6 +39,7 @@ const CATEGORY_ICONS: Readonly<Record<SettingsCategoryId, LucideIcon>> = {
   catalog: Boxes,
   routingTest: FlaskConical,
   models: Route,
+  clients: Terminal,
   bot: Bot,
   shortcuts: Keyboard,
   pet: Bird,

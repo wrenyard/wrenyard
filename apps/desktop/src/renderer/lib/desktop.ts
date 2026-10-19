@@ -1,6 +1,6 @@
 /** The only renderer module that reads the typed preload shell facade. */
 import { useSyncExternalStore } from 'react';
-import type { ActivityStatusSnapshot, AppNotification, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi, AgentMethod, AgentMethodMap, BotMethod, BotMethodMap, TodoMethod, TodoMethodMap, BotTodoMethod, BotTodoMethodMap } from '@/shell-contract';
+import type { ActivityStatusSnapshot, AppNotification, ClientListResult, DesktopPreferences, ResolvedAppearance, NotificationCommandAction, RemoteConnectionSnapshot, ShellPage, WindowStateSnapshot, WrenyardShellApi, AgentMethod, AgentMethodMap, BotMethod, BotMethodMap, TodoMethod, TodoMethodMap, BotTodoMethod, BotTodoMethodMap } from '@/shell-contract';
 
 declare global {
   interface Window {
@@ -81,6 +81,18 @@ export function botTodoRequest<M extends BotTodoMethod>(
   params?: BotTodoMethodMap[M]['params'],
 ): Promise<BotTodoMethodMap[M]['result']> {
   return shell.botTodo(method, params);
+}
+
+/* ------------------------------------------------------------------ */
+/* Agent clients bridge                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Read the daemon's supported agent-client listing through the shell bridge.
+ * The `client` channel accepts only `client.list`.
+ */
+export function clientList(): Promise<ClientListResult> {
+  return shell.client('client.list');
 }
 
 /* ------------------------------------------------------------------ */
