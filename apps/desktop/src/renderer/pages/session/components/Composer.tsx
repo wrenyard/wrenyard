@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent as ReactClipboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { REASONING_EFFORTS } from '@wrenyard/models';
-import { AlertTriangle, Plus } from 'lucide-react';
+import { AlertTriangle, Plus, Zap } from 'lucide-react';
 import { countInputTokens } from '../model/usage.js';
 import { ModelPicker, modelBadges, type ModelOption } from '@/renderer/components/chat/model-picker';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
@@ -40,6 +40,9 @@ function useInputTokenCount(text: string): number | undefined {
 
 /** Upper bound on attachments held by the composer in one draft. */
 const MAX_ATTACHMENTS = 32;
+
+/** Tooltip of the standalone Fast toggle: a mode, never a model or effort choice. */
+const FAST_TOOLTIP = 'Fast：开启后可能消耗更多额度或按更高单价计费，需上游已开通';
 
 /** Providers whose route health is pool-scoped and therefore gate selection. */
 const ROUTE_GATED_PROVIDERS = new Set(['openrouter', 'opencode-zen', 'opencode-go']);
@@ -538,13 +541,28 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
               value={modelId}
               effort={effort}
               onChange={selectModel}
-              fast={fast}
-              onFastChange={setFast}
               disabled={options.length === 0}
               placeholder={selectionPlaceholder}
               className="min-w-0 max-w-full min-h-6 py-0.5"
               compactTrigger
             />
+            {/* Fast is its own axis: a toggle on the selected model, never a
+                model or effort choice. It is offered only for a selected model
+                that declares the capability. */}
+            {selected?.supportsFast === true && (
+              <InputGroupButton
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-pressed={fast}
+                aria-label="Fast"
+                title={FAST_TOOLTIP}
+                className={`shrink-0 ${fast ? 'text-primary' : 'text-muted-foreground'}`}
+                onClick={() => { setFast(!fast); }}
+              >
+                <Zap className={fast ? 'fill-current' : undefined} />
+              </InputGroupButton>
+            )}
             {selectionUnusable && (
               <span className="flex items-center gap-1 text-xs text-destructive" role="status">
                 <AlertTriangle className="size-3.5 shrink-0" />
