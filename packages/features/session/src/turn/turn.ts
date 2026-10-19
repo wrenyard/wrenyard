@@ -17,6 +17,7 @@ import { type ToolCall } from '../transport/index.ts';
 import { ACTION_TOOL, parseActionCall } from '../reasoning/tool.ts';
 import { buildReason } from '../reasoning/prompt.ts';
 import { compactContext, renderKernelFactsBlock } from '../context/compaction.ts';
+import { computeReduction } from '../context/reduction.ts';
 import {
   type ActionExecutionOutcome,
   type ActionRunContext,
@@ -244,11 +245,12 @@ export class TurnRunner {
     });
     let view = buildView(events);
 
-    // A request that would cross the compaction threshold is summarised once
-    // before it is sent. The ledger keeps every event; the `context.compacted`
-    // floor bounds only the rendered view. A rebuilt view that is still over
-    // the hard budget falls through to the send-time guard, which refuses it
-    // without ever resending the unchanged request.
+    // A request that would cross the compaction threshold is reduced first and
+    // summarised only when the reduction left it over the threshold. Both keep
+    // every event on the ledger; their floors bound only the rendered view. A
+    // rebuilt view that is still over the hard budget falls through to the
+    // send-time guard, which refuses it without ever resending the unchanged
+    // request.
     const budget = contextBudgetOf(
       turn.publicId,
       view.messages,
@@ -257,52 +259,85 @@ export class TurnRunner {
     );
     if (!turn.finished && !turn.abort.signal.aborted
       && budget.threshold !== undefined && budget.estimatedInputTokens > budget.threshold) {
-      const compacted = await compactContext({
-        events,
-        metadata,
-        ...(maxTokens === undefined ? {} : { outputReservation: maxTokens }),
-        estimatedInputTokens: budget.estimatedInputTokens,
-        title: session.title,
-        summarize: async (messages, maxOutputTokens) => {
-          const outcome = await this.engine.invoke(session, turn, 'reason', { messages: [...messages], layers: {} }, {
-            parent: stepKey,
-            step,
-            reason: {
-              provider: turn.model.provider,
-              model: turn.model.model,
-              reasoningEffort: turn.model.reasoningEffort,
-              fast: turn.model.fast,
-            },
-            maxTokens: maxOutputTokens,
-          });
-          return outcome.ok
-            ? { ok: true, text: outcome.text }
-            : { ok: false, error: outcome.error ?? 'compaction summary call failed' };
-        },
-      });
-      if (compacted.throughSeq > 0) {
+      // Stage 1: release the bulky content of cold, older events. It makes no
+      // model call, so it runs before the summary, and the floor it records
+      // keeps the rendered prefix stable until the next reduction.
+      let source = events;
+      let overThreshold = true;
+      const reduction = computeReduction(source, budget.threshold);
+      if (reduction !== undefined) {
         await this.engine.ledger.append(session.sessionId, {
-          type: 'context.compacted',
+          type: 'context.reduced',
           turn: turn.turn,
           step,
-          throughSeq: compacted.throughSeq,
-          summary: compacted.summary,
-          ...(compacted.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: compacted.estimatedInputTokens }),
-          ...(compacted.contextWindow === undefined ? {} : { contextWindow: compacted.contextWindow }),
-          ...(compacted.failure === undefined ? {} : { failure: compacted.failure }),
+          throughSeq: reduction.throughSeq,
+          ...(reduction.releasedTokens === undefined ? {} : { releasedTokens: reduction.releasedTokens }),
         });
-        const kernelFacts = port?.kernelFacts?.();
-        const freshEvents = this.engine.ledger.read(session.sessionId);
-        view = buildView(freshEvents);
-        if (kernelFacts !== undefined && kernelFacts.trim() !== '') {
-          view.messages.splice(view.messages.length - 1, 0, { role: 'user', content: renderKernelFactsBlock(kernelFacts) });
-        }
-        contextBudgetOf(
+        source = this.engine.ledger.read(session.sessionId);
+        view = buildView(source);
+        const reduced = contextBudgetOf(
           turn.publicId,
           view.messages,
           (id) => this.engine.host.resolveInferenceProvider(id),
           maxTokens,
         );
+        overThreshold = reduced.threshold === undefined
+          || reduced.estimatedInputTokens > reduced.threshold;
+        if (!overThreshold) {
+          const facts = port?.kernelFacts?.();
+          if (facts !== undefined && facts.trim() !== '') {
+            view.messages.splice(view.messages.length - 1, 0, { role: 'user', content: renderKernelFactsBlock(facts) });
+          }
+        }
+      }
+      if (overThreshold) {
+        const compacted = await compactContext({
+          events: source,
+          metadata,
+          ...(maxTokens === undefined ? {} : { outputReservation: maxTokens }),
+          estimatedInputTokens: budget.estimatedInputTokens,
+          title: session.title,
+          summarize: async (messages, maxOutputTokens) => {
+            const outcome = await this.engine.invoke(session, turn, 'reason', { messages: [...messages], layers: {} }, {
+              parent: stepKey,
+              step,
+              reason: {
+                provider: turn.model.provider,
+                model: turn.model.model,
+                reasoningEffort: turn.model.reasoningEffort,
+                fast: turn.model.fast,
+              },
+              maxTokens: maxOutputTokens,
+            });
+            return outcome.ok
+              ? { ok: true, text: outcome.text }
+              : { ok: false, error: outcome.error ?? 'compaction summary call failed' };
+          },
+        });
+        if (compacted.throughSeq > 0) {
+          await this.engine.ledger.append(session.sessionId, {
+            type: 'context.compacted',
+            turn: turn.turn,
+            step,
+            throughSeq: compacted.throughSeq,
+            summary: compacted.summary,
+            ...(compacted.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: compacted.estimatedInputTokens }),
+            ...(compacted.contextWindow === undefined ? {} : { contextWindow: compacted.contextWindow }),
+            ...(compacted.failure === undefined ? {} : { failure: compacted.failure }),
+          });
+          const kernelFacts = port?.kernelFacts?.();
+          const freshEvents = this.engine.ledger.read(session.sessionId);
+          view = buildView(freshEvents);
+          if (kernelFacts !== undefined && kernelFacts.trim() !== '') {
+            view.messages.splice(view.messages.length - 1, 0, { role: 'user', content: renderKernelFactsBlock(kernelFacts) });
+          }
+          contextBudgetOf(
+            turn.publicId,
+            view.messages,
+            (id) => this.engine.host.resolveInferenceProvider(id),
+            maxTokens,
+          );
+        }
       }
     }
 

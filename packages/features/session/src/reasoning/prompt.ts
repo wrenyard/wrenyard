@@ -15,6 +15,17 @@ import {
 } from '../ledger/store.ts';
 import {
   ACTION_RUNNING,
+  REDUCED_ARGUMENT_HEAD,
+  REDUCED_ARGUMENT_LIMIT,
+  REDUCED_ARGUMENT_TAIL,
+  REDUCED_RESULT_HEAD,
+  REDUCED_RESULT_LIMIT,
+  REDUCED_RESULT_TAIL,
+  REDUCED_TEXT_HEAD,
+  REDUCED_TEXT_LIMIT,
+  REDUCED_TEXT_TAIL,
+  cutReleasedChars,
+  cutReleasedTokens,
   escapeBody,
   renderEventText,
   renderEventsBlock,
@@ -89,6 +100,21 @@ function latestCompaction(events: readonly LedgerEvent[]): Extract<LedgerEvent, 
 }
 
 /**
+ * The latest reduction on the timeline, when one exists. Its `throughSeq` is
+ * the reduced floor: every context event at or below it renders in reduced
+ * form, and every event above it renders in full. The floor only moves when a
+ * new reduction is recorded, so the rendered prefix stays byte-identical
+ * between two reductions.
+ */
+function latestReduction(events: readonly LedgerEvent[]): Extract<LedgerEvent, { type: 'context.reduced' }> | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type === 'context.reduced') return event;
+  }
+  return undefined;
+}
+
+/**
  * Render the reasoning context as an append-only message sequence.
  *
  * Each finished reasoning output becomes an `assistant` message (its text plus
@@ -123,9 +149,20 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
   const events = compaction === undefined
     ? input.events
     : input.events.filter((event) => event.seq > compaction.throughSeq);
+  // The reduced floor: a reduction below an already-summarised range has
+  // nothing left to bound, so only a later one renders events reduced.
+  const reduction = latestReduction(events);
+  const reducedFloor = reduction === undefined
+    || (compaction !== undefined && reduction.throughSeq <= compaction.throughSeq)
+    ? undefined
+    : reduction.throughSeq;
+  const isReduced = (event: LedgerEvent): boolean => reducedFloor !== undefined && event.seq <= reducedFloor;
   // A restart continuation keeps its linked original turn's post-interrupt
   // results; an ordinary user-interrupted turn keeps them hidden.
   const resumedTurns = resumedOriginalTurns(events);
+  /** Render one event in full, or in reduced form when it is below the floor. */
+  const render = (event: LedgerEvent): string | undefined =>
+    renderEventText(event, resumedTurns, isReduced(event) ? { reduced: true } : undefined);
 
   // Index the ledger by occurrence, not by raw action id: a recovered session
   // can reuse an id, and each reuse is its own call with its own result.
@@ -230,6 +267,12 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
   for (const [index, event] of events.entries()) {
     switch (event.type) {
       case 'files.attached': {
+        // A cold attachment is a stub of names and kinds, and it carries no
+        // image parts: image bytes are the bulkiest thing in the context.
+        if (isReduced(event)) {
+          pushText(render(event)!);
+          break;
+        }
         pushText(renderFiles(event));
         for (const file of event.files) {
           if (file.kind !== 'image' || file.processedPath === undefined) continue;
@@ -247,7 +290,7 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
         // An action whose reasoning step never completed has no assistant
         // message to hang on: it stays record text. Each occurrence is judged
         // on its own, so a reused id is never dropped.
-        if (start === undefined || !isNative(start)) pushText(renderEventText(event, resumedTurns)!);
+        if (start === undefined || !isNative(start)) pushText(render(event)!);
         break;
       }
       case 'reasoning.completed': {
@@ -255,23 +298,30 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
         const calls = starts.filter((start) => start.key === key);
         if (event.text === '' && calls.length === 0) break;
         endUserMessage();
+        const reduced = isReduced(event);
+        /** Cold arguments keep the head and the tail of the original intent. */
+        const argument = (intent: string): string => (reduced
+          ? cutReleasedChars(intent, REDUCED_ARGUMENT_LIMIT, REDUCED_ARGUMENT_HEAD, REDUCED_ARGUMENT_TAIL)
+          : intent);
         messages.push({
           role: 'assistant',
-          content: event.text,
+          content: reduced
+            ? cutReleasedChars(event.text, REDUCED_TEXT_LIMIT, REDUCED_TEXT_HEAD, REDUCED_TEXT_TAIL)
+            : event.text,
           // A `tool` action replays under its own native name with its raw
           // arguments string; every built-in action keeps the wy_action shape.
           toolCalls: calls.map((start) => start.type === 'tool'
-            ? { id: start.callId, name: start.name ?? '', arguments: start.intent }
+            ? { id: start.callId, name: start.name ?? '', arguments: argument(start.intent) }
             : {
                 id: start.callId,
                 name: 'wy_action',
-                arguments: JSON.stringify({ type: start.type, intent: start.intent }),
+                arguments: JSON.stringify({ type: start.type, intent: argument(start.intent) }),
               }),
         });
         for (const start of calls) {
           const content = start.finish === undefined || arrivedLate(start)
             ? ACTION_RUNNING
-            : actionResultText(start.finish.event);
+            : actionResultText(start.finish.event, isReduced(start.finish.event));
           messages.push({ role: 'tool', toolCallId: start.callId, content });
         }
         break;
@@ -284,11 +334,11 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
         // stays an <action-result> record.
         const start = finishByIndex.get(index)?.start;
         if (start !== undefined && isNative(start) && !arrivedLate(start)) break;
-        pushText(renderEventText(event, resumedTurns)!);
+        pushText(render(event)!);
         break;
       }
       case 'step.started':
-        pushText(renderEventText(event, resumedTurns)!);
+        pushText(render(event)!);
         endUserMessage();
         break;
       case 'context.compacted':
@@ -296,7 +346,7 @@ function renderReasonContext(input: ReasonViewInput): ModelMessage[] {
         pushText(renderCompactionBlock(event));
         break;
       default: {
-        const text = renderEventText(event, resumedTurns);
+        const text = render(event);
         if (text !== undefined) pushText(text);
       }
     }
@@ -312,9 +362,18 @@ function toolCallName(input: unknown): string | undefined {
   return typeof name === 'string' && name !== '' ? name : undefined;
 }
 
-/** The text of one action's tool result: its outcome when not done, then the result. */
-function actionResultText(event: Extract<LedgerEvent, { type: 'action.finished' }>): string {
-  const result = event.result === '' ? '(no output)' : event.result;
+/**
+ * The text of one action's tool result: its outcome when not done, then the
+ * result. A cold result is cut to its head and tail; the outcome stays.
+ */
+function actionResultText(
+  event: Extract<LedgerEvent, { type: 'action.finished' }>,
+  reduced = false,
+): string {
+  const full = event.result === '' ? '(no output)' : event.result;
+  const result = reduced
+    ? cutReleasedTokens(full, REDUCED_RESULT_LIMIT, REDUCED_RESULT_HEAD, REDUCED_RESULT_TAIL)
+    : full;
   return event.status === 'done' ? result : `[${event.status}] ${result}`;
 }
 

@@ -698,6 +698,20 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
           : `${record.summary}\n\ncompaction failed: ${record.failure}`,
         source: 'read',
       });
+    } else if (type === 'context.reduced') {
+      // A reduction is a quiet context marker: it released the bulky content
+      // of cold events with no model call. Expanding it shows the floor.
+      const record = event as Extract<LedgerEvent, { type: 'context.reduced' }>;
+      items.push({
+        key: String(event.seq),
+        kind: 'thinking',
+        path: '',
+        title: record.releasedTokens === undefined
+          ? '已精简上下文'
+          : `已精简上下文（释放约 ${record.releasedTokens} tokens）`,
+        content: `#${record.throughSeq}`,
+        source: 'read',
+      });
     } else if (type === 'system.info' && (event as SystemNoticeEvent).code === 'memory.saved') {
       // A memory the session wrote to the workspace. It is a write, explicitly
       // not a `memory.recalled` read.

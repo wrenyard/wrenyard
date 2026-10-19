@@ -53,7 +53,8 @@ export type LedgerEventType =
   | 'system.info'
   | 'system.warning'
   | 'system.error'
-  | 'context.compacted';
+  | 'context.compacted'
+  | 'context.reduced';
 
 /**
  * Event types that may enter the rendered model context. Everything else is
@@ -646,6 +647,22 @@ export interface ContextCompactedEvent extends LedgerEventBase {
 }
 
 /**
+ * One programmatic context reduction: every context event at or below
+ * `throughSeq` renders in its reduced form from now on, which releases the
+ * bulky content of cold, older events without a model call. Nothing is dropped
+ * from the ledger and nothing is rewritten; the floor only bounds the rendered
+ * view. A reduction is deliberately not a context event itself, so it never
+ * renders into the model context.
+ */
+export interface ContextReducedEvent extends LedgerEventBase {
+  type: 'context.reduced';
+  /** Highest ledger sequence rendered in reduced form. */
+  throughSeq: number;
+  /** Tokens the reduction released, when the estimate was computable. */
+  releasedTokens?: number;
+}
+
+/**
  * An out-of-band notice the model should read: a system fault that no content
  * event already reports (`system.error`), a degraded but continuing condition
  * (`system.warning`), or a state change (`system.info`). A failed action that
@@ -691,6 +708,7 @@ export type LedgerEvent =
   | SessionTitledEvent
   | SessionMetadataEvent
   | ContextCompactedEvent
+  | ContextReducedEvent
   | SystemNoticeEvent;
 
 /** An event body without the `seq` / `at` the ledger assigns on append. */
