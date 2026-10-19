@@ -148,6 +148,8 @@ const PROBE_LEASE_GRACE_MS = 5_000;
 /** Idle attempts are expired so attempt bookkeeping stays bounded over a long run. */
 const ATTEMPT_TTL_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 4_096;
+/** Inactive generation tombstones retained beyond the keys that hold a block. */
+const MAX_GENERATION_TOMBSTONES = 4_096;
 const MAX_TIMER_MS = 2_147_483_647;
 
 const fingerprint = (value: string): string => createHash('sha256').update(value).digest('hex');
@@ -203,8 +205,18 @@ function nativeRouteFailure(kind: NativeRouteFaultKind, until?: string): Markabl
  */
 export class RouteStateStore {
   private readonly blocks = new Map<string, Block>();
-  /** Latest generation per scope key; never deleted so late completions can be rejected. */
+  /** Latest generation per scope key; bounded tombstones so late completions stay rejectable. */
   private readonly generations = new Map<string, number>();
+  /** Store-wide monotonic generation sequence; never reset or reused per key. */
+  private sequence = 0;
+  /**
+   * Highest generation evicted from `generations`. A key without a tombstone reads
+   * at least this value, so a guard captured before an evicted transition still
+   * fails the `current > captured` stale-failure fence. After eviction this can
+   * also reject older unrelated completions; that conservative tradeoff is
+   * accepted so the map stays bounded.
+   */
+  private retiredFloor = 0;
   /** In-flight attempts by `provider/model#attemptId`, bounded by count and TTL. */
   private readonly attempts = new Map<string, Attempt>();
   private leaseSeq = 0;
@@ -227,7 +239,9 @@ export class RouteStateStore {
    */
   capture(provider: string, model: string): RouteGuard {
     const generations = new Map<string, number>();
-    for (const key of this.applicableKeys(provider, model)) generations.set(key, this.generations.get(key) ?? 0);
+    // A key without a tombstone is stamped with the current sequence, not zero, so
+    // its guard stays meaningful after a tombstone eviction raises the floor.
+    for (const key of this.applicableKeys(provider, model)) generations.set(key, this.generations.get(key) ?? this.sequence);
     return { generations };
   }
 
@@ -355,6 +369,34 @@ export class RouteStateStore {
       const oldest = this.attempts.keys().next().value;
       if (oldest === undefined) return;
       this.attempts.delete(oldest);
+    }
+  }
+
+  /** Advance the store-wide sequence and record the key's new generation. */
+  private advanceGeneration(key: string): number {
+    const generation = ++this.sequence;
+    // Re-insert so map order follows transition order and the oldest tombstone is
+    // also the lowest generation.
+    this.generations.delete(key);
+    this.generations.set(key, generation);
+    return generation;
+  }
+
+  /**
+   * Bound the tombstones to {@link MAX_GENERATION_TOMBSTONES} beyond the keys that
+   * hold a block. Active block generations are never evicted; the retired floor
+   * rises to the highest evicted generation so a guard captured before that
+   * transition still fails the stale-failure fence.
+   */
+  private pruneGenerations(): void {
+    const limit = this.blocks.size + MAX_GENERATION_TOMBSTONES;
+    // Only an over-allowance map is scanned, so normal marks and removals stay O(1).
+    if (this.generations.size <= limit) return;
+    for (const [key, generation] of this.generations) {
+      if (this.generations.size <= limit) break;
+      if (this.blocks.has(key)) continue;
+      this.generations.delete(key);
+      if (generation > this.retiredFloor) this.retiredFloor = generation;
     }
   }
 
@@ -503,7 +545,9 @@ export class RouteStateStore {
     const faultKind: RouteFaultKind = failure.faultKind ?? failure.state;
     const { key, scope, pool } = this.scopeFor(provider, model, failure);
     const previous = this.blocks.get(key);
-    const current = this.generations.get(key) ?? 0;
+    // Without a tombstone the retired floor is the key's current generation, so a
+    // guard captured before that tombstone was evicted is still rejected here.
+    const current = this.generations.get(key) ?? this.retiredFloor;
     // Stale-failure guard: the scope changed (a newer fault, or a recovery) after
     // the caller captured it, so a late in-flight failure must not rebuild it.
     if (guard !== undefined && current > (guard.generations.get(key) ?? 0)) {
@@ -517,8 +561,7 @@ export class RouteStateStore {
     // cools exactly until the upstream says the scope recovers. Without one the
     // fixed bounded cooldown applies and the scope is re-probed afterwards.
     const until = new Date(boundMs === undefined ? computed : Math.max(now + 1, boundMs)).toISOString();
-    const generation = current + 1;
-    this.generations.set(key, generation);
+    const generation = this.advanceGeneration(key);
     const block: Block = {
       publicModel: `${provider}/${model}`, provider, scope, ...(pool ? { quotaPoolId: pool } : {}),
       state: failure.state, faultKind, phase: 'open', generation, probeFailures: 0, until, status,
@@ -527,6 +570,7 @@ export class RouteStateStore {
       timer: this.schedule(key, until),
     };
     this.blocks.set(key, block);
+    this.pruneGenerations();
     this.emitEvent(block, { state: failure.state, reason: 'upstream_error' });
     return this.statusOf(block);
   }
@@ -558,6 +602,7 @@ export class RouteStateStore {
       if (block.leaseTimer !== undefined) clearTimeout(block.leaseTimer);
     }
     this.blocks.clear();
+    this.generations.clear();
     this.attempts.clear();
   }
 
@@ -670,12 +715,16 @@ export class RouteStateStore {
   private remove(key: string, reason: RouteStateChangedEvent['reason'], status?: number, extra?: Partial<RouteStateChangedEvent>): void {
     // Any removal (recovery, credential change) advances the scope's generation
     // so a failure captured before it can never rebuild the cleared fault.
-    this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    this.advanceGeneration(key);
     const block = this.blocks.get(key);
-    if (!block) return;
+    if (!block) {
+      this.pruneGenerations();
+      return;
+    }
     clearTimeout(block.timer);
     if (block.leaseTimer !== undefined) clearTimeout(block.leaseTimer);
     this.blocks.delete(key);
+    this.pruneGenerations();
     this.emit({ ...this.describe(block), state: 'available', phase: 'closed', status: status ?? block.status, reason, ...(extra ?? {}) });
   }
 

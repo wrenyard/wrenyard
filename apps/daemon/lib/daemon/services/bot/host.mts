@@ -125,6 +125,20 @@ const MAX_DIFF_CHARS = 60_000
 const MAX_TURNS_CHARS = 20_000
 /** Upper bound when scanning prior attempts of a repeatable step kind. */
 const MAX_STEP_ATTEMPTS = 500
+/** Retained window of the `*Logged` dedupe sets, so a long-lived host stays bounded. */
+const LOGGED_LIMIT = 1_024
+
+/** A `Set` that keeps only the most recent {@link LOGGED_LIMIT} members (FIFO). */
+class LoggedSet extends Set<string> {
+  override add(value: string): this {
+    super.add(value)
+    if (this.size > LOGGED_LIMIT) {
+      const oldest = this.values().next().value
+      if (oldest !== undefined) this.delete(oldest)
+    }
+    return this
+  }
+}
 /**
  * Step kinds whose effect is a detached task run, and the builtin task each one
  * uses. A tick starts the run and records its id; later ticks poll that run, so
@@ -485,7 +499,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   /** Per-bot cadence counters and lag, so health describes one bot. */
   const botTickStats = new Map<string, BotTickStats>()
   /** `itemId:kind` keys already reported as unavailable, so the log stays once-per-item. */
-  const unavailableLogged = new Set<string>()
+  const unavailableLogged = new LoggedSet()
   /** Validated config per bot, keyed by content hash so an unchanged file is not re-parsed. */
   const configCache = new Map<string, { hash: string; config: BotConfig }>()
   /** Config problems already logged, keyed by hash (or path), so one bad file logs once. */
@@ -507,18 +521,18 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   /** Epoch ms of the last escalation, so notifications are rate-limited. */
   let lastEscalationAt = 0
   /** Notifications already logged as deferred, so quiet hours do not spam the log. */
-  const deferredNotifyLogged = new Set<string>()
+  const deferredNotifyLogged = new LoggedSet()
   /** Parked items already reported as changed, keyed by item and fingerprint. */
-  const sourceChangedLogged = new Set<string>()
+  const sourceChangedLogged = new LoggedSet()
   /** Bots already told that their task runs use automatic routing. */
-  const routingAutoLogged = new Set<string>()
+  const routingAutoLogged = new LoggedSet()
   /** Last load probe result, and the error when the probe itself threw. */
   let lastLoad: BotLoadProbe | undefined
   let loadProbeError: string | undefined
   /** Per-bot load back-off flags, so `load.backoff`/`load.recovered` log once each. */
   const backedOffBots = new Map<string, boolean>()
   /** Watchdog conditions already reported, so one condition logs and escalates once. */
-  const watchdogLogged = new Set<string>()
+  const watchdogLogged = new LoggedSet()
   /** Epoch ms of the last component watchdog pass, per bot. */
   const componentCheckedAt = new Map<string, number>()
 
@@ -3862,6 +3876,11 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         clearInterval(timer)
         timer = undefined
       }
+      unavailableLogged.clear()
+      deferredNotifyLogged.clear()
+      sourceChangedLogged.clear()
+      routingAutoLogged.clear()
+      watchdogLogged.clear()
     },
     // The store persists synchronously through better-sqlite3, so there is no
     // queued write to await; the method exists so the host mirrors the

@@ -26,12 +26,20 @@ export interface RepoWriteLocksOptions {
   repoRootResolver?: RepoRootResolver
 }
 
+/** Bound of the resolver cache; a long-lived daemon can see many worktree paths. */
+const RESOLVER_CACHE_LIMIT = 512
+
 export function defaultRepoRootResolver(): RepoRootResolver {
   const cache = new Map<string, string>()
   return (repoPath: string): string => {
     const canonical = canonicalPath(repoPath)
     const cached = cache.get(canonical)
-    if (cached) return cached
+    if (cached !== undefined) {
+      // Refresh recency so the least recently used key is evicted first.
+      cache.delete(canonical)
+      cache.set(canonical, cached)
+      return cached
+    }
     let root = canonical
     const { stdout, code } = runGitSync(canonical, ['rev-parse', '--show-toplevel'])
     if (code === 0) {
@@ -41,6 +49,11 @@ export function defaultRepoRootResolver(): RepoRootResolver {
     // A non-zero exit (not inside a git repo, or git unavailable) falls back to
     // the canonical working directory as the lock namespace.
     cache.set(canonical, root)
+    while (cache.size > RESOLVER_CACHE_LIMIT) {
+      const oldest = cache.keys().next().value
+      if (oldest === undefined) break
+      cache.delete(oldest)
+    }
     return root
   }
 }
