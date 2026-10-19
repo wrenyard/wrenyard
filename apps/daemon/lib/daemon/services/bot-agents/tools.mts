@@ -305,17 +305,25 @@ export function createAgentToolRunner(deps: {
 ) => Promise<ToolOutcome> {
   return async (call, ctx) => {
     try {
+      const spec = (TOOL_SPECS as Readonly<Record<string, ToolSpec | undefined>>)[call.name]
+      if (spec === undefined) return failed(`unknown tool: ${call.name}`)
+      const args = parseArguments(call.arguments)
+      // An argument the tool does not declare is refused, never silently
+      // ignored, so a stale instruction surfaces at once.
+      const declared = (spec.parameters as { properties?: Record<string, unknown> }).properties ?? {}
+      const unknown = Object.keys(args).filter(key => !Object.hasOwn(declared, key))
+      if (unknown.length > 0) return failed(`unknown argument: ${unknown.join(', ')}`)
       switch (call.name) {
         case 'session':
-          return await runSessionTool(parseArguments(call.arguments), deps, ctx)
+          return await runSessionTool(args, deps, ctx)
         case 'todo':
-          return await runTodoTool(parseArguments(call.arguments), deps)
+          return await runTodoTool(args, deps)
         case 'message':
-          return runMessageTool(parseArguments(call.arguments), ctx)
+          return runMessageTool(args, ctx)
         case 'memory':
-          return await runMemoryTool(parseArguments(call.arguments), ctx)
+          return await runMemoryTool(args, ctx)
         case 'routine':
-          return await runRoutineTool(parseArguments(call.arguments), ctx)
+          return await runRoutineTool(args, ctx)
         default:
           return failed(`unknown tool: ${call.name}`)
       }
