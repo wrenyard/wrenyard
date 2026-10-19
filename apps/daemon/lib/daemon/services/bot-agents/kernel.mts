@@ -442,18 +442,14 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** 32-bit FNV-1a over UTF-16 code units, as a fixed-width hex string. */
-function fnv1a(text: string): string {
-  let hash = 0x811c9dc5
-  for (let index = 0; index < text.length; index++) {
-    hash ^= text.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193)
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0')
-}
-
-function sessionWakeKeys(meta: { sessionId: string; turn: number }, text: string): [string, string] {
-  return [`s:${meta.sessionId}:${meta.turn}`, `c:${fnv1a(text)}`]
+/**
+ * Identity of one delivered watched-turn outcome. Each turn number
+ * finishes at most once per session and every replay path re-emits the
+ * same turn, so session plus turn alone marks a true replay; hashing
+ * the wake text would wrongly collapse later turns with equal answers.
+ */
+function sessionWakeKeys(meta: { sessionId: string; turn: number }): string[] {
+  return [`s:${meta.sessionId}:${meta.turn}`]
 }
 
 function hasWakeKey(bot: BotState, keys: readonly string[]): boolean {
@@ -1085,7 +1081,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const text = `[wake:session ${sessionId} ${event.status}] ${reply ?? ''}`
     const bot = ensureBotState(botId)
     const meta = { sessionId, turn }
-    const keys = sessionWakeKeys(meta, text)
+    const keys = sessionWakeKeys(meta)
     const pending = bot.queue.some(item => item.meta?.sessionId === sessionId && item.meta?.turn === turn)
     if (hasWakeKey(bot, keys) || pending) {
       persist()
@@ -1665,7 +1661,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         .some(event => event.type === 'reply.sent' && event.turn === failedTurn && event.kind !== 'progress')
       if (alreadyPublished) {
         removePendingWake(botId, wake.id)
-        if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta, wake.text))
+        if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta))
         finishWakeTurn(botId, wake, sessionId, {
           turn: failedTurn,
           status: 'failed',
@@ -1703,7 +1699,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     holdModel(botId, route)
     const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route, sender: { botId } })
     removePendingWake(botId, wake.id)
-    if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta, wake.text))
+    if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta))
     recordRoundTurn(wake, sessionId, turn)
     persist()
     trackTurn(botId, sessionId, turn, outcome => {
@@ -1795,7 +1791,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     if (stopped || admitting.has(wake.id) || !isRunnable(entries.get(botId))) return
     if (wake.meta !== undefined) {
       const bot = ensureBotState(botId)
-      if (hasWakeKey(bot, sessionWakeKeys(wake.meta, wake.text))) {
+      if (hasWakeKey(bot, sessionWakeKeys(wake.meta))) {
         removePendingWake(botId, wake.id)
         persist()
         return
@@ -1894,7 +1890,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const text = `[wake:session ${sessionId} ${status}] ${reply ?? ''}`
     const bot = ensureBotState(watch.botId)
     const meta = { sessionId, turn }
-    const keys = sessionWakeKeys(meta, text)
+    const keys = sessionWakeKeys(meta)
     const pending = bot.queue.some(item => item.meta?.sessionId === sessionId && item.meta?.turn === turn)
     if (hasWakeKey(bot, keys) || pending) return
     const wake = enqueue(watch.botId, {
