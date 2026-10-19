@@ -385,6 +385,8 @@ export interface SessionModelEntry {
   quotaState?: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted'
   /** How that state was obtained; absent when no quota was assessed. */
   quotaEvidence?: 'measured' | 'unknown_by_design' | 'not_obtained'
+  /** Per-provider quota summary shown in the model picker group header. */
+  providerQuotaSummary?: string
   /** True when a verified, distinct upstream Fast mode exists for this route. */
   supportsFast?: boolean
   /** Circuit state of this model's own route; absent while the route is healthy. */

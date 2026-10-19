@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { BatteryFull, Gift, Search, SlidersHorizontal, Zap } from 'lucide-react';
+import { BatteryFull, ChevronDown, Gift, Search, SlidersHorizontal, Zap } from 'lucide-react';
 import { REASONING_EFFORT_NAMES, type ReasoningEffort } from '@wrenyard/models';
 import { cn } from 'cn';
 import {
@@ -72,6 +72,44 @@ export interface ModelOption {
   defaultEffort: ReasoningEffort;
   /** True when this route has a verified, distinct upstream Fast mode. */
   supportsFast?: boolean;
+  /** Unified quota state; absent when no quota was assessed. */
+  quotaState?: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted';
+  /** How that state was obtained; absent when no quota was assessed. */
+  quotaEvidence?: 'measured' | 'unknown_by_design' | 'not_obtained';
+  /** Per-provider quota summary shown in the group header. */
+  providerQuotaSummary?: string;
+  /** Explicit free supply: keeps the free badge and normal placement. */
+  free?: boolean;
+}
+
+/** Quota tiers in picker order; unknown quota ranks with sufficient supply. */
+function quotaTier(option: ModelOption): number {
+  switch (option.quotaState) {
+    case 'abundant': return 0;
+    case 'insufficient': return 2;
+    case 'exhausted': return 3;
+    default: return 1;
+  }
+}
+
+/** Stable within-tier order: abundant, sufficient, insufficient, exhausted. */
+function orderByQuota(items: readonly ModelOption[]): ModelOption[] {
+  return items
+    .map((option, index) => ({ option, index }))
+    .sort((left, right) => quotaTier(left.option) - quotaTier(right.option) || left.index - right.index)
+    .map(({ option }) => option);
+}
+
+/** Small label for a nearly-used-up option; a by-design unknown is never a number. */
+function quotaNotice(option: ModelOption): string | undefined {
+  if (option.quotaState !== 'insufficient') return undefined;
+  return option.quotaEvidence === 'unknown_by_design' ? '用量未知' : '额度不足';
+}
+
+/** Muted styling applies to insufficient and exhausted options, never to free supply. */
+function quotaMuted(option: ModelOption): boolean {
+  if (option.free === true) return false;
+  return option.quotaState === 'insufficient' || option.quotaState === 'exhausted';
 }
 
 export interface ModelPickerProps {
@@ -159,6 +197,8 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
   const [query, setQuery] = useState('');
   /** The model whose effort submenu is open. */
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
+  /** Per-group expansion of the folded exhausted rows. */
+  const [expandedExhausted, setExpandedExhausted] = useState<Record<string, boolean>>({});
   const searchRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -169,8 +209,19 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
       if (bucket) bucket.push(model);
       else map.set(model.group, [model]);
     }
-    return [...map.entries()].map(([group, items]) => ({ value: group, items }));
+    return [...map.entries()].map(([group, items]) => {
+      const ordered = orderByQuota(items);
+      return {
+        value: group,
+        items: ordered,
+        quotaSummary: ordered.find((item) => item.providerQuotaSummary !== undefined)?.providerQuotaSummary,
+      };
+    });
   }, [models]);
+
+  const toggleExhausted = (group: string): void => {
+    setExpandedExhausted((current) => ({ ...current, [group]: current[group] !== true }));
+  };
 
   const selected = useMemo(
     () => models.find((model) => model.value === value) ?? null,
@@ -198,6 +249,7 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
               item.label.toLowerCase().includes(normalizedQuery) ||
               item.value.toLowerCase().includes(normalizedQuery),
           ),
+          quotaSummary: group.quotaSummary,
         };
       })
       .filter((group) => group.items.length > 0);
@@ -246,6 +298,72 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
     // typeahead or list navigation; stopping propagation keeps the keystroke in
     // the field without preventing its default behaviour.
     event.stopPropagation();
+  }
+
+  /** One option row: muted quota tiers and a small remaining-allowance label. */
+  function renderOption(option: ModelOption) {
+    const isCurrent = option.value === value;
+    const checked = isCurrent ? effort : option.defaultEffort;
+    const muted = quotaMuted(option);
+    const notice = muted ? quotaNotice(option) : undefined;
+    const rowClass = cn(
+      isCurrent && 'bg-accent/60 font-medium',
+      isCurrent && option.quotaState === 'exhausted' && 'text-destructive',
+      !isCurrent && muted && 'text-muted-foreground',
+    );
+    if (option.efforts.length === 0) {
+      return (
+        <DropdownMenuItem
+          key={option.value}
+          onClick={() => onChange(option.value, checked)}
+          className={rowClass}
+        >
+          <ModelOptionContent option={option} />
+          {notice !== undefined && (
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">{notice}</span>
+          )}
+          {isCurrent && <SelectedModelIndicator />}
+        </DropdownMenuItem>
+      );
+    }
+    return (
+      <DropdownMenuSub
+        key={option.value}
+        open={openSubmenu === option.value}
+        onOpenChange={(next) => setOpenSubmenu(next ? option.value : null)}
+      >
+        <DropdownMenuSubTrigger className={cn('[&>svg:last-child]:hidden', rowClass)}>
+          <ModelOptionContent option={option} />
+          {notice !== undefined && (
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">{notice}</span>
+          )}
+          {isCurrent && <SelectedModelIndicator />}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className="no-scrollbar">
+          <DropdownMenuRadioGroup
+            value={isCurrent ? effort : ''}
+            onValueChange={(next) => {
+              if (typeof next === 'string' && (option.efforts as readonly string[]).includes(next)) {
+                onChange(option.value, next as ReasoningEffort);
+              }
+            }}
+          >
+            {option.efforts.map((level) => (
+              <DropdownMenuRadioItem
+                key={level}
+                value={level}
+                className="not-focus:data-[checked]:bg-accent/60 data-[checked]:font-medium"
+              >
+                {REASONING_EFFORT_NAMES[level]}
+                {!isCurrent && level === option.defaultEffort && (
+                  <span className="ml-auto text-xs text-muted-foreground">预设</span>
+                )}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+    );
   }
 
   return (
@@ -322,68 +440,42 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
           {visibleGroups.length === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-muted-foreground">No models found</p>
           ) : (
-            visibleGroups.map((group) => (
-              <DropdownMenuGroup key={group.value}>
-                <DropdownMenuLabel>{group.value}</DropdownMenuLabel>
-                {group.items.map((option) => {
-                  const isCurrent = option.value === value;
-                  const checked = isCurrent ? effort : option.defaultEffort;
-                  if (option.efforts.length === 0) {
-                    return (
-                      <DropdownMenuItem
-                        key={option.value}
-                        onClick={() => onChange(option.value, checked)}
-                        className={isCurrent ? 'bg-accent/60 font-medium' : undefined}
-                      >
-                        <ModelOptionContent option={option} />
-                        {isCurrent && <SelectedModelIndicator />}
-                      </DropdownMenuItem>
-                    );
-                  }
-                  return (
-                    <DropdownMenuSub
-                      key={option.value}
-                      open={openSubmenu === option.value}
-                      onOpenChange={(next) => setOpenSubmenu(next ? option.value : null)}
+            visibleGroups.map((group) => {
+              // The selected option and free supply are never folded away; a
+              // search shows every matching exhausted row in place instead.
+              const exhausted = group.items.filter(
+                (option) =>
+                  option.quotaState === 'exhausted' && option.value !== value && option.free !== true,
+              );
+              const expandable = normalizedQuery === '' && exhausted.length > 0;
+              const expanded = expandable && expandedExhausted[group.value] === true;
+              const folded = expandable && !expanded ? new Set(exhausted) : undefined;
+              return (
+                <DropdownMenuGroup key={group.value}>
+                  <DropdownMenuLabel className="flex items-baseline justify-between gap-2">
+                    <span>{group.value}</span>
+                    {group.quotaSummary !== undefined && (
+                      <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
+                        {group.quotaSummary}
+                      </span>
+                    )}
+                  </DropdownMenuLabel>
+                  {group.items.filter((option) => folded?.has(option) !== true).map(renderOption)}
+                  {expandable && (
+                    <DropdownMenuItem
+                      closeOnClick={false}
+                      onClick={() => toggleExhausted(group.value)}
+                      className="text-muted-foreground"
                     >
-                      <DropdownMenuSubTrigger
-                        className={
-                          isCurrent
-                            ? 'bg-accent/60 font-medium [&>svg:last-child]:hidden'
-                            : '[&>svg:last-child]:hidden'
-                        }
-                      >
-                        <ModelOptionContent option={option} />
-                        {isCurrent && <SelectedModelIndicator />}
-                      </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent className="no-scrollbar">
-                        <DropdownMenuRadioGroup
-                          value={isCurrent ? effort : ''}
-                          onValueChange={(next) => {
-                            if (typeof next === 'string' && (option.efforts as readonly string[]).includes(next)) {
-                              onChange(option.value, next as ReasoningEffort);
-                            }
-                          }}
-                        >
-                          {option.efforts.map((level) => (
-                            <DropdownMenuRadioItem
-                              key={level}
-                              value={level}
-                              className="not-focus:data-[checked]:bg-accent/60 data-[checked]:font-medium"
-                            >
-                              {REASONING_EFFORT_NAMES[level]}
-                              {!isCurrent && level === option.defaultEffort && (
-                                <span className="ml-auto text-xs text-muted-foreground">预设</span>
-                              )}
-                            </DropdownMenuRadioItem>
-                          ))}
-                        </DropdownMenuRadioGroup>
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                  );
-                })}
-              </DropdownMenuGroup>
-            ))
+                      <span>额度用尽（{exhausted.length}）</span>
+                      <ChevronDown
+                        className={cn('ml-auto size-3.5 transition-transform', expanded && 'rotate-180')}
+                      />
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuGroup>
+              );
+            })
           )}
         </div>
       </DropdownMenuContent>

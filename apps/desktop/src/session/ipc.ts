@@ -4,7 +4,7 @@ import { isAbsolute } from 'node:path';
 import { clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import type { ReasoningEffort } from '@wrenyard/models';
-import type { ProviderListResult } from '@wrenyard/protocol/provider';
+import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
 import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
 import type { TaskRunUsage } from '../shell-contract.js';
 import { toModelEntries } from './model-entries.js';
@@ -477,11 +477,13 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     // The Provider list carries configured eligibility and display metadata;
     // the Gateway connection carries each model's own protocols, which is the
     // only source for the model's session protocol.
-    const [providers, connection] = await Promise.all([
+    const [providers, connection, quota] = await Promise.all([
       request<ProviderListResult>('provider.list', {}),
       request<WrenyardGatewayConnection>('gateway.connection', {}),
+      // Quota is display-only here: a failed read never breaks the picker.
+      request<ProviderQuotaResult>('provider.quota', {}).catch(() => undefined),
     ]);
-    return toModelEntries(providers, connection.models);
+    return toModelEntries(providers, connection.models, undefined, quota?.providers);
   });
   handle(SESSION_CHANNELS.context, (_event, value) =>
     request('session.context.inspect', value));

@@ -398,6 +398,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         ? effort
         : (resolveModelEffort(modelEfforts, entry.publicId, entry.reasoningEfforts) ?? defaultModelEffort(entry.reasoningEfforts)),
       supportsFast: entry.supportsFast === true,
+      quotaState: entry.quotaState,
+      quotaEvidence: entry.quotaEvidence,
+      providerQuotaSummary: entry.providerQuotaSummary,
+      free: entry.free === true,
     }));
   // An unusable selection is named on the trigger (never silently becoming
   // another model) and blocks sending; a probe-eligible one is informational.
