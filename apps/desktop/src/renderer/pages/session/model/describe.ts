@@ -48,7 +48,7 @@ export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   reason: '主推理',
   'memory-search': '记忆检索',
   search: '检索',
-  dispatch: '派发',
+  dispatch: '编译派发输入',
   reply: '沟通',
   title: '标题',
   document: '文档',
@@ -59,6 +59,32 @@ export const CALL_ROLE_LABEL: Record<CallModel['role'], string> = {
   status: '状态',
   suggestion: '输入建议',
 };
+
+/**
+ * System auxiliary roles kept out of the transcript: they run for every turn
+ * and say nothing about the work. Their spans stay in the ledger and the trace.
+ */
+export const HIDDEN_CALL_ROLES: ReadonlySet<CallModel['role']> = new Set(['status', 'title', 'suggestion', 'reply']);
+
+/** Row verb of every action kind. */
+export const ACTION_KIND_LABEL: Record<ActionModel['kind'], string> = {
+  search: '检索',
+  dispatch: '派发',
+  document: '文档',
+  todo: '待办',
+  vcs: '工作区版本',
+  project: '项目',
+  schedule: '定时任务',
+  'parse-failed': '操作',
+};
+
+/** Thinking verbs of the live line, picked by reasoning step so each step keeps one. */
+export const THINKING_VERBS = ['思考中', '斟酌中', '推敲中', '琢磨中', '梳理中'] as const;
+
+/** The thinking verb of one reasoning step. */
+export function thinkingVerb(step: number): string {
+  return THINKING_VERBS[Math.max(0, step) % THINKING_VERBS.length]!;
+}
 
 const ROUTE_STATE_LABEL: Record<string, string> = {
   rate_limited: '限流',

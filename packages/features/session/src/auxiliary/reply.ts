@@ -13,7 +13,6 @@ import { escapeReplyBody, tag } from '../context/render.ts';
 import { messageOf } from '../errors.ts';
 import type { BuiltView, CallFailureSummary, SessionCallHost } from '../ports.ts';
 import type { SessionRuntime, TurnRuntime } from '../turn/runtime.ts';
-import { maybeUpdateTitle } from './title.ts';
 import { maybeClassifyStatus } from './status.ts';
 
 /** Output-token allowance for the single communication reply call. */
@@ -282,7 +281,7 @@ export class ReplyWriter {
       const memoryCalls = canSave && text !== undefined && outcome.ok && failure === undefined
         ? outcome.toolCalls
         : undefined;
-      await this.finishTurn(session, turn, request.status as TerminalStatus, request.error, text, memoryCalls);
+      await this.finishTurn(session, turn, request.status as TerminalStatus, request.error, memoryCalls);
     }
   }
 
@@ -336,7 +335,7 @@ export class ReplyWriter {
       kind: 'final',
     });
     if (turn.finished || turn.abort.signal.aborted) return;
-    await this.finishTurn(session, turn, request.status as TerminalStatus, request.error, text);
+    await this.finishTurn(session, turn, request.status as TerminalStatus, request.error);
   }
 
   /**
@@ -388,13 +387,12 @@ export class ReplyWriter {
     }
   }
 
-  /** Write the durable terminal rows and update the title. */
+  /** Write the durable terminal rows. */
   private async finishTurn(
     session: SessionRuntime,
     turn: TurnRuntime,
     status: TerminalStatus,
     error: string | undefined,
-    replyText: string | undefined,
     memoryCalls?: readonly ToolCall[],
   ): Promise<void> {
     if (turn.finished) return;
@@ -440,10 +438,6 @@ export class ReplyWriter {
     }
     turn.durableTerminal = true;
 
-    // A terminal call without a reply leaves no new reply; the title still uses
-    // the latest real reply already on the timeline.
-    const titleReply = replyText ?? latestReplyText(this.host.ledger.read(session.sessionId));
-    await maybeUpdateTitle(this.host, session, turn, titleReply);
     // The turn is durable; the status judgement runs fire-and-forget and never
     // delays turn end or fails loudly.
     this.host.track(maybeClassifyStatus(this.host, session, turn, endedWithAsk));
@@ -535,15 +529,6 @@ function finishedActionCount(events: readonly LedgerEvent[], turn: number): numb
     if (event.type === 'action.finished' && event.turn === turn) count += 1;
   }
   return count;
-}
-
-/** The text of the latest visible system reply on the timeline, if any. */
-function latestReplyText(events: readonly LedgerEvent[]): string | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index]!;
-    if (event.type === 'reply.sent') return event.text;
-  }
-  return undefined;
 }
 
 /** Fixed-format fallback used when a terminal communication call itself fails. */

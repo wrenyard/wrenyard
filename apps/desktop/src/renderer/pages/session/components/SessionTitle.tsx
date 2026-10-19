@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Sparkles } from 'lucide-react';
 import { Button } from '@/renderer/components/ui/button';
 import { Input } from '@/renderer/components/ui/input';
+import { Spinner } from '@/renderer/components/ui/spinner';
 import { useMiniMode } from '@/renderer/lib/mini';
 import { useSessionSeen } from '@/renderer/lib/session-seen';
 import { SessionDot } from './SessionDot';
@@ -13,20 +15,24 @@ export interface SessionTitleProps {
   draft: boolean;
   /** Save a manual title for the shown session; absent when it cannot be renamed. */
   onRename?: (title: string) => Promise<void>;
+  /** Generate and save a new title; resolves with it. */
+  onRegenerate?: () => Promise<string>;
 }
 
 /**
  * Title-bar session title. The main-window title is inline-editable: clicking it
  * opens a focused editor, Enter or blur saves, Escape cancels, and an empty or
- * whitespace-only title is rejected without a request.
+ * whitespace-only title is rejected without a request. The editor also offers
+ * to generate the title again.
  */
-export function SessionTitle({ title, session, draft, onRename }: SessionTitleProps) {
+export function SessionTitle({ title, session, draft, onRename, onRegenerate }: SessionTitleProps) {
   const mini = useMiniMode();
   const seen = useSessionSeen();
   const label = draft ? '新对话' : title;
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(title);
   const [error, setError] = useState('');
+  const [regenerating, setRegenerating] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   /**
    * Set once a save or cancel for the current edit is under way, so the blur a
@@ -127,6 +133,26 @@ export function SessionTitle({ title, session, draft, onRename }: SessionTitlePr
     }
   };
 
+  const regenerate = async (): Promise<void> => {
+    if (onRegenerate === undefined || regenerating) return;
+    const submittedFor = editingSession.current;
+    settling.current = true;
+    setRegenerating(true);
+    setError('');
+    try {
+      await onRegenerate();
+      if (!mounted.current || editingSession.current !== submittedFor) return;
+      setEditing(false);
+    } catch (failure) {
+      if (!mounted.current || editingSession.current !== submittedFor) return;
+      settling.current = false;
+      setError(failure instanceof Error ? failure.message : String(failure));
+      inputRef.current?.focus();
+    } finally {
+      if (mounted.current) setRegenerating(false);
+    }
+  };
+
   if (draft || onRename === undefined) {
     return <Button variant="ghost" className="max-w-80 truncate text-base font-medium">{label}</Button>;
   }
@@ -148,7 +174,8 @@ export function SessionTitle({ title, session, draft, onRename }: SessionTitlePr
         value={value}
         aria-label="会话标题"
         aria-invalid={error !== ''}
-        className="absolute inset-x-0 top-0 h-8 rounded-[4px] border-transparent bg-transparent px-3 py-0 text-base font-medium outline-none ring-0 focus-visible:border-ring focus-visible:ring-0 aria-invalid:ring-0 md:text-base dark:bg-transparent"
+        disabled={regenerating}
+        className="absolute inset-x-0 top-0 h-8 rounded-[4px] border-transparent bg-transparent py-0 pl-3 pr-9 text-base font-medium outline-none ring-0 focus-visible:border-ring focus-visible:ring-0 aria-invalid:ring-0 md:text-base dark:bg-transparent"
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
@@ -165,6 +192,21 @@ export function SessionTitle({ title, session, draft, onRename }: SessionTitlePr
         onCompositionEnd={() => { composing.current = false; }}
         onBlur={() => { void commit(); }}
       />
+      )}
+      {editing && onRegenerate !== undefined && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="absolute right-1 top-1 text-muted-foreground"
+          aria-label="重新生成标题"
+          title="重新生成标题"
+          disabled={regenerating}
+          // Keep the input focused, so its blur does not save first.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => { void regenerate(); }}
+        >
+          {regenerating ? <Spinner className="size-3" /> : <Sparkles />}
+        </Button>
       )}
       {editing && error !== '' && (
         <span className="px-1 pt-0.5 text-xs text-destructive">{error}</span>

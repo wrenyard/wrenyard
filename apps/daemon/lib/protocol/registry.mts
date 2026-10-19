@@ -10,6 +10,7 @@ import {
   sessionMediaReadParamsSchema, sessionMediaReadResultSchema,
   sessionDeleteParamsSchema, sessionDeleteResultSchema,
   sessionRenameParamsSchema, sessionRenameResultSchema,
+  sessionTitleRegenerateParamsSchema, sessionTitleRegenerateResultSchema,
   sessionUpdateMetadataParamsSchema, sessionUpdateMetadataResultSchema,
   sessionPromptSuggestParamsSchema, sessionPromptSuggestResultSchema,
   sessionPromptCancelParamsSchema, sessionPromptCancelResultSchema,
@@ -23,6 +24,7 @@ import {
   type SessionMediaReadParams, type SessionMediaReadResult,
   type SessionDeleteParams, type SessionDeleteResult,
   type SessionRenameParams, type SessionRenameResult,
+  type SessionTitleRegenerateParams, type SessionTitleRegenerateResult,
   type SessionUpdateMetadataParams, type SessionUpdateMetadataResult,
   type SessionPromptSuggestParams, type SessionPromptSuggestResult,
   type SessionPromptCancelParams, type SessionPromptCancelResult,
@@ -38,6 +40,7 @@ export type {
   SessionMediaReadParams, SessionMediaReadResult,
   SessionDeleteParams, SessionDeleteResult,
   SessionRenameParams, SessionRenameResult,
+  SessionTitleRegenerateParams, SessionTitleRegenerateResult,
   SessionUpdateMetadataParams, SessionUpdateMetadataResult,
   SessionPromptSuggestParams, SessionPromptSuggestResult,
   SessionPromptCancelParams, SessionPromptCancelResult,
@@ -1036,6 +1039,7 @@ export interface ForemanMethodParams {
   'session.media.read': SessionMediaReadParams
   'session.delete': SessionDeleteParams
   'session.rename': SessionRenameParams
+  'session.title.regenerate': SessionTitleRegenerateParams
   'session.updateMetadata': SessionUpdateMetadataParams
   'session.prompt.suggest': SessionPromptSuggestParams
   'session.prompt.cancel': SessionPromptCancelParams
@@ -1158,6 +1162,7 @@ export interface ForemanMethodResults {
   'session.media.read': SessionMediaReadResult
   'session.delete': SessionDeleteResult
   'session.rename': SessionRenameResult
+  'session.title.regenerate': SessionTitleRegenerateResult
   'session.updateMetadata': SessionUpdateMetadataResult
   'session.prompt.suggest': SessionPromptSuggestResult
   'session.prompt.cancel': SessionPromptCancelResult
@@ -1582,6 +1587,10 @@ export const methodRegistry: {
   'session.rename': {
     params: sessionRenameParamsSchema,
     result: sessionRenameResultSchema,
+  },
+  'session.title.regenerate': {
+    params: sessionTitleRegenerateParamsSchema,
+    result: sessionTitleRegenerateResultSchema,
   },
   'session.updateMetadata': {
     params: sessionUpdateMetadataParamsSchema,

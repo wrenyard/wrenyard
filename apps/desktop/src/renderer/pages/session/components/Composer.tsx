@@ -14,6 +14,7 @@ import { defaultModelEffort, resolveModelEffort } from '../state/reasoning-effor
 import { useComposerSelection, useSessionUsage } from '../state/session-usage.js';
 import { clearDraftAttachments, isStagedPathRetained, readDraftAttachments, reconcileSentDraft } from '../state/drafts.js';
 import { useContextBudget } from '../state/use-context-budget.js';
+import { InterruptControl } from './InterruptControl.js';
 import { MediaAttachments, fromDraftAttachment } from './MediaAttachments.js';
 
 /** Input text is token-counted 300ms after typing stops (usage spec 3.3). */
@@ -117,10 +118,12 @@ export interface ComposerProps {
   focusRequest?: number;
   /** Invoked after an explicit focus request has been consumed. */
   onFocusRequestHandled?: () => void;
+  /** Interrupt one running turn; the stop control replaces send while turns run. */
+  onInterrupt?: (turn: number) => void;
 }
 
 /** Bottom composer with a unified model/effort picker, attachments and a send button. */
-export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, onFocusRequestHandled }: ComposerProps) {
+export function Composer({ models, turns, sessionKey, disabled = false, onSend, injectedText, focusRequest = 0, onFocusRequestHandled, onInterrupt }: ComposerProps) {
   const {
     modelId, setModelId, effort, setEffort, text, setText, clearText,
     attachments, setAttachments, clearAttachments,
@@ -280,15 +283,16 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
   // Invalidation is separate from, and narrower than, eligibility: a shown
   // suggestion is cleared — and any in-flight request cancelled — only on an
   // explicit invalidation. The feature being explicitly off, a send, a new
-  // running turn, real typed input or attachments all invalidate. A
+  // running turn or attachments invalidate; typed text that leaves the
+  // suggestion is dropped by the input itself. A
   // hidden surface, a disabled/loading composer, or preference data that is
   // transiently absent must NOT: they only suppress eligibility above.
   const promptCompletionDisabled = preferences.data?.session.promptCompletion === false;
   useEffect(() => {
-    if (promptCompletionDisabled || sending || turnRunning || text !== '' || attachments.length > 0) {
+    if (promptCompletionDisabled || sending || turnRunning || attachments.length > 0) {
       dismissSuggestion();
     }
-  }, [promptCompletionDisabled, sending, turnRunning, text, attachments.length, dismissSuggestion]);
+  }, [promptCompletionDisabled, sending, turnRunning, attachments.length, dismissSuggestion]);
 
   // Seed the model/effort once per session (or per new turn). A nonempty
   // remembered or explicit pick is never overwritten by an availability
@@ -408,8 +412,6 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     : '';
 
   const handleChange = (value: string): void => {
-    // Typing or pasting text replaces and discards any suggestion.
-    if (value !== '') dismissSuggestion();
     setText(value);
   };
 
@@ -495,6 +497,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
       });
   };
 
+  // An empty draft with running turns offers stop; typing brings send back.
+  const runningTurns = turns.filter((turn) => turn.status === 'running');
+  const stopShown = runningTurns.length > 0 && text.trim() === '' && attachments.length === 0;
+
   const attachmentStrip = attachmentError === '' && attachments.length === 0 ? undefined : (
     <div className="flex flex-col gap-1.5">
       {attachmentError !== '' && <p className="text-xs text-destructive">{attachmentError}</p>}
@@ -527,7 +533,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         attachments={attachmentStrip}
         hasAttachments={attachments.length > 0}
         onPaste={handlePaste}
-        suggestion={suggestion}
+        suggestion={suggestion === '' ? undefined : suggestion}
+        submitControl={stopShown && onInterrupt !== undefined
+          ? <InterruptControl running={runningTurns} onInterrupt={onInterrupt} composerRef={textareaRef} />
+          : undefined}
         onAcceptSuggestion={acceptSuggestion}
         onDismissSuggestion={dismissSuggestion}
         toolbar={

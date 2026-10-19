@@ -50,6 +50,7 @@ export function AppMarkdown({ attachments, sessionId, ...props }: AppMarkdownPro
       onOpenExternal={onOpenExternal}
       onReadAttachment={onReadAttachment}
       onRevealAttachment={onRevealAttachment}
+      {...(sessionId === undefined || sessionId === '' ? {} : { attachmentSessionId: sessionId })}
     />
   );
 }

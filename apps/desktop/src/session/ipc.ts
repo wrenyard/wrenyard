@@ -1,6 +1,7 @@
 /** Desktop transport for daemon-owned sessions. */
+import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
-import { dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { WrenyardIpcClient, WrenyardRpcError, type WrenyardGatewayConnection } from '@wrenyard/control';
 import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderListResult } from '@wrenyard/protocol/provider';
@@ -32,8 +33,9 @@ export const SESSION_CHANNELS = {
   routesPreview: 'session:routes-preview',
   promptSuggest: 'session:prompt-suggest', promptCancel: 'session:prompt-cancel',
   mediaRead: 'session:media-read', mediaReveal: 'session:media-reveal',
+  mediaOriginal: 'session:media-original', mediaOpen: 'session:media-open', mediaCopy: 'session:media-copy',
   delete: 'session:delete', mediaPick: 'session:media-pick',
-  rename: 'session:rename',
+  rename: 'session:rename', regenerateTitle: 'session:regenerate-title',
   updateMetadata: 'session:update-metadata',
   mediaDescribe: 'session:media-describe', mediaStageClipboard: 'session:media-stage-clipboard',
   mediaDiscard: 'session:media-discard',
@@ -553,6 +555,35 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     if (canonical === undefined || !isAbsolute(canonical)) throw new Error('媒体路径无效');
     shell.showItemInFolder(canonical);
   });
+  // The daemon authorizes a ledger-known file and returns its canonical path;
+  // the actions below use exactly that path, and only on the local host.
+  const localMediaPath = async (value: unknown): Promise<{ path: string; mime: string; dataUrl?: string } | { remote: string | undefined }> => {
+    const result = await request<{ path?: unknown; mime?: unknown; dataUrl?: unknown }>('session.media.read', readMediaRequest(value));
+    if (options.isRemote?.() === true) return { remote: readString(result?.dataUrl) };
+    const canonical = readString(result?.path);
+    if (canonical === undefined || !isAbsolute(canonical)) throw new Error('媒体路径无效');
+    return { path: canonical, mime: readString(result?.mime) ?? 'application/octet-stream' };
+  };
+  handle(SESSION_CHANNELS.mediaOriginal, async (_event, value) => {
+    // The original file at full resolution; remote media only has its preview.
+    const media = await localMediaPath(value);
+    if ('remote' in media) return media.remote;
+    return `data:${media.mime};base64,${(await readFile(media.path)).toString('base64')}`;
+  });
+  handle(SESSION_CHANNELS.mediaOpen, async (_event, value) => {
+    const media = await localMediaPath(value);
+    if ('remote' in media) throw new Error('远程模式下无法在本地打开远程媒体文件');
+    const failure = await shell.openPath(media.path);
+    if (failure !== '') throw new Error(failure);
+  });
+  handle(SESSION_CHANNELS.mediaCopy, async (_event, value) => {
+    const media = await localMediaPath(value);
+    const image = 'remote' in media
+      ? nativeImage.createFromDataURL(media.remote ?? '')
+      : nativeImage.createFromPath(media.path);
+    if (image.isEmpty()) throw new Error('无法读取图片');
+    clipboard.writeImage(image);
+  });
   handle(SESSION_CHANNELS.delete, async (_event, value) => {
     const sessionId = readString(value);
     if (sessionId === undefined) throw new Error('会话 id 无效');
@@ -565,6 +596,11 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
     const title = readString(record.title);
     if (sessionId === undefined || title === undefined) throw new Error('会话标题无效');
     await request('session.rename', { sessionId, title });
+  });
+  handle(SESSION_CHANNELS.regenerateTitle, async (_event, value) => {
+    const sessionId = readString(value);
+    if (sessionId === undefined) throw new Error('会话无效');
+    return (await request<{ title: string }>('session.title.regenerate', { sessionId })).title;
   });
   handle(SESSION_CHANNELS.updateMetadata, async (_event, value) => {
     if (typeof value !== 'object' || value === null) throw new Error('会话元数据无效');

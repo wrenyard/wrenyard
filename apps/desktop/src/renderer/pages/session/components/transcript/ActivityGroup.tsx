@@ -1,19 +1,36 @@
 /**
- * One collapsed stretch of agent work: a muted summary line over the bordered
- * list of its step rows. The summary shows a live label while an item runs.
+ * One collapsed stretch of agent work: a muted header line over the bordered
+ * list of its step rows. The header's icon is the step kind when the group
+ * holds one step and a list when it holds several. While a step runs, the
+ * header names it with an animated ellipsis; once settled it summarises the
+ * steps by kind, with a warning when some failed. A new group rises in.
  */
-import { useState } from 'react';
-import { ChevronRight, ListChecks } from 'lucide-react';
+import { useState, type ComponentType } from 'react';
+import {
+  BookOpen,
+  Brain,
+  CalendarClock,
+  ChevronRight,
+  FileText,
+  FolderGit2,
+  GitBranch,
+  History,
+  List,
+  ListTodo,
+  Search,
+  Send,
+  TriangleAlert,
+  Wrench,
+} from 'lucide-react';
 import { cn } from 'cn';
-import { Elapsed } from '@/renderer/components/elapsed';
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/renderer/components/ui/collapsible';
-import { CALL_ROLE_LABEL, materialTitle } from '../../model/describe.js';
+import { ACTION_KIND_LABEL, CALL_ROLE_LABEL, materialTitle, thinkingVerb } from '../../model/describe.js';
 import type { ActionModel, CallModel, ContextItem, ReasoningModel } from '../../model/types.js';
-import { LiveGlyph } from '../live-glyph.js';
+import { Ellipsis } from '../live-indicators.js';
 import { MorphText } from '../morph-text.js';
 import { ActionRow } from './ActionCard.js';
 import { ActivityRow } from './ActivityRow.js';
@@ -36,47 +53,74 @@ export function groupId(item: ActivityItem): string {
   }
 }
 
-/** The muted one-line summary of a group's finished work. */
-function summary(items: readonly ActivityItem[]): string | undefined {
-  let reasoning = 0;
-  let actions = 0;
-  let calls = 0;
-  let contexts = 0;
-  for (const item of items) {
-    switch (item.kind) {
-      case 'reason': reasoning += 1; break;
-      case 'action': actions += 1; break;
-      case 'call': calls += 1; break;
-      case 'context': contexts += 1; break;
-    }
+type Icon = ComponentType<{ className?: string }>;
+
+const ACTION_ICON: Record<ActionModel['kind'], Icon> = {
+  search: Search,
+  dispatch: Send,
+  document: FileText,
+  todo: ListTodo,
+  vcs: GitBranch,
+  project: FolderGit2,
+  schedule: CalendarClock,
+  'parse-failed': Wrench,
+};
+
+const CALL_ICON: Partial<Record<CallModel['role'], Icon>> = {
+  'memory-search': History,
+  search: Search,
+  document: FileText,
+  todo: ListTodo,
+  vcs: GitBranch,
+  project: FolderGit2,
+  schedule: CalendarClock,
+};
+
+/** The icon of one step. */
+function itemIcon(item: ActivityItem): Icon {
+  switch (item.kind) {
+    case 'reason': return Brain;
+    case 'call': return CALL_ICON[item.call.role] ?? Wrench;
+    case 'action': return ACTION_ICON[item.action.kind];
+    case 'context': return BookOpen;
   }
-  const parts: string[] = [];
-  if (reasoning > 0) parts.push(`思考 ${reasoning} 次`);
-  if (actions > 0) parts.push(`执行 ${actions} 个操作`);
-  if (calls > 0) parts.push(`辅助调用 ${calls} 次`);
-  if (contexts > 0) parts.push(`加载 ${contexts} 份资料`);
-  return parts.length === 0 ? undefined : parts.join('，');
 }
 
-/** Thinking verbs of a reasoning step, picked by step index so they are stable. */
-const THINKING_VERBS = ['思考中…', '斟酌中…', '推敲中…', '琢磨中…', '梳理中…'];
-
-/** The group's running item and the label shown in its place. */
-function liveItem(items: readonly ActivityItem[]): { label: string } | undefined {
-  let reasoning = 0;
+/** One count phrase per step kind, in first-seen order: `派发 2 个任务，思考 3 次`. */
+function summary(items: readonly ActivityItem[]): string {
+  const counts = new Map<string, { count: number; phrase: (count: number) => string }>();
+  const add = (key: string, phrase: (count: number) => string): void => {
+    const entry = counts.get(key);
+    if (entry === undefined) counts.set(key, { count: 1, phrase });
+    else entry.count += 1;
+  };
   for (const item of items) {
-    if (item.kind === 'reason') {
-      const step = item.call.cycle ?? reasoning;
-      reasoning += 1;
-      if (item.call.status !== 'running') continue;
-      return { label: THINKING_VERBS[step % THINKING_VERBS.length] ?? THINKING_VERBS[0] };
+    switch (item.kind) {
+      case 'reason': add('reason', (n) => `思考 ${n} 次`); break;
+      case 'context': add('context', (n) => `加载 ${n} 份资料`); break;
+      case 'call': {
+        const label = CALL_ROLE_LABEL[item.call.role] ?? item.call.role;
+        add(`call:${item.call.role}`, (n) => `${label} ${n} 次`);
+        break;
+      }
+      case 'action': {
+        const kind = item.action.kind;
+        add(`action:${kind}`, kind === 'dispatch' ? (n) => `派发 ${n} 个任务` : (n) => `${ACTION_KIND_LABEL[kind]} ${n} 次`);
+        break;
+      }
     }
-    if (item.kind === 'call') {
-      if (item.call.status !== 'running') continue;
-      return { label: `正在${CALL_ROLE_LABEL[item.call.role] ?? item.call.role}…` };
-    }
+  }
+  return [...counts.values()].map(({ count, phrase }) => phrase(count)).join('，');
+}
+
+/** The label of the group's running step, without the trailing ellipsis. */
+function runningLabel(items: readonly ActivityItem[]): string | undefined {
+  for (const item of items) {
+    if (item.kind === 'reason' && item.call.status === 'running') return thinkingVerb(item.call.cycle ?? 0);
+    if (item.kind === 'call' && item.call.status === 'running') return `正在${CALL_ROLE_LABEL[item.call.role] ?? item.call.role}`;
     if (item.kind === 'action' && item.action.status === 'running') {
-      return { label: `正在执行：${item.action.title}` };
+      // A step still waiting for its generated name reads as running.
+      return item.action.title === '' ? '运行中' : item.action.title;
     }
   }
   return undefined;
@@ -111,50 +155,39 @@ export interface ActivityGroupProps {
   sessionId?: string;
   /** Cancel one dispatched task run; rejects when the daemon refuses. */
   onCancelTask: (taskRunId: string) => Promise<void>;
-  /** This group is the turn's live line, so its header tells the current step. */
-  live?: boolean;
-  /** Status text shown on the live line while no item of the group runs. */
-  fallbackLabel?: string;
-  /** Start of the task run whose elapsed time the live line shows. */
-  taskStartedAt?: string;
 }
 
 /** One collapsed stretch of agent work. */
-export function ActivityGroup({
-  items,
-  sessionId,
-  onCancelTask,
-  live = false,
-  fallbackLabel,
-  taskStartedAt,
-}: ActivityGroupProps) {
+export function ActivityGroup({ items, sessionId, onCancelTask }: ActivityGroupProps) {
   const [open, setOpen] = useState(false);
-  const summaryText = summary(items);
-  const running = liveItem(items);
+  const running = runningLabel(items);
   const failed = failedCount(items);
-  const runningLabel = running?.label ?? fallbackLabel ?? '';
+  const HeaderIcon = items.length === 1 ? itemIcon(items[0]!) : List;
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
+    <Collapsible open={open} onOpenChange={setOpen} className="wy-rise-in">
       <CollapsibleTrigger
         render={(
           <button
             type="button"
-            className="group/act inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-sm text-muted-foreground hover:text-foreground"
+            className="group/act inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           />
         )}
       >
-        {live ? (
-          <>
-            <LiveGlyph />
-            <MorphText className="shimmer truncate" text={runningLabel} />
-            {taskStartedAt !== undefined && <Elapsed start={taskStartedAt} className="tabular-nums" />}
-          </>
+        <HeaderIcon className="size-3.5 shrink-0" aria-hidden />
+        {running !== undefined ? (
+          <span className="inline-flex min-w-0 items-baseline">
+            <MorphText className="shimmer truncate" text={running} />
+            <Ellipsis />
+          </span>
         ) : (
           <>
-            <ListChecks className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
-            <span className="truncate">{summaryText}</span>
-            {running !== undefined && <span className="truncate text-muted-foreground/70">{' · 1 项进行中'}</span>}
-            {failed > 0 && <span className="shrink-0 text-destructive">{` · ${failed} 项失败`}</span>}
+            <span className="truncate">{summary(items)}</span>
+            {failed > 0 && (
+              <>
+                <span className="shrink-0">（{failed} 项失败）</span>
+                <TriangleAlert className="size-3.5 shrink-0" aria-label="有失败的步骤" />
+              </>
+            )}
           </>
         )}
         <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', open && 'rotate-90')} />
@@ -165,13 +198,7 @@ export function ActivityGroup({
             {items.map((item) => {
               switch (item.kind) {
                 case 'reason':
-                  return (
-                    <ReasoningRow
-                      key={groupId(item)}
-                      call={item.call}
-                      reasoning={item.reasoning}
-                    />
-                  );
+                  return <ReasoningRow key={groupId(item)} call={item.call} reasoning={item.reasoning} />;
                 case 'call':
                   return <AuxiliaryCallRow key={groupId(item)} call={item.call} />;
                 case 'action':

@@ -2,7 +2,7 @@
  * Reusable attachment strip for user messages and task-result cards.
  *
  * Each image is lazily resolved through the session bridge (`mediaRead`) and
- * shown as a rounded thumbnail; clicking it opens a zoom dialog. Files show
+ * shown as a thumbnail; clicking it opens the full-window lightbox. Files show
  * their name and size and reveal in the OS file manager. Draft (optimistic)
  * attachments may carry an inline `preview`, so no IPC round-trip is needed
  * before the send. Nothing here ever persists bytes to the ledger.
@@ -10,14 +10,8 @@
 import { useEffect, useState } from 'react';
 import { FileText, ImageOff, X } from 'lucide-react';
 import { cn } from 'cn';
+import { openLightbox, useLightboxItem } from '@/renderer/components/lightbox-store';
 import { Button } from '@/renderer/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@/renderer/components/ui/dialog';
-import { ImageViewer } from '@/renderer/components/image-viewer';
 import { getSessionBridge } from '@/renderer/lib/session';
 import type { DraftAttachment, SessionFile } from '../model/types.js';
 
@@ -116,24 +110,35 @@ function RemoveButton({ onRemove }: { onRemove: () => void }) {
   );
 }
 
-function ImageAttachment({ item, sessionId, onOpen, onRemove }: {
+function ImageAttachment({ item, sessionId, single, onRemove }: {
   item: MediaAttachmentItem;
   sessionId?: string;
-  onOpen: (src: string, name: string) => void;
+  /** The only image of its strip: shown uncropped at its natural aspect ratio. */
+  single: boolean;
   onRemove?: () => void;
 }) {
   const { src, error } = useThumbnail(item, sessionId);
+  const register = useLightboxItem(src === undefined ? undefined : {
+    name: item.name,
+    src,
+    ...(sessionId === undefined || sessionId === '' || item.path === '' ? {} : { media: { sessionId, path: item.path } }),
+  });
+  const uncropped = single && src !== undefined;
   return (
-    <span className="relative inline-flex">
+    <span className="relative inline-flex max-w-full">
       <button
+        ref={register}
         type="button"
-        className="size-20 overflow-hidden rounded-xl border bg-muted ring-1 ring-foreground/5 disabled:cursor-default"
+        className={cn(
+          'overflow-hidden rounded-xl border bg-muted ring-1 ring-foreground/5 disabled:cursor-default',
+          uncropped ? 'max-w-full cursor-zoom-in' : 'size-20',
+        )}
         title={item.name}
         disabled={src === undefined}
-        onClick={() => { if (src !== undefined) onOpen(src, item.name); }}
+        onClick={(event) => openLightbox(event.currentTarget)}
       >
         {src !== undefined ? (
-          <img src={src} alt={item.name} className="size-full object-cover" />
+          <img src={src} alt={item.name} className={uncropped ? 'block max-h-48 max-w-full object-contain' : 'size-full object-cover'} />
         ) : (
           <span className="flex size-full flex-col items-center justify-center gap-1 p-1 text-center text-[10px] text-muted-foreground">
             <ImageOff className="size-4" />
@@ -194,8 +199,9 @@ export interface MediaAttachmentsProps {
 
 /** Attachment thumbnail/file strip for one message or task-result card. */
 export function MediaAttachments({ items, sessionId, onRemove, align = 'start', className }: MediaAttachmentsProps) {
-  const [zoom, setZoom] = useState<{ src: string; name: string } | undefined>(undefined);
   if (items.length === 0) return null;
+  // A lone image in a sent message shows whole; draft strips keep square tiles.
+  const singleImage = onRemove === undefined && items.filter((item) => item.kind === 'image').length === 1;
   return (
     <>
       <div className={cn('flex flex-wrap gap-2', align === 'end' ? 'justify-end' : 'justify-start', className)}>
@@ -204,7 +210,7 @@ export function MediaAttachments({ items, sessionId, onRemove, align = 'start', 
             key={item.key}
             item={item}
             {...(sessionId === undefined ? {} : { sessionId })}
-            onOpen={(src, name) => setZoom({ src, name })}
+            single={singleImage}
             {...(onRemove === undefined ? {} : { onRemove: () => onRemove(item.key) })}
           />
         ) : (
@@ -216,13 +222,6 @@ export function MediaAttachments({ items, sessionId, onRemove, align = 'start', 
           />
         )))}
       </div>
-      <Dialog open={zoom !== undefined} onOpenChange={(open) => { if (!open) setZoom(undefined); }}>
-        <DialogContent className="max-w-[min(90vw,64rem)]">
-          <DialogTitle className="truncate">{zoom?.name ?? '图片'}</DialogTitle>
-          <DialogDescription className="sr-only">附件图片预览</DialogDescription>
-          {zoom !== undefined && <ImageViewer src={zoom.src} alt={zoom.name} />}
-        </DialogContent>
-      </Dialog>
     </>
   );
 }

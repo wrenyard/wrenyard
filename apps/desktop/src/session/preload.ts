@@ -67,10 +67,18 @@ export const SESSION_CHANNELS = {
   mediaRead: 'session:media-read',
   /** Renderer → main: `{ sessionId, path }`, ledger-validated then revealed in the file manager. */
   mediaReveal: 'session:media-reveal',
+  /** Renderer → main: `{ sessionId, path }`; the original image as a data URL (the preview when remote). */
+  mediaOriginal: 'session:media-original',
+  /** Renderer → main: `{ sessionId, path }`, opened with the default app (local only). */
+  mediaOpen: 'session:media-open',
+  /** Renderer → main: `{ sessionId, path }`, the image copied to the clipboard. */
+  mediaCopy: 'session:media-copy',
   /** Renderer → main: `sessionId`, forwarded to `session.delete`. */
   delete: 'session:delete',
   /** Renderer → main: `{ sessionId, title }`, forwarded to `session.rename`. */
   rename: 'session:rename',
+  /** Renderer → main: `sessionId`, forwarded to `session.title.regenerate`; resolves with the title. */
+  regenerateTitle: 'session:regenerate-title',
   /** Renderer → main: `{ sessionId, archived?, pinned? }`, forwarded to `session.updateMetadata`. */
   updateMetadata: 'session:update-metadata',
   /** Renderer → main: open the native multi-file picker, returning drafts. */
@@ -198,10 +206,18 @@ export interface SessionBridge {
   mediaRead(request: SessionBridgeMediaRequest): Promise<SessionMediaReadResult>;
   /** Reveal one ledger-known media file in the OS file manager. */
   revealMedia(request: SessionBridgeMediaRequest): Promise<void>;
+  /** The original image as a data URL; the preview when the daemon is remote. */
+  readOriginalMedia(request: SessionBridgeMediaRequest): Promise<string | undefined>;
+  /** Open one session file with the system's default app (local only). */
+  openMedia(request: SessionBridgeMediaRequest): Promise<void>;
+  /** Copy one session image to the clipboard. */
+  copyMedia(request: SessionBridgeMediaRequest): Promise<void>;
   /** Delete one session, clearing it from the daemon list. */
   deleteSession(sessionId: string): Promise<void>;
   /** Rename one session with a manual title; the new title is persisted. */
   renameSession(sessionId: string, title: string): Promise<void>;
+  /** Generate a new title on request and save it as the manual title. */
+  regenerateTitle(sessionId: string): Promise<string>;
   /**
    * Change one session's archived / pinned list flags; an omitted field keeps
    * its prior value.
@@ -312,11 +328,23 @@ const bridge: SessionBridge = {
   revealMedia(request: SessionBridgeMediaRequest): Promise<void> {
     return ipcRenderer.invoke(SESSION_CHANNELS.mediaReveal, request) as Promise<void>;
   },
+  readOriginalMedia(request: SessionBridgeMediaRequest): Promise<string | undefined> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.mediaOriginal, request) as Promise<string | undefined>;
+  },
+  openMedia(request: SessionBridgeMediaRequest): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.mediaOpen, request) as Promise<void>;
+  },
+  copyMedia(request: SessionBridgeMediaRequest): Promise<void> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.mediaCopy, request) as Promise<void>;
+  },
   deleteSession(sessionId: string): Promise<void> {
     return ipcRenderer.invoke(SESSION_CHANNELS.delete, sessionId) as Promise<void>;
   },
   renameSession(sessionId: string, title: string): Promise<void> {
     return ipcRenderer.invoke(SESSION_CHANNELS.rename, { sessionId, title }) as Promise<void>;
+  },
+  regenerateTitle(sessionId: string): Promise<string> {
+    return ipcRenderer.invoke(SESSION_CHANNELS.regenerateTitle, sessionId) as Promise<string>;
   },
   updateMetadata(sessionId: string, patch: { archived?: boolean; pinned?: boolean }): Promise<void> {
     return ipcRenderer.invoke(SESSION_CHANNELS.updateMetadata, { sessionId, ...patch }) as Promise<void>;

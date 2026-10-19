@@ -20,8 +20,6 @@ export interface TranscriptViewProps {
   pending: readonly PendingTurn[];
   /** Ledger session id, forwarded to attachment media. */
   sessionId?: string;
-  /** Interrupt one running turn. */
-  onInterrupt: (turn: number) => void;
   /** Cancel one dispatched task run. */
   onCancelTask: (taskRunId: string) => Promise<void>;
   /** Retry one pending send that failed. */
@@ -37,7 +35,6 @@ export const TranscriptView = memo(function TranscriptView({
   turns,
   pending,
   sessionId,
-  onInterrupt,
   onCancelTask,
   onRetry,
   onRemove,
@@ -45,7 +42,7 @@ export const TranscriptView = memo(function TranscriptView({
 }: TranscriptViewProps) {
   return (
     <>
-      {turns.map((turn) => (
+      {turns.map((turn, index) => (
         <MessageScrollerItem
           key={`transcript:${turn.id}`}
           messageId={`transcript:${turn.id}`}
@@ -55,7 +52,7 @@ export const TranscriptView = memo(function TranscriptView({
           <TranscriptTurn
             turn={turn}
             sessionId={sessionId}
-            onInterrupt={onInterrupt}
+            latest={index === turns.length - 1}
             onCancelTask={onCancelTask}
             waiting={waiting?.get(turn.id)}
           />

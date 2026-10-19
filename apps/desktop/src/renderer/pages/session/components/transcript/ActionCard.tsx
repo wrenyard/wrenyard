@@ -11,11 +11,11 @@ import { Button } from '@/renderer/components/ui/button';
 import { Spinner } from '@/renderer/components/ui/spinner';
 import { shell } from '@/renderer/lib/desktop';
 import { formatTokenCount } from '@/renderer/lib/format';
-import { statusView } from '../../model/describe.js';
+import { ACTION_KIND_LABEL, statusView } from '../../model/describe.js';
 import type { ActionModel, CallModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
-import { ActivityRow, ActivityRowStatus } from './ActivityRow.js';
-import { NestedCallRow } from './CallRow.js';
+import { ActivityRow, ActivityRowStatus, OutputBox } from './ActivityRow.js';
+import { CallMeta, NestedCallRow } from './CallRow.js';
 import { ContextItems } from './ToolCard.js';
 
 /** Dispatched task row: name, runtime, status, tokens, transcript and cancel. */
@@ -67,12 +67,59 @@ export interface ActionRowProps {
   onCancelTask: (taskRunId: string) => Promise<void>;
 }
 
+/** Pretty-printed compiled task input, or the compile call's own output. */
+function compiledInput(action: ActionModel, compile: CallModel | undefined): string {
+  if (action.parsed !== undefined) return JSON.stringify(action.parsed, null, 2);
+  return compile?.output ?? '';
+}
+
+/** A dispatch's input: the full prompt and the compiled task input, collapsed. */
+function DispatchInput({ action, compile }: { action: ActionModel; compile: CallModel | undefined }) {
+  const input = compiledInput(action, compile);
+  return (
+    <div className="rounded-lg border">
+      <ActivityRow
+        verb="派发输入"
+        subject={<span className="font-mono text-xs font-normal">{compile?.model ?? ''}</span>}
+        meta={compile === undefined ? undefined : <Elapsed start={compile.startedAt} end={compile.endedAt} />}
+        openMeta={compile === undefined ? undefined : <CallMeta call={compile} />}
+        status={compile === undefined ? undefined : (
+          <ActivityRowStatus
+            running={compile.status === 'running'}
+            failed={compile.status === 'failed'}
+            cancelled={compile.status === 'aborted'}
+          />
+        )}
+        compact
+      >
+        {action.prompt !== undefined && (
+          <>
+            <p className="text-xs text-muted-foreground">派发提示词</p>
+            <OutputBox>{action.prompt}</OutputBox>
+          </>
+        )}
+        {input !== '' && (
+          <>
+            <p className="text-xs text-muted-foreground">编译后的任务输入</p>
+            <OutputBox>{input}</OutputBox>
+          </>
+        )}
+        {compile?.error !== undefined && <p className="text-destructive">{compile.error}</p>}
+      </ActivityRow>
+    </div>
+  );
+}
+
 /** One action as an expandable transcript step. */
 export function ActionRow({ action, calls, sessionId, onCancelTask }: ActionRowProps) {
   const files = (action.files ?? []).map(fromSessionFile);
+  const dispatch = action.kind === 'dispatch';
+  // A dispatch folds its compile call into the input block; other nested calls stay listed.
+  const compile = dispatch ? calls.filter((call) => call.role === 'dispatch').at(-1) : undefined;
+  const nested = compile === undefined ? calls : calls.filter((call) => call !== compile);
   return (
     <ActivityRow
-      verb="操作"
+      verb={ACTION_KIND_LABEL[action.kind]}
       subject={action.title}
       meta={<Elapsed start={action.startedAt} end={action.endedAt} />}
       status={(
@@ -83,12 +130,12 @@ export function ActionRow({ action, calls, sessionId, onCancelTask }: ActionRowP
         />
       )}
     >
-      {action.subtitle !== undefined && (
+      {dispatch ? <DispatchInput action={action} compile={compile} /> : action.subtitle !== undefined && (
         <p className="text-xs text-muted-foreground">{action.subtitle}</p>
       )}
-      {calls.length > 0 && (
+      {nested.length > 0 && (
         <div className="flex flex-col divide-y divide-border/60 rounded-lg border">
-          {calls.map((call) => <NestedCallRow key={call.id} call={call} />)}
+          {nested.map((call) => <NestedCallRow key={call.id} call={call} />)}
         </div>
       )}
       <ContextItems items={action.outputs} />
@@ -105,11 +152,14 @@ export function ActionRow({ action, calls, sessionId, onCancelTask }: ActionRowP
         </div>
       )}
       {files.length > 0 && <MediaAttachments items={files} sessionId={sessionId} />}
-      {action.result !== undefined && action.result !== '' && (
+      {action.result !== undefined && action.result !== '' && (dispatch ? (
+        // The task's answer reads like a reply, not like tool output.
+        <AppMarkdown className="text-sm leading-relaxed">{action.result}</AppMarkdown>
+      ) : (
         <div className="max-h-80 overflow-auto rounded-lg border bg-background/60 px-3 py-2 text-sm">
           <AppMarkdown className="text-sm">{action.result}</AppMarkdown>
         </div>
-      )}
+      ))}
     </ActivityRow>
   );
 }

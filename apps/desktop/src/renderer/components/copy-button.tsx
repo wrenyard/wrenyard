@@ -8,7 +8,7 @@ export interface CopyButtonProps {
   text: string;
   className?: string;
   label?: string;
-  size?: 'icon' | 'icon-sm';
+  size?: 'icon' | 'icon-sm' | 'icon-xs';
 }
 
 /** Copies text through the desktop bridge, falling back to the clipboard API. */

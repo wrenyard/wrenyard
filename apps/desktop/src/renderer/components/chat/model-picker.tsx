@@ -157,6 +157,8 @@ function SelectedModelIndicator() {
 export function ModelPicker({ models, value, effort, onChange, disabled = false, placeholder = '选择模型', className, compactTrigger = false }: ModelPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  /** The model whose effort submenu is open. */
+  const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -313,6 +315,9 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
         <div
           ref={resultsRef}
           className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          // A scrolling list moves the row an open effort submenu is anchored
+          // to, so the submenu would ride along and then vanish; close it instead.
+          onScroll={() => setOpenSubmenu(null)}
         >
           {visibleGroups.length === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-muted-foreground">No models found</p>
@@ -336,7 +341,11 @@ export function ModelPicker({ models, value, effort, onChange, disabled = false,
                     );
                   }
                   return (
-                    <DropdownMenuSub key={option.value}>
+                    <DropdownMenuSub
+                      key={option.value}
+                      open={openSubmenu === option.value}
+                      onOpenChange={(next) => setOpenSubmenu(next ? option.value : null)}
+                    >
                       <DropdownMenuSubTrigger
                         className={
                           isCurrent

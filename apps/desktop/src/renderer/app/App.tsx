@@ -1,6 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/renderer/components/ui/tooltip';
 import { ConfirmHost } from '@/renderer/components/confirm-host';
+import { LightboxHost } from '@/renderer/components/lightbox';
 import { Toaster } from '@/renderer/components/ui/sonner';
 import { AppShell } from '@/renderer/app/AppShell';
 import { queryClient } from '@/renderer/app/query-client';
@@ -8,13 +9,14 @@ import { queryClient } from '@/renderer/app/query-client';
 // main-process command delivery and the notification-history toast consumer).
 import '@/renderer/app/commands';
 
-/** Renderer root: data client, tooltip host, shell frame, confirm and toast hosts. */
+/** Renderer root: data client, tooltip host, shell frame, confirm, lightbox and toast hosts. */
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AppShell />
         <ConfirmHost />
+        <LightboxHost />
         <Toaster position="bottom-right" visibleToasts={3} offset={{ bottom: 'calc(var(--statusbar-height, 0px) + 8px)' }} />
       </TooltipProvider>
     </QueryClientProvider>

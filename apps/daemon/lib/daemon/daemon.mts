@@ -1538,7 +1538,8 @@ async function createForemanDaemonResources(
       if (params.reasoningEffort !== undefined) {
         if (!(REASONING_EFFORTS as readonly string[]).includes(params.reasoningEffort)) {
           throw new Error('Invalid reasoning effort')
-        }        const supported = catalog.reasoningEfforts(params.client, provider, model)
+        }
+        const supported = catalog.reasoningEfforts(params.client, provider, model)
         // A provider-default-only ladder accepts any valid request: resolveRun
         // adapts every effort to the route's provider default.
         const providerDefaultOnly = supported.length === 1 && supported[0] === PROVIDER_DEFAULT_REASONING
@@ -1643,7 +1644,7 @@ async function createForemanDaemonResources(
   const blockedDuringSwitch = new Set([
     'taskgraph.create', 'taskgraph.patch', 'taskgraph.signal',
     'task.run.create', 'exec.start', 'session.send',
-    'session.create', 'session.interrupt', 'session.delete', 'session.rename',
+    'session.create', 'session.interrupt', 'session.delete', 'session.rename', 'session.title.regenerate',
     'project.register', 'project.pull', 'project.push', 'project.commit',
     'project.worktree.create', 'project.worktree.remove', 'project.worktree.merge', 'project.worktree.rebase',
     'workspace.vcs.commit', 'workspace.vcs.push', 'workspace.vcs.pull',
@@ -1659,7 +1660,7 @@ async function createForemanDaemonResources(
   const trackedWorkMethods = [
     'taskgraph.create', 'taskgraph.patch', 'taskgraph.signal',
     'task.run.create', 'exec.start', 'session.send',
-    'session.create', 'session.interrupt', 'session.delete', 'session.rename',
+    'session.create', 'session.interrupt', 'session.delete', 'session.rename', 'session.title.regenerate',
     'project.register', 'project.pull', 'project.push', 'project.commit',
     'project.worktree.create', 'project.worktree.remove', 'project.worktree.merge', 'project.worktree.rebase',
     'workspace.vcs.commit', 'workspace.vcs.push', 'workspace.vcs.pull',

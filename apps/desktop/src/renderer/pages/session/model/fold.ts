@@ -928,6 +928,7 @@ function buildActions(
       kind,
       title,
       ...(intent === '' ? {} : { subtitle: intent }),
+      ...(start === undefined || start.action.prompt.trim() === '' ? {} : { prompt: start.action.prompt }),
       status,
       startedAt: runStartedAt ?? start?.at ?? end?.at ?? '',
       ...(end?.at === undefined ? {} : { endedAt: end.at }),

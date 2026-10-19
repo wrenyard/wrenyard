@@ -9,7 +9,6 @@ import {
   type ComponentProps,
   type ReactNode,
 } from 'react';
-import { createPortal } from 'react-dom';
 import { Streamdown, defaultRehypePlugins, type Components, type ExtraProps, type PluginConfig } from 'streamdown';
 import { code } from '@streamdown/code';
 import { cjk } from '@streamdown/cjk';
@@ -21,13 +20,7 @@ import {
   parseAttachmentRefUrl,
   type SessionFile,
 } from '@wrenyard/protocol';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@/renderer/components/ui/dialog';
-import { ImageViewer } from '@/renderer/components/image-viewer';
+import { openLightbox, useLightboxItem } from '@/renderer/components/lightbox-store';
 import {
   MermaidBlock,
   MermaidDarkContext,
@@ -103,6 +96,8 @@ interface AttachmentContext {
   files: ReadonlyMap<string, SessionFile>;
   read: ReadAttachment | undefined;
   reveal: RevealAttachment | undefined;
+  /** Session owning the files; enables the lightbox's original image and file actions. */
+  sessionId?: string;
 }
 
 /** The shared empty context: a message without attachments is always a no-op. */
@@ -126,6 +121,7 @@ function buildAttachmentDirectory(
   attachments: readonly SessionFile[],
   read: ReadAttachment | undefined,
   reveal: RevealAttachment | undefined,
+  sessionId: string | undefined,
 ): AttachmentContext {
   const files = new Map<string, SessionFile>();
   for (const file of attachments) {
@@ -134,7 +130,7 @@ function buildAttachmentDirectory(
     const identity = attachmentFileIdentity(file);
     if (!files.has(identity)) files.set(identity, file);
   }
-  return { files, read, reveal };
+  return { files, read, reveal, ...(sessionId === undefined ? {} : { sessionId }) };
 }
 
 /** Resolve one reserved-host URL to a directory file by exact contract match. */
@@ -327,13 +323,13 @@ function AttachmentTextLink({ file, label, onReveal }: {
 }
 
 /** The first reference to an image: an inline preview at the reference position. */
-function InlineImageAttachment({ file, label, onRead }: {
+function InlineImageAttachment({ file, label, onRead, sessionId }: {
   file: SessionFile;
   label: ReactNode;
   onRead: ReadAttachment | undefined;
+  sessionId: string | undefined;
 }) {
   const [state, setState] = useState<{ src?: string; error?: string }>({});
-  const [open, setOpen] = useState(false);
   useEffect(() => {
     if (onRead === undefined) {
       setState({ error: '预览不可用' });
@@ -351,14 +347,20 @@ function InlineImageAttachment({ file, label, onRead }: {
   }, [file, onRead]);
 
   const src = state.src;
+  const register = useLightboxItem(src === undefined ? undefined : {
+    name: file.name,
+    src,
+    ...(sessionId === undefined ? {} : { media: { sessionId, path: file.path } }),
+  });
   return (
     <>
       <button
+        ref={register}
         type="button"
-        className="my-1 flex max-w-full flex-col overflow-hidden rounded-xl border bg-muted text-left ring-1 ring-foreground/5 disabled:cursor-default"
+        className="my-1 flex max-w-full cursor-zoom-in flex-col overflow-hidden rounded-xl border bg-muted text-left ring-1 ring-foreground/5 disabled:cursor-default"
         title={file.name}
         disabled={src === undefined}
-        onClick={() => { if (src !== undefined) setOpen(true); }}
+        onClick={(event) => openLightbox(event.currentTarget)}
       >
         {src !== undefined ? (
           <img src={src} alt={file.name} className="max-h-72 w-auto max-w-full object-contain" />
@@ -369,16 +371,6 @@ function InlineImageAttachment({ file, label, onRead }: {
         )}
         <span className="block border-t px-2 py-1 text-xs text-muted-foreground">{label}</span>
       </button>
-      {open && src !== undefined && createPortal(
-        <Dialog open onOpenChange={(next) => { if (!next) setOpen(false); }}>
-          <DialogContent className="max-w-[min(90vw,64rem)]">
-            <DialogTitle className="truncate">{file.name}</DialogTitle>
-            <DialogDescription className="sr-only">附件图片预览</DialogDescription>
-            <ImageViewer src={src} alt={file.name} />
-          </DialogContent>
-        </Dialog>,
-        document.body,
-      )}
     </>
   );
 }
@@ -415,7 +407,7 @@ function AttachmentReference({ href, label, node, context }: {
   const first = node?.properties?.[ATTACHMENT_PREVIEW_PROP] === true;
   if (!first) return <AttachmentTextLink file={file} label={label} onReveal={context.reveal} />;
   return file.kind === 'image'
-    ? <InlineImageAttachment file={file} label={label} onRead={context.read} />
+    ? <InlineImageAttachment file={file} label={label} onRead={context.read} sessionId={context.sessionId} />
     : <InlineFileAttachment file={file} label={label} onReveal={context.reveal} />;
 }
 
@@ -478,6 +470,8 @@ export interface MarkdownProps {
   onReadAttachment?: ReadAttachment;
   /** Reveals one attachment in the OS file manager; the embedder binds the session bridge. */
   onRevealAttachment?: RevealAttachment;
+  /** Session owning the attachments, for the image lightbox. */
+  attachmentSessionId?: string;
   /** Known todo ids; exact plain-text or inline-code occurrences become todo links. */
   todoIds?: ReadonlySet<string>;
 }
@@ -496,6 +490,7 @@ export function Markdown({
   attachments,
   onReadAttachment,
   onRevealAttachment,
+  attachmentSessionId,
   todoIds,
 }: MarkdownProps) {
   // A message without attachments shares one stable empty context, so the
@@ -504,8 +499,8 @@ export function Markdown({
   const context = useMemo(
     () => (attachments === undefined || attachments.length === 0
       ? EMPTY_ATTACHMENT_CONTEXT
-      : buildAttachmentDirectory(attachments, onReadAttachment, onRevealAttachment)),
-    [attachments, onReadAttachment, onRevealAttachment],
+      : buildAttachmentDirectory(attachments, onReadAttachment, onRevealAttachment, attachmentSessionId)),
+    [attachments, onReadAttachment, onRevealAttachment, attachmentSessionId],
   );
   // A message with an attachment directory parses the whole committed reply at
   // once. The transformer below walks the parsed tree and marks the first

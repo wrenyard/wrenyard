@@ -17,10 +17,10 @@ const TRANSIENT_ERROR_MS = 6_000;
 const TRANSIENT_OTHER_MS = 4_000;
 
 /** Transient feedback: a toast only, never the notification history. */
-export function toast(message: string, options?: { level?: NotificationLevel }): void {
+export function toast(message: string, options?: { level?: NotificationLevel; durationMs?: number }): void {
   const level = options?.level ?? 'info';
   sonnerToast[level](message, {
-    duration: level === 'error' ? TRANSIENT_ERROR_MS : TRANSIENT_OTHER_MS,
+    duration: options?.durationMs ?? (level === 'error' ? TRANSIENT_ERROR_MS : TRANSIENT_OTHER_MS),
     closeButton: true,
   });
 }

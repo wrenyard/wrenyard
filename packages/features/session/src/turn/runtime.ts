@@ -91,7 +91,6 @@ export interface SessionRuntime {
   title: string;
   lastTitleVersion: number;
   titleVersion: number;
-  titleUpdatedWithReply: boolean;
   firstUserText?: string;
   turns: Map<number, TurnRuntime>;
   nextTurn: number;

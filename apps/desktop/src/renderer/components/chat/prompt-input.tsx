@@ -31,6 +31,8 @@ export interface PromptInputProps {
   toolbarLeading?: ReactNode;
   /** Rendered at the trailing edge, just before the send button. */
   toolbarTrailing?: ReactNode;
+  /** Replaces the send button, for example with a stop control while turns run. */
+  submitControl?: ReactNode;
   /** Rendered above the textarea; the composer puts attachment previews here. */
   attachments?: ReactNode;
   /** When true, an empty textarea may still submit (attachment-only message). */
@@ -40,11 +42,10 @@ export interface PromptInputProps {
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
   className?: string;
   /**
-   * Ghost next-input suggestion. While the value is empty it reads as the
-   * field's muted placeholder; Tab accepts it into the draft and Escape
-   * dismisses it. Navigation and modifier keys leave it in place, and typing
-   * (handled by the composer) clears it. No suggestion leaves every existing key
-   * behaviour untouched.
+   * Inline completion. While the draft is a prefix of it and the caret sits at
+   * the end, its remaining text shows as muted ghost text after the caret; Tab,
+   * or → at the end, accepts it and Escape dismisses it. A diverging draft or a
+   * caret moved away dismisses it. No suggestion leaves every key untouched.
    */
   suggestion?: string;
   /** Accept the shown suggestion into the draft (never submits). */
@@ -56,8 +57,8 @@ export interface PromptInputProps {
 /**
  * Auto-growing composed input. The submit key follows `sendKey`: plain `Enter`
  * or `Cmd/Ctrl+Enter`. `Shift+Enter` always inserts a newline, and an active IME
- * composition never submits. The send button submits as well; interrupting
- * a turn happens on that turn's message. `submitDisabled` blocks the keyboard
+ * composition never submits. The send button submits as well; a caller may
+ * replace it through `submitControl`. `submitDisabled` blocks the keyboard
  * submit path and the button while keeping the textarea editable.
  */
 export function PromptInput({
@@ -71,6 +72,7 @@ export function PromptInput({
   toolbar,
   toolbarLeading,
   toolbarTrailing,
+  submitControl,
   attachments,
   hasAttachments = false,
   onPaste,
@@ -90,34 +92,40 @@ export function PromptInput({
   const canSubmit = !disabled && !submitDisabled && (value.trim() !== '' || hasAttachments);
   const hasLeading = toolbarLeading !== undefined && toolbarLeading !== null;
   const hasStrip = attachments !== undefined && attachments !== null;
-  // The suggestion reads as the field's placeholder while the value is empty: it
-  // is muted, never part of the value, and a "Tab 补全" hint names the accept key.
-  // A retained suggestion stays visible through a transient loading/disabled
-  // state so the field neither hides it nor collapses its height.
-  const ghost = value === '' && suggestion !== undefined ? suggestion : '';
-  const placeholderText = ghost === '' ? placeholder : `${ghost}\u2003Tab 补全`;
-  // The content that drives the layout: the real draft when present, otherwise
-  // the shown ghost placeholder (the accept hint included; the ordinary
-  // placeholder is excluded). A newline expands at once; a wrapped ghost is
-  // caught before paint by the measurement below.
-  const measured = value !== '' ? value : ghost === '' ? '' : placeholderText ?? '';
+  const mirrorRef = useRef<HTMLDivElement>(null);
+  const [caretAtEnd, setCaretAtEnd] = useState(true);
+  // The part of the suggestion still to type: shown only while the draft is a
+  // prefix of it (a trailing space difference ignored) and the caret is at the end.
+  const continuation = suggestion === undefined ? undefined : completionSuffix(value, suggestion);
+  const ghost = continuation !== undefined && caretAtEnd ? continuation : '';
+  // The content that drives the layout: the draft plus the shown ghost text.
+  const measured = value + ghost;
   // EXPANDED once the measured content carries a strip (attachments/reply/error),
   // an explicit newline, or a line that no longer fits the compact row. Expansion
   // is sticky for the same content and holds until that content is emptied.
   const expanded = hasStrip || (measured !== '' && (overflow || measured.includes('\n')));
   // A changed suggestion is re-measured from scratch so a stale expansion never
-  // sticks to a new one; the same content keeps its expansion (as do typed
-  // drafts). Resetting during render re-measures before the next paint.
-  const [measuredGhost, setMeasuredGhost] = useState(ghost);
-  if (measuredGhost !== ghost) {
-    setMeasuredGhost(ghost);
+  // sticks to a new one. Resetting during render re-measures before the next paint.
+  const [measuredSuggestion, setMeasuredSuggestion] = useState(suggestion);
+  if (measuredSuggestion !== suggestion) {
+    setMeasuredSuggestion(suggestion);
     setOverflow(false);
   }
-  // A shown ghost sizes to whole 22px lines plus the 1rem vertical padding,
-  // bounded by main's 200px cap and by the viewport minus room for the composer
-  // toolbar and window chrome, then scrolls rather than clipping; `max(22px, …)`
-  // keeps at least one whole line.
-  const ghostMaxHeight = 'calc(1rem + max(22px, round(down, calc(min(200px, 100svh - 8rem) - 1rem), 22px)))';
+  // The ghost text is drawn by a mirror behind the textarea; the textarea grows
+  // to the mirror's height so a wrapped suggestion is never clipped.
+  const [ghostHeight, setGhostHeight] = useState(0);
+
+  // A draft that left the suggestion, or a caret moved away from the end, drops it.
+  useEffect(() => {
+    if (suggestion === undefined || value === '') return;
+    if (continuation === undefined || !caretAtEnd) onDismissSuggestion?.();
+  }, [suggestion, value, continuation, caretAtEnd]);
+
+  const trackCaret = (): void => {
+    const el = ref.current;
+    if (el === null) return;
+    setCaretAtEnd(el.selectionStart === el.value.length && el.selectionEnd === el.value.length);
+  };
 
   const submit = (): void => {
     if (canSubmit) onSubmit();
@@ -133,6 +141,8 @@ export function PromptInput({
   // content no longer fits one row. The 4px tolerance absorbs fractional-DPI
   // rounding (Windows 125%/150%); one wrapped line adds a whole 24px line.
   useLayoutEffect(() => {
+    const mirror = mirrorRef.current;
+    setGhostHeight(ghost === '' || mirror === null ? 0 : mirror.scrollHeight);
     if (measured === '') {
       setOverflow(false);
       return;
@@ -140,8 +150,8 @@ export function PromptInput({
     if (expanded) return;
     const el = ref.current;
     if (el === null) return;
-    if (el.scrollHeight - el.clientHeight > 4) setOverflow(true);
-  }, [measured, expanded]);
+    if (Math.max(el.scrollHeight, mirror?.scrollHeight ?? 0) - el.clientHeight > 4) setOverflow(true);
+  }, [measured, expanded, ghost]);
 
   // While the compact row still holds the content, a narrowing window can push
   // it past one line; watch the textarea's box so it expands without a keystroke.
@@ -151,7 +161,7 @@ export function PromptInput({
     const el = ref.current;
     if (el === null) return;
     const observer = new ResizeObserver(() => {
-      if (el.scrollHeight - el.clientHeight > 4) setOverflow(true);
+      if (Math.max(el.scrollHeight, mirrorRef.current?.scrollHeight ?? 0) - el.clientHeight > 4) setOverflow(true);
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -162,13 +172,14 @@ export function PromptInput({
   const containerBase = 'h-auto border-border bg-background shadow-none has-[[data-slot=input-group-control]:focus-visible]:ring-0 has-[[data-slot=input-group-control]:focus-visible]:border-foreground/20';
   const compactLayout = 'flex-row flex-nowrap items-center gap-1 rounded-full p-2';
   const expandedLayout = 'flex-col items-stretch gap-0 rounded-[18px] p-0';
-  const compactTextareaClass = 'min-w-0 flex-1 h-6 min-h-6 py-0 pl-1 pr-0 leading-6 field-sizing-fixed overflow-hidden';
-  const expandedTextareaClass = 'w-full min-w-0 px-3 py-2 leading-[22px] min-h-9 max-h-[200px] field-sizing-content overflow-y-auto';
-  // A shown ghost in the expanded layout wraps long unbroken tokens
-  // (`break-words`) and scrolls at the whole-line cap above instead of clipping.
-  const ghostExpandedTextareaClass = 'w-full min-w-0 px-3 py-2 leading-[22px] min-h-9 field-sizing-content overflow-y-auto break-words';
+  // Padding, line height and font are shared by the textarea and its ghost mirror.
+  const compactText = 'py-0 pl-1 pr-0 leading-6';
+  const expandedText = 'px-3 py-2 leading-[22px]';
+  const fieldText = `${expanded ? expandedText : compactText} border border-transparent text-base break-words md:text-sm [[data-mini]_&]:text-sm`;
+  const compactTextareaClass = 'h-6 min-h-6 field-sizing-fixed overflow-hidden';
+  const expandedTextareaClass = 'min-h-9 max-h-[200px] field-sizing-content overflow-y-auto';
   // Shared by both layouts; only one branch renders at a time.
-  const sendButton = (
+  const sendButton = submitControl ?? (
     <InputGroupButton type="submit" variant="default" size="icon-sm" className="size-6 shrink-0 rounded-full p-0 [&_svg]:size-3.5" disabled={!canSubmit} aria-label="发送" title="发送">
       <ArrowUp />
     </InputGroupButton>
@@ -194,38 +205,53 @@ export function PromptInput({
         {!expanded && hasLeading && toolbarLeading}
         {/* The textarea keeps its slot in the children list across both layouts,
             so focus, caret and IME composition survive the switch. */}
-        <InputGroupTextarea
-          ref={ref}
-          value={value}
-          placeholder={placeholderText}
-          disabled={disabled}
-          rows={1}
-          className={`${expanded ? (ghost !== '' ? ghostExpandedTextareaClass : expandedTextareaClass) : compactTextareaClass} [[data-mini]_&]:text-sm`}
-          style={expanded && ghost !== '' ? { maxHeight: ghostMaxHeight } : undefined}
-          onChange={(event) => onValueChange(event.target.value)}
-          onPaste={onPaste}
-          onKeyDown={(event) => {
-            const inComposition = composing.current || event.nativeEvent.isComposing;
-            if (isSubmitKey(event) && !inComposition) {
-              event.preventDefault();
-              submit();
-              return;
-            }
-            // A bare Tab accepts the suggestion into the draft and never submits.
-            if (event.key === 'Tab' && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
-              && !inComposition && ghost !== '') {
-              event.preventDefault();
-              onAcceptSuggestion?.();
-              return;
-            }
-            if (event.key === 'Escape') {
-              if (value === '') onDismissSuggestion?.();
-              return;
-            }
-          }}
-          onCompositionStart={() => { composing.current = true; onDismissSuggestion?.(); }}
-          onCompositionEnd={() => { composing.current = false; }}
-        />
+        <div className={expanded ? 'relative w-full min-w-0' : 'relative min-w-0 flex-1'}>
+          {ghost !== '' && (
+            <div
+              ref={mirrorRef}
+              aria-hidden
+              className={`pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap ${fieldText}`}
+            >
+              <span className="invisible">{value}</span>
+              <span className="text-muted-foreground">{ghost}</span>
+            </div>
+          )}
+          <InputGroupTextarea
+            ref={ref}
+            value={value}
+            placeholder={ghost === '' ? placeholder : undefined}
+            disabled={disabled}
+            rows={1}
+            className={`relative w-full ${fieldText} ${expanded ? expandedTextareaClass : compactTextareaClass}`}
+            style={expanded && ghostHeight > 0 ? { minHeight: Math.min(ghostHeight, 200) } : undefined}
+            onChange={(event) => { onValueChange(event.target.value); trackCaret(); }}
+            onSelect={trackCaret}
+            onScroll={(event) => { if (mirrorRef.current !== null) mirrorRef.current.scrollTop = event.currentTarget.scrollTop; }}
+            onPaste={onPaste}
+            onKeyDown={(event) => {
+              const inComposition = composing.current || event.nativeEvent.isComposing;
+              if (isSubmitKey(event) && !inComposition) {
+                event.preventDefault();
+                submit();
+                return;
+              }
+              const bare = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
+              // Tab, or → with the caret at the end, accepts the completion; never submits.
+              if (bare && ghost !== '' && !inComposition && (event.key === 'Tab' || event.key === 'ArrowRight')) {
+                event.preventDefault();
+                onAcceptSuggestion?.();
+                return;
+              }
+              if (event.key === 'Escape' && ghost !== '') {
+                // Handled here, so Escape does not also count toward interrupting a turn.
+                event.preventDefault();
+                onDismissSuggestion?.();
+              }
+            }}
+            onCompositionStart={() => { composing.current = true; onDismissSuggestion?.(); }}
+            onCompositionEnd={() => { composing.current = false; }}
+          />
+        </div>
         {!expanded && (
           <div className="flex shrink-0 items-center gap-1">
             {toolbar}
@@ -248,4 +274,16 @@ export function PromptInput({
       </InputGroup>
     </form>
   );
+}
+
+/**
+ * The rest of `suggestion` after `draft`, or undefined when the draft is not a
+ * prefix of it. A trailing space typed before the suggestion's next word still
+ * counts as a prefix. Compared case-sensitively.
+ */
+function completionSuffix(draft: string, suggestion: string): string | undefined {
+  if (suggestion.startsWith(draft)) return suggestion.slice(draft.length);
+  const trimmed = draft.trimEnd();
+  if (trimmed !== draft && suggestion.startsWith(trimmed)) return suggestion.slice(trimmed.length).trimStart();
+  return undefined;
 }

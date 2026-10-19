@@ -231,6 +231,12 @@ export interface Session {
    */
   renameSession(sessionId: string, title: string): Promise<void>;
   /**
+   * Generate a new title from the first user message and the latest reply and
+   * record it as a manual `session.titled`. Resolves with the title; rejects
+   * when the session is unknown or has no messages, or the generation failed.
+   */
+  regenerateTitle(sessionId: string): Promise<string>;
+  /**
    * Update one session's list metadata (archived / pinned). Appends one
    * `session.metadata` event carrying only the provided fields, so an absent
    * field keeps its prior value. Rejects an unknown session and a patch that

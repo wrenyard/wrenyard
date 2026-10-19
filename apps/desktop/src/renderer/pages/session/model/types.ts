@@ -124,6 +124,8 @@ export interface ActionModel {
   kind: ActionKindModel;
   title: string;
   subtitle?: string;
+  /** The agent's full natural-language prompt for this action. */
+  prompt?: string;
   status: ItemStatus;
   startedAt: string;
   endedAt?: string;

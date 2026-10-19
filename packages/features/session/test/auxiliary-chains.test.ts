@@ -95,7 +95,7 @@ function makeSession(): SessionRuntime {
   return {
     sessionId: 's1', workspaceRoot: '/tmp/ws', snapshot: {}, files: {}, actions: {}, calls: {},
     spanSeq: 0, actionSeq: 0, title: '', lastTitleVersion: 0, titleVersion: 0,
-    titleUpdatedWithReply: true, firstUserText: 'hi', turns: new Map(), nextTurn: 2,
+    firstUserText: 'hi', turns: new Map(), nextTurn: 2,
     reasonQueue: Promise.resolve(), replyQueue: Promise.resolve(),
   } as unknown as SessionRuntime;
 }

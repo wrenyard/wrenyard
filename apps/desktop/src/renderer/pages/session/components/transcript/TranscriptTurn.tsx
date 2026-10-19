@@ -3,26 +3,27 @@
  * user bubble, replies as plain prose, each stretch of agent work folded into
  * one muted summary line, visible errors, the running line and a hover footer.
  */
-import { TriangleAlert } from 'lucide-react';
+import { ArrowDown, ArrowUp, DatabaseZap, TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
+import { CopyButton } from '@/renderer/components/copy-button';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { StatusBadge } from '@/renderer/components/status-badge';
+import { shell } from '@/renderer/lib/desktop';
 import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
-  TASK_RUN_PHASE_LABEL,
+  HIDDEN_CALL_ROLES,
   dispatchTerminal,
-  runningTaskAction,
   statusView,
-  turnStatusText,
+  thinkingVerb,
   waitingStatusText,
 } from '../../model/describe.js';
 import type { TurnWaitingState } from '../../model/describe.js';
 import type { ActionModel, CallModel, ErrorItem, ReplyModel, TurnModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
 import { HoverTime } from '../conversation/HoverTime.js';
-import { LiveGlyph } from '../live-glyph.js';
+import { Ellipsis, WorkingDots } from '../live-indicators.js';
 import { MorphText } from '../morph-text.js';
 import { ActivityGroup, groupId, type ActivityItem } from './ActivityGroup.js';
 
@@ -31,8 +32,8 @@ export interface TranscriptTurnProps {
   turn: TurnModel;
   /** Ledger session id, forwarded to attachment media. */
   sessionId?: string;
-  /** Interrupt this running turn. */
-  onInterrupt: (turn: number) => void;
+  /** The newest turn of the session: its footer stays visible once finished. */
+  latest?: boolean;
   /** Cancel one dispatched task run; rejects when the daemon refuses. */
   onCancelTask: (taskRunId: string) => Promise<void>;
   /** Live recovery waiting state of this turn, when it has one. */
@@ -49,17 +50,26 @@ function sumDefined(a: number | undefined, b: number | undefined): number | unde
   return (a ?? 0) + (b ?? 0);
 }
 
-/** Aggregate input/cached/output tokens across the turn's expensive and cheap calls. */
-function tokenSummary(turn: TurnModel): string | undefined {
+/** Input, cached input and output tokens of the turn, each with its icon. */
+function TokenFigures({ turn }: { turn: TurnModel }) {
   const { expensive, cheap } = turn.stats;
-  const input = sumDefined(expensive.input, cheap.input);
-  const cached = expensive.cachedInput;
-  const output = sumDefined(expensive.output, cheap.output);
-  const parts: string[] = [];
-  if (input !== undefined) parts.push(`输入 ${formatTokenCount(input)}`);
-  if (cached !== undefined) parts.push(`缓存 ${formatTokenCount(cached)}`);
-  if (output !== undefined) parts.push(`输出 ${formatTokenCount(output)}`);
-  return parts.length === 0 ? undefined : parts.join(' · ');
+  const figures = [
+    { key: 'input', icon: ArrowUp, label: '输入', value: sumDefined(expensive.input, cheap.input) },
+    { key: 'cached', icon: DatabaseZap, label: '缓存', value: expensive.cachedInput },
+    { key: 'output', icon: ArrowDown, label: '输出', value: sumDefined(expensive.output, cheap.output) },
+  ];
+  return figures.map(({ key, icon: Icon, label, value }) => value === undefined ? null : (
+    <span key={key} className="inline-flex items-center gap-0.5" title={`${label} ${formatTokenCount(value)}`}>
+      <Icon className="size-3" aria-label={label} />
+      {formatTokenCount(value)}
+    </span>
+  ));
+}
+
+/** What the copy button copies: the turn's final reply, else its last reply. */
+function copyableReply(turn: TurnModel): string | undefined {
+  const reply = turn.replies.filter((item) => item.kind === 'final').at(-1) ?? turn.replies.at(-1);
+  return reply === undefined || reply.text.trim() === '' ? undefined : reply.text;
 }
 
 /** A call belongs to an action when its parent or id prefix names that action. */
@@ -111,7 +121,8 @@ type TranscriptEntry =
 /** Chronological entries of a turn: activity items, prose replies and errors. */
 function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
-  const turnCalls = turn.calls.filter(
+  const visibleCalls = turn.calls.filter((call) => !HIDDEN_CALL_ROLES.has(call.role));
+  const turnCalls = visibleCalls.filter(
     (call) => (call.cycle === undefined || call.cycle === 0)
       && call.role !== 'reason'
       && !attachedToAction(call, turn.actions),
@@ -128,14 +139,14 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
       entries.push({ kind: 'activity', item: { kind: 'context', item } });
     }
     const inCycle: { at: string; item: ActivityItem }[] = [];
-    const reasoning = turn.calls.find((call) => call.role === 'reason' && call.cycle === cycle.index);
+    const reasoning = visibleCalls.find((call) => call.role === 'reason' && call.cycle === cycle.index);
     if (reasoning !== undefined) {
       inCycle.push({
         at: reasoning.startedAt,
         item: { kind: 'reason', call: reasoning, reasoning: cycle.reasoning },
       });
     }
-    const standalone = turn.calls.filter(
+    const standalone = visibleCalls.filter(
       (call) => call.cycle === cycle.index && call.role !== 'reason' && !attachedToAction(call, turn.actions),
     );
     for (const call of standalone) {
@@ -145,7 +156,7 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
       .map((id) => turn.actions.find((action) => action.id === id))
       .filter((action): action is ActionModel => action !== undefined);
     for (const action of actions) {
-      const calls = turn.calls.filter(
+      const calls = visibleCalls.filter(
         (call) => call.parent === action.id || call.id.startsWith(`${action.id}.`),
       );
       inCycle.push({ at: action.startedAt, item: { kind: 'action', action, calls } });
@@ -171,13 +182,62 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
   return entries;
 }
 
+/** Dispatched task runs of the turn that are still running. */
+function runningTasks(turn: TurnModel): ActionModel[] {
+  return turn.actions.filter((action) => action.kind === 'dispatch' && action.status === 'running' && action.taskRunId !== undefined);
+}
+
+/** `· N 个任务运行中`; opens the first running task's transcript. */
+function RunningTasks({ tasks }: { tasks: readonly ActionModel[] }) {
+  if (tasks.length === 0) return null;
+  const first = tasks[0]!;
+  return (
+    <>
+      <span aria-hidden>·</span>
+      <button
+        type="button"
+        className="rounded hover:text-foreground hover:underline"
+        onClick={() => { if (first.taskRunId !== undefined) void shell.openTaskTranscript(first.taskRunId, first.title); }}
+      >
+        {tasks.length} 个任务运行中
+      </button>
+    </>
+  );
+}
+
+/**
+ * The running turn's bottom line: accent working dots, then the thinking verb
+ * while the model reasons, or the turn's elapsed time while steps run, plus
+ * the count of task runs still working.
+ */
+function LiveLine({ turn, waiting }: { turn: TurnModel; waiting?: TurnWaitingState }) {
+  const thinking = turn.calls.find((call) => call.role === 'reason' && call.status === 'running');
+  let label;
+  if (waiting !== undefined) label = <MorphText className="truncate" text={waitingStatusText(waiting)} />;
+  else if (turn.interrupting) label = <span>正在中断<Ellipsis /></span>;
+  else if (thinking !== undefined) {
+    label = (
+      <span className="inline-flex items-baseline text-primary">
+        <MorphText className="shimmer" text={thinkingVerb(thinking.cycle ?? turn.cycle)} />
+        <Ellipsis />
+      </span>
+    );
+  } else {
+    label = <Elapsed start={turn.startedAt} className="tabular-nums" />;
+  }
+  return (
+    <div className="wy-rise-in flex items-center gap-2 text-sm text-muted-foreground">
+      <WorkingDots />
+      {label}
+      <RunningTasks tasks={runningTasks(turn)} />
+    </div>
+  );
+}
+
 /** One turn as a chronological transcript. */
-export function TranscriptTurn({ turn, sessionId, onCancelTask, waiting }: TranscriptTurnProps) {
+export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, waiting }: TranscriptTurnProps) {
   const attachments = (turn.user.attachments ?? []).map(fromSessionFile);
-  const tokens = tokenSummary(turn);
-  // The implementation phase is timed from the task run it opened, separate
-  // from the compile call's own duration; it is never shown as compiling.
-  const taskRun = runningTaskAction(turn);
+  const reply = copyableReply(turn);
   // Terminal states are told apart only for a turn that dispatched: a compile
   // that never opened a task run reads as 编译失败, not as a running task.
   const terminal = turn.actions.some((action) => action.kind === 'dispatch') ? dispatchTerminal(turn) : undefined;
@@ -201,19 +261,13 @@ export function TranscriptTurn({ turn, sessionId, onCancelTask, waiting }: Trans
   }
   flush();
 
-  // A running turn shows exactly one live line: the header of its trailing
-  // group, or a standalone line when the body ends with a reply, an error or
-  // nothing at all. No other line spins and the live line has no controls.
-  const trailing = body[body.length - 1];
-  const liveGroup = turn.status === 'running' && trailing?.kind === 'group' ? body.length - 1 : -1;
-  const fallbackLabel = waiting !== undefined
-    ? waitingStatusText(waiting)
-    : taskRun === undefined ? turnStatusText(turn) : `${TASK_RUN_PHASE_LABEL}…`;
-  const taskStartedAt = taskRun?.startedAt;
-  const footerInFlow = turn.status === 'failed' || turn.status === 'interrupted';
+  // The footer describes a finished turn, so it is absent while the turn runs.
+  // It stays in view on the newest turn and on failed or interrupted ones;
+  // elsewhere it shows on hover without reserving height.
+  const footerInFlow = latest || turn.status === 'failed' || turn.status === 'interrupted';
 
   return (
-    <div className="group/turn relative flex flex-col gap-3">
+    <div className="group/turn relative flex flex-col gap-3" data-lightbox-root>
       <div className="group/user flex justify-end">
         <HoverTime
           value={turn.user.at}
@@ -227,7 +281,7 @@ export function TranscriptTurn({ turn, sessionId, onCancelTask, waiting }: Trans
         </div>
       </div>
 
-      {body.map((block, index) => {
+      {body.map((block) => {
         if (block.kind === 'group') {
           return (
             <ActivityGroup
@@ -235,9 +289,6 @@ export function TranscriptTurn({ turn, sessionId, onCancelTask, waiting }: Trans
               items={block.items}
               sessionId={sessionId}
               onCancelTask={onCancelTask}
-              live={index === liveGroup}
-              fallbackLabel={fallbackLabel}
-              taskStartedAt={taskStartedAt}
             />
           );
         }
@@ -247,33 +298,33 @@ export function TranscriptTurn({ turn, sessionId, onCancelTask, waiting }: Trans
         return <ErrorRow key={`${block.error.at}:${block.error.stage}`} error={block.error} />;
       })}
 
-      {turn.status === 'running' && liveGroup < 0 ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <LiveGlyph />
-          <MorphText className="shimmer truncate" text={fallbackLabel} />
-          {taskStartedAt !== undefined && <Elapsed start={taskStartedAt} className="tabular-nums" />}
-        </div>
-      ) : null}
+      {turn.status === 'running' && <LiveLine turn={turn} waiting={waiting} />}
 
-      <div
-        className={cn(
-          'flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground tabular-nums transition-opacity',
-          // A hidden footer is taken out of the flow so it leaves no empty band
-          // between this turn and the next one.
-          footerInFlow
-            ? undefined
-            : 'pointer-events-none absolute inset-x-0 top-full opacity-0 group-hover/turn:opacity-100',
-        )}
-      >
-        {(turn.status === 'failed' || turn.status === 'interrupted') && (
-          <StatusBadge tone={statusView(turn.status).tone} label={statusView(turn.status).label} />
-        )}
-        <span className="font-mono">{turn.model.provider}/{turn.model.model}</span>
-        {turn.model.reasoningEffort !== undefined && <span>{turn.model.reasoningEffort}</span>}
-        <Elapsed start={turn.startedAt} end={turn.endedAt} />
-        {tokens !== undefined && <span>{tokens}</span>}
-        {terminal !== undefined && <span>{DISPATCH_TERMINAL_LABEL[terminal]}</span>}
-      </div>
+      {turn.status !== 'running' && (
+        <div
+          className={cn(
+            'flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground tabular-nums transition-opacity',
+            // A hidden footer is taken out of the flow so it leaves no empty band
+            // between this turn and the next one.
+            footerInFlow
+              ? undefined
+              : 'pointer-events-none absolute inset-x-0 top-full opacity-0 group-hover/turn:pointer-events-auto group-hover/turn:opacity-100',
+          )}
+        >
+          {(turn.status === 'failed' || turn.status === 'interrupted') && (
+            <StatusBadge tone={statusView(turn.status).tone} label={statusView(turn.status).label} />
+          )}
+          <span className="font-mono">{turn.model.provider}/{turn.model.model}</span>
+          {turn.model.reasoningEffort !== undefined && <span>{turn.model.reasoningEffort}</span>}
+          <Elapsed start={turn.startedAt} end={turn.endedAt} />
+          <TokenFigures turn={turn} />
+          {terminal !== undefined && <span>{DISPATCH_TERMINAL_LABEL[terminal]}</span>}
+          <RunningTasks tasks={runningTasks(turn)} />
+          {reply !== undefined && (
+            <CopyButton text={reply} label="复制回复" size="icon-xs" className="-my-1 text-muted-foreground" />
+          )}
+        </div>
+      )}
     </div>
   );
 }

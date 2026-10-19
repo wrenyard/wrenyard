@@ -55,6 +55,10 @@ export interface SessionDeleteParams { sessionId: string }
 export type SessionDeleteResult = Record<string, never>
 /** Rename one session with an explicit user title. */
 export interface SessionRenameParams { sessionId: string; title: string }
+/** Params of `session.title.regenerate`: the session whose title to generate again. */
+export interface SessionTitleRegenerateParams { sessionId: string }
+/** Result of `session.title.regenerate`: the new manual title. */
+export interface SessionTitleRegenerateResult { title: string }
 export type SessionRenameResult = Record<string, never>
 /** Change one session's archived / pinned list flags. */
 export interface SessionUpdateMetadataParams { sessionId: string; archived?: boolean; pinned?: boolean }
@@ -153,6 +157,14 @@ export const sessionRenameParamsSchema = {
   properties: { sessionId: idSchema, title: { type: 'string', minLength: 1 } },
 } as const satisfies JsonSchema
 export const sessionRenameResultSchema = emptySchema
+export const sessionTitleRegenerateParamsSchema = {
+  type: 'object', required: ['sessionId'], additionalProperties: false,
+  properties: { sessionId: idSchema },
+} as const satisfies JsonSchema
+export const sessionTitleRegenerateResultSchema = {
+  type: 'object', required: ['title'], additionalProperties: false,
+  properties: { title: { type: 'string', minLength: 1 } },
+} as const satisfies JsonSchema
 export const sessionUpdateMetadataParamsSchema = {
   type: 'object', required: ['sessionId'], additionalProperties: false,
   anyOf: [{ required: ['archived'] }, { required: ['pinned'] }],

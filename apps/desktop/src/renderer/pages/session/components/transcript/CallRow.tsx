@@ -3,6 +3,7 @@
  * auxiliary call rows (standalone or nested inside an action). All of them
  * share the same timing and token metadata, including the time to first token.
  */
+import { ArrowDown, ArrowUp } from 'lucide-react';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { elapsedBetween, formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
@@ -16,8 +17,8 @@ function ttftMs(call: CallModel): number | undefined {
   return elapsedBetween(call.startedAt, call.firstTokenAt, 0);
 }
 
-/** Timing and token metadata shared by the auxiliary and reasoning rows. */
-function CallMeta({ call }: { call: CallModel }) {
+/** Timing and token metadata shared by the call rows and the dispatch input block. */
+export function CallMeta({ call }: { call: CallModel }) {
   const ttft = ttftMs(call);
   const input = call.usage?.input;
   const output = call.usage?.output;
@@ -25,8 +26,15 @@ function CallMeta({ call }: { call: CallModel }) {
     <>
       {ttft !== undefined && <span>首字 {formatElapsedMs(ttft)}</span>}
       <Elapsed start={call.startedAt} end={call.endedAt} />
-      {(input !== undefined || output !== undefined) && (
-        <span>{formatTokenCount(input)}→{formatTokenCount(output)}</span>
+      {input !== undefined && (
+        <span className="inline-flex items-center gap-0.5" title={`输入 ${formatTokenCount(input)}`}>
+          <ArrowUp className="size-3" aria-label="输入" />{formatTokenCount(input)}
+        </span>
+      )}
+      {output !== undefined && (
+        <span className="inline-flex items-center gap-0.5" title={`输出 ${formatTokenCount(output)}`}>
+          <ArrowDown className="size-3" aria-label="输出" />{formatTokenCount(output)}
+        </span>
       )}
     </>
   );

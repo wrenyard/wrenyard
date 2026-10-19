@@ -246,6 +246,8 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
       await session.renameSession(params.sessionId, params.title)
       return {}
     }))
+  router.register('session.title.regenerate', (params, _message, context) =>
+    call(context, 'session.title.regenerate', async () => ({ title: await session.regenerateTitle(params.sessionId) })))
   router.register('session.updateMetadata', (params, _message, context) =>
     call(context, 'session.updateMetadata', async () => {
       await session.updateMetadata(params.sessionId, {

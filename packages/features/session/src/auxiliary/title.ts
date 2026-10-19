@@ -1,6 +1,6 @@
 /**
- * The session title: the first title taken from the opening user message and
- * the later refresh from the terminal reply.
+ * The session title: generated automatically once, from the opening user
+ * message, and again only when the user asks for it.
  */
 
 import { escapeBody, tag, twoPartView } from '../context/render.ts';
@@ -49,21 +49,38 @@ export function startInitialTitle(host: TitleHost, session: SessionRuntime, turn
   host.track(runTitle(host, session, turn, version, buildTitle({ userText })));
 }
 
-/** Refresh the title once, when a turn finishes with its terminal reply. */
-export async function maybeUpdateTitle(
-  host: TitleHost,
-  session: SessionRuntime,
-  turn: TurnRuntime,
-  finalReply: string | undefined,
-): Promise<void> {
-  if (session.titleUpdatedWithReply || hasManualTitle(host, session)) return;
-  session.titleUpdatedWithReply = true;
-  const version = ++session.titleVersion;
+/**
+ * Generate a new title on the user's request from the first user message and
+ * the latest reply, and record it as a manual title. Rejects when the model
+ * call fails or returns nothing, so the caller can show why.
+ */
+export async function regenerateTitle(host: TitleHost, session: SessionRuntime, turn: TurnRuntime): Promise<string> {
+  const finalReply = latestReplyText(host.ledger.read(session.sessionId));
   const userText = session.firstUserText ?? turn.userText;
-  await runTitle(host, session, turn, version, buildTitle({
+  const outcome = await host.invoke(session, turn, 'title', buildTitle({
     userText,
     ...(finalReply === undefined ? {} : { finalReply }),
-  }));
+  }), { parent: turnId(turn.turn) });
+  if (!outcome.ok) throw new Error(outcome.error ?? 'Title generation failed');
+  const applied = applyTitle(session, ++session.titleVersion, outcome.text);
+  if (applied === undefined) throw new Error('Title generation returned no title');
+  await host.ledger.append(session.sessionId, {
+    type: 'session.titled',
+    turn: turn.turn,
+    parent: outcome.spanId,
+    text: applied,
+    manual: true,
+  });
+  return applied;
+}
+
+/** The text of the latest reply on the timeline, if any. */
+function latestReplyText(events: ReturnType<TitleHost['ledger']['read']>): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type === 'reply.sent') return event.text;
+  }
+  return undefined;
 }
 
 /**

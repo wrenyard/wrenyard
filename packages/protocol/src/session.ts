@@ -308,6 +308,16 @@ export interface SessionRenameParams {
 /** Result of `session.rename`: empty on success. */
 export type SessionRenameResult = Record<string, never>
 
+/** Params of `session.title.regenerate`: the session whose title to generate again. */
+export interface SessionTitleRegenerateParams {
+  sessionId: string
+}
+
+/** Result of `session.title.regenerate`: the new manual title. */
+export interface SessionTitleRegenerateResult {
+  title: string
+}
+
 /**
  * Params of `session.updateMetadata`: one session and the list flags to change.
  * A field that is omitted keeps its prior value; at least one must be present.
@@ -391,6 +401,7 @@ export interface SessionMethods {
   'session.media.read': RpcMethod<SessionMediaReadParams, SessionMediaReadResult>
   'session.delete': RpcMethod<SessionDeleteParams, SessionDeleteResult>
   'session.rename': RpcMethod<SessionRenameParams, SessionRenameResult>
+  'session.title.regenerate': RpcMethod<SessionTitleRegenerateParams, SessionTitleRegenerateResult>
   'session.updateMetadata': RpcMethod<SessionUpdateMetadataParams, SessionUpdateMetadataResult>
   'session.prompt.suggest': RpcMethod<SessionPromptSuggestParams, SessionPromptSuggestResult>
   'session.prompt.cancel': RpcMethod<SessionPromptCancelParams, SessionPromptCancelResult>

@@ -278,6 +278,7 @@ export function SessionPage() {
       injectedText={retry}
       focusRequest={composerFocusRequest}
       onFocusRequestHandled={() => setComposerFocusRequest(0)}
+      onInterrupt={onInterrupt}
     />
   );
 
@@ -303,6 +304,13 @@ export function SessionPage() {
               ? undefined
               : (title) => renameSession(selectedSession.sessionId, title)
                 .then(() => queryClient.invalidateQueries({ queryKey: sessionListQueryKey }))}
+            onRegenerate={selectedSession === undefined
+              ? undefined
+              : async () => {
+                const regenerated = await api.regenerateTitle(selectedSession.sessionId);
+                await queryClient.invalidateQueries({ queryKey: sessionListQueryKey });
+                return regenerated;
+              }}
           />
         </PageTitle>
       </PageHeader>
@@ -343,7 +351,6 @@ export function SessionPage() {
                         turns={model.turns}
                         pending={state.pending}
                         sessionId={state.selectedId}
-                        onInterrupt={onInterrupt}
                         onCancelTask={cancelTask}
                         onRetry={(text, attachments) => setRetry({ text, attachments, nonce: Date.now() })}
                         onRemove={removePending}

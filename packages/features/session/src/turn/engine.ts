@@ -46,6 +46,7 @@ import type {
 } from '../ports.ts';
 import { ReplyWriter } from '../auxiliary/reply.ts';
 import { suggestNextInput } from '../auxiliary/prompt-suggestion.ts';
+import { regenerateTitle } from '../auxiliary/title.ts';
 import { TurnRunner } from './turn.ts';
 import type { SessionRuntime, TurnRuntime } from './runtime.ts';
 import { buildSnapshot } from '../snapshot.ts';
@@ -984,6 +985,23 @@ class Engine implements Session, SessionCallHost {
   }
 
   /**
+   * Generate a new title on the user's request and record it as a manual
+   * title. Rejects an unknown session, a session without messages and a failed
+   * or empty generation, with the reason.
+   */
+  async regenerateTitle(sessionId: string): Promise<string> {
+    this.assertOpen();
+    await this.ready;
+    const session = await this.ensureSession(sessionId);
+    let latest: TurnRuntime | undefined;
+    for (const turn of session.turns.values()) {
+      if (latest === undefined || turn.turn > latest.turn) latest = turn;
+    }
+    if (latest === undefined) throw new Error('Session has no messages to title');
+    return regenerateTitle(this, session, latest);
+  }
+
+  /**
    * Update one session's list metadata (archived / pinned). Appends one
    * `session.metadata` event carrying only the provided fields through the
    * normal ledger append path, so `index.json`, `listSessions` and every
@@ -1403,7 +1421,6 @@ class Engine implements Session, SessionCallHost {
       title: '新会话',
       lastTitleVersion: 0,
       titleVersion: 0,
-      titleUpdatedWithReply: false,
       turns: new Map(),
       nextTurn: 1,
     };
@@ -1473,9 +1490,6 @@ class Engine implements Session, SessionCallHost {
           }
           break;
         }
-        case 'reply.sent':
-          session.titleUpdatedWithReply = true;
-          break;
         case 'turn.started':
           if (session.firstUserText === undefined) session.firstUserText = event.text;
           break;
