@@ -77,6 +77,8 @@ const GROUP_PAGE_SIZE = 100
 const GROUP_PAGE_MAX = 500
 /** How many published reply source keys are remembered for deduplication. */
 const GROUP_PUBLISHED_MAX = 2_000
+/** How many delivered session wake keys one bot remembers. */
+const WAKE_KEYS_MAX = 64
 /** How many memory files the fixed context carries at most. */
 const MEMORY_BLOCK_FILES = 20
 /** How many characters of one memory body the fixed context carries. */
@@ -109,6 +111,8 @@ interface Wake {
   round?: string
   /** The routine that fired this wake, read by the per-routine busy gate. */
   routineId?: string
+  /** Session outcome identity for a watched-session wake. */
+  meta?: { sessionId: string; turn: number }
   createdAt: string
 }
 
@@ -143,6 +147,8 @@ interface BotState {
   lastError?: string
   /** The model of the bot's last request and when it was sent; see {@link MODEL_HOLD_MS}. */
   heldModel?: { provider: string; model: string; at: string }
+  /** Delivered session wake keys, oldest first, bounded. */
+  wakeKeys?: string[]
 }
 
 /** A bot keeps its last model this long after its last request, so the prefix cache stays warm. */
@@ -417,6 +423,35 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** 32-bit FNV-1a over UTF-16 code units, as a fixed-width hex string. */
+function fnv1a(text: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function sessionWakeKeys(meta: { sessionId: string; turn: number }, text: string): [string, string] {
+  return [`s:${meta.sessionId}:${meta.turn}`, `c:${fnv1a(text)}`]
+}
+
+function hasWakeKey(bot: BotState, keys: readonly string[]): boolean {
+  const wakeKeys = bot.wakeKeys
+  if (wakeKeys === undefined || wakeKeys.length === 0) return false
+  return keys.some(key => wakeKeys.includes(key))
+}
+
+function markWakeKeys(bot: BotState, keys: readonly string[]): void {
+  let wakeKeys = bot.wakeKeys ?? []
+  for (const key of keys) {
+    if (!wakeKeys.includes(key)) wakeKeys.push(key)
+  }
+  if (wakeKeys.length > WAKE_KEYS_MAX) wakeKeys = wakeKeys.slice(-WAKE_KEYS_MAX)
+  bot.wakeKeys = wakeKeys
+}
+
 /**
  * The context-input threshold above which a bot's own conversation rotates to a
  * fresh session. It is the smaller of a fixed 100k ceiling and half the
@@ -469,6 +504,9 @@ function readWake(value: unknown): Wake | undefined {
     text,
     ...(typeof value.round === 'string' ? { round: value.round } : {}),
     ...(typeof value.routineId === 'string' ? { routineId: value.routineId } : {}),
+    ...(isPlainObject(value.meta) && typeof value.meta.sessionId === 'string' && typeof value.meta.turn === 'number'
+      ? { meta: { sessionId: value.meta.sessionId, turn: value.meta.turn } }
+      : {}),
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString(),
   }
 }
@@ -601,11 +639,15 @@ function parseState(raw: string): KernelState {
           queue.unshift(inflight)
         }
       }
+      const wakeKeys = Array.isArray(value.wakeKeys)
+        ? value.wakeKeys.filter((key): key is string => typeof key === 'string' && key !== '')
+        : undefined
       state.bots[id] = {
         queue,
         ...(typeof value.sessionId === 'string' ? { sessionId: value.sessionId } : {}),
         ...(typeof value.lastWakeAt === 'string' ? { lastWakeAt: value.lastWakeAt } : {}),
         ...(typeof value.lastError === 'string' ? { lastError: value.lastError } : {}),
+        ...(wakeKeys !== undefined && wakeKeys.length > 0 ? { wakeKeys } : {}),
       }
     }
   }
@@ -903,7 +945,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
   function enqueue(
     botId: string,
-    input: { source: WakeSource; text: string; round?: string; routineId?: string },
+    input: { source: WakeSource; text: string; round?: string; routineId?: string; meta?: { sessionId: string; turn: number } },
   ): Wake {
     const wake: Wake = {
       id: randomUUID(),
@@ -913,6 +955,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       createdAt: new Date().toISOString(),
       ...(input.round === undefined ? {} : { round: input.round }),
       ...(input.routineId === undefined ? {} : { routineId: input.routineId }),
+      ...(input.meta === undefined ? {} : { meta: input.meta }),
     }
     ensureBotState(botId).queue.push(wake)
     return wake
@@ -1019,9 +1062,19 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     state.watches.splice(index, 1)
     releaseWatch(botId, sessionId)
     const reply = turnAnswerOf(options.sessions, sessionId, turn)
+    const text = `[wake:session ${sessionId} ${event.status}] ${reply ?? ''}`
+    const bot = ensureBotState(botId)
+    const meta = { sessionId, turn }
+    const keys = sessionWakeKeys(meta, text)
+    const pending = bot.queue.some(item => item.meta?.sessionId === sessionId && item.meta?.turn === turn)
+    if (hasWakeKey(bot, keys) || pending) {
+      persist()
+      return
+    }
     const wake = enqueue(botId, {
       source: 'session',
-      text: `[wake:session ${sessionId} ${event.status}] ${reply ?? ''}`,
+      text,
+      meta,
       ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()
@@ -1592,6 +1645,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
         .some(event => event.type === 'reply.sent' && event.turn === failedTurn && event.kind !== 'progress')
       if (alreadyPublished) {
         removePendingWake(botId, wake.id)
+        if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta, wake.text))
         finishWakeTurn(botId, wake, sessionId, {
           turn: failedTurn,
           status: 'failed',
@@ -1629,6 +1683,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     holdModel(botId, route)
     const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route, sender: { botId } })
     removePendingWake(botId, wake.id)
+    if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta, wake.text))
     recordRoundTurn(wake, sessionId, turn)
     persist()
     trackTurn(botId, sessionId, turn, outcome => {
@@ -1718,6 +1773,14 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
   function dispatchWake(botId: string, wake: Wake): void {
     if (stopped || admitting.has(wake.id) || !isRunnable(entries.get(botId))) return
+    if (wake.meta !== undefined) {
+      const bot = ensureBotState(botId)
+      if (hasWakeKey(bot, sessionWakeKeys(wake.meta, wake.text))) {
+        removePendingWake(botId, wake.id)
+        persist()
+        return
+      }
+    }
     admitting.add(wake.id)
     let task: Promise<void>
     task = runWake(botId, wake).finally(() => {
@@ -1800,9 +1863,18 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     } catch (error) {
       log('warn', `bot agent kernel could not read watched session ${watch.sessionId}: ${errorText(error)}`)
     }
+    const turn = watch.afterTurn + 1
+    const sessionId = watch.sessionId
+    const text = `[wake:session ${sessionId} ${status}] ${reply ?? ''}`
+    const bot = ensureBotState(watch.botId)
+    const meta = { sessionId, turn }
+    const keys = sessionWakeKeys(meta, text)
+    const pending = bot.queue.some(item => item.meta?.sessionId === sessionId && item.meta?.turn === turn)
+    if (hasWakeKey(bot, keys) || pending) return
     const wake = enqueue(watch.botId, {
       source: 'session',
-      text: `[wake:session ${watch.sessionId} ${status}] ${reply ?? ''}`,
+      text,
+      meta,
       ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()
