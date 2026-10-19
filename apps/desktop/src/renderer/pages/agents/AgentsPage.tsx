@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { PromptInput } from '@/renderer/components/chat/prompt-input';
 import { Page, PageActions, PageContent, PageHeader, PageTitle } from '@/renderer/components/page';
@@ -8,9 +9,10 @@ import type { StatusTone } from '@/renderer/components/status-badge';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { Button } from '@/renderer/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/renderer/components/ui/card';
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { Field, FieldLabel } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/renderer/components/ui/popover';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -21,6 +23,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { useRemoteConnection } from '@/renderer/lib/desktop';
+import { navigate } from '@/renderer/lib/navigation';
 import type { AgentBot, AgentBotLocation, AgentStatus, GroupMessage } from '@/shell-contract';
 import { fold } from '../session/model/fold.js';
 import { MessageTimeline, buildMessageTimeline } from '../session/components/conversation/MessageTimeline.js';
@@ -82,6 +85,159 @@ function sortBots(bots: readonly AgentBot[]): AgentBot[] {
     if (left.primary !== right.primary) return left.primary ? -1 : 1;
     return left.id.localeCompare(right.id);
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared bot rows: mention picker and header roster                   */
+/* ------------------------------------------------------------------ */
+
+/** Roster order for the picker and header list: primary, enabled by name, disabled. */
+function orderForPicker(bots: readonly AgentBot[]): AgentBot[] {
+  return [...bots].sort((left, right) => {
+    if (left.primary !== right.primary) return left.primary ? -1 : 1;
+    if (left.enabled !== right.enabled) return left.enabled ? -1 : 1;
+    return left.name.localeCompare(right.name);
+  });
+}
+
+/** Dot color for a bot's live status; `disabled` is handled by the row itself. */
+const STATUS_DOT: Record<AgentStatus, { className: string; label: string | null }> = {
+  idle: { className: 'bg-muted-foreground/50', label: null },
+  running: { className: 'bg-primary', label: '工作中' },
+  error: { className: 'bg-destructive', label: null },
+  disabled: { className: 'bg-muted-foreground/50', label: null },
+};
+
+/** 20 px round avatar: the identity icon, else the first letter of the name. */
+function BotAvatar(props: { bot: AgentBot; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] leading-none text-muted-foreground',
+        props.className,
+      )}
+    >
+      {botIcon(props.bot)}
+    </span>
+  );
+}
+
+/** The status dot at the right end of a bot row, with its label when it has one. */
+function BotStatusDot(props: { bot: AgentBot }) {
+  const bot = props.bot;
+  if (!bot.enabled) {
+    return <span className="shrink-0 text-xs text-muted-foreground">已停用</span>;
+  }
+  const status = STATUS_DOT[bot.status];
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {status.label !== null && (
+        <span className="text-xs text-muted-foreground">{status.label}</span>
+      )}
+      <span aria-hidden className={cn('size-1.5 rounded-full', status.className)} />
+    </span>
+  );
+}
+
+/**
+ * The shared bot row content: avatar, name with a muted @id, an optional
+ * one-line description and the status at the right end.
+ */
+function BotRowContent(props: { bot: AgentBot }) {
+  const bot = props.bot;
+  return (
+    <>
+      <BotAvatar bot={bot} />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="truncate">{bot.name}</span>
+          <span className="truncate text-xs text-muted-foreground">{`@${bot.id}`}</span>
+        </span>
+        {bot.description !== undefined && bot.description.trim() !== '' && (
+          <span className="truncate text-xs text-muted-foreground">{bot.description.trim()}</span>
+        )}
+      </span>
+      <BotStatusDot bot={bot} />
+    </>
+  );
+}
+
+/**
+ * The `@token` the caret currently sits inside, when the `@` starts the draft
+ * or follows whitespace. Returns the token's range and filter text, or null.
+ */
+function mentionTokenAt(text: string, caret: number): { start: number; end: number; filter: string } | null {
+  if (caret < 0 || caret > text.length) return null;
+  const at = text.lastIndexOf('@', caret - 1);
+  if (at < 0) return null;
+  const before = at === 0 ? '' : text[at - 1]!;
+  if (before !== '' && !/\s/u.test(before)) return null;
+  const token = text.slice(at + 1, caret);
+  if (/\s/u.test(token)) return null;
+  return { start: at, end: caret, filter: token };
+}
+
+/** Case-insensitive prefix of the id or the name. */
+function botMatchesFilter(bot: AgentBot, filter: string): boolean {
+  const key = filter.trim().toLowerCase();
+  if (key === '') return true;
+  return bot.id.toLowerCase().startsWith(key) || bot.name.trim().toLowerCase().startsWith(key);
+}
+
+/**
+ * Replace `range` in the draft with `@<id> `, then focus the textarea and put
+ * the caret after the inserted token.
+ */
+function insertMentionAt(
+  draft: string,
+  range: { start: number; end: number } | null,
+  id: string,
+  textarea: HTMLTextAreaElement | null,
+  onDraftChange: (value: string) => void,
+): void {
+  const token = `@${id} `;
+  let next: string;
+  let caret: number;
+  if (range !== null) {
+    next = `${draft.slice(0, range.start)}${token}${draft.slice(range.end)}`;
+    caret = range.start + token.length;
+  } else {
+    const start = textarea?.selectionStart ?? draft.length;
+    const end = textarea?.selectionEnd ?? draft.length;
+    const before = draft.slice(0, start);
+    const previous = before.at(-1);
+    const separator = before !== '' && previous !== undefined && !/\s/u.test(previous) ? ' ' : '';
+    next = `${before}${separator}${token}${draft.slice(end)}`;
+    caret = before.length + separator.length + token.length;
+  }
+  onDraftChange(next);
+  window.requestAnimationFrame(() => {
+    textarea?.focus();
+    textarea?.setSelectionRange(caret, caret);
+  });
+}
+
+/**
+ * Build the muted wake-feedback line for one send result: who woke and which
+ * @tokens named no enabled bot. Returns null when nothing should be shown.
+ */
+function wakeFeedbackText(text: string, awakened: readonly string[], bots: readonly AgentBot[]): string | null {
+  const parts: string[] = [];
+  if (awakened.length > 0) {
+    const names = awakened.map((id) => {
+      const name = bots.find((bot) => bot.id === id)?.name;
+      return name !== undefined && name !== id ? `${name}（${id}）` : id;
+    });
+    parts.push(`已唤醒 ${names.join('、')}`);
+  }
+  const unknown = unrecognizedMentions(text, bots);
+  if (unknown.length > 0) {
+    parts.push(`${unknown.map((token) => `@${token}`).join('、')} 不是可唤醒的机器人`);
+  }
+  if (parts.length === 0) return null;
+  if (awakened.length === 0) parts.push('没有唤醒任何机器人');
+  return parts.join('；');
 }
 
 /**
@@ -230,7 +386,7 @@ function ModeSwitch(props: { mode: ConversationMode; onChange: (mode: Conversati
 }
 
 /** Author line shared by every group entry. */
-function GroupMessageView(props: { message: GroupMessage }) {
+function GroupMessageView(props: { message: GroupMessage; feedback?: string }) {
   const message = props.message;
   const fromUser = message.author === 'user';
   const author = fromUser ? '你' : message.name ?? message.botId ?? '机器人';
@@ -246,12 +402,22 @@ function GroupMessageView(props: { message: GroupMessage }) {
       <div className={`rounded-xl border px-3 py-2 text-sm ${fromUser ? 'bg-muted/40' : 'bg-card'}`}>
         <AppMarkdown>{message.text}</AppMarkdown>
       </div>
+      {/* Wake result of this send; only messages sent in this window have one. */}
+      {props.feedback !== undefined && (
+        <div className="text-xs text-muted-foreground">{props.feedback}</div>
+      )}
     </article>
   );
 }
 
 /** The canonical group transcript, rendered from the daemon's sequence cursor. */
-function GroupTranscriptView(props: { transcript: GroupTranscript }) {
+function GroupTranscriptView(props: {
+  transcript: GroupTranscript;
+  /** Whether the loaded bot list is empty, so the empty state can offer to create one. */
+  noBots: boolean;
+  /** Muted wake lines keyed by the user's sent message seq; history shows none. */
+  feedback: ReadonlyMap<number, string>;
+}) {
   const { messages, error, ready } = props.transcript;
 
   const header = error !== null && (
@@ -277,12 +443,29 @@ function GroupTranscriptView(props: { transcript: GroupTranscript }) {
       <div className="flex min-h-0 flex-1 flex-col">
         {header}
         <div className="flex min-h-0 flex-1 items-center justify-center">
-          <Empty>
-            <EmptyHeader>
-              <EmptyTitle>还没有群聊消息</EmptyTitle>
-              <EmptyDescription>在下方发言，用 @机器人 唤醒它。</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+          {props.noBots ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>还没有机器人</EmptyTitle>
+                <EmptyDescription>创建一个机器人，然后在群聊里用 @ 唤醒它。</EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button
+                  size="sm"
+                  onClick={() => { void navigate('settings', { category: 'bot' }); }}
+                >
+                  创建机器人
+                </Button>
+              </EmptyContent>
+            </Empty>
+          ) : (
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>还没有群聊消息</EmptyTitle>
+                <EmptyDescription>在下方发言，用 @机器人 唤醒它。</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          )}
         </div>
       </div>
     );
@@ -296,7 +479,11 @@ function GroupTranscriptView(props: { transcript: GroupTranscript }) {
           <MessageScrollerViewport className="scroll-fade-y">
             <MessageScrollerContent className="mx-auto w-full max-w-3xl gap-5 px-4 py-4">
               {messages.map((message) => (
-                <GroupMessageView key={message.seq} message={message} />
+                <GroupMessageView
+                  key={message.seq}
+                  message={message}
+                  feedback={props.feedback.get(message.seq)}
+                />
               ))}
             </MessageScrollerContent>
           </MessageScrollerViewport>
@@ -338,72 +525,230 @@ function unrecognizedMentions(text: string, bots: readonly AgentBot[]): string[]
   return unknown;
 }
 
-/** Room in the draft for one unambiguous alias; the caret controls the spot. */
-function insertMention(
-  draft: string,
-  id: string,
-  textarea: HTMLTextAreaElement | null,
-  onDraftChange: (value: string) => void,
-): void {
-  const token = `@${id} `;
-  const start = textarea?.selectionStart ?? draft.length;
-  const end = textarea?.selectionEnd ?? draft.length;
-  const before = draft.slice(0, start);
-  const previous = before.at(-1);
-  const separator = before !== '' && previous !== undefined && !/\s/u.test(previous) ? ' ' : '';
-  const next = `${before}${separator}${token}${draft.slice(end)}`;
-  onDraftChange(next);
-  const caret = before.length + separator.length + token.length;
-  window.requestAnimationFrame(() => {
-    textarea?.focus();
-    textarea?.setSelectionRange(caret, caret);
-  });
+
+
+/**
+ * The @ mention picker: a non-modal popover anchored to the composer, listing
+ * every configured bot in roster order. Open while the caret sits in an
+ * `@token`; the token text is the prefix filter. Keys stay in the textarea:
+ * a native capture listener decides before React's submit handling sees them.
+ */
+function MentionPicker(props: {
+  bots: readonly AgentBot[];
+  botsLoaded: boolean;
+  draft: string;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  onDraftChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState<{ start: number; filter: string } | null>(null);
+  const [selected, setSelected] = useState(0);
+  // Latest values for the native listeners; React state setters stay fresh.
+  const draftRef = useRef(props.draft);
+  draftRef.current = props.draft;
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const openRef = useRef(open);
+  openRef.current = open;
+  const botsRef = useRef(props.bots);
+  botsRef.current = props.bots;
+
+  const rows = useMemo(
+    () => orderForPicker(props.bots).filter((bot) => active !== null && botMatchesFilter(bot, active.filter)),
+    [props.bots, active],
+  );
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const selectable = rows.filter((bot) => bot.enabled);
+  const selectedBot = selectable[selected];
+
+  // Recompute the token under the caret; closes when the caret leaves it.
+  const syncCaret = (): void => {
+    const el = props.textareaRef.current;
+    if (el === null) return;
+    const token = mentionTokenAt(el.value, el.selectionStart ?? 0);
+    if (token === null || el.selectionEnd !== token.end) {
+      activeRef.current = null;
+      setActive(null);
+      openRef.current = false;
+      setOpen(false);
+      return;
+    }
+    activeRef.current = token;
+    setActive(token);
+    openRef.current = true;
+    setOpen(true);
+  };
+
+  const insert = (bot: AgentBot): void => {
+    const token = activeRef.current;
+    insertMentionAt(
+      draftRef.current,
+      token === null ? null : { start: token.start, end: token.start + 1 + token.filter.length },
+      bot.id,
+      props.textareaRef.current,
+      props.onDraftChange,
+    );
+    activeRef.current = null;
+    setActive(null);
+    openRef.current = false;
+    setOpen(false);
+  };
+
+  const selectedRef = useRef(0);
+  selectedRef.current = selected;
+
+  // Arrow / Enter / Tab / Esc handling on the textarea, in capture phase so an
+  // open picker consumes the keys before the composer submits on Enter.
+  useEffect(() => {
+    const el = props.textareaRef.current;
+    if (el === null) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!openRef.current) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      const list = rowsRef.current.filter((bot) => bot.enabled);
+      switch (event.key) {
+        case 'ArrowDown':
+        case 'ArrowUp': {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          if (list.length === 0) return;
+          setSelected((previous) => {
+            const size = list.length;
+            const next = event.key === 'ArrowDown' ? previous + 1 : previous - 1;
+            return ((next % size) + size) % size;
+          });
+          return;
+        }
+        case 'Enter':
+        case 'Tab': {
+          const target = list[selectedRef.current] ?? list[0];
+          if (target === undefined) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          insert(target);
+          return;
+        }
+        case 'Escape': {
+          // Closes only the popover; the draft and the page are untouched.
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          activeRef.current = null;
+          setActive(null);
+          openRef.current = false;
+          setOpen(false);
+          return;
+        }
+        default:
+      }
+    };
+    const onInput = (): void => syncCaret();
+    const onSelect = (): void => syncCaret();
+    const onBlur = (): void => {
+      // Focus leaving the composer closes the picker. Clicks inside the popup
+      // move focus there only after the insert already ran on pointerdown.
+      activeRef.current = null;
+      setActive(null);
+      openRef.current = false;
+      setOpen(false);
+    };
+    el.addEventListener('keydown', onKeyDown, { capture: true });
+    el.addEventListener('input', onInput);
+    el.addEventListener('select', onSelect);
+    el.addEventListener('blur', onBlur);
+    return () => {
+      el.removeEventListener('keydown', onKeyDown, { capture: true });
+      el.removeEventListener('input', onInput);
+      el.removeEventListener('select', onSelect);
+      el.removeEventListener('blur', onBlur);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs keep the latest values; one binding is enough.
+  }, [props.textareaRef]);
+
+  // The first selectable row starts selected whenever the filter changes.
+  useEffect(() => { setSelected(0); }, [active?.filter]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen} modal={false}>
+      {/* Invisible composer-wide trigger: the anchor the popup measures and
+          positions against, so the picker opens above at composer width. */}
+      <PopoverTrigger
+        render={<span className="pointer-events-none absolute inset-x-0 top-0 h-0" aria-hidden />}
+      />
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="w-(--anchor-width) max-w-(--anchor-width) gap-0 rounded-2xl p-1"
+        initialFocus={false}
+        finalFocus={false}
+      >
+        {props.bots.length === 0 && props.botsLoaded ? (
+          <div className="px-3 py-2 text-sm text-muted-foreground">还没有机器人</div>
+        ) : rows.length === 0 ? (
+          <div className="px-3 py-2 text-sm text-muted-foreground">没有匹配的机器人</div>
+        ) : (
+          rows.map((bot) => {
+            const isSelected = bot.enabled && bot.id === selectedBot?.id;
+            return (
+              <button
+                key={bot.id}
+                type="button"
+                disabled={!bot.enabled}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-sm',
+                  bot.enabled ? 'hover:bg-muted' : 'cursor-default opacity-50',
+                  isSelected && 'bg-muted',
+                )}
+                // Pointerdown keeps the textarea's blur from racing the click.
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => { if (bot.enabled) insert(bot); }}
+              >
+                <BotRowContent bot={bot} />
+              </button>
+            );
+          })
+        )}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
-/** The group composer, roster chips and explicit wake feedback. */
+/** The group composer and its @ mention picker; wake results land in the transcript. */
 function GroupComposer(props: {
   agents: ReturnType<typeof useAgentsQuery>;
   bots: readonly AgentBot[];
   transcript: GroupTranscript;
   draft: string;
   onDraftChange: (value: string) => void;
+  /** Imperative insert target shared with the header roster's @ action. */
+  insertRef: React.RefObject<((bot: AgentBot) => void) | null>;
+  /** Records the muted wake line under the sent message's transcript seq. */
+  onSent: (seq: number, feedback: string | null) => void;
 }) {
   const connection = useRemoteConnection();
   const connected = connection.state === 'local' || connection.state === 'remote';
   const send = useGroupSendMutation();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [feedback, setFeedback] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null);
+  const botsRef = useRef(props.bots);
+  botsRef.current = props.bots;
 
-  const enabledBots = props.bots.filter((bot) => bot.enabled);
-  const unknown = unrecognizedMentions(props.draft, props.bots);
+  // Shared insert helper: the roster's @ action uses the same caret path.
+  props.insertRef.current = (bot: AgentBot): void => {
+    const el = textareaRef.current;
+    const caret = el?.selectionStart ?? props.draft.length;
+    const token = el === null ? null : mentionTokenAt(props.draft, caret);
+    insertMentionAt(props.draft, token, bot.id, el, props.onDraftChange);
+  };
 
   const submit = (): void => {
     const text = props.draft.trim();
     if (text === '' || send.isPending || !connected) return;
-    setFeedback(null);
     send.mutate(text, {
       onSuccess: (result) => {
         // Only a confirmed daemon post clears the draft; a failure keeps it.
         props.onDraftChange('');
-        const names = result.awakened.map((id) => {
-          const name = props.bots.find((bot) => bot.id === id)?.name;
-          return name !== undefined && name !== id ? `${name}（${id}）` : id;
-        });
-        if (result.awakened.length === 0) {
-          setFeedback({
-            tone: 'warn',
-            text: unknown.length > 0
-              ? `没有机器人被唤醒：未识别或已停用的提及 ${unknown.map((token) => `@${token}`).join('、')}。`
-              : '没有机器人被唤醒：只有 @id 或 @名称 才会唤醒机器人。',
-          });
-        } else if (unknown.length > 0) {
-          setFeedback({
-            tone: 'warn',
-            text: `已唤醒 ${names.join('、')}；未识别或已停用的提及 ${unknown.map((token) => `@${token}`).join('、')}。`,
-          });
-        } else {
-          setFeedback({ tone: 'ok', text: `已唤醒 ${names.join('、')}` });
-        }
+        props.onSent(result.message.seq, wakeFeedbackText(text, result.awakened, botsRef.current));
         // Read the canonical transcript now instead of waiting for the tick.
         props.transcript.refresh();
       },
@@ -417,54 +762,29 @@ function GroupComposer(props: {
           <QueryError query={props.agents} title={PAGE_TITLE} />
         </div>
       )}
-      <PromptInput
-        value={props.draft}
-        onValueChange={props.onDraftChange}
-        onSubmit={submit}
-        sendKey="mod-enter"
-        submitDisabled={send.isPending || !connected}
-        placeholder="在群聊里发言；用 @机器人 唤醒它（Cmd/Ctrl+Enter 发送）"
-        textareaRef={textareaRef}
-      />
-      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span>提及</span>
-        {props.agents.isPending ? (
-          <span className="flex items-center gap-2" role="status" aria-label="加载机器人">
-            <Skeleton className="h-4 w-16" />
-            <Skeleton className="h-4 w-16" />
-          </span>
-        ) : props.agents.isError ? null : enabledBots.length === 0 ? (
-          <span>没有启用的机器人</span>
-        ) : (
-          enabledBots.map((bot) => (
-            <button
-              key={bot.id}
-              type="button"
-              title={`唤醒 ${bot.name}`}
-              className="rounded-full border px-2 py-0.5 text-foreground transition-colors hover:bg-muted"
-              onClick={() => insertMention(props.draft, bot.id, textareaRef.current, props.onDraftChange)}
-            >
-              {`@${bot.id}`}
-            </button>
-          ))
-        )}
-        <span className="basis-full">提及会唤醒机器人；未提及的发言只进入群聊，不会唤醒任何机器人。</span>
+      <div className="relative">
+        <PromptInput
+          value={props.draft}
+          onValueChange={props.onDraftChange}
+          onSubmit={submit}
+          sendKey="mod-enter"
+          submitDisabled={send.isPending || !connected}
+          placeholder="发消息，输入 @ 唤醒机器人"
+          textareaRef={textareaRef}
+        />
+        <MentionPicker
+          bots={props.bots}
+          botsLoaded={!props.agents.isPending}
+          draft={props.draft}
+          textareaRef={textareaRef}
+          onDraftChange={props.onDraftChange}
+        />
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs" aria-live="polite">
         {!connected && <span className="text-destructive">尚未连接，暂时不能发送。</span>}
         {send.isPending && <span className="text-muted-foreground">发送中…</span>}
         {send.isError && (
           <span className="text-destructive">{`发送失败：${String(send.error)}（草稿已保留）`}</span>
-        )}
-        {feedback !== null && (
-          <span className={feedback.tone === 'ok' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
-            {feedback.text}
-          </span>
-        )}
-        {unknown.length > 0 && !send.isPending && (
-          <span className="text-amber-600 dark:text-amber-400">
-            {`未识别或已停用的提及：${unknown.map((token) => `@${token}`).join('、')}`}
-          </span>
         )}
       </div>
     </div>
@@ -477,11 +797,23 @@ function GroupView(props: {
   bots: readonly AgentBot[];
   draft: string;
   onDraftChange: (value: string) => void;
+  insertRef: React.RefObject<((bot: AgentBot) => void) | null>;
 }) {
   const transcript = useGroupEvents();
+  // Muted wake lines keyed by the sent message's seq; entries sent in this
+  // window only, so messages loaded from history never show one.
+  const [feedback, setFeedback] = useState<ReadonlyMap<number, string>>(new Map());
+  const recordFeedback = (seq: number, line: string | null): void => {
+    if (line === null) return;
+    setFeedback((previous) => new Map(previous).set(seq, line));
+  };
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <GroupTranscriptView transcript={transcript} />
+      <GroupTranscriptView
+        transcript={transcript}
+        noBots={!props.agents.isPending && !props.agents.isError && props.bots.length === 0}
+        feedback={feedback}
+      />
       <div className="shrink-0 border-t bg-background px-4 py-3">
         <GroupComposer
           agents={props.agents}
@@ -489,9 +821,97 @@ function GroupView(props: {
           transcript={transcript}
           draft={props.draft}
           onDraftChange={props.onDraftChange}
+          insertRef={props.insertRef}
+          onSent={recordFeedback}
         />
       </div>
     </div>
+  );
+}
+
+/**
+ * The header roster button: up to three overlapping avatars plus the count of
+ * every configured bot. Its popover lists all bots in picker order with a `@`
+ * insert action and a `私聊` action; it has no editing controls.
+ */
+function RosterButton(props: {
+  agents: ReturnType<typeof useAgentsQuery>;
+  bots: readonly AgentBot[];
+  onMention: (bot: AgentBot) => void;
+  onPrivate: (bot: AgentBot) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ordered = useMemo(() => orderForPicker(props.bots), [props.bots]);
+  const avatars = ordered.slice(0, 3);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen} modal={false}>
+      <PopoverTrigger
+        render={
+          <Button variant="ghost" size="xs" aria-label="机器人成员" />
+        }
+      >
+        {props.agents.isPending ? (
+          <span className="flex items-center gap-1" role="status" aria-label="加载机器人">
+            <Skeleton className="size-5 rounded-full" />
+            <Skeleton className="h-3 w-12" />
+          </span>
+        ) : (
+          <>
+            {avatars.length > 0 && (
+              <span className="flex -space-x-1.5">
+                {avatars.map((bot) => (
+                  <BotAvatar key={bot.id} bot={bot} className="ring-1 ring-background" />
+                ))}
+              </span>
+            )}
+            <span>{`${props.bots.length} 个机器人`}</span>
+          </>
+        )}
+      </PopoverTrigger>
+      <PopoverContent side="bottom" align="end" className="w-72 gap-0 rounded-2xl p-1">
+        {props.bots.length === 0 ? (
+          <div className="px-3 py-2 text-sm text-muted-foreground">还没有机器人</div>
+        ) : (
+          ordered.map((bot) => (
+            <div
+              key={bot.id}
+              className={cn(
+                'flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm',
+                !bot.enabled && 'opacity-50',
+              )}
+            >
+              <BotRowContent bot={bot} />
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`提及 ${bot.name}`}
+                title={`提及 ${bot.name}`}
+                disabled={!bot.enabled}
+                className="shrink-0"
+                onClick={() => {
+                  setOpen(false);
+                  props.onMention(bot);
+                }}
+              >
+                @
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="shrink-0 px-1.5"
+                onClick={() => {
+                  setOpen(false);
+                  props.onPrivate(bot);
+                }}
+              >
+                私聊
+              </Button>
+            </div>
+          ))
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -628,6 +1048,8 @@ export function AgentsPage() {
   const [privateId, setPrivateId] = useState<string | null>(null);
   const [groupDraft, setGroupDraft] = useState('');
   const [privateDrafts, setPrivateDrafts] = useState<Record<string, string>>({});
+  // The group composer registers its mention-insert here for the roster's @.
+  const groupInsertRef = useRef<((bot: AgentBot) => void) | null>(null);
 
   const bots = useMemo(() => sortBots(agents.data?.bots ?? []), [agents.data]);
 
@@ -655,6 +1077,17 @@ export function AgentsPage() {
       <PageHeader>
         <PageTitle>{PAGE_TITLE}</PageTitle>
         <PageActions>
+          {mode === 'group' && (
+            <RosterButton
+              agents={agents}
+              bots={bots}
+              onMention={(bot) => groupInsertRef.current?.(bot)}
+              onPrivate={(bot) => {
+                setPrivateId(bot.id);
+                setMode('private');
+              }}
+            />
+          )}
           <ModeSwitch mode={mode} onChange={setMode} />
           {mode === 'private' && bots.length > 0 && (
             <Select value={privateId ?? bots[0]?.id ?? ''} onValueChange={(value) => setPrivateId(String(value))}>
@@ -696,6 +1129,7 @@ export function AgentsPage() {
             bots={bots}
             draft={groupDraft}
             onDraftChange={setGroupDraft}
+            insertRef={groupInsertRef}
           />
         ) : agents.isPending ? (
           <div className="flex flex-col gap-3 p-4" role="status" aria-label="加载机器人">
