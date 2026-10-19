@@ -13,7 +13,7 @@ import {
   type RouteHealth,
   type SpanEventDraft,
 } from '../src/model/request.ts';
-import { ROLE_REQUIREMENTS } from '../src/model/roles.ts';
+import { ROLE_REQUIREMENTS } from '@wrenyard/auto-routing';
 import { ModelError, type ModelResult, type ModelRequest, type ModelTransport } from '../src/transport/index.ts';
 
 const MODEL_IDS = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];

@@ -16,7 +16,7 @@ import {
   type RouteHealth,
   type SpanEventDraft,
 } from '../src/model/request.ts';
-import { ROLE_REQUIREMENTS } from '../src/model/roles.ts';
+import { ROLE_REQUIREMENTS } from '@wrenyard/auto-routing';
 import { ModelError, type ModelRequest, type ModelResult, type ModelTransport } from '../src/transport/index.ts';
 import type { BuiltView, CallsPort } from '../src/ports.ts';
 import type { LedgerEventDraft } from '../src/ledger/store.ts';

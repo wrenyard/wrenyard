@@ -698,6 +698,9 @@ importers:
       '@wrenyard/agent-client':
         specifier: workspace:*
         version: link:../../clients/base
+      '@wrenyard/auto-routing':
+        specifier: workspace:*
+        version: link:../auto-routing
       '@wrenyard/control':
         specifier: workspace:*
         version: link:../../control

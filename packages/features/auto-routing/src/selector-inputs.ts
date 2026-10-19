@@ -1,8 +1,7 @@
-import type { CandidateInput, RequiredQuotaConstraint } from '@wrenyard/auto-routing';
+import type { CandidateInput, RequiredQuotaConstraint } from './types.ts';
 import { INTELLIGENCE_ORDER } from '@wrenyard/providers/catalog';
 import { findProviderQuotaBindingForSupply, resolveDeepSeekReferencePricing, type DeepSeekPricingModel, type DeepSeekReferencePricing, type ProviderQuotaBinding } from '@wrenyard/providers';
-import type { TaskResolvedDispatch } from '../../task-run-metadata-types.mts';
-import type { AutoRoutingQuotaSnapshot } from './auto-routing-snapshot-service.mts';
+import type { AutoRoutingQuotaSnapshot } from './selector.ts';
 
 /** Model evidence only: callers supply their own route identity and transport. */
 export interface ModelRoutingEntry {
@@ -31,7 +30,7 @@ export interface AutomaticSelectionContext {
 }
 
 /** Task and auxiliary selection share the same cap and normalization rules.
- *  Callers may pass a missing routing-only reference price (undefined) for an
+ *  Callers may pass a missing routing-only reference price (undefined) for a
  *  explicit free offering; those absent values must not turn the default cap
  *  into NaN/Infinity. Only finite references participate, and a pool whose
  *  every reference is absent falls back to a zero routing cap, which admits the
@@ -44,10 +43,20 @@ export function effectiveRoutingCap(references: readonly (number | null | undefi
 
 const DEEPSEEK_SAFETY_LOOKAHEAD_MS = 7 * 24 * 60 * 60 * 1_000
 
+/** Structural reference-price shape shared with the daemon's resolved dispatch. */
+export interface RoutingReferencePricing {
+  input_usd_per_million?: number
+  output_usd_per_million?: number
+  cached_input_usd_per_million?: number
+  cache_write_input_usd_per_million?: number
+  source?: string
+  checked_at?: string
+}
+
 export interface DeepSeekAutomaticPricing {
   safetyOutputUsdPerM: number
   marginalPrice: NonNullable<CandidateInput['marginalPrice']>
-  attemptReferencePricing: TaskResolvedDispatch['reference_pricing']
+  attemptReferencePricing: RoutingReferencePricing
 }
 
 function deepSeekModelOf(dispatch: { provider: string; model: string }): DeepSeekPricingModel | undefined {
@@ -58,7 +67,7 @@ function deepSeekModelOf(dispatch: { provider: string; model: string }): DeepSee
   return undefined
 }
 
-function toTaskReferencePricing(pricing: DeepSeekReferencePricing): TaskResolvedDispatch['reference_pricing'] {
+function toTaskReferencePricing(pricing: DeepSeekReferencePricing): RoutingReferencePricing {
   return {
     input_usd_per_million: pricing.inputCacheMissPerMillion,
     cached_input_usd_per_million: pricing.inputCacheHitPerMillion,
@@ -102,17 +111,6 @@ export function deepSeekAutomaticPricingOf(
     },
     attemptReferencePricing: toTaskReferencePricing(attempt),
   }
-}
-
-export function withDeepSeekAttemptPricing(
-  dispatch: TaskResolvedDispatch,
-  nowMs: number,
-  timeoutMs: number,
-): TaskResolvedDispatch {
-  const pricing = deepSeekAutomaticPricingOf(dispatch, nowMs, timeoutMs)
-  return pricing === undefined
-    ? dispatch
-    : { ...dispatch, reference_pricing: pricing.attemptReferencePricing }
 }
 
 /** Builds explicit null quota constraints for one resolved binding. Uses the
@@ -219,4 +217,3 @@ export function toAutomaticCandidateInput(
       : null,
   }
 }
-

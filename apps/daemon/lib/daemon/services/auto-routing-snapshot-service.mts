@@ -82,6 +82,11 @@ import { randomUUID } from 'node:crypto';
 import { queryQuotaJson, type CodeBuddyQueryContext } from '../execution/quota-query.mts';
 
 import type { BalanceEvidence, QuotaEvidence, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/auto-routing';
+import type {
+  AutoRoutingBoundQuotaSnapshot as PackageAutoRoutingBoundQuotaSnapshot,
+  AutoRoutingQuotaSnapshot,
+  AutoRoutingQuotaSnapshotEntry,
+} from '@wrenyard/auto-routing';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
 /** Evidence freshness window for a direct raw observation (ms). */
 const QUOTA_SNAPSHOT_VALID_FOR_MS = 60_000;
@@ -124,44 +129,16 @@ function codeBuddyContextKey(context: CodeBuddyQueryContext | undefined): string
 // Public snapshot shape
 // ---------------------------------------------------------------------------
 
-/** One binding entry in a snapshot with its frozen required quota constraints. */
-export interface AutoRoutingQuotaSnapshotEntry {
-  readonly providerId: string;
-  readonly modelId: string;
-  /** Every jointly required normalized pool id for this binding. */
-  readonly quotaPoolIds: readonly string[];
-  readonly requiredQuota: readonly RequiredQuotaConstraint[];
-}
-
-/**
- * Immutable automatic-routing quota snapshot.
- *
- * - `nowMs`: when this snapshot was taken.
- * - `validUntilMs`: the earliest direct freshness boundary (60s from each raw
- *   fetched_at) capped at now + 60s (or by the CodeBuddy reset for a retained
- *   hard block), or the short validity of an unknown snapshot. After this time
- *   a caller must obtain a new snapshot.
- * - `hardBlockedProviderIds`: monotonic privacy-safe observed CodeBuddy
- *   exhaustion blocks only.
- *
- * The private CodeBuddy query context (expected scope/environment) never
- * appears on the snapshot or in any serialized field.
- */
-export interface AutoRoutingQuotaSnapshot {
-  readonly snapshotId: string;
-  readonly nowMs: number;
-  readonly validUntilMs: number;
-  readonly entries: readonly AutoRoutingQuotaSnapshotEntry[];
-  readonly hardBlockedProviderIds: readonly string[];
-}
+export type { AutoRoutingQuotaSnapshotEntry, AutoRoutingQuotaSnapshot };
 
 /**
  * Private daemon routing bundle. The quota DTO remains serialization-safe;
  * the optional active CodeBuddy snapshot is retained only in-process so one
  * auth read can drive scope, environment, wire mapping and free eligibility.
+ * `codeBuddySnapshot` is the concrete in-process view, assignable to the
+ * routing package's opaque `unknown`.
  */
-export interface AutoRoutingBoundQuotaSnapshot {
-  readonly snapshot: AutoRoutingQuotaSnapshot;
+export interface AutoRoutingBoundQuotaSnapshot extends PackageAutoRoutingBoundQuotaSnapshot {
   readonly codeBuddySnapshot: CodeBuddyActiveSnapshotView | undefined;
 }
 

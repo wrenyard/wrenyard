@@ -1,5 +1,6 @@
 import { INTELLIGENCE_ORDER, type IntelligenceTier, normalizeIntelligenceTier, normalizeReasoningEffort } from '@wrenyard/providers/catalog';
 import { type TaskDispatchRequirements as AutoRoutingTaskDispatchRequirements, validateScoreWeights } from '@wrenyard/auto-routing';
+import { JsonForemanConfigStore } from './manager.mts'
 
 /**
  * Canonical Task settings model and effective-settings resolver.
@@ -755,4 +756,10 @@ export function resolveEffectiveTaskSettings(
     routingWeights,
     sources,
   }
+}
+
+/** Read only current routing weights/cap; old auxiliary preference files are inert. */
+export function readAuxiliaryRoutingSettings(configPath: string): TaskSettingsLayer | undefined {
+  const config = new JsonForemanConfigStore().read(configPath)
+  return readGlobalTaskSettings(config?.tasks as TasksConfigSettingsInput | undefined)
 }

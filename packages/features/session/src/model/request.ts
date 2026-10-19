@@ -35,7 +35,8 @@ import {
   type Usage,
 } from '../transport/index.ts';
 import type { ModelSpanFinishedEvent, ModelSpanStartedEvent } from '../ledger/events.ts';
-import { ROLE_REQUIREMENTS, type AuxiliaryCallRole } from './roles.ts';
+import { ROLE_REQUIREMENTS } from '@wrenyard/auto-routing';
+import type { AuxiliaryCallRole } from './roles.ts';
 import { resolveModelMetadata, type ModelMetadata } from './metadata.ts';
 
 // The pure metadata helper now lives in the browser-safe model-metadata entry;

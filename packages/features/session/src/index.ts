@@ -84,7 +84,7 @@ export {
   sanitizeMessagesForRole,
 } from './model/request.ts';
 export type { AuxiliaryCallRole, RoleReasoningRequirement } from './model/roles.ts';
-export { AUXILIARY_ROLE_ORDER, ROLE_REQUIREMENTS } from './model/roles.ts';
+export { AUXILIARY_ROLE_ORDER } from './model/roles.ts';
 export type { AuxiliaryRoutePreview } from './model/roles.ts';
 export type { AttachmentInput, SessionFile, TaskArtifact } from './media.ts';
 export { FileStore, MEDIA_LIMITS } from './media.ts';

@@ -1,5 +1,6 @@
 import { createRoutingAvailability, createAuxiliaryAvailability } from './services/model-routing-availability.mts'
-import { createAuxiliarySelector, createRequirementSelector, readAuxiliaryRoutingSettings, type AuxiliaryRoutingOptions } from './services/auxiliary-routing.mts'
+import { createAuxiliarySelector, selectRoutesByRequirementKey, type SelectorInputPort } from '@wrenyard/auto-routing'
+import { readAuxiliaryRoutingSettings } from '../config/task-settings.mts'
 import { timingSafeEqual, randomBytes, createHash } from 'node:crypto'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
@@ -1187,9 +1188,9 @@ async function createForemanDaemonResources(
     // this same IPC path like every other client. The ledger is stored under a
     // workspace-hashed directory, so a new root opens a new ledger and the old
     // workspace's history stays intact on disk.
-    // One shared routing-options object feeds both the per-role auxiliary
-    // selector and the explicit-requirement selector the bot agent kernel uses.
-    const auxiliaryRoutingOptions: AuxiliaryRoutingOptions = {
+    // One shared routing input port feeds both the per-role auxiliary selector
+    // and the bot requirement key the bot agent kernel uses.
+    const auxiliaryRoutingOptions: SelectorInputPort = {
       catalog,
       quotaSnapshots: autoRoutingQuotaSnapshots,
       // The Gateway model directory is the only source of per-model protocols.
@@ -1199,15 +1200,11 @@ async function createForemanDaemonResources(
       localSpeed: readLocalSpeedSamplesCached,
       readSettings: () => readAuxiliaryRoutingSettings(authoritativeConfigPath),
     }
-    // Bot agents run on a hard-coded high/premium intelligence rule at a high
-    // reasoning level; each ranked `provider/model` route is split into the
+    // Bot agents select through the bot requirement key (high/premium at a high
+    // reasoning level); each ranked `provider/model` route is split into the
     // explicit model session.send needs.
     const selectModels = async (): Promise<readonly AgentModelRoute[]> => {
-      const routes = await createRequirementSelector(auxiliaryRoutingOptions)({
-        intelligenceMin: 'high',
-        intelligenceExpected: 'premium',
-        expectedReasoningEffort: ['high'],
-      })
+      const routes = await selectRoutesByRequirementKey(auxiliaryRoutingOptions, 'bot')
       return routes.map(route => {
         const separator = route.model.indexOf('/')
         if (separator <= 0) return { provider: route.model, model: route.model, reasoningEffort: route.reasoningEffort }

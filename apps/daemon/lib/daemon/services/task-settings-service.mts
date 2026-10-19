@@ -1,11 +1,10 @@
-import { deepSeekAutomaticPricingOf, withDeepSeekAttemptPricing, toAutomaticCandidateInput, effectiveRoutingCap, type AutomaticSelectionContext, type DeepSeekAutomaticPricing } from './model-routing-inputs.mts'
-import { assessRequiredQuota } from '@wrenyard/auto-routing';
+import { assessRequiredQuota, deepSeekAutomaticPricingOf, rankAutomaticTaskCandidates, type DeepSeekAutomaticPricing } from '@wrenyard/auto-routing';
+import { withDeepSeekAttemptPricing } from '../../task-dispatch.mts'
 import { createHash } from 'node:crypto'
-import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, type IntelligenceTier, type ReasoningEffort } from '@wrenyard/providers/catalog';
+import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog';
 import { resolveHistoricalProviderModelId } from '@wrenyard/providers';
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
-import { isAbundantSupply, rankAutoRoutingCandidates, type RankedCandidate } from '@wrenyard/auto-routing';
-import type { CandidateInput } from '@wrenyard/auto-routing';
+import { isAbundantSupply, type RankedCandidate } from '@wrenyard/auto-routing';
 import {
   NoEligiblePlanError,
   type TaskDispatchChoice,
@@ -1953,7 +1952,7 @@ export class TaskSettingsService {
    *  stable other client). The effective cap is the min of the defined
    *  task/global caps; when neither is defined the maximum admitted finite
    *  reference output price is used only as non-rejecting score normalization.
-   *  rankAutoRoutingCandidates runs once and the matching exact choice is
+   *  rankAutomaticTaskCandidates runs once and the matching exact choice is
    *  selected with no fallback. */
   private async resolveAutomaticSelection(
     params: AutomaticSelectionParams,
@@ -2116,97 +2115,53 @@ export class TaskSettingsService {
       return { ok: false, error: automaticSelectionFailure(params, eliminations) }
     }
 
-    const caps: number[] = []
-    if (typeof params.requirements.maxOutputUsdPerMillion === 'number') {
-      caps.push(params.requirements.maxOutputUsdPerMillion)
-    }
     const deepSeekPricing = new Map<string, DeepSeekAutomaticPricing>()
     for (const entry of collapsed) {
       const pricing = deepSeekAutomaticPricingOf(entry.choice, nowMs, params.timeoutMs)
       if (pricing !== undefined) deepSeekPricing.set(entry.choice.exactAgentRuntime, pricing)
     }
-    // Current choices originate from validated Catalog prices; optional metadata
-    // fields only describe older persisted dispatch records. A missing reference
-    // (explicit free route with no declared price) is passed through as undefined
-    // so effectiveRoutingCap keeps its finite-only default semantics.
-    const finiteReferences = collapsed
-      .map((entry) => deepSeekPricing.get(entry.choice.exactAgentRuntime)?.safetyOutputUsdPerM
-        ?? entry.choice.reference_pricing.output_usd_per_million)
-    const capUsdPerM = effectiveRoutingCap(finiteReferences, caps)
 
-    if (trace !== undefined) trace.capUsdPerMillion = capUsdPerM
+    const ranking = rankAutomaticTaskCandidates(
+      collapsed,
+      {
+        snapshotId: snapshot ? snapshot.snapshotId : 'settings-no-quota-snapshot',
+        snapshot,
+        nowMs,
+        timeoutMs: params.timeoutMs,
+        requirements: params.requirements,
+      },
+      params.routingWeights,
+      deepSeekPricing,
+    )
 
-    const context: AutomaticSelectionContext = {
-      snapshotId: snapshot ? snapshot.snapshotId : 'settings-no-quota-snapshot',
-      nowMs,
-      timeoutMs: params.timeoutMs,
-      snapshot,
-      capUsdPerM,
-      minimumTps: finiteOrDefault(params.requirements.minimumTps, 0),
-      expectedTps: finiteOrDefault(params.requirements.expectedTps, 0),
-      intelligenceMinRank: intelligenceRankOf(params.requirements.intelligenceMin, 0),
-      intelligenceExpectedRank: (() => {
-        const expectedTier = params.requirements.intelligenceExpected
-        if (expectedTier !== undefined) {
-          return intelligenceRankOf(expectedTier, INTELLIGENCE_ORDER.premium)
-        }
-        // Missing expectation defaults to `mid`, clamped upward to the
-        // effective hard minimum so it is always an admissible target
-        // (consistent with the settings resolver, which also defaults to
-        // `mid`). There is no configurable ceiling.
-        let resolved: IntelligenceTier = 'mid'
-        const minTier = params.requirements.intelligenceMin
-        if (minTier !== undefined && INTELLIGENCE_ORDER.mid < INTELLIGENCE_ORDER[minTier]) {
-          resolved = minTier
-        }
-        return INTELLIGENCE_ORDER[resolved]
-      })(),
-    }
+    if (trace !== undefined) trace.capUsdPerMillion = ranking.capUsdPerM
 
-    const inputs: CandidateInput[] = []
     for (const entry of collapsed) {
+      if (!ranking.unscorableIds.includes(entry.choice.exactAgentRuntime)) continue
       const pricing = deepSeekPricing.get(entry.choice.exactAgentRuntime)
-      const candidate = toAutomaticCandidateInput(entry, context, pricing)
-      if (candidate === null) {
-        const referenceUsdPerM = pricing?.safetyOutputUsdPerM
-          ?? entry.choice.reference_pricing.output_usd_per_million
-        eliminations.push(eliminationOf('intelligence_requirement', referenceUsdPerM))
-        if (trace !== undefined) {
-          trace.unscorable.push({ id: entry.choice.exactAgentRuntime, code: 'intelligence_requirement' })
-        }
-        continue
+      const referenceUsdPerM = pricing?.safetyOutputUsdPerM
+        ?? entry.choice.reference_pricing.output_usd_per_million
+      eliminations.push(eliminationOf('intelligence_requirement', referenceUsdPerM))
+      if (trace !== undefined) {
+        trace.unscorable.push({ id: entry.choice.exactAgentRuntime, code: 'intelligence_requirement' })
       }
-      inputs.push(candidate)
     }
-    if (inputs.length === 0) {
+    if (ranking.inputs.length === 0) {
       return { ok: false, error: automaticSelectionFailure(params, eliminations) }
     }
-    if (trace !== undefined) trace.scored = inputs.length
-
-    const configuredWeights = params.routingWeights
-    const ranked = rankAutoRoutingCandidates(
-      inputs,
-      configuredWeights === undefined
-        ? undefined
-        : {
-            P: configuredWeights.price,
-            S: configuredWeights.speed,
-            Q: configuredWeights.quota,
-            I: configuredWeights.intelligence,
-          },
-    )
     if (trace !== undefined) {
-      trace.ranked = ranked.ranked
-      trace.catalogExcluded = ranked.excluded.map((entry) => ({
+      trace.scored = ranking.inputs.length
+      trace.ranked = ranking.ranked.ranked
+      trace.catalogExcluded = ranking.ranked.excluded.map((entry) => ({
         id: entry.canonicalId, reason: entry.reason, detail: entry.detail,
       }))
     }
-    const best = ranked.ranked[0]
+    const best = ranking.ranked.ranked[0]
     if (!best) {
       // Every routed candidate was excluded by a real Catalog gate; each
       // exclusion reason maps to its closed code. Unknown reasons are not a
       // hard elimination, so they surface as no_available_provider.
-      for (const exclusion of ranked.excluded) {
+      for (const exclusion of ranking.ranked.excluded) {
         const code = codeFromCatalogExclusion(exclusion.reason)
         if (code === undefined) {
           eliminations.push({ code: 'no_available_provider' })
@@ -2231,7 +2186,7 @@ export class TaskSettingsService {
       quota_headroom_trusted: best.headroomTrusted,
       reference_output_usd_per_million: best.referenceUsdPerM,
       routing_output_usd_per_million: best.routingPriceUsdPerM,
-      effective_cap_usd_per_million: context.capUsdPerM,
+      effective_cap_usd_per_million: ranking.capUsdPerM,
       score: best.score,
       scoring: {
         version: 'normalized-v1',
@@ -2249,7 +2204,7 @@ export class TaskSettingsService {
       ...(selectedPricing !== undefined ? { reference_pricing: selectedPricing.attemptReferencePricing } : {}),
       auto_routing: decision,
     }
-    const reason = `automatic selection rank ${best.rank}/${ranked.ranked.length} (${best.supplyClass}, quota tier ${best.tier})`
+    const reason = `automatic selection rank ${best.rank}/${ranking.ranked.ranked.length} (${best.supplyClass}, quota tier ${best.tier})`
     return {
       ok: true,
       exactAgentRuntime: chosen.choice.exactAgentRuntime,
@@ -2472,16 +2427,6 @@ type AutomaticSelectionResult =
     }
   | { ok: false; error: NoEligiblePlanError }
 
-
-function finiteOrDefault(value: number | undefined, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
-function intelligenceRankOf(value: string | undefined, fallback: number): number {
-  if (value === undefined) return fallback
-  const rank = INTELLIGENCE_ORDER[value as keyof typeof INTELLIGENCE_ORDER]
-  return rank === undefined ? fallback : rank
-}
 
 /** Collapse only variants sharing the same canonical provider+model AND the
  *  same reference pricing identity. Within a group prefer native, then grok,
