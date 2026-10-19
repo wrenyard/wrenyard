@@ -23,6 +23,7 @@ import type {
   ContextLayerId,
   LedgerEvent,
 } from '@wrenyard/session';
+import type { QuotaState } from '@wrenyard/auto-routing';
 import type { WrenyardGatewaySettings, WrenyardGatewaySettingsSaveInput, WrenyardGatewaySettingsSaveResult } from '@wrenyard/control';
 
 // The gateway access DTOs are owned by the control client; the shell contract
@@ -801,8 +802,9 @@ export interface StatsSnapshot {
 /**
  * Four-level per-pool quota state, the same levels automatic routing uses:
  * `abundant` 充裕, `sufficient` 足够, `insufficient` 不足, `exhausted` 用尽.
+ * Aliased to the canonical routing state so the levels are declared once.
  */
-export type QuotaPoolState = 'abundant' | 'sufficient' | 'insufficient' | 'exhausted';
+export type QuotaPoolState = QuotaState;
 
 export interface QuotaWindowSnapshot {
   name: string;
