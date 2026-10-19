@@ -348,9 +348,14 @@ export class ReplyWriter {
     const memory = this.host.ports.memory;
     if (memory === undefined) return;
     try {
+      // The reply run is a single completion with tool choice auto: the model
+      // may answer with no reply call (the turn fallback supplied the text) or
+      // split the reply across several calls. Only a reply call can carry
+      // memory candidates, so read the first one and stay quiet without any.
       const replies = calls.filter((call) => call.name === REPLY_TOOL.name);
-      if (replies.length !== 1) throw new Error('the final reply must call the reply tool exactly once');
-      const parsed: unknown = JSON.parse(replies[0]!.arguments);
+      const reply = replies[0];
+      if (reply === undefined) return;
+      const parsed: unknown = JSON.parse(reply.arguments);
       const candidates = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
         ? (parsed as { memories?: unknown }).memories
         : undefined;
@@ -615,7 +620,7 @@ Durable memory, only when the reply tool offers memories:
 - The program saves these only after it accepts this reply and shows a separate saved-memory record. Never claim in your text that something was saved.
 
 Output contract:
-- A reply must be a native function call to reply, with your message in the text argument. Ordinary assistant content does not send a message and is discarded.
+- A reply must be one native function call to reply, with your whole message in the text argument. Ordinary assistant content does not send a message and is discarded.
 - Do not describe a tool call, print its JSON as text, or write the answer outside the function call.
 - If you choose not to reply, return no content and no tool calls.
 </wy-system>`;
