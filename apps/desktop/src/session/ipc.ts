@@ -7,6 +7,12 @@ import type { ReasoningEffort } from '@wrenyard/models';
 import type { ProviderListResult, ProviderQuotaResult } from '@wrenyard/protocol/provider';
 import type { LedgerEvent, LiveCall, SessionSummary } from '@wrenyard/session';
 import type { TaskRunUsage } from '../shell-contract.js';
+import {
+  normalizeSafeEvent,
+  normalizeTaskRunEventsResult,
+  type SafeTaskRunEventsResult,
+  type TranscriptRunInfo,
+} from '../pet/shared/taskgraph.js';
 import { toModelEntries } from './model-entries.js';
 import type {
   SessionBridgeEventPayload,
@@ -30,6 +36,7 @@ export const SESSION_CHANNELS = {
   send: 'session:send', interrupt: 'session:interrupt', models: 'session:models',
   cancelTask: 'session:cancel-task',
   context: 'session:context', tasks: 'session:tasks',
+  taskRunEvents: 'session:task-run-events',
   routesPreview: 'session:routes-preview',
   promptSuggest: 'session:prompt-suggest', promptCancel: 'session:prompt-cancel',
   mediaRead: 'session:media-read', mediaReveal: 'session:media-reveal',
@@ -535,6 +542,42 @@ export function registerSession(options: RegisterSessionOptions): SessionRegistr
         return { taskRunId, status: 'unavailable' };
       }
     }));
+  });
+  handle(SESSION_CHANNELS.taskRunEvents, async (_event, value) => {
+    if (typeof value !== 'object' || value === null) throw new Error('Invalid taskRunId');
+    const record = value as Record<string, unknown>;
+    const taskRunId = readString(record.taskRunId);
+    const afterSeq = readNumber(record.afterSeq);
+    if (taskRunId === undefined || (afterSeq !== undefined && (!Number.isInteger(afterSeq) || afterSeq < 0))) {
+      throw new Error('Invalid taskRunId');
+    }
+    // The events page and the authoritative run status travel together so the
+    // preview can stop polling on a terminal status without a second round trip.
+    const [eventsResult, statusResult] = await Promise.all([
+      request('task.run.events', {
+        task_run_id: taskRunId,
+        limit: 500,
+        ...(afterSeq === undefined ? {} : { after_seq: afterSeq }),
+      }).then(normalizeTaskRunEventsResult),
+      request('task.run.status', { task_run_id: taskRunId }).catch(() => undefined),
+    ]);
+    if (eventsResult.task_run_id !== taskRunId) {
+      throw new Error('task.run.events identity mismatch');
+    }
+    let run: TranscriptRunInfo | undefined;
+    if (typeof statusResult === 'object' && statusResult !== null) {
+      const status = readString((statusResult as Record<string, unknown>).status);
+      if (status !== undefined) {
+        const name = readString((statusResult as Record<string, unknown>).task_name);
+        run = { status: status.slice(0, 40), ...(name ? { task_name: name.slice(0, 80) } : {}) };
+      }
+    }
+    const result: SafeTaskRunEventsResult = {
+      ...eventsResult,
+      events: eventsResult.events.map(normalizeSafeEvent),
+      ...(run === undefined ? {} : { run }),
+    };
+    return result;
   });
   // `send` above already forwards its request untouched, so `attachments`
   // ride along without a dedicated channel.

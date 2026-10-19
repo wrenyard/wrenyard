@@ -3,12 +3,12 @@
  * user bubble, replies as plain prose, each stretch of agent work folded into
  * one muted summary line, visible errors, the running line and a hover footer.
  */
-import { ArrowDown, ArrowUp, DatabaseZap, TriangleAlert } from 'lucide-react';
+import { ArrowDown, ArrowUp, DatabaseZap, ListTodo, TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { CopyButton } from '@/renderer/components/copy-button';
 import { Elapsed } from '@/renderer/components/elapsed';
-import { shell } from '@/renderer/lib/desktop';
+import { openActivityPanel } from '@/renderer/lib/activity-panel';
 import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
@@ -185,21 +185,21 @@ function runningTasks(turn: TurnModel): ActionModel[] {
   return turn.actions.filter((action) => action.kind === 'dispatch' && action.status === 'running' && action.taskRunId !== undefined);
 }
 
-/** `· N 个任务运行中`; opens the first running task's transcript. */
-function RunningTasks({ tasks }: { tasks: readonly ActionModel[] }) {
+/**
+ * Muted chip `≣ N 个任务` at the right end of the live line or the last
+ * turn's footer; opens the activity side panel scoped to this session's tasks.
+ */
+function RunningTasks({ tasks, sessionId }: { tasks: readonly ActionModel[]; sessionId?: string }) {
   if (tasks.length === 0) return null;
-  const first = tasks[0]!;
   return (
-    <>
-      <span aria-hidden>·</span>
-      <button
-        type="button"
-        className="rounded hover:text-foreground hover:underline"
-        onClick={() => { if (first.taskRunId !== undefined) void shell.openTaskTranscript(first.taskRunId, first.title); }}
-      >
-        {tasks.length} 个任务运行中
-      </button>
-    </>
+    <button
+      type="button"
+      className="ml-auto inline-flex shrink-0 items-center gap-1 rounded text-muted-foreground hover:text-foreground"
+      onClick={() => openActivityPanel(sessionId)}
+    >
+      <ListTodo className="size-3.5" aria-hidden />
+      {tasks.length} 个任务
+    </button>
   );
 }
 
@@ -208,7 +208,7 @@ function RunningTasks({ tasks }: { tasks: readonly ActionModel[] }) {
  * while the model reasons, or the turn's elapsed time while steps run, plus
  * the count of task runs still working.
  */
-function LiveLine({ turn, waiting }: { turn: TurnModel; waiting?: TurnWaitingState }) {
+function LiveLine({ turn, sessionId, waiting }: { turn: TurnModel; sessionId?: string; waiting?: TurnWaitingState }) {
   const thinking = turn.calls.find((call) => call.role === 'reason' && call.status === 'running');
   let label;
   if (waiting !== undefined) label = <MorphText className="truncate" text={waitingStatusText(waiting)} />;
@@ -227,7 +227,7 @@ function LiveLine({ turn, waiting }: { turn: TurnModel; waiting?: TurnWaitingSta
     <div className="wy-rise-in flex items-center gap-2 text-sm text-muted-foreground">
       <WorkingDots />
       {label}
-      <RunningTasks tasks={runningTasks(turn)} />
+      <RunningTasks tasks={runningTasks(turn)} sessionId={sessionId} />
     </div>
   );
 }
@@ -296,7 +296,7 @@ export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, 
         return <ErrorRow key={`${block.error.at}:${block.error.stage}`} error={block.error} />;
       })}
 
-      {turn.status === 'running' && <LiveLine turn={turn} waiting={waiting} />}
+      {turn.status === 'running' && <LiveLine turn={turn} sessionId={sessionId} waiting={waiting} />}
 
       {turn.status !== 'running' && (
         <div
@@ -314,7 +314,7 @@ export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, 
           <Elapsed start={turn.startedAt} end={turn.endedAt} />
           <TokenFigures turn={turn} />
           {terminal !== undefined && <span>{DISPATCH_TERMINAL_LABEL[terminal]}</span>}
-          <RunningTasks tasks={runningTasks(turn)} />
+          <RunningTasks tasks={runningTasks(turn)} sessionId={sessionId} />
           {reply !== undefined && (
             <CopyButton text={reply} label="复制回复" size="icon-xs" className="-my-1 text-muted-foreground" />
           )}

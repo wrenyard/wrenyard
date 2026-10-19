@@ -27,6 +27,7 @@ import type {
   SessionSummary,
 } from '@wrenyard/session';
 import type { DesktopTaskBrief } from '../shell-contract.js';
+import type { SafeTaskRunEventsResult } from '../pet/shared/taskgraph.js';
 import type { SessionSeenState } from './seen-store.js';
 
 export type { ContextInspection, LiveCall };
@@ -63,6 +64,8 @@ export const SESSION_CHANNELS = {
   promptCancel: 'session:prompt-cancel',
   /** Renderer → main: `string[]` of task run ids, resolved to briefs. */
   tasks: 'session:tasks',
+  /** Renderer → main: `{ taskRunId, afterSeq? }`, one safe task-run event page. */
+  taskRunEvents: 'session:task-run-events',
   /** Renderer → main: `{ sessionId, path }`, forwarded to `session.media.read`. */
   mediaRead: 'session:media-read',
   /** Renderer → main: `{ sessionId, path }`, ledger-validated then revealed in the file manager. */
@@ -179,6 +182,9 @@ export interface SessionBridgeEventPayload {
  */
 export type SessionBridgeTaskBrief = DesktopTaskBrief;
 
+/** One safe task-run transcript page; the shared pet/main allowlist shape. */
+export type SessionBridgeTaskRunEvents = SafeTaskRunEventsResult;
+
 export interface SessionBridgeLivePayload {
   sessionId: string;
   live: LiveCall[];
@@ -259,6 +265,12 @@ export interface SessionBridge {
   promptCancel(request: SessionPromptCancelParams): Promise<void>;
   /** Resolve task-run briefs for the given run ids (per-id failures are `unavailable`). */
   tasks(taskRunIds: string[]): Promise<SessionBridgeTaskBrief[]>;
+  /**
+   * Read one page of a task run's safe transcript events (the
+   * SafeTranscriptEventData allowlist) plus the authoritative run facts, for
+   * the in-shell activity-panel preview. `afterSeq` continues the stream.
+   */
+  taskRunEvents(taskRunId: string, afterSeq?: number): Promise<SessionBridgeTaskRunEvents>;
   /** Subscribe to pushed ledger events; the returned function unsubscribes. */
   onEvent(listener: (payload: SessionBridgeEventPayload) => void): () => void;
   /** Subscribe to live streaming snapshots; the returned function unsubscribes. */
@@ -387,6 +399,12 @@ const bridge: SessionBridge = {
   },
   tasks(taskRunIds: string[]): Promise<SessionBridgeTaskBrief[]> {
     return ipcRenderer.invoke(SESSION_CHANNELS.tasks, taskRunIds) as Promise<SessionBridgeTaskBrief[]>;
+  },
+  taskRunEvents(taskRunId: string, afterSeq?: number): Promise<SessionBridgeTaskRunEvents> {
+    return ipcRenderer.invoke(
+      SESSION_CHANNELS.taskRunEvents,
+      afterSeq === undefined ? { taskRunId } : { taskRunId, afterSeq },
+    ) as Promise<SessionBridgeTaskRunEvents>;
   },
   onEvent(listener: (payload: SessionBridgeEventPayload) => void): () => void {
     const handler = (_event: IpcRendererEvent, payload: unknown): void => {
