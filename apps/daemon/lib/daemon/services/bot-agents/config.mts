@@ -12,8 +12,8 @@
  *
  * What a bot does on this device are its routines, one file each in
  * `<config root>/bots/<id>/routines/` (see routine-files.mts). They are never
- * synced. For a workspace bot that device directory holds only `routines/` and
- * is not a second bot.
+ * synced. A device directory without `bot.json` is not a bot; for a workspace
+ * bot it holds only `routines/`.
  *
  * Loading never throws: an unreadable or invalid part disables only that bot
  * and keeps the error visible.
@@ -474,9 +474,9 @@ export async function loadBotAgents(
     ))
   }
   for (const item of device) {
-    // A device directory without bot.json next to a workspace bot of the same
-    // id only carries that bot's routines on this device; it is not a second bot.
-    if (workspaceIds.has(item.id) && !(await exists(join(item.directory, 'bot.json')))) continue
+    // A device directory without bot.json is not a bot: it carries a workspace
+    // bot's routines on this device, or belongs to something else in the root.
+    if (!(await exists(join(item.directory, 'bot.json')))) continue
     const entry = await readDefinition(roots.device, item.id, 'device', cached.get(`device\n${item.id}`), roots.device)
     if (workspaceIds.has(item.id)) {
       warnings.push(`bot "${item.id}" exists in both roots; the workspace bot is used and the device bot is disabled`)
