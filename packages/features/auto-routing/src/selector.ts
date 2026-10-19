@@ -155,6 +155,7 @@ function createSelector(
   requirements: RoleReasoningRequirement,
   label: string,
   suggestion: boolean,
+  forcedToolChoice = false,
 ) {
   return async (): Promise<SelectorRoute[]> => {
     const bound = await port.quotaSnapshots.routingSnapshot();
@@ -178,6 +179,11 @@ function createSelector(
     const excludedModels = settings?.exclude?.models ?? [];
     const models = port.catalog.providers().flatMap(provider => {
       if (excludedProviders.has(provider.id)) { reject('provider excluded'); return []; }
+      // A request that forces a tool choice can only use a provider that can
+      // honour it; an undeclared capability is treated as supported.
+      if (forcedToolChoice && provider.supportsForcedToolChoice === false) {
+        reject('provider cannot honour forced tool_choice'); return [];
+      }
       const excluded = excludedModelIdsFor(provider, excludedModels);
       return provider.models
         .filter(model => !model.taskOnly && (model.supportedClients?.length ?? 0) === 0)
@@ -345,10 +351,31 @@ function createSelector(
   };
 }
 
+/**
+ * Request facts the auxiliary selector needs beyond the role: the call's
+ * `tool_choice`, or a caller-derived forced flag. `'required'` and a named tool
+ * object force a tool call; `'auto'`, `'none'` and an absent value do not.
+ */
+export interface AuxiliarySelectorInput {
+  toolChoice?: 'auto' | 'none' | 'required' | { readonly name: string };
+  /** Pre-derived forced flag; when supplied it takes precedence over `toolChoice`. */
+  forcedToolChoice?: boolean;
+}
+
+function toolChoiceIsForced(toolChoice: AuxiliarySelectorInput['toolChoice']): boolean {
+  return toolChoice === 'required'
+    || (typeof toolChoice === 'object' && toolChoice !== null && typeof toolChoice.name === 'string');
+}
+
 /** Fresh ranked routes on each invocation; no session state or result cache. */
 export function createAuxiliarySelector(port: SelectorInputPort) {
-  return async (role: AuxiliaryCallRole): Promise<SelectorRoute[]> =>
-    createSelector(port, ROLE_REQUIREMENTS[role], role, role === 'suggestion')();
+  return async (
+    role: AuxiliaryCallRole,
+    input: AuxiliarySelectorInput = {},
+  ): Promise<SelectorRoute[]> => {
+    const forced = input.forcedToolChoice ?? toolChoiceIsForced(input.toolChoice);
+    return createSelector(port, ROLE_REQUIREMENTS[role], role, role === 'suggestion', forced)();
+  };
 }
 
 /**

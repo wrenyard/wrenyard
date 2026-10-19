@@ -468,4 +468,11 @@ export interface ProviderDefinition {
    * existing empty-ladder ("unknown / no selectable level") semantics.
    */
   usesProviderDefaultReasoning?: boolean;
+  /**
+   * Definition-level capability gate for forced tool choice. `false` means the
+   * provider cannot honour a forced `tool_choice` (`'required'` or a named tool
+   * object), so it must never be selected for a request that forces one.
+   * `undefined` or `true` means the capability is supported.
+   */
+  supportsForcedToolChoice?: boolean;
 }

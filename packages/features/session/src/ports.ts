@@ -75,7 +75,10 @@ export interface SessionHost {
   reportRouteFault?(publicModel: string, attemptId: string, kind: 'timeout' | 'transport'): void;
   /** Release one attempt's bookkeeping once it has settled, success or failure. */
   completeRouteAttempt?(publicModel: string, attemptId: string): void;
-  selectAuxiliary(role: import('./model/roles.ts').AuxiliaryCallRole): Promise<readonly import('./model/request.ts').AuxiliaryRoute[]>;
+  selectAuxiliary(
+    role: import('./model/roles.ts').AuxiliaryCallRole,
+    input?: { toolChoice?: ToolChoice },
+  ): Promise<readonly import('./model/request.ts').AuxiliaryRoute[]>;
   /** Read-only, per-role rank-1 auxiliary route preview; never calls a model. */
   previewAuxiliaryRoutes(): Promise<readonly import('./model/roles.ts').AuxiliaryRoutePreview[]>;
   listProjects(): Promise<ProjectInfo[]>;

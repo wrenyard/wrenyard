@@ -236,8 +236,15 @@ export interface CallRunnerOptions {
   completeRouteAttempt?: (publicModel: string, attemptId: string) => void;
   /** Session id, sent to the Gateway for request attribution. */
   sessionId?: string;
-  /** Fresh non-empty ranked routes for each auxiliary invocation. */
-  selectAuxiliary: (role: AuxiliaryCallRole) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
+  /**
+   * Fresh non-empty ranked routes for each auxiliary invocation. The request's
+   * `tool_choice` is forwarded so a forced choice never selects a provider that
+   * cannot honour it.
+   */
+  selectAuxiliary: (
+    role: AuxiliaryCallRole,
+    input?: { toolChoice?: ToolChoice },
+  ) => readonly AuxiliaryRoute[] | Promise<readonly AuxiliaryRoute[]>;
   /** Structural sink: the span events of every attempted invocation, in order. */
   append: (event: SpanEventDraft) => void | Promise<void>;
   /** Forwarded as the request cache key on every call of this runner. */
@@ -1131,7 +1138,10 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         } else {
           auxiliaryRole = input.role;
           requestedReasoningEffort = ROLE_REQUIREMENTS[input.role].expectedReasoningEffort[0];
-          routes = await settleWithAbort(options.selectAuxiliary(input.role), controller.signal);
+          routes = await settleWithAbort(
+            options.selectAuxiliary(input.role, { toolChoice: input.toolChoice }),
+            controller.signal,
+          );
           if (!routes.length) throw new Error(`Auxiliary role ${input.role}: no candidate qualified (empty route selection)`);
         }
         if (controller.signal.aborted) {

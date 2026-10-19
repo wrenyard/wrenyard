@@ -221,7 +221,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     deviceName: hostname(),
     gateway: options.gateway,
     resolveInferenceProvider: options.resolveInferenceProvider,
-    selectAuxiliary: options.selectAuxiliary,
+    selectAuxiliary: (role, input) => options.selectAuxiliary(role, input),
     routeStatus: options.routeStatus,
     beginRouteAttempt: options.beginRouteAttempt,
     reportRouteFault: options.reportRouteFault,

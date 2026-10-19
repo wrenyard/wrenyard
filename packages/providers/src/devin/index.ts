@@ -90,6 +90,9 @@ export function createDevin(options: DevinOptions = {}): DevinProvider {
       if (!variant) throw new Error(`Devin model ${model} does not support reasoning effort ${effort}`);
       return { model: variant.id };
     },
+    // Devin only accepts the upstream-native tool_choice modes; a forced choice
+    // is rejected by the encoder, so selection must never route one here.
+    supportsForcedToolChoice: false,
     // Devin reports paid quota exhaustion as a Connect `failed_precondition`
     // whose message names the exhausted quota. That failure owns the paid pools
     // only, never a route or the provider, so the free pool stays usable. Every

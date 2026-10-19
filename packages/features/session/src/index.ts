@@ -243,7 +243,7 @@ export function createSession(host: SessionHost): Session {
       const recorder = new SpanRecorder((draft) => ledger.append(sessionId, draft).then(() => undefined));
       const executor = createCallRunner({
         transport: createModelTransport({ gateway: () => host.gateway() }),
-        selectAuxiliary: role => host.selectAuxiliary(role),
+        selectAuxiliary: (role, input) => host.selectAuxiliary(role, input),
         ...(host.routeStatus === undefined ? {} : { routeStatus: (model: string) => host.routeStatus!(model) }),
         // Attempt-level route feedback is forwarded only when the host supplies
         // it; a host without it keeps the prior behaviour unchanged.
