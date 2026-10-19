@@ -23,7 +23,7 @@ import { EventCursorStore } from './main/daemon-client/event-cursor-store.js';
 import { reorderProviders } from './provider-order.js';
 import { DesktopQuotaController } from './quota-controller.js';
 import { DesktopQuotaSource } from './quota-service.js';
-import { ActivityStatusProjector, TaskRunLifecycleTracker } from './main/activity-status.js';
+import { ActivityStatusProjector } from './main/activity-status.js';
 import { ProviderService } from './provider-service.js';
 import { buildSettingsSnapshot, type HealthSnapshot } from './settings-snapshot.js';
 import { readStatsSnapshot } from './stats-snapshot.js';
@@ -34,7 +34,6 @@ import { Notifier } from './main/notifications/notifier.js';
 import { createInAppChannel } from './main/notifications/channels/in-app.js';
 import { createPetChannel } from './main/notifications/channels/pet.js';
 import { createSystemChannel } from './main/notifications/channels/system.js';
-import { createTaskNotifier } from './main/notifications/task.js';
 import { createTaskGraphNotifier } from './main/notifications/taskgraph.js';
 import { createSessionNotifier } from './main/notifications/session.js';
 import { createQuotaNotifier } from './main/notifications/quota.js';
@@ -1059,7 +1058,6 @@ async function bootstrap(): Promise<void> {
       getShellWindow: () => shellWindow,
     }),
   });
-  const taskNotifier = createTaskNotifier({ notifier, requestForeman });
   const taskgraphNotifier = createTaskGraphNotifier({ notifier });
   const sessionNotifier = createSessionNotifier({ notifier });
   const quotaNotifier = createQuotaNotifier({ notifier });
@@ -1452,18 +1450,14 @@ async function bootstrap(): Promise<void> {
   if (canConnectDaemon()) desktopSubscriptions.start();
   // The single shared activity round feeds the general TaskGraph windows as
   // well, so Wren entities and Graph Slips stay live even while Pet is hidden.
-  // It also feeds the status-bar projection and the main-owned task lifecycle
-  // notifications, which must work whether or not Pet is enabled.
+  // It also feeds the status-bar projection, which must work whether or not
+  // Pet is enabled.
   const activityProjector = new ActivityStatusProjector();
-  const taskLifecycle = new TaskRunLifecycleTracker();
   desktopSubscriptions.subscribe({
     onActivity: (presence) => {
       windowOwner.applyActivity(presence);
       const changed = activityProjector.update(presence);
       if (changed) shellWindow?.notifyActivityChanged(changed);
-      for (const run of taskLifecycle.observe(activityProjector.get())) {
-        void taskNotifier.notifyVanishedTaskRun(run);
-      }
       taskgraphNotifier.observe(presence);
     },
   });
