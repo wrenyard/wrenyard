@@ -28,14 +28,15 @@ import { SettingsSearch } from './components/SettingsSearch.js';
 import { SettingsToc, type TocCategory } from './components/SettingsToc.js';
 import { ShortcutsTable } from './components/ShortcutsTable.js';
 import { StorageUsage } from './components/StorageUsage.js';
-import { ModelList } from './supply/components/ModelList.js';
 import { ProviderDialog } from './supply/components/ProviderDialog.js';
-import { ProviderSupply } from './supply/components/ProviderSupply.js';
-import { ProviderUsage } from './supply/components/ProviderUsage.js';
-import { RoutingTest } from './supply/components/RoutingTest.js';
 import { QUOTA_UNAVAILABLE_FALLBACK } from './supply/model/describe.js';
-import { buildModelListRows } from './supply/model/models.js';
 import { quotaQuery, useQuotaQuery, useQuotaRefresh, useSaveProviderOrder } from './supply/queries.js';
+import { SupplySettings } from './model/supply/SupplySettings.js';
+import {
+  resolveSupplyTab,
+  supplyTabForSettingGroup,
+  type SupplyTabId,
+} from './model/supply/location.js';
 import {
   OPEN_SETTINGS_FILE_LABEL,
   PAGE_TITLE,
@@ -83,8 +84,7 @@ function HighlightedText({ text, terms }: { text: string; terms: readonly string
 
 /** Supply pages whose header carries the quota refresh action (usage spec 6). */
 const QUOTA_REFRESH_CATEGORIES: ReadonlySet<SettingsCategoryId> = new Set<SettingsCategoryId>([
-  'providers',
-  'catalog',
+  'supply',
 ]);
 
 export interface SettingsPageProps {
@@ -129,20 +129,27 @@ export function SettingsPage({
   // The shared provider dialog entry: opened from the merged 供应商 page.
   const [dialogEntry, setDialogEntry] = useState<ProviderCatalogSnapshot | null>(null);
   const [reorderError, setReorderError] = useState('');
+  const [supplyTab, setSupplyTab] = useState<SupplyTabId>('providers');
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useSecondarySidebar({ open: sidebarOpen, setOpen: setSidebarOpen });
 
-  const navState = useMemo<Record<string, string>>(() => ({ category: activeCategory }), [activeCategory]);
+  const navState = useMemo<Record<string, string>>(() => {
+    const state: Record<string, string> = { category: activeCategory };
+    if (activeCategory === 'supply') state.tab = supplyTab;
+    return state;
+  }, [activeCategory, supplyTab]);
   const restoreLocation = useCallback((state: Record<string, string>) => {
     const category = state.category;
     if (category !== undefined) {
-      // A restored legacy `usage` position resolves to the merged 供应商 page.
       const normalized = normalizeSettingsCategoryId(category);
       if (normalized !== null) {
         setSearchInput('');
         setActiveCategory(normalized);
+        if (normalized === 'supply') {
+          setSupplyTab(resolveSupplyTab(category, state.tab));
+        }
         return true;
       }
     }
@@ -169,7 +176,6 @@ export function SettingsPage({
   const quotaRefresh = useQuotaRefresh();
   const providerOrder = useSaveProviderOrder();
   const snapshot = quota.data ?? null;
-  const modelRows = useMemo(() => buildModelListRows(snapshot, displayCurrency), [snapshot, displayCurrency]);
   const quotaFallback = quota.isPending
     ? <Skeleton className="h-24 w-full" />
     : <QueryError query={quota} title={QUOTA_UNAVAILABLE_FALLBACK} />;
@@ -324,11 +330,17 @@ export function SettingsPage({
       const category = normalizeSettingsCategoryId(target);
       if (category !== null) {
         setActiveCategory(category);
+        if (category === 'supply') {
+          setSupplyTab(resolveSupplyTab(target, undefined));
+        }
         return;
       }
       const definition = SETTINGS_REGISTRY.find((candidate) => candidate.id === target);
       if (definition !== undefined) {
         setActiveCategory(definition.category);
+        if (definition.category === 'supply') {
+          setSupplyTab(supplyTabForSettingGroup(definition.group));
+        }
         setPendingTarget({ kind: 'setting', id: target });
       }
     },
@@ -359,6 +371,12 @@ export function SettingsPage({
   const activateResult = useCallback((categoryId: SettingsCategoryId, settingId?: string) => {
     setSearchInput('');
     setActiveCategory(categoryId);
+    if (categoryId === 'supply') {
+      const definition = settingId === undefined
+        ? undefined
+        : SETTINGS_REGISTRY.find((candidate) => candidate.id === settingId);
+      setSupplyTab(supplyTabForSettingGroup(definition?.group));
+    }
     setPendingTarget(settingId !== undefined ? { kind: 'setting', id: settingId, focus: true } : null);
   }, []);
 
@@ -429,33 +447,30 @@ export function SettingsPage({
       // the chat page is now only the group/private conversation.
       return <BotSettings />;
     }
-    if (categoryId === 'providers') {
-      // The merged 供应商 page: provider management (activation, ordering,
-      // configuration) plus the quota windows and balance detail that used to
-      // live on the standalone 用量 page.
+    if (categoryId === 'supply') {
       if (snapshot === null) return quotaFallback;
+      const supplySettings = settingsForCategory('supply')
+        .filter((definition) => definition.platform === undefined || definition.platform.includes(platform));
+      const usageSettings = supplySettings.filter((definition) => definition.group === 'usage');
+      const gatewaySettings = supplySettings.filter((definition) => definition.group === 'gateway');
+      const routingSettings = supplySettings.filter((definition) => definition.group === 'routing');
       return (
-        <>
-          <ProviderSupply
-            snapshot={snapshot}
-            savingOrder={providerOrder.isPending}
-            reorderError={reorderError}
-            onReorder={handleReorder}
-            onConfigure={setDialogEntry}
-          />
-          <ProviderUsage />
-        </>
-      );
-    }
-    if (categoryId === 'catalog') {
-      if (snapshot === null) return quotaFallback;
-      return <ModelList rows={modelRows} />;
-    }
-    if (categoryId === 'routingTest') {
-      return (
-        <RoutingTest
+        <SupplySettings
+          tab={supplyTab}
+          onTabChange={setSupplyTab}
           snapshot={snapshot}
-          active={!searchActive && activeCategory === 'routingTest'}
+          savingOrder={providerOrder.isPending}
+          reorderError={reorderError}
+          onReorder={handleReorder}
+          onConfigure={setDialogEntry}
+          routingActive={!searchActive && activeCategory === 'supply'}
+          usageSettings={usageSettings}
+          gatewaySettings={gatewaySettings}
+          routingSettings={routingSettings}
+          preferenceBindings={preferenceBindings}
+          highlightTerms={query.terms}
+          flashId={flashId}
+          renderSetting={renderRow}
         />
       );
     }
@@ -643,6 +658,8 @@ export function SettingsPage({
       </div>
       <ProviderDialog
         entry={dialogEntry}
+        snapshot={snapshot}
+        displayCurrency={displayCurrency}
         onClose={() => setDialogEntry(null)}
         onSaved={(next) => queryClient.setQueryData(quotaQuery.queryKey, next)}
       />

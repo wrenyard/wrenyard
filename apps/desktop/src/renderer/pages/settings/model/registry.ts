@@ -124,17 +124,6 @@ const GENERAL_CATEGORY: SettingDefinition[] = [
     source: { kind: 'preference', preference: 'general.displayCurrency' },
   },
   {
-    id: 'general.menuBarQuota',
-    category: 'general',
-    title: '在菜单栏显示额度',
-    description: '在菜单栏图标中显示额度。',
-    keywords: ['菜单栏', '额度', 'tray', 'menubar', 'quota'],
-    platform: ['darwin'],
-    control: { kind: 'boolean' },
-    default: true,
-    source: { kind: 'preference', preference: 'general.menuBarQuota' },
-  },
-  {
     id: 'notifications.enabled',
     category: 'general',
     title: '通知',
@@ -246,15 +235,39 @@ const SESSION_CATEGORY: SettingDefinition[] = [
   },
 ];
 
-const MODELS_CATEGORY: SettingDefinition[] = [
+const SUPPLY_CATEGORY: SettingDefinition[] = [
+  {
+    id: 'general.menuBarQuota',
+    category: 'supply',
+    group: 'usage',
+    title: '在菜单栏显示额度',
+    description: '在菜单栏图标中显示额度。',
+    keywords: ['菜单栏', '额度', 'tray', 'menubar', 'quota'],
+    platform: ['darwin'],
+    control: { kind: 'boolean' },
+    default: true,
+    source: { kind: 'preference', preference: 'general.menuBarQuota' },
+  },
   {
     id: 'models.routingWeights',
-    category: 'models',
+    category: 'supply',
+    group: 'routing',
     title: '路由权重',
     description: '调整自动派发时四项因子的相对比重，四项之和须为 100。',
-    keywords: ['路由权重', 'routing', 'weights', '价格', '速度', '额度', '智能'],
+    keywords: ['路由权重', 'routing', 'weights', '价格', '速度', '额度', '智能', '派发测试'],
     control: custom('routingWeights'),
     source: { kind: 'daemon' },
+  },
+  {
+    id: 'runtime.gateway',
+    category: 'supply',
+    group: 'gateway',
+    title: 'Gateway 接入',
+    description: '查看本机 Gateway 连接信息并设置下次绑定使用的端口与 Token。',
+    keywords: ['gateway', '端口', 'token', '外部客户端', '接入'],
+    control: custom('gateway'),
+    readonly: true,
+    source: { kind: 'readonly' },
   },
 ];
 
@@ -365,16 +378,6 @@ const COMPONENTS_CATEGORY: SettingDefinition[] = [
 ];
 
 const RUNTIME_CATEGORY: SettingDefinition[] = [
-  {
-    id: 'runtime.gateway',
-    category: 'runtime',
-    title: 'Gateway 接入',
-    description: '查看本机 Gateway 连接信息并设置下次绑定使用的端口与 Token。',
-    keywords: ['gateway', '端口', 'token', '外部客户端', '接入'],
-    control: custom('gateway'),
-    readonly: true,
-    source: { kind: 'readonly' },
-  },
   {
     id: 'runtime.daemon',
     category: 'runtime',
@@ -505,7 +508,7 @@ export const SETTINGS_REGISTRY: readonly SettingDefinition[] = [
   ...GENERAL_CATEGORY,
   ...APPEARANCE_CATEGORY,
   ...SESSION_CATEGORY,
-  ...MODELS_CATEGORY,
+  ...SUPPLY_CATEGORY,
   ...PET_CATEGORY,
   ...COMPONENTS_CATEGORY,
   ...RUNTIME_CATEGORY,

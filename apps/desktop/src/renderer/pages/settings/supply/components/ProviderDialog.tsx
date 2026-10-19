@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { cn } from 'cn';
 import { Alert, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
@@ -18,7 +18,14 @@ import {
 import { Field, FieldLabel } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
 import { shell } from '@/renderer/lib/desktop';
-import { providerKeyPageUrl, type ProviderCatalogSnapshot, type QuotaSnapshot } from '@/shell-contract';
+import {
+  providerKeyPageUrl,
+  type DisplayCurrency,
+  type ProviderCatalogSnapshot,
+  type QuotaSnapshot,
+} from '@/shell-contract';
+import { buildModelListRows } from '../model/models.js';
+import { modelPriceSuffix } from '../model/describe.js';
 import {
   DIALOG_CANCEL_LABEL,
   DIALOG_SAVE_LABEL,
@@ -44,6 +51,8 @@ const DISCARD_CONFIRM_LABEL = '放弃';
 export interface ProviderDialogProps {
   /** Provider being configured, or null when the dialog is closed. */
   entry: ProviderCatalogSnapshot | null;
+  snapshot: QuotaSnapshot | null;
+  displayCurrency: DisplayCurrency;
   onClose: () => void;
   /** Called with the refreshed snapshot after a successful key save. */
   onSaved: (snapshot: QuotaSnapshot) => void;
@@ -56,7 +65,7 @@ export interface ProviderDialogProps {
  * with a typed but unsaved key asks for confirmation inside the same dialog
  * (spec section 4.1, rule 6), never with a second stacked modal.
  */
-export function ProviderDialog({ entry, onClose, onSaved }: ProviderDialogProps) {
+export function ProviderDialog({ entry, snapshot, displayCurrency, onClose, onSaved }: ProviderDialogProps) {
   const [key, setKey] = useState('');
   const [error, setError] = useState('');
   const [openingPage, setOpeningPage] = useState(false);
@@ -75,6 +84,21 @@ export function ProviderDialog({ entry, onClose, onSaved }: ProviderDialogProps)
     // `configure.reset` is stable for the mutation's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry?.id, open]);
+
+  const providerModels = useMemo(() => {
+    if (snapshot === null || entry === null) return [];
+    return buildModelListRows(snapshot, displayCurrency)
+      .flatMap((row) =>
+        row.providers
+          .filter((provider) => provider.id === entry.id)
+          .map((provider) => ({
+            name: row.name,
+            inputLabel: row.inputLabel,
+            outputLabel: row.outputLabel,
+            credits: provider.credits,
+          })),
+      );
+  }, [snapshot, displayCurrency, entry?.id]);
 
   if (entry === null) {
     return <Dialog open={false} />;
@@ -191,6 +215,31 @@ export function ProviderDialog({ entry, onClose, onSaved }: ProviderDialogProps)
               {KEY_SAVE_PENDING}
             </p>
           )}
+
+          <section className="flex flex-col gap-2 border-t pt-4">
+            <h3 className="text-sm font-medium">模型</h3>
+            {providerModels.length === 0 ? (
+              <p className="text-sm text-muted-foreground">暂无模型</p>
+            ) : (
+              <ul className="divide-y rounded-lg border">
+                {providerModels.map((model) => (
+                  <li key={model.name} className="flex flex-col gap-1 px-3 py-2 text-sm">
+                    <span className="font-medium">{model.name}</span>
+                    <span className="text-muted-foreground">
+                      {`输入 ${model.inputLabel}${modelPriceSuffix(displayCurrency)} · 输出 ${model.outputLabel}${modelPriceSuffix(displayCurrency)}`}
+                    </span>
+                    {model.credits !== undefined && model.credits.length > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        {model.credits.map((credit) => (
+                          credit.label === undefined ? credit.value : `${credit.label} ${credit.value}`
+                        )).join(' · ')}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
 
         <DialogFooter>

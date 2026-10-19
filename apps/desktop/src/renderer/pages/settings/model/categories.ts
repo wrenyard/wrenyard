@@ -8,10 +8,7 @@ export type SettingsCategoryId =
   | 'general'
   | 'appearance'
   | 'session'
-  | 'providers'
-  | 'catalog'
-  | 'routingTest'
-  | 'models'
+  | 'supply'
   | 'clients'
   | 'bot'
   | 'shortcuts'
@@ -34,10 +31,11 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
   { id: 'general', label: '通用', description: '启动、通知与菜单栏等基础偏好。' },
   { id: 'appearance', label: '外观', description: '主题、明暗模式、界面缩放与动效。' },
   { id: 'session', label: '会话', description: '消息发送方式与会话绑定的工作区。' },
-  { id: 'providers', label: '供应商', description: '激活、配置凭据、查看额度余额并调整派发优先顺序。' },
-  { id: 'catalog', label: '模型', description: '已激活供应商提供的模型、价格与点数倍率。' },
-  { id: 'routingTest', label: '派发测试', description: '按条件预览自动派发会选中的模型。' },
-  { id: 'models', label: '模型与路由', description: '自动派发参考与路由权重。' },
+  {
+    id: 'supply',
+    label: '模型供应',
+    description: '供应商、额度、网关、路由与 Agent 客户端。',
+  },
   { id: 'clients', label: '客户端', description: '各客户端的安装状态与可用性检测结果（只读）。' },
   { id: 'bot', label: '机器人', description: '机器人配置与例行任务；群聊和私聊在机器人页面。' },
   { id: 'shortcuts', label: '快捷键', description: '当前平台生效的全部快捷键；暂不支持自定义。' },
@@ -50,12 +48,16 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
 ];
 
 /**
- * Category ids that no longer have their own entry but must keep resolving for
- * deep links and restored history. The standalone 用量 page was merged into
- * 供应商, so any `usage` selection resolves and highlights 供应商.
+ * Category ids that no longer have their own sidebar entry but must keep
+ * resolving for deep links and restored history. Each maps to 模型供应; the
+ * matching sub-tab is resolved in `model/supply/location.ts`.
  */
 const LEGACY_CATEGORY_ALIASES: Readonly<Record<string, SettingsCategoryId>> = {
-  usage: 'providers',
+  providers: 'supply',
+  usage: 'supply',
+  catalog: 'supply',
+  routingTest: 'supply',
+  models: 'supply',
 };
 
 export function isSettingsCategoryId(value: unknown): value is SettingsCategoryId {
