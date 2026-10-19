@@ -175,7 +175,8 @@ export function PromptInput({
   // Padding, line height and font are shared by the textarea and its ghost mirror.
   const compactText = 'py-0 pl-1 pr-0 leading-6';
   const expandedText = 'px-3 py-2 leading-[22px]';
-  const fieldText = `${expanded ? expandedText : compactText} border border-transparent text-base break-words md:text-sm [[data-mini]_&]:text-sm`;
+  // Font size precedes the line height: a later font size would drop it in the class merge.
+  const fieldText = `text-base md:text-sm [[data-mini]_&]:text-sm border border-transparent break-words ${expanded ? expandedText : compactText}`;
   const compactTextareaClass = 'h-6 min-h-6 field-sizing-fixed overflow-hidden';
   const expandedTextareaClass = 'min-h-9 max-h-[200px] field-sizing-content overflow-y-auto';
   // Shared by both layouts; only one branch renders at a time.

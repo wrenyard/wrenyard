@@ -8,14 +8,12 @@ import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { CopyButton } from '@/renderer/components/copy-button';
 import { Elapsed } from '@/renderer/components/elapsed';
-import { StatusBadge } from '@/renderer/components/status-badge';
 import { shell } from '@/renderer/lib/desktop';
 import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
   HIDDEN_CALL_ROLES,
   dispatchTerminal,
-  statusView,
   thinkingVerb,
   waitingStatusText,
 } from '../../model/describe.js';
@@ -311,9 +309,6 @@ export function TranscriptTurn({ turn, sessionId, latest = false, onCancelTask, 
               : 'pointer-events-none absolute inset-x-0 top-full opacity-0 group-hover/turn:pointer-events-auto group-hover/turn:opacity-100',
           )}
         >
-          {(turn.status === 'failed' || turn.status === 'interrupted') && (
-            <StatusBadge tone={statusView(turn.status).tone} label={statusView(turn.status).label} />
-          )}
           <span className="font-mono">{turn.model.provider}/{turn.model.model}</span>
           {turn.model.reasoningEffort !== undefined && <span>{turn.model.reasoningEffort}</span>}
           <Elapsed start={turn.startedAt} end={turn.endedAt} />

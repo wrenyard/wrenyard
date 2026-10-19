@@ -77,13 +77,13 @@ export function InterruptControl({ running, onInterrupt, composerRef }: Interrup
       type="button"
       variant="default"
       size="icon-sm"
-      className="size-6 shrink-0 rounded-full p-0 [&_svg]:size-3"
+      className="size-6 shrink-0 rounded-full p-0"
       aria-label="中断"
       title="中断"
       disabled={single?.interrupting === true}
       onClick={single === undefined ? undefined : () => onInterrupt(single.id)}
     >
-      {single?.interrupting === true ? <Spinner /> : <Square className="fill-current" />}
+      {single?.interrupting === true ? <Spinner /> : <Square className="size-2.5" fill="currentColor" strokeWidth={0} />}
     </InputGroupButton>
   );
   if (single !== undefined) return button;

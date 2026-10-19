@@ -28,7 +28,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/renderer/components/ui/collapsible';
-import { ACTION_KIND_LABEL, CALL_ROLE_LABEL, materialTitle, thinkingVerb } from '../../model/describe.js';
+import { ACTION_KIND_LABEL, CALL_ROLE_LABEL, materialTitle } from '../../model/describe.js';
 import type { ActionModel, CallModel, ContextItem, ReasoningModel } from '../../model/types.js';
 import { Ellipsis } from '../live-indicators.js';
 import { MorphText } from '../morph-text.js';
@@ -113,10 +113,12 @@ function summary(items: readonly ActivityItem[]): string {
   return [...counts.values()].map(({ count, phrase }) => phrase(count)).join('，');
 }
 
-/** The label of the group's running step, without the trailing ellipsis. */
+/**
+ * The label of the group's running tool step, without the trailing ellipsis.
+ * Reasoning in progress is told by the turn's live line, never here.
+ */
 function runningLabel(items: readonly ActivityItem[]): string | undefined {
   for (const item of items) {
-    if (item.kind === 'reason' && item.call.status === 'running') return thinkingVerb(item.call.cycle ?? 0);
     if (item.kind === 'call' && item.call.status === 'running') return `正在${CALL_ROLE_LABEL[item.call.role] ?? item.call.role}`;
     if (item.kind === 'action' && item.action.status === 'running') {
       // A step still waiting for its generated name reads as running.
@@ -162,6 +164,9 @@ export function ActivityGroup({ items, sessionId, onCancelTask }: ActivityGroupP
   const [open, setOpen] = useState(false);
   const running = runningLabel(items);
   const failed = failedCount(items);
+  // A reasoning step joins the summary once it settled.
+  const settled = items.filter((item) => !(item.kind === 'reason' && item.call.status === 'running'));
+  if (running === undefined && settled.length === 0) return null;
   const HeaderIcon = items.length === 1 ? itemIcon(items[0]!) : List;
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="wy-rise-in">
@@ -181,13 +186,8 @@ export function ActivityGroup({ items, sessionId, onCancelTask }: ActivityGroupP
           </span>
         ) : (
           <>
-            <span className="truncate">{summary(items)}</span>
-            {failed > 0 && (
-              <>
-                <span className="shrink-0">（{failed} 项失败）</span>
-                <TriangleAlert className="size-3.5 shrink-0" aria-label="有失败的步骤" />
-              </>
-            )}
+            <span className="truncate">{summary(settled)}{failed > 0 ? `（${failed} 项失败）` : ''}</span>
+            {failed > 0 && <TriangleAlert className="size-3.5 shrink-0" aria-label="有失败的步骤" />}
           </>
         )}
         <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', open && 'rotate-90')} />

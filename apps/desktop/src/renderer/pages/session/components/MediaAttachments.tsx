@@ -204,7 +204,7 @@ export function MediaAttachments({ items, sessionId, onRemove, align = 'start', 
   const singleImage = onRemove === undefined && items.filter((item) => item.kind === 'image').length === 1;
   return (
     <>
-      <div className={cn('flex flex-wrap gap-2', align === 'end' ? 'justify-end' : 'justify-start', className)}>
+      <div className={cn('flex flex-wrap items-start gap-2', align === 'end' ? 'justify-end' : 'justify-start', className)}>
         {items.map((item) => (item.kind === 'image' ? (
           <ImageAttachment
             key={item.key}
