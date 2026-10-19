@@ -11,6 +11,7 @@ import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { MessageFooter } from '@/renderer/components/chat/MessageFooter';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { openActivityPanel } from '@/renderer/lib/activity-panel';
+import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
   HIDDEN_CALL_ROLES,
