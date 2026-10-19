@@ -29,7 +29,7 @@ updates. There is no separate agent runtime binary or Go build.
   cheap auxiliary models carry them out, and the request runs over Chat
   Completions, Responses or Anthropic Messages depending on the protocols the
   model declares. See the [session feature](../packages/features/session/README.md).
-- Bots are daemon-hosted agents defined by `<config root>/bot-agents/<id>.json`.
+- Bots are daemon-hosted agents defined by `<workspace>/bots/<id>/` (or `<config root>/bots/<id>/` for a device-only bot), with each device's routines in `<config root>/bots/<id>/routines/`.
   The bot kernel queues wakes per bot, runs one turn at a time per bot over the
   session engine with the bot's own system prompt and its enabled native tools
   (`session`, `todo`, `message`), and watches the sessions a bot starts. The
@@ -148,7 +148,8 @@ Quota observations live in `<XDG_STATE_HOME or ~/.local/state>/wrenyard/quota`.
 In that state root, session ledgers live under `session/`, a session's attached
 files under `sessions/<sessionId>/files`, each task run's output files under
 `artifacts/<runId>` and bot state and conversations under `bot-agents/`. Bot
-definitions live in the config root under `wrenyard/bot-agents/`.
+definitions live in the workspace under `bots/`, and device bots and routines
+in the config root under `wrenyard/bots/`.
 Official native client credential stores remain owned by those clients.
 No runtime migration or dual-read fallback is shipped.
 

@@ -4,15 +4,16 @@
  * One bot is one directory named by its id, in one of two roots:
  *
  * - `<workspace>/bots/<id>/` for a bot that syncs with the workspace;
- * - `<config root>/bot-agents/<id>/` for a device-only bot.
+ * - `<config root>/bots/<id>/` for a device-only bot.
  *
  * Each directory holds `bot.json` (the user-only switches), `identity.md` (the
- * name, icon, description and role text the bot itself may edit) and a
+ * name, icon, description and persona the bot itself may edit) and a
  * `memory/` directory.
  *
- * What a bot does on this device is `<config root>/bot-agents/<id>/routines.md`:
- * never synced, and only the user edits it. For a workspace bot that device
- * directory holds only `routines.md` and is not a second bot.
+ * What a bot does on this device are its routines, one file each in
+ * `<config root>/bots/<id>/routines/` (see routine-files.mts). They are never
+ * synced. For a workspace bot that device directory holds only `routines/` and
+ * is not a second bot.
  *
  * Loading never throws: an unreadable or invalid part disables only that bot
  * and keeps the error visible.
@@ -23,6 +24,7 @@ import type { Stats } from 'node:fs'
 import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { readRoutines, type RoutineDefinition } from './routine-files.mts'
 
 /** One tool switch a bot can turn on. */
 export type AgentToolName = 'session' | 'todo' | 'message' | 'memory' | 'workspace'
@@ -44,7 +46,7 @@ const LEGACY_IGNORED_KEYS: readonly string[] = [['deny', 'Models'].join('')]
 export interface BotAgentRoots {
   /** `<workspace>/bots`. */
   workspace: string
-  /** `<config root>/bot-agents`. */
+  /** `<config root>/bots`. */
   device: string
 }
 
@@ -114,8 +116,13 @@ export interface BotAgentEntry {
   identityText: string
   config?: BotAgentConfig
   identity?: BotAgentIdentity
-  /** The bot's routines on this device, when its routines file exists. */
-  routines?: string
+  /** `<config root>/bots/<id>/routines`: this device's routine files of the bot. */
+  routinesDir: string
+  /**
+   * The bot's routines on this device; undefined while its routines directory
+   * does not exist yet (the scheduler then exports the routines it holds).
+   */
+  routines?: RoutineDefinition[]
   error?: string
   signature: string
 }
@@ -341,6 +348,7 @@ async function readDefinition(
     configPath,
     identityPath,
     memoryDir,
+    routinesDir: join(deviceRoot, id, 'routines'),
     primary: false,
     warnings: [] as string[],
     change: { config: 'missing', identity: 'missing', memory: '', routines: 'missing' } satisfies BotAgentChangeSet,
@@ -386,18 +394,9 @@ async function readDefinition(
     errors.push(`identity.md: ${errorText(error)}`)
   }
 
-  // The routines file is optional: a missing one means no routines on this device.
-  const routinesPath = join(deviceRoot, id, 'routines.md')
-  let routinesSignature = 'missing'
-  let routines: string | undefined
-  try {
-    const info = await lstat(routinesPath)
-    if (!info.isFile()) throw new Error('routines file is a symlink or not a file')
-    routinesSignature = signatureText(signatureOf(info))
-    routines = (await readFile(routinesPath, 'utf8')).trim()
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') errors.push(`routines: ${errorText(error)}`)
-  }
+  // Routines are optional and never disable the bot: an invalid file is a warning.
+  const read = await readRoutines(base.routinesDir)
+  const routinesSignature = read === undefined ? 'missing' : read.signature
 
   const change: BotAgentChangeSet = {
     config: configSignature,
@@ -412,12 +411,13 @@ async function readDefinition(
 
   return {
     ...base,
+    warnings: read?.errors ?? [],
     change,
     configText,
     identityText,
     ...(config === undefined ? {} : { config }),
     ...(identity === undefined ? {} : { identity }),
-    ...(routines === undefined || routines === '' ? {} : { routines }),
+    ...(read === undefined ? {} : { routines: read.routines }),
     ...(errors.length === 0 ? {} : { error: errors.join('; ') }),
     signature,
   }
@@ -475,7 +475,7 @@ export async function loadBotAgents(
   }
   for (const item of device) {
     // A device directory without bot.json next to a workspace bot of the same
-    // id only carries that bot's local routines; it is not a second bot.
+    // id only carries that bot's routines on this device; it is not a second bot.
     if (workspaceIds.has(item.id) && !(await exists(join(item.directory, 'bot.json')))) continue
     const entry = await readDefinition(roots.device, item.id, 'device', cached.get(`device\n${item.id}`), roots.device)
     if (workspaceIds.has(item.id)) {

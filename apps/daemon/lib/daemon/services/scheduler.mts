@@ -8,6 +8,7 @@ import type {
   RoutineRecord,
   RoutineState,
 } from '../../protocol/methods/routine.mts'
+import { writeRoutine, removeRoutine, type RoutineDefinition } from './bot-agents/routine-files.mts'
 
 /** How often due routines are checked. */
 const TICK_MS = 5_000
@@ -64,6 +65,12 @@ export interface CreateSchedulerOptions {
    * Manual `run(id)` also honors this gate.
    */
   busy?: (routine: RoutineRecord) => boolean
+  /**
+   * The directory of one bot's routine files on this device. Routine files are
+   * the definitions: create, update and remove write them, and {@link
+   * Scheduler.sync} adopts them. Without it routines live only in the store.
+   */
+  routinesDir?: (botId: string) => string
 }
 
 export interface Scheduler {
@@ -86,6 +93,13 @@ export interface Scheduler {
   update(id: string, state: 'active' | 'paused'): RoutineRecord
   run(id: string): RoutineRecord
   remove(id: string): void
+  /**
+   * Adopt one bot's routine files: create, change or drop its stored routines
+   * so they match, keeping run state for the same ids. `undefined` means the
+   * bot has no routines directory yet; its stored routines are then written out
+   * as files once, so nothing is lost on the move to files.
+   */
+  sync(botId: string, definitions: readonly RoutineDefinition[] | undefined): void
 }
 
 interface SchedulerStateFile {
@@ -152,7 +166,9 @@ function readRecord(value: unknown): RoutineRecord | undefined {
  * 5 second timer wakes each due routine's owning bot agent.
  */
 export function createScheduler(options: CreateSchedulerOptions): Scheduler {
-  const { statePath, wake, log, workspaceRoot, canRun, busy } = options
+  const { statePath, wake, log, workspaceRoot, canRun, busy, routinesDir } = options
+  /** The latest routine files per bot, applied again after the store loads. */
+  const definitions = new Map<string, readonly RoutineDefinition[] | undefined>()
   let routines: RoutineRecord[] = []
   /** Original workspace root per routine id (see SchedulerStateFile.workspaces). */
   const routineWorkspaces = new Map<string, string>()
@@ -386,6 +402,82 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     }
   }
 
+  /** Write one record's definition file; a failure is logged, never thrown. */
+  function saveFile(record: RoutineRecord): void {
+    if (routinesDir === undefined || (record.state !== 'active' && record.state !== 'paused')) return
+    void writeRoutine(routinesDir(record.botId), {
+      id: record.id,
+      ...(record.name === undefined ? {} : { name: record.name }),
+      intervalMinutes: record.intervalMinutes,
+      state: record.state,
+      prompt: record.prompt,
+    }).catch(error => log?.('warn', `scheduler could not write routine file ${record.id}`, error))
+  }
+
+  /** Make one bot's stored routines match its files. */
+  function applyDefinitions(botId: string, files: readonly RoutineDefinition[] | undefined): void {
+    const owned = routines.filter(record => record.botId === botId && recordWorkspace(record) === workspaceRoot)
+    if (files === undefined) {
+      for (const record of owned) saveFile(record)
+      return
+    }
+    const now = Date.now()
+    const wanted = new Map(files.map(file => [file.id, file]))
+    let changed = false
+    for (const record of owned) {
+      if (wanted.has(record.id)) continue
+      routines = routines.filter(candidate => candidate !== record)
+      routineWorkspaces.delete(record.id)
+      changed = true
+    }
+    for (const file of files) {
+      const record = routines.find(candidate => candidate.id === file.id)
+      if (record !== undefined && record.botId !== botId) {
+        log?.('warn', `routine ${file.id} of bot ${botId} clashes with a routine of bot ${record.botId}; skipped`)
+        continue
+      }
+      const next = new Date(now + file.intervalMinutes * 60_000).toISOString()
+      if (record === undefined) {
+        routines.push({
+          id: file.id,
+          botId,
+          ...(file.name === undefined ? {} : { name: file.name }),
+          prompt: file.prompt,
+          intervalMinutes: file.intervalMinutes,
+          recurring: true,
+          state: file.state,
+          deliver: 'none',
+          createdAt: new Date(now).toISOString(),
+          ...(file.state === 'active' ? { nextRunAt: next } : {}),
+          runCount: 0,
+        })
+        routineWorkspaces.set(file.id, workspaceRoot)
+        changed = true
+        continue
+      }
+      const before = JSON.stringify(record)
+      record.prompt = file.prompt
+      if (file.name === undefined) delete record.name
+      else record.name = file.name
+      record.recurring = true
+      delete record.expiresAt
+      if (record.intervalMinutes !== file.intervalMinutes) {
+        record.intervalMinutes = file.intervalMinutes
+        if (record.nextRunAt !== undefined && Date.parse(record.nextRunAt) > Date.parse(next)) record.nextRunAt = next
+      }
+      if (file.state === 'paused') {
+        record.state = 'paused'
+      } else if (record.state !== 'active') {
+        record.state = 'active'
+        if (record.nextRunAt === undefined || Date.parse(record.nextRunAt) <= now) record.nextRunAt = next
+      } else if (record.nextRunAt === undefined) {
+        record.nextRunAt = next
+      }
+      if (JSON.stringify(record) !== before) changed = true
+    }
+    if (changed) persist()
+  }
+
   /**
    * Load the state file and prepare the workspace association without firing
    * anything or arming the poll timer, so a hot switch can stage this before it
@@ -395,6 +487,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     if (stopped || prepared) return
     routines = await load()
     prepared = true
+    for (const [botId, files] of definitions) applyDefinitions(botId, files)
     // Persist the first-load workspace association of any legacy routine, so a
     // later switch reads it back instead of re-homing the record into the
     // switched-to workspace.
@@ -463,13 +556,15 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         deliver,
         createdAt: now.toISOString(),
         nextRunAt: new Date(now.getTime() + input.intervalMinutes * 60_000).toISOString(),
-        ...(input.recurring ? { expiresAt: new Date(now.getTime() + EXPIRY_MS).toISOString() } : {}),
+        // A routine with a definition file is the user's own and never expires.
+        ...(input.recurring && routinesDir === undefined ? { expiresAt: new Date(now.getTime() + EXPIRY_MS).toISOString() } : {}),
         runCount: 0,
       }
       routines.push(record)
       // The record belongs to this scheduler's workspace for its whole life.
       routineWorkspaces.set(record.id, workspaceRoot)
       persist()
+      saveFile(record)
       return copyRecord(record)
     },
     update(id: string, state: 'active' | 'paused'): RoutineRecord {
@@ -486,6 +581,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         }
       }
       persist()
+      saveFile(record)
       return copyRecord(record)
     },
     run(id: string): RoutineRecord {
@@ -504,6 +600,14 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       routines = routines.filter(candidate => candidate.id !== record.id)
       routineWorkspaces.delete(record.id)
       persist()
+      if (routinesDir !== undefined) {
+        void removeRoutine(routinesDir(record.botId), record.id)
+          .catch(error => log?.('warn', `scheduler could not remove routine file ${record.id}`, error))
+      }
+    },
+    sync(botId: string, files: readonly RoutineDefinition[] | undefined): void {
+      definitions.set(botId, files)
+      if (prepared && !stopped) applyDefinitions(botId, files)
     },
   }
 }

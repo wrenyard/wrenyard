@@ -28,6 +28,7 @@ import {
   type AgentToolName,
   type BotAgentIdentity,
 } from './config.mts'
+import { newRoutineId, readRoutines, removeRoutine, writeRoutine, type RoutineDefinition } from './routine-files.mts'
 
 /** One ranked model route a bot may run a session on. */
 export interface AgentModelRoute {
@@ -50,6 +51,8 @@ export interface AgentToolContext {
   botId: string
   /** The bot definition directory; identity and memory live inside it. */
   directory: string
+  /** This device's routine files of the bot. */
+  routinesDir: string
   /** The workspace root the `workspace` tool operates on. */
   workspaceRoot: string
   /** Adopt a freshly written identity in the running kernel. */
@@ -183,6 +186,9 @@ const MEMORY_TOOL: ToolSpec = {
     'memories are Markdown files in your private memory directory; `list` and `read` show them,',
     '`save` creates one by name, `update` replaces an existing one, `remove` deletes one and drops',
     'its index line, and `identity` reads or rewrites your name, icon, description and role text.',
+    '`routines` lists your routines on this device, `routine` creates one (without `routine`) or changes',
+    'one (with its id), and `routine_remove` deletes one. Keep routine text to a short trigger; put',
+    'procedure details in a memory and name that memory in the routine.',
     'An updated or removed memory must carry its exact current body as `previous`;',
     'your switches are not editable here.',
   ].join(' '),
@@ -191,12 +197,12 @@ const MEMORY_TOOL: ToolSpec = {
     properties: {
       op: {
         type: 'string',
-        enum: ['list', 'read', 'save', 'update', 'remove', 'identity'],
-        description: 'List memories, read one, create one, replace one, delete one, or read/update your identity.',
+        enum: ['list', 'read', 'save', 'update', 'remove', 'identity', 'routines', 'routine', 'routine_remove'],
+        description: 'List memories, read one, create one, replace one, delete one, read/update your identity, or list/write/delete your routines.',
       },
       name: {
         type: 'string',
-        description: 'Memory name for read/save/update/remove, or the new identity name for identity.',
+        description: 'Memory name for read/save/update/remove, the new identity name for identity, or the routine name.',
       },
       description: {
         type: 'string',
@@ -209,7 +215,7 @@ const MEMORY_TOOL: ToolSpec = {
       },
       content: {
         type: 'string',
-        description: 'The memory body; save and update only.',
+        description: 'The memory body for save and update, or the routine text for routine.',
       },
       previous: {
         type: 'string',
@@ -222,6 +228,19 @@ const MEMORY_TOOL: ToolSpec = {
       body: {
         type: 'string',
         description: 'The identity role text.',
+      },
+      routine: {
+        type: 'string',
+        description: 'Routine id (8 hex characters) to change or remove; omit to create a routine.',
+      },
+      intervalMinutes: {
+        type: 'integer',
+        description: 'Minutes between runs of a routine (1 to 10080); required when creating one.',
+      },
+      state: {
+        type: 'string',
+        enum: ['active', 'paused'],
+        description: 'Routine state; new routines start active.',
       },
     },
     required: ['op'],
@@ -621,9 +640,53 @@ async function runMemoryTool(args: Record<string, unknown>, ctx: AgentToolContex
     }
     case 'identity':
       return await runIdentityTool(args, ctx)
+    case 'routines':
+      return done((await readRoutines(ctx.routinesDir))?.routines ?? [])
+    case 'routine':
+      return done(await writeOwnRoutine(args, ctx))
+    case 'routine_remove': {
+      const id = requireString(args, 'routine', 'routine_remove requires routine')
+      await removeRoutine(ctx.routinesDir, id)
+      return done({ removed: id })
+    }
     default:
       return failed(`unsupported memory op: ${String(args.op)}`)
   }
+}
+
+/**
+ * Create a routine, or change the given fields of an existing one. The file is
+ * the definition; the scheduler picks the change up on the next poll.
+ */
+async function writeOwnRoutine(args: Record<string, unknown>, ctx: AgentToolContext): Promise<RoutineDefinition> {
+  const existing = (await readRoutines(ctx.routinesDir))?.routines ?? []
+  const id = optionalString(args, 'routine')
+  const name = optionalString(args, 'name')
+  const prompt = optionalString(args, 'content')
+  const interval = args.intervalMinutes
+  if (interval !== undefined && typeof interval !== 'number') throw new Error('intervalMinutes must be an integer')
+  const state = optionalString(args, 'state')
+  if (state !== undefined && state !== 'active' && state !== 'paused') throw new Error('state must be active or paused')
+  if (id === undefined) {
+    if (prompt === undefined) throw new Error('creating a routine requires content')
+    if (interval === undefined) throw new Error('creating a routine requires intervalMinutes')
+    return await writeRoutine(ctx.routinesDir, {
+      id: newRoutineId(existing.map(routine => routine.id)),
+      ...(name === undefined ? {} : { name }),
+      intervalMinutes: interval,
+      state: state ?? 'active',
+      prompt,
+    })
+  }
+  const current = existing.find(routine => routine.id === id)
+  if (current === undefined) throw new Error(`routine ${id} does not exist`)
+  return await writeRoutine(ctx.routinesDir, {
+    ...current,
+    ...(name === undefined ? {} : { name }),
+    ...(interval === undefined ? {} : { intervalMinutes: interval }),
+    ...(state === undefined ? {} : { state }),
+    ...(prompt === undefined ? {} : { prompt }),
+  })
 }
 
 /**

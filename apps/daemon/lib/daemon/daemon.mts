@@ -2,7 +2,7 @@ import { createRoutingAvailability, createAuxiliaryAvailability } from './servic
 import { createAuxiliarySelector, excludedModelIdsFor, selectRoutesByRequirementKey, type SelectorInputPort } from '@wrenyard/auto-routing'
 import { readAuxiliaryRoutingSettings } from '../config/task-settings.mts'
 import { timingSafeEqual, randomBytes, createHash } from 'node:crypto'
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, renameSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { hostname } from 'node:os'
@@ -1292,6 +1292,11 @@ async function createForemanDaemonResources(
     // routine records `lastError`. The scheduler stays workspace-scoped, so no
     // routine can fire into another workspace's bots. It shares the daemon's
     // single diagnostic sink.
+    // Device bots and every bot's routines on this device live in
+    // `<config root>/bots`; an older `bot-agents` directory is moved there once.
+    const deviceBotsDir = join(resolveWrenyardConfigRoot(), 'bots')
+    const legacyBotsDir = join(resolveWrenyardConfigRoot(), 'bot-agents')
+    if (!existsSync(deviceBotsDir) && existsSync(legacyBotsDir)) renameSync(legacyBotsDir, deviceBotsDir)
     const scheduler = createScheduler({
       statePath: join(sessionStateRoot, 'routines.json'),
       // Late binding: the kernel is constructed right below the scheduler, so a
@@ -1304,6 +1309,8 @@ async function createForemanDaemonResources(
       // or shutdown is staging, so a suppressed scheduler cannot start a prompt
       // after isIdle was observed.
       canRun: () => !options.isShuttingDown() && options.isSwitching?.() !== true,
+      // Routine files on this device are the definitions.
+      routinesDir: botId => join(deviceBotsDir, botId, 'routines'),
     })
     // The bot agent kernel assembles LLM bots from per-bot JSON configs. It owns
     // per-bot contexts (a private session host rooted in its own state dir),
@@ -1311,7 +1318,8 @@ async function createForemanDaemonResources(
     const botAgents = createBotAgentKernel({
       workspaceRoot,
       workspaceBotsDir: join(workspaceRoot, 'bots'),
-      deviceBotsDir: join(resolveWrenyardConfigRoot(), 'bot-agents'),
+      deviceBotsDir,
+      syncRoutines: (botId, routines) => scheduler.sync(botId, routines),
       stateDir: join(sessionStateRoot, 'bot-agents', sha256hex(workspaceRoot)),
       host: daemonSessionHost,
       sessions: session,

@@ -13,46 +13,46 @@ desktop app.
 
 ## Define a bot
 
-A bot is one JSON file:
+A bot is one directory named by its id. Who the bot is can sync between your
+devices; what it does on a device stays on that device.
 
 ```text
-<config root>/bot-agents/<id>.json
+<workspace>/bots/<id>/          a bot that syncs with the workspace
+  bot.json                      switches only you change: tools, enabled, primary
+  identity.md                   name, icon, description and persona
+  memory/                       the bot's own notes, one Markdown file each
+<config root>/bots/<id>/        this device
+  routines/<routine id>.md      one file per routine (see below)
 ```
+
+A bot that should exist on one device only keeps `bot.json`, `identity.md`
+and `memory/` in `<config root>/bots/<id>/` as well. When the same id exists in
+both places, the workspace bot is used; a device directory that holds only
+`routines/` is not a second bot.
 
 The config root is `WRENYARD_CONFIG_HOME` when set, otherwise
-`~/.config/wrenyard` (the same directory that holds the rest of your
-Wrenyard settings). The daemon checks the directory every few seconds, so
+`~/.config/wrenyard`. The daemon checks both places every few seconds, so
 adding, editing or removing a file takes effect without a restart. A file that
-does not validate disables only that bot, and the Bots page shows the error.
+does not validate disables only that bot (or, for a routine file, only that
+routine), and the Bots page shows the error.
+
+`bot.json`:
 
 ```json
-{
-  "id": "reviewer",
-  "name": "Reviewer",
-  "instructions": "Every morning, check the open todos of project aurora. Open a work session for each item that needs code changes and report a short summary to the release bot.",
-  "tools": { "session": true, "todo": true, "message": true },
-  "routines": [
-    {
-      "name": "morning-review",
-      "prompt": "Check the open todos of project aurora.",
-      "intervalMinutes": 1440,
-      "deliver": "bot:release"
-    }
-  ]
-}
+{ "tools": { "session": true, "todo": true, "message": true } }
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `id` | Required. Must equal the file name; lowercase letters, digits and `-`, at most 32 characters. |
-| `name` | Display name; defaults to the id. |
-| `enabled` | `false` puts the bot out of service without deleting the file. Defaults to `true`. |
-| `instructions` | Text added to the bot's fixed system prompt: its job, its project, how to report. |
-| `tools` | Which tools the bot may call (see below). Nothing is enabled by default, so a bot without tools can only answer in text. |
-| `routines` | Routines this file declares (see below). |
+`identity.md`:
 
-Unknown fields are rejected, so typos surface as an error instead of being
-ignored.
+```markdown
+---
+name: Reviewer
+icon: 🔍
+description: Reviews new commits for blocking problems
+---
+
+You are the reviewer of project aurora. Keep findings short and backed by evidence.
+```
 
 ## Tools
 
@@ -61,6 +61,7 @@ ignored.
 | `session` | List, create and message work sessions, and interrupt a running turn. A work session is a full Wrenyard conversation: it reads registered projects, dispatches tasks and edits code, so the bot names the project and worktree in its message. |
 | `todo` | List, show and add workspace todos, change their status (`open`, `in_progress`, `done`, `accepted`, `cancelled`) and record a result summary. |
 | `message` | Send a message to another bot by id, which wakes that bot. |
+| `memory` | Keep the bot's own memory, edit its identity, and manage its routines on this device. |
 
 Sessions a bot creates or messages are watched: when such a session finishes
 its next turn, the bot is woken with the outcome. A bot therefore starts work,
@@ -90,18 +91,27 @@ ends its turn, and continues when the result is in, instead of polling.
 
 ## Routines
 
-A routine wakes its bot with a fixed prompt on an interval between 1 minute and
-7 days. Routines come from two places:
+A routine wakes its bot with a short text on an interval between 1 minute and
+7 days. Each routine is one file on the device it runs on:
 
-- **Declared in the bot file** (`routines`). They are recurring, and the daemon
-  keeps them in step with the file.
-- **Created on the Bots page.** These can be recurring or run once after the
-  interval, and can be paused, resumed, run immediately or deleted there.
+```markdown
+---
+name: morning-review
+intervalMinutes: 1440
+state: active
+---
+Morning review: follow your review-procedure memory.
+```
 
-A routine round lasts until the bot's work for it is done, including sessions
-it started. A routine whose bot is still busy with the previous round is
-skipped. With `deliver` set to `bot:<id>`, the round's final reply is sent to
-that bot; `none` keeps it in the owning bot's conversation.
+The file name is the routine id (8 lowercase hex characters). Routines created
+or paused on the Bots page write these files, and a bot with the `memory` tool
+can list, create, change and delete its own routines. A routine fires into the
+bot's own conversation each time, so keep its text to a trigger and keep the
+procedure in a memory the routine names.
+
+A routine whose bot is still busy with the previous run is skipped. When a bot
+has no `routines/` directory yet, the routines it already had are written out
+as files on the first start.
 
 ## Workspace todos
 

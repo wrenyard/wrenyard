@@ -46,6 +46,7 @@ import {
   type BotAgentIdentity,
   type BotAgentRoots,
 } from './config.mts'
+import type { RoutineDefinition } from './routine-files.mts'
 import {
   GROUP_PROMPT_GUIDANCE,
   groupSourceKey,
@@ -260,8 +261,13 @@ export interface CreateBotAgentKernelOptions {
   workspaceRoot: string
   /** `<workspace>/bots`: one directory per synced bot. */
   workspaceBotsDir: string
-  /** `<config root>/bot-agents`: one directory per device-only bot. */
+  /** `<config root>/bots`: one directory per device-only bot, and each bot's routines. */
   deviceBotsDir: string
+  /**
+   * Hand each loaded bot's routine files to the scheduler; `undefined` routines
+   * mean the bot has no routines directory on this device yet.
+   */
+  syncRoutines?: (botId: string, routines: readonly RoutineDefinition[] | undefined, routinesDir: string) => void
   /** `<state root>/bot-agents/<sha256(workspaceRoot)>`: state and bot ledgers. */
   stateDir: string
   /** The daemon session host; the kernel derives its private bot host from it. */
@@ -409,7 +415,14 @@ function botSystemPrompt(entry: BotAgentEntry, all: Iterable<BotAgentEntry>, mem
   const body = identity?.body ?? ''
   const parts = [fixed, GROUP_PROMPT_GUIDANCE]
   if (body.trim() !== '') parts.push(body)
-  if (entry.routines !== undefined) parts.push(`## Your routines on this device\n\n${entry.routines}`)
+  if (entry.routines !== undefined && entry.routines.length > 0) {
+    parts.push([
+      '## Your routines on this device',
+      'Each fires on its schedule as a [wake:routine <id>] message with its text. Change them only through the memory tool `routine` operation.',
+      ...entry.routines.map(routine =>
+        `- ${routine.id}${routine.name === undefined ? '' : ` (${routine.name})`}, every ${routine.intervalMinutes} min, ${routine.state}: ${routine.prompt.split('\n')[0]}`),
+    ].join('\n'))
+  }
   if (memory.trim() !== '') parts.push(memory)
   parts.push(roster)
   return parts.join('\n\n')
@@ -869,6 +882,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     return {
       botId,
       directory: entry?.directory ?? '',
+      routinesDir: entry?.routinesDir ?? join(options.deviceBotsDir, botId, 'routines'),
       workspaceRoot: options.workspaceRoot,
       refreshIdentity: identity => {
         const current = entries.get(botId)
@@ -1814,6 +1828,9 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       for (const entry of group) {
         if (entry !== active) shadowed.push(entry)
       }
+    }
+    for (const entry of entries.values()) {
+      if (entry.config !== undefined) options.syncRoutines?.(entry.id, entry.routines, entry.routinesDir)
     }
     // Every wake carries the per-bot memory, so it is read with the definition.
     await refreshMemoryBlocks()

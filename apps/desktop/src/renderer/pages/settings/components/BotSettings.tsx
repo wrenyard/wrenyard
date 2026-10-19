@@ -352,7 +352,7 @@ export function BotSettings() {
             {' '}
             目录（多设备同步）或配置目录的
             {' '}
-            <code>bot-agents/&lt;id&gt;/</code>
+            <code>bots/&lt;id&gt;/</code>
             {' '}
             目录（仅本机）下放 bot.json、identity.md 和 memory/。
           </EmptyDescription>
