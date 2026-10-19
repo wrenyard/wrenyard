@@ -75,17 +75,22 @@ ends its turn, and continues when the result is in, instead of polling.
   premium- and high-tier models with abundant quota come first, then premium-
   and high-tier models with sufficient quota, then premium- and high-tier
   models that are nearly used up (insufficient), and finally mid-tier models in
-  any usable state. Models whose quota is exhausted are never used. Each step
-  is ranked by score, and each wake re-ranks the ladder, so a bot steps down
-  only while the higher tiers have no available route and steps back up when
-  they do.
+  any usable state. Models whose quota is exhausted, or that are backing off
+  after errors, are never used. Each step is ranked by score. A bot keeps the
+  model of its last request for an hour after that request, so its prompt cache
+  stays warm, as long as the ladder still offers that model; otherwise a wake
+  takes the top of the ladder.
 - The session tool takes no model or reasoning-effort parameter. A session a
   bot opens gets both its model and its reasoning effort from the same ladder,
   and later sends keep the session's current model. When no model is available,
-  the wake is dropped and the error is shown on the bot.
+  the wake is dropped and the error is shown on the bot. A tool call with an
+  argument the tool does not declare fails with that argument named.
 - A failed model call keeps the existing single fallback attempt: the wake is
   retried once on the next route the ladder ranked.
-- Queued wakes, watched sessions and routine rounds survive a daemon restart,
+- A bot's memory works like workspace memory: before each step the memory
+  search picks the entries the turn needs from the bot's own memory index, and
+  a final reply may save new entries there.
+- Queued wakes and watched sessions survive a daemon restart,
   and a wake interrupted by a restart is retried once.
 - The bot's conversation is shown on the Bots page. Type in the composer there
   to wake the bot with your own message.
