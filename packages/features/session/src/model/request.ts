@@ -54,8 +54,12 @@ export type CallRole = (typeof CALL_ROLES)[number];
 export const REASON_IDLE_TIMEOUT_MS = 180_000;
 /** Every auxiliary request is bounded end to end. */
 export const AUXILIARY_TIMEOUT_MS = 60_000;
-/** The whole bounded auxiliary failover budget: route selection plus every attempt. */
-export const AUXILIARY_TOTAL_BUDGET_MS = AUXILIARY_TIMEOUT_MS;
+/**
+ * The whole bounded auxiliary failover budget: route selection plus every
+ * attempt. Raised above the per-route hard cap so a single capped route still
+ * leaves a full window for the next ranked route within the same call.
+ */
+export const AUXILIARY_TOTAL_BUDGET_MS = 90_000;
 /** At most this many distinct candidate routes, each tried once. */
 export const AUXILIARY_MAX_ROUTES = 3;
 /**
@@ -66,6 +70,13 @@ export const AUXILIARY_MAX_ROUTES = 3;
  * whole call regardless of progress.
  */
 export const AUXILIARY_IDLE_TIMEOUT_MS = 30_000;
+/**
+ * Per-attempt absolute deadline for auxiliary calls, armed once per attempt and
+ * never re-armed by streamed output. It caps a route that is slow but still
+ * producing tokens — the idle deadline is suppressed once output starts — so a
+ * sluggish route cannot consume the whole failover budget before failover.
+ */
+export const AUXILIARY_ROUTE_TIMEOUT_MS = 45_000;
 /**
  * The two local, caller-side terminal classifications this runner decides
  * itself — never a transport adapter: the caller's finite auxiliary total
@@ -81,6 +92,11 @@ export const LOCAL_CALL_ERROR = {
   budget: 'local_budget' as ModelErrorKind,
   /** The per-route idle/no-progress deadline cut the last attempt. */
   deadline: 'local_deadline' as ModelErrorKind,
+  /**
+   * The per-route hard cap cut the last attempt: a route that kept going but
+   * was too slow to finish, distinct from the caller's own total budget.
+   */
+  route_timeout: 'local_route_timeout' as ModelErrorKind,
 };
 
 /**
@@ -922,6 +938,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         // `lastFailure` kind, and never touch route health.
         let budgetExhausted = false;
         let idleDeadlineCut = false;
+        let routeHardCapCut = false;
         for (const candidate of candidates) {
           if (controller.signal.aborted) break;
           // Stop once three distinct routes have really been called: a route
@@ -967,16 +984,21 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           const onMainAbort = (): void => attemptController.abort();
           controller.signal.addEventListener('abort', onMainAbort, { once: true });
           let perRouteTimedOut = false;
-          // The per-attempt deadline is idle, not absolute: it is re-armed on
-          // every streamed-output or transport-progress signal, so a route that
-          // keeps producing tokens runs on while a silent route is aborted.
+          // A hard per-route cap cuts a route that is slow but still producing
+          // output: the idle deadline is suppressed once output starts, so a
+          // route that streams tokens too slowly would otherwise burn the whole
+          // call. Unlike the idle deadline this timer is absolute and is never
+          // re-armed by progress.
+          let routeTimedOut = false;
           let attemptTimer: ReturnType<typeof setTimeout> | undefined;
+          let routeTimer: ReturnType<typeof setTimeout> | undefined;
           const armAttemptIdle = (): void => {
             if (attemptTimer !== undefined) clearTimeout(attemptTimer);
             attemptTimer = setTimeout(() => { perRouteTimedOut = true; attemptController.abort(); }, AUXILIARY_IDLE_TIMEOUT_MS);
           };
           resetAttemptIdle = armAttemptIdle;
           armAttemptIdle();
+          routeTimer = setTimeout(() => { routeTimedOut = true; attemptController.abort(); }, AUXILIARY_ROUTE_TIMEOUT_MS);
           try {
             const request: ModelRequest = {
               model: candidate.model,
@@ -1006,39 +1028,60 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
             // The caller's finite total budget cutting the whole call is not a
             // route fault: no route stalled, the call itself ran out of time.
             const callerBudgetExhausted = abortKind === 'timeout';
-            // Report the real fault before reading the route's retry instant, so
-            // the attempt record carries the `until` this report just wrote, and
-            // before stopping failover, so a genuine transport failure after
-            // visible output still reaches the route-health authority. Only a
-            // genuine network failure blames the route: a local deadline (an
-            // idle stall, a role's own deadline or the caller's total budget) is
-            // our own decision, not the route's fault, so it never marks the
-            // route unhealthy.
-            if (!cancelled && !callerBudgetExhausted && !perRouteTimedOut && fact.kind === 'network') {
-              options.reportRouteFault?.(candidate.model, attemptId, 'transport');
-            }
             const attemptUntil = retryInstantOf(candidate.model);
+            // Read the route's retry instant before reporting the fault, so the
+            // attempt record carries the `until` the report just wrote.
             if (!cancelled && !callerBudgetExhausted) earliestRetry = earliest(earliestRetry, attemptUntil);
             // Exactly one record per attempt: the transport's own record when it
             // produced one, otherwise a synthetic record of this route's stall.
             const supplied = collectAttempts(metricsOf(error), attemptUntil);
-            if (supplied === 0 && perRouteTimedOut && !callerBudgetExhausted) {
-              routeAttempts.push({
-                error: 'network',
-                ms: AUXILIARY_IDLE_TIMEOUT_MS,
-                model: candidate.model,
-                ...(attemptUntil === undefined ? {} : { routeUntil: attemptUntil }),
-              });
+            // Report the real fault before stopping failover, so a genuine
+            // transport failure after visible output still reaches the
+            // route-health authority. Only a genuine network failure blames the
+            // route: a local deadline (an idle or hard route cap, a role's own
+            // deadline or the caller's total budget) is our own decision, not the
+            // route's fault, so it never marks the route unhealthy.
+            if (!cancelled && !callerBudgetExhausted && !perRouteTimedOut && !routeTimedOut && fact.kind === 'network') {
+              options.reportRouteFault?.(candidate.model, attemptId, 'transport');
             }
             lastFailure = fact;
+            // The per-route hard cap: a route too slow even while streaming is
+            // cut and reported, and the call fails over to the next ranked route
+            // — overriding the no-failover-after-output guard below — so one
+            // slow route does not waste the whole budget. The slow route is
+            // reported so the gateway can demote it.
+            if (routeTimedOut) {
+              options.reportRouteFault?.(candidate.model, attemptId, 'timeout');
+              if (supplied === 0) {
+                routeAttempts.push({
+                  error: 'network',
+                  ms: AUXILIARY_ROUTE_TIMEOUT_MS,
+                  model: candidate.model,
+                  ...(attemptUntil === undefined ? {} : { routeUntil: attemptUntil }),
+                });
+              }
+              lastMessage = `Route ${candidate.model} exceeded ${AUXILIARY_ROUTE_TIMEOUT_MS} ms per-route budget`;
+              routeHardCapCut = true;
+              continue;
+            }
             // A cancellation or any visible output already produced is final:
-            // no further route may be tried.
+            // no further route may be tried — unless the per-route hard cap
+            // above already claimed this attempt.
             if (cancelled || outputStarted) throw error;
             if (perRouteTimedOut) {
               // An idle route stall is a fallback fact, never a terminal aborted
               // state: the route fault is reported and the next candidate tried.
               // If it also ends the call, the terminal fact is the local idle
               // deadline — not the `aborted` its request abort happens to carry.
+              options.reportRouteFault?.(candidate.model, attemptId, 'timeout');
+              if (supplied === 0) {
+                routeAttempts.push({
+                  error: 'network',
+                  ms: AUXILIARY_IDLE_TIMEOUT_MS,
+                  model: candidate.model,
+                  ...(attemptUntil === undefined ? {} : { routeUntil: attemptUntil }),
+                });
+              }
               lastMessage = `Route ${candidate.model} stalled after ${AUXILIARY_IDLE_TIMEOUT_MS} ms without output`;
               idleDeadlineCut = true;
               continue;
@@ -1059,6 +1102,7 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           } finally {
             options.completeRouteAttempt?.(candidate.model, attemptId);
             if (attemptTimer !== undefined) clearTimeout(attemptTimer);
+            if (routeTimer !== undefined) clearTimeout(routeTimer);
             resetAttemptIdle = undefined;
             controller.signal.removeEventListener('abort', onMainAbort);
           }
@@ -1076,7 +1120,9 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
           ? LOCAL_CALL_ERROR.budget
           : idleDeadlineCut
             ? LOCAL_CALL_ERROR.deadline
-            : lastFailure?.kind ?? 'protocol';
+            : routeHardCapCut
+              ? LOCAL_CALL_ERROR.route_timeout
+              : lastFailure?.kind ?? 'protocol';
         return await fail(message, auxiliaryFailure(message, earliestRetry, classification));
       };
 

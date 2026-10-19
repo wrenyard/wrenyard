@@ -5,6 +5,7 @@ import type { ProviderDefinition } from '@wrenyard/providers/base';
 import {
   AUXILIARY_IDLE_TIMEOUT_MS,
   AUXILIARY_MAX_ROUTES,
+  AUXILIARY_ROUTE_TIMEOUT_MS,
   AUXILIARY_TOTAL_BUDGET_MS,
   createCallRunner,
   ModelCallError,
@@ -154,7 +155,7 @@ test('exhaustion reports the attempt count and the bounded budget', async () => 
   const { runner } = makeRunner({ transport, routes: ['test/alpha', 'test/beta', 'test/gamma'] });
   await assert.rejects(runner.run(callInput('reply', new AbortController().signal)), (error: unknown) => {
     assert.ok(error instanceof Error);
-    assert.match(error.message, /3 of 3 candidate route\(s\), budget 60000 ms/);
+    assert.match(error.message, /3 of 3 candidate route\(s\), budget 90000 ms/);
     return true;
   });
 });
@@ -290,10 +291,11 @@ test('a real transport failure is reported to the route health before failing ov
   assert.deepEqual(faults, [{ model: 'test/alpha', kind: 'transport' }]);
 });
 
-test('the finite total budget cuts the call without blaming the route', async () => {
+test('the per-route hard cap cuts a slow route and reports it as a fault', async () => {
   const faults: string[] = [];
   // A route that keeps streaming progress never trips the idle deadline, so
-  // only the caller's finite total budget can end this call.
+  // only the per-route hard cap can end this single-route call — and the slow
+  // route is reported, not excused.
   const transport: ModelTransport = {
     complete: (request) => {
       const progress = setInterval(() => request.onEvent?.({ type: 'activity' }), 7000);
@@ -312,18 +314,18 @@ test('the finite total budget cuts the call without blaming the route', async ()
     const pending = runner.run(callInput('reply', new AbortController().signal))
       .then(() => undefined, (failure: unknown) => failure);
     await flush();
-    mock.timers.tick(AUXILIARY_TOTAL_BUDGET_MS);
+    mock.timers.tick(AUXILIARY_ROUTE_TIMEOUT_MS);
     await flush();
     error = await pending;
   } finally {
     mock.timers.reset();
   }
   assert.ok(error instanceof ModelCallError);
-  // The caller's own budget is a local deadline, not the route's fault.
-  assert.match(error.message, /Call timed out after 60000 ms/);
-  assert.deepEqual(faults, []);
-  // No synthesized attempt record is attributed to the route either.
-  assert.equal((error.detail.metrics?.attempts ?? []).length, 0);
+  // The slow route is cut by the per-route hard cap and reported as a fault.
+  assert.match(error.message, /exceeded 45000 ms per-route budget/);
+  assert.deepEqual(faults, ['timeout']);
+  // One synthesized attempt record is attributed to the slow route.
+  assert.equal((error.detail.metrics?.attempts ?? []).length, 1);
 });
 
 test('an explicit user cancellation stays neutral and reports no route fault', async () => {

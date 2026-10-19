@@ -338,7 +338,7 @@ test('task dispatch returns a readable failure when every route faults', async (
   assert.ok(calls.every((call) => call.startsWith('dispatch:')));
   assert.equal(outcome.status, 'failed');
   // The failure feedback names what was tried instead of silently doing nothing.
-  assert.match(outcome.result, /2 of 2 candidate route\(s\), budget 60000 ms/);
+  assert.match(outcome.result, /2 of 2 candidate route\(s\), budget 90000 ms/);
   // Every failed compile span keeps both attempts and the route retry time.
   const failed = failedSpans(events);
   assert.ok(failed.length >= 1);
