@@ -83,7 +83,7 @@ export interface WrenyardGatewayModel {
    * contract; absent when the model's ladder is unknown.
    */
   reasoningEfforts?: ProviderListModel['reasoningEfforts'];
-  routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'model_unavailable';
+  routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable';
   routeUntil?: string;
   /** Circuit phase of the route; absent while the route is healthy. */
   routePhase?: 'closed' | 'open' | 'half_open';

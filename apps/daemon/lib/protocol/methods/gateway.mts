@@ -38,7 +38,7 @@ export interface GatewayConnectionResult {
     /** USD per million tokens: [cached, input, output]. */
     pricing?: readonly [number, number, number]
     /** Current circuit state of the route; absent while it is healthy. */
-    routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'model_unavailable'
+    routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable'
     routeUntil?: string
     routePhase?: 'closed' | 'open' | 'half_open'
     routeNextProbeAt?: string
@@ -84,7 +84,7 @@ export const gatewayConnectionResultSchema = {
             maxItems: 3,
             items: { type: 'number', minimum: 0 },
           },
-          routeState: { enum: ['rate_limited', 'quota_exhausted', 'auth_failed', 'model_unavailable'] },
+          routeState: { enum: ['rate_limited', 'quota_exhausted', 'auth_failed', 'access_denied', 'model_unavailable'] },
           routeUntil: { type: 'string' },
           routePhase: { enum: ['closed', 'open', 'half_open'] },
           routeNextProbeAt: { type: 'string' },

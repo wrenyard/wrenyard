@@ -2,12 +2,9 @@ import type { ZodTypeAny } from 'zod'
 import type { TaskSettingsLayer } from './protocol/methods/task.mts'
 import type {
   Admission as GatewayRouteAdmission,
-  NativeRouteFaultKind as TaskRouteFaultKind,
   ProbeLease as GatewayProbeLease,
   RouteGuard as GatewayRouteGuard,
 } from '@wrenyard/gateway'
-
-export type { TaskRouteFaultKind }
 
 /**
  * The read-only shared-circuit fault state of a just-used route/pool: the two
@@ -21,8 +18,8 @@ export type TaskRouteFaultState = 'quota_exhausted' | 'rate_limited' | 'other'
  * Optional daemon-owned native-task route-state port. The daemon binds it to
  * the single shared Gateway circuit; isolated/legacy callers omit it and then
  * never touch route health. Identities are the route's provider on its own plus
- * its model key — the canonical target's client-qualified model, so the client
- * suffix scopes health to that exact route and is never an upstream model id.
+ * its bare model key: any client suffix is stripped before the health key is
+ * built, so a native fault never keys by client.
  */
 export interface TaskRouteStateHooks {
   /** Admit/check one exact route before launching a model attempt. The
@@ -32,8 +29,11 @@ export interface TaskRouteStateHooks {
   /** Report a schema-validated delivery; settles a due half-open probe as success. */
   success: (provider: string, model: string, guard?: GatewayRouteGuard, lease?: GatewayProbeLease) => void
   /** Report a route-local fault for a launched attempt that failed terminally,
-   *  settling a held probe lease with the classified fault. */
-  fault: (provider: string, model: string, guard: GatewayRouteGuard | undefined, kind: TaskRouteFaultKind, lease: GatewayProbeLease | undefined, until?: string) => void
+   *  settling a held probe lease with the classified fault. The payload is
+   *  either the structured-output delivery failure or the upstream error the
+   *  failed execution reported; an upstream error without a status records no
+   *  fault. */
+  fault: (provider: string, model: string, guard: GatewayRouteGuard | undefined, fault: TaskRouteFault, lease: GatewayProbeLease | undefined) => void
   /** Release a held probe lease as cancelled, so a throw or cancel never lets
    *  the lease silently expire. */
   cancel: (lease: GatewayProbeLease) => void
@@ -236,6 +236,7 @@ import type {
   TaskConfig,
   TaskDefinition,
   TaskDispatchResolver,
+  TaskRouteFault,
   ForemanSchemas,
 } from '@wrenyard/task'
 import type { ForemanInstructions } from './standard/instructions/index.mts'

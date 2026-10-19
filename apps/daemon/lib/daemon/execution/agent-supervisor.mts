@@ -11,7 +11,6 @@ import { assertValidTimeoutMs } from '@wrenyard/task'
 import { killProcessTree } from '../../adapters/shell/process.mts'
 import { redactDiagnosticText, redactEvent, redactJsonString } from './redaction.mts'
 import { extractForemanTaskOutputSummary } from '@wrenyard/task'
-import { MODEL_REJECTION_FAILURE_CLASS, QUOTA_OR_RATE_LIMITED_FAILURE_CLASS } from '@wrenyard/task'
 import { RepoWriteLocks } from './repo-write-locks.mts'
 import { desktopLane, DesktopLaneClosedError, toOperationIds, OperationAdapter, type PreparedOperations } from './operation-adapter.mts'
 import { parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
@@ -1152,6 +1151,10 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       ? agentOutput
       : (agentOutput === null ? failureDiagnostic : `${agentOutput}\n${failureDiagnostic}`)
     const error = this.determineTerminalError(entry, status, failureDiagnostic)
+    // The upstream identity the client reported, when its captured diagnostics
+    // state one. It is carried beside the failure diagnostic so the downstream
+    // gateway classification can decide the fault; this layer never classifies.
+    const upstreamError = status === 'failed' ? extractUpstreamError(failureDiagnostic) : undefined
 
     this.terminalizeRunning(entry, {
       status,
@@ -1160,7 +1163,8 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       killReason,
       output,
       error,
-      failureClass: this.classifyClientFailure(entry, failureDiagnostic),
+      failureClass: this.classifyClientFailure(entry),
+      upstreamError,
     })
   }
 
@@ -1185,29 +1189,13 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
   }
 
   /**
-   * The failure classification carried to route health. A client-supplied class
-   * (from a run_finished record) wins; otherwise a bounded diagnostic matching a
-   * specific model-rejection signature is classified as `model_rejected` so the
-   * exact route is marked unhealthy. An ordinary failed execution stays
-   * unclassified (null).
+   * The failure classification carried to route health. Only a class the client
+   * itself reported on its terminal record is carried; the upstream status and
+   * error identity are extracted separately as `upstreamError`, so a diagnostic
+   * text pattern never decides a class here.
    */
-  private classifyClientFailure(entry: RegistryEntry, failureDiagnostic: string | null): string | null {
-    // A client-supplied class normally wins, but a generic missing-terminal-result
-    // delivery failure must not mask an upstream quota/rate-limit diagnostic:
-    // those CLIs print the quota error and exit without a result record, and the
-    // quota class is the actionable one for route health and automatic retry.
-    if (entry.pendingFailureClass === 'protocol_missing_terminal_result' &&
-        failureDiagnostic !== null && isQuotaOrRateLimitText(failureDiagnostic)) {
-      return QUOTA_OR_RATE_LIMITED_FAILURE_CLASS
-    }
-    if (entry.pendingFailureClass) return entry.pendingFailureClass
-    if (failureDiagnostic !== null && isModelRejectionText(failureDiagnostic)) {
-      return MODEL_REJECTION_FAILURE_CLASS
-    }
-    if (failureDiagnostic !== null && isQuotaOrRateLimitText(failureDiagnostic)) {
-      return QUOTA_OR_RATE_LIMITED_FAILURE_CLASS
-    }
-    return null
+  private classifyClientFailure(entry: RegistryEntry): string | null {
+    return entry.pendingFailureClass ?? null
   }
 
   private determineTerminalStatus(entry: RegistryEntry, intent: TerminalIntent | undefined): TerminalStatus {
@@ -1257,6 +1245,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
     output: string | null
     error: string | null
     failureClass?: string | null
+    upstreamError?: UpstreamError
   },
   ): void {
     if (entry.terminalGeneration > 0) return
@@ -1339,7 +1328,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       committed = applied
 
       if (committed) {
-        result = {
+        const terminalResult: ExecutionResult & { upstreamError?: UpstreamError | null } = {
           executionId: entry.executionId,
           status: terminal.status,
           output: terminal.output,
@@ -1347,7 +1336,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
           exitCode: terminal.exitCode,
           killReason: terminal.killReason,
           failureClass: terminal.failureClass ?? null,
+          upstreamError: terminal.upstreamError ?? null,
         }
+        result = terminalResult
       } else {
         const row = this.getExecution(entry.executionId)
         if (row && isTerminalStatus(row.status)) result = resultFromRow(row)
@@ -2375,57 +2366,55 @@ function detectFailureClass(event: StreamEventRecord): string | undefined {
 }
 
 /**
- * Signatures of a client-reported model rejection: the client child refusing the
- * resolved model because it is unsupported for its product/account, or an
- * upstream model-not-found response. These are deliberately narrow and specific
- * so an ordinary execution failure is never misclassified as a model/route
- * problem.
+ * The upstream HTTP status and error identity a failed native client reported.
+ * Parsed only from explicit status markers or error fields in the captured
+ * diagnostics; a missing field stays missing rather than being guessed.
  */
-const MODEL_REJECTION_PATTERNS: readonly RegExp[] = [
-  /not supported when using [a-z0-9._-]+/iu,
-  /model ['"`]?[A-Za-z0-9._:/-]+['"`]? is not supported/iu,
-  /\bunsupported (?:model|model id)\b/iu,
-  /\bmodel_(?:not_found|not_supported|unavailable)\b/iu,
-  /\b(?:unknown|no such|invalid) model\b/iu,
-  /(?:do(?:es)? not|don't) have access to (?:the )?model/iu,
-  // The free promotion ending is reported as a free-tier rejection or as an
-  // explicit promotion end; both mean this exact route no longer serves.
-  /\bFreeTierError\b/iu,
-  /free[ _-]?(?:tier|promotion)\b[^.]{0,60}\b(?:end|expir|no longer|unavailable|exhaust)/iu,
-]
-
-/** True when a captured diagnostic text matches a specific model-rejection signature. */
-function isModelRejectionText(text: string): boolean {
-  return MODEL_REJECTION_PATTERNS.some((pattern) => pattern.test(text))
+interface UpstreamError {
+  status?: number
+  errorType?: string
+  message?: string
 }
 
-/**
- * Signatures of a provider quota-exhausted or rate-limited response surfaced
- * through the native client path (the opencode child exits non-zero with an
- * HTTP 402/429 or a quota/rate-limit message in its stderr). The gateway's
- * HTTP status classifier does not run on the native path, so the daemon must
- * recognize the signature from the child's diagnostic text instead.
- *
- * These are deliberately narrow: every pattern requires a billing/quota/rate
- * keyword (or the literal 402/429 status) so an ordinary model error is never
- * misclassified as a recoverable quota condition. The bare token "exceeded" is
- * never matched on its own — it is only a quota signal when it is anchored to a
- * billing/quota/rate keyword within the same short message fragment.
- */
-const QUOTA_OR_RATE_LIMIT_PATTERNS: readonly RegExp[] = [
-  /\b402\b/iu,
-  /\b429\b/iu,
-  /\bquota\b/iu,
-  /\binsufficient_quota\b/iu,
-  /\brate[ _-]?limit/iu,
-  /\busage[ _-]?limit/iu,
-  /\bbilling\b/iu,
-  /\bexceed(?:ed|s)?[^.]{0,40}\b(?:quota|rate[ _-]?limit|usage[ _-]?limit|billing)\b/i,
-]
+/** An explicit HTTP status: `HTTP 403`, `HTTP/1.1 403`, or a labeled status field. */
+const UPSTREAM_HTTP_STATUS_PATTERN = /\bHTTP(?:\/[\d.]+)?\s+(4\d{2}|5\d{2})\b/iu
+const UPSTREAM_STATUS_FIELD_PATTERN = /\bstatus(?:[ _-]?code)?["']?\s*[:=]\s*["']?(4\d{2}|5\d{2})\b/iu
+/** An error identity printed after the status, e.g. `FreeTierError`. */
+const UPSTREAM_ERROR_TYPE_PATTERN = /\bHTTP\s+(?:4\d{2}|5\d{2})\s+([A-Za-z_][\w.-]*(?:Error|Exception))\b/u
+/** The provider error type in a JSON diagnostic (`{ "error": { "type": … } }`). */
+const UPSTREAM_JSON_ERROR_TYPE_PATTERN = /"error"\s*:\s*\{[^{}]{0,200}?"type"\s*:\s*"([^"]+)"/u
+/** An explicitly labeled error identity field. */
+const UPSTREAM_ERROR_TYPE_FIELD_PATTERN = /"error_?type"\s*:\s*"([^"]+)"/iu
+/** The message that follows the upstream status/identity, up to the line end. */
+const UPSTREAM_ERROR_MESSAGE_PATTERN = /\bHTTP\s+(?:4\d{2}|5\d{2})\s+(?:[A-Za-z_][\w.-]*(?:Error|Exception))?\s*:\s*([^\r\n]+)/u
+/** A JSON error message, unescaped after capture. */
+const UPSTREAM_JSON_MESSAGE_PATTERN = /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/u
 
-/** True when a captured diagnostic text indicates a quota-exhausted or rate-limited condition. */
-function isQuotaOrRateLimitText(text: string): boolean {
-  return QUOTA_OR_RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(text))
+function extractUpstreamError(text: string | null): UpstreamError | undefined {
+  if (text === null || text === '') return undefined
+  const statusText = UPSTREAM_HTTP_STATUS_PATTERN.exec(text)?.[1] ?? UPSTREAM_STATUS_FIELD_PATTERN.exec(text)?.[1]
+  const status = statusText === undefined ? undefined : Number(statusText)
+  const errorType = UPSTREAM_ERROR_TYPE_PATTERN.exec(text)?.[1]
+    ?? UPSTREAM_JSON_ERROR_TYPE_PATTERN.exec(text)?.[1]
+    ?? UPSTREAM_ERROR_TYPE_FIELD_PATTERN.exec(text)?.[1]
+  const rawMessage = UPSTREAM_ERROR_MESSAGE_PATTERN.exec(text)?.[1]
+    ?? UPSTREAM_JSON_MESSAGE_PATTERN.exec(text)?.[1]
+  const message = rawMessage === undefined ? undefined : unescapeJsonString(rawMessage)
+  if (status === undefined && errorType === undefined && message === undefined) return undefined
+  return {
+    ...(status === undefined ? {} : { status }),
+    ...(errorType === undefined ? {} : { errorType }),
+    ...(message === undefined ? {} : { message }),
+  }
+}
+
+function unescapeJsonString(text: string): string {
+  if (!text.includes('\\')) return text
+  try {
+    return JSON.parse(`"${text}"`) as string
+  } catch {
+    return text
+  }
 }
 
 function extractFinalResult(event: StreamEventRecord): { isError: boolean; output?: string } | undefined {

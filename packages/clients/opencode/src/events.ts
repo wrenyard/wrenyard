@@ -102,6 +102,9 @@ export async function* decodeOpenCode(events: AsyncIterable<StreamChunk>): Async
         }
         if (type === 'error') {
             sawError = true;
+            const errorText = openCodeErrorText(record);
+            if (errorText)
+                yield { type: 'error', message: errorText };
             yield finishedEvent('opencode', sessionId, output, true);
         }
     }
@@ -233,4 +236,42 @@ function partOutput(part: Record<string, unknown>, state: Record<string, unknown
 function openCodeEventText(record: Record<string, unknown>): string {
     const part = recordOf(record, 'part');
     return part ? stringOf(part, 'text') : '';
+}
+
+/**
+ * Retains the native error payload's status, error type and message so the
+ * execution layer can classify the upstream rejection instead of seeing only a
+ * generic failed finish. Current OpenCode nests the payload in `error.data`
+ * and earlier shapes flatten it; a JSON `responseBody` carries the provider's
+ * own error identity and message.
+ */
+function openCodeErrorText(record: Record<string, unknown>): string {
+    const error = recordOf(record, 'error');
+    const data = error ? recordOf(error, 'data') ?? error : undefined;
+    const status = nonnegativeInt(data?.statusCode) ?? nonnegativeInt(data?.status) ?? nonnegativeInt(record.statusCode);
+    const body = openCodeErrorBody(data, error, record);
+    const errorType = stringOf(body, 'type') || stringOf(data, 'type') || stringOf(error, 'errorType') || stringOf(record, 'errorType');
+    const message = stringOf(body, 'message') || stringOf(data, 'message') || stringOf(error, 'message') || stringOf(record, 'message');
+    const identity = [status === undefined ? '' : `HTTP ${status}`, errorType].filter(Boolean).join(' ');
+    if (!identity)
+        return message;
+    return message ? `${identity}: ${message}` : identity;
+}
+
+/** Parses a JSON `responseBody` from the native payload, when one is present. */
+function openCodeErrorBody(...sources: (Record<string, unknown> | undefined)[]): Record<string, unknown> | undefined {
+    for (const source of sources) {
+        const body = stringOf(source, 'responseBody');
+        if (!body)
+            continue;
+        try {
+            const value: unknown = JSON.parse(body);
+            if (!value || typeof value !== 'object' || Array.isArray(value))
+                continue;
+            const root = value as Record<string, unknown>;
+            return recordOf(root, 'error') ?? root;
+        }
+        catch { /* a non-JSON body carries no structured identity */ }
+    }
+    return undefined;
 }

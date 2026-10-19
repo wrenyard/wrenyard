@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { GatewayRouteState, GatewayRouteStatus, UpstreamRouteFailure } from '@wrenyard/providers/base';
-import { clientTimeoutFailure, resetInstant, structuredOutputFailure, transportFailure, type RouteFaultKind } from './route-failure.ts';
+import { clientTimeoutFailure, resetInstant, transportFailure, type RouteFaultKind } from './route-failure.ts';
 
 type Scope = 'provider' | 'pool' | 'route';
 
@@ -87,8 +87,8 @@ interface Block extends GatewayRouteStatus {
   phase: CircuitPhase;
   /** Monotonic generation of this scope's latest fault. */
   generation: number;
-  /** Consecutive failed half-open probes; drives the exponential backoff. */
-  probeFailures: number;
+  /** Consecutive failures of this scope; drives the exponential cooldown. */
+  failures: number;
   /** When the next half-open trial may be attempted. */
   nextProbeAt?: string;
   lastProbe?: ProbeOutcome;
@@ -110,18 +110,6 @@ export type MarkableFailure = UpstreamRouteFailure & { faultKind?: RouteFaultKin
 /** The client-observed fault kinds the attempt-correlated feedback API accepts. */
 export type ClientFaultKind = 'timeout' | 'transport';
 
-/**
- * The route-local fault kinds a native task attempt may report for its own
- * route. Only a fault for the attempt's own route is reported: the
- * delivery/protocol failure of an attempt that produced no usable output
- * (`structured_output`), or a client-reported model rejection
- * (`model_rejected`) where the client refuses the resolved model for its
- * product/account, or a quota-exhausted/rate-limited response
- * (`quota_or_rate_limited`). The first two are route-scoped and never claim a
- * provider or a shared pool; the quota kind claims the route's free pool only.
- */
-export type NativeRouteFaultKind = 'structured_output' | 'model_rejected' | 'quota_or_rate_limited';
-
 /** One in-flight attempt, correlated by the client so a duplicate report is dropped. */
 interface Attempt {
   readonly generations: Map<string, number>;
@@ -131,12 +119,12 @@ interface Attempt {
   lease?: ProbeLease;
 }
 
-const RATE_LIMIT_FALLBACK_MS = 60_000;
-const FAILURE_FALLBACK_MS = 30 * 60_000;
-/** Initial cooldown of a route-scoped timeout/transport/5xx fault. */
-const ROUTE_FAULT_COOLDOWN_MS = 60_000;
-/** Hard cap of the exponential backoff after repeated failed half-open probes. */
-const MAX_ROUTE_COOLDOWN_MS = 10 * 60_000;
+/** Base cooldown of a fresh fault; the delay doubles per consecutive failure. */
+const ROUTE_COOLDOWN_BASE_MS = 60_000;
+/** Hard cap of the exponential cooldown: one hour. */
+const MAX_ROUTE_COOLDOWN_MS = 60 * 60_000;
+/** Jitter added to a computed cooldown, as a fraction of the delay. */
+const ROUTE_COOLDOWN_JITTER = 0.25;
 /** A probe lease is always bounded: a stalled probe never blocks others forever. */
 const PROBE_LEASE_MS = 60_000;
 /**
@@ -154,45 +142,21 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 const fingerprint = (value: string): string => createHash('sha256').update(value).digest('hex');
 
-/** The initial cooldown of a fresh fault, before any probe backoff. */
-function initialCooldownMs(faultKind: RouteFaultKind): number {
-  if (faultKind === 'rate_limited') return RATE_LIMIT_FALLBACK_MS;
-  if (faultKind === 'timeout' || faultKind === 'transport' || faultKind === 'server_error' || faultKind === 'structured_output') return ROUTE_FAULT_COOLDOWN_MS;
-  return FAILURE_FALLBACK_MS;
-}
-
 /** The fault a client-observed kind maps to: the exact route that observed it. */
 function clientFailure(kind: ClientFaultKind): MarkableFailure {
   return kind === 'timeout' ? clientTimeoutFailure() : transportFailure();
 }
 
-/** The exact route fault a native task attempt's fault kind maps to. */
-function nativeRouteFailure(kind: NativeRouteFaultKind, until?: string): MarkableFailure {
-  switch (kind) {
-    case 'structured_output':
-      return structuredOutputFailure();
-    case 'model_rejected':
-      // A client-reported model rejection means this exact route cannot serve
-      // the resolved model (unsupported for the client's product/account, or a
-      // model-not-found response). It is route-scoped like a 404 model-missing
-      // fault and is recorded under the route's `model_unavailable` state.
-      return { state: 'model_unavailable', scope: 'route', faultKind: 'model_unavailable' };
-    case 'quota_or_rate_limited':
-      // A native client reported a quota-exhausted or rate-limited response
-      // (HTTP 402/429, or a quota/rate-limit message). The native path never
-      // runs the gateway's HTTP status classifier, so this fault is synthesized
-      // from the child diagnostic. It is pool-scoped: the route's free quota pool
-      // is marked exhausted so an automatically-routed task re-resolves to the
-      // next route, but other routes that draw from a different pool are
-      // untouched. The pool id is resolved by the store from the provider/model.
-      // An upstream-stated reset instant, when the caller could extract one,
-      // becomes the block's `until` instead of the fixed fallback cooldown.
-      return {
-        state: 'quota_exhausted',
-        scope: 'pool',
-        faultKind: 'quota_exhausted',
-        ...(until === undefined ? {} : { until }),
-      };
+/** The HTTP status a native fault is reported with, matching its classification. */
+function nativeFailureStatus(failure: MarkableFailure): number {
+  switch (failure.faultKind ?? failure.state) {
+    case 'rate_limited': return 429;
+    case 'quota_exhausted': return 402;
+    case 'auth_failed': return 401;
+    case 'access_denied': return 403;
+    case 'model_unavailable': return 404;
+    case 'timeout': return 504;
+    default: return 502;
   }
 }
 
@@ -225,6 +189,7 @@ export class RouteStateStore {
     private readonly now: () => number,
     private readonly pools: (provider: string, model: string) => readonly string[],
     private readonly emit: (event: RouteStateChangedEvent) => void,
+    private readonly random: () => number = Math.random,
   ) {}
 
   status(provider: string, model: string): RouteStatus | undefined {
@@ -290,16 +255,16 @@ export class RouteStateStore {
   }
 
   /**
-   * Record a route-local fault a native task attempt observed on its own route.
-   * A held half-open probe lease is settled with the classified fault so the
-   * probe backoff is preserved; without one the fault goes through the
-   * generation-fenced `mark`, so a stale in-flight report can never rebuild a
-   * cleared fault. A delivery/rejection fault is route-scoped; the quota kind
-   * claims the route's pool only and never the provider.
+   * Record a route-local fault a native task attempt already classified for its
+   * own route. The failure carries its own fault kind, scope and any
+   * upstream-stated reset instant, so its scope and cooldown are the same as a
+   * gateway-observed fault. A held half-open probe lease is settled with the
+   * classified fault so the probe backoff is preserved; without one the fault
+   * goes through the generation-fenced `mark`, so a stale in-flight report can
+   * never rebuild a cleared fault.
    */
-  reportNativeRouteFault(provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease, until?: string): RouteStatus | undefined {
-    const failure = nativeRouteFailure(kind, until);
-    const status = 502;
+  reportNativeRouteFault(provider: string, model: string, failure: MarkableFailure, guard?: RouteGuard, lease?: ProbeLease): RouteStatus | undefined {
+    const status = nativeFailureStatus(failure);
     if (lease !== undefined) {
       this.releaseProbe(lease, 'failure', failure, status);
       return this.status(provider, model);
@@ -440,7 +405,7 @@ export class RouteStateStore {
    * both the fault generation and the lease token, so an expired and reacquired
    * lease can never be cleared by a stale completion. `success` restores health;
    * `failure` adopts the classified fault the probe observed and backs the
-   * cooldown off exponentially (capped at ten minutes); `cancelled` or an omitted
+   * cooldown off exponentially (capped at one hour); `cancelled` or an omitted
    * outcome (expiry, shutdown) leaves the scope half-open for a later trial. When
    * the lease is attached to an attempt, that attempt settles in the same step.
    */
@@ -498,7 +463,7 @@ export class RouteStateStore {
       this.emitEvent(block, { state: block.state, reason: 'half_open', probe: 'cancelled' });
       return;
     }
-    block.probeFailures += 1;
+    block.failures += 1;
     block.phase = 'open';
     block.nextProbeAt = undefined;
     if (failure !== undefined) {
@@ -508,9 +473,10 @@ export class RouteStateStore {
     }
     const boundMs = failure?.until === undefined ? undefined : resetInstant(failure.until);
     if (boundMs !== undefined) block.boundUntil = Math.max(block.boundUntil ?? 0, boundMs);
-    // A reset instant stated by the upstream replaces the fixed backoff; without
-    // one the bounded exponential backoff is preserved so the scope is re-probed.
-    const floor = boundMs ?? Math.max(this.now() + this.backoffMs(block.probeFailures), block.boundUntil ?? 0);
+    // A reset instant stated by the upstream replaces the computed cooldown;
+    // without one the same exponential cooldown as a passive fault applies, so
+    // the scope is re-probed afterwards.
+    const floor = boundMs ?? Math.max(this.now() + this.backoffMs(block.failures), block.boundUntil ?? 0);
     block.until = new Date(Math.max(this.now() + 1, floor)).toISOString();
     clearTimeout(block.timer);
     block.timer = this.schedule(key, block.until);
@@ -528,17 +494,22 @@ export class RouteStateStore {
     this.mark(lease.provider, lease.model, failure, status ?? 502, '');
   }
 
-  /** The exponential backoff of repeated failed probes, capped at ten minutes. */
-  private backoffMs(probeFailures: number): number {
-    return Math.min(ROUTE_FAULT_COOLDOWN_MS * 2 ** Math.max(0, probeFailures - 1), MAX_ROUTE_COOLDOWN_MS);
+  /**
+   * The cooldown after `failures` consecutive failures of one scope: a 60s base
+   * doubling per failure, clamped to one hour, plus up to 25% jitter. A probe
+   * retry uses the same counter, so it backs off on the same schedule.
+   */
+  private backoffMs(failures: number): number {
+    const delay = Math.min(ROUTE_COOLDOWN_BASE_MS * 2 ** Math.max(0, failures - 1), MAX_ROUTE_COOLDOWN_MS);
+    return delay + this.random() * ROUTE_COOLDOWN_JITTER * delay;
   }
 
   /**
    * Record one upstream fault. A stale in-flight failure (its captured
    * generation is older than the scope's current one) never overwrites a newer
-   * fault. The cooldown is the initial window for the fault kind, always honoring
-   * a later upstream not-before bound or `Retry-After`, which is preserved as a
-   * floor across later failed probes.
+   * fault. The cooldown grows with the scope's consecutive failure count, always
+   * honoring a later upstream not-before bound or `Retry-After`, which is
+   * preserved as a floor across later failed probes.
    */
   mark(provider: string, model: string, failure: MarkableFailure, status: number, credential: string, guard?: RouteGuard): RouteStatus | undefined {
     const now = this.now();
@@ -556,15 +527,18 @@ export class RouteStateStore {
     if (previous) clearTimeout(previous.timer);
     if (previous?.leaseTimer !== undefined) clearTimeout(previous.leaseTimer);
     const boundMs = failure.until === undefined ? undefined : resetInstant(failure.until);
-    const computed = now + initialCooldownMs(faultKind);
-    // A caller-supplied reset instant overrides the fixed cooldown: the block
+    // Every failure of this scope counts, including passive marks, so repeated
+    // faults back off on one schedule until a success clears the scope.
+    const failures = (previous?.failures ?? 0) + 1;
+    const computed = now + this.backoffMs(failures);
+    // A caller-supplied reset instant overrides the computed cooldown: the block
     // cools exactly until the upstream says the scope recovers. Without one the
-    // fixed bounded cooldown applies and the scope is re-probed afterwards.
+    // exponential cooldown applies and the scope is re-probed afterwards.
     const until = new Date(boundMs === undefined ? computed : Math.max(now + 1, boundMs)).toISOString();
     const generation = this.advanceGeneration(key);
     const block: Block = {
       publicModel: `${provider}/${model}`, provider, scope, ...(pool ? { quotaPoolId: pool } : {}),
-      state: failure.state, faultKind, phase: 'open', generation, probeFailures: 0, until, status,
+      state: failure.state, faultKind, phase: 'open', generation, failures, until, status,
       ...(boundMs !== undefined && boundMs > computed ? { boundUntil: boundMs } : {}),
       ...(failure.state === 'auth_failed' ? { credential: fingerprint(credential) } : {}),
       timer: this.schedule(key, until),

@@ -29,7 +29,7 @@ export const GATEWAY_HEADERS = {
   admission: 'x-wrenyard-admission',
 } as const;
 
-export const GATEWAY_ROUTE_STATES = ['rate_limited', 'quota_exhausted', 'auth_failed', 'model_unavailable'] as const;
+export const GATEWAY_ROUTE_STATES = ['rate_limited', 'quota_exhausted', 'auth_failed', 'access_denied', 'model_unavailable'] as const;
 export type GatewayRouteState = (typeof GATEWAY_ROUTE_STATES)[number];
 
 /** Fixed discriminant of a Gateway-local admission refusal. */

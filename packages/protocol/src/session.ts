@@ -378,7 +378,7 @@ export interface SessionModelEntry {
   /** True when a verified, distinct upstream Fast mode exists for this route. */
   supportsFast?: boolean
   /** Circuit state of this model's own route; absent while the route is healthy. */
-  routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'model_unavailable'
+  routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable'
   /** Circuit phase of the route; `half_open` is a cooldown, not a verified recovery. */
   routePhase?: 'closed' | 'open' | 'half_open'
   /** When a half-open route's recovery probe may next be admitted (ISO 8601). */

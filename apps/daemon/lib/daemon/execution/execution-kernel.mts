@@ -609,16 +609,16 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
             options.taskRouteState.success(routeIdentity.provider, routeIdentity.model, routeGuard, routeLease)
           }
         },
-        onRouteFault: (kind, until) => {
+        onRouteFault: (fault) => {
           if (!routeSettled && routeIdentity !== undefined && options.taskRouteState) {
             // Only a launched attempt's terminal delivery failure faults the
-            // route — a structured-output/protocol failure or a client-reported
-            // model rejection, carried by its native fault kind. Cancellation,
-            // time budget and functional task failures never reach this hook.
-            // For a quota/rate-limit fault the diagnostic's upstream reset
-            // instant, when present, bounds the block instead of the fallback.
+            // route — a structured-output/protocol failure or the upstream
+            // error a failed execution reported. The payload is forwarded
+            // unchanged; classification belongs to the route-state port.
+            // Cancellation, time budget and functional task failures never
+            // reach this hook.
             routeSettled = true
-            options.taskRouteState.fault(routeIdentity.provider, routeIdentity.model, routeGuard, kind, routeLease, until)
+            options.taskRouteState.fault(routeIdentity.provider, routeIdentity.model, routeGuard, fault, routeLease)
           }
         },
         beforeAttempt: () => assertTaskStillActive(taskId),

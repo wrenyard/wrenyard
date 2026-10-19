@@ -26,7 +26,7 @@ export interface GatewayRequestCompletedEvent {
   sessionId?: string;
   usage?: GatewayUsage;
   reasoningParameters?: Record<string, unknown>;
-  routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'model_unavailable';
+  routeState?: 'rate_limited' | 'quota_exhausted' | 'auth_failed' | 'access_denied' | 'model_unavailable';
   routeUntil?: string;
   /** The specific fault kind behind `routeState`, when a route was faulted. */
   faultReason?: RouteFaultKind;

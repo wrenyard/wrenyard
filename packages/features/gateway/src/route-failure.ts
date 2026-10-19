@@ -83,7 +83,11 @@ function codeOf(body: unknown): string | undefined {
  * fixed and identical for every supplier:
  *
  * - 429 rate limit / 402 quota exhaustion claim a shared pool,
- * - 401/403 auth failure claims the provider (recovered by a credential change),
+ * - 401 authentication failure claims the provider (recovered by a credential
+ *   change),
+ * - 403 access denial claims the provider too, but is a distinct state: the
+ *   server accepted the credential and refused access (a plan, region or
+ *   free-tier restriction), which a credential change cannot repair,
  * - 404 model missing claims the exact route,
  * - 408 request timeout and every 5xx claim the exact route (transport class),
  * - every other 4xx is a request the caller must fix and never poisons a route;
@@ -95,7 +99,8 @@ function genericFailure(status: number, headers: Headers, body: unknown, nowMs: 
     return { state: 'rate_limited', scope: 'pool', faultKind: 'rate_limited', ...(reset === undefined ? {} : { until: new Date(reset).toISOString() }) };
   }
   if (status === 402) return { state: 'quota_exhausted', scope: 'pool', faultKind: 'quota_exhausted' };
-  if (status === 401 || status === 403) return { state: 'auth_failed', scope: 'provider', faultKind: 'auth_failed' };
+  if (status === 401) return { state: 'auth_failed', scope: 'provider', faultKind: 'auth_failed' };
+  if (status === 403) return { state: 'access_denied', scope: 'provider', faultKind: 'access_denied' };
   if (status === 404) return { state: 'model_unavailable', scope: 'route', faultKind: 'model_unavailable' };
   if (status === 408) return { state: 'model_unavailable', scope: 'route', faultKind: 'timeout' };
   if (status >= 500) return { state: 'model_unavailable', scope: 'route', faultKind: 'server_error' };
@@ -178,7 +183,8 @@ export function classifyStreamFailure(identity: { type?: string; code?: string }
   if (token.trim() === '') return undefined;
   if (/rate.?limit/.test(token)) return { state: 'rate_limited', scope: 'pool', faultKind: 'rate_limited' };
   if (/quota|insufficient_quota|billing|payment/.test(token)) return { state: 'quota_exhausted', scope: 'pool', faultKind: 'quota_exhausted' };
-  if (/authentication|permission|unauthorized|forbidden/.test(token)) return { state: 'auth_failed', scope: 'provider', faultKind: 'auth_failed' };
+  if (/access.?denied|permission|forbidden/.test(token)) return { state: 'access_denied', scope: 'provider', faultKind: 'access_denied' };
+  if (/authentication|unauthenticated|unauthorized|invalid.?api.?key|invalid_key|api_key_invalid/.test(token)) return { state: 'auth_failed', scope: 'provider', faultKind: 'auth_failed' };
   if (/timeout|timed_out/.test(token)) return { state: 'model_unavailable', scope: 'route', faultKind: 'timeout' };
   if (/overload|server_error|internal_error|api_error|unavailable|bad_gateway/.test(token)) return { state: 'model_unavailable', scope: 'route', faultKind: 'server_error' };
   return undefined;

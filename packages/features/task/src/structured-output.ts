@@ -5,8 +5,8 @@ import {
   assertValidTimeoutMs,
   effectiveTaskTimeoutMs,
 } from './task-timeouts.ts'
-import { GateFailureError, MODEL_REJECTION_FAILURE_CLASS, QUOTA_OR_RATE_LIMITED_FAILURE_CLASS, mapAgentFailureClass } from './failure.ts'
-import type { NativeRouteFaultKind } from '@wrenyard/gateway'
+import { agentFailedError, GateFailureError } from './failure.ts'
+import type { MarkableFailure } from '@wrenyard/gateway'
 import type { TaskResolvedDispatch } from '@wrenyard/protocol'
 
 /**
@@ -104,6 +104,30 @@ function rejectPlaceholders(data: unknown, schema: CompiledSchema): string[] {
   return errors
 }
 
+/**
+ * The upstream HTTP status and error identity a failed native client reported.
+ * It is carried verbatim to the route-state port, which classifies it with the
+ * gateway classifier; this layer never interprets it.
+ */
+export interface TaskUpstreamError {
+  status?: number
+  errorType?: string
+  message?: string
+}
+
+/**
+ * A terminal route fault: the gateway's structured-output delivery failure
+ * payload, or the upstream error a failed native execution reported.
+ */
+export type TaskRouteFault = MarkableFailure | TaskUpstreamError
+
+/** The gateway's structured-output delivery failure, scoped to the exact route. */
+const STRUCTURED_OUTPUT_FAILURE: MarkableFailure = {
+  state: 'model_unavailable',
+  scope: 'route',
+  faultKind: 'structured_output',
+}
+
 export interface StructuredOutputOptions {
   profile: string
   instructions: string
@@ -145,14 +169,13 @@ export interface StructuredOutputOptions {
    *  terminal delivery outcome of actually launched attempts is reported:
    *  `onRouteSuccess` after a schema-validated delivery, `onRouteFault` after
    *  the terminal delivery failure — either a structured-output/protocol
-   *  failure (`structured_output`) or a client-reported model rejection
-   *  (`model_rejected`). Cancellation, time budget, functional and post-gate
-   *  failures never fault the route. */
+   *  failure (the gateway's structured-output failure payload) or the upstream
+   *  error a failed execution reported. Cancellation, time budget, functional
+   *  and post-gate failures never fault the route. */
   onRouteSuccess?: () => void
-  /** `until` is the upstream-stated reset instant (ISO) for a quota/rate-limit
-   *  fault, when the diagnostic carried one; omitted means the route-state
-   *  store's fixed bounded cooldown applies. */
-  onRouteFault?: (kind: NativeRouteFaultKind, until?: string) => void
+  /** The exact fault payload to record: the gateway's structured-output failure
+   *  payload, or the upstream error the failed native execution reported. */
+  onRouteFault?: (fault: TaskRouteFault) => void
 }
 
 export type StructuredOutputAgentStatus = 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'interrupted'
@@ -264,6 +287,8 @@ export interface StructuredOutputAgentResult {
   resolvedProfile?: string
   /** Canonical agent-runtime failure class captured from `run_finished`, if present. */
   failureClass?: string | null
+  /** Upstream HTTP status and error identity the native client reported. */
+  upstreamError?: TaskUpstreamError
   /** Time this attempt waited in the queue before its process launched. */
   queueWaitMs?: number
 }
@@ -341,7 +366,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     // check runs before profile resolution so its diagnostic is always the one
     // reported.
     if (attempt > 0 && !resume) {
-      opts.onRouteFault?.('structured_output')
+      opts.onRouteFault?.(STRUCTURED_OUTPUT_FAILURE)
       const validationErrors = lastValidationErrors ?? []
       const rawExcerpt = lastOutputExcerpt ?? ''
       const hasPlaceholderErrors = validationErrors.some((e) => e.includes('placeholder'))
@@ -455,18 +480,17 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
     // execution never produced.
     if (terminal.status === 'failed') {
       // A missing-terminal-result protocol failure is a delivery failure of the
-      // exact route and faults it; a client-reported model rejection faults the
-      // same route under its own kind; any other agent failure is functional and
-      // never touches route health.
-      if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.('structured_output')
-      if (terminal.failureClass === MODEL_REJECTION_FAILURE_CLASS) opts.onRouteFault?.('model_rejected')
-      if (terminal.failureClass === QUOTA_OR_RATE_LIMITED_FAILURE_CLASS) {
-        opts.onRouteFault?.('quota_or_rate_limited', parseResetInstant(terminal.error ?? terminal.output))
-      }
+      // exact route and faults it; a client-reported upstream error is carried
+      // verbatim for the route-state port to classify. Any other agent failure
+      // is functional and never touches route health, and an execution without
+      // an upstream error records no fault.
+      if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.(STRUCTURED_OUTPUT_FAILURE)
+      if (terminal.upstreamError !== undefined) opts.onRouteFault?.(terminal.upstreamError)
       throw agentFailedError(
         terminal.executionId ?? lastExecutionId ?? 'unknown',
         terminal.error ?? terminal.output,
         terminal.failureClass,
+        terminal.upstreamError,
       )
     }
 
@@ -532,7 +556,7 @@ export async function collectStructuredOutput(opts: StructuredOutputOptions): Pr
   )
   // The launched model attempts never produced a valid delivery: report the
   // terminal structured-output failure to the shared circuit before failing.
-  opts.onRouteFault?.('structured_output')
+  opts.onRouteFault?.(STRUCTURED_OUTPUT_FAILURE)
   throw gateErr
 }
 
@@ -544,6 +568,7 @@ interface StructuredExecutionTerminal {
   nativeSessionId?: string
   resolvedProfile?: string
   failureClass?: string | null
+  upstreamError?: TaskUpstreamError
   queueWaitMs?: number
 }
 
@@ -562,6 +587,7 @@ async function runStructuredAttempt(
     nativeSessionId: result.nativeSessionId,
     resolvedProfile: result.resolvedProfile,
     failureClass: result.failureClass ?? null,
+    upstreamError: result.upstreamError,
     queueWaitMs: result.queueWaitMs,
   }
 }
@@ -629,14 +655,16 @@ async function runTimeLimitWarningResume(
     )
   }
   if (terminal.status === 'failed') {
-    // The same protocol/delivery class faults the route here too, as does a
-    // client-reported model rejection; a functional agent failure does not.
-    if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.('structured_output')
-    if (terminal.failureClass === MODEL_REJECTION_FAILURE_CLASS) opts.onRouteFault?.('model_rejected')
+    // The same protocol/delivery class faults the route here too; a
+    // client-reported upstream error is carried verbatim for downstream
+    // classification. A functional agent failure does not fault the route.
+    if (terminal.failureClass === MISSING_TERMINAL_RESULT_FAILURE_CLASS) opts.onRouteFault?.(STRUCTURED_OUTPUT_FAILURE)
+    if (terminal.upstreamError !== undefined) opts.onRouteFault?.(terminal.upstreamError)
     throw agentFailedError(
       terminal.executionId ?? lastExecutionId ?? 'unknown',
       terminal.error ?? terminal.output,
       terminal.failureClass,
+      terminal.upstreamError,
     )
   }
   const parsed = await parseStructuredFinalOutput(terminal.output, schema, opts.preSchemaTransform)
@@ -686,31 +714,6 @@ function agentStoppedError(
         type: status === 'cancelled' ? 'agent_cancelled' : 'agent_interrupted',
         execution_id: executionId,
         status,
-        ...(detail ? { detail: detail.slice(0, 2000) } : {}),
-      }),
-    },
-  )
-}
-
-function agentFailedError(
-  executionId: string,
-  detail?: string | null,
-  failureClass?: string | null,
-): Error & { failure_category: string; error_message: string } {
-  // Map a canonical agent-runtime FailureClass onto a stable task failure
-  // category so a capacity/policy exhaustion is reported as
-  // runtime_status/transport rather than collapsed into the generic
-  // agent_failed bucket. Missing/unknown class defaults to agent_failed.
-  const category = mapAgentFailureClass(failureClass) ?? 'agent_failed'
-  return Object.assign(
-    new Error(`Agent execution failed: ${executionId}`),
-    {
-      failure_category: category,
-      error_message: JSON.stringify({
-        type: category,
-        execution_id: executionId,
-        status: 'failed',
-        ...(failureClass ? { agent_failure_class: failureClass } : {}),
         ...(detail ? { detail: detail.slice(0, 2000) } : {}),
       }),
     },

@@ -1,15 +1,16 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Catalog, GatewayProtocol, PublicGatewayModel } from '@wrenyard/providers/catalog';
 import type { ProviderRuntime } from '@wrenyard/providers';
-import { RouteStateStore, type Admission, type ClientFaultKind, type NativeRouteFaultKind, type ProbeLease, type RouteGuard, type RouteStateChangedEvent, type RouteStatus } from './route-state.ts';
+import { RouteStateStore, type Admission, type ClientFaultKind, type MarkableFailure, type ProbeLease, type RouteGuard, type RouteStateChangedEvent, type RouteStatus } from './route-state.ts';
 import { chatProtocol } from './protocols/chat.ts';
 import { responsesProtocol } from './protocols/responses.ts';
 import { messagesProtocol } from './protocols/messages.ts';
 import type { GatewayProtocolModule } from './protocols/types.ts';
 import { createGatewayPipeline, type GatewayRequestCompletedEvent, type GatewayRoute } from './pipeline.ts';
 
-export type { RouteStateChangedEvent, RouteStatus, CircuitPhase, ClientFaultKind, NativeRouteFaultKind, Admission, ProbeLease, RouteGuard } from './route-state.ts';
+export type { RouteStateChangedEvent, RouteStatus, CircuitPhase, ClientFaultKind, MarkableFailure, Admission, ProbeLease, RouteGuard } from './route-state.ts';
 export type { RouteFaultKind } from './route-failure.ts';
+export { classifyRouteFailure } from './route-failure.ts';
 export type { GatewayRequestCompletedEvent } from './pipeline.ts';
 
 export interface GatewayConnection {
@@ -64,11 +65,12 @@ export interface ModelGateway {
    */
   completeRouteSuccess(provider: string, model: string, guard?: RouteGuard, lease?: ProbeLease): void;
   /**
-   * Record a route-local fault a native task attempt observed on its own route.
-   * A held half-open probe lease is settled with the classified fault so the
-   * probe backoff is preserved.
+   * Record a route-local fault a native task attempt already classified for its
+   * own route. The failure carries its own fault kind, scope and any
+   * upstream-stated reset instant. A held half-open probe lease is settled with
+   * the classified fault so the probe backoff is preserved.
    */
-  reportNativeRouteFault(provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease, until?: string): void;
+  reportNativeRouteFault(provider: string, model: string, failure: MarkableFailure, guard?: RouteGuard, lease?: ProbeLease): void;
   /** Release a held native-task probe lease as cancelled; it never silently expires. */
   releaseNativeProbe(lease: ProbeLease): void;
   close(): Promise<void>;
@@ -156,8 +158,8 @@ export function createModelGateway(options: ModelGatewayOptions): ModelGateway {
     routeStates.success(provider, model, guard);
   };
 
-  const reportNativeRouteFault = (provider: string, model: string, kind: NativeRouteFaultKind, guard?: RouteGuard, lease?: ProbeLease, until?: string): void => {
-    routeStates.reportNativeRouteFault(provider, model, kind, guard, lease, until);
+  const reportNativeRouteFault = (provider: string, model: string, failure: MarkableFailure, guard?: RouteGuard, lease?: ProbeLease): void => {
+    routeStates.reportNativeRouteFault(provider, model, failure, guard, lease);
   };
 
   const releaseNativeProbe = (lease: ProbeLease): void => {

@@ -65,27 +65,120 @@ export type AgentFailureClass =
   | 'policy_exhausted'
 
 /**
- * Client-reported model-rejection classification. Unlike the native-runtime
- * failure classes above, this value is synthesized by the execution layer when a
- * client child refuses the resolved model — the model is unsupported for the
- * client's product or account, or the upstream answers model-not-found — so the
- * exact route is marked unhealthy instead of the failure being collapsed into a
- * generic agent failure. It is a specific signature, never applied to an
- * ordinary failed execution.
+ * Plain label for a client-reported model rejection. Route health and user-visible
+ * error types are derived from gateway classification of the upstream error, not
+ * from diagnostic text patterns.
  */
 export const MODEL_REJECTION_FAILURE_CLASS = 'model_rejected'
 
 /**
- * Client-reported quota-exhausted / rate-limited classification for the native
- * client path. The gateway's HTTP status classifier (402/429) does not run on
- * the native opencode path, so the daemon synthesizes this class from the
- * child's diagnostic text when it matches a quota/rate-limit signature. It
- * marks the route's free pool as exhausted so an automatically-routed task
- * re-resolves to the next (paid) route instead of failing outright. Like the
- * model-rejection class, it is a specific signature, never applied to an
- * ordinary failed execution.
+ * Plain label for a client-reported quota or rate limit. Route health and
+ * user-visible error types are derived from gateway classification of the
+ * upstream error, not from diagnostic text patterns.
  */
 export const QUOTA_OR_RATE_LIMITED_FAILURE_CLASS = 'quota_or_rate_limited'
+
+/** Gateway error-code vocabulary names surfaced in task failure text. */
+export type GatewayFailureClass =
+  | 'auth_failed'
+  | 'access_denied'
+  | 'model_unavailable'
+  | 'quota_exhausted'
+  | 'rate_limited'
+  | 'timeout'
+  | 'server_error'
+  | 'transport'
+  | 'structured_output'
+  | 'runtime_error'
+
+const GATEWAY_FAILURE_CLASS_SET = new Set<string>([
+  'auth_failed',
+  'access_denied',
+  'model_unavailable',
+  'quota_exhausted',
+  'rate_limited',
+  'timeout',
+  'server_error',
+  'transport',
+  'structured_output',
+  'runtime_error',
+])
+
+export interface AgentFailedErrorUpstream {
+  status?: number
+  errorType?: string
+  message?: string
+}
+
+function firstLineOf(text: string | null | undefined): string | undefined {
+  if (text === null || text === undefined || text.length === 0) return undefined
+  const line = text.split(/\r?\n/, 1)[0]?.trim()
+  return line === '' ? undefined : line
+}
+
+/** Generic HTTP status to gateway fault kind (matches gateway genericFailure). */
+export function genericFailureClassFromStatus(status: number): GatewayFailureClass | undefined {
+  if (status === 429) return 'rate_limited'
+  if (status === 402) return 'quota_exhausted'
+  if (status === 401) return 'auth_failed'
+  if (status === 403) return 'access_denied'
+  if (status === 404) return 'model_unavailable'
+  if (status === 408) return 'timeout'
+  if (status >= 500) return 'server_error'
+  return undefined
+}
+
+/**
+ * Map a failure class or upstream error to the error-codes table name used in
+ * user-visible task failure text.
+ */
+export function taskVisibleFailureClassToken(
+  failureClass: AgentFailureClass | string | null | undefined,
+  upstream?: AgentFailedErrorUpstream | null,
+): GatewayFailureClass | undefined {
+  if (upstream?.status !== undefined) {
+    const fromStatus = genericFailureClassFromStatus(upstream.status)
+    if (fromStatus !== undefined) return fromStatus
+  }
+  if (failureClass === null || failureClass === undefined || failureClass === 'none') return undefined
+  if (GATEWAY_FAILURE_CLASS_SET.has(failureClass)) return failureClass as GatewayFailureClass
+  switch (failureClass) {
+    case MODEL_REJECTION_FAILURE_CLASS:
+      return 'model_unavailable'
+    case QUOTA_OR_RATE_LIMITED_FAILURE_CLASS:
+      return 'rate_limited'
+    case 'profile_specific_limit':
+    case 'policy_exhausted':
+      return 'quota_exhausted'
+    case 'transient_provider':
+      return 'server_error'
+    case 'non_retryable':
+      return 'runtime_error'
+    default:
+      return undefined
+  }
+}
+
+/** First line of upstream reason for task failure text and error_message JSON. */
+export function upstreamFailureReasonFirstLine(
+  upstream?: AgentFailedErrorUpstream | null,
+  detail?: string | null,
+): string | undefined {
+  if (upstream !== null && upstream !== undefined
+    && (upstream.status !== undefined || upstream.errorType !== undefined || upstream.message !== undefined)) {
+    const parts: string[] = []
+    if (upstream.status !== undefined) parts.push(`HTTP ${upstream.status}`)
+    if (upstream.errorType !== undefined) {
+      parts.push(upstream.message !== undefined && upstream.message !== ''
+        ? `${upstream.errorType}: ${upstream.message}`
+        : upstream.errorType)
+    } else if (upstream.message !== undefined && upstream.message !== '') {
+      parts.push(upstream.message)
+    }
+    return firstLineOf(parts.join(' '))
+  }
+  return firstLineOf(detail)
+}
 
 /**
  * Distinct task failure categories that must stay separable in reporting. The
@@ -143,6 +236,19 @@ export function mapAgentFailureClass(
     // a model rejection.
     case QUOTA_OR_RATE_LIMITED_FAILURE_CLASS:
       return 'runtime_status'
+    case 'auth_failed':
+    case 'access_denied':
+    case 'model_unavailable':
+    case 'quota_exhausted':
+    case 'rate_limited':
+    case 'timeout':
+    case 'server_error':
+    case 'transport':
+    case 'structured_output':
+    case 'runtime_error':
+      return failureClass === 'timeout' || failureClass === 'server_error' || failureClass === 'transport'
+        ? 'transport'
+        : 'runtime_status'
     case 'none':
     case undefined:
     case null:
@@ -166,4 +272,34 @@ export function agentFailurePayload(
     status: 'failed',
     ...(detail ? { detail: detail.slice(0, 2000) } : {}),
   }
+}
+
+export function agentFailedError(
+  executionId: string,
+  detail?: string | null,
+  failureClass?: AgentFailureClass | string | null,
+  upstreamError?: AgentFailedErrorUpstream | null,
+): Error & { failure_category: string; error_message: string } {
+  const category = mapAgentFailureClass(failureClass) ?? 'agent_failed'
+  const classToken = taskVisibleFailureClassToken(failureClass, upstreamError)
+  const reason = upstreamFailureReasonFirstLine(upstreamError, detail)
+  const message = classToken !== undefined && reason !== undefined
+    ? `Agent execution failed (${classToken}): ${reason}`
+    : `Agent execution failed: ${executionId}`
+
+  return Object.assign(
+    new Error(message),
+    {
+      failure_category: category,
+      error_message: JSON.stringify({
+        type: category,
+        execution_id: executionId,
+        status: 'failed',
+        ...(failureClass ? { agent_failure_class: failureClass } : {}),
+        ...(classToken !== undefined ? { class: classToken } : {}),
+        ...(reason !== undefined ? { reason } : {}),
+        ...(detail ? { detail: detail.slice(0, 2000) } : {}),
+      }),
+    },
+  )
 }

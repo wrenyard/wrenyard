@@ -70,7 +70,7 @@ import { initializeLocalSpeedSamples, readLocalSpeedSamplesCached, updateLocalSp
 import type { ForemanEvent, ForemanEventKind, ForemanEventSeverity } from '../events/event-types.mts'
 import { WorkspaceDocService } from './services/workspace-doc-service.mts'
 import { WorkspaceTodoService, todoIndexPath } from './services/workspace-todo-service.mts'
-import { createModelGateway, type ModelGateway, type RouteStatus } from '@wrenyard/gateway'
+import { classifyRouteFailure, createModelGateway, type ModelGateway, type RouteStatus } from '@wrenyard/gateway'
 import { deriveTaskDispatchPlans, createBuiltinCatalog, createBuiltinProviderRuntime, createCodeBuddy, createDevin, createOpenCodeZen, resolveHistoricalOfferedModelId } from '@wrenyard/providers'
 import { REASONING_EFFORTS, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog'
 import { PROVIDER_DEFAULT_REASONING } from '@wrenyard/providers/base'
@@ -1116,9 +1116,9 @@ async function createForemanDaemonResources(
   // failure (settling the held probe with its backoff), and a cancelled release
   // for any other exit.
   //
-  // The task route key is client-qualified (`provider/model:client`), so it is
-  // its own circuit route and would not otherwise see a fault recorded on the
-  // shared `provider/model` route a session call uses. Admission therefore also
+  // The task fault key is the route's provider plus its bare model (any
+  // `:client` suffix is stripped), so a native fault lands on the same
+  // `provider/model` health key a session call uses. Admission therefore also
   // checks the shared route first, so a pinned task or a selection-to-launch
   // race can never launch while that shared circuit still refuses the route.
   const taskRouteState: TaskRouteStateHooks = {
@@ -1128,21 +1128,34 @@ async function createForemanDaemonResources(
       return gateway.admitRoute(provider, model)
     },
     success: (provider, model, guard, lease) => gateway.completeRouteSuccess(provider, model, guard, lease),
-    fault: (provider, model, guard, kind, lease, until) => {
-      // The native task route key is client-qualified (`provider/model:client`),
-      // but the shared circuit store keys pools by the bare model. The pool-scoped
-      // `quota_or_rate_limited` fault must land on the bare-model pool key that
-      // `sharedRouteFaultState` and the automatic re-resolution read, so strip the
-      // client suffix for that kind alone. Other native faults (`structured_output`,
-      // `model_rejected`) stay client-qualified exactly as before — their route
-      // keys are not duplicated by the shared bare-model pool store.
-      let resolved = model
-      if (kind === 'quota_or_rate_limited') {
-        try {
-          resolved = parseRunSyntax(`${provider}/${model}`).model
-        } catch {}
+    fault: (provider, model, guard, fault, lease) => {
+      // Faults are keyed by provider plus the bare model: the native task route
+      // is client-qualified, but a client suffix is never part of route health.
+      let bareModel: string
+      try {
+        bareModel = parseRunSyntax(`${provider}/${model}`).model
+      } catch {
+        return undefined
       }
-      return gateway.reportNativeRouteFault(provider, resolved, kind, guard, lease, until)
+      // A structured-output delivery failure is already classified.
+      if ('state' in fault) return gateway.reportNativeRouteFault(provider, bareModel, fault, guard, lease)
+      // An upstream error without a status cannot be classified: record nothing.
+      if (fault.status === undefined) return undefined
+      const providerDefinition = catalog.provider(provider)
+      if (providerDefinition === undefined) return undefined
+      // The provider hook reads the error identity exactly as it would from a
+      // real upstream body (`{ error: { type, message } }`).
+      const body = fault.errorType === undefined && fault.message === undefined
+        ? undefined
+        : {
+            error: {
+              ...(fault.errorType === undefined ? {} : { type: fault.errorType }),
+              ...(fault.message === undefined ? {} : { message: fault.message }),
+            },
+          }
+      const failure = classifyRouteFailure(providerDefinition, bareModel, fault.status, new Headers(), body, Date.now())
+      if (failure === undefined) return undefined
+      return gateway.reportNativeRouteFault(provider, bareModel, failure, guard, lease)
     },
     cancel: (lease) => gateway.releaseNativeProbe(lease),
     faultState: (provider, model) => sharedRouteFaultState(gateway, provider, model),

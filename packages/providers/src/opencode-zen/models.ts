@@ -148,15 +148,16 @@ export const definition = defineProvider({
     })),
   },
   /**
-   * A free-promotion rejection or a model that disappeared from the live
-   * catalog is a fault of this exact route only. It must never cool the paid
-   * pools or the whole provider, and it is never an authentication failure:
-   * that would let an ended promotion poison every Zen route.
+   * A free-tier 403 denies access to the whole free pool the caller was using,
+   * so it narrows to that pool: every free Zen route cools down while the paid
+   * balance pool and the provider stay usable. It is an access denial, not an
+   * authentication failure. A model that disappeared from the live catalog
+   * stays a fault of this exact route.
    */
   classifyUpstreamError({ status, body }: UpstreamRouteErrorInput): UpstreamRouteFailure | undefined {
     const { identity, message } = upstreamErrorParts(body);
-    if (/\bFreeTierError\b/i.test(identity) || /free[_ ]?tier|free promotion/i.test(message)) {
-      return { state: 'model_unavailable', scope: 'route' };
+    if (status === 403 && (/\bFreeTierError\b/i.test(identity) || /free[_ ]?tier|free promotion/i.test(message))) {
+      return { state: 'access_denied', scope: 'pool', quotaPoolId: 'opencode-zen/free' };
     }
     const modelGone = /model not found|unknown model|(?:do(?:es)? not|don't) have access to (?:the )?model/i.test(message);
     if (modelGone || (status === 404 && /not found|unknown model|access to the model/i.test(message))) {
