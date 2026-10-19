@@ -152,10 +152,31 @@ const MESSAGE_TOOL: ToolSpec = {
   },
 }
 
+const WORKSPACE_TOOL: ToolSpec = {
+  name: 'workspace',
+  description: [
+    'Version control of the workspace repository itself: status, diff, commit, push and pull,',
+    'run through the workspace vcs auxiliary in this conversation.',
+    'You may commit and push workspace changes you made yourself (your memory, your identity, todos you created or updated).',
+    'Name the exact files you changed and never commit files you did not change; a commit with foreign or mismatched staged files is refused.',
+  ].join(' '),
+  parameters: {
+    type: 'object',
+    properties: {
+      request: {
+        type: 'string',
+        description: 'A natural-language instruction, for example: commit bots/main/memory/foo.md with message "...", then push.',
+      },
+    },
+    required: ['request'],
+  },
+}
+
 const TOOL_SPECS: Readonly<Record<AgentToolName, ToolSpec>> = {
   session: SESSION_TOOL,
   todo: TODO_TOOL,
   message: MESSAGE_TOOL,
+  workspace: WORKSPACE_TOOL,
 }
 
 /** The specs of the enabled tools, in the order the config lists them. */

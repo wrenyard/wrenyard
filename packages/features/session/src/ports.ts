@@ -14,6 +14,7 @@ import type {
   TaskBrief,
   WorkspaceSnapshot,
 } from './ledger/store.ts';
+import type { ActionType } from './ledger/events.ts';
 import type { CallRole } from './model/request.ts';
 import type { ContextInspectRequest, ContextInspection } from './context/inspect.ts';
 import type { Message as ModelMessage, ModelContentPart, ModelWaitReason, ToolCall, ToolSpec, ToolChoice, Usage, ModelMetrics } from './transport/index.ts';
@@ -163,6 +164,15 @@ export interface AgentToolPort {
     call: { name: string; arguments: string },
     ctx: { sessionId: string; turn: number },
   ): Promise<{ status: 'done' | 'failed'; result: string }>;
+  /**
+   * Tools backed by a built-in auxiliary action instead of `run`. When the
+   * model calls one of these names, the turn starts a real action of the
+   * mapped type with the call's `request` argument as its intent, so ledger
+   * records, usage attribution, the transcript card and auxiliary model
+   * routing match a direct built-in action of that type. Every name must
+   * also appear in `tools`.
+   */
+  auxiliaryTools?: Readonly<Record<string, ActionType>>;
 }
 
 /**

@@ -530,6 +530,25 @@ export class TurnRunner {
         await this.engine.appendError(session.sessionId, 'reason', `unknown tool: ${call.name}`, turn, step);
         return;
       }
+      const auxiliary = port.auxiliaryTools?.[call.name];
+      if (auxiliary !== undefined) {
+        const request = auxiliaryToolRequest(call.arguments);
+        if (request === undefined) {
+          turn.correctionRequired = true;
+          await this.engine.appendError(
+            session.sessionId,
+            'reason',
+            `invalid arguments for tool ${call.name}: expected a non-empty "request" string`,
+            turn,
+            step,
+          );
+          return;
+        }
+        turn.portToolCallsThisTurn += 1;
+        const ordinal = turn.portToolCallsThisTurn;
+        await this.startAction(session, turn, step, { type: auxiliary, intent: request, name: call.name }, ordinal);
+        return;
+      }
       turn.portToolCallsThisTurn += 1;
       // The call's own ordinal is captured after the increment: calls in one
       // synchronous batch each keep their own position against the cap.
@@ -656,9 +675,18 @@ export class TurnRunner {
   ): Promise<void> {
     let outcome: ActionExecutionOutcome;
     try {
-      outcome = action.type === 'tool'
-        ? await this.runToolAction(session, turn, action, toolOrdinal)
-        : await session.actions.execute(action, ctx);
+      if (action.type === 'tool') {
+        outcome = await this.runToolAction(session, turn, action, toolOrdinal);
+      } else {
+        // A port-originated auxiliary action is subject to the same per-turn
+        // cap as a native tool call; a built-in action never is.
+        const port = action.name === undefined ? undefined : this.engine.host.agentTools?.(session.sessionId);
+        if (port !== undefined && (toolOrdinal ?? turn.portToolCallsThisTurn) > (port.maxToolCalls ?? 24)) {
+          outcome = { status: 'failed', result: 'tool call limit reached; end the turn', deferred: [] };
+        } else {
+          outcome = await session.actions.execute(action, ctx);
+        }
+      }
     } catch (error) {
       outcome = { status: 'failed', result: messageOf(error), deferred: [] };
     }
@@ -834,6 +862,20 @@ function isReadDraft(draft: LedgerEventDraft): boolean {
       return true;
     default:
       return false;
+  }
+}
+
+/** The trimmed `request` argument of one tool call, or undefined when it is not a non-empty string. */
+function auxiliaryToolRequest(args: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(args);
+    if (parsed === null || typeof parsed !== 'object') return undefined;
+    const request = (parsed as { request?: unknown }).request;
+    if (typeof request !== 'string') return undefined;
+    const trimmed = request.trim();
+    return trimmed === '' ? undefined : trimmed;
+  } catch {
+    return undefined;
   }
 }
 

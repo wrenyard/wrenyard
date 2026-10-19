@@ -18,10 +18,10 @@ import { basename, join } from 'node:path'
 import type { RoutineConfig } from '../scheduler.mts'
 
 /** One tool switch a bot can turn on. */
-export type AgentToolName = 'session' | 'todo' | 'message'
+export type AgentToolName = 'session' | 'todo' | 'message' | 'workspace'
 
 /** Every known tool switch. */
-const TOOL_NAMES: readonly AgentToolName[] = ['session', 'todo', 'message']
+const TOOL_NAMES: readonly AgentToolName[] = ['session', 'todo', 'message', 'workspace']
 
 /** The only top-level keys a bot config file may declare. */
 const CONFIG_KEYS = new Set(['id', 'name', 'enabled', 'instructions', 'tools', 'routines'])

@@ -267,14 +267,20 @@ export interface GroupSendResult {
  * the prefix, the group guidance and the config instructions, all verbatim.
  */
 function botSystemPrompt(config: BotAgentConfig, all: Iterable<BotAgentEntry>): string {
+  const workspaceEnabled = config.tools.includes('workspace')
   const fixed = [
     `You are the Wrenyard bot "${config.name}" (${config.id}).`,
     'You are driven by messages: routine triggers, user input, other bots\' messages and work-session updates.',
     'One message may carry several [wake:user], [wake:routine <id>], [wake:session <sessionId> <status>] or [wake:message from <bot>] entries; handle every one of them in this turn.',
-    'Your levers are the bot tools (session list/create/send/interrupt, todo, message).',
+    workspaceEnabled
+      ? 'Your levers are the bot tools (session list/create/send/interrupt, todo, message, workspace).'
+      : 'Your levers are the bot tools (session list/create/send/interrupt, todo, message).',
     'Answer directly in text when no work is needed: acknowledgements, status from this conversation, and questions you can answer without running anything.',
     'You never run code, searches, documents or tasks yourself; delegate such work to a work session in natural language and create one only for it.',
     'You have no file or shell access.',
+    ...(workspaceEnabled
+      ? ['With the workspace tool you may commit and push workspace changes you made yourself (your memory, your identity, todos you created or updated); name the exact files and never commit files you did not change.']
+      : []),
   ].join(' ')
   const peers: BotAgentConfig[] = []
   for (const entry of all) {
@@ -663,6 +669,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       tools: agentToolSpecs(config.tools),
       maxToolCalls: MAX_TOOL_CALLS,
       kernelFacts: () => kernelFactsFor(config),
+      auxiliaryTools: { workspace: 'vcs' },
       // The invoking context session and turn decide which routine round a
       // watch inherits; a turn admitted before a rotation keeps its own round.
       run: (call, ctx) => runTools(call, toolContext(botId, ctx.sessionId, ctx.turn)),
