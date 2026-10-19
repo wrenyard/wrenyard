@@ -40,6 +40,17 @@ const MAX_CONCURRENT_EXECUTIONS = 10
 const SHUTDOWN_GRACE_MS = 10_000
 const STDERR_TAIL_MAX_LEN = 4_000
 /**
+ * Upper bound on retained assistant message text for one execution, in UTF-16
+ * code units. Same code-unit accounting as `tailString`, so a run's retained
+ * output can never exceed this regardless of how many chunks it streams.
+ */
+const OUTPUT_MAX_CHARS = 256 * 1024
+const OUTPUT_HEAD_CHARS = 128 * 1024
+const OUTPUT_TRUNCATION_MARKER = '\n\n[... output truncated ...]\n\n'
+const OUTPUT_TAIL_CHARS = OUTPUT_MAX_CHARS - OUTPUT_HEAD_CHARS - OUTPUT_TRUNCATION_MARKER.length
+/** Part count above which a region is collapsed into one joined string. */
+const OUTPUT_COMPACT_PARTS = 512
+/**
  * Default bound for settling a registered active-execution cancellation when
  * the child-close/stream observer is absent or stalled. After the process-tree
  * kill succeeds (or the registered PID is already absent), the supervisor waits
@@ -179,6 +190,12 @@ interface RegistryEntry {
   hasRepoLock: boolean
   wasQueued: boolean
   outputParts: string[]
+  /** Code units held before truncation, or in the retained head afterwards. */
+  outputHeadChars: number
+  /** Code units held after the truncation marker. */
+  outputTailChars: number
+  /** True once the middle of the output has been replaced by the marker. */
+  outputTruncated: boolean
   finalOutput?: string
   stderrTail: string
   rawResult?: string
@@ -766,6 +783,9 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
       hasRepoLock,
       wasQueued: false,
       outputParts: [],
+      outputHeadChars: 0,
+      outputTailChars: 0,
+      outputTruncated: false,
       stderrTail: '',
       resultErrorTail: '',
       sawTerminalResult: false,
@@ -1093,7 +1113,7 @@ export class AgentExecutionSupervisor implements AgentExecutionHost {
               entry.idleTimer?.refresh()
             }
             if (mapped.type === 'message' && typeof mapped.data.text === 'string') {
-              entry.outputParts.push(mapped.data.text)
+              appendOutputText(entry, mapped.data.text)
             }
 
             const redacted = redactEvent(mapped.type, mapped.data)
@@ -2667,6 +2687,112 @@ function dropUndefined<T extends Record<string, unknown>>(value: T): T {
 
 function compactStrings(values: Array<string | null | undefined>): string[] {
   return values.filter((value): value is string => Boolean(value?.trim()))
+}
+
+/**
+ * Copy a retained string into a flat, exactly-sized buffer so a V8 slice cannot
+ * keep a much larger incoming payload's backing store alive. The UTF-16
+ * round-trip preserves every code unit, including lone surrogate halves.
+ */
+function detachRetainedText(value: string): string {
+  return Buffer.from(value, 'utf16le').toString('utf16le')
+}
+
+/**
+ * Accumulate one assistant message chunk under a hard code-unit cap.
+ *
+ * Below the cap the exact chunk sequence is preserved. Once the cap would be
+ * crossed, the first OUTPUT_HEAD_CHARS and the newest OUTPUT_TAIL_CHARS are
+ * retained with an explicit marker between them; the marker itself counts
+ * toward OUTPUT_MAX_CHARS. Incoming chunks are sliced against the remaining
+ * budget rather than concatenated first, so an oversized chunk is never
+ * materialised in full. Empty chunks are ignored, and a region that grows into
+ * many tiny parts is periodically collapsed so the array itself stays bounded.
+ */
+function appendOutputText(entry: RegistryEntry, text: string): void {
+  if (text.length === 0) return
+  if (!entry.outputTruncated) {
+    if (entry.outputHeadChars + text.length <= OUTPUT_MAX_CHARS) {
+      entry.outputParts.push(detachRetainedText(text))
+      entry.outputHeadChars += text.length
+      if (entry.outputParts.length > OUTPUT_COMPACT_PARTS) {
+        const joined = entry.outputParts.join('')
+        entry.outputParts = [joined]
+        entry.outputHeadChars = joined.length
+      }
+      return
+    }
+    truncateOutputText(entry, text)
+    return
+  }
+  appendOutputTail(entry, text)
+}
+
+/** Replace the middle of an over-cap sequence with the truncation marker. */
+function truncateOutputText(entry: RegistryEntry, incoming: string): void {
+  // The pre-truncation parts are bounded by OUTPUT_MAX_CHARS, so joining them
+  // is cheap; the incoming chunk is only ever sliced.
+  const existing = entry.outputParts.join('')
+  const headBudget = OUTPUT_HEAD_CHARS
+  const head = existing.length >= headBudget
+    ? detachRetainedText(existing.slice(0, headBudget))
+    : detachRetainedText(existing + incoming.slice(0, headBudget - existing.length))
+  const headFromIncoming = Math.max(0, head.length - existing.length)
+
+  const parts: string[] = []
+  const tailFromIncoming = Math.min(incoming.length - headFromIncoming, OUTPUT_TAIL_CHARS)
+  if (tailFromIncoming > 0) parts.push(detachRetainedText(incoming.slice(incoming.length - tailFromIncoming)))
+  const neededFromExisting = OUTPUT_TAIL_CHARS - tailFromIncoming
+  if (neededFromExisting > 0) {
+    const suffix = detachRetainedText(existing.slice(Math.max(0, existing.length - neededFromExisting)))
+    if (suffix.length > 0) parts.unshift(suffix)
+  }
+
+  entry.outputParts = [head, OUTPUT_TRUNCATION_MARKER, ...parts]
+  entry.outputHeadChars = head.length
+  entry.outputTailChars = parts.reduce((total, part) => total + part.length, 0)
+  entry.outputTruncated = true
+}
+
+/** Append into the retained tail window of an already-truncated output. */
+function appendOutputTail(entry: RegistryEntry, text: string): void {
+  if (entry.outputTailChars + text.length <= OUTPUT_TAIL_CHARS) {
+    entry.outputParts.push(detachRetainedText(text))
+    entry.outputTailChars += text.length
+    if (entry.outputParts.length - 2 > OUTPUT_COMPACT_PARTS) {
+      const tail = entry.outputParts.slice(2).join('')
+      entry.outputParts = [entry.outputParts[0]!, OUTPUT_TRUNCATION_MARKER, tail]
+    }
+    return
+  }
+  if (text.length >= OUTPUT_TAIL_CHARS) {
+    entry.outputParts = [
+      entry.outputParts[0]!,
+      OUTPUT_TRUNCATION_MARKER,
+      detachRetainedText(text.slice(text.length - OUTPUT_TAIL_CHARS)),
+    ]
+    entry.outputTailChars = OUTPUT_TAIL_CHARS
+    return
+  }
+  const keep = OUTPUT_TAIL_CHARS - text.length
+  const kept: string[] = []
+  let remaining = keep
+  for (let index = entry.outputParts.length - 1; index >= 2 && remaining > 0; index -= 1) {
+    const part = entry.outputParts[index]!
+    if (part.length <= remaining) {
+      kept.unshift(part)
+      remaining -= part.length
+    } else {
+      kept.unshift(detachRetainedText(part.slice(part.length - remaining)))
+      remaining = 0
+    }
+  }
+  kept.push(detachRetainedText(text))
+  if (kept.length > OUTPUT_COMPACT_PARTS) {
+    kept.splice(0, kept.length, kept.join(''))
+  }
+  entry.outputParts = [entry.outputParts[0]!, OUTPUT_TRUNCATION_MARKER, ...kept]
+  entry.outputTailChars = keep + text.length
 }
 
 function tailString(value: string, maxLen: number): string {
