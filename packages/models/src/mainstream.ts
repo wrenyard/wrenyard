@@ -18,7 +18,7 @@ export const MAINSTREAM_MODEL_IDS = [
   'gpt-6-luna',
   'glm-5.3',
   'glm-5.3-flash',
-  'minimax-m3.1-flash-preview',
+  'minimax-m3.1-flash',
   'claude-fable-5-1',
   'claude-opus-5',
   'claude-opus-5-5',

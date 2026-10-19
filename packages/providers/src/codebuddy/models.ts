@@ -19,7 +19,8 @@ const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'hy4-preview': 'hunyuan-hy4-preview',
   'hy4-preview-ioa': 'hunyuan-hy4-preview',
   'MiniMax-M3': 'minimax-m3',
-  'MiniMax-M3.1-Flash-Preview': 'minimax-m3.1-flash-preview',
+  'MiniMax-M3.1-Flash': 'minimax-m3.1-flash',
+  'MiniMax-M3.1-Flash-Preview': 'minimax-m3.1-flash',
   'MiniMax-M2.7': 'minimax-m2.7',
   // DeepSeek V4 Pro ships as `deepseek-v4-pro-ioa` in the iOA product file. The
   // older `deepseek-v4-flash(-ioa)` rows are a distinct model, not V4.1 Flash

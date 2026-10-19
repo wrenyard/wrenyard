@@ -1,14 +1,17 @@
 import { defineProvider, model, openAI, anthropic, effortLadder } from '../base/model-defaults.ts';
 
-// M3.1 Flash Preview materializes low through max; `none` is not offered.
+// M3.1 Flash GA materializes low through max; `none` is rejected upstream with HTTP 400.
 const REASONING_LOW_MAX = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 export const definition = defineProvider({
-  id: 'minimax-coding', displayName: 'MiniMax Coding Plan', credentialResolver: 'managed', defaultModel: 'minimax-m3.1-flash-preview',
-  // M3.1 Flash Preview is subscription-only; the pay-as-you-go provider keeps M3.
-  models: [model('minimax-m3.1-flash-preview', undefined, undefined, 'MiniMax-M3.1-Flash-Preview', REASONING_LOW_MAX)],
+  id: 'minimax-coding', displayName: 'MiniMax Coding Plan', credentialResolver: 'managed', defaultModel: 'minimax-m3.1-flash',
+  // M3.1 Flash is subscription-only; the pay-as-you-go provider keeps M3.
+  models: [model('minimax-m3.1-flash', undefined, undefined, 'MiniMax-M3.1-Flash', REASONING_LOW_MAX)],
+  // Migration-only: a selection written against the preview id still resolves
+  // onto the GA offering.
+  modelAliases: { 'minimax-m3.1-flash-preview': 'minimax-m3.1-flash' },
   reasoningEffortMappings: {
-    'minimax-m3.1-flash-preview': {
+    'minimax-m3.1-flash': {
       claude: effortLadder(REASONING_LOW_MAX),
       codebuddy: effortLadder(REASONING_LOW_MAX),
       grok: effortLadder(REASONING_LOW_MAX),
