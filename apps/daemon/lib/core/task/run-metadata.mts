@@ -498,9 +498,8 @@ const AUTO_ROUTING_DECISION_KEYS: ReadonlySet<string> = new Set([
   'snapshot_id',
   'selected_rank',
   'supply_class',
-  'quota_tier',
+  'quota_state',
   'quota_coverage_complete',
-  'quota_headroom_trusted',
   'reference_output_usd_per_million',
   'routing_output_usd_per_million',
   'effective_cap_usd_per_million',
@@ -511,7 +510,7 @@ const AUTO_ROUTING_DECISION_KEYS: ReadonlySet<string> = new Set([
 /**
  * Type guard for a complete, schema-safe TaskAutoRoutingDecision parsed from
  * JSON. Accepts only the exact DTO key set with exact boolean / finite number /
- * string / string-array field types and the allowed supply_class / quota_tier
+ * string / string-array field types and the allowed supply_class / quota_state
  * enums, so arbitrary JSON (credentials, domains, raw provider errors) can
  * never be mistaken for or re-exposed as a routing decision.
  */
@@ -535,9 +534,9 @@ function isAutoRoutingDecision(record: Record<string, unknown>): record is TaskA
     typeof record.snapshot_id === 'string'
     && isFiniteNumber(record.selected_rank)
     && (record.supply_class === 'confirmed_free' || record.supply_class === 'standard')
-    && (record.quota_tier === 'healthy' || record.quota_tier === 'unknown' || record.quota_tier === 'strained')
+    && (record.quota_state === 'abundant' || record.quota_state === 'sufficient'
+      || record.quota_state === 'insufficient' || record.quota_state === 'exhausted')
     && typeof record.quota_coverage_complete === 'boolean'
-    && typeof record.quota_headroom_trusted === 'boolean'
     && isFiniteNumber(record.reference_output_usd_per_million)
     && isFiniteNumber(record.routing_output_usd_per_million)
     && isFiniteNumber(record.effective_cap_usd_per_million)
@@ -568,9 +567,8 @@ function parseAutoRoutingDecision(raw: string | null): TaskAutoRoutingDecision |
     snapshot_id: record.snapshot_id,
     selected_rank: record.selected_rank,
     supply_class: record.supply_class,
-    quota_tier: record.quota_tier,
+    quota_state: record.quota_state,
     quota_coverage_complete: record.quota_coverage_complete,
-    quota_headroom_trusted: record.quota_headroom_trusted,
     reference_output_usd_per_million: record.reference_output_usd_per_million,
     routing_output_usd_per_million: record.routing_output_usd_per_million,
     effective_cap_usd_per_million: record.effective_cap_usd_per_million,

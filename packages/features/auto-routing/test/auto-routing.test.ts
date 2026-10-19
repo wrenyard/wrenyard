@@ -142,34 +142,32 @@ function expectRejected(c: CandidateInput, reason: string, weights?: ScoreWeight
 // Rolling-partial replenishment semantics
 // ---------------------------------------------------------------------------
 
-test("rolling_partial healthy/strained/unknown/blocked bands and H", () => {
-  const healthy = assessRequiredQuota(NOW, [q("h", rollingEv(90))]);
-  assert.equal(healthy.state, "healthy");
-  assert.equal(healthy.coverageComplete, true);
-  assert.equal(healthy.headroomTrusted, true);
+test("rolling_partial abundant/sufficient/insufficient/exhausted bands and H", () => {
+  const abundant = assessRequiredQuota(NOW, [q("h", rollingEv(90))]);
+  assert.equal(abundant.state, "abundant");
+  assert.equal(abundant.coverageComplete, true);
   // A rolling pool carries no pace credit: H = 0.5 * remainingRatio.
-  close(healthy.headroom!, 0.45, 1e-12, "healthy rolling H");
-  assert.equal(healthy.constraints[0].state, "healthy");
-  close(healthy.constraints[0].headroom!, 0.45, 1e-12, "constraint H");
+  close(abundant.headroom!, 0.45, 1e-12, "abundant rolling H");
+  assert.equal(abundant.constraints[0].state, "abundant");
+  close(abundant.constraints[0].headroom!, 0.45, 1e-12, "constraint H");
 
-  const strained = assessRequiredQuota(NOW, [q("s", rollingEv(4))]);
-  assert.equal(strained.state, "strained");
-  close(strained.headroom!, 0.02, 1e-12, "strained rolling H");
-  assert.equal(strained.constraints[0].state, "strained");
-  close(strained.constraints[0].headroom!, 0.02, 1e-12, "strained constraint H");
+  const insufficient = assessRequiredQuota(NOW, [q("s", rollingEv(4))]);
+  assert.equal(insufficient.state, "insufficient");
+  close(insufficient.headroom!, 0.02, 1e-12, "insufficient rolling H");
+  assert.equal(insufficient.constraints[0].state, "insufficient");
+  close(insufficient.constraints[0].headroom!, 0.02, 1e-12, "insufficient constraint H");
 
-  const unknownMid = assessRequiredQuota(NOW, [q("u", rollingEv(50))]);
-  assert.equal(unknownMid.state, "unknown");
-  assert.equal(unknownMid.headroomTrusted, false);
-  assert.equal(unknownMid.constraints[0].headroom, null);
-  assert.equal(unknownMid.headroom, ZERO_QUOTA_HEADROOM);
+  const sufficientMid = assessRequiredQuota(NOW, [q("u", rollingEv(50))]);
+  assert.equal(sufficientMid.state, "sufficient");
+  assert.equal(sufficientMid.constraints[0].headroom, null);
+  assert.equal(sufficientMid.headroom, ZERO_QUOTA_HEADROOM);
 
-  const blocked = assessRequiredQuota(NOW, [q("z", rollingEv(0))]);
-  assert.equal(blocked.state, "blocked");
-  assert.equal(blocked.headroom, null);
-  assert.deepEqual(blocked.blockedConstraintIds, ["z"]);
-  assert.equal(blocked.constraints[0].state, "blocked");
-  assert.equal(blocked.constraints[0].headroom, 0);
+  const exhausted = assessRequiredQuota(NOW, [q("z", rollingEv(0))]);
+  assert.equal(exhausted.state, "exhausted");
+  assert.equal(exhausted.headroom, null);
+  assert.deepEqual(exhausted.exhaustedConstraintIds, ["z"]);
+  assert.equal(exhausted.constraints[0].state, "exhausted");
+  assert.equal(exhausted.constraints[0].headroom, 0);
 });
 
 test("unknown replenishment kind and missing monthly keep coverage semantics", () => {
@@ -180,7 +178,7 @@ test("unknown replenishment kind and missing monthly keep coverage semantics", (
     replenishmentKind: "unknown",
   };
   const single = assessRequiredQuota(NOW, [q("u", unknownEv)]);
-  assert.equal(single.state, "unknown");
+  assert.equal(single.state, "sufficient");
   assert.equal(single.coverageComplete, true);
   assert.equal(single.headroom, ZERO_QUOTA_HEADROOM);
 
@@ -188,17 +186,16 @@ test("unknown replenishment kind and missing monthly keep coverage semantics", (
     q("u", unknownEv),
     q("monthly", null),
   ]);
-  assert.equal(withMissing.state, "unknown");
+  assert.equal(withMissing.state, "insufficient");
   assert.equal(withMissing.coverageComplete, false);
   assert.equal(withMissing.headroom, ZERO_QUOTA_HEADROOM);
-  assert.equal(withMissing.constraints[1].state, "missing");
+  assert.equal(withMissing.constraints[1].evidenceStatus, "not_obtained");
 });
 
-test("empty required quota is unknown with incomplete coverage", () => {
+test("empty required quota is sufficient with incomplete coverage", () => {
   const empty = assessRequiredQuota(NOW, []);
-  assert.equal(empty.state, "unknown");
+  assert.equal(empty.state, "sufficient");
   assert.equal(empty.coverageComplete, false);
-  assert.equal(empty.headroomTrusted, false);
   assert.equal(empty.headroom, ZERO_QUOTA_HEADROOM);
 });
 
@@ -206,30 +203,30 @@ test("full_cycle legal reset/window math and headroom values", () => {
   // resetAt - now == window => expectedRemaining 1, threshold 0.8. Remaining
   // trails that pace, so the pace term floors at 0 and H = 0.5 * ratio.
   const atWindow = assessRequiredQuota(NOW, [q("w", fullCycleEv(85, 1))]);
-  assert.equal(atWindow.state, "healthy");
+  assert.equal(atWindow.state, "sufficient");
   assert.equal(atWindow.coverageComplete, true);
-  assert.equal(atWindow.headroomTrusted, true);
   close(atWindow.headroom!, 0.425, 1e-9, "full-cycle H=half ratio");
 
   // Remaining 0.05 against a 1/17-of-window horizon still trails the pace
-  // (0.0588), so no pace credit is earned: H = 0.5*0.05 = 0.025.
+  // (0.0588): below the 10% bound and under pace, so it is insufficient. The
+  // headroom keeps its raw blend: H = 0.5*0.05 = 0.025.
   const low = assessRequiredQuota(NOW, [q("l", fullCycleEv(5, 1 / 17))]);
-  assert.equal(low.state, "healthy");
+  assert.equal(low.state, "insufficient");
   close(low.headroom!, 0.025, 1e-6, "full-cycle low H");
 
   // 60% with a 0.3-of-window horizon leads the pace by thirty points, so the
   // pace term saturates: H = 0.5*0.6 + 0.5.
   const mid = assessRequiredQuota(NOW, [q("m", fullCycleEv(60, 0.3))]);
-  assert.equal(mid.state, "healthy");
+  assert.equal(mid.state, "abundant");
   close(mid.headroom!, 0.8, 1e-9, "full-cycle mid H");
 
-  // Slow replenishment that cannot reach healthy stays strained.
-  const strainedSlow = assessRequiredQuota(NOW, [q("r", fullCycleEv(30, 0.95))]);
-  assert.equal(strainedSlow.state, "strained");
-  assert.equal(strainedSlow.coverageComplete, true);
+  // Under pace but above the insufficient bound stays sufficient.
+  const sufficientSlow = assessRequiredQuota(NOW, [q("r", fullCycleEv(30, 0.95))]);
+  assert.equal(sufficientSlow.state, "sufficient");
+  assert.equal(sufficientSlow.coverageComplete, true);
 });
 
-test("equal arithmetic mean is taken across joint healthy full-cycle constraints", () => {
+test("equal arithmetic mean is taken across joint measured full-cycle constraints", () => {
   // Each constraint is one pool resource and participates equally:
   // (0.45 + 0.80 + 0.425) / 3 = 0.558333...
   const joint = assessRequiredQuota(NOW, [
@@ -237,17 +234,15 @@ test("equal arithmetic mean is taken across joint healthy full-cycle constraints
     q("tight", fullCycleEv(60, 0.3)),
     q("mid", fullCycleEv(85, 1)),
   ]);
-  assert.equal(joint.state, "healthy");
+  assert.equal(joint.state, "sufficient");
   assert.equal(joint.coverageComplete, true);
-  assert.equal(joint.headroomTrusted, true);
-  close(joint.headroom!, (0.45 + 0.8 + 0.425) / 3, 1e-9, "mean across healthy headrooms");
+  close(joint.headroom!, (0.45 + 0.8 + 0.425) / 3, 1e-9, "mean across measured headrooms");
 });
 
-test("complete full-cycle weekly evidence at 28% remaining with ~84% expected remaining is strained, never unknown", () => {
+test("complete full-cycle weekly evidence at 28% remaining with ~84% expected stays sufficient", () => {
   const weekly = assessRequiredQuota(NOW, [q("7d", fullCycleEv(28, 0.84))]);
-  assert.equal(weekly.state, "strained");
+  assert.equal(weekly.state, "sufficient");
   assert.equal(weekly.coverageComplete, true);
-  assert.equal(weekly.headroomTrusted, true);
   // 28% remaining trails the 84% cycle pace, so the pace term floors at 0 and
   // only the remaining allowance counts: H = 0.5 * 0.28.
   close(
@@ -256,55 +251,54 @@ test("complete full-cycle weekly evidence at 28% remaining with ~84% expected re
     1e-9,
     "weekly blended H"
   );
-  assert.equal(weekly.constraints[0].state, "strained");
+  assert.equal(weekly.constraints[0].state, "sufficient");
   assert.notEqual(weekly.headroom, ZERO_QUOTA_HEADROOM);
 });
 
-test("complete kimi-shaped evidence (rolling 5h 100% + full-cycle 7d 96%) is healthy", () => {
+test("complete kimi-shaped evidence (rolling 5h 100% + full-cycle 7d 96%) is sufficient", () => {
   const result = assessRequiredQuota(NOW, [
     q("5h", rollingEv(100)),
     q("7d", fullCycleEv(96, 1)),
   ]);
-  assert.equal(result.state, "healthy");
+  assert.equal(result.state, "sufficient");
   assert.equal(result.coverageComplete, true);
-  assert.equal(result.headroomTrusted, true);
   // Rolling 100% -> 0.5*1 = 0.5; full-cycle 96% at a full-window horizon earns
   // no pace credit -> 0.5*0.96 = 0.48.
-  close(result.headroom!, (0.5 + 0.48) / 2, 1e-9, "mean healthy H");
+  close(result.headroom!, (0.5 + 0.48) / 2, 1e-9, "mean H");
   assert.deepEqual(
     result.constraints.map((constraint) => constraint.state),
-    ["healthy", "healthy"]
+    ["abundant", "sufficient"]
   );
 });
 
-test("unknown quota scores zero regardless of listed price and sub-price strained stays accepted", () => {
-  // Complete low-remaining weekly evidence is strained but trustworthy: $9.99 accepted.
-  const strained = expectAccepted(
+test("sufficient quota scores zero headroom regardless of listed price and insufficient stays accepted", () => {
+  // Complete low-remaining weekly evidence stays sufficient: $9.99 accepted.
+  const sufficient = expectAccepted(
     cand({
       referenceUsdPerM: 9.99,
       requiredQuota: [q("7d", fullCycleEv(28, 0.84))],
     })
   );
-  assert.equal(strained!.tier, "strained");
-  assert.equal(strained!.coverageComplete, true);
-  // Unknown quota stays eligible: no listed reference price can turn a genuinely
-  // unknown/incomplete quota into a price rejection.
-  const unknownHigh = expectAccepted(
+  assert.equal(sufficient!.tier, "sufficient");
+  assert.equal(sufficient!.coverageComplete, true);
+  // A mid-band rolling window is sufficient but carries no headroom: no listed
+  // reference price turns it into a price rejection.
+  const sufficientHigh = expectAccepted(
     cand({
       referenceUsdPerM: 10,
       requiredQuota: [q("5h", rollingEv(50))],
     })
   );
-  assert.equal(unknownHigh!.tier, "unknown");
-  // Incomplete coverage plus a strained constraint is likewise never gated by price.
-  const incompleteStrained = expectAccepted(
+  assert.equal(sufficientHigh!.tier, "sufficient");
+  // Not-obtained evidence drags the tier to insufficient and is still never gated by price.
+  const insufficientMissing = expectAccepted(
     cand({
       referenceUsdPerM: 10,
       requiredQuota: [q("7d", fullCycleEv(28, 0.84)), q("monthly", null)],
     })
   );
-  assert.equal(incompleteStrained!.tier, "strained");
-  // Stale evidence keeps failing closed to incomplete unknown coverage.
+  assert.equal(insufficientMissing!.tier, "insufficient");
+  // Stale evidence keeps failing closed to insufficient.
   const stale = assessRequiredQuota(NOW, [
     q("5h", {
       ...rollingEv(100),
@@ -312,7 +306,7 @@ test("unknown quota scores zero regardless of listed price and sub-price straine
       validForMs: HOUR_MS,
     }),
   ]);
-  assert.equal(stale.state, "unknown");
+  assert.equal(stale.state, "insufficient");
   assert.equal(stale.coverageComplete, false);
 });
 
@@ -325,11 +319,10 @@ function expectConstraintReject(
   code: string
 ): void {
   const result = assessRequiredQuota(NOW, [q("bad", evidence)]);
-  assert.equal(result.state, "unknown");
+  assert.equal(result.state, "insufficient");
   assert.equal(result.coverageComplete, false);
-  assert.equal(result.headroomTrusted, false);
   const assessment = result.constraints[0];
-  assert.equal(assessment.state, "rejected");
+  assert.equal(assessment.state, "insufficient");
   assert.equal(assessment.rejectCode, code);
 }
 
@@ -422,8 +415,8 @@ test("zero remaining is blocked before full_cycle reset fields are consulted", (
       replenishmentKind: "full_cycle",
     }),
   ]);
-  assert.equal(zeroFullCycle.state, "blocked");
-  assert.deepEqual(zeroFullCycle.blockedConstraintIds, ["z"]);
+  assert.equal(zeroFullCycle.state, "exhausted");
+  assert.deepEqual(zeroFullCycle.exhaustedConstraintIds, ["z"]);
   assert.equal(zeroFullCycle.constraints[0].rejectCode, null);
 });
 
@@ -441,36 +434,34 @@ test("unknown replenishment kind is rejected as invalid kind", () => {
 // Negative aggregation: blocked / strained dominate, never silently healthy
 // ---------------------------------------------------------------------------
 
-test("blocked + missing stays blocked", () => {
+test("exhausted + missing stays exhausted", () => {
   const result = assessRequiredQuota(NOW, [
     q("zero", rollingEv(0)),
     q("monthly", null),
   ]);
-  assert.equal(result.state, "blocked");
-  assert.deepEqual(result.blockedConstraintIds, ["zero"]);
+  assert.equal(result.state, "exhausted");
+  assert.deepEqual(result.exhaustedConstraintIds, ["zero"]);
   assert.equal(result.coverageComplete, false);
 });
 
-test("strained + missing averages in the zero unknown contribution", () => {
+test("insufficient + missing averages in the zero contribution", () => {
   const result = assessRequiredQuota(NOW, [
     q("strain", rollingEv(4)),
     q("monthly", null),
   ]);
-  assert.equal(result.state, "strained");
+  assert.equal(result.state, "insufficient");
   assert.equal(result.coverageComplete, false);
-  assert.equal(result.headroomTrusted, false);
-  close(result.headroom!, (0.02 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "strained + missing mean H");
+  close(result.headroom!, (0.02 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "insufficient + missing mean H");
 });
 
-test("strained + unknown averages in the zero unknown contribution", () => {
+test("insufficient + sufficient averages in the zero contribution", () => {
   const result = assessRequiredQuota(NOW, [
     q("strain", rollingEv(4)),
     q("unknown", rollingEv(50)),
   ]);
-  assert.equal(result.state, "strained");
+  assert.equal(result.state, "insufficient");
   assert.equal(result.coverageComplete, true);
-  assert.equal(result.headroomTrusted, false);
-  close(result.headroom!, (0.02 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "strained + unknown mean H");
+  close(result.headroom!, (0.02 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "insufficient + sufficient mean H");
 });
 
 // ---------------------------------------------------------------------------
@@ -550,26 +541,25 @@ test("cap zero admits only effective zero price", () => {
   );
 });
 
-test("zero remaining blocks the candidate", () => {
-  const blocked = expectRejected(
+test("zero remaining exhausts the candidate", () => {
+  const exhausted = expectRejected(
     cand({ requiredQuota: [q("zero", rollingEv(0))] }),
-    "quota_blocked"
+    "quota_exhausted"
   );
-  assert.ok(blocked!.detail!.includes("zero"));
+  assert.ok(exhausted!.detail!.includes("zero"));
 });
 
 // ---------------------------------------------------------------------------
 // Equal arithmetic-mean aggregation of required quota constraints
 // ---------------------------------------------------------------------------
 
-test("two healthy constraints average equally: 0.4 and 0.5 mean to 0.45", () => {
+test("two abundant constraints average equally: 0.4 and 0.5 mean to 0.45", () => {
   const result = assessRequiredQuota(NOW, [
     q("a", rollingEv(80)),
     q("b", rollingEv(100)),
   ]);
-  assert.equal(result.state, "healthy");
+  assert.equal(result.state, "abundant");
   assert.equal(result.coverageComplete, true);
-  assert.equal(result.headroomTrusted, true);
   close(result.headroom!, 0.45, 1e-12, "mean of 0.4 and 0.5");
   close(result.constraints[0].headroom!, 0.4, 1e-12, "constraint a H");
   close(result.constraints[1].headroom!, 0.5, 1e-12, "constraint b H");
@@ -587,25 +577,24 @@ test("three constraints average equally regardless of order", () => {
     q("s", rollingEv(4)),
     q("h", rollingEv(90)),
   ]);
-  assert.equal(forward.state, "strained");
-  assert.equal(reversed.state, "strained");
+  assert.equal(forward.state, "insufficient");
+  assert.equal(reversed.state, "insufficient");
   close(forward.headroom!, expected, 1e-12, "forward 3-way mean");
   close(reversed.headroom!, expected, 1e-12, "reversed 3-way mean");
 });
 
-test("unknown 0 contributes nothing without discarding a healthy peer", () => {
+test("sufficient 0 contributes nothing without discarding an abundant peer", () => {
   const result = assessRequiredQuota(NOW, [
     q("h", rollingEv(80)),
     q("u", rollingEv(50)),
   ]);
-  assert.equal(result.state, "unknown");
+  assert.equal(result.state, "sufficient");
   assert.equal(result.coverageComplete, true);
-  assert.equal(result.headroomTrusted, false);
   // Equal mixed pool: (0.4 + 0) / 2 === 0.2 exactly.
   assert.equal(result.headroom, 0.2);
 });
 
-test("positive balance contributes zero 0 alongside a healthy peer", () => {
+test("positive balance contributes zero 0 alongside an abundant peer", () => {
   const result = assessRequiredQuota(NOW, [
     q("q", rollingEv(80)),
     {
@@ -615,22 +604,22 @@ test("positive balance contributes zero 0 alongside a healthy peer", () => {
       balance: { amount: "12.50", observedAtMs: NOW - 1_000, validForMs: HOUR_MS },
     },
   ]);
-  assert.equal(result.state, "healthy");
+  assert.equal(result.state, "sufficient");
   assert.equal(result.coverageComplete, true);
   // Equal mixed pool: (0.4 + 0) / 2 === 0.2 exactly.
   assert.equal(result.headroom, 0.2);
 });
 
-test("any exhausted (zero) constraint rejects the candidate even alongside a healthy peer", () => {
-  const blocked = expectRejected(
+test("any exhausted (zero) constraint rejects the candidate even alongside an abundant peer", () => {
+  const exhausted = expectRejected(
     cand({ requiredQuota: [q("z", rollingEv(0)), q("h", rollingEv(90))] }),
-    "quota_blocked"
+    "quota_exhausted"
   );
-  assert.ok(blocked!.detail!.includes("z"));
+  assert.ok(exhausted!.detail!.includes("z"));
   const pool = assessRequiredQuota(NOW, [q("z", rollingEv(0)), q("h", rollingEv(90))]);
-  assert.equal(pool.state, "blocked");
+  assert.equal(pool.state, "exhausted");
   assert.equal(pool.headroom, null);
-  assert.deepEqual(pool.blockedConstraintIds, ["z"]);
+  assert.deepEqual(pool.exhaustedConstraintIds, ["z"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -765,47 +754,45 @@ describe("editable score weights", () => {
 // Tier, gate, and incomplete-strained behavior on evaluateCandidate
 // ---------------------------------------------------------------------------
 
-test("incomplete-strained reference is accepted at any listed price", () => {
-  const incompleteStrained = {
+test("insufficient reference is accepted at any listed price", () => {
+  const insufficientQuota = {
     requiredQuota: [q("strain", rollingEv(4)), q("monthly", null)],
   };
-  const accepted = expectAccepted(cand({ ...incompleteStrained, referenceUsdPerM: 9.99 }));
-  assert.equal(accepted!.tier, "strained");
+  const accepted = expectAccepted(cand({ ...insufficientQuota, referenceUsdPerM: 9.99 }));
+  assert.equal(accepted!.tier, "insufficient");
   assert.equal(accepted!.coverageComplete, false);
-  assert.equal(accepted!.headroomTrusted, false);
-  close(accepted!.headroom, (0.02 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "incomplete-strained H");
+  close(accepted!.headroom, (0.02 + ZERO_QUOTA_HEADROOM) / 2, 1e-12, "insufficient H");
 
-  // An unknown/incomplete quota is not price-gated: a high listed reference
+  // An insufficient quota is not price-gated: a high listed reference
   // price no longer rejects it.
   const highPrice = expectAccepted(
-    cand({ ...incompleteStrained, referenceUsdPerM: 10 })
+    cand({ ...insufficientQuota, referenceUsdPerM: 10 })
   );
-  assert.equal(highPrice!.tier, "strained");
+  assert.equal(highPrice!.tier, "insufficient");
 });
 
-test("unknown tier with a high reference price is accepted, not price-gated", () => {
-  const unknownCovered = { requiredQuota: [q("u", rollingEv(50))] };
-  const ok = expectAccepted(cand({ ...unknownCovered, referenceUsdPerM: 9.99 }));
-  assert.equal(ok!.tier, "unknown");
-  const high = expectAccepted(cand({ ...unknownCovered, referenceUsdPerM: 10 }));
-  assert.equal(high!.tier, "unknown");
-  const higher = expectAccepted(cand({ ...unknownCovered, referenceUsdPerM: 10.000001 }));
-  assert.equal(higher!.tier, "unknown");
+test("sufficient tier with a high reference price is accepted, not price-gated", () => {
+  const sufficientCovered = { requiredQuota: [q("u", rollingEv(50))] };
+  const ok = expectAccepted(cand({ ...sufficientCovered, referenceUsdPerM: 9.99 }));
+  assert.equal(ok!.tier, "sufficient");
+  const high = expectAccepted(cand({ ...sufficientCovered, referenceUsdPerM: 10 }));
+  assert.equal(high!.tier, "sufficient");
+  const higher = expectAccepted(cand({ ...sufficientCovered, referenceUsdPerM: 10.000001 }));
+  assert.equal(higher!.tier, "sufficient");
 });
 
-test("healthy tiers compute quota metrics and normalized score exactly", () => {
+test("abundant tiers compute quota metrics and normalized score exactly", () => {
   const input = cand({
-    canonicalId: "healthy-a",
+    canonicalId: "abundant-a",
     referenceUsdPerM: 2,
     effectiveCapUsdPerM: 20,
     requiredQuota: [q("q", fullCycleEv(60, 0.5))], // H 0.80
   });
   const a = expectAccepted(input);
-  assert.equal(a!.tier, "healthy");
+  assert.equal(a!.tier, "abundant");
   assert.equal(a!.coverageComplete, true);
-  assert.equal(a!.headroomTrusted, true);
   assert.equal(a!.quotaQuality, a!.headroom);
-  close(a!.headroom, 0.8, 1e-9, "healthy H");
+  close(a!.headroom, 0.8, 1e-9, "abundant H");
   close(a!.quotaQuality, 0.8, 1e-9, "Q without efficiency");
   assert.equal(a!.marginalApplied, false);
   assert.equal(a!.routingPriceUsdPerM, 2);
@@ -825,23 +812,23 @@ test("balance constraint: positive amount is available with zero headroom, zero 
         : { amount, observedAtMs: at - 1_000, validForMs: HOUR_MS },
   });
 
-  // Positive valid amount: not exhausted, but no quota headroom is granted.
+  // Positive valid amount: sufficient but never abundant, with no quota headroom.
   const positive = assessRequiredQuota(NOW, [balance("12.50")]);
-  assert.equal(positive.state, "healthy");
+  assert.equal(positive.state, "sufficient");
   assert.equal(positive.coverageComplete, true);
   assert.equal(positive.headroom, ZERO_QUOTA_HEADROOM);
 
-  // Exactly zero blocks.
+  // Exactly zero exhausts.
   const zero = assessRequiredQuota(NOW, [balance("0")]);
-  assert.equal(zero.state, "blocked");
-  assert.deepEqual(zero.blockedConstraintIds, ["deepseek-balance"]);
+  assert.equal(zero.state, "exhausted");
+  assert.deepEqual(zero.exhaustedConstraintIds, ["deepseek-balance"]);
 
-  // Missing / malformed / negative / stale / future are unknown, never zero-valued
-  // headroom: they stay unknown and never block.
+  // Missing / malformed / negative / stale amounts are never zero-valued
+  // headroom: they stay insufficient and never exhaust.
   for (const unknown of [balance(null), balance(""), balance("not-a-number"), balance("-1"), balance("0x00"), balance("0e0")]) {
     const result = assessRequiredQuota(NOW, [unknown]);
-    assert.notEqual(result.state, "blocked", "unknown balance must never block");
-    assert.equal(result.state, "unknown");
+    assert.notEqual(result.state, "exhausted", "unknown balance must never exhaust");
+    assert.equal(result.state, "insufficient");
     assert.equal(result.headroom, ZERO_QUOTA_HEADROOM);
   }
   const stale: RequiredQuotaConstraint = {
@@ -850,21 +837,21 @@ test("balance constraint: positive amount is available with zero headroom, zero 
     kind: "balance",
     balance: { amount: "5", observedAtMs: NOW - 2 * HOUR_MS, validForMs: HOUR_MS },
   };
-  assert.equal(assessRequiredQuota(NOW, [stale]).state, "unknown");
+  assert.equal(assessRequiredQuota(NOW, [stale]).state, "insufficient");
 
-  // A positive balance keeps the candidate available; a zero balance blocks it.
+  // A positive balance keeps the candidate available; a zero balance exhausts it.
   const available = expectAccepted(cand({ requiredQuota: [balance("1.00")] }));
-  assert.equal(available!.tier, "healthy");
+  assert.equal(available!.tier, "sufficient");
   assert.equal(available!.headroom, ZERO_QUOTA_HEADROOM);
-  expectRejected(cand({ requiredQuota: [balance("0")] }), "quota_blocked");
+  expectRejected(cand({ requiredQuota: [balance("0")] }), "quota_exhausted");
 });
 
-test(">= 10 unknown quota is no longer blocked by any reference price gate", () => {
+test(">= 10 sufficient quota is no longer blocked by any reference price gate", () => {
   for (const price of [10, 25, 100, 1000]) {
     const accepted = expectAccepted(
       cand({ referenceUsdPerM: price, effectiveCapUsdPerM: 1000, requiredQuota: [q("u", rollingEv(50))] })
     );
-    assert.equal(accepted!.tier, "unknown");
+    assert.equal(accepted!.tier, "sufficient");
   }
 });
 
@@ -1039,7 +1026,7 @@ test("valid covered discount applies to routingPrice/P only, never H/tier", () =
   assert.equal(withMargin!.marginalApplied, true);
   close(withMargin!.routingPriceUsdPerM, 4, 1e-12, "routing price");
   assert.equal(withMargin!.referenceUsdPerM, 5);
-  assert.equal(withMargin!.tier, "healthy");
+  assert.equal(withMargin!.tier, "abundant");
   assert.equal(withMargin!.coverageComplete, true);
   close(withMargin!.headroom, 0.8, 1e-9, "H untouched by discount");
   close(withMargin!.quotaQuality, 0.8, 1e-9, "Q untouched");
@@ -1220,47 +1207,47 @@ test("DS prices 1.2 vs 0.6 produce a score delta of 0.044 with other inputs equa
   close(eb.score - ea.score, 0.044, 1e-9, "delta 0.044");
 });
 
-test("healthy quota with trusted headroom shares the abundant tier and crosses by score", () => {
-  // A healthy candidate and an unknown candidate are in different supply
-  // tiers: the healthy (abundant) route ranks first even though the unknown
-  // candidate has a higher score, and blocked stays rejected.
-  const healthyLow = cand({
-    canonicalId: "healthy-low",
+test("abundant quota ranks ahead of sufficient even on a lower score", () => {
+  // An abundant candidate and a sufficient candidate are in different quota
+  // tiers: the abundant route ranks first even though the sufficient
+  // candidate has a higher score, and exhausted stays rejected.
+  const abundantLow = cand({
+    canonicalId: "abundant-low",
     referenceUsdPerM: 30, // P(30)=0.05
     requiredQuota: [q("q", hQ(0.9))], // Q 0.90
   });
-  const unknownHigh = cand({
-    canonicalId: "unknown-high",
+  const sufficientHigh = cand({
+    canonicalId: "sufficient-high",
     referenceUsdPerM: 0.5, // P(0.5)=0.85
     requiredQuota: [q("u", rollingEv(50))], // Q = 0
   });
-  const blocked = cand({
-    canonicalId: "blocked-x",
+  const exhausted = cand({
+    canonicalId: "exhausted-x",
     requiredQuota: [q("z", rollingEv(0))],
   });
-  const result = rankAutoRoutingCandidates([healthyLow, unknownHigh, blocked]);
-  // The abundant healthy candidate leads; within the remaining tier score order
+  const result = rankAutoRoutingCandidates([abundantLow, sufficientHigh, exhausted]);
+  // The abundant candidate leads; within the remaining tier score order
   // applies.
-  assert.deepEqual(rankedIds(result), ["healthy-low", "unknown-high"]);
+  assert.deepEqual(rankedIds(result), ["abundant-low", "sufficient-high"]);
   assert.deepEqual(
     result.excluded.map((entry) => [entry.canonicalId, entry.reason]),
-    [["blocked-x", "quota_blocked"]]
+    [["exhausted-x", "quota_exhausted"]]
   );
 });
 
 test("confirmed-free candidates share the abundant tier ranked by score", () => {
   // A confirmed-free candidate routes for free (P=1) and belongs to the
-  // abundant tier; a healthy-quota route with trusted headroom joins the same
-  // tier, so the higher score ranks first.
+  // abundant tier; an abundant-quota route joins the same tier, so the higher
+  // score ranks first.
   const free = cand({
     canonicalId: "free-a",
-    requiredQuota: [q("rolling", rollingEv(50))], // unknown -> Q 0.5
+    requiredQuota: [q("rolling", rollingEv(50))], // sufficient -> Q 0
     confirmedFreeSupply: confirmedFreeSupply(),
   });
   const standard = cand({
     canonicalId: "std-a",
     referenceUsdPerM: 0, // zero reference also P=1
-    requiredQuota: [q("q", fullCycleEv(80, 1))], // healthy -> Q 0.8
+    requiredQuota: [q("q", fullCycleEv(80, 1))], // sufficient -> Q 0.8
   });
   const [f, s] = [free, standard].map((x) => expectAccepted(x)!);
   assert.equal(f.supplyClass, "confirmed_free");
@@ -1271,7 +1258,7 @@ test("confirmed-free candidates share the abundant tier ranked by score", () => 
   assert.equal(s.priceFactor, 1);
   assert.ok(
     s.score > f.score,
-    "the healthy-quota route keeps the higher score and both share the abundant tier"
+    "the measured-quota route keeps the higher score and both share the abundant tier"
   );
   const result = rankAutoRoutingCandidates([free, standard]);
   assert.deepEqual(rankedIds(result), ["std-a", "free-a"]);
@@ -1612,7 +1599,7 @@ test("original inputs mutated after ranking never change returned results", () =
   const second = rankAutoRoutingCandidates(inputs);
   assert.deepEqual(
     second.excluded.map((e) => [e.canonicalId, e.reason]),
-    [["ds-a", "quota_blocked"]]
+    [["ds-a", "quota_exhausted"]]
   );
   assert.deepEqual(rankedIds(second), ["ds-b"]);
   assert.notEqual(JSON.stringify(second), firstJson);
@@ -1635,7 +1622,7 @@ test("evaluateCandidate returns fresh independent results per call", () => {
   const after = evaluateCandidate(input);
   assert.deepEqual(first, second); // prior result untouched
   assert.equal(after.kind, "rejected");
-  assert.equal(after.kind === "rejected" ? after.reason : "", "quota_blocked");
+  assert.equal(after.kind === "rejected" ? after.reason : "", "quota_exhausted");
   assert.equal(first.kind === "accepted" ? first.assessment.headroom : null, assessment!.headroom);
 });
 
@@ -1664,7 +1651,7 @@ test("blocked confirmed-free supply remains excluded", () => {
   assert.deepEqual(rankedIds(result), []);
   assert.deepEqual(
     result.excluded.map((entry) => [entry.canonicalId, entry.reason]),
-    [["free-blocked", "quota_blocked"]]
+    [["free-blocked", "quota_exhausted"]]
   );
 });
 

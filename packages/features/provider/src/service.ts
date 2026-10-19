@@ -16,7 +16,10 @@ import type {
 /** Per-model resolver status: whether a credential admits the pair and its TPS. */
 export interface ProviderModelStatus {
   effectiveTps: number | null
-  quotaAbundant: boolean
+  /** Unified quota state of this offering: abundant > sufficient > insufficient > exhausted. */
+  quotaState: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted'
+  /** How the state was obtained: measured, unknown by design, or not obtained. */
+  quotaEvidence: 'measured' | 'unknown_by_design' | 'not_obtained'
 }
 
 /**

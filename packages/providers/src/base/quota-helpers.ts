@@ -17,6 +17,7 @@ export function quotaPool(
   windows: readonly ProviderQuotaPoolWindow[],
   routingDiscountRate = 1,
   displayName?: string,
+  usageUnknown?: boolean,
 ): ProviderQuotaPool {
   return Object.freeze({
     quotaPoolId,
@@ -24,6 +25,7 @@ export function quotaPool(
     windows: Object.freeze(windows.slice()),
     routingDiscountRate,
     ...(displayName !== undefined ? { displayName } : {}),
+    ...(usageUnknown === true ? { usageUnknown: true } : {}),
   });
 }
 
@@ -32,8 +34,13 @@ export function balancePool(
   quotaPoolId: string,
   evidenceRef: string,
   checkedAt = '2026-09-08',
+  usageUnknown?: boolean,
 ): ProviderQuotaPool {
-  return Object.freeze({ quotaPoolId, kind: 'balance' as const, windows: Object.freeze([]), balanceId: quotaPoolId, routingDiscountRate: 1, evidenceRef, checkedAt });
+  return Object.freeze({
+    quotaPoolId, kind: 'balance' as const, windows: Object.freeze([]), balanceId: quotaPoolId,
+    routingDiscountRate: 1, evidenceRef, checkedAt,
+    ...(usageUnknown === true ? { usageUnknown: true } : {}),
+  });
 }
 
 /**

@@ -178,7 +178,7 @@ interface ModelSpec {
   maxOutputTokens?: number;
   effectiveTps?: number;
   free?: boolean;
-  quotaAbundant?: boolean;
+  quotaState?: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted';
   supportsFast?: boolean;
 }
 
@@ -194,8 +194,8 @@ const MODEL_SPECS: readonly ModelSpec[] = [
     supportsFast: true,
   },
   { publicId: 'anthropic/claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', providerDisplayName: 'Anthropic', reasoningEfforts: ['none', 'low', 'medium', 'high'], contextWindow: 1_000_000, maxOutputTokens: 64_000, effectiveTps: 88 },
-  { publicId: 'chatgpt/gpt-6-sol', displayName: 'GPT 6 Sol', providerDisplayName: 'ChatGPT', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'], contextWindow: 1_050_000, maxOutputTokens: 128_000, effectiveTps: 71, quotaAbundant: true, supportsFast: true },
-  { publicId: 'kimi-coding/kimi-k3', displayName: 'Kimi K3', providerDisplayName: 'Kimi Coding', reasoningEfforts: ['none', 'low', 'medium', 'high'], contextWindow: 1_048_576, maxOutputTokens: 32_768, effectiveTps: 54, quotaAbundant: true },
+  { publicId: 'chatgpt/gpt-6-sol', displayName: 'GPT 6 Sol', providerDisplayName: 'ChatGPT', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'], contextWindow: 1_050_000, maxOutputTokens: 128_000, effectiveTps: 71, quotaState: 'abundant', supportsFast: true },
+  { publicId: 'kimi-coding/kimi-k3', displayName: 'Kimi K3', providerDisplayName: 'Kimi Coding', reasoningEfforts: ['none', 'low', 'medium', 'high'], contextWindow: 1_048_576, maxOutputTokens: 32_768, effectiveTps: 54, quotaState: 'abundant' },
   { publicId: 'zhipu-coding/glm-5.3', displayName: 'GLM 5.3', providerDisplayName: 'Zhipu Coding', reasoningEfforts: ['none', 'low', 'medium'], contextWindow: 200_000, maxOutputTokens: 32_000, effectiveTps: 66 },
   { publicId: 'deepseek/deepseek-v4.1', displayName: 'DeepSeek V4.1', providerDisplayName: 'DeepSeek', reasoningEfforts: ['none', 'low', 'medium', 'high'], contextWindow: 1_000_000, maxOutputTokens: 64_000, effectiveTps: 48 },
   { publicId: 'opencode-zen/deepseek-v4.1-flash', displayName: 'DeepSeek V4.1 Flash', providerDisplayName: 'OpenCode Zen', reasoningEfforts: ['none', 'low', 'medium'], contextWindow: 1_000_000, maxOutputTokens: 32_000, effectiveTps: 140, free: true },
@@ -218,7 +218,7 @@ const MODEL_ENTRIES: SessionBridgeModelEntry[] = MODEL_SPECS.map((spec) => {
     ...(spec.maxOutputTokens === undefined ? {} : { maxOutputTokens: spec.maxOutputTokens }),
     ...(spec.effectiveTps === undefined ? {} : { effectiveTps: spec.effectiveTps }),
     ...(spec.free ? { free: true } : {}),
-    ...(spec.quotaAbundant ? { quotaAbundant: true } : {}),
+    ...(spec.quotaState === undefined ? {} : { quotaState: spec.quotaState }),
     ...(spec.supportsFast ? { supportsFast: true } : {}),
   };
 });

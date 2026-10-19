@@ -1,5 +1,6 @@
 /** Auxiliary, task and bot requirements as data; no IO or selection logic. */
 import type { IntelligenceTier, ModelCapability, ReasoningEffort } from '@wrenyard/models';
+import type { QuotaState } from './types.ts';
 
 /** Every role that may issue an auxiliary call. */
 export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch' | 'document' | 'todo' | 'vcs' | 'project' | 'reply' | 'status' | 'suggestion';
@@ -7,7 +8,8 @@ export type AuxiliaryCallRole = 'title' | 'memory-search' | 'search' | 'dispatch
 /** One tier pool in a bot's step-down ladder. */
 export interface BotLadderStep {
   readonly intelligence: readonly ('premium' | 'high' | 'mid')[];
-  readonly quotaState?: 'abundant' | 'sufficient' | 'insufficient';
+  /** Exhausted routes are never used, so no ladder step may name that state. */
+  readonly quotaState?: Exclude<QuotaState, 'exhausted'>;
 }
 
 /** The model evidence one routing requirement asks for. */

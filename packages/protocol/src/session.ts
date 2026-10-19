@@ -371,7 +371,10 @@ export interface SessionModelEntry {
   maxOutputTokens?: number
   free?: boolean
   effectiveTps?: number | null
-  quotaAbundant?: boolean
+  /** Unified quota state of this offering; absent when no quota was assessed. */
+  quotaState?: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted'
+  /** How that state was obtained; absent when no quota was assessed. */
+  quotaEvidence?: 'measured' | 'unknown_by_design' | 'not_obtained'
   /** True when a verified, distinct upstream Fast mode exists for this route. */
   supportsFast?: boolean
   /** Circuit state of this model's own route; absent while the route is healthy. */

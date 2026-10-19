@@ -852,7 +852,8 @@ export interface ProviderModelSnapshot {
   id: string;
   displayName: string;
   effectiveTps?: number | null;
-  quotaAbundant?: boolean;
+  quotaState?: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted';
+  quotaEvidence?: 'measured' | 'unknown_by_design' | 'not_obtained';
   /**
    * Authoritative catalog free-model flag. Only an explicit `true` marks a
    * model free; absence/`undefined` means unknown and must never be inferred

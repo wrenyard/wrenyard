@@ -64,7 +64,8 @@ export class ProviderService {
           ...(model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens }),
           ...(model.taskOnly === undefined ? {} : { taskOnly: model.taskOnly }),
           ...(model.effectiveTps === undefined ? {} : { effectiveTps: model.effectiveTps }),
-          ...(model.quotaAbundant === undefined ? {} : { quotaAbundant: model.quotaAbundant }),
+          ...(model.quotaState === undefined ? {} : { quotaState: model.quotaState }),
+          ...(model.quotaEvidence === undefined ? {} : { quotaEvidence: model.quotaEvidence }),
           ...(model.free === undefined ? {} : { free: model.free }),
           // The CodeBuddy credit multiplier copied through verbatim; omitted when
           // the catalog declares none rather than defaulted.

@@ -9,7 +9,6 @@ import type { IntelligenceTier } from '@wrenyard/providers/catalog';
 import { isMainstreamModelId, type ReasoningEffort } from '@wrenyard/models';
 import type { CandidateInput, RequiredQuotaConstraint } from './types.ts';
 import { AutoRouter } from './auto-router.ts';
-import { quotaStateOf } from './quota-states.ts';
 import {
   AUXILIARY_TIMEOUT_MS,
   BOT_REQUIREMENT,
@@ -295,7 +294,6 @@ function createSelector(
       }, pricings[index]);
       if (candidate) inputs.push(candidate); else reject('invalid model evidence');
     });
-    const inputsById = new Map(inputs.map(input => [input.canonicalId, input]));
     const weights = settings?.routingWeights;
     const scoreWeights = weights ? { P: weights.price, S: weights.speed, Q: weights.quota, I: weights.intelligence } : undefined;
     // Scores are per candidate, so filtering the ranked list keeps the ranking of any layer.
@@ -305,15 +303,15 @@ function createSelector(
     const speedsOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.speed.effective_tps]));
     const tiersOf = new Map(entries.map(({ entry }) => [entry.choice.exactAgentRuntime, entry.choice.intelligence]));
     const admitted = ranked.ranked.map(candidate => {
-      const input = inputsById.get(candidate.canonicalId);
       return {
         model: candidate.canonicalId,
         levels: levelsOf.get(candidate.canonicalId)!,
         speedTps: speedsOf.get(candidate.canonicalId)!,
         tier: tiersOf.get(candidate.canonicalId)!,
-        quotaState: quotaStateOf(input?.requiredQuota ?? [], nowMs, {
-          confirmedFreeSupply: input?.confirmedFreeSupply != null,
-        }),
+        // The routing tier is the canonical quota state: the evaluator already
+        // classified this candidate, so the ladder consumes it instead of
+        // running a second classification.
+        quotaState: candidate.tier,
       };
     });
     const preferred = requirements.expectedReasoningEffort;

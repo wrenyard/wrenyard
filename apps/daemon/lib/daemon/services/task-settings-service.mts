@@ -1,10 +1,10 @@
-import { assessRequiredQuota, deepSeekAutomaticPricingOf, rankAutomaticTaskCandidates, type DeepSeekAutomaticPricing } from '@wrenyard/auto-routing';
+import { quotaStateOf, deepSeekAutomaticPricingOf, rankAutomaticTaskCandidates, type DeepSeekAutomaticPricing } from '@wrenyard/auto-routing';
 import { withDeepSeekAttemptPricing } from '../../task-dispatch.mts'
 import { createHash } from 'node:crypto'
 import { formatRunSyntax, INTELLIGENCE_ORDER, parseRunSyntax, type ReasoningEffort } from '@wrenyard/providers/catalog';
 import { resolveHistoricalProviderModelId } from '@wrenyard/providers';
 import type { GatewayRouteStatus } from '@wrenyard/providers/base';
-import { isAbundantSupply, type RankedCandidate } from '@wrenyard/auto-routing';
+import { type RankedCandidate } from '@wrenyard/auto-routing';
 import {
   NoEligiblePlanError,
   type TaskDispatchChoice,
@@ -530,7 +530,7 @@ function buildRoutingFormRows(
         intelligence_score: ranked.weights.I * ranked.intelligenceFactor,
         score: ranked.score,
         rank: ranked.rank,
-        reason: isAbundantSupply(ranked) ? '额度充足，优先于受限路线' : null,
+        reason: ranked.tier === 'abundant' ? '额度充足，优先于受限路线' : null,
       })
       continue
     }
@@ -751,8 +751,8 @@ export class TaskSettingsService {
    *  and native-provider samples) is consulted before collapsing. Any ready
    *  supporting client admits the pair and an admin-denied native model/client
    *  is omitted; no scoring or extra price/TPS/task gate is imposed here. */
-  async modelStatus(): Promise<Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>> {
-    const status = new Map<string, { effectiveTps: number | null; quotaAbundant: boolean }>()
+  async modelStatus(): Promise<Map<string, { effectiveTps: number | null; quotaState: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted'; quotaEvidence: 'measured' | 'unknown_by_design' | 'not_obtained' }>> {
+    const status = new Map<string, { effectiveTps: number | null; quotaState: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted'; quotaEvidence: 'measured' | 'unknown_by_design' | 'not_obtained' }>()
     try {
       const baseline = await this.resolver.diagnose({ taskName: 'model-status', requirements: {} })
       const baselineChoices: TaskDispatchDiagnosticChoice[] = baseline.ok
@@ -784,7 +784,7 @@ export class TaskSettingsService {
         if (availability?.available !== false) admittedChoices.push(choice)
       }
       for (const pair of collapseRoutingFormPairs(admittedChoices).values()) {
-        status.set(`${pair.provider}/${pair.model}`, { effectiveTps: pair.effectiveTps, quotaAbundant: false })
+        status.set(`${pair.provider}/${pair.model}`, { effectiveTps: pair.effectiveTps, quotaState: 'sufficient', quotaEvidence: 'measured' })
       }
       // The shared snapshot is reused (never re-read); quota evidence remains
       // fail-closed when it cannot establish a fresh, complete constraint set.
@@ -798,12 +798,12 @@ export class TaskSettingsService {
           const entry = snapshot.entries.find((entry) => entry.providerId === provider && entry.modelId === model)
             ?? snapshot.entries.find((entry) => entry.providerId === provider && entry.modelId === '*')
           const constraints = entry?.requiredQuota ?? []
-          const assessment = assessRequiredQuota(now, constraints)
-          value.quotaAbundant = constraints.length > 0 && assessment.coverageComplete
-            && constraints.every(({ kind, evidence }) => kind !== 'balance' && evidence !== null
-              && evidence.replenishmentKind === 'full_cycle'
-              && typeof evidence.resetAtMs === 'number' && typeof evidence.windowMs === 'number'
-              && evidence.remainingPercent > (evidence.resetAtMs - now) / evidence.windowMs * 100)
+          // The shared snapshot is reused (never re-read): the unified state
+          // function is the only place that maps constraints to a state and how
+          // it was obtained.
+          const assessment = quotaStateOf(constraints, now)
+          value.quotaState = assessment.state
+          value.quotaEvidence = assessment.evidence
         }
       }
     } catch {
@@ -2233,9 +2233,8 @@ export class TaskSettingsService {
       snapshot_id: best.snapshotId,
       selected_rank: best.rank,
       supply_class: best.supplyClass,
-      quota_tier: best.tier,
+      quota_state: best.tier,
       quota_coverage_complete: best.coverageComplete,
-      quota_headroom_trusted: best.headroomTrusted,
       reference_output_usd_per_million: best.referenceUsdPerM,
       routing_output_usd_per_million: best.routingPriceUsdPerM,
       effective_cap_usd_per_million: ranking.capUsdPerM,

@@ -57,7 +57,8 @@ export function toModelEntries(
         ...(model.maxTokens === undefined ? {} : { maxOutputTokens: model.maxTokens }),
         ...(model.free === undefined ? {} : { free: model.free }),
         ...(model.effectiveTps === undefined ? {} : { effectiveTps: model.effectiveTps }),
-        ...(model.quotaAbundant === undefined ? {} : { quotaAbundant: model.quotaAbundant }),
+        ...(model.quotaState === undefined ? {} : { quotaState: model.quotaState }),
+        ...(model.quotaEvidence === undefined ? {} : { quotaEvidence: model.quotaEvidence }),
         // Route health comes from the Gateway row, which already scopes a fault
         // to its own route/provider/pool — a zero paid balance never marks a free
         // pool. The row is still emitted while faulted so a selected model that

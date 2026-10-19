@@ -163,7 +163,7 @@ export function selectTaskResolutionFailure(
  * - reference_above_cap / marginal_above_reference -> price_limit
  * - speed_below_minimum                           -> speed_requirement
  * - intelligence_out_of_range                     -> intelligence_requirement
- * - quota_blocked                                 -> quota_unavailable
+ * - quota_exhausted                               -> quota_unavailable
  *
  * Unknown/strained/incomplete quota reasons are not hard eliminations and are
  * NOT mapped (returns undefined). The obsolete reference_price_gate is gone:
@@ -175,7 +175,7 @@ export const CATALOG_EXCLUSION_CODE_MAP: Readonly<Record<string, TaskResolutionF
   marginal_above_reference: 'price_limit',
   speed_below_minimum: 'speed_requirement',
   intelligence_out_of_range: 'intelligence_requirement',
-  quota_blocked: 'quota_unavailable',
+  quota_exhausted: 'quota_unavailable',
 }
 
 export function codeFromCatalogExclusion(reason: string): TaskResolutionFailureCode | undefined {

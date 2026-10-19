@@ -25,8 +25,17 @@ export interface ScoreWeights {
 // Types
 // ---------------------------------------------------------------------------
 export type ReplenishmentKind = "full_cycle" | "rolling_partial" | "unknown";
-export type QuotaTier = "healthy" | "unknown" | "strained";
-export type QuotaState = QuotaTier | "blocked";
+/**
+ * The single four-level quota state of a route, ordered from best to worst for
+ * ranking: abundant > sufficient > insufficient > exhausted.
+ */
+export type QuotaState = "abundant" | "sufficient" | "insufficient" | "exhausted";
+/**
+ * How a route's numbers were obtained. `unknown_by_design` is a provider
+ * declaration that usage is never exposed; `not_obtained` is a failed, refused
+ * or stale read that may still reuse its last measurement for a grace period.
+ */
+export type QuotaEvidenceStatus = "measured" | "unknown_by_design" | "not_obtained";
 export type SupplyClass = "confirmed_free" | "standard";
 /** Evidence for one required quota constraint observed at a point in time. */
 export interface QuotaEvidence {
@@ -59,11 +68,24 @@ export interface RequiredQuotaConstraint {
   /** Present when this constraint is a mandatory monetary balance resource. */
   balance?: BalanceEvidence | null;
   kind?: "quota" | "balance";
+  /**
+   * How this constraint's evidence was obtained. Absent means derived from the
+   * evidence itself: measured when fresh evidence is present, otherwise not
+   * obtained.
+   */
+  evidenceStatus?: QuotaEvidenceStatus;
+  /**
+   * Copied from the pool declaration: the provider never exposes usage for this
+   * resource, so the constraint is unknown by design and never abundant.
+   */
+  usageUnknown?: boolean;
 }
 /** Discriminated monetary balance evidence for one required balance resource. */
 export interface BalanceEvidence {
   /** Raw decimal amount string from Wrenyard balances (authoritative). */
   amount: string;
+  /** ISO-4217 currency code; selects the low-balance threshold. */
+  currency?: string | null;
   /** Timestamp (epoch ms) the observation was taken. */
   observedAtMs: number;
   /** How long after observedAtMs the observation is considered fresh. */
@@ -141,26 +163,32 @@ export interface CandidateInput {
   marginalPrice?: MarginalPriceEvidence | null;
   confirmedFreeSupply?: ConfirmedFreeSupplyEvidence | null;
 }
-export type ConstraintState = "blocked" | "strained" | "unknown" | "healthy" | "missing" | "rejected";
+/** Per-constraint quota state; `rejectCode` carries the reason when unusable. */
+export type ConstraintState = QuotaState;
 export type ConstraintRejectCode = "invalid_now" | "remaining_percent_not_finite" | "remaining_percent_out_of_range" | "observation_time_not_finite" | "future_observation" | "invalid_freshness_window" | "stale_observation" | "invalid_replenishment_kind" | "invalid_reset_time" | "invalid_cycle_duration" | "reset_horizon_beyond_duration" | "invalid_balance_amount";
 export interface ConstraintAssessment {
   id: string;
   state: ConstraintState;
+  /** How this constraint's numbers were obtained. */
+  evidenceStatus: QuotaEvidenceStatus;
   /** Headroom in [0, 1]; null when the state carries no determinate headroom. */
   headroom: number | null;
-  /** Machine-readable reason when state === "rejected". */
+  /** Machine-readable reason when the evidence is unusable. */
   rejectCode: ConstraintRejectCode | null;
 }
 /** Aggregate quota assessment across all required constraints. */
 export interface QuotaAssessment {
   state: QuotaState;
-  blockedConstraintIds: string[];
+  /** Route-level evidence status: the worst status across constraints. */
+  evidence: QuotaEvidenceStatus;
+  /** Timestamp of the newest observation, or null when nothing was observed. */
+  measuredAt: number | null;
+  exhaustedConstraintIds: string[];
   coverageComplete: boolean;
-  headroomTrusted: boolean;
   headroom: number | null;
   constraints: ConstraintAssessment[];
 }
-export type ExcludedReason = "invalid_candidate" | "invalid_now" | "invalid_timeout" | "invalid_reference_price" | "invalid_cap" | "reference_above_cap" | "invalid_speed" | "speed_below_minimum" | "invalid_intelligence" | "intelligence_out_of_range" | "quota_blocked" | "marginal_above_reference" | "snapshot_context_mismatch";
+export type ExcludedReason = "invalid_candidate" | "invalid_now" | "invalid_timeout" | "invalid_reference_price" | "invalid_cap" | "reference_above_cap" | "invalid_speed" | "speed_below_minimum" | "invalid_intelligence" | "intelligence_out_of_range" | "quota_exhausted" | "marginal_above_reference" | "snapshot_context_mismatch";
 export interface ExcludedCandidate {
   snapshotId: string;
   canonicalId: string;
@@ -171,7 +199,8 @@ export interface ExcludedCandidate {
 export interface CandidateAssessment {
   snapshotId: string;
   canonicalId: string;
-  tier: QuotaTier;
+  /** The route's quota state; the primary ranking tier. */
+  tier: QuotaState;
   referenceUsdPerM: number;
   routingPriceUsdPerM: number;
   marginalApplied: boolean;
@@ -206,7 +235,6 @@ export interface CandidateAssessment {
   /** Exact weight set used for this assessment's score. */
   weights: ScoreWeights;
   coverageComplete: boolean;
-  headroomTrusted: boolean;
   quota: QuotaAssessment;
   notes: string[];
 }
@@ -225,7 +253,7 @@ export interface RankedCandidate {
   rank: number;
   snapshotId: string;
   canonicalId: string;
-  tier: QuotaTier;
+  tier: QuotaState;
   score: number;
   referenceUsdPerM: number;
   routingPriceUsdPerM: number;
@@ -245,7 +273,6 @@ export interface RankedCandidate {
   /** Exact weight set used for this candidate's score. */
   weights: ScoreWeights;
   coverageComplete: boolean;
-  headroomTrusted: boolean;
   quota: QuotaAssessment;
   notes: string[];
 }

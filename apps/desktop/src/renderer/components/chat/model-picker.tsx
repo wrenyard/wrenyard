@@ -38,7 +38,8 @@ const MODEL_BADGE_ICONS = {
 /** The raw facts a badge is derived from; all are optional catalog flags. */
 export interface ModelBadgeFacts {
   effectiveTps?: number | null;
-  quotaAbundant?: boolean;
+  quotaState?: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted';
+  quotaEvidence?: 'measured' | 'unknown_by_design' | 'not_obtained';
   free?: boolean;
 }
 
@@ -55,7 +56,7 @@ export function modelBadges(facts: ModelBadgeFacts): ModelBadge[] {
     if (tps > 200) badges.push({ kind: 'turbo', text: `极速 · ${Math.round(tps)} TPS` });
     else if (tps > 100) badges.push({ kind: 'fast', text: `快速 · ${Math.round(tps)} TPS` });
   }
-  if (facts.quotaAbundant === true) badges.push({ kind: 'quota', text: '额度充足' });
+  if (facts.quotaState === 'abundant') badges.push({ kind: 'quota', text: '额度充足' });
   if (facts.free === true) badges.push({ kind: 'free', text: '免费模型' });
   return badges;
 }

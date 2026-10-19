@@ -31,6 +31,11 @@ export interface ProviderQuotaPool {
   readonly routingDiscountRate?: number;
   readonly evidenceRef?: string;
   readonly checkedAt?: string;
+  /**
+   * The provider never exposes usage for this pool, so automatic routing treats
+   * it as unknown by design: usable, but never ranked ahead of measured supply.
+   */
+  readonly usageUnknown?: boolean;
 }
 
 export interface ProviderQuotaBinding {

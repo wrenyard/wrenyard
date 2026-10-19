@@ -26,7 +26,10 @@ export interface ProviderListModel {
   contextWindow?: number
   maxTokens?: number
   effectiveTps?: number | null
-  quotaAbundant?: boolean
+  /** Unified quota state of this offering; absent when no quota was assessed. */
+  quotaState?: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted'
+  /** How that state was obtained; absent when no quota was assessed. */
+  quotaEvidence?: 'measured' | 'unknown_by_design' | 'not_obtained'
   free?: boolean
   /** CodeBuddy per-model credit multiplier string carried verbatim from the live
    * `/v3/config` offering (e.g. `x1.33 credits`); absent when the provider

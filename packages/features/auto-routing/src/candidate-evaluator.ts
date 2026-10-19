@@ -1,14 +1,14 @@
-import { QuotaPolicy } from './quota-policy.ts';
+import { assessRequiredQuota } from './quota-state.ts';
 import { SupplyEvidencePolicy } from './supply-evidence-policy.ts';
 import { CandidateScorer } from './candidate-scorer.ts';
-import { type ExcludedReason, type CandidateEvaluation, type CandidateInput, type ScoreWeights, type QuotaTier, type CandidateAssessment } from './types.ts';
+import { type ExcludedReason, type CandidateEvaluation, type CandidateInput, type ScoreWeights, type QuotaState, type CandidateAssessment } from './types.ts';
 import { snapshotScoreWeights } from './weights.ts';
 import { SCORE_WEIGHTS } from './constants.ts';
 import { snapshotCandidate } from './candidate-snapshot.ts';
 import { isFiniteNumber } from './numeric.ts';
 /** Owns admission gates and composes quota, supply evidence and scoring. */
 export class CandidateEvaluator {
-  constructor(private readonly quota = new QuotaPolicy(), private readonly supply = new SupplyEvidencePolicy(), private readonly scorer = new CandidateScorer()) { }
+  constructor(private readonly supply = new SupplyEvidencePolicy(), private readonly scorer = new CandidateScorer()) { }
   private rejected(snapshotId: string, canonicalId: string, reason: ExcludedReason, detail: string | null): CandidateEvaluation {
     return { kind: "rejected", snapshotId, canonicalId, reason, detail };
   }
@@ -90,14 +90,22 @@ export class CandidateEvaluator {
         return this.rejected(snapshotId, canonicalId, "invalid_intelligence", "intelligence expected rank must be an integer in [0, 3] at or above the minimum");
       }
     }
-    const quota = this.quota.assess(candidate.nowMs, candidate.requiredQuota);
-    if (quota.state === "blocked") {
-      return this.rejected(snapshotId, canonicalId, "quota_blocked", `blocked constraints: ${quota.blockedConstraintIds.join(",") || "(none)"}`);
+    const quota = assessRequiredQuota(candidate.nowMs, candidate.requiredQuota);
+    // An exhausted route can never serve a request and is dropped entirely.
+    if (quota.state === "exhausted") {
+      return this.rejected(snapshotId, canonicalId, "quota_exhausted", `exhausted constraints: ${quota.exhaustedConstraintIds.join(",") || "(none)"}`);
     }
-    const tier: QuotaTier = quota.state;
     const supply = this.supply.assess(candidate, quota);
     if ("kind" in supply) return supply;
     const { notes, supplyClass, confirmedFreeSupplyApplied, confirmedFreeSupplyEvidence, routingPriceUsdPerM, marginalApplied, headroom } = supply;
+    // The canonical assessment owns the confirmed-free promotion: with no
+    // measured evidence a confirmed free allowance is abundant, and any measured
+    // window keeps the state its own numbers produce. Exhaustion is never
+    // promoted, so the centralized state is already the routing tier.
+    const assessed = confirmedFreeSupplyApplied
+      ? assessRequiredQuota(candidate.nowMs, candidate.requiredQuota, { confirmedFreeSupply: true })
+      : quota;
+    const tier: QuotaState = assessed.state;
     const { quotaQuality, priceFactor, speedFactor, intelligenceFactor, intelligenceShortfall, score } = this.scorer.score(candidate, supply, effectiveWeights);
     const assessment: CandidateAssessment = {
       snapshotId,
@@ -117,9 +125,8 @@ export class CandidateEvaluator {
       intelligenceShortfall,
       score,
       weights: effectiveWeights,
-      coverageComplete: quota.coverageComplete,
-      headroomTrusted: quota.headroomTrusted,
-      quota,
+      coverageComplete: assessed.coverageComplete,
+      quota: assessed,
       notes,
     };
     return { kind: "accepted", assessment };

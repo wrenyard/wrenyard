@@ -2,16 +2,8 @@ import { CandidateEvaluator } from './candidate-evaluator.ts';
 import { type CandidateAssessment, type RankedCandidate, type CandidateInput, type ScoreWeights, type AutoRoutingResult, type ExcludedCandidate } from './types.ts';
 import { snapshotScoreWeights } from './weights.ts';
 import { SCORE_WEIGHTS } from './constants.ts';
+import { STATE_SEVERITY } from './quota-state.ts';
 import { compareLex } from './numeric.ts';
-/** Abundant supply: confirmed free, or healthy quota carrying trusted headroom. */
-export function isAbundantSupply(assessment: Pick<CandidateAssessment, 'supplyClass' | 'quota' | 'headroomTrusted'>): boolean {
-  return assessment.supplyClass === 'confirmed_free' ||
-    (assessment.quota.state === 'healthy' && assessment.headroomTrusted);
-}
-/** Abundant supply ranks ahead of every other eligible route as a priority tier. */
-function supplyTier(assessment: CandidateAssessment): number {
-  return isAbundantSupply(assessment) ? 0 : 1;
-}
 /** Evaluates one immutable candidate set and applies deterministic ranking. */
 export class AutoRouter {
   constructor(private readonly evaluator = new CandidateEvaluator()) { }
@@ -36,7 +28,6 @@ export class AutoRouter {
       intelligenceShortfall: assessment.intelligenceShortfall,
       weights: assessment.weights,
       coverageComplete: assessment.coverageComplete,
-      headroomTrusted: assessment.headroomTrusted,
       quota: assessment.quota,
       notes: assessment.notes,
     };
@@ -85,13 +76,13 @@ export class AutoRouter {
     }
     excluded.sort((a, b) => compareLex(a.canonicalId, b.canonicalId) ||
       compareLex(a.snapshotId, b.snapshotId));
-    // Abundant supply (confirmed free or healthy quota with trusted headroom)
-    // forms its own priority tier ahead of every other eligible route; inside
-    // each tier the weighted total score ranks candidates, then stable identity
-    // breaks ties. Recommendation affects the intelligence factor; shortfall
-    // remains a diagnostic and is never an independent ranking priority.
+    // The quota state is the primary tier (abundant > sufficient >
+    // insufficient); inside each tier the weighted total score ranks
+    // candidates, then stable identity breaks ties. Recommendation affects the
+    // intelligence factor; shortfall remains a diagnostic and is never an
+    // independent ranking priority.
     const rankedAssessments = accepted.slice().sort((a, b) =>
-      supplyTier(a) - supplyTier(b) ||
+      STATE_SEVERITY[a.tier] - STATE_SEVERITY[b.tier] ||
       b.score - a.score ||
       compareLex(a.canonicalId, b.canonicalId) ||
       compareLex(a.snapshotId, b.snapshotId));

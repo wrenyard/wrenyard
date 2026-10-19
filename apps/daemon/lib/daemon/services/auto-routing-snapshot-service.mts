@@ -81,15 +81,23 @@ import { randomUUID } from 'node:crypto';
 
 import { queryQuotaJson, type CodeBuddyQueryContext } from '../execution/quota-query.mts';
 
-import type { BalanceEvidence, QuotaEvidence, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/auto-routing';
+import type { BalanceEvidence, QuotaEvidence, QuotaEvidenceStatus, RequiredQuotaConstraint, ReplenishmentKind } from '@wrenyard/auto-routing';
 import type {
   AutoRoutingBoundQuotaSnapshot as PackageAutoRoutingBoundQuotaSnapshot,
   AutoRoutingQuotaSnapshot,
   AutoRoutingQuotaSnapshotEntry,
 } from '@wrenyard/auto-routing';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
+import { QUOTA_EVIDENCE_GRACE_MS } from '@wrenyard/auto-routing';
 /** Evidence freshness window for a direct raw observation (ms). */
 const QUOTA_SNAPSHOT_VALID_FOR_MS = 60_000;
+
+/**
+ * Freshness stamped on a retained last-measured observation reused after a
+ * failed/stale read. It spans the whole grace period so the policy can apply
+ * the last measured state for 30 minutes and then fall back to insufficient.
+ */
+const RETAINED_EVIDENCE_VALID_FOR_MS = QUOTA_EVIDENCE_GRACE_MS;
 
 /** A snapshot may never claim direct freshness further than now + this cap. */
 const DIRECT_FRESHNESS_CAP_MS = 60_000;
@@ -314,6 +322,8 @@ type RequiredQuotaTarget =
       readonly windowName?: undefined;
       readonly resetKind?: undefined;
       readonly balanceId?: undefined;
+      /** Copied from the pool declaration: usage is never exposed here. */
+      readonly usageUnknown?: boolean;
     }
   | {
       readonly id: string;
@@ -324,6 +334,8 @@ type RequiredQuotaTarget =
        *  constraint; never invented from raw output. */
       readonly resetKind: unknown;
       readonly balanceId?: undefined;
+      /** Copied from the pool declaration: usage is never exposed here. */
+      readonly usageUnknown?: boolean;
     }
   | {
       /** Mandatory monetary balance resource; evidence is located by the raw
@@ -332,6 +344,8 @@ type RequiredQuotaTarget =
       readonly balanceId: string;
       readonly windowName?: undefined;
       readonly resetKind?: undefined;
+      /** Copied from the pool declaration: usage is never exposed here. */
+      readonly usageUnknown?: boolean;
     };
 
 interface BindingQuotaShape {
@@ -365,6 +379,7 @@ function quotaShapeOf(binding: {
     readonly kind: string;
     readonly windows: readonly { readonly windowId: string; readonly resetKind: unknown }[];
     readonly balanceId?: string;
+    readonly usageUnknown?: boolean;
   }[];
 }, row: RawRow | null, nowMs: number): BindingQuotaShape {
   const quotaPoolIds: string[] = [];
@@ -376,12 +391,15 @@ function quotaShapeOf(binding: {
       && row.notApplicableWindows.includes(window.windowId)
       && !row.windows.some((item) => item.name === window.windowId)) continue;
     quotaPoolIds.push(pool.quotaPoolId);
+    // A pool whose provider never exposes usage keeps that declaration, so the
+    // policy classifies it as unknown by design instead of a failed read.
+    const usageUnknown = pool.usageUnknown === true ? { usageUnknown: true } : {};
     if (pool.kind === 'balance') {
-      targets.push({ id: pool.quotaPoolId, balanceId: pool.quotaPoolId });
+      targets.push({ id: pool.quotaPoolId, balanceId: pool.quotaPoolId, ...usageUnknown });
     } else if (window) {
-      targets.push({ id: pool.quotaPoolId, windowName: window.windowId, resetKind: window.resetKind });
+      targets.push({ id: pool.quotaPoolId, windowName: window.windowId, resetKind: window.resetKind, ...usageUnknown });
     } else {
-      targets.push({ id: pool.quotaPoolId });
+      targets.push({ id: pool.quotaPoolId, ...usageUnknown });
     }
   }
   return { quotaPoolIds, targets };
@@ -401,7 +419,12 @@ function entryFields(
   };
 }
 
-function windowEvidence(row: RawRow, windowName: string, resetKind: unknown): QuotaEvidence | null {
+function windowEvidence(
+  row: RawRow,
+  windowName: string,
+  resetKind: unknown,
+  validForMs = QUOTA_SNAPSHOT_VALID_FOR_MS,
+): QuotaEvidence | null {
   const rawWindow = row.windows.find((window) => window.name === windowName);
   if (rawWindow === undefined || rawWindow.pct === null) return null;
   const observedAtMs = row.fetchedAtMs;
@@ -412,7 +435,7 @@ function windowEvidence(row: RawRow, windowName: string, resetKind: unknown): Qu
   const remainingPercent = 100 - rawWindow.pct;
   // A fresh explicit zero proves exhaustion even when cycle metadata is absent.
   if (remainingPercent === 0) {
-    return { remainingPercent, observedAtMs, validForMs: QUOTA_SNAPSHOT_VALID_FOR_MS, replenishmentKind };
+    return { remainingPercent, observedAtMs, validForMs, replenishmentKind };
   }
   if (replenishmentKind === 'full_cycle') {
     // Full-cycle evidence carries the parsed reset time and cycle duration.
@@ -420,14 +443,45 @@ function windowEvidence(row: RawRow, windowName: string, resetKind: unknown): Qu
     return {
       remainingPercent,
       observedAtMs,
-      validForMs: QUOTA_SNAPSHOT_VALID_FOR_MS,
+      validForMs,
       replenishmentKind,
       resetAtMs: rawWindow.resetsAtMs,
       windowMs: rawWindow.windowMs,
     };
   }
   // rolling_partial/unknown carry no reset pace.
-  return { remainingPercent, observedAtMs, validForMs: QUOTA_SNAPSHOT_VALID_FOR_MS, replenishmentKind };
+  return { remainingPercent, observedAtMs, validForMs, replenishmentKind };
+}
+
+/**
+ * The most recent row of one provider that was usable when it was read, kept
+ * only while it is inside the last-measured grace period. A failed, refused or
+ * stale read reuses it so the route keeps its last measured state for 30
+ * minutes; afterwards the read is reported as not obtained and the policy maps
+ * that to insufficient.
+ */
+function retainedRow(
+  lastUsableRows: ReadonlyMap<string, RawRow>,
+  providerId: string,
+  nowMs: number,
+): RawRow | null {
+  const row = lastUsableRows.get(providerId);
+  if (row === undefined || row.fetchedAtMs === null) return null;
+  if (row.fetchedAtMs > nowMs) return null;
+  return nowMs - row.fetchedAtMs <= QUOTA_EVIDENCE_GRACE_MS ? row : null;
+}
+
+function constraintOf(
+  target: RequiredQuotaTarget,
+  evidence: QuotaEvidence | null,
+  balance: BalanceEvidence | null,
+  evidenceStatus: QuotaEvidenceStatus,
+): RequiredQuotaConstraint {
+  const usageUnknown = target.usageUnknown === true ? { usageUnknown: true } : {};
+  if (target.balanceId !== undefined) {
+    return { id: target.id, evidence: null, kind: 'balance', balance, evidenceStatus, ...usageUnknown };
+  }
+  return { id: target.id, evidence, evidenceStatus, ...usageUnknown };
 }
 
 /**
@@ -440,21 +494,31 @@ function windowEvidence(row: RawRow, windowName: string, resetKind: unknown): Qu
  * or guaranteed affordability from money; malformed/absent amounts surface as
  * the raw string (or null) so the policy treats them as unknown, never zero.
  */
-function balanceEvidence(row: RawRow): BalanceEvidence | null {
+function balanceEvidence(row: RawRow, validForMs = QUOTA_SNAPSHOT_VALID_FOR_MS): BalanceEvidence | null {
   if (row.fetchedAtMs === null || row.balances.length === 0) return null;
   let positive: string | undefined;
+  let positiveCurrency: string | null = null;
   let allValid = true;
   for (const entry of row.balances) {
     if (entry.currency === null || !/^[A-Z]{3}$/.test(entry.currency) || entry.amount === null || !/^\d+(?:\.\d+)?$/.test(entry.amount)) {
       allValid = false;
       continue;
     }
-    if (/[1-9]/.test(entry.amount)) positive ??= entry.amount;
+    // The currency of the reported amount selects the low-balance threshold.
+    if (positive === undefined && /[1-9]/.test(entry.amount)) {
+      positive = entry.amount;
+      positiveCurrency = entry.currency;
+    }
   }
   // Currencies are alternative balances, not amounts to add or convert.
   // One valid positive suffices; claim zero only when every entry is valid.
   if (positive === undefined && !allValid) return null;
-  return { amount: positive ?? '0', observedAtMs: row.fetchedAtMs, validForMs: QUOTA_SNAPSHOT_VALID_FOR_MS };
+  return {
+    amount: positive ?? '0',
+    currency: positiveCurrency,
+    observedAtMs: row.fetchedAtMs,
+    validForMs,
+  };
 }
 
 /**
@@ -475,17 +539,27 @@ function codebuddyExhaustionReset(row: RawRow): number | null {
   return observed.resetsAtMs; // Validated as finite-future by the caller.
 }
 
-function buildUnknownSnapshot(nowMs: number, rows: readonly RawRow[] = []): AutoRoutingQuotaSnapshot {
+function buildUnknownSnapshot(
+  nowMs: number,
+  rows: readonly RawRow[] = [],
+  lastUsableRows: ReadonlyMap<string, RawRow> = new Map(),
+): AutoRoutingQuotaSnapshot {
   const entries: AutoRoutingQuotaSnapshotEntry[] = PROVIDER_QUOTA_BINDINGS.map((binding) => {
     // Preserve the explicit presence of a provider-declared not-applicable
     // window even when the row itself is stale/non-ok: present-but-unusable
     // stays an explicit null constraint rather than disappearing into a
     // falsely complete row.
     const shape = quotaShapeOf(binding, findRow(rows, binding.providerId), nowMs);
+    // A failed or empty refresh reuses the last usable row inside the grace
+    // period as not-obtained evidence; afterwards the constraint carries no
+    // numbers at all and the policy reports insufficient.
+    const retained = retainedRow(lastUsableRows, binding.providerId, nowMs);
     const requiredQuota = shape.targets.map((target) =>
       target.balanceId !== undefined
-        ? { id: target.id, evidence: null, kind: 'balance' as const, balance: null }
-        : { id: target.id, evidence: null },
+        ? constraintOf(target, null, retained === null ? null : balanceEvidence(retained, RETAINED_EVIDENCE_VALID_FOR_MS), 'not_obtained')
+        : constraintOf(target, retained === null || target.windowName === undefined
+          ? null
+          : windowEvidence(retained, target.windowName, target.resetKind, RETAINED_EVIDENCE_VALID_FOR_MS), null, 'not_obtained'),
     );
     return entryFields(binding, shape, requiredQuota);
   });
@@ -509,6 +583,7 @@ function buildSnapshot(
   rows: readonly RawRow[],
   nowMs: number,
   allowCodeBuddyBlock: boolean,
+  lastUsableRows: Map<string, RawRow>,
 ): AutoRoutingQuotaSnapshot | null {
   const entries: AutoRoutingQuotaSnapshotEntry[] = [];
   const boundaries: number[] = [];
@@ -523,21 +598,30 @@ function buildSnapshot(
     if (usable) {
       hasFreshBindingEvidence = true;
       boundaries.push((row.fetchedAtMs as number) + QUOTA_SNAPSHOT_VALID_FOR_MS);
+      // Retain the newest usable row so a later failed/stale read can reuse its
+      // measurement for the grace period.
+      lastUsableRows.set(binding.providerId, row);
     }
+    // A row that is missing, non-ok, stale or unfresh is a failed read: reuse
+    // the retained row inside the grace period as not-obtained evidence.
+    const retained = usable ? null : retainedRow(lastUsableRows, binding.providerId, nowMs);
+    const source = usable ? row : retained;
     const requiredQuota: RequiredQuotaConstraint[] = shape.targets.map((target) => {
       // A pool with no proven raw windows (no windowName) is always null, and
       // unrelated raw rows/windows never fabricate a constraint or evidence.
       // The row and the window/reset facts are narrowed together so an absent
       // value is never handed to evidence construction.
       if (target.balanceId !== undefined) {
-        const balance = usable && row !== null ? balanceEvidence(row) : null;
-        return { id: target.id, evidence: null, kind: 'balance', balance };
+        const balance = source === null
+          ? null
+          : balanceEvidence(source, usable ? QUOTA_SNAPSHOT_VALID_FOR_MS : RETAINED_EVIDENCE_VALID_FOR_MS);
+        return constraintOf(target, null, balance, usable && balance !== null ? 'measured' : 'not_obtained');
       }
-      const evidence =
-        usable && row !== null && target.windowName !== undefined
-          ? windowEvidence(row, target.windowName, target.resetKind)
-          : null;
-      return { id: target.id, evidence };
+      const evidence = source !== null && target.windowName !== undefined
+        ? windowEvidence(source, target.windowName, target.resetKind,
+          usable ? QUOTA_SNAPSHOT_VALID_FOR_MS : RETAINED_EVIDENCE_VALID_FOR_MS)
+        : null;
+      return constraintOf(target, evidence, null, usable && evidence !== null ? 'measured' : 'not_obtained');
     });
     entries.push(entryFields(binding, shape, requiredQuota));
   }
@@ -597,6 +681,12 @@ export class AutoRoutingQuotaSnapshotService {
   private readonly cachedByContext = new Map<string, AutoRoutingQuotaSnapshot>();
   /** In-flight refreshes keyed by the same private CodeBuddy query context. */
   private readonly inFlightByContext = new Map<string, Promise<AutoRoutingQuotaSnapshot>>();
+  /**
+   * Newest row of each provider that was usable when read, retained in memory
+   * only. A later failed/stale/unfresh read reuses it as not-obtained evidence
+   * for the last-measured grace period; it never leaves the process.
+   */
+  private readonly lastUsableRows = new Map<string, RawRow>();
 
   constructor(options: AutoRoutingQuotaSnapshotServiceOptions = {}) {
     this.queryJson = options.queryJson ?? queryQuotaJson;
@@ -696,7 +786,7 @@ export class AutoRoutingQuotaSnapshotService {
       const rows = parseQuotaReport(text);
       // Defense in depth: even an injected/misbehaving query source cannot
       // activate a CodeBuddy negative row without a complete current scope.
-      const snapshot = buildSnapshot(rows, nowMs, context !== undefined);
+      const snapshot = buildSnapshot(rows, nowMs, context !== undefined, this.lastUsableRows);
       if (snapshot === null) return this.failClosed(context, rows);
       this.cachedByContext.set(codeBuddyContextKey(context), snapshot);
       return snapshot;
@@ -714,6 +804,6 @@ export class AutoRoutingQuotaSnapshotService {
     // short-lived unknown snapshot. Other contexts (e.g. a previous login) can
     // never be served because they are keyed separately.
     this.cachedByContext.delete(codeBuddyContextKey(context));
-    return buildUnknownSnapshot(this.now(), rows);
+    return buildUnknownSnapshot(this.now(), rows, this.lastUsableRows);
   }
 }

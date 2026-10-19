@@ -44,9 +44,9 @@ export interface TaskAutoRoutingDecision {
   snapshot_id: string
   selected_rank: number
   supply_class: 'confirmed_free' | 'standard'
-  quota_tier: 'healthy' | 'unknown' | 'strained'
+  /** Unified quota state of the selected route. */
+  quota_state: 'abundant' | 'sufficient' | 'insufficient' | 'exhausted'
   quota_coverage_complete: boolean
-  quota_headroom_trusted: boolean
   reference_output_usd_per_million: number
   routing_output_usd_per_million: number
   effective_cap_usd_per_million: number

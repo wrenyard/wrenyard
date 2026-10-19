@@ -46,11 +46,24 @@ export const SPEED_SATURATION_BASE_TPS = 100;
  * trusted headroom, never a neutral (or positive) quota quality.
  */
 export const ZERO_QUOTA_HEADROOM = 0;
-/** Full-cycle replenishment assessment constants. */
-export const FULL_CYCLE_MIN_REMAINING = 0.05;
-export const FULL_CYCLE_RESET_PACE = 0.8;
+/** Full-cycle headroom blend weights (remaining share and cycle-pace term). */
 export const FULL_CYCLE_HEADROOM_WEIGHT = 0.5;
 export const FULL_CYCLE_RESET_WEIGHT = 0.5;
-/** Rolling-partial replenishment bands. */
-export const HEALTHY_ROLLING_REMAINING = 0.8;
-export const STRAINED_ROLLING_REMAINING = 0.05;
+/**
+ * A window at or below this remaining share is insufficient only when it also
+ * trails its cycle pace; a balance uses its per-currency low threshold instead.
+ */
+export const QUOTA_INSUFFICIENT_REMAINING = 0.1;
+/** A rolling window (no reset facts, so no pace) is abundant from this share. */
+export const ROLLING_ABUNDANT_REMAINING = 0.8;
+/**
+ * Pay-as-you-go low-balance thresholds by ISO-4217 currency. A balance at or
+ * below its threshold is insufficient; an unknown currency has no threshold,
+ * so only an exact zero exhausts it.
+ */
+export const BALANCE_LOW_THRESHOLDS: Readonly<Record<string, number>> = Object.freeze({
+  CNY: 10,
+  USD: 1.5,
+});
+/** How long a last measured state survives a failed or stale read. */
+export const QUOTA_EVIDENCE_GRACE_MS = 30 * 60_000;
