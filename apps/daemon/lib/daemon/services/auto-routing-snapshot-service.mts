@@ -88,6 +88,8 @@ import type {
   AutoRoutingQuotaSnapshotEntry,
 } from '@wrenyard/auto-routing';
 import { PROVIDER_QUOTA_BINDINGS } from '@wrenyard/providers';
+import { codeBuddyPoolsForModel } from '@wrenyard/providers/codebuddy';
+import type { ProviderQuotaBinding, ProviderQuotaPool } from '@wrenyard/providers';
 import { QUOTA_EVIDENCE_GRACE_MS } from '@wrenyard/auto-routing';
 /** Evidence freshness window for a direct raw observation (ms). */
 const QUOTA_SNAPSHOT_VALID_FOR_MS = 60_000;
@@ -558,12 +560,32 @@ function codebuddyExhaustionReset(row: RawRow): number | null {
   return observed.resetsAtMs; // Validated as finite-future by the caller.
 }
 
+/**
+ * Resolves the bindings the routing snapshot builds constraints from.
+ *
+ * PROVIDER_QUOTA_BINDINGS is the static catalog table: its CodeBuddy pools are
+ * the non-iOA declarations. When the live CodeBuddy login reports an
+ * environment, the CodeBuddy entries are rebound through
+ * codeBuddyPoolsForModel so iOA's pay-as-you-go monthly pool (usageUnknown)
+ * reaches the constraints; HY family and non-CodeBuddy providers keep the
+ * static declarations. An absent environment falls back to the static table.
+ */
+function routingBindings(environment: string | undefined): readonly ProviderQuotaBinding[] {
+  if (environment === undefined) return PROVIDER_QUOTA_BINDINGS;
+  return PROVIDER_QUOTA_BINDINGS.map((binding) => (
+    binding.providerId === 'codebuddy'
+      ? { ...binding, pools: codeBuddyPoolsForModel(binding.modelId, environment) as readonly ProviderQuotaPool[] }
+      : binding
+  ));
+}
+
 function buildUnknownSnapshot(
   nowMs: number,
   rows: readonly RawRow[] = [],
   lastUsableRows: ReadonlyMap<string, RawRow> = new Map(),
+  environment?: string,
 ): AutoRoutingQuotaSnapshot {
-  const entries: AutoRoutingQuotaSnapshotEntry[] = PROVIDER_QUOTA_BINDINGS.map((binding) => {
+  const entries: AutoRoutingQuotaSnapshotEntry[] = routingBindings(environment).map((binding) => {
     // Preserve the explicit presence of a provider-declared not-applicable
     // window even when the row itself is stale/non-ok: present-but-unusable
     // stays an explicit null constraint rather than disappearing into a
@@ -604,12 +626,13 @@ function buildSnapshot(
   allowCodeBuddyBlock: boolean,
   lastUsableRows: Map<string, RawRow>,
   observedPoolExhaustion: ReadonlyMap<string, number> | undefined,
+  environment?: string,
 ): AutoRoutingQuotaSnapshot | null {
   const entries: AutoRoutingQuotaSnapshotEntry[] = [];
   const boundaries: number[] = [];
   let hasFreshBindingEvidence = false;
 
-  for (const binding of PROVIDER_QUOTA_BINDINGS) {
+  for (const binding of routingBindings(environment)) {
     // Row lookup is by row.provider === binding.providerId (the owner
     // provider). Normalized pool ids are retained in output only.
     const row = findRow(rows, binding.providerId);
@@ -763,7 +786,7 @@ export class AutoRoutingQuotaSnapshotService {
       return Object.freeze({ snapshot: await pending, codeBuddySnapshot });
     }
 
-    const started = this.refresh(context).finally(() => {
+    const started = this.refresh(context, codeBuddySnapshot?.environment).finally(() => {
       this.inFlightByContext.delete(key);
     });
     this.inFlightByContext.set(key, started);
@@ -794,12 +817,15 @@ export class AutoRoutingQuotaSnapshotService {
     return { expectedScope: stableScope, expectedEnvironment: environment };
   }
 
-  private async refresh(context: CodeBuddyQueryContext | undefined): Promise<AutoRoutingQuotaSnapshot> {
+  private async refresh(
+    context: CodeBuddyQueryContext | undefined,
+    environment?: string,
+  ): Promise<AutoRoutingQuotaSnapshot> {
     let text: string;
     try {
       text = await this.queryJson(context);
     } catch {
-      return this.failClosed(context);
+      return this.failClosed(context, [], environment);
     }
     // Evaluate provider observations against the time at which the asynchronous
     // sample completed. Wrenyard stamps each provider row as that provider
@@ -817,24 +843,26 @@ export class AutoRoutingQuotaSnapshotService {
         context !== undefined,
         this.lastUsableRows,
         this.observedPoolExhaustion?.(),
+        environment,
       );
-      if (snapshot === null) return this.failClosed(context, rows);
+      if (snapshot === null) return this.failClosed(context, rows, environment);
       this.cachedByContext.set(codeBuddyContextKey(context), snapshot);
       return snapshot;
     } catch {
-      return this.failClosed(context);
+      return this.failClosed(context, [], environment);
     }
   }
 
   private failClosed(
     context: CodeBuddyQueryContext | undefined,
     rows: readonly RawRow[] = [],
+    environment?: string,
   ): AutoRoutingQuotaSnapshot {
     // Never serve expired old evidence after a failed or empty refresh for the
     // current context; drop only that context's cache and hand back a
     // short-lived unknown snapshot. Other contexts (e.g. a previous login) can
     // never be served because they are keyed separately.
     this.cachedByContext.delete(codeBuddyContextKey(context));
-    return buildUnknownSnapshot(this.now(), rows, this.lastUsableRows);
+    return buildUnknownSnapshot(this.now(), rows, this.lastUsableRows, environment);
   }
 }

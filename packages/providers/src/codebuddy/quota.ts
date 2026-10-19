@@ -49,8 +49,16 @@ export function codeBuddyDefaultPools(environment?: string) {
   return [environment === 'ioa' ? IOA_MONTHLY_POOL : MONTHLY_POOL];
 }
 
-export function createCodeBuddyQuota(definition: ProviderDefinition, environment?: string): ProviderQuota {
-    return { bindings: codeBuddyQuotaBindings(definition, environment), defaultPools: codeBuddyDefaultPools(environment),
+/** Model-agnostic CodeBuddy pool selector keyed by environment for the daemon
+ * routing snapshot: exact bindings stay the catalog identity, this returns the
+ * pool list one model id draws on. */
+export function codeBuddyPoolsForModel(modelId: string, environment?: string) {
+  const monthly = environment === 'ioa' ? IOA_MONTHLY_POOL : MONTHLY_POOL;
+  return Object.freeze(isHyFamilyModel(modelId) ? [HY_FAMILY_POOL, monthly] : [monthly]);
+}
+
+export function createCodeBuddyQuota(definition: ProviderDefinition): ProviderQuota {
+    return { bindings: codeBuddyQuotaBindings(definition), defaultPools: codeBuddyDefaultPools(),
       read: async source => normalizeCodeBuddyQuota(await source.read()) };
   }
 

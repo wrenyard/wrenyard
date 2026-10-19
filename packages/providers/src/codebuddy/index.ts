@@ -3,6 +3,7 @@ import { codeBuddyClient, createCodeBuddyModels } from './models.ts';
 import type { CodeBuddyProductModelEntry } from './product.ts';
 import { applyCodeBuddyNativeHeaders, createCodeBuddyRuntime, type CodeBuddyActiveSnapshot, type CodeBuddyClientIdentity, type CodeBuddyProviderProduct } from './runtime.ts';
 import { createCodeBuddyQuota } from './quota.ts';
+export { codeBuddyPoolsForModel } from './quota.ts';
 
 export interface CodeBuddyOptions {
   /** Explicit product and account snapshot. Absent means no install was supplied. */
@@ -42,7 +43,7 @@ export function createCodeBuddy(options: CodeBuddyOptions = {}): CodeBuddy {
     id: definition.id,
     definition,
     clients: [codeBuddyClient],
-    quota: createCodeBuddyQuota(definition, product?.status === 'ready' ? product.environment : undefined),
+    quota: createCodeBuddyQuota(definition),
     credential: runtime.credential,
     resolveModel: (model, credential) => runtime.resolveUpstreamModel(model, credential) ?? model,
     canonicalizeModel: runtime.canonicalizeModel,
