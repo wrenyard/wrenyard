@@ -18,6 +18,14 @@ export interface ThemeModeDefinition {
   titleBarOverlay: { color: string; symbolColor: string };
   /** Shiki theme name used by code highlighting. */
   codeTheme: string;
+  /** Resolved `--foreground` for this mode. */
+  foreground: string;
+  /** Resolved `--muted-foreground` for this mode. */
+  mutedForeground: string;
+  /** Resolved `--destructive` for this mode. */
+  destructive: string;
+  /** Resolved `--destructive-foreground` for this mode. */
+  destructiveForeground: string;
 }
 
 export interface ThemeDefinition {
@@ -26,6 +34,10 @@ export interface ThemeDefinition {
   label: string;
   description?: string;
   modes: Record<ThemeMode, ThemeModeDefinition>;
+  /** Resolved `--app-font-sans` stack, identical in both modes. */
+  fontSans: string;
+  /** Resolved `--radius`, identical in both modes. */
+  radius: string;
   /** Icon paths relative to the package root. */
   icon: { png1024: string; png256: string };
 }
