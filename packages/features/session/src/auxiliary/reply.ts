@@ -276,9 +276,10 @@ export class ReplyWriter {
     if (turn.finished || turn.abort.signal.aborted) return;
 
     if (request.terminal) {
-      // Only an accepted nonempty reply may carry memories; a failed or missing
-      // reply never saves anything.
-      const memoryCalls = canSave && text !== undefined && outcome.ok && failure === undefined
+      // Only an accepted nonempty reply made through the reply tool may carry
+      // memories; a failed reply, or one taken from a fallback because the tool
+      // was never called, saves nothing.
+      const memoryCalls = canSave && text !== undefined && source === undefined && outcome.ok && failure === undefined
         ? outcome.toolCalls
         : undefined;
       await this.finishTurn(session, turn, request.status as TerminalStatus, request.error, memoryCalls);

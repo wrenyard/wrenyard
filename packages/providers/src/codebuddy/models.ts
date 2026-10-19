@@ -90,7 +90,9 @@ const CODEBUDDY_REASONING_EFFORTS: Readonly<Record<string, readonly ReasoningEff
   'deepseek-v4.1-flash': ['none', 'high'],
   'deepseek-v4-pro': ['none', 'high'],
   'hunyuan-hy3': ['none', 'high'],
-  'hunyuan-hy4-preview': ['none', 'high'],
+  // Disabling thinking has no effect on HY4 here: it still reasons for most of
+  // its output, so only the level it actually runs at is offered.
+  'hunyuan-hy4-preview': ['high'],
 };
 
 const codeBuddyReasoningEfforts = (modelId: string): readonly ReasoningEffort[] =>

@@ -173,6 +173,13 @@ export async function relayResponse(
       options.observer.feed(text);
       pending += text;
       flushFrames();
+      // The protocol's terminal event completes the response. Some upstreams
+      // keep the body open afterwards; waiting for it would let the client's
+      // disconnect turn a finished call into a cancellation without usage.
+      if (options.observer.succeeded()) {
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
     }
     const tail = decoder.decode();
     options.observer.feed(tail);

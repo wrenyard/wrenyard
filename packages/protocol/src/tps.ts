@@ -20,8 +20,12 @@ export interface TpsWindowSample {
 export const TPS_MIN_SAMPLE_TOKENS = 8;
 /** A shorter window is a buffered or collapsed stream, not a generation interval. */
 export const TPS_MIN_SAMPLE_WINDOW_MS = 100;
-/** A faster implied rate is burst delivery of buffered content, not generation speed. */
-export const TPS_MAX_PLAUSIBLE_RATE = 3000;
+/**
+ * A faster implied rate is burst delivery of buffered content, not generation
+ * speed. Measured per-sample rates of the routed models stay well below it
+ * (p99 about 550 tok/s), while buffered bursts reach several thousand.
+ */
+export const TPS_MAX_PLAUSIBLE_RATE = 1000;
 
 /** True when a sample has enough tokens and window, and a plausible rate. */
 export function isUsableTpsSample(sample: TpsWindowSample | undefined): sample is TpsWindowSample {
