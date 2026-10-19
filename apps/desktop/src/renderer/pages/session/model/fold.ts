@@ -24,7 +24,7 @@ import type {
   WorkspaceChangedEvent,
   WorkspaceSnapshot,
 } from '@wrenyard/session';
-import { actionLabel } from './describe.js';
+import { actionLabel, summarizeError } from './describe.js';
 import type {
   ActionModel,
   CallContextSnapshot,
@@ -374,6 +374,15 @@ function buildTurn(
       ...(event.step === undefined ? {} : { cycle: event.step }),
     }));
 
+  // A turn that recorded no closing reply still ends with one: the same
+  // fallback the engine uses, derived from the folded turn. Turns recorded
+  // before the terminal answer existed therefore look like new ones, and no
+  // turn is ever shown as missing a reply.
+  const derived = committedFinal === undefined
+    ? derivedFinalReply({ status, cycles, actions, calls, errors, startedAt, endedAt })
+    : undefined;
+  const allReplies = derived === undefined ? replies : [...replies, derived];
+
   const model: TurnModel = {
     id: turnId,
     user: {
@@ -391,8 +400,9 @@ function buildTurn(
     ...(interrupted === undefined ? {} : { interruptReason: interrupted.reason }),
     interrupting,
     cycles,
-    replies,
+    replies: allReplies,
     ...(committedFinal === undefined ? {} : { final: committedFinal }),
+    ...(derived === undefined ? {} : { final: derived }),
     calls,
     actions,
     errors,
@@ -401,6 +411,69 @@ function buildTurn(
   };
   cache.set(turnId, { signature, model });
   return model;
+}
+
+/**
+ * The closing reply of an ended turn that recorded none, derived from the
+ * folded turn. The first nonempty candidate wins: the last reasoning step's
+ * raw text, then the last finished action's textual result, then a closing
+ * line built from turn facts, which is never empty. A running turn has no
+ * closing reply yet.
+ */
+function derivedFinalReply(turn: {
+  status: TurnStatus;
+  cycles: readonly CycleModel[];
+  actions: readonly ActionModel[];
+  calls: readonly CallModel[];
+  errors: readonly ErrorItem[];
+  startedAt: string;
+  endedAt?: string;
+}): ReplyModel | undefined {
+  if (turn.status === 'running') return undefined;
+  const at = turn.endedAt ?? turn.startedAt;
+  const tone = turn.status === 'failed' ? 'destructive' : turn.status === 'interrupted' ? 'muted' : undefined;
+  const closing = (text: string): ReplyModel => ({
+    text,
+    at,
+    kind: 'final',
+    ...(tone === undefined ? {} : { tone }),
+  });
+
+  const reasoning = lastReasoningText(turn.cycles, turn.calls);
+  if (reasoning !== undefined) return closing(reasoning);
+  const result = lastActionResult(turn.actions);
+  if (result !== undefined) return closing(result);
+  if (turn.status === 'failed') return closing(`出错了：${summarizeError(turn.errors[0]?.message ?? '未知错误')}`);
+  if (turn.status === 'interrupted') return closing('已中断');
+  const done = turn.actions.reduce((count, action) => (action.status === 'running' ? count : count + 1), 0);
+  return closing(`本轮已完成，执行了 ${done} 个操作，未生成文字说明。`);
+}
+
+/** The raw text of the turn's last reasoning step, from its cycles or calls. */
+function lastReasoningText(cycles: readonly CycleModel[], calls: readonly CallModel[]): string | undefined {
+  for (let index = cycles.length - 1; index >= 0; index -= 1) {
+    const text = cycles[index]!.reasoning?.text;
+    if (text !== undefined && text.trim() !== '') return text;
+  }
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const call = calls[index]!;
+    if (call.role !== 'reason') continue;
+    const text = call.output !== '' ? call.output : call.reasoning;
+    if (text !== undefined && text.trim() !== '') return text;
+  }
+  return undefined;
+}
+
+/** The nonempty textual result of the turn's last finished action, if any. */
+function lastActionResult(actions: readonly ActionModel[]): string | undefined {
+  for (let index = actions.length - 1; index >= 0; index -= 1) {
+    const action = actions[index]!;
+    if (action.status === 'running') continue;
+    const result = action.result;
+    if (result === undefined || result.trim() === '') continue;
+    return result;
+  }
+  return undefined;
 }
 
 function replyModel(event: ReplySentEvent, kind: 'progress' | 'final'): ReplyModel {

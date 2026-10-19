@@ -38,19 +38,10 @@ export interface TimelineReplyEntry {
   reference?: MessageReference;
 }
 
-export interface TimelineFallbackEntry {
-  kind: 'fallback';
-  id: string;
-  at: string;
-  turn: TurnModel;
-  reference?: MessageReference;
-}
-
 export type MessageTimelineEntry =
   | TimelineUserEntry
   | TimelinePendingEntry
-  | TimelineReplyEntry
-  | TimelineFallbackEntry;
+  | TimelineReplyEntry;
 
 interface MessageReference {
   messageId: string;
@@ -110,10 +101,10 @@ function sortByAt(entries: MessageTimelineEntry[]): MessageTimelineEntry[] {
 
 /**
  * Flatten the folded turns and optimistic pending turns into independent
- * message rows: every user message, every committed reply and a terminal
- * fallback for an ended turn with no final reply. Task attachments are not
- * appended automatically; a task file appears only where a reply references it.
- * Rows are ordered by their own timestamp across all concurrent turns.
+ * message rows: every user message and every committed reply, including the
+ * closing reply a turn derived on read. Task attachments are not appended
+ * automatically; a task file appears only where a reply references it. Rows
+ * are ordered by their own timestamp across all concurrent turns.
  */
 export function buildMessageTimeline(
   turns: readonly TurnModel[],
@@ -125,14 +116,6 @@ export function buildMessageTimeline(
     turn.replies.forEach((reply, index) => {
       entries.push({ kind: 'reply', id: `reply:${turn.id}:${index}:${reply.at}`, at: reply.at, turn, reply });
     });
-    // The terminal fallback is emitted when the turn has no final reply for
-    // its current status — no final-kind reply and no last-reply coalescing
-    // (coalescing happens only for a successfully completed turn) — and the
-    // status is not running. This includes a completed turn that published no
-    // reply at all.
-    if (turn.final === undefined && turn.status !== 'running') {
-      entries.push({ kind: 'fallback', id: `fallback:${turn.id}`, at: turn.endedAt ?? turn.startedAt, turn });
-    }
   }
   for (const item of pending) {
     entries.push({ kind: 'pending', id: `pending:${item.localId}`, at: item.at, pending: item });
@@ -233,16 +216,6 @@ function EntryContent({ entry, sessionId, attachmentFiles, botNames, enter, onRe
           enter={enter}
           onReply={() => onReply(excerpt(entry.reply.text))}
           {...(sessionId === undefined ? {} : { sessionId })}
-          {...(entry.reference === undefined ? {} : {
-            reference: { ...entry.reference, onJump: () => onJump(entry.reference!.messageId) },
-          })}
-        />
-      );
-    case 'fallback':
-      return (
-        <AssistantMessage
-          turn={entry.turn}
-          enter={enter}
           {...(entry.reference === undefined ? {} : {
             reference: { ...entry.reference, onJump: () => onJump(entry.reference!.messageId) },
           })}

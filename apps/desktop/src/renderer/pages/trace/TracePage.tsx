@@ -47,6 +47,7 @@ function nodeFields(node: TraceNode): Array<[string, string]> {
       fields.push(['结束原因', event.kind !== 'task' ? event.metrics?.finishReason ?? '—' : event.metrics?.taskStatus ?? '—']);
       if (event.metrics) fields.push(['指标', JSON.stringify(event.metrics)]);
     }
+    if (event.type === 'reply.sent' && event.source !== undefined) fields.push(['来源', event.source]);
     if (event.type === 'action.started') fields.push(['提示', event.action.prompt]);
     if (event.type === 'action.finished') fields.push(['结果', event.result]);
   }

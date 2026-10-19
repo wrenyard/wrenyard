@@ -216,6 +216,12 @@ export interface ReplyModel {
    * written before the ledger recorded the kind.
    */
   kind?: ReplyKind;
+  /**
+   * Rendering tone of a reply derived on read for a turn that recorded no
+   * final reply: `destructive` for a failed turn, `muted` for an interrupted
+   * one. Absent for every recorded reply, which renders as ordinary prose.
+   */
+  tone?: 'destructive' | 'muted';
 }
 
 export interface ErrorItem {

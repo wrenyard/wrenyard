@@ -15,7 +15,6 @@ import {
   DISPATCH_TERMINAL_LABEL,
   TASK_RUN_PHASE_LABEL,
   dispatchTerminal,
-  noFinalReply,
   runningTaskAction,
   statusView,
   turnStatusText,
@@ -73,7 +72,14 @@ function attachedToAction(call: CallModel, actions: readonly ActionModel[]): boo
 function ReplyBlock({ reply }: { reply: ReplyModel }) {
   return (
     <div className="group/reply relative">
-      <AppMarkdown className="text-sm leading-relaxed">{reply.text}</AppMarkdown>
+      <AppMarkdown
+        className={cn(
+          'text-sm leading-relaxed',
+          reply.tone === 'destructive' ? 'text-destructive' : reply.tone === 'muted' ? 'text-muted-foreground' : undefined,
+        )}
+      >
+        {reply.text}
+      </AppMarkdown>
       <HoverTime
         value={reply.at}
         className="absolute -right-1 top-0 translate-x-full opacity-0 transition-opacity group-hover/reply:opacity-100"
@@ -164,7 +170,6 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
 export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask, waiting }: TranscriptTurnProps) {
   const attachments = (turn.user.attachments ?? []).map(fromSessionFile);
   const tokens = tokenSummary(turn);
-  const fallback = noFinalReply(turn);
   // The implementation phase is timed from the task run it opened, separate
   // from the compile call's own duration; it is never shown as compiling.
   const taskRun = runningTaskAction(turn);
@@ -224,10 +229,6 @@ export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask, wai
           {taskRun !== undefined && <Elapsed start={taskRun.startedAt} className="tabular-nums" />}
           <InterruptButton className="ml-auto" turn={turn} onInterrupt={onInterrupt} />
         </div>
-      ) : turn.final === undefined ? (
-        <p className={cn('px-1 text-sm', fallback.variant === 'destructive' ? 'text-destructive' : 'text-muted-foreground')}>
-          {fallback.text}
-        </p>
       ) : null}
 
       <div

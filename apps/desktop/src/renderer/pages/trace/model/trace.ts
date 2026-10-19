@@ -59,7 +59,7 @@ function eventLabel(event: LedgerEvent): string {
     case 'span.started': return event.kind === 'task' ? `任务 · ${event.request.task}` : `${event.kind === 'reasoning' ? '推理' : event.request.role ?? '辅助任务'} · ${event.request.model}`;
     case 'span.finished': return `执行记录 · ${event.kind}`;
     case 'reasoning.completed': return `推理输出 · ${event.text.slice(0, 90)}`;
-    case 'reply.sent': return `回复 · ${event.text.slice(0, 90)}`;
+    case 'reply.sent': return `回复 · ${event.text.slice(0, 90)}${event.source === undefined ? '' : ` · ${event.source}`}`;
     case 'system.error': case 'system.warning': case 'system.info': return event.message.slice(0, 100);
     case 'document.content': return `文档 · ${event.title || event.path}`;
     case 'document.found': return `文档检索 · ${event.understanding.slice(0, 90)}`;

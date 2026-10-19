@@ -217,14 +217,8 @@ export function waitingStatusText(state: TurnWaitingState): string {
   return `正在等待恢复，预计 ${pad2(at.getHours())}:${pad2(at.getMinutes())}:${pad2(at.getSeconds())} 重试`;
 }
 
-export interface NoFinalReply {
-  /** Exact product copy for an ended turn without a final reply. */
-  text: string;
-  /** `destructive` renders plain error text; `outline` renders a bubble. */
-  variant: 'destructive' | 'outline';
-}
-
-function summarizeError(message: string, max = 60): string {
+/** The first line of an error message, trimmed and truncated for display. */
+export function summarizeError(message: string, max = 60): string {
   const line = (message.split('\n', 1)[0] ?? '').trim();
   const chars = [...line];
   return chars.length > max ? `${chars.slice(0, max).join('')}…` : line;
@@ -261,15 +255,6 @@ export function dispatchTerminal(turn: TurnModel): DispatchTerminal | undefined 
     return turn.status === 'failed' ? 'compile-failed' : 'not-started';
   }
   return turn.status === 'failed' ? 'failed' : 'not-started';
-}
-
-/** Fallback assistant line for an ended turn that produced no final reply. */
-export function noFinalReply(turn: TurnModel): NoFinalReply {
-  if (turn.status === 'failed') {
-    return { text: `出错了：${summarizeError(turn.errors[0]?.message ?? '未知错误')}`, variant: 'destructive' };
-  }
-  if (turn.status === 'interrupted') return { text: '已中断', variant: 'outline' };
-  return { text: '没有给出回复', variant: 'outline' };
 }
 
 function basename(path: string): string {

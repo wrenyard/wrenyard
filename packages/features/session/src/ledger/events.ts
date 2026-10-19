@@ -589,6 +589,14 @@ export interface ReplySentEvent extends LedgerEventBase {
    * order rather than from the text.
    */
   kind?: 'progress' | 'final';
+  /**
+   * Where the reply text came from: the reply tool call (`tool`), the
+   * communication call's own plain text (`reply-text`), the turn's last
+   * reasoning output (`reasoning`), the turn's last finished action result
+   * (`action-result`), or a closing line built from turn facts (`closing`).
+   * Absent means `tool`, the default.
+   */
+  source?: 'tool' | 'reply-text' | 'reasoning' | 'action-result' | 'closing';
 }
 
 /** The session title; never part of the model context. */

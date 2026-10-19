@@ -124,6 +124,12 @@ interface ReplyRequest {
 /** The statuses a terminal communication call carries. */
 type TerminalStatus = 'completed' | 'failed';
 
+/** Where the text of a recorded reply came from. */
+type ReplySource = NonNullable<Extract<LedgerEvent, { type: 'reply.sent' }>['source']>;
+
+/** The closing line of a terminal turn that was interrupted. */
+const INTERRUPTED_CLOSING = '已中断';
+
 /** Writes a session's communication replies. */
 export class ReplyWriter {
   constructor(
@@ -184,7 +190,14 @@ export class ReplyWriter {
     const turn = session.turns.get(request.turn);
     if (!turn) return;
     // An interrupted or already-finished turn never communicates.
-    if (turn.finished || turn.abort.signal.aborted) return;
+    if (turn.finished || turn.abort.signal.aborted) {
+      // An interrupted terminal turn still records its closing line, so a
+      // finished turn is never left without a reply.
+      if (request.terminal && turn.abort.signal.aborted) {
+        await this.appendReply(session, request, undefined, INTERRUPTED_CLOSING, 'closing');
+      }
+      return;
+    }
 
     // A session running on a host agent tool port is a bot context: it answers
     // with ordinary assistant content and never calls the reply tool, so the
@@ -222,17 +235,32 @@ export class ReplyWriter {
       tools: [canSave ? REPLY_TOOL_WITH_MEMORY : REPLY_TOOL],
     });
     // An interrupt that landed while the call was in flight suppresses it.
-    if (turn.finished || turn.abort.signal.aborted) return;
+    if (turn.finished || turn.abort.signal.aborted) {
+      if (request.terminal && turn.abort.signal.aborted) {
+        await this.appendReply(session, request, outcome.spanId, INTERRUPTED_CLOSING, 'closing');
+      }
+      return;
+    }
 
     let text: string | undefined;
+    let source: ReplySource | undefined;
     let failure: string | undefined;
     if (outcome.ok) {
       try {
         const replyText = replyTextOfCalls(outcome.toolCalls ?? []);
-        // A request that did not use the reply tool sends no reply.
         if (replyText.trim() !== '') text = replyText;
       } catch (error) {
         failure = messageOf(error);
+      }
+      // A terminal request that produced no reply tool text still answers: the
+      // call's own plain text, then the turn's last reasoning output, then the
+      // last finished action's result, then a closing line built from turn
+      // facts, which is never empty. Progress requests stay silent exactly as
+      // before.
+      if (text === undefined && failure === undefined && request.terminal) {
+        const fallback = terminalFallback(input.events, request, outcome.text);
+        text = fallback.text;
+        source = fallback.source;
       }
     } else {
       failure = outcome.error ?? 'reply call failed';
@@ -245,18 +273,7 @@ export class ReplyWriter {
       text = fallbackReply(request.status as TerminalStatus, request.error);
     }
 
-    if (text !== undefined) {
-      await this.host.ledger.append(session.sessionId, {
-        type: 'reply.sent',
-        turn: request.turn,
-        step: request.step,
-        parent: outcome.spanId,
-        text,
-        // The publication kind follows execution alone: the invocation that
-        // finalizes the turn is the final reply, every other one is progress.
-        kind: request.terminal ? 'final' : 'progress',
-      });
-    }
+    if (text !== undefined) await this.appendReply(session, request, outcome.spanId, text, source);
     if (turn.finished || turn.abort.signal.aborted) return;
 
     if (request.terminal) {
@@ -267,6 +284,30 @@ export class ReplyWriter {
         : undefined;
       await this.finishTurn(session, turn, request.status as TerminalStatus, request.error, text, memoryCalls);
     }
+  }
+
+  /**
+   * Append one `reply.sent` record. `source` stays absent for the ordinary
+   * reply tool text, which is the default meaning.
+   */
+  private async appendReply(
+    session: SessionRuntime,
+    request: ReplyRequest,
+    parent: string | undefined,
+    text: string,
+    source: ReplySource | undefined,
+  ): Promise<void> {
+    await this.host.ledger.append(session.sessionId, {
+      type: 'reply.sent',
+      turn: request.turn,
+      step: request.step,
+      ...(parent === undefined ? {} : { parent }),
+      text,
+      // The publication kind follows execution alone: the invocation that
+      // finalizes the turn is the final reply, every other one is progress.
+      kind: request.terminal ? 'final' : 'progress',
+      ...(source === undefined ? {} : { source }),
+    });
   }
 
   /**
@@ -434,6 +475,65 @@ function terminalReasonOutput(
     return { text: event.workerOutput ?? event.text, parent: event.parent };
   }
   return undefined;
+}
+
+/**
+ * The terminal answer of a communication call that sent no reply tool text.
+ * The first nonempty candidate wins: the call's own plain text, the turn's
+ * last reasoning output, the last finished action's textual result, and a
+ * closing line built from turn facts. The closing line is never empty, so a
+ * terminal turn always records an answer.
+ */
+function terminalFallback(
+  events: readonly LedgerEvent[],
+  request: ReplyRequest,
+  callText: string,
+): { text: string; source: Exclude<ReplySource, 'tool'> } {
+  if (callText.trim() !== '') return { text: callText, source: 'reply-text' };
+  const reasoning = lastTurnReasonText(events, request.turn);
+  if (reasoning !== undefined) return { text: reasoning, source: 'reasoning' };
+  const result = lastActionResult(events, request.turn);
+  if (result !== undefined) return { text: result, source: 'action-result' };
+  if (request.status === 'failed') {
+    return { text: `出错了：${request.error ?? '未知错误'}`, source: 'closing' };
+  }
+  const actions = finishedActionCount(events, request.turn);
+  return { text: `本轮已完成，执行了 ${actions} 个操作，未生成文字说明。`, source: 'closing' };
+}
+
+/**
+ * The raw text of a turn's last completed reasoning output, preferring
+ * `workerOutput` over `text`, or undefined when the turn recorded none or it
+ * is empty.
+ */
+function lastTurnReasonText(events: readonly LedgerEvent[], turn: number): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type !== 'reasoning.completed' || event.turn !== turn) continue;
+    const text = event.workerOutput ?? event.text;
+    return text.trim() === '' ? undefined : text;
+  }
+  return undefined;
+}
+
+/** The nonempty textual result of the turn's last finished action, if any. */
+function lastActionResult(events: readonly LedgerEvent[], turn: number): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type !== 'action.finished' || event.turn !== turn) continue;
+    if (event.result.trim() === '') continue;
+    return event.result;
+  }
+  return undefined;
+}
+
+/** How many actions of the turn finished. */
+function finishedActionCount(events: readonly LedgerEvent[], turn: number): number {
+  let count = 0;
+  for (const event of events) {
+    if (event.type === 'action.finished' && event.turn === turn) count += 1;
+  }
+  return count;
 }
 
 /** The text of the latest visible system reply on the timeline, if any. */

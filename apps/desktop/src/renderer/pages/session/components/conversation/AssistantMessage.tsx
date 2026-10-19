@@ -3,15 +3,14 @@ import { Bubble, BubbleContent } from '@/renderer/components/ui/bubble';
 import { Message, MessageContent } from '@/renderer/components/ui/message';
 import { AppMarkdown as Markdown } from '@/renderer/components/app-markdown';
 import { useEnterAnimation } from '@/renderer/lib/motion';
-import { noFinalReply } from '../../model/describe.js';
 import type { ReplyModel, SessionFile, TurnModel } from '../../model/types.js';
 import { HoverTime } from './HoverTime.js';
 import { ReplyMenu } from './ReplyMenu.js';
 
 export interface AssistantMessageProps {
   turn: TurnModel;
-  /** The reply to render; omitted for the terminal fallback of a turn without replies. */
-  reply?: ReplyModel;
+  /** The reply to render: a recorded publication, or the closing reply the turn derived on read. */
+  reply: ReplyModel;
   /** A contextual reference to an earlier message separated by other turns. */
   reference?: { author: string; text: string; onJump: () => void };
   /** Play the entry animation; only set for genuinely new appends. */
@@ -24,20 +23,19 @@ export interface AssistantMessageProps {
 }
 
 /**
- * One committed communication reply, or the terminal fallback when `reply` is
- * omitted. Raw reason/thinking output is never shown here (it lives in the
- * transcript view only).
+ * One committed communication reply, including the closing reply a turn
+ * derived on read. Raw reason/thinking output is never shown here (it lives in
+ * the transcript view only).
  */
 export function AssistantMessage({ turn, reply, reference, enter, onReply, attachmentFiles, sessionId }: AssistantMessageProps) {
   const animate = useEnterAnimation(enter === true);
-  const fallback = reply === undefined ? noFinalReply(turn) : undefined;
-  const at = reply?.at ?? turn.endedAt;
+  const at = reply.at || turn.endedAt;
   return (
     <Message className={cn(animate && 'animate-in fade-in slide-in-from-bottom-2 duration-base ease-out')}>
       <MessageContent>
         <div className="flex items-end gap-2">
-          <ReplyMenu text={reply?.text ?? fallback!.text} onReply={onReply}>
-            <Bubble variant={fallback === undefined ? 'muted' : fallback.variant === 'destructive' ? 'destructive' : 'outline'}>
+          <ReplyMenu text={reply.text} onReply={onReply}>
+            <Bubble variant={reply.tone === 'destructive' ? 'destructive' : reply.tone === 'muted' ? 'outline' : 'muted'}>
               <BubbleContent className="rounded-2xl px-3 py-1.5">
                 {reference !== undefined && (
                   <button
@@ -50,16 +48,12 @@ export function AssistantMessage({ turn, reply, reference, enter, onReply, attac
                     <span className="line-clamp-2 text-muted-foreground">{reference.text}</span>
                   </button>
                 )}
-                {reply !== undefined
-                  ? (
-                    <Markdown
-                      {...(attachmentFiles === undefined ? {} : { attachments: attachmentFiles })}
-                      {...(sessionId === undefined ? {} : { sessionId })}
-                    >
-                      {reply.text}
-                    </Markdown>
-                  )
-                  : <span className="whitespace-pre-wrap">{fallback!.text}</span>}
+                <Markdown
+                  {...(attachmentFiles === undefined ? {} : { attachments: attachmentFiles })}
+                  {...(sessionId === undefined ? {} : { sessionId })}
+                >
+                  {reply.text}
+                </Markdown>
               </BubbleContent>
             </Bubble>
           </ReplyMenu>
