@@ -97,7 +97,7 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
               <strong className="tabular-nums">{balance.display}</strong>
             </span>
           ))}
-          {!hasStructured && (
+          {(provider.message || !hasStructured) && (
             <span className="text-xs text-muted-foreground">{provider.message ?? NO_DATA_NOTE}</span>
           )}
         </div>
