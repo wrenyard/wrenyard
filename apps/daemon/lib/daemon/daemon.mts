@@ -39,6 +39,7 @@ import { createSession, resolveModelMetadata, type Session } from '@wrenyard/ses
 import { resolveWrenyardIpcPath } from '@wrenyard/control'
 import { createDaemonSessionHost } from './services/session-host.mts'
 import { createScheduler, type Scheduler } from './services/scheduler.mts'
+import { migrateDeviceBots } from './services/bot-agents/device-migration.mts'
 import { createBotAgentKernel, type AgentModelRoute, type BotAgentKernel } from './services/bot-agents/kernel.mts'
 import { createBotHost, type BotHost, type BotLoadProbe, type BotTaskRunner } from './services/bot/host.mts'
 import { setAgentExecutionSupervisor } from '../core/operations/primitives/agent.mts'
@@ -1324,10 +1325,12 @@ async function createForemanDaemonResources(
     // routine records `lastError`. The scheduler stays workspace-scoped, so no
     // routine can fire into another workspace's bots. It shares the daemon's
     // single diagnostic sink.
-    // Device-only bot definitions and each bot's routines on this device live in
-    // `<config root>/bot-agents`. Legacy flat `<id>.json` files there are
-    // upgraded into `<id>/` directories when bots are loaded.
-    const deviceBotsDir = join(resolveWrenyardConfigRoot(), 'bot-agents')
+    // Device-only bots and each bot's routines on this device live in
+    // `<config root>/bots`; an older `bot-agents` directory is moved there once.
+    const deviceBotsDir = join(resolveWrenyardConfigRoot(), 'bots')
+    for (const note of await migrateDeviceBots(join(resolveWrenyardConfigRoot(), 'bot-agents'), deviceBotsDir)) {
+      writeDaemonLog('warn', note)
+    }
     const scheduler = createScheduler({
       statePath: join(sessionStateRoot, 'routines.json'),
       // Late binding: the kernel is constructed right below the scheduler, so a
@@ -1350,9 +1353,6 @@ async function createForemanDaemonResources(
       workspaceRoot,
       workspaceBotsDir: join(workspaceRoot, 'bots'),
       deviceBotsDir,
-      importConfigDeclaredRoutines: (botId, routines) => {
-        scheduler.importConfigDeclaredRoutines(botId, routines)
-      },
       syncRoutines: (botId, routines) => scheduler.sync(botId, routines),
       stateDir: join(sessionStateRoot, 'bot-agents', sha256hex(workspaceRoot)),
       host: daemonSessionHost,

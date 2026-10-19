@@ -8,7 +8,6 @@ import type {
   RoutineRecord,
   RoutineState,
 } from '../../protocol/methods/routine.mts'
-import type { ConfigDeclaredRoutine } from './bot-agents/config.mts'
 import { writeRoutine, removeRoutine, type RoutineDefinition } from './bot-agents/routine-files.mts'
 
 /** How often due routines are checked. */
@@ -101,11 +100,6 @@ export interface Scheduler {
    * as files once, so nothing is lost on the move to files.
    */
   sync(botId: string, definitions: readonly RoutineDefinition[] | undefined): void
-  /**
-   * Import config-declared named routines once per botId+name. Existing store
-   * entries and Desktop-created unnamed routines are never changed or removed.
-   */
-  importConfigDeclaredRoutines(botId: string, routines: readonly ConfigDeclaredRoutine[]): void
 }
 
 interface SchedulerStateFile {
@@ -420,55 +414,6 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     }).catch(error => log?.('warn', `scheduler could not write routine file ${record.id}`, error))
   }
 
-  /** Create only missing config-declared routines, matched by botId and name. */
-  function importConfigDeclaredRoutines(botId: string, declared: readonly ConfigDeclaredRoutine[]): void {
-    if (declared.length === 0) return
-    const existing = new Set(
-      routines
-        .filter(record => record.botId === botId && recordWorkspace(record) === workspaceRoot)
-        .map(record => record.name)
-        .filter((name): name is string => name !== undefined),
-    )
-    let changed = false
-    for (const routine of declared) {
-      if (existing.has(routine.name)) continue
-      const prompt = routine.prompt.trim()
-      if (prompt.length === 0 || prompt.length > MAX_PROMPT_LENGTH) continue
-      if (!Number.isInteger(routine.intervalMinutes)
-        || routine.intervalMinutes < MIN_INTERVAL_MINUTES
-        || routine.intervalMinutes > MAX_INTERVAL_MINUTES) {
-        continue
-      }
-      const activeCount = routines.filter(record =>
-        record.botId === botId && (record.state === 'active' || record.state === 'paused')).length
-      if (activeCount >= MAX_PER_BOT) {
-        log?.('warn', `scheduler could not import routine "${routine.name}" for bot ${botId}: routine limit reached`)
-        break
-      }
-      const deliver = parseRoutineDeliver(routine.deliver)
-      const now = new Date()
-      const record: RoutineRecord = {
-        id: nextId(),
-        botId,
-        name: routine.name,
-        prompt,
-        intervalMinutes: routine.intervalMinutes,
-        recurring: true,
-        state: 'active',
-        deliver,
-        createdAt: now.toISOString(),
-        nextRunAt: new Date(now.getTime() + routine.intervalMinutes * 60_000).toISOString(),
-        runCount: 0,
-      }
-      routines.push(record)
-      routineWorkspaces.set(record.id, workspaceRoot)
-      existing.add(routine.name)
-      changed = true
-      saveFile(record)
-    }
-    if (changed) persist()
-  }
-
   /** Make one bot's stored routines match its files. */
   function applyDefinitions(botId: string, files: readonly RoutineDefinition[] | undefined): void {
     const owned = routines.filter(record => record.botId === botId && recordWorkspace(record) === workspaceRoot)
@@ -664,6 +609,5 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       definitions.set(botId, files)
       if (prepared && !stopped) applyDefinitions(botId, files)
     },
-    importConfigDeclaredRoutines,
   }
 }

@@ -4,14 +4,14 @@
  * One bot is one directory named by its id, in one of two roots:
  *
  * - `<workspace>/bots/<id>/` for a bot that syncs with the workspace;
- * - `<config root>/bot-agents/<id>/` for a device-only bot.
+ * - `<config root>/bots/<id>/` for a device-only bot.
  *
  * Each directory holds `bot.json` (the user-only switches), `identity.md` (the
  * name, icon, description and persona the bot itself may edit) and a
  * `memory/` directory.
  *
  * What a bot does on this device are its routines, one file each in
- * `<config root>/bot-agents/<id>/routines/` (see routine-files.mts). They are never
+ * `<config root>/bots/<id>/routines/` (see routine-files.mts). They are never
  * synced. A device directory without `bot.json` is not a bot; for a workspace
  * bot it holds only `routines/`.
  *
@@ -21,10 +21,9 @@
 
 import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
-import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
-import type { RoutineDeliver } from '../../../protocol/methods/routine.mts'
 import { readRoutines, type RoutineDefinition } from './routine-files.mts'
 
 /** One tool switch a bot can turn on. */
@@ -47,7 +46,7 @@ const LEGACY_IGNORED_KEYS: readonly string[] = [['deny', 'Models'].join('')]
 export interface BotAgentRoots {
   /** `<workspace>/bots`. */
   workspace: string
-  /** `<config root>/bot-agents`. */
+  /** `<config root>/bots`. */
   device: string
 }
 
@@ -117,28 +116,15 @@ export interface BotAgentEntry {
   identityText: string
   config?: BotAgentConfig
   identity?: BotAgentIdentity
-  /** `<config root>/bot-agents/<id>/routines`: this device's routine files of the bot. */
+  /** `<config root>/bots/<id>/routines`: this device's routine files of the bot. */
   routinesDir: string
   /**
    * The bot's routines on this device; undefined while its routines directory
    * does not exist yet (the scheduler then exports the routines it holds).
    */
   routines?: RoutineDefinition[]
-  /**
-   * Config-declared routines from a flat `<id>.json` migrated in this load;
-   * the kernel imports them into the scheduler once before the bot runs.
-   */
-  configDeclaredRoutines?: ConfigDeclaredRoutine[]
   error?: string
   signature: string
-}
-
-/** One named routine from a retired flat device bot JSON file. */
-export interface ConfigDeclaredRoutine {
-  name: string
-  prompt: string
-  intervalMinutes: number
-  deliver: RoutineDeliver
 }
 
 /** One file of a bot's memory directory. */
@@ -215,7 +201,7 @@ async function readDefinitionFile(root: string, path: string, label: string): Pr
 }
 
 /** Read one `tools` map into the sorted list of enabled tool names. */
-function validateTools(value: unknown): AgentToolName[] {
+export function validateTools(value: unknown): AgentToolName[] {
   if (value === undefined) return []
   if (!isPlainObject(value)) throw new Error('tools must be an object')
   const enabled: AgentToolName[] = []
@@ -437,7 +423,7 @@ async function readDefinition(
   }
 }
 
-async function exists(path: string): Promise<boolean> {
+export async function exists(path: string): Promise<boolean> {
   return lstat(path).then(() => true, () => false)
 }
 
@@ -448,136 +434,6 @@ interface ScannedDirectory {
 }
 
 /** List the legal bot directories of one root; illegal names are warnings. */
-const LEGACY_FLAT_KEYS = new Set(['id', 'name', 'enabled', 'instructions', 'tools', 'routines'])
-const LEGACY_RETIRED_KEYS = new Set(['denyModels'])
-const LEGACY_DELIVER_PATTERN = /^(none|bot:[a-z0-9][a-z0-9-]{0,31})$/
-const LEGACY_MAX_PROMPT_LENGTH = 4_000
-const LEGACY_MAX_INTERVAL_MINUTES = 10_080
-
-interface LegacyFlatBot {
-  name: string
-  enabled: boolean
-  instructions: string
-  tools: Record<string, true>
-  routines: ConfigDeclaredRoutine[]
-}
-
-function validateLegacyRoutine(value: unknown, names: Set<string>): ConfigDeclaredRoutine {
-  if (!isPlainObject(value)) throw new Error('routine must be an object')
-  const name = value.name
-  if (typeof name !== 'string' || name.trim() === '') throw new Error('routine name must be a nonempty string')
-  if (names.has(name)) throw new Error(`duplicate routine name: ${name}`)
-  names.add(name)
-  const prompt = value.prompt
-  if (typeof prompt !== 'string' || prompt.trim() === '') {
-    throw new Error(`routine ${name}: prompt must be a nonempty string`)
-  }
-  if (prompt.length > LEGACY_MAX_PROMPT_LENGTH) {
-    throw new Error(`routine ${name}: prompt must be at most ${LEGACY_MAX_PROMPT_LENGTH} characters`)
-  }
-  const intervalMinutes = value.intervalMinutes
-  if (typeof intervalMinutes !== 'number' || !Number.isInteger(intervalMinutes)
-    || intervalMinutes < 1 || intervalMinutes > LEGACY_MAX_INTERVAL_MINUTES) {
-    throw new Error(`routine ${name}: intervalMinutes must be an integer between 1 and ${LEGACY_MAX_INTERVAL_MINUTES}`)
-  }
-  const deliver = value.deliver
-  if (deliver !== undefined && (typeof deliver !== 'string' || !LEGACY_DELIVER_PATTERN.test(deliver))) {
-    throw new Error(`routine ${name}: deliver must match ${LEGACY_DELIVER_PATTERN}`)
-  }
-  return { name, prompt, intervalMinutes, deliver: (deliver ?? 'none') as RoutineDeliver }
-}
-
-function parseLegacyFlatBot(text: string, id: string): LegacyFlatBot {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch (error) {
-    throw new Error(`invalid JSON: ${errorText(error)}`)
-  }
-  if (!isPlainObject(parsed)) throw new Error('bot file must be a JSON object')
-  for (const key of LEGACY_RETIRED_KEYS) delete parsed[key]
-  for (const key of Object.keys(parsed)) {
-    if (!LEGACY_FLAT_KEYS.has(key)) throw new Error(`unknown field: ${key}`)
-  }
-  const declaredId = parsed.id
-  if (declaredId !== undefined && declaredId !== id) {
-    throw new Error(`declared id ${String(declaredId)} does not match file name ${id}`)
-  }
-  const name = parsed.name
-  if (name !== undefined && typeof name !== 'string') throw new Error('name must be a string')
-  const enabled = parsed.enabled
-  if (enabled !== undefined && typeof enabled !== 'boolean') throw new Error('enabled must be a boolean')
-  const instructions = parsed.instructions
-  if (instructions !== undefined && typeof instructions !== 'string') {
-    throw new Error('instructions must be a string')
-  }
-  const toolNames = validateTools(parsed.tools ?? {})
-  const routines = parsed.routines
-  if (routines !== undefined && !Array.isArray(routines)) throw new Error('routines must be an array')
-  const names = new Set<string>()
-  return {
-    name: name ?? id,
-    enabled: enabled ?? true,
-    instructions: instructions ?? '',
-    tools: Object.fromEntries(toolNames.map(tool => [tool, true])),
-    routines: (routines ?? []).map(routine => validateLegacyRoutine(routine, names)),
-  }
-}
-
-/**
- * Upgrade flat `<id>.json` device bots into `<id>/` directories. Never clobbers
- * an existing directory; failures and skips become visible warnings.
- */
-async function migrateFlatDeviceBots(
-  deviceRoot: string,
-  warnings: string[],
-): Promise<Map<string, ConfigDeclaredRoutine[]>> {
-  const imported = new Map<string, ConfigDeclaredRoutine[]>()
-  const entries = await readdir(deviceRoot, { withFileTypes: true }).catch(() => [])
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isFile() || !entry.name.endsWith('.json') || entry.name.endsWith('.json.migrated')) continue
-    const id = entry.name.slice(0, -'.json'.length)
-    if (!isBotId(id)) {
-      warnings.push(`ignored legacy bot file "${entry.name}": id must match ${ID_PATTERN.source}`)
-      continue
-    }
-    const filePath = join(deviceRoot, entry.name)
-    let bot: LegacyFlatBot
-    try {
-      bot = parseLegacyFlatBot(await readFile(filePath, 'utf-8'), id)
-    } catch (error) {
-      warnings.push(`legacy bot file "${entry.name}" left in place: ${errorText(error)}`)
-      continue
-    }
-    const directory = join(deviceRoot, id)
-    if (await exists(directory)) {
-      warnings.push(`legacy bot file "${entry.name}" skipped: directory "${id}" already exists`)
-      continue
-    }
-    try {
-      await mkdir(directory)
-      await writeFile(
-        join(directory, 'bot.json'),
-        `${JSON.stringify({ enabled: bot.enabled, tools: bot.tools }, null, 2)}\n`,
-        { encoding: 'utf-8', mode: 0o600 },
-      )
-      await writeFile(
-        join(directory, 'identity.md'),
-        formatIdentity({ name: bot.name, body: bot.instructions }),
-        'utf-8',
-      )
-      await mkdir(join(directory, 'memory'))
-      await rename(filePath, `${filePath}.migrated`)
-    } catch (error) {
-      warnings.push(`legacy bot file "${entry.name}" left in place: ${errorText(error)}`)
-      await rm(directory, { recursive: true, force: true }).catch(() => {})
-      continue
-    }
-    imported.set(id, bot.routines)
-  }
-  return imported
-}
-
 async function scanRoot(
   root: string,
   location: AgentBotLocation,
@@ -607,7 +463,6 @@ export async function loadBotAgents(
 ): Promise<BotAgentScan> {
   const warnings: string[] = []
   const workspace = await scanRoot(roots.workspace, 'workspace', warnings)
-  const migratedRoutines = await migrateFlatDeviceBots(roots.device, warnings)
   const device = await scanRoot(roots.device, 'device', warnings)
   const cached = new Map(previous.map(entry => [`${entry.location}\n${entry.id}`, entry]))
 
@@ -622,14 +477,7 @@ export async function loadBotAgents(
     // A device directory without bot.json is not a bot: it carries a workspace
     // bot's routines on this device, or belongs to something else in the root.
     if (!(await exists(join(item.directory, 'bot.json')))) continue
-    let entry = await readDefinition(roots.device, item.id, 'device', cached.get(`device\n${item.id}`), roots.device)
-    const declared = migratedRoutines.get(item.id)
-    if (declared !== undefined && declared.length > 0) {
-      entry = { ...entry, configDeclaredRoutines: declared }
-    } else {
-      const { configDeclaredRoutines: _drop, ...rest } = entry
-      entry = rest
-    }
+    const entry = await readDefinition(roots.device, item.id, 'device', cached.get(`device\n${item.id}`), roots.device)
     if (workspaceIds.has(item.id)) {
       warnings.push(`bot "${item.id}" exists in both roots; the workspace bot is used and the device bot is disabled`)
       loaded.push({

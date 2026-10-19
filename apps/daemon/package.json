@@ -37,7 +37,7 @@
   "scripts": {
     "build": "node tools/build.mjs",
     "dev": "node scripts/dev.ts",
-    "test": "tsx --test tests/workspace-todo-service.test.mts tests/bot-workspace-inbox.test.mts tests/bot-workspace-host.test.mts tests/bot-adapters.test.mts tests/bot-state-machine.test.mts tests/bot-flat-migration.test.mts"
+    "test": "tsx --test tests/workspace-todo-service.test.mts tests/bot-workspace-inbox.test.mts tests/bot-workspace-host.test.mts tests/bot-adapters.test.mts tests/bot-state-machine.test.mts"
   },
   "engines": {
     "node": ">=24.19.0"

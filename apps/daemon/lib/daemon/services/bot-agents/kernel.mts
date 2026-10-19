@@ -39,7 +39,6 @@ import {
   createBotDirectory,
   listMemoryFiles,
   loadBotAgents,
-  type ConfigDeclaredRoutine,
   type AgentBotLocation,
   type AgentMemoryFile,
   type BotAgentConfig,
@@ -262,13 +261,8 @@ export interface CreateBotAgentKernelOptions {
   workspaceRoot: string
   /** `<workspace>/bots`: one directory per synced bot. */
   workspaceBotsDir: string
-  /** `<config root>/bot-agents`: one directory per device-only bot, and each bot's routines. */
+  /** `<config root>/bots`: one directory per device-only bot, and each bot's routines. */
   deviceBotsDir: string
-  /**
-   * Import config-declared routines from a migrated flat bot file before the bot
-   * is treated as runnable.
-   */
-  importConfigDeclaredRoutines?: (botId: string, routines: readonly ConfigDeclaredRoutine[]) => void
   /**
    * Hand each loaded bot's routine files to the scheduler; `undefined` routines
    * mean the bot has no routines directory on this device yet.
@@ -1832,9 +1826,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       }
     }
     for (const entry of entries.values()) {
-      if (entry.configDeclaredRoutines !== undefined && entry.configDeclaredRoutines.length > 0) {
-        options.importConfigDeclaredRoutines?.(entry.id, entry.configDeclaredRoutines)
-      }
       if (entry.config !== undefined) options.syncRoutines?.(entry.id, entry.routines, entry.routinesDir)
     }
     // Every wake carries the per-bot memory, so it is read with the definition.
