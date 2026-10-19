@@ -415,6 +415,11 @@ export interface ProviderDefinition {
   modelSpeedMeasurements?: Readonly<
     Record<string, { readonly initialTps: number; readonly measuredAt: string; readonly method: string }>
   >;
+  // Exact declared model ids whose upstream generates the whole response before
+  // streaming it, then replays it in a burst: their streamed timing measures the
+  // replay, not generation, so their speed samples are dropped and routing uses
+  // the declared speed.
+  replayedStreamModels?: readonly string[];
   // Per-runtime reasoning-effort materializations, keyed model id then client id
   // then effort level. The presence of an entry is the only claim that a runtime
   // explicitly supports realizing that level; absent means capability unknown,

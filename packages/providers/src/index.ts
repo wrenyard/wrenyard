@@ -11,6 +11,7 @@ export {
   BUILTIN_PROVIDERS,
   canonicalizeBuiltinPublicModelId,
   deriveTaskDispatchPlans,
+  hasReplayedStream,
   isBuiltinClientGatewayProviderSupported,
   resolveHistoricalOfferedModelId,
   resolveHistoricalProviderModelId,

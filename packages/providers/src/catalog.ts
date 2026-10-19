@@ -38,6 +38,11 @@ export function isBuiltinClientGatewayProviderSupported(clientID: string, provid
 
 export const BUILTIN_PROVIDERS: readonly ProviderDefinition[] = builtinDefinitions;
 
+/** True when the provider declares that the model's stream is a replay, so its timing is not a speed. */
+export function hasReplayedStream(providerId: string, modelId: string): boolean {
+  return BUILTIN_PROVIDERS.find((provider) => provider.id === providerId)?.replayedStreamModels?.includes(modelId) === true;
+}
+
 /**
  * Verified historical identity migration for one provider.
  *

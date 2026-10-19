@@ -289,6 +289,9 @@ export function createCodeBuddyModels(entries: readonly CodeBuddyProductModelEnt
     nativeClients: ['codebuddy'],
     defaultModel: 'hunyuan-hy4-preview',
     useClientBinary: true,
+    // Measured 2026-10-19: no event for about 9 s, then the whole response in
+    // about 2.5 s (visible text near 640 tok/s).
+    replayedStreamModels: ['gpt-6-luna'],
     models: built.models,
     // Aliases only target currently offered models, and only where they do not
     // collide with an exact offered endpoint id. Outbound wire ids are the

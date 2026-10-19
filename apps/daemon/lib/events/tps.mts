@@ -2,7 +2,7 @@ import { getDb } from '../db/connection.mts'
 import { TPS_MIN_SAMPLE_WINDOW_MS, isUsableTpsSample } from '@wrenyard/protocol/tps'
 import type { ForemanDatabase } from '../db/types.mts'
 import type { LocalSpeedSample } from '@wrenyard/providers/catalog'
-import { canonicalizeObservedProviderModelId } from '@wrenyard/providers'
+import { canonicalizeObservedProviderModelId, hasReplayedStream } from '@wrenyard/providers'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
 
 /**
@@ -280,6 +280,8 @@ export function readExecutionTpsSamples(
     // provider attribution stays intact. The persisted ledger text (modelId) is
     // never rewritten.
     const model = normalizeSampleModel(provider, rawModel)
+    // A replayed stream's timing measures the replay, not generation.
+    if (hasReplayedStream(provider, model)) continue
     const endedMs = parseTimestampMs(row.endedAt)
     if (endedMs === undefined) continue
 
