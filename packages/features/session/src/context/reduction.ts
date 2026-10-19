@@ -89,7 +89,7 @@ function isStepBoundary(event: LedgerEvent): boolean {
  * the budget, aligned to the start of a step, widened to hold the whole current
  * turn and never splitting an action from its result.
  */
-function hotZoneStart(
+export function hotZoneStart(
   events: readonly LedgerEvent[],
   size: (event: LedgerEvent) => number,
   budget: number,

@@ -13,11 +13,12 @@ import { boundedOutputReservation, type ModelMetadata } from '../model/metadata.
 import { COMPACTION_THRESHOLD_CAP, estimateInputTokens, estimateTokens } from '../model/request.ts';
 import { CONTEXT_EVENT_TYPES, type LedgerEvent } from '../ledger/store.ts';
 import { escapeBody, renderEventText, resumedOriginalTurns, tag } from './render.ts';
+import { hotZoneStart } from './reduction.ts';
 import { messageOf } from '../errors.ts';
 import type { Message as ModelMessage } from '../transport/index.ts';
 
 /** The summarisation call's output cap; never above this. */
-export const COMPACTION_MAX_OUTPUT_TOKENS = 2000;
+export const COMPACTION_MAX_OUTPUT_TOKENS = 6000;
 
 /** Share of the threshold kept verbatim as the most recent tail. */
 const TAIL_SHARE = 0.25;
@@ -47,6 +48,7 @@ Pitfalls learned at run time.
 
 Rules:
 - Use only the supplied records. Never invent paths, ids, results or decisions.
+- The input may hold an earlier handover note followed by newer records: fold them into one updated note keeping the same sections.
 - Keep concrete names, paths, ids, numbers and command results exact.
 - Do not address the user and do not ask questions.
 - Return the Markdown only, with no prose before or after it.
@@ -71,6 +73,11 @@ export interface CompactionInput {
   estimatedInputTokens?: number;
   /** The session's current title, used only by the deterministic fallback. */
   title?: string;
+  /**
+   * When set, the verbatim tail is every context event at or after this
+   * sequence and the hot zone is not computed.
+   */
+  tailFromSeq?: number;
 }
 
 export interface CompactionResult {
@@ -106,11 +113,14 @@ export function renderCompactionBlock(event: Extract<LedgerEvent, { type: 'conte
 }
 
 /**
- * Compact one timeline. The tail is the newest context suffix whose rendered
- * size fits within 25% of the threshold and stays verbatim; everything before
- * it is covered by one summary. When the summary call fails or its own input
- * cannot fit the window, a deterministic summary is built from ledger facts and
- * the failure is recorded.
+ * Compact one timeline. The tail is the hot zone of the last reduction stage:
+ * the newest step-aligned suffix whose rendered size fits within 25% of the
+ * threshold, or every context event from `tailFromSeq` on when the caller asks
+ * for a smaller tail. Everything before it is covered by one summary, whose
+ * input is only the previous handover note plus the records written after the
+ * previous floor, rendered in reduced form. When the summary call fails or its
+ * own input cannot fit the window, a deterministic summary is built from ledger
+ * facts and the failure is recorded.
  */
 export async function compactContext(input: CompactionInput): Promise<CompactionResult> {
   const contextWindow = input.metadata.contextWindow;
@@ -118,6 +128,9 @@ export async function compactContext(input: CompactionInput): Promise<Compaction
   const threshold = contextWindow === undefined
     ? 0
     : Math.min(Math.floor(THRESHOLD_SHARE * (contextWindow - outputReservation)), COMPACTION_THRESHOLD_CAP);
+  const maxOutputTokens = contextWindow === undefined
+    ? COMPACTION_MAX_OUTPUT_TOKENS
+    : Math.min(COMPACTION_MAX_OUTPUT_TOKENS, Math.floor(contextWindow / 4));
   const echoed = {
     ...(input.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: input.estimatedInputTokens }),
     ...(contextWindow === undefined ? {} : { contextWindow }),
@@ -129,37 +142,47 @@ export async function compactContext(input: CompactionInput): Promise<Compaction
     ? renderCompactionBlock(event)
     : renderEventText(event, resumedTurns) ?? '');
   const tailBudget = Math.floor(TAIL_SHARE * threshold);
-  let tailStart = contextEvents.length;
-  let tailTokens = 0;
-  for (let index = contextEvents.length - 1; index >= 0; index -= 1) {
-    const size = estimateTokens(renderOne(contextEvents[index]!));
-    if (tailTokens + size > tailBudget) break;
-    tailTokens += size;
-    tailStart = index;
-  }
+  const tailFromSeq = input.tailFromSeq;
+  const found = tailFromSeq === undefined
+    ? hotZoneStart(contextEvents, (event) => estimateTokens(renderOne(event)), tailBudget)
+    : contextEvents.findIndex((event) => event.seq >= tailFromSeq);
+  const tailStart = found === -1 ? contextEvents.length : found;
 
   const covered = contextEvents.slice(0, tailStart);
   if (covered.length === 0) return { throughSeq: 0, summary: '', ...echoed };
   const throughSeq = covered[covered.length - 1]!.seq;
 
-  const source = covered
-    .map(renderOne)
+  // Incremental input: the earlier handover note is carried forward verbatim
+  // and only the newer records, rendered in reduced form, are added to it.
+  // Thinking and earlier compaction blocks are never fed back.
+  const previous = previousCompaction(input.events);
+  const records = covered
+    .filter((event) => event.seq > previous.floor
+      && event.type !== 'reasoning.thinking'
+      && event.type !== 'context.compacted')
+    .map((event) => renderEventText(event, resumedTurns, { reduced: true }) ?? '')
     .filter((text) => text !== '')
     .join('\n');
+  const source = [
+    ...(previous.summary === undefined
+      ? []
+      : [tag('wy-handover-note', [['through-seq', previous.floor]], escapeBody(previous.summary))]),
+    records,
+  ].filter((part) => part !== '').join('\n');
   const messages: ModelMessage[] = [
     { role: 'system', content: COMPACTION_SYSTEM },
-    { role: 'user', content: `<wy-compaction>\n${escapeBody(source)}\n</wy-compaction>` },
+    { role: 'user', content: `<wy-compaction>\n${source}\n</wy-compaction>` },
   ];
 
   const summaryInputTokens = estimateInputTokens(messages);
-  if (contextWindow !== undefined && summaryInputTokens + COMPACTION_MAX_OUTPUT_TOKENS > contextWindow) {
-    const failure = `compaction summary input ${summaryInputTokens} + max output ${COMPACTION_MAX_OUTPUT_TOKENS} exceeds the context window ${contextWindow}`;
+  if (contextWindow !== undefined && summaryInputTokens + maxOutputTokens > contextWindow) {
+    const failure = `compaction summary input ${summaryInputTokens} + max output ${maxOutputTokens} exceeds the context window ${contextWindow}`;
     return { throughSeq, summary: fallbackSummary(input.title, input.events, throughSeq), ...echoed, failure };
   }
 
   let failure: string | undefined;
   try {
-    const outcome = await input.summarize(messages, COMPACTION_MAX_OUTPUT_TOKENS);
+    const outcome = await input.summarize(messages, maxOutputTokens);
     if (!outcome.ok) failure = outcome.error;
     else if (outcome.text.trim() === '') failure = 'compaction summary call returned no text';
     else return { throughSeq, summary: outcome.text.trim(), ...echoed };
@@ -167,6 +190,18 @@ export async function compactContext(input: CompactionInput): Promise<Compaction
     failure = messageOf(error);
   }
   return { throughSeq, summary: fallbackSummary(input.title, input.events, throughSeq), ...echoed, failure };
+}
+
+/** The latest recorded compaction: the floor it covered and its handover note. */
+function previousCompaction(events: readonly LedgerEvent[]): { floor: number; summary?: string } {
+  let floor = 0;
+  let summary: string | undefined;
+  for (const event of events) {
+    if (event.type !== 'context.compacted' || event.throughSeq < floor) continue;
+    floor = event.throughSeq;
+    summary = event.summary;
+  }
+  return { floor, ...(summary === undefined ? {} : { summary }) };
 }
 
 /** Collapse whitespace and cap one fallback line. */

@@ -16,7 +16,7 @@ import { contextBudgetOf, resolveModelMetadata } from '../model/request.ts';
 import { type ToolCall } from '../transport/index.ts';
 import { ACTION_TOOL, parseActionCall } from '../reasoning/tool.ts';
 import { buildReason } from '../reasoning/prompt.ts';
-import { compactContext, renderKernelFactsBlock } from '../context/compaction.ts';
+import { compactContext, renderKernelFactsBlock, type CompactionResult } from '../context/compaction.ts';
 import { computeReduction } from '../context/reduction.ts';
 import {
   type ActionExecutionOutcome,
@@ -248,9 +248,9 @@ export class TurnRunner {
     // A request that would cross the compaction threshold is reduced first and
     // summarised only when the reduction left it over the threshold. Both keep
     // every event on the ledger; their floors bound only the rendered view. A
-    // rebuilt view that is still over the hard budget falls through to the
-    // send-time guard, which refuses it without ever resending the unchanged
-    // request.
+    // rebuilt view that is still over the hard budget is never sent: the
+    // summary runs once more with the tail shrunk to the current turn, and a
+    // view still over the window fails the turn naming the sizes.
     const budget = contextBudgetOf(
       turn.publicId,
       view.messages,
@@ -263,6 +263,7 @@ export class TurnRunner {
       // model call, so it runs before the summary, and the floor it records
       // keeps the rendered prefix stable until the next reduction.
       let source = events;
+      let compactEstimate = budget.estimatedInputTokens;
       let overThreshold = true;
       const reduction = computeReduction(source, budget.threshold);
       if (reduction !== undefined) {
@@ -281,6 +282,7 @@ export class TurnRunner {
           (id) => this.engine.host.resolveInferenceProvider(id),
           maxTokens,
         );
+        compactEstimate = reduced.estimatedInputTokens;
         overThreshold = reduced.threshold === undefined
           || reduced.estimatedInputTokens > reduced.threshold;
         if (!overThreshold) {
@@ -291,12 +293,17 @@ export class TurnRunner {
         }
       }
       if (overThreshold) {
-        const compacted = await compactContext({
-          events: source,
+        const compact = (
+          from: readonly LedgerEvent[],
+          estimated: number,
+          tailFromSeq?: number,
+        ): Promise<CompactionResult> => compactContext({
+          events: from,
           metadata,
           ...(maxTokens === undefined ? {} : { outputReservation: maxTokens }),
-          estimatedInputTokens: budget.estimatedInputTokens,
+          estimatedInputTokens: estimated,
           title: session.title,
+          ...(tailFromSeq === undefined ? {} : { tailFromSeq }),
           summarize: async (messages, maxOutputTokens) => {
             const outcome = await this.engine.invoke(session, turn, 'reason', { messages: [...messages], layers: {} }, {
               parent: stepKey,
@@ -314,7 +321,8 @@ export class TurnRunner {
               : { ok: false, error: outcome.error ?? 'compaction summary call failed' };
           },
         });
-        if (compacted.throughSeq > 0) {
+        // Record one compaction and rebuild the view from the ledger it wrote.
+        const record = async (compacted: CompactionResult): Promise<LedgerEvent[]> => {
           await this.engine.ledger.append(session.sessionId, {
             type: 'context.compacted',
             turn: turn.turn,
@@ -325,18 +333,44 @@ export class TurnRunner {
             ...(compacted.contextWindow === undefined ? {} : { contextWindow: compacted.contextWindow }),
             ...(compacted.failure === undefined ? {} : { failure: compacted.failure }),
           });
-          const kernelFacts = port?.kernelFacts?.();
           const freshEvents = this.engine.ledger.read(session.sessionId);
           view = buildView(freshEvents);
+          const kernelFacts = port?.kernelFacts?.();
           if (kernelFacts !== undefined && kernelFacts.trim() !== '') {
             view.messages.splice(view.messages.length - 1, 0, { role: 'user', content: renderKernelFactsBlock(kernelFacts) });
           }
-          contextBudgetOf(
-            turn.publicId,
-            view.messages,
-            (id) => this.engine.host.resolveInferenceProvider(id),
-            maxTokens,
-          );
+          return freshEvents;
+        };
+        const recheck = () => contextBudgetOf(
+          turn.publicId,
+          view.messages,
+          (id) => this.engine.host.resolveInferenceProvider(id),
+          maxTokens,
+        );
+        const overWindow = (facts: ReturnType<typeof recheck>): boolean => facts.contextWindow !== undefined
+          && facts.estimatedInputTokens + (facts.outputReservation ?? 0) > facts.contextWindow;
+
+        const compacted = await compact(source, compactEstimate);
+        if (compacted.throughSeq > 0) {
+          let fresh = await record(compacted);
+          let after = recheck();
+          if (overWindow(after)) {
+            // Still over the hard budget: summarise once more with the tail
+            // shrunk to the current turn, which is the smallest verbatim tail.
+            const started = [...fresh].reverse()
+              .find((event) => event.type === 'turn.started' && event.turn === turn.turn);
+            const retry = await compact(fresh, after.estimatedInputTokens, started?.seq);
+            if (retry.throughSeq > 0) {
+              fresh = await record(retry);
+              after = recheck();
+            }
+          }
+          if (overWindow(after)) {
+            return {
+              ok: false,
+              error: `context_overflow: estimated input ${after.estimatedInputTokens} + output reservation ${after.outputReservation ?? 0} exceeds the context window ${after.contextWindow}`,
+            };
+          }
         }
       }
     }

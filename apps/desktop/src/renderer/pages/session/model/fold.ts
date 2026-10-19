@@ -789,7 +789,7 @@ function buildContextItems(events: LedgerEvent[]): ContextItem[] {
         key: String(event.seq),
         kind: 'thinking',
         path: '',
-        title: `Context compacted · #${record.throughSeq}`,
+        title: `已压缩上下文 · #${record.throughSeq}`,
         ...(usage === undefined ? {} : { reason: usage }),
         content: record.failure === undefined
           ? record.summary
