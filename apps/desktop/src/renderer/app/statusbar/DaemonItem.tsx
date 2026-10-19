@@ -186,7 +186,8 @@ export function DaemonItem({ onOpenUpdate }: DaemonItemProps) {
 
   const openUsage = (): void => {
     setOpen(false);
-    executeCommand('settings.open', 'providers');
+    // The usage entry now opens the right-side panel on its 用量 tab.
+    executeCommand('quota.showPanel');
   };
 
   const openProviders = (): void => {

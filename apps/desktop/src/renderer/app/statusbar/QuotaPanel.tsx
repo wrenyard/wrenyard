@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RotateCw } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/renderer/components/ui/button';
@@ -52,17 +52,37 @@ function orderProviders(
 export interface QuotaPanelProps {
   /** Closes the hosting popover after a jump into the 供应商 settings page. */
   onClose?: () => void;
+  /** Provider listed first, ahead of the user's own ordering (e.g. the selected model's provider). */
+  firstProviderId?: string;
+  /** Provider scrolled into view once after mount or when the target changes. */
+  scrollProviderId?: string;
 }
 
-export function QuotaPanel({ onClose }: QuotaPanelProps = {}) {
+export function QuotaPanel({ onClose, firstProviderId, scrollProviderId }: QuotaPanelProps = {}) {
   const quota = useQuery(quotaQuery);
   const refresh = useQuotaRefresh();
   const now = useMinuteNow();
   const data = quota.data;
-  const providers = useMemo(
-    () => orderProviders(data?.providers ?? [], data?.providerOrder ?? []),
-    [data],
-  );
+  const providers = useMemo(() => {
+    const ordered = orderProviders(data?.providers ?? [], data?.providerOrder ?? []);
+    if (firstProviderId === undefined) return ordered;
+    // The requested provider leads; the rest keep the user's own order.
+    const index = ordered.findIndex((provider) => provider.id === firstProviderId);
+    if (index <= 0) return ordered;
+    return [ordered[index]!, ...ordered.slice(0, index), ...ordered.slice(index + 1)];
+  }, [data, firstProviderId]);
+  // One-shot scroll target: each provider row carries a `data-provider-id`, and
+  // the matching row is scrolled into view once per requested id.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const scrolledRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (scrollProviderId === undefined || scrollProviderId === scrolledRef.current) return;
+    const row = listRef.current?.querySelector(`[data-provider-id="${CSS.escape(scrollProviderId)}"]`);
+    if (row instanceof HTMLElement) {
+      row.scrollIntoView({ block: 'nearest' });
+      scrolledRef.current = scrollProviderId;
+    }
+  }, [scrollProviderId, providers]);
 
   return (
     <div className="flex max-h-[560px] w-full min-w-0 flex-col">
@@ -86,9 +106,11 @@ export function QuotaPanel({ onClose }: QuotaPanelProps = {}) {
         {providers.length === 0 ? (
           <p className="px-4 py-10 text-center text-xs text-muted-foreground">暂无额度数据</p>
         ) : (
-          <div className="flex flex-col gap-3 px-4 py-3">
+          <div ref={listRef} className="flex flex-col gap-3 px-4 py-3">
             {providers.map((provider) => (
-              <QuotaProviderBlock key={provider.id} provider={provider} />
+              <div key={provider.id} data-provider-id={provider.id}>
+                <QuotaProviderBlock provider={provider} />
+              </div>
             ))}
           </div>
         )}

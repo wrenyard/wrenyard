@@ -20,7 +20,8 @@ import { executeCommand } from '@/renderer/lib/commands';
 import { shell, useActivityStatus } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
 import { useAppearance } from '@/renderer/lib/theme';
-import { closeActivityPanel } from '@/renderer/lib/activity-panel';
+import { closeActivityPanel, setActivityPanelTab, useActivityPanelState, type ActivityPanelTab } from '@/renderer/lib/activity-panel';
+import { UsagePanel } from '@/renderer/app/UsagePanel';
 import { useActiveSession } from '@/renderer/lib/navigation';
 import { PHASE_LABEL, TASK_RUN_PHASE_LABEL, runningTaskAction } from '@/renderer/pages/session/model/describe';
 import { isRunningTask } from '@/renderer/pages/session/model/fold';
@@ -81,6 +82,7 @@ const transcriptLoader: TaskRunEventsLoader = {
 };
 
 export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
+  const { tab } = useActivityPanelState();
   const snapshot = useActivityStatus();
   const sessions = useSessionActivity();
   const activeSession = useActiveSession();
@@ -243,9 +245,24 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        <span className="text-sm font-medium">活动</span>
+        {/* 活动 / 用量 tabs; the selected tab is persisted by the store. */}
+        <div className="flex items-center rounded-md border p-0.5 text-xs">
+          {(['activity', 'usage'] as const).map((value: ActivityPanelTab) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setActivityPanelTab(value)}
+              className={cn(
+                'rounded-sm px-2 py-0.5',
+                tab === value ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {value === 'activity' ? '活动' : '用量'}
+            </button>
+          ))}
+        </div>
         <div className="flex items-center gap-1">
-          {sessionOpen && (
+          {tab === 'activity' && sessionOpen && (
             <div className="flex items-center rounded-md border p-0.5 text-xs">
               {(['session', 'all'] as const).map((value) => (
                 <button
@@ -268,6 +285,8 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
         </div>
       </div>
 
+      {tab === 'usage' ? <UsagePanel /> : (
+      <>
       <div className="min-h-0 flex-1 overflow-auto px-2 py-2">
         {stale ? <p className="px-2 py-1 text-xs text-warning">活动数据暂未更新</p> : null}
         {visibleGroups.map((session) => session.turns.length > 0 ? (
@@ -375,6 +394,8 @@ export function ActivityPanel({ scopeSession }: { scopeSession: string }) {
             />
           </div>
         </>
+      )}
+      </>
       )}
     </div>
   );

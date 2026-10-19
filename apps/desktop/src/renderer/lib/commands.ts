@@ -14,8 +14,7 @@ import type { ShellPage } from '@/shell-contract';
 import { isShellPage } from '@/shell-contract';
 import { onCommandAction, onViewChanged, shell } from '@/renderer/lib/desktop';
 import { back, forward, toggleSecondarySidebar } from '@/renderer/lib/navigation';
-import { requestQuotaPanelOpen } from '@/renderer/lib/statusbar';
-import { toggleActivityPanel } from '@/renderer/lib/activity-panel';
+import { openActivityPanel, toggleActivityPanel, type ActivityPanelTab } from '@/renderer/lib/activity-panel';
 
 export interface CommandDefinition {
   id: string;
@@ -54,6 +53,23 @@ function runTaskOpen(args: unknown): void {
   if (taskRunId) void shell.openTaskTranscript(taskRunId);
 }
 
+/** Optional `{tab, provider, sessionId}` args for the activity-panel commands. */
+interface ActivityPanelArgs {
+  tab?: ActivityPanelTab;
+  provider?: string;
+  sessionId?: string;
+}
+
+function activityPanelArgs(args: unknown): ActivityPanelArgs {
+  if (args === null || typeof args !== 'object') return {};
+  const raw = args as Record<string, unknown>;
+  return {
+    ...(raw.tab === 'activity' || raw.tab === 'usage' ? { tab: raw.tab } : {}),
+    ...(typeof raw.provider === 'string' ? { provider: raw.provider } : {}),
+    ...(typeof raw.sessionId === 'string' ? { sessionId: raw.sessionId } : {}),
+  };
+}
+
 const ROUTED_PAGES: Readonly<Record<string, ShellPage>> = {
   'session.open': 'session',
   'session.newDraft': 'session',
@@ -75,8 +91,26 @@ export const GLOBAL_COMMANDS: readonly CommandDefinition[] = [
   { id: 'nav.forward', title: '前进', run: () => forward() },
   { id: 'view.toggleSidebar', title: '折叠侧栏', run: () => toggleSecondarySidebar() },
   { id: 'task.open', title: '查看任务', run: runTaskOpen },
-  { id: 'quota.showPanel', title: '查看额度', run: () => requestQuotaPanelOpen() },
-  { id: 'activity.toggle', title: '活动面板', run: () => toggleActivityPanel() },
+  // Opens the side panel on the 用量 tab, scrolling to the given provider.
+  {
+    id: 'quota.showPanel',
+    title: '查看额度',
+    run: (args) => {
+      const { provider } = activityPanelArgs(args);
+      openActivityPanel(undefined, { tab: 'usage', ...(provider === undefined ? {} : { provider }) });
+    },
+  },
+  {
+    id: 'activity.toggle',
+    title: '活动面板',
+    run: (args) => {
+      const { tab, provider, sessionId } = activityPanelArgs(args);
+      toggleActivityPanel(sessionId, {
+        ...(tab === undefined ? {} : { tab }),
+        ...(provider === undefined ? {} : { provider }),
+      });
+    },
+  },
 ];
 
 for (const command of GLOBAL_COMMANDS) globalCommands.set(command.id, command);

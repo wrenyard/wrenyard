@@ -28,6 +28,9 @@ import { useSessionUsage } from '../../state/session-usage.js';
 import { useContextBudget } from '../../state/use-context-budget.js';
 import { useSessionConsumption } from '../../state/use-session-consumption.js';
 import { ContextBreakdown } from '../usage/ContextBreakdown.js';
+import type { ModelEntry } from '../../model/types.js';
+import type { SessionUsage } from '../../state/session-usage.js';
+import type { SessionConsumption } from '../../state/use-session-consumption.js';
 
 /**
  * Session status-bar items (window-chrome spec 4.5). The component renders
@@ -39,18 +42,45 @@ import { ContextBreakdown } from '../usage/ContextBreakdown.js';
  * first: ctx > metrics.
  */
 
-export function SessionStatusItems() {
-  const { sessionKey, models, turns, modelId, refreshContext, inputTokens } = useSessionUsage();
-  const { budget, groups, resolveModel, routesPreview } = useContextBudget(sessionKey, modelId, inputTokens);
-  const consumption = useSessionConsumption();
+/**
+ * Everything the session usage surfaces share: the {@link ContextBreakdown}
+ * props (`roles`, `budget`, `groups`, the selected model list) plus the
+ * {@link SessionUsagePanel} inputs (`clusters`, model `groups`, task counts,
+ * currency) and the speed figure. Extracted so the app-level 用量 panel renders
+ * the same components without duplicating the derivation. `usage` may carry a
+ * session-scoped usage slice (turns, models, consumption) so a scoped session
+ * is preferred when the data path supports it; omitting it uses the active
+ * session's provider.
+ */
+export interface SessionUsagePanelData {
+  models: readonly ModelEntry[];
+  modelId: string;
+  roles: RoleContextEntry[];
+  budget: ContextBudgetView | undefined;
+  groups: UsageGroupView[];
+  clusters: readonly MetricCluster[];
+  taskGroups: readonly TaskModelGroup[];
+  callGroups: { reason: readonly TaskModelGroup[]; aux: readonly TaskModelGroup[] };
+  missingTasks: number;
+  runningTasks: number;
+  currency: DisplayCurrency;
+  speed: number | undefined;
+}
 
-  const calls = useMemo(() => turns.flatMap((turn) => turn.calls), [turns]);
+export function useSessionUsagePanelData(usage?: Pick<SessionUsage, 'turns'> & { consumption?: SessionConsumption }): SessionUsagePanelData {
+  const { sessionKey, models, turns, modelId, inputTokens } = useSessionUsage();
+  const { budget, groups, resolveModel, routesPreview } = useContextBudget(sessionKey, modelId, inputTokens);
+  const providerConsumption = useSessionConsumption();
+  const consumption = usage?.consumption ?? providerConsumption;
+  const scopedTurns = usage?.turns ?? turns;
+
+  const calls = useMemo(() => scopedTurns.flatMap((turn) => turn.calls), [scopedTurns]);
   const speed = useMemo(() => mainSpeed(calls), [calls]);
   const quota = useQuotaQuery();
   const currency = useDisplayCurrency();
   const dispatches = useMemo(
-    () => turns.flatMap((turn) => turn.actions.filter((action) => action.kind === 'dispatch')),
-    [turns],
+    () => scopedTurns.flatMap((turn) => turn.actions.filter((action) => action.kind === 'dispatch')),
+    [scopedTurns],
   );
   const clusters = useMemo(
     () => metricClusters(calls, consumption.tasks, dispatches, quota.data),
@@ -79,7 +109,27 @@ export function SessionStatusItems() {
     [calls, modelId, resolveModel, routesPreview],
   );
 
-  const selected = models.find((entry) => entry.publicId === modelId);
+  return {
+    models,
+    modelId,
+    roles,
+    budget,
+    groups,
+    clusters,
+    taskGroups,
+    callGroups,
+    missingTasks: consumption.missingTasks,
+    runningTasks: consumption.runningTasks,
+    currency,
+    speed,
+  };
+}
+
+export function SessionStatusItems() {
+  const { sessionKey, modelId, refreshContext } = useSessionUsage();
+  const data = useSessionUsagePanelData();
+
+  const selected = data.models.find((entry) => entry.publicId === modelId);
 
   useStatusBarItem({
     id: 'session.ctx',
@@ -87,9 +137,9 @@ export function SessionStatusItems() {
     priority: 34,
     render: () => (
       <CtxStatusItem
-        budget={budget}
-        groups={groups}
-        roles={roles}
+        budget={data.budget}
+        groups={data.groups}
+        roles={data.roles}
         modelName={selected?.displayName}
         onRefresh={refreshContext}
       />
@@ -101,13 +151,13 @@ export function SessionStatusItems() {
     priority: 33,
     render: () => (
       <MetricsStatusItem
-        speed={speed}
-        clusters={clusters}
-        taskGroups={taskGroups}
-        callGroups={callGroups}
-        missingTasks={consumption.missingTasks}
-        runningTasks={consumption.runningTasks}
-        currency={currency}
+        speed={data.speed}
+        clusters={data.clusters}
+        taskGroups={data.taskGroups}
+        callGroups={data.callGroups}
+        missingTasks={data.missingTasks}
+        runningTasks={data.runningTasks}
+        currency={data.currency}
       />
     ),
   });
@@ -415,7 +465,7 @@ function SourceSection({ label, featured, cluster, groups, alwaysExpanded, curre
   );
 }
 
-interface SessionUsagePanelProps {
+export interface SessionUsagePanelProps {
   clusters: readonly MetricCluster[];
   /** Each source's requests grouped by model. */
   groups: { reason: readonly TaskModelGroup[]; aux: readonly TaskModelGroup[]; task: readonly TaskModelGroup[] };
@@ -432,7 +482,7 @@ interface SessionUsagePanelProps {
  * expandable into one row per model. A legend with the session's three token
  * totals closes the panel.
  */
-function SessionUsagePanel({ clusters, groups, note, rootRef, currency }: SessionUsagePanelProps) {
+export function SessionUsagePanel({ clusters, groups, note, rootRef, currency }: SessionUsagePanelProps) {
   const totals = totalsOf(clusters);
   const find = (key: MetricCluster['key']): MetricCluster | undefined => clusters.find((cluster) => cluster.key === key);
 
