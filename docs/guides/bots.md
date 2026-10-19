@@ -38,8 +38,7 @@ does not validate disables only that bot, and the Bots page shows the error.
       "intervalMinutes": 1440,
       "deliver": "bot:release"
     }
-  ],
-  "denyModels": []
+  ]
 }
 ```
 
@@ -51,7 +50,6 @@ does not validate disables only that bot, and the Bots page shows the error.
 | `instructions` | Text added to the bot's fixed system prompt: its job, its project, how to report. |
 | `tools` | Which tools the bot may call (see below). Nothing is enabled by default, so a bot without tools can only answer in text. |
 | `routines` | Routines this file declares (see below). |
-| `denyModels` | Models the bot must not use, as `provider/model` or bare model ids. |
 
 Unknown fields are rejected, so typos surface as an error instead of being
 ignored.
@@ -71,9 +69,16 @@ ends its turn, and continues when the result is in, instead of polling.
 ## How a bot runs
 
 - Each bot handles one wake at a time; several bots run concurrently.
-- A bot reasons on an automatically chosen high-intelligence model at high
-  reasoning effort, skipping anything in `denyModels`. When no allowed model is
-  available, the wake is dropped and the error is shown on the bot.
+- Automatic routing ranks the models a bot may use as a ladder. Premium-tier
+  models with sufficient quota (on or behind pace) come first, then high-tier
+  models with sufficient quota, then premium models ahead of pace, then the
+  remaining high-tier models, and finally mid-tier models as a last resort.
+  Each wake re-ranks the ladder, so a bot steps down only while the higher
+  tiers have no available route and steps back up when they do.
+- A bot session without an explicit model uses normal automatic routing. When
+  no model is available, the wake is dropped and the error is shown on the bot.
+- A failed model call keeps the existing single fallback attempt: the wake is
+  retried once on the next route the ladder ranked.
 - Queued wakes, watched sessions and routine rounds survive a daemon restart,
   and a wake interrupted by a restart is retried once.
 - The bot's conversation is shown on the Bots page. Type in the composer there

@@ -38,8 +38,6 @@ export interface AgentToolContext {
   message(to: string, text: string): void
   /** Drop every watch of one session, so its turns can no longer wake this bot. */
   removeWatches(sessionId: string): void
-  /** Models this bot may not run a session on, as configured. */
-  denyModels: readonly string[]
   /** The ranked model routes this bot may run on, best first. */
   selectModels(): Promise<readonly AgentModelRoute[]>
 }
@@ -58,7 +56,6 @@ const SESSION_TOOL: ToolSpec = {
     'so state the project and the worktree you want it to work in inside the message text.',
     'Sessions you create or message are watched: when such a session finishes its next turn you are woken',
     'with its full turn answer.',
-    'Models on this bot deny list are refused, both when named explicitly and when inherited from the session.',
     'When a session carries one or more workspace todos, pass their ids in todoIds (a single id or an array)',
     'so the watch records that association and it survives a context rotation of your own conversation.',
   ].join(' '),
@@ -362,11 +359,10 @@ async function stopSession(
 }
 
 /**
- * The model one send runs on. An explicit `model` argument wins unless the bot
- * denies it, then the model the session's newest started turn already used
- * unless the bot denies that too, then the first ranked route the bot allows.
+ * The model one send runs on. An explicit `model` argument wins, then the model
+ * the session's newest started turn already used, then the first ranked route.
  * The reasoning level is the explicit argument, then the chosen route's own
- * level, then `high`; with no allowed route the send fails.
+ * level, then `high`; with no route the send fails.
  */
 async function resolveSessionModel(
   sessions: Session,
@@ -382,13 +378,11 @@ async function resolveSessionModel(
     if (ranked === undefined) ranked = await ctx.selectModels()
     return ranked
   }
-  const allowedRoute = async (): Promise<AgentModelRoute | undefined> =>
-    (await rankedRoutes()).find(route => !isDenied(route, ctx.denyModels))
+  const firstRoute = async (): Promise<AgentModelRoute | undefined> => (await rankedRoutes())[0]
 
   if (explicitModel !== undefined) {
     const split = splitModelId(explicitModel)
     if (split === undefined) throw new Error("model must be a 'provider/model' id")
-    if (isDenied(split, ctx.denyModels)) throw new Error(`model ${explicitModel} is denied for this bot`)
     // The reasoning level belongs to the named model alone: an unrelated route
     // never lends its level to an explicitly chosen model. When the named model
     // has no route of its own the neutral default applies.
@@ -403,32 +397,17 @@ async function resolveSessionModel(
   }
 
   const current = currentSessionModel(sessions, sessionId)
-  if (current !== undefined && !isDenied(current, ctx.denyModels)) {
+  if (current !== undefined) {
     return {
       provider: current.provider,
       model: current.model,
-      reasoningEffort: explicitEffort ?? current.reasoningEffort ?? (await allowedRoute())?.reasoningEffort ?? 'high',
+      reasoningEffort: explicitEffort ?? current.reasoningEffort ?? (await firstRoute())?.reasoningEffort ?? 'high',
     }
   }
 
-  const route = await allowedRoute()
-  if (route === undefined) throw new Error('no allowed model available')
+  const route = await firstRoute()
+  if (route === undefined) throw new Error('no model available')
   return explicitEffort === undefined ? route : { ...route, reasoningEffort: explicitEffort }
-}
-
-/**
- * Whether one model is on the bot's deny list. An entry in `provider/model`
- * form matches the whole id and a bare entry matches the model id alone; both
- * comparisons ignore case.
- */
-export function isDenied(model: { provider: string; model: string }, denyModels: readonly string[]): boolean {
-  const full = `${model.provider}/${model.model}`.toLowerCase()
-  const bare = model.model.toLowerCase()
-  for (const entry of denyModels) {
-    const candidate = entry.toLowerCase()
-    if (candidate.includes('/') ? candidate === full : candidate === bare) return true
-  }
-  return false
 }
 
 /** The model a session's newest started turn ran on, as `turn.started` recorded it. */

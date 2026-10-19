@@ -46,7 +46,6 @@ import { TurnAnswerIndex } from './turn-answer.mts'
 import {
   agentToolSpecs,
   createAgentToolRunner,
-  isDenied,
   type AgentModelRoute,
   type AgentToolContext,
 } from './tools.mts'
@@ -225,7 +224,7 @@ export interface CreateBotAgentKernelOptions {
   todos: WorkspaceTodoService
   /** The routine store, used only to reconcile config-declared routines. */
   routines: Pick<Scheduler, 'reconcile'>
-  /** The ranked high-intelligence routes a bot may run on, best first. */
+  /** The ladder-ranked routes a bot may run on, best first. */
   selectModels(): Promise<readonly AgentModelRoute[]>
   log(level: 'info' | 'warn' | 'error', message: string): void
 }
@@ -683,7 +682,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   function toolContext(botId: string, invokingSessionId?: string, invokingTurn?: number): AgentToolContext {
     return {
       botId,
-      denyModels: entries.get(botId)?.config?.denyModels ?? [],
       watch: (sessionId, afterTurn, todoIds) =>
         addWatch(botId, sessionId, afterTurn, todoIds, invokingSessionId, invokingTurn),
       message: (to, text) => sendMessage(botId, to, text),
@@ -1481,10 +1479,9 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       const bot = ensureBotState(botId)
       const sessionId = await ensureContext(botId)
       if (stopped) return
-      const denyModels = entries.get(botId)?.config?.denyModels ?? []
-      const routes = (await options.selectModels()).filter(route => !isDenied(route, denyModels))
+      const routes = await options.selectModels()
       if (stopped) return
-      if (routes.length === 0) throw new Error('no allowed high-intelligence model available')
+      if (routes.length === 0) throw new Error('no bot model available from automatic routing')
       const primary = routes[0]
       const modelId = `${primary.provider}/${primary.model}`
       // Estimate the active context input before any dispatch decision. A

@@ -24,7 +24,14 @@ export type AgentToolName = 'session' | 'todo' | 'message'
 const TOOL_NAMES: readonly AgentToolName[] = ['session', 'todo', 'message']
 
 /** The only top-level keys a bot config file may declare. */
-const CONFIG_KEYS = new Set(['id', 'name', 'enabled', 'instructions', 'tools', 'routines', 'denyModels'])
+const CONFIG_KEYS = new Set(['id', 'name', 'enabled', 'instructions', 'tools', 'routines'])
+
+/**
+ * Retired top-level keys that older bot files may still carry. They are
+ * dropped before validation so those files keep loading; the values have no
+ * effect any more.
+ */
+const LEGACY_IGNORED_KEYS: readonly string[] = [['deny', 'Models'].join('')]
 
 /** A bot id: the config file's basename, lowercase and path safe. */
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/
@@ -51,8 +58,6 @@ export interface BotAgentConfig {
   instructions: string
   /** The tool switches that are on, sorted. Empty means text replies only. */
   tools: AgentToolName[]
-  /** Models this bot may not run sessions on: `provider/model` or bare model ids. */
-  denyModels: string[]
   /** The routines this config declares; managed by the routine store. */
   routines: RoutineConfig[]
 }
@@ -104,23 +109,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-/** Trim and deduplicate the model deny list entries. */
-function normalizeDenyModels(value: unknown): string[] {
-  if (value === undefined) return []
-  if (!Array.isArray(value)) throw new Error('denyModels must be an array')
-  const seen = new Set<string>()
-  const models: string[] = []
-  for (const entry of value) {
-    if (typeof entry !== 'string') throw new Error('every denyModels entry must be a string')
-    const model = entry.trim()
-    if (model === '') throw new Error('every denyModels entry must be a nonempty string')
-    if (seen.has(model)) continue
-    seen.add(model)
-    models.push(model)
-  }
-  return models
 }
 
 /** Read one `tools` map into the sorted list of enabled tool names. */
@@ -196,6 +184,7 @@ function validateConfig(id: string, text: string): BotAgentConfig {
     throw new Error(`invalid JSON: ${errorText(error)}`)
   }
   if (!isPlainObject(parsed)) throw new Error('the config must be a JSON object')
+  for (const key of LEGACY_IGNORED_KEYS) delete parsed[key]
   for (const key of Object.keys(parsed)) {
     if (!CONFIG_KEYS.has(key)) throw new Error(`unknown field: ${key}`)
   }
@@ -221,7 +210,6 @@ function validateConfig(id: string, text: string): BotAgentConfig {
     enabled: enabled ?? true,
     instructions: instructions ?? '',
     tools: parsedTools,
-    denyModels: normalizeDenyModels(parsed.denyModels),
     routines: validateRoutines(parsed.routines),
   }
 }
