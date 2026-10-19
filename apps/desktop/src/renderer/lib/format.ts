@@ -113,7 +113,7 @@ export function formatCount(value: number): string {
   return value.toLocaleString();
 }
 
-export type DateGroup = '今天' | '昨天' | '7 天内' | '更早';
+export type DateGroup = '今天' | '昨天' | `day:${number}` | '更早';
 
 function startOfDay(timestamp: number): number {
   const date = new Date(timestamp);
@@ -127,8 +127,29 @@ export function dateGroupOf(value: string, now: number): DateGroup {
   const days = Math.round((startOfDay(now) - startOfDay(timestamp)) / 86_400_000);
   if (days <= 0) return '今天';
   if (days === 1) return '昨天';
-  if (days < 7) return '7 天内';
+  if (days < 7) return `day:${startOfDay(timestamp)}`;
   return '更早';
+}
+
+/** Display label for a `DateGroup`: `day:<ms>` keys render as `10月17日`. */
+export function dateGroupLabel(group: DateGroup): string {
+  if (group === '今天' || group === '昨天' || group === '更早') return group;
+  const date = new Date(Number(group.slice(4)));
+  return `${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+/** Sidebar order: 今天 < 昨天 < per-day keys newest first < 更早. */
+export function compareDateGroups(a: DateGroup, b: DateGroup): number {
+  const rank = (group: DateGroup): number => {
+    if (group === '今天') return 0;
+    if (group === '昨天') return 1;
+    if (group === '更早') return 3;
+    return 2;
+  };
+  const order = rank(a) - rank(b);
+  if (order !== 0) return order;
+  if (rank(a) === 2) return Number(b.slice(4)) - Number(a.slice(4));
+  return 0;
 }
 
 const WEEKDAY = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'] as const;

@@ -8,13 +8,11 @@ import {
   CommandList,
 } from '@/renderer/components/ui/command';
 import { DIALOG_SIZES } from '@/renderer/components/dialog-size';
-import { dateGroupOf, type DateGroup } from '@/renderer/lib/format';
+import { compareDateGroups, dateGroupLabel, dateGroupOf, type DateGroup } from '@/renderer/lib/format';
 import { useSessionSeen } from '@/renderer/lib/session-seen';
 import { SessionDot } from './SessionDot';
 import { sessionStatusOf } from '../model/session-status.js';
 import type { SessionSummary } from '../model/types.js';
-
-const GROUPS: DateGroup[] = ['今天', '昨天', '7 天内', '更早'];
 
 export interface SessionSearchProps {
   open: boolean;
@@ -48,11 +46,11 @@ export function SessionSearch({ open, onOpenChange, sessions, onSelect }: Sessio
       <CommandInput placeholder="搜索对话" />
       <CommandList>
         <CommandEmpty>没有匹配的对话</CommandEmpty>
-        {GROUPS.map((group) => {
+        {[...grouped.keys()].sort(compareDateGroups).map((group) => {
           const list = grouped.get(group);
           if (!list || list.length === 0) return null;
           return (
-            <CommandGroup key={group} heading={group}>
+            <CommandGroup key={group} heading={dateGroupLabel(group)}>
               {list.map((session) => {
                 const status = sessionStatusOf(session, seen);
                 return (
