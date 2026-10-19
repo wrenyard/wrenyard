@@ -46,45 +46,138 @@ function sameLive(a: readonly LiveCall[], b: readonly LiveCall[]): boolean {
   return true
 }
 
-async function pollEvents(session: Session, params: SessionEventsParams): Promise<SessionEventsResult> {
+/** Read the transport-owned cancellation signal from a router context, if any. */
+function contextAbortSignal(context: unknown): AbortSignal | undefined {
+  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined
+  const signal = (context as { signal?: unknown }).signal
+  return signal instanceof AbortSignal ? signal : undefined
+}
+
+/** Sleep for `ms`, settling early and cleaning up when the signal aborts. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      signal?.removeEventListener('abort', finish)
+      resolve()
+    }
+    timer = setTimeout(finish, ms)
+    signal?.addEventListener('abort', finish, { once: true })
+    // Abort may have landed between the caller's check and listener attachment.
+    if (signal?.aborted) finish()
+  })
+}
+
+/**
+ * Wait for a durable append, a live update, the timeout or socket abort.
+ *
+ * Every exit path is idempotent and releases both subscriptions, the wait
+ * timer and the abort listener, including callbacks that fire synchronously
+ * during subscription.
+ */
+function waitForEvents(
+  session: Session,
+  params: SessionEventsParams,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
+    let settled = false
+    let unsubscribe: (() => void) | undefined
+    let unsubscribeLive: (() => void) | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let removeAbortListener: (() => void) | undefined
+
+    const cleanup = (): void => {
+      removeAbortListener?.()
+      removeAbortListener = undefined
+      unsubscribe?.()
+      unsubscribe = undefined
+      unsubscribeLive?.()
+      unsubscribeLive = undefined
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+    }
+
+    const finish = (error?: unknown): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (error) reject(error)
+      else resolve()
+    }
+
+    try {
+      if (signal) {
+        const onAbort = (): void => finish()
+        signal.addEventListener('abort', onAbort, { once: true })
+        removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+      }
+      // Re-check after attaching: no 'abort' event follows an abort that
+      // happened before the listener existed.
+      if (signal?.aborted) {
+        finish()
+        return
+      }
+
+      // Subscribe before re-reading so an append cannot fall between read and wait.
+      unsubscribe = session.subscribe(params.sessionId, event => {
+        if (event.seq > params.afterSeq) finish()
+      })
+      if (settled) {
+        cleanup()
+        return
+      }
+      if (params.live) {
+        const initial = session.readLive(params.sessionId)
+        unsubscribeLive = session.subscribeLive(params.sessionId, live => {
+          if (!sameLive(initial, live)) finish()
+        })
+        if (settled) {
+          cleanup()
+          return
+        }
+      }
+      timer = setTimeout(() => finish(), params.waitMs)
+      if (settled) {
+        cleanup()
+        return
+      }
+      if (readEvents(session, params).events.length) finish()
+    } catch (error) {
+      finish(error)
+    }
+  })
+}
+
+async function pollEvents(
+  session: Session,
+  params: SessionEventsParams,
+  signal?: AbortSignal,
+): Promise<SessionEventsResult> {
   const startedAt = Date.now()
   const page = readEvents(session, params)
   if (!params.waitMs) return page
+  if (signal?.aborted) return page
   if (!page.events.length) {
-    await new Promise<void>((resolve, reject) => {
-      let unsubscribe: (() => void) | undefined
-      let unsubscribeLive: (() => void) | undefined
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const finish = (error?: unknown): void => {
-        unsubscribe?.()
-        unsubscribeLive?.()
-        clearTimeout(timer)
-        if (error) reject(error)
-        else resolve()
-      }
-      try {
-        // Subscribe before re-reading so an append cannot fall between read and wait.
-        unsubscribe = session.subscribe(params.sessionId, event => {
-          if (event.seq > params.afterSeq) finish()
-        })
-        if (params.live) {
-          const initial = session.readLive(params.sessionId)
-          unsubscribeLive = session.subscribeLive(params.sessionId, live => {
-            if (!sameLive(initial, live)) finish()
-          })
-        }
-        timer = setTimeout(() => finish(), params.waitMs)
-        if (readEvents(session, params).events.length) finish()
-      } catch (error) {
-        finish(error)
-      }
-    })
+    await waitForEvents(session, params, signal)
   }
+  // Once the socket is gone no further read or pacing delay is useful; the
+  // response is discarded, so the initial page is a fine terminal result.
+  if (signal?.aborted) return page
   // Every normal (waitMs > 0) long-poll return stays >= LIVE_MIN_INTERVAL_MS from the
   // call start, so a sequential caller's returns are spaced >= 150ms apart whether it
   // was woken by immediate events, a durable append, or a live update.
   const remaining = LIVE_MIN_INTERVAL_MS - (Date.now() - startedAt)
-  if (remaining > 0) await new Promise<void>(resolve => setTimeout(resolve, remaining))
+  if (remaining > 0) await abortableDelay(remaining, signal)
+  if (signal?.aborted) return page
   return readEvents(session, params)
 }
 
@@ -136,7 +229,7 @@ export function registerSessionHandlers(router: RpcRouter, options: SessionRpcHa
       return {}
     }))
   router.register('session.events', (params, _message, context) =>
-    call(context, 'session.events', () => pollEvents(session, params)))
+    call(context, 'session.events', () => pollEvents(session, params, contextAbortSignal(context))))
   router.register('session.context.inspect', (params, _message, context) =>
     call(context, 'session.context.inspect', () => session.inspectContext(params)))
   router.register('session.routes.preview', (_params, _message, context) =>

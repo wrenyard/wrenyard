@@ -1735,7 +1735,8 @@ async function createForemanDaemonResources(
   try {
     ipcServer = await createIpcServer({
       path: ipcPath,
-      onMessage: (message) => rpcRouter.handleMessage(message, { transport: 'ipc' }),
+      onMessage: (message, signal) =>
+        rpcRouter.handleMessage(message, { transport: 'ipc', ...(signal ? { signal } : {}) }),
     })
   } catch (error) {
     // Tear down every handle already built through the one shared teardown:

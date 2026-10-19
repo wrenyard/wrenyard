@@ -10,7 +10,13 @@ import { normalizeWrenyardIpcPath, resolveWrenyardIpcPath } from '@wrenyard/cont
 
 export interface IpcServerOptions {
   path: string
-  onMessage: (message: unknown) => unknown | Promise<unknown | undefined> | undefined
+  /**
+   * Handle one framed request. The signal belongs to the connection that sent
+   * the request and is aborted synchronously when that socket closes, so a
+   * handler can release waiters and timers instead of holding them until a
+   * timeout expires.
+   */
+  onMessage: (message: unknown, signal?: AbortSignal) => unknown | Promise<unknown | undefined> | undefined
 }
 
 /** The handshake method; carries the client's expected protocol version. */
@@ -128,6 +134,12 @@ export async function createIpcServer(options: IpcServerOptions): Promise<IpcSer
   const server = createServer((socket) => {
     sockets.add(socket)
 
+    // Exactly one controller per connection, kept for the socket's lifetime.
+    // Every request read from this socket shares its signal; the socket's
+    // existing close listener aborts it synchronously so in-flight long polls
+    // settle immediately instead of keeping listeners and timers alive.
+    const controller = new AbortController()
+
     // Every connection must complete the version-checked health.ping handshake
     // before it may issue business requests. A mismatched (or otherwise
     // non-numeric) client version, and any business request sent first, fail
@@ -169,7 +181,7 @@ export async function createIpcServer(options: IpcServerOptions): Promise<IpcSer
           // read-only and does not unlock business requests.
           if (clientVersion !== undefined) handshaken = true
         }
-        void handleMessage(socket, message)
+        void handleMessage(socket, message, controller.signal)
       },
       onError: (error) => {
         socket.destroy(error)
@@ -185,12 +197,13 @@ export async function createIpcServer(options: IpcServerOptions): Promise<IpcSer
     })
     socket.on('close', () => {
       sockets.delete(socket)
+      controller.abort()
     })
   })
 
-  async function handleMessage(socket: Socket, message: unknown): Promise<void> {
+  async function handleMessage(socket: Socket, message: unknown, signal: AbortSignal): Promise<void> {
     try {
-      const response = await options.onMessage(message)
+      const response = await options.onMessage(message, signal)
       if (response !== undefined && !socket.destroyed) {
         socket.write(encodeFrame(response))
       }
