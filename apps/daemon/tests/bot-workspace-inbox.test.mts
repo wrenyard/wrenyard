@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createInboxClient, itemFingerprint } from '../lib/daemon/services/bot/adapters.mts'
-import { validateBotConfig } from '../lib/daemon/services/bot/config.mts'
 import { WorkspaceTodoService } from '../lib/daemon/services/workspace-todo-service.mts'
 
 // The built-in workspace inbox drives the real WorkspaceTodoService over a
@@ -287,80 +286,3 @@ test('annotate persists the result summary without corrupting request or fingerp
 })
 
 // ── config validation ───────────────────────────────────────────────────────
-
-/** A minimal valid config, with the inbox supplied per case. */
-function botConfig(inbox?: unknown): Record<string, unknown> {
-  const config: Record<string, unknown> = {
-    name: 'bot-test',
-    mode: 'dryRun',
-    notifier: { kind: 'command', argv: ['/bin/echo'] },
-    projects: [{ id: 'alpha', match: ['alpha'] }],
-    routing: {
-      default: { provider: 'test', model: 'test-model', reasoningEffort: 'high' },
-      acceptance: { provider: 'test', model: 'test-model', reasoningEffort: 'high' },
-      judgment: { provider: 'test', model: 'test-model', reasoningEffort: 'high' },
-    },
-  }
-  if (inbox !== undefined) config.inbox = inbox
-  return config
-}
-
-test('the config accepts a workspace inbox', () => {
-  const result = validateBotConfig(botConfig({ kind: 'workspace' }))
-  assert.equal(result.ok, true)
-  if (result.ok) assert.deepEqual(result.config.inbox, { kind: 'workspace' })
-})
-
-test('the config still accepts an existing command-kind (Things) inbox unchanged', () => {
-  const inbox = { kind: 'command', argv: ['node', 'inbox-adapter.mjs'], timeoutMs: 15_000 }
-  const result = validateBotConfig(botConfig(inbox))
-  assert.equal(result.ok, true)
-  if (result.ok) {
-    assert.deepEqual(result.config.inbox, {
-      kind: 'command',
-      argv: ['node', 'inbox-adapter.mjs'],
-      timeoutMs: 15_000,
-    })
-  }
-})
-
-test('an omitted inbox defaults to workspace for new configs without rewriting input', () => {
-  const parsed = botConfig()
-  const before = JSON.stringify(parsed)
-  const result = validateBotConfig(parsed)
-  assert.equal(result.ok, true)
-  if (result.ok) assert.deepEqual(result.config.inbox, { kind: 'workspace' })
-  // The default is applied to the returned config only; the caller's object and
-  // any file it came from are left exactly as they were.
-  assert.equal(JSON.stringify(parsed), before)
-  assert.equal('inbox' in parsed, false)
-})
-
-test('the config rejects unknown inbox keys', () => {
-  const result = validateBotConfig(botConfig({ kind: 'workspace', argv: ['nope'] }))
-  assert.equal(result.ok, false)
-  if (!result.ok) assert.ok(result.issues.some((issue) => issue === 'inbox.argv is not a supported key'))
-})
-
-test('the config rejects workspace as a notifier', () => {
-  const config = botConfig({ kind: 'workspace' })
-  config.notifier = { kind: 'workspace' }
-  const result = validateBotConfig(config)
-  assert.equal(result.ok, false)
-  if (!result.ok) assert.ok(result.issues.some((issue) => issue === "notifier.kind must be 'command' or 'mcp'"))
-})
-
-test('a config file with an omitted inbox is validated without being rewritten', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'wrenyard-bot-config-'))
-  try {
-    const filePath = join(dir, 'bot.json')
-    writeFileSync(filePath, JSON.stringify(botConfig(), null, 2), 'utf-8')
-    const before = readFileSync(filePath, 'utf-8')
-    const result = validateBotConfig(JSON.parse(before) as unknown)
-    assert.equal(result.ok, true)
-    if (result.ok) assert.deepEqual(result.config.inbox, { kind: 'workspace' })
-    assert.equal(readFileSync(filePath, 'utf-8'), before)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})

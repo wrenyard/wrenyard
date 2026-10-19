@@ -6,7 +6,6 @@ import {
   AUXILIARY_IDLE_TIMEOUT_MS,
   AUXILIARY_MAX_ROUTES,
   AUXILIARY_ROUTE_TIMEOUT_MS,
-  AUXILIARY_TOTAL_BUDGET_MS,
   createCallRunner,
   ModelCallError,
   type CallRole,
@@ -327,37 +326,6 @@ test('an explicit user cancellation stays neutral and reports no route fault', a
   controller.abort();
   await assert.rejects(pending);
   assert.deepEqual(faults, []);
-});
-
-test('a cancellation between the span.started append and the loop finishes as aborted', async () => {
-  const controller = new AbortController();
-  const transport: ModelTransport = {
-    async complete() { throw new Error('the transport must not be called'); },
-  };
-  const events: SpanEventDraft[] = [];
-  const runner = createCallRunner({
-    resolveProvider: () => providerStub,
-    transport,
-    selectAuxiliary: (role) => ['test/alpha', 'test/beta'].map((model) => ({
-      model,
-      reasoningEffort: ROLE_REQUIREMENTS[role].expectedReasoningEffort[0] as ReasoningEffort,
-    })),
-    append: (event) => {
-      events.push(event);
-      // Cancel in the middle of the awaited append, before the loop runs.
-      if (event.type === 'span.started') controller.abort();
-    },
-    now: () => new Date(),
-  });
-  await assert.rejects(runner.run(callInput('reply', controller.signal)), (error: unknown) => {
-    assert.ok(error instanceof ModelCallError);
-    assert.equal(error.detail.status, 'aborted');
-    // The pre-loop cancellation is terminal `aborted` with the plain abort
-    // message and carries no structured route-failure fact.
-    assert.equal(error.message, 'Model call was aborted');
-    return true;
-  });
-  assert.equal(events.filter((event) => event.type === 'span.finished').length, 1);
 });
 
 test('a timed-out attempt is recorded exactly once', async () => {

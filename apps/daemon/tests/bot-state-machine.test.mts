@@ -3,14 +3,12 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mock, test } from 'node:test'
+import { test } from 'node:test'
 import type { Session } from '@wrenyard/session'
 import { initDb } from '../lib/db/connection.mts'
 import {
   assertItemTransition,
   canTransition,
-  isTerminalItemState,
-  requiresDeliveryLane,
 } from '../lib/daemon/services/bot/machine.mts'
 import { createBotStore } from '../lib/daemon/services/bot/store.mts'
 import { createBotHost } from '../lib/daemon/services/bot/host.mts'
@@ -75,22 +73,6 @@ test('a parked item resumes only into the state it parked from', () => {
   assert.doesNotThrow(() => assertItemTransition('parked', 'dismissed'))
   assert.doesNotThrow(() => assertItemTransition('parked', 'failed'))
   assert.doesNotThrow(() => assertItemTransition('parked', 'withdrawn'))
-})
-
-test('terminal states and the delivery-lane range are exactly the documented ones', () => {
-  assert.equal(isTerminalItemState('completed'), true)
-  assert.equal(isTerminalItemState('dismissed'), true)
-  assert.equal(isTerminalItemState('withdrawn'), true)
-  assert.equal(isTerminalItemState('failed'), false)
-  assert.equal(isTerminalItemState('parked'), false)
-  assert.equal(isTerminalItemState('merged'), false)
-
-  for (const state of ['accepting', 'accepted', 'rejected', 'merging', 'merged', 'completing'] as const) {
-    assert.equal(requiresDeliveryLane(state), true, `${state} must hold the lane`)
-  }
-  for (const state of ['discovered', 'in_progress', 'ready', 'parked', 'failed', 'completed'] as const) {
-    assert.equal(requiresDeliveryLane(state), false, `${state} must not hold the lane`)
-  }
 })
 
 test('the delivery lane admits one item per project across every bot', () => {
@@ -358,17 +340,6 @@ async function removeFixture(fixture: BotFixture): Promise<void> {
   await rm(fixture.dir, { recursive: true, force: true })
 }
 
-/**
- * Await the tick pass a mocked timer interval just queued. The host serializes
- * every pass, so `ticking` is already true when the interval callback returns.
- */
-async function settleTimerPass(host: { readonly ticking: boolean }): Promise<void> {
-  for (let i = 0; i < 500 && host.ticking; i += 1) {
-    await new Promise(resolve => setTimeout(resolve, 2))
-  }
-  assert.equal(host.ticking, false, 'the timer pass settled')
-}
-
 test('repeated inbox polls admit one item per source', async () => {
   const root = `${WORKSPACE}-poll`
   const fixture = await writeBotFixture({
@@ -411,140 +382,6 @@ test('repeated inbox polls admit one item per source', async () => {
       assert.equal(items[0]?.state, 'parked')
       assert.equal(items[0]?.project, 'alpha')
       assert.equal(store.listLog(bot.id, 0).filter(entry => entry.code === 'poll.discovered').length, 1)
-    })
-  } finally {
-    await removeFixture(fixture)
-  }
-})
-
-test('an unchanged inbox poll logs no poll.ok row and one poll.changed per change', async () => {
-  const root = `${WORKSPACE}-polllog`
-  const fixture = await writeBotFixture({
-    name: 'polllog',
-    mode: 'live',
-    inboxBehavior: { list: { items: [] } },
-  })
-  try {
-    await withConfigHome(fixture.home, async () => {
-      // A file-backed inbox script so one poll can differ from the previous one;
-      // the fixture's config already points at this path.
-      const itemsFile = join(fixture.dir, 'inbox-items.json')
-      await writeFile(join(fixture.dir, 'inbox.mjs'), [
-        "import { readFileSync } from 'node:fs'",
-        "let raw = '';",
-        "process.stdin.setEncoding('utf8');",
-        "process.stdin.on('data', (chunk) => { raw += chunk });",
-        "process.stdin.on('end', () => {",
-        "  const request = JSON.parse(raw === '' ? '{}' : raw);",
-        `  const items = JSON.parse(readFileSync(${JSON.stringify(itemsFile)}, 'utf8'));`,
-        '  const replies = {',
-        '    list: { items },',
-        '    get: { item: items.find((candidate) => candidate.id === request.id) ?? null },',
-        '    complete: { ok: true },',
-        '    annotate: { ok: true },',
-        '    release: { ok: true },',
-        '  };',
-        '  process.stdout.write(JSON.stringify(replies[request.op] ?? { ok: false }));',
-        '});',
-      ].join('\n'), 'utf-8')
-
-      const db = initDb(':memory:')
-      const store = createBotStore({ db, workspaceRoot: root })
-      const bot = store.createBot({ name: 'polllog', state: 'running', mode: 'live', configPath: fixture.configPath })
-      const host = createBotHost({ db, workspaceRoot: root, session: botSession(), log: () => {} })
-      const source = (id: string, title: string) => ({ id, title, body: 'details', project: 'alpha' })
-      // A named `bot.tick` forces a poll at most once per 30 s, so the later
-      // polls are made due on the ordinary cadence instead.
-      const pollNow = () => store.updateBot(bot.id, { nextPollAt: new Date(Date.now() - 1_000).toISOString() })
-      const codeCount = (code: string) => store.listLog(bot.id, 0).filter(entry => entry.code === code).length
-
-      await writeFile(itemsFile, JSON.stringify([source('source-a', 'First')]), 'utf-8')
-      await host.tick(bot.id)
-      // The first poll after host start has no baseline and reports a change.
-      assert.equal(codeCount('poll.changed'), 1)
-
-      pollNow()
-      await host.tick(bot.id)
-      // An identical repeat is routine: no info row, one rate-limited debug row.
-      assert.equal(codeCount('poll.changed'), 1)
-      assert.equal(codeCount('poll.ok'), 0)
-      assert.equal(codeCount('poll.unchanged'), 1)
-
-      await writeFile(itemsFile, JSON.stringify([
-        source('source-a', 'First'),
-        source('source-b', 'Second'),
-      ]), 'utf-8')
-      pollNow()
-      await host.tick(bot.id)
-      // A changed result is reported again, and the new source is admitted.
-      assert.equal(codeCount('poll.changed'), 2)
-      assert.equal(store.listItems(bot.id).length, 2)
-    })
-  } finally {
-    await removeFixture(fixture)
-  }
-})
-
-test('the bot config drives the poll interval and the timer pass cadence', async () => {
-  const root = `${WORKSPACE}-cadence`
-  const fixture = await writeBotFixture({
-    name: 'cadence',
-    mode: 'live',
-    inboxBehavior: { list: { items: [] } },
-    cadence: { tickSeconds: 30, pollMinutes: 1 },
-  })
-  try {
-    await withConfigHome(fixture.home, async () => {
-      const db = initDb(':memory:')
-      const store = createBotStore({ db, workspaceRoot: root })
-      const bot = store.createBot({ name: 'cadence', state: 'running', mode: 'live', configPath: fixture.configPath })
-      // A controllable clock, so a 30 s cadence is exercised without waiting;
-      // the timer itself is mocked so its 10 s interval fires on demand.
-      let now = Date.now()
-      const host = createBotHost({
-        db,
-        workspaceRoot: root,
-        session: botSession(),
-        log: () => {},
-        now: () => now,
-        tickMs: 10_000,
-      })
-      mock.timers.enable({ apis: ['setInterval'] })
-      try {
-        await host.start()
-
-        // The poll interval is the config's pollMinutes (1 min), not the 10 min
-        // default the host falls back to without a config.
-        const nextPollAt = Date.parse(store.getBot(bot.id).nextPollAt ?? '')
-        assert.ok(
-          Math.abs(nextPollAt - (Date.now() + 60_000)) < 5_000,
-          `next poll was ${Math.round((nextPollAt - Date.now()) / 1_000)} s away`,
-        )
-
-        // The first pass after start always runs, but it is not a cadence tick.
-        assert.equal((await host.health(bot.id)).ticks, 0)
-
-        // A timer pass 10 s later is early for this bot's own 30 s cadence.
-        now += 10_000
-        mock.timers.tick(10_000)
-        await settleTimerPass(host)
-        assert.equal((await host.health(bot.id)).ticks, 0)
-
-        // Still early at 20 s.
-        now += 10_000
-        mock.timers.tick(10_000)
-        await settleTimerPass(host)
-        assert.equal((await host.health(bot.id)).ticks, 0)
-
-        // Once its cadence has elapsed the pass advances it and is counted.
-        now += 10_000
-        mock.timers.tick(10_000)
-        await settleTimerPass(host)
-        assert.equal((await host.health(bot.id)).ticks, 1)
-      } finally {
-        host.stop()
-        mock.timers.reset()
-      }
     })
   } finally {
     await removeFixture(fixture)

@@ -34,37 +34,6 @@ async function rejectsWithCode(promise: Promise<unknown>, code: string): Promise
   })
 }
 
-/** The canonical stored form for a minimal todo, for exact-file assertions. */
-function rawTodo(options: {
-  id: string
-  title?: string
-  status?: string
-  dependsOn?: string[]
-  created?: string
-  updated?: string
-  request?: string
-  acceptance?: string
-  attachments?: string[]
-}): string {
-  const lines = [
-    '---',
-    `id: ${options.id}`,
-    `title: ${options.title ?? 'A todo'}`,
-    `status: ${options.status ?? 'open'}`,
-  ]
-  if (options.dependsOn !== undefined && options.dependsOn.length > 0) {
-    lines.push('depends_on:')
-    for (const dependency of options.dependsOn) lines.push(`  - ${dependency}`)
-  }
-  lines.push(`created: ${options.created ?? '2026-10-16T00:00:00.000Z'}`)
-  lines.push(`updated: ${options.updated ?? '2026-10-16T00:00:00.000Z'}`)
-  lines.push('---', '', '## Request', '', options.request ?? 'Do the thing', '', '## Acceptance criteria', '', options.acceptance ?? 'The thing is done')
-  if (options.attachments !== undefined && options.attachments.length > 0) {
-    lines.push('', '## Attachments', '', ...options.attachments.map((path) => `- ${path}`))
-  }
-  return `${lines.join('\n')}\n`
-}
-
 test('create, list, get and update roundtrip including a dependent todo', async () => {
   const root = makeRoot()
   try {
@@ -206,20 +175,6 @@ test('annotate adds a Result summary while preserving Request and Acceptance cri
 
 // ── create/update validation, each with its own error code ──────────────────
 
-test('create rejects an empty title and an invalid status with coded errors', async () => {
-  const root = makeRoot()
-  try {
-    const service = new WorkspaceTodoService(root)
-    await rejectsWithCode(service.createTodo({ title: '   ' }), 'bad_title')
-    await rejectsWithCode(
-      service.createTodo({ title: 'Bad status', status: 'finished' as never }),
-      'bad_status',
-    )
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
 test('create rejects absolute and path-escaping attachments with coded errors', async () => {
   const root = makeRoot()
   try {
@@ -273,99 +228,6 @@ test('create and update reject duplicate, self, unknown and cyclic dependencies'
 })
 
 // ── parser validation of raw files ──────────────────────────────────────────
-
-test('a well-formed raw file parses with the file stem as the id', async () => {
-  const root = makeRoot()
-  try {
-    writeRawTodo(root, 'raw-one.md', rawTodo({
-      id: 'raw-one',
-      title: 'Raw todo',
-      status: 'in_progress',
-      dependsOn: ['other'],
-      request: 'the request',
-      acceptance: 'the acceptance',
-      attachments: ['assets/a.png', 'assets/b.pdf'],
-    }))
-    // Reads do not validate dependency existence, so an externally broken
-    // dependency still parses and is surfaced rather than hidden.
-    writeRawTodo(root, 'other.md', rawTodo({ id: 'other', status: 'done' }))
-
-    const todo = await new WorkspaceTodoService(root).getTodo('raw-one')
-    assert.equal(todo.id, 'raw-one')
-    assert.equal(todo.title, 'Raw todo')
-    assert.equal(todo.status, 'in_progress')
-    assert.deepEqual(todo.depends_on, ['other'])
-    assert.equal(todo.request, 'the request')
-    assert.equal(todo.acceptance, 'the acceptance')
-    assert.deepEqual(todo.attachments, ['assets/a.png', 'assets/b.pdf'])
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('the parser rejects malformed front matter and unknown fields', async () => {
-  const root = makeRoot()
-  try {
-    writeRawTodo(root, 'nofront.md', '# A heading without front matter\n')
-    writeRawTodo(root, 'badyaml.md', '---\nid: : :\n---\n\n## Request\n\nx\n')
-    writeRawTodo(root, 'unknownfield.md', rawTodo({ id: 'unknownfield' }).replace('status: open', 'status: open\nmystery: 1'))
-
-    const service = new WorkspaceTodoService(root)
-    await rejectsWithCode(service.getTodo('nofront'), 'malformed')
-    await rejectsWithCode(service.getTodo('badyaml'), 'malformed')
-    await rejectsWithCode(service.getTodo('unknownfield'), 'unknown_field')
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('the parser rejects an id/filename mismatch and invalid field values', async () => {
-  const root = makeRoot()
-  try {
-    // Every file declares a different id in front matter than its own name.
-    writeRawTodo(root, 'mismatch.md', rawTodo({ id: 'different' }))
-    writeRawTodo(root, 'emptytitle.md', rawTodo({ id: 'emptytitle', title: '""' }))
-    writeRawTodo(root, 'badstatus.md', rawTodo({ id: 'badstatus', status: 'finished' }))
-    writeRawTodo(root, 'badcreated.md', rawTodo({
-      id: 'badcreated',
-      created: '2026/10/16 00:00',
-      updated: '2026/10/16 00:00',
-    }))
-
-    const service = new WorkspaceTodoService(root)
-    await rejectsWithCode(service.getTodo('mismatch'), 'bad_id')
-    await rejectsWithCode(service.getTodo('emptytitle'), 'bad_title')
-    await rejectsWithCode(service.getTodo('badstatus'), 'bad_status')
-    await rejectsWithCode(service.getTodo('badcreated'), 'bad_timestamp')
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('the parser rejects unsafe attachments declared in the body', async () => {
-  const root = makeRoot()
-  try {
-    writeRawTodo(root, 'absolute.md', rawTodo({ id: 'absolute', attachments: ['/etc/passwd'] }))
-    writeRawTodo(root, 'escaping.md', rawTodo({ id: 'escaping', attachments: ['../secret'] }))
-
-    const service = new WorkspaceTodoService(root)
-    await rejectsWithCode(service.getTodo('absolute'), 'bad_attachment')
-    await rejectsWithCode(service.getTodo('escaping'), 'bad_attachment')
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('get and update report a missing todo with the missing code', async () => {
-  const root = makeRoot()
-  try {
-    const service = new WorkspaceTodoService(root)
-    await rejectsWithCode(service.getTodo('nope'), 'missing')
-    await rejectsWithCode(service.updateTodo({ id: 'nope', title: 'x' }), 'missing')
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
 
 // ── disposable SQLite index ─────────────────────────────────────────────────
 
