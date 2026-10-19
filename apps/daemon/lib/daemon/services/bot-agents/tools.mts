@@ -656,21 +656,35 @@ async function runMemoryTool(args: Record<string, unknown>, ctx: AgentToolContex
   }
 }
 
+type RoutineRead = NonNullable<Awaited<ReturnType<typeof readRoutines>>>
+
+/** Resolve one routine id against the latest directory read. */
+function requireRoutineId(id: string, read: RoutineRead | undefined): RoutineDefinition {
+  const routine = read?.routines.find(candidate => candidate.id === id)
+  if (routine !== undefined) return routine
+  if (read?.invalidIds.includes(id) === true) {
+    const warning = read.errors.find(message => message.startsWith(`routine ${id}.md:`))
+    throw new Error(warning ?? `routine ${id}.md exists but is invalid`)
+  }
+  throw new Error(`routine ${id} does not exist`)
+}
+
 /**
  * The bot's own routines on this device. Each change writes or removes one
  * routine file; the scheduler picks it up on the next poll.
  */
 async function runRoutineTool(args: Record<string, unknown>, ctx: AgentToolContext): Promise<ToolOutcome> {
-  const existing = (await readRoutines(ctx.routinesDir))?.routines ?? []
+  const read = await readRoutines(ctx.routinesDir)
+  const existing = read?.routines ?? []
   switch (args.op) {
     case 'list':
       return done(existing)
     case 'create':
     case 'update':
-      return done(await writeOwnRoutine(args, existing, ctx))
+      return done(await writeOwnRoutine(args, read, ctx))
     case 'remove': {
       const id = requireString(args, 'id', 'remove requires id')
-      if (!existing.some(routine => routine.id === id)) throw new Error(`routine ${id} does not exist`)
+      requireRoutineId(id, read)
       await removeRoutine(ctx.routinesDir, id)
       return done({ removed: id })
     }
@@ -682,9 +696,10 @@ async function runRoutineTool(args: Record<string, unknown>, ctx: AgentToolConte
 /** Create a routine, or change the given fields of an existing one. */
 async function writeOwnRoutine(
   args: Record<string, unknown>,
-  existing: readonly RoutineDefinition[],
+  read: RoutineRead | undefined,
   ctx: AgentToolContext,
 ): Promise<RoutineDefinition> {
+  const existing = read?.routines ?? []
   const id = args.op === 'update' ? requireString(args, 'id', 'update requires id') : undefined
   const name = optionalString(args, 'name')
   const prompt = optionalString(args, 'text')
@@ -703,8 +718,7 @@ async function writeOwnRoutine(
       prompt,
     })
   }
-  const current = existing.find(routine => routine.id === id)
-  if (current === undefined) throw new Error(`routine ${id} does not exist`)
+  const current = requireRoutineId(id, read)
   return await writeRoutine(ctx.routinesDir, {
     ...current,
     ...(name === undefined ? {} : { name }),

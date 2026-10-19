@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type {
@@ -389,6 +390,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     let changed = false
     for (const record of owned) {
       if (wanted.has(record.id)) continue
+      if (routinesDir !== undefined && existsSync(join(routinesDir(botId), `${record.id}.md`))) continue
       routines = routines.filter(candidate => candidate !== record)
       routineWorkspaces.delete(record.id)
       changed = true

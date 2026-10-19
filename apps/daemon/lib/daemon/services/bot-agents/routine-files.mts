@@ -98,20 +98,22 @@ export function formatRoutine(definition: RoutineDefinition): string {
 
 /**
  * Read every routine of one directory. A missing directory yields `undefined`
- * (the bot has no routine files yet); an invalid file is reported and skipped.
+ * (the bot has no routine files yet). Files that exist but fail to parse are
+ * listed in `invalidIds` and `errors` while valid routines are still returned.
  */
 export async function readRoutines(
   directory: string,
-): Promise<{ routines: RoutineDefinition[]; errors: string[]; signature: string } | undefined> {
+): Promise<{ routines: RoutineDefinition[]; invalidIds: string[]; errors: string[]; signature: string } | undefined> {
   let names: string[]
   try {
     const info = await lstat(directory)
-    if (!info.isDirectory()) return { routines: [], errors: ['routines is not a directory'], signature: 'invalid' }
+    if (!info.isDirectory()) return { routines: [], invalidIds: [], errors: ['routines is not a directory'], signature: 'invalid' }
     names = (await readdir(directory)).filter(name => name.endsWith('.md')).sort()
   } catch {
     return undefined
   }
   const routines: RoutineDefinition[] = []
+  const invalidIds: string[] = []
   const errors: string[] = []
   const stamps: string[] = []
   for (const name of names) {
@@ -120,13 +122,21 @@ export async function readRoutines(
     try {
       const info = await lstat(path)
       if (!info.isFile()) throw new Error('not a regular file')
-      stamps.push(`${name}:${info.size}:${info.mtimeMs}`)
       routines.push(parseRoutine(id, await readFile(path, 'utf-8')))
+      stamps.push(`${name}:${info.size}:${info.mtimeMs}`)
     } catch (error) {
+      invalidIds.push(id)
+      try {
+        const info = await lstat(path)
+        if (info.isFile()) stamps.push(`${name}:${info.size}:${info.mtimeMs}:invalid`)
+        else stamps.push(`${name}:invalid`)
+      } catch {
+        stamps.push(`${name}:invalid`)
+      }
       errors.push(`routine ${name}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  return { routines, errors, signature: stamps.join('|') }
+  return { routines, invalidIds, errors, signature: stamps.join('|') }
 }
 
 /** Atomically write one routine file, creating the directory when needed. */
