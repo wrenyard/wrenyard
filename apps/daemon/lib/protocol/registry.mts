@@ -492,14 +492,22 @@ import {
 import {
   clientListParamsSchema,
   clientListResultSchema,
+  clientActionParamsSchema,
+  clientActionResultSchema,
   type ClientListParams,
   type ClientListResult,
+  type ClientAction,
+  type ClientActionParams,
+  type ClientActionResult,
 } from './methods/client.mts'
 export type {
   ClientListEntry,
   ClientListParams,
   ClientListResult,
   ClientReadiness,
+  ClientAction,
+  ClientActionParams,
+  ClientActionResult,
 } from './methods/client.mts'
 import {
   storageUsageParamsSchema,
@@ -1035,6 +1043,7 @@ export interface ForemanMethodParams {
   'components.list': ComponentsListParams
   'components.action': ComponentsActionParams
   'client.list': ClientListParams
+  'client.action': ClientActionParams
   'session.list': SessionListParams
   'session.create': SessionCreateParams
   'session.send': SessionSendParams
@@ -1158,6 +1167,7 @@ export interface ForemanMethodResults {
   'components.list': ComponentsListResult
   'components.action': ComponentsActionResult
   'client.list': ClientListResult
+  'client.action': ClientActionResult
   'session.list': SessionListResult
   'session.create': SessionCreateResult
   'session.send': SessionSendResult
@@ -1568,7 +1578,12 @@ export const methodRegistry: {
   'client.list': {
     params: clientListParamsSchema,
     result: clientListResultSchema,
-    description: 'Read-only listing of every supported agent client with its detected installation, version, executable path and derived readiness.',
+    description: 'Read-only listing of every supported agent client with its detected installation, install/upgrade state, executable path, derived readiness and host.',
+  },
+  'client.action': {
+    params: clientActionParamsSchema,
+    result: clientActionResultSchema,
+    description: 'Install or upgrade an agent client through its npm package as a background job; returns the refreshed client entry.',
   },
   'session.list': { params: sessionListParamsSchema, result: sessionListResultSchema },
   'session.create': { params: sessionCreateParamsSchema, result: sessionCreateResultSchema },

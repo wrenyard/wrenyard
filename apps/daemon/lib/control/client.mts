@@ -143,6 +143,8 @@ import type {
   ProviderListResult,
   ClientListParams,
   ClientListResult,
+  ClientActionParams,
+  ClientActionResult,
 } from '../protocol/registry.mts'
 
 export interface ForemanRequestOptions {
@@ -447,6 +449,9 @@ export class ForemanClient {
   readonly clients = {
     list: (params: ClientListParams = {}): Promise<ClientListResult> => {
       return this.rpc.request<ClientListResult>('client.list', params)
+    },
+    act: (params: ClientActionParams): Promise<ClientActionResult> => {
+      return this.rpc.request<ClientActionResult>('client.action', params)
     },
   }
 

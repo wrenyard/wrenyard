@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { Loader2, RefreshCw } from 'lucide-react';
 import { StatusBadge, type StatusTone } from '@/renderer/components/status-badge';
 import { Button } from '@/renderer/components/ui/button';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
-import { clientList } from '@/renderer/lib/desktop';
-import type { ClientListEntry, ClientReadiness } from '@/shell-contract';
+import { clientAct, clientList } from '@/renderer/lib/desktop';
+import type { ClientAction, ClientListEntry, ClientReadiness } from '@/shell-contract';
 import { errorMessage } from '../model/settings.js';
 
 const CLIENTS_UNAVAILABLE_TITLE = '客户端状态暂时不可用。';
 const CLIENTS_REFRESH_LABEL = '重新检测';
 const CLIENTS_CHECKING_LABEL = '检测中…';
-const CLIENTS_SCOPE_NOTE = '列表由守护进程检测并上报，此页面为只读，不提供安装或启用操作。';
+const CLIENTS_SCOPE_NOTE =
+  '列表由守护进程检测并上报；有 npm 安装源的客户端可在此直接安装或升级，其余请手动处理。';
+const CLIENTS_POLL_MS = 1_000;
 
 const READINESS_LABEL: Record<ClientReadiness, string> = {
   ready: '可用',
@@ -27,23 +29,36 @@ const READINESS_TONE: Record<ClientReadiness, StatusTone> = {
   error: 'danger',
 };
 
+const BUSY_LABEL: Record<'install' | 'upgrade', string> = {
+  install: '安装中…',
+  upgrade: '升级中…',
+};
+
+type PendingAction = { action: ClientAction };
+
 /**
- * Read-only 客户端 page: one row per supported agent client reported by the
- * daemon's `client.list` method — display name and version, a labelled status
- * badge (reason shown in a tooltip on non-ready states) and the detected
- * executable path. The 重新检测 button re-runs the detection. No install,
- * upgrade or enable actions exist here.
+ * 客户端 page: one row per supported agent client reported by the daemon's
+ * `client.list` method — display name and version, a labelled status badge
+ * (reason shown in a tooltip on non-ready states) and the detected executable
+ * path. Clients with an npm install source expose install/upgrade actions that
+ * the daemon runs as a background job; the list re-polls every second while any
+ * install or upgrade is in flight. The 重新检测 button re-runs detection and
+ * refresh checks for available upgrades.
  */
 export function ClientsSettings() {
   const [clients, setClients] = useState<ClientListEntry[] | null>(null);
+  const [host, setHost] = useState<{ hostname: string; platform: string } | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState<Record<string, PendingAction>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (checkUpdates: boolean) => {
     setLoading(true);
     try {
-      const result = await clientList();
+      const result = await clientList({ checkUpdates });
       setClients(result.clients);
+      setHost(result.host);
       setError('');
     } catch (failure) {
       setError(errorMessage(failure));
@@ -52,19 +67,158 @@ export function ClientsSettings() {
     }
   }, []);
 
+  const act = useCallback(async (entry: ClientListEntry, action: ClientAction) => {
+    setPending((current) => {
+      const next = { ...current };
+      delete next[entry.id];
+      return next;
+    });
+    setRowErrors((current) => {
+      const next = { ...current };
+      delete next[entry.id];
+      return next;
+    });
+    try {
+      const result = await clientAct(entry.id, action);
+      setClients((current) =>
+        current === null
+          ? current
+          : current.map((client) => (client.id === entry.id ? result.client : client)),
+      );
+    } catch (failure) {
+      setRowErrors((current) => ({ ...current, [entry.id]: errorMessage(failure) }));
+    }
+  }, []);
+
   useEffect(() => {
-    void refresh();
+    void refresh(true);
   }, [refresh]);
+
+  // Poll while any client has an install/upgrade in flight; the daemon clears
+  // `busy` when the background job finishes.
+  const anyBusy = (clients ?? []).some((client) => client.busy !== undefined);
+  useEffect(() => {
+    if (!anyBusy) return;
+    const timer = setInterval(() => {
+      void refresh(false);
+    }, CLIENTS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [anyBusy, refresh]);
+
+  const requestAction = (entry: ClientListEntry, action: ClientAction): void => {
+    setPending((current) => ({ ...current, [entry.id]: { action } }));
+  };
+
+  const sourceLabel = (entry: ClientListEntry): string =>
+    entry.source === 'npm' ? 'npm' : '手动';
+
+  const canInstall = (entry: ClientListEntry): boolean =>
+    !entry.installed && entry.source === 'npm' && entry.npmPackage !== undefined;
+
+  const canUpgrade = (entry: ClientListEntry): boolean =>
+    entry.installed && entry.source === 'npm' && entry.updateAvailable === true;
+
+  const renderActions = (entry: ClientListEntry) => {
+    const confirm = pending[entry.id];
+    if (confirm !== undefined) {
+      const isUpgrade = confirm.action === 'upgrade';
+      const detail = isUpgrade
+        ? `将升级 ${entry.npmPackage} 至 ${entry.latestVersion ?? 'latest'}`
+        : `将从 npm 全局安装 ${entry.npmPackage}@latest`;
+      return (
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 truncate text-xs text-muted-foreground">{detail}</span>
+          <Button
+            variant="default"
+            className="shrink-0"
+            disabled={loading}
+            onClick={() => { void act(entry, confirm.action); }}
+          >
+            确认
+          </Button>
+          <Button
+            variant="ghost"
+            className="shrink-0"
+            disabled={loading}
+            onClick={() =>
+              setPending((current) => {
+                const next = { ...current };
+                delete next[entry.id];
+                return next;
+              })
+            }
+          >
+            取消
+          </Button>
+        </div>
+      );
+    }
+
+    if (entry.busy !== undefined) {
+      return (
+        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {BUSY_LABEL[entry.busy]}
+        </span>
+      );
+    }
+
+    if (entry.source === 'manual' || entry.npmPackage === undefined) {
+      return <span className="shrink-0 text-xs text-muted-foreground">请手动安装与升级</span>;
+    }
+
+    return (
+      <div className="flex shrink-0 items-center gap-2">
+        {entry.updateAvailable === true && (
+          <span className="text-xs text-muted-foreground">
+            可升级{entry.latestVersion !== undefined ? ` · ${entry.latestVersion}` : ''}
+          </span>
+        )}
+        {canInstall(entry) && (
+          <Button
+            variant="outline"
+            disabled={loading}
+            onClick={() => requestAction(entry, 'install')}
+          >
+            安装
+          </Button>
+        )}
+        {canUpgrade(entry) && (
+          <Button
+            variant="outline"
+            disabled={loading}
+            onClick={() => requestAction(entry, 'upgrade')}
+          >
+            升级
+          </Button>
+        )}
+        {entry.lastError !== undefined && (
+          <Button
+            variant="outline"
+            disabled={loading}
+            onClick={() => requestAction(entry, entry.installed ? 'upgrade' : 'install')}
+          >
+            重试
+          </Button>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-muted-foreground">已支持客户端的运行环境状态</span>
+        <div className="flex min-w-0 flex-col">
+          <span className="text-sm text-muted-foreground">已支持客户端的运行环境状态</span>
+          {host !== null && (
+            <span className="text-xs text-muted-foreground">{host.hostname} · {host.platform}</span>
+          )}
+        </div>
         <Button
           variant="outline"
           className="shrink-0"
           disabled={loading}
-          onClick={() => { void refresh(); }}
+          onClick={() => { void refresh(true); }}
         >
           <RefreshCw />
           {loading ? CLIENTS_CHECKING_LABEL : CLIENTS_REFRESH_LABEL}
@@ -94,21 +248,32 @@ export function ClientsSettings() {
                     label={READINESS_LABEL[entry.readiness]}
                   />
                 );
+                const rowError = rowErrors[entry.id];
                 return (
-                  <li key={entry.id} className="flex items-center gap-2 px-3 py-2">
-                    <span className="min-w-0 shrink-0 truncate font-medium">{entry.name}</span>
-                    {entry.version !== undefined && (
-                      <span className="shrink-0 text-xs text-muted-foreground">{entry.version}</span>
+                  <li key={entry.id} className="flex flex-col gap-1 px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="min-w-0 shrink-0 truncate font-medium">{entry.name}</span>
+                      {entry.version !== undefined && (
+                        <span className="shrink-0 text-xs text-muted-foreground">{entry.version}</span>
+                      )}
+                      <span className="shrink-0 text-xs text-muted-foreground">{sourceLabel(entry)}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                        {entry.path ?? ''}
+                      </span>
+                      {entry.reason !== undefined ? (
+                        <Tooltip>
+                          <TooltipTrigger render={<span />}>{badge}</TooltipTrigger>
+                          <TooltipContent>{entry.reason}</TooltipContent>
+                        </Tooltip>
+                      ) : badge}
+                      <span className="ml-2 shrink-0">{renderActions(entry)}</span>
+                    </div>
+                    {entry.lastError !== undefined && (
+                      <p role="alert" className="text-xs text-destructive">{entry.lastError}</p>
                     )}
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                      {entry.path ?? ''}
-                    </span>
-                    {entry.reason !== undefined ? (
-                      <Tooltip>
-                        <TooltipTrigger render={<span />}>{badge}</TooltipTrigger>
-                        <TooltipContent>{entry.reason}</TooltipContent>
-                      </Tooltip>
-                    ) : badge}
+                    {rowError !== undefined && (
+                      <p role="alert" className="text-xs text-destructive">{rowError}</p>
+                    )}
                   </li>
                 );
               })}

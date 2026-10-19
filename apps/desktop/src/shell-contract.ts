@@ -1787,10 +1787,16 @@ export interface BotTodoMethodMap {
 
 /**
  * The agent clients the daemon supports on its host, as reported by the
- * read-only `client.list` method. These wire types mirror the daemon's
- * client DTOs exactly; Desktop never detects a client itself.
+ * `client.list` method. These wire types mirror the daemon's client DTOs
+ * exactly; Desktop never detects or installs a client itself.
  */
 export type ClientReadiness = 'ready' | 'not_installed' | 'disabled' | 'error';
+
+/** Host identity reported alongside a client list. */
+export interface ClientListHost {
+  hostname: string;
+  platform: string;
+}
 
 export interface ClientListEntry {
   id: string;
@@ -1801,18 +1807,46 @@ export interface ClientListEntry {
   enabled: boolean;
   readiness: ClientReadiness;
   reason?: string;
+  /** Where the client was installed from: an npm-managed package or manual. */
+  source?: 'npm' | 'manual';
+  /** The npm package that installs this client, when one is known. */
+  npmPackage?: string;
+  /** Latest published npm version, when checkUpdates was requested. */
+  latestVersion?: string;
+  /** True when an installed npm client is behind latestVersion. */
+  updateAvailable?: boolean;
+  /** A background install/upgrade currently running for this client. */
+  busy?: 'install' | 'upgrade';
+  /** The last install/upgrade failure message, when one was recorded. */
+  lastError?: string;
 }
 
-export interface ClientListResult { clients: ClientListEntry[] }
+export interface ClientListResult {
+  clients: ClientListEntry[];
+  host: ClientListHost;
+}
 
-/** The bounded, read-only daemon surface the shell `client` bridge forwards. */
-export const CLIENT_METHODS = ['client.list'] as const;
+/** A client lifecycle action the daemon can perform. */
+export type ClientAction = 'install' | 'upgrade';
+
+export interface ClientActionParams {
+  id: string;
+  action: ClientAction;
+}
+
+export interface ClientActionResult {
+  client: ClientListEntry;
+}
+
+/** The bounded daemon surface the shell `client` bridge forwards. */
+export const CLIENT_METHODS = ['client.list', 'client.action'] as const;
 
 export type ClientMethod = (typeof CLIENT_METHODS)[number];
 
 /** Params and result of each forwarded client method, used to type the facade. */
 export interface ClientMethodMap {
-  'client.list': { params: undefined; result: ClientListResult };
+  'client.list': { params: { checkUpdates?: boolean }; result: ClientListResult };
+  'client.action': { params: ClientActionParams; result: ClientActionResult };
 }
 
 /* ------------------------------------------------------------------ */

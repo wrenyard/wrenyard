@@ -12,7 +12,6 @@ import {
   MessageSquare,
   Palette,
   Server,
-  Terminal,
   WalletCards,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -33,7 +32,6 @@ const CATEGORY_ICONS: Readonly<Record<SettingsCategoryId, LucideIcon>> = {
   appearance: Palette,
   session: MessageSquare,
   supply: WalletCards,
-  clients: Terminal,
   bot: Bot,
   shortcuts: Keyboard,
   pet: Bird,

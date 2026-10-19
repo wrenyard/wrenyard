@@ -6,7 +6,8 @@ import { appendFileSync, mkdirSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { hostname } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { closeDb, getDb, initDb, query as dbQuery, setSlowQueryLogger } from '../db/connection.mts'
 import { ensureIncrementalAutoVacuum } from '../db/auto-vacuum-convert.mts'
 import { dropTaskRunTelemetryRetiredColumns } from '../db/schema.mts'
@@ -59,7 +60,8 @@ import {
   type NativeProviderReadinessSnapshot,
 } from './execution/native-provider-readiness.mts'
 import { createAgentClients, CodeBuddyClient, readCodexGatewayCredential, refreshCodexGatewayCredential, readCodexModels, type AgentClient, type NativeClientReadiness } from '@wrenyard/clients'
-import type { ClientListEntry, ClientReadiness } from '../protocol/methods/client.mts'
+import { findExecutable } from '@wrenyard/agent-client'
+import type { ClientAction, ClientListEntry, ClientListHost, ClientListParams, ClientReadiness } from '../protocol/methods/client.mts'
 import { ExecService } from '@wrenyard/exec'
 import { ProviderService } from '@wrenyard/provider-service'
 import { OperationComponents } from './services/operation-components.mts'
@@ -1533,59 +1535,255 @@ async function createForemanDaemonResources(
     grok: 'Grok',
     opencode: 'OpenCode',
   }
+  // npm package backing each client, when one is published. Clients without an
+  // entry (e.g. cursor) have no supported install source and are managed
+  // manually. Used to derive the install/upgrade source and to run npm.
+  const clientNpmPackages: Record<string, string> = {
+    claude: '@anthropic-ai/claude-code',
+    codex: '@openai/codex',
+    grok: '@xai-official/grok',
+    opencode: 'opencode-ai',
+    codebuddy: '@tencent-ai/codebuddy-code',
+    dsh: '@deepseek-ai/dsh',
+  }
+  // In-flight install/upgrade jobs, keyed by client id, and the last recorded
+  // failure message per client. Shared so client.list reflects live state.
+  const clientJobs = new Map<string, { action: 'install' | 'upgrade' }>()
+  const clientLastErrors = new Map<string, string>()
+  let cachedNpmPrefix: string | null | undefined
+  let npmPrefixLoad: Promise<string | null> | undefined
+  const getNpmPrefix = (): Promise<string | null> => {
+    if (cachedNpmPrefix !== undefined) return Promise.resolve(cachedNpmPrefix)
+    if (npmPrefixLoad) return npmPrefixLoad
+    npmPrefixLoad = (async () => {
+      try {
+        const child = process.platform === 'win32'
+          ? spawn('cmd.exe', ['/d', '/s', '/c', 'npm prefix -g'], { windowsHide: true })
+          : spawn('npm', ['prefix', '-g'])
+        const output = await readSpawnOutput(child, 10_000)
+        cachedNpmPrefix = output.trim() || null
+      } catch {
+        cachedNpmPrefix = null
+      }
+      return cachedNpmPrefix
+    })()
+    return npmPrefixLoad
+  }
+  const isUnderNpmPrefix = (executablePath: string, prefix: string): boolean => {
+    const normalized = prefix.endsWith(sep) ? prefix : prefix + sep
+    return executablePath === prefix || executablePath.startsWith(normalized)
+  }
+  const readSpawnOutput = (child: ChildProcess, timeoutMs: number): Promise<string> => {
+    return new Promise<string>((resolve, reject) => {
+      let out = ''
+      let err = ''
+      let done = false
+      const timer = setTimeout(() => {
+        if (done) return
+        done = true
+        child.kill('SIGKILL')
+        reject(new Error('command timed out'))
+      }, timeoutMs)
+      child.stdout?.on('data', (chunk) => { out += chunk.toString() })
+      child.stderr?.on('data', (chunk) => { err += chunk.toString() })
+      child.on('error', (error) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        reject(error)
+      })
+      child.on('close', () => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        resolve(out + (out && err ? '\n' : '') + err)
+      })
+    })
+  }
+  // Builds one client.list entry, shared by listClients and act so the two never
+  // diverge. The source is derived from the known npm package and whether the
+  // detected executable lives under the npm global prefix.
+  const buildClientEntry = async (
+    id: string,
+    client: AgentClient,
+    snapshot: { sampledAtMs: number; clientsById: Record<string, { enabled: boolean; installed: boolean }> },
+  ): Promise<ClientListEntry> => {
+    const enabled = snapshot.clientsById[id]?.enabled ?? true
+    let installed = false
+    let version: string | undefined
+    let path: string | undefined
+    let readiness: ClientReadiness = 'ready'
+    let reason: string | undefined
+    let status
+    let inspectFailed = false
+    try {
+      status = await client.inspect()
+    } catch (error) {
+      inspectFailed = true
+      reason = error instanceof Error ? error.message : String(error)
+    }
+    if (status !== undefined && status.installation.state === 'installed') {
+      installed = true
+      version = status.installation.version
+      path = status.installation.executable
+    }
+    if (!enabled) {
+      readiness = 'disabled'
+    } else if (inspectFailed || status?.installation.state === 'unknown') {
+      readiness = 'error'
+      if (reason === undefined && status?.installation.state === 'unknown') {
+        reason = status.installation.reason
+      }
+    } else if (status?.installation.state === 'missing') {
+      readiness = 'not_installed'
+    } else {
+      const nativeReadiness = await readClientReadiness(client)
+      if (nativeReadiness?.authentication === 'missing') {
+        readiness = 'error'
+        reason = 'authentication missing'
+      }
+    }
+    const npmPackage = clientNpmPackages[id]
+    let source: 'npm' | 'manual' = 'manual'
+    if (npmPackage !== undefined) {
+      if (!installed) {
+        source = 'npm'
+      } else if (path !== undefined) {
+        const prefix = await getNpmPrefix()
+        if (prefix !== null && isUnderNpmPrefix(path, prefix)) source = 'npm'
+      }
+    }
+    const entry: ClientListEntry = {
+      id,
+      name: clientDisplayNames[id] ?? id,
+      installed,
+      ...(version === undefined ? {} : { version }),
+      ...(path === undefined ? {} : { path }),
+      enabled,
+      readiness,
+      ...(reason === undefined ? {} : { reason }),
+      ...(npmPackage === undefined ? {} : { npmPackage }),
+      source,
+      ...(clientJobs.has(id) ? { busy: clientJobs.get(id)!.action } : {}),
+      ...(clientLastErrors.has(id) ? { lastError: clientLastErrors.get(id)! } : {}),
+    }
+    return entry
+  }
   const clientService = {
-    listClients: async (): Promise<ClientListEntry[]> => {
+    listClients: async (params?: ClientListParams): Promise<ClientListEntry[]> => {
       const snapshot = await loadClientReadiness()
+      const clients = createAgentClients()
       const entries: ClientListEntry[] = []
-      for (const [id, client] of createAgentClients()) {
-        const enabled = snapshot.clientsById[id]?.enabled ?? true
-        let installed = false
-        let version: string | undefined
-        let path: string | undefined
-        let readiness: ClientReadiness = 'ready'
-        let reason: string | undefined
-        let status
-        let inspectFailed = false
-        try {
-          status = await client.inspect()
-        } catch (error) {
-          inspectFailed = true
-          reason = error instanceof Error ? error.message : String(error)
-        }
-        if (status !== undefined && status.installation.state === 'installed') {
-          installed = true
-          version = status.installation.version
-          path = status.installation.executable
-        }
-        if (!enabled) {
-          readiness = 'disabled'
-        } else if (inspectFailed || status?.installation.state === 'unknown') {
-          readiness = 'error'
-          if (reason === undefined && status?.installation.state === 'unknown') {
-            reason = status.installation.reason
-          }
-        } else if (status?.installation.state === 'missing') {
-          readiness = 'not_installed'
-        } else {
-          const nativeReadiness = await readClientReadiness(client)
-          if (nativeReadiness?.authentication === 'missing') {
-            readiness = 'error'
-            reason = 'authentication missing'
+      for (const [id, client] of clients) {
+        entries.push(await buildClientEntry(id, client, snapshot))
+      }
+      if (params?.checkUpdates === true) {
+        const npmEntries = entries.filter((entry) => entry.installed && entry.npmPackage !== undefined)
+        const latestResults = await Promise.allSettled(
+          npmEntries.map(async (entry) => {
+            const pkg = entry.npmPackage!
+            const response = await fetch(
+              `https://registry.npmjs.org/${encodeURIComponent(pkg)}/latest`,
+              { signal: AbortSignal.timeout(5000) },
+            )
+            if (!response.ok) throw new Error(`registry returned ${response.status}`)
+            const data = await response.json() as { version?: string }
+            return { pkg, latest: data.version }
+          }),
+        )
+        const latestByPkg: Record<string, string> = {}
+        for (const result of latestResults) {
+          if (result.status === 'fulfilled' && result.value.latest !== undefined) {
+            latestByPkg[result.value.pkg] = result.value.latest
           }
         }
-        entries.push({
-          id,
-          name: clientDisplayNames[id] ?? id,
-          installed,
-          ...(version === undefined ? {} : { version }),
-          ...(path === undefined ? {} : { path }),
-          enabled,
-          readiness,
-          ...(reason === undefined ? {} : { reason }),
-        })
+        for (const entry of entries) {
+          if (entry.npmPackage !== undefined && latestByPkg[entry.npmPackage] !== undefined) {
+            const latest = latestByPkg[entry.npmPackage]
+            entry.latestVersion = latest
+            entry.updateAvailable = entry.version !== undefined && latest !== entry.version
+          }
+        }
       }
       return entries
     },
+    act: async (id: string, action: ClientAction): Promise<ClientListEntry> => {
+      const client = createAgentClients().get(id)
+      if (client === undefined) throw new Error(`Unknown client '${id}'`)
+      if (clientJobs.has(id)) {
+        throw new Error(`A ${clientJobs.get(id)!.action} is already in progress for client '${id}'`)
+      }
+      const npmPackage = clientNpmPackages[id]
+      if (npmPackage === undefined) {
+        throw new Error('This client has no supported install source; manage it manually.')
+      }
+      const npmStatus = await findExecutable(['npm'])
+      if (npmStatus.installation.state !== 'installed') {
+        throw new Error('npm is not available on the PATH; install Node.js and npm before managing clients.')
+      }
+      const load = readExecutionLoad(runtime.db)
+      if (load.activeExecutions > 0) {
+        throw new Error('Stop active executions before installing or upgrading a client.')
+      }
+      const status = await client.inspect()
+      const installation = status.installation
+      const installed = installation.state === 'installed'
+      const executablePath = installation.state === 'installed' ? installation.executable : undefined
+      const npmPrefix = await getNpmPrefix()
+      if (action === 'install' && installed) {
+        throw new Error(`Client '${id}' is already installed.`)
+      }
+      if (action === 'upgrade' && !installed) {
+        throw new Error(`Client '${id}' is not installed; install it before upgrading.`)
+      }
+      if (action === 'upgrade' && executablePath !== undefined
+        && (npmPrefix === null || !isUnderNpmPrefix(executablePath, npmPrefix))) {
+        throw new Error(`Client '${id}' was not installed through npm; manage it manually.`)
+      }
+      clientJobs.set(id, { action })
+      clientLastErrors.delete(id)
+      try {
+        const npmCommand = `npm install --global ${npmPackage}@latest`
+        const command = process.platform === 'win32' ? 'cmd.exe' : 'npm'
+        const args = process.platform === 'win32'
+          ? ['/d', '/s', '/c', npmCommand]
+          : ['install', '--global', `${npmPackage}@latest`]
+        const child = spawn(command, args, { windowsHide: true })
+        let output = ''
+        const append = (chunk: Buffer | string): void => {
+          output += chunk.toString()
+          if (output.length > 4000) output = output.slice(output.length - 4000)
+        }
+        child.stdout?.on('data', append)
+        child.stderr?.on('data', append)
+        const exitCode = await new Promise<number>((resolve, reject) => {
+          const timer = setTimeout(() => {
+            child.kill('SIGKILL')
+            reject(new Error('npm timed out after 10 minutes'))
+          }, 10 * 60 * 1000)
+          child.on('error', reject)
+          child.on('close', (code) => {
+            clearTimeout(timer)
+            resolve(code ?? 1)
+          })
+        })
+        if (exitCode !== 0) {
+          const tail = output.length > 2000 ? output.slice(output.length - 2000) : output
+          clientLastErrors.set(id, `npm exited with code ${exitCode}${tail ? `\n${tail}` : ''}`)
+        } else {
+          clientReadinessCache.invalidate()
+          await client.inspect().catch(() => undefined)
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        clientLastErrors.set(id, message)
+      } finally {
+        clientJobs.delete(id)
+      }
+      const snapshot = await loadClientReadiness()
+      return await buildClientEntry(id, client, snapshot)
+    },
+    host: (): ClientListHost => ({ hostname: hostname(), platform: process.platform }),
   }
   coreOptions = {
     startedAt,

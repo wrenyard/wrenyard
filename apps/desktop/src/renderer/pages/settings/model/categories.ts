@@ -9,7 +9,6 @@ export type SettingsCategoryId =
   | 'appearance'
   | 'session'
   | 'supply'
-  | 'clients'
   | 'bot'
   | 'shortcuts'
   | 'pet'
@@ -36,7 +35,6 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategoryDefinition[] = [
     label: '模型供应',
     description: '供应商、额度、网关、路由与 Agent 客户端。',
   },
-  { id: 'clients', label: '客户端', description: '各客户端的安装状态与可用性检测结果（只读）。' },
   { id: 'bot', label: '机器人', description: '机器人配置与例行任务；群聊和私聊在机器人页面。' },
   { id: 'shortcuts', label: '快捷键', description: '当前平台生效的全部快捷键；暂不支持自定义。' },
   { id: 'pet', label: '桌宠', description: '桌宠的显示内容与行为，由啾啾工坊直接管理生命周期。' },
@@ -58,6 +56,7 @@ const LEGACY_CATEGORY_ALIASES: Readonly<Record<string, SettingsCategoryId>> = {
   catalog: 'supply',
   routingTest: 'supply',
   models: 'supply',
+  clients: 'supply',
 };
 
 export function isSettingsCategoryId(value: unknown): value is SettingsCategoryId {

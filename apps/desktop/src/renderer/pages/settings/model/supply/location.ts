@@ -2,13 +2,14 @@
  * Supply category sub-tab ids and legacy navigation resolution (category id plus tab).
  */
 
-export type SupplyTabId = 'providers' | 'usage' | 'gateway' | 'routing';
+export type SupplyTabId = 'providers' | 'usage' | 'gateway' | 'routing' | 'clients';
 
 export const SUPPLY_TAB_ORDER: readonly SupplyTabId[] = [
   'providers',
   'usage',
   'gateway',
   'routing',
+  'clients',
 ];
 
 export const SUPPLY_TAB_LABELS: Readonly<Record<SupplyTabId, string>> = {
@@ -16,6 +17,7 @@ export const SUPPLY_TAB_LABELS: Readonly<Record<SupplyTabId, string>> = {
   usage: '额度',
   gateway: '网关',
   routing: '路由',
+  clients: '客户端',
 };
 
 const SUPPLY_TAB_SET = new Set<string>(SUPPLY_TAB_ORDER);
@@ -31,6 +33,7 @@ const LEGACY_CATEGORY_SUPPLY_TAB: Readonly<Record<string, SupplyTabId>> = {
   catalog: 'providers',
   routingTest: 'routing',
   models: 'routing',
+  clients: 'clients',
 };
 
 /**
