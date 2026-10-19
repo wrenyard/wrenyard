@@ -1,5 +1,6 @@
-import { get as dbGet, query as dbQuery } from '../db/connection.mts'
+import { get as dbGet, getDb, query as dbQuery } from '../db/connection.mts'
 import { migrateProviderId } from '../config/chatgpt-migration.mts'
+import { AuxiliaryRunStore } from '../db/stores/auxiliary-run-store.mts'
 import { MAX_STATS_SUMMARY_DAYS } from '../protocol/methods/stats.mts'
 import { readTaskRunMetadataBatch, toTaskRunRecord } from '@wrenyard/task'
 import { taskRunMetadataDeps } from '../core/task/run-metadata-source.mts'
@@ -62,7 +63,11 @@ export interface DailyStatsResponse {
 
 export interface TaskRunLedgerRow {
   task_run_id: string
+  /** Whether this run is a dispatched task or an in-session auxiliary run. */
+  kind: 'task' | 'auxiliary'
   task: string
+  /** Auxiliary-only: the auxiliary role that ran (document, todo, vcs, ...). */
+  role?: string
   /** Exact persisted execution project, present only when nonblank. */
   project?: string
   source: 'builtin' | 'project' | 'unknown'
@@ -608,7 +613,7 @@ function readRecentTaskRunLedger(
 
   const metadataById = readTaskRunMetadataBatch(rows.map((row) => row.id), taskRunMetadataDeps)
 
-  return rows.map((row) => {
+  const taskRows: TaskRunLedgerRow[] = rows.map((row) => {
     const meta = metadataById.get(row.id) ?? { usage: { completeness: 'unavailable' as const, attempt_count: 0, usage_event_count: 0, reference_cost_complete: false } }
     // Shared run-record projection of the same row. Built alongside the ledger
     // row and not emitted on the wire yet: the recentRuns shape is unchanged.
@@ -628,6 +633,7 @@ function readRecentTaskRunLedger(
     void runRecord
     const ledger: TaskRunLedgerRow = {
       task_run_id: row.id,
+      kind: 'task',
       task: normalizeTaskName(row.template),
       source: taskSourceOf(row.definition_source),
       status: row.status,
@@ -673,6 +679,57 @@ function readRecentTaskRunLedger(
     if (legacyResolvedProfile) ledger.resolved_profile = legacyResolvedProfile
     return ledger
   })
+
+  // Auxiliary runs union into the same ledger: one row per finished in-session
+  // auxiliary run, labelled by its role, never touching the task aggregates.
+  const auxiliaryRows = new AuxiliaryRunStore(getDb())
+    .readRecent(recentLimit)
+    .map((row): TaskRunLedgerRow => {
+      const ledger: TaskRunLedgerRow = {
+        task_run_id: row.id,
+        kind: 'auxiliary',
+        task: row.role,
+        role: row.role,
+        source: 'unknown',
+        status: row.status,
+        created_at: row.created_at,
+        usage: parseAuxiliaryUsage(row.usage),
+      }
+      if (row.started_at) ledger.started_at = row.started_at
+      if (row.finished_at) ledger.finished_at = row.finished_at
+      const provider = nonBlankString(row.provider)
+      const model = nonBlankString(row.model)
+      if (provider && model) {
+        const migrated = migrateProviderId(provider)
+        const displayNames = resolveDisplayNames?.(migrated, model)
+        const pairedProvider = nonBlankString(displayNames?.provider_display_name)
+        const pairedModel = nonBlankString(displayNames?.model_display_name)
+        ledger.provider_display_name = pairedProvider ?? migrated
+        ledger.model_display_name = pairedModel ?? model
+      }
+      return ledger
+    })
+
+  return [...taskRows, ...auxiliaryRows]
+    .sort((a, b) => {
+      const aInstant = Date.parse(a.finished_at ?? a.created_at)
+      const bInstant = Date.parse(b.finished_at ?? b.created_at)
+      if (aInstant !== bInstant) return bInstant - aInstant
+      return Date.parse(b.created_at) - Date.parse(a.created_at)
+    })
+    .slice(0, recentLimit)
+}
+
+/** Parse one stored auxiliary usage JSON back into the TaskUsage wire shape. */
+function parseAuxiliaryUsage(stored: string | null): TaskUsage {
+  const parsed = parseJsonValue(stored)
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const record = parsed as TaskUsage
+    if (record.completeness === 'complete' || record.completeness === 'partial' || record.completeness === 'unavailable') {
+      return parsed as TaskUsage
+    }
+  }
+  return { completeness: 'unavailable', attempt_count: 0, usage_event_count: 0, reference_cost_complete: false }
 }
 
 function localDayWindow(now: Date): { dayKey: string; startAt: string; endAt: string } {

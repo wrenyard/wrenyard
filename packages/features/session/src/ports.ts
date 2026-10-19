@@ -152,6 +152,13 @@ export interface SessionHost {
    * for every session of this host; `undefined` means the session has none.
    */
   memoryFor?(sessionId: string): WorkspaceMemoryPort | undefined;
+  /**
+   * Optional recorder of one finished auxiliary run into the unified run
+   * record. A host (the daemon) supplies it so each auxiliary run writes one
+   * durable row without the session package importing the store; absent hosts
+   * skip the record.
+   */
+  recordAuxiliaryRun?(input: import('@wrenyard/protocol').AuxiliaryRunRecordInput): void;
   now?(): Date;
 }
 
@@ -433,6 +440,11 @@ export interface CallRunResult {
   toolCalls: readonly ToolCall[];
   /** Measured facts of the call, produced by the transport. */
   metrics: ModelMetrics;
+  /**
+   * The route the last completed request actually served: provider,
+   * provider-qualified model and reasoning effort of the serving candidate.
+   */
+  route?: { provider?: string; model?: string; effort?: string };
 }
 
 /** Structural match for `calls.ts`'s `CallRunner`. */
@@ -442,6 +454,11 @@ export interface CallsPort {
   holdSpan(spanId: string): void;
   /** Close a held span, writing everything measured so far. */
   releaseSpan(spanId: string, status?: import('./ledger/events.ts').SpanStatus): Promise<void>;
+  /**
+   * Optional hook copied from the host's {@link SessionHost.recordAuxiliaryRun}
+   * so a finished auxiliary run running through this port is recorded.
+   */
+  recordAuxiliaryRun?(input: import('@wrenyard/protocol').AuxiliaryRunRecordInput): void;
 }
 
 /** One assembled prompt view: protocol-neutral messages plus layer statistics. */

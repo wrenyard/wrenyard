@@ -201,6 +201,12 @@ export interface ModelCallOutput {
   finishReason?: import('../transport/index.ts').FinishReason;
   /** Measured facts of the call, produced by the transport. */
   metrics: ModelMetrics;
+  /**
+   * The route the last completed request actually served: the provider,
+   * provider-qualified model and reasoning effort of the route candidate that
+   * succeeded. Absent only when no route identity is known.
+   */
+  route?: { provider?: string; model?: string; effort?: string };
 }
 
 /** One ranked auxiliary route and the level it is called at. */
@@ -1359,6 +1365,11 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         metrics,
       });
 
+      // The serving candidate's public id is `provider/model`; the provider is
+      // the segment before the first separator and stays absent when the id is
+      // not provider-qualified.
+      const providerOfServing = model.includes('/') ? model.slice(0, model.indexOf('/')) : undefined;
+
       return {
         model,
         text: finalText,
@@ -1367,6 +1378,11 @@ export function createCallRunner(options: CallRunnerOptions): CallRunner {
         toolCalls: completed.toolCalls,
         ...(completed.finishReason === undefined ? {} : { finishReason: completed.finishReason }),
         metrics,
+        route: {
+          ...(providerOfServing === undefined ? {} : { provider: providerOfServing }),
+          model,
+          ...(actualReasoningEffort === undefined ? {} : { effort: actualReasoningEffort }),
+        },
       };
     },
   };

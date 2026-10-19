@@ -1,5 +1,7 @@
 import type {
+  AuxiliaryRunRecordInput,
   RunRecord,
+  RunRecordRoute,
   RunRecordTiming,
   TaskResolvedDispatch,
   TaskUsage,
@@ -46,5 +48,40 @@ export function toTaskRunRecord(input: TaskRunRecordInput): RunRecord {
   if (input.summary !== undefined && input.summary !== '') {
     record.summary = input.summary
   }
+  return record
+}
+
+/**
+ * Maps one auxiliary run onto the shared run record.
+ *
+ * An auxiliary run has no task id and a known caller session, so it is tagged
+ * `kind: 'auxiliary'` with its role and the owning session as the caller. The
+ * resolved route, status, timing, usage and summary are carried verbatim; the
+ * wire/database layers decide how much of that to project.
+ */
+export function toAuxiliaryRunRecord(input: AuxiliaryRunRecordInput): RunRecord {
+  const record: RunRecord = {
+    id: input.id,
+    kind: 'auxiliary',
+    role: input.role,
+    caller: { origin: 'session', id: input.callerSessionId },
+    status: input.status,
+    timing: {
+      createdAt: input.startedAt,
+      startedAt: input.startedAt,
+      finishedAt: input.finishedAt,
+    },
+  }
+  if (input.route !== undefined) {
+    const route: RunRecordRoute = {}
+    if (input.route.provider !== undefined && input.route.provider !== '') route.provider = input.route.provider
+    if (input.route.model !== undefined && input.route.model !== '') route.model = input.route.model
+    if (input.route.effort !== undefined && input.route.effort !== '') route.effort = input.route.effort
+    if (route.provider !== undefined || route.model !== undefined || route.effort !== undefined) {
+      record.route = route
+    }
+  }
+  if (input.usage !== undefined) record.usage = input.usage
+  if (input.summary !== undefined && input.summary !== '') record.summary = input.summary
   return record
 }

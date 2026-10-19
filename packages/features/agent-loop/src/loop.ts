@@ -19,6 +19,7 @@ import type {
   ActionExecutionOutcome,
   ActionRunContext,
   CallRunRequest,
+  CallRunResult,
   CallsPort,
   LedgerEventDraft,
   LoopHelpers,
@@ -28,8 +29,10 @@ import type {
   MethodInfo,
   ToolCall,
   ToolSpec,
+  Usage,
   WorkspaceChange,
 } from './ports.ts';
+import type { AuxiliaryRunRecordInput, TaskUsage } from '@wrenyard/protocol';
 
 /** Which auxiliary task is running; used for ledger call attribution. */
 export type LoopRole = 'document' | 'todo' | 'vcs' | 'project';
@@ -76,6 +79,12 @@ export interface LoopDeps {
   calls: CallsPort;
   /** The host's text and tool-diagnostic helpers. */
   helpers: LoopHelpers;
+  /**
+   * Optional hook recording one finished auxiliary run into the unified run
+   * record. Threaded from {@link AuxiliaryRunnerPorts}; falls back to the
+   * shared `calls` port when supplied there instead.
+   */
+  recordAuxiliaryRun?: (input: AuxiliaryRunRecordInput) => void;
 }
 
 /** Everything one auxiliary loop run needs. */
@@ -104,6 +113,14 @@ export interface AuxiliaryLoopOptions {
 export interface AuxiliaryLoopResult {
   status: 'done' | 'failed';
   summary: string;
+  /** The route the last serving request actually used, when known. */
+  route?: { provider?: string; model?: string; effort?: string };
+  /** Tokens summed across every request this loop issued. */
+  usage?: Usage;
+  /** ISO timestamp the loop started. */
+  startedAt: string;
+  /** ISO timestamp the loop finished. */
+  finishedAt: string;
 }
 
 /**
@@ -115,15 +132,16 @@ export async function runAuxiliaryLoop(options: AuxiliaryLoopOptions): Promise<A
   // The whole loop is one auxiliary task and therefore one span: every round's
   // request reports into it and it closes when the loop ends, however it ends.
   const spanId = `${options.ctx.actionId}.${options.spanIdPrefix}`;
+  const startedAt = new Date().toISOString();
   options.deps.calls.holdSpan(spanId);
   try {
-    return await runRounds(options, spanId);
+    return await runRounds(options, spanId, startedAt);
   } finally {
     await options.deps.calls.releaseSpan(spanId, options.ctx.signal.aborted ? 'aborted' : undefined);
   }
 }
 
-async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise<AuxiliaryLoopResult> {
+async function runRounds(options: AuxiliaryLoopOptions, spanId: string, startedAt: string): Promise<AuxiliaryLoopResult> {
   const { deps, ctx, role, system, user, tools, maxRounds } = options;
   const { messageOf } = deps.helpers;
   const toolMap = new Map(tools.map((tool) => [tool.spec.name, tool]));
@@ -134,9 +152,31 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise
     { role: 'user', content: user },
   ];
   let silentRounds = 0;
+  // Accumulate the run-level facts the unified record needs, across every round.
+  let lastRoute: { provider?: string; model?: string; effort?: string } | undefined;
+  let totalUsage: Usage = {};
+
+  const finish = (status: 'done' | 'failed', summary: string): AuxiliaryLoopResult => {
+    const finishedAt = new Date().toISOString();
+    const recordInput = buildAuxiliaryRunRecordInput({
+      options,
+      status,
+      summary,
+      route: lastRoute,
+      usage: totalUsage,
+      startedAt,
+      finishedAt,
+    });
+    const record = (input: AuxiliaryRunRecordInput): void => {
+      if (options.deps.recordAuxiliaryRun !== undefined) options.deps.recordAuxiliaryRun(input);
+      else if (options.deps.calls.recordAuxiliaryRun !== undefined) options.deps.calls.recordAuxiliaryRun(input);
+    };
+    record(recordInput);
+    return { status, summary, route: lastRoute, usage: totalUsage, startedAt, finishedAt };
+  };
 
   for (let round = 1; round <= maxRounds; round += 1) {
-    if (ctx.signal.aborted) return abortedResult();
+    if (ctx.signal.aborted) return finish('failed', 'The session was interrupted.');
 
     let text: string;
     let calls: readonly ToolCall[];
@@ -151,13 +191,18 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise
         layers,
         signal: ctx.signal,
         tools: specs,
-      } satisfies CallRunRequest) as { text: string; toolCalls?: readonly ToolCall[] };
+      } satisfies CallRunRequest) as CallRunResult;
       text = result.text;
       calls = result.toolCalls ?? [];
+      // The last serving route, preferred from the host-resolved `route` and
+      // falling back to the raw model id when only that is known.
+      if (result.route !== undefined) lastRoute = result.route;
+      else if (result.model !== undefined && result.model !== '') lastRoute = { model: result.model };
+      if (result.usage !== undefined) totalUsage = sumUsage(totalUsage, result.usage);
     } catch (error) {
-      return { status: 'failed', summary: `The model call failed: ${messageOf(error)}` };
+      return finish('failed', `The model call failed: ${messageOf(error)}`);
     }
-    if (ctx.signal.aborted) return abortedResult();
+    if (ctx.signal.aborted) return finish('failed', 'The session was interrupted.');
 
     messages.push({
       role: 'assistant',
@@ -171,14 +216,14 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise
     // model that will not use the tools, which ends the loop as a failure.
     if (calls.length === 0) {
       silentRounds += 1;
-      if (silentRounds >= 2) return { status: 'failed', summary: 'The model did not call a tool.' };
+      if (silentRounds >= 2) return finish('failed', 'The model did not call a tool.');
       messages.push({ role: 'user', content: 'Call a tool or call done.' });
       continue;
     }
     silentRounds = 0;
 
     for (const call of calls) {
-      if (ctx.signal.aborted) return abortedResult();
+      if (ctx.signal.aborted) return finish('failed', 'The session was interrupted.');
       if (call.name === DONE_TOOL.name) {
         const done = readDoneCall(call, messageOf);
         if (!done.ok) {
@@ -192,23 +237,19 @@ async function runRounds(options: AuxiliaryLoopOptions, spanId: string): Promise
         if (done.status === 'done' && options.record !== undefined
           && options.record.changes.length === 0 && options.record.documents.length === 0
           && options.record.observations.length === 0) {
-          return {
-            status: 'failed',
-            summary: 'The helper reported done, but this run recorded no workspace change, no document draft and no authoritative result, so the claimed completion is not confirmed and the result is a failure.',
-          };
+          return finish(
+            'failed',
+            'The helper reported done, but this run recorded no workspace change, no document draft and no authoritative result, so the claimed completion is not confirmed and the result is a failure.',
+          );
         }
-        return { status: done.status, summary: done.summary };
+        return finish(done.status, done.summary);
       }
       const content = await runToolCall(toolMap.get(call.name), call, ctx.signal, options.record, messageOf);
       messages.push({ role: 'tool', toolCallId: call.id, content });
     }
   }
 
-  return { status: 'failed', summary: `The round limit of ${maxRounds} was reached.` };
-}
-
-function abortedResult(): AuxiliaryLoopResult {
-  return { status: 'failed', summary: 'The session was interrupted.' };
+  return finish('failed', `The round limit of ${maxRounds} was reached.`);
 }
 
 /** Run one model tool call, converting every failure into a tool result. */
@@ -400,6 +441,68 @@ export function toActionOutcome(
     result: lines.join('\n'),
     deferred: [...record.updates, ...extraDrafts],
   };
+}
+
+/**
+ * Assemble the unified run-record input for one finished auxiliary loop. The id
+ * is the owning action id, the role is the loop's role and the caller is the
+ * owning session, so the record reads as one auxiliary run in the unified ledger.
+ */
+function buildAuxiliaryRunRecordInput(args: {
+  options: AuxiliaryLoopOptions;
+  status: 'done' | 'failed';
+  summary: string;
+  route?: { provider?: string; model?: string; effort?: string };
+  usage: Usage;
+  startedAt: string;
+  finishedAt: string;
+}): AuxiliaryRunRecordInput {
+  const { options, status, summary, route, usage, startedAt, finishedAt } = args;
+  return {
+    id: options.ctx.actionId,
+    role: options.role,
+    callerSessionId: options.ctx.sessionId,
+    status,
+    ...(route ? { route } : {}),
+    usage: toTaskUsage(usage),
+    startedAt,
+    finishedAt,
+    summary,
+  };
+}
+
+/** Map summed auxiliary loop usage onto the protocol `TaskUsage` shape. */
+function toTaskUsage(usage: Usage): TaskUsage {
+  const input = usage.inputTokens ?? 0;
+  const cached = usage.cachedInputTokens ?? 0;
+  const output = usage.outputTokens ?? 0;
+  const total = input + cached + output;
+  return {
+    completeness: 'partial',
+    attempt_count: 1,
+    usage_event_count: 1,
+    ...(input > 0 ? { input_tokens: input } : {}),
+    ...(cached > 0 ? { cached_input_tokens: cached } : {}),
+    ...(output > 0 ? { output_tokens: output } : {}),
+    ...(total > 0 ? { total_tokens: total } : {}),
+    reference_cost_complete: false,
+  };
+}
+
+/** Sum two auxiliary `Usage` records, field by field. */
+function sumUsage(total: Usage, next: Usage): Usage {
+  const sum: Usage = {};
+  for (const key of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningTokens'] as const) {
+    const value = addUsage(total[key], next[key]);
+    if (value !== undefined) sum[key] = value;
+  }
+  return sum;
+}
+
+function addUsage(left: number | undefined, right: number | undefined): number | undefined {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return left + right;
 }
 
 // ─── Protocol tool adapter ──────────────────────────────────────────────────

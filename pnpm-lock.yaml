@@ -582,6 +582,9 @@ importers:
       '@wrenyard/auto-routing':
         specifier: workspace:*
         version: link:../auto-routing
+      '@wrenyard/protocol':
+        specifier: workspace:*
+        version: link:../../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.0.0

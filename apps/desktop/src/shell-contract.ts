@@ -156,7 +156,11 @@ export interface TaskRunUsage {
 export interface TaskRunSnapshot {
   taskRunId: string;
   taskId: string;
+  /** Whether this run is a dispatched task or an in-session auxiliary run. */
+  kind?: 'task' | 'auxiliary';
   taskName?: string;
+  /** Auxiliary-only: the auxiliary role that ran (document, todo, vcs, ...). */
+  role?: string;
   source?: 'builtin' | 'project' | 'unknown';
   /** Exact persisted execution project; present only when nonblank. */
   project?: string;

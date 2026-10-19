@@ -8,6 +8,8 @@
  * is an implementation: it is the contract between the loop and its host.
  */
 
+import type { AuxiliaryRunRecordInput } from '@wrenyard/protocol'
+
 // ─── Model wire vocabulary ──────────────────────────────────────────────────
 
 /** Public reasoning level a route may be called at. */
@@ -279,6 +281,12 @@ export interface CallRunResult {
   toolCalls: readonly ToolCall[];
   /** Measured facts of the call. */
   metrics: ModelMetrics;
+  /**
+   * The route the last completed request actually served, when the host could
+   * resolve one. Mirrors the same provider/model/effort identity reported on the
+   * span's `finished` event so an auxiliary loop can record the run's route.
+   */
+  route?: { provider?: string; model?: string; effort?: string };
 }
 
 /** The model transport the loop calls through. */
@@ -288,6 +296,14 @@ export interface CallsPort {
   holdSpan(spanId: string): void;
   /** Close a held span, writing everything measured so far. */
   releaseSpan(spanId: string, status?: 'ok' | 'failed' | 'aborted' | 'interrupted'): Promise<void>;
+  /**
+   * Optional hook a host supplies so a finished auxiliary run is recorded into
+   * the unified run record (the daemon ledger / stats store). Invoked once per
+   * finished auxiliary run with the run's id, role, caller session, status,
+   * resolved route, summed usage, timing and summary. Absent hosts (CLI, bots
+   * without persistence) simply skip the record.
+   */
+  recordAuxiliaryRun?(input: AuxiliaryRunRecordInput): void;
 }
 
 // ─── Method catalog port ────────────────────────────────────────────────────

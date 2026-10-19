@@ -23,6 +23,7 @@ import {
   type LoopDeps,
   type LoopRecord,
 } from './loop.ts';
+import type { AuxiliaryRunRecordInput } from '@wrenyard/protocol';
 import type {
   ActionExecutionOutcome,
   ActionRunContext,
@@ -136,6 +137,11 @@ export interface AuxiliaryRunnerPorts {
   context: ActionRunContext;
   /** The workspace document rules, used by the document definition only. */
   documentRules?: () => string;
+  /**
+   * Optional hook recording one finished auxiliary run into the unified run
+   * record. Threaded into the loop; absent hosts simply skip the record.
+   */
+  recordAuxiliaryRun?: (input: AuxiliaryRunRecordInput) => void;
 }
 
 /**
@@ -159,6 +165,7 @@ export async function runAuxiliary(
     host: bindCatalog(ports.catalog, definition.role),
     calls: ports.calls,
     helpers,
+    ...(ports.recordAuxiliaryRun === undefined ? {} : { recordAuxiliaryRun: ports.recordAuxiliaryRun }),
   };
   const tools = await protocolTools(
     deps.host,

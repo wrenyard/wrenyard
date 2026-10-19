@@ -37,8 +37,11 @@ export interface TaskRow {
 
 export interface TaskRunRow {
   taskRunId: string;
+  kind: 'task' | 'auxiliary';
   status: TaskRunSnapshot['status'];
   label: string;
+  /** Auxiliary-only: the auxiliary role that ran, shown as the task label. */
+  role?: string;
   providerName?: string;
   providerBrand?: string;
   modelName?: string;
@@ -161,9 +164,13 @@ export function taskRunRows(runs: TaskRunSnapshot[], names: TaskNameTables): Tas
     const modelName = nonEmpty(run.resolvedModelDisplayName);
     const row: TaskRunRow = {
       taskRunId: run.taskRunId,
+      kind: run.kind ?? 'task',
       status,
-      label: taskDisplayLabel(run, names),
+      label: run.kind === 'auxiliary'
+        ? (nonEmpty(run.role) ?? taskDisplayLabel(run, names))
+        : taskDisplayLabel(run, names),
     };
+    if (run.kind === 'auxiliary' && nonEmpty(run.role) !== undefined) row.role = run.role;
     if (providerName !== undefined && modelName !== undefined) {
       row.providerName = providerName;
       row.modelName = modelName;

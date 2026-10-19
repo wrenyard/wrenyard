@@ -213,6 +213,9 @@ export function parseTaskRunSnapshot(value: unknown): TaskRunSnapshot | null {
 
   const sourceValue = record.source;
   const statusValue = record.status;
+  // A row without `kind` is a pre-auxiliary task row: it still parses as a task.
+  const kindValue = record.kind === 'auxiliary' ? 'auxiliary' as const : 'task' as const;
+  const role = readString(record.role);
   const resolvedRecord = asRecord(record.resolved);
   const speedRecord = resolvedRecord ? resolvedRecord.speed : record['resolved.speed'];
   const speed = parseTaskRunSpeed(speedRecord);
@@ -242,7 +245,9 @@ export function parseTaskRunSnapshot(value: unknown): TaskRunSnapshot | null {
   return {
     taskRunId,
     taskId,
+    kind: kindValue,
     ...(typeof record.task_name === 'string' && record.task_name.length > 0 ? { taskName: record.task_name } : {}),
+    ...(kindValue === 'auxiliary' && role !== null ? { role } : {}),
     ...(isTaskSource(sourceValue) ? { source: sourceValue } : {}),
     ...(isTaskRunStatus(statusValue) ? { status: statusValue } : {}),
     ...(readString(record.started_at) !== null ? { startedAt: record.started_at as string } : {}),

@@ -19,7 +19,7 @@ import { ActivityHeatmap } from './components/ActivityHeatmap.js';
 import { MetricCards } from './components/MetricCards.js';
 import { ProfileTable } from './components/ProfileTable.js';
 import { TaskInvestmentTable } from './components/TaskInvestmentTable.js';
-import { TaskRunsTable } from './components/TaskRunsTable.js';
+import { TaskRunsTable, type TaskRunKindFilter } from './components/TaskRunsTable.js';
 import {
   PAGE_TITLE,
   PERIOD_OPTIONS,
@@ -38,6 +38,7 @@ function isPeriod(value: string | undefined): value is StatsPeriod {
 export function StatsPage() {
   const [period, setPeriod] = useState<StatsPeriod>('24h');
   const [builtinOnly, setBuiltinOnly] = useState(false);
+  const [runKind, setRunKind] = useState<TaskRunKindFilter>('all');
   const stats = useStatsQuery();
   const settings = useQuery(taskSettingsQuery());
 
@@ -98,7 +99,11 @@ export function StatsPage() {
                       onBuiltinOnlyChange={setBuiltinOnly}
                     />
                   </div>
-                  <TaskRunsTable rows={taskRunRows(snapshot.recentTaskRuns, names)} />
+                  <TaskRunsTable
+                    rows={taskRunRows(snapshot.recentTaskRuns, names)}
+                    kindFilter={runKind}
+                    onKindFilterChange={setRunKind}
+                  />
                 </>
               )}
             </>

@@ -65,6 +65,27 @@ export function initDb(path?: string): ForemanDatabase {
     ensureDbFileMode(nextPath)
     applyPragmas(nextDb, freshFile)
     bootstrapSchema(nextDb)
+    // Auxiliary run ledger: one row per finished auxiliary run, keyed by its
+    // action id. Created idempotently so existing databases pick it up at open
+    // without touching any other table.
+    nextDb.prepare(`CREATE TABLE IF NOT EXISTS auxiliary_runs (
+      id            TEXT PRIMARY KEY,
+      role          TEXT NOT NULL,
+      caller_origin TEXT NOT NULL DEFAULT 'session',
+      caller_id     TEXT,
+      provider      TEXT,
+      model         TEXT,
+      effort        TEXT,
+      status        TEXT NOT NULL,
+      created_at    TEXT NOT NULL,
+      started_at    TEXT,
+      finished_at   TEXT,
+      usage         TEXT,
+      summary       TEXT
+    )`).run()
+    nextDb.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_auxiliary_runs_finished ON auxiliary_runs(COALESCE(finished_at, created_at) DESC, created_at DESC)',
+    ).run()
   } catch (error) {
     if (nextDb.open) nextDb.close()
     throw error

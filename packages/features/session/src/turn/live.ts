@@ -44,6 +44,9 @@ export class LiveCalls {
       run: (input) => this.runCallWithLive(sessionId, inner, input),
       holdSpan: (spanId) => inner.holdSpan(spanId),
       releaseSpan: (spanId, status) => inner.releaseSpan(spanId, status),
+      ...(inner.recordAuxiliaryRun === undefined ? {} : {
+        recordAuxiliaryRun: (input) => inner.recordAuxiliaryRun!(input),
+      }),
     };
   }
 

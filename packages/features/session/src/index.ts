@@ -275,6 +275,9 @@ export function createSession(host: SessionHost): Session {
         run: (input) => executor.run(input),
         holdSpan: (spanId) => recorder.hold(spanId),
         releaseSpan: (spanId, status) => recorder.release(spanId, status),
+        ...(host.recordAuxiliaryRun === undefined ? {} : {
+          recordAuxiliaryRun: (input) => host.recordAuxiliaryRun!(input),
+        }),
       };
       runners.set(sessionId, runner);
     }

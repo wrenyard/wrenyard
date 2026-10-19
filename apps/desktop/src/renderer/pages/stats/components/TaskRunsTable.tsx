@@ -2,20 +2,54 @@ import { BrandIcon } from '@/renderer/components/brand-icon';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { StatusBadge } from '@/renderer/components/status-badge';
 import { Timestamp } from '@/renderer/components/timestamp';
-import { Card, CardContent, CardHeader, CardTitle } from '@/renderer/components/ui/card';
+import { Badge } from '@/renderer/components/ui/badge';
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/renderer/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/renderer/components/ui/table';
+import { ToggleGroup, ToggleGroupItem } from '@/renderer/components/ui/toggle-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { formatElapsedMs, formatTokenCount } from '@/renderer/lib/format';
 import { statusView } from '@/renderer/lib/task-status';
 import { TASK_RUNS_EMPTY, TASK_RUNS_TITLE } from '../model/describe.js';
 import type { TaskRunRow } from '../model/stats.js';
 
+/** Which runs the recent-runs table shows. */
+export type TaskRunKindFilter = 'all' | 'task' | 'auxiliary';
+
+const KIND_FILTER_OPTIONS: Array<{ value: TaskRunKindFilter; label: string }> = [
+  { value: 'all', label: '全部' },
+  { value: 'task', label: '任务' },
+  { value: 'auxiliary', label: '辅助' },
+];
+
 /** The last fifty runs with status, model brands and terminal-only telemetry. */
-export function TaskRunsTable({ rows }: { rows: TaskRunRow[] }) {
+export function TaskRunsTable({
+  rows,
+  kindFilter,
+  onKindFilterChange,
+}: {
+  rows: TaskRunRow[];
+  kindFilter: TaskRunKindFilter;
+  onKindFilterChange: (kind: TaskRunKindFilter) => void;
+}) {
+  const visible = rows.filter((row) => kindFilter === 'all' || row.kind === kindFilter);
   return (
     <Card>
       <CardHeader>
         <CardTitle>{TASK_RUNS_TITLE}</CardTitle>
+        <CardAction>
+          <ToggleGroup
+            variant="outline"
+            value={[kindFilter]}
+            onValueChange={(value) => {
+              const next = value[0];
+              if (next === 'all' || next === 'task' || next === 'auxiliary') onKindFilterChange(next);
+            }}
+          >
+            {KIND_FILTER_OPTIONS.map((option) => (
+              <ToggleGroupItem key={option.value} value={option.value}>{option.label}</ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </CardAction>
       </CardHeader>
       <CardContent>
         <Table>
@@ -31,14 +65,19 @@ export function TaskRunsTable({ rows }: { rows: TaskRunRow[] }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.length === 0 ? (
+            {visible.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-muted-foreground">{TASK_RUNS_EMPTY}</TableCell>
               </TableRow>
-            ) : rows.map((row) => (
+            ) : visible.map((row) => (
               <TableRow key={row.taskRunId}>
                 <TableCell><StatusCell status={row.status} /></TableCell>
-                <TableCell>{row.label}</TableCell>
+                <TableCell>
+                  <span className="inline-flex flex-wrap items-center gap-1.5">
+                    <span>{row.label}</span>
+                    {row.kind === 'auxiliary' ? <Badge variant="secondary">辅助</Badge> : null}
+                  </span>
+                </TableCell>
                 <TableCell><ModelCell row={row} /></TableCell>
                 <TableCell className="text-right tabular-nums">
                   {`↑${row.inputTokens === undefined ? '-' : formatTokenCount(row.inputTokens)} / ↓${row.outputTokens === undefined ? '-' : formatTokenCount(row.outputTokens)}`}

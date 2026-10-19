@@ -11,7 +11,8 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@wrenyard/auto-routing": "workspace:*"
+    "@wrenyard/auto-routing": "workspace:*",
+    "@wrenyard/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

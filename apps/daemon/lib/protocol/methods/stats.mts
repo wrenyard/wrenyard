@@ -160,7 +160,11 @@ export interface StatsWindowSummary {
 
 export interface TaskRunLedgerRow {
   task_run_id: string
+  /** Whether this run is a dispatched task or an in-session auxiliary run. */
+  kind: 'task' | 'auxiliary'
   task: string
+  /** Auxiliary-only: the auxiliary role that ran (document, todo, vcs, ...). */
+  role?: string
   /** Exact persisted execution project; present only when nonblank. */
   project?: string
   source: 'builtin' | 'project' | 'unknown'
@@ -398,10 +402,12 @@ export const statsSummaryResultSchema = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['task_run_id', 'task', 'source', 'status', 'created_at', 'usage'],
+        required: ['task_run_id', 'kind', 'task', 'source', 'status', 'created_at', 'usage'],
         properties: {
           task_run_id: { type: 'string' },
+          kind: { enum: ['task', 'auxiliary'] },
           task: { type: 'string' },
+          role: { type: 'string' },
           project: { type: 'string' },
           source: { enum: ['builtin', 'project', 'unknown'] },
           status: { type: 'string' },

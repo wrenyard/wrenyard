@@ -32,6 +32,31 @@ export interface RunRecordTiming {
   finishedAt?: string
 }
 
+/**
+ * Plain input for {@link toAuxiliaryRunRecord}. The auxiliary loop hands this to
+ * the host `recordAuxiliaryRun` port at the end of every finished auxiliary run;
+ * the session engine turns it into a {@link RunRecord} and forwards it to the
+ * daemon sink. Carries no persistence detail so every producer maps its own run
+ * state onto it.
+ */
+export interface AuxiliaryRunRecordInput {
+  /** Run record id: a unique id for this auxiliary run. */
+  id: string
+  /** Auxiliary role this run served (document, todo, vcs, project, ...). */
+  role: string
+  /** The session that owns this auxiliary run. */
+  callerSessionId: string
+  status: string
+  /** The route the run was resolved to, when known. */
+  route?: { provider?: string; model?: string; effort?: string }
+  usage?: TaskUsage
+  /** ISO timestamp the run started. */
+  startedAt: string
+  /** ISO timestamp the run finished. */
+  finishedAt: string
+  summary?: string
+}
+
 export interface RunRecord {
   id: string
   kind: RunRecordKind

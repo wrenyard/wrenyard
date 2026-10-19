@@ -12,7 +12,9 @@ import {
 } from '@wrenyard/session'
 import { ProjectManager } from '../../core/project/manager.mts'
 import { runGitSync } from '../../core/vcs/index.mts'
-import { readGlobalTaskSettings, type TaskContext } from '@wrenyard/task'
+import { getDb } from '../../db/connection.mts'
+import { AuxiliaryRunStore } from '../../db/stores/auxiliary-run-store.mts'
+import { readGlobalTaskSettings, toAuxiliaryRunRecord, type TaskContext } from '@wrenyard/task'
 import { isTaskRunRejection, type TaskService } from '../../core/task/service.mts'
 import { METHOD_NOT_FOUND, ProtocolError } from '../../protocol/errors.mts'
 import { describeMethod } from '../../protocol/registry.mts'
@@ -210,6 +212,10 @@ function declaredEnvironmentTools(configPath: string | undefined): readonly stri
 export function createDaemonSessionHost(options: DaemonSessionHostOptions): SessionHost {
   const { stateRoot, taskService } = options
   const projects = new ProjectManager({ workspaceRoot: options.workspaceRoot })
+  // One row per finished auxiliary run, success or failure, straight into the
+  // stats store; the session package stays free of any store import. The db is
+  // resolved lazily so host construction never depends on init order.
+  const auxiliaryRunStoreOf = (): AuxiliaryRunStore => new AuxiliaryRunStore(getDb())
   const listProjects = async (): Promise<ProjectInfo[]> => projects.listProjects().map(project => ({
     id: project.name,
     workspaceDir: `projects/${project.name}`,
@@ -232,6 +238,7 @@ export function createDaemonSessionHost(options: DaemonSessionHostOptions): Sess
     beginRouteAttempt: options.beginRouteAttempt,
     reportRouteFault: options.reportRouteFault,
     completeRouteAttempt: options.completeRouteAttempt,
+    recordAuxiliaryRun: (input) => auxiliaryRunStoreOf().insert(toAuxiliaryRunRecord(input)),
     /**
      * Read-only rank-1 preview of every auxiliary role. Reuses the injected
      * selector and the same provider catalog `provider.list` serves; a role with
