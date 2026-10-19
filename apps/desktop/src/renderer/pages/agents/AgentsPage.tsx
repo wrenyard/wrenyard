@@ -362,6 +362,7 @@ function insertMention(
 
 /** The group composer, roster chips and explicit wake feedback. */
 function GroupComposer(props: {
+  agents: ReturnType<typeof useAgentsQuery>;
   bots: readonly AgentBot[];
   transcript: GroupTranscript;
   draft: string;
@@ -411,6 +412,11 @@ function GroupComposer(props: {
 
   return (
     <div className="mx-auto w-full max-w-3xl">
+      {props.agents.isError && (
+        <div className="mb-2">
+          <QueryError query={props.agents} title={PAGE_TITLE} />
+        </div>
+      )}
       <PromptInput
         value={props.draft}
         onValueChange={props.onDraftChange}
@@ -422,7 +428,12 @@ function GroupComposer(props: {
       />
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <span>提及</span>
-        {enabledBots.length === 0 ? (
+        {props.agents.isPending ? (
+          <span className="flex items-center gap-2" role="status" aria-label="加载机器人">
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-4 w-16" />
+          </span>
+        ) : props.agents.isError ? null : enabledBots.length === 0 ? (
           <span>没有启用的机器人</span>
         ) : (
           enabledBots.map((bot) => (
@@ -462,6 +473,7 @@ function GroupComposer(props: {
 
 /** Group mode: canonical transcript plus the group composer. */
 function GroupView(props: {
+  agents: ReturnType<typeof useAgentsQuery>;
   bots: readonly AgentBot[];
   draft: string;
   onDraftChange: (value: string) => void;
@@ -472,6 +484,7 @@ function GroupView(props: {
       <GroupTranscriptView transcript={transcript} />
       <div className="shrink-0 border-t bg-background px-4 py-3">
         <GroupComposer
+          agents={props.agents}
           bots={props.bots}
           transcript={transcript}
           draft={props.draft}
@@ -679,6 +692,7 @@ export function AgentsPage() {
           <QueryError query={agents} title={PAGE_TITLE} />
         ) : mode === 'group' ? (
           <GroupView
+            agents={agents}
             bots={bots}
             draft={groupDraft}
             onDraftChange={setGroupDraft}
