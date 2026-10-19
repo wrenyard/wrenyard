@@ -192,7 +192,6 @@ const quotaChanged = createVoidEmitter();
 const updateChanged = createVoidEmitter();
 const activityChanged = createEmitter<ActivityStatusSnapshot>();
 const notificationShow = createEmitter<AppNotification>();
-const notificationsChanged = createVoidEmitter();
 const preferencesChanged = createEmitter<DesktopPreferences>();
 
 let resolvedAppearance: ResolvedAppearance = { ...INITIAL_APPEARANCE };
