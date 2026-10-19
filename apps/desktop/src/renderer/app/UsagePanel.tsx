@@ -14,11 +14,12 @@ import { consumeActivityPanelProvider } from '@/renderer/lib/activity-panel';
 import { useActiveSession } from '@/renderer/lib/navigation';
 import { shell } from '@/renderer/lib/desktop';
 import { getSessionBridge } from '@/renderer/lib/session';
-import { useQuotaFocus } from '@/renderer/lib/statusbar';
+import { useQuotaFocus } from '@/renderer/lib/quota-focus';
 import type { LedgerEvent } from '@/renderer/pages/session/model/types';
 import { fold } from '@/renderer/pages/session/model/fold';
 import { SessionUsageProvider, useComposerSelection, useSessionUsage } from '@/renderer/pages/session/state/session-usage';
-import { useSessionUsagePanelData, SessionUsagePanel } from '@/renderer/pages/session/components/status/SessionStatusItems';
+import { useSessionUsagePanelData } from '@/renderer/pages/session/components/usage/useSessionUsagePanelData';
+import { SessionUsagePanel } from '@/renderer/pages/session/components/usage/SessionUsagePanel';
 import { ContextBreakdown } from '@/renderer/pages/session/components/usage/ContextBreakdown';
 import { QuotaPanel } from '@/renderer/app/statusbar/QuotaPanel';
 
