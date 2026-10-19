@@ -3,9 +3,9 @@
  * list of its step rows. The summary shows a live label while an item runs.
  */
 import { useState } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ListChecks } from 'lucide-react';
 import { cn } from 'cn';
-import { Spinner } from '@/renderer/components/ui/spinner';
+import { Elapsed } from '@/renderer/components/elapsed';
 import {
   Collapsible,
   CollapsibleContent,
@@ -13,6 +13,8 @@ import {
 } from '@/renderer/components/ui/collapsible';
 import { CALL_ROLE_LABEL, materialTitle } from '../../model/describe.js';
 import type { ActionModel, CallModel, ContextItem, ReasoningModel } from '../../model/types.js';
+import { LiveGlyph } from '../live-glyph.js';
+import { MorphText } from '../morph-text.js';
 import { ActionRow } from './ActionCard.js';
 import { ActivityRow } from './ActivityRow.js';
 import { AuxiliaryCallRow, ReasoningRow } from './CallRow.js';
@@ -56,16 +58,22 @@ function summary(items: readonly ActivityItem[]): string | undefined {
   return parts.length === 0 ? undefined : parts.join('，');
 }
 
+/** Thinking verbs of a reasoning step, picked by step index so they are stable. */
+const THINKING_VERBS = ['思考中…', '斟酌中…', '推敲中…', '琢磨中…', '梳理中…'];
+
 /** The group's running item and the label shown in its place. */
 function liveItem(items: readonly ActivityItem[]): { label: string } | undefined {
+  let reasoning = 0;
   for (const item of items) {
-    if (item.kind === 'reason' || item.kind === 'call') {
+    if (item.kind === 'reason') {
+      const step = item.call.cycle ?? reasoning;
+      reasoning += 1;
       if (item.call.status !== 'running') continue;
-      return {
-        label: item.kind === 'reason'
-          ? '正在思考…'
-          : `正在${CALL_ROLE_LABEL[item.call.role] ?? item.call.role}…`,
-      };
+      return { label: THINKING_VERBS[step % THINKING_VERBS.length] ?? THINKING_VERBS[0] };
+    }
+    if (item.kind === 'call') {
+      if (item.call.status !== 'running') continue;
+      return { label: `正在${CALL_ROLE_LABEL[item.call.role] ?? item.call.role}…` };
     }
     if (item.kind === 'action' && item.action.status === 'running') {
       return { label: `正在执行：${item.action.title}` };
@@ -103,14 +111,28 @@ export interface ActivityGroupProps {
   sessionId?: string;
   /** Cancel one dispatched task run; rejects when the daemon refuses. */
   onCancelTask: (taskRunId: string) => Promise<void>;
+  /** This group is the turn's live line, so its header tells the current step. */
+  live?: boolean;
+  /** Status text shown on the live line while no item of the group runs. */
+  fallbackLabel?: string;
+  /** Start of the task run whose elapsed time the live line shows. */
+  taskStartedAt?: string;
 }
 
 /** One collapsed stretch of agent work. */
-export function ActivityGroup({ items, sessionId, onCancelTask }: ActivityGroupProps) {
+export function ActivityGroup({
+  items,
+  sessionId,
+  onCancelTask,
+  live = false,
+  fallbackLabel,
+  taskStartedAt,
+}: ActivityGroupProps) {
   const [open, setOpen] = useState(false);
   const summaryText = summary(items);
-  const live = liveItem(items);
+  const running = liveItem(items);
   const failed = failedCount(items);
+  const runningLabel = running?.label ?? fallbackLabel ?? '';
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger
@@ -121,16 +143,20 @@ export function ActivityGroup({ items, sessionId, onCancelTask }: ActivityGroupP
           />
         )}
       >
-        {live !== undefined ? (
+        {live ? (
           <>
-            <Spinner className="size-3.5 shrink-0" />
-            <span className="shimmer truncate">{live.label}</span>
-            {summaryText !== undefined && <span className="truncate">{` · ${summaryText}`}</span>}
+            <LiveGlyph />
+            <MorphText className="shimmer truncate" text={runningLabel} />
+            {taskStartedAt !== undefined && <Elapsed start={taskStartedAt} className="tabular-nums" />}
           </>
         ) : (
-          <span className="truncate">{summaryText}</span>
+          <>
+            <ListChecks className="size-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
+            <span className="truncate">{summaryText}</span>
+            {running !== undefined && <span className="truncate text-muted-foreground/70">{' · 1 项进行中'}</span>}
+            {failed > 0 && <span className="shrink-0 text-destructive">{` · ${failed} 项失败`}</span>}
+          </>
         )}
-        {failed > 0 && <span className="shrink-0 text-destructive">{` · ${failed} 项失败`}</span>}
         <ChevronRight className={cn('size-3.5 shrink-0 transition-transform', open && 'rotate-90')} />
       </CollapsibleTrigger>
       <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-150 data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0">

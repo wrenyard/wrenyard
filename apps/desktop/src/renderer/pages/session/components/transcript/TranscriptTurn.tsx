@@ -3,13 +3,11 @@
  * user bubble, replies as plain prose, each stretch of agent work folded into
  * one muted summary line, visible errors, the running line and a hover footer.
  */
-import type { ReactNode } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { cn } from 'cn';
 import { AppMarkdown } from '@/renderer/components/app-markdown';
 import { Elapsed } from '@/renderer/components/elapsed';
 import { StatusBadge } from '@/renderer/components/status-badge';
-import { Spinner } from '@/renderer/components/ui/spinner';
 import { formatTokenCount } from '@/renderer/lib/format';
 import {
   DISPATCH_TERMINAL_LABEL,
@@ -23,8 +21,9 @@ import {
 import type { TurnWaitingState } from '../../model/describe.js';
 import type { ActionModel, CallModel, ErrorItem, ReplyModel, TurnModel } from '../../model/types.js';
 import { MediaAttachments, fromSessionFile } from '../MediaAttachments.js';
-import { InterruptButton } from '../conversation/TurnActivity.js';
 import { HoverTime } from '../conversation/HoverTime.js';
+import { LiveGlyph } from '../live-glyph.js';
+import { MorphText } from '../morph-text.js';
 import { ActivityGroup, groupId, type ActivityItem } from './ActivityGroup.js';
 
 export interface TranscriptTurnProps {
@@ -98,6 +97,12 @@ function ErrorRow({ error }: { error: ErrorItem }) {
   );
 }
 
+/** One body block: a folded activity group, a prose reply or an error line. */
+type BodyBlock =
+  | { kind: 'group'; items: ActivityItem[] }
+  | { kind: 'reply'; reply: ReplyModel }
+  | { kind: 'error'; error: ErrorItem };
+
 type TranscriptEntry =
   | { kind: 'activity'; item: ActivityItem }
   | { kind: 'reply'; reply: ReplyModel }
@@ -167,7 +172,7 @@ function transcriptEntries(turn: TurnModel): TranscriptEntry[] {
 }
 
 /** One turn as a chronological transcript. */
-export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask, waiting }: TranscriptTurnProps) {
+export function TranscriptTurn({ turn, sessionId, onCancelTask, waiting }: TranscriptTurnProps) {
   const attachments = (turn.user.attachments ?? []).map(fromSessionFile);
   const tokens = tokenSummary(turn);
   // The implementation phase is timed from the task run it opened, separate
@@ -178,13 +183,11 @@ export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask, wai
   const terminal = turn.actions.some((action) => action.kind === 'dispatch') ? dispatchTerminal(turn) : undefined;
 
   // A maximal run of consecutive activity items becomes one summary group.
-  const body: ReactNode[] = [];
+  const body: BodyBlock[] = [];
   let run: ActivityItem[] = [];
   const flush = (): void => {
     if (run.length === 0) return;
-    body.push(
-      <ActivityGroup key={groupId(run[0]!)} items={run} sessionId={sessionId} onCancelTask={onCancelTask} />,
-    );
+    body.push({ kind: 'group', items: run });
     run = [];
   };
   for (const entry of transcriptEntries(turn)) {
@@ -193,16 +196,24 @@ export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask, wai
       continue;
     }
     flush();
-    if (entry.kind === 'reply') {
-      body.push(<ReplyBlock key={`${entry.reply.at}:${entry.reply.cycle ?? 0}`} reply={entry.reply} />);
-    } else {
-      body.push(<ErrorRow key={`${entry.error.at}:${entry.error.stage}`} error={entry.error} />);
-    }
+    if (entry.kind === 'reply') body.push({ kind: 'reply', reply: entry.reply });
+    else body.push({ kind: 'error', error: entry.error });
   }
   flush();
 
+  // A running turn shows exactly one live line: the header of its trailing
+  // group, or a standalone line when the body ends with a reply, an error or
+  // nothing at all. No other line spins and the live line has no controls.
+  const trailing = body[body.length - 1];
+  const liveGroup = turn.status === 'running' && trailing?.kind === 'group' ? body.length - 1 : -1;
+  const fallbackLabel = waiting !== undefined
+    ? waitingStatusText(waiting)
+    : taskRun === undefined ? turnStatusText(turn) : `${TASK_RUN_PHASE_LABEL}…`;
+  const taskStartedAt = taskRun?.startedAt;
+  const footerInFlow = turn.status === 'failed' || turn.status === 'interrupted';
+
   return (
-    <div className="group/turn flex flex-col gap-3">
+    <div className="group/turn relative flex flex-col gap-3">
       <div className="group/user flex justify-end">
         <HoverTime
           value={turn.user.at}
@@ -216,25 +227,42 @@ export function TranscriptTurn({ turn, sessionId, onInterrupt, onCancelTask, wai
         </div>
       </div>
 
-      {body}
+      {body.map((block, index) => {
+        if (block.kind === 'group') {
+          return (
+            <ActivityGroup
+              key={groupId(block.items[0]!)}
+              items={block.items}
+              sessionId={sessionId}
+              onCancelTask={onCancelTask}
+              live={index === liveGroup}
+              fallbackLabel={fallbackLabel}
+              taskStartedAt={taskStartedAt}
+            />
+          );
+        }
+        if (block.kind === 'reply') {
+          return <ReplyBlock key={`${block.reply.at}:${block.reply.cycle ?? 0}`} reply={block.reply} />;
+        }
+        return <ErrorRow key={`${block.error.at}:${block.error.stage}`} error={block.error} />;
+      })}
 
-      {turn.status === 'running' ? (
+      {turn.status === 'running' && liveGroup < 0 ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner className="size-3.5" />
-          <span className={waiting === undefined ? 'shimmer' : undefined}>
-            {waiting !== undefined
-              ? waitingStatusText(waiting)
-              : taskRun === undefined ? turnStatusText(turn) : `${TASK_RUN_PHASE_LABEL}…`}
-          </span>
-          {taskRun !== undefined && <Elapsed start={taskRun.startedAt} className="tabular-nums" />}
-          <InterruptButton className="ml-auto" turn={turn} onInterrupt={onInterrupt} />
+          <LiveGlyph />
+          <MorphText className="shimmer truncate" text={fallbackLabel} />
+          {taskStartedAt !== undefined && <Elapsed start={taskStartedAt} className="tabular-nums" />}
         </div>
       ) : null}
 
       <div
         className={cn(
           'flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground tabular-nums transition-opacity',
-          !(turn.status === 'failed' || turn.status === 'interrupted') && 'opacity-0 group-hover/turn:opacity-100',
+          // A hidden footer is taken out of the flow so it leaves no empty band
+          // between this turn and the next one.
+          footerInFlow
+            ? undefined
+            : 'pointer-events-none absolute inset-x-0 top-full opacity-0 group-hover/turn:opacity-100',
         )}
       >
         {(turn.status === 'failed' || turn.status === 'interrupted') && (
