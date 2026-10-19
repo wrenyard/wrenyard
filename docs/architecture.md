@@ -108,6 +108,37 @@ policy: a local circuit-admission refusal from the Gateway does not consume the
 transport's same-route upstream retry budget, and a bounded, cancellable wait
 honours the route's retry-after hint.
 
+## Routing exclusions
+
+Global model and provider exclusions live at the config root under
+`routing.exclude`:
+
+```json
+{
+  "routing": {
+    "exclude": {
+      "models": ["provider/model"],
+      "providers": ["provider"]
+    }
+  }
+}
+```
+
+Both entries are arrays of ids: `models` accepts bare model ids or unified
+`provider/model` ids, `providers` accepts bare provider ids. Exclusions
+configured for one specific task stay in that task's own settings and keep
+their names and behaviour; only the machine-wide exclusions use
+`routing.exclude`.
+
+Earlier builds stored the machine-wide lists under
+`tasks.settings.global.dispatch.excludeModelIds` / `excludeProviderIds`. On the
+first read after upgrading, the daemon moves those values into
+`routing.exclude` — values already at `routing.exclude` come first, the legacy
+entries are appended after them, and duplicates are removed while keeping
+order — deletes the old keys, writes the configuration back in a single atomic
+write and logs one line. A configuration that has already been migrated is left
+byte-identical.
+
 ## State and distribution
 
 Managed provider keys live in `<XDG_CONFIG_HOME or ~/.config>/wrenyard/providers/auth.json`.
