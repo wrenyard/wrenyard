@@ -48,8 +48,6 @@ import type {
   TaskDefinitionDescribeResult,
   TaskDefinitionListParams,
   TaskDefinitionListResult,
-  TaskSettingsRuntimesParams,
-  TaskSettingsRuntimesResult,
   TaskRunCancelParams,
   TaskRunCancelResult,
   TaskRunCreateParams,
@@ -261,11 +259,6 @@ export class ForemanClient {
   }
 
   readonly task = {
-    settings: {
-      runtimes: (params: TaskSettingsRuntimesParams): Promise<TaskSettingsRuntimesResult> => {
-        return this.rpc.request<TaskSettingsRuntimesResult>('task.settings.runtimes', params)
-      },
-    },
     definition: {
       list: (params: TaskDefinitionListParams = {}): Promise<TaskDefinitionListResult> => {
         return this.rpc.request<TaskDefinitionListResult>('task.definition.list', params)

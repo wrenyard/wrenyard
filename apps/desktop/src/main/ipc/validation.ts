@@ -13,7 +13,7 @@ import type {
   TaskSettingsSaveRequest,
 } from '../../shell-contract.js';
 
-export const TASK_SETTINGS_PATCH_KEYS = new Set(['mode', 'explicit_runtime', 'timeout_ms', 'automatic']);
+export const TASK_SETTINGS_PATCH_KEYS = new Set(['timeout_ms', 'automatic']);
 export const TASK_SETTINGS_AUTOMATIC_KEYS = new Set([
   'expected_tps',
   'minimum_tps',
@@ -51,23 +51,6 @@ export function isFinitePositiveNumber(value: unknown): boolean {
 
 export function isBoundedString(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max;
-}
-
-export function validateExplicitReferenceValue(explicitReference: unknown): void {
-  if (explicitReference === undefined || explicitReference === null) return;
-  if (!isBoundedPlainObject(explicitReference)) throw new Error('显式运行时引用无效');
-  const kind = explicitReference.kind;
-  if (kind === 'target') {
-    for (const field of Object.keys(explicitReference)) {
-      if (field !== 'kind' && field !== 'target') throw new Error('显式运行时引用无效');
-    }
-    const target = explicitReference.target;
-    if (typeof target !== 'string' || !target || target.length > TASK_SETTINGS_STRING_MAX || TASK_SETTINGS_CONTROL_CHARS.test(target)) {
-      throw new Error('显式运行时引用无效');
-    }
-    return;
-  }
-  throw new Error('显式运行时引用无效');
 }
 
 export function validateAutomaticDispatch(automatic: unknown, allowFieldReset = false): void {
@@ -139,9 +122,6 @@ export function validateTaskSettingsSaveRequest(value: unknown): TaskSettingsSav
   for (const key of Object.keys(patch)) {
     if (!TASK_SETTINGS_PATCH_KEYS.has(key)) throw new Error('任务设置内容无效');
   }
-  const mode = patch.mode;
-  if (mode !== undefined && mode !== null && mode !== 'automatic' && mode !== 'explicit') throw new Error('运行时模式无效');
-  validateExplicitReferenceValue(patch.explicit_runtime);
   const timeoutMs = patch.timeout_ms;
   if (timeoutMs !== undefined && timeoutMs !== null) {
     if (typeof timeoutMs !== 'number' || !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('超时设置无效');

@@ -1,14 +1,11 @@
 import type {
   TaskResolvedDispatch,
-  TaskSettingsExplicitReference,
   TaskSettingsLayer,
-  TaskSettingsMode,
   TaskSettingsPatch,
   TaskSettingsSnapshot,
   TaskSettingsTaskRow,
 } from '@/shell-contract';
 import {
-  ERR_RUNTIME_REQUIRED,
   ERR_TIMEOUT_INVALID,
   TIMEOUT_INHERIT_PREFIX,
   TIMEOUT_NOT_SET,
@@ -121,37 +118,13 @@ export function resolvedTaskLabel(
 
 /** Title-band runtime line: clean display-label identity on success only. */
 export function taskRuntimeLine(row: TaskSettingsTaskRow): string {
-  const mode = row.effective.mode.value;
-  const resolved = mode === 'automatic' ? row.automatic_selection?.resolved : row.explicit?.resolved;
-  return resolvedTaskLabel(resolved) ?? '';
+  return resolvedTaskLabel(row.automatic_selection?.resolved) ?? '';
 }
 
 /** First structured resolution-failure message on the row, or null when none. */
 export function taskResolutionFailureMessage(row: TaskSettingsTaskRow): string | null {
   const issue = row.issues.find((candidate) => candidate.resolutionFailure !== undefined);
   return issue?.resolutionFailure?.message ?? null;
-}
-
-/** Render text for a stored explicit reference: the inline target. */
-export function explicitReferenceText(reference: TaskSettingsExplicitReference | null | undefined): string {
-  if (!reference) return '';
-  return reference.target;
-}
-
-/** Inline canonical target from the trimmed input. */
-export function referenceFromRuntimeInput(value: string): TaskSettingsExplicitReference {
-  const trimmed = value.trim();
-  if (trimmed === '') throw new Error(ERR_RUNTIME_REQUIRED);
-  return { kind: 'target', target: trimmed };
-}
-
-export function explicitReferencesEqual(
-  left: TaskSettingsExplicitReference | null | undefined,
-  right: TaskSettingsExplicitReference | null | undefined,
-): boolean {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  return left.target === right.target;
 }
 
 /** ms -> whole-seconds display text ('' when no override at this layer). */
@@ -187,27 +160,15 @@ export function timeoutHint(row: TaskSettingsTaskRow): TimeoutHint {
 }
 
 /**
- * Builds the per-task layer patch from the visible controls. The mode baseline
- * is the effective two-mode value, so saving an unrelated field never silently
- * pins a mode. Timeout is entered in whole seconds and converted back to ms.
+ * Builds the per-task layer patch from the visible controls. Timeout is entered
+ * in whole seconds and converted back to ms.
  */
 export function buildLayerPatch(
   row: TaskSettingsTaskRow,
-  mode: TaskSettingsMode,
-  runtimeValue: string,
   timeoutValue: string,
 ): TaskSettingsPatch {
   const layer = row.user_task;
-  const modeChanged = row.effective.mode.value !== mode;
   const patch: TaskSettingsPatch = {};
-  if (modeChanged) patch.mode = mode;
-  if (mode === 'explicit') {
-    const runtime = referenceFromRuntimeInput(runtimeValue);
-    if (!explicitReferencesEqual(row.effective.explicit_runtime.value, runtime)) patch.explicit_runtime = runtime;
-  } else if (modeChanged && layer.explicit_runtime) {
-    // Switching away from explicit clears only this layer's stored reference.
-    patch.explicit_runtime = null;
-  }
   const timeout = secondsToMilliseconds(timeoutValue);
   if ((layer.timeout_ms ?? null) !== timeout) patch.timeout_ms = timeout;
   return patch;
@@ -216,7 +177,7 @@ export function buildLayerPatch(
 /** Field-level reset of every writable field present on this layer. */
 export function resetPatch(layer: TaskSettingsLayer): TaskSettingsPatch {
   const patch: TaskSettingsPatch = {};
-  for (const field of ['mode', 'explicit_runtime', 'timeout_ms', 'automatic'] as const) {
+  for (const field of ['timeout_ms', 'automatic'] as const) {
     if (layer[field] !== undefined) patch[field] = null as never;
   }
   return patch;

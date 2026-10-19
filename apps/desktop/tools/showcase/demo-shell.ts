@@ -853,8 +853,6 @@ function instructionTemplate(): TaskSettingsInstructionTemplate {
 function effectiveSettings(): TaskSettingsEffective {
   return {
     routing_weights: { value: { price: 0.3, speed: 0.3, quota: 0.2, intelligence: 0.2 }, source: 'system' },
-    mode: { value: 'automatic', source: 'system' },
-    explicit_runtime: { value: null, source: 'system' },
     timeout_ms: { value: TASK_TIMEOUT_MS, source: 'system' },
     automatic: {
       expected_tps: { value: null, source: 'system' },

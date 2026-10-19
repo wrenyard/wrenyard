@@ -67,10 +67,8 @@ adapter paths belong in your own file.
     "default":    { "provider": "<provider>", "model": "<model>", "reasoningEffort": "high" },
     "simple":     { "provider": "<provider>", "model": "<model>", "reasoningEffort": "medium" },
     "visual":     { "provider": "<provider>", "model": "<model>", "reasoningEffort": "high" },
-    "acceptance": { "provider": "<provider>", "model": "<computer-use-model>", "reasoningEffort": "high",
-                    "target": "<provider>/<model>:<client>" },
-    "judgment":   { "provider": "<provider>", "model": "<strong-general-model>", "reasoningEffort": "high",
-                    "target": "<provider>/<model>:<client>" }
+    "acceptance": { "provider": "<provider>", "model": "<computer-use-model>", "reasoningEffort": "high" },
+    "judgment":   { "provider": "<provider>", "model": "<strong-general-model>", "reasoningEffort": "high" }
   },
 
   "concurrency": {
@@ -310,12 +308,9 @@ example `simple`, `visual`).
   operation components. Recommended: a model strong at computer use.
 
 Each entry carries `provider`, `model` and `reasoningEffort` (used for session
-turns) and may carry an optional `target`, a registered run target of the form
-`<provider>/<model>:<client>`. Task runs (verify, review, acceptance) use
-`target` as an explicit selection; without it they use automatic routing, and the
-bot logs `routing.auto` once per bot. Session turns always use
-provider/model/reasoningEffort. A target that is not registered and available
-parks the item rather than guessing.
+turns). Tasks (verify, review, acceptance) use automatic routing, and the bot
+logs `routing.auto` once per bot. Session turns always use
+provider/model/reasoningEffort.
 
 ## 9. Dry run vs live
 
@@ -372,9 +367,6 @@ file). The real config and state homes are never written.
 
 ```bash
 node tools/bot-demo/run.mjs --session-model <provider>/<model>/<effort> \
-  [--judgment-target <provider>/<model>:<client>] \
-  [--acceptance-target <provider>/<model>:<client>] \
-  [--task-target <provider>/<model>:<client>] \
   [--provider-config-from <dir>] \
   [--timeout-minutes 30] [--hold-minutes 0] [--keep]
 ```
@@ -382,9 +374,6 @@ node tools/bot-demo/run.mjs --session-model <provider>/<model>/<effort> \
 | Flag | Meaning |
 | --- | --- |
 | `--session-model` | Required. `<provider>/<model>/<effort>` for the session turns. |
-| `--judgment-target` | Optional explicit run target for `bot-verify`/`bot-review`. |
-| `--acceptance-target` | Optional explicit run target for acceptance. |
-| `--task-target` | Optional explicit run target for the work session's dispatched builtin `edit`, `test` and `explore` runs. It is written as per-task explicit runtime settings (`tasks.settings.byTask` with `selection_mode: "explicit"` and `explicit_runtime: { kind: "target", target }`) into the temp config home only. |
 | `--provider-config-from` | Copy only the provider credential/runtime subtrees the daemon needs for model access into the temp config home; contents are never printed. |
 | `--timeout-minutes` | Overall wall-clock budget; default 30. |
 | `--hold-minutes` | Keep the demo daemon up for this many minutes *after* the final item JSON, health JSON and assertions are printed, so the Bot page can be inspected in the final state. Ends early on `SIGINT`/`SIGTERM`. Default 0. |

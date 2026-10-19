@@ -604,8 +604,6 @@ export const taskRunEventsResultSchema = {
 
 // ─── task.settings.snapshot / task.settings.save / task.run invocation ───────
 
-export type TaskSettingsMode = 'automatic' | 'explicit'
-
 export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'premium'
 export type TaskSettingsCapability = 'text' | 'image'
 export type TaskSettingsReasoningEffort = ReasoningEffort
@@ -620,20 +618,13 @@ export type TaskSettingsSourceLayer =
 
 /** One exact resolved runtime triple used only where automatic selection or
  *  resolved provider readiness genuinely needs client/provider/model. Never a
- *  user selection: explicit mode stores a structural reference instead, and
- *  execution resolves it to a canonical run target. */
+ *  user selection; execution resolves the automatic selection to a canonical
+ *  run target. */
 export interface TaskSettingsRuntimeTriple {
   client: string
   provider: string
   model: string
 }
-
-/**
- * Structural explicit selection stored by Task settings. Explicit mode names
- * an inline exact run target. A resolved client/provider/model triple is never
- * stored or copied back as the selection.
- */
-export type TaskSettingsExplicitReference = { kind: 'target'; target: string }
 
 /** JSON-safe snake_case automatic dispatch fields mirroring TaskDispatchRequirements. */
 export interface TaskSettingsAutomaticDispatch {
@@ -662,8 +653,6 @@ export type TaskSettingsAutomaticPatch = {
 
 /** JSON-safe view of one editable settings layer (user global, user per-task, or invocation). */
 export interface TaskSettingsLayer {
-  mode?: TaskSettingsMode
-  explicit_runtime?: TaskSettingsExplicitReference | null
   timeout_ms?: number | null
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null
   /** Global-only automatic scoring weights; null clears them. All four numeric
@@ -682,8 +671,6 @@ export interface TaskSettingsRoutingWeights {
 
 /** Field-level save patch. `null` deletes that field only at the selected layer. */
 export interface TaskSettingsPatch {
-  mode?: TaskSettingsMode | null
-  explicit_runtime?: TaskSettingsExplicitReference | null
   timeout_ms?: number | null
   automatic?: TaskSettingsAutomaticPatch | null
   /** Global-only: set (full four-key object) or clear (null) routing weights. */
@@ -715,8 +702,6 @@ export interface TaskSettingsEffectiveAutomatic {
 }
 
 export interface TaskSettingsEffective {
-  mode: TaskSettingsSourcedValue<TaskSettingsMode>
-  explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitReference | null>
   timeout_ms: TaskSettingsSourcedValue<number | null>
   automatic: TaskSettingsEffectiveAutomatic
   /** Global-only routing weights; sourced exclusively from the user_global
@@ -746,20 +731,6 @@ export interface TaskSettingsValidationIssue {
   message: string
   field?: string
   resolutionFailure?: TaskResolutionFailure
-}
-
-export interface TaskSettingsRuntimeReadiness {
-  /** Exact runtime identity `client/provider/model`. */
-  runtime: string
-  client: string
-  provider: string
-  model: string
-  daemon: 'accepting' | 'unavailable' | 'unknown'
-  provider_credential: 'available' | 'missing' | 'unknown'
-  provider_live: 'available' | 'unavailable' | 'unknown'
-  quota: 'available' | 'unavailable' | 'unknown'
-  available: boolean
-  issues: TaskSettingsValidationIssue[]
 }
 
 /** One ordered, non-executing preview segment of a builtin prompt template. */
@@ -798,19 +769,6 @@ export type TaskSettingsResolvedDispatch = TaskResolvedDispatch & {
   model_display_name?: string
 }
 
-export interface TaskSettingsExplicitRow {
-  /** Stored structural selection: an inline exact run target.
-   *  Never a copied resolved client/provider/model triple. */
-  reference: TaskSettingsExplicitReference
-  /** Canonical exact run target (for example `openai/gpt-5.6-sol:codex`) when
-   *  `reference` resolves; null when it cannot resolve without fallback. */
-  resolved_target: string | null
-  /** Exact resolved dispatch of the canonical target; null while unresolved. */
-  resolved: TaskSettingsResolvedDispatch | null
-  /** Non-billable live readiness of the resolved exact runtime. */
-  readiness: TaskSettingsRuntimeReadiness | null
-}
-
 /**
  * Safe automatic-mode preview selection attached to an automatic row. The
  * resolved dispatch carries the optional privacy-safe auto_routing decision;
@@ -839,11 +797,8 @@ export interface TaskSettingsTaskRow {
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer
   effective: TaskSettingsEffective
-  /** Present when the effective mode is `explicit`; exposes the stored
-   *  structural reference and its exact resolution. */
-  explicit?: TaskSettingsExplicitRow
-  /** Present when the effective mode is `automatic` and a selection resolved;
-   *  exposes the selected automatic dispatch and safe reason. */
+/** Present when a selection resolved; exposes the selected automatic
+ *  dispatch and safe reason. */
   automatic_selection?: TaskSettingsAutomaticSelection
   /** Base→effective inheritance chain; present only when this row's effective
    *  definition was resolved from an inherited declaration. */
@@ -957,42 +912,7 @@ export interface TaskRoutingTestTasksResult {
   tasks: TaskRoutingTestTask[]
 }
 
-// ─── task.settings.runtimes ─────────────────────────────────────────────────
-
-/** Bounded runtime-discovery input for one task. Identifies the task whose
- *  declared runtime requirements gate the enumeration. An unknown task or
- *  project is an error, never an empty list. */
-export interface TaskSettingsRuntimesParams {
-  project?: string
-  task_id: string
-}
-
-/** One discoverable exact runtime target of a task, reported with its actual
- *  client/provider/model/mode and truthful readiness. `target` is the canonical
- *  `provider/model:client` dispatch target an explicit selection may name.
- *  Credentials, endpoints, and internal upstream details are never exposed. */
-export interface TaskSettingsRuntimesItem {
-  /** Canonical dispatch target `provider/model:client`. */
-  target: string
-  provider: string
-  model: string
-  client: string
-  /** Resolved route mode, omitted when resolution is unavailable. */
-  mode?: 'native' | 'gateway'
-  available: boolean
-  /** Concrete cause when unavailable; absent when available. */
-  reason?: string
-}
-
-export interface TaskSettingsRuntimesResult {
-  items: TaskSettingsRuntimesItem[]
-}
-
 // ─── task.settings schemas ───────────────────────────────────────────────────
-
-const taskSettingsModeSchema = {
-  enum: ['automatic', 'explicit'],
-} as const satisfies JsonSchema
 
 const taskSettingsIntelligenceSchema = {
   enum: ['low', 'mid', 'high', 'premium'],
@@ -1008,22 +928,6 @@ const taskSettingsReasoningEffortSchema = {
 
 const taskSettingsSourceLayerSchema = {
   enum: ['system', 'builtin', 'user_global', 'user_task', 'invocation'],
-} as const satisfies JsonSchema
-
-const taskSettingsTargetReferenceSchema = {
-  type: 'object',
-  required: ['kind', 'target'],
-  properties: {
-    kind: { const: 'target' },
-    target: { type: 'string', minLength: 1 },
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
-export const taskSettingsExplicitReferenceSchema = taskSettingsTargetReferenceSchema
-
-const taskSettingsNullableExplicitReferenceSchema = {
-  anyOf: [taskSettingsExplicitReferenceSchema, { type: 'null' }],
 } as const satisfies JsonSchema
 
 export const taskSettingsAutomaticDispatchSchema = {
@@ -1098,8 +1002,6 @@ const taskSettingsNullableRoutingWeightsSchema = {
 export const taskSettingsLayerSchema = {
   type: 'object',
   properties: {
-    mode: taskSettingsModeSchema,
-    explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
     timeout_ms: taskSettingsNullableNumberSchema,
     automatic: taskSettingsNullableAutomaticSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
@@ -1110,8 +1012,6 @@ export const taskSettingsLayerSchema = {
 export const taskSettingsLayerInputSchema = {
   type: 'object',
   properties: {
-    mode: taskSettingsModeSchema,
-    explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
     timeout_ms: taskSettingsNullableNumberSchema,
     automatic: taskSettingsNullableAutomaticSchema,
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
@@ -1122,33 +1022,11 @@ export const taskSettingsLayerInputSchema = {
 export const taskSettingsPatchSchema = {
   type: 'object',
   properties: {
-    mode: { anyOf: [taskSettingsModeSchema, { type: 'null' }] },
-    explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
     timeout_ms: taskSettingsNullableNumberSchema,
     automatic: { anyOf: [taskSettingsAutomaticPatchSchema, { type: 'null' }] },
     routing_weights: taskSettingsNullableRoutingWeightsSchema,
   },
   additionalProperties: true,
-} as const satisfies JsonSchema
-
-const taskSettingsSourcedModeSchema = {
-  type: 'object',
-  required: ['value', 'source'],
-  properties: {
-    value: taskSettingsModeSchema,
-    source: taskSettingsSourceLayerSchema,
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
-const taskSettingsSourcedExplicitReferenceSchema = {
-  type: 'object',
-  required: ['value', 'source'],
-  properties: {
-    value: taskSettingsNullableExplicitReferenceSchema,
-    source: taskSettingsSourceLayerSchema,
-  },
-  additionalProperties: false,
 } as const satisfies JsonSchema
 
 const taskSettingsSourcedNullableNumberSchema = {
@@ -1268,10 +1146,8 @@ const taskSettingsEffectiveAutomaticSchema = {
 
 const taskSettingsEffectiveSchema = {
   type: 'object',
-  required: ['mode', 'explicit_runtime', 'timeout_ms', 'automatic'],
+  required: ['timeout_ms', 'automatic'],
   properties: {
-    mode: taskSettingsSourcedModeSchema,
-    explicit_runtime: taskSettingsSourcedExplicitReferenceSchema,
     timeout_ms: taskSettingsSourcedNullableNumberSchema,
     automatic: taskSettingsEffectiveAutomaticSchema,
     routing_weights: taskSettingsSourcedNullableRoutingWeightsSchema,
@@ -1415,22 +1291,6 @@ const taskSettingsResolvedDispatchSchema = {
   },
 } as const satisfies JsonSchema
 
-const taskSettingsExplicitRowSchema = {
-  type: 'object',
-  required: ['reference', 'resolved_target', 'resolved', 'readiness'],
-  properties: {
-    reference: taskSettingsExplicitReferenceSchema,
-    resolved_target: nullableStringSchema,
-    resolved: {
-      anyOf: [taskSettingsResolvedDispatchSchema, { type: 'null' }],
-    },
-    readiness: {
-      anyOf: [taskSettingsRuntimeReadinessSchema, { type: 'null' }],
-    },
-  },
-  additionalProperties: true,
-} as const satisfies JsonSchema
-
 /** Resolved dispatch wire schema extended with the additive safe auto_routing
  *  decision and the additive Catalog display labels (backward compatible: all
  *  original fields and shape are kept). */
@@ -1466,7 +1326,6 @@ const taskSettingsTaskRowSchema = {
     builtin: taskSettingsBuiltinMetadataSchema,
     user_task: taskSettingsLayerSchema,
     effective: taskSettingsEffectiveSchema,
-    explicit: taskSettingsExplicitRowSchema,
     automatic_selection: taskSettingsAutomaticSelectionSchema,
     inheritanceChain: { type: 'array', items: taskInheritanceChainEntrySchema },
     issues: { type: 'array', items: taskSettingsValidationIssueSchema },
@@ -1606,40 +1465,6 @@ export const taskRoutingTestTasksResultSchema = {
   additionalProperties: false,
 } as const satisfies JsonSchema
 
-const taskSettingsRuntimesItemSchema = {
-  type: 'object',
-  required: ['target', 'provider', 'model', 'client', 'available'],
-  properties: {
-    target: { type: 'string', minLength: 1 },
-    provider: { type: 'string', minLength: 1 },
-    model: { type: 'string', minLength: 1 },
-    client: { type: 'string', minLength: 1 },
-    mode: { enum: ['native', 'gateway'] },
-    available: { type: 'boolean' },
-    reason: { type: 'string', minLength: 1 },
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
-export const taskSettingsRuntimesParamsSchema = {
-  type: 'object',
-  required: ['task_id'],
-  properties: {
-    project: { type: 'string', minLength: 1 },
-    task_id: { type: 'string', minLength: 1 },
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
-export const taskSettingsRuntimesResultSchema = {
-  type: 'object',
-  required: ['items'],
-  properties: {
-    items: { type: 'array', items: taskSettingsRuntimesItemSchema },
-  },
-  additionalProperties: false,
-} as const satisfies JsonSchema
-
 export const taskRunCreateParamsSchema = {
   type: 'object',
   required: ['task_id', 'project'],
@@ -1650,14 +1475,6 @@ export const taskRunCreateParamsSchema = {
     input: {},
     ctx: recordSchema,
     invocation_settings: taskSettingsLayerInputSchema,
-    // Runtime selection is expressed ONLY through these two mutually exclusive
-    // forms: `invocation_settings.mode`/'automatic' for automatic routing, and
-    // `invocation_settings.explicit_runtime` for an explicit target.
-    // Unknown top-level selection keys are rejected instead of silently
-    // ignored, so an invented selection field can never look accepted.
-    mode: taskSettingsModeSchema,
-    automatic: taskSettingsNullableAutomaticSchema,
-    explicit_runtime: taskSettingsNullableExplicitReferenceSchema,
   },
   additionalProperties: false,
 } as const satisfies JsonSchema

@@ -84,10 +84,6 @@ function migrate<T>(original: T, apply: (record: RecordValue) => void): { record
 
 function migrateLayer(layer: unknown): void {
   if (!object(layer)) return;
-  const ref = layer.explicitRuntime;
-  if (object(ref) && ref.kind === 'target' && typeof ref.target === 'string') {
-    ref.target = migrateProviderTargetId(ref.target);
-  }
   if (!object(layer.dispatch)) return;
   for (const key of ['excludeProviderIds', 'excludeModelIds', 'excludeProfileIds']) {
     const entries = layer.dispatch[key];
@@ -144,9 +140,8 @@ export function markForemanProviderMigration<T>(record: T): { record: T; changed
   });
 }
 
-/** Migrate persisted task settings provider references (explicit runtime
- *  targets and dispatch exclusions) plus the neutral root `routing.exclude`
- *  lists. Callers gate this on
+/** Migrate persisted task settings dispatch exclusions plus the neutral root
+ *  `routing.exclude` lists. Callers gate this on
  *  {@link hasForemanProviderMigrationMarker} so a legacy document migrates
  *  exactly once and later reads leave modern `anthropic` API refs untouched. */
 export function migrateForemanChatGPTReferences<T>(record: T): { record: T; changed: boolean } {

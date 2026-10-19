@@ -599,44 +599,6 @@ export function registerCoreHandlers(router: RpcRouter, options: CoreRpcHandlerO
       throw error
     }
   })
-  // Bounded read-only runtime discovery for one task: canonical
-  // `provider/model:client` targets with truthful client/provider readiness.
-  // Never selects, saves, reserves, or calls a model; it reads no user settings
-  // and mutates nothing. The public surface is the owner-only IPC channel, so
-  // every task.settings.* method is IPC-only.
-  const requireTaskSettingsDiscovery = (
-    context: unknown,
-    method: string,
-  ): TaskSettingsService => {
-    const rpcContext = coreRpcContextFromUnknown(context)
-    if (rpcContext.transport !== 'ipc') {
-      throw new ProtocolError(
-        { code: INVALID_PARAMS.code, message: `${method} is only available over IPC` },
-        { code: 'task_settings_forbidden', statusCode: 403, transport: rpcContext.transport ?? 'unknown' },
-      )
-    }
-    if (!options.taskSettings) {
-      throw new ProtocolError(
-        { code: INTERNAL_ERROR.code, message: `${method} is not available in this runtime` },
-        { code: 'task_settings_unavailable' },
-      )
-    }
-    return options.taskSettings
-  }
-  router.register('task.settings.runtimes', async (params, _message, context) => {
-    const service = requireTaskSettingsDiscovery(context, 'task.settings.runtimes')
-    try {
-      return await service.runtimes(params)
-    } catch (error) {
-      if (
-        error instanceof TaskSettingsTaskNotFoundError
-        || error instanceof TaskSettingsInvalidSettingsError
-      ) {
-        throw protocolErrorFromTaskSettingsError(error)
-      }
-      throw error
-    }
-  })
   // exec.* delegate to the injected daemon-owned shared ExecService; the RPC
   // surface never resolves a client/provider/model/mode/reasoning-effort/cwd and never
   // persists anything — the caller has already resolved all of it. IPC-only,

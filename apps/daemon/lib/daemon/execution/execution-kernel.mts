@@ -476,7 +476,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
 
     // Resolve task settings once per route attempt. The daemon TaskSettingsService
     // owns field merging and readiness; its result is authoritative: the
-    // canonical exact target (automatic or explicit) is the only launched
+    // canonical exact target chosen by automatic selection is the only launched
     // runtime, the dispatch snapshot feeds telemetry, and the effective timeout
     // is the single total task_execution deadline. exactAgentRuntime is optional
     // on the resolution contract; a null target terminates the run with no
@@ -683,7 +683,7 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
     // Bounded route retry: an automatic submission whose just-used route/pool is
     // still circuit-open with a quota/rate-limit fault and which produced no
     // structured output advances to the next eligible route, up to the cap.
-    // Every other outcome — explicit pins, any other fault state, cancellation,
+    // Every other outcome — any other fault state, cancellation,
     // an unresolvable or unchanged re-resolution, an exhausted budget — keeps
     // today's terminal behavior and surfaces the attempt's own error.
     const MAX_ROUTE_ATTEMPTS = 3
@@ -722,7 +722,6 @@ export async function executeTaskInDaemon(name: string, input: unknown, opts: Ex
           recordRouteCooldown(identity.provider, canonicalModel ?? identity.model)
         }
         const retryable = options.taskSettingsResolver !== undefined
-          && resolution?.mode === 'automatic'
           && identity !== undefined
           && structuredSummary === undefined
           && (faultKind === 'quota_exhausted' || faultKind === 'rate_limited' || timedOut)

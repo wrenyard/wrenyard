@@ -410,16 +410,10 @@ export interface BotTaskRunInput {
   input: unknown
   /**
    * The routing model the bot chose for this run (the `judgment` triple for
-   * `bot-verify`/`bot-review`, the `acceptance` triple for `test`). A caller
-   * that cannot honor an explicit model uses automatic routing instead.
+   * `bot-verify`/`bot-review`, the `acceptance` triple for `test`). Runtime
+   * selection itself stays automatic.
    */
   model?: BotModel
-  /**
-   * The routing entry's explicit canonical run target, when it has one. A
-   * runner that honors it selects exactly that target; a target the daemon
-   * cannot resolve fails the run instead of falling back to automatic routing.
-   */
-  target?: string
 }
 
 /** Terminal or still-in-flight outcome of one task run the host started. */
@@ -730,9 +724,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
   /**
    * The routing entry one task kind uses: `judgment` for `bot-verify` and
    * `bot-review`, `acceptance` for the builtin `test` task. The entry carries
-   * provider/model/reasoningEffort and an optional explicit `target`; the
-   * runner selects that target when present and otherwise uses automatic
-   * routing.
+   * only provider/model/reasoningEffort.
    */
   function routedModelFor(config: BotConfig, kind: 'judgment' | 'acceptance'): BotRoutingEntry {
     return config.routing[kind] ?? config.routing.default
@@ -740,8 +732,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
 
   /**
    * The routing entry for one item class, falling back to `default`. A session
-   * send takes only the provider/model/reasoningEffort triple, never an entry's
-   * explicit run `target`.
+   * send takes only the provider/model/reasoningEffort triple.
    */
   function routedClassModel(config: BotConfig | undefined, className: string | undefined): BotModel | undefined {
     if (config === undefined) return undefined
@@ -749,10 +740,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
     return { provider: entry.provider, model: entry.model, reasoningEffort: entry.reasoningEffort }
   }
 
-  /**
-   * Record, once per bot, that a task kind whose routing entry has no explicit
-   * `target` relies on automatic routing.
-   */
+  /** Record, once per bot, that its task runs rely on automatic routing. */
   function noteAutomaticRouting(bot: BotRecord): void {
     if (routingAutoLogged.has(bot.id)) return
     routingAutoLogged.add(bot.id)
@@ -760,7 +748,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
       botId: bot.id,
       level: 'info',
       code: 'routing.auto',
-      message: 'bot task runs use automatic routing: the routing entry has no explicit target',
+      message: 'bot task runs use automatic routing',
     })
   }
 
@@ -2335,7 +2323,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         }
       }
       const routed = routedModelFor(config, 'judgment')
-      if (routed.target === undefined) noteAutomaticRouting(bot)
+      noteAutomaticRouting(bot)
       // A verify run resumed from a park carries the user's answer so the
       // verifier can act on the clarification instead of asking again. The
       // built-in bot-verify input is strict and has no clarification field, so
@@ -2356,7 +2344,6 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
             classes: Object.keys(config.routing),
           },
           model: routed,
-          ...(routed.target === undefined ? {} : { target: routed.target }),
         },
       }
     },
@@ -2467,7 +2454,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         ? ''
         : truncateHead(await projectManager.diff({ project: item.project, worktree_id: item.worktreeId }), MAX_DIFF_CHARS)
       const routed = routedModelFor(config, 'judgment')
-      if (routed.target === undefined) noteAutomaticRouting(bot)
+      noteAutomaticRouting(bot)
       return {
         input: {
           task: 'bot-review',
@@ -2482,7 +2469,6 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
             corrections: counters.corrections ?? 0,
           },
           model: routed,
-          ...(routed.target === undefined ? {} : { target: routed.target }),
         },
       }
     },
@@ -2663,7 +2649,7 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
         ? 'computer-use' as const
         : runtimeChecks.some(check => check.surface === 'renderer') ? 'browser-use' as const : undefined
       const routed = routedModelFor(config, 'acceptance')
-      if (routed.target === undefined) noteAutomaticRouting(bot)
+      noteAutomaticRouting(bot)
       return {
         input: {
           task: 'test',
@@ -2679,7 +2665,6 @@ export function createBotHost(options: CreateBotHostOptions): BotHost {
             ...(capability === undefined ? {} : { capability }),
           },
           model: routed,
-          ...(routed.target === undefined ? {} : { target: routed.target }),
         },
       }
     },

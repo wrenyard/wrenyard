@@ -115,7 +115,6 @@ Usage:
   wrenyard task describe <task_id> [--config path] [-p project] [--json]
   wrenyard task status <task_run_id> [--config path] [--json]
   wrenyard task output <task_run_id> [--config path] [--json]
-  wrenyard task runtimes <task_id> [-p project] [--config path] [--json]
   wrenyard task doctor [--config path] [--json]
   wrenyard session list [--config path] [--json]
   wrenyard session create [--config path] [--json]

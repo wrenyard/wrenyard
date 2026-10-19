@@ -185,10 +185,9 @@ export interface TaskRunSettingsParams {
 }
 
 export interface TaskRunSettingsResolution {
-  mode: 'automatic' | 'explicit'
   /** The single exact canonical execution target the run must launch
-   *  ('<provider>/<model>:<client>'). Set only when explicit mode resolves a
-   *  reference to a canonical target. */
+   *  ('<provider>/<model>:<client>'). Populated by the automatic selection as
+   *  the only launched runtime. */
   exactAgentRuntime: string | null
   /** Resolved dispatch snapshot produced by the daemon resolver for this run. */
   dispatch: import('./core/operations/types.mts').TaskDispatchSnapshot | null
@@ -199,8 +198,6 @@ export interface TaskRunSettingsResolution {
   timeoutMs: number | null
   /** Per-field winning source layer. */
   sources: {
-    selectionMode: TaskRunSettingsLayerName
-    explicitRuntime: TaskRunSettingsLayerName
     timeoutMs: TaskRunSettingsLayerName
     automatic: Partial<Record<string, TaskRunSettingsLayerName>>
   }

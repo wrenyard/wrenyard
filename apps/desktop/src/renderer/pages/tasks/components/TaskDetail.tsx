@@ -1,22 +1,18 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { CircleHelp, RotateCcw, X } from 'lucide-react';
+import { RotateCcw, X } from 'lucide-react';
 import { Alert, AlertAction, AlertDescription } from '@/renderer/components/ui/alert';
 import { Button } from '@/renderer/components/ui/button';
 import { Input } from '@/renderer/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/renderer/components/ui/select';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { cn } from 'cn';
 import type {
-  TaskSettingsMode,
   TaskSettingsPatch,
   TaskSettingsTaskRow,
 } from '@/shell-contract';
 import * as copy from '../model/describe.js';
 import {
   buildLayerPatch,
-  explicitReferenceText,
   msToSecondsText,
   resetPatch,
   taskIdentityLabel,
@@ -51,16 +47,12 @@ export function TaskDetail({
   onError,
   onClearError,
 }: TaskDetailProps) {
-  const [mode, setMode] = useState<TaskSettingsMode>(row.effective.mode.value);
-  const [runtime, setRuntime] = useState(() => explicitReferenceText(row.effective.explicit_runtime.value));
   const [timeoutText, setTimeoutText] = useState(() => msToSecondsText(row.user_task.timeout_ms));
 
   // Re-seed the draft when the selected task changes or the page confirms a
   // successful save/reset. Background refetches and conflict reloads keep the
   // user's in-progress edits intact.
   useEffect(() => {
-    setMode(row.effective.mode.value);
-    setRuntime(explicitReferenceText(row.effective.explicit_runtime.value));
     setTimeoutText(msToSecondsText(row.user_task.timeout_ms));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row.identity, reseedNonce]);
@@ -77,7 +69,7 @@ export function TaskDetail({
 
   const save = (): void => {
     try {
-      onCommit(buildLayerPatch(row, mode, runtime, timeoutText));
+      onCommit(buildLayerPatch(row, timeoutText));
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -129,43 +121,6 @@ export function TaskDetail({
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
         <dl className="grid shrink-0 grid-cols-[minmax(5.5rem,max-content)_minmax(0,1fr)] items-start gap-x-6 gap-y-3">
-          <SettingRow label={copy.MODE_LABEL}>
-            <Select
-              value={mode}
-              onValueChange={(value) => setMode(value as TaskSettingsMode)}
-              disabled={disabled}
-            >
-              <SelectTrigger className="w-40" aria-label={copy.MODE_LABEL}>
-                <SelectValue>{(value) => copy.taskModeLabel(value as TaskSettingsMode)}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="automatic">{copy.MODE_AUTOMATIC_LABEL}</SelectItem>
-                <SelectItem value="explicit">{copy.MODE_EXPLICIT_LABEL}</SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingRow>
-
-          {mode === 'explicit' ? (
-            <SettingRow label={copy.RUNTIME_LABEL}>
-              <div className="flex w-full max-w-md min-w-0 items-center gap-1">
-                <Input
-                  className="w-full font-mono"
-                  placeholder={copy.RUNTIME_PLACEHOLDER}
-                  value={runtime}
-                  disabled={disabled}
-                  aria-label={copy.RUNTIME_LABEL}
-                  onChange={(event) => setRuntime(event.target.value)}
-                />
-                <Tooltip>
-                  <TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label={copy.RUNTIME_HELP_LABEL} />}>
-                    <CircleHelp />
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-xs">{copy.RUNTIME_HELP}</TooltipContent>
-                </Tooltip>
-              </div>
-            </SettingRow>
-          ) : null}
-
           <SettingRow label={copy.TIMEOUT_LABEL}>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <div className="flex items-center gap-2">

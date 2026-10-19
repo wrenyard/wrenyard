@@ -18,10 +18,6 @@
 //   node tools/bot-demo/run.mjs --session-model <provider>/<model>/<effort> [options]
 //
 // Options:
-//   --judgment-target <provider>/<model>:<client>     explicit run target for judgment task runs
-//   --acceptance-target <provider>/<model>:<client>   explicit run target for acceptance task runs
-//   --task-target <provider>/<model>:<client>         route the session's builtin edit/test/explore
-//                                                     runs to this registered target (temp config only)
 //   --provider-config-from <dir>                      copy provider credential/runtime subtrees into the temp config home
 //   --timeout-minutes <n>                             overall wall-clock budget (default 30)
 //   --hold-minutes <n>                                keep the daemon up for n minutes after the final
@@ -64,14 +60,6 @@ const TERMINAL_STATES = new Set(['completed', 'dismissed', 'withdrawn', 'failed'
  * terminal — the item waits for a decision — but the demo still stops there.
  */
 const STOP_STATES = new Set([...TERMINAL_STATES, 'parked'])
-/**
- * Builtin tasks whose runs `--task-target` routes. The daemon keys per-task
- * settings by the stable identity `builtin:<name>`
- * (apps/daemon/lib/config/task-settings.mts).
- */
-const TASK_TARGET_BUILTINS = ['edit', 'test', 'explore']
-/** Canonical explicit run target: `<provider>/<model>:<client>`. */
-const RUN_TARGET_PATTERN = /^[^\/\s]+\/[^:\s]+:[^:\s]+$/
 
 function log(message) {
   process.stderr.write(`[bot-demo] ${message}\n`)
@@ -85,9 +73,6 @@ function die(message) {
 function printUsage() {
   process.stderr.write(
     'Usage: node tools/bot-demo/run.mjs --session-model <provider>/<model>/<effort> [options]\n'
-    + '  --judgment-target <provider>/<model>:<client>\n'
-    + '  --acceptance-target <provider>/<model>:<client>\n'
-    + '  --task-target <provider>/<model>:<client>   (temp config home only)\n'
     + '  --provider-config-from <dir>\n'
     + '  --timeout-minutes <n>   (default 30)\n'
     + '  --hold-minutes <n>      (default 0)\n'
@@ -98,9 +83,6 @@ function printUsage() {
 function parseArgs(argv) {
   const options = {
     sessionModel: undefined,
-    judgmentTarget: undefined,
-    acceptanceTarget: undefined,
-    taskTarget: undefined,
     providerConfigFrom: undefined,
     timeoutMinutes: 30,
     holdMinutes: 0,
@@ -115,9 +97,6 @@ function parseArgs(argv) {
     }
     switch (flag) {
       case '--session-model': options.sessionModel = next(); break
-      case '--judgment-target': options.judgmentTarget = next(); break
-      case '--acceptance-target': options.acceptanceTarget = next(); break
-      case '--task-target': options.taskTarget = next(); break
       case '--provider-config-from': options.providerConfigFrom = next(); break
       case '--timeout-minutes': options.timeoutMinutes = Number(next()); break
       case '--hold-minutes': options.holdMinutes = Number(next()); break
@@ -140,9 +119,6 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(options.holdMinutes) || options.holdMinutes < 0) {
     die('--hold-minutes must be a number >= 0')
-  }
-  if (options.taskTarget !== undefined && !RUN_TARGET_PATTERN.test(options.taskTarget)) {
-    die('--task-target must look like <provider>/<model>:<client>')
   }
   options.routing = { provider: parts[0], model: parts[1], reasoningEffort: parts[2] }
   return options
@@ -324,30 +300,11 @@ function createDemoRepo(repoDir, originDir) {
 /**
  * Write the daemon config into the temp config home. Nothing outside the temp
  * root is ever touched.
- *
- * With `--task-target`, per-task explicit runtime settings are written here
- * (the daemon's own persisted format) so the work session's dispatched builtin
- * `edit`, `test` and `explore` runs bind that registered run target. The daemon
- * reads `tasks.settings.byTask["builtin:<name>"]` as a layer
- * `{ selection_mode: 'explicit', explicit_runtime: { kind: 'target', target } }`
- * (apps/daemon/lib/config/task-settings.mts, read via
- * apps/daemon/lib/daemon/services/task-settings-service.mts).
  */
-function writeDemoConfig(layout, options) {
+function writeDemoConfig(layout) {
   const config = {
     service: { enabled: true, ipc: { path: layout.ipcPath } },
     workspace: { root: layout.workspaceDir },
-  }
-  if (options.taskTarget) {
-    const explicitLayer = () => ({
-      selection_mode: 'explicit',
-      explicit_runtime: { kind: 'target', target: options.taskTarget },
-    })
-    config.tasks = {
-      settings: {
-        byTask: Object.fromEntries(TASK_TARGET_BUILTINS.map((name) => [`builtin:${name}`, explicitLayer()])),
-      },
-    }
   }
   writeFileSync(layout.configFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
 }
@@ -582,7 +539,7 @@ async function main() {
   const originMainBefore = git(layout.bareRepoDir, ['rev-parse', 'main'])
   log(`demo-origin main before: ${originMainBefore}`)
 
-  writeDemoConfig(layout, options)
+  writeDemoConfig(layout)
   seedInbox(layout)
   writeBotConfig(layout, options)
   if (options.providerConfigFrom) copyProviderSubtrees(options.providerConfigFrom, layout.configDir)

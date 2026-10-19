@@ -14,23 +14,18 @@ import { type TaskDispatchRequirements as AutoRoutingTaskDispatchRequirements, v
  * undefined), which makes the next lower defined value inherit again. Layers
  * never carry copies of defaults.
  *
- * Runtime selection is mode-driven and has exactly two modes:
- *   - `automatic` ignores any explicit reference found on lower/inherited
- *     layers (a stale reference is dropped, never validated nor resolved).
- *   - `explicit` requires one structural explicit reference (an inline target)
- *     to be effective. This module never resolves references nor checks
- *     compatibility against a catalog: it only carries the structural
- *     reference forward for the daemon to honor.
+ * Runtime selection is automatic: every Task resolves its runtime through the
+ * automatic routing path. This module never resolves references nor checks
+ * compatibility against a catalog; it only carries the structural dispatch
+ * fields forward for the daemon to honor.
  *
- * Task definitions never pin a runtime; every Task defaults to `automatic`.
- * The only per-task user selection source is the persisted
+ * Task definitions never pin a runtime; every Task defaults to automatic
+ * selection. The only per-task user selection source is the persisted
  * `tasks.settings.byTask` map (plus the user-global and invocation layers).
  * This module is dependency-light by design: it only consumes plain layer
  * shapes plus persisted `tasks.settings.global`/`tasks.settings.byTask`. It
  * never mutates configuration input.
  */
-
-export type TaskSelectionMode = 'automatic' | 'explicit'
 
 export type TaskSettingsSourceTag =
   | 'system_global'
@@ -46,9 +41,6 @@ export const TASK_SETTINGS_SOURCE_ORDER: readonly TaskSettingsSourceTag[] = [
   'user_task',
   'invocation',
 ]
-
-/** System default mode: automatic selection. */
-export const SYSTEM_DEFAULT_MODE: TaskSelectionMode = 'automatic'
 
 /** System default total execution timeout: 15 minutes. */
 export const SYSTEM_DEFAULT_TIMEOUT_MS = 15 * 60 * 1000
@@ -154,17 +146,7 @@ const GLOBAL_IGNORED_DISPATCH_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
  * Layer model
  * -------------------------------------------------------------------------- */
 
-/**
- * Structural user explicit selection. `target` is an inline runtime target.
- * This module validates the shape but never resolves references or
- * compatibility.
- */
-export type TaskExplicitRuntime = { kind: 'target'; target: string }
-
 export interface TaskSettingsLayer {
-  selectionMode?: TaskSelectionMode
-  /** Structural explicit reference, honored only in explicit mode. */
-  explicitRuntime?: TaskExplicitRuntime
   dispatch?: Partial<TaskDispatchRequirements>
   /** Total execution timeout in milliseconds. */
   timeoutMs?: number
@@ -248,16 +230,12 @@ export interface TaskSettingsLayersInput {
 }
 
 export interface EffectiveTaskSettingsSources {
-  selectionMode?: TaskSettingsSourceTag
-  explicitRuntime?: TaskSettingsSourceTag
   timeoutMs?: TaskSettingsSourceTag
   routingWeights?: TaskSettingsSourceTag
   dispatch?: Partial<Record<TaskDispatchField, TaskSettingsSourceTag>>
 }
 
 export interface EffectiveTaskSettings {
-  mode: TaskSelectionMode
-  explicitRuntime: TaskExplicitRuntime | undefined
   timeoutMs: number
   dispatch: TaskDispatchRequirements
   /** User-global routing score weights; undefined falls back to scorer defaults. */
@@ -330,37 +308,6 @@ function normalizeNonEmptyStringList(value: unknown, scope: string, label: strin
     list.push(item.trim())
   }
   return list
-}
-
-const EXPLICIT_RUNTIME_KEYS = {
-  target: ['kind', 'target'],
-} as const
-
-/**
- * Validates one explicit runtime reference. The reference must be exactly
- * `{ kind: 'target', target }` with a non-empty trimmed value; extra fields
- * are rejected.
- */
-function normalizeExplicitRuntime(raw: unknown, scope: string): TaskExplicitRuntime {
-  if (!isPlainObject(raw)) {
-    fail(scope, 'explicitRuntime must be an object reference')
-  }
-  const record = raw as Record<string, unknown>
-  const kind = record.kind
-  if (kind !== 'target') {
-    fail(scope, `explicitRuntime.kind must be "target", got ${String(kind)}`)
-  }
-  const allowed: readonly string[] = EXPLICIT_RUNTIME_KEYS.target
-  for (const key of Object.keys(record)) {
-    if (!allowed.includes(key)) {
-      fail(scope, `explicitRuntime ${kind} reference does not accept field "${key}"`)
-    }
-  }
-  const target = record.target
-  if (typeof target !== 'string' || target.trim() === '') {
-    fail(scope, 'explicitRuntime target requires a non-empty trimmed target')
-  }
-  return { kind: 'target', target: target.trim() }
 }
 
 function normalizeDispatch(
@@ -485,8 +432,6 @@ export function normalizeRoutingWeights(raw: unknown, scope: string): TaskRoutin
 }
 
 const LAYER_FIELD_ALIASES = {
-  selectionMode: ['selectionMode', 'selection_mode'],
-  explicitRuntime: ['explicitRuntime', 'explicit_runtime'],
   timeoutMs: ['timeoutMs', 'timeout_ms'],
   routingWeights: ['routingWeights', 'routing_weights'],
   environmentTools: ['environmentTools', 'environment_tools'],
@@ -513,18 +458,9 @@ export function normalizeTaskSettingsLayer(
 
   const record = raw as Record<string, unknown>
 
-  const mode = resolveAliased(record, LAYER_FIELD_ALIASES.selectionMode)
-  if (mode.value !== undefined) {
-    if (mode.value !== 'automatic' && mode.value !== 'explicit') {
-      fail(scope, `selectionMode must be "automatic" or "explicit", got ${String(mode.value)}`)
-    }
-    layer.selectionMode = mode.value
-  }
-
-  const explicitRuntime = resolveAliased(record, LAYER_FIELD_ALIASES.explicitRuntime)
-  if (explicitRuntime.value !== undefined) {
-    layer.explicitRuntime = normalizeExplicitRuntime(explicitRuntime.value, scope)
-  }
+  // Legacy `selectionMode`/`selection_mode` and `explicitRuntime`/`explicit_runtime`
+  // keys are unknown fields here: they are dropped like any other ignored key,
+  // never migrated, rewritten, or honored.
 
   const timeout = resolveAliased(record, LAYER_FIELD_ALIASES.timeoutMs)
   if (timeout.value !== undefined) {
@@ -571,13 +507,12 @@ export function normalizeTaskSettingsLayer(
  * -------------------------------------------------------------------------- */
 
 /**
- * Converts TaskConfig defaults into the builtin layer. Every Task defaults to
- * `automatic` selection: Task definitions never pin a runtime, and explicit
- * user selection belongs to user settings layers. Only timeout and dispatch
- * defaults are carried over.
+ * Converts TaskConfig defaults into the builtin layer. Every Task resolves
+ * automatically: Task definitions never pin a runtime. Only timeout and
+ * dispatch defaults are carried over.
  */
 export function taskDefaultsToSettingsLayer(taskDefaults: TaskDefaultsLike): TaskSettingsLayer {
-  const layer: TaskSettingsLayer = { selectionMode: 'automatic' }
+  const layer: TaskSettingsLayer = {}
   if (taskDefaults.timeoutMs !== undefined) {
     layer.timeoutMs = taskDefaults.timeoutMs
   }
@@ -735,15 +670,6 @@ function rightmostDefined<T>(
   return { value: undefined, source: undefined }
 }
 
-function assertExplicitReference(
-  explicitRuntime: TaskExplicitRuntime | undefined,
-  scope: string,
-): void {
-  if (explicitRuntime === undefined) {
-    fail(scope, 'explicit mode requires an explicit runtime reference (target)')
-  }
-}
-
 function assertEffectiveIntelligenceOrder(dispatch: TaskDispatchRequirements): void {
   // Compare the normalized tiers so a rejected `frontier` alias (already
   // dropped by the reader) never participates in the order check.
@@ -777,10 +703,7 @@ function assertEffectiveIntelligenceOrder(dispatch: TaskDispatchRequirements): v
  * when the declaration alone contributes (no nonempty normal winner),
  * otherwise the highest contributing layer (the normal winner's source).
  *
- * System defaults: mode `automatic`, total execution timeout 15 minutes.
- * Automatic mode ignores any inherited/stale explicit reference; explicit
- * mode requires one effective structural reference. References are never
- * resolved or compatibility-checked here.
+ * System default: total execution timeout 15 minutes.
  */
 export function resolveEffectiveTaskSettings(
   layers: TaskSettingsLayersInput,
@@ -789,21 +712,6 @@ export function resolveEffectiveTaskSettings(
     tag,
     layer: normalizeTaskSettingsLayer(layers[key], { scope: `layer:${tag}` }),
   }))
-
-  const modeLeaf = rightmostDefined(entries, (layer) => layer.selectionMode)
-  const mode = modeLeaf.value ?? SYSTEM_DEFAULT_MODE
-  const modeSource = modeLeaf.source ?? 'system_global'
-
-  const explicitRuntimeLeaf = rightmostDefined(entries, (layer) => layer.explicitRuntime)
-
-  let effectiveExplicitRuntime: TaskExplicitRuntime | undefined
-  let explicitRuntimeSource: TaskSettingsSourceTag | undefined
-  if (mode === 'explicit') {
-    assertExplicitReference(explicitRuntimeLeaf.value, '')
-    effectiveExplicitRuntime = explicitRuntimeLeaf.value
-    explicitRuntimeSource = explicitRuntimeLeaf.source
-  }
-  // automatic mode deliberately ignores any inherited explicit reference.
 
   const timeoutLeaf = rightmostDefined(entries, (layer) => layer.timeoutMs)
   const timeoutMs = timeoutLeaf.value ?? SYSTEM_DEFAULT_TIMEOUT_MS
@@ -885,16 +793,12 @@ export function resolveEffectiveTaskSettings(
   assertEffectiveIntelligenceOrder(dispatch)
 
   const sources: EffectiveTaskSettingsSources = {
-    selectionMode: modeSource,
     timeoutMs: timeoutSource,
   }
-  if (explicitRuntimeSource !== undefined) sources.explicitRuntime = explicitRuntimeSource
   if (routingWeights !== undefined) sources.routingWeights = 'user_global'
   sources.dispatch = dispatchSources
 
   return {
-    mode,
-    explicitRuntime: effectiveExplicitRuntime,
     timeoutMs,
     dispatch,
     routingWeights,

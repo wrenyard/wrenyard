@@ -174,9 +174,10 @@ function timeoutMetadata(config: TaskConfig): Pick<ListedDefinition, 'timeoutMs'
 
 /**
  * Validate the runtime-pin contract for a definition. Neither Active nor
- * `scheduling: 'legacy'` Tasks pin a runtime in current source: they select
- * automatically from dispatch, and explicit selection belongs to Task
- * settings, not Task definitions. Definitions carrying the retired
+ * `scheduling: 'legacy'` Tasks pin a runtime in current source: runtime is
+ * chosen by automatic routing from dispatch. Only provider/model exclusions
+ * (global or per-task) and `wrenyard exec --target` affect the launch target,
+ * not Task definitions. Definitions carrying the retired
  * `agentRuntime` or `profile` fields — including untyped JS exports — are
  * rejected exactly like the no-pin invariant. `scheduling: 'legacy'` remains a
  * valid discriminated mode so persisted work stays resolvable while omitted
@@ -259,7 +260,7 @@ function validateTaskDispatch(config: TaskConfig, sourcePath: string, options?: 
   for (const removedKey of ['preferredRuntime', 'preferred_runtime'] as const) {
     if (removedKey in raw) {
       throw new Error(
-        `${sourcePath} task config dispatch.${removedKey} is no longer supported; choose explicit mode with an alias or exact target through Task Settings`,
+        `${sourcePath} task config dispatch.${removedKey} is no longer supported; runtime is chosen by automatic routing — only provider/model exclusions (global or per-task) and wrenyard exec --target affect the launch target`,
       )
     }
   }

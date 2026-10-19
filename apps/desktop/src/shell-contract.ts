@@ -1019,16 +1019,6 @@ export function eligibleQuotaProviders(snapshot: QuotaSnapshot): QuotaProviderSn
 /** Which user layer a settings snapshot or save request targets. */
 export type TaskSettingsScope = 'global' | 'task';
 
-/** Runtime resolution mode a user layer may request. */
-export type TaskSettingsMode = 'automatic' | 'explicit';
-
-/**
- * Explicit-mode runtime selection: an inline canonical `provider/model:client`
- * target. Desktop never synthesizes a resolved client/provider/model triple and
- * never enumerates catalog candidates.
- */
-export type TaskSettingsExplicitReference = { kind: 'target'; target: string };
-
 /** Automatic dispatch field enums (mirrors the task dispatch requirements). */
 export type TaskSettingsIntelligence = 'low' | 'mid' | 'high' | 'premium';
 export type TaskSettingsCapability = 'text' | 'image';
@@ -1078,8 +1068,6 @@ export interface TaskSettingsRoutingWeights {
 }
 
 export interface TaskSettingsLayer {
-  mode?: TaskSettingsMode;
-  explicit_runtime?: TaskSettingsExplicitReference | null;
   timeout_ms?: number | null;
   routing_weights?: TaskSettingsRoutingWeights | null;
   automatic?: Partial<TaskSettingsAutomaticDispatch> | null;
@@ -1087,8 +1075,6 @@ export interface TaskSettingsLayer {
 
 /** Field-level save patch; `null` deletes that field only at the selected layer. */
 export interface TaskSettingsPatch {
-  mode?: TaskSettingsMode | null;
-  explicit_runtime?: TaskSettingsExplicitReference | null;
   timeout_ms?: number | null;
   routing_weights?: TaskSettingsRoutingWeights | null;
   automatic?: TaskSettingsAutomaticPatch | null;
@@ -1112,8 +1098,6 @@ export interface TaskSettingsEffectiveAutomatic {
 /** Effective settings of one task, each value tagged with its source layer. */
 export interface TaskSettingsEffective {
   routing_weights?: TaskSettingsSourcedValue<TaskSettingsRoutingWeights | null>;
-  mode: TaskSettingsSourcedValue<TaskSettingsMode>;
-  explicit_runtime: TaskSettingsSourcedValue<TaskSettingsExplicitReference | null>;
   timeout_ms: TaskSettingsSourcedValue<number | null>;
   automatic: TaskSettingsEffectiveAutomatic;
 }
@@ -1175,14 +1159,8 @@ export interface TaskSettingsBuiltinMetadata {
   dispatch: TaskSettingsAutomaticDispatch;
 }
 
-/** Explicit-mode resolution data carried on a row by the daemon when resolved. */
-export interface TaskSettingsExplicitRow {
-  /** Daemon-resolved dispatch; null while unresolved/unavailable. */
-  resolved: TaskResolvedDispatch | null;
-}
-
 /**
- * Automatic-mode resolution data carried on an automatic row by the daemon when
+ * Automatic-selection resolution data carried on a row by the daemon when
  * resolved. Mirrors the daemon automatic-selection row projection exactly: when
  * this object is present it is fully populated. Backward compatibility for older
  * snapshots and unresolved rows lives on the optional row-level field
@@ -1225,9 +1203,7 @@ export interface TaskSettingsTaskRow {
   /** Persisted per-task user layer for this identity. */
   user_task: TaskSettingsLayer;
   effective: TaskSettingsEffective;
-  /** Daemon resolution projection; present only when the daemon resolves. */
-  explicit?: TaskSettingsExplicitRow;
-  /** Automatic resolution projection; present only on automatic rows the daemon resolves. */
+  /** Automatic resolution projection; present only when the daemon resolves it. */
   automatic_selection?: TaskSettingsAutomaticSelection;
   /** Ordered base→effective definition layers; present only when this row's
    *  definition inherits from another layer. */

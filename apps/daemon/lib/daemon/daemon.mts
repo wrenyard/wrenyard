@@ -1214,9 +1214,9 @@ async function createForemanDaemonResources(
       resolver: taskDispatchResolver,
       quotaSnapshots: autoRoutingQuotaSnapshots,
       // The same shared Gateway instance and route-status callable already used
-      // by session and auxiliary routing: Task automatic candidates and explicit
-      // availability observe the one in-memory route circuit, with no second
-      // Gateway or duplicated circuit state.
+      // by session and auxiliary routing: automatic Task candidates observe the
+      // one in-memory route circuit, with no second Gateway or duplicated
+      // circuit state.
       routeStatus: model => gateway.routeStatus(model),
       nativeProviderReadiness: loadNativeProviderReadiness,
       // The production gate uses each registered client's own inspect state for
@@ -1371,25 +1371,18 @@ async function createForemanDaemonResources(
     // started detached: the host records each run id and polls it, so no bot
     // tick ever waits for a model run.
     //
-    // A routing entry may carry an explicit `target` (a canonical
-    // `provider/model:client` run target). When it does, the run selects that
-    // target through the same one-shot invocation settings layer other callers
-    // use. An unknown or unavailable target fails the run; it never falls back
-    // silently to automatic routing. An entry without a target leaves the run
-    // on automatic routing, and the host records `routing.auto` once per bot.
+    // Runtime selection is automatic: the routing entry's reasoning effort is
+    // forwarded through the same one-shot invocation settings layer other
+    // callers use, and the host records `routing.auto` once per bot.
     const botTaskRunner: BotTaskRunner = {
       // Start one task run and hand its run id back at once: the bot host keeps
       // the step pending and polls the run on later ticks, so a long model run
       // never blocks a tick or another item.
-      async startTask({ task, project, worktree, input, model, target }) {
+      async startTask({ task, project, worktree, input, model }) {
         try {
-          const invocationSettings: TaskSettingsLayer | undefined = target === undefined
+          const invocationSettings: TaskSettingsLayer | undefined = model === undefined
             ? undefined
-            : {
-                mode: 'explicit',
-                explicit_runtime: { kind: 'target', target },
-                ...(model === undefined ? {} : { automatic: { expected_reasoning_effort: model.reasoningEffort } }),
-              }
+            : { automatic: { expected_reasoning_effort: model.reasoningEffort } }
           const accepted = await taskService.run({
             taskId: task,
             project,
