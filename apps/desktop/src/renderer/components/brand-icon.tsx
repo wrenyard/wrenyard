@@ -1,3 +1,4 @@
+import { Cpu } from 'lucide-react';
 import type { ComponentProps } from 'react';
 import { cn } from 'cn';
 import { brandIconSrc } from '@/renderer/lib/brand-icons';
@@ -21,7 +22,9 @@ export function BrandIcon({
   ...props
 }: BrandIconProps) {
   const src = brandIconSrc(brand);
-  if (src === null) return null;
+  if (src === null) {
+    return <Cpu size={size} aria-hidden="true" className={cn('shrink-0 text-muted-foreground', className)} />;
+  }
   return (
     <img
       src={src}

@@ -115,12 +115,12 @@ function ModelCell({ row }: { row: TaskRunRow }) {
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
       <span className="inline-flex items-center gap-1">
-        {row.providerBrand ? <BrandIcon brand={row.providerBrand} size={16} /> : null}
+        <BrandIcon brand={row.providerBrand ?? ''} size={16} />
         <span>{row.providerName}</span>
       </span>
       <span className="text-muted-foreground">·</span>
       <span className="inline-flex items-center gap-1">
-        {row.modelBrand ? <BrandIcon brand={row.modelBrand} size={16} /> : null}
+        <BrandIcon brand={row.modelBrand ?? ''} size={16} />
         <span>{row.modelName}</span>
       </span>
     </span>

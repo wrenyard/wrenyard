@@ -48,7 +48,7 @@ export function ProfileTable({ rows }: { rows: ProfileRow[] }) {
 function ModelCell({ row }: { row: ProfileRow }) {
   const content = (
     <span className="inline-flex items-center gap-1.5">
-      {row.brand !== '' && <BrandIcon brand={row.brand} />}
+      <BrandIcon brand={row.brand} />
       <span>{row.displayName}</span>
     </span>
   );
