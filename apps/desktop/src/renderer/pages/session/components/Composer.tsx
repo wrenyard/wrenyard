@@ -432,7 +432,10 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
     submitLatch.current = true;
     const body = text.trim();
     const submitted = attachmentsRef.current;
-    if ((body === '' && submitted.length === 0) || !selected || sending || disabled || exceeded || selectionUnusable) {
+    // An over-budget context is not refused here: only sending a turn triggers
+    // the engine's compaction, so blocking would deadlock the session. What the
+    // engine still refuses after compacting surfaces through the turn error.
+    if ((body === '' && submitted.length === 0) || !selected || sending || disabled || selectionUnusable) {
       submitLatch.current = false;
       return;
     }
@@ -513,7 +516,7 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
         onValueChange={handleChange}
         onSubmit={submit}
         disabled={disabled || !selected}
-        submitDisabled={sending || exceeded || selectionUnusable}
+        submitDisabled={sending || selectionUnusable}
         sendKey={preferences.data?.session.sendKey ?? 'enter'}
         textareaRef={textareaRef}
         placeholder="输入消息…"
@@ -555,9 +558,9 @@ export function Composer({ models, turns, sessionKey, disabled = false, onSend, 
               </span>
             )}
             {exceeded && (
-              <span className="flex items-center gap-1 text-xs text-destructive" role="status">
+              <span className="flex items-center gap-1 text-xs text-muted-foreground" role="status">
                 <AlertTriangle className="size-3.5 shrink-0" />
-                超出上下文
+                上下文较大，发送时将先压缩
               </span>
             )}
           </>

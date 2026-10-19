@@ -106,7 +106,7 @@ export function ContextBreakdown({ roles, budget, groups, modelName }: ContextBr
         <div className="px-3 pt-2">
           <Alert variant="destructive">
             <AlertDescription>
-              {`上下文超出 ${modelName ?? reason?.model ?? '主推理'} 的可用窗口 ${formatTokenCount(budget.available)}，无法发送`}
+              {`${modelName ?? reason?.model ?? '主推理'} 的上下文较大（可用窗口 ${formatTokenCount(budget.available)}），发送时将先压缩`}
             </AlertDescription>
           </Alert>
         </div>

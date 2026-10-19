@@ -2,6 +2,7 @@ import { isUsableTpsSample, rollingTps, tpsOfSample as tpsOf, weightedTps } from
 import { getEncoding, type Tiktoken } from 'js-tiktoken';
 import type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, QuotaSnapshot, TaskRunUsage } from '@/shell-contract';
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
+import { boundedOutputReservation } from '@wrenyard/session/model-metadata';
 import type { CallContextSnapshot, CallModel } from './types.js';
 import { CALL_ROLE_LABEL } from './describe.js';
 
@@ -77,7 +78,7 @@ export interface ContextBudgetView {
   total: number;
   /** Model context window; absent when the model declares none. */
   window: number | undefined;
-  /** Reserved output allowance; absent when the model declares none. */
+  /** Reserved output allowance, bounded by the shared reservation cap; absent when the model declares none. */
   reserved: number | undefined;
   /** `window - reserved`, the available input budget; absent when either is unknown. */
   available: number | undefined;
@@ -91,7 +92,7 @@ export interface ContextBudgetView {
 export function contextBudget(inspection: ContextInspection, inputTokens = 0): ContextBudgetView {
   const total = inspection.totalTokens + Math.max(0, inputTokens);
   const contextWindow = inspection.model.contextWindow;
-  const reserved = inspection.model.maxOutputTokens;
+  const reserved = boundedOutputReservation(inspection.model.maxOutputTokens);
   const available = contextWindow !== undefined && reserved !== undefined
     ? Math.max(0, contextWindow - reserved)
     : undefined;

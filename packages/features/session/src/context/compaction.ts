@@ -9,7 +9,7 @@
  * call is attempted, with no retry: a failed or oversized call falls back to a
  * deterministic summary built from ledger facts and records the failure.
  */
-import type { ModelMetadata } from '../model/metadata.ts';
+import { boundedOutputReservation, type ModelMetadata } from '../model/metadata.ts';
 import { COMPACTION_THRESHOLD_CAP, estimateInputTokens, estimateTokens } from '../model/request.ts';
 import { CONTEXT_EVENT_TYPES, type LedgerEvent } from '../ledger/store.ts';
 import { escapeBody, renderEventText, resumedOriginalTurns, tag } from './render.ts';
@@ -65,7 +65,7 @@ export interface CompactionInput {
   metadata: ModelMetadata;
   /** The one summarisation call, made on the session's own model. */
   summarize: CompactionSummaryCall;
-  /** Output tokens the reason request reserves; defaults to the model maximum. */
+  /** Output tokens the reason request reserves; defaults to the bounded model maximum. */
   outputReservation?: number;
   /** Input-token estimate of the request that triggered the compaction. */
   estimatedInputTokens?: number;
@@ -114,7 +114,7 @@ export function renderCompactionBlock(event: Extract<LedgerEvent, { type: 'conte
  */
 export async function compactContext(input: CompactionInput): Promise<CompactionResult> {
   const contextWindow = input.metadata.contextWindow;
-  const outputReservation = input.outputReservation ?? input.metadata.maxOutputTokens ?? 0;
+  const outputReservation = input.outputReservation ?? boundedOutputReservation(input.metadata.maxOutputTokens) ?? 0;
   const threshold = contextWindow === undefined
     ? 0
     : Math.min(Math.floor(THRESHOLD_SHARE * (contextWindow - outputReservation)), COMPACTION_THRESHOLD_CAP);

@@ -37,7 +37,7 @@ import {
 import type { ModelSpanFinishedEvent, ModelSpanStartedEvent } from '../ledger/events.ts';
 import { ROLE_REQUIREMENTS } from '@wrenyard/auto-routing';
 import type { AuxiliaryCallRole } from './roles.ts';
-import { resolveModelMetadata, type ModelMetadata } from './metadata.ts';
+import { boundedOutputReservation, resolveModelMetadata, type ModelMetadata } from './metadata.ts';
 
 // The pure metadata helper now lives in the browser-safe model-metadata entry;
 // the call runner re-exports it so existing `./calls.ts` consumers are unchanged.
@@ -330,7 +330,11 @@ export interface ContextBudget {
  * the request reserves would exceed its window.
  *
  * The declared `metadata.maxOutputTokens` is the model's source maximum — a
- * capability, not a mandatory per-request reservation. A route whose provider
+ * capability, not a mandatory per-request reservation. It is reserved only up to
+ * {@link boundedOutputReservation}: reserving a huge declared maximum verbatim
+ * would leave almost no input budget, so a request never reserves more than the
+ * shared cap. A per-call cap that is already smaller than that bound still wins.
+ * A route whose provider
  * opted out of the canonical metadata fallback therefore resolves its request
  * output cap to the smallest of the per-call cap (or the source maximum when
  * none was requested), the source maximum when known, and the room left after
@@ -353,7 +357,8 @@ export function checkContextBudget(
 ): ContextBudget {
   const metadata = resolveModelMetadata(publicId, resolveProvider);
   const estimatedInputTokens = estimateInputTokens(messages);
-  const { contextWindow, maxOutputTokens: sourceMax } = metadata;
+  const { contextWindow } = metadata;
+  const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
 
   if (metadata.skipCanonicalMetadataFallback === true) {
     const requested = requestedMaxOutputTokens ?? sourceMax;
@@ -427,7 +432,8 @@ export function contextBudgetOf(
 ): ContextBudgetFacts {
   const metadata = resolveModelMetadata(publicId, resolveProvider);
   const estimatedInputTokens = estimateInputTokens(messages);
-  const { contextWindow, maxOutputTokens: sourceMax } = metadata;
+  const { contextWindow } = metadata;
+  const sourceMax = boundedOutputReservation(metadata.maxOutputTokens);
   const outputReservation = metadata.skipCanonicalMetadataFallback === true
     ? sourceMax === undefined
       ? requestedMaxOutputTokens
