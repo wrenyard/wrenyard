@@ -2,7 +2,7 @@ import { isUsableTpsSample, rollingTps, tpsOfSample as tpsOf, weightedTps } from
 import { getEncoding, type Tiktoken } from 'js-tiktoken';
 import type { ContextInspection, ContextItem, ContextItemKind, ContextLayerId, QuotaSnapshot, TaskRunUsage } from '@/shell-contract';
 import type { SessionRoutesPreviewRole } from '@wrenyard/protocol';
-import { boundedOutputReservation } from '@wrenyard/session/model-metadata';
+import { boundedOutputReservation } from '@wrenyard/models';
 import type { CallContextSnapshot, CallModel } from './types.js';
 import { CALL_ROLE_LABEL } from './describe.js';
 

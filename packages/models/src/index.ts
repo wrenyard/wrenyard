@@ -22,3 +22,4 @@ export {
 } from './registry.ts';
 export { MAINSTREAM_MODEL_IDS, isMainstreamModelId } from './mainstream.ts';
 export type { MainstreamModelId } from './mainstream.ts';
+export { CONTEXT_OUTPUT_RESERVATION_CAP, boundedOutputReservation } from './output-reservation.ts';
