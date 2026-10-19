@@ -21,11 +21,9 @@ const CODEBUDDY_PRODUCT_MODEL_IDS: Readonly<Record<string, string>> = {
   'MiniMax-M3': 'minimax-m3',
   'MiniMax-M3.1-Flash-Preview': 'minimax-m3.1-flash-preview',
   'MiniMax-M2.7': 'minimax-m2.7',
-  // DeepSeek V4 ships as `deepseek-v4-<tier>` in the plain/internal product
-  // files and as `deepseek-v4-<tier>-ioa` in the iOA one; both channel forms
-  // collapse onto the two unified registry identities.
-  'deepseek-v4-flash': 'deepseek-v4.1-flash',
-  'deepseek-v4-flash-ioa': 'deepseek-v4.1-flash',
+  // DeepSeek V4 Pro ships as `deepseek-v4-pro-ioa` in the iOA product file. The
+  // older `deepseek-v4-flash(-ioa)` rows are a distinct model, not V4.1 Flash
+  // (the iOA endpoint serves them as themselves), so they are not mapped.
   'deepseek-v4-pro-ioa': 'deepseek-v4-pro',
 };
 
@@ -87,7 +85,8 @@ const CODEBUDDY_REASONING_EFFORTS: Readonly<Record<string, readonly ReasoningEff
   'glm-5.3': ['none', ...REASONING_LOW_HIGH_MAX],
   'glm-5.3-flash': ['none', ...REASONING_LOW_HIGH_MAX],
   'kimi-k3': ['none', ...REASONING_LOW_HIGH_MAX],
-  'deepseek-v4.1-flash': ['none', 'high'],
+  // V4.1-Flash-1017 lists low/high/max and can disable thinking.
+  'deepseek-v4.1-flash': ['none', ...REASONING_LOW_HIGH_MAX],
   'deepseek-v4-pro': ['none', 'high'],
   'hunyuan-hy3': ['none', 'high'],
   // Disabling thinking has no effect on HY4 here: it still reasons for most of
