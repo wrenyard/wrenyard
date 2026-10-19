@@ -798,6 +798,12 @@ export interface StatsSnapshot {
   recentTaskRuns: TaskRunSnapshot[];
 }
 
+/**
+ * Four-level per-pool quota state, the same levels automatic routing uses:
+ * `abundant` 充裕, `sufficient` 足够, `insufficient` 不足, `exhausted` 用尽.
+ */
+export type QuotaPoolState = 'abundant' | 'sufficient' | 'insufficient' | 'exhausted';
+
 export interface QuotaWindowSnapshot {
   name: string;
   /** Display-only pool label (declared display name or pool id); `name` stays the key. */
@@ -808,12 +814,16 @@ export interface QuotaWindowSnapshot {
   resetsAt?: string;
   /** Window length in minutes; drives the Chinese window label. */
   windowMinutes?: number;
+  /** Per-pool state from the shared quota rules; absent when none can be derived. */
+  state?: QuotaPoolState;
 }
 
 export interface QuotaBalanceSnapshot {
   currency: string;
   amount: string;
   display: string;
+  /** Per-pool state from the shared quota rules; a balance is never abundant. */
+  state?: QuotaPoolState;
 }
 
 export interface QuotaProviderSnapshot {
@@ -823,6 +833,12 @@ export interface QuotaProviderSnapshot {
   plan?: string;
   status: 'ok' | 'pending' | 'error' | 'unavailable';
   stale: boolean;
+  /**
+   * Epoch ms of this provider's last successful quota read. It drives the
+   * grace-aware read-failure note (`读取失败，沿用 N 分钟前的数据`); absent
+   * means no usable measurement was ever taken.
+   */
+  lastSuccessAt?: number;
   windows: QuotaWindowSnapshot[];
   balances: QuotaBalanceSnapshot[];
   displayLine?: string;

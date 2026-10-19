@@ -1,5 +1,5 @@
 import { BrandIcon } from '@/renderer/components/brand-icon';
-import { QuotaBar } from '@/renderer/components/usage/QuotaBar';
+import { QuotaBar, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone } from '@/renderer/components/usage/QuotaBar';
 import { Button } from '@/renderer/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { useQuotaRefresh } from '@/renderer/lib/queries';
@@ -88,6 +88,7 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
               remainingPct={window.remainingPct}
               expectedRemainingPct={window.expectedRemainingPct}
               resetsAt={window.resetsAt}
+              state={window.state}
               stale={provider.stale}
             />
           ))}
@@ -95,6 +96,11 @@ export function QuotaProviderBlock({ provider, className }: QuotaProviderBlockPr
             <span key={`${balance.currency}:${balance.display}`} className="flex items-baseline gap-1 text-xs">
               <span className="text-muted-foreground">{BALANCE_LABEL}</span>
               <strong className="tabular-nums">{balance.display}</strong>
+              {balance.state !== undefined && (
+                <span className={cn(quotaPoolStateTone(balance.state) ?? 'text-muted-foreground')}>
+                  {QUOTA_POOL_STATE_LABEL[balance.state]}
+                </span>
+              )}
             </span>
           ))}
           {(provider.message || !hasStructured) && (

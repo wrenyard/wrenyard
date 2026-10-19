@@ -1,9 +1,12 @@
+import { QUOTA_EVIDENCE_GRACE_MS, quotaStateOf } from '@wrenyard/auto-routing';
+import type { BalanceEvidence, QuotaEvidence } from '@wrenyard/auto-routing';
 import type { QuotaProviderState } from './main/projections/quota-runtime';
 import type {
   ProviderAuthMode,
   ProviderAuthStatus,
   ProviderCatalogSnapshot,
   QuotaBalanceSnapshot,
+  QuotaPoolState,
   QuotaProviderSnapshot,
   QuotaSnapshot,
   QuotaWindowSnapshot,
@@ -137,7 +140,7 @@ export function projectQuotaSnapshot(
   const canonicalProviders = canonicalizeProviders(providers);
   const canonicalOrder = canonicalizeOrder(configuredOrder);
   const canonicalDiscovered = canonicalizeDiscovered(discovered);
-  const catalog = projectCatalog(canonicalProviders, canonicalOrder, canonicalDiscovered);
+  const catalog = projectCatalog(canonicalProviders, canonicalOrder, canonicalDiscovered, refreshedAt);
   const projected = catalog.flatMap((entry) => entry.configured && entry.quota ? [entry.quota] : []);
   return {
     status: canonicalProviders.length > 0 || canonicalOrder.length === 0 ? 'available' : 'unavailable',
@@ -185,30 +188,41 @@ function canonicalizeDiscovered(discovered: ProviderAuthStatus[]): ProviderAuthS
   return [...byId.values()];
 }
 
-function projectProvider(id: string, provider: QuotaProviderState): QuotaProviderSnapshot {
-  const windows: QuotaWindowSnapshot[] = (provider.bars?.windows ?? []).map((window) => ({
-    name: sanitizeQuotaText(window.name),
-    remainingPct: clampPercentage(window.remainingPct),
-    expectedRemainingPct: window.expectedRemainingPct === null
-      ? null
-      : clampPercentage(window.expectedRemainingPct),
-    ...(window.poolLabel !== undefined ? { poolLabel: sanitizeQuotaText(window.poolLabel) } : {}),
-    ...windowTiming(window.resetsAt, window.windowMinutes),
-  }));
+function projectProvider(id: string, provider: QuotaProviderState, lastSuccessAt?: number): QuotaProviderSnapshot {
+  const nowMs = Date.now();
+  // The measurement behind these numbers: the last successful read, or this
+  // projection when none is recorded. It is the age the grace rules use.
+  const observedAtMs = lastSuccessAt ?? nowMs;
+  const windows: QuotaWindowSnapshot[] = (provider.bars?.windows ?? []).map((window) => {
+    const row: QuotaWindowSnapshot = {
+      name: sanitizeQuotaText(window.name),
+      remainingPct: clampPercentage(window.remainingPct),
+      expectedRemainingPct: window.expectedRemainingPct === null
+        ? null
+        : clampPercentage(window.expectedRemainingPct),
+      ...(window.poolLabel !== undefined ? { poolLabel: sanitizeQuotaText(window.poolLabel) } : {}),
+      ...windowTiming(window.resetsAt, window.windowMinutes),
+    };
+    return { ...row, state: windowPoolState(row, observedAtMs, nowMs) };
+  });
   if (windows.length === 0 && provider.bars?.remainingPct !== null && provider.bars?.remainingPct !== undefined) {
-    windows.push({
+    const row: QuotaWindowSnapshot = {
       name: 'quota',
       remainingPct: clampPercentage(provider.bars.remainingPct),
       expectedRemainingPct: provider.bars.expectedRemainingPct === null
         ? null
         : clampPercentage(provider.bars.expectedRemainingPct),
-    });
+    };
+    windows.push({ ...row, state: windowPoolState(row, observedAtMs, nowMs) });
   }
-  const balances: QuotaBalanceSnapshot[] = (provider.balances ?? []).map((balance) => ({
-    currency: balance.currency,
-    amount: balance.amount,
-    display: sanitizeQuotaText(balance.display),
-  }));
+  const balances: QuotaBalanceSnapshot[] = (provider.balances ?? []).map((balance) => {
+    const row: QuotaBalanceSnapshot = {
+      currency: balance.currency,
+      amount: balance.amount,
+      display: sanitizeQuotaText(balance.display),
+    };
+    return { ...row, state: balancePoolState(row, observedAtMs, nowMs) };
+  });
   // A successful status preserves the runtime's friendly message (e.g. the
   // observed CodeBuddy monthly exhaustion) alongside any display line, while
   // error/unavailable statuses keep the generic unavailable copy. A rate-limit
@@ -231,6 +245,7 @@ function projectProvider(id: string, provider: QuotaProviderState): QuotaProvide
     ...(plan ? { plan } : {}),
     status: provider.status,
     stale: provider.stale,
+    ...(lastSuccessAt !== undefined ? { lastSuccessAt } : {}),
     windows,
     balances,
     ...(message ? { message } : {}),
@@ -243,6 +258,7 @@ function projectCatalog(
   providers: QuotaProviderState[],
   configuredOrder: Array<{ id: string; enabled: boolean }>,
   discovered: ProviderAuthStatus[],
+  lastSuccessAt?: number,
 ): ProviderCatalogSnapshot[] {
   const byId = new Map(providers.map((provider) => [provider.id, provider]));
   const discoveredById = new Map(discovered.map((entry) => [entry.id, entry]));
@@ -263,7 +279,7 @@ function projectCatalog(
     const discoveredStatus = discoveredById.get(id);
     const quota = byId.get(id);
     const authMode = discoveredStatus?.authMode ?? 'none';
-    const projectedQuota = quota ? projectProvider(id, quota) : undefined;
+    const projectedQuota = quota ? projectProvider(id, quota, lastSuccessAt) : undefined;
     const configured = projectedQuota?.code === 'configuration_missing'
       || projectedQuota?.code === 'authentication_required'
       ? false
@@ -359,6 +375,60 @@ function windowTiming(
       ? { windowMinutes }
       : {}),
   };
+}
+
+/**
+ * Full-cycle facts of one window: a reset inside its own cycle, measured from
+ * now. A window without them has no pace, so the rolling bands apply.
+ */
+function fullCycleFacts(
+  window: QuotaWindowSnapshot,
+  nowMs: number,
+): { resetAtMs: number; windowMs: number } | null {
+  if (typeof window.resetsAt !== 'string' || typeof window.windowMinutes !== 'number') return null;
+  const resetAtMs = Date.parse(window.resetsAt);
+  const windowMs = window.windowMinutes * 60_000;
+  if (!Number.isFinite(resetAtMs) || !(windowMs > 0)) return null;
+  const horizonMs = resetAtMs - nowMs;
+  if (horizonMs <= 0 || horizonMs > windowMs) return null;
+  return { resetAtMs, windowMs };
+}
+
+/**
+ * Per-pool state of one windowed pool, mapped by the routing quota rules
+ * (`quotaStateOf`): a full-cycle window compares its remaining share with the
+ * cycle pace, any other window uses the rolling 80%/10% bands, and an
+ * observation older than the evidence grace is insufficient.
+ */
+function windowPoolState(
+  window: QuotaWindowSnapshot,
+  observedAtMs: number,
+  nowMs: number,
+): QuotaPoolState {
+  const cycle = fullCycleFacts(window, nowMs);
+  const evidence: QuotaEvidence = {
+    remainingPercent: window.remainingPct,
+    observedAtMs,
+    validForMs: QUOTA_EVIDENCE_GRACE_MS,
+    replenishmentKind: cycle ? 'full_cycle' : 'rolling_partial',
+    ...(cycle ?? {}),
+  };
+  return quotaStateOf([{ id: window.name, kind: 'quota', evidence }], nowMs).state;
+}
+
+/** Per-pool state of one balance: exhausted at zero, insufficient at or below its currency threshold. */
+function balancePoolState(
+  balance: QuotaBalanceSnapshot,
+  observedAtMs: number,
+  nowMs: number,
+): QuotaPoolState {
+  const balanceEvidence: BalanceEvidence = {
+    amount: balance.amount,
+    currency: balance.currency,
+    observedAtMs,
+    validForMs: QUOTA_EVIDENCE_GRACE_MS,
+  };
+  return quotaStateOf([{ id: balance.currency, kind: 'balance', evidence: null, balance: balanceEvidence }], nowMs).state;
 }
 
 function isQuotaUnavailable(status: QuotaProviderSnapshot['status']): boolean {

@@ -1,11 +1,13 @@
 import { BrandIcon } from '@/renderer/components/brand-icon';
 import { QueryError } from '@/renderer/components/query-error';
 import { Skeleton } from '@/renderer/components/ui/skeleton';
-import { QuotaBar } from '@/renderer/components/usage/QuotaBar';
+import { QuotaBar, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone } from '@/renderer/components/usage/QuotaBar';
 import { providerBrand } from '@/renderer/lib/model-brand';
 import { useQuotaQuery } from '@/renderer/lib/queries';
 import { reorderProviders } from '@/provider-order';
+import { cn } from 'cn';
 import type { ProviderCatalogSnapshot, QuotaSnapshot } from '@/shell-contract';
+import { QUOTA_EVIDENCE_GRACE_MS } from '@wrenyard/auto-routing/constants';
 import { BALANCE_LABEL } from '../model/describe.js';
 
 /**
@@ -18,12 +20,27 @@ import { BALANCE_LABEL } from '../model/describe.js';
  * provider.
  */
 
-function providerStatus(entry: ProviderCatalogSnapshot): string {
+/**
+ * Copy for a failed quota read. While the last successful measurement is inside
+ * the evidence grace the stale numbers are still shown, so the note says how
+ * old they are; after the grace — or with no usable measurement — the plain
+ * failure stands.
+ */
+function readFailureNote(quota: NonNullable<ProviderCatalogSnapshot['quota']>, now: number): string {
+  const lastSuccessAt = quota.lastSuccessAt;
+  const age = typeof lastSuccessAt === 'number' && Number.isFinite(lastSuccessAt) && lastSuccessAt <= now
+    ? now - lastSuccessAt
+    : null;
+  if (age !== null && age <= QUOTA_EVIDENCE_GRACE_MS) {
+    return `读取失败，沿用 ${Math.max(1, Math.round(age / 60_000))} 分钟前的数据`;
+  }
+  return quota.message ? `读取失败 · ${quota.message}` : '读取失败';
+}
+
+function providerStatus(entry: ProviderCatalogSnapshot, now: number): string {
   const quota = entry.quota;
   if (quota === undefined) return '此供应商暂不提供额度查询';
-  if (quota.status === 'error' || quota.status === 'unavailable') {
-    return quota.message ? `读取失败 · ${quota.message}` : '读取失败';
-  }
+  if (quota.status === 'error' || quota.status === 'unavailable') return readFailureNote(quota, now);
   if (quota.status === 'pending') return '读取中';
   return '已连接';
 }
@@ -55,18 +72,19 @@ function ProviderUsageCards({ snapshot }: { snapshot: QuotaSnapshot }) {
     .map((id) => byId.get(id))
     .filter((entry): entry is ProviderCatalogSnapshot => entry !== undefined && entry.configured);
 
+  const now = Date.now();
   return (
     <div className="flex flex-col gap-3">
       {activated.length === 0 ? (
         <p className="text-sm text-muted-foreground">还没有已激活的供应商。</p>
       ) : (
-        activated.map((entry) => <ProviderUsageCard key={entry.id} entry={entry} />)
+        activated.map((entry) => <ProviderUsageCard key={entry.id} entry={entry} now={now} />)
       )}
     </div>
   );
 }
 
-function ProviderUsageCard({ entry }: { entry: ProviderCatalogSnapshot }) {
+function ProviderUsageCard({ entry, now }: { entry: ProviderCatalogSnapshot; now: number }) {
   const quota = entry.quota;
   const hasDetail = quota !== undefined && (quota.windows.length > 0 || quota.balances.length > 0);
 
@@ -75,7 +93,7 @@ function ProviderUsageCard({ entry }: { entry: ProviderCatalogSnapshot }) {
       <div className="flex items-center gap-2">
         <BrandIcon brand={providerBrand(entry.id)} />
         <span className="truncate font-medium">{entry.label || entry.id}</span>
-        <span className="truncate text-xs text-muted-foreground">{providerStatus(entry)}</span>
+        <span className="truncate text-xs text-muted-foreground">{providerStatus(entry, now)}</span>
       </div>
       <span className="text-xs text-muted-foreground">套餐：{quota?.plan || '未知'}</span>
       {hasDetail && (
@@ -88,6 +106,7 @@ function ProviderUsageCard({ entry }: { entry: ProviderCatalogSnapshot }) {
               remainingPct={window.remainingPct}
               expectedRemainingPct={window.expectedRemainingPct}
               resetsAt={window.resetsAt}
+              state={window.state}
               stale={quota.stale}
             />
           ))}
@@ -98,6 +117,11 @@ function ProviderUsageCard({ entry }: { entry: ProviderCatalogSnapshot }) {
             >
               <span className="text-muted-foreground">{BALANCE_LABEL}</span>
               <strong className="tabular-nums">{balance.display}</strong>
+              {balance.state !== undefined && (
+                <span className={cn(quotaPoolStateTone(balance.state) ?? 'text-muted-foreground')}>
+                  {QUOTA_POOL_STATE_LABEL[balance.state]}
+                </span>
+              )}
             </span>
           ))}
         </div>

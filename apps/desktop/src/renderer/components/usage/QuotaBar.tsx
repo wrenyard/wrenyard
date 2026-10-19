@@ -3,6 +3,8 @@ import { Progress as ProgressPrimitive } from '@base-ui/react/progress';
 import { ProgressIndicator, ProgressTrack } from '@/renderer/components/ui/progress';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/renderer/components/ui/tooltip';
 import { QUOTA_PACE_WARN_DELTA } from '@/shell-contract';
+import type { QuotaPoolState, QuotaProviderSnapshot } from '@/shell-contract';
+import { QUOTA_EVIDENCE_GRACE_MS } from '@wrenyard/auto-routing/constants';
 import { cn } from 'cn';
 
 /**
@@ -30,6 +32,39 @@ const FILL_CLASS: Record<QuotaLevel, string> = {
 
 /** Reset-pending copy shown on a quota bar while a refresh has not arrived. */
 export const RESET_PENDING_LABEL = '等待刷新';
+
+/** Chinese label of each four-level pool state. */
+export const QUOTA_POOL_STATE_LABEL: Readonly<Record<QuotaPoolState, string>> = {
+  abundant: '充裕',
+  sufficient: '足够',
+  insufficient: '不足',
+  exhausted: '用尽',
+};
+
+/** Tone class of a pool state label; the two usable levels keep the surface's muted tone. */
+export function quotaPoolStateTone(state: QuotaPoolState): string | null {
+  if (state === 'exhausted') return 'text-destructive';
+  if (state === 'insufficient') return 'text-warning';
+  return null;
+}
+
+/**
+ * Copy for a provider whose quota read failed or went stale. While the last
+ * measurement is inside the evidence grace and pools are still shown, the note
+ * says how old the reused numbers are; after the grace — or without a usable
+ * measurement — only the plain failure stands.
+ */
+export function quotaReadFailureNote(provider: QuotaProviderSnapshot, now: number): string {
+  const reusable = provider.windows.length > 0 || provider.balances.length > 0;
+  const lastSuccessAt = provider.lastSuccessAt;
+  const age = typeof lastSuccessAt === 'number' && Number.isFinite(lastSuccessAt) && lastSuccessAt <= now
+    ? now - lastSuccessAt
+    : null;
+  if (reusable && age !== null && age <= QUOTA_EVIDENCE_GRACE_MS) {
+    return `读取失败，沿用 ${Math.max(1, Math.round(age / 60_000))} 分钟前的数据`;
+  }
+  return provider.message ? `读取失败 · ${provider.message}` : '读取失败';
+}
 
 /** Severity ordering for alert levels. */
 const SEVERITY: Readonly<Record<QuotaLevel, number>> = { normal: 0, warning: 1, destructive: 2 };
@@ -92,7 +127,7 @@ export interface QuotaVerdictWindow {
 }
 
 export interface QuotaVerdict {
-  /** 额度充足 / 额度偏紧 / 额度不足. */
+  /** 充裕 / 足够 / 不足 / 用尽, the four-level pool state wording. */
   label: string;
   level: 'sufficient' | 'tight' | 'insufficient';
   /** Short muted reason, or undefined when every pool is normal. */
@@ -100,11 +135,12 @@ export interface QuotaVerdict {
 }
 
 /**
- * One-line verdict on whether to keep using the current model (usage spec 6.2):
- * `额度充足` when every pool is normal and not projected to run out before
- * reset, `额度偏紧` on any warning pool or a fast pace, `额度不足` on any
- * destructive pool. Reuses the {@link quotaLevel} / {@link paceView} thresholds
- * through {@link quotaPoolLevel} — no new thresholds.
+ * One-line verdict on whether to keep using the current model (usage spec 6.2),
+ * in the four-level pool-state wording: `充裕` when every pool is normal and
+ * not projected to run out before reset, `足够` on any warning pool or a fast
+ * pace, `不足` on any destructive pool and `用尽` once it is empty. Reuses the
+ * {@link quotaLevel} / {@link paceView} thresholds through
+ * {@link quotaPoolLevel} — no new thresholds.
  */
 export function quotaVerdict(windows: readonly QuotaVerdictWindow[]): QuotaVerdict {
   let worst: { level: QuotaLevel; window: QuotaVerdictWindow } | null = null;
@@ -118,13 +154,17 @@ export function quotaVerdict(windows: readonly QuotaVerdictWindow[]): QuotaVerdi
     }
   }
   if (worst === null || worst.level === 'normal') {
-    return { label: '额度充足', level: 'sufficient', reason: undefined };
+    return { label: QUOTA_POOL_STATE_LABEL.abundant, level: 'sufficient', reason: undefined };
   }
   const name = worst.window.poolLabel ?? worst.window.name;
   const exhausted = worst.window.remainingPct <= 0;
   return worst.level === 'destructive'
-    ? { label: '额度不足', level: 'insufficient', reason: exhausted ? `${name} 已耗尽` : `${name} 将在重置前用尽` }
-    : { label: '额度偏紧', level: 'tight', reason: `${name} 将在重置前用尽` };
+    ? {
+      label: exhausted ? QUOTA_POOL_STATE_LABEL.exhausted : QUOTA_POOL_STATE_LABEL.insufficient,
+      level: 'insufficient',
+      reason: exhausted ? `${name} 已耗尽` : `${name} 将在重置前用尽`,
+    }
+    : { label: QUOTA_POOL_STATE_LABEL.sufficient, level: 'tight', reason: `${name} 将在重置前用尽` };
 }
 
 export interface QuotaResetView {
@@ -165,6 +205,8 @@ export interface QuotaBarProps {
   remainingPct: number;
   expectedRemainingPct: number | null;
   resetsAt?: string;
+  /** Four-level pool state from the snapshot; rendered as its Chinese label. */
+  state?: QuotaPoolState;
   /** When true the whole row is dimmed and the name is marked stale. */
   stale?: boolean;
   /**
@@ -191,6 +233,7 @@ export function QuotaBar({
   remainingPct,
   expectedRemainingPct,
   resetsAt,
+  state,
   stale = false,
   now: injectedNow,
   surface = 'card',
@@ -218,6 +261,11 @@ export function QuotaBar({
     ? `${Math.max(0, Math.min(100, 100 - expectedRemainingPct))}%`
     : null;
   const usedLabel = `已用 ${Math.floor(used)}%`;
+  // The projected four-level state replaces the ad-hoc exhaustion word so one
+  // pool never carries two parallel wordings.
+  const stateView = state === undefined
+    ? null
+    : { label: QUOTA_POOL_STATE_LABEL[state], tone: quotaPoolStateTone(state) ?? mutedClass };
 
   return (
     <div className={cn('flex flex-col gap-1.5', stale && 'opacity-60', className)} data-slot="quota-bar">
@@ -231,9 +279,11 @@ export function QuotaBar({
                 <TooltipContent>{reset.exact}</TooltipContent>
               </Tooltip>
             )}
-            {exhausted
-              ? <span className="shrink-0 text-destructive">· 已耗尽</span>
-              : pace !== null && <span className={cn('shrink-0', pace.warn && 'text-warning')}>· {pace.word}</span>}
+            {stateView !== null
+              ? <span className={cn('shrink-0', stateView.tone)}>· {stateView.label}</span>
+              : exhausted
+                ? <span className="shrink-0 text-destructive">· 已耗尽</span>
+                : pace !== null && <span className={cn('shrink-0', pace.warn && 'text-warning')}>· {pace.word}</span>}
             {stale && <span className="shrink-0 text-warning">· 数据过期</span>}
           </span>
           <span className="shrink-0 tabular-nums">{usedLabel}</span>
@@ -248,9 +298,11 @@ export function QuotaBar({
                 <TooltipContent>{reset.exact}</TooltipContent>
               </Tooltip>
             )}
-            {exhausted
-              ? <span className="shrink-0 text-destructive">· 已耗尽</span>
-              : pace !== null && <span className={cn('shrink-0', pace.warn && 'text-warning')}>· {pace.word}</span>}
+            {stateView !== null
+              ? <span className={cn('shrink-0', stateView.tone)}>· {stateView.label}</span>
+              : exhausted
+                ? <span className="shrink-0 text-destructive">· 已耗尽</span>
+                : pace !== null && <span className={cn('shrink-0', pace.warn && 'text-warning')}>· {pace.word}</span>}
             {stale && <span className="shrink-0 text-warning">· 数据过期</span>}
           </span>
           <span className="shrink-0 tabular-nums">{usedLabel}</span>

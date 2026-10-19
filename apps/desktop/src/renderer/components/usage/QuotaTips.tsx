@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { QuotaBar, quotaVerdict, type QuotaVerdict } from '@/renderer/components/usage/QuotaBar';
+import { QuotaBar, quotaVerdict, QUOTA_POOL_STATE_LABEL, quotaPoolStateTone, type QuotaVerdict } from '@/renderer/components/usage/QuotaBar';
 import type { QuotaProviderSnapshot } from '@/shell-contract';
 import { cn } from 'cn';
 
@@ -84,6 +84,7 @@ function ProviderTips({ provider, now, inverse }: {
               remainingPct={window.remainingPct}
               expectedRemainingPct={window.expectedRemainingPct}
               resetsAt={window.resetsAt}
+              state={window.state}
               stale={provider.stale}
               now={now}
               surface={inverse ? 'inverse' : 'card'}
@@ -93,6 +94,11 @@ function ProviderTips({ provider, now, inverse }: {
             <span key={`${balance.currency}:${balance.display}`} className="flex items-baseline gap-1">
               <span className={muted}>{BALANCE_LABEL}</span>
               <strong className="tabular-nums">{balance.display}</strong>
+              {balance.state !== undefined && (
+                <span className={cn(quotaPoolStateTone(balance.state) ?? muted)}>
+                  {QUOTA_POOL_STATE_LABEL[balance.state]}
+                </span>
+              )}
             </span>
           ))}
         </>
