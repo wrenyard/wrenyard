@@ -616,6 +616,52 @@ function canonicalLayerToRaw(layer?: ConfigTaskSettingsLayer): Record<string, un
   return raw
 }
 
+/**
+ * Copies a persisted user-global layer without the model/provider exclusions:
+ * those belong to the config root `routing.exclude` and are never recreated
+ * under the legacy `tasks.settings.global.dispatch` keys. Every other field,
+ * and every per-task layer, is untouched.
+ */
+function globalLayerWithoutRoutingExclusions(
+  layer: ConfigTaskSettingsLayer,
+): ConfigTaskSettingsLayer {
+  if (layer.dispatch === undefined) return layer
+  const { excludeModelIds: _models, excludeProviderIds: _providers, ...dispatch } = layer.dispatch
+  const next: ConfigTaskSettingsLayer = { ...layer }
+  if (Object.keys(dispatch).length > 0) next.dispatch = dispatch
+  else delete next.dispatch
+  return next
+}
+
+/** Persists the global model/provider exclusions under the neutral root
+ *  `routing.exclude.models` / `routing.exclude.providers`. An absent value
+ *  removes the key; an empty section is removed entirely. */
+function writeRootRoutingExclusions(
+  root: Record<string, unknown>,
+  layer: ConfigTaskSettingsLayer | undefined,
+): void {
+  const models = layer?.dispatch?.excludeModelIds
+  const providers = layer?.dispatch?.excludeProviderIds
+  const routing: Record<string, unknown> = isRecord(root.routing) ? { ...root.routing } : {}
+  const exclude: Record<string, unknown> = isRecord(routing.exclude) ? { ...routing.exclude } : {}
+  if (models === undefined) delete exclude.models
+  else exclude.models = [...models]
+  if (providers === undefined) delete exclude.providers
+  else exclude.providers = [...providers]
+  if (Object.keys(exclude).length > 0) {
+    routing.exclude = exclude
+    root.routing = routing
+    return
+  }
+  delete routing.exclude
+  if (Object.keys(routing).length === 0) delete root.routing
+  else root.routing = routing
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 /** The authoritative origin of a definition: its registered project id, or
  *  undefined when the definition is builtin/workspace-scoped. */
 function authoritativeProjectOf(summary: TaskSettingsDefinitionSummary): string | undefined {
@@ -879,7 +925,7 @@ export class TaskSettingsService {
     try {
       effective = resolveEffectiveTaskSettings({
         builtin: builtinLayer,
-        userGlobal: readGlobalTaskSettings(tasks) ?? undefined,
+        userGlobal: readGlobalTaskSettings(tasks, record) ?? undefined,
         userTask: userTaskLayer,
         ...(invocationLayer !== undefined ? { invocation: invocationLayer } : {}),
       })
@@ -965,7 +1011,7 @@ export class TaskSettingsService {
   async snapshot(params: TaskSettingsSnapshotParams = {}): Promise<TaskSettingsSnapshotResult> {
     const { record, revision } = this.readConfigRecord()
     const tasks = tasksSectionOf(record)
-    const userGlobal = readGlobalTaskSettings(tasks)
+    const userGlobal = readGlobalTaskSettings(tasks, record)
 
     const summaries = await this.collectSnapshotSummaries(params)
     // Request-scoped preview memo for this snapshot request only: automatic
@@ -1098,7 +1144,8 @@ export class TaskSettingsService {
   async routingTest(params: TaskRoutingTestParams): Promise<TaskRoutingTestResult> {
     // Weight-only exception: read the current global routing weights once per
     // request; both passes below use this identical weight set.
-    const routingWeights = readGlobalTaskSettings(tasksSectionOf(this.readConfigRecord().record))?.routingWeights
+    const currentRecord = this.readConfigRecord().record
+    const routingWeights = readGlobalTaskSettings(tasksSectionOf(currentRecord), currentRecord)?.routingWeights
     const requirements = routingFormRequirements(params.automatic)
     const timeoutMs = typeof params.timeout_ms === 'number' && params.timeout_ms >= 1
       ? params.timeout_ms
@@ -1169,8 +1216,9 @@ export class TaskSettingsService {
    *  dropped. It resolves no runtime and performs no inference, save, or
    *  reserve. */
   async routingTestTasks(_params: TaskRoutingTestTasksParams = {}): Promise<TaskRoutingTestTasksResult> {
-    const settings = tasksSectionOf(this.readConfigRecord().record)
-    const userGlobal = readGlobalTaskSettings(settings) ?? undefined
+    const currentRecord = this.readConfigRecord().record
+    const settings = tasksSectionOf(currentRecord)
+    const userGlobal = readGlobalTaskSettings(settings, currentRecord) ?? undefined
     const summaries = await this.collectSnapshotSummaries({})
     const tasks: TaskRoutingTestTask[] = summaries.map((summary) => {
       const kind: 'builtin' | 'project' = summary.kind
@@ -1377,17 +1425,21 @@ export class TaskSettingsService {
     }
 
     const tasks = tasksSectionOf(current.record)
-    const existingGlobal = readGlobalTaskSettings(tasks)
+    const existingGlobal = readGlobalTaskSettings(tasks, current.record)
     const nextGlobal = this.applyPatchToLayer(existingGlobal, params.patch)
     if (nextGlobal?.selectionMode === 'explicit' && nextGlobal.explicitRuntime === undefined) {
       throw new TaskSettingsInvalidSettingsError('global explicit mode requires an explicit runtime reference (target)')
     }
 
-    this.writeRecordMutation(current.record, (settings) => {
+    this.writeRecordMutation(current.record, (settings, root) => {
+      // The global model/provider exclusions live only at the config root
+      // `routing.exclude`; the legacy global `dispatch` keys are never
+      // written back.
+      writeRootRoutingExclusions(root, nextGlobal)
       if (nextGlobal === undefined) {
         delete settings.global
       } else {
-        settings.global = nextGlobal
+        settings.global = globalLayerWithoutRoutingExclusions(nextGlobal)
       }
     })
     return this.snapshot({ project: params.project })
@@ -1429,7 +1481,7 @@ export class TaskSettingsService {
       try {
         effective = resolveEffectiveTaskSettings({
           builtin: builtinLayer,
-          userGlobal: readGlobalTaskSettings(tasks) ?? undefined,
+          userGlobal: readGlobalTaskSettings(tasks, current.record) ?? undefined,
           userTask: nextLayer,
         })
       } catch (error) {

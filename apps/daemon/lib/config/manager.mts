@@ -18,6 +18,7 @@ import {
   markForemanProviderMigration,
   migrateForemanChatGPTReferences,
 } from './chatgpt-migration.mts'
+import { migrateGlobalRoutingExclusions } from './routing-exclusions-migration.mts'
 import {
   normalizeForemanServiceConfig,
   type NormalizeForemanConfigOptions,
@@ -61,13 +62,27 @@ export class JsonForemanConfigStore implements ForemanConfigStore {
     // document with no legacy reference at all — is left byte-identical, so
     // canonical `anthropic` API references are never re-interpreted as the
     // subscription provider on subsequent reads.
+    // Both migrations are aggregated into one atomic write so a document that
+    // needs either is persisted exactly once.
+    let migratedRecord: ConfigRecord | null = null
     if (!hasForemanProviderMigrationMarker(parsed)) {
       const migrated = migrateForemanChatGPTReferences(parsed)
       if (migrated.changed) {
-        const record = markForemanProviderMigration(migrated.record).record as ConfigRecord
-        this.write(configPath, record)
-        return record
+        migratedRecord = markForemanProviderMigration(migrated.record).record as ConfigRecord
       }
+    }
+
+    const relocated = migrateGlobalRoutingExclusions(migratedRecord ?? (parsed as ConfigRecord))
+    if (relocated.changed) {
+      const record = relocated.record as ConfigRecord
+      this.write(configPath, record)
+      console.error('config: migrated global model/provider exclusions to routing.exclude')
+      return record
+    }
+
+    if (migratedRecord !== null) {
+      this.write(configPath, migratedRecord)
+      return migratedRecord
     }
 
     return parsed as ConfigRecord

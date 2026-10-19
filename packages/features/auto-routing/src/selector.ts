@@ -51,9 +51,12 @@ export interface SelectorRoute {
 export interface SelectorSettingsLayer {
   dispatch?: {
     maxOutputUsdPerMillion?: number;
+  };
+  /** Global model/provider exclusions: the neutral `routing.exclude` lists. */
+  exclude?: {
     /** Bare model ids or unified `provider/model` ids no automatic route may use. */
-    excludeModelIds?: readonly string[];
-    excludeProviderIds?: readonly string[];
+    models?: readonly string[];
+    providers?: readonly string[];
   };
   /** Routing score weights keyed for config, mapped to scorer P/S/Q/I. */
   routingWeights?: { price: number; speed: number; quota: number; intelligence: number };
@@ -173,8 +176,8 @@ function createSelector(
     }
     // The global exclusions govern every automatic choice, the same lists task
     // dispatch honors; an explicit user choice never reaches this selector.
-    const excludedProviders = new Set(settings?.dispatch?.excludeProviderIds ?? []);
-    const excludedModels = settings?.dispatch?.excludeModelIds ?? [];
+    const excludedProviders = new Set(settings?.exclude?.providers ?? []);
+    const excludedModels = settings?.exclude?.models ?? [];
     const models = port.catalog.providers().flatMap(provider => {
       if (excludedProviders.has(provider.id)) { reject('provider excluded'); return []; }
       const excluded = excludedModelIdsFor(provider, excludedModels);

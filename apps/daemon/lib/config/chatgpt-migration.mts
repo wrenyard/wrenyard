@@ -104,6 +104,29 @@ function migrateLayer(layer: unknown): void {
   }
 }
 
+/** Migrate the provider references inside the neutral root `routing.exclude`
+ *  lists: bare provider ids in `providers`, `provider/model` targets in
+ *  `models`. Unknown/missing sections are left untouched. */
+function migrateRoutingExcludeLayer(root: RecordValue): void {
+  const routing = root.routing;
+  if (!object(routing)) return;
+  const exclude = routing.exclude;
+  if (!object(exclude)) return;
+  for (const key of ['providers', 'models']) {
+    const entries = exclude[key];
+    if (!Array.isArray(entries)) continue;
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      if (typeof entry !== 'string') continue;
+      const migrated = key === 'providers'
+        ? stageProviderId(entry)
+        : migrateProviderTargetId(entry);
+      entries[index] = isStagedProvider(migrated) ? unstageProviderSentinel(migrated) : migrated;
+    }
+    exclude[key] = [...new Set(entries)];
+  }
+}
+
 /** Marker written into a foreman config document once provider identities have
  *  been migrated. Its presence means later reads must leave canonical
  *  `anthropic` (API) references untouched instead of reinterpreting them. */
@@ -122,11 +145,13 @@ export function markForemanProviderMigration<T>(record: T): { record: T; changed
 }
 
 /** Migrate persisted task settings provider references (explicit runtime
- *  targets and dispatch exclusions). Callers gate this on
+ *  targets and dispatch exclusions) plus the neutral root `routing.exclude`
+ *  lists. Callers gate this on
  *  {@link hasForemanProviderMigrationMarker} so a legacy document migrates
  *  exactly once and later reads leave modern `anthropic` API refs untouched. */
 export function migrateForemanChatGPTReferences<T>(record: T): { record: T; changed: boolean } {
   const staged = migrate(record, (root) => {
+    migrateRoutingExcludeLayer(root);
     const settings = object(root.tasks) ? root.tasks.settings : undefined;
     if (!object(settings)) return;
     migrateLayer(settings.global);

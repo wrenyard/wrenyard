@@ -140,6 +140,17 @@ const BOOLEAN_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
 
 const REASONING_EFFORT_FIELDS: ReadonlySet<TaskDispatchField> = new Set(['expectedReasoningEffort'])
 
+/**
+ * Dispatch fields the user-global layer no longer owns: the global model and
+ * provider exclusions live at the config root `routing.exclude`, so a legacy
+ * `tasks.settings.global.dispatch` copy is ignored rather than honored.
+ * Per-task layers keep accepting exactly the same field names.
+ */
+const GLOBAL_IGNORED_DISPATCH_FIELDS: ReadonlySet<TaskDispatchField> = new Set([
+  'excludeModelIds',
+  'excludeProviderIds',
+])
+
 /* -------------------------------------------------------------------------- *
  * Layer model
  * -------------------------------------------------------------------------- */
@@ -174,6 +185,12 @@ export interface TaskSettingsLayer {
    * layer drops it like an unknown key.
    */
   environmentTools?: readonly string[]
+  /**
+   * Neutral model/provider exclusions, read exclusively from the config root
+   * `routing.exclude`. They are also projected into `dispatch` so downstream
+   * resolution keeps consuming `excludeModelIds` / `excludeProviderIds`.
+   */
+  exclude?: RoutingExcludeSettings
 }
 
 /** Routing score weights keyed for config, mapped to scorer P/S/Q/I. */
@@ -182,6 +199,28 @@ export interface TaskRoutingWeights {
   speed: number
   quota: number
   intelligence: number
+}
+
+/**
+ * Neutral model/provider exclusions. Their only persisted home is the config
+ * root `routing.exclude`; a settings layer carries them as a read projection
+ * alongside `dispatch`. Per-task exclusions keep their
+ * `dispatch.excludeModelIds` / `dispatch.excludeProviderIds` names.
+ */
+export interface RoutingExcludeSettings {
+  /** Bare model ids or unified `provider/model` ids no automatic route may use. */
+  models?: readonly string[]
+  providers?: readonly string[]
+}
+
+/** Root-level routing section of a foreman config document. */
+export interface RoutingConfigSection {
+  exclude?: RoutingExcludeSettings
+}
+
+/** Structural view over a config document root carrying `routing`. */
+export interface RoutingConfigRootInput {
+  routing?: unknown
 }
 
 /** Five named layers in merge precedence order. All are optional. */
@@ -309,7 +348,11 @@ function normalizeExplicitRuntime(raw: unknown, scope: string): TaskExplicitRunt
   return { kind: 'target', target: target.trim() }
 }
 
-function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchRequirements> {
+function normalizeDispatch(
+  raw: unknown,
+  scope: string,
+  ignored?: ReadonlySet<TaskDispatchField>,
+): Partial<TaskDispatchRequirements> {
   if (raw === undefined || raw === null) return {}
   if (!isPlainObject(raw)) fail(scope, 'dispatch must be an object')
 
@@ -319,6 +362,7 @@ function normalizeDispatch(raw: unknown, scope: string): Partial<TaskDispatchReq
   let intelligenceExpected: IntelligenceTier | undefined
 
   for (const field of TASK_DISPATCH_FIELDS) {
+    if (ignored?.has(field)) continue
     const { value } = resolveAliased(record, DISPATCH_FIELD_ALIASES[field])
     if (value === undefined) continue
 
@@ -492,7 +536,13 @@ export function normalizeTaskSettingsLayer(
 
   const dispatch = resolveAliased(record, LAYER_FIELD_ALIASES.dispatch)
   if (dispatch.value !== undefined) {
-    const normalizedDispatch = normalizeDispatch(dispatch.value, scope)
+    // The user-global layer drops the model/provider exclusions: those are
+    // sourced from the neutral root `routing.exclude` only.
+    const normalizedDispatch = normalizeDispatch(
+      dispatch.value,
+      scope,
+      options?.globalLayer === true ? GLOBAL_IGNORED_DISPATCH_FIELDS : undefined,
+    )
     if (Object.keys(normalizedDispatch).length > 0) {
       layer.dispatch = normalizedDispatch
     }
@@ -534,13 +584,66 @@ export interface TasksConfigSettingsInput {
   } | null
 }
 
-/** Reads and normalizes the user-global layer from `tasks.settings.global`. */
+/**
+ * Strict reader for the neutral global model/provider exclusions at the config
+ * root `routing.exclude`. Only `models` and `providers` are read; both must be
+ * arrays of non-empty strings when present. A missing section yields
+ * `undefined`; a malformed one fails instead of being silently dropped.
+ */
+export function readRoutingExclusions(
+  root?: RoutingConfigRootInput | null,
+  scope?: string,
+): RoutingExcludeSettings | undefined {
+  if (root === undefined || root === null) return undefined
+  if (!isPlainObject(root)) fail(scopeOf('config', scope), 'config root must be an object')
+  const routing = (root as Record<string, unknown>).routing
+  if (routing === undefined || routing === null) return undefined
+  if (!isPlainObject(routing)) fail(scopeOf('routing', scope), 'routing must be an object')
+  const exclude = (routing as Record<string, unknown>).exclude
+  if (exclude === undefined || exclude === null) return undefined
+  if (!isPlainObject(exclude)) fail(scopeOf('routing.exclude', scope), 'routing.exclude must be an object')
+  const listScope = ` (${scope ?? 'routing.exclude'})`
+  const out: RoutingExcludeSettings = {}
+  const models = (exclude as Record<string, unknown>).models
+  if (models !== undefined && models !== null) {
+    out.models = normalizeNonEmptyStringList(models, listScope, 'routing.exclude.models')
+  }
+  const providers = (exclude as Record<string, unknown>).providers
+  if (providers !== undefined && providers !== null) {
+    out.providers = normalizeNonEmptyStringList(providers, listScope, 'routing.exclude.providers')
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+function scopeOf(label: string, scope: string | undefined): string {
+  return scope === undefined ? ` (${label})` : ` (${scope})`
+}
+
+/**
+ * Reads and normalizes the user-global layer from `tasks.settings.global`,
+ * sourcing the model/provider exclusions exclusively from the neutral config
+ * root `routing.exclude`. Legacy global `dispatch` exclusion keys (camelCase or
+ * snake_case) are ignored; the neutral exclusions are projected back into
+ * `dispatch` so downstream resolution keeps consuming `excludeModelIds` /
+ * `excludeProviderIds`. Layer precedence is unchanged.
+ */
 export function readGlobalTaskSettings(
   tasks?: TasksConfigSettingsInput | null,
+  root?: RoutingConfigRootInput | null,
 ): TaskSettingsLayer | undefined {
   const raw = tasks?.settings?.global
-  if (raw === undefined || raw === null) return undefined
-  return normalizeTaskSettingsLayer(raw, { scope: 'tasks.settings.global', globalLayer: true })
+  const layer = raw === undefined || raw === null
+    ? undefined
+    : normalizeTaskSettingsLayer(raw, { scope: 'tasks.settings.global', globalLayer: true })
+  const exclusions = readRoutingExclusions(root)
+  if (exclusions === undefined) return layer
+  const merged: TaskSettingsLayer = layer ?? {}
+  merged.exclude = exclusions
+  const dispatch: Partial<TaskDispatchRequirements> = { ...merged.dispatch }
+  if (exclusions.models !== undefined) dispatch.excludeModelIds = [...exclusions.models]
+  if (exclusions.providers !== undefined) dispatch.excludeProviderIds = [...exclusions.providers]
+  merged.dispatch = dispatch
+  return merged
 }
 
 /** Reads and normalizes the user-task layer for a stable definition identity
@@ -761,5 +864,5 @@ export function resolveEffectiveTaskSettings(
 /** Read only current routing weights/cap; old auxiliary preference files are inert. */
 export function readAuxiliaryRoutingSettings(configPath: string): TaskSettingsLayer | undefined {
   const config = new JsonForemanConfigStore().read(configPath)
-  return readGlobalTaskSettings(config?.tasks as TasksConfigSettingsInput | undefined)
+  return readGlobalTaskSettings(config?.tasks as TasksConfigSettingsInput | undefined, config)
 }
