@@ -536,7 +536,8 @@ export interface TasksConfigSettingsInput {
 
 /**
  * Strict reader for the neutral global model/provider exclusions at the config
- * root `routing.exclude`. Only `models`, `providers` and `roles` are read; the
+ * root `routing.exclude`. Only `models`, `providers` and `roles` are read;
+ * unknown keys under `routing.exclude` and under each role entry fail. The
  * lists must be arrays of non-empty strings when present, and every role entry
  * must be an object whose own lists pass the same validation. A missing section
  * yields `undefined`; a malformed one fails instead of being silently dropped.
@@ -553,6 +554,11 @@ export function readRoutingExclusions(
   const exclude = (routing as Record<string, unknown>).exclude
   if (exclude === undefined || exclude === null) return undefined
   if (!isPlainObject(exclude)) fail(scopeOf('routing.exclude', scope), 'routing.exclude must be an object')
+  for (const key of Object.keys(exclude)) {
+    if (key !== 'models' && key !== 'providers' && key !== 'roles') {
+      fail(scopeOf('routing.exclude', scope), `routing.exclude has unknown key ${key}`)
+    }
+  }
   const listScope = ` (${scope ?? 'routing.exclude'})`
   const out: RoutingExcludeSettings = {}
   const models = (exclude as Record<string, unknown>).models
@@ -575,6 +581,11 @@ export function readRoutingExclusions(
         fail(listScope, `routing.exclude.roles.${role} must be an object`)
       }
       const roleRecord = value as Record<string, unknown>
+      for (const key of Object.keys(roleRecord)) {
+        if (key !== 'models' && key !== 'providers') {
+          fail(scopeOf(`routing.exclude.roles.${role}`, scope), `routing.exclude.roles.${role} has unknown key ${key}`)
+        }
+      }
       const entry: RoutingRoleExcludeSettings = {}
       const roleModels = roleRecord.models
       if (roleModels !== undefined && roleModels !== null) {

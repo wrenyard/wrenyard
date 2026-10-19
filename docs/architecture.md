@@ -154,7 +154,9 @@ apply only to that role's own automatic selection — the auxiliary roles (for
 example `status`, `title`, `suggestion`, `reply` and `dispatch`), the task
 roles, which are keyed by task name, and bot selection — and they are layered
 on top of the global lists. Explicit user choices and the Gateway are
-unaffected.
+unaffected. Unknown keys under `routing.exclude` and inside a role entry fail
+config load with an error naming the key and scope; empty lists are accepted
+and mean no exclusions.
 
 Earlier builds stored the machine-wide lists under
 `tasks.settings.global.dispatch.excludeModelIds` / `excludeProviderIds`. On the
