@@ -129,7 +129,8 @@ class Engine implements Session, SessionCallHost {
   /**
    * Whether the daemon opted this session service into restart recovery. Only
    * the graceful shutdown path calls {@link prepareForRestart}; an ordinary
-   * interrupt, a default `close` and bot context never enable it.
+   * interrupt and a default `close` never enable it. Bot context enables it
+   * through the bot kernel's `prepareForRestart` during graceful shutdown.
    */
   private restartOptIn = false;
   /**
