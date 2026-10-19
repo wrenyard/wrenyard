@@ -1,11 +1,12 @@
 import { homedir } from 'node:os';
 import { BUILTIN_PROVIDERS, createBuiltinProviderRuntime, readDevinCredentials } from '@wrenyard/providers';
 import type { ClientOptions } from '@wrenyard/clients';
-export type HttpQuotaProvider = 'deepseek' | 'kimi-coding' | 'zhipu-coding' | 'devin';
+export type HttpQuotaProvider = 'deepseek' | 'kimi-coding' | 'zhipu-coding' | 'devin' | 'openrouter';
 const endpoints: Record<Exclude<HttpQuotaProvider, 'devin'>, string> = {
     deepseek: 'https://api.deepseek.com/user/balance',
     'kimi-coding': 'https://api.kimi.com/coding/v1/usages',
     'zhipu-coding': 'https://open.bigmodel.cn/api/monitor/usage/quota/limit',
+    openrouter: 'https://openrouter.ai/api/v1/key',
 };
 async function credential(provider: HttpQuotaProvider, env: NodeJS.ProcessEnv): Promise<string | undefined> {
     const home = env.HOME || env.USERPROFILE || homedir();
@@ -61,6 +62,13 @@ export class HttpQuotaSource {
         }
         const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (provider === 'devin' && data.code) return { error_code: data.code === 'unauthenticated' || data.code === 'permission_denied' ? 'authentication_required' : data.code === 'resource_exhausted' ? 'rate_limited' : 'quota_query_failed' };
-        return { source: provider === 'deepseek' ? 'deepseek-balance' : provider === 'devin' ? 'devin.GetUserStatus' : 'api', fetched_at: new Date().toISOString(), data };
+        const sourceLabel = provider === 'devin'
+            ? 'devin.GetUserStatus'
+            : provider === 'deepseek'
+                ? 'deepseek-balance'
+                : provider === 'openrouter'
+                    ? 'openrouter-balance'
+                    : 'api';
+        return { source: sourceLabel, fetched_at: new Date().toISOString(), data };
     }
 }

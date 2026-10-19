@@ -7,6 +7,8 @@ export interface QuotaSource {
 export interface ProviderQuota {
   readonly bindings: readonly ProviderQuotaBinding[];
   readonly defaultPools: readonly ProviderQuotaPool[];
+  /** Pools declared beyond defaultPools and explicit bindings, for catalog binding synthesis; not model bindings. */
+  readonly pools?: readonly ProviderQuotaPool[];
   /**
    * Minimum interval between successful upstream reads. While it has not
    * elapsed, a cached observation is returned even for an explicit refresh, so

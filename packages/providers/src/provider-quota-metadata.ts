@@ -11,11 +11,43 @@ function defaultPoolsFor(providerId: string): readonly ProviderQuotaPool[] {
   return providerQuotas.get(providerId)?.defaultPools ?? [];
 }
 
+function catalogPoolContext(providerId: string): {
+  defaultPools: readonly ProviderQuotaPool[];
+  freePool: ProviderQuotaPool | undefined;
+  balancePools: readonly ProviderQuotaPool[];
+} {
+  const quota = providerQuotas.get(providerId);
+  const defaultPools = quota?.defaultPools ?? [];
+  const byId = new Map<string, ProviderQuotaPool>();
+  for (const pool of defaultPools) byId.set(pool.quotaPoolId, pool);
+  for (const pool of quota?.pools ?? []) byId.set(pool.quotaPoolId, pool);
+  for (const entry of quota?.bindings ?? []) {
+    if (entry.providerId !== providerId) continue;
+    for (const pool of entry.pools) byId.set(pool.quotaPoolId, pool);
+  }
+  const universe = [...byId.values()];
+  return {
+    defaultPools,
+    freePool: universe.find((pool) => pool.kind === 'quota' && pool.quotaPoolId === `${providerId}/free`),
+    balancePools: universe.filter((pool) => pool.kind === 'balance'),
+  };
+}
+
+function synthesizedCatalogPools(
+  model: { free?: boolean },
+  context: ReturnType<typeof catalogPoolContext>,
+): readonly ProviderQuotaPool[] {
+  if (model.free === true && context.freePool !== undefined) return [context.freePool];
+  if (model.free !== true && context.balancePools.length === 1) return [context.balancePools[0]!];
+  return context.defaultPools;
+}
+
 const catalogBindings = BUILTIN_PROVIDERS.flatMap((provider) => {
-  const pools = defaultPoolsFor(provider.id);
+  const context = catalogPoolContext(provider.id);
   return provider.models.flatMap((model) => {
     const explicit = explicitBindings.find((entry) => entry.providerId === provider.id && entry.modelId === model.id);
     if (explicit) return [explicit];
+    const pools = synthesizedCatalogPools(model, context);
     return pools.length ? [binding(provider.id, model.id, pools)] : [];
   });
 });
