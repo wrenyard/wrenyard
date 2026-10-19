@@ -150,8 +150,6 @@ export interface ConstraintAssessment {
   headroom: number | null;
   /** Machine-readable reason when state === "rejected". */
   rejectCode: ConstraintRejectCode | null;
-  /** True only when fresh full-cycle evidence is behind the reset pace. */
-  aheadOfPace?: boolean | null;
 }
 /** Aggregate quota assessment across all required constraints. */
 export interface QuotaAssessment {
@@ -161,8 +159,6 @@ export interface QuotaAssessment {
   headroomTrusted: boolean;
   headroom: number | null;
   constraints: ConstraintAssessment[];
-  /** True when any constraint reports aheadOfPace. */
-  aheadOfPace?: boolean;
 }
 export type ExcludedReason = "invalid_candidate" | "invalid_now" | "invalid_timeout" | "invalid_reference_price" | "invalid_cap" | "reference_above_cap" | "invalid_speed" | "speed_below_minimum" | "invalid_intelligence" | "intelligence_out_of_range" | "quota_blocked" | "marginal_above_reference" | "snapshot_context_mismatch";
 export interface ExcludedCandidate {

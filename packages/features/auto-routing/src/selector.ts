@@ -320,7 +320,7 @@ function createSelector(
       const emitted = new Set<string>();
       const ladderPool = ladder.flatMap(step => admitted.filter(({ model, tier, quota, abundant }) => {
         if (tier !== step.intelligence) return false;
-        if (step.requireQuotaSufficient && !(abundant || quota.aheadOfPace !== true)) return false;
+        if (step.requireQuotaSufficient && !(abundant || quota.state === 'healthy')) return false;
         if (emitted.has(model)) return false;
         emitted.add(model);
         return true;
