@@ -248,7 +248,7 @@ export interface TurnWaitingEvent extends LedgerEventBase {
   /** The waiting turn: `t<turn>`. */
   parent: string;
   /** Why the turn is waiting. */
-  reason: 'admission' | 'recovery';
+  reason: 'admission' | 'recovery' | 'quota_exhausted';
   /**
    * Absolute instant the next probe/recovery is due (ISO 8601); absent when no
    * real instant is known, so the wait is recorded as unknown-time.

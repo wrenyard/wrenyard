@@ -32,7 +32,7 @@
  * and long waits are chunked so a timer cannot overflow.
  */
 import { ModelError, abortError, isQuotaCode, type ModelErrorKind } from './errors.ts';
-import type { ModelWaitReason, RetryAfterHint } from './protocol.ts';
+import type { ModelPreflightResult, ModelWaitReason, RetryAfterHint } from './protocol.ts';
 
 /** Failed attempts after the first, so one call issues at most five requests. */
 export const MAX_RETRIES = 4;
@@ -107,7 +107,7 @@ export interface RetryContext {
    * route-health wait in the single retry loop — there is no second nested retry
    * owner. Cancellation, not `outputStarted`, gates it.
    */
-  preflight?: () => number | undefined;
+  preflight?: () => ModelPreflightResult | undefined;
 }
 
 /**
@@ -223,7 +223,7 @@ async function waitForRecovery(wait: RecoveryWait, context: RetryContext, now: (
     await waitChunk(Math.min(remaining, RECOVERY_RECHECK_MS), context.signal);
     // A local read only: nothing is sent upstream before the due instant.
     if (context.preflight === undefined) continue;
-    const observed = context.preflight();
+    const observed = context.preflight()?.notBeforeMs;
     const effective = Math.max(wait.floorMs ?? 0, observed ?? 0);
     if (effective === untilMs) continue;
     untilMs = effective;
@@ -258,11 +258,13 @@ export async function runWithRetry<T>(run: () => Promise<T>, context: RetryConte
     // each one that follows a wait — so a route that entered (or extended) its
     // cooldown is waited out in the same loop instead of probed early and
     // rejected by the Gateway. One wait owner; no nested retry loop.
-    const blockedUntil = context.preflight?.();
+    const preflight = context.preflight?.();
+    const blockedUntil = preflight?.notBeforeMs;
     if (blockedUntil !== undefined && blockedUntil > now()) {
       // No advertised floor here: this instant is live route state, so the wait
       // may be shortened as well as extended while it sleeps.
-      await waitForRecovery({ attempt, kind: 'server', reason: 'admission', untilMs: blockedUntil }, context, now);
+      const reason = preflight?.faultState === 'quota_exhausted' ? 'quota_exhausted' : 'admission';
+      await waitForRecovery({ attempt, kind: 'server', reason, untilMs: blockedUntil }, context, now);
       continue;
     }
     // A cancellation that landed while reading route health is honoured before

@@ -140,9 +140,13 @@ export type ModelFailureSource = 'upstream' | 'admission';
 /**
  * Why the transport is waiting before its next attempt. `admission` is waiting
  * for permission to probe a locally blocked route; `recovery` is a guaranteed
- * wait until an adopted not-before instant.
+ * wait until an adopted not-before instant; `quota_exhausted` is waiting on a
+ * free-quota block with a known or unknown reset time.
  */
-export type ModelWaitReason = 'admission' | 'recovery';
+export type ModelWaitReason = 'admission' | 'recovery' | 'quota_exhausted';
+
+/** Local route-health read before an attempt: when blocked, when probing may resume. */
+export type ModelPreflightResult = { notBeforeMs: number; faultState?: string };
 
 /** Request attribution metadata; never sent to the supplier. */
 export interface ModelAttribution {
@@ -200,7 +204,7 @@ export interface ModelRequest {
    * route-health wait in the one retry loop instead of a second nested one, so
    * a route known to be cooling down is not probed early.
    */
-  preflight?: () => number | undefined;
+  preflight?: () => ModelPreflightResult | undefined;
   signal: AbortSignal;
   /** Called for every event of the call, in arrival order. */
   onEvent?: (event: ModelEvent) => void;

@@ -571,7 +571,19 @@ export function createGatewayPipeline(options: GatewayPipelineOptions): GatewayP
           // Minimal mapping: an official body keeps its bytes; a non-conforming
           // structure is wrapped in the entry protocol's official envelope.
           const mapped = mapUpstreamErrorBody(module, finalStatus, finalBytes, finalBody);
-          response.writeHead(mapped.status, allowedResponseHeaders(upstream.headers));
+          const responseHeaders = allowedResponseHeaders(upstream.headers);
+          // A classified failure that names a future reset instant asks the
+          // caller to wait exactly until then; advertise it as Retry-After in
+          // delta seconds so a conforming client honours the upstream recovery
+          // time instead of guessing an exponential backoff.
+          if (outcome !== undefined && isPoisoning(outcome) && outcome.until !== undefined) {
+            const untilMs = Date.parse(outcome.until);
+            if (Number.isFinite(untilMs)) {
+              const deltaMs = untilMs - options.now();
+              if (deltaMs > 0) responseHeaders['retry-after'] = Math.ceil(deltaMs / 1000).toString();
+            }
+          }
+          response.writeHead(mapped.status, responseHeaders);
           response.end(Buffer.from(mapped.bytes));
           await finish({
             ...forwarded, status: mapped.status, upstream: fact,

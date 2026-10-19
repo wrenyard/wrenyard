@@ -6,6 +6,33 @@ import { fetchDevinModels, type DevinModel } from './models.ts';
 import { executeDevin, CHAT_RPC, jsonError } from './protocol.ts';
 import { quota } from './quota.ts';
 
+/**
+ * Parse the reset instant Devin embeds in a free-model rate-limit message.
+ * Prefers the absolute `(at HH:MM UTC)` marker (UTC calendar day of `nowMs`,
+ * bumped to the next day once it has already passed); otherwise falls back to a
+ * relative `reset in N hours [M minutes]` window measured from `nowMs`. Returns
+ * an ISO 8601 instant, or `undefined` when the message carries no usable time.
+ */
+function parseDevinResetInstant(message: string, nowMs: number): string | undefined {
+  const absolute = message.match(/\(at\s+(\d{1,2}):(\d{2})\s+UTC\)/i);
+  if (absolute !== null) {
+    const hours = Number(absolute[1]);
+    const minutes = Number(absolute[2]);
+    const now = new Date(nowMs);
+    const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hours, minutes, 0, 0));
+    // An instant already in the past belongs to the next UTC day.
+    if (reset.getTime() <= now.getTime()) reset.setUTCDate(reset.getUTCDate() + 1);
+    return reset.toISOString();
+  }
+  const relative = message.match(/reset in\s+(\d+)\s*hours?(?:\s+(\d+)\s*minutes?)?/i);
+  if (relative !== null) {
+    const hours = Number(relative[1]);
+    const minutes = Number(relative[2] ?? 0);
+    return new Date(nowMs + (hours * 60 + minutes) * 60_000).toISOString();
+  }
+  return undefined;
+}
+
 export interface DevinOptions { context?: ProviderContext; fetch?: typeof fetch }
 export interface DevinProvider extends Provider { refreshModels(): Promise<readonly ModelDefinition[]> }
 interface Snapshot { credentials: DevinCredentials; models: DevinModel[]; expires: number }
@@ -67,12 +94,20 @@ export function createDevin(options: DevinOptions = {}): DevinProvider {
     // whose message names the exhausted quota. That failure owns the paid pools
     // only, never a route or the provider, so the free pool stays usable. Every
     // other body falls through to the generic status classification.
-    classifyUpstreamError({ body }) {
+    classifyUpstreamError({ body, status, nowMs }) {
       if (body === null || typeof body !== 'object' || Array.isArray(body)) return undefined;
       const root = body as Record<string, unknown>;
       const error = root.error !== null && typeof root.error === 'object' && !Array.isArray(root.error)
         ? root.error as Record<string, unknown>
         : root;
+      // Free-model rate limit: Devin names the reset instant in the message, so
+      // surface a pool-scoped quota exhaustion carrying that instant instead of
+      // letting it fall through to a generic rate-limited fault with no reset.
+      if (error.code === 'resource_exhausted' || (status === 429 && typeof error.message === 'string' && /free model rate limit/i.test(error.message))) {
+        const message = typeof error.message === 'string' ? error.message : '';
+        const until = parseDevinResetInstant(message, nowMs);
+        return { state: 'quota_exhausted', scope: 'pool', quotaPoolId: 'devin/free', ...(until !== undefined ? { until } : {}) };
+      }
       if (error.code !== 'failed_precondition') return undefined;
       if (typeof error.message !== 'string' || !/quota|exhausted/i.test(error.message)) return undefined;
       return { state: 'quota_exhausted', scope: 'pool' };

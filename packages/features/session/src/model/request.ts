@@ -613,12 +613,16 @@ function isCallableNow(health: RouteHealth | undefined, nowMs: number): boolean 
  * waited out inside the one retry budget instead of being probed early and
  * rejected by the Gateway.
  */
-function routeNotBeforeMs(health: RouteHealth | undefined, nowMs: number): number | undefined {
+function routeNotBeforeMs(
+  health: RouteHealth | undefined,
+  nowMs: number,
+): { notBeforeMs: number; faultState?: string } | undefined {
   if (health === undefined) return undefined;
   const candidate = health.nextProbeAt ?? (health.phase === 'open' ? health.until : undefined);
   if (candidate === undefined) return undefined;
   const parsed = Date.parse(candidate);
-  return Number.isFinite(parsed) && parsed > nowMs ? parsed : undefined;
+  if (!Number.isFinite(parsed) || parsed <= nowMs) return undefined;
+  return { notBeforeMs: parsed, faultState: health.state };
 }
 
 /** The earlier of two optional ISO instants. */

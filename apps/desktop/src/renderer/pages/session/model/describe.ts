@@ -1,4 +1,3 @@
-import type { LedgerEvent } from '@wrenyard/session';
 import type { TimelineTone } from '@/renderer/components/timeline-bars';
 import type { ActionModel, CallModel, ContextItem, Phase, TurnModel } from './types.js';
 
@@ -213,8 +212,11 @@ export function turnStatusText(turn: TurnModel): string {
  * The live recovery waiting state of one turn, projected from its
  * `turn.waiting` event. `retryAt` is optional so a wait without a real expected
  * time stays explicitly unknown rather than borrowing a fallback recheck delay.
+ * `reason` widens the ledger's `admission | recovery` to also name a
+ * `quota_exhausted` wait, so the free-quota-exhausted notice can be rendered
+ * without redesigning the waiting surface.
  */
-export type TurnWaitingState = Pick<Extract<LedgerEvent, { type: 'turn.waiting' }>, 'reason' | 'retryAt'>;
+export type TurnWaitingState = { reason: 'admission' | 'recovery' | 'quota_exhausted'; retryAt?: string };
 
 /** Short phase name for the waiting lane, alongside the existing phase labels. */
 export const WAITING_PHASE_LABEL = '等待恢复';
@@ -223,6 +225,7 @@ export const WAITING_PHASE_LABEL = '等待恢复';
 export const WAITING_REASON_LABEL: Record<TurnWaitingState['reason'], string> = {
   admission: '等待线路允许探测',
   recovery: '等待线路恢复',
+  quota_exhausted: '免费额度耗尽',
 };
 
 function pad2(value: number): string {
@@ -237,6 +240,14 @@ function pad2(value: number): string {
  * interruptible.
  */
 export function waitingStatusText(state: TurnWaitingState): string {
+  // A free-quota-exhausted wait names the exhaustion and its expected reset
+  // time, distinct from the generic recovery wording.
+  if (state.reason === 'quota_exhausted') {
+    const reset = state.retryAt === undefined ? Number.NaN : Date.parse(state.retryAt);
+    if (!Number.isFinite(reset)) return '免费额度耗尽，恢复时间未知';
+    const at = new Date(reset);
+    return `免费额度耗尽，预计 ${pad2(at.getHours())}:${pad2(at.getMinutes())}:${pad2(at.getSeconds())} 恢复`;
+  }
   const parsed = state.retryAt === undefined ? Number.NaN : Date.parse(state.retryAt);
   if (!Number.isFinite(parsed)) return '正在等待恢复，预计重试时间：未知';
   const at = new Date(parsed);

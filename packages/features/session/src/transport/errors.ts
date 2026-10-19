@@ -118,7 +118,7 @@ export function classifyStatus(status: number, code?: string): ModelErrorKind {
 
 /** True when an official error code reports an exhausted account quota. */
 export function isQuotaCode(code: string | undefined): boolean {
-  return code === 'insufficient_quota';
+  return code === 'insufficient_quota' || code === 'resource_exhausted';
 }
 
 /** Official error `type`/`code` spellings mapped to the equivalent status semantics. */
