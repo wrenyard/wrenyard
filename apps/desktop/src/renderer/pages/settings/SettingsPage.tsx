@@ -124,6 +124,7 @@ export function SettingsPage({
     setSidebarOpen(true);
   }, [setSidebarOpen]);
   const [pendingTarget, setPendingTarget] = useState<PendingTarget | null>(null);
+  const [botFocusId, setBotFocusId] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   // The shared provider dialog entry: opened from the merged 供应商 page.
   const [dialogEntry, setDialogEntry] = useState<ProviderCatalogSnapshot | null>(null);
@@ -148,6 +149,9 @@ export function SettingsPage({
         setActiveCategory(normalized);
         if (normalized === 'supply') {
           setSupplyTab(resolveSupplyTab(category, state.tab));
+        }
+        if (normalized === 'bot') {
+          setBotFocusId(state.bot ?? null);
         }
         return true;
       }
@@ -444,7 +448,7 @@ export function SettingsPage({
     if (categoryId === 'bot') {
       // The read-only bot config lives here; routines moved to the dedicated
       // 自动化 page. The chat page is now only the group/private conversation.
-      return <BotSettings />;
+      return <BotSettings focusBotId={botFocusId} />;
     }
     if (categoryId === 'supply') {
       if (snapshot === null) return quotaFallback;

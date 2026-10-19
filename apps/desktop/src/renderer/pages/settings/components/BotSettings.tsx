@@ -111,10 +111,17 @@ function ConfigSection(props: { botId: string; tools: readonly string[] }) {
  * still owns config and routine state, so nothing here adds storage or a config
  * format.
  */
-export function BotSettings() {
+export function BotSettings(props: { focusBotId?: string | null }) {
   const agents = useAgentsQuery();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const bots = agents.data?.bots ?? [];
+
+  // A deep link naming one bot selects it once the loaded list contains it.
+  useEffect(() => {
+    const focus = props.focusBotId;
+    if (focus === undefined || focus === null) return;
+    if (bots.some((bot) => bot.id === focus)) setSelectedId(focus);
+  }, [props.focusBotId, bots]);
 
   // Keep a valid selection as the polled list changes.
   useEffect(() => {

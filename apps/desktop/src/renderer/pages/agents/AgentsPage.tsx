@@ -144,9 +144,9 @@ function BotStatusDot(props: { bot: AgentBot }) {
  * The shared bot row content: avatar, name with a muted @id, an optional
  * one-line description and the status at the right end.
  */
-function BotRowContent(props: { bot: AgentBot }) {
+function BotRowContent(props: { bot: AgentBot; onOpenSettings?: (id: string) => void }) {
   const bot = props.bot;
-  return (
+  const label = (
     <>
       <BotAvatar bot={bot} />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -158,6 +158,22 @@ function BotRowContent(props: { bot: AgentBot }) {
           <span className="truncate text-xs text-muted-foreground">{bot.description.trim()}</span>
         )}
       </span>
+    </>
+  );
+  return (
+    <>
+      {props.onOpenSettings === undefined ? (
+        label
+      ) : (
+        <button
+          type="button"
+          aria-label={`打开 ${bot.name} 的设置`}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left hover:bg-muted"
+          onClick={() => props.onOpenSettings?.(bot.id)}
+        >
+          {label}
+        </button>
+      )}
       <BotStatusDot bot={bot} />
     </>
   );
@@ -881,7 +897,13 @@ function RosterButton(props: {
                 !bot.enabled && 'opacity-50',
               )}
             >
-              <BotRowContent bot={bot} />
+              <BotRowContent
+                bot={bot}
+                onOpenSettings={(id) => {
+                  setOpen(false);
+                  void navigate('settings', { category: 'bot', bot: id });
+                }}
+              />
               <Button
                 variant="ghost"
                 size="icon-xs"
@@ -1003,8 +1025,15 @@ function PrivateView(props: {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2 text-sm">
-        <span aria-hidden>{botIcon(props.bot)}</span>
-        <span className="font-medium">{props.bot.name}</span>
+        <button
+          type="button"
+          aria-label={`打开 ${props.bot.name} 的设置`}
+          className="flex items-center gap-2 rounded-md hover:bg-muted"
+          onClick={() => { void navigate('settings', { category: 'bot', bot: props.bot.id }); }}
+        >
+          <span aria-hidden>{botIcon(props.bot)}</span>
+          <span className="font-medium">{props.bot.name}</span>
+        </button>
         <span className="rounded bg-muted px-1 text-xs text-muted-foreground">{props.bot.id}</span>
         {props.bot.primary && (
           <span className="rounded bg-primary/15 px-1 text-xs text-primary">主</span>
