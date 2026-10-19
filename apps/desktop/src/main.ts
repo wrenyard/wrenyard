@@ -49,7 +49,9 @@ import { resolveDesktopBuildTime } from './build-metadata.js';
 import { desktopMenuTemplate } from './app-menu.js';
 import { packagedDaemonLaunch } from '../../daemon/lib/daemon/launch.mts';
 import { resolveWrenyardConfigPath as resolveForemanConfigPath, resolveWrenyardDesktopDataDir } from '@wrenyard/paths';
-import { getTheme } from '@wrenyard/themes';
+import { DEFAULT_THEME_ID, getTheme } from '@wrenyard/themes';
+import neutralTokensCss from '@wrenyard/themes/neutral/tokens.css?raw';
+import paperTokensCss from '@wrenyard/themes/paper/tokens.css?raw';
 import { foremanStateRoot } from '../../daemon/lib/config/state.mts';
 import {
   createMacQuitConfirmationGate,
@@ -724,13 +726,17 @@ function showQuitHint(): void {
  * tasks or graphs. It has exactly one action ("强制结束"), reports live counts,
  * and cannot be closed by the user: only drain completion or the button.
  */
-const QUIT_DIALOG_HTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<title>退出啾啾工坊</title><style>
-body{margin:0;padding:24px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#1f1f24;color:#f2f2f5}
+// Both builtin themes' token CSS is inlined so the dialog's var() references
+// resolve regardless of the active theme. The tokens files contain no
+// backticks or ${, so they are safe inside this template literal.
+const QUIT_DIALOG_TOKENS_CSS = `${paperTokensCss}\n${neutralTokensCss}`;
+const QUIT_DIALOG_HTML = (theme: string, dark: boolean): string => `<!doctype html><html lang="zh-CN" data-theme="${theme}"${dark ? ' class="dark"' : ''}><head><meta charset="utf-8">
+<title>退出啾啾工坊</title><style>${QUIT_DIALOG_TOKENS_CSS}</style><style>
+body{margin:0;padding:24px;font-family:var(--app-font-sans);background:var(--background);color:var(--foreground)}
 h1{margin:0 0 8px;font-size:16px}
-p{margin:0 0 8px;font-size:13px;color:#c8c8d0}
-.counts{font-size:13px;color:#f2f2f5}
-button{margin-top:16px;padding:8px 18px;border:0;border-radius:6px;background:#c0392b;color:#fff;font-size:13px;cursor:pointer}
+p{margin:0 0 8px;font-size:13px;color:var(--muted-foreground)}
+.counts{font-size:13px;color:var(--foreground)}
+button{margin-top:16px;padding:8px 18px;border:0;border-radius:var(--radius);background:var(--destructive);color:var(--destructive-foreground);font-family:inherit;font-size:13px;cursor:pointer}
 </style></head><body>
 <h1>正在退出啾啾工坊</h1>
 <p>后台仍有任务运行，全部完成后将自动停止服务并退出。</p>
@@ -793,7 +799,10 @@ function createQuitDialogPresenter() {
           `(() => { ${setCounts(counts)} return new Promise((resolve) => { document.getElementById('force').addEventListener('click', () => resolve(true)); }); })()`,
         ).then(() => resolveForced()).catch(() => undefined);
       });
-      void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(QUIT_DIALOG_HTML)}`);
+      const resolved = appearanceController?.resolve();
+      const theme = resolved?.theme ?? DEFAULT_THEME_ID;
+      const dark = resolved ? resolved.dark : true;
+      void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(QUIT_DIALOG_HTML(theme, dark))}`);
       return {
         update: (value) => {
           if (!window.isDestroyed()) void window.webContents.executeJavaScript(setCounts(value)).catch(() => undefined);
