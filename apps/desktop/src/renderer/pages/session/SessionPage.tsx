@@ -334,7 +334,7 @@ export function SessionPage() {
               <MessageScrollerProvider key={sessionKey} autoScroll>
                 <MessageScroller className={cn('min-h-0 flex-1', conversationEnter && 'motion-conversation-enter')}>
                   {/* The scroller owns follow-bottom, so browser scroll anchoring must not compete during streaming. */}
-                  <MessageScrollerViewport className="scroll-fade-y [overflow-anchor:none]">
+                  <MessageScrollerViewport className="scroll-fade-y [overflow-anchor:none] overflow-x-hidden">
                     <MessageScrollerContent className={cn('w-full pt-(--header-height) pb-4 gap-8', mini ? 'px-3' : 'mx-auto max-w-3xl px-4')}>
                       {hydrating && (
                         <div role="status" className="py-8 text-center text-sm text-muted-foreground">

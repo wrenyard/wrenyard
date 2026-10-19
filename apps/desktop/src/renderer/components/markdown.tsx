@@ -545,12 +545,22 @@ export function Markdown({
           className={cn(
             'text-sm',
             // Orphan control: prose paragraphs avoid a lone trailing word and
-            // headings balance their lines. The utilities target the elements
-            // themselves (p/h1-h6), so inherited text-wrap never reaches code,
-            // pre or table content.
+            // headings balance their lines. Overflow and break utilities are
+            // descendant-scoped so inherited text-wrap never reaches code, pre
+            // or table content.
             '[&_p]:text-pretty',
             '[&_h1]:text-balance [&_h2]:text-balance [&_h3]:text-balance',
             '[&_h4]:text-balance [&_h5]:text-balance [&_h6]:text-balance',
+            // Fenced code blocks and wide tables scroll inside their own box
+            // instead of widening the page; streamdown already preserves code
+            // whitespace so no whitespace utility is needed on pre.
+            '[&_pre]:overflow-x-auto',
+            '[&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto',
+            // Long inline code, links and unbreakable prose words wrap; inline
+            // code breaking stays scoped to code not inside a pre block.
+            '[&_:not(pre)>code]:break-all',
+            '[&_a]:break-all',
+            '[&_p]:break-words [&_li]:break-words',
             className,
           )}
         >
