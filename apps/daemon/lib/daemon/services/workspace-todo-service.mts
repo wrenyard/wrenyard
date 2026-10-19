@@ -153,6 +153,7 @@ export interface TodoUpdateInput {
   request?: string
   acceptance?: string
   attachments?: string[]
+  resultSummary?: string
 }
 
 /** Structured failure for todo operations, carrying a specific code. */
@@ -255,6 +256,7 @@ export class WorkspaceTodoService {
         updated: new Date().toISOString(),
       }
       if (input.project !== undefined) next.project = requireProject(input.project, current.id)
+      if (input.resultSummary !== undefined) next.resultSummary = input.resultSummary
       await this.assertDependenciesKnownLocked(next)
       this.writeTodo(filePath, next)
       await this.refreshIndexLocked()

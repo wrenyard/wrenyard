@@ -170,6 +170,7 @@ export const todoUpdateParamsSchema = {
       items: { type: 'string', minLength: 1 },
       description: 'The new relative-path attachments; absolute or upward-escaping paths are refused.',
     },
+    resultSummary: { type: 'string', description: 'The new execution result summary.' },
   },
   additionalProperties: false,
 } as const satisfies JsonSchema
