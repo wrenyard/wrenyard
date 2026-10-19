@@ -3,8 +3,7 @@
  *
  * A bot is an LLM agent assembled from one directory definition. The kernel owns
  * everything around it: immediate message delivery, the watches that wake a
- * bot when a work session finishes a turn, the rounds a routine fire opens,
- * and the persisted state that lets admission survive a daemon restart. Bots
+ * bot when a work session finishes a turn, and the persisted state that lets admission survive a daemon restart. Bots
  * run concurrently and know nothing about each other
  * except the `message` tool.
  *
@@ -31,7 +30,7 @@ import {
   type SessionSummary,
   type TurnStatus,
 } from '@wrenyard/session'
-import type { RoutineDeliver, RoutineRecord } from '../../../protocol/methods/routine.mts'
+import type { RoutineRecord } from '../../../protocol/methods/routine.mts'
 import type { WorkspaceTodoService } from '../workspace-todo-service.mts'
 import {
   assertBotIdAvailable,
@@ -108,8 +107,6 @@ interface Wake {
   source: WakeSource
   /** The exact text the bot turn is started with. */
   text: string
-  /** The round this wake belongs to, when a routine opened one. */
-  round?: string
   /** The routine that fired this wake, read by the per-routine busy gate. */
   routineId?: string
   /** Session outcome identity for a watched-session wake. */
@@ -122,20 +119,8 @@ interface Watch {
   sessionId: string
   botId: string
   afterTurn: number
-  round?: string
   /** Workspace todo ids this session works on, kept so a context rotation can recover them. */
   todoIds?: string[]
-}
-
-/** One routine round: every wake and watch it started inherits its delivery. */
-interface Round {
-  botId: string
-  routineId: string
-  deliver: RoutineDeliver
-  /** Turns to which this round has been admitted. */
-  turns?: { sessionId: string; turn: number }[]
-  /** The round's last final reply, delivered to `deliver` when the round closes. */
-  lastReply?: string
 }
 
 /** One bot's persisted runtime state. */
@@ -210,7 +195,6 @@ interface KernelState {
   version: 1
   bots: Record<string, BotState>
   watches: Watch[]
-  rounds: Record<string, Round>
   group: GroupState
 }
 
@@ -498,7 +482,7 @@ function emptyGroupState(): GroupState {
 }
 
 function emptyState(): KernelState {
-  return { version: 1, bots: {}, watches: [], rounds: {}, group: emptyGroupState() }
+  return { version: 1, bots: {}, watches: [], group: emptyGroupState() }
 }
 
 function readWake(value: unknown): Wake | undefined {
@@ -511,7 +495,6 @@ function readWake(value: unknown): Wake | undefined {
     botId,
     source,
     text,
-    ...(typeof value.round === 'string' ? { round: value.round } : {}),
     ...(typeof value.routineId === 'string' ? { routineId: value.routineId } : {}),
     ...(isPlainObject(value.meta) && typeof value.meta.sessionId === 'string' && typeof value.meta.turn === 'number'
       ? { meta: { sessionId: value.meta.sessionId, turn: value.meta.turn } }
@@ -524,29 +507,12 @@ function readWatch(value: unknown): Watch | undefined {
   if (!isPlainObject(value)) return undefined
   const { sessionId, botId, afterTurn } = value
   if (typeof sessionId !== 'string' || typeof botId !== 'string' || typeof afterTurn !== 'number') return undefined
-  const watch: Watch = { sessionId, botId, afterTurn, ...(typeof value.round === 'string' ? { round: value.round } : {}) }
+  const watch: Watch = { sessionId, botId, afterTurn }
   if (Array.isArray(value.todoIds)) {
     const ids = value.todoIds.filter((id): id is string => typeof id === 'string')
     if (ids.length > 0) watch.todoIds = ids
   }
   return watch
-}
-
-function readRound(value: unknown): Round | undefined {
-  if (!isPlainObject(value)) return undefined
-  const { botId, routineId, deliver } = value
-  if (typeof botId !== 'string' || typeof routineId !== 'string' || typeof deliver !== 'string') return undefined
-  const turns = Array.isArray(value.turns)
-    ? value.turns.filter((turn): turn is { sessionId: string; turn: number } =>
-      isPlainObject(turn) && typeof turn.sessionId === 'string' && typeof turn.turn === 'number')
-    : []
-  return {
-    botId,
-    routineId,
-    deliver: deliver as RoutineDeliver,
-    ...(turns.length === 0 ? {} : { turns }),
-    ...(typeof value.lastReply === 'string' ? { lastReply: value.lastReply } : {}),
-  }
 }
 
 function readGroupMessage(value: unknown): GroupTranscriptEntry | undefined {
@@ -666,12 +632,6 @@ function parseState(raw: string): KernelState {
       if (watch !== undefined) state.watches.push(watch)
     }
   }
-  if (isPlainObject(parsed.rounds)) {
-    for (const [id, value] of Object.entries(parsed.rounds)) {
-      const round = readRound(value)
-      if (round !== undefined) state.rounds[id] = round
-    }
-  }
   return state
 }
 
@@ -751,7 +711,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
   const seedWaits = new Set<() => void>()
   /** Per-bot memory block of the fixed context, keyed by bot id. */
   const memoryBlocks = new Map<string, string>()
-  const turnRounds = new Map<string, Set<string>>()
   /** Live ledger subscriptions, keyed by bot and watched session. */
   const watchSubs = new Map<string, () => void>()
   /** Live reply-publication subscriptions, keyed by bot context session. */
@@ -857,9 +816,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       maxToolCalls: MAX_TOOL_CALLS,
       kernelFacts: () => kernelFactsFor(entry),
       auxiliaryTools: { workspace: 'vcs' },
-      // The invoking context session and turn decide which routine round a
-      // watch inherits; a turn admitted before a rotation keeps its own round.
-      run: (call, ctx) => runTools(call, toolContext(botId, ctx.sessionId, ctx.turn)),
+      run: (call) => runTools(call, toolContext(botId)),
     }
   }
 
@@ -867,13 +824,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     return `${sessionId}\n${turn}`
   }
 
-  /**
-   * The per-call context of one bot tool call. `invokingSessionId` and
-   * `invokingTurn` identify the bot context turn that invoked the call,
-   * reported by the port host; a watch created here inherits that turn's
-   * routine round, even after a rotation moved the bot to a new session.
-   */
-  function toolContext(botId: string, invokingSessionId?: string, invokingTurn?: number): AgentToolContext {
+  /** The per-call context of one bot tool call. */
+  function toolContext(botId: string): AgentToolContext {
     const entry = entries.get(botId)
     return {
       botId,
@@ -889,8 +841,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
           log('warn', `bot agent kernel could not refresh the memory of ${botId}: ${errorText(error)}`)
         })
       },
-      watch: (sessionId, afterTurn, todoIds) =>
-        addWatch(botId, sessionId, afterTurn, todoIds, invokingSessionId, invokingTurn),
+      watch: (sessionId, afterTurn, todoIds) => addWatch(botId, sessionId, afterTurn, todoIds),
       message: (to, text) => sendMessage(botId, to, text),
       removeWatches: sessionId => removeWatches(sessionId),
       selectModels: () => options.selectModels(),
@@ -955,7 +906,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
   function enqueue(
     botId: string,
-    input: { source: WakeSource; text: string; round?: string; routineId?: string; meta?: { sessionId: string; turn: number } },
+    input: { source: WakeSource; text: string; routineId?: string; meta?: { sessionId: string; turn: number } },
   ): Wake {
     const wake: Wake = {
       id: randomUUID(),
@@ -963,7 +914,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       source: input.source,
       text: input.text,
       createdAt: new Date().toISOString(),
-      ...(input.round === undefined ? {} : { round: input.round }),
       ...(input.routineId === undefined ? {} : { routineId: input.routineId }),
       ...(input.meta === undefined ? {} : { meta: input.meta }),
     }
@@ -1018,14 +968,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     sessionId: string,
     afterTurn: number,
     todoIds?: readonly string[],
-    invokingSessionId?: string,
-    invokingTurn?: number,
   ): void {
-    // The round is the one of the session and turn that actually ran the tool
-    // call; a turn still running on a pre-rotation session keeps its round.
-    const rounds = invokingSessionId === undefined || invokingTurn === undefined
-      ? undefined
-      : turnRounds.get(turnKey(invokingSessionId, invokingTurn))
     // A re-watch of a session the bot already follows keeps the prior todo
     // association when the caller omits one, so rotation recovery is stable.
     const inherited = todoIds === undefined
@@ -1033,12 +976,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       : undefined
     // At most one pending watch per bot and session: a new send supersedes the
     // earlier watch, so only the newest sent turn can wake the bot.
-    const superseded = state.watches.filter(watch => watch.botId === botId && watch.sessionId === sessionId)
     state.watches = state.watches.filter(watch => watch.botId !== botId || watch.sessionId !== sessionId)
-    const ownRound = rounds !== undefined && rounds.size > 0 ? [...rounds][0] : undefined
-    const lastSuperseded = superseded.length > 0 ? superseded[superseded.length - 1] : undefined
-    const round = ownRound ?? lastSuperseded?.round
-    const next: Watch = { sessionId, botId, afterTurn, ...(round === undefined ? {} : { round }) }
+    const next: Watch = { sessionId, botId, afterTurn }
     if (todoIds !== undefined && todoIds.length > 0) next.todoIds = [...todoIds]
     else if (inherited !== undefined) next.todoIds = inherited.todoIds
     state.watches.push(next)
@@ -1085,7 +1024,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       source: 'session',
       text,
       meta,
-      ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()
     dispatchAfterPersist([wake])
@@ -1427,7 +1365,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
    * Seed a freshly rotated bot context with a compact, deterministic projection
    * of the work still in flight: every session the bot watches, its associated
    * todo ids and a bounded original brief of each. Nothing is deleted or
-   * archived — the old context ledger, the watches, rounds, routines and queued
+   * archived — the old context ledger, the watches, routines and queued
    * wakes all remain; only the bot's own context pointer moves.
    */
   async function seedRotatedContext(newSessionId: string, route: AgentModelRoute, botId: string): Promise<void> {
@@ -1462,38 +1400,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     noteGroupCursor(botId, newSessionId, lastLedgerSeq(newSessionId))
     subscribeGroupReplies(botId, newSessionId)
     persist()
-  }
-
-  // ─── Rounds ──────────────────────────────────────────────────────────────
-
-  /** Close a round once nothing of it is left, and deliver its final reply. */
-  function closeRound(roundId: string): void {
-    const round = state.rounds[roundId]
-    if (round === undefined) return
-    if (state.watches.some(watch => watch.round === roundId)) return
-    const bot = state.bots[round.botId]
-    if ((round.turns?.length ?? 0) > 0 || bot?.queue.some(wake => wake.round === roundId)) return
-    // The target's wake is enqueued before the round is dropped, so the delivery
-    // and the round removal reach the file in one transition. A target that
-    // cannot be woken is reported as an error: its reply is never silently lost
-    // and no delivery is fabricated.
-    let delivery: Wake | undefined
-    if (round.deliver !== 'none') {
-      const reply = round.lastReply
-      if (reply === undefined || reply === '') {
-        log('warn', `bot agent round ${roundId} of bot ${round.botId} closed without a reply to deliver to ${round.deliver}`)
-      } else {
-        try {
-          const target = round.deliver.slice('bot:'.length)
-          delivery = enqueueMessage(round.botId, target, reply)
-        } catch (error) {
-          log('error', `bot agent round ${roundId} could not deliver its reply to ${round.deliver}: ${errorText(error)}`)
-        }
-      }
-    }
-    delete state.rounds[roundId]
-    persist()
-    if (delivery !== undefined) dispatchWake(delivery.botId, delivery)
   }
 
   /** Enqueue one message wake on the target bot; throws unless it is runnable. */
@@ -1576,53 +1482,12 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     tracked.timer.unref()
   }
 
-  function recordRoundTurn(wake: Wake, sessionId: string, turn: number): void {
-    if (wake.round === undefined) return
-    const round = state.rounds[wake.round]
-    if (round === undefined) return
-    const ref = { sessionId, turn }
-    round.turns ??= []
-    if (!round.turns.some(item => item.sessionId === sessionId && item.turn === turn)) round.turns.push(ref)
-    const key = turnKey(sessionId, turn)
-    const rounds = turnRounds.get(key) ?? new Set<string>()
-    rounds.add(wake.round)
-    turnRounds.set(key, rounds)
-  }
-
-  function removeRoundTurn(roundId: string, sessionId: string, turn: number): void {
-    const round = state.rounds[roundId]
-    if (round?.turns !== undefined) {
-      round.turns = round.turns.filter(item => item.sessionId !== sessionId || item.turn !== turn)
-      if (round.turns.length === 0) delete round.turns
-    }
-    const key = turnKey(sessionId, turn)
-    const rounds = turnRounds.get(key)
-    rounds?.delete(roundId)
-    if (rounds?.size === 0) turnRounds.delete(key)
-  }
-
-  function finishRoundTurn(botId: string, roundId: string, sessionId: string, outcome: TurnOutcome): void {
-    const round = state.rounds[roundId]
-    if (round === undefined) return
-    const reply = turnAnswerOf(contextSession(), sessionId, outcome.turn)
-    if (reply === undefined || reply === '') {
-      delete round.lastReply
-      log('warn', `bot agent round ${roundId} of bot ${botId} turn ${outcome.turn} published no reply`)
-    } else {
-      round.lastReply = reply
-    }
-    removeRoundTurn(roundId, sessionId, outcome.turn)
-    persist()
-    closeRound(roundId)
-  }
-
   function finishWakeTurn(botId: string, wake: Wake, sessionId: string, outcome: TurnOutcome): void {
     const bot = ensureBotState(botId)
     bot.lastWakeAt = new Date().toISOString()
     if (outcome.error === undefined) delete bot.lastError
     else bot.lastError = outcome.error
     persist()
-    if (wake.round !== undefined) finishRoundTurn(botId, wake.round, sessionId, outcome)
   }
 
   function pendingWake(botId: string, wake: Wake): void {
@@ -1670,8 +1535,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       holdModel(botId, route)
       const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route, sender: { botId } })
       removePendingWake(botId, wake.id)
-      recordRoundTurn(wake, sessionId, turn)
-      if (wake.round !== undefined) removeRoundTurn(wake.round, sessionId, failedTurn)
       persist()
       trackTurn(botId, sessionId, turn, outcome => finishWakeTurn(botId, wake, sessionId, outcome))
     } catch (error) {
@@ -1694,7 +1557,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     const { turn } = await contextSession().send(sessionId, { text: wake.text, model: route, sender: { botId } })
     removePendingWake(botId, wake.id)
     if (wake.meta !== undefined) markWakeKeys(ensureBotState(botId), sessionWakeKeys(wake.meta))
-    recordRoundTurn(wake, sessionId, turn)
     persist()
     trackTurn(botId, sessionId, turn, outcome => {
       if (outcome.status === 'failed' && fallback !== undefined && !stopped) {
@@ -1744,7 +1606,7 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       const estimatedInput = await estimateInput(sessionId, modelId, wake.text)
       // Rotate the bot's own context when its input outgrows the room the
       // routes can offer, seeding the fresh session with what is still in
-      // flight. The old ledger and every watch/round/routine stays intact.
+      // flight. The old ledger and every watch and routine stays intact.
       let activeSessionId = sessionId
       // The threshold covers only the routes a turn can run: the primary
       // and the single fallback runWake tries below.
@@ -1777,7 +1639,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       ensureBotState(botId).lastError = errorText(error)
       log('error', `bot agent wake ${wake.id} of bot ${botId} failed: ${errorText(error)}`)
       persist()
-      if (wake.round !== undefined) closeRound(wake.round)
     }
   }
 
@@ -1888,7 +1749,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       source: 'session',
       text,
       meta,
-      ...(watch.round === undefined ? {} : { round: watch.round }),
     })
     persist()
     dispatchAfterPersist([wake])
@@ -1981,25 +1841,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     }
   }
 
-  function restoreRoundTurns(): void {
-    for (const [roundId, round] of Object.entries(state.rounds)) {
-      for (const ref of [...(round.turns ?? [])]) {
-        const outcome = finishedTurnOf(contextSession(), ref.sessionId, ref.turn)
-        if (outcome !== undefined) {
-          finishRoundTurn(round.botId, roundId, ref.sessionId, outcome)
-          continue
-        }
-        const key = turnKey(ref.sessionId, ref.turn)
-        const rounds = turnRounds.get(key) ?? new Set<string>()
-        rounds.add(roundId)
-        turnRounds.set(key, rounds)
-        trackTurn(round.botId, ref.sessionId, ref.turn, finished => {
-          finishRoundTurn(round.botId, roundId, ref.sessionId, finished)
-        })
-      }
-    }
-  }
-
   return {
     async start(): Promise<void> {
       if (started || stopped) return
@@ -2009,7 +1850,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
           const loaded = parseState(raw)
           state.bots = loaded.bots
           state.watches = loaded.watches
-          state.rounds = loaded.rounds
           state.group = loaded.group
         })
       } catch {
@@ -2021,7 +1861,6 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
       if (stopped) return
       await restoreWatches()
       if (stopped) return
-      restoreRoundTurns()
       restoreGroupReplies()
       restorePeerWakes()
       persist()
@@ -2234,12 +2073,9 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
 
     async wakeRoutine(routine: RoutineRecord): Promise<void> {
       const entry = requireBot(routine.botId)
-      const roundId = randomUUID()
-      state.rounds[roundId] = { botId: entry.id, routineId: routine.id, deliver: routine.deliver }
       const wake = enqueue(entry.id, {
         source: 'routine',
         text: `[wake:routine ${routine.id}] ${routine.prompt}`,
-        round: roundId,
         routineId: routine.id,
       })
       persist()
@@ -2247,9 +2083,8 @@ export function createBotAgentKernel(options: CreateBotAgentKernelOptions): BotA
     },
 
     routineBusy(routine: RoutineRecord): boolean {
-      // Busy only while a wake of this same routine is still queued. A round
-      // that waits on watched sessions never holds the next fire back: its
-      // turns may belong to a context the bot has since rotated away from.
+      // Busy only while a wake of this same routine is still queued; work the
+      // routine started never holds its next fire back.
       return state.bots[routine.botId]?.queue.some(wake => wake.routineId === routine.id) === true
     },
   }

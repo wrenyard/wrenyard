@@ -90,7 +90,7 @@ export type {
   GroupMessage,
 } from './methods/agent.mts'
 export type {
-  RoutineState, RoutineDeliver, RoutineRecord,
+  RoutineState, RoutineRecord,
   RoutineListParams, RoutineListResult,
   RoutineCreateParams, RoutineCreateResult,
   RoutineUpdateParams, RoutineUpdateResult,

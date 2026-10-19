@@ -10,31 +10,23 @@ const BOT_ID_SOURCE = '[a-z0-9][a-z0-9-]{0,31}'
 const BOT_ID_PATTERN = `^${BOT_ID_SOURCE}$`
 
 /** Lifecycle of one routine. */
-export type RoutineState = 'active' | 'paused' | 'finished' | 'failed'
-
-/** Where a routine's round result goes: nowhere, or to another bot. */
-export type RoutineDeliver = 'none' | `bot:${string}`
+export type RoutineState = 'active' | 'paused'
 
 export interface RoutineRecord {
   /** 8 lowercase hex characters; unique among every stored routine. */
   id: string
   /** The bot this routine wakes when it fires. */
   botId: string
-  /** Config-declared routine name; absent for routines created from Desktop. */
+  /** Optional short name from the routine file. */
   name?: string
   /** 1..4000 characters; used verbatim as the wake text when it fires. */
   prompt: string
   /** Whole minutes between runs; 1..10080 (7 days). */
   intervalMinutes: number
-  recurring: boolean
   state: RoutineState
-  /** `none` (default) or `bot:<id>`: where the round's final reply is posted. */
-  deliver: RoutineDeliver
   /** ISO timestamp of creation. */
   createdAt: string
-  /** ISO timestamp when a recurring routine expires (createdAt + 7 days). */
-  expiresAt?: string
-  /** ISO timestamp of the next due run; absent once a routine is finished or failed. */
+  /** ISO timestamp of the next due run; absent while paused. */
   nextRunAt?: string
   /** ISO timestamp of the most recent successful run. */
   lastRunAt?: string
@@ -50,8 +42,6 @@ export interface RoutineCreateParams {
   botId: string
   prompt: string
   intervalMinutes: number
-  recurring: boolean
-  deliver?: RoutineDeliver
 }
 export interface RoutineCreateResult { routine: RoutineRecord }
 export interface RoutineUpdateParams {
@@ -70,17 +60,12 @@ const routineIdSchema = { type: 'string', pattern: '^[0-9a-f]{8}$' } as const
 const botIdSchema = { type: 'string', pattern: BOT_ID_PATTERN } as const
 const routineStateSchema = {
   type: 'string',
-  enum: ['active', 'paused', 'finished', 'failed'],
-} as const
-// `none`, or a bot id prefixed with `bot:`.
-const routineDeliverSchema = {
-  type: 'string',
-  pattern: `^(none|bot:${BOT_ID_SOURCE})$`,
+  enum: ['active', 'paused'],
 } as const
 
 const routineRecordSchema = {
   type: 'object',
-  required: ['id', 'botId', 'prompt', 'intervalMinutes', 'recurring', 'state', 'deliver', 'createdAt', 'runCount'],
+  required: ['id', 'botId', 'prompt', 'intervalMinutes', 'state', 'createdAt', 'runCount'],
   additionalProperties: false,
   properties: {
     id: routineIdSchema,
@@ -88,11 +73,8 @@ const routineRecordSchema = {
     name: { type: 'string', minLength: 1, maxLength: 64 },
     prompt: { type: 'string', minLength: 1, maxLength: 4000 },
     intervalMinutes: { type: 'integer', minimum: 1, maximum: 10080 },
-    recurring: { type: 'boolean' },
     state: routineStateSchema,
-    deliver: routineDeliverSchema,
     createdAt: { type: 'string', minLength: 1 },
-    expiresAt: { type: 'string', minLength: 1 },
     nextRunAt: { type: 'string', minLength: 1 },
     lastRunAt: { type: 'string', minLength: 1 },
     lastError: { type: 'string', minLength: 1 },
@@ -113,13 +95,11 @@ export const routineListResultSchema = {
 
 export const routineCreateParamsSchema = {
   description: 'Create one routine owned by a bot.',
-  type: 'object', required: ['botId', 'prompt', 'intervalMinutes', 'recurring'], additionalProperties: false,
+  type: 'object', required: ['botId', 'prompt', 'intervalMinutes'], additionalProperties: false,
   properties: {
     botId: botIdSchema,
     prompt: { type: 'string', minLength: 1, maxLength: 4000 },
     intervalMinutes: { type: 'integer', minimum: 1, maximum: 10080 },
-    recurring: { type: 'boolean' },
-    deliver: routineDeliverSchema,
   },
 } as const satisfies JsonSchema
 export const routineCreateResultSchema = {

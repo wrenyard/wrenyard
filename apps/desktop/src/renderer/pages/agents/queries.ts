@@ -8,7 +8,6 @@ import type {
   AgentMemoryFile,
   GroupMessage,
   RoutineCreateParams,
-  RoutineDeliver,
   RoutineState,
   RoutineUpdateParams,
 } from '@/shell-contract';
@@ -303,19 +302,13 @@ export function useAgentEvents(id: string | null): readonly LedgerEvent[] {
 export const ROUTINE_STATE_VIEW: Record<RoutineState, { label: string; tone: 'running' | 'success' | 'danger' | 'warning' | 'muted' }> = {
   active: { label: '运行中', tone: 'success' },
   paused: { label: '已暂停', tone: 'muted' },
-  finished: { label: '已完成', tone: 'muted' },
-  failed: { label: '失败', tone: 'danger' },
 };
 
-/** `每 N 分钟` for a recurring routine; `N 分钟后一次` for a one-shot. */
-export function frequencyText(intervalMinutes: number, recurring: boolean): string {
+/** `每 N 分钟` for a routine. */
+export function frequencyText(intervalMinutes: number): string {
   const unit = intervalMinutes % 1440 === 0 ? `${intervalMinutes / 1440} 天`
     : intervalMinutes % 60 === 0 ? `${intervalMinutes / 60} 小时`
       : `${intervalMinutes} 分钟`;
-  return recurring ? `每 ${unit}` : `${unit}后一次`;
+  return `每 ${unit}`;
 }
 
-/** Display text of a routine deliver target. */
-export function deliverText(deliver: RoutineDeliver): string {
-  return deliver === 'none' ? '不投递' : deliver.slice('bot:'.length);
-}

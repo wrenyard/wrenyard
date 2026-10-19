@@ -4,7 +4,6 @@ import { StatusBadge } from '@/renderer/components/status-badge';
 import { Timestamp } from '@/renderer/components/timestamp';
 import { Button } from '@/renderer/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/renderer/components/ui/card';
-import { Checkbox } from '@/renderer/components/ui/checkbox';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/renderer/components/ui/empty';
 import { Field, FieldLabel } from '@/renderer/components/ui/field';
 import { Input } from '@/renderer/components/ui/input';
@@ -17,7 +16,6 @@ import { useConfirm } from '@/renderer/hooks/use-confirm';
 import type { AgentBot, Routine } from '@/shell-contract';
 import {
   ROUTINE_STATE_VIEW,
-  deliverText,
   frequencyText,
   useAgentConfigQuery,
   useAgentMemoryQuery,
@@ -52,7 +50,7 @@ function botOptionLabel(bot: AgentBot): string {
 }
 
 /** Routines section: the bot's routine table with row actions and a create form. */
-function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
+function Routines(props: { botId: string }) {
   const routines = useRoutinesQuery(props.botId);
   const update = useUpdateRoutineMutation();
   const run = useRunRoutineMutation();
@@ -62,8 +60,6 @@ function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
 
   const [prompt, setPrompt] = useState('');
   const [interval, setIntervalMinutes] = useState('5');
-  const [recurring, setRecurring] = useState(true);
-  const [deliver, setDeliver] = useState<string>('none');
 
   const items: Routine[] = routines.data?.routines ?? [];
 
@@ -86,15 +82,11 @@ function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
         botId: props.botId,
         prompt: prompt.trim(),
         intervalMinutes: minutes,
-        recurring,
-        deliver: recurring ? (deliver as Routine['deliver']) : undefined,
       },
       {
         onSuccess: () => {
           setPrompt('');
           setIntervalMinutes('5');
-          setRecurring(true);
-          setDeliver('none');
         },
       },
     );
@@ -119,7 +111,6 @@ function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
               <TableRow>
                 <TableHead>提示词</TableHead>
                 <TableHead>频率</TableHead>
-                <TableHead>投递</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>下次运行</TableHead>
                 <TableHead>上次错误</TableHead>
@@ -139,27 +130,14 @@ function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
                         <TooltipContent>{item.prompt}</TooltipContent>
                       </Tooltip>
                       {item.name !== undefined && (
-                        <span className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
-                          {item.name}
-                          <span className="rounded bg-muted px-1">配置</span>
-                        </span>
+                        <span className="mt-1 block text-xs text-muted-foreground">{item.name}</span>
                       )}
                     </TableCell>
                     <TableCell className="text-muted-foreground tabular-nums">
-                      {frequencyText(item.intervalMinutes, item.recurring)}
+                      {frequencyText(item.intervalMinutes)}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{deliverText(item.deliver)}</TableCell>
                     <TableCell>
-                      {item.state === 'failed' && item.lastError !== undefined ? (
-                        <Tooltip>
-                          <TooltipTrigger render={<span className="inline-flex" />}>
-                            <StatusBadge tone={view.tone} label={view.label} />
-                          </TooltipTrigger>
-                          <TooltipContent>{item.lastError}</TooltipContent>
-                        </Tooltip>
-                      ) : (
-                        <StatusBadge tone={view.tone} label={view.label} />
-                      )}
+                      <StatusBadge tone={view.tone} label={view.label} />
                     </TableCell>
                     <TableCell className="text-muted-foreground tabular-nums">
                       {item.nextRunAt === undefined ? NONE : <Timestamp value={item.nextRunAt} />}
@@ -205,24 +183,6 @@ function Routines(props: { botId: string; otherBotIds: readonly string[] }) {
                 className="w-24"
                 onChange={(event) => setIntervalMinutes(event.target.value)}
               />
-            </Field>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox checked={recurring} onCheckedChange={(checked) => setRecurring(checked === true)} />
-              重复
-            </label>
-            <Field className="flex items-center gap-2">
-              <FieldLabel>投递</FieldLabel>
-              <select
-                value={deliver}
-                disabled={!recurring}
-                className="rounded-md border bg-transparent px-2 py-1 text-sm"
-                onChange={(event) => setDeliver(event.target.value)}
-              >
-                <option value="none">不投递</option>
-                {props.otherBotIds.map((id) => (
-                  <option key={id} value={`bot:${id}`}>{id}</option>
-                ))}
-              </select>
             </Field>
             <Button size="sm" className="ml-auto" disabled={create.isPending} onClick={submit}>
               新建
@@ -333,10 +293,6 @@ export function BotSettings() {
     () => bots.find((bot) => bot.id === selectedId),
     [bots, selectedId],
   );
-  const otherBotIds = useMemo(
-    () => bots.filter((bot) => bot.id !== selectedId).map((bot) => bot.id),
-    [bots, selectedId],
-  );
 
   if (agents.isError) return <QueryError query={agents} title="机器人" />;
   if (agents.isPending) return <Skeleton className="h-24 w-full" />;
@@ -385,7 +341,7 @@ export function BotSettings() {
       </div>
       {selected !== undefined && (
         <>
-          <Routines botId={selected.id} otherBotIds={otherBotIds} />
+          <Routines botId={selected.id} />
           <ConfigSection botId={selected.id} tools={selected.tools} />
         </>
       )}

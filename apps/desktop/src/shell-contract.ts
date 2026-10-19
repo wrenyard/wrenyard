@@ -1378,23 +1378,18 @@ export interface AgentBot {
   sessionId?: string;
 }
 
-export type RoutineState = 'active' | 'paused' | 'finished' | 'failed';
-/** `none` or `bot:<id>`: where the final reply of a routine round is posted. */
-export type RoutineDeliver = 'none' | `bot:${string}`;
+export type RoutineState = 'active' | 'paused';
 
 export interface Routine {
   /** 8 lowercase hex characters. */
   id: string;
   botId: string;
-  /** Present only for config-declared routines. */
+  /** Optional short name from the routine file. */
   name?: string;
   prompt: string;
   intervalMinutes: number;
-  recurring: boolean;
   state: RoutineState;
-  deliver: RoutineDeliver;
   createdAt: string;
-  expiresAt?: string;
   nextRunAt?: string;
   lastRunAt?: string;
   lastError?: string;
@@ -1474,8 +1469,6 @@ export interface RoutineCreateParams {
   botId: string;
   prompt: string;
   intervalMinutes: number;
-  recurring: boolean;
-  deliver?: RoutineDeliver;
 }
 export interface RoutineCreateResult { routine: Routine }
 export interface RoutineUpdateParams { id: string; state: 'active' | 'paused' }

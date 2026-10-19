@@ -77,11 +77,11 @@ speed, the cache hit rate and total tokens.
 
 ### Bots and routines
 
-The **Bots** page runs agents you define in a small JSON file: a name,
-instructions, and the tools each one may use — open and steer work sessions,
-manage the built-in workspace todos, or message another bot. A routine wakes a
-bot on an interval, and its result can be delivered to another bot. Sessions a
-bot starts are watched, so it is woken again when they finish. See the
+The **Bots** page runs agents you define in a small directory: who the bot is,
+and the tools it may use — open and steer work sessions, manage the built-in
+workspace todos, message another bot, keep its own memory and routines. A
+routine wakes a bot on an interval on one device. Sessions a bot starts are
+watched, so it is woken again when they finish. See the
 [bots guide](docs/guides/bots.md).
 
 ![Bots](docs/images/agents.png)

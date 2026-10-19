@@ -3,7 +3,6 @@ import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promis
 import { dirname, join } from 'node:path'
 import type {
   RoutineCreateParams,
-  RoutineDeliver,
   RoutineListResult,
   RoutineRecord,
   RoutineState,
@@ -12,8 +11,6 @@ import { writeRoutine, removeRoutine, type RoutineDefinition } from './bot-agent
 
 /** How often due routines are checked. */
 const TICK_MS = 5_000
-/** A recurring routine is created seven days ahead and expires then. */
-const EXPIRY_MS = 7 * 24 * 60 * 60 * 1_000
 /** At most this many active or paused routines may exist per bot. */
 const MAX_PER_BOT = 50
 const MIN_INTERVAL_MINUTES = 1
@@ -29,14 +26,6 @@ export type SchedulerLog = (level: 'info' | 'warn' | 'error', message: string, m
  * records `lastError` on the routine; a resolved call counts as a run.
  */
 export type RoutineWake = (routine: RoutineRecord) => void | Promise<void>
-
-const DELIVER_PATTERN = /^(none|bot:[a-z0-9][a-z0-9-]{0,31})$/
-
-export function parseRoutineDeliver(value: string | undefined): RoutineDeliver {
-  if (value === undefined || value === 'none') return 'none'
-  if (!DELIVER_PATTERN.test(value)) throw new Error(`deliver must be 'none' or 'bot:<id>'`)
-  return value as RoutineDeliver
-}
 
 export interface CreateSchedulerOptions {
   /** JSON state file holding `{ version: 1, routines: [...] }`. */
@@ -132,9 +121,6 @@ function readRecord(value: unknown): RoutineRecord | undefined {
     || typeof record.botId !== 'string'
     || typeof record.prompt !== 'string'
     || typeof record.intervalMinutes !== 'number'
-    || typeof record.recurring !== 'boolean'
-    || typeof record.deliver !== 'string'
-    || !DELIVER_PATTERN.test(record.deliver)
     || typeof record.createdAt !== 'string'
     || typeof record.runCount !== 'number'
     || (record.state !== 'active' && record.state !== 'paused' && record.state !== 'finished' && record.state !== 'failed')
@@ -147,12 +133,10 @@ function readRecord(value: unknown): RoutineRecord | undefined {
     botId: record.botId,
     prompt: record.prompt,
     intervalMinutes: record.intervalMinutes,
-    recurring: record.recurring,
-    state: record.state,
-    deliver: record.deliver as RoutineDeliver,
+    // A routine an older store ended (finished or failed) comes back paused.
+    state: record.state === 'active' ? 'active' : 'paused',
     createdAt: record.createdAt,
     ...(typeof record.name === 'string' ? { name: record.name } : {}),
-    ...(typeof record.expiresAt === 'string' ? { expiresAt: record.expiresAt } : {}),
     ...(typeof record.nextRunAt === 'string' ? { nextRunAt: record.nextRunAt } : {}),
     ...(typeof record.lastRunAt === 'string' ? { lastRunAt: record.lastRunAt } : {}),
     ...(typeof record.lastError === 'string' ? { lastError: record.lastError } : {}),
@@ -358,16 +342,10 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         const after = routines.find(candidate => candidate.id === id)
         if (!after) continue
         if (wakeError !== undefined) {
-          // A wake rejection (unknown or disabled bot) skips the run and
-          // records the failure: a recurring routine retries on its next
-          // interval, a one-shot routine fails outright.
+          // A wake rejection (unknown or disabled bot) skips the run, records
+          // the failure and retries on the next interval.
           after.lastError = wakeError instanceof Error ? wakeError.message : String(wakeError)
-          if (after.recurring) {
-            after.nextRunAt = new Date(fireAt.getTime() + after.intervalMinutes * 60_000).toISOString()
-          } else if (after.state === 'active') {
-            after.state = 'failed'
-            delete after.nextRunAt
-          }
+          after.nextRunAt = new Date(fireAt.getTime() + after.intervalMinutes * 60_000).toISOString()
           changed = true
           log?.('warn', `scheduler failed to wake bot ${after.botId} for routine ${after.id}`, wakeError)
           continue
@@ -377,22 +355,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         after.runCount += 1
         after.lastRunAt = fireAt.toISOString()
         delete after.lastError
-        if (after.recurring) {
-          const next = new Date(fireAt.getTime() + after.intervalMinutes * 60_000)
-          // Config-declared (named) routines never expire: only unnamed
-          // routines are bounded by their expiresAt.
-          if (after.name === undefined && after.expiresAt !== undefined && next.getTime() > Date.parse(after.expiresAt)) {
-            if (after.state === 'active') {
-              after.state = 'finished'
-              delete after.nextRunAt
-            }
-          } else {
-            after.nextRunAt = next.toISOString()
-          }
-        } else if (after.state === 'active') {
-          after.state = 'finished'
-          delete after.nextRunAt
-        }
+        after.nextRunAt = new Date(fireAt.getTime() + after.intervalMinutes * 60_000).toISOString()
         changed = true
         log?.('info', `scheduler fired routine ${after.id} for bot ${after.botId}`)
       }
@@ -444,9 +407,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
           ...(file.name === undefined ? {} : { name: file.name }),
           prompt: file.prompt,
           intervalMinutes: file.intervalMinutes,
-          recurring: true,
           state: file.state,
-          deliver: 'none',
           createdAt: new Date(now).toISOString(),
           ...(file.state === 'active' ? { nextRunAt: next } : {}),
           runCount: 0,
@@ -459,8 +420,6 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
       record.prompt = file.prompt
       if (file.name === undefined) delete record.name
       else record.name = file.name
-      record.recurring = true
-      delete record.expiresAt
       if (record.intervalMinutes !== file.intervalMinutes) {
         record.intervalMinutes = file.intervalMinutes
         if (record.nextRunAt !== undefined && Date.parse(record.nextRunAt) > Date.parse(next)) record.nextRunAt = next
@@ -541,9 +500,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         || input.intervalMinutes > MAX_INTERVAL_MINUTES) {
         throw new Error(`intervalMinutes must be an integer between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES}`)
       }
-      const deliver = parseRoutineDeliver(input.deliver)
-      const activeCount = routines.filter(record =>
-        record.botId === input.botId && (record.state === 'active' || record.state === 'paused')).length
+      const activeCount = routines.filter(record => record.botId === input.botId).length
       if (activeCount >= MAX_PER_BOT) throw new Error(`routine limit reached (${MAX_PER_BOT} per bot)`)
       const now = new Date()
       const record: RoutineRecord = {
@@ -551,13 +508,9 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
         botId: input.botId,
         prompt,
         intervalMinutes: input.intervalMinutes,
-        recurring: input.recurring,
         state: 'active',
-        deliver,
         createdAt: now.toISOString(),
         nextRunAt: new Date(now.getTime() + input.intervalMinutes * 60_000).toISOString(),
-        // A routine with a definition file is the user's own and never expires.
-        ...(input.recurring && routinesDir === undefined ? { expiresAt: new Date(now.getTime() + EXPIRY_MS).toISOString() } : {}),
         runCount: 0,
       }
       routines.push(record)
@@ -569,8 +522,6 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     },
     update(id: string, state: 'active' | 'paused'): RoutineRecord {
       const record = findRecord(id)
-      const previous: RoutineState = record.state
-      if (previous !== 'active' && previous !== 'paused') throw new Error(`routine ${id} is ${previous}`)
       if (state === 'paused') {
         record.state = 'paused'
       } else {
